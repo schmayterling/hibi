@@ -61,11 +61,11 @@
     "@tiptap/starter-kit": "3.31.3",
     "@types/d3-force": "3.0.10",
     "@types/katex": "0.16.8",
-    "@types/node": "24.13.4",
+    "@types/node": "26.5.1",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@types/unzipper": "0.10.11",
-    "@vitejs/plugin-react": "5.2.0",
+    "@vitejs/plugin-react": "6.1.1",
     "d3-force": "3.0.0",
     "dompurify": "3.4.15",
     "electron": "44.3.0",
@@ -83,7 +83,7 @@
     "simple-icons": "16.31.0",
     "typescript": "7.0.2",
     "unzipper": "0.12.5",
-    "vite": "7.3.6",
+    "vite": "8.3.0",
     "yaml": "2.9.1"
   },
   "dependencies": {

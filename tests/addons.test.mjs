@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
 
 test('plugin pages, metadata, shared controls, and full source vim editing', {
   timeout: 60000,
@@ -39,7 +40,7 @@ test('plugin pages, metadata, shared controls, and full source vim editing', {
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-  await page.getByRole('button', { name: /^open$/i, exact: true }).click()
+  await clickMenu(app, 'Open…')
   await page.waitForFunction(() =>
     document.querySelector('.tiptap')?.textContent.includes('alpha'),
   )
@@ -59,7 +60,7 @@ test('plugin pages, metadata, shared controls, and full source vim editing', {
       { id, enabled },
     )
   }
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^editor$/i, exact: true }).click()
   await mkdir('test-results', { recursive: true })
   await page.screenshot({
@@ -131,7 +132,7 @@ test('plugin pages, metadata, shared controls, and full source vim editing', {
   )
   await page.getByRole('checkbox', { name: /show vim status/i }).uncheck()
   await page.getByRole('checkbox', { name: /show vim status/i }).check()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await page.waitForFunction(
     () =>
       document.querySelector('[data-vim-plugin="true"]') ||
@@ -282,14 +283,14 @@ test('plugin pages, metadata, shared controls, and full source vim editing', {
     path: 'test-results/vim-status.png',
     animations: 'disabled',
   })
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^vim$/i, exact: true }).click()
   await page.getByRole('checkbox', { name: /show vim status/i }).uncheck()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   assert.equal(await page.locator('[data-status-id^="vim."]').count(), 0)
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('checkbox', { name: /show vim status/i }).check()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   assert.equal(await lastCommand.innerText(), ':w')
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
   const unavailable = page.locator('[data-status-id="vim.unavailable"]')
@@ -307,7 +308,7 @@ test('plugin pages, metadata, shared controls, and full source vim editing', {
     .getByRole('status')
     .filter({ hasText: /vim · normal/i })
     .waitFor()
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   await toggleAddon('vim', false)
   assert.equal(
@@ -318,7 +319,7 @@ test('plugin pages, metadata, shared controls, and full source vim editing', {
     await page.locator('.settings-sidebar .sidebar-section').count(),
     0,
   )
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await page.waitForFunction(() => !document.querySelector('[data-vim-plugin]'))
   assert.equal(await page.locator('[data-status-id^="vim."]').count(), 0)
   const beforePlain = await read()

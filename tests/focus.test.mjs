@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
 
 test('closing settings never overrides a newer editor focus', {
   timeout: 15000,
@@ -29,7 +30,7 @@ test('closing settings never overrides a newer editor focus', {
     .click()
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   await source.waitFor()
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.evaluate(async () => {
     document.activeElement.dispatchEvent(
       new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),

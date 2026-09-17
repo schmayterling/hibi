@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 test('code highlighting controls update both panes, persist, and discover addon languages', {
   timeout: 30000,
@@ -31,9 +31,7 @@ test('code highlighting controls update both panes, persist, and discover addon 
     .locator('.source-pane .hibi-token-keyword')
     .filter({ hasText: /const/i })
     .waitFor()
-  await page
-    .getByRole('button', { name: /^editor settings$/i, exact: true })
-    .click()
+  await clickMenu(app, 'Settings')
   await page
     .getByRole('tab', { name: /^code highlighting$/i, exact: true })
     .click()
@@ -51,9 +49,7 @@ test('code highlighting controls update both panes, persist, and discover addon 
     original,
   )
   await page.reload()
-  await page
-    .getByRole('button', { name: /^editor settings$/i, exact: true })
-    .click()
+  await clickMenu(app, 'Settings')
   await page
     .getByRole('tab', { name: /^code highlighting$/i, exact: true })
     .click()

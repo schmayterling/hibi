@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
 
 test('native file operations preserve drafts and avoid silent overwrites', {
   timeout: 30000,
@@ -43,7 +44,7 @@ test('native file operations preserve drafts and avoid silent overwrites', {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })
   }, destination)
   await rich.fill('hello file')
-  await page.getByRole('button', { name: /^save$/i, exact: true }).click()
+  await clickMenu(app, 'Save')
   await page
     .getByRole('status', { name: /unsaved changes/i })
     .waitFor({ state: 'hidden' })
@@ -91,7 +92,7 @@ test('native file operations preserve drafts and avoid silent overwrites', {
       checkboxChecked: false,
     })
   })
-  await page.getByRole('button', { name: /^save$/i, exact: true }).click()
+  await clickMenu(app, 'Save')
   await page
     .getByRole('status', { name: /unsaved changes/i })
     .waitFor({ state: 'hidden' })
@@ -100,7 +101,7 @@ test('native file operations preserve drafts and avoid silent overwrites', {
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, fixture)
-  await page.getByRole('button', { name: /^open$/i, exact: true }).click()
+  await clickMenu(app, 'Open…')
   await page
     .getByRole('tab', { name: /^original\.md$/i, exact: true })
     .waitFor()
@@ -108,7 +109,7 @@ test('native file operations preserve drafts and avoid silent overwrites', {
     .getByRole('button', { name: /^markdown only$/i, exact: true })
     .click()
   await page.getByRole('textbox', { name: /markdown editor/i }).waitFor()
-  await page.getByRole('button', { name: /^save$/i, exact: true }).click()
+  await clickMenu(app, 'Save')
   assert.equal(await readFile(fixture, 'utf8'), original)
   assert.equal(
     await page.evaluate(() =>

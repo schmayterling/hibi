@@ -11,6 +11,7 @@ import {
   splitFrontmatter,
 } from '../src/addons/frontmatter/markdown.ts'
 import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
 import { renameDocument } from './rename.mjs'
 import { uiName } from './ui.mjs'
 
@@ -127,10 +128,10 @@ test('frontmatter contributes slash actions in rich and source panes only while 
   assert.equal(await read(), existing)
   await source.press('Escape')
   const toggle = async () => {
-    await mode('editor settings')
+    await clickMenu(app, 'Settings')
     await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
     await page.locator('#addon-frontmatter').click()
-    await page.getByRole('button', { name: /back to editor/i }).click()
+    await page.getByRole('button', { name: /^back to app$/i }).click()
   }
   await toggle()
   await source.fill('/yaml')
@@ -184,7 +185,7 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
     await page.getByRole('region', { name: /frontmatter properties/i }).count(),
     0,
   )
-  await page.getByRole('button', { name: /^open$/i, exact: true }).click()
+  await clickMenu(app, 'Open…')
   const properties = page.getByRole('region', {
     name: /frontmatter properties/i,
   })
@@ -292,18 +293,16 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
     })
   assert.ok(heights.some((height) => height > 0 && height < heights[0]))
   assert.equal(heights.at(-1), 0)
-  await page.getByRole('button', { name: /^save$/i, exact: true }).click()
+  await clickMenu(app, 'Save')
   await page
     .getByRole('status', { name: /unsaved changes/i })
     .waitFor({ state: 'hidden' })
   assert.equal(await readFile(fixture, 'utf8'), await read())
-  await page.getByRole('button', { name: /^new$/i, exact: true }).click()
+  await clickMenu(app, 'New')
   await page.waitForFunction(
     () => document.querySelector('.tiptap')?.textContent === '',
   )
-  await page
-    .getByRole('button', { name: /^command palette$/i, exact: true })
-    .click()
+  await clickMenu(app, 'Command palette')
   await page
     .getByRole('combobox', { name: /search commands/i })
     .fill('add frontmatter')
@@ -409,28 +408,24 @@ test('frontmatter addon, inline rename, and centered workspace entry preserve do
   })
   assert.ok(center.x < 1 && center.y < 1 && center.iconAbove)
   const rename = async (name) => {
-    await renameDocument(page, name)
+    await renameDocument(app, page, name)
   }
   await rename('meeting notes')
   await page
     .getByRole('tab', { name: /^meeting notes\.md$/i, exact: true })
     .waitFor()
   assert.equal(await page.getByRole('dialog').count(), 0)
-  assert.match(
-    await page
-      .getByRole('button', { name: /^command palette$/i, exact: true })
-      .innerText(),
-    /k/,
-  )
-  await page.getByRole('button', { name: /^save$/i, exact: true }).click()
+  await clickMenu(app, 'Save')
   await page.waitForFunction(
-    () => !document.querySelector('button[aria-label=save i]').disabled,
+    () =>
+      document.querySelector('.titlebar')?.getAttribute('aria-busy') ===
+      'false',
   )
   assert.match(
     await app.evaluate(() => globalThis.suggestedName),
     /meeting notes\.md$/,
   )
-  await page.getByRole('button', { name: /^open$/i, exact: true }).click()
+  await clickMenu(app, 'Open…')
   await page.waitForFunction(
     () =>
       document.querySelector('.tiptap')?.getAttribute('contenteditable') ===
@@ -457,7 +452,7 @@ test('frontmatter addon, inline rename, and centered workspace entry preserve do
   const edited = (await page.evaluate(() => window.hibi.getDocument())).markdown
   assert.equal(edited, '---\ntitle: changed\n---\n\nvisual body')
   for (const enabled of [false, true]) {
-    await page.getByRole('button', { name: /editor settings/i }).click()
+    await clickMenu(app, 'Settings')
     await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
     await page
       .getByRole('checkbox', { name: /^frontmatter$/i, exact: true })
@@ -468,7 +463,7 @@ test('frontmatter addon, inline rename, and centered workspace entry preserve do
         String(editable),
       enabled,
     )
-    await page.getByRole('button', { name: /back to editor/i }).click()
+    await page.getByRole('button', { name: /^back to app$/i }).click()
     assert.equal(
       (await page.evaluate(() => window.hibi.getDocument())).markdown,
       edited,
@@ -482,7 +477,7 @@ test('frontmatter addon, inline rename, and centered workspace entry preserve do
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     edited,
   )
-  await page.getByRole('button', { name: /^save$/i, exact: true }).click()
+  await clickMenu(app, 'Save')
   await page
     .getByRole('status', { name: /unsaved changes/i })
     .waitFor({ state: 'hidden' })

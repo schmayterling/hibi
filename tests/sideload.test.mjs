@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('sideloads reviewed packages disabled, discovers their settings/themes/commands, and cleans up removal', {
@@ -128,7 +128,7 @@ test('sideloads reviewed packages disabled, discovers their settings/themes/comm
     (await page.evaluate(() => window.hibi.getInstalledAddons())).length,
     0,
   )
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   await pressShortcut(app, `${mod}+k`)
   await page
@@ -152,7 +152,7 @@ test('sideloads reviewed packages disabled, discovers their settings/themes/comm
   await page.waitForFunction(
     () => document.activeElement?.id === 'fixture-option',
   )
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await page.getByText(/^fixture active$/i, { exact: true }).waitFor()
   await choose('fixture: append')
   await waitForAsync(page, async () =>
@@ -232,7 +232,7 @@ test('sideloads reviewed packages disabled, discovers their settings/themes/comm
   await page.waitForFunction(
     () => document.documentElement.dataset.colorscheme === 'hibi-dark',
   )
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   await page
     .locator('.setting-row')

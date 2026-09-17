@@ -71,7 +71,7 @@ test('palette discovers settings, addon controls, themes, and formatting without
   await page.waitForFunction(
     () => document.documentElement.dataset.colorscheme === 'catppuccin-mocha',
   )
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await rich.fill('format from palette')
   await rich.press(`${mod}+a`)

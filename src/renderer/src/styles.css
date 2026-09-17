@@ -224,9 +224,6 @@ button:disabled {
   flex: 1;
   min-width: 0;
   height: 100%;
-  padding-left: 8px;
-}
-.document-toolbar:has(> .document-title:first-child) {
   padding-left: var(--space-4);
 }
 .titlebar .document-title {
@@ -275,12 +272,6 @@ button:disabled {
   font-size: var(--text-sm);
   white-space: nowrap;
 }
-.titlebar .palette-trigger {
-  width: auto;
-  gap: 6px;
-  padding: 0 6px;
-  margin-left: auto;
-}
 .document-tabs {
   display: flex;
   gap: var(--space-1);
@@ -324,13 +315,6 @@ button:disabled {
 }
 .document-tab:is(:hover, :focus-within, [data-active="true"]) .tab-close {
   opacity: 1;
-}
-.document-actions {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  font-size: var(--text-sm);
 }
 .workspace-empty .sidebar-scroll {
   display: flex;

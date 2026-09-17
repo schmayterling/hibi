@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { zipFiles } from './zip.mjs'
 
 test('compact filters reset preferences, group addons, and install reviewed url packages disabled', {
@@ -72,7 +72,7 @@ test('compact filters reset preferences, group addons, and install reviewed url 
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   const addons = page.locator('#settings-addons')
   assert.equal(

@@ -8,7 +8,13 @@ import {
   Puzzle,
   TextCursorInput,
 } from 'lucide-react'
-import { Component, type ReactNode, useSyncExternalStore } from 'react'
+import {
+  Component,
+  type ReactNode,
+  useLayoutEffect,
+  useRef,
+  useSyncExternalStore,
+} from 'react'
 import type { AddonState } from '../../addons/api'
 import type { AppInfo } from '../../shared/desktop'
 import type { Hotkeys } from '../../shared/hotkeys'
@@ -104,6 +110,13 @@ export function SettingsScreen({
   showLineNumbers: boolean
   onShowLineNumbers: (show: boolean) => void
 }) {
+  const screen = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    if (open)
+      screen.current
+        ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+        ?.focus({ preventScroll: true })
+  }, [open])
   const casing = useSyncExternalStore(uiCase.subscribe, uiCase.snapshot)
   const pluginPages = addons.filter(
     (addon) =>
@@ -128,6 +141,7 @@ export function SettingsScreen({
   return (
     <SettingsDiscovery value={true}>
       <main
+        ref={screen}
         className="settings-screen"
         aria-label="Settings"
         hidden={!open}

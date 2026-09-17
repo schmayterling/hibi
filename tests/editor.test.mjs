@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
 
 test('empty entry, three views, and lossless source switching', {
   timeout: 30000,
@@ -89,7 +90,7 @@ test('empty entry, three views, and lossless source switching', {
   assert.equal(geometry.padding, '48px')
   assert.equal(geometry.besideSidebar, true)
   assert.equal(geometry.flat, true)
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('main', { name: /settings/i }).waitFor()
   assert.equal(await rich.isVisible(), false)
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
@@ -139,7 +140,7 @@ test('empty entry, three views, and lossless source switching', {
   )
   await page.reload()
   await rich.waitFor()
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
   assert.equal(
     await page
@@ -177,10 +178,10 @@ test('empty entry, three views, and lossless source switching', {
   const sourceBefore = (await page.evaluate(() => window.hibi.getDocument()))
     .markdown
   assert.equal(await page.locator('.cm-lineNumbers').count(), 0)
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^editor$/i, exact: true }).click()
   await page.getByRole('checkbox', { name: /show line numbers/i }).check()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await page.locator('.cm-lineNumbers').waitFor()
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
@@ -200,10 +201,10 @@ test('empty entry, three views, and lossless source switching', {
     .getByRole('button', { name: /^markdown only$/i, exact: true })
     .click()
   await page.locator('.cm-lineNumbers').waitFor()
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^editor$/i, exact: true }).click()
   await page.getByRole('checkbox', { name: /show line numbers/i }).uncheck()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await page.locator('.cm-lineNumbers').waitFor({ state: 'detached' })
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,

@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'vite'
 import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
 
 test('recovery preview preserves the live draft; real render failures offer recovery actions', {
   timeout: 45000,
@@ -25,7 +26,7 @@ test('recovery preview preserves the live draft; real render failures offer reco
   await page
     .getByRole('textbox', { name: /document editor/i })
     .fill('keep this draft')
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('button', { name: /preview explode screen/i }).click()
   const preview = page.getByRole('dialog', { name: /recovery preview/i })
   await preview

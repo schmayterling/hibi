@@ -32,6 +32,8 @@ use `ShortcutKeys` from `src/addons/ui.ts` in addons, or `src/ui/ShortcutKeys.ts
 
 ## settings
 
+the app titlebar contains sidebar controls, document tabs, and editor view switches. use the File menu for new/open/save and the View menu or configured shortcuts for settings and the command palette. opening settings focuses the selected sidebar category so keyboard navigation works from the menu. settings return through the sidebar's **Back to app** item or Escape.
+
 write UI labels and descriptions in sentence case, preserving proper names such as GitHub, Vim, Markdown, and Typst. the optional lowercase interface style uses `--ui-text-transform`; controls must inherit it. never transform document content or editable field values. status items can set `verbatim: true` for case-sensitive data such as Vim commands. shared setting labels, menus, dialog titles, notifications, and ordinary status labels normalize sentence case at their rendering boundary.
 
 group related rows on one surface with inset separators. each row puts its label and description on the left and its control on the right. controls wrap inside narrow panels, including when the sidebar is widened. keep native input semantics, labels, descriptions, and keyboard focus behavior.

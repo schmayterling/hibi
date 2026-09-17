@@ -12,6 +12,7 @@ import {
   themePreferences,
 } from '../src/shared/colorschemes.ts'
 import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
 import { uiName } from './ui.mjs'
 
 function contrast(a, b) {
@@ -137,7 +138,7 @@ test('app palettes update all surfaces, preserve editing, and persist native app
   await page.evaluate(() => {
     window.originalEditor = document.querySelector('.tiptap')
   })
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
   for (const scheme of bundledColorschemes) {
     await page
@@ -206,7 +207,7 @@ test('app palettes update all surfaces, preserve editing, and persist native app
     }, payload),
     true,
   )
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await editor.press('End')
   await editor.pressSequentially('!')
   await editor.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')

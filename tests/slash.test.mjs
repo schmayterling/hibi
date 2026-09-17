@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { filterCommands } from '../src/addons/slash-commands/commands.ts'
 import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
 
 test('slash search matches labels, descriptions, and extension keywords without case sensitivity', () => {
   const context = {
@@ -176,23 +177,23 @@ test('slash commands work in both editors, preserve undo, and coexist with vim',
     .click()
 
   await page.mouse.move(450, 18)
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   await page.locator('#addon-slash-commands').click()
   await page.waitForFunction(
     () =>
       !document.querySelector('style[data-addon-style="slash-commands.menu"]'),
   )
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await source.fill('/h1')
   assert.equal(await menu.count(), 0)
   const beforeToggle = await read()
   await page.mouse.move(450, 18)
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   await page.locator('#addon-slash-commands').click()
   await page.locator('#addon-vim').click()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   assert.equal(await read(), beforeToggle)
   await page
     .getByRole('status')

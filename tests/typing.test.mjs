@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { typingSpeed } from '../src/addons/typing-speed/speed.ts'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('typing speed estimates a session rate and resets after a five-second pause', () => {
@@ -41,10 +41,10 @@ test('typing pills, source formatting shortcuts, and sidebar shortcut', {
   page.setDefaultTimeout(6000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   await page.locator('#addon-typing-speed').click()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await page
     .getByRole('textbox', { name: /document editor/i })
     .pressSequentially('hello')
@@ -93,7 +93,7 @@ test('typing pills, source formatting shortcuts, and sidebar shortcut', {
   await page
     .getByRole('dialog', { name: /command palette/i })
     .waitFor({ state: 'hidden' })
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.locator('#addon-typing-speed').click()
   assert.equal(await cpm.count(), 0)
 })

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
 import { uiName } from './ui.mjs'
 
 test('titlebar insets titles without leading actions and adapts outer button corners', async (t) => {
@@ -18,6 +19,28 @@ test('titlebar insets titles without leading actions and adapts outer button cor
   const page = await app.firstWindow()
   await page.setViewportSize({ width: 1000, height: 600 })
   await page.emulateMedia({ reducedMotion: 'reduce' })
+  const titlebar = page.locator('.titlebar')
+  for (const name of [
+    'new',
+    'open',
+    'save',
+    'editor settings',
+    'command palette',
+    'back to editor',
+  ])
+    assert.equal(
+      await titlebar
+        .getByRole('button', { name: new RegExp(`^${name}$`, 'i') })
+        .count(),
+      0,
+    )
+  assert.equal(
+    await titlebar
+      .getByRole('navigation', { name: /editor view/i })
+      .getByRole('button')
+      .count(),
+    3,
+  )
   await page
     .getByRole('tab', { name: /^untitled\.md$/i, exact: true })
     .dblclick()
@@ -33,7 +56,7 @@ test('titlebar insets titles without leading actions and adapts outer button cor
       .evaluate((tab) => getComputedStyle(tab).borderRadius),
     '6px',
   )
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   for (const category of ['hibi', 'appearance']) {
     await page
       .getByRole('tab', { name: uiName(category, true), exact: true })
@@ -79,7 +102,7 @@ test('titlebar insets titles without leading actions and adapts outer button cor
   await page
     .getByRole('button', { name: /^dismiss notice$/i, exact: true })
     .click()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   for (const open of [true, false]) {
     await page
       .getByRole('button', { name: /toggle workspace sidebar/i })

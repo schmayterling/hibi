@@ -10,7 +10,7 @@ import {
   alertTypes,
 } from '../src/addons/github-markdown/alerts.ts'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('github alerts use quote boundaries and leave other markdown alone', () => {
@@ -164,9 +164,7 @@ test('github alerts edit in rich/split view, keep markers, and export with theme
     /edited warning/,
   )
   await site.close()
-  await page
-    .getByRole('button', { name: /^editor settings$/i, exact: true })
-    .click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   await page.locator('#addon-github-markdown').click()
   await page

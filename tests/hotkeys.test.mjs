@@ -241,9 +241,7 @@ test('rebind, conflict, clear, reset, native menus, and relaunch persistence', {
   )
   await mkdir('test-results', { recursive: true })
   await page.screenshot({ path: 'test-results/hotkeys.png' })
-  await page
-    .getByRole('button', { name: /^back to editor$/i, exact: true })
-    .click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await rich.waitFor()
   await rich.focus()
   await pressShortcut(app, `${mod}+k`)
@@ -252,7 +250,9 @@ test('rebind, conflict, clear, reset, native menus, and relaunch persistence', {
   assert.equal(await app.evaluate(() => globalThis.saveCalls), 0)
   await pressShortcut(app, `${mod}+Shift+d`)
   await page.waitForFunction(
-    () => !document.querySelector('.document-actions button:disabled'),
+    () =>
+      document.querySelector('.titlebar')?.getAttribute('aria-busy') ===
+      'false',
   )
   assert.equal(await app.evaluate(() => globalThis.saveCalls), 1)
   await pressShortcut(app, `${mod}+j`)

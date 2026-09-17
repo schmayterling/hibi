@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { uiName } from './ui.mjs'
 
 test('command palette, full-height settings, and local geist fonts', {
@@ -86,27 +86,23 @@ test('command palette, full-height settings, and local geist fonts', {
       style.backgroundColor,
     ]
   }
-  const toolbarKeys = await page
-    .locator('.palette-trigger kbd')
+  const footerKeys = await palette
+    .locator('.palette-footer kbd')
     .first()
     .evaluate(keyStyle)
   assert.deepEqual(
     await palette.locator('.shortcut-keys kbd').first().evaluate(keyStyle),
-    toolbarKeys,
+    footerKeys,
   )
   await search.click()
   assert.equal(await palette.isVisible(), true)
   await page.mouse.click(12, 400)
   await palette.waitFor({ state: 'hidden' })
-  await page
-    .getByRole('button', { name: /^command palette$/i, exact: true })
-    .click()
+  await clickMenu(app, 'Command palette')
   await palette.waitFor()
   await page.mouse.click(300, 18)
   await palette.waitFor({ state: 'hidden' })
-  await page
-    .getByRole('button', { name: /^command palette$/i, exact: true })
-    .click()
+  await clickMenu(app, 'Command palette')
   await palette.waitFor()
   await search.fill('side-by-side')
   await search.press('Enter')
@@ -128,9 +124,7 @@ test('command palette, full-height settings, and local geist fonts', {
     [true, true],
   )
 
-  await page
-    .getByRole('button', { name: /^command palette$/i, exact: true })
-    .click()
+  await clickMenu(app, 'Command palette')
   await search.fill('preferences settings')
   await search.press('Enter')
   await palette.waitFor({ state: 'hidden' })
@@ -152,7 +146,7 @@ test('command palette, full-height settings, and local geist fonts', {
     if (category === 'hotkeys')
       assert.deepEqual(
         await page.locator('.hotkey-binding kbd').first().evaluate(keyStyle),
-        toolbarKeys,
+        footerKeys,
       )
     for (const width of [1000, 480]) {
       await page.setViewportSize({ width, height: 720 })
@@ -236,9 +230,7 @@ test('command palette, full-height settings, and local geist fonts', {
   await mkdir('test-results', { recursive: true })
   await page.screenshot({ path: 'test-results/settings.png' })
 
-  await page
-    .getByRole('button', { name: /^command palette$/i, exact: true })
-    .click()
+  await clickMenu(app, 'Command palette')
   await search.fill('no matching action')
   await page
     .getByRole('status')
@@ -247,9 +239,7 @@ test('command palette, full-height settings, and local geist fonts', {
   await search.press('Escape')
   await palette.waitFor({ state: 'hidden' })
   assert.equal(await settings.isVisible(), true)
-  await page
-    .getByRole('button', { name: /^command palette$/i, exact: true })
-    .click()
+  await clickMenu(app, 'Command palette')
   const first = await search.getAttribute('aria-activedescendant')
   await search.press('ArrowDown')
   assert.notEqual(await search.getAttribute('aria-activedescendant'), first)
@@ -261,9 +251,7 @@ test('command palette, full-height settings, and local geist fonts', {
   await palette.waitFor({ state: 'hidden' })
 
   await page.emulateMedia({ reducedMotion: 'reduce' })
-  await page
-    .getByRole('button', { name: /^command palette$/i, exact: true })
-    .click()
+  await clickMenu(app, 'Command palette')
   await palette.waitFor()
   assert.equal(
     await palette.evaluate(

@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { checkSidebarResize } from './sidebar-resize.mjs'
 import { uiName } from './ui.mjs'
 
@@ -149,7 +149,7 @@ test('nested workspace editing, addon lifecycle, and offline static export', {
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     draft,
   )
-  await page.getByRole('button', { name: /^save$/i, exact: true }).click()
+  await clickMenu(app, 'Save')
   await page
     .getByRole('status', { name: /unsaved changes/i })
     .waitFor({ state: 'hidden' })
@@ -166,9 +166,7 @@ test('nested workspace editing, addon lifecycle, and offline static export', {
     .click()
   await page.getByRole('heading', { name: /^welcome$/i, exact: true }).waitFor()
 
-  await page
-    .getByRole('button', { name: /^editor settings$/i, exact: true })
-    .click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   const enabled = page.getByRole('checkbox', {
     name: /^documentation$/i,
@@ -206,9 +204,7 @@ test('nested workspace editing, addon lifecycle, and offline static export', {
     ),
     /unknown addon method/,
   )
-  await page
-    .getByRole('button', { name: /^back to editor$/i, exact: true })
-    .click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   assert.equal(
     await page.locator('.workspace-sidebar .sidebar-footer').count(),
     0,
@@ -231,7 +227,7 @@ test('nested workspace editing, addon lifecycle, and offline static export', {
           throw new Error('could not open example file')
         }
       })
-      await page.getByRole('button', { name: /^open$/i, exact: true }).click()
+      await clickMenu(app, 'Open…')
     }
     await page.waitForFunction((kind) => {
       const notice = document

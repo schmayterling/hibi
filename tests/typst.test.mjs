@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 import { renameDocument } from './rename.mjs'
 import { uiName } from './ui.mjs'
@@ -48,10 +48,10 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   const read = () => page.evaluate(() => window.hibi.getDocument())
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   await page.locator('#addon-typst').click()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await app.evaluate(({ dialog }, notes) => {
     dialog.showOpenDialog = async (_window, options) => ({
       canceled: false,
@@ -116,12 +116,12 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   await formatDialog.waitFor()
   await formatDialog.getByRole('button', { name: /^ok$/i, exact: true }).click()
   assert.equal((await read()).markdown, updated)
-  await renameDocument(page, 'renamed')
+  await renameDocument(app, page, 'renamed')
   await tree
     .getByRole('treeitem', { name: /^renamed\.typ$/i, exact: true })
     .waitFor()
   assert.equal(await readFile(join(notes, 'renamed.typ'), 'utf8'), updated)
-  await renameDocument(page, 'report')
+  await renameDocument(app, page, 'report')
   await tree
     .getByRole('treeitem', { name: /^report\.typ$/i, exact: true })
     .waitFor()
@@ -151,10 +151,10 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
       'unexpected success',
     (error) => error.message,
   )
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
   assert.match(await loop, /timed out|infinite/)
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   assert.ok((await query('recovered')).svg)
   // Exercise timeout/restart deterministically without allocating an enormous Typst document.
   await page.evaluate(() => window.hibi.setAddonEnabled('typst', false))
@@ -251,10 +251,10 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     true,
   )
   await site.close()
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   await page.locator('#addon-typst').click()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await page.locator('.tiptap pre').waitFor()
   assert.equal(
     await page.locator('.tiptap').getAttribute('contenteditable'),

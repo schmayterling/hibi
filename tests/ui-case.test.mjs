@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
 
 test('sentence case is default; lowercase covers UI and menus while preserving content and persists', {
   timeout: 30000,
@@ -43,7 +44,7 @@ test('sentence case is default; lowercase covers UI and menus while preserving c
   await page
     .getByRole('textbox', { name: /document editor/i })
     .fill('CaseSensitiveValue')
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i }).click()
   assert.equal(
     await page.locator('#settings-appearance h1').innerText(),
@@ -89,7 +90,7 @@ test('sentence case is default; lowercase covers UI and menus while preserving c
     ),
     'lowercase',
   )
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   const rich = page.getByRole('textbox', { name: /document editor/i })
   assert.equal(await rich.innerText(), 'CaseSensitiveValue')
   assert.equal(
@@ -124,7 +125,7 @@ test('sentence case is default; lowercase covers UI and menus while preserving c
     await page.locator('.startup-placeholder h2').innerText(),
     'start typing',
   )
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i }).click()
   await page.getByRole('checkbox', { name: /^lowercase interface$/i }).uncheck()
   assert.equal(

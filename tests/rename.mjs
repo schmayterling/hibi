@@ -1,5 +1,7 @@
-export async function openRename(page) {
-  await page.getByRole('button', { name: /^command palette$/i }).click()
+import { clickMenu } from './keyboard.mjs'
+
+export async function openRename(app, page) {
+  await clickMenu(app, 'Command palette')
   await page
     .getByRole('combobox', { name: /^search commands$/i })
     .fill('rename document')
@@ -10,8 +12,8 @@ export async function openRename(page) {
   return page.getByRole('textbox', { name: /^file name$/i })
 }
 
-export async function renameDocument(page, name) {
-  const input = await openRename(page)
+export async function renameDocument(app, page, name) {
+  const input = await openRename(app, page)
   await input.fill(name)
   await input.press('Enter')
   await page

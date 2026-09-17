@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('file tabs preserve independent drafts and guard closing, saving, and workspace mutations', {
@@ -56,7 +56,7 @@ test('file tabs preserve independent drafts and guard closing, saving, and works
     )
   await rich.fill('untitled draft')
   const untitled = (await read()).tabId
-  await page.getByRole('button', { name: /^new$/i, exact: true }).click()
+  await clickMenu(app, 'New')
   await waitForAsync(
     page,
     async (id) => (await window.hibi.getDocument()).tabId !== id,
@@ -68,13 +68,13 @@ test('file tabs preserve independent drafts and guard closing, saving, and works
     async () => (await window.hibi.getDocument()).markdown === 'untitled draft',
   )
   await choose(a)
-  await page.getByRole('button', { name: /^open$/i, exact: true }).click()
+  await clickMenu(app, 'Open…')
   await page.getByRole('tab', { name: /^a\.md$/i, exact: true }).waitFor()
   await waitEditable()
   await rich.fill('draft a')
   const aTab = (await read()).tabId
   await choose(b)
-  await page.getByRole('button', { name: /^open$/i, exact: true }).click()
+  await clickMenu(app, 'Open…')
   await page.getByRole('tab', { name: /^b\.md$/i, exact: true }).waitFor()
   const bTab = (await read()).tabId
   assert.equal(
@@ -125,14 +125,14 @@ test('file tabs preserve independent drafts and guard closing, saving, and works
   assert.equal((await read()).tabId, bTab)
   await page.locator(`[data-tab-id="${untitled}"]`).click()
   await waitEditable()
-  await page.getByRole('button', { name: /^save$/i, exact: true }).click()
+  await clickMenu(app, 'Save')
   await page
     .getByRole('alert')
     .filter({ hasText: /already open in another tab/i })
     .waitFor()
   assert.equal(await readFile(b, 'utf8'), 'original b')
   await choose(a)
-  await page.getByRole('button', { name: /^open$/i, exact: true }).click()
+  await clickMenu(app, 'Open…')
   await page.getByRole('tab', { name: /^a\.md$/i, exact: true }).waitFor()
   await waitEditable()
   await rich.fill('moved draft')
@@ -217,7 +217,7 @@ test('file tabs preserve independent drafts and guard closing, saving, and works
     0,
   )
   const lastTab = (await read()).tabId
-  await page.getByRole('button', { name: /^new$/i, exact: true }).click()
+  await clickMenu(app, 'New')
   await waitForAsync(
     page,
     async (id) => (await window.hibi.getDocument()).tabId !== id,

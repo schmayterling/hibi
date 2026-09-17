@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('shift-click links, note/settings history, and file-menu remote imports', {
@@ -131,7 +131,7 @@ test('shift-click links, note/settings history, and file-menu remote imports', {
   await page.mouse.click(point.x, point.y)
   await page.keyboard.up('Shift')
   await waitName('b.md')
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
   await page.getByRole('tab', { name: /^hotkeys$/i, exact: true }).click()
   await pressShortcut(app, `${mod}+[`)
@@ -148,9 +148,7 @@ test('shift-click links, note/settings history, and file-menu remote imports', {
   )
   const beforeSettings = (await page.evaluate(() => window.hibi.getDocument()))
     .markdown
-  await page
-    .getByRole('button', { name: /^editor settings$/i, exact: true })
-    .click()
+  await clickMenu(app, 'Settings')
   const back = page.getByRole('button', { name: /^back to app$/i, exact: true })
   const categoryTab = page.getByRole('tab', { name: /^hibi$/i, exact: true })
   const backBounds = await back.boundingBox()

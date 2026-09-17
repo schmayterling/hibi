@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 import { uiName } from './ui.mjs'
 
@@ -27,7 +27,7 @@ test('toolbar auto-hide defaults on, shares top-bar timing, and moves content sm
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await rich.waitFor()
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
   const autoHide = page.getByRole('checkbox', {
     name: /^hide toolbar while typing$/i,
@@ -43,7 +43,7 @@ test('toolbar auto-hide defaults on, shares top-bar timing, and moves content sm
       .isChecked(),
     true,
   )
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   const expanded = await page
     .locator('.toolbar-slot')
     .evaluate((element) => element.getBoundingClientRect().height)
@@ -119,9 +119,9 @@ test('toolbar auto-hide defaults on, shares top-bar timing, and moves content sm
     ),
   )
   assert.equal(showing.at(-1).fade, 0)
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await autoHide.uncheck()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await rich.press('b')
   await page.waitForFunction(
     () => getComputedStyle(document.querySelector('.titlebar')).opacity === '0',
@@ -133,11 +133,11 @@ test('toolbar auto-hide defaults on, shares top-bar timing, and moves content sm
     expanded,
   )
   await page.reload()
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
   assert.equal(await autoHide.isChecked(), false)
   await autoHide.check()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await rich.press('c')
   await page.waitForFunction(
@@ -407,7 +407,7 @@ test('markdown toolbar formats both panes, preserves undo, and persists drag ord
     await bar.getByRole('button').first().getAttribute('data-toolbar-id'),
     'format.italic',
   )
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
   await page.locator('.toolbar-order summary').click()
   const order = page.getByRole('list', { name: /toolbar order/i })

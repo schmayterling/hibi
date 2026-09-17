@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 test('cursor appearance, movement, selection hiding, and persistence in both editors', {
   timeout: 30000,
@@ -56,7 +56,7 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
   const cursor = page.locator('.editor-cursor')
   await cursor.waitFor()
   assert.equal(await cursor.getAttribute('data-style'), 'bar')
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
   await page
     .getByLabel(/^cursor style$/i, { exact: true })
@@ -65,7 +65,7 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
   await page
     .getByLabel(/^cursor animation$/i, { exact: true })
     .selectOption('smooth')
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await cursor.waitFor()
   await page.evaluate(
     () =>
@@ -125,7 +125,7 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     ['block', 'slow'],
     ['underline', 'normal'],
   ]) {
-    await page.getByRole('button', { name: /editor settings/i }).click()
+    await clickMenu(app, 'Settings')
     await page
       .getByLabel(/^cursor style$/i, { exact: true })
       .selectOption(shape)
@@ -135,7 +135,7 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     await page
       .getByLabel(/^cursor animation$/i, { exact: true })
       .selectOption('blink')
-    await page.getByRole('button', { name: /back to editor/i }).click()
+    await page.getByRole('button', { name: /^back to app$/i }).click()
     await cursor.waitFor()
     assert.equal(await cursor.getAttribute('data-style'), shape)
     assert.equal(
@@ -199,7 +199,7 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     ),
   ])
   await rich.waitFor()
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
   assert.equal(
     await page.getByLabel(/^cursor style$/i, { exact: true }).inputValue(),

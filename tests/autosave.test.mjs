@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('autosave preserves later edits, pauses on external changes, and never prompts for unnamed drafts', {
@@ -43,13 +44,13 @@ test('autosave preserves later edits, pauses on external changes, and never prom
   await pill.click()
   await page.getByRole('checkbox', { name: /^autosave$/i, exact: true }).check()
   await page.getByLabel(/^save after$/i, { exact: true }).selectOption('1000')
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await rich.fill('new draft')
   await page.waitForTimeout(1200)
   assert.equal(await app.evaluate(() => globalThis.dialogsShown), 0)
   assert.equal(await pill.innerText(), 'Autosave · save first')
   await rich.fill('')
-  await page.getByRole('button', { name: /^open$/i, exact: true }).click()
+  await clickMenu(app, 'Open…')
   await waitForAsync(
     page,
     async () => (await window.hibi.getDocument()).canAutosave,
@@ -97,7 +98,7 @@ test('autosave preserves later edits, pauses on external changes, and never prom
   await rich.fill('another local edit')
   await page.waitForTimeout(1200)
   assert.equal(await readFile(file, 'utf8'), 'external edit')
-  await page.getByRole('button', { name: /^save$/i, exact: true }).click()
+  await clickMenu(app, 'Save')
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   assert.equal(await readFile(file, 'utf8'), 'another local edit')
   await page.waitForFunction(

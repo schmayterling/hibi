@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { collectLicenses } from '../scripts/licenses.ts'
 import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
 
 test('license catalog retains dependency and palette notices, excluding build tools', async () => {
   const entries = await collectLicenses()
@@ -64,7 +65,7 @@ test('hibi opens first, sponsor uses a fixed URL, and license dialogs stay reada
   page.setDefaultTimeout(5000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   const sidebar = page.getByRole('tablist', { name: /settings categories/i })
   assert.equal(await sidebar.getByRole('tab').first().innerText(), 'Hibi')
   assert.equal(

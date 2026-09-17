@@ -12,7 +12,7 @@ import {
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
 import { installSyntaxPreferences } from '../src/renderer/src/syntax-parser.ts'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 import { uiName } from './ui.mjs'
 
@@ -107,9 +107,7 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
   )
   assert.equal(await rich.locator('s').innerText(), 'strike')
   const settings = async () => {
-    await page
-      .getByRole('button', { name: /^editor settings$/i, exact: true })
-      .click()
+    await clickMenu(app, 'Settings')
     await page.getByRole('tab', { name: /^syntax$/i, exact: true }).click()
   }
   await settings()

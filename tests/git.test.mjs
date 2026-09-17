@@ -14,7 +14,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const execute = promisify(execFile)
@@ -86,11 +86,11 @@ test('git addon stages, commits, switches, pulls and pushes only to a disposable
   await page.waitForFunction(
     () => document.querySelector('.tiptap')?.textContent === 'initial',
   )
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   await page.locator('#addon-git').click()
   await page.waitForFunction(() => document.querySelector('#addon-git').checked)
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   const invoke = (method, input) =>
     page.evaluate(
       ({ method, input }) => window.hibi.invokeAddon('git', method, input),
@@ -236,7 +236,7 @@ test('git addon stages, commits, switches, pulls and pushes only to a disposable
     animations: 'disabled',
   })
   await page.getByRole('treeitem', { name: /^note\.md$/i, exact: true }).click()
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   await page.locator('#addon-git').click()
   await page.waitForFunction(
@@ -247,7 +247,7 @@ test('git addon stages, commits, switches, pulls and pushes only to a disposable
     /not enabled/,
   )
   await page.locator('#addon-git').click()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   await nested.locator('.sidebar-decoration').waitFor()
   await assert.rejects(
     page.evaluate(() => window.hibi.queryAddon('git', 'stage', 'note.md')),

@@ -1248,12 +1248,8 @@ function App() {
         platform={info?.platform ?? 'darwin'}
         document={document}
         settingsOpen={settingsOpen}
-        onSettings={() => addonHost.app.runAction('settings')}
-        onPalette={() => addonHost.app.runAction('palette')}
         mode={mode}
         onMode={(view) => addonHost.app.runAction(view)}
-        onCommand={(command) => void addonHost.app.runCommand(command)}
-        disabled={!document}
       />
       {paletteOpen && (
         <CommandPalette

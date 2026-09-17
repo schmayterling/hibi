@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 test('keybeats uses local audio, editor input, toolbar controls, and clean addon teardown', {
   timeout: 45000,
@@ -64,7 +64,7 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
       return close.apply(this, args)
     }
   })
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   await page.locator('#addon-keybeats').click()
   await page.getByRole('tab', { name: /^keybeats$/i, exact: true }).click()
@@ -94,7 +94,7 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
     path: 'test-results/keybeats-settings.png',
     animations: 'disabled',
   })
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   const toolbar = page.getByRole('navigation', { name: /editor toolbar/i })
   await toolbar.waitFor()
   const soundAction = toolbar.locator('[data-toolbar-id="keybeats.mute"]')
@@ -146,9 +146,7 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
   await typeKey(source)
   assert.equal(await sounds(), count + 2)
   count = await sounds()
-  await page
-    .getByRole('button', { name: /^command palette$/i, exact: true })
-    .click()
+  await clickMenu(app, 'Command palette')
   await page
     .getByRole('combobox', { name: /search commands/i })
     .pressSequentially('normal')
@@ -185,7 +183,7 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
     )
   })
   await find.press('Escape')
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^keybeats$/i, exact: true }).click()
   for (const id of await plugin
     .locator('select option')
@@ -199,20 +197,20 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
     .getByLabel(/^toolbar labels$/i, { exact: true })
     .selectOption('icons-and-text')
   await page.getByLabel(/^show toolbar$/i, { exact: true }).uncheck()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   assert.equal(await toolbar.count(), 0)
   await typeKey(source)
   assert.equal(await sounds(), count + 2)
   count = await sounds()
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByLabel(/^show toolbar$/i, { exact: true }).check()
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   assert.equal(await soundAction.innerText(), 'Mute keyboard sounds')
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   await page.locator('#addon-keybeats').click()
   await page.waitForFunction(() => window.audioTest.closed === 1)
-  await page.getByRole('button', { name: /back to editor/i }).click()
+  await page.getByRole('button', { name: /^back to app$/i }).click()
   assert.equal(await soundAction.count(), 0)
   await typeKey(source)
   assert.equal(await sounds(), count)

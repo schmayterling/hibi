@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
 
 test('desktop launch, isolation, offline reload, and recovery', {
   timeout: 60000,
@@ -40,7 +41,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
     }),
     { maximized: false, fullscreen: false, visible: false, focused: false },
   )
-  await page.getByRole('button', { name: /editor settings/i }).click()
+  await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^hibi$/i, exact: true }).click()
   await page
     .locator('.settings-sidebar .settings-versions')

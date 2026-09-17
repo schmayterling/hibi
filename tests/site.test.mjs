@@ -65,6 +65,7 @@ test('documentation breadcrumbs, outline, pagination, and phone navigation', {
     void window.loadFile(html)
   }, html)
   const page = await nextWindow
+  await page.setViewportSize({ width: 1440, height: 900 })
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('heading', { name: /^welcome$/i, exact: true }).waitFor()

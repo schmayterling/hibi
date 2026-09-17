@@ -24,7 +24,9 @@ tests use temporary profiles and real Electron windows. file dialogs are control
 
 the settings focus regression deliberately focuses the source editor between settings dismissal and its deferred restoration frame. the newer focus must win, so immediate source input cannot land in the rich pane.
 
-native tests import `electron` from `tests/electron.mjs`. this launcher adds `--hibi-test`, keeping windows hidden and unfocusable, with background rendering enabled and all web contents muted. on macOS the test app uses accessory activation policy, so it has no Dock icon. normal app launches keep their usual window behavior. screenshots and DOM input still run against real Electron renderers in the background.
+native tests import `electron` from `tests/electron.mjs`. this launcher adds `--hibi-test`, keeping local windows hidden and unfocusable, with background rendering enabled and all web contents muted. on macOS the test app uses accessory activation policy, so it has no Dock icon. normal app launches keep their usual window behavior. screenshots and DOM input still run against real Electron renderers in the background.
+
+GitHub Actions uses its isolated desktop for test windows, keeping Linux compositor frames and native input active. Linux runs under a 1920×1080 Xvfb display and a session bus. desktop export tests set their browser viewport explicitly, audio checks use a native silent output sink, and notification positioning checks use the stack boundary rather than platform scrollbar width. tracked text stays LF on Windows through `.gitattributes`. superseded checks are cancelled and each platform job has a 20-minute limit.
 
 toolbar and tooltip checks exercise all display modes, visibility, scope cleanup, stale handles, keyboard help, existing descriptions, and help inside native dialogs. keybeats tests decode all 150 local recordings with audio output muted, exercise rich/source input, repeats, search exclusion, profile switching, mute, and disabling the addon. command palette tests sample the selection marker mid-transition and check reduced motion.
 

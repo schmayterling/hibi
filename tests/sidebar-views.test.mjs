@@ -23,7 +23,10 @@ test('sidebar starts hidden, stays open while typing, and navigates the page out
   const page = await app.firstWindow()
   page.setDefaultTimeout(6500)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-  assert.equal(await page.locator('.app').getAttribute('data-sidebar'), 'false')
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.app')?.getAttribute('data-sidebar') === 'false',
+  )
   await page
     .getByRole('button', { name: /^markdown only$/i, exact: true })
     .click()
@@ -82,7 +85,10 @@ test('sidebar starts hidden, stays open while typing, and navigates the page out
     app,
     process.platform === 'darwin' ? 'Meta+/' : 'Control+/',
   )
-  assert.equal(await page.locator('.app').getAttribute('data-sidebar'), 'false')
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.app')?.getAttribute('data-sidebar') === 'false',
+  )
   await pressShortcut(
     app,
     process.platform === 'darwin' ? 'Meta+/' : 'Control+/',

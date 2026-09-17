@@ -298,7 +298,7 @@ test('plugin pages, metadata, shared controls, and full source vim editing', {
   assert.equal(await unavailable.innerText(), 'Vim · off')
   assert.match(
     await unavailable.getAttribute('data-tooltip'),
-    /switch to Markdown or side-by-side view/i,
+    /disabled in the Normal view.*side-by-side or Markdown-only view/i,
   )
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })

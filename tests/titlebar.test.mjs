@@ -20,6 +20,7 @@ test('titlebar insets titles without leading actions and adapts outer button cor
   await page.setViewportSize({ width: 1000, height: 600 })
   await page.emulateMedia({ reducedMotion: 'reduce' })
   const titlebar = page.locator('.titlebar')
+  await titlebar.waitFor()
   for (const name of [
     'new',
     'open',

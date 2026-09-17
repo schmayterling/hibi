@@ -46,6 +46,13 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
   )
   await page.evaluate(() => {
     window.audioTest = { starts: 0, decodes: 0, closed: 0 }
+    const NativeAudioContext = window.AudioContext
+    // Keep real decoding and playback scheduling without requiring a runner sound card.
+    window.AudioContext = class extends NativeAudioContext {
+      constructor(options) {
+        super({ ...options, sinkId: { type: 'none' } })
+      }
+    }
     const start = AudioBufferSourceNode.prototype.start
     const decode = AudioContext.prototype.decodeAudioData
     const close = AudioContext.prototype.close

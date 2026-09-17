@@ -29,18 +29,20 @@ test('desktop launch, isolation, offline reload, and recovery', {
   assert.equal(page.url(), 'app://hibi/')
   if (process.platform === 'darwin')
     assert.equal(await app.evaluate(({ app }) => app.dock.isVisible()), false)
-  assert.deepEqual(
-    await app.evaluate(({ BrowserWindow }) => {
-      const window = BrowserWindow.getAllWindows()[0]
-      return {
-        maximized: window.isMaximized(),
-        fullscreen: window.isFullScreen(),
-        visible: window.isVisible(),
-        focused: window.isFocused(),
-      }
-    }),
-    { maximized: false, fullscreen: false, visible: false, focused: false },
-  )
+  const windowState = await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    return {
+      maximized: window.isMaximized(),
+      fullscreen: window.isFullScreen(),
+      visible: window.isVisible(),
+      focused: window.isFocused(),
+    }
+  })
+  assert.equal(windowState.maximized, false)
+  assert.equal(windowState.fullscreen, false)
+  assert.equal(windowState.visible, process.env.GITHUB_ACTIONS === 'true')
+  if (process.env.GITHUB_ACTIONS !== 'true')
+    assert.equal(windowState.focused, false)
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^hibi$/i, exact: true }).click()
   await page
@@ -266,22 +268,29 @@ test('desktop launch, isolation, offline reload, and recovery', {
   }
 
   await t.test('renderer crash offers reload and recovers', async () => {
-    const recovered = await app.evaluate(async ({ dialog, BrowserWindow }) => {
-      dialog.showMessageBox = async () => ({
-        response: 0,
-        checkboxChecked: false,
-      })
-      const contents = BrowserWindow.getAllWindows()[0].webContents
-      const reloaded = new Promise((resolve) =>
-        contents.once('did-finish-load', resolve),
-      )
-      contents.forcefullyCrashRenderer()
-      await reloaded
-      // Playwright retains its crashed target; inspect the new renderer through Electron.
-      return contents.executeJavaScript(
-        'new Promise(resolve => { const check = () => document.querySelector(".tiptap") ? window.hibi.getAppInfo().then(info => resolve({ editor: true, version: info.version })) : requestAnimationFrame(check); check() })',
-      )
-    })
+    const current = await app.firstWindow()
+    // Finish pending locator-handle disposal before crashing the debug target.
+    await current.evaluate(() => undefined)
+    const crashed = current.waitForEvent('crash')
+    const [recovered] = await Promise.all([
+      app.evaluate(async ({ dialog, BrowserWindow }) => {
+        dialog.showMessageBox = async () => ({
+          response: 0,
+          checkboxChecked: false,
+        })
+        const contents = BrowserWindow.getAllWindows()[0].webContents
+        const reloaded = new Promise((resolve) =>
+          contents.once('did-finish-load', resolve),
+        )
+        contents.forcefullyCrashRenderer()
+        await reloaded
+        // Playwright retains its crashed target; inspect the new renderer through Electron.
+        return contents.executeJavaScript(
+          'new Promise(resolve => { const check = () => document.querySelector(".tiptap") ? window.hibi.getAppInfo().then(info => resolve({ editor: true, version: info.version })) : requestAnimationFrame(check); check() })',
+        )
+      }),
+      crashed,
+    ])
     assert.deepEqual(recovered, {
       editor: true,
       version: '0.1.0',

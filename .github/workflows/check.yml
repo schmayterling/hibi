@@ -2,8 +2,12 @@ name: check
 on: [push, pull_request]
 permissions:
   contents: read
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   desktop:
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -19,7 +23,7 @@ jobs:
       - run: npm run lint
       - run: npm test
         if: runner.os != 'Linux'
-      - run: xvfb-run --auto-servernum npm test
+      - run: dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' npm test
         if: runner.os == 'Linux'
       - run: npm run package
         env:

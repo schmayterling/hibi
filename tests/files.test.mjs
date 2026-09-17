@@ -144,19 +144,25 @@ test('native file operations preserve drafts and avoid silent overwrites', {
     ),
     1,
   )
-  const recovered = await app.evaluate(async ({ dialog, BrowserWindow }) => {
-    dialog.showMessageBox = async () => ({
-      response: 0,
-      checkboxChecked: false,
-    })
-    const contents = BrowserWindow.getAllWindows()[0].webContents
-    const loaded = new Promise((resolve) =>
-      contents.once('did-finish-load', resolve),
-    )
-    contents.forcefullyCrashRenderer()
-    await loaded
-    return contents.executeJavaScript('window.hibi.getDocument()')
-  })
+  // Finish pending locator-handle disposal before crashing the debug target.
+  await page.evaluate(() => undefined)
+  const crashed = page.waitForEvent('crash')
+  const [recovered] = await Promise.all([
+    app.evaluate(async ({ dialog, BrowserWindow }) => {
+      dialog.showMessageBox = async () => ({
+        response: 0,
+        checkboxChecked: false,
+      })
+      const contents = BrowserWindow.getAllWindows()[0].webContents
+      const loaded = new Promise((resolve) =>
+        contents.once('did-finish-load', resolve),
+      )
+      contents.forcefullyCrashRenderer()
+      await loaded
+      return contents.executeJavaScript('window.hibi.getDocument()')
+    }),
+    crashed,
+  ])
   assert.equal(recovered.markdown, 'recover this draft')
   assert.equal(recovered.dirty, true)
 })

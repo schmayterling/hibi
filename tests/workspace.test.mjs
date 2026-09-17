@@ -245,6 +245,7 @@ test('nested workspace editing, addon lifecycle, and offline static export', {
             .querySelector(
               `.toast[data-variant="${kind === 'error' ? 'error' : 'info'}"]`,
             )
+            .closest('.sonner')
             .getBoundingClientRect().right,
         editorTop: document
           .querySelector('.editor-surface')

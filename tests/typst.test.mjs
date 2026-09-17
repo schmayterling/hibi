@@ -115,6 +115,7 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   })
   await formatDialog.waitFor()
   await formatDialog.getByRole('button', { name: /^ok$/i, exact: true }).click()
+  await formatDialog.waitFor({ state: 'hidden' })
   assert.equal((await read()).markdown, updated)
   await renameDocument(app, page, 'renamed')
   await tree

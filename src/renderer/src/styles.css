@@ -175,25 +175,43 @@ button:disabled {
 .app[data-platform="darwin"] .view-switch > button:last-child {
   border-top-right-radius: var(--window-corner-radius);
 }
-.app[data-platform="win32"] .sidebar-toolbar > button:first-child,
-.app[data-platform="linux"] .sidebar-toolbar > button:first-child {
+.sidebar-toggle {
+  margin-left: auto;
+}
+.app[data-platform="win32"] .sidebar-view-shortcuts > button:first-child,
+.app[data-platform="linux"] .sidebar-view-shortcuts > button:first-child,
+.app[data-platform="win32"] .sidebar-toolbar[data-open="false"] .sidebar-toggle,
+.app[data-platform="linux"]
+  .sidebar-toolbar[data-open="false"]
+  .sidebar-toggle {
   border-top-left-radius: var(--window-corner-radius);
 }
 .sidebar-toolbar {
   --window-controls-width: 80px;
+  --sidebar-action-size: 28px;
   display: flex;
   align-items: center;
   height: 100%;
-  width: calc(var(--window-controls-width) + 52px);
+  width: calc(var(--window-controls-width) + 36px);
   padding-left: var(--window-controls-width);
+  padding-right: 8px;
   flex-shrink: 0;
   transition: width var(--motion-pane) var(--ease-out);
 }
 .sidebar-toolbar[data-open="true"] {
   width: var(--sidebar-width);
 }
-.titlebar .sidebar-view-menu {
-  width: 18px;
+.sidebar-toolbar button.icon-button {
+  width: var(--sidebar-action-size);
+  min-width: var(--sidebar-action-size);
+}
+.sidebar-view-controls,
+.sidebar-view-shortcuts {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 4px;
+  overflow: hidden;
 }
 .app[data-platform="win32"] .sidebar-toolbar,
 .app[data-platform="linux"] .sidebar-toolbar {

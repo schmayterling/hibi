@@ -72,6 +72,7 @@ export function MarkdownEditor({
   onAttach,
   onLink,
   onOutline,
+  onActiveOutline,
   outlineTarget,
 }: {
   document: DocumentState
@@ -96,6 +97,7 @@ export function MarkdownEditor({
   ) => Promise<import('../../shared/media').MediaAttachment[] | null>
   onLink: (href: string) => void
   onOutline: (headings: OutlineHeading[]) => void
+  onActiveOutline: (id: string | null) => void
   outlineTarget: OutlineRequest | null
 }) {
   const markdownDocument = isMarkdownDocument(documentState.name)
@@ -227,20 +229,92 @@ export function MarkdownEditor({
     },
     [markdownExtensions, flavors, syntaxVersion],
   )
-  // biome-ignore lint/correctness/useExhaustiveDependencies: source and rich changes update the editor document outside React.
   useEffect(() => {
-    const headings: OutlineHeading[] = []
-    if (markdownDocument)
-      editor?.state.doc.descendants((node, pos) => {
-        if (node.type.name === 'heading')
-          headings.push({
-            id: String(pos),
-            label: node.textContent || 'Untitled heading',
-            level: Number(node.attrs.level),
-          })
-      })
-    onOutline(headings)
-  }, [editor, markdownDocument, value, richRevision, onOutline])
+    if (!editor || !markdownDocument) {
+      onOutline([])
+      onActiveOutline(null)
+      return
+    }
+    const root = content.current
+    let frame = 0
+    let document: typeof editor.state.doc | null = null
+    let headings: OutlineHeading[] = []
+    let sourceHeadings: { id: string; start: number }[] = []
+    let mappedBody: string | null = null
+    const report = () => {
+      frame = 0
+      if (editor.isDestroyed) return
+      if (document !== editor.state.doc) {
+        document = editor.state.doc
+        headings = []
+        document.descendants((node, pos) => {
+          if (node.type.name === 'heading')
+            headings.push({
+              id: String(pos),
+              label: node.textContent || 'Untitled heading',
+              level: Number(node.attrs.level),
+            })
+        })
+        mappedBody = null
+        onOutline(headings)
+      }
+      let selected: string | null = null
+      if (findTarget === 'source') {
+        const element = root?.querySelector<HTMLElement>('.cm-content')
+        const view = element && SourceView.findFromDOM(element)
+        const { source, body } = scrollContent.current
+        const offset = source.lastIndexOf(body)
+        if (
+          sourceReady &&
+          view &&
+          offset >= 0 &&
+          view.state.selection.main.head >= offset
+        ) {
+          if (mappedBody !== body) {
+            const map = markdownPositions(body, document)
+            sourceHeadings = headings.flatMap((heading) => {
+              const position = map(Number(heading.id) + 1, 'rich')
+              return position === null
+                ? []
+                : [
+                    {
+                      id: heading.id,
+                      start: body.lastIndexOf('\n', position - 1) + 1,
+                    },
+                  ]
+            })
+            mappedBody = body
+          }
+          const position = view.state.selection.main.head - offset
+          for (const heading of sourceHeadings)
+            if (heading.start <= position) selected = heading.id
+        }
+      } else {
+        for (const heading of headings)
+          if (Number(heading.id) <= editor.state.selection.head)
+            selected = heading.id
+      }
+      onActiveOutline(selected)
+    }
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(report)
+    }
+    editor.on('transaction', schedule)
+    root?.addEventListener('hibi:source-caret', schedule)
+    schedule()
+    return () => {
+      cancelAnimationFrame(frame)
+      editor.off('transaction', schedule)
+      root?.removeEventListener('hibi:source-caret', schedule)
+    }
+  }, [
+    editor,
+    markdownDocument,
+    findTarget,
+    sourceReady,
+    onOutline,
+    onActiveOutline,
+  ])
   const handledOutline = useRef<OutlineRequest | null>(outlineTarget)
   useEffect(() => {
     if (!editor || !outlineTarget || handledOutline.current === outlineTarget)

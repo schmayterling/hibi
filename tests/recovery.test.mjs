@@ -35,6 +35,12 @@ test('recovery preview preserves the live draft; real render failures offer reco
     await preview.getByRole('button', { name: /reload hibi/i }).count(),
     0,
   )
+  await preview.getByRole('button', { name: /^error details$/i }).click()
+  const previewDetails = page.getByRole('dialog', { name: /^error details$/i })
+  await previewDetails.waitFor()
+  await page.keyboard.press('Escape')
+  await previewDetails.waitFor({ state: 'hidden' })
+  assert.equal(await preview.isVisible(), true)
   await page.keyboard.press('Escape')
   await preview.waitFor({ state: 'hidden' })
   assert.equal(
@@ -111,6 +117,16 @@ test('recovery preview preserves the live draft; real render failures offer reco
   assert.match(
     await crashed.locator('body').getAttribute('data-copied-error'),
     /fixture render failure/,
+  )
+  await crashed.getByRole('button', { name: /close error details/i }).click()
+  await crashed
+    .getByRole('dialog', { name: /^error details$/i })
+    .waitFor({ state: 'hidden' })
+  assert.equal(
+    await crashed
+      .getByRole('button', { name: /^error details$/i })
+      .evaluate((element) => element === document.activeElement),
+    true,
   )
   await crashed.getByRole('button', { name: /reload hibi/i }).click()
   await crashed

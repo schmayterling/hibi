@@ -1,5 +1,11 @@
 # settings
 
+## sidebar views
+
+view shortcuts sit beside the window controls while the sidebar is expanded. the sidebar toggle always keeps its sidebar icon and sits at the right edge of the expanded sidebar. shortcuts that fit appear before it; the views dropdown keeps every view available at narrower widths. collapsing the sidebar hides the shortcuts and dropdown, leaving only the toggle.
+
+the first dropdown item pins or unpins the current view. up to three pins are remembered and appear first in the shortcuts and dropdown. **In this page** nests headings by level and highlights the section containing the cursor in every editor mode.
+
 ## interface text
 
 the interface uses sentence case by default. enable **Lowercase interface** under **Appearance** to display built-in screens, extension panels, tooltips, notifications, and app menus in lowercase. the preference persists across launches. document content, typed field values, code, and case-sensitive Vim commands keep their original spelling.
@@ -28,7 +34,7 @@ addons are grouped into **enabled** and **disabled**. their metadata identifies 
 
 hibi → diagnostics → **preview explode screen** opens a dismissible preview of the recovery screen. escape or **back to settings** returns without unmounting the editor or changing the document.
 
-when a renderer component fails, the real screen offers **reload hibi**, **save a copy** of the draft still held by the main process, and expandable error details with a copy button. hibi does not claim unsent edits survived, and it never sends diagnostics automatically. native process crashes retain the operating system’s reload prompt.
+when a renderer component fails, the real screen offers **reload hibi**, **save a copy** of the draft still held by the main process, and an **error details** modal with the full stack and a copy button. Escape or the close button returns to recovery, including when previewing it from settings. hibi does not claim unsent edits survived, and it never sends diagnostics automatically. native process crashes retain the operating system’s reload prompt.
 
 ## notifications
 

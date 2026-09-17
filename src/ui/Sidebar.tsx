@@ -30,6 +30,8 @@ export type SidebarProps = {
   onSelect: (id: string) => void
   label: string
   mode?: 'tree' | 'tabs'
+  /** False keeps every branch open and lets parent rows select content. */
+  collapsible?: boolean
   open?: boolean
   className?: string
   idPrefix?: string
@@ -100,6 +102,7 @@ export function Sidebar({
   onSelect,
   label,
   mode = 'tree',
+  collapsible = true,
   open = true,
   className = '',
   idPrefix = 'sidebar',
@@ -123,7 +126,7 @@ export function Sidebar({
   const buttons = useRef(new Map<string, HTMLButtonElement>())
   const revealed = useRef('')
   useEffect(() => {
-    if (mode === 'tabs') return
+    if (mode === 'tabs' || !collapsible) return
     const parents: string[] = []
     function find(items: readonly SidebarItem[], target: string): boolean {
       return items.some((item) => {
@@ -141,7 +144,7 @@ export function Sidebar({
     if (revealed.current === key) return
     revealed.current = key
     if (parents.length) setExpanded((old) => new Set([...old, ...parents]))
-  }, [items, selected, mode, editing?.id])
+  }, [items, selected, mode, editing?.id, collapsible])
   const rows = useMemo(() => {
     const visible: {
       item: SidebarItem
@@ -163,13 +166,13 @@ export function Sidebar({
           position: index + 1,
           size: items.length,
         })
-        if (item.children && expanded.has(item.id))
+        if (item.children && (!collapsible || expanded.has(item.id)))
           visit(item.children, depth + 1, item.id)
       })
     }
     visit(items, 0, null)
     return visible
-  }, [items, expanded])
+  }, [items, expanded, collapsible])
   const active = rows.findIndex(({ item }) => item.id === selected)
   const focusId = rows.some(({ item }) => item.id === focused)
     ? focused
@@ -312,7 +315,9 @@ export function Sidebar({
                         role={mode === 'tabs' ? 'tab' : 'treeitem'}
                         aria-selected={selected === item.id}
                         aria-expanded={
-                          item.children ? expanded.has(item.id) : undefined
+                          item.children
+                            ? !collapsible || expanded.has(item.id)
+                            : undefined
                         }
                         aria-level={mode === 'tree' ? depth + 1 : undefined}
                         aria-posinset={mode === 'tree' ? position : undefined}
@@ -348,7 +353,7 @@ export function Sidebar({
                         }}
                         onFocus={() => setFocused(item.id)}
                         onClick={() => {
-                          if (item.children) toggle(item.id)
+                          if (item.children && collapsible) toggle(item.id)
                           else onSelect(item.id)
                         }}
                         onKeyDown={(event) => {
@@ -384,13 +389,18 @@ export function Sidebar({
                             case 'ArrowRight':
                               if (item.children) {
                                 event.preventDefault()
-                                if (!expanded.has(item.id)) toggle(item.id)
+                                if (collapsible && !expanded.has(item.id))
+                                  toggle(item.id)
                                 else focus(item.children[0]?.id)
                               }
                               break
                             case 'ArrowLeft':
                               event.preventDefault()
-                              if (item.children && expanded.has(item.id))
+                              if (
+                                collapsible &&
+                                item.children &&
+                                expanded.has(item.id)
+                              )
                                 toggle(item.id)
                               else if (parent) focus(parent)
                               break
@@ -399,7 +409,7 @@ export function Sidebar({
                       >
                         {mode === 'tree' && (
                           <ChevronRight
-                            className={`sidebar-chevron ${item.children ? '' : 'leaf'}`}
+                            className={`sidebar-chevron ${item.children && collapsible ? '' : 'leaf'}`}
                             size={12}
                             style={{
                               rotate:

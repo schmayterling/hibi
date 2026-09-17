@@ -19,6 +19,8 @@ export type SidebarProps = {
   onSelect: (id: string) => void
   label: string
   mode?: 'tree' | 'tabs'
+  /** False keeps every branch open and lets parent rows select content. */
+  collapsible?: boolean
   open?: boolean
   className?: string
   idPrefix?: string

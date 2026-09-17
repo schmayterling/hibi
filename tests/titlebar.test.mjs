@@ -107,7 +107,7 @@ test('titlebar insets titles without leading actions and adapts outer button cor
       const button = document.querySelector(
         platform === 'darwin'
           ? '.view-switch > button:last-child'
-          : '.sidebar-toolbar > button:first-child',
+          : '.sidebar-toggle',
       )
       const styles = getComputedStyle(button)
       return {

@@ -252,6 +252,7 @@ function App() {
       : 'workspace',
   )
   const [outline, setOutline] = useState<OutlineHeading[]>([])
+  const [activeOutline, setActiveOutline] = useState<string | null>(null)
   const [outlineTarget, setOutlineTarget] = useState<OutlineRequest | null>(
     null,
   )
@@ -1192,7 +1193,7 @@ function App() {
       onKeyDownCapture={(event) => {
         if (
           (event.target as HTMLElement).closest(
-            '.hotkey-recorder[aria-pressed="true"]',
+            'dialog[open], .hotkey-recorder[aria-pressed="true"]',
           )
         )
           return
@@ -1279,7 +1280,7 @@ function App() {
         open={sidebarOpen && !settingsOpen && sidebarView === 'outline'}
         resize={sidebarResize}
         headings={outline}
-        selected={outlineTarget?.id ?? null}
+        selected={activeOutline}
         onSelect={(id) =>
           setOutlineTarget((previous) => ({
             id,
@@ -1331,6 +1332,7 @@ function App() {
           {document && (
             <MarkdownEditor
               onOutline={setOutline}
+              onActiveOutline={setActiveOutline}
               outlineTarget={outlineTarget}
               document={document}
               format={documentFormat}

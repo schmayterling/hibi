@@ -62,21 +62,22 @@
   margin-top: var(--space-2);
   font-size: var(--text-sm);
 }
-.recovery-details {
+.recovery-details-trigger {
   margin-top: var(--space-5);
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-3);
-  color: var(--muted);
-}
-.recovery-details summary {
-  cursor: pointer;
 }
 .recovery-details pre {
-  max-height: 180px;
-  overflow: auto;
+  margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: var(--text-xs) / 1.6 var(--font-mono);
+}
+.recovery-details [role="status"] {
+  margin: var(--space-3) 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+.recovery-details [role="status"]:empty {
+  display: none;
 }
 .recovery-content .recovery-status {
   min-height: 1.5em;

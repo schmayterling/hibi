@@ -635,7 +635,10 @@ test('workspace sidebar slides at a fixed width and the titlebar follows its sta
       ),
     )
     assert.equal(samples.at(-1).x, opening ? 0 : -196)
-    assert.equal(samples.at(-1).toolbarWidth, opening ? 196 : 132)
+    assert.equal(
+      samples.at(-1).toolbarWidth,
+      opening ? 196 : process.platform === 'darwin' ? 116 : 44,
+    )
   }
   await page.getByRole('button', { name: /editor settings/i }).click()
   assert.equal(

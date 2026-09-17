@@ -177,6 +177,7 @@ export function SettingsScreen({
           >
             <h1>Editor</h1>
             <AutosaveSettings />
+            <h2>Layout</h2>
             <div className="settings-group">
               <SettingRow
                 id="editor-padding"
@@ -240,6 +241,7 @@ export function SettingsScreen({
             hidden={category !== 'appearance'}
           >
             <h1>Appearance</h1>
+            <h2>Interface text</h2>
             <div className="settings-group">
               <SettingRow
                 id="lowercase-interface"
@@ -255,6 +257,7 @@ export function SettingsScreen({
                 />
               </SettingRow>
             </div>
+            <h2>Colors</h2>
             <ColorschemeSettings store={colorschemes} showLicense={false} />
             <h2>Cursor</h2>
             <div className="settings-group">

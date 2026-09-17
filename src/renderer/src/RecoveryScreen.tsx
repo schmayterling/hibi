@@ -6,6 +6,7 @@ import {
   FileWarning,
   RotateCcw,
   Save,
+  X,
 } from 'lucide-react'
 import {
   Component,
@@ -15,8 +16,10 @@ import {
   useRef,
   useState,
 } from 'react'
+import { createPortal } from 'react-dom'
 import type { DocumentState } from '../../shared/desktop'
-import { Button } from '../../ui/Controls'
+import { Button, IconButton } from '../../ui/Controls'
+import { Modal } from '../../ui/Modal'
 import './recovery.css'
 
 export function RecoveryScreen({
@@ -30,6 +33,7 @@ export function RecoveryScreen({
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
   const heading = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
     if (!onBack) heading.current?.focus()
@@ -137,19 +141,55 @@ export function RecoveryScreen({
               </>
             )}
           </div>
-          <details className="recovery-details">
-            <summary>Error details</summary>
-            <pre>{details}</pre>
-            <Button variant="ghost" onClick={() => void copyDetails()}>
-              {copied ? <Check /> : <Copy />}
-              {copied ? 'copied' : 'copy details'}
-            </Button>
-          </details>
+          <Button
+            variant="ghost"
+            className="recovery-details-trigger"
+            aria-haspopup="dialog"
+            onClick={() => {
+              setCopied(false)
+              setStatus('')
+              setDetailsOpen(true)
+            }}
+          >
+            Error details
+          </Button>
           <p className="recovery-status" role="status">
             {status}
           </p>
         </section>
       </div>
+      {detailsOpen &&
+        createPortal(
+          <Modal
+            className="app-dialog recovery-details"
+            data-size="wide"
+            aria-label="Error details"
+            onDismiss={() => setDetailsOpen(false)}
+          >
+            <header className="dialog-heading">
+              <div className="dialog-title-row">
+                <h2>Error details</h2>
+                <IconButton
+                  aria-label="Close error details"
+                  onClick={() => setDetailsOpen(false)}
+                >
+                  <X />
+                </IconButton>
+              </div>
+            </header>
+            <div className="dialog-content">
+              <pre>{details}</pre>
+              <p role="status">{status}</p>
+            </div>
+            <footer className="dialog-footer">
+              <Button onClick={() => void copyDetails()}>
+                {copied ? <Check /> : <Copy />}
+                {copied ? 'Copied' : 'Copy details'}
+              </Button>
+            </footer>
+          </Modal>,
+          document.body,
+        )}
     </main>
   )
 }

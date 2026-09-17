@@ -36,6 +36,8 @@ write UI labels and descriptions in sentence case, preserving proper names such 
 
 group related rows on one surface with inset separators. each row puts its label and description on the left and its control on the right. controls wrap inside narrow panels, including when the sidebar is widened. keep native input semantics, labels, descriptions, and keyboard focus behavior.
 
+give each distinct settings group a section heading when a page contains multiple groups. editor settings separate saving from layout; appearance separates interface text, colors, cursor, window, toolbar, and notifications. use the shared heading margins so adjacent cards never touch or appear to belong to the previous section.
+
 use `SettingsFilter` for a compact search field and reset-all action. keep filtered `SettingRow` components mounted with `hidden`, so the command palette can still discover every setting. navigation from the palette reveals its target by clearing the filter. reset applies to the whole page, including hidden results. see the [generated component reference](../reference/settings-filter-api.md).
 
 ## reusable components
@@ -61,6 +63,8 @@ use `TextInput` and `TextArea` from `src/addons/ui.ts` (or `sdk.ui` in sideloade
 - `ShortcutKeys`: every visible shortcut uses the same formatter and keycap styles.
 
 sidebar items may introduce a section label. selection offsets include both row and section-height tokens, keeping plugin pages aligned while keyboard navigation skips the labels. app and Electron versions live as small text in the settings sidebar footer.
+
+the page outline nests each heading beneath the nearest preceding heading of a lower level. branches stay open and every heading navigates, including parents. its selection follows the cursor's current section in rich, Markdown, and split views, rather than remembering only the last sidebar click. the shared sidebar's optional `collapsible: false` mode provides this always-open tree behavior without changing workspace folder controls.
 
 plugin status items use one bottom-left pill style through `context.statusBar`. the bar appears only when visible items exist and reserves space below the editor page. it moves and resizes with that page; the workspace sidebar remains full-height beside it.
 

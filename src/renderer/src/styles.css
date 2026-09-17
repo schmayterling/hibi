@@ -1148,6 +1148,9 @@ summary {
   font-size: var(--text-heading);
   height: 26px;
 }
+.command-search .ui-input[data-variant="inline"]:focus-visible {
+  box-shadow: none;
+}
 .command-results {
   position: relative;
   padding: 6px;

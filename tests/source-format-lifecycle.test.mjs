@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 test('lazy rich startup applies view attributes after mounting and accepts native input', {
   timeout: 40000,
@@ -133,7 +133,7 @@ test('standalone source skips rich attachment and hidden previews while preservi
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-  await pressShortcut(app, `${mod}+o`)
+  await clickMenu(app, 'Open…')
   const source = page.getByRole('textbox', {
     name: 'Probe editor',
     exact: true,

@@ -8,6 +8,7 @@ import {
   PanelRight,
   Pin,
   PinOff,
+  SettingsIcon,
 } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import type { DocumentState } from '../../shared/desktop'
@@ -39,6 +40,7 @@ export function Titlebar({
   platform,
   sidebarOpen,
   onSidebar,
+  onSettings,
   onBack,
   sidebarOverlay,
   sidebarView,
@@ -62,6 +64,7 @@ export function Titlebar({
   platform: string
   sidebarOpen: boolean
   onSidebar: () => void
+  onSettings: () => void
   onBack: () => void
   sidebarOverlay: boolean
   sidebarView: string
@@ -266,6 +269,15 @@ export function Titlebar({
               )
             })}
           </nav>
+        )}
+        {!settingsOpen && (
+          <IconButton
+            aria-label="Settings"
+            title="Settings"
+            onClick={onSettings}
+          >
+            <SettingsIcon size={16} aria-hidden="true" />
+          </IconButton>
         )}
       </div>
       {!settingsOpen && (

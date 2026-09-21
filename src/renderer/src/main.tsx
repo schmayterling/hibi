@@ -1785,6 +1785,7 @@ function App() {
         }
         sidebarOpen={settingsOpen ? settingsSidebarOpen : sidebarOpen}
         onSidebar={toggleSidebar}
+        onSettings={toggleSettings}
         onBack={toggleSettings}
         sidebarOverlay={sidebarResize.overlay}
         hotkeys={hotkeys}

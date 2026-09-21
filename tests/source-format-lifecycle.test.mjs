@@ -134,11 +134,11 @@ test('standalone source skips rich attachment and hidden previews while preservi
   }, file)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await clickMenu(app, 'Open…')
-  const source = page.getByRole('textbox', {
-    name: 'Probe editor',
-    exact: true,
-  })
-  await source.waitFor()
+  await page
+    .locator(
+      '.editor-panes.mode-markdown[data-source-ready="true"] .source-pane:not([inert]) .cm-content[contenteditable="true"][aria-label="Probe editor"]',
+    )
+    .waitFor({ timeout: 15_000 })
   await page.waitForFunction(() => window.sourceFormatFixture.rich === 0)
   assert.equal(await page.locator('.tiptap').count(), 0)
   const initial = await page.evaluate(() => {

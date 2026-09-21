@@ -131,7 +131,9 @@ test('git addon stages, commits, switches, pulls and pushes only to a disposable
   await commitDialog.waitFor({ state: 'hidden' })
   assert.equal(await page.getByRole('dialog').count(), 0)
   await page.getByRole('button', { name: /toggle workspace sidebar/i }).click()
-  await panel.waitFor({ state: 'hidden' })
+  await page.waitForFunction(
+    () => document.querySelector('.app')?.dataset.sidebar === 'false',
+  )
   await openGit()
   await panel.getByRole('button', { name: /^commit changes$/i }).click()
   commitDialog = page.getByRole('dialog', { name: /^commit changes$/i })

@@ -119,7 +119,11 @@ test('both renderer profiles preserve native error propagation, safe original lo
         .records.some((r) => r.includes('RENDERER_REJECTION')),
     )
     assert.equal(await page.evaluate(() => window.diagnosticHarness.inert()), 0)
-    await page.evaluate(() => window.diagnosticHarness.worker())
+    await page.evaluate(() => {
+      window.diagnosticHarness.install()
+      window.diagnosticHarness.clear()
+      window.diagnosticHarness.worker()
+    })
     state = await read()
     assert.equal(count(state.records, 'SOURCE_WORKER_FAILED'), 1)
     assert.equal(state.reads, 0)

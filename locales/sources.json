@@ -3003,9 +3003,6 @@
   "191a43a3e539": [
     "src/addons/graph/Panel.tsx"
   ],
-  "44ff26388205": [
-    "src/renderer/src/AddonSettings.tsx"
-  ],
   "0ed6653bd55e": [
     "src/renderer/src/AddonReadme.tsx"
   ],

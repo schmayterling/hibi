@@ -364,7 +364,7 @@ export function useAddons(
         continue
       let disposed = false
       const overrides = createAddonOverrides(id)
-      const dialogScope = dialogService.scope(addon.manifest.name)
+      const dialogScope = dialogService.scope()
       const toastScope = toastService.scope()
       const menuScope = menus.scope((error) => latest.current.error(error))
       const toolbarScope = toolbar.scope(id, (error) =>

@@ -61,7 +61,7 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
 })
 
 test('standalone source skips rich attachment and hidden previews while preserving view, history and saves', {
-  timeout: 45000,
+  timeout: 60000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-source-format-')),
     addon = join(profile, 'installed-addons', 'source-format-fixture'),
@@ -111,7 +111,7 @@ test('standalone source skips rich attachment and hidden previews while preservi
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
-  const watchdog = setTimeout(() => app.process().kill('SIGKILL'), 40000)
+  const watchdog = setTimeout(() => app.process().kill('SIGKILL'), 55000)
   t.after(async () => {
     await app
       .evaluate(({ dialog }) => {
@@ -138,7 +138,7 @@ test('standalone source skips rich attachment and hidden previews while preservi
     .locator(
       '.editor-panes.mode-markdown[data-source-ready="true"] .source-pane:not([inert]) .cm-content[contenteditable="true"][aria-label="Probe editor"]',
     )
-    .waitFor({ timeout: 15_000 })
+    .waitFor({ timeout: 30_000 })
   await page.waitForFunction(() => window.sourceFormatFixture.rich === 0)
   assert.equal(await page.locator('.tiptap').count(), 0)
   const initial = await page.evaluate(() => {

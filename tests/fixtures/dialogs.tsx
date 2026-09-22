@@ -19,8 +19,8 @@ function Harness() {
   const toastService = useToastService()
   const [result, setResult] = useState('ready')
   useEffect(() => {
-    const owner = service.scope('test addon')
-    const other = service.scope('other addon')
+    const owner = service.scope()
+    const other = service.scope()
     const errors: unknown[] = []
     const actions = toolbar.scope('test', (error) => errors.push(error))
     const tips = createTooltipScope()

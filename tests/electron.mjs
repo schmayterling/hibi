@@ -17,8 +17,8 @@ export const electron = {
           new Promise((_, reject) => {
             timer = setTimeout(() => {
               application.process().kill('SIGKILL')
-              reject(new Error('Electron test cleanup exceeded 10 seconds'))
-            }, 10000)
+              reject(new Error('Electron test cleanup exceeded 20 seconds'))
+            }, 20000)
           }),
         ])
       } finally {

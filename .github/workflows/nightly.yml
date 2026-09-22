@@ -45,7 +45,7 @@ jobs:
           if-no-files-found: error
   build:
     needs: prepare
-    timeout-minutes: 45
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -58,10 +58,10 @@ jobs:
             args: --win --x64
           - os: macos-latest
             platform: macos-arm64
-            args: --mac --arm64 -c.mac.identity=-
+            args: --mac --arm64
           - os: macos-15-intel
             platform: macos-x64
-            args: --mac --x64 -c.mac.identity=-
+            args: --mac --x64
     runs-on: ${{ matrix.os }}
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
@@ -103,10 +103,41 @@ jobs:
           else
             node --test --test-concurrency=1 tests/*.test.mjs
           fi
+      - name: Install macOS signing credentials
+        if: startsWith(matrix.platform, 'macos-')
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          certificate_path="$RUNNER_TEMP/hibi-signing.p12"
+          api_key_path="$RUNNER_TEMP/AuthKey.p8"
+          keychain_path="$RUNNER_TEMP/hibi-signing.keychain-db"
+          keychain_password=$(openssl rand -base64 32)
+
+          printf '%s' "$MAC_CSC_LINK" | base64 --decode -o "$certificate_path"
+          if [[ "$APPLE_API_KEY_CONTENT" == -----BEGIN* ]]; then
+            printf '%s' "$APPLE_API_KEY_CONTENT" > "$api_key_path"
+          else
+            printf '%s' "$APPLE_API_KEY_CONTENT" | base64 --decode -o "$api_key_path"
+          fi
+          openssl pkey -in "$api_key_path" -noout
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" -P "$MAC_CSC_KEY_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          rm "$certificate_path"
+
+          echo "CSC_KEYCHAIN=$keychain_path" >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY=$api_key_path" >> "$GITHUB_ENV"
       - name: Package installers
         id: package
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          APPLE_API_KEY_ID: ${{ startsWith(matrix.platform, 'macos-') && vars.APPLE_API_KEY_ID || '' }}
+          APPLE_API_ISSUER: ${{ startsWith(matrix.platform, 'macos-') && vars.APPLE_API_ISSUER || '' }}
+          APPLE_TEAM_ID: ${{ startsWith(matrix.platform, 'macos-') && vars.APPLE_TEAM_ID || '' }}
           BUILD_ARGS: ${{ matrix.args }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
@@ -115,6 +146,17 @@ jobs:
             -c.extraMetadata.version="$RELEASE_VERSION" \
             -c.buildVersion="${RELEASE_VERSION%%-*}.$GITHUB_RUN_NUMBER" \
             "-c.artifactName=hibi-\${version}-\${os}-\${arch}.\${ext}"
+      - name: Verify signed macOS installers
+        if: startsWith(matrix.platform, 'macos-')
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          app=$(find release -maxdepth 2 -type d -name 'hibi.app' -print -quit)
+          test -n "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --display --verbose=4 "$app" 2>&1 | grep -F "TeamIdentifier=$APPLE_TEAM_ID"
+          spctl --assess --type execute --verbose=4 "$app"
+          xcrun stapler validate "$app"
       - name: Record platform results
         env:
           PLATFORM: ${{ matrix.platform }}

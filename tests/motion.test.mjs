@@ -37,7 +37,9 @@ test('switching documents retains split/source layout without replaying view tra
         filePaths: [file],
       })
     }, file)
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await page
+    .getByRole('textbox', { name: /document editor/i })
+    .waitFor({ timeout: 15000 })
   await chooseFile(first)
   await clickMenu(app, 'Open…')
   await page.getByRole('heading', { name: /^first$/i, exact: true }).waitFor()

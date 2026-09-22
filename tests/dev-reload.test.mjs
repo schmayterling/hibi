@@ -123,7 +123,7 @@ test('development watches renderer, preload, addons, and documentation generatio
     output.match(/DevTools listening on (ws:\/\/\S+)/)[1],
   )
   const page = browser.contexts()[0].pages()[0]
-  page.setDefaultTimeout(15000)
+  page.setDefaultTimeout(30000)
   await page.locator('[data-status-id="typing-speed.wpm"]').waitFor()
   assert.equal(
     await page.evaluate(

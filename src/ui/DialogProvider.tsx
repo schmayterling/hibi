@@ -25,7 +25,6 @@ import { TooltipHost } from './Tooltip'
 
 type Request = {
   id: number
-  owner: string
   options: DialogOptions<unknown>
   closing: boolean
   value: unknown
@@ -58,7 +57,7 @@ export function createDialogService() {
     requests = [...requests]
     publish()
   }
-  function scope(owner: string) {
+  function scope() {
     let disposed = false
     const owned = new Set<Request>()
     const api: DialogApi = {
@@ -71,7 +70,6 @@ export function createDialogService() {
         })
         const request: Request = {
           id: ++nextId,
-          owner,
           options: options as DialogOptions<unknown>,
           closing: false,
           value: null,
@@ -132,7 +130,7 @@ export function createDialogService() {
       },
     }
   }
-  const root = scope('hibi')
+  const root = scope()
   return {
     api: root.api,
     scope,
@@ -267,9 +265,6 @@ function DialogFrame({
             <X size={16} aria-hidden="true" />
           </IconButton>
         </div>
-        {request.owner !== 'hibi' && (
-          <p className="dialog-owner">{request.owner}</p>
-        )}
         {request.options.description && (
           <p id={description} className="dialog-description">
             {sentenceCase(request.options.description)}

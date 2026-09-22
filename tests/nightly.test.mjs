@@ -346,6 +346,11 @@ test('release workflow always builds nightlies and gates stable publication on t
       .sort(),
     [...platforms].sort(),
   )
+  const macBuilds = workflow.jobs.build.strategy.matrix.include.filter((item) =>
+    item.platform.startsWith('macos-'),
+  )
+  assert.equal(macBuilds.length, 2)
+  for (const build of macBuilds) assert.doesNotMatch(build.args, /identity=-/)
   const checks = steps.find((step) => step.id === 'checks')
   assert.equal(
     checks['continue-on-error'],
@@ -363,6 +368,62 @@ test('release workflow always builds nightlies and gates stable publication on t
     undefined,
     'stable checks must succeed before packaging',
   )
+  const signingCredentials = steps.find(
+    (step) => step.name === 'Install macOS signing credentials',
+  )
+  assert.equal(signingCredentials.if, "startsWith(matrix.platform, 'macos-')")
+  for (const name of [
+    'MAC_CSC_LINK',
+    'MAC_CSC_KEY_PASSWORD',
+    'APPLE_API_KEY_CONTENT',
+  ])
+    assert.match(signingCredentials.env[name], /secrets\./)
+  for (const command of [
+    'security import',
+    'security set-key-partition-list',
+    'base64 --decode',
+    'openssl pkey',
+    'CSC_KEYCHAIN=',
+    'APPLE_API_KEY=',
+  ])
+    assert.ok(signingCredentials.run.includes(command))
+  assert.match(
+    signingCredentials.run,
+    /set-key-partition-list[^\n]+-k "\$keychain_password"/,
+  )
+  const packageStep = steps.find((step) => step.id === 'package')
+  for (const name of ['CSC_LINK', 'CSC_KEY_PASSWORD', 'APPLE_API_KEY'])
+    assert.equal(packageStep.env[name], undefined)
+  for (const name of ['APPLE_API_KEY_ID', 'APPLE_API_ISSUER', 'APPLE_TEAM_ID'])
+    assert.match(packageStep.env[name], /startsWith\(matrix\.platform/)
+  const verifyMac = steps.find(
+    (step) => step.name === 'Verify signed macOS installers',
+  )
+  assert.equal(verifyMac.if, "startsWith(matrix.platform, 'macos-')")
+  for (const command of [
+    'codesign --verify',
+    'spctl --assess',
+    'stapler validate "$app"',
+  ])
+    assert.ok(verifyMac.run.includes(command))
+  const builder = parse(readFileSync('electron-builder.yml', 'utf8'))
+  assert.equal(builder.appId, 'com.ryanaque.hibi')
+  assert.equal(builder.mac.forceCodeSigning, true)
+  assert.equal(builder.mac.hardenedRuntime, true)
+  assert.equal(builder.mac.notarize, true)
+  assert.equal(builder.mac.entitlements, 'build/entitlements.mac.plist')
+  assert.equal(
+    builder.mac.entitlementsInherit,
+    'build/entitlements.mac.inherit.plist',
+  )
+  for (const file of [
+    builder.mac.entitlements,
+    builder.mac.entitlementsInherit,
+  ]) {
+    const entitlements = readFileSync(file, 'utf8')
+    assert.match(entitlements, /com\.apple\.security\.cs\.allow-jit/)
+    assert.doesNotMatch(entitlements, /get-task-allow/)
+  }
   const promotion = workflow.jobs.publish.steps.find(
     (step) => step.name === 'Update recommended nightly pointer',
   )

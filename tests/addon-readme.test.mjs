@@ -174,6 +174,7 @@ test('addon readmes render safely without activation, and settings headers have 
   await modal
     .getByRole('heading', { name: 'Readme fixture', level: 1 })
     .waitFor()
+  assert.equal(await modal.getByText('Readme', { exact: true }).count(), 0)
   assert.equal(await modal.locator('strong').innerText(), 'Bold text')
   assert.equal(await modal.locator('table td').count(), 2)
   assert.equal(await modal.getByRole('checkbox').isChecked(), true)

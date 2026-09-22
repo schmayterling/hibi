@@ -36,6 +36,11 @@ electronFuses:
 mac:
   icon: build/icon.icns
   target: [dmg, zip]
+  forceCodeSigning: true
+  hardenedRuntime: true
+  notarize: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
 win:
   icon: build/icon.ico
   target: [nsis]

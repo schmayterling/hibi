@@ -225,6 +225,7 @@ test('shared dialogs validate input, trap focus, queue, and clean up by addon ow
   await page.evaluate(() => window.dialogTest.owner.dispose())
   const other = page.getByRole('dialog', { name: /other addon dialog/i })
   await other.waitFor()
+  assert.equal(await other.getByText('other addon', { exact: true }).count(), 0)
   assert.deepEqual(await page.evaluate(() => window.completedDialogs), [
     { title: 'active addon dialog', value: null },
     { title: 'queued addon dialog', value: null },

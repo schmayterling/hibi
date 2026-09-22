@@ -44,7 +44,7 @@ export function StartupPlaceholder({
         <p>No recent workspaces yet.</p>
       )}
       <Button variant="ghost" disabled={busy} onClick={onDismiss}>
-        Start writing
+        Dismiss this screen
       </Button>
     </section>
   )

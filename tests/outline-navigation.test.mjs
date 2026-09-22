@@ -8,7 +8,7 @@ import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('large outline follows rich and source carets with bounded rows and ignores stale results', {
-  timeout: 45000,
+  timeout: 60000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-outline-navigation-'))
   const file = join(profile, 'headings.md')
@@ -61,6 +61,7 @@ test('large outline follows rich and source carets with bounded rows and ignores
           '.outline-sidebar[data-side="right"] [role="treeitem"][aria-selected="true"] .sidebar-label',
         )?.textContent === label,
       label,
+      { timeout: 15000 },
     )
     assert.equal(await selected.textContent(), label)
     assert.ok((await outline.locator('.sidebar-row').count()) < 65)

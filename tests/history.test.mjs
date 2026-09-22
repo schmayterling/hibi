@@ -37,6 +37,12 @@ test('local history snapshots on save, previews, and restores without overwritin
     page,
     async () => (await window.hibi.getDocument()).markdown === 'original',
   )
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.tiptap')?.textContent === 'original' &&
+      document.querySelector('.tiptap')?.getAttribute('contenteditable') ===
+        'true',
+  )
   await rich.fill('saved change')
   await pressShortcut(app, `${mod}+s`)
   await waitForAsync(

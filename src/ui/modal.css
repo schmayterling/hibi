@@ -58,13 +58,9 @@
   font-weight: 500;
   overflow-wrap: anywhere;
 }
-.dialog-owner,
 .dialog-description {
   margin: var(--space-1) 0 0;
   color: var(--muted);
-}
-.dialog-owner {
-  font-size: var(--text-xs);
 }
 .dialog-description {
   white-space: pre-wrap;

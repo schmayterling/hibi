@@ -1063,6 +1063,9 @@
   "a17991767970": [
     "src/ui/Sonner.tsx"
   ],
+  "ff3e9344a3ea": [
+    "src/renderer/src/StartupPlaceholder.tsx"
+  ],
   "cc29053ff492": [
     "src/addons/slash-commands/commands.ts",
     "src/renderer/src/FormattingToolbar.tsx"

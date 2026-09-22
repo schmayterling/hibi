@@ -2,6 +2,14 @@
 
 This addon adds a command that displays a greeting. First, [run Hibi from source](../core/running-the-development-build.md).
 
+For a standalone addon you can install and share without rebuilding Hibi, run:
+
+```sh
+npx create-hibi-addon hello --name "Hello" --author "Your name"
+```
+
+From a Hibi source checkout, use `npm run create:addon -- hello` to run the bundled creator before it is published.
+
 ## Create the files
 
 Create `src/useraddons/hello/`. This folder is ignored by Git, so you can experiment without adding the addon to the repository. Add these three files.

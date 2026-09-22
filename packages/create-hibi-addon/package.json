@@ -1,0 +1,17 @@
+{
+  "name": "create-hibi-addon",
+  "version": "0.1.0",
+  "description": "Create a shareable Hibi addon.",
+  "type": "module",
+  "bin": {
+    "create-hibi-addon": "index.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "template"
+  ],
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "license": "AGPL-3.0-or-later"
+}

@@ -361,7 +361,11 @@ function containsPath(parent: string, file: string | null) {
     (!isAbsolute(child) && child !== '..' && !child.startsWith(`..${sep}`))
   )
 }
-function removeTabs(window: BrowserWindow, ids: Set<string>) {
+function removeTabs(
+  window: BrowserWindow,
+  ids: Set<string>,
+  preferredTab?: string,
+) {
   storeTab()
   const order = [...tabs.keys()]
   const currentIndex = order.indexOf(activeTab)
@@ -373,6 +377,7 @@ function removeTabs(window: BrowserWindow, ids: Set<string>) {
   forward = forward.filter((id) => !ids.has(id))
   if (ids.has(activeTab)) {
     const next =
+      (preferredTab && tabs.has(preferredTab) ? preferredTab : undefined) ??
       order.slice(currentIndex + 1).find((id) => tabs.has(id)) ??
       [...tabs.keys()].at(-1)
     if (next) {
@@ -386,12 +391,28 @@ function removeTabs(window: BrowserWindow, ids: Set<string>) {
   refreshDirtyIndicator(window)
   return getDocument()
 }
-export async function closeDocumentTab(window: BrowserWindow, id: unknown) {
+export async function closeDocumentTabs(
+  window: BrowserWindow,
+  ids: unknown,
+  preferredTab?: unknown,
+) {
   storeTab()
-  if (typeof id !== 'string' || !tabs.has(id))
-    throw new Error('This tab is no longer open.')
-  if (!(await confirmTabDiscard(window, id))) return null
-  return removeTabs(window, new Set([id]))
+  if (
+    !Array.isArray(ids) ||
+    ids.some((id) => typeof id !== 'string' || !tabs.has(id)) ||
+    (preferredTab !== undefined &&
+      (typeof preferredTab !== 'string' || !tabs.has(preferredTab)))
+  )
+    throw new Error('A tab is no longer open.')
+  const closing = new Set<string>(ids)
+  if (preferredTab !== undefined && closing.has(preferredTab as string))
+    throw new Error('The preferred tab must remain open.')
+  for (const id of tabs.keys())
+    if (closing.has(id) && !(await confirmTabDiscard(window, id))) return null
+  return removeTabs(window, closing, preferredTab as string | undefined)
+}
+export async function closeDocumentTab(window: BrowserWindow, id: unknown) {
+  return closeDocumentTabs(window, [id])
 }
 
 export function moveDocumentTab(id: unknown, beforeId: unknown) {

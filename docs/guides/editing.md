@@ -16,7 +16,7 @@ When you use an input method, choosing and revising candidates remains one undo 
 
 ## Work with tabs
 
-Opening or creating a note adds a tab. Select one to return to its document, drag it to change its position, or press `Cmd/Ctrl+W` to close it. A dot marks unsaved changes. Hibi asks before discarding unsaved work.
+Opening or creating a note adds a tab. Select one to return to its document, drag it to change its position, or press `Cmd/Ctrl+W` to close it. Right-click a tab to close it, close the other tabs, or close tabs to its left or right. A dot marks unsaved changes. Hibi asks before discarding unsaved work, including when you close several tabs at once.
 
 With a tab focused, arrow keys and Home/End move between tabs. Use `Alt+Shift+Left/Right` to reorder them with the keyboard.
 

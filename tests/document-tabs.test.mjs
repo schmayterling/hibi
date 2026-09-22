@@ -159,6 +159,98 @@ test('overflowing tabs reveal close buttons and reorder without losing drafts', 
   await fullyVisible()
 })
 
+test('tab context menu closes ordered groups and guards dirty tabs', {
+  timeout: 40000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-tab-context-'))
+  const files = ['a.md', 'b.md', 'c.md', 'd.md'].map((name) => join(root, name))
+  for (const file of files) await writeFile(file, basename(file))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(6000)
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  for (const file of files) {
+    await app.evaluate(({ dialog }, selected) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [selected],
+      })
+    }, file)
+    await clickMenu(app, 'Open…')
+    await page.getByRole('tab', { name: basename(file), exact: true }).waitFor()
+  }
+  const tab = (name) => page.getByRole('tab', { name, exact: true })
+  await tab('a.md').click()
+  await tab('b.md').click({ button: 'right' })
+  const menu = page.getByRole('menu', { name: 'Tab actions' })
+  await menu.waitFor()
+  assert.equal(
+    await menu
+      .getByRole('menuitem', { name: 'Close tabs to the left' })
+      .isDisabled(),
+    false,
+  )
+  await menu.getByRole('menuitem', { name: 'Close tabs to the left' }).click()
+  await page.waitForFunction(() =>
+    window.hibi.getDocument().then((state) => state.tabs[0].name === 'b.md'),
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabId,
+    await tab('b.md').getAttribute('data-tab-id'),
+  )
+
+  await tab('d.md').click()
+  await page.getByRole('textbox', { name: /document editor/i }).fill('dirty d')
+  await app.evaluate(({ dialog }) => {
+    globalThis.choice = 2
+    dialog.showMessageBox = async () => ({ response: globalThis.choice })
+  })
+  await tab('b.md').click({ button: 'right' })
+  await menu.getByRole('menuitem', { name: 'Close tabs to the right' }).click()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.length,
+    3,
+  )
+  await app.evaluate(() => {
+    globalThis.choice = 1
+  })
+  await tab('b.md').click({ button: 'right' })
+  await menu.getByRole('menuitem', { name: 'Close other tabs' }).click()
+  await page.waitForFunction(() =>
+    window.hibi.getDocument().then((state) => state.tabs.length === 1),
+  )
+  const state = await page.evaluate(() => window.hibi.getDocument())
+  assert.equal(state.name, 'b.md')
+  await tab('b.md').click({ button: 'right' })
+  assert.equal(
+    await menu.getByRole('menuitem', { name: 'Close other tabs' }).isDisabled(),
+    true,
+  )
+  assert.equal(
+    await menu
+      .getByRole('menuitem', { name: 'Close tabs to the left' })
+      .isDisabled(),
+    true,
+  )
+  assert.equal(
+    await menu
+      .getByRole('menuitem', { name: 'Close tabs to the right' })
+      .isDisabled(),
+    true,
+  )
+  await page.keyboard.press('Escape')
+  await menu.waitFor({ state: 'hidden' })
+})
+
 test('single-file mode guards replacement, closes other tabs safely, and persists', {
   timeout: 45000,
 }, async (t) => {

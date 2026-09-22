@@ -8,19 +8,24 @@ import {
 } from 'react'
 import type { DocumentState } from '../../shared/desktop'
 import { IconButton } from '../../ui/Controls'
+import type { MenuApi } from '../../ui/menus'
 
 export function DocumentTabs({
   document,
   busy,
   onSelect,
   onClose,
+  onCloseTabs,
   onMove,
+  menus,
 }: {
   document: DocumentState
   busy: boolean
   onSelect: (id: string) => void
   onClose: (id: string) => void
+  onCloseTabs: (ids: string[], preferredTab: string) => void
   onMove: (id: string, beforeId: string | null) => void
+  menus: MenuApi
 }) {
   const strip = useRef<HTMLDivElement>(null)
   const active = useRef<HTMLDivElement>(null)
@@ -266,6 +271,60 @@ export function DocumentTabs({
               onMouseDown={(event) => {
                 if (event.button === 0)
                   event.currentTarget.focus({ preventScroll: true })
+              }}
+              onAuxClick={(event) => {
+                if (event.button === 1 && !busy && !closing) onClose(tab.id)
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                if (busy || closing) return
+                event.currentTarget.focus({ preventScroll: true })
+                const index = document.tabs.findIndex(
+                  (current) => current.id === tab.id,
+                )
+                if (index < 0) return
+                const left = document.tabs
+                  .slice(0, index)
+                  .map((item) => item.id)
+                const right = document.tabs
+                  .slice(index + 1)
+                  .map((item) => item.id)
+                menus.open({
+                  label: 'Tab actions',
+                  anchor: { x: event.clientX, y: event.clientY },
+                  items: [
+                    {
+                      id: 'close',
+                      label: 'Close tab',
+                      onSelect: () => onClose(tab.id),
+                    },
+                    {
+                      id: 'close-others',
+                      label: 'Close other tabs',
+                      disabled: document.tabs.length === 1,
+                      separatorBefore: true,
+                      onSelect: () =>
+                        onCloseTabs(
+                          document.tabs
+                            .filter((item) => item.id !== tab.id)
+                            .map((item) => item.id),
+                          tab.id,
+                        ),
+                    },
+                    {
+                      id: 'close-right',
+                      label: 'Close tabs to the right',
+                      disabled: right.length === 0,
+                      onSelect: () => onCloseTabs(right, tab.id),
+                    },
+                    {
+                      id: 'close-left',
+                      label: 'Close tabs to the left',
+                      disabled: left.length === 0,
+                      onSelect: () => onCloseTabs(left, tab.id),
+                    },
+                  ],
+                })
               }}
               onClick={() => {
                 if (!busy && !selected) onSelect(tab.id)

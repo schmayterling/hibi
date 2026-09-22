@@ -19,6 +19,7 @@ export const DOCUMENT_CHANNELS = {
   autosave: 'document:autosave',
   selectTab: 'document:select-tab',
   closeTab: 'document:close-tab',
+  closeTabs: 'document:close-tabs',
   moveTab: 'document:move-tab',
   tabsEnabled: 'document:tabs-enabled',
   rename: 'document:rename',
@@ -193,6 +194,10 @@ export type DesktopApi = {
   getDocument: () => Promise<DocumentState>
   selectDocumentTab: (id: string) => Promise<DocumentState>
   closeDocumentTab: (id: string) => Promise<DocumentState | null>
+  closeDocumentTabs: (
+    ids: string[],
+    preferredTab?: string,
+  ) => Promise<DocumentState | null>
   moveDocumentTab: (
     id: string,
     beforeId: string | null,

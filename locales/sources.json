@@ -74,6 +74,9 @@
   "dbd4fb5faedf": [
     "src/addons/frontmatter/Properties.tsx"
   ],
+  "be4baf3c7663": [
+    "src/main/document.ts"
+  ],
   "c913ac4eb666": [
     "src/renderer/src/DependencySettings.tsx"
   ],
@@ -643,6 +646,9 @@
   "99904db30de4": [
     "src/site/main.tsx"
   ],
+  "0ddc2c568df7": [
+    "src/renderer/src/DocumentTabs.tsx"
+  ],
   "17e28e230217": [
     "src/ui/Sidebar.tsx"
   ],
@@ -650,6 +656,12 @@
     "src/main/index.ts",
     "src/renderer/src/DocumentTabs.tsx",
     "src/shared/hotkeys.ts"
+  ],
+  "9db4e0a00da4": [
+    "src/renderer/src/DocumentTabs.tsx"
+  ],
+  "70b08b33798a": [
+    "src/renderer/src/DocumentTabs.tsx"
   ],
   "31a8910a7cf4": [
     "src/renderer/src/DocumentTabs.tsx"
@@ -3685,6 +3697,9 @@
     "src/addons/documentation/ExportDialog.tsx",
     "src/ui/ColorschemeSettings.tsx"
   ],
+  "6067c7203339": [
+    "src/renderer/src/DocumentTabs.tsx"
+  ],
   "16d1c9050a0b": [
     "src/addons/slash-commands/commands.ts",
     "src/renderer/src/FormattingToolbar.tsx"
@@ -3956,6 +3971,9 @@
   ],
   "a3a83b5e3ed9": [
     "src/addons/_shared/format-native.ts"
+  ],
+  "8b3833b3d6d6": [
+    "src/main/document.ts"
   ],
   "590fb9c8974a": [
     "src/addons/_shared/format-native.ts"

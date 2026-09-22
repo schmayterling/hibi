@@ -52,6 +52,7 @@ export function Titlebar({
   onRightSidebarView,
   onSelectTab,
   onCloseTab,
+  onCloseTabs,
   onMoveTab,
   busy,
 }: {
@@ -76,6 +77,7 @@ export function Titlebar({
   onRightSidebarView: (view: string) => void
   onSelectTab: (id: string) => void
   onCloseTab: (id: string) => void
+  onCloseTabs: (ids: string[], preferredTab: string) => void
   onMoveTab: (id: string, beforeId: string | null) => void
   busy: boolean
 }) {
@@ -244,7 +246,9 @@ export function Titlebar({
               busy={busy}
               onSelect={onSelectTab}
               onClose={onCloseTab}
+              onCloseTabs={onCloseTabs}
               onMove={onMoveTab}
+              menus={menus}
             />
           ) : (
             <span>Hibi</span>

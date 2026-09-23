@@ -252,6 +252,8 @@ if (process.isMainFrame) {
     getDocument: () => ipcRenderer.invoke(DOCUMENT_CHANNELS.get),
     selectDocumentTab: (id) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.selectTab, id),
+    getDocumentTabPreview: (id) =>
+      ipcRenderer.invoke(DOCUMENT_CHANNELS.tabPreview, id),
     closeDocumentTab: (id) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.closeTab, id),
     moveDocumentTab: (id, beforeId) =>

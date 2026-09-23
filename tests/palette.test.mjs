@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -283,4 +283,81 @@ test('command palette, full-height settings, and local geist fonts', {
     'keep this draft',
   )
   assert.deepEqual(errors, [])
+})
+
+test('recent workspace submenu filters, returns, and opens a workspace', {
+  timeout: 45000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-palette-recent-'))
+  const first = join(profile, 'first-workspace')
+  const second = join(profile, 'second-workspace')
+  await mkdir(first)
+  await mkdir(second)
+  await writeFile(
+    join(profile, 'recent-workspaces.json'),
+    JSON.stringify([first, second]),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await clickMenu(app, 'Command palette')
+  const palette = page.getByRole('dialog', { name: 'Command palette' })
+  const search = palette.getByRole('combobox', { name: 'Search commands' })
+
+  await search.fill('open recent workspaces')
+  await search.press('Enter')
+  const scope = palette.getByRole('button', {
+    name: 'Leave Open recent workspaces',
+  })
+  await scope.waitFor()
+  assert.equal(await search.inputValue(), '')
+  assert.deepEqual(await palette.locator('.command-label').allTextContents(), [
+    'first-workspace',
+    'second-workspace',
+  ])
+  assert.deepEqual(await palette.locator('.command-detail').allTextContents(), [
+    first,
+    second,
+  ])
+  await page.setViewportSize({ width: 480, height: 720 })
+  assert.equal(
+    await palette.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    ),
+    true,
+  )
+  await mkdir('test-results', { recursive: true })
+  await page.screenshot({ path: 'test-results/command-submenu.png' })
+
+  await search.fill('second-workspace')
+  assert.deepEqual(await palette.locator('.command-label').allTextContents(), [
+    'second-workspace',
+  ])
+  await search.press('Escape')
+  assert.equal(await scope.count(), 0)
+  assert.equal(await palette.isVisible(), true)
+
+  await search.fill('open recent workspaces')
+  await search.press('Enter')
+  await scope.click()
+  assert.equal(await scope.count(), 0)
+  await search.fill('open recent workspaces')
+  await search.press('Enter')
+  await search.press('Backspace')
+  assert.equal(await scope.count(), 0)
+
+  await search.fill('open recent workspaces')
+  await search.press('Enter')
+  await search.fill('second-workspace')
+  await search.press('Enter')
+  await palette.waitFor({ state: 'hidden' })
+  await page.waitForFunction(
+    async () => (await window.hibi.getWorkspace())?.name === 'second-workspace',
+  )
 })

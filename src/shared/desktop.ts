@@ -70,6 +70,9 @@ export type AppInfo = {
 }
 
 export type DesktopApi = {
+  registerGlobalShortcut: (id: string, accelerator: string) => Promise<void>
+  unregisterGlobalShortcut: (id: string) => Promise<void>
+  onGlobalShortcut: (callback: (id: string) => void) => () => void
   getUpdateState: () => Promise<import('./updates').UpdateState>
   setUpdateChannel: (
     channel: import('./updates').UpdateChannel,

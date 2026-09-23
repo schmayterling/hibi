@@ -91,6 +91,20 @@ Throw when an attachment cannot be installed. Hibi displays the failure and keep
 
 Use `onInput()` to observe typed characters, or `onKeyEvent()` to observe editor key events. These hooks do not receive input from settings, search fields, or dialogs.
 
+## Add a system-wide shortcut
+
+Register an Electron accelerator to run an addon action while Hibi is open, even when another application has focus. The registration returns a removal function. Hibi also removes it when the addon stops. Registration rejects a shortcut already owned by another application.
+
+```typescript
+const remove = await context.globalShortcuts.register(
+  'capture',
+  'CommandOrControl+Alt+N',
+  () => context.commands.execute('capture'),
+)
+```
+
+Choose a shortcut that does not overlap with a Hibi editing command. System-wide shortcuts are active only while Hibi is running and this addon is enabled. The operating system may reserve some combinations.
+
 ## Clean up
 
 Hibi removes registrations made through `context` when the addon stops. Clean up timers, browser listeners, and other resources you create yourself in `stop()`. Editor attachment callbacks must clean up their own resources when their editor is removed.

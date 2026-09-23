@@ -34,6 +34,7 @@ import {
 } from '../shared/document-checkpoint'
 import { createJournalReceiver } from '../shared/document-journal'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
+import { GLOBAL_SHORTCUT_CHANNELS } from '../shared/global-shortcuts'
 import { HISTORY_CHANNELS } from '../shared/history'
 import {
   type AppCommand,
@@ -87,6 +88,11 @@ import {
 } from './document'
 import { isDocumentName } from './document-types'
 import { externalFileArguments } from './external-files'
+import {
+  clearGlobalShortcuts,
+  registerGlobalShortcut,
+  unregisterGlobalShortcut,
+} from './global-shortcuts'
 import { listVersions, previewVersion } from './history'
 import { hotkeys, loadHotkeys, saveHotkeys } from './hotkeys'
 import { readDocumentImage } from './images'
@@ -205,6 +211,7 @@ let mainWindow: BrowserWindow | null = null
 let fileOperation: Promise<unknown> | null = null
 let quitting = false
 let recordingHotkey = false
+let pendingGlobalShortcut: string | null = null
 const externalFiles: string[] = []
 function queueExternalFiles(paths: string[]) {
   for (const path of paths) {
@@ -240,6 +247,24 @@ if (process.env.NODE_ENV_ELECTRON_VITE === 'development')
       app.quit()
     }
   })
+app.on('will-quit', clearGlobalShortcuts)
+
+function invokeGlobalShortcut(id: string) {
+  if (!mainWindow) {
+    pendingGlobalShortcut = id
+    createWindow()
+  }
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+  if (mainWindow.webContents.isLoadingMainFrame()) {
+    pendingGlobalShortcut = id
+    return
+  }
+  if (pendingGlobalShortcut !== id)
+    mainWindow.webContents.send(GLOBAL_SHORTCUT_CHANNELS.invoked, id)
+}
 
 function trustedWindow(
   event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>,
@@ -366,6 +391,7 @@ function createWindow(): void {
   }
   window.on('blur', stopRecording)
   window.webContents.on('did-start-loading', stopRecording)
+  window.webContents.on('did-start-loading', clearGlobalShortcuts)
   window.webContents.on('did-start-loading', () => analysisService.cancel())
   window.webContents.on('render-process-gone', () => analysisService.cancel())
   window.on('closed', () => analysisService.cancel())
@@ -966,6 +992,20 @@ if (!app.requestSingleInstanceLock()) {
       handle(HOTKEY_CHANNELS.get, (event) => {
         trustedWindow(event)
         return hotkeys
+      })
+      handle(
+        GLOBAL_SHORTCUT_CHANNELS.register,
+        (_event, id: unknown, accelerator: unknown) => {
+          registerGlobalShortcut(id, accelerator, invokeGlobalShortcut)
+          if (pendingGlobalShortcut === id) {
+            pendingGlobalShortcut = null
+            mainWindow?.webContents.send(GLOBAL_SHORTCUT_CHANNELS.invoked, id)
+          }
+        },
+      )
+      handle(GLOBAL_SHORTCUT_CHANNELS.unregister, (_event, id: unknown) => {
+        unregisterGlobalShortcut(id)
+        if (pendingGlobalShortcut === id) pendingGlobalShortcut = null
       })
       handle(HOTKEY_CHANNELS.save, async (event, value: unknown) => {
         trustedWindow(event)

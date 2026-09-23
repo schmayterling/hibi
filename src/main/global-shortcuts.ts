@@ -7,12 +7,18 @@ export function registerGlobalShortcut(
   accelerator: unknown,
   invoke: (id: string) => void,
 ): void {
+  const parts = typeof accelerator === 'string' ? accelerator.split('+') : []
+  const modifier =
+    /^(commandorcontrol|cmdorctrl|command|cmd|control|ctrl|alt|option|meta|super)$/i
+  const key = parts.at(-1) ?? ''
   if (
     typeof id !== 'string' ||
     !/^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/.test(id) ||
     typeof accelerator !== 'string' ||
     accelerator.length > 80 ||
-    !accelerator.includes('+')
+    !parts.slice(0, -1).some((part) => modifier.test(part)) ||
+    !key ||
+    modifier.test(key)
   )
     throw new Error('Choose a shortcut with a modifier and key.')
   const previous = registrations.get(id)

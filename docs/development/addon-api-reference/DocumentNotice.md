@@ -10,6 +10,8 @@ function DocumentNotice(props: {
   message?: string | undefined
   busy?: boolean
   variant?: 'default' | 'warning'
+  className?: string
+  style?: CSSProperties
   children?: ReactNode
 })
 ```
@@ -18,4 +20,4 @@ function DocumentNotice(props: {
 
 | Name | Type |
 | --- | --- |
-| <code>props</code> | <code>{ title: string message?: string &#124; undefined busy?: boolean variant?: 'default' &#124; 'warning' children?: ReactNode }</code> |
+| <code>props</code> | <code>{ title: string message?: string &#124; undefined busy?: boolean variant?: 'default' &#124; 'warning' className?: string style?: CSSProperties children?: ReactNode }</code> |

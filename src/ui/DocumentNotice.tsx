@@ -1,5 +1,5 @@
 import { FileWarning, LoaderCircle, TriangleAlert } from 'lucide-react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { errorMessage } from '../shared/errors'
 
 export function DocumentNotice({
@@ -7,12 +7,16 @@ export function DocumentNotice({
   message,
   busy = false,
   variant = 'default',
+  className,
+  style,
   children,
 }: {
   title: string
   message?: string | undefined
   busy?: boolean
   variant?: 'default' | 'warning'
+  className?: string
+  style?: CSSProperties
   children?: ReactNode
 }) {
   const Icon = busy
@@ -22,7 +26,8 @@ export function DocumentNotice({
       : FileWarning
   return (
     <div
-      className="document-notice"
+      className={`document-notice${className ? ` ${className}` : ''}`}
+      style={style}
       data-variant={variant}
       role="status"
       aria-live="polite"

@@ -110,6 +110,56 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   await page.evaluate(() => window.viewsFixture.start.dispose())
   await start.getByRole('heading', { name: 'Start typing' }).waitFor()
   await replaceRichText(page, editor, 'first document')
+  await page.evaluate(() => {
+    const fixture = window.viewsFixture
+    fixture.handles.notice = fixture.context.views.notify({
+      title: 'Warning',
+      message: 'This file is unsupported.',
+      variant: 'warning',
+      className: 'fixture-notice',
+      style: { backgroundColor: 'rgb(255, 241, 170)' },
+    })
+  })
+  const notice = page.locator('.view-notifications .fixture-notice')
+  await notice.getByText('This file is unsupported.').waitFor()
+  assert.equal(await notice.getAttribute('data-variant'), 'warning')
+  assert.equal(
+    await notice.evaluate(
+      (element) => getComputedStyle(element).backgroundColor,
+    ),
+    'rgb(255, 241, 170)',
+  )
+  assert.equal(
+    await notice.evaluate((element) => getComputedStyle(element).borderStyle),
+    'solid',
+  )
+  assert.equal(
+    await page.evaluate(
+      () =>
+        document.querySelector('.view-notifications').getBoundingClientRect()
+          .top >=
+        document.querySelector('.toolbar-slot').getBoundingClientRect().bottom,
+    ),
+    true,
+  )
+  await page.evaluate(() =>
+    window.viewsFixture.handles.notice.update({
+      message: 'This file is read only.',
+    }),
+  )
+  await notice.getByText('This file is read only.').waitFor()
+  await page.evaluate(() => window.viewsFixture.handles.notice.dispose())
+  await notice.waitFor({ state: 'detached' })
+  await page.evaluate(() => {
+    window.viewsFixture.handles.notice =
+      window.viewsFixture.context.views.notify({
+        title: 'Warning',
+        message: 'This file is unsupported.',
+        variant: 'warning',
+        className: 'fixture-notice',
+      })
+  })
+  await notice.waitFor()
   await page.evaluate(() => window.viewsFixture.staged.show())
   await page
     .getByRole('region', { name: 'Fixture panel' })
@@ -223,10 +273,12 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   const addonTab = page.getByRole('tab', { name: 'Fixture tab' })
   const tabContent = page.getByRole('tabpanel', { name: 'Fixture tab' })
   await tabContent.getByRole('button', { name: 'Count 0' }).click()
+  await notice.waitFor({ state: 'detached' })
   assert.equal(await addonTab.getAttribute('aria-selected'), 'true')
   assert.equal(await editor.isVisible(), false)
   await page.locator(`#document-tab-${first}`).click()
   assert.equal(await editor.isVisible(), true)
+  await notice.waitFor()
   await addonTab.click()
   await tabContent.getByRole('button', { name: 'Count 1' }).waitFor()
   await addonTab.focus()
@@ -265,6 +317,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   await page.getByRole('button', { name: 'Back to app', exact: true }).click()
   assert.equal(await page.locator('[data-addon-view]').count(), 0)
   assert.equal(await addonTab.count(), 0)
+  assert.equal(await notice.count(), 0)
   assert.equal(await editor.textContent(), 'still editable')
   assert.equal(await sidebar.count(), 0)
   await page.getByText(/no view selected/i).waitFor()

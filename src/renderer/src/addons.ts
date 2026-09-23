@@ -55,6 +55,7 @@ import { markdownSyntax } from './markdown-syntax'
 import { registrationBatch } from './registration-batch'
 import { settingsPages } from './settings-pages'
 import { toolbar } from './toolbar'
+import { viewNotifications } from './view-notifications'
 
 export { addons } from './addon-registry'
 
@@ -374,6 +375,7 @@ export function useAddons(
       const toolbarScope = toolbar.scope(id, (error) =>
         latest.current.error(error),
       )
+      const notificationScope = viewNotifications.scope()
       const tooltipScope = createTooltipScope()
       const cleanups = new Set<() => void>()
       const editScope = documentEdits.scope(() => latest.current.isBusy())
@@ -535,6 +537,7 @@ export function useAddons(
               () => toastScope.dispose(),
               () => menuScope.dispose(),
               () => toolbarScope.dispose(),
+              () => notificationScope.dispose(),
               () => tooltipScope.dispose(),
               () => overrides.dispose(),
             ],
@@ -622,7 +625,7 @@ export function useAddons(
               },
             },
             dialogs: dialogScope.api,
-            views: { register: registerView },
+            views: { register: registerView, notify: notificationScope.notify },
             analysis: {
               async run(projection) {
                 if (disposed)

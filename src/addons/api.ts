@@ -1,7 +1,7 @@
 import type { Extension } from '@codemirror/state'
 import type { AnyExtension, Editor } from '@tiptap/core'
 import type { MarkedExtension } from 'marked'
-import type { ComponentType } from 'react'
+import type { ComponentType, CSSProperties } from 'react'
 import type {
   Colorscheme,
   ColorschemeInput,
@@ -444,7 +444,23 @@ export type ViewRegistration = {
   }) => ViewInstance
   dispose: () => void
 }
-export type ViewApi = { register: (view: AddonView) => ViewRegistration }
+export type ViewNotification = {
+  title: string
+  message?: string
+  variant?: 'default' | 'warning'
+  /** Optional addon class and inline styles for custom appearance. */
+  className?: string
+  style?: CSSProperties
+}
+export type ViewNotificationHandle = {
+  update: (changes: Partial<ViewNotification>) => void
+  dispose: () => void
+}
+export type ViewApi = {
+  register: (view: AddonView) => ViewRegistration
+  /** Show a persistent notice below the editor toolbar until disposed. */
+  notify: (notification: ViewNotification) => ViewNotificationHandle
+}
 
 export type SettingsCategory = {
   /** Local ID. The host prefixes custom categories with the addon ID. */

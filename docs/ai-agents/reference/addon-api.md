@@ -45,6 +45,8 @@ See the [addon API reference](../../development/addon-api-reference/README.md).
 - [AddonView](../../development/addon-api-reference/AddonView.md)
 - [ViewInstance](../../development/addon-api-reference/ViewInstance.md)
 - [ViewRegistration](../../development/addon-api-reference/ViewRegistration.md)
+- [ViewNotification](../../development/addon-api-reference/ViewNotification.md)
+- [ViewNotificationHandle](../../development/addon-api-reference/ViewNotificationHandle.md)
 - [ViewApi](../../development/addon-api-reference/ViewApi.md)
 - [SettingsCategory](../../development/addon-api-reference/SettingsCategory.md)
 - [SettingsPage](../../development/addon-api-reference/SettingsPage.md)

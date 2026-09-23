@@ -57,6 +57,8 @@ For installed packages, use the [SideloadFactory](SideloadFactory.md) and the [s
 - [StyleHandle](StyleHandle.md)
 - [ViewApi](ViewApi.md)
 - [ViewInstance](ViewInstance.md)
+- [ViewNotification](ViewNotification.md)
+- [ViewNotificationHandle](ViewNotificationHandle.md)
 - [ViewRegistration](ViewRegistration.md)
 
 ## Sideloading

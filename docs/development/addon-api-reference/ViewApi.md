@@ -2,13 +2,17 @@
 
 # ViewApi
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L447)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L459)
 
 <details>
 <summary>Declaration</summary>
 
 ```typescript
-type ViewApi = { register: (view: AddonView) => ViewRegistration }
+type ViewApi = {
+  register: (view: AddonView) => ViewRegistration
+  /** Show a persistent notice below the editor toolbar until disposed. */
+  notify: (notification: ViewNotification) => ViewNotificationHandle
+}
 ```
 
 </details>
@@ -18,12 +22,13 @@ type ViewApi = { register: (view: AddonView) => ViewRegistration }
 **Methods**
 
 - [register](#register)
+- [notify](#notify)
 
 ## Methods
 
 ### register
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L447)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L460)
 
 ```typescript
 register: (view: AddonView) => ViewRegistration
@@ -39,6 +44,26 @@ Related: [AddonView](AddonView.md), [ViewRegistration](ViewRegistration.md).
 
 **Returns:** <code><a href="ViewRegistration.md">ViewRegistration</a></code>
 
+### notify
+
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L462)
+
+Show a persistent notice below the editor toolbar until disposed.
+
+```typescript
+notify: (notification: ViewNotification) => ViewNotificationHandle
+```
+
+Related: [ViewNotification](ViewNotification.md), [ViewNotificationHandle](ViewNotificationHandle.md).
+
+**Parameters**
+
+| Name | Type |
+| --- | --- |
+| <code>notification</code> | <code><a href="ViewNotification.md">ViewNotification</a></code> |
+
+**Returns:** <code><a href="ViewNotificationHandle.md">ViewNotificationHandle</a></code>
+
 ## Related types
 
-[AddonView](AddonView.md), [ViewRegistration](ViewRegistration.md).
+[AddonView](AddonView.md), [ViewRegistration](ViewRegistration.md), [ViewNotification](ViewNotification.md), [ViewNotificationHandle](ViewNotificationHandle.md).

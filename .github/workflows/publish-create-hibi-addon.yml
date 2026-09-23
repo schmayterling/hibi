@@ -1,4 +1,4 @@
-name: publish create-hibi-addon
+name: stage create-hibi-addon
 
 on:
   workflow_dispatch:
@@ -7,11 +7,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: publish-create-hibi-addon
+  group: stage-create-hibi-addon
   cancel-in-progress: false
 
 jobs:
-  publish:
+  stage:
     if: github.repository == 'schmayterling/hibi' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -24,10 +24,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
-          registry-url: ${{ secrets.NPM_PUBLISH_TOKEN && 'https://registry.npmjs.org' || '' }}
       - run: npm install --global npm@^11.15.0
       - run: node --test tests/create-addon.test.mjs
-      - run: npm publish --access public --provenance
+      - run: npm stage publish --access public --provenance
         working-directory: packages/create-hibi-addon
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}

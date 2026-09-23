@@ -80,12 +80,12 @@ test('nightlies build unchanged revisions daily and include real commits since t
   for (const [release, color, footer] of [
     [
       green,
-      16748945,
+      9568176,
       '🟢 this nightly is tagged green and has passed all checks.',
     ],
     [
       broken,
-      9568176,
+      16748945,
       '🔴 this nightly is tagged red.\n⚠️ this nightly has not passed all checks.',
     ],
   ]) {

@@ -168,7 +168,7 @@ export function nightlyWebhook(release, repository, checksums) {
             (asset) => `[${asset.name}](${asset.url})`,
           ),
         ].join('\n'),
-        color: green ? 16748945 : 9568176,
+        color: green ? 9568176 : 16748945,
         footer: {
           text: green
             ? '🟢 this nightly is tagged green and has passed all checks.'

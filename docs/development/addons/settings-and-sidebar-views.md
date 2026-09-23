@@ -121,6 +121,8 @@ const instance = report.open({ id: 'comparison', binding: 'pinned' })
 
 Use `location: 'tab'` for a full-size view beside document tabs. Opening an instance selects its tab; opening the same ID again reuses it. Closing the tab releases that instance. Selecting a document tab hides the addon view without closing it. Tab views remain available when document tabs are turned off, and they are removed when the addon stops.
 
+Use `location: 'start'` to replace the welcome screen when no document tab is open. Hibi opens this view when the addon registers it and returns to the built-in welcome screen when the addon stops. Its `document` prop is `null`. If several addons register start views, the most recently shown one is visible. Calling `show()` selects it again; `hide()` or `close()` reveals another registered start view or the built-in screen. Typing in the editor still creates an `untitled.md` tab.
+
 ```tsx
 const dashboard = context.views.register({
   id: 'dashboard',

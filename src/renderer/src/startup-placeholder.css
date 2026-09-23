@@ -13,6 +13,13 @@
 .startup-placeholder[data-mode="side-by-side"] {
   right: 50%;
 }
+.startup-placeholder.addon-start-view {
+  padding: 0;
+  pointer-events: auto;
+}
+.addon-start-view .addon-view-content {
+  min-height: 100%;
+}
 .startup-placeholder h2,
 .startup-placeholder h4 {
   font-weight: 600;

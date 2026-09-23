@@ -322,11 +322,14 @@ test('single-file mode guards replacement, closes other tabs safely, and persist
       'false',
   )
   await page.keyboard.press('Escape')
-  await page.getByRole('tablist', { name: 'Open tabs' }).waitFor()
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).tabsEnabled,
+  )
   await clickMenu(app, 'New')
   await waitForAsync(
     page,
-    async () => (await window.hibi.getDocument()).tabs.length === 2,
+    async () => (await window.hibi.getDocument()).tabs.length === 1,
   )
 })
 
@@ -345,6 +348,11 @@ test('tab entry and exit animate, while reduced motion removes transitions', {
   page.setDefaultTimeout(6000)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await page.emulateMedia({ reducedMotion: 'no-preference' })
+  await clickMenu(app, 'New')
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).tabs.length === 1,
+  )
   const first = (await page.evaluate(() => window.hibi.getDocument())).tabId
   const observe = (name) =>
     page.evaluate(
@@ -623,14 +631,11 @@ test('file tabs preserve independent drafts and guard closing, saving, and works
   )
   for (const tab of (await read()).tabs)
     await page.evaluate((id) => window.hibi.closeDocumentTab(id), tab.id)
-  assert.equal((await read()).tabs.length, 1)
+  assert.equal((await read()).tabs.length, 0)
   assert.equal((await read()).markdown, '')
   await page.reload()
   await rich.waitFor()
-  assert.equal(
-    await page.getByRole('region', { name: /start writing/i }).count(),
-    0,
-  )
+  await page.getByRole('region', { name: /start writing/i }).waitFor()
   const lastTab = (await read()).tabId
   await clickMenu(app, 'New')
   await waitForAsync(
@@ -644,10 +649,9 @@ test('file tabs preserve independent drafts and guard closing, saving, and works
   )
   await waitForAsync(
     page,
-    async (id) => (await window.hibi.getDocument()).tabId === id,
-    lastTab,
+    async () => (await window.hibi.getDocument()).tabs.length === 0,
   )
-  assert.equal((await read()).tabs.length, 1)
+  await page.getByRole('region', { name: /start writing/i }).waitFor()
 })
 
 test('source selection survives tab remounts with emoji and mixed line endings', {

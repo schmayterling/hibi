@@ -230,7 +230,11 @@ export function Titlebar({
         <div className="document-title">
           {settingsOpen ? (
             <span>Settings</span>
-          ) : document?.tabsEnabled === false && addonTabs.length === 0 ? (
+          ) : document?.tabs.length === 0 && addonTabs.length === 0 ? (
+            <span>Hibi</span>
+          ) : document?.tabsEnabled === false &&
+            document.tabs.length > 0 &&
+            addonTabs.length === 0 ? (
             <span
               className="single-document-title"
               data-tooltip={document.name}

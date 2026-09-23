@@ -1,6 +1,6 @@
 # Editing
 
-Start typing in a blank note, choose **Open a file…** on the welcome screen, use **File → Open**, or select a recent workspace.
+Hibi opens on the welcome screen with no document tabs. Start typing to create an unsaved `untitled.md` tab, choose **Open a file…**, use **File → Open**, or select a recent workspace.
 
 ## Choose a view
 
@@ -16,7 +16,7 @@ When you use an input method, choosing and revising candidates remains one undo 
 
 ## Work with tabs
 
-Opening or creating a note adds a tab. Select one to return to its document, drag it to change its position, or press `Cmd/Ctrl+W` to close it. A dot marks unsaved changes. Hibi asks before discarding unsaved work.
+Opening or creating a note adds a tab. Select one to return to its document, drag it to change its position, or press `Cmd/Ctrl+W` to close it. Closing the last document tab returns to the welcome screen. A dot marks unsaved changes. Hibi asks before discarding unsaved work.
 
 With a tab focused, arrow keys and Home/End move between tabs. Use `Alt+Shift+Left/Right` to reorder them with the keyboard.
 

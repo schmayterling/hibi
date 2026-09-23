@@ -43,7 +43,12 @@ export function AddonViewContent({
   )
   const state = useSyncExternalStore(addonViews.subscribe, addonViews.snapshot)
   const root = useRef<HTMLDivElement>(null)
-  const document = entry.binding === 'pinned' ? entry.document : current
+  const document =
+    entry.definition.location === 'start'
+      ? null
+      : entry.binding === 'pinned'
+        ? entry.document
+        : current
   useLayoutEffect(() => {
     if (!visible || state.focusTarget !== entry.id) return
     const target =

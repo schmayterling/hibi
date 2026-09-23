@@ -3647,7 +3647,8 @@
     "src/renderer/src/markdown.ts"
   ],
   "b94c5ac62b87": [
-    "src/renderer/src/StartupPlaceholder.tsx"
+    "src/renderer/src/StartupPlaceholder.tsx",
+    "src/renderer/src/main.tsx"
   ],
   "b48677e096e8": [
     "src/addons/diagnostics/Settings.tsx"

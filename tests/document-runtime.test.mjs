@@ -28,6 +28,27 @@ const fixture = (options = {}) => {
   return { runtime, operations, errors }
 }
 
+test('first edit opens a tab from the zero-tab start view', () => {
+  const { runtime } = fixture()
+  runtime.activate(
+    document('', {
+      tabs: [],
+      name: 'untitled.md',
+      id: 'start-draft',
+      revision: 0,
+      canAutosave: false,
+    }),
+  )
+  assert.equal(runtime.get().tabs.length, 0)
+  runtime.replace('hello')
+  assert.deepEqual(runtime.get().tabs, [
+    { id: 'one', name: 'untitled.md', dirty: true },
+  ])
+  runtime.session().undo()
+  assert.equal(runtime.get().tabs.length, 1)
+  runtime.dispose()
+})
+
 test('runtime facades capture immutable full snapshots and do not flatten on publication', () => {
   const { runtime, operations } = fixture()
   const original = runtime.activate(document('old source'))

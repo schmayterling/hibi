@@ -55,6 +55,7 @@ import {
 import { AddonPanel } from './AddonPanel'
 import { AddonSidebar, builtInViews, viewShortcut } from './AddonSidebar'
 import { AddonTab } from './AddonTab'
+import { AddonViewContent } from './AddonViewContent'
 import { addonRegistry } from './addon-registry'
 import { addonViews } from './addon-views'
 import { addons, useAddons } from './addons'
@@ -245,13 +246,7 @@ function App() {
     [],
   )
   useLayoutEffect(() => {
-    let dismissed = sessionStorage.getItem('hibi:welcome-dismissed') === 'true'
     return documentRuntime.subscribe((next, changes) => {
-      if (changes && !dismissed) {
-        dismissed = true
-        setWelcomeDismissed(true)
-        sessionStorage.setItem('hibi:welcome-dismissed', 'true')
-      }
       currentDocument.current = next
       // Save acknowledgments update the baseline even when dirty stays true.
       if (!changes || !sameDocumentShell(shellDocument.current, next)) {
@@ -372,19 +367,7 @@ function App() {
   const [recentWorkspaces, setRecentWorkspaces] = useState<
     RecentWorkspace[] | null
   >(null)
-  const [welcomeDismissed, setWelcomeDismissed] = useState(
-    () => sessionStorage.getItem('hibi:welcome-dismissed') === 'true',
-  )
-  const showWelcome =
-    !welcomeDismissed &&
-    document?.revision === 0 &&
-    documentRuntime.sourceFor(document)?.utf16Length === 0 &&
-    !document.dirty &&
-    !workspace
-  function dismissWelcome() {
-    setWelcomeDismissed(true)
-    sessionStorage.setItem('hibi:welcome-dismissed', 'true')
-  }
+  const showWelcome = document?.tabs.length === 0
   const [workspaceRename, setWorkspaceRename] = useState<WorkspaceRename>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarView, setSidebarView] = useState(
@@ -665,6 +648,9 @@ function App() {
   )
   const activeAddonTab = addonTabs.find(
     (entry) => entry.id === addonViewState.activeTab,
+  )
+  const activeStartView = addonViewState.instances.find(
+    (entry) => entry.id === addonViewState.activeStart,
   )
   const activeAddonView = addonHost.sidebarViews.find(
     (view) => view.id === sidebarView,
@@ -999,7 +985,6 @@ function App() {
   useEffect(() => window.hibi.onNotice(setNotice), [setNotice])
 
   function updateMarkdown(markdown: string, historyGroup?: string) {
-    if (!welcomeDismissed) dismissWelcome()
     if (exceedsUtf8Limit(markdown, MAX_DOCUMENT_BYTES)) {
       setError(
         'This edit would exceed the 2 MiB document limit, so it was not applied.',
@@ -1101,6 +1086,14 @@ function App() {
         setSettingsOpen(false)
         settingsNavigation.current.forward = []
       }
+      if (next.tabs.length === 0)
+        requestAnimationFrame(() =>
+          window.document
+            .querySelector<HTMLElement>(
+              mode === 'normal' ? '.tiptap' : '.cm-content',
+            )
+            ?.focus({ preventScroll: true }),
+        )
     } catch (error) {
       setError(
         error instanceof Error
@@ -1182,7 +1175,7 @@ function App() {
     switch (command) {
       case 'close-tab':
         if (activeAddonTab) activeAddonTab.handle.close()
-        else if (document)
+        else if (document?.tabs.some((tab) => tab.id === document.tabId))
           void applyDocumentOperation(() =>
             window.hibi.closeDocumentTab(document.tabId),
           )
@@ -1247,7 +1240,6 @@ function App() {
         if (!availableViews.includes(command)) break
         showTitlebar()
         setSettingsOpen(false)
-        dismissWelcome()
         setMode(command)
         break
       case 'toggle-titlebar':
@@ -1947,7 +1939,6 @@ function App() {
             onDefaultView={(view) => {
               setDefaultView(view)
               setMode(view)
-              dismissWelcome()
             }}
             cursorSettings={cursorSettings}
             onCursorSettings={setCursorSettings}
@@ -2056,23 +2047,35 @@ function App() {
               />
             </Suspense>
           )}
-          {showWelcome && addonHost.ready && (
-            <StartupPlaceholder
-              recent={recentWorkspaces}
-              mode={mode}
-              busy={busy}
-              onOpen={(id) => void openFolder(id)}
-              onOpenFile={() => void runCommand('open')}
-              onDismiss={() => {
-                dismissWelcome()
-                window.document
-                  .querySelector<HTMLElement>(
-                    mode === 'normal' ? '.tiptap' : '.cm-content',
+          {showWelcome &&
+            addonHost.ready &&
+            (activeStartView ? (
+              <section
+                className="startup-placeholder addon-start-view"
+                aria-label="Start writing"
+              >
+                <AddonViewContent entry={activeStartView} visible />
+              </section>
+            ) : (
+              <StartupPlaceholder
+                recent={recentWorkspaces}
+                mode={mode}
+                busy={busy}
+                onOpen={(id) => void openFolder(id)}
+                onOpenFile={() => void runCommand('open')}
+                onDismiss={() => {
+                  void applyDocumentOperation(() =>
+                    window.hibi.newDocument(),
+                  ).then(() =>
+                    window.document
+                      .querySelector<HTMLElement>(
+                        mode === 'normal' ? '.tiptap' : '.cm-content',
+                      )
+                      ?.focus(),
                   )
-                  ?.focus()
-              }}
-            />
-          )}
+                }}
+              />
+            ))}
           {!settingsOpen && (
             <StatusBar
               visibility={zen ? 'hidden' : statusBar}

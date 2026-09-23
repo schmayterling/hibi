@@ -418,7 +418,7 @@ export type AddonView = {
   id: string
   label: string
   icon?: SidebarView['icon']
-  location?: 'sidebar' | 'panel' | 'tab'
+  location?: 'sidebar' | 'panel' | 'tab' | 'start'
   /** Preferred side for sidebar views. Users can choose either side in its picker. */
   side?: 'left' | 'right'
   /** Visible views unmount when hidden; session views retain local state until closed or disposed. */

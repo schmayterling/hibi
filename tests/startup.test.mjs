@@ -41,6 +41,7 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
   const bootstrap = await page.evaluate(() => window.hibi.bootstrap.document())
   assert.equal(bootstrap.externalPending, false)
   assert.equal(bootstrap.document.markdown, '')
+  assert.equal(bootstrap.document.tabs.length, 0)
   assert.equal(bootstrap.workspace, null)
   assert.deepEqual(
     await page.evaluate(() => window.hibi.bootstrap.addons()),
@@ -63,12 +64,24 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
   )
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await pressShortcut(app, `${mod}+Shift+]`)
-  await welcome().waitFor({ state: 'hidden' })
+  assert.equal(await welcome().isVisible(), true)
   await pressShortcut(app, `${mod}+Shift+[`)
   await rich.press('a')
   await welcome().waitFor({ state: 'hidden' })
+  assert.deepEqual(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.map(
+      (tab) => tab.name,
+    ),
+    ['untitled.md'],
+  )
   await rich.fill('')
   assert.equal(await welcome().count(), 0)
+  await page.locator('.document-tab .tab-close').click()
+  await welcome().waitFor()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.length,
+    0,
+  )
   await pressShortcut(app, `${mod}+n`)
   assert.equal(await welcome().count(), 0)
 
@@ -106,6 +119,10 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
 
   // A fresh process has an empty startup draft and the same workspace history.
   page = await launch()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.length,
+    0,
+  )
   await welcome()
     .getByRole('button', { name: uiName(reordered[0], true), exact: true })
     .waitFor()
@@ -122,7 +139,7 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
   await welcome()
     .getByRole('button', { name: uiName(reordered[1], true), exact: true })
     .click()
-  await welcome().waitFor({ state: 'hidden' })
+  assert.equal(await welcome().isVisible(), true)
   await page
     .getByRole('treeitem', { name: /^empty\.md$/i, exact: true })
     .click()
@@ -142,6 +159,10 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
   const outside = join(temp, 'outside.md')
   await writeFile(outside, 'outside note')
   page = await launch()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.length,
+    0,
+  )
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({
       canceled: false,
@@ -160,10 +181,18 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
   app = null
 
   page = await launch()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.length,
+    0,
+  )
   await welcome()
     .getByRole('button', { name: /dismiss this screen/i })
     .click()
   await welcome().waitFor({ state: 'hidden' })
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.length,
+    1,
+  )
   assert.equal(
     await page
       .getByRole('textbox', { name: /document editor/i })

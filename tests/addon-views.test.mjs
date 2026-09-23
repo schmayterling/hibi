@@ -61,7 +61,8 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
     const lazy = React.lazy(() => new Promise(resolve => { window.finishView = () => resolve({default:Content}); }));
     const slow = context.views.register({ id:'slow', label:'Slow panel', location:'panel', Content:lazy });
     const broken = context.views.register({ id:'broken', label:'Broken panel', location:'panel', Content() { throw Error('view failure'); } });
-    window.viewsFixture = { context, panel, follow, right, tab, queuedRight, slow, broken, staged, handles: {} };
+    const start = context.views.register({ id:'start', label:'Fixture start', location:'start', Content() { return h('h2', null, 'Fixture start'); } });
+    window.viewsFixture = { context, panel, follow, right, tab, queuedRight, slow, broken, start, staged, handles: {} };
   }});`,
   )
   const app = await electron.launch({
@@ -80,8 +81,31 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
     name: 'Document editor',
     exact: true,
   })
-  await replaceRichText(page, editor, 'first document')
   await page.waitForFunction(() => window.viewsFixture)
+  const start = page.getByRole('region', { name: 'Start writing' })
+  await start.getByRole('heading', { name: 'Fixture start' }).waitFor()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.length,
+    0,
+  )
+  await replaceRichText(page, editor, 'first document')
+  await start.waitFor({ state: 'hidden' })
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.length,
+    1,
+  )
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  await page.locator('.document-tab .tab-close').click()
+  await start.getByRole('heading', { name: 'Fixture start' }).waitFor()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabs.length,
+    0,
+  )
+  await page.evaluate(() => window.viewsFixture.start.dispose())
+  await start.getByRole('heading', { name: 'Start typing' }).waitFor()
+  await replaceRichText(page, editor, 'first document')
   await page.evaluate(() => window.viewsFixture.staged.show())
   await page
     .getByRole('region', { name: 'Fixture panel' })

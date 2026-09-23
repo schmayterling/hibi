@@ -147,6 +147,18 @@ export class DocumentRuntime {
   }
   #publish = () => {
     if (this.#updating) return
+    if (
+      this.#changes &&
+      this.#metadata?.tabs.length === 0 &&
+      this.#active?.snapshot().utf16Length
+    ) {
+      const { tabId, name } = this.#metadata
+      this.#metadata = {
+        ...this.#metadata,
+        tabs: [{ id: tabId, name, dirty: true }],
+      }
+      this.#cached = null
+    }
     const document = this.get(),
       changes = this.#changes
     this.#changes = null

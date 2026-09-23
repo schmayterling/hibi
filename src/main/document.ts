@@ -45,6 +45,7 @@ let draftId = randomUUID()
 let back: string[] = []
 let forward: string[] = []
 let activeTab: string = randomUUID()
+let activeTabOpen = false
 const materialized = new WeakMap<SourceSnapshot, string>()
 const equalSaved = new WeakMap<SourceSnapshot, SourceSnapshot>()
 let dirtyTimer: ReturnType<typeof setTimeout> | undefined
@@ -223,6 +224,16 @@ function snapshot() {
   }
 }
 function storeTab() {
+  if (!activeTabOpen) {
+    if (
+      !source.snapshot().utf16Length &&
+      !path &&
+      !pendingPath &&
+      untitledName === 'untitled.md'
+    )
+      return
+    activeTabOpen = true
+  }
   const draft = snapshot()
   tabs.set(activeTab, draft)
   updateTabDirty(activeTab, draft)
@@ -248,11 +259,16 @@ async function startTab(window: BrowserWindow, reuseEmpty = false) {
     back = []
     forward = []
     activeTab = randomUUID()
+    activeTabOpen = true
     return true
   }
   storeTab()
-  if (reuseEmpty && isEmptyTab()) return true
+  if (reuseEmpty && isEmptyTab()) {
+    activeTabOpen = true
+    return true
+  }
   activeTab = randomUUID()
+  activeTabOpen = true
   return true
 }
 function isEmptyTab() {
@@ -380,6 +396,7 @@ function removeTabs(window: BrowserWindow, ids: Set<string>) {
       revision++
     } else {
       activeTab = randomUUID()
+      activeTabOpen = false
       clearDocument(window, false)
     }
   }
@@ -493,6 +510,7 @@ export function getDocument(): DocumentState {
 
 export function discardChanges(): void {
   storeTab()
+  if (!activeTabOpen) return
   for (const [id, draft] of tabs) {
     const version =
       draft.source.snapshot().version + Number(dirty(draft.source, draft.saved))
@@ -680,6 +698,7 @@ export function relocateDocument(from: string, to: string): void {
         : current
   }
   storeTab()
+  if (!activeTabOpen) return
   for (const draft of tabs.values()) {
     draft.path = relocate(draft.path)
     draft.pendingPath = relocate(draft.pendingPath)

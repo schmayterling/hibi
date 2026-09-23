@@ -23,6 +23,12 @@ test('global shortcut registration rejects conflicts and releases keys', {
     page.evaluate(() => window.hibi.registerGlobalShortcut('bad', 'A')),
     /modifier and key/,
   )
+  await assert.rejects(
+    page.evaluate(() =>
+      window.hibi.registerGlobalShortcut('test.shift', 'Shift+A'),
+    ),
+    /modifier and key/,
+  )
   await page.evaluate(
     (value) => window.hibi.registerGlobalShortcut('test.one', value),
     shortcut,

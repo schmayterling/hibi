@@ -23,6 +23,7 @@ import type {
   AutosaveResult,
   DocumentState,
   DocumentTab,
+  DocumentTabPreview,
 } from '../shared/desktop'
 import { MAX_DOCUMENT_BYTES } from '../shared/desktop'
 import type { DocumentSaveResult } from '../shared/document-edits'
@@ -335,6 +336,13 @@ export function getDocumentTabs(): DocumentTab[] {
         : draft.untitledName,
     dirty: updateTabDirty(id, draft),
   }))
+}
+export function getDocumentTabPreview(id: unknown): DocumentTabPreview {
+  storeTab()
+  if (typeof id !== 'string' || !tabs.has(id))
+    throw new Error('This tab is no longer open.')
+  const tab = getDocumentTabs().find((item) => item.id === id)!
+  return { ...tab, markdown: textOf(tabs.get(id)!.source.snapshot()) }
 }
 export function hasUnsavedDocuments() {
   storeTab()

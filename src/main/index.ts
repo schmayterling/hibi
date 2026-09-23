@@ -98,6 +98,7 @@ import {
   getDocumentSourceFor,
   getOpenDocumentVersions,
   hasOpenDocumentPath,
+  getDocumentTabPreview,
   loadDocument,
   loadDocumentPreferences,
   moveDocumentTab,
@@ -1422,6 +1423,10 @@ if (!app.requestSingleInstanceLock()) {
       handle(DOCUMENT_CHANNELS.selectTab, (event, id: unknown) =>
         runFileOperation(event, (window) => selectDocumentTab(window, id)),
       )
+      handle(DOCUMENT_CHANNELS.tabPreview, (event, id: unknown) => {
+        trustedWindow(event)
+        return getDocumentTabPreview(id)
+      })
       handle(DOCUMENT_CHANNELS.closeTab, (event, id: unknown) =>
         runFileOperation(event, (window) => closeDocumentTab(window, id)),
       )

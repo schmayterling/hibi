@@ -58,6 +58,7 @@ export function Titlebar({
   activeAddonTab,
   onSelectAddonTab,
   onCloseAddonTab,
+  onSplitTab,
   busy,
 }: {
   document: DocumentState | null
@@ -86,6 +87,7 @@ export function Titlebar({
   activeAddonTab: string | null
   onSelectAddonTab: (id: string) => void
   onCloseAddonTab: (id: string) => void
+  onSplitTab: (id: string) => void
   busy: boolean
 }) {
   const menus = useMenus(console.error)
@@ -262,6 +264,7 @@ export function Titlebar({
               activeAddonTab={activeAddonTab}
               onSelectAddon={onSelectAddonTab}
               onCloseAddon={onCloseAddonTab}
+              onSplit={onSplitTab}
             />
           ) : (
             <span>Hibi</span>

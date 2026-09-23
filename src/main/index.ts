@@ -17,6 +17,7 @@ import {
   systemPreferences,
 } from 'electron'
 import { ADDON_CHANNELS } from '../addons/api'
+import { obsidianPluginAsset } from '../addons/obsidian-plugin-loader/store'
 import { ABOUT_CHANNELS, SPONSOR_URL } from '../shared/about'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
@@ -276,6 +277,34 @@ async function serveAsset(request: Request): Promise<Response> {
       parsed.pathname.startsWith('/document-media/')
     )
       return await serveDocumentMedia(request)
+    if (
+      parsed.hostname === 'hibi' &&
+      parsed.pathname.startsWith('/obsidian-plugins/')
+    ) {
+      if (
+        !getAddonStates().some(
+          (addon) => addon.id === 'obsidian-plugin-loader' && addon.enabled,
+        )
+      )
+        return new Response(null, { status: 403 })
+      const asset = await obsidianPluginAsset(
+        join(app.getPath('userData'), 'obsidian-plugins'),
+        request.url,
+      )
+      if (asset === null) return new Response(null, { status: 404 })
+      return new Response(asset, {
+        headers: {
+          'Content-Type': parsed.pathname.endsWith('.js')
+            ? 'text/javascript; charset=utf-8'
+            : 'text/css; charset=utf-8',
+          'Content-Security-Policy': CONTENT_SECURITY_POLICY,
+          'X-Content-Type-Options': 'nosniff',
+          'Access-Control-Allow-Origin': devUrl
+            ? new URL(devUrl).origin
+            : 'app://hibi',
+        },
+      })
+    }
     const isAddon = parsed.pathname.startsWith('/installed-addons/')
     const path = isAddon
       ? await installedAsset(request.url)

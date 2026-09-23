@@ -356,6 +356,7 @@
   "19766ed6ccb2": [
     "src/addons/frontmatter/Properties.tsx",
     "src/addons/mermaid/Block.tsx",
+    "src/addons/obsidian-plugin-loader/native.ts",
     "src/addons/typst/Block.tsx",
     "src/main/dependencies.ts",
     "src/main/document.ts",
@@ -453,6 +454,9 @@
   "e31315092b97": [
     "src/addons/import-bear/convert.ts"
   ],
+  "247e8a9721ce": [
+    "src/addons/obsidian-plugin-loader/vault.ts"
+  ],
   "b02e490743df": [
     "src/addons/import-notion/convert.ts"
   ],
@@ -483,6 +487,9 @@
   "1d7031f78966": [
     "src/main/workspace-actions.ts"
   ],
+  "02e58b4b4922": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx"
+  ],
   "3b24e1f87361": [
     "src/main/workspace-actions.ts"
   ],
@@ -500,6 +507,9 @@
   ],
   "d4dc94ba2837": [
     "src/main/media.ts"
+  ],
+  "3ac9e5b5283e": [
+    "src/addons/obsidian-plugin-loader/store.ts"
   ],
   "f37b4c631f70": [
     "src/main/imports.ts"
@@ -555,6 +565,9 @@
   "c7c709c5d2bb": [
     "src/addons/documentation/native.ts"
   ],
+  "389a5d02e34a": [
+    "src/addons/obsidian-plugin-loader/native.ts"
+  ],
   "3426e2f6e182": [
     "src/addons/vim/Settings.tsx"
   ],
@@ -597,6 +610,9 @@
   ],
   "23d7c3da66d2": [
     "src/main/updates.ts"
+  ],
+  "079cf50c65fc": [
+    "src/addons/obsidian-plugin-loader/native.ts"
   ],
   "97ebc02f32f0": [
     "src/main/workspace-settings.ts"
@@ -848,6 +864,9 @@
   "349ceed84d07": [
     "src/renderer/src/HibiSettings.tsx"
   ],
+  "d27e1218886c": [
+    "src/addons/obsidian-plugin-loader/runtime.ts"
+  ],
   "ca7ac7cbc82a": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
@@ -1037,6 +1056,9 @@
   ],
   "187581a4c6c3": [
     "src/addons/git/Panel.tsx"
+  ],
+  "75081b593d15": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx"
   ],
   "855e169eae01": [
     "src/addons/discord-presence/manifest.ts"
@@ -1387,8 +1409,14 @@
   "25f127ce6030": [
     "src/main/addons.ts"
   ],
+  "bfccd2731af5": [
+    "src/addons/obsidian-plugin-loader/runtime.ts"
+  ],
   "297f8ade1919": [
     "src/main/workspace-settings.ts"
+  ],
+  "3fbe651d4821": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx"
   ],
   "a0d8a682c986": [
     "src/renderer/src/ModalEditingSettings.tsx"
@@ -1949,6 +1977,7 @@
     "src/addons/diagnostics/manifest.ts"
   ],
   "569ca49f4aaf": [
+    "src/addons/obsidian-plugin-loader/native.ts",
     "src/main/dependencies.ts",
     "src/main/sideload.ts"
   ],
@@ -1967,6 +1996,9 @@
   "66146583cc60": [
     "src/main/file-associations.ts"
   ],
+  "f6609775d119": [
+    "src/addons/obsidian-plugin-loader/native.ts"
+  ],
   "1e7a5cff30e0": [
     "src/renderer/src/ModalEditingSettings.tsx"
   ],
@@ -1975,6 +2007,9 @@
   ],
   "c7d5009dc83d": [
     "src/renderer/src/AddonSettings.tsx"
+  ],
+  "6d14ec80f225": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx"
   ],
   "198b85e15987": [
     "src/renderer/src/DependencySettings.tsx"
@@ -2011,6 +2046,12 @@
   ],
   "bd3aaa300e50": [
     "src/shared/dependencies.ts"
+  ],
+  "b4479c8658c9": [
+    "src/addons/obsidian-plugin-loader/store.ts"
+  ],
+  "2b49bd2b7e4e": [
+    "src/addons/obsidian-plugin-loader/vault.ts"
   ],
   "2e8a09a716d9": [
     "src/shared/dependencies.ts"
@@ -2316,6 +2357,9 @@
   "f43b94251094": [
     "src/renderer/src/FormatsSettings.tsx"
   ],
+  "a765629a7d46": [
+    "src/addons/obsidian-plugin-loader/index.tsx"
+  ],
   "76d861074364": [
     "src/addons/_shared/format-renderer.tsx"
   ],
@@ -2551,6 +2595,9 @@
   "a092ad6b8be0": [
     "src/addons/graph/Panel.tsx"
   ],
+  "1411b824310b": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx"
+  ],
   "92a350272aa9": [
     "src/renderer/src/StartupPlaceholder.tsx"
   ],
@@ -2604,6 +2651,9 @@
   "e3ebaa16dd9d": [
     "src/renderer/src/DependencySettings.tsx"
   ],
+  "9e3856eef37c": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx"
+  ],
   "c45165c4120e": [
     "src/addons/github-markdown/index.ts"
   ],
@@ -2635,6 +2685,22 @@
   ],
   "2cb4007f6fbe": [
     "src/addons/diagnostics/Settings.tsx"
+  ],
+  "0ea04c0497ac": [
+    "src/addons/obsidian-plugin-loader/manifest.ts"
+  ],
+  "ed0b28d90bde": [
+    "src/addons/obsidian-plugin-loader/runtime.ts"
+  ],
+  "2480226e513f": [
+    "src/addons/obsidian-plugin-loader/runtime.ts"
+  ],
+  "f35944c23de5": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx",
+    "src/addons/obsidian-plugin-loader/index.tsx"
+  ],
+  "5ef58d864fdc": [
+    "src/addons/obsidian-plugin-loader/vault.ts"
   ],
   "b1a1e8e3cf7c": [
     "src/addons/diagnostics/Settings.tsx"
@@ -2699,8 +2765,14 @@
   "ce7d9af1008b": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
+  "9eef6604f77f": [
+    "src/addons/obsidian-plugin-loader/compat.tsx"
+  ],
   "7693e6fba57c": [
     "src/addons/graph/Panel.tsx"
+  ],
+  "27d6739c832f": [
+    "src/addons/obsidian-plugin-loader/vault.ts"
   ],
   "ad5aa51d2d83": [
     "src/main/workspace-actions.ts",
@@ -2902,6 +2974,15 @@
   "36be30dddfe1": [
     "src/addons/keybeats/manifest.ts"
   ],
+  "e2f792532d55": [
+    "src/addons/obsidian-plugin-loader/store.ts"
+  ],
+  "95d7fb376526": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx"
+  ],
+  "56d2ea87d561": [
+    "src/addons/obsidian-plugin-loader/package.ts"
+  ],
   "6d031af10da7": [
     "src/renderer/src/NotificationSettings.tsx"
   ],
@@ -3021,6 +3102,9 @@
   "e1dda8fa3404": [
     "src/addons/rmarkdown/manifest.ts"
   ],
+  "0e5b6cd1c3a5": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx"
+  ],
   "156aba86640e": [
     "src/addons/git/Panel.tsx"
   ],
@@ -3082,11 +3166,17 @@
   "dbcdfde02229": [
     "src/shared/source-references.ts"
   ],
+  "0e9161011702": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx"
+  ],
   "903ae9ad0d9f": [
     "src/addons/git/Panel.tsx"
   ],
   "e2b488cb6e0d": [
     "src/renderer/src/WorkspaceSidebar.tsx"
+  ],
+  "0986f19f7a29": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx"
   ],
   "306960dcad4c": [
     "src/renderer/src/WorkspaceSidebar.tsx",
@@ -3109,10 +3199,14 @@
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
   "c3812fc4acb8": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx",
     "src/renderer/src/AddonSettings.tsx"
   ],
   "4953f8970948": [
     "src/renderer/src/FormattingToolbar.tsx"
+  ],
+  "1f3d9f11ea5f": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx"
   ],
   "20b118351e19": [
     "src/addons/documentation/ExportDialog.tsx",
@@ -3120,6 +3214,9 @@
   ],
   "0ab4d0cee3a1": [
     "src/renderer/src/main.tsx"
+  ],
+  "404ec90fcf33": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx"
   ],
   "3064d79a295c": [
     "src/renderer/src/workspace-menu.ts"
@@ -3166,6 +3263,9 @@
   ],
   "97b7a53b9210": [
     "src/main/sideload.ts"
+  ],
+  "6f63f5757ffc": [
+    "src/addons/obsidian-plugin-loader/native.ts"
   ],
   "6beb76e49302": [
     "src/main/document.ts"
@@ -3249,6 +3349,12 @@
   "79bb614213b2": [
     "src/addons/_shared/format-renderer.tsx"
   ],
+  "f83efc031f24": [
+    "src/addons/obsidian-plugin-loader/manifest.ts"
+  ],
+  "f4ccae29e1bb": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx"
+  ],
   "aa297b69634e": [
     "src/addons/_shared/format-renderer.tsx"
   ],
@@ -3286,6 +3392,9 @@
   ],
   "ac752922d909": [
     "src/renderer/src/AutosaveSettings.tsx"
+  ],
+  "ac7531bdfb99": [
+    "src/addons/obsidian-plugin-loader/vault.ts"
   ],
   "73c583fedbc0": [
     "src/main/addons.ts"
@@ -3742,6 +3851,9 @@
   "90115ae3fa70": [
     "src/addons/textile/manifest.ts"
   ],
+  "b326ecd283ed": [
+    "src/addons/obsidian-plugin-loader/vault.ts"
+  ],
   "f50cce0f1ca7": [
     "src/addons/_shared/format-native.ts"
   ],
@@ -3965,17 +4077,32 @@
   "23aa870889ee": [
     "src/main/import-files.ts"
   ],
+  "6ebac77473e5": [
+    "src/addons/obsidian-plugin-loader/Panel.tsx"
+  ],
   "5b9df36cc43f": [
     "src/shared/document-journal.ts"
   ],
   "c7085d2772ec": [
     "src/renderer/src/FormattingToolbar.tsx"
   ],
+  "3fd98c3a3b9f": [
+    "src/addons/obsidian-plugin-loader/vault.ts"
+  ],
+  "aa6acb094ab2": [
+    "src/addons/obsidian-plugin-loader/vault.ts"
+  ],
   "95e4db0dfa62": [
     "src/main/workspace-settings.ts"
   ],
   "a3a83b5e3ed9": [
     "src/addons/_shared/format-native.ts"
+  ],
+  "e2e8cf39e8ef": [
+    "src/addons/obsidian-plugin-loader/runtime.ts"
+  ],
+  "079701d66be6": [
+    "src/addons/obsidian-plugin-loader/vault.ts"
   ],
   "590fb9c8974a": [
     "src/addons/_shared/format-native.ts"
@@ -4013,6 +4140,9 @@
   "671a56401be1": [
     "src/addons/documentation/native.ts"
   ],
+  "3d55a62f1d3c": [
+    "src/addons/obsidian-plugin-loader/vault.ts"
+  ],
   "fc77ba3291d5": [
     "src/addons/git/Panel.tsx"
   ],
@@ -4036,6 +4166,21 @@
   ],
   "ae8d2458110c": [
     "src/main/sideload.ts"
+  ],
+  "76b3549577bf": [
+    "src/addons/obsidian-plugin-loader/store.ts"
+  ],
+  "2b46e5dbba04": [
+    "src/addons/obsidian-plugin-loader/store.ts"
+  ],
+  "eff761d5ec91": [
+    "src/addons/obsidian-plugin-loader/store.ts"
+  ],
+  "d2d1a9633e20": [
+    "src/addons/obsidian-plugin-loader/runtime.ts"
+  ],
+  "77de25f293b1": [
+    "src/addons/obsidian-plugin-loader/store.ts"
   ],
   "31430920dff7": [
     "src/addons/_shared/FormatPdf.tsx"
@@ -4198,6 +4343,10 @@
   "f21c0d01153d": [
     "src/main/workspace.ts"
   ],
+  "4de38ce1d96c": [
+    "src/addons/obsidian-plugin-loader/package.ts",
+    "src/addons/obsidian-plugin-loader/store.ts"
+  ],
   "9a8066d604c9": [
     "src/main/addon-documentation.ts"
   ],
@@ -4219,8 +4368,17 @@
   "62a6fbf88b17": [
     "src/main/links.ts"
   ],
+  "841b3cf45fd2": [
+    "src/addons/obsidian-plugin-loader/vault.ts"
+  ],
+  "fec25cb59b22": [
+    "src/addons/obsidian-plugin-loader/vault.ts"
+  ],
   "a8509d324773": [
     "src/main/workspace-actions.ts"
+  ],
+  "75286f3e5e5b": [
+    "src/addons/obsidian-plugin-loader/compat.tsx"
   ],
   "5089081cf601": [
     "src/renderer/src/document-edits.ts"
@@ -4524,6 +4682,9 @@
   "106476af38f2": [
     "src/addons/discord-presence/Settings.tsx"
   ],
+  "7f830e063121": [
+    "src/addons/obsidian-plugin-loader/compat.tsx"
+  ],
   "7fc90e2bb6a9": [
     "src/renderer/src/flavors.ts"
   ],
@@ -4766,6 +4927,9 @@
   "55ea09e5715d": [
     "src/preload/analysis.ts"
   ],
+  "2c39985ed33c": [
+    "src/addons/obsidian-plugin-loader/runtime.ts"
+  ],
   "a6375ee99716": [
     "src/addons/vim/Settings.tsx"
   ],
@@ -4844,6 +5008,9 @@
   ],
   "dafe8af01f1c": [
     "src/renderer/src/workspace-menu.ts"
+  ],
+  "4d7e412b6a6f": [
+    "src/addons/obsidian-plugin-loader/compat.tsx"
   ],
   "bb174a00dfce": [
     "src/renderer/src/SourceEditor.tsx"

@@ -18,6 +18,8 @@ When you use an input method, choosing and revising candidates remains one undo 
 
 Opening or creating a note adds a tab. Select one to return to its document, drag it to change its position, or press `Cmd/Ctrl+W` to close it. Closing the last document tab returns to the welcome screen. A dot marks unsaved changes. Hibi asks before discarding unsaved work.
 
+Use **Split right** on another tab to show two documents side by side. Click the other pane to edit it. The inactive pane shows a read-only source view until you activate it. Use **Close split** to return to one pane without closing either tab. On a narrow window, only the active pane is visible.
+
 With a tab focused, arrow keys and Home/End move between tabs. Use `Alt+Shift+Left/Right` to reorder them with the keyboard.
 
 Addons can also open their own tabs. Select an addon tab to show its view, or close it with its close button or `Cmd/Ctrl+W`. Returning to a document tab keeps the addon tab available until you close it or turn off the addon.

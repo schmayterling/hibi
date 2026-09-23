@@ -276,6 +276,9 @@
   "42f0fec8e4fc": [
     "src/addons/asciidoc/manifest.ts"
   ],
+  "864373a5c00f": [
+    "src/addons/quick-note/Settings.tsx"
+  ],
   "1e0ff8230be7": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
@@ -392,6 +395,7 @@
   "19766ed6ccb2": [
     "src/addons/frontmatter/Properties.tsx",
     "src/addons/mermaid/Block.tsx",
+    "src/addons/quick-note/CaptureDialog.tsx",
     "src/addons/typst/Block.tsx",
     "src/main/dependencies.ts",
     "src/main/document.ts",
@@ -414,6 +418,9 @@
   ],
   "c96cbbddcd15": [
     "src/main/workspace-metadata.ts"
+  ],
+  "eb27a06d869e": [
+    "src/addons/quick-note/manifest.ts"
   ],
   "139549ca9bd9": [
     "src/renderer/src/main.tsx"
@@ -539,6 +546,9 @@
   "3b24e1f87361": [
     "src/main/workspace-actions.ts"
   ],
+  "84c5d2b7d29b": [
+    "src/addons/quick-note/native.ts"
+  ],
   "0433bc8a92c0": [
     "src/main/workspace-settings.ts"
   ],
@@ -613,11 +623,20 @@
   "63f351843bb7": [
     "src/main/links.ts"
   ],
+  "995c08ae21a7": [
+    "src/addons/quick-note/index.tsx"
+  ],
   "949393a50f00": [
     "src/main/recent-workspaces.ts"
   ],
   "66a2df7c0717": [
     "src/main/workspace-settings.ts"
+  ],
+  "519460187895": [
+    "src/addons/quick-note/native.ts"
+  ],
+  "cf344c7a8b0f": [
+    "src/addons/quick-note/native.ts"
   ],
   "3aa9d06341aa": [
     "src/main/sideload.ts"
@@ -633,6 +652,9 @@
   ],
   "c7c709c5d2bb": [
     "src/addons/documentation/native.ts"
+  ],
+  "9b428a658996": [
+    "src/addons/quick-note/native.ts"
   ],
   "7beddfe6d6c2": [
     "src/renderer/src/main.tsx"
@@ -665,11 +687,17 @@
   "44ce6e4a2f8d": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
+  "8df705147953": [
+    "src/addons/quick-note/native.ts"
+  ],
   "298f2f5ecafe": [
     "src/addons/documentation/native.ts"
   ],
   "79bce0799896": [
     "src/renderer/src/SettingsScreen.tsx"
+  ],
+  "58ff373bd894": [
+    "src/addons/quick-note/Settings.tsx"
   ],
   "26a5aa15d2b1": [
     "src/main/media.ts"
@@ -688,6 +716,9 @@
   ],
   "85322e1c1bac": [
     "src/renderer/src/main.tsx"
+  ],
+  "58c89bd40e5d": [
+    "src/addons/quick-note/Settings.tsx"
   ],
   "2b7f25dec79d": [
     "src/addons/documentation/ExportDialog.tsx"
@@ -920,6 +951,9 @@
   "9cbb87fafd15": [
     "src/renderer/src/FormatsSettings.tsx"
   ],
+  "f29958bfab73": [
+    "src/addons/quick-note/Settings.tsx"
+  ],
   "8ee887cb7d7b": [
     "src/renderer/src/main.tsx"
   ],
@@ -1016,6 +1050,9 @@
   "640191209dda": [
     "src/addons/_shared/format-native.ts"
   ],
+  "dd16b185f231": [
+    "src/addons/quick-note/native.ts"
+  ],
   "2fe18391f790": [
     "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/HotkeySettings.tsx"
@@ -1044,11 +1081,17 @@
   "2a30abd5f2ce": [
     "src/main/dependencies.ts"
   ],
+  "a4c30f907288": [
+    "src/addons/quick-note/Settings.tsx"
+  ],
   "a032fdba4bce": [
     "src/renderer/src/AddonHotkeySettings.tsx"
   ],
   "6704c0f053f8": [
     "src/renderer/src/HotkeySettings.tsx"
+  ],
+  "e6b7639dbcef": [
+    "src/addons/quick-note/CaptureDialog.tsx"
   ],
   "f6a61661c1fd": [
     "src/renderer/src/document-worker-client.ts"
@@ -1079,6 +1122,9 @@
   "184c749f9915": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
+  "5df664de9db8": [
+    "src/addons/quick-note/Settings.tsx"
+  ],
   "2c014f8f8986": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
@@ -1103,6 +1149,9 @@
   ],
   "09edc6e2fe05": [
     "src/renderer/src/WorkspaceSettings.tsx"
+  ],
+  "2ffd3b947a9a": [
+    "src/addons/quick-note/Settings.tsx"
   ],
   "99f5151884f2": [
     "src/renderer/src/SettingsScreen.tsx"
@@ -1547,6 +1596,9 @@
   "c660726ed628": [
     "src/main/document.ts"
   ],
+  "33c4e36cc1fd": [
+    "src/addons/quick-note/native.ts"
+  ],
   "f6fb011371a9": [
     "src/addons/discord-presence/Settings.tsx"
   ],
@@ -1788,6 +1840,7 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "74ccd4330384": [
+    "src/addons/quick-note/Settings.tsx",
     "src/renderer/src/ImportDialog.tsx"
   ],
   "2f343666aaa8": [
@@ -1861,6 +1914,9 @@
   ],
   "f99faf8efcd6": [
     "src/renderer/src/WorkspaceSettings.tsx"
+  ],
+  "ca7eb278d77b": [
+    "src/addons/quick-note/Settings.tsx"
   ],
   "6aadac2f2b7a": [
     "src/shared/hotkeys.ts"
@@ -2842,6 +2898,9 @@
   "e3ebaa16dd9d": [
     "src/renderer/src/DependencySettings.tsx"
   ],
+  "d8da2c49df39": [
+    "src/addons/quick-note/CaptureDialog.tsx"
+  ],
   "8ec5e108fc99": [
     "src/addons/tags/Panel.tsx"
   ],
@@ -2941,9 +3000,18 @@
   "84040f5486e6": [
     "src/renderer/src/addon-storage.ts"
   ],
+  "1cc598ae2762": [
+    "src/addons/quick-note/Settings.tsx"
+  ],
   "ad5aa51d2d83": [
     "src/main/workspace-actions.ts",
     "src/main/workspace.ts"
+  ],
+  "c8970b4bfa71": [
+    "src/addons/quick-note/native.ts"
+  ],
+  "89be5144b357": [
+    "src/addons/quick-note/index.tsx"
   ],
   "2cbc82c80178": [
     "src/addons/tags/Panel.tsx"
@@ -3262,6 +3330,16 @@
   "e0cbecb3f0cb": [
     "src/addons/_shared/format-worker.ts"
   ],
+  "b7fc47179f67": [
+    "src/addons/quick-note/index.tsx",
+    "src/addons/quick-note/manifest.ts"
+  ],
+  "bccf10da05f5": [
+    "src/addons/quick-note/Settings.tsx"
+  ],
+  "239c9fef4eb8": [
+    "src/addons/quick-note/index.tsx"
+  ],
   "b3eb37acb66b": [
     "src/main/index.ts"
   ],
@@ -3565,8 +3643,14 @@
   "ac752922d909": [
     "src/renderer/src/AutosaveSettings.tsx"
   ],
+  "6501e1ced8da": [
+    "src/addons/quick-note/CaptureDialog.tsx"
+  ],
   "73c583fedbc0": [
     "src/main/addons.ts"
+  ],
+  "7f3a3b142814": [
+    "src/addons/quick-note/Settings.tsx"
   ],
   "5a88d622ebec": [
     "src/renderer/src/AddonHotkeySettings.tsx"
@@ -3588,6 +3672,9 @@
   ],
   "f3d260a0efb6": [
     "src/renderer/src/VersionHistory.tsx"
+  ],
+  "47a1c336e478": [
+    "src/addons/quick-note/index.tsx"
   ],
   "4c5e2f1569fd": [
     "src/renderer/src/WorkspaceSettings.tsx"
@@ -3614,6 +3701,7 @@
     "src/renderer/src/AutosaveSettings.tsx"
   ],
   "23e39291d613": [
+    "src/addons/quick-note/CaptureDialog.tsx",
     "src/renderer/src/RecoveryScreen.tsx"
   ],
   "991c3fbf7f31": [
@@ -3987,9 +4075,6 @@
   "361acbbafb8f": [
     "src/addons/vim/index.ts"
   ],
-  "270d8cb4f014": [
-    "src/main/workspace-entry-transfer.ts"
-  ],
   "5d04fcd66b47": [
     "src/main/workspace.ts"
   ],
@@ -4173,6 +4258,9 @@
   "32c1f3399caa": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
+  "de77fbc70fe9": [
+    "src/main/workspace-entry-transfer.ts"
+  ],
   "3beb69ab6d1d": [
     "src/main/workspace-entry-transfer.ts"
   ],
@@ -4321,6 +4409,9 @@
   ],
   "75f8344e99c3": [
     "src/renderer/src/source-session.ts"
+  ],
+  "5bf197e47fc6": [
+    "src/main/workspace-entry-transfer.ts"
   ],
   "995a14b50dbc": [
     "src/renderer/src/source-session.ts"
@@ -4618,6 +4709,9 @@
   "f21c0d01153d": [
     "src/main/workspace.ts"
   ],
+  "1f93aa51a306": [
+    "src/addons/quick-note/native.ts"
+  ],
   "9a8066d604c9": [
     "src/main/addon-documentation.ts"
   ],
@@ -4706,6 +4800,9 @@
   "78c4a3ab448e": [
     "src/main/workspace.ts"
   ],
+  "1fe8aa868253": [
+    "src/addons/quick-note/native.ts"
+  ],
   "a5d897d361ec": [
     "src/main/recent-workspaces.ts",
     "src/main/workspace.ts"
@@ -4716,6 +4813,9 @@
   "2b9947edaee2": [
     "src/main/workspace-entry-page.ts",
     "src/main/workspace-files.ts"
+  ],
+  "7e8cd2056da7": [
+    "src/addons/quick-note/CaptureDialog.tsx"
   ],
   "dfc1e6d16ba5": [
     "src/site/main.tsx"
@@ -4997,6 +5097,9 @@
   "815013862844": [
     "src/main/workspace-actions.ts"
   ],
+  "33afe8adb06f": [
+    "src/addons/quick-note/Settings.tsx"
+  ],
   "68fd17ffa10f": [
     "src/main/links.ts"
   ],
@@ -5029,6 +5132,9 @@
   ],
   "ca4f485a9985": [
     "src/renderer/src/main.tsx"
+  ],
+  "e4015ada6400": [
+    "src/addons/quick-note/Settings.tsx"
   ],
   "681bf81aba87": [
     "src/renderer/src/DependencySettings.tsx"
@@ -5095,6 +5201,7 @@
     "src/addons/git/Panel.tsx"
   ],
   "87bb59ba2f92": [
+    "src/addons/quick-note/Settings.tsx",
     "src/renderer/src/AddonSidebar.tsx"
   ],
   "2649c35c1ccf": [
@@ -5127,6 +5234,9 @@
   ],
   "73dff0b88724": [
     "src/addons/documentation/saved-options.ts"
+  ],
+  "9c69a1ee211a": [
+    "src/addons/quick-note/Settings.tsx"
   ],
   "5ebc59145b59": [
     "src/renderer/src/ImportDialog.tsx",
@@ -5161,6 +5271,9 @@
   ],
   "2cfece6a285e": [
     "src/addons/typst/manifest.ts"
+  ],
+  "4548dc08958d": [
+    "src/addons/quick-note/native.ts"
   ],
   "a9ed0d8684a9": [
     "src/addons/mermaid/manifest.ts"

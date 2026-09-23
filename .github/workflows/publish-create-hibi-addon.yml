@@ -24,7 +24,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
-          registry-url: https://registry.npmjs.org
+          registry-url: ${{ secrets.NPM_PUBLISH_TOKEN && 'https://registry.npmjs.org' || '' }}
       - run: npm install --global npm@^11.15.0
       - run: node --test tests/create-addon.test.mjs
       - run: npm publish --access public --provenance

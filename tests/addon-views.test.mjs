@@ -245,6 +245,11 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   await right.waitFor({ state: 'hidden' })
   await page.evaluate(() => window.viewsFixture.queuedRight.show())
   await right.getByRole('button', { name: 'Count 1' }).waitFor()
+  const other = (
+    await page.evaluate(() => window.hibi.getDocument())
+  ).tabs.find((tab) => tab.id !== first).id
+  await page.locator(`[data-tab-key="${other}"] .tab-split`).click()
+  await page.locator('.split-tab-preview').waitFor()
   await page.evaluate(() => {
     window.viewsFixture.handles.rightFollow = window.viewsFixture.follow.open({
       side: 'right',
@@ -276,9 +281,11 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   await notice.waitFor({ state: 'detached' })
   assert.equal(await addonTab.getAttribute('aria-selected'), 'true')
   assert.equal(await editor.isVisible(), false)
+  assert.equal(await page.locator('.split-tab-preview').count(), 0)
   await page.locator(`#document-tab-${first}`).click()
   assert.equal(await editor.isVisible(), true)
   await notice.waitFor()
+  assert.equal(await page.locator('.split-tab-preview').count(), 1)
   await addonTab.click()
   await tabContent.getByRole('button', { name: 'Count 1' }).waitFor()
   await addonTab.focus()

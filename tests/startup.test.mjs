@@ -83,7 +83,7 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
     0,
   )
   await pressShortcut(app, `${mod}+n`)
-  assert.equal(await welcome().count(), 0)
+  await welcome().waitFor({ state: 'hidden' })
 
   const folders = []
   for (let index = 1; index <= 6; index++) {

@@ -32,6 +32,7 @@ const listeners = new Set<() => void>()
 let activePanel: string | null = null
 let activeTab: string | null = null
 let activeStart: string | null = null
+let startOrder: string[] = []
 let activeSidebar: string | null = null
 let activeRightSidebar: string | null = null
 let focusTarget: string | null = null
@@ -128,8 +129,10 @@ function open(
       if (!instances.has(id)) return
       if (panel) activePanel = id
       else if (tab) activeTab = id
-      else if (start) activeStart = id
-      else select()
+      else if (start) {
+        startOrder = [...startOrder.filter((entry) => entry !== id), id]
+        activeStart = id
+      } else select()
       publish()
       if (tab) definition.environment.openTab()
       else if (!panel) definition.environment.openSidebar(definition.id, side)
@@ -154,11 +157,9 @@ function open(
       }
       if (panel && activePanel === id) activePanel = null
       else if (tab && activeTab === id) activeTab = null
-      else if (start && activeStart === id) {
-        activeStart =
-          [...instances.values()].findLast(
-            (entry) => entry.id !== id && entry.definition.location === 'start',
-          )?.id ?? null
+      else if (start) {
+        startOrder = startOrder.filter((entry) => entry !== id)
+        activeStart = startOrder.at(-1) ?? null
       } else if (
         !panel &&
         !tab &&

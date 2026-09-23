@@ -62,7 +62,8 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
     const slow = context.views.register({ id:'slow', label:'Slow panel', location:'panel', Content:lazy });
     const broken = context.views.register({ id:'broken', label:'Broken panel', location:'panel', Content() { throw Error('view failure'); } });
     const start = context.views.register({ id:'start', label:'Fixture start', location:'start', Content() { return h('h2', null, 'Fixture start'); } });
-    window.viewsFixture = { context, panel, follow, right, tab, queuedRight, slow, broken, start, staged, handles: {} };
+    const alternateStart = context.views.register({ id:'alternate-start', label:'Alternate start', location:'start', Content() { return h('h2', null, 'Alternate start'); } });
+    window.viewsFixture = { context, panel, follow, right, tab, queuedRight, slow, broken, start, alternateStart, staged, handles: {} };
   }});`,
   )
   const app = await electron.launch({
@@ -83,6 +84,9 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   })
   await page.waitForFunction(() => window.viewsFixture)
   const start = page.getByRole('region', { name: 'Start writing' })
+  await page.evaluate(() => window.viewsFixture.alternateStart.open())
+  await start.getByRole('heading', { name: 'Alternate start' }).waitFor()
+  await page.evaluate(() => window.viewsFixture.alternateStart.open().hide())
   await start.getByRole('heading', { name: 'Fixture start' }).waitFor()
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).tabs.length,

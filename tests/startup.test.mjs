@@ -143,7 +143,7 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
   await page
     .getByRole('treeitem', { name: /^empty\.md$/i, exact: true })
     .click()
-  assert.equal(await welcome().count(), 0)
+  await welcome().waitFor({ state: 'hidden' })
   await page.locator('.tiptap p[data-placeholder="Start typing"]').waitFor()
   assert.equal(
     await page.locator('.tiptap p').getAttribute('data-placeholder'),

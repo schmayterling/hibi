@@ -2,6 +2,11 @@
   "name": "create-hibi-addon",
   "version": "0.1.0",
   "description": "Create a shareable Hibi addon.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/schmayterling/hibi.git",
+    "directory": "packages/create-hibi-addon"
+  },
   "type": "module",
   "bin": {
     "create-hibi-addon": "index.mjs"

@@ -1,0 +1,33 @@
+name: publish create-hibi-addon
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-create-hibi-addon
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'schmayterling/hibi' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
+      - run: npm install --global npm@^11.15.0
+      - run: node --test tests/create-addon.test.mjs
+      - run: npm publish --access public --provenance
+        working-directory: packages/create-hibi-addon
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}

@@ -139,6 +139,11 @@ test('quick note captures to a chosen folder without replacing files', {
   const recent = await page.evaluate(() => window.hibi.getRecentWorkspaces())
   const otherPath = await realpath(other)
   const otherId = recent.find((entry) => entry.path === otherPath)?.id
+  assert.ok(otherId)
+  await page.waitForFunction(
+    (id) => document.querySelector('#quick-note-workspace')?.value === id,
+    otherId,
+  )
   assert.equal(
     await settings.getByLabel('Workspace', { exact: true }).inputValue(),
     otherId,

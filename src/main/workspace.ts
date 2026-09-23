@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
 import { type FSWatcher, watch } from 'node:fs'
 import { lstat, readdir, realpath } from 'node:fs/promises'
-import { basename, isAbsolute, join, relative, sep } from 'node:path'
-import { type BrowserWindow, dialog } from 'electron'
+import { basename, isAbsolute, join, parse, relative, sep } from 'node:path'
+import { app, type BrowserWindow, dialog, shell } from 'electron'
 import type {
   WorkspaceEntry,
   WorkspaceIndex,
@@ -11,6 +11,8 @@ import type {
 } from '../shared/workspace'
 import type { WorkspaceManifest } from '../shared/workspace-settings'
 import {
+  closeDeletedDocuments,
+  confirmDiscardAll,
   getDocument,
   getDocumentPath,
   getOpenDocuments,
@@ -18,7 +20,11 @@ import {
   selectDocumentTab,
 } from './document'
 import { readMarkdown } from './files'
-import { getRecentWorkspaces, rememberWorkspace } from './recent-workspaces'
+import {
+  forgetWorkspace,
+  getKnownWorkspaces,
+  rememberWorkspace,
+} from './recent-workspaces'
 import { workspaceIgnore, workspaceMetadata } from './workspace-metadata'
 
 let root: string | null = null
@@ -202,12 +208,50 @@ export async function loadWorkspace(
 }
 
 export async function openRecentWorkspace(id: unknown) {
-  const recent = (await getRecentWorkspaces()).find((item) => item.id === id)
+  const recent = (await getKnownWorkspaces()).find(
+    (item) => !item.hidden && item.id === id,
+  )
   if (!recent)
     throw new Error(
       'This workspace is no longer in the recent list. Open it from its folder.',
     )
   return loadWorkspace(recent.path)
+}
+
+export async function deleteKnownWorkspace(
+  window: BrowserWindow,
+  id: unknown,
+): Promise<boolean> {
+  const item = (await getKnownWorkspaces()).find((entry) => entry.id === id)
+  if (!item || item.hidden)
+    throw new Error('This workspace is no longer in the list.')
+  const stat = await lstat(item.path)
+  const containsAppPath = [app.getPath('userData'), app.getAppPath()].some(
+    (path) => path === item.path || path.startsWith(`${item.path}${sep}`),
+  )
+  if (
+    !stat.isDirectory() ||
+    stat.isSymbolicLink() ||
+    (await realpath(item.path)) !== item.path ||
+    item.path === parse(item.path).root ||
+    item.path === app.getPath('home') ||
+    containsAppPath
+  )
+    throw new Error('This folder cannot be moved to Trash from Hibi.')
+  if (!(await confirmDiscardAll(window, item.path))) return false
+  await shell.trashItem(item.path)
+  closeDeletedDocuments(window, item.path)
+  if (root === item.path || root?.startsWith(`${item.path}${sep}`)) {
+    watcher?.close()
+    clearTimeout(refreshTimer)
+    watcher = undefined
+    root = null
+    entries = []
+    manifest = null
+  }
+  await forgetWorkspace(item.path)
+  onChanged()
+  return true
 }
 
 export async function resolveWorkspaceFile(

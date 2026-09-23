@@ -79,6 +79,7 @@
   ],
   "90b2bf6c90bc": [
     "src/renderer/src/WorkspaceSidebar.tsx",
+    "src/renderer/src/WorkspacesSidebar.tsx",
     "src/ui/Sidebar.tsx"
   ],
   "6934e9d2bb61": [
@@ -537,6 +538,9 @@
   "63f351843bb7": [
     "src/main/links.ts"
   ],
+  "949393a50f00": [
+    "src/main/recent-workspaces.ts"
+  ],
   "66a2df7c0717": [
     "src/main/workspace-settings.ts"
   ],
@@ -992,6 +996,9 @@
   ],
   "c34051351939": [
     "src/renderer/src/FormattingToolbar.tsx"
+  ],
+  "f36eec8ad2bf": [
+    "src/renderer/src/WorkspacesSidebar.tsx"
   ],
   "2e41b118eb20": [
     "src/renderer/src/DependencySettings.tsx",
@@ -1812,6 +1819,9 @@
     "src/renderer/src/SettingsScreen.tsx",
     "src/renderer/src/main.tsx"
   ],
+  "721eb80bb358": [
+    "src/renderer/src/WorkspacesSidebar.tsx"
+  ],
   "3e7e6d92f47d": [
     "src/addons/slash-commands/commands.ts"
   ],
@@ -2403,6 +2413,9 @@
   "cc6fc79ab665": [
     "src/addons/block-drag/index.ts"
   ],
+  "9adcdf33dce1": [
+    "src/renderer/src/WorkspacesSidebar.tsx"
+  ],
   "b250a454877d": [
     "src/renderer/src/workspace-menu.ts"
   ],
@@ -2411,6 +2424,9 @@
   ],
   "189599ffaee2": [
     "src/renderer/src/EditorToolbar.tsx"
+  ],
+  "ee1f0c423c5b": [
+    "src/renderer/src/WorkspacesSidebar.tsx"
   ],
   "d45fef636bf6": [
     "src/renderer/src/workspace-menu.ts"
@@ -2691,7 +2707,8 @@
     "src/renderer/src/StartupPlaceholder.tsx"
   ],
   "fd94cbb45d14": [
-    "src/renderer/src/WorkspaceSidebar.tsx"
+    "src/renderer/src/WorkspaceSidebar.tsx",
+    "src/renderer/src/WorkspacesSidebar.tsx"
   ],
   "d25f3f0b3cc5": [
     "src/main/workspace-settings.ts"
@@ -2883,6 +2900,9 @@
   ],
   "49bac35016ed": [
     "src/addons/review/index.tsx"
+  ],
+  "e961fa7ba885": [
+    "src/renderer/src/WorkspacesSidebar.tsx"
   ],
   "771cbda3796a": [
     "src/addons/review/index.tsx"
@@ -4196,6 +4216,9 @@
   "2fad5aad9df6": [
     "src/main/sideload.ts"
   ],
+  "cb628f15bb2c": [
+    "src/main/workspace.ts"
+  ],
   "f21c0d01153d": [
     "src/main/workspace.ts"
   ],
@@ -4219,6 +4242,9 @@
   ],
   "62a6fbf88b17": [
     "src/main/links.ts"
+  ],
+  "557e75befd2a": [
+    "src/renderer/src/WorkspacesSidebar.tsx"
   ],
   "a8509d324773": [
     "src/main/workspace-actions.ts"
@@ -4261,6 +4287,10 @@
     "src/renderer/src/addons.ts"
   ],
   "78c4a3ab448e": [
+    "src/main/workspace.ts"
+  ],
+  "a5d897d361ec": [
+    "src/main/recent-workspaces.ts",
     "src/main/workspace.ts"
   ],
   "d2714d88ce4e": [
@@ -4418,6 +4448,9 @@
   ],
   "ee3c71613054": [
     "src/addons/review/index.tsx"
+  ],
+  "fdc9b79d6691": [
+    "src/renderer/src/WorkspacesSidebar.tsx"
   ],
   "a710c2b90913": [
     "src/renderer/src/DocumentTabs.tsx",
@@ -4616,6 +4649,10 @@
   ],
   "f29d3f31dc6e": [
     "src/renderer/src/WorkspaceSettings.tsx"
+  ],
+  "1377264ba3b0": [
+    "src/renderer/src/AddonSidebar.tsx",
+    "src/renderer/src/WorkspacesSidebar.tsx"
   ],
   "5b86626506d7": [
     "src/renderer/src/markdown-syntax.ts"

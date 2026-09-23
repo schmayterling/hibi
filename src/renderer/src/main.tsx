@@ -37,6 +37,7 @@ import '../../ui/ui-case'
 import { Minimize2 } from 'lucide-react'
 import { documentExtension, isDocumentView } from '../../shared/document-types'
 import type {
+  KnownWorkspace,
   RecentWorkspace,
   WorkspaceAction,
   WorkspaceActionResult,
@@ -93,6 +94,7 @@ import { settingsPages } from './settings-pages'
 import { Titlebar } from './Titlebar'
 import { toolbar } from './toolbar'
 import { WorkspaceSidebar } from './WorkspaceSidebar'
+import { WorkspacesSidebar } from './WorkspacesSidebar'
 import { type WorkspaceRename, workspaceMenuItems } from './workspace-menu'
 
 const stopLocalDiagnostics = installRendererDiagnostics(window.hibiDiagnostics)
@@ -367,6 +369,17 @@ function App() {
   const [recentWorkspaces, setRecentWorkspaces] = useState<
     RecentWorkspace[] | null
   >(null)
+  const [knownWorkspaces, setKnownWorkspaces] = useState<
+    KnownWorkspace[] | null
+  >(null)
+  const refreshKnownWorkspaces = useCallback(async () => {
+    const [known, recent] = await Promise.all([
+      window.hibi.getKnownWorkspaces(),
+      window.hibi.getRecentWorkspaces(),
+    ])
+    setKnownWorkspaces(known)
+    setRecentWorkspaces(recent)
+  }, [])
   const showWelcome = document?.tabs.length === 0
   const [workspaceRename, setWorkspaceRename] = useState<WorkspaceRename>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -681,7 +694,14 @@ function App() {
   useEffect(() => {
     localStorage.removeItem('sidebar-open')
   }, [])
-  useEffect(() => window.hibi.onWorkspaceChanged(setWorkspace), [])
+  useEffect(
+    () =>
+      window.hibi.onWorkspaceChanged((next) => {
+        setWorkspace(next)
+        void refreshKnownWorkspaces().catch((error) => setError(String(error)))
+      }),
+    [refreshKnownWorkspaces, setError],
+  )
   const [hotkeys, setHotkeys] = useState<Hotkeys>(() =>
     defaultHotkeys('darwin'),
   )
@@ -787,6 +807,14 @@ function App() {
         if (active) setRecentWorkspaces(items)
       })
     startupMark('bootstrap-document-effect')
+    void window.hibi
+      .getKnownWorkspaces()
+      .then((items) => {
+        if (active) setKnownWorkspaces(items)
+      })
+      .catch(() => {
+        if (active) setKnownWorkspaces([])
+      })
     window.hibi.bootstrap
       .document()
       .then(({ info, document, hotkeys, workspace, externalPending }) => {
@@ -1849,6 +1877,19 @@ function App() {
         onFile={(path) => void openFile(path)}
         onRefresh={() => void refreshFiles()}
         commands={addonHost.commands}
+      />
+      <WorkspacesSidebar
+        overlay={sidebarResize.overlay}
+        onDismiss={() => closeSidebar(false)}
+        resize={documentSidebarResize}
+        open={
+          sidebarOpen && !zen && !settingsOpen && sidebarView === 'workspaces'
+        }
+        workspace={workspace}
+        workspaces={knownWorkspaces}
+        onOpen={(id) => void openFolder(id)}
+        onChange={refreshKnownWorkspaces}
+        onError={(error) => setError(String(error))}
       />
       <OutlineSidebar
         overlay={sidebarResize.overlay}

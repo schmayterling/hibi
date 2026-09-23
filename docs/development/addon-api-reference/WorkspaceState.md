@@ -2,7 +2,7 @@
 
 # WorkspaceState
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L28)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L31)
 
 <details>
 <summary>Declaration</summary>
@@ -35,7 +35,7 @@ type WorkspaceState = {
 
 ### manifest
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L30)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L33)
 
 Present when this folder contains a workspace manifest in .hibi/workspace.json (or legacy .hibi.json).
 
@@ -47,7 +47,7 @@ Related: [WorkspaceManifest](WorkspaceManifest.md).
 
 ### id
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L32)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L35)
 
 Opaque identity; changes when a different folder is opened.
 
@@ -57,7 +57,7 @@ id?: string
 
 ### name
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L33)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L36)
 
 ```typescript
 name: string
@@ -65,7 +65,7 @@ name: string
 
 ### entries
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L34)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L37)
 
 ```typescript
 entries: WorkspaceEntry[]
@@ -75,7 +75,7 @@ Related: [WorkspaceEntry](WorkspaceEntry.md).
 
 ### activePath
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L35)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L38)
 
 ```typescript
 activePath: string | null

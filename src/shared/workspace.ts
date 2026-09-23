@@ -8,7 +8,10 @@ export const WORKSPACE_CHANNELS = {
   snapshot: 'workspace:snapshot',
   index: 'workspace:index',
   recent: 'workspace:recent',
+  known: 'workspace:known',
   openRecent: 'workspace:open-recent',
+  setKnown: 'workspace:set-known',
+  deleteKnown: 'workspace:delete-known',
 } as const
 
 export type RecentWorkspace = {
@@ -88,4 +91,9 @@ export type WorkspaceSnapshot = {
 export type WorkspaceIndex = {
   workspace: WorkspaceState
   pages: WorkspacePage[]
+}
+
+export type KnownWorkspace = RecentWorkspace & {
+  pinned: boolean
+  hidden: boolean
 }

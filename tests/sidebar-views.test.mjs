@@ -206,7 +206,7 @@ test('outline nesting follows the cursor and sidebar view pins survive reload', 
   await resize.press('End')
   await page.waitForFunction(
     () =>
-      document.querySelectorAll('.sidebar-view-shortcuts button').length === 2,
+      document.querySelectorAll('.sidebar-view-shortcuts button').length === 3,
   )
   assert.equal(
     await page

@@ -79,6 +79,7 @@ For installed packages, use the [SideloadFactory](SideloadFactory.md) and the [s
 
 - [ExplorerDecoration](ExplorerDecoration.md)
 - [ExplorerDecorationProvider](ExplorerDecorationProvider.md)
+- [KnownWorkspace](KnownWorkspace.md)
 - [RecentWorkspace](RecentWorkspace.md)
 - [WorkspaceAction](WorkspaceAction.md)
 - [WorkspaceActionResult](WorkspaceActionResult.md)

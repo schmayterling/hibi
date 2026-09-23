@@ -1,4 +1,4 @@
-import { FolderOpen, ListTree, PanelLeft } from 'lucide-react'
+import { FolderOpen, Folders, ListTree, PanelLeft } from 'lucide-react'
 import { useEffect, useSyncExternalStore } from 'react'
 import type { AddonView } from '../../addons/api'
 import { Sidebar, type SidebarProps } from '../../ui/Sidebar'
@@ -7,6 +7,7 @@ import { addonViews } from './addon-views'
 
 export const builtInViews = [
   { id: 'workspace', label: 'Workspace', icon: FolderOpen },
+  { id: 'workspaces', label: 'Workspaces', icon: Folders },
   { id: 'outline', label: 'On this page', icon: ListTree },
 ]
 

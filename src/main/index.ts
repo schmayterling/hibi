@@ -103,7 +103,11 @@ import {
   readDocumentMedia,
   serveDocumentMedia,
 } from './media'
-import { getRecentWorkspaces } from './recent-workspaces'
+import {
+  getKnownWorkspaces,
+  getRecentWorkspaces,
+  setKnownWorkspace,
+} from './recent-workspaces'
 import {
   CONTENT_SECURITY_POLICY,
   isTrustedRendererUrl,
@@ -126,6 +130,7 @@ import {
   startUpdateChecks,
 } from './updates'
 import {
+  deleteKnownWorkspace,
   getWorkspace,
   indexWorkspace,
   observeWorkspace,
@@ -1068,6 +1073,20 @@ if (!app.requestSingleInstanceLock()) {
       )
       handle(WORKSPACE_CHANNELS.openRecent, (event, id: unknown) =>
         runFileOperation(event, () => openRecentWorkspace(id)),
+      )
+      handle(WORKSPACE_CHANNELS.known, (event) => {
+        trustedWindow(event)
+        return getKnownWorkspaces()
+      })
+      handle(
+        WORKSPACE_CHANNELS.setKnown,
+        (event, id: unknown, action: unknown) => {
+          trustedWindow(event)
+          return setKnownWorkspace(id, action)
+        },
+      )
+      handle(WORKSPACE_CHANNELS.deleteKnown, (event, id: unknown) =>
+        runFileOperation(event, (window) => deleteKnownWorkspace(window, id)),
       )
       handle(WORKSPACE_CHANNELS.refresh, (event) => {
         trustedWindow(event)

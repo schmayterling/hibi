@@ -2,7 +2,7 @@
 
 # WorkspaceEntry
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L20)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L23)
 
 <details>
 <summary>Declaration</summary>
@@ -33,7 +33,7 @@ type WorkspaceEntry = {
 
 ### path
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L21)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L24)
 
 ```typescript
 path: string
@@ -41,7 +41,7 @@ path: string
 
 ### name
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L22)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L25)
 
 ```typescript
 name: string
@@ -49,7 +49,7 @@ name: string
 
 ### kind
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L23)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L26)
 
 ```typescript
 kind: 'file' | 'folder'
@@ -57,7 +57,7 @@ kind: 'file' | 'folder'
 
 ### dirty
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L24)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L27)
 
 ```typescript
 dirty?: boolean
@@ -65,7 +65,7 @@ dirty?: boolean
 
 ### children
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L25)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L28)
 
 ```typescript
 children?: WorkspaceEntry[]

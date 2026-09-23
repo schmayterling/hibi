@@ -182,7 +182,13 @@ export type DesktopApi = {
     action: import('./workspace-settings').WorkspaceSettingsAction,
   ) => Promise<import('./workspace-settings').WorkspaceSettings>
   getRecentWorkspaces: () => Promise<import('./workspace').RecentWorkspace[]>
+  getKnownWorkspaces: () => Promise<import('./workspace').KnownWorkspace[]>
   openRecentWorkspace: (id: string) => Promise<WorkspaceState | null>
+  setKnownWorkspace: (
+    id: string,
+    action: 'pin' | 'unpin' | 'hide',
+  ) => Promise<import('./workspace').KnownWorkspace[]>
+  deleteKnownWorkspace: (id: string) => Promise<boolean>
   getWorkspaceSnapshot: () => Promise<import('./workspace').WorkspaceSnapshot>
   getWorkspaceIndex: () => Promise<import('./workspace').WorkspaceIndex | null>
   workspaceAction: (

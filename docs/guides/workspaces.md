@@ -12,6 +12,8 @@ To bring files from another folder or writing app, see [Import documents](import
 
 Choose **Workspace** from the sidebar dropdown. Expand folders and select a file to open it. Arrow keys move focus, Left/Right collapse or expand a folder, and Enter opens a file.
 
+Choose **Workspaces** from the sidebar views to see every folder you have opened in Hibi. Select a folder to open it. Each row's menu can pin it to the top or hide it until you open that folder again. **Delete workspace** asks for confirmation, then moves the folder and all its contents to system Trash. You can restore the folder from Trash.
+
 Opening a file selects its existing tab or creates one. In single-file mode, Hibi asks what to do with unsaved changes first. Use each item's menu to [create, rename, copy, move, or delete files](../editing/explorer.md).
 
 The tree updates when files change. It excludes hidden items, `node_modules`, and symbolic links. If Hibi reports that the folder is too large, open a smaller folder.

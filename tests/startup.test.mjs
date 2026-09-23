@@ -104,14 +104,22 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
     recent.map((item) => item.path),
     folders.slice(0, 5),
   )
+  assert.deepEqual(
+    (await page.evaluate(() => window.hibi.getKnownWorkspaces())).map(
+      (item) => item.path,
+    ),
+    folders,
+  )
   await assert.rejects(
     page.evaluate(() => window.hibi.openRecentWorkspace('/unapproved/path')),
     /recent list/,
   )
   await page.evaluate((id) => window.hibi.openRecentWorkspace(id), recent[1].id)
-  const reordered = [folders[1], folders[0], ...folders.slice(2, 5)]
+  const reordered = [folders[1], folders[0], ...folders.slice(2)]
   assert.deepEqual(
-    JSON.parse(await readFile(join(profile, 'recent-workspaces.json'), 'utf8')),
+    JSON.parse(
+      await readFile(join(profile, 'recent-workspaces.json'), 'utf8'),
+    ).map((item) => item.path),
     reordered,
   )
   await app.close()

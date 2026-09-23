@@ -40,7 +40,11 @@ export type DialogApi = {
   alert: (options: MessageDialogOptions) => Promise<void>
   /** Ask for confirmation. Cancellation returns false. */
   confirm: (
-    options: MessageDialogOptions & { cancelLabel?: string },
+    options: MessageDialogOptions & {
+      cancelLabel?: string
+      /** Emphasize a destructive action and require an explicit button press. */
+      destructive?: boolean
+    },
   ) => Promise<boolean>
   /** Ask for a text value. Cancellation returns null. */
   prompt: (options: PromptDialogOptions) => Promise<string | null>

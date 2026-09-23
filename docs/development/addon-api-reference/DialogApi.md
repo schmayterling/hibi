@@ -17,7 +17,11 @@ type DialogApi = {
   alert: (options: MessageDialogOptions) => Promise<void>
   /** Ask for confirmation. Cancellation returns false. */
   confirm: (
-    options: MessageDialogOptions & { cancelLabel?: string },
+    options: MessageDialogOptions & {
+      cancelLabel?: string
+      /** Emphasize a destructive action and require an explicit button press. */
+      destructive?: boolean
+    },
   ) => Promise<boolean>
   /** Ask for a text value. Cancellation returns null. */
   prompt: (options: PromptDialogOptions) => Promise<string | null>
@@ -88,7 +92,11 @@ Ask for confirmation. Cancellation returns false.
 
 ```typescript
 confirm: (
-    options: MessageDialogOptions & { cancelLabel?: string },
+    options: MessageDialogOptions & {
+      cancelLabel?: string
+      /** Emphasize a destructive action and require an explicit button press. */
+      destructive?: boolean
+    },
   ) => Promise<boolean>
 ```
 
@@ -98,13 +106,13 @@ Related: [MessageDialogOptions](MessageDialogOptions.md).
 
 | Name | Type |
 | --- | --- |
-| <code>options</code> | <code><a href="MessageDialogOptions.md">MessageDialogOptions</a> &amp; { cancelLabel?: string }</code> |
+| <code>options</code> | <code><a href="MessageDialogOptions.md">MessageDialogOptions</a> &amp; { cancelLabel?: string destructive?: boolean }</code> |
 
 **Returns:** <code>Promise&lt;boolean&gt;</code>
 
 ### prompt
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L46)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L50)
 
 Ask for a text value. Cancellation returns null.
 
@@ -124,7 +132,7 @@ Related: [PromptDialogOptions](PromptDialogOptions.md).
 
 ### isOpen
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L48)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L52)
 
 Report whether a shared dialog is currently open.
 

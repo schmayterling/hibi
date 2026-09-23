@@ -92,6 +92,16 @@
   border-top: 1px solid var(--border);
   background: var(--surface);
 }
+.dialog-footer .dialog-danger {
+  background: var(--status-danger);
+  border-color: var(--status-danger);
+  color: var(--background);
+}
+.dialog-footer button.ui-button.dialog-danger:hover:not(:disabled) {
+  background: var(--status-danger);
+  color: var(--background);
+  opacity: 0.9;
+}
 .dialog-actions {
   display: flex;
   justify-content: flex-end;

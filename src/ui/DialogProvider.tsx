@@ -98,13 +98,19 @@ export function createDialogService() {
         return (
           (await api.open<boolean>({
             ...options,
+            closeOnOutsideClick: !options.destructive,
             content: () => null,
             footer: ({ close }) => (
               <>
                 <Button onClick={() => close(false)}>
                   {options.cancelLabel ?? 'Cancel'}
                 </Button>
-                <Button className="dialog-primary" onClick={() => close(true)}>
+                <Button
+                  className={
+                    options.destructive ? 'dialog-danger' : 'dialog-primary'
+                  }
+                  onClick={() => close(true)}
+                >
                   {options.confirmLabel ?? 'Confirm'}
                 </Button>
               </>

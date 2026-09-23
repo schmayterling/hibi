@@ -25,6 +25,7 @@ import {
 import {
   getWorkspace,
   loadWorkspace,
+  refreshWorkspace,
   resolveWorkspaceFile,
   workspaceRoot,
 } from './workspace'
@@ -38,6 +39,7 @@ import {
 
 const defaults: WorkspacePreferences = {
   enabled: false,
+  showAllFiles: false,
   path: null,
   startup: 'empty',
   startupFolder: null,
@@ -50,6 +52,8 @@ async function preferences(): Promise<WorkspacePreferences> {
     ) as WorkspacePreferences
     if (
       typeof value.enabled !== 'boolean' ||
+      (value.showAllFiles !== undefined &&
+        typeof value.showAllFiles !== 'boolean') ||
       !['empty', 'managed', 'folder'].includes(value.startup) ||
       ![value.path, value.startupFolder].every(
         (path) =>
@@ -60,12 +64,15 @@ async function preferences(): Promise<WorkspacePreferences> {
       )
     )
       throw new Error('Invalid workspace settings.')
-    return value
+    return { ...defaults, ...value }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
       console.error('Could not read workspace settings:', error)
     return { ...defaults }
   }
+}
+export async function showAllWorkspaceFiles() {
+  return (await preferences()).showAllFiles
 }
 async function savePreferences(value: WorkspacePreferences) {
   await writeFile(`${location()}.tmp`, JSON.stringify(value), { mode: 0o600 })
@@ -130,6 +137,10 @@ export async function updateWorkspaceSettings(
       await ensureManifest(prefs.path)
     }
     prefs.enabled = value.enabled
+  } else if (value.action === 'show-all-files') {
+    if (typeof value.enabled !== 'boolean')
+      throw new Error('Choose whether to show all workspace files.')
+    prefs.showAllFiles = value.enabled
   } else if (value.action === 'choose') {
     const selected = await chooseFolder(window, 'Choose Hibi workspace')
     if (selected) {
@@ -237,6 +248,7 @@ export async function updateWorkspaceSettings(
     prefs.path = to
   } else throw new Error('Unknown workspace action.')
   await savePreferences(prefs)
+  if (value.action === 'show-all-files') await refreshWorkspace()
   return getWorkspaceSettings()
 }
 

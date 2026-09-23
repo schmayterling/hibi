@@ -217,7 +217,7 @@ export function WorkspaceSidebar({
       }
       empty={
         workspace ? (
-          'No supported documents in this folder.'
+          'No files to show in this folder.'
         ) : (
           <button
             className="open-workspace"

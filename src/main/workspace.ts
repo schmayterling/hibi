@@ -26,6 +26,7 @@ import {
   rememberWorkspace,
 } from './recent-workspaces'
 import { workspaceIgnore, workspaceMetadata } from './workspace-metadata'
+import { showAllWorkspaceFiles } from './workspace-settings'
 
 let root: string | null = null
 let entries: WorkspaceEntry[] = []
@@ -51,7 +52,10 @@ function relativePath(base: string, path: string): string | null {
     : null
 }
 
-export async function scanWorkspace(base: string): Promise<WorkspaceEntry[]> {
+export async function scanWorkspace(
+  base: string,
+  showAllFiles = false,
+): Promise<WorkspaceEntry[]> {
   const ignored = await workspaceIgnore(base)
   let count = 0
   async function walk(directory: string): Promise<WorkspaceEntry[]> {
@@ -59,7 +63,8 @@ export async function scanWorkspace(base: string): Promise<WorkspaceEntry[]> {
     const children = await readdir(directory, { withFileTypes: true })
     for (const child of children) {
       if (
-        child.name.startsWith('.') ||
+        (child.name.startsWith('.') &&
+          (child.isDirectory() || !showAllFiles)) ||
         child.name === 'node_modules' ||
         child.isSymbolicLink()
       )
@@ -79,7 +84,10 @@ export async function scanWorkspace(base: string): Promise<WorkspaceEntry[]> {
           kind: 'folder',
           children: nested,
         })
-      } else if (child.isFile() && isDocumentName(child.name, true)) {
+      } else if (
+        child.isFile() &&
+        (showAllFiles || isDocumentName(child.name, true))
+      ) {
         result.push({ path, name: child.name, kind: 'file' })
       }
     }
@@ -145,7 +153,7 @@ export async function refreshWorkspace(): Promise<WorkspaceState | null> {
   const selected = root
   if (selected) {
     const [next, metadata] = await Promise.all([
-      scanWorkspace(selected),
+      scanWorkspace(selected, await showAllWorkspaceFiles()),
       workspaceMetadata(selected),
     ])
     if (root === selected) {
@@ -176,7 +184,10 @@ export async function loadWorkspace(
   selected: string,
 ): Promise<WorkspaceState | null> {
   const nextRoot = await realpath(selected)
-  const nextEntries = await scanWorkspace(nextRoot)
+  const nextEntries = await scanWorkspace(
+    nextRoot,
+    await showAllWorkspaceFiles(),
+  )
   const metadata = await workspaceMetadata(nextRoot)
   watcher?.close()
   clearTimeout(refreshTimer)
@@ -257,6 +268,7 @@ export async function deleteKnownWorkspace(
 export async function resolveWorkspaceFile(
   base: string,
   value: unknown,
+  allowUnsupported = false,
 ): Promise<string> {
   if (
     typeof value !== 'string' ||
@@ -264,7 +276,7 @@ export async function resolveWorkspaceFile(
     isAbsolute(value) ||
     value.includes('\\') ||
     value.split('/').some((part) => !part || part === '.' || part === '..') ||
-    !isDocumentName(value, true)
+    (!allowUnsupported && !isDocumentName(value, true))
   )
     throw new Error('Choose a supported document inside this workspace.')
   const candidate = join(base, value)
@@ -291,7 +303,10 @@ export async function openWorkspaceFile(window: BrowserWindow, path: unknown) {
         draft.pendingPath && relativePath(root!, draft.pendingPath) === path,
     )
   if (draft) return selectDocumentTab(window, draft.tabId)
-  return loadDocument(window, await resolveWorkspaceFile(root, path))
+  return loadDocument(
+    window,
+    await resolveWorkspaceFile(root, path, await showAllWorkspaceFiles()),
+  )
 }
 
 export async function snapshotWorkspace(): Promise<WorkspaceSnapshot> {
@@ -367,6 +382,7 @@ export async function indexWorkspace(): Promise<WorkspaceIndex | null> {
         continue
       }
       if (item.kind !== 'file') continue
+      if (!isDocumentName(item.name, true)) continue
       try {
         const draft = drafts.get(item.path)
         const path =

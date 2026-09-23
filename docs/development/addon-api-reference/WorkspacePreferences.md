@@ -10,6 +10,7 @@ Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/share
 ```typescript
 type WorkspacePreferences = {
   enabled: boolean
+  showAllFiles: boolean
   path: string | null
   startup: 'empty' | 'managed' | 'folder'
   startupFolder: string | null
@@ -23,6 +24,7 @@ type WorkspacePreferences = {
 **Properties**
 
 - [enabled](#enabled)
+- [showAllFiles](#showallfiles)
 - [path](#path)
 - [startup](#startup)
 - [startupFolder](#startupfolder)
@@ -37,9 +39,17 @@ type WorkspacePreferences = {
 enabled: boolean
 ```
 
-### path
+### showAllFiles
 
 [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L14)
+
+```typescript
+showAllFiles: boolean
+```
+
+### path
+
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L15)
 
 ```typescript
 path: string | null
@@ -47,7 +57,7 @@ path: string | null
 
 ### startup
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L15)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L16)
 
 ```typescript
 startup: 'empty' | 'managed' | 'folder'
@@ -55,7 +65,7 @@ startup: 'empty' | 'managed' | 'folder'
 
 ### startupFolder
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L16)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L17)
 
 ```typescript
 startupFolder: string | null

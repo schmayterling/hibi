@@ -2,11 +2,12 @@
 
 # WorkspaceSettingsAction
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L25)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L26)
 
 ```typescript
 type WorkspaceSettingsAction =
   | { action: 'enable'; enabled: boolean }
+  | { action: 'show-all-files'; enabled: boolean }
   | { action: 'choose' | 'open' | 'relocate' | 'create-manifest' }
   | { action: 'startup'; startup: WorkspacePreferences['startup'] }
   | {

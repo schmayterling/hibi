@@ -81,6 +81,23 @@ export function WorkspaceSettings({
       )}
       <div className="settings-group">
         <SettingRow
+          id="show-all-files"
+          label="Show all files in sidebar"
+          description="Show files of any type, including hidden files. Unsupported formats open in source view only."
+        >
+          <Toggle
+            aria-label="Show all files in sidebar"
+            checked={state?.showAllFiles ?? false}
+            disabled={busy || !state}
+            onChange={(event) =>
+              void update({
+                action: 'show-all-files',
+                enabled: event.target.checked,
+              })
+            }
+          />
+        </SettingRow>
+        <SettingRow
           id="managed-workspace"
           label="Hibi workspace"
           description={

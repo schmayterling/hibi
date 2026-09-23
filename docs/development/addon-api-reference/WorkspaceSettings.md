@@ -2,7 +2,7 @@
 
 # WorkspaceSettings
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L18)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L19)
 
 <details>
 <summary>Declaration</summary>
@@ -33,7 +33,7 @@ type WorkspaceSettings = WorkspacePreferences & {
 
 ### defaultPath
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L19)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L20)
 
 ```typescript
 defaultPath: string
@@ -41,7 +41,7 @@ defaultPath: string
 
 ### currentPath
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L20)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L21)
 
 ```typescript
 currentPath: string | null
@@ -49,7 +49,7 @@ currentPath: string | null
 
 ### manifest
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L21)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L22)
 
 ```typescript
 manifest: WorkspaceManifest | null
@@ -59,7 +59,7 @@ Related: [WorkspaceManifest](WorkspaceManifest.md).
 
 ### manifestRevision
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L22)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L23)
 
 ```typescript
 manifestRevision: string | null
@@ -67,7 +67,7 @@ manifestRevision: string | null
 
 ### ignore
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L23)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L24)
 
 ```typescript
 ignore: string

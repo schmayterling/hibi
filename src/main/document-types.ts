@@ -11,3 +11,7 @@ export function isDocumentName(name: string, _workspace = false) {
   const extension = documentExtension(name)
   return documentExtensions().includes(extension)
 }
+const assetExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'svg']
+export function isAssetName(name: string) {
+  return assetExtensions.includes(documentExtension(name))
+}

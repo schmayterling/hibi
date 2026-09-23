@@ -42,7 +42,7 @@ Platform references: [Electron file-open events](https://www.electronjs.org/docs
 
 Local history retains up to 100 snapshots and 20 MiB per file, keeping at least the latest snapshot. Consecutive identical saves are deduplicated. The first save of an edited file also records its old disk contents, including an external version the user explicitly chose to replace.
 
-Workspace scans stop at 20,000 entries. Graph and tag snapshots accept up to 2,000 documents and 20 MiB of text. The graph displays up to 500 matching nodes, while the active saved note's draft overlays its disk contents in both indexes.
+Workspace scans show notes and image assets, and stop at 20,000 entries. Graph and tag snapshots accept up to 2,000 documents and 20 MiB of text. The graph displays up to 500 matching nodes, while the active saved note's draft overlays its disk contents in both indexes.
 
 Documentation exports accept up to 2,000 documents and 20 MiB total for source text and embedded media. Hidden documents, symbolic links, and `node_modules` are excluded. The current workspace note's unsaved changes are included without saving them to disk.
 

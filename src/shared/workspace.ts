@@ -20,7 +20,7 @@ export type RecentWorkspace = {
 export type WorkspaceEntry = {
   path: string
   name: string
-  kind: 'file' | 'folder'
+  kind: 'file' | 'folder' | 'asset'
   dirty?: boolean
   children?: WorkspaceEntry[]
 }

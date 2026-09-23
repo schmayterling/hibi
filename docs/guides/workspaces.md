@@ -12,7 +12,7 @@ To bring files from another folder or writing app, see [Import documents](import
 
 Choose **Workspace** from the sidebar dropdown. Expand folders and select a file to open it. Arrow keys move focus, Left/Right collapse or expand a folder, and Enter opens a file.
 
-Opening a file selects its existing tab or creates one. In single-file mode, Hibi asks what to do with unsaved changes first. Use each item's menu to [create, rename, copy, move, or delete files](../editing/explorer.md).
+Opening a file selects its existing tab or creates one. In single-file mode, Hibi asks what to do with unsaved changes first. Use each item's menu to [create, rename, copy, move, or delete files](../editing/explorer.md). Selecting an image opens it with the system application for that file type.
 
 The tree updates when files change. It excludes hidden items, `node_modules`, and symbolic links. If Hibi reports that the folder is too large, open a smaller folder.
 

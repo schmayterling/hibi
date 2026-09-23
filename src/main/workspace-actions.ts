@@ -29,7 +29,7 @@ import {
   renameDocument,
   selectDocumentTab,
 } from './document'
-import { isDocumentName } from './document-types'
+import { isAssetName, isDocumentName } from './document-types'
 import { refreshWorkspace, workspaceRoot } from './workspace'
 
 const missing = (error: NodeJS.ErrnoException) => {
@@ -187,7 +187,7 @@ export async function workspaceAction(
     if (draft && draft.tabId !== getDocument().tabId)
       await selectDocumentTab(window, draft.tabId)
     const folder = draft ? false : (await lstat(source)).isDirectory()
-    if (!folder && !isDocumentName(source, true))
+    if (!folder && !isDocumentName(source, true) && !isAssetName(source))
       throw new Error('Choose a supported document.')
     if (action === 'delete') {
       if (!(await confirmDiscardAll(window, source))) return null
@@ -205,7 +205,7 @@ export async function workspaceAction(
         const name = basename(source, extension)
         resultPath = await unique(dirname(source), `${name} copy${extension}`)
       } else resultPath = await resolveEntry(base, destination, true)
-      if (!folder && !isDocumentName(resultPath, true))
+      if (!folder && !isDocumentName(resultPath, true) && !isAssetName(resultPath))
         throw new Error('Use a supported file extension.')
       if (source === resultPath)
         return {

@@ -1,4 +1,5 @@
 import {
+    FileImage,
   FilePlus2,
   FileText,
   Folder,
@@ -130,7 +131,12 @@ export function WorkspaceSidebar({
       entries.map((entry) => ({
         id: entry.path,
         label: entry.name,
-        icon: entry.kind === 'folder' ? Folder : FileText,
+        icon:
+          entry.kind === 'folder'
+            ? Folder
+            : entry.kind === 'asset'
+              ? FileImage
+              : FileText,
         dirty: workspace?.activePath === entry.path ? dirty : !!entry.dirty,
         ...(decorations.has(entry.path)
           ? { decoration: decorations.get(entry.path)! }

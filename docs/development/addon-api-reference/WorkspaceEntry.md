@@ -11,7 +11,7 @@ Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/share
 type WorkspaceEntry = {
   path: string
   name: string
-  kind: 'file' | 'folder'
+  kind: 'file' | 'folder' | 'asset'
   dirty?: boolean
   children?: WorkspaceEntry[]
 }
@@ -52,7 +52,7 @@ name: string
 [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L23)
 
 ```typescript
-kind: 'file' | 'folder'
+kind: 'file' | 'folder' | 'asset'
 ```
 
 ### dirty

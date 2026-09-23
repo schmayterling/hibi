@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { type FSWatcher, watch } from 'node:fs'
 import { lstat, readdir, realpath } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
-import { type BrowserWindow, dialog } from 'electron'
+import { type BrowserWindow, dialog, shell } from 'electron'
 import type {
   WorkspaceEntry,
   WorkspaceIndex,
@@ -75,6 +75,8 @@ export async function scanWorkspace(base: string): Promise<WorkspaceEntry[]> {
         })
       } else if (child.isFile() && isDocumentName(child.name, true)) {
         result.push({ path, name: child.name, kind: 'file' })
+      } else if (child.isFile() && isAssetName(child.name)) {
+        result.push({ path, name: child.name, kind: 'asset' })
       }
     }
     return result.sort(
@@ -210,9 +212,11 @@ export async function openRecentWorkspace(id: unknown) {
   return loadWorkspace(recent.path)
 }
 
-export async function resolveWorkspaceFile(
+async function resolveWorkspaceEntry(
   base: string,
   value: unknown,
+  valid: (name: string) => boolean,
+  message: string,
 ): Promise<string> {
   if (
     typeof value !== 'string' ||
@@ -220,9 +224,9 @@ export async function resolveWorkspaceFile(
     isAbsolute(value) ||
     value.includes('\\') ||
     value.split('/').some((part) => !part || part === '.' || part === '..') ||
-    !isDocumentName(value, true)
+    !valid(value)
   )
-    throw new Error('Choose a supported document inside this workspace.')
+    throw new Error(message)
   const candidate = join(base, value)
   if ((await lstat(candidate)).isSymbolicLink())
     throw new Error(
@@ -230,10 +234,20 @@ export async function resolveWorkspaceFile(
     )
   const chosen = await realpath(candidate)
   if (!relativePath(base, chosen))
-    throw new Error(
-      'This file is outside the workspace. Open its folder first.',
-    )
+    throw new Error('This file is outside the workspace. Open its folder first.')
   return chosen
+}
+
+export async function resolveWorkspaceFile(
+  base: string,
+  value: unknown,
+): Promise<string> {
+  return resolveWorkspaceEntry(
+    base,
+    value,
+    (name) => isDocumentName(name, true),
+    'Choose a supported document inside this workspace.',
+  )
 }
 
 export async function openWorkspaceFile(window: BrowserWindow, path: unknown) {
@@ -247,6 +261,18 @@ export async function openWorkspaceFile(window: BrowserWindow, path: unknown) {
         draft.pendingPath && relativePath(root!, draft.pendingPath) === path,
     )
   if (draft) return selectDocumentTab(window, draft.tabId)
+  if (typeof path === 'string' && isAssetName(path)) {
+    const file = await resolveWorkspaceEntry(
+      root,
+      path,
+      isAssetName,
+      'Choose an image inside this workspace.',
+    )
+    const error = await shell.openPath(file)
+    if (error)
+      throw new Error('This image cannot be opened with the system application.')
+    return null
+  }
   return loadDocument(window, await resolveWorkspaceFile(root, path))
 }
 
@@ -264,6 +290,7 @@ export async function snapshotWorkspace(): Promise<WorkspaceSnapshot> {
   async function collect(items: WorkspaceEntry[]) {
     for (const item of items) {
       if (item.kind === 'folder') await collect(item.children ?? [])
+      else if (item.kind === 'asset') continue
       else {
         const path = await resolveWorkspaceFile(selected as string, item.path)
         const markdown = drafts.get(path) ?? (await readMarkdown(path))
@@ -349,6 +376,6 @@ export async function indexWorkspace(): Promise<WorkspaceIndex | null> {
 }
 
 import { isMarkdownDocument } from '../shared/document-types'
-import { isDocumentName } from './document-types'
+import { isAssetName, isDocumentName } from './document-types'
 import { imageSources } from './images'
 import { exportDocumentMedia } from './media'

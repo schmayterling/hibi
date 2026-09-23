@@ -331,7 +331,7 @@ export async function invokeAddon(
             if (entry.children) {
               const match = await find(entry.children)
               if (match) return match
-            } else {
+            } else if (entry.kind === 'file') {
               const path = await resolveWorkspaceFile(base!, entry.path)
               if (createHash('sha256').update(path).digest('hex') === id)
                 return path

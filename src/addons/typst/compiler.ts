@@ -292,7 +292,7 @@ export async function compileTypst(
             fingerprint = ''
             reject(
               new Error(
-                `Typst compilation took longer than 10 seconds. Simplify the document and try again. [${phases.join(', ')}]`,
+                'Typst compilation took longer than 10 seconds. Simplify the document and try again.',
               ),
             )
           }, 10000)

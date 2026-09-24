@@ -9,7 +9,7 @@ import { documentProjections } from './document-projections'
 
 const handlers = new Map<
   string,
-  (request: SourceEditRequest) => SourceEditResult
+  Set<(request: SourceEditRequest) => SourceEditResult>
 >()
 let applying = false
 export const documentEdits = {
@@ -17,9 +17,15 @@ export const documentEdits = {
     next: (request: SourceEditRequest) => SourceEditResult,
     kind: 'source' | 'rich' = 'source',
   ) {
-    handlers.set(kind, next)
+    let registered = handlers.get(kind)
+    if (!registered) {
+      registered = new Set()
+      handlers.set(kind, registered)
+    }
+    registered.add(next)
     return () => {
-      if (handlers.get(kind) === next) handlers.delete(kind)
+      registered.delete(next)
+      if (!registered.size) handlers.delete(kind)
     }
   },
   scope(isBusy: () => boolean) {
@@ -81,9 +87,11 @@ export const documentEdits = {
                   message: 'The document changed. Review the edits again.',
                 }
               : (() => {
-                  for (const handler of handlers.values()) {
-                    const result = handler(request)
-                    if (result.status !== 'unsupported-view') return result
+                  for (const registered of handlers.values()) {
+                    for (const handler of registered) {
+                      const result = handler(request)
+                      if (result.status !== 'unsupported-view') return result
+                    }
                   }
                   return {
                     status: 'unsupported-view' as const,

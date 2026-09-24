@@ -18,7 +18,7 @@ When you use an input method, choosing and revising candidates remains one undo 
 
 Opening or creating a note adds a tab. Select one to return to its document, drag it to change its position, or press `Cmd/Ctrl+W` to close it. Closing the last document tab returns to the welcome screen. A dot marks unsaved changes. Hibi asks before discarding unsaved work.
 
-Use **Split right** on another tab to show two documents side by side. Click the other pane to edit it. The inactive pane shows a read-only source view until you activate it. Use **Close split** to return to one pane without closing either tab. On a narrow window, only the active pane is visible.
+Use **Split right** on any tab to open two editor panes side by side. You can show the same document twice with separate selections and scroll positions, or edit two documents at once. Click a pane to direct toolbar and keyboard commands to it. Each pane keeps its own view mode. Use **Close split** to return to one pane without closing either tab. On a narrow window, only the active pane is visible.
 
 With a tab focused, arrow keys and Home/End move between tabs. Use `Alt+Shift+Left/Right` to reorder them with the keyboard.
 

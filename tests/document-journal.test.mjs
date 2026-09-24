@@ -68,6 +68,36 @@ test('source deltas round trip Unicode boundaries, insertions, replacements, and
     }
 })
 
+test('receiver routes interleaved edits to their owning tab', () => {
+  const stores = new Map(
+    ['a', 'b'].map((id) => [
+      id,
+      new SourceStore('', { tabId: id, revision: 1 }, 0),
+    ]),
+  )
+  const receive = createJournalReceiver((id) => {
+    const store = stores.get(id)
+    if (!store) throw new Error('closed tab')
+    return store
+  })
+  const edit = (tabId, baseVersion, from, insert) =>
+    receive({
+      tabId,
+      revision: 1,
+      baseVersion,
+      contentVersion: baseVersion + 1,
+      from,
+      to: from,
+      insert,
+    })
+  edit('a', 0, 0, 'a')
+  edit('b', 0, 0, 'b')
+  edit('a', 1, 1, '2')
+  assert.equal(stores.get('a').snapshot().materialize(), 'a2')
+  assert.equal(stores.get('b').snapshot().materialize(), 'b')
+  assert.throws(() => edit('closed', 0, 0, 'x'), /closed tab/)
+})
+
 test('receiver enforces order and identity and deduplicates accepted retries', () => {
   const { state, receive, change } = fixture()
   const first = change('', 'hello', 0)

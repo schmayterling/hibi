@@ -983,14 +983,14 @@ if (!app.requestSingleInstanceLock()) {
       handle(DOCUMENT_CHANNELS.tabsEnabled, (event, enabled: unknown) =>
         runFileOperation(event, (window) => setTabsEnabled(window, enabled)),
       )
-      handle(HISTORY_CHANNELS.list, (event) => {
-        trustedWindow(event)
-        return listVersions(getDocumentPath())
-      })
-      handle(HISTORY_CHANNELS.preview, (event, id: unknown) => {
-        trustedWindow(event)
-        return previewVersion(getDocumentPath(), id)
-      })
+      handle(HISTORY_CHANNELS.list, (event) =>
+        readAfterFileOperation(event, () => listVersions(getDocumentPath())),
+      )
+      handle(HISTORY_CHANNELS.preview, (event, id: unknown) =>
+        readAfterFileOperation(event, () =>
+          previewVersion(getDocumentPath(), id),
+        ),
+      )
       handle(HISTORY_CHANNELS.restore, (event, id: unknown) =>
         runFileOperation(event, async (window) => {
           const content = await previewVersion(getDocumentPath(), id)

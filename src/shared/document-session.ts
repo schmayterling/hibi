@@ -30,6 +30,7 @@ type HistoryGroup = Readonly<{
   operations: number
   beforeSelection: SourceSelection | null
   afterSelection: SourceSelection | null
+  viewId: string
 }>
 export type SessionState = Readonly<{
   document: DocumentKey
@@ -80,6 +81,7 @@ export class DocumentSession {
   #cancelVerification: (() => void) | undefined
   #settled: Promise<void> = Promise.resolve()
   #selection: SourceSelection | null = null
+  readonly #viewSelections = new Map<string, SourceSelection | null>()
 
   constructor(
     source: string,
@@ -154,14 +156,24 @@ export class DocumentSession {
       this.#operationListeners.delete(listener)
     }
   }
-  selection = () => this.#selection
+  selection = (viewId = 'default') =>
+    viewId === 'default'
+      ? this.#selection
+      : (this.#viewSelections.get(viewId) ?? null)
+  releaseView(viewId: string) {
+    if (viewId !== 'default') this.#viewSelections.delete(viewId)
+  }
   subscribeSelection = (listener: () => void) => {
     this.#selectionListeners.add(listener)
     return () => {
       this.#selectionListeners.delete(listener)
     }
   }
-  select(selection: SourceSelection, version = this.snapshot().version) {
+  select(
+    selection: SourceSelection,
+    version = this.snapshot().version,
+    viewId = 'default',
+  ) {
     if (
       this.#disposed ||
       this.#dispatching ||
@@ -169,8 +181,9 @@ export class DocumentSession {
     )
       throw new Error('Source selection is stale or the session is busy.')
     const next = sourceSelection(this.snapshot(), selection)
-    if (JSON.stringify(next) === JSON.stringify(this.#selection)) return
-    this.#selection = next
+    if (JSON.stringify(next) === JSON.stringify(this.selection(viewId))) return
+    if (viewId === 'default') this.#selection = next
+    else this.#viewSelections.set(viewId, next)
     this.#notifySelection()
   }
   reidentify(document: DocumentKey) {
@@ -277,6 +290,7 @@ export class DocumentSession {
   #record(
     prepared: PreparedSourceOperation,
     beforeSelection: SourceSelection | null,
+    viewId: string,
   ) {
     const previous = this.#undo.at(-1),
       operation = prepared.operation
@@ -285,6 +299,7 @@ export class DocumentSession {
       inverse = prepared.inverse
     const merge =
       previous?.id === operation.historyGroup &&
+      previous.viewId === viewId &&
       previous.origin === operation.origin &&
       previous.operations < 256 &&
       previous.bytes + editBytes(forward) + editBytes(inverse) < 128 * 1024
@@ -324,7 +339,8 @@ export class DocumentSession {
         bytes: editBytes(forward) + editBytes(inverse),
         operations: merge ? previous.operations + 1 : 1,
         beforeSelection: merge ? previous.beforeSelection : beforeSelection,
-        afterSelection: this.#selection,
+        afterSelection: this.selection(viewId),
+        viewId,
       }),
     )
     this.#contentIdentity = afterIdentity
@@ -354,6 +370,7 @@ export class DocumentSession {
       beforeSelection: SourceSelection | null,
     ) => void,
     selection?: (prepared: PreparedSourceOperation) => SourceSelection | null,
+    viewId = 'default',
   ): AcceptedSourceEdit {
     if (this.#disposed || this.#dispatching)
       throw new Error(
@@ -365,7 +382,7 @@ export class DocumentSession {
     try {
       prepared = this.#store.prepare(operation)
       const accepted = prepared,
-        beforeSelection = this.#selection
+        beforeSelection = this.selection(viewId)
       const requested = selection?.(prepared)
       const afterSelection = selection
         ? requested
@@ -374,7 +391,24 @@ export class DocumentSession {
         : mapSourceSelection(prepared.after, beforeSelection, operation.changes)
       this.#options.admit?.(prepared.operation)
       this.#store.commit(prepared)
-      this.#selection = afterSelection
+      if (viewId === 'default') this.#selection = afterSelection
+      else this.#viewSelections.set(viewId, afterSelection)
+      if (viewId !== 'default')
+        this.#selection = mapSourceSelection(
+          prepared.after,
+          this.#selection,
+          operation.changes,
+        )
+      for (const [otherId, otherSelection] of this.#viewSelections)
+        if (otherId !== viewId)
+          this.#viewSelections.set(
+            otherId,
+            mapSourceSelection(
+              prepared.after,
+              otherSelection,
+              operation.changes,
+            ),
+          )
       history(prepared, beforeSelection)
       this.#identities.set(prepared.after, this.#contentIdentity)
       const changed = this.#publish(false)
@@ -429,8 +463,9 @@ export class DocumentSession {
     ) => void,
     reconcile?: (prepared: PreparedSourceOperation) => void,
     selection?: (prepared: PreparedSourceOperation) => SourceSelection | null,
+    viewId = 'default',
   ) {
-    const accepted = this.#begin(operation, history, selection)
+    const accepted = this.#begin(operation, history, selection, viewId)
     try {
       reconcile?.(accepted.prepared)
     } catch (error) {
@@ -445,13 +480,16 @@ export class DocumentSession {
     origin: SourceOperation['origin'],
     historyGroup: string,
     selection?: (prepared: PreparedSourceOperation) => SourceSelection | null,
+    viewId = 'default',
   ): AcceptedSourceEdit {
     if (origin === 'undo' || origin === 'redo')
       throw new Error('Use session history for undo and redo.')
     return this.#begin(
       this.#operation(changes, origin, historyGroup),
-      (prepared, beforeSelection) => this.#record(prepared, beforeSelection),
+      (prepared, beforeSelection) =>
+        this.#record(prepared, beforeSelection, viewId),
       selection,
+      viewId,
     )
   }
   edit(
@@ -460,14 +498,17 @@ export class DocumentSession {
     historyGroup: string,
     reconcile?: (prepared: PreparedSourceOperation) => void,
     selection?: (prepared: PreparedSourceOperation) => SourceSelection | null,
+    viewId = 'default',
   ) {
     if (origin === 'undo' || origin === 'redo')
       throw new Error('Use session history for undo and redo.')
     return this.#accept(
       this.#operation(changes, origin, historyGroup),
-      (prepared, beforeSelection) => this.#record(prepared, beforeSelection),
+      (prepared, beforeSelection) =>
+        this.#record(prepared, beforeSelection, viewId),
       reconcile,
       selection,
+      viewId,
     )
   }
   undo(reconcile?: (prepared: PreparedSourceOperation) => void) {
@@ -482,6 +523,7 @@ export class DocumentSession {
       },
       reconcile,
       () => group.beforeSelection,
+      group.viewId,
     )
   }
   redo(reconcile?: (prepared: PreparedSourceOperation) => void) {
@@ -496,6 +538,7 @@ export class DocumentSession {
       },
       reconcile,
       () => group.afterSelection,
+      group.viewId,
     )
   }
   markSaved(snapshot: SourceSnapshot) {
@@ -583,6 +626,7 @@ export class DocumentSession {
     this.#listeners.clear()
     this.#operationListeners.clear()
     this.#selectionListeners.clear()
+    this.#viewSelections.clear()
     this.#storageListeners.clear()
     this.#undo = []
     this.#redo = []

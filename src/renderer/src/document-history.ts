@@ -7,6 +7,12 @@ import {
 } from '@tiptap/core'
 import { Plugin } from '@tiptap/pm/state'
 import { documentRuntime } from './document-runtime'
+import { richSourceSnapshot } from './rich-sync'
+
+const sessionFor = (editor: import('@tiptap/core').Editor) => {
+  const id = richSourceSnapshot(editor)?.document.tabId
+  return id ? documentRuntime.session(id) : null
+}
 
 /** Rich commands use host history; PM does not retain a competing undo stack. */
 export const documentHistory = Extension.create({
@@ -16,7 +22,7 @@ export const documentHistory = Extension.create({
       (direction: 'undo' | 'redo') =>
       () =>
       ({ dispatch, tr }: CommandProps) => {
-        const session = documentRuntime.session()
+        const session = sessionFor(this.editor)
         if (
           !session ||
           !session.state()[direction === 'undo' ? 'canUndo' : 'canRedo']
@@ -55,8 +61,8 @@ export const documentHistory = Extension.create({
       return
     }
     const direction = transaction.getMeta('hibiHistory')
-    if (direction === 'undo') documentRuntime.session()?.undo()
-    else if (direction === 'redo') documentRuntime.session()?.redo()
+    if (direction === 'undo') sessionFor(this.editor)?.undo()
+    else if (direction === 'redo') sessionFor(this.editor)?.redo()
     else next(transaction)
   },
   addKeyboardShortcuts() {
@@ -79,8 +85,8 @@ export const documentHistory = Extension.create({
                 return false
               event.preventDefault()
               if (event.inputType === 'historyUndo')
-                documentRuntime.session()?.undo()
-              else documentRuntime.session()?.redo()
+                sessionFor(this.editor)?.undo()
+              else sessionFor(this.editor)?.redo()
               return true
             },
           },

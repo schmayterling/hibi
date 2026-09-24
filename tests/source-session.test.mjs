@@ -21,8 +21,8 @@ function fixture(source, options = {}, extensions = []) {
       ...options,
     },
   )
-  const attach = () => {
-    const bridge = createSourceSession(session)
+  const attach = (viewId) => {
+    const bridge = createSourceSession(session, viewId)
     const selection = bridge.selection()
     const view = {
       state: EditorState.create({
@@ -99,6 +99,28 @@ test('S01/S07: accepted filters and sequential changes commit before CM callback
   assert.deepEqual(f.errors, [])
   first.dispose()
   second.dispose()
+  f.session.dispose()
+})
+
+test('two source views share text and history but keep separate selections', () => {
+  const f = fixture('abcd')
+  const left = f.attach('left')
+  const right = f.attach('right')
+  left.dispatch({ selection: { anchor: 1 } })
+  right.dispatch({ selection: { anchor: 4 } })
+  assert.equal(f.session.selection('left').ranges[0].head, 1)
+  assert.equal(f.session.selection('right').ranges[0].head, 4)
+  left.dispatch(type(1, 'X', 1))
+  assert.equal(left.view.state.doc.toString(), 'aXbcd')
+  assert.equal(right.view.state.doc.toString(), 'aXbcd')
+  assert.equal(f.session.selection('right').ranges[0].head, 5)
+  assert.deepEqual(f.session.historyDepth(), { undo: 1, redo: 0 })
+  right.bridge.undo()
+  assert.equal(left.view.state.doc.toString(), 'abcd')
+  assert.equal(right.view.state.doc.toString(), 'abcd')
+  assert.equal(f.session.selection('right').ranges[0].head, 4)
+  left.dispose()
+  right.dispose()
   f.session.dispose()
 })
 

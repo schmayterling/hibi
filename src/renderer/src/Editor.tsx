@@ -119,6 +119,7 @@ export type ViewMode = DocumentView
 
 export function MarkdownEditor({
   document: documentState,
+  viewId = 'default',
   format,
   formatName,
   value,
@@ -145,6 +146,7 @@ export function MarkdownEditor({
   outlineActive,
 }: {
   document: DocumentState
+  viewId?: string
   format: DocumentFormat | undefined
   formatName: string
   value: string
@@ -482,7 +484,7 @@ export function MarkdownEditor({
   const positions = useMemo<MarkdownPositionLookup>(() => {
     const fallback = createMarkdownPositionCache()
     return (source, document) => (position, from) => {
-      const snapshot = documentRuntime.session()?.snapshot()
+      const snapshot = documentRuntime.session(documentState.tabId)?.snapshot()
       const exact =
         snapshot && markdownSyntax.version() === syntaxVersion
           ? plainSync.current?.map(snapshot, document, position, from)
@@ -493,7 +495,7 @@ export function MarkdownEditor({
   const geometryContent = useMemo(
     () => () => {
       if (!editor || !richSourceCurrent(editor)) return null
-      const current = documentRuntime.get()
+      const current = documentRuntime.get(documentState.tabId)
       const text = scrollContent.current
       return current &&
         text.document.contentVersion === current.contentVersion &&
@@ -502,7 +504,7 @@ export function MarkdownEditor({
         ? text
         : null
     },
-    [editor],
+    [editor, documentState.tabId],
   )
   // biome-ignore lint/correctness/useExhaustiveDependencies: delayed document props publish fresh geometry independently of rich transactions.
   useLayoutEffect(() => {
@@ -522,7 +524,7 @@ export function MarkdownEditor({
     pendingPlainSync.current = null
     if (!markdownDocument) return null
     const known = richSourceSnapshot(editor),
-      session = documentRuntime.session(),
+      session = documentRuntime.session(documentState.tabId),
       current = session?.snapshot()
     if (
       !known ||
@@ -584,7 +586,14 @@ export function MarkdownEditor({
       const accepted = performanceDiagnostics.measure(
         'core',
         'document update',
-        () => session.beginEdit([direct.change], 'visual', previous.id),
+        () =>
+          session.beginEdit(
+            [direct.change],
+            'visual',
+            previous.id,
+            undefined,
+            viewId,
+          ),
       )
       try {
         const certificate = direct.certify(accepted.prepared)
@@ -620,7 +629,8 @@ export function MarkdownEditor({
     const preserved =
       exactSource.current ??
       exactHistory.current.get(editor)?.get(serialized.source)
-    const currentSource = documentRuntime.get()?.markdown ?? value
+    const currentSource =
+      documentRuntime.get(documentState.tabId)?.markdown ?? value
     const source = preserved?.document.eq(nextState.doc)
       ? preserved.source
       : projectMarkdown(currentSource, markdownExtensions).serialize(
@@ -631,7 +641,13 @@ export function MarkdownEditor({
     const accepted = performanceDiagnostics.measure(
       'core',
       'document update',
-      () => documentRuntime.beginReplace(source, previous.id),
+      () =>
+        documentRuntime.beginReplace(
+          source,
+          previous.id,
+          documentState.tabId,
+          viewId,
+        ),
     )
     // Regional proof is optional. Its failure must not strand an accepted source edit.
     try {
@@ -684,9 +700,8 @@ export function MarkdownEditor({
     richSyntaxCompatible,
     richExtensions,
   ])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: replacing rich attachments invalidates certificates even when both sets are audited.
   useLayoutEffect(() => {
-    const session = documentRuntime.session()
+    const session = documentRuntime.session(documentState.tabId)
     const retained = retainedPreview.current
     retainedPreview.current = null
     if (!editor || !markdownDocument || !session) return
@@ -1172,7 +1187,7 @@ export function MarkdownEditor({
       !sourceReady
     )
       return
-    const session = documentRuntime.session()
+    const session = documentRuntime.session(documentState.tabId)
     if (!session) return
     const semantics =
       outlineSyntax && createMarkdownSemantics(flavors, documentState.revision)
@@ -1392,7 +1407,7 @@ export function MarkdownEditor({
       disposed = false
     const current = () => {
       const cached = visualOutline.current,
-        source = documentRuntime.session()?.snapshot()
+        source = documentRuntime.session(documentState.tabId)?.snapshot()
       return cached &&
         source &&
         cached.document === editor.state.doc &&
@@ -1442,7 +1457,7 @@ export function MarkdownEditor({
       timer = idle = undefined
       if (disposed || editor.isDestroyed) return
       const document = editor.state.doc,
-        source = documentRuntime.session()?.snapshot(),
+        source = documentRuntime.session(documentState.tabId)?.snapshot(),
         known = richSourceSnapshot(editor)
       if (
         !source ||
@@ -1504,7 +1519,7 @@ export function MarkdownEditor({
               })
           }
       }
-      const latest = documentRuntime.session()?.snapshot()
+      const latest = documentRuntime.session(documentState.tabId)?.snapshot()
       if (
         disposed ||
         editor.state.doc !== document ||
@@ -1566,6 +1581,7 @@ export function MarkdownEditor({
     positions,
     paneMode,
     markdownExtensions,
+    documentState.tabId,
   ])
   // biome-ignore lint/correctness/useExhaustiveDependencies: pane focus/readiness changes refresh selection through the current context ref without rebuilding the outline.
   useEffect(() => reportVisualCaret.current(), [findTarget, sourceReady])
@@ -1580,7 +1596,7 @@ export function MarkdownEditor({
     if (mode !== 'normal' && !sourceReady) return
     if (paneMode === 'markdown') {
       const current = sourceOutline.current,
-        session = documentRuntime.session(),
+        session = documentRuntime.session(documentState.tabId),
         heading = current?.headings.find(
           (item) => item.id === outlineTarget.id,
         ),
@@ -1600,7 +1616,7 @@ export function MarkdownEditor({
     }
     handledOutline.current = outlineTarget
     const cached = visualOutline.current,
-      source = documentRuntime.session()?.snapshot(),
+      source = documentRuntime.session(documentState.tabId)?.snapshot(),
       heading = cached?.headings.find((item) => item.id === outlineTarget.id)
     const position = heading?.position
     if (
@@ -1633,7 +1649,15 @@ export function MarkdownEditor({
       revealSourcePosition(view, heading.raw)
       view.focus()
     }
-  }, [content, editor, outlineTarget, mode, sourceReady, paneMode])
+  }, [
+    content,
+    editor,
+    outlineTarget,
+    mode,
+    sourceReady,
+    paneMode,
+    documentState.tabId,
+  ])
   useEffect(() => {
     if (paneMode !== 'side-by-side' || !sourceReady || !editor) return
     const rich = content.current?.querySelector<HTMLElement>('.rich-pane')
@@ -1932,6 +1956,7 @@ export function MarkdownEditor({
               >
                 <SourceEditor
                   document={documentState}
+                  viewId={viewId}
                   editTarget={findTarget === 'source'}
                   markdownMode={markdownDocument}
                   referenceSyntax={referenceSyntax}

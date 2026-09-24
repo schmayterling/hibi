@@ -11,15 +11,18 @@ export function certifyVisualEcho(source: SourceSnapshot) {
 
 /** A delayed display read must not run after its canonical snapshot changes. */
 export function afterDocumentQuiet(
-  runtime: Pick<DocumentRuntime, 'get' | 'subscribe'>,
+  runtime: Pick<DocumentRuntime, 'get' | 'subscribeDocument'>,
   snapshot: DocumentState,
   read: () => void,
+  tabId?: string,
 ) {
-  if (runtime.get() !== snapshot) return
+  if (runtime.get(tabId) !== snapshot) return
   const timer = setTimeout(() => {
-    if (runtime.get() === snapshot) read()
+    if (runtime.get(tabId) === snapshot) read()
   }, 200)
-  const remove = runtime.subscribe(() => clearTimeout(timer))
+  const remove = runtime.subscribeDocument((document) => {
+    if (!tabId || document.tabId === tabId) clearTimeout(timer)
+  })
   return () => {
     clearTimeout(timer)
     remove()
@@ -28,16 +31,18 @@ export function afterDocumentQuiet(
 
 /** Source surfaces subscribe to edits directly; their hidden rich props can settle. */
 export function editorDocumentUpdates(
-  runtime: Pick<DocumentRuntime, 'get' | 'subscribe' | 'sourceFor'>,
+  runtime: Pick<DocumentRuntime, 'get' | 'subscribeDocument' | 'sourceFor'>,
   deferred: boolean,
   certifiedVisual = false,
+  tabId?: string,
 ) {
-  let current = runtime.get()
+  let current = runtime.get(tabId)
   return {
     get: () => current,
     subscribe(notify: () => void) {
       let timer: ReturnType<typeof setTimeout> | undefined
-      const remove = runtime.subscribe((next, changes) => {
+      const remove = runtime.subscribeDocument((next, changes) => {
+        if (tabId && next.tabId !== tabId) return
         clearTimeout(timer)
         const snapshot = runtime.sourceFor(next)
         const visualEcho = snapshot && certifiedVisualEchoes.delete(snapshot)
@@ -49,7 +54,7 @@ export function editorDocumentUpdates(
           timer = setTimeout(publish, 250)
         else publish()
       })
-      const latest = runtime.get()
+      const latest = runtime.get(tabId)
       if (current !== latest) {
         current = latest
         notify()

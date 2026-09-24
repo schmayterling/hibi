@@ -10,6 +10,7 @@ jobs:
     timeout-minutes: 20
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      electron_config_cache: ${{ github.workspace }}/.cache/electron
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -18,6 +19,15 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - id: electron
+        run: node -e "console.log('version=' + require('./package.json').devDependencies.electron)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/electron
+          key: raf-electron-${{ runner.os }}-${{ runner.arch }}-${{ steps.electron.outputs.version }}
+          restore-keys: |
+            electron-${{ runner.os }}-${{ runner.arch }}-${{ steps.electron.outputs.version }}
+            electron-${{ runner.os }}-${{ runner.arch }}-
       - run: npm ci
       - run: npm run build
       - run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends openbox x11-utils

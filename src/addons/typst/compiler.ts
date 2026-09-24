@@ -129,11 +129,20 @@ export async function compileTypst(
   )
     throw new Error('Could not read this Typst document.')
   const documentId = value.documentId ?? context.document.get().id
+  const executable =
+    value.compiler === 'system'
+      ? await context.dependencies.resolve('typst')
+      : null
+  if (value.compiler === 'system' && !executable)
+    throw new Error(
+      'Install Typst or choose its executable in Settings → Dependencies.',
+    )
   const dependencyKey = JSON.stringify([
     context.workspace.id(),
     documentId,
     value.block ?? false,
     value.compiler ?? 'bundled',
+    executable,
     createHash('sha256').update(value.source).digest('hex'),
   ])
   const requestKey =
@@ -171,12 +180,7 @@ export async function compileTypst(
         }
       }
       if (epoch !== generation) throw new Error('Typst compilation canceled.')
-      if (value.compiler === 'system') {
-        const executable = await context.dependencies.resolve('typst')
-        if (!executable)
-          throw new Error(
-            'Install Typst or choose its executable in Settings → Dependencies.',
-          )
+      if (executable) {
         const fontSnapshot = await documentProject(context, {
           id: documentId,
           entry: 'untitled.typ',

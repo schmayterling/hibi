@@ -24,6 +24,9 @@ test('typing coalesces formatting checks without delaying document changes or un
   const result = await page.evaluate(async () => {
     const editor = document.querySelector('.tiptap').editor
     await new Promise(requestAnimationFrame)
+    const visibleActions = document.querySelectorAll(
+      '.editor-toolbar [data-toolbar-id^="format."]',
+    ).length
     let checks = 0
     const can = editor.can.bind(editor)
     editor.can = (...args) => {
@@ -41,13 +44,15 @@ test('typing coalesces formatting checks without delaying document changes or un
     return {
       immediate,
       afterFrame,
+      visibleActions,
       persisted,
       undone,
       redone: editor.getText(),
     }
   })
   assert.deepEqual(result.immediate, { checks: 0, text: 'hello' })
-  assert.equal(result.afterFrame, 35)
+  assert.ok(result.visibleActions > 0)
+  assert.equal(result.afterFrame, result.visibleActions)
   assert.equal(result.persisted, 'hello')
   assert.equal(result.undone, '')
   assert.equal(result.redone, 'hello')

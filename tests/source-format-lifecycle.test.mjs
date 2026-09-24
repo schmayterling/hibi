@@ -7,6 +7,8 @@ import { electron, startupDiagnostics, stopElectronTree } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 async function closeProbe(app, watchdog, fired, name, preserveFailure = false) {
+  clearTimeout(watchdog)
+  const watchdogFired = fired()
   const child = app.process()
   const started = performance.now()
   let error
@@ -14,10 +16,7 @@ async function closeProbe(app, watchdog, fired, name, preserveFailure = false) {
     await app.close()
   } catch (failure) {
     error = failure
-  } finally {
-    clearTimeout(watchdog)
   }
-  const watchdogFired = fired()
   if (watchdogFired || error)
     console.error(
       'source format cleanup:',
@@ -87,11 +86,14 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
       failed = true
       throw error
     } finally {
-      await app
-        .evaluate(({ dialog }) => {
-          dialog.showMessageBox = async () => ({ response: 1 })
-        })
-        .catch(() => {})
+      clearTimeout(watchdog)
+      if (failed || watchdogFired) stopElectronTree(app.process())
+      else
+        await app
+          .evaluate(({ dialog }) => {
+            dialog.showMessageBox = async () => ({ response: 1 })
+          })
+          .catch(() => {})
       await closeProbe(
         app,
         watchdog,
@@ -160,11 +162,13 @@ test('standalone source skips rich attachment and hidden previews while preservi
     stopElectronTree(app.process())
   }, 55000)
   t.after(async () => {
-    await app
-      .evaluate(({ dialog }) => {
-        dialog.showMessageBox = async () => ({ response: 1 })
-      })
-      .catch(() => {})
+    clearTimeout(watchdog)
+    if (!watchdogFired)
+      await app
+        .evaluate(({ dialog }) => {
+          dialog.showMessageBox = async () => ({ response: 1 })
+        })
+        .catch(() => {})
     try {
       await closeProbe(app, watchdog, () => watchdogFired, 'standalone source')
     } finally {

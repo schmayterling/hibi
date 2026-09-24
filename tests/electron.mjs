@@ -179,9 +179,14 @@ async function traceElectronClose(application) {
 // so Linux compositors keep painting frames and delivering native keyboard input.
 export const electron = {
   async launch(options) {
+    // Cold Xvfb runners can lose the default GPU process before first paint.
+    const gpuArgs =
+      process.env.GITHUB_ACTIONS === 'true' && process.platform === 'linux'
+        ? ['--use-gl=angle', '--use-angle=swiftshader']
+        : []
     const application = await _electron.launch({
       ...options,
-      args: [...options.args, '--hibi-test'],
+      args: [...options.args, '--hibi-test', ...gpuArgs],
     })
     const close = application.close.bind(application)
     let slowStartTimer

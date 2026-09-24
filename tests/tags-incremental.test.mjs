@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { markdown } from '@codemirror/lang-markdown'
+import { ensureSyntaxTree, syntaxTreeAvailable } from '@codemirror/language'
 import { EditorState as SourceState } from '@codemirror/state'
 import { Node, Schema } from '@tiptap/pm/model'
 import { EditorState } from '@tiptap/pm/state'
 import {
   frontmatterPrefix,
+  frontmatterState,
   richTags,
   sourceTagRanges,
+  updateFrontmatterState,
 } from '../src/addons/tags/decorations.ts'
 import { scheduleTagCounts } from '../src/addons/tags/schedule.ts'
 import { tagMatches } from '../src/addons/tags/syntax.ts'
@@ -55,7 +58,11 @@ test('source tag scanning stays inside visible lines and skips frontmatter', (t)
     ...Array.from({ length: 1000 }, (_, index) => `ordinary line ${index}`),
     'ending #last',
   ].join('\n')
-  const state = SourceState.create({ doc: source, extensions: [markdown()] })
+  let state = SourceState.create({ doc: source, extensions: [markdown()] })
+  assert.ok(ensureSyntaxTree(state, state.doc.length, 1000))
+  state = state.update({}).state
+  const first = state.doc.line(2)
+  const last = state.doc.line(state.doc.lines)
   const textPrototype = Object.getPrototypeOf(state.doc)
   const original = textPrototype.sliceString
   const sizes = []
@@ -64,8 +71,6 @@ test('source tag scanning stays inside visible lines and skips frontmatter', (t)
     return original.apply(this, args)
   })
   const prefix = frontmatterPrefix(state)
-  const first = state.doc.line(2)
-  const last = state.doc.line(state.doc.lines)
   const hidden = []
   sourceTagRanges(state, [{ from: first.from, to: first.to }], prefix).between(
     0,
@@ -85,6 +90,86 @@ test('source tag scanning stays inside visible lines and skips frontmatter', (t)
     sizes.every((size) => size < source.length / 4),
     'scrolling must not materialize or scan the full source',
   )
+})
+
+test('unclosed frontmatter skips whole-note rescans but finds a new closing fence', (t) => {
+  const source = [
+    '---',
+    'title: note',
+    ...Array.from({ length: 5000 }, (_, index) => `body ${index}`),
+  ].join('\n')
+  const state = SourceState.create({ doc: source })
+  const previous = frontmatterState(state)
+  const edit = state.update({
+    changes: { from: state.doc.length, insert: 'x' },
+  })
+  const textPrototype = Object.getPrototypeOf(edit.state.doc)
+  const original = textPrototype.line
+  let lines = 0
+  t.mock.method(textPrototype, 'line', function (...args) {
+    lines++
+    return original.apply(this, args)
+  })
+  assert.strictEqual(
+    updateFrontmatterState(previous, edit.changes, edit.state),
+    previous,
+  )
+  assert.ok(lines < 10, 'ordinary edits must not probe every line')
+
+  const unclosed = SourceState.create({ doc: '---\ntitle: note\nbody #tag' })
+  const at = unclosed.doc.line(3).from
+  const closed = unclosed.update({ changes: { from: at, insert: '---\n' } })
+  assert.equal(
+    updateFrontmatterState(
+      frontmatterState(unclosed),
+      closed.changes,
+      closed.state,
+    ).prefix,
+    closed.state.doc.line(4).from,
+  )
+
+  const invalid = SourceState.create({ doc: '---\nplain text\n---\nbody #tag' })
+  const badHeader = frontmatterState(invalid)
+  assert.equal(badHeader.prefix, 0)
+  const line = invalid.doc.line(2)
+  const repaired = invalid.update({
+    changes: { from: line.from, to: line.to, insert: 'title: note' },
+  })
+  assert.equal(
+    updateFrontmatterState(badHeader, repaired.changes, repaired.state).prefix,
+    repaired.state.doc.line(4).from,
+  )
+})
+
+test('source tags wait for distant syntax before highlighting code fences', () => {
+  const source = [
+    ...Array.from({ length: 10000 }, (_, index) => `ordinary line ${index}`),
+    '```md',
+    '#hidden',
+    '```',
+    'plain #visible',
+  ].join('\n')
+  const state = SourceState.create({ doc: source, extensions: [markdown()] })
+  const hidden = state.doc.line(10002)
+  const visible = state.doc.line(10004)
+  assert.equal(syntaxTreeAvailable(state, visible.to), false)
+  const tags = (current) => {
+    const found = []
+    sourceTagRanges(
+      current,
+      [{ from: hidden.from, to: visible.to }],
+      0,
+    ).between(0, source.length, (_from, _to, value) =>
+      found.push(value.spec.attributes['data-tag']),
+    )
+    return found
+  }
+  assert.deepEqual(tags(state), [])
+  assert.ok(ensureSyntaxTree(state, visible.to, 1000))
+  assert.deepEqual(tags(state), [], 'uncommitted syntax remains unavailable')
+  const parsed = state.update({}).state
+  assert.equal(syntaxTreeAvailable(parsed, visible.to), true)
+  assert.deepEqual(tags(parsed), ['visible'])
 })
 
 test('rich tags map decorations and rescan only changed blocks', (t) => {

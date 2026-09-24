@@ -1,5 +1,5 @@
-import { syntaxTree } from '@codemirror/language'
-import type { EditorState as SourceState } from '@codemirror/state'
+import { syntaxTree, syntaxTreeAvailable } from '@codemirror/language'
+import type { ChangeDesc, EditorState as SourceState } from '@codemirror/state'
 import {
   type EditorView,
   Decoration as SourceDecoration,
@@ -120,21 +120,59 @@ export function richTags(browse: (tag: string) => void): RichExtension {
   }
 }
 
+type FrontmatterState = {
+  prefix: number
+  boundary: number
+  unclosed: boolean
+}
+
+const openingFence = /^(?:\uFEFF)?---[ \t]*$/
+const closingFence = /^(?:---|\.\.\.)[ \t]*$/
+
 /** Only the metadata header needs YAML parsing; scrolling never reads the full source. */
-export function frontmatterPrefix(state: SourceState) {
+export function frontmatterState(state: SourceState): FrontmatterState {
   const doc = state.doc
-  if (doc.lines < 2 || !/^(?:\uFEFF)?---[ \t]*$/.test(doc.line(1).text))
-    return 0
+  const firstLine = doc.line(1)
+  if (!openingFence.test(firstLine.text))
+    return { prefix: 0, boundary: firstLine.to, unclosed: false }
   for (let line = 2; line <= doc.lines; line++) {
-    if (!/^(?:---|\.\.\.)[ \t]*$/.test(doc.line(line).text)) continue
+    if (!closingFence.test(doc.line(line).text)) continue
     let end = line < doc.lines ? doc.line(line + 1).from : doc.length
     for (let blank = line + 1; blank <= doc.lines; blank++) {
       if (!/^[ \t]*$/.test(doc.line(blank).text)) break
       end = blank < doc.lines ? doc.line(blank + 1).from : doc.length
     }
-    return readFrontmatter(doc.sliceString(0, end))?.prefix.length ?? 0
+    return {
+      prefix: readFrontmatter(doc.sliceString(0, end))?.prefix.length ?? 0,
+      boundary: end,
+      unclosed: false,
+    }
   }
-  return 0
+  return { prefix: 0, boundary: firstLine.to, unclosed: true }
+}
+
+export function frontmatterPrefix(state: SourceState) {
+  return frontmatterState(state).prefix
+}
+
+export function updateFrontmatterState(
+  previous: FrontmatterState,
+  changes: ChangeDesc,
+  state: SourceState,
+): FrontmatterState {
+  let refresh = false
+  changes.iterChangedRanges((from, _to, nextFrom, nextTo) => {
+    if (from <= previous.boundary) refresh = true
+    if (!previous.unclosed || refresh) return
+    const doc = state.doc
+    const last = doc.lineAt(nextTo).number
+    for (let line = doc.lineAt(nextFrom).number; line <= last; line++) {
+      if (!closingFence.test(doc.line(line).text)) continue
+      refresh = true
+      break
+    }
+  })
+  return refresh ? frontmatterState(state) : previous
 }
 
 export function sourceTagRanges(
@@ -156,7 +194,12 @@ export function sourceTagRanges(
   for (const { from, to } of scan) {
     for (const match of tagMatches(doc.sliceString(from, to))) {
       const start = from + match.from
-      if (start < prefix) continue
+      if (
+        start < prefix ||
+        tree.length < from + match.to ||
+        !syntaxTreeAvailable(state, from + match.to)
+      )
+        continue
       let allowed = true
       for (
         let node: ReturnType<typeof tree.resolveInner> | null =
@@ -193,13 +236,18 @@ export function sourceTags(
       ViewPlugin.fromClass(
         class {
           decorations: SourceDecorationSet = SourceDecoration.none
-          prefix: number
+          frontmatter: FrontmatterState
           constructor(view: EditorView) {
-            this.prefix = frontmatterPrefix(view.state)
+            this.frontmatter = frontmatterState(view.state)
             this.highlight(view)
           }
           update(update: ViewUpdate) {
-            if (update.docChanged) this.prefix = frontmatterPrefix(update.state)
+            if (update.docChanged)
+              this.frontmatter = updateFrontmatterState(
+                this.frontmatter,
+                update.changes,
+                update.state,
+              )
             if (
               update.docChanged ||
               update.viewportChanged ||
@@ -209,7 +257,11 @@ export function sourceTags(
           }
           highlight(view: EditorView) {
             this.decorations = enabled()
-              ? sourceTagRanges(view.state, view.visibleRanges, this.prefix)
+              ? sourceTagRanges(
+                  view.state,
+                  view.visibleRanges,
+                  this.frontmatter.prefix,
+                )
               : SourceDecoration.none
           }
         },

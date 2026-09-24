@@ -27,8 +27,11 @@ export function tagIndex(
     if (!parsed || parsed.markdown !== page.markdown)
       parsed = { markdown: page.markdown, tags: parse(page.markdown) }
     next.set(page.path, parsed)
-    for (const tag of parsed.tags)
-      tags.set(tag, [...(tags.get(tag) ?? []), page.path])
+    for (const tag of parsed.tags) {
+      const paths = tags.get(tag)
+      if (paths) paths.push(page.path)
+      else tags.set(tag, [page.path])
+    }
   }
   cache.workspaceId = workspaceId
   cache.pages = next

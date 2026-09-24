@@ -138,7 +138,10 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     )
   })
   await rich.press('ArrowLeft')
-  await page.waitForFunction(() => window.cursorMotion, null, { timeout: 2000 })
+  await page.waitForFunction(() => window.cursorMotion, null, {
+    polling: 100,
+    timeout: 2000,
+  })
   const motion = await page.evaluate(() => {
     const style = getComputedStyle(
       document.querySelector('.editor-cursor'),

@@ -6,9 +6,9 @@ import { electron } from '../tests/electron.mjs'
 import { clickMenu } from '../tests/keyboard.mjs'
 
 const mode = process.argv[2]
-if (!['bare', 'openbox'].includes(mode))
-  throw new Error('Choose bare or openbox')
-const trials = Number(process.argv[3] ?? 40)
+if (!['immediate', 'ready'].includes(mode))
+  throw new Error('Choose immediate or ready')
+const trials = Number(process.argv[3] ?? 1)
 
 async function bounded(request, timeout) {
   let timer
@@ -35,6 +35,7 @@ async function probe() {
     app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${profile}`],
       timeout: 10000,
+      testShowAtReady: mode === 'ready',
     })
     await app.evaluate(({ app }) => {
       globalThis.__ciGpuExits = 0
@@ -53,7 +54,11 @@ async function probe() {
     const native = await bounded(
       app.evaluate(({ BrowserWindow }) => {
         const window = BrowserWindow.getAllWindows()[0]
-        return { visible: window.isVisible(), focused: window.isFocused() }
+        return {
+          visible: window.isVisible(),
+          focused: window.isFocused(),
+          painted: !!performance.getEntriesByName('hibi:window-painted').length,
+        }
       }),
       1500,
     )
@@ -89,6 +94,18 @@ async function probe() {
       500,
     )
     result.gpu = gpu.status === 'ok' ? gpu.value : null
+    const nativeAfter = await bounded(
+      app.evaluate(({ BrowserWindow }) => {
+        const window = BrowserWindow.getAllWindows()[0]
+        return {
+          visible: window.isVisible(),
+          focused: window.isFocused(),
+          painted: !!performance.getEntriesByName('hibi:window-painted').length,
+        }
+      }),
+      500,
+    )
+    result.nativeAfter = nativeAfter.status === 'ok' ? nativeAfter.value : null
     if (result.frames === 0) {
       result.capture = await bounded(
         app.evaluate(async ({ BrowserWindow }) => {
@@ -138,6 +155,9 @@ console.log(
     clickNotAttempted: count((result) => result.click == null),
     unfocused: count((result) => result.native?.focused === false),
     invisible: count((result) => result.native?.visible === false),
+    paintedAtLaunch: count((result) => result.native?.painted === true),
+    paintedAtEnd: count((result) => result.nativeAfter?.painted === true),
+    visibleAtEnd: count((result) => result.nativeAfter?.visible === true),
     captureOk: count((result) => result.capture?.status === 'ok'),
     captureEmpty: count(
       (result) => result.capture?.status === 'ok' && result.capture.value.empty,

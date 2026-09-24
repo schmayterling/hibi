@@ -432,7 +432,7 @@ async function serveAsset(request: Request): Promise<Response> {
     const response = await net.fetch(pathToFileURL(path).href)
     status = response.status
     if (trace) trace.phase = 'headers'
-    const headers = new Headers(response.headers)
+    const headers = response.headers
     headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY)
     headers.set('X-Content-Type-Options', 'nosniff')
     if (isAddon) {
@@ -443,7 +443,7 @@ async function serveAsset(request: Request): Promise<Response> {
       if (/\.m?js$/i.test(path))
         headers.set('Content-Type', 'text/javascript; charset=utf-8')
     }
-    return new Response(response.body, { status: response.status, headers })
+    return response
   } catch {
     return new Response(null, { status: 404 })
   } finally {

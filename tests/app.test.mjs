@@ -186,6 +186,25 @@ test('desktop launch, isolation, offline reload, and recovery', {
   )
 
   await t.test(
+    'static asset responses retain security and MIME headers',
+    async () => {
+      const headers = await page.evaluate(async () => {
+        const response = await fetch('app://hibi/index.html')
+        return {
+          status: response.status,
+          csp: response.headers.get('Content-Security-Policy'),
+          noSniff: response.headers.get('X-Content-Type-Options'),
+          type: response.headers.get('Content-Type'),
+        }
+      })
+      assert.equal(headers.status, 200)
+      assert.match(headers.csp, /default-src 'none'/)
+      assert.equal(headers.noSniff, 'nosniff')
+      assert.match(headers.type, /^text\/html/)
+    },
+  )
+
+  await t.test(
     'asset protocol rejects traversal and unrecognized hosts',
     async () => {
       const statuses = await app.evaluate(async ({ net }) => {

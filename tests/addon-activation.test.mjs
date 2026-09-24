@@ -82,6 +82,22 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
   const page = await app.firstWindow()
   await page.locator('.tiptap[contenteditable="true"]').waitFor()
   const editorReady = performance.now()
+  const assetHeaders = await page.evaluate(async () => {
+    const addon = (await window.hibi.getInstalledAddons()).find(
+      (entry) => entry.manifest.id === 'deferred-command',
+    )
+    const response = await fetch(addon.url)
+    return {
+      status: response.status,
+      type: response.headers.get('Content-Type'),
+      origin: response.headers.get('Access-Control-Allow-Origin'),
+      noSniff: response.headers.get('X-Content-Type-Options'),
+    }
+  })
+  assert.equal(assetHeaders.status, 200)
+  assert.match(assetHeaders.type, /^text\/javascript/)
+  assert.equal(assetHeaders.origin, 'app://hibi')
+  assert.equal(assetHeaders.noSniff, 'nosniff')
   page.setDefaultTimeout(8000)
   assert.deepEqual(await page.evaluate(() => window.richAttachments), [
     'alpha',

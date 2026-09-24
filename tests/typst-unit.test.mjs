@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { createServer } from 'node:http'
 import test from 'node:test'
-import { promisify } from 'node:util'
 import {
   svgSource,
   typstBlock,
@@ -33,7 +32,7 @@ test('typst fences preserve source and exclude incomplete or quoted examples', (
 })
 
 test('pinned native compiler sends package requests through the denying proxy', {
-  timeout: 30000,
+  timeout: 45000,
 }, async (t) => {
   let blocked = 0
   const server = createServer((_request, response) => {
@@ -50,25 +49,49 @@ test('pinned native compiler sends package requests through the denying proxy', 
     server.close()
   })
   const proxy = `http://127.0.0.1:${server.address().port}`
-  const script = `import { NodeCompiler } from '@myriaddreamin/typst-ts-node-compiler'; const compiler = NodeCompiler.create(); console.log(compiler.compile({ mainFileContent: '#import "@preview/hibi-nonexistent-package:0.0.0": *' }).hasError());`
-  const { stdout } = await promisify(execFile)(
-    process.execPath,
-    ['--input-type=module', '-e', script],
-    {
-      timeout: 25000,
-      env: {
-        ...process.env,
-        HTTP_PROXY: proxy,
-        HTTPS_PROXY: proxy,
-        ALL_PROXY: proxy,
-        http_proxy: proxy,
-        https_proxy: proxy,
-        all_proxy: proxy,
-        NO_PROXY: '',
-        no_proxy: '',
+  const script = `import { writeSync } from 'node:fs'; import { NodeCompiler } from '@myriaddreamin/typst-ts-node-compiler'; const compiler = NodeCompiler.create(); writeSync(1, 'ready\\n'); console.log(compiler.compile({ mainFileContent: '#import "@preview/hibi-nonexistent-package:0.0.0": *' }).hasError());`
+  const stdout = await new Promise((resolve, reject) => {
+    let timer
+    let output = ''
+    let ready = false
+    const child = execFile(
+      process.execPath,
+      ['--input-type=module', '-e', script],
+      {
+        env: {
+          ...process.env,
+          HTTP_PROXY: proxy,
+          HTTPS_PROXY: proxy,
+          ALL_PROXY: proxy,
+          http_proxy: proxy,
+          https_proxy: proxy,
+          all_proxy: proxy,
+          NO_PROXY: '',
+          no_proxy: '',
+        },
       },
-    },
-  )
-  assert.equal(stdout.trim(), 'true')
+      (error, stdout) => {
+        clearTimeout(timer)
+        if (error) reject(error)
+        else resolve(stdout)
+      },
+    )
+    const deadline = (phase, delay) => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        child.kill('SIGKILL')
+        reject(new Error(`Typst ${phase} exceeded ${delay / 1000} seconds.`))
+      }, delay)
+    }
+    deadline('font initialization', 30000)
+    child.stdout.on('data', (chunk) => {
+      output += chunk
+      if (!ready && output.includes('ready\n')) {
+        ready = true
+        deadline('network compilation', 10000)
+      }
+    })
+  })
+  assert.equal(stdout.trim(), 'ready\ntrue')
   assert.ok(blocked > 0)
 })

@@ -3,8 +3,34 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, startupDiagnostics } from './electron.mjs'
+import { electron, startupDiagnostics, stopElectronTree } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
+
+async function closeProbe(app, watchdog, fired, name) {
+  const child = app.process()
+  const started = performance.now()
+  let error
+  try {
+    await app.close()
+  } catch (failure) {
+    error = String(failure).slice(0, 200)
+  } finally {
+    clearTimeout(watchdog)
+  }
+  if (fired() || error)
+    console.error(
+      'source format cleanup:',
+      JSON.stringify({
+        name,
+        watchdogFired: fired(),
+        closeError: error ?? null,
+        closeMs: Math.round(performance.now() - started),
+        pid: child.pid,
+        exitCode: child.exitCode,
+        signalCode: child.signalCode,
+      }),
+    )
+}
 
 test('lazy rich startup applies view attributes after mounting and accepts native input', {
   timeout: 40000,
@@ -15,7 +41,11 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
     const app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${join(folder, String(attempt))}`],
     })
-    const watchdog = setTimeout(() => app.process().kill('SIGKILL'), 8000)
+    let watchdogFired = false
+    const watchdog = setTimeout(() => {
+      watchdogFired = true
+      stopElectronTree(app.process())
+    }, 8000)
     try {
       const page = await app.firstWindow()
       page.setDefaultTimeout(5000)
@@ -54,8 +84,7 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
           dialog.showMessageBox = async () => ({ response: 1 })
         })
         .catch(() => {})
-      await app.close().catch(() => {})
-      clearTimeout(watchdog)
+      await closeProbe(app, watchdog, () => watchdogFired, `rich ${attempt}`)
     }
   }
 })
@@ -111,15 +140,18 @@ test('standalone source skips rich attachment and hidden previews while preservi
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
-  const watchdog = setTimeout(() => app.process().kill('SIGKILL'), 55000)
+  let watchdogFired = false
+  const watchdog = setTimeout(() => {
+    watchdogFired = true
+    stopElectronTree(app.process())
+  }, 55000)
   t.after(async () => {
     await app
       .evaluate(({ dialog }) => {
         dialog.showMessageBox = async () => ({ response: 1 })
       })
       .catch(() => {})
-    await app.close().catch(() => {})
-    clearTimeout(watchdog)
+    await closeProbe(app, watchdog, () => watchdogFired, 'standalone source')
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()

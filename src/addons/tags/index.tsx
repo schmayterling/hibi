@@ -2,10 +2,16 @@ import { Tags } from 'lucide-react'
 import { isMarkdownDocument } from '../../shared/document-types'
 import { reportDiagnosticFailure } from '../../shared/local-diagnostics-observer'
 import { defineAddon } from '../api'
+import { createTagAnalysis } from './analysis'
 import { richTags, sourceTags } from './decorations'
 import manifest from './manifest'
 import { TagsPanel } from './Panel'
-import { scheduleTagCounts, type TagJob, type TagResult } from './schedule'
+import {
+  scheduleTagCounts,
+  type TagJob,
+  type TagResult,
+  tagVersion,
+} from './schedule'
 import css from './style.css?inline'
 
 let stop: (() => void) | undefined
@@ -13,6 +19,7 @@ export default defineAddon({
   manifest,
   start(context) {
     context.styles.register('tags', css)
+    const analysis = createTagAnalysis()
     const view = context.sidebar.register({
       id: 'browser',
       label: 'Tags',
@@ -38,40 +45,68 @@ export default defineAddon({
       tooltip: 'Browse workspace tags',
       onClick: () => browse(),
     })
-    const worker = new Worker(new URL('./count.worker.ts', import.meta.url), {
-      type: 'module',
-    })
-    const failed = (event: Event) =>
-      reportDiagnosticFailure('TAGS_WORKER_FAILED', event, worker)
-    worker.addEventListener('error', failed)
-    worker.addEventListener('messageerror', failed)
-    const keyFor = (
-      document: Readonly<import('../../shared/desktop').DocumentState>,
-    ) =>
-      JSON.stringify([
-        document.tabId,
-        document.revision,
-        document.contentVersion,
-      ])
+    let sent: TagJob | null = null
+    const failed = (event: Event) => {
+      const old = worker
+      if (!old) return
+      reportDiagnosticFailure('TAGS_WORKER_FAILED', event, old)
+      sent = null
+      old.removeEventListener('error', failed)
+      old.removeEventListener('messageerror', failed)
+      old.onmessage = null
+      old.terminate()
+      worker = null
+      try {
+        worker = createWorker()
+        counter.fail()
+      } catch {
+        counter.fail(false)
+      }
+    }
+    const createWorker = () => {
+      const next = new Worker(new URL('./count.worker.ts', import.meta.url), {
+        type: 'module',
+      })
+      next.addEventListener('error', failed)
+      next.addEventListener('messageerror', failed)
+      next.onmessage = (event: MessageEvent<TagResult>) => {
+        const document = context.editor.getDocument()
+        if (
+          sent?.key === event.data.key &&
+          document &&
+          tagVersion(document) === sent.key
+        )
+          analysis.remember(sent.source, event.data.tags)
+        sent = null
+        counter.receive(event.data)
+      }
+      return next
+    }
+    let worker: Worker | null = createWorker()
     const counter = scheduleTagCounts(
       () => {
         const document = context.editor.getDocument()
         return document && isMarkdownDocument(document.name)
-          ? { key: keyFor(document), source: document.markdown }
+          ? { key: tagVersion(document), source: document.markdown }
           : null
       },
-      (job: TagJob) => worker.postMessage(job),
+      (job: TagJob) => {
+        const tags = analysis.get(job.source)
+        if (tags) counter.receive({ key: job.key, tags })
+        else if (worker) {
+          sent = job
+          worker.postMessage(job)
+        } else counter.receive({ key: job.key, tags: [] })
+      },
       (tags) =>
         status.update({
           label: tags.length ? `Tags · ${tags.length}` : '',
           tooltip: tags.map((tag) => `#${tag}`).join(' · '),
         }),
     )
-    worker.onmessage = (event: MessageEvent<TagResult>) =>
-      counter.receive(event.data)
     context.editor.onDocumentChange((document) => {
       counter.refresh(
-        isMarkdownDocument(document.name) ? keyFor(document) : null,
+        isMarkdownDocument(document.name) ? tagVersion(document) : null,
       )
     })
     context.editor.registerRich(richTags(browse))
@@ -82,9 +117,9 @@ export default defineAddon({
     )
     stop = () => {
       counter.stop()
-      worker.removeEventListener('error', failed)
-      worker.removeEventListener('messageerror', failed)
-      worker.terminate()
+      worker?.removeEventListener('error', failed)
+      worker?.removeEventListener('messageerror', failed)
+      worker?.terminate()
     }
   },
   stop() {

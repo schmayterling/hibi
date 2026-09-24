@@ -87,7 +87,7 @@ export function WorkspaceSidebar({
     }
   }
   async function commitRename() {
-    if (!editing || committing.current) return
+    if (!editing || committing.current || busy) return
     committing.current = true
     setRenaming(true)
     try {
@@ -164,7 +164,7 @@ export function WorkspaceSidebar({
       editing={
         editing && {
           ...editing,
-          disabled: renaming,
+          disabled: renaming || busy,
           onChange: (value) => setEditing({ ...editing, value }),
           onCommit: () => void commitRename(),
           onCancel: () => setEditing(null),

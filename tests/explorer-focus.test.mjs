@@ -50,6 +50,12 @@ test('workspace creation keeps typing in rename and accepts names on click away'
     { polling: 100 },
   )
   await page.locator('.app[aria-busy="false"]').waitFor()
+  const rename = page.getByRole('textbox', { name: 'Rename item', exact: true })
+  await page
+    .getByRole('button', { name: 'Actions for existing.md', exact: true })
+    .click()
+  await page.getByRole('menuitem', { name: 'Rename', exact: true }).click()
+  await rename.fill('interrupted.md')
   await app.evaluate(({ dialog }, root) => {
     let entered
     globalThis.__heldWorkspaceOpenEntered = new Promise((resolve) => {
@@ -77,6 +83,12 @@ test('workspace creation keeps typing in rename and accepts names on click away'
     ]),
   )
   await page.locator('.app[aria-busy="true"]').waitFor()
+  assert.equal(await rename.isEnabled(), false)
+  assert.equal(
+    await readFile(join(root, 'existing.md'), 'utf8'),
+    '# Keep this content',
+  )
+  await assert.rejects(access(join(root, 'interrupted.md')))
   assert.equal(
     await page
       .getByRole('button', { name: 'New workspace file', exact: true })
@@ -85,19 +97,19 @@ test('workspace creation keeps typing in rename and accepts names on click away'
   )
   assert.equal(
     await page
-      .getByRole('button', { name: 'Actions for existing.md', exact: true })
+      .getByRole('button', { name: 'Actions for parent', exact: true })
       .isEnabled(),
     false,
   )
   assert.equal(
     await tree
-      .getByRole('treeitem', { name: 'existing.md', exact: true })
+      .getByRole('treeitem', { name: 'parent', exact: true })
       .isEnabled(),
     false,
   )
   await app.evaluate(() => globalThis.__releaseHeldWorkspaceOpen())
   await page.locator('.app[aria-busy="false"]').waitFor()
-  const rename = page.getByRole('textbox', { name: 'Rename item', exact: true })
+  await rename.waitFor({ state: 'hidden' })
   for (const mode of ['rich', 'source']) {
     if (mode === 'source') {
       await pressShortcut(app, `${mod}+Shift+]`)

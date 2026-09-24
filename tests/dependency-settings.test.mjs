@@ -56,7 +56,7 @@ test('dependency settings discover addon requirements, manage shared paths, and 
   )
   await writeFile(
     join(addon, 'index.js'),
-    'export default () => ({ start(context) { window.fixtureDependencies = context.dependencies; } })',
+    'export default () => ({ start(context) { window.fixtureStopped = false; window.fixtureDependencies = context.dependencies; }, stop() { window.fixtureStopped = true; } })',
   )
   await writeFile(
     join(profile, 'addons.json'),
@@ -320,12 +320,7 @@ test('dependency settings discover addon requirements, manage shared paths, and 
         (addon) => addon.id === 'dependency-fixture',
       ).enabled,
   )
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
-  )
+  await waitForAsync(page, () => window.fixtureStopped === true)
   await assert.rejects(
     page.evaluate(() => window.fixtureDependencies.list()),
     /Enable this addon/,

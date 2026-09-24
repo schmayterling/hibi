@@ -710,23 +710,22 @@ function App() {
       description:
         'Hibi opens the vault in place and leaves its .obsidian settings unchanged. Make a backup before editing notes shared with Obsidian.',
       closeOnOutsideClick: false,
-      content: ({ close }) => (
-        <div className="dialog-form">
+      content: () =>
+        workspace.obsidian?.externalAddons ? (
+          <p>
+            This vault uses community plugins. Hibi does not run Obsidian
+            plugins. Enable a relevant Hibi addon for plugin-specific content
+            when available; that content may still need its original plugin in
+            Obsidian.
+          </p>
+        ) : null,
+      footer: ({ close }) => (
+        <>
           {workspace.obsidian?.externalAddons && (
-            <p>
-              This vault uses community plugins. Hibi does not run Obsidian
-              plugins. Enable a relevant Hibi addon for plugin-specific content
-              when available; that content may still need its original plugin in
-              Obsidian.
-            </p>
+            <Button onClick={() => close('addons')}>Review addons</Button>
           )}
-          <div className="dialog-actions">
-            {workspace.obsidian?.externalAddons && (
-              <Button onClick={() => close('addons')}>Review addons</Button>
-            )}
-            <Button onClick={() => close('continue')}>Continue</Button>
-          </div>
-        </div>
+          <Button onClick={() => close('continue')}>Continue</Button>
+        </>
       ),
     })
     void dialog.result.then((choice) => {

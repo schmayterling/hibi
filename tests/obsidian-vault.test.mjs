@@ -127,4 +127,25 @@ test('Obsidian vault opens in place with wiki links, SVG embeds and backup promp
     await readFile(join(root, '.obsidian', 'community-plugins.json'), 'utf8'),
     '["dataview"]',
   )
+
+  const plainRoot = join(folder, 'plain-vault')
+  await mkdir(join(plainRoot, '.obsidian'), { recursive: true })
+  await writeFile(join(plainRoot, 'Plain.md'), '# Plain\n')
+  await app.evaluate(({ dialog }, vault) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [vault],
+    })
+  }, plainRoot)
+  await pressShortcut(
+    app,
+    `${process.platform === 'darwin' ? 'Meta' : 'Control'}+Shift+o`,
+  )
+  await warning.waitFor()
+  assert.equal(await warning.locator('.dialog-content').isVisible(), false)
+  const continueButton = warning
+    .locator('.dialog-footer')
+    .getByRole('button', { name: 'Continue' })
+  await continueButton.click()
+  await warning.waitFor({ state: 'hidden' })
 })

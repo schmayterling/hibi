@@ -215,7 +215,8 @@
     "src/main/dependencies.ts"
   ],
   "46e7dbbc93e5": [
-    "src/main/index.ts"
+    "src/main/index.ts",
+    "src/renderer/src/main.tsx"
   ],
   "3907fa7f8072": [
     "src/addons/documentation/ExportDialog.tsx",

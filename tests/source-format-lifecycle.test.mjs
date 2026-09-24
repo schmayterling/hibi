@@ -6,14 +6,14 @@ import test from 'node:test'
 import { electron, startupDiagnostics, stopElectronTree } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
-async function closeProbe(app, watchdog, fired, name) {
+async function closeProbe(app, watchdog, fired, name, preserveFailure = false) {
   const child = app.process()
   const started = performance.now()
   let error
   try {
     await app.close()
   } catch (failure) {
-    error = String(failure).slice(0, 200)
+    error = failure
   } finally {
     clearTimeout(watchdog)
   }
@@ -23,13 +23,14 @@ async function closeProbe(app, watchdog, fired, name) {
       JSON.stringify({
         name,
         watchdogFired: fired(),
-        closeError: error ?? null,
+        closeError: error ? String(error).slice(0, 200) : null,
         closeMs: Math.round(performance.now() - started),
         pid: child.pid,
         exitCode: child.exitCode,
         signalCode: child.signalCode,
       }),
     )
+  if (error && !preserveFailure) throw error
 }
 
 test('lazy rich startup applies view attributes after mounting and accepts native input', {
@@ -46,6 +47,7 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
       watchdogFired = true
       stopElectronTree(app.process())
     }, 8000)
+    let failed = false
     try {
       const page = await app.firstWindow()
       page.setDefaultTimeout(5000)
@@ -78,13 +80,22 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
         ),
         false,
       )
+    } catch (error) {
+      failed = true
+      throw error
     } finally {
       await app
         .evaluate(({ dialog }) => {
           dialog.showMessageBox = async () => ({ response: 1 })
         })
         .catch(() => {})
-      await closeProbe(app, watchdog, () => watchdogFired, `rich ${attempt}`)
+      await closeProbe(
+        app,
+        watchdog,
+        () => watchdogFired,
+        `rich ${attempt}`,
+        failed,
+      )
     }
   }
 })
@@ -151,8 +162,11 @@ test('standalone source skips rich attachment and hidden previews while preservi
         dialog.showMessageBox = async () => ({ response: 1 })
       })
       .catch(() => {})
-    await closeProbe(app, watchdog, () => watchdogFired, 'standalone source')
-    await rm(profile, { recursive: true, force: true })
+    try {
+      await closeProbe(app, watchdog, () => watchdogFired, 'standalone source')
+    } finally {
+      await rm(profile, { recursive: true, force: true })
+    }
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)

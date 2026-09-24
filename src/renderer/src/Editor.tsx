@@ -633,7 +633,7 @@ export function MarkdownEditor({
     const original = projection.content
     let body = serialized.source
     if (
-      richSyntaxCompatible &&
+      plainSyncEligible &&
       !preserved?.document.eq(nextState.doc) &&
       original !== body
     ) {
@@ -649,11 +649,17 @@ export function MarkdownEditor({
                 .eq(nextState.doc),
             )
           : null
-        if (patched === null)
-          throw new Error(
-            'This edit would rewrite other Markdown. Use Source view for this document.',
+        if (patched === null) {
+          if (
+            !(editor.state.selection instanceof AllSelection) ||
+            !editor.schema
+              .nodeFromJSON(editor.markdown!.parse(body))
+              .eq(nextState.doc)
           )
-        body = patched
+            throw new Error(
+              'This edit would rewrite other Markdown. Use Source view for this document.',
+            )
+        } else body = patched
       }
     }
     const source = preserved?.document.eq(nextState.doc)
@@ -752,7 +758,9 @@ export function MarkdownEditor({
       !disabled &&
       !richExtensionError &&
       richExtensions.every((extension) =>
-        ['word-count.text', 'slash-commands.menu'].includes(extension.id),
+        ['word-count.text', 'slash-commands.menu', 'tags.highlights'].includes(
+          extension.id,
+        ),
       )
     plainSync.current = null
     pendingPlainSync.current = null

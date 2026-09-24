@@ -156,6 +156,7 @@ test('slash commands work in both editors, preserve undo, and coexist with vim',
   assert.ok(bounds.left >= 0 && bounds.right <= bounds.width)
   assert.ok(bounds.top >= 0 && bounds.bottom <= bounds.height)
   await source.press('Enter')
+  await source.pressSequentially('heading')
   await page.mouse.move(400, 18)
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
@@ -168,7 +169,14 @@ test('slash commands work in both editors, preserve undo, and coexist with vim',
   await page.waitForFunction(
     () => document.querySelector('.tiptap')?.editor?.isEditable,
   )
-  await rich.locator('h2').last().click()
+  await rich
+    .locator('h2')
+    .last()
+    .evaluate((heading) => {
+      const editor = heading.closest('.tiptap').editor
+      editor.commands.setTextSelection(editor.view.posAtDOM(heading, 0))
+      editor.commands.focus()
+    })
   await rich.pressSequentially('/quote')
   await menu.waitFor()
   await rich.press('Enter')

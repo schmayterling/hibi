@@ -204,10 +204,7 @@ test('outline nesting follows the cursor and sidebar view pins survive reload', 
     .locator('.outline-sidebar')
     .getByRole('separator', { name: /resize sidebar/i })
   await resize.press('End')
-  await page.waitForFunction(
-    () =>
-      document.querySelectorAll('.sidebar-view-shortcuts button').length === 3,
-  )
+  await page.getByRole('button', { name: 'On this page view' }).waitFor()
   assert.equal(
     await page
       .locator('.sidebar-view-shortcuts button')

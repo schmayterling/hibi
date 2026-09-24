@@ -525,7 +525,10 @@ test('markdown toolbar formats both panes without dragging and reorders only in 
   await page.reload()
   await bar.waitFor()
   assert.equal(
-    await bar.getByRole('button').first().getAttribute('data-toolbar-id'),
+    await bar
+      .locator('button[data-toolbar-id^="format."]')
+      .first()
+      .getAttribute('data-toolbar-id'),
     'format.italic',
   )
   assert.deepEqual(errors, [])

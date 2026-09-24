@@ -137,7 +137,25 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
   try {
     await source.fill('# cafe\u0301 👨‍👩‍👧‍👦\n\n中文')
   } catch (error) {
-    const state = await Promise.race([
+    const bounded = async (promise, milliseconds) => {
+      let timer
+      try {
+        return await Promise.race([
+          promise.catch((failure) => ({
+            error: String(failure).slice(0, 160),
+          })),
+          new Promise((resolve) => {
+            timer = setTimeout(
+              () => resolve({ timeout: milliseconds }),
+              milliseconds,
+            )
+          }),
+        ])
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    const stateRequest = Promise.race([
       page.evaluate(() => {
         const content = document.querySelector('.cm-content')
         const path = []
@@ -154,12 +172,12 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
             inert: node.inert,
             hidden: node.hidden,
             ariaHidden: node.getAttribute('aria-hidden'),
+            ariaDisabled: node.getAttribute('aria-disabled'),
             ariaReadOnly: node.getAttribute('aria-readonly'),
             contentEditable: node.getAttribute('contenteditable'),
             rect: [rect.x, rect.y, rect.width, rect.height].map(Math.round),
             display: style.display,
             visibility: style.visibility,
-            opacity: style.opacity,
           })
         }
         return {
@@ -183,8 +201,20 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
       new Promise((resolve) =>
         setTimeout(() => resolve({ capture: 'timed out' }), 2000),
       ),
+    ]).catch((failure) => ({ error: String(failure).slice(0, 160) }))
+    const [state, visible, enabled, editable] = await Promise.all([
+      stateRequest,
+      bounded(source.isVisible(), 500),
+      bounded(source.isEnabled(), 500),
+      bounded(source.isEditable(), 500),
     ])
-    console.error('editor plugins source fill state:', JSON.stringify(state))
+    console.error(
+      'editor plugins source fill state:',
+      JSON.stringify({
+        state,
+        actionability: { visible, enabled, editable },
+      }),
+    )
     throw error
   }
   await count('2 words · 12 characters')

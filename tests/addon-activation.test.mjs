@@ -161,15 +161,21 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
         sourceEditable: source?.isContentEditable,
         sourceContentEditable: source?.getAttribute('contenteditable'),
         sourcePaneInert: document.querySelector('.source-pane')?.inert,
+        activeElement: document.activeElement?.getAttribute('aria-label'),
+        openDialogs: [...document.querySelectorAll('dialog[open]')].map(
+          (dialog) => dialog.getAttribute('aria-label'),
+        ),
         sourceStarts: window.sourceStarts,
         sourceCreates: window.sourceCreates,
         sourceStops: window.sourceStops,
+        sourceEvaluations: window.sourceEvaluations,
+        richDetachments: window.richDetachments,
         notices: [...document.querySelectorAll('.document-notice')].map(
-          (notice) => notice.textContent,
+          (notice) => notice.textContent?.slice(0, 180),
         ),
       }
     })
-    error.message += `\nsource state: ${JSON.stringify(state)}`
+    console.error('source activation state:', JSON.stringify(state))
     throw error
   }
   assert.equal(await page.evaluate(() => window.sourceCreates), 1)

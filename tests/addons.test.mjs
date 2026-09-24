@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { clickMenu } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 test('vim cursor stays hidden behind the startup screen', {
   timeout: 30000,
@@ -346,6 +346,32 @@ test('plugin pages, metadata, shared controls, and full source vim editing', {
   await page.getByRole('checkbox', { name: /show vim status/i }).check()
   await page.getByRole('button', { name: /^back to app$/i }).click()
   assert.equal(await lastCommand.innerText(), ':w')
+  await source.pressSequentially('A')
+  await page.keyboard.type('!')
+  await page.keyboard.press('Escape')
+  assert.equal(
+    await source.evaluate((element) => element === document.activeElement),
+    true,
+  )
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+S' : 'Control+S',
+  )
+  await page
+    .getByRole('status', { name: /unsaved changes/i })
+    .waitFor({ state: 'hidden' })
+  assert.equal(await readFile(fixture, 'utf8'), await read())
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  )
+  assert.equal(
+    await source.evaluate((element) => element === document.activeElement),
+    true,
+    'source editor should keep focus after the save shortcut',
+  )
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
   const unavailable = page.locator('[data-status-id="vim.unavailable"]')
   await unavailable.waitFor()

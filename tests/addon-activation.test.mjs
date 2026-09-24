@@ -164,6 +164,9 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
         sourceEditable: source?.isContentEditable,
         sourceContentEditable: source?.getAttribute('contenteditable'),
         sourcePaneInert: document.querySelector('.source-pane')?.inert,
+        sourcePaneText: document
+          .querySelector('.source-pane')
+          ?.textContent?.slice(0, 180),
         richContentEditable: document
           .querySelector('.tiptap')
           ?.getAttribute('contenteditable'),
@@ -177,6 +180,10 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
         sourceStops: window.sourceStops,
         sourceEvaluations: window.sourceEvaluations,
         richDetachments: window.richDetachments,
+        sourceTimings: performance
+          .getEntriesByType('measure')
+          .filter((entry) => entry.name.includes('source-mode'))
+          .map((entry) => [entry.name, Math.round(entry.duration)]),
         notices: [...document.querySelectorAll('.document-notice')].map(
           (notice) => notice.textContent?.slice(0, 180),
         ),

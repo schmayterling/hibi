@@ -44,6 +44,30 @@ export function waitForElectronExit(child, closePromise) {
   })
 }
 
+export function waitForElectronShutdown(
+  child,
+  closePromise,
+  platform = process.platform,
+  waitForTransport = false,
+) {
+  // Windows keeps profile databases locked until Chromium descendants close.
+  if (!waitForTransport && platform !== 'win32')
+    return waitForElectronExit(child, closePromise)
+  const exited = new Promise((resolve, reject) => {
+    const finish = (code, signal) => {
+      if (code === 0 && signal === null) resolve()
+      else
+        reject(new Error(`Electron exited with code ${code}, signal ${signal}`))
+    }
+    child.once('exit', finish)
+    if (child.exitCode !== null || child.signalCode !== null) {
+      child.off('exit', finish)
+      finish(child.exitCode, child.signalCode)
+    }
+  })
+  return Promise.all([closePromise, exited]).then(() => undefined)
+}
+
 export function stopElectronTree(child) {
   if (child.exitCode !== null || child.signalCode !== null) return
   if (process.platform === 'win32') {
@@ -87,9 +111,12 @@ export const electron = {
       try {
         const pendingClose = close()
         await Promise.race([
-          waitForTransport
-            ? pendingClose
-            : waitForElectronExit(child, pendingClose),
+          waitForElectronShutdown(
+            child,
+            pendingClose,
+            process.platform,
+            waitForTransport,
+          ),
           new Promise((_, reject) => {
             timer = setTimeout(() => {
               reject(new Error('Electron test cleanup exceeded 20 seconds'))

@@ -37,6 +37,7 @@ let generation = 0
 let queued = 0
 let tail: Promise<unknown> = Promise.resolve()
 let cancel: (() => void) | undefined
+let stopping: Promise<void> | null = null
 const allowed =
   /\.(typ|typc|txt|md|markdown|json|yaml|yml|toml|csv|bib|xml|png|jpe?g|gif|webp|svg|avif|pdf|ttf|otf|ttc|otc|wasm)$/i
 const dependencies = new Map<string, Set<string>>()
@@ -44,6 +45,16 @@ const inFlight = new Map<string, Promise<TypstResult & { pdf?: Uint8Array }>>()
 
 function terminate(worker: UtilityProcess | null) {
   if (!worker) return
+  const exited = new Promise<void>((resolve) =>
+    worker.once('exit', () => resolve()),
+  )
+  const pending = stopping
+    ? Promise.all([stopping, exited]).then(() => {})
+    : exited
+  stopping = pending
+  void pending.then(() => {
+    if (stopping === pending) stopping = null
+  })
   expectDiagnosticStop(worker)
   // A synchronous native compile may never process SIGTERM; terminate only this owned utility process.
   if (worker.pid) {
@@ -59,15 +70,18 @@ export function stopCompiler() {
   generation++
   inFlight.clear()
   cancel?.()
+  const owned = child
   terminate(child)
   child = null
-  networkBlocker?.close()
-  networkBlocker = null
   fingerprint = ''
-  const previous = scratch
+  if (!owned && !stopping) {
+    networkBlocker?.close()
+    networkBlocker = null
+    const previous = scratch
+    if (previous)
+      void rm(previous, { recursive: true, force: true }).catch(() => {})
+  }
   scratch = ''
-  if (previous)
-    void rm(previous, { recursive: true, force: true }).catch(() => {})
 }
 app.on('before-quit', stopCompiler)
 
@@ -126,6 +140,28 @@ export async function compileTypst(
   const run = tail
     .catch(() => {})
     .then(async () => {
+      const pending = stopping
+      if (pending) {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        try {
+          await Promise.race([
+            pending,
+            new Promise<void>((_resolve, reject) => {
+              timer = setTimeout(
+                () =>
+                  reject(
+                    new Error(
+                      'Typst could not stop its previous compiler. Try again.',
+                    ),
+                  ),
+                5000,
+              )
+            }),
+          ])
+        } finally {
+          if (timer) clearTimeout(timer)
+        }
+      }
       if (epoch !== generation) throw new Error('Typst compilation canceled.')
       if (!child) {
         const createdDirectory = await mkdtemp(join(tmpdir(), 'hibi-typst-'))
@@ -234,6 +270,7 @@ export async function compileTypst(
             terminate(worker)
             child = null
             fingerprint = ''
+            scratch = ''
             reject(error)
           }
           const arm = (delay: number, error: Error) => {

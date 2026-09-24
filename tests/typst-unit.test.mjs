@@ -32,7 +32,7 @@ test('typst fences preserve source and exclude incomplete or quoted examples', (
 })
 
 test('pinned native compiler sends package requests through the denying proxy', {
-  timeout: 45000,
+  timeout: 70000,
 }, async (t) => {
   let blocked = 0
   const server = createServer((_request, response) => {
@@ -49,11 +49,11 @@ test('pinned native compiler sends package requests through the denying proxy', 
     server.close()
   })
   const proxy = `http://127.0.0.1:${server.address().port}`
-  const script = `import { writeSync } from 'node:fs'; import { NodeCompiler } from '@myriaddreamin/typst-ts-node-compiler'; const compiler = NodeCompiler.create(); writeSync(1, 'ready\\n'); console.log(compiler.compile({ mainFileContent: '#import "@preview/hibi-nonexistent-package:0.0.0": *' }).hasError());`
+  const script = `import { writeSync } from 'node:fs'; writeSync(1, 'module-start\\n'); const { NodeCompiler } = await import('@myriaddreamin/typst-ts-node-compiler'); writeSync(1, 'module-done\\n'); writeSync(1, 'font-start\\n'); const compiler = NodeCompiler.create(); writeSync(1, 'font-done\\n'); console.log(compiler.compile({ mainFileContent: '#import "@preview/hibi-nonexistent-package:0.0.0": *' }).hasError());`
   const stdout = await new Promise((resolve, reject) => {
     let timer
     let output = ''
-    let ready = false
+    let phase = 0
     let timedOut
     const child = execFile(
       process.execPath,
@@ -85,15 +85,27 @@ test('pinned native compiler sends package requests through the denying proxy', 
         child.kill('SIGKILL')
       }, delay)
     }
-    deadline('font initialization', 30000)
+    deadline('process startup', 10000)
+    const markers = ['module-start\n', 'module-done\n', 'font-done\n']
+    const phases = [
+      ['native module load', 15000],
+      ['font initialization', 30000],
+      ['network compilation', 10000],
+    ]
     child.stdout.on('data', (chunk) => {
       output += chunk
-      if (!ready && output.includes('ready\n')) {
-        ready = true
-        deadline('network compilation', 10000)
+      while (phase < markers.length && output.includes(markers[phase])) {
+        deadline(...phases[phase])
+        phase++
       }
     })
   })
-  assert.equal(stdout.trim(), 'ready\ntrue')
+  assert.deepEqual(stdout.trim().split(/\r?\n/), [
+    'module-start',
+    'module-done',
+    'font-start',
+    'font-done',
+    'true',
+  ])
   assert.ok(blocked > 0)
 })

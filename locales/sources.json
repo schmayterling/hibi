@@ -4436,6 +4436,9 @@
   "b2a12ed05860": [
     "src/addons/typst/compiler.ts"
   ],
+  "a0f88fb28683": [
+    "src/addons/typst/compiler.ts"
+  ],
   "aa462ad89611": [
     "src/addons/typst/Preview.tsx"
   ],

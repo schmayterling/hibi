@@ -251,10 +251,13 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     globalThis.typstOriginalTimer = setTimeout
     globalThis.typstDedupPosts = 0
     globalThis.typstFakeRespond = true
+    globalThis.typstFakePendingExit = false
+    globalThis.typstForkDuringExit = 0
     const { EventEmitter } = process.getBuiltinModule('events')
     utilityProcess.fork = () => {
       const worker = new EventEmitter()
       worker.postMessage = (job) => {
+        worker.lastSource = job.source
         if (job.source === 'dedup fixture') globalThis.typstDedupPosts++
         if (job.source === 'slow initialization fixture') {
           globalThis.typstOriginalTimer(() => {
@@ -280,7 +283,13 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
           )
       }
       worker.kill = () => {
-        worker.emit('exit', 0)
+        if (worker.lastSource === 'timeout fixture') {
+          globalThis.typstFakePendingExit = true
+          globalThis.typstOriginalTimer(() => {
+            worker.emit('exit', 0)
+            globalThis.typstFakePendingExit = false
+          }, 500)
+        } else worker.emit('exit', 0)
         return true
       }
       return worker
@@ -320,13 +329,21 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
       query('timeout fixture'),
       /Typst compilation took longer than 10 seconds\./,
     )
+    await app.evaluate(({ utilityProcess }) => {
+      globalThis.setTimeout = globalThis.typstOriginalTimer
+      utilityProcess.fork = (...args) => {
+        if (globalThis.typstFakePendingExit) globalThis.typstForkDuringExit++
+        return globalThis.typstOriginalFork(...args)
+      }
+    })
+    assert.ok((await query('restarted')).svg)
+    assert.equal(await app.evaluate(() => globalThis.typstForkDuringExit), 0)
   } finally {
     await app.evaluate(({ utilityProcess }) => {
       utilityProcess.fork = globalThis.typstOriginalFork
       globalThis.setTimeout = globalThis.typstOriginalTimer
     })
   }
-  assert.ok((await query('restarted')).svg)
   // Empty/incomplete syntax reports diagnostics without modifying the buffer.
   await source.fill('#let =')
   await page.locator('.typst-preview .document-notice').waitFor()

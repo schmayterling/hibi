@@ -45,6 +45,7 @@ export type SidebarProps = {
   /** Show a dismissible drawer over the content, keeping desktop-sized controls. */
   overlay?: boolean
   onDismiss?: () => void
+  disabled?: boolean
   className?: string
   idPrefix?: string
   panelPrefix?: string
@@ -147,6 +148,7 @@ export function Sidebar({
   overlay = false,
   side = 'left',
   onDismiss,
+  disabled = false,
 }: SidebarProps) {
   const container = useRef<HTMLDivElement>(null)
   const focusedElement = useRef<HTMLElement | null>(null)
@@ -453,7 +455,7 @@ export function Sidebar({
                     data-drop-target={dropTarget === item.id}
                     onDragOver={(event) => {
                       const source = draggedItem.current
-                      if (!onMove || !source) return
+                      if (disabled || !onMove || !source) return
                       event.stopPropagation()
                       const target = item.children ? item.id : parent
                       if (
@@ -469,7 +471,7 @@ export function Sidebar({
                     }}
                     onDrop={(event) => {
                       const source = draggedItem.current
-                      if (!onMove || !source) return
+                      if (disabled || !onMove || !source) return
                       event.preventDefault()
                       event.stopPropagation()
                       const target = item.children ? item.id : parent
@@ -518,7 +520,8 @@ export function Sidebar({
                         }}
                         id={`${idPrefix}-${item.id}`}
                         type="button"
-                        draggable={mode === 'tree' && !!onMove}
+                        disabled={disabled}
+                        draggable={mode === 'tree' && !!onMove && !disabled}
                         onDragStart={(event) => {
                           if (!onMove) return
                           draggedItem.current = item.id
@@ -569,7 +572,7 @@ export function Sidebar({
                             .join('; ') || undefined
                         }
                         onContextMenu={(event) => {
-                          if (onMenu) {
+                          if (onMenu && !disabled) {
                             event.preventDefault()
                             setFocused(item.id)
                             onMenu(item.id, event.currentTarget)
@@ -670,6 +673,7 @@ export function Sidebar({
                       <button
                         type="button"
                         className="sidebar-more"
+                        disabled={disabled}
                         tabIndex={
                           windowed && focusId !== item.id ? -1 : undefined
                         }

@@ -39,6 +39,7 @@ export function WorkspaceSidebar({
   onDismiss,
   resize,
   dirty,
+  busy,
   onAction,
   onError,
   editing,
@@ -54,6 +55,7 @@ export function WorkspaceSidebar({
   onDismiss: () => void
   resize: NonNullable<SidebarProps['resize']>
   dirty: boolean
+  busy: boolean
   onAction: (action: WorkspaceAction) => Promise<WorkspaceActionResult | null>
   onError: (error: unknown) => void
   editing: WorkspaceRename
@@ -105,6 +107,7 @@ export function WorkspaceSidebar({
     }
   }
   function openMenu(path: string, anchor: HTMLElement) {
+    if (busy) return
     const find = (entries: WorkspaceEntry[]): WorkspaceEntry | undefined => {
       for (const entry of entries) {
         if (entry.path === path) return entry
@@ -142,6 +145,7 @@ export function WorkspaceSidebar({
   return (
     <Sidebar
       resize={resize}
+      disabled={busy}
       open={open}
       overlay={overlay}
       onDismiss={onDismiss}
@@ -183,6 +187,7 @@ export function WorkspaceSidebar({
             <IconButton
               aria-label="New workspace file"
               title="New file"
+              disabled={busy}
               onClick={() => void create('new-file')}
             >
               <FilePlus2 size={14} />
@@ -190,6 +195,7 @@ export function WorkspaceSidebar({
             <IconButton
               aria-label="New workspace folder"
               title="New folder"
+              disabled={busy}
               onClick={() => void create('new-folder')}
             >
               <FolderPlus size={14} />
@@ -198,6 +204,7 @@ export function WorkspaceSidebar({
               type="button"
               aria-label="Open workspace"
               title="Open folder"
+              disabled={busy}
               onClick={onOpen}
             >
               <FolderOpen size={15} />
@@ -207,6 +214,7 @@ export function WorkspaceSidebar({
                 type="button"
                 aria-label="Refresh workspace"
                 title="Refresh files"
+                disabled={busy}
                 onClick={onRefresh}
               >
                 <RefreshCw size={14} />
@@ -223,6 +231,7 @@ export function WorkspaceSidebar({
             className="open-workspace"
             type="button"
             aria-label="Open workspace"
+            disabled={busy}
             onClick={onOpen}
           >
             <FolderOpen size={28} strokeWidth={1.25} aria-hidden="true" />
@@ -236,6 +245,7 @@ export function WorkspaceSidebar({
               <button
                 key={command.id}
                 type="button"
+                disabled={busy}
                 onClick={() => void command.run()}
               >
                 {command.label}

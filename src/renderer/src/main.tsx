@@ -1070,7 +1070,10 @@ function App() {
   async function runWorkspaceAction(
     action: WorkspaceAction,
   ): Promise<WorkspaceActionResult | null> {
-    if (busyRef.current) return null
+    if (busyRef.current)
+      throw new Error(
+        'Another file operation is in progress. Wait for it to finish, then try again.',
+      )
     busyRef.current = true
     setBusy(true)
     try {
@@ -1934,6 +1937,7 @@ function App() {
         editing={workspaceRename}
         onEditing={setWorkspaceRename}
         dirty={document?.dirty ?? false}
+        busy={busy}
         onAction={runWorkspaceAction}
         onError={(error) => setError(String(error))}
         resize={documentSidebarResize}

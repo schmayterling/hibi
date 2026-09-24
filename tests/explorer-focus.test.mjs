@@ -25,6 +25,7 @@ test('workspace creation keeps typing in rename and accepts names on click away'
   })
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
+      globalThis.__releaseHeldWorkspaceOpen?.()
       dialog.showMessageBox = async () => ({ response: 1 })
     })
     await app.close()
@@ -40,7 +41,62 @@ test('workspace creation keeps typing in rename and accepts names on click away'
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await pressShortcut(app, `${mod}+Shift+o`)
   const tree = page.getByRole('tree', { name: /workspace files/i })
+  await page.locator('.app[aria-busy="false"]').waitFor()
   await tree.getByRole('treeitem', { name: 'existing.md', exact: true }).click()
+  await page.waitForFunction(
+    async () =>
+      (await window.hibi.getWorkspace())?.activePath === 'existing.md',
+    null,
+    { polling: 100 },
+  )
+  await page.locator('.app[aria-busy="false"]').waitFor()
+  await app.evaluate(({ dialog }, root) => {
+    let entered
+    globalThis.__heldWorkspaceOpenEntered = new Promise((resolve) => {
+      entered = resolve
+    })
+    dialog.showOpenDialog = () =>
+      new Promise((resolve) => {
+        globalThis.__releaseHeldWorkspaceOpen = () => {
+          globalThis.__releaseHeldWorkspaceOpen = undefined
+          resolve({ canceled: false, filePaths: [root] })
+        }
+        entered()
+      })
+  }, root)
+  await pressShortcut(app, `${mod}+Shift+o`)
+  await app.evaluate(() =>
+    Promise.race([
+      globalThis.__heldWorkspaceOpenEntered,
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error('workspace dialog did not open')),
+          8000,
+        ),
+      ),
+    ]),
+  )
+  await page.locator('.app[aria-busy="true"]').waitFor()
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'New workspace file', exact: true })
+      .isEnabled(),
+    false,
+  )
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'Actions for existing.md', exact: true })
+      .isEnabled(),
+    false,
+  )
+  assert.equal(
+    await tree
+      .getByRole('treeitem', { name: 'existing.md', exact: true })
+      .isEnabled(),
+    false,
+  )
+  await app.evaluate(() => globalThis.__releaseHeldWorkspaceOpen())
+  await page.locator('.app[aria-busy="false"]').waitFor()
   const rename = page.getByRole('textbox', { name: 'Rename item', exact: true })
   for (const mode of ['rich', 'source']) {
     if (mode === 'source') {

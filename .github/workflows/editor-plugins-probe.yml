@@ -34,12 +34,12 @@ jobs:
             electron-${{ runner.os }}-${{ runner.arch }}-
       - run: npm ci
       - run: npm run build
-      - name: repeat fresh editor sessions
+      - name: repeat large editor then plugin sessions
         shell: pwsh
         run: |
           for ($i = 1; $i -le 30; $i++) {
-            Write-Host "editor plugins run $i/30"
-            node --test tests/editor-plugins.test.mjs
+            Write-Host "editor input and plugins run $i/30"
+            node --test --test-concurrency=1 tests/editor-input.test.mjs tests/editor-plugins.test.mjs
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-          Write-Host 'editor plugins probe passed 30/30 fresh launches'
+          Write-Host 'editor input and plugins probe passed 30/30 pairs'

@@ -1,6 +1,11 @@
 import { spawnSync } from 'node:child_process'
 import { _electron } from 'playwright'
 
+function drainElectronStdio(child) {
+  for (const stream of child.stdio ?? [child.stdout, child.stderr])
+    stream?.destroy()
+}
+
 // Playwright can wait for inherited stdio to close after Electron itself exits.
 export function waitForElectronExit(child, closePromise) {
   return new Promise((resolve, reject) => {
@@ -13,10 +18,7 @@ export function waitForElectronExit(child, closePromise) {
       settled = true
       clearTimeout(grace)
       child.off('exit', onExit)
-      if (exited) {
-        child.stdout?.destroy()
-        child.stderr?.destroy()
-      }
+      if (exited) drainElectronStdio(child)
       if (error) reject(error)
       else resolve()
     }
@@ -130,8 +132,7 @@ export const electron = {
         ])
       } catch (error) {
         stopElectronTree(child)
-        child.stdout?.destroy()
-        child.stderr?.destroy()
+        drainElectronStdio(child)
         throw error
       } finally {
         clearTimeout(timer)

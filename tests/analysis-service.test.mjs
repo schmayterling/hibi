@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -62,6 +63,22 @@ test('electron cleanup trusts clean process exit but reports close and crash fai
   crashed.emit('exit', null, 'SIGKILL')
   await assert.rejects(failed, /signal SIGKILL/)
   assert.equal(crashed.drained, 2)
+})
+
+test('electron cleanup drains transport pipes inherited by a surviving child', {
+  timeout: 5000,
+}, async () => {
+  const parent = `const {spawn}=require('node:child_process');const child=spawn(process.execPath,['-e','setTimeout(()=>{},2000)'],{stdio:['ignore',1,2,3,4],detached:true});child.unref();`
+  const child = spawn(process.execPath, ['-e', parent], {
+    stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'],
+  })
+  const exited = new Promise((resolve) => child.once('exit', resolve))
+  const closed = new Promise((resolve) => child.once('close', resolve))
+  const shutdown = waitForElectronExit(child, new Promise(() => {}))
+  await exited
+  await shutdown
+  assert.ok(child.stdio.slice(1).every((stream) => stream.destroyed))
+  await closed
 })
 
 test('analysis grants contain only exact ranges from the active source', () => {

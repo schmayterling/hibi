@@ -2,7 +2,7 @@
 
 # WorkspaceAction
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L55)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L61)
 
 <details>
 <summary>Declaration</summary>
@@ -38,7 +38,7 @@ type WorkspaceAction = {
 
 ### action
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L56)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L62)
 
 ```typescript
 action: | 'new-file'
@@ -52,7 +52,7 @@ action: | 'new-file'
 
 ### path
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L65)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L71)
 
 Relative source path, or parent directory for new entries. Empty = root.
 
@@ -62,7 +62,7 @@ path: string
 
 ### destination
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L67)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L73)
 
 New basename for rename; complete relative destination for copy/move.
 

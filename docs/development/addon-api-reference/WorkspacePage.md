@@ -2,7 +2,7 @@
 
 # WorkspacePage
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L75)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L81)
 
 <details>
 <summary>Declaration</summary>
@@ -35,7 +35,7 @@ type WorkspacePage = {
 
 ### id
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L76)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L82)
 
 ```typescript
 id?: string
@@ -43,7 +43,7 @@ id?: string
 
 ### path
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L77)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L83)
 
 ```typescript
 path: string
@@ -51,7 +51,7 @@ path: string
 
 ### markdown
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L78)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L84)
 
 ```typescript
 markdown: string
@@ -59,7 +59,7 @@ markdown: string
 
 ### html
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L80)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L86)
 
 Pre-rendered by the enabled flavor pipeline. Always sanitized by the site.
 
@@ -69,7 +69,7 @@ html?: string
 
 ### images
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L82)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L88)
 
 Local Markdown image references mapped to embedded image data URLs.
 

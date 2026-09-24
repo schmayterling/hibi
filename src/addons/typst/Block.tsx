@@ -54,8 +54,8 @@ export function typstNode(context: AddonContext) {
     const source = String(node.attrs.source ?? '')
     const documentId = useSyncExternalStore(
       context.editor.onDocumentChange,
-      context.editor.getDocument,
-    )?.id
+      () => context.editor.getDocument()?.id,
+    )
     async function edit() {
       const value = await context.dialogs.open<string>({
         title: 'Edit Typst block',

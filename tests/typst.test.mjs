@@ -76,6 +76,62 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     .click()
   const preview = page.getByAltText(/Typst document preview/)
   await preview.waitFor()
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.typst-preview')?.getAttribute('aria-busy') ===
+      'false',
+  )
+  await page.waitForTimeout(250)
+  await page.evaluate(() => {
+    const target = document.querySelector('.typst-preview')
+    window.typstBusyTransitions = 0
+    window.typstWorkspaceEvents = 0
+    window.typstWorkspaceStop = window.hibi.onWorkspaceChanged(() => {
+      window.typstWorkspaceEvents++
+    })
+    window.typstBusyObserver = new MutationObserver(() => {
+      if (target?.getAttribute('aria-busy') === 'true')
+        window.typstBusyTransitions++
+    })
+    window.typstBusyObserver.observe(target, {
+      attributes: true,
+      attributeFilter: ['aria-busy'],
+    })
+  })
+  await writeFile(join(notes, 'unrelated-0.json'), 'still not a Typst input')
+  await page.waitForFunction(() => window.typstWorkspaceEvents > 0)
+  await page.waitForTimeout(350)
+  assert.equal(await page.evaluate(() => window.typstBusyTransitions), 0)
+  const oldImage = await preview.getAttribute('src')
+  await writeFile(join(notes, 'values.typ'), '#let answer = 43')
+  await page.waitForFunction(
+    (previous) =>
+      document.querySelector('.typst-preview img')?.getAttribute('src') !==
+        previous &&
+      document.querySelector('.typst-preview')?.getAttribute('aria-busy') ===
+        'false',
+    oldImage,
+  )
+  assert.ok((await page.evaluate(() => window.typstBusyTransitions)) > 0)
+  await page.evaluate(() => {
+    window.typstWorkspaceStop()
+    window.typstBusyObserver.disconnect()
+  })
+  const tracked = await page.evaluate(
+    async (documentId) => {
+      const compile = (source) =>
+        window.hibi.queryAddon('typst', 'compile', { source, documentId })
+      return [
+        await compile('#import "values.typ": answer\n#answer'),
+        await compile('no imports'),
+      ]
+    },
+    (await read()).id,
+  )
+  assert.deepEqual(
+    tracked.map((result) => result.dependencies),
+    [['values.typ'], []],
+  )
   assert.equal((await read()).markdown, original)
   await pressShortcut(app, `${mod}+Shift+\\`)
   const source = page.getByRole('textbox', { name: /typst editor/i })
@@ -180,30 +236,62 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   )
   await page.getByRole('button', { name: /^back to app$/i }).click()
   assert.ok((await query('recovered')).svg)
-  // Exercise timeout/restart deterministically without allocating an enormous Typst document.
+  // Count actual worker jobs for concurrent, equivalent preview requests.
   await page.evaluate(() => window.hibi.setAddonEnabled('typst', false))
   await app.evaluate(({ utilityProcess }) => {
     globalThis.typstOriginalFork = utilityProcess.fork
     globalThis.typstOriginalTimer = setTimeout
+    globalThis.typstDedupPosts = 0
+    globalThis.typstFakeRespond = true
     const { EventEmitter } = process.getBuiltinModule('events')
     utilityProcess.fork = () => {
       const worker = new EventEmitter()
-      worker.postMessage = () => {}
+      worker.postMessage = (job) => {
+        if (job.source === 'dedup fixture') globalThis.typstDedupPosts++
+        if (globalThis.typstFakeRespond)
+          globalThis.typstOriginalTimer(
+            () =>
+              worker.emit('message', {
+                svg: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+                pages: 1,
+                diagnostics: [],
+              }),
+            40,
+          )
+      }
       worker.kill = () => {
         worker.emit('exit', 0)
         return true
       }
       return worker
     }
-    globalThis.setTimeout = (callback, delay, ...args) =>
-      globalThis.typstOriginalTimer(
-        callback,
-        delay === 10000 ? 20 : delay,
-        ...args,
-      )
   })
   try {
     await page.evaluate(() => window.hibi.setAddonEnabled('typst', true))
+    const pair = await page.evaluate(() =>
+      Promise.all([
+        window.hibi.queryAddon('typst', 'compile', {
+          source: 'dedup fixture',
+          revision: 'dedup-test:1',
+        }),
+        window.hibi.queryAddon('typst', 'compile', {
+          source: 'dedup fixture',
+          revision: 'dedup-test:1',
+        }),
+      ]),
+    )
+    assert.equal(pair[0].svg, pair[1].svg)
+    assert.equal(await app.evaluate(() => globalThis.typstDedupPosts), 1)
+    // Exercise timeout/restart without allocating an enormous document.
+    await app.evaluate(() => {
+      globalThis.typstFakeRespond = false
+      globalThis.setTimeout = (callback, delay, ...args) =>
+        globalThis.typstOriginalTimer(
+          callback,
+          delay === 10000 ? 20 : delay,
+          ...args,
+        )
+    })
     await assert.rejects(
       query('timeout fixture'),
       /Typst compilation took longer than 10 seconds\./,

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -26,6 +27,7 @@ type Input = {
   documentId?: string
   block?: boolean
   pdf?: boolean
+  revision?: string
 }
 let child: UtilityProcess | null = null
 let networkBlocker: Server | null = null
@@ -38,6 +40,7 @@ let cancel: (() => void) | undefined
 const allowed =
   /\.(typ|typc|txt|md|markdown|json|yaml|yml|toml|csv|bib|xml|png|jpe?g|gif|webp|svg|avif|pdf|ttf|otf|ttc|otc|wasm)$/i
 const dependencies = new Map<string, Set<string>>()
+const inFlight = new Map<string, Promise<TypstResult & { pdf?: Uint8Array }>>()
 
 function terminate(worker: UtilityProcess | null) {
   if (!worker) return
@@ -54,6 +57,7 @@ function terminate(worker: UtilityProcess | null) {
 
 export function stopCompiler() {
   generation++
+  inFlight.clear()
   cancel?.()
   terminate(child)
   child = null
@@ -67,13 +71,18 @@ export function stopCompiler() {
 }
 app.on('before-quit', stopCompiler)
 
-function project(context: NativeAddonContext, epoch: number, id?: string) {
+function project(
+  context: NativeAddonContext,
+  epoch: number,
+  id: string | undefined,
+  paths: ReadonlySet<string>,
+) {
   return documentProject(context, {
     id,
     entry: 'untitled.typ',
     allowed,
     previousKey: fingerprint,
-    paths: [...(dependencies.get(id ?? context.document.get().id) ?? [])],
+    paths: [...paths],
     canceled: () => epoch !== generation,
   })
 }
@@ -91,9 +100,26 @@ export async function compileTypst(
       (typeof value.documentId !== 'string' ||
         value.documentId.length > 128)) ||
     (value.block !== undefined && typeof value.block !== 'boolean') ||
-    (value.pdf !== undefined && typeof value.pdf !== 'boolean')
+    (value.pdf !== undefined && typeof value.pdf !== 'boolean') ||
+    (value.revision !== undefined &&
+      (typeof value.revision !== 'string' ||
+        value.revision.length > 64 ||
+        !/^[a-zA-Z0-9:-]+$/.test(value.revision)))
   )
     throw new Error('Could not read this Typst document.')
+  const documentId = value.documentId ?? context.document.get().id
+  const dependencyKey = JSON.stringify([
+    context.workspace.id(),
+    documentId,
+    value.block ?? false,
+    createHash('sha256').update(value.source).digest('hex'),
+  ])
+  const requestKey =
+    value.revision === undefined || value.pdf
+      ? null
+      : JSON.stringify([dependencyKey, value.revision])
+  const duplicate = requestKey ? inFlight.get(requestKey) : undefined
+  if (duplicate) return duplicate
   if (queued >= 16) throw new Error('Typst is busy. Try again shortly.')
   queued++
   const epoch = generation
@@ -177,12 +203,13 @@ export async function compileTypst(
         })
         fingerprint = ''
       }
-      let snapshot = await project(context, epoch, value.documentId)
-      const dependencyKey = value.documentId ?? context.document.get().id
       const requested = dependencies.get(dependencyKey) ?? new Set<string>()
-      if (dependencies.size >= 16 && !dependencies.has(dependencyKey))
-        dependencies.clear()
+      if (dependencies.size >= 64 && !dependencies.has(dependencyKey)) {
+        const oldest = dependencies.keys().next().value
+        if (oldest) dependencies.delete(oldest)
+      }
       dependencies.set(dependencyKey, requested)
+      let snapshot = await project(context, epoch, documentId, requested)
       let passes = 0
       if (epoch !== generation || !child)
         throw new Error('Typst compilation canceled.')
@@ -209,7 +236,7 @@ export async function compileTypst(
             if (missing.length && passes++ < 64) {
               try {
                 for (const path of missing) requested.add(path)
-                snapshot = await project(context, epoch, value.documentId)
+                snapshot = await project(context, epoch, documentId, requested)
                 if (epoch !== generation || child !== worker) return
                 worker.postMessage({
                   sandbox: join(scratch, 'project'),
@@ -227,7 +254,14 @@ export async function compileTypst(
             }
             clean()
             fingerprint = snapshot.key
-            resolve(result)
+            const workspace = context.workspace.directory()
+            resolve({
+              ...result,
+              dependencies:
+                workspace && snapshot.root === workspace
+                  ? [...requested].map((path) => path.replaceAll('\\', '/'))
+                  : null,
+            })
           }
           cancel = () => {
             clean()
@@ -259,9 +293,11 @@ export async function compileTypst(
       )
     })
   tail = run
-  try {
-    return await run
-  } finally {
+  const result = run.finally(() => {
     queued--
-  }
+    if (requestKey && inFlight.get(requestKey) === result)
+      inFlight.delete(requestKey)
+  })
+  if (requestKey) inFlight.set(requestKey, result)
+  return result
 }

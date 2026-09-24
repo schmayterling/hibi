@@ -25,20 +25,18 @@ import type { SidebarItem } from '../../ui/Sidebar'
 import { coreSettingsCategories } from './settings-pages'
 
 export const settingsCategories = [
-  { id: 'hibi', label: 'Hibi', icon: File, category: 'general' },
   {
-    id: 'licenses',
-    label: 'Open source licenses',
-    icon: ScrollText,
-    category: 'general',
+    id: 'workspace',
+    label: 'Workspace settings',
+    icon: Folder,
+    category: 'pinned',
   },
-  { id: 'workspace', label: 'Workspace', icon: Folder, category: 'general' },
   { id: 'editor', label: 'Editor', icon: FileText, category: 'editing' },
   { id: 'formats', label: 'Formats', icon: FileText, category: 'editing' },
   { id: 'syntax', label: 'Syntax', icon: TextCursorInput, category: 'editing' },
   {
     id: 'code-syntax',
-    label: 'Code highlighting',
+    label: 'Code Highlight',
     icon: Code,
     category: 'editing',
   },
@@ -49,12 +47,19 @@ export const settingsCategories = [
     category: 'interface',
   },
   { id: 'hotkeys', label: 'Hotkeys', icon: Keyboard, category: 'interface' },
-  { id: 'addons', label: 'Addons', icon: Puzzle, category: 'addons' },
+  { id: 'addons', label: 'Addon Manager', icon: Puzzle, category: 'addons' },
   {
     id: 'dependencies',
     label: 'Dependencies',
     icon: Package,
     category: 'addons',
+  },
+  { id: 'hibi', label: 'About', icon: File, category: 'general' },
+  {
+    id: 'licenses',
+    label: 'Credits',
+    icon: ScrollText,
+    category: 'general',
   },
 ] as const
 
@@ -83,17 +88,27 @@ export function settingsNavigation(
   pages: readonly (SidebarItem & { category?: string })[],
   categories: readonly SettingsCategory[],
 ) {
-  const groups = [...coreSettingsCategories, ...categories]
+  const groups = [
+    { id: 'pinned', label: '' },
+    ...coreSettingsCategories.filter(({ id }) => id !== 'general'),
+    { id: 'addon-settings', label: 'Addon settings' },
+    { id: 'general', label: '' },
+    ...categories,
+  ]
   const known = new Set(groups.map(({ id }) => id))
-  return groups.flatMap(({ id, label }) =>
-    pages
-      .filter(
-        (page) =>
-          (known.has(page.category ?? '') ? page.category : 'addons') === id,
+  return groups.flatMap(({ id, label }) => {
+    const group = pages.filter((page) => {
+      const category = known.has(page.category ?? '') ? page.category : 'addons'
+      return (
+        (category === 'addons' && /^(plugin|addon)-/.test(page.id)
+          ? 'addon-settings'
+          : category) === id
       )
-      .map((page, index) => ({
-        ...page,
-        ...(index === 0 ? { section: label } : {}),
-      })),
-  )
+    })
+    return group.map((page, index) => ({
+      ...page,
+      ...(index === 0 && label ? { section: label } : {}),
+      ...(index === 0 && id === 'general' ? { divider: true } : {}),
+    }))
+  })
 }

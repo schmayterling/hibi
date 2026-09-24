@@ -167,7 +167,7 @@ test('nested workspace editing, addon lifecycle, and offline static export', {
   await page.getByRole('heading', { name: /^welcome$/i, exact: true }).waitFor()
 
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   const enabled = page.getByRole('checkbox', {
     name: /^export$/i,
     exact: true,

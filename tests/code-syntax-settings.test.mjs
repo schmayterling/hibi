@@ -33,7 +33,7 @@ test('code highlighting controls update both panes, persist, and discover addon 
     .waitFor()
   await clickMenu(app, 'Settings')
   await page
-    .getByRole('tab', { name: /^code highlighting$/i, exact: true })
+    .getByRole('tab', { name: /^code highlight$/i, exact: true })
     .click()
   await page
     .getByRole('checkbox', { name: /^javascript$/i, exact: true })
@@ -51,7 +51,7 @@ test('code highlighting controls update both panes, persist, and discover addon 
   await page.reload()
   await clickMenu(app, 'Settings')
   await page
-    .getByRole('tab', { name: /^code highlighting$/i, exact: true })
+    .getByRole('tab', { name: /^code highlight$/i, exact: true })
     .click()
   assert.equal(
     await page
@@ -65,10 +65,10 @@ test('code highlighting controls update both panes, persist, and discover addon 
   await page
     .locator('.tiptap pre .hibi-token-keyword')
     .waitFor({ state: 'attached' })
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-typst').click()
   await page
-    .getByRole('tab', { name: /^code highlighting$/i, exact: true })
+    .getByRole('tab', { name: /^code highlight$/i, exact: true })
     .click()
   await page.getByRole('checkbox', { name: /^typst$/i, exact: true }).waitFor()
   assert.equal(

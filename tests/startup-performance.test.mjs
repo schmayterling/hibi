@@ -186,7 +186,7 @@ test('blank startup leaves disabled runtimes and closed settings unloaded and so
   await page.locator('.command-palette').waitFor({ state: 'hidden' })
   await clickMenu(app, 'Settings')
   assert.match(await loadedModules(), /src\/renderer\/src\/SettingsScreen\.tsx/)
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   assert.doesNotMatch(
     await loadedModules(),
     /src\/addons\/(?:math|typst|mdx)\/index\./,

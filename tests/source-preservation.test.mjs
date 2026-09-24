@@ -163,7 +163,7 @@ test('unsaved custom source survives enabling, rich editing, disabling, saving, 
     .getByRole('textbox', { name: 'Markdown editor', exact: true })
     .fill(`${prefix}Unsaved body`)
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-citations').click()
   await clickMenu(app, 'Settings')
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()

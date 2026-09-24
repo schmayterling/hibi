@@ -166,7 +166,7 @@ export function AddonSettings({
   }
   return (
     <>
-      <h1>Addons</h1>
+      <h1>Addon Manager</h1>
       <ControlRow className="addon-catalog-actions">
         <Button
           disabled={busy}

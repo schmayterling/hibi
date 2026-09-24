@@ -87,7 +87,7 @@ test('git addon stages, commits, switches, pulls and pushes only to a disposable
     () => document.querySelector('.tiptap')?.textContent === 'initial',
   )
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-git').click()
   await page.waitForFunction(() => document.querySelector('#addon-git').checked)
   await page.getByRole('button', { name: /^back to app$/i }).click()
@@ -277,7 +277,7 @@ test('git addon stages, commits, switches, pulls and pushes only to a disposable
   })
   await page.getByRole('treeitem', { name: /^note\.md$/i, exact: true }).click()
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-git').click()
   await page.waitForFunction(
     () => !document.querySelector('.workspace-sidebar .sidebar-decoration'),

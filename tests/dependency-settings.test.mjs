@@ -311,7 +311,7 @@ test('dependency settings discover addon requirements, manage shared paths, and 
   )
   await filter.fill('no-such-tool')
   await panel.getByText('No matching dependencies', { exact: true }).waitFor()
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-dependency-fixture').click()
   await waitForAsync(
     page,

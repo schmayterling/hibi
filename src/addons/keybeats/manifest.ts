@@ -7,7 +7,7 @@ export default {
   id: 'keybeats',
   name: 'keyBeats',
   version: '1.0.1',
-  settings: { category: 'interface', icon: 'audio-lines' },
+  settings: { icon: 'audio-lines' },
   apiVersion: 2,
   description: 'Play mechanical keyboard sounds while you write.',
   defaultEnabled: false,

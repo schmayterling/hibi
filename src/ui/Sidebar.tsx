@@ -3,6 +3,7 @@ import { ChevronRight, MoreHorizontal } from 'lucide-react'
 import {
   Fragment,
   type ReactNode,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -24,9 +25,12 @@ export type SidebarItem = {
   children?: SidebarItem[]
   /** Optional section label immediately before this row. */
   section?: string
+  /** Draw a divider along this row's top edge. */
+  divider?: boolean
   dirty?: boolean
   decoration?: Omit<ExplorerDecoration, 'path'>
 }
+
 export type SidebarProps = {
   items: readonly SidebarItem[]
   selected: string | null
@@ -46,6 +50,9 @@ export type SidebarProps = {
   panelPrefix?: string
   header?: ReactNode
   footer?: ReactNode
+  afterItems?: ReactNode
+  /** Fade rows at scroll edges instead of clipping them abruptly. */
+  fadeEdges?: boolean
   /** Custom view content in the shared sidebar frame instead of tree rows. */
   content?: ReactNode
   empty?: ReactNode
@@ -129,6 +136,8 @@ export function Sidebar({
   panelPrefix = '',
   header,
   footer,
+  afterItems,
+  fadeEdges = false,
   content,
   empty,
   onMenu,
@@ -221,6 +230,34 @@ export function Sidebar({
       : (rows[active]?.item.id ?? rows[0]?.item.id)
   const windowed = mode === 'tree' && rows.length > 200
   const rowWindow = useSidebarWindow(model, windowed, editing?.id)
+  const [faded, setFaded] = useState({ top: false, bottom: false })
+  const updateFade = useCallback(() => {
+    if (!fadeEdges || !rowWindow.scroll.current) return
+    const element = rowWindow.scroll.current
+    const top = element.scrollTop > 1
+    const bottom =
+      element.scrollTop + element.clientHeight < element.scrollHeight - 1
+    setFaded((current) =>
+      current.top === top && current.bottom === bottom
+        ? current
+        : { top, bottom },
+    )
+  }, [fadeEdges, rowWindow.scroll])
+  useLayoutEffect(() => {
+    if (!fadeEdges || !rowWindow.scroll.current) return
+    const element = rowWindow.scroll.current
+    const observer = new ResizeObserver(updateFade)
+    observer.observe(element)
+    const itemList = element.querySelector('.sidebar-items')
+    if (itemList) observer.observe(itemList)
+    const mutations = new MutationObserver(updateFade)
+    mutations.observe(element, { childList: true })
+    updateFade()
+    return () => {
+      observer.disconnect()
+      mutations.disconnect()
+    }
+  }, [fadeEdges, rowWindow.scroll, updateFade])
   const rendered = windowed
     ? (() => {
         const visible = new Set<number>()
@@ -316,7 +353,12 @@ export function Sidebar({
           className="sidebar-scroll"
           ref={rowWindow.scroll}
           data-windowed={windowed || undefined}
-          onScroll={rowWindow.onScroll}
+          data-fade-top={(fadeEdges && faded.top) || undefined}
+          data-fade-bottom={(fadeEdges && faded.bottom) || undefined}
+          onScroll={() => {
+            rowWindow.onScroll()
+            updateFade()
+          }}
           hidden={content !== undefined}
           data-drop-target={dropTarget === ''}
           onDragOver={(event) => {
@@ -370,7 +412,7 @@ export function Sidebar({
                 className="sidebar-selection category-selection"
                 aria-hidden="true"
                 style={{
-                  transform: `translateY(calc(${active} * var(--sidebar-row-height) + ${rows[active]!.sections} * var(--sidebar-section-height)))`,
+                  transform: `translateY(calc(${active} * var(--sidebar-row-height) + ${rows[active]!.sections} * var(--sidebar-section-height) + ${rows[active]!.dividers} * var(--sidebar-divider-gap, 0px)))`,
                 }}
               />
             )}
@@ -398,6 +440,7 @@ export function Sidebar({
                   {/* biome-ignore lint/a11y/noStaticElementInteractions: tree buttons and the move menu provide keyboard equivalents. */}
                   <div
                     className="sidebar-row"
+                    data-divider={item.divider || undefined}
                     style={
                       windowed
                         ? {
@@ -645,6 +688,7 @@ export function Sidebar({
               )
             })}
           </div>
+          {afterItems}
           {!rows.length && empty && (
             <div className="sidebar-empty">{empty}</div>
           )}

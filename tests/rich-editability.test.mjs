@@ -27,7 +27,7 @@ test('empty formatted blocks remain editable and rich editing survives vim and v
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await rich.waitFor()
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-vim').click()
   await page.getByRole('button', { name: /^back to app$/i }).click()
   await rich.fill('/table')

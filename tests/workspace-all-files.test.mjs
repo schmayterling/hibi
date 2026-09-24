@@ -53,7 +53,9 @@ test('workspace can show all files and opens unsupported text in source only', {
   )
 
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
-  await page.getByRole('tab', { name: 'Workspace', exact: true }).click()
+  await page
+    .getByRole('tab', { name: 'Workspace settings', exact: true })
+    .click()
   const toggle = page.getByRole('checkbox', {
     name: 'Show all files in sidebar',
   })
@@ -110,7 +112,9 @@ test('workspace can show all files and opens unsupported text in source only', {
   )
 
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
-  await page.getByRole('tab', { name: 'Workspace', exact: true }).click()
+  await page
+    .getByRole('tab', { name: 'Workspace settings', exact: true })
+    .click()
   await toggle.click()
   await waitForAppState(page, () =>
     window.hibi.getWorkspaceSettings().then((state) => !state.showAllFiles),

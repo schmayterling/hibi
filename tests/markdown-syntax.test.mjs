@@ -162,7 +162,7 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
     await page
       .getByRole('checkbox', { name: uiName(name, true), exact: true })
       .check()
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-math').click()
   await page.getByRole('tab', { name: /^syntax$/i, exact: true }).click()
   await page

@@ -129,7 +129,7 @@ test('Markdown source loading and schema recreation leave the hidden rich docume
     window.previousRichEditor = document.querySelector('.tiptap').editor
   })
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   assert.equal(await page.locator('#addon-frontmatter').isChecked(), true)
   await page.locator('#addon-frontmatter').click()
   await page.waitForFunction(() => {

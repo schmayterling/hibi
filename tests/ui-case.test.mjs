@@ -95,7 +95,7 @@ test('sentence case is default; lowercase covers UI and menus while preserving c
     await page.locator('#extension-case').textContent(),
     'Extension Action',
   )
-  await page.getByRole('tab', { name: /^addons$/i }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i }).click()
   const filter = page.getByRole('searchbox', { name: /^filter addons$/i })
   await filter.fill('GitHubCase')
   assert.equal(await filter.inputValue(), 'GitHubCase')

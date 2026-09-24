@@ -2,7 +2,7 @@
 
 # SidebarItem
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L20)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L21)
 
 <details>
 <summary>Declaration</summary>
@@ -15,6 +15,8 @@ type SidebarItem = {
   children?: SidebarItem[]
   /** Optional section label immediately before this row. */
   section?: string
+  /** Draw a divider along this row's top edge. */
+  divider?: boolean
   dirty?: boolean
   decoration?: Omit<ExplorerDecoration, 'path'>
 }
@@ -31,6 +33,7 @@ type SidebarItem = {
 - [icon](#icon)
 - [children](#children)
 - [section](#section)
+- [divider](#divider)
 - [dirty](#dirty)
 - [decoration](#decoration)
 
@@ -38,7 +41,7 @@ type SidebarItem = {
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L21)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L22)
 
 ```typescript
 id: string
@@ -46,7 +49,7 @@ id: string
 
 ### label
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L22)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L23)
 
 ```typescript
 label: string
@@ -54,7 +57,7 @@ label: string
 
 ### icon
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L23)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L24)
 
 ```typescript
 icon?: ToolbarItem['icon']
@@ -64,7 +67,7 @@ Related: [ToolbarItem](ToolbarItem.md).
 
 ### children
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L24)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L25)
 
 ```typescript
 children?: SidebarItem[]
@@ -72,7 +75,7 @@ children?: SidebarItem[]
 
 ### section
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L26)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L27)
 
 Optional section label immediately before this row.
 
@@ -80,9 +83,19 @@ Optional section label immediately before this row.
 section?: string
 ```
 
+### divider
+
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L29)
+
+Draw a divider along this row's top edge.
+
+```typescript
+divider?: boolean
+```
+
 ### dirty
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L27)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L30)
 
 ```typescript
 dirty?: boolean
@@ -90,7 +103,7 @@ dirty?: boolean
 
 ### decoration
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L28)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L31)
 
 ```typescript
 decoration?: Omit<ExplorerDecoration, 'path'>

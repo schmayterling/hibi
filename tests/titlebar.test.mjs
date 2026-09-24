@@ -46,7 +46,7 @@ test('titlebar keeps actions minimal, blocks scrolled content, and persists toas
   await page.getByRole('main', { name: /^settings$/i, exact: true }).waitFor()
   await page.getByRole('button', { name: /^back to app$/i }).click()
   await clickMenu(app, 'Settings')
-  for (const category of ['hibi', 'appearance']) {
+  for (const category of ['about', 'appearance']) {
     await page
       .getByRole('tab', { name: uiName(category, true), exact: true })
       .click()

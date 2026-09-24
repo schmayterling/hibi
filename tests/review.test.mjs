@@ -122,7 +122,7 @@ test('review highlights and fixes both editors, keeps undo, and disposes annotat
     animations: 'disabled',
   })
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-review').click()
   await page.waitForFunction(
     () => !document.querySelector('#addon-review').checked,

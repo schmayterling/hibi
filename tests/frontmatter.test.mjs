@@ -130,7 +130,9 @@ test('frontmatter contributes slash actions in rich and source panes only while 
   await source.press('Escape')
   const toggle = async (enabled) => {
     await clickMenu(app, 'Settings')
-    await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+    await page
+      .getByRole('tab', { name: /^addon manager$/i, exact: true })
+      .click()
     await page.locator('#addon-frontmatter').click()
     await waitForAsync(
       page,
@@ -479,7 +481,9 @@ test('frontmatter addon, inline rename, and centered workspace entry preserve do
   assert.equal(edited, '---\r\ntitle: changed\r\n---\r\n\r\nvisual body')
   for (const enabled of [false, true]) {
     await clickMenu(app, 'Settings')
-    await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+    await page
+      .getByRole('tab', { name: /^addon manager$/i, exact: true })
+      .click()
     await page
       .getByRole('checkbox', { name: /^frontmatter$/i, exact: true })
       .click()

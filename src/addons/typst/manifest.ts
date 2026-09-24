@@ -8,7 +8,7 @@ export default {
   name: 'Typst',
   kind: 'extension',
   version: '1.0.2',
-  settings: { category: 'editing', icon: 'type' },
+  settings: { icon: 'type' },
   apiVersion: 2,
   description: 'Write Typst documents with live previews and PDF export.',
   defaultEnabled: false,

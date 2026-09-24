@@ -85,7 +85,7 @@ test('production diagnostics opt in, attribute measured work, retain initializat
     await page.getByRole('tab', { name: 'Diagnostics', exact: true }).count(),
     0,
   )
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-diagnostics').click()
   await page.getByRole('tab', { name: 'Diagnostics', exact: true }).click()
   const panel = page.locator('#settings-plugin-diagnostics')
@@ -145,7 +145,7 @@ test('production diagnostics opt in, attribute measured work, retain initializat
     path: 'test-results/diagnostics.png',
     animations: 'disabled',
   })
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-diagnostics').click()
   await page.waitForFunction(
     () => !document.querySelector('#addon-diagnostics').checked,

@@ -121,7 +121,7 @@ function App() {
     addonViews.subscribe,
     addonViews.snapshot,
   )
-  const [settingsCategory, setSettingsCategory] = useState('hibi')
+  const [settingsCategory, setSettingsCategory] = useState('workspace')
   const [settingTarget, setSettingTarget] = useState<string | null>(null)
   const registeredSettings = useSyncExternalStore(
     settingsPages.subscribe,
@@ -345,7 +345,7 @@ function App() {
   )
   const [settingsLoaded, setSettingsLoaded] = useState(false)
   const settingsNavigation = useRef({
-    current: { open: false, category: 'hibi' },
+    current: { open: false, category: 'workspace' },
     back: [] as { open: boolean; category: string }[],
     forward: [] as { open: boolean; category: string }[],
     navigating: false,

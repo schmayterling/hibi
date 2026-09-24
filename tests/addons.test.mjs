@@ -37,7 +37,7 @@ test('vim cursor stays hidden behind the startup screen', {
   await page
     .getByLabel('Default view', { exact: true })
     .selectOption('markdown')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-vim').click()
   await close()
 
@@ -140,7 +140,7 @@ test('plugin pages, metadata, shared controls, and full source vim editing', {
   }))
   assert.ok(footer.bottom > footer.height - 80)
   assert.match(footer.text, /Hibi 0\.1\.0.*Electron 44\.3\.0/)
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   assert.ok(
     (await page
       .locator('#settings-addons [data-discord-id="1262793452236570667"]')
@@ -175,7 +175,7 @@ test('plugin pages, metadata, shared controls, and full source vim editing', {
   })
   assert.deepEqual(
     await page.locator('.settings-sidebar .sidebar-section').allTextContents(),
-    ['General', 'Editing', 'Interface', 'Addons'],
+    ['Editing', 'Interface', 'Addons', 'Addon settings'],
   )
   await page.getByRole('checkbox', { name: /show vim status/i }).uncheck()
   await page.getByRole('checkbox', { name: /show vim status/i }).check()
@@ -363,7 +363,7 @@ test('plugin pages, metadata, shared controls, and full source vim editing', {
     .filter({ hasText: /vim · normal/i })
     .waitFor()
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await toggleAddon('vim', false)
   assert.equal(
     await page.locator('style[data-addon-style="vim.editor"]').count(),

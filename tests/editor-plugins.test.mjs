@@ -143,7 +143,7 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
   assert.equal(await grip.isVisible(), false)
 
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   for (const id of ['word-count', 'block-drag']) {
     await page.locator(`#addon-${id}`).click()
     await page.waitForFunction(

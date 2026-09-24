@@ -55,7 +55,7 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   const read = () => page.evaluate(() => window.hibi.getDocument())
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-typst').click()
   await page.getByRole('button', { name: /^back to app$/i }).click()
   await app.evaluate(({ dialog }, notes) => {
@@ -394,7 +394,7 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   )
   await site.close()
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-typst').click()
   await page.getByRole('button', { name: /^back to app$/i }).click()
   await page.locator('.tiptap pre').waitFor()

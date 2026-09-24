@@ -6,4 +6,4 @@ Sounds work in both formatted text and source views. keyBeats listens only to ty
 
 ## Credits
 
-The original application is by **Yug Bhanushali**, with recordings by **Thomas Lai**. **may** made the Hibi port. The [addon README](../../src/addons/keybeats/README.md) includes source credits, and full MIT notices are under **Settings → Hibi → Open source licenses**.
+The original application is by **Yug Bhanushali**, with recordings by **Thomas Lai**. **may** made the Hibi port. The [addon README](../../src/addons/keybeats/README.md) includes source credits, and full MIT notices are under **Settings → Credits**.

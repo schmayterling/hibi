@@ -77,14 +77,18 @@ test('licenses open on their own settings page and dialogs stay readable', {
   page.on('pageerror', (error) => errors.push(error.message))
   await clickMenu(app, 'Settings')
   const sidebar = page.getByRole('tablist', { name: /settings categories/i })
-  assert.equal(await sidebar.getByRole('tab').first().innerText(), 'Hibi')
+  assert.equal(
+    await sidebar.getByRole('tab').first().innerText(),
+    'Workspace settings',
+  )
+  await sidebar.getByRole('tab', { name: 'About', exact: true }).click()
   assert.equal(
     await page
-      .getByRole('tab', { name: /^hibi$/i, exact: true })
+      .getByRole('tab', { name: /^about$/i, exact: true })
       .getAttribute('aria-selected'),
     'true',
   )
-  const panel = page.getByRole('tabpanel', { name: /^hibi$/i, exact: true })
+  const panel = page.getByRole('tabpanel', { name: /^about$/i, exact: true })
   await panel.getByText(/^version 0\.1\.0$/i, { exact: true }).waitFor()
   assert.equal(await panel.locator('.license-row').count(), 0)
   await app.evaluate(({ shell }) => {
@@ -102,26 +106,43 @@ test('licenses open on their own settings page and dialogs stay readable', {
     await panel.getByRole('link', { name, exact: true }).press('Enter')
     assert.equal(await app.evaluate(() => globalThis.openedUrl), url)
   }
-  await panel.getByRole('button', { name: /sponsor on github/i }).press('Enter')
+  await panel
+    .getByRole('link', { name: /support hibi development/i })
+    .press('Enter')
   assert.equal(
     await app.evaluate(() => globalThis.openedUrl),
     'https://github.com/sponsors/schmayterling',
   )
-  await page.waitForFunction(
-    () => !document.querySelector('#sponsor-project').disabled,
+  await panel.getByRole('link', { name: /^docs$/i }).click()
+  assert.equal(
+    await app.evaluate(() => globalThis.openedUrl),
+    'https://docs.hibi.garden/',
+  )
+  await panel.getByRole('link', { name: /^report an issue$/i }).click()
+  assert.equal(
+    await app.evaluate(() => globalThis.openedUrl),
+    'https://github.com/schmayterling/hibi/issues',
+  )
+  await panel.getByRole('link', { name: /^contribute$/i }).click()
+  assert.equal(
+    await app.evaluate(() => globalThis.openedUrl),
+    'https://github.com/schmayterling/hibi',
+  )
+  await panel.getByRole('link', { name: /^join the discord$/i }).click()
+  assert.equal(
+    await app.evaluate(() => globalThis.openedUrl),
+    'https://discord.gg/v9r4cABUP2',
   )
   await mkdir('test-results', { recursive: true })
   await page.screenshot({
     path: 'test-results/hibi-settings.png',
     animations: 'disabled',
   })
-  await sidebar.getByRole('tab', { name: 'Open source licenses' }).click()
+  await sidebar.getByRole('tab', { name: 'Credits' }).click()
   const licensesPanel = page.getByRole('tabpanel', {
-    name: 'Open source licenses',
+    name: 'Credits',
   })
-  await licensesPanel
-    .getByRole('heading', { name: 'Open source licenses' })
-    .waitFor()
+  await licensesPanel.getByRole('heading', { name: 'Credits' }).waitFor()
   const react = licensesPanel
     .getByRole('button')
     .filter({ has: page.locator('.license-name', { hasText: /^react19/ }) })

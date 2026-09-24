@@ -570,6 +570,52 @@ button:disabled {
 .settings-sidebar .sidebar-header .sidebar-items > button:hover {
   background: var(--hover);
 }
+.settings-sidebar {
+  --sidebar-section-height: 36px;
+  --sidebar-divider-gap: 12px;
+}
+.settings-sidebar .sidebar-section {
+  position: relative;
+  z-index: 1;
+  background: var(--sidebar);
+  padding-bottom: 6px;
+}
+.settings-sidebar .sidebar-section::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  left: 16px;
+  right: 16px;
+  border-top: 1px solid var(--border);
+}
+.settings-sidebar .sidebar-row[data-divider]::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 16px;
+  right: 16px;
+  z-index: 1;
+  border-top: 1px solid var(--border);
+  pointer-events: none;
+}
+.settings-sidebar .sidebar-row[data-divider] {
+  margin-top: var(--sidebar-divider-gap);
+}
+.settings-sidebar .sidebar-scroll:is([data-fade-top], [data-fade-bottom]) {
+  mask-image: linear-gradient(
+    to bottom,
+    var(--settings-fade-top, #000),
+    #000 16px,
+    #000 calc(100% - 16px),
+    var(--settings-fade-bottom, #000)
+  );
+}
+.settings-sidebar .sidebar-scroll[data-fade-top] {
+  --settings-fade-top: transparent;
+}
+.settings-sidebar .sidebar-scroll[data-fade-bottom] {
+  --settings-fade-bottom: transparent;
+}
 .settings-search {
   position: relative;
   margin: var(--space-3) var(--space-2) 0;
@@ -902,7 +948,7 @@ button.ui-button.update-download-button:disabled {
   gap: 2px;
   color: var(--muted);
   font-size: var(--text-xs);
-  padding: var(--space-2) var(--space-1) 0;
+  margin: var(--space-5) 16px var(--space-2);
   overflow-wrap: anywhere;
 }
 .app-statusbar {

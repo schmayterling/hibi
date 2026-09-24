@@ -8,4 +8,4 @@ Choose a built-in palette before [exporting documentation](exporting.md) to keep
 
 ## Credits and licenses
 
-The [Catppuccin](../licenses/catppuccin.md), [VS Code](../licenses/vscode.md), and [Nord](../licenses/nord.md) palettes are adaptations for Hibi and may differ from the original themes. Their authors have not endorsed these adaptations. Full notices are also available under **Settings → Hibi → Open source licenses** and in exported sites.
+The [Catppuccin](../licenses/catppuccin.md), [VS Code](../licenses/vscode.md), and [Nord](../licenses/nord.md) palettes are adaptations for Hibi and may differ from the original themes. Their authors have not endorsed these adaptations. Full notices are also available under **Settings → Credits** and in exported sites.

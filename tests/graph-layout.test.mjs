@@ -219,7 +219,7 @@ test('large graphs fit padded sidebars and expanded views, resize, zoom and filt
   await page.screenshot({ path: 'test-results/graph-tab-narrow.png' })
   await page.setViewportSize({ width: 1100, height: 800 })
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.getByRole('tab', { name: 'Graph', exact: true }).click()
   const zoomSetting = page.locator('#graph-default-zoom')
   assert.equal(await zoomSetting.inputValue(), '8')

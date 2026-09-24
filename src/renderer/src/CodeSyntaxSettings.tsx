@@ -19,7 +19,7 @@ export function CodeSyntaxSettings() {
   )
   return (
     <>
-      <h1>Code highlighting</h1>
+      <h1>Code Highlight</h1>
       <SettingsFilter
         id="code-syntax-filter"
         label="Filter languages"

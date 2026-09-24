@@ -84,8 +84,10 @@ test('plain text stays literal and disabled addons stay out of formats', {
   })
   assert.ok(gaps.every((gap) => gap >= 12))
   await page.screenshot({ path: 'test-results/formats-warning.png' })
-  await intro.getByRole('link', { name: 'Addons', exact: true }).click()
-  await page.getByRole('tabpanel', { name: 'Addons', exact: true }).waitFor()
+  await intro.getByRole('link', { name: 'Addon Manager', exact: true }).click()
+  await page
+    .getByRole('tabpanel', { name: 'Addon Manager', exact: true })
+    .waitFor()
   await page.getByRole('tab', { name: 'Formats', exact: true }).click()
   assert.equal(
     await page

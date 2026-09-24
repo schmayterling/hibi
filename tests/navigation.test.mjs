@@ -162,7 +162,7 @@ test('modified link clicks, note/settings history, and file-menu remote imports'
     .markdown
   await clickMenu(app, 'Settings')
   const back = page.getByRole('button', { name: /^back to app$/i, exact: true })
-  const categoryTab = page.getByRole('tab', { name: /^hibi$/i, exact: true })
+  const categoryTab = page.getByRole('tab', { name: /^about$/i, exact: true })
   const backBounds = await back.boundingBox()
   const tabBounds = await categoryTab.boundingBox()
   const scrollbarWidth = await page

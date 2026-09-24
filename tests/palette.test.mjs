@@ -155,7 +155,7 @@ test('command palette, full-height settings, and local geist fonts', {
     await page.locator('.editor-surface').evaluate((element) => element.inert),
     true,
   )
-  for (const category of ['appearance', 'addons', 'hibi', 'hotkeys']) {
+  for (const category of ['appearance', 'addon manager', 'about', 'hotkeys']) {
     await page
       .getByRole('tab', { name: uiName(category, true), exact: true })
       .click()

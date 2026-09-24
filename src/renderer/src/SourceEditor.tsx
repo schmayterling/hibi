@@ -172,16 +172,14 @@ export function SourceEditor({
   ])
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
-  const [installedExtensions, setInstalledExtensions] = useState<
-    readonly SourceExtension[] | null
-  >(null)
+  const [installedExtensions, setInstalledExtensions] = useState<{
+    bridge: ReturnType<typeof createSourceSession>
+    extensions: readonly SourceExtension[]
+  } | null>(null)
   const [extensionError, setExtensionError] = useState('')
   const [languageError, setLanguageError] = useState('')
   const [languageReady, setLanguageReady] = useState(!codeLanguage)
   const [inputError, setInputError] = useState('')
-  const inputReady = installedExtensions === sourceExtensions && languageReady
-  const editContext = useRef({ document, editTarget, disabled, inputReady })
-  editContext.current = { document, editTarget, disabled, inputReady }
   const [bridgeRetry, retryBridge] = useState(0)
   const session = documentRuntime.session()!
   // biome-ignore lint/correctness/useExhaustiveDependencies: retry refreshes a bridge whose snapshot went stale before attachment.
@@ -189,6 +187,12 @@ export function SourceEditor({
     () => createSourceSession(session),
     [session, bridgeRetry],
   )
+  const inputReady =
+    installedExtensions?.bridge === bridge &&
+    installedExtensions.extensions === sourceExtensions &&
+    languageReady
+  const editContext = useRef({ document, editTarget, disabled, inputReady })
+  editContext.current = { document, editTarget, disabled, inputReady }
   const exactChanges = useRef<readonly RawEdit[] | undefined>(undefined)
   const editable = useRef(new Compartment())
   const numbers = useRef(new Compartment())
@@ -847,7 +851,7 @@ export function SourceEditor({
       .then((extensions) => {
         if (!canceled && editor) {
           editor.dispatch({ effects: addons.current.reconfigure(extensions) })
-          setInstalledExtensions(sourceExtensions)
+          setInstalledExtensions({ bridge, extensions: sourceExtensions })
         }
       })
       .catch((error: unknown) => {
@@ -858,7 +862,7 @@ export function SourceEditor({
     return () => {
       canceled = true
     }
-  }, [sourceExtensions])
+  }, [bridge, sourceExtensions])
   useEffect(() => {
     // CodeMirror measures on an animation frame; editing cannot wait for paint.
     ready.current(
@@ -879,6 +883,7 @@ export function SourceEditor({
     })
   }, [disabled, inputReady])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new bridge replaces the editor view.
   useEffect(() => {
     view.current?.dispatch({
       effects: numbers.current.reconfigure(
@@ -899,8 +904,9 @@ export function SourceEditor({
           : [],
       ),
     })
-  }, [showLineNumbers])
+  }, [bridge, showLineNumbers])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new bridge replaces the editor view.
   useEffect(() => {
     const editor = view.current
     if (!editor) return
@@ -928,7 +934,7 @@ export function SourceEditor({
       stopFind()
       find.current.report({ current: 0, total: 0 })
     }
-  }, [findActive, findQuery, requestFind])
+  }, [bridge, findActive, findQuery, requestFind])
 
   useEffect(() => {
     if (handledFindMove.current === findMove.id) return

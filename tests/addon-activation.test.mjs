@@ -3,13 +3,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, startupDiagnostics } from './electron.mjs'
+import { electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 test('capability SDKs defer irrelevant entries, activate command descriptors, and gate source attachments', {
   timeout: 30000,
 }, async (t) => {
-  const started = performance.now()
   const profile = await mkdtemp(join(tmpdir(), 'hibi-activation-'))
   const fixtures = [
     {
@@ -67,11 +66,9 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
     join(profile, 'addons.json'),
     JSON.stringify(Object.fromEntries(fixtures.map(({ id }) => [id, true]))),
   )
-  const launchStarted = performance.now()
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
-  const launched = performance.now()
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1 })
@@ -81,7 +78,6 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
   })
   const page = await app.firstWindow()
   await page.locator('.tiptap[contenteditable="true"]').waitFor()
-  const editorReady = performance.now()
   const assetHeaders = await page.evaluate(async () => {
     const addon = (await window.hibi.getInstalledAddons()).find(
       (entry) => entry.manifest.id === 'deferred-command',
@@ -127,7 +123,6 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
       .flatMap((chunk) => chunk.modules)
       .join('\n')
   assert.doesNotMatch(loaded(), /@codemirror\//)
-  const commandStarted = performance.now()
   await clickMenu(app, 'Command palette')
   const search = page.getByRole('combobox', { name: /search commands/i })
   await search.fill('Deferred hello')
@@ -161,85 +156,15 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
     'documents',
   ])
   assert.doesNotMatch(loaded(), /src\/addons\/sdk\.ts|@codemirror\//)
-  const sourceStarted = performance.now()
-  const phases = () =>
-    JSON.stringify({
-      fixture: Math.round(launchStarted - started),
-      launch: Math.round(launched - launchStarted),
-      editor: Math.round(editorReady - launched),
-      preCommand: Math.round(commandStarted - editorReady),
-      command: Math.round(sourceStarted - commandStarted),
-      source: Math.round(performance.now() - sourceStarted),
-    })
   await page
     .getByRole('button', { name: 'Source view', exact: true })
     .press('Enter')
-  try {
-    // Source editing can be ready while Chromium pauses animation frames.
-    await page.waitForFunction(
-      () => document.querySelector('.cm-content')?.isContentEditable,
-      undefined,
-      { polling: 100 },
-    )
-  } catch (error) {
-    console.error('source activation phases:', phases())
-    const state = await page.evaluate(() => {
-      const source = document.querySelector('.cm-content')
-      return {
-        mode: document.querySelector('.editor-panes')?.className,
-        sourceReady: document
-          .querySelector('.editor-panes')
-          ?.getAttribute('data-source-ready'),
-        sourceButton: document
-          .querySelector('[aria-label="Source view"]')
-          ?.getAttribute('aria-pressed'),
-        sourceButtonDisabled: document.querySelector(
-          '[aria-label="Source view"]',
-        )?.disabled,
-        sourceEditable: source?.isContentEditable,
-        sourceContentEditable: source?.getAttribute('contenteditable'),
-        sourcePaneInert: document.querySelector('.source-pane')?.inert,
-        sourcePaneText: document
-          .querySelector('.source-pane')
-          ?.textContent?.slice(0, 180),
-        richContentEditable: document
-          .querySelector('.tiptap')
-          ?.getAttribute('contenteditable'),
-        visibility: document.visibilityState,
-        activeElement: document.activeElement?.getAttribute('aria-label'),
-        openDialogs: [...document.querySelectorAll('dialog[open]')].map(
-          (dialog) => dialog.getAttribute('aria-label'),
-        ),
-        sourceStarts: window.sourceStarts,
-        sourceCreates: window.sourceCreates,
-        sourceStops: window.sourceStops,
-        sourceEvaluations: window.sourceEvaluations,
-        richDetachments: window.richDetachments,
-        sourceTimings: performance
-          .getEntriesByType('measure')
-          .filter((entry) => entry.name.includes('source-mode'))
-          .map((entry) => [entry.name, Math.round(entry.duration)]),
-        notices: [...document.querySelectorAll('.document-notice')].map(
-          (notice) => notice.textContent?.slice(0, 180),
-        ),
-      }
-    })
-    console.error('source activation state:', JSON.stringify(state))
-    try {
-      const trace = await startupDiagnostics(app, page)
-      console.error(
-        'source activation assets:',
-        JSON.stringify({
-          assets: trace.main.assets,
-          resources: trace.renderer.resources,
-          consoleErrors: trace.consoleErrors,
-          pageErrors: trace.pageErrors,
-        }),
-      )
-    } catch {}
-    throw error
-  }
-  console.error('source activation phases:', phases())
+  // Source editing can be ready while Chromium pauses animation frames.
+  await page.waitForFunction(
+    () => document.querySelector('.cm-content')?.isContentEditable,
+    undefined,
+    { polling: 100 },
+  )
   assert.equal(await page.evaluate(() => window.sourceCreates), 1)
   assert.deepEqual(await page.evaluate(() => window.richDetachments), [
     'alpha',

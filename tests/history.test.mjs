@@ -51,39 +51,10 @@ test('local history snapshots on save, previews, and restores without overwritin
     return document.dirty && document.markdown === 'saved change'
   })
   await pressShortcut(app, `${mod}+s`)
-  try {
-    await waitForAsync(
-      page,
-      async () => (await window.hibi.listVersions()).length === 2,
-    )
-  } catch (error) {
-    const [state, disk] = await Promise.all([
-      Promise.race([
-        page
-          .evaluate(async () => {
-            const documentState = await window.hibi.getDocument()
-            return {
-              markdown: documentState.markdown,
-              dirty: documentState.dirty,
-              versions: (await window.hibi.listVersions()).length,
-              busy: document.querySelector('.app')?.getAttribute('aria-busy'),
-              editor: document.querySelector('.tiptap')?.textContent,
-              notices: [
-                ...document.querySelectorAll('[data-sonner-toast]'),
-              ].map((notice) => notice.textContent),
-            }
-          })
-          .catch((failure) => ({ error: String(failure) })),
-        delay(500, { error: 'state snapshot timed out' }),
-      ]),
-      Promise.race([
-        readFile(file, 'utf8').catch((failure) => String(failure)),
-        delay(500, 'disk read timed out'),
-      ]),
-    ])
-    console.error('history save state:', { state, disk })
-    throw error
-  }
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.listVersions()).length === 2,
+  )
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   assert.equal(await readFile(file, 'utf8'), 'saved change')
   const versions = await page.evaluate(() => window.hibi.listVersions())

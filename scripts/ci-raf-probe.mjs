@@ -36,6 +36,12 @@ async function probe() {
       args: [resolve('.'), `--user-data-dir=${profile}`],
       timeout: 10000,
     })
+    await app.evaluate(({ app }) => {
+      globalThis.__ciGpuExits = 0
+      app.on('child-process-gone', (_event, details) => {
+        if (details.type === 'GPU') globalThis.__ciGpuExits++
+      })
+    })
     const page = await app.firstWindow()
     page.setDefaultTimeout(2000)
     await page.emulateMedia({ reducedMotion: 'reduce' })
@@ -75,6 +81,14 @@ async function probe() {
     } catch (error) {
       result.click = error?.name === 'TimeoutError' ? 'timeout' : 'error'
     }
+    const gpu = await bounded(
+      app.evaluate(({ app }) => ({
+        exits: globalThis.__ciGpuExits,
+        alive: app.getAppMetrics().some(({ type }) => type === 'GPU'),
+      })),
+      500,
+    )
+    result.gpu = gpu.status === 'ok' ? gpu.value : null
     if (result.frames === 0) {
       result.capture = await bounded(
         app.evaluate(async ({ BrowserWindow }) => {
@@ -106,16 +120,20 @@ async function probe() {
 const results = []
 for (let index = 0; index < trials; index++) results.push(await probe())
 const count = (check) => results.filter(check).length
+const indices = (check) =>
+  results.flatMap((result, index) => (check(result) ? [index + 1] : []))
 console.log(
   JSON.stringify({
     mode,
     trials: results.length,
     setupErrors: count((result) => !!result.error),
     rafZero: count((result) => result.frames === 0),
+    rafZeroIndices: indices((result) => result.frames === 0),
     rafOneToFour: count((result) => result.frames > 0 && result.frames < 5),
     rafUnavailable: count((result) => result.frames == null),
     clickSelected: count((result) => result.click === 'selected'),
     clickTimeout: count((result) => result.click === 'timeout'),
+    clickTimeoutIndices: indices((result) => result.click === 'timeout'),
     clickError: count((result) => result.click === 'error'),
     clickNotAttempted: count((result) => result.click == null),
     unfocused: count((result) => result.native?.focused === false),
@@ -126,6 +144,11 @@ console.log(
     ),
     captureTimeout: count((result) => result.capture?.status === 'timeout'),
     captureError: count((result) => result.capture?.status === 'error'),
+    gpuExits: results.reduce(
+      (sum, result) => sum + (result.gpu?.exits ?? 0),
+      0,
+    ),
+    gpuMissing: count((result) => result.gpu?.alive === false),
     cleanupErrors: count((result) => result.cleanup || result.profileCleanup),
   }),
 )

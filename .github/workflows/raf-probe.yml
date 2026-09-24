@@ -8,6 +8,10 @@ jobs:
   compare:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [bare, openbox]
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
       electron_config_cache: ${{ github.workspace }}/.cache/electron
@@ -32,6 +36,7 @@ jobs:
       - run: npm run build
       - run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends openbox x11-utils
       - name: xvfb with openbox
+        if: matrix.mode == 'openbox'
         run: |
           # shellcheck disable=SC2016
           dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' bash -ec '
@@ -47,7 +52,8 @@ jobs:
               sleep 0.1
             done
             test "$ready" = 1
-            node scripts/ci-raf-probe.mjs openbox 100
+            node scripts/ci-raf-probe.mjs openbox 200
           '
       - name: bare xvfb
-        run: dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' node scripts/ci-raf-probe.mjs bare 100
+        if: matrix.mode == 'bare'
+        run: dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' node scripts/ci-raf-probe.mjs bare 200

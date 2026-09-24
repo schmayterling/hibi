@@ -167,7 +167,7 @@ export async function updateWorkspaceSettings(
     const root = workspaceRoot()
     if (!root) throw new Error('Open a folder first.')
     await ensureManifest(root)
-    await loadWorkspace(root)
+    await refreshWorkspace([WORKSPACE_MANIFEST])
   } else if (value.action === 'save-manifest') {
     const root = workspaceRoot()
     if (!root) throw new Error('Open a folder first.')
@@ -187,7 +187,7 @@ export async function updateWorkspaceSettings(
       WORKSPACE_MANIFEST,
       JSON.stringify(manifest, null, 2) + '\n',
     )
-    await loadWorkspace(root)
+    await refreshWorkspace([WORKSPACE_IGNORE, WORKSPACE_MANIFEST])
   } else if (value.action === 'relocate') {
     if (!prefs.enabled || !prefs.path)
       throw new Error('Enable your Hibi workspace first.')

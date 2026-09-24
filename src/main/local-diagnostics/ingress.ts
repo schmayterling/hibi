@@ -90,7 +90,9 @@ export class DiagnosticIngress {
                   ? 'document-worker'
                   : record.code === 'WORD_COUNT_WORKER_FAILED'
                     ? 'word-count'
-                    : 'renderer',
+                    : record.code === 'TAGS_WORKER_FAILED'
+                      ? 'tags'
+                      : 'renderer',
             }),
           )
       }

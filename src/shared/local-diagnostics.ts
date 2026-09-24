@@ -65,6 +65,7 @@ export const diagnosticEvents = {
     producer: true,
     critical: false,
   },
+  TAGS_WORKER_FAILED: { severity: 'error', producer: true, critical: false },
   ANALYSIS_PROCESS_FAILED: {
     severity: 'error',
     producer: false,
@@ -100,6 +101,7 @@ export const diagnosticRoles = [
   'preload',
   'document-worker',
   'word-count',
+  'tags',
   'analysis',
   'typst',
   'format',

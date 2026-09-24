@@ -91,4 +91,36 @@ test('note indexes include drafts, exclude media/symlinks, and coexist with save
   assert.equal(concurrent[0].pages[0].markdown, text)
   assert.equal(concurrent[1].pages[0].markdown, text)
   assert.equal(await readFile(join(root, 'saved.md'), 'utf8'), text)
+
+  const extra = join(root, 'extra.md')
+  await writeFile(extra, '# extra')
+  await page.evaluate(() => window.hibi.refreshWorkspace())
+  const added = await page.evaluate(() =>
+    Promise.all([
+      window.hibi.getWorkspaceIndex(),
+      window.hibi.getWorkspaceIndex(),
+    ]),
+  )
+  assert.deepEqual(
+    added.map((index) => index.pages.map((page) => page.path)),
+    [
+      ['extra.md', 'saved.md'],
+      ['extra.md', 'saved.md'],
+    ],
+  )
+  const changedText = `${text}\nchanged`
+  await writeFile(join(root, 'saved.md'), changedText)
+  const changed = await page.evaluate(() => window.hibi.getWorkspaceIndex(true))
+  assert.equal(
+    changed.pages.find((page) => page.path === 'saved.md').markdown,
+    changedText,
+  )
+  await rm(extra)
+  await page.evaluate(() => window.hibi.refreshWorkspace())
+  assert.deepEqual(
+    (await page.evaluate(() => window.hibi.getWorkspaceIndex())).pages.map(
+      (page) => page.path,
+    ),
+    ['saved.md'],
+  )
 })

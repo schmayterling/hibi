@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto'
-import { type FSWatcher, watch } from 'node:fs'
-import { lstat, readdir, readFile, realpath } from 'node:fs/promises'
+import { type FSWatcher, type Stats, watch } from 'node:fs'
+import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute, join, parse, relative, sep } from 'node:path'
 import { app, type BrowserWindow, dialog, shell } from 'electron'
+import ignore from 'ignore'
 import { wikiTarget } from '../shared/note-links'
 import type {
+  WorkspaceChange,
   WorkspaceEntry,
   WorkspaceIndex,
   WorkspaceSnapshot,
@@ -26,16 +28,93 @@ import {
   getKnownWorkspaces,
   rememberWorkspace,
 } from './recent-workspaces'
+import {
+  type CachedIndexPage,
+  diskIndexVersion,
+  needsIndexVerification,
+  readIndexPage,
+} from './workspace-index-cache'
+import { LatestIndexJob } from './workspace-index-job'
 import { workspaceIgnore, workspaceMetadata } from './workspace-metadata'
+import { createScanCoordinator, watchNeedsScan } from './workspace-refresh'
 import { showAllWorkspaceFiles } from './workspace-settings'
+
+type ScanResult = {
+  entries: WorkspaceEntry[]
+  manifest: WorkspaceManifest | null
+  showAllFiles: boolean
+  ignored: ReturnType<typeof ignore>
+}
 
 let root: string | null = null
 let entries: WorkspaceEntry[] = []
 let manifest: WorkspaceManifest | null = null
 let obsidian: WorkspaceState['obsidian']
+let showingAllFiles = false
+let ignoredPaths: ReturnType<typeof ignore> | null = null
 let watcher: FSWatcher | undefined
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
-let onChanged: () => void = () => {}
+let scanCoordinator:
+  | ReturnType<typeof createScanCoordinator<ScanResult>>
+  | undefined
+let pendingTreePaths: Set<string> | null = new Set()
+let watcherEvents = new Map<string, 'change' | 'rename'>()
+let unknownWatcherEvent = false
+let loadGeneration = 0
+const acknowledgedPaths = new Map<
+  string,
+  { fingerprint: string | null; expires: number }
+>()
+let onChanged: (change: WorkspaceChange) => void = () => {}
+let indexRevision = 0
+let cachedRoot: string | null = null
+let cachedPages = new Map<string, CachedIndexPage>()
+let dirtyIndexPaths: Set<string> | null = null
+let cachedIndexKey: string | null = null
+let cachedIndexPages: WorkspaceIndex['pages'] | null = null
+type IndexDraft = ReturnType<typeof getOpenDocuments>[number]
+type IndexRequest = {
+  key: string
+  selected: string
+  workspace: WorkspaceState
+  drafts: Map<string, IndexDraft>
+  revision: number
+}
+const indexJob = new LatestIndexJob(captureIndexRequest, runIndexRequest)
+
+function indexedContentPath(path: string): boolean {
+  if (cachedPages.has(path)) return true
+  if (!isDocumentName(basename(path), true)) return false
+  if (cachedEntry(path)?.kind === 'file') return true
+  const selected = root
+  if (
+    !selected ||
+    !relevantWatchPath(path) ||
+    path.split('/').includes('node_modules') ||
+    ignoredPaths?.ignores(path)
+  )
+    return false
+  return getOpenDocuments().some(
+    (draft) =>
+      draft.pendingPath && relativePath(selected, draft.pendingPath) === path,
+  )
+}
+
+function publishWorkspaceChange(change: WorkspaceChange) {
+  if (
+    change.kind === 'tree' ||
+    change.paths === null ||
+    cachedRoot !== root ||
+    change.paths.some(indexedContentPath)
+  ) {
+    if (change.paths === null) dirtyIndexPaths = null
+    else if (dirtyIndexPaths)
+      for (const path of change.paths) dirtyIndexPaths.add(path)
+    indexRevision++
+    indexJob.invalidate()
+  }
+  onChanged(change)
+}
 
 export function workspaceRoot(): string | null {
   return root
@@ -60,6 +139,10 @@ async function obsidianVault(
   } catch {
     return { externalAddons: false }
   }
+}
+
+export function workspaceRelativePath(path: string | null): string | null {
+  return root && path ? relativePath(root, path) : null
 }
 
 function relativePath(base: string, path: string): string | null {
@@ -120,13 +203,15 @@ export async function scanWorkspace(
   return walk(base)
 }
 
-export function getWorkspace(): WorkspaceState | null {
+export function getWorkspace(
+  open?: ReturnType<typeof getOpenDocuments>,
+): WorkspaceState | null {
   if (!root) return null
+  const documents = open ?? getOpenDocuments()
   const path = getDocumentPath()
   const activePath = path ? relativePath(root, path) : null
   let visible = entries
-  const open = getOpenDocuments()
-  for (const draft of open) {
+  for (const draft of documents) {
     const draftPath = draft.pendingPath && relativePath(root, draft.pendingPath)
     if (!draftPath) continue
     const parts = draftPath.split('/')
@@ -150,7 +235,7 @@ export function getWorkspace(): WorkspaceState | null {
     visible = addDraft(visible, 0)
   }
   const dirty = new Set(
-    open
+    documents
       .filter((draft) => draft.dirty && draft.file)
       .map((draft) => relativePath(root!, draft.file!)),
   )
@@ -170,24 +255,250 @@ export function getWorkspace(): WorkspaceState | null {
   }
 }
 
-export async function refreshWorkspace(): Promise<WorkspaceState | null> {
-  const selected = root
-  if (selected) {
-    const [next, metadata, vault] = await Promise.all([
-      scanWorkspace(selected, await showAllWorkspaceFiles()),
-      workspaceMetadata(selected),
-      obsidianVault(selected),
-    ])
-    if (root === selected) {
-      entries = next
-      manifest = metadata.manifest
-      obsidian = vault
-    }
+function addTreePaths(paths: string[] | null) {
+  if (paths === null) pendingTreePaths = null
+  else if (pendingTreePaths)
+    for (const path of paths) pendingTreePaths.add(path)
+}
+
+function takeTreePaths(): string[] | null {
+  const paths = pendingTreePaths ? [...pendingTreePaths] : null
+  pendingTreePaths = new Set()
+  return paths
+}
+
+async function fileStatus(base: string, path: string): Promise<Stats | null> {
+  try {
+    return await lstat(join(base, path))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
   }
+}
+
+function fingerprint(info: Stats | null): string | null {
+  return info
+    ? [
+        info.dev,
+        info.ino,
+        info.mode,
+        info.size,
+        info.mtimeMs,
+        info.ctimeMs,
+      ].join(':')
+    : null
+}
+
+async function acknowledgePaths(base: string, paths: string[]) {
+  const now = Date.now()
+  for (const [path, acknowledged] of acknowledgedPaths)
+    if (acknowledged.expires < now) acknowledgedPaths.delete(path)
+  const affected = new Set(paths)
+  for (const path of paths) {
+    const parts = path.split('/')
+    for (let length = 1; length < parts.length; length++)
+      affected.add(parts.slice(0, length).join('/'))
+  }
+  await Promise.all(
+    [...affected].map(async (path) => {
+      const current = fingerprint(await fileStatus(base, path))
+      if (root === base)
+        acknowledgedPaths.set(path, {
+          fingerprint: current,
+          expires: Date.now() + 1500,
+        })
+    }),
+  )
+}
+
+async function requestWorkspaceScan(
+  paths: string[] | null,
+  acknowledge = false,
+): Promise<WorkspaceState | null> {
+  const selected = root
+  if (!selected || !scanCoordinator) return getWorkspace()
+  if (acknowledge && paths) await acknowledgePaths(selected, paths)
+  if (root !== selected) return getWorkspace()
+  addTreePaths(paths)
+  await scanCoordinator.request()
   return getWorkspace()
 }
 
-export function observeWorkspace(callback: () => void): void {
+export function refreshWorkspace(
+  paths: string[] | null = null,
+): Promise<WorkspaceState | null> {
+  return requestWorkspaceScan(paths, paths !== null)
+}
+
+export async function notifyWorkspaceContent(
+  paths: string[] | null,
+): Promise<WorkspaceState | null> {
+  const selected = root
+  if (!selected) return null
+  if (paths) await acknowledgePaths(selected, paths)
+  if (root === selected) publishWorkspaceChange({ kind: 'content', paths })
+  return getWorkspace()
+}
+
+export async function documentFileChanged(
+  previous: string | null,
+  next: string | null,
+  treeChanged: boolean,
+): Promise<void> {
+  const paths = [
+    ...new Set(
+      [workspaceRelativePath(previous), workspaceRelativePath(next)].filter(
+        (path): path is string => path !== null,
+      ),
+    ),
+  ]
+  if (!paths.length) return
+  if (treeChanged) await refreshWorkspace(paths)
+  else await notifyWorkspaceContent(paths)
+}
+
+function cachedEntry(path: string): WorkspaceEntry | undefined {
+  let level = entries
+  let found: WorkspaceEntry | undefined
+  for (const part of path.split('/')) {
+    found = level.find((item) => item.name === part)
+    if (!found) return undefined
+    level = found.children ?? []
+  }
+  return found
+}
+
+function metadataPath(path: string): boolean {
+  return (
+    path === '.hibi' ||
+    path === '.hibi/workspace.json' ||
+    path === '.hibi/ignore' ||
+    path === '.hibi.json' ||
+    path === '.hibiignore'
+  )
+}
+
+function gitMetadataPath(path: string): boolean {
+  return path === '.git' || path.startsWith('.git/')
+}
+
+function relevantWatchPath(path: string): boolean {
+  if (metadataPath(path) || gitMetadataPath(path)) return true
+  const parts = path.split('/')
+  return !parts.some(
+    (part, index) =>
+      part.startsWith('.') && (index < parts.length - 1 || !showingAllFiles),
+  )
+}
+
+async function flushWatcherEvents(selected: string) {
+  const events = watcherEvents
+  const unknown = unknownWatcherEvent
+  watcherEvents = new Map()
+  unknownWatcherEvent = false
+  if (root !== selected) return
+  if (unknown) {
+    await requestWorkspaceScan(null)
+    return
+  }
+  const ignored = await workspaceIgnore(selected)
+  if (root !== selected) return
+  const treePaths: string[] = []
+  const contentPaths: string[] = []
+  for (const [path] of events) {
+    if (!relevantWatchPath(path)) continue
+    const stat = await fileStatus(selected, path)
+    const current = fingerprint(stat)
+    const acknowledged = acknowledgedPaths.get(path)
+    if (acknowledged) {
+      if (Date.now() > acknowledged.expires) acknowledgedPaths.delete(path)
+      else if (acknowledged.fingerprint === current) continue
+    }
+    if (metadataPath(path)) {
+      treePaths.push(path)
+      continue
+    }
+    if (gitMetadataPath(path)) {
+      contentPaths.push(path)
+      continue
+    }
+    if (
+      path.split('/').includes('node_modules') ||
+      ignored.ignores(path) ||
+      ignored.ignores(`${path}/`)
+    ) {
+      contentPaths.push(path)
+      continue
+    }
+    const visibleKind = stat?.isDirectory()
+      ? 'folder'
+      : stat?.isFile() &&
+          (showingAllFiles || isDocumentName(basename(path), true))
+        ? 'file'
+        : null
+    if (watchNeedsScan(cachedEntry(path)?.kind ?? null, visibleKind))
+      treePaths.push(path)
+    else contentPaths.push(path)
+  }
+  if (root !== selected) return
+  if (treePaths.length)
+    await requestWorkspaceScan([...treePaths, ...contentPaths])
+  else if (contentPaths.length)
+    publishWorkspaceChange({ kind: 'content', paths: contentPaths })
+}
+
+function atomicTempTarget(path: string): string | null {
+  const parts = path.split('/')
+  const name = parts.pop()
+  const match =
+    /^\.(.+)\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/i.exec(
+      name ?? '',
+    )
+  return match ? [...parts, match[1]].join('/') : null
+}
+
+function queueWatcherEvent(
+  selected: string,
+  eventType: string,
+  filename: string | Buffer | null,
+) {
+  if (root !== selected) return
+  const path =
+    filename && relativePath(selected, join(selected, filename.toString()))
+  const target = path && atomicTempTarget(path)
+  const changedPath = target || path
+  const acknowledged = changedPath && acknowledgedPaths.get(changedPath)
+  if (
+    !changedPath ||
+    (relevantWatchPath(changedPath) &&
+      !gitMetadataPath(changedPath) &&
+      (metadataPath(changedPath) ||
+        (!changedPath.split('/').includes('node_modules') &&
+          !ignoredPaths?.ignores(changedPath) &&
+          !ignoredPaths?.ignores(`${changedPath}/`))) &&
+      (!acknowledged || acknowledged.expires < Date.now()))
+  )
+    scanCoordinator?.invalidate()
+  if (target) watcherEvents.set(target, 'rename')
+  else if (path)
+    watcherEvents.set(
+      path,
+      eventType === 'rename' || watcherEvents.get(path) === 'rename'
+        ? 'rename'
+        : 'change',
+    )
+  else unknownWatcherEvent = true
+  clearTimeout(refreshTimer)
+  refreshTimer = setTimeout(() => {
+    void flushWatcherEvents(selected).catch((error: unknown) =>
+      console.error('workspace refresh failed:', error),
+    )
+  }, 200)
+}
+
+export function observeWorkspace(
+  callback: (change: WorkspaceChange) => void,
+): void {
   onChanged = callback
 }
 
@@ -206,32 +517,73 @@ export async function openWorkspace(
 export async function loadWorkspace(
   selected: string,
 ): Promise<WorkspaceState | null> {
+  const loading = ++loadGeneration
   const nextRoot = await realpath(selected)
-  const nextEntries = await scanWorkspace(
-    nextRoot,
-    await showAllWorkspaceFiles(),
-  )
-  const [metadata, vault] = await Promise.all([
+  if (loading !== loadGeneration) return getWorkspace()
+  if (nextRoot === root) {
+    const vault = await obsidianVault(nextRoot)
+    if (loading !== loadGeneration) return getWorkspace()
+    obsidian = vault
+    await refreshWorkspace()
+    if (loading !== loadGeneration) return getWorkspace()
+    await rememberWorkspace(nextRoot)
+    return getWorkspace()
+  }
+  const showAllFiles = await showAllWorkspaceFiles()
+  const [nextEntries, metadata, vault] = await Promise.all([
+    scanWorkspace(nextRoot, showAllFiles),
     workspaceMetadata(nextRoot),
     obsidianVault(nextRoot),
   ])
+  if (loading !== loadGeneration) return getWorkspace()
   watcher?.close()
   clearTimeout(refreshTimer)
+  indexJob.reset()
+  scanCoordinator?.close()
+  watcherEvents.clear()
+  unknownWatcherEvent = false
+  acknowledgedPaths.clear()
+  pendingTreePaths = new Set()
+  cachedRoot = null
+  cachedPages.clear()
+  dirtyIndexPaths = null
+  cachedIndexKey = null
+  cachedIndexPages = null
   root = nextRoot
   entries = nextEntries
   manifest = metadata.manifest
   obsidian = vault
+  showingAllFiles = showAllFiles
+  ignoredPaths = ignore().add(metadata.ignore)
+  scanCoordinator = createScanCoordinator(
+    async () => {
+      const showAllFiles = await showAllWorkspaceFiles()
+      const [next, metadata] = await Promise.all([
+        scanWorkspace(nextRoot, showAllFiles),
+        workspaceMetadata(nextRoot),
+      ])
+      return {
+        entries: next,
+        manifest: metadata.manifest,
+        showAllFiles,
+        ignored: ignore().add(metadata.ignore),
+      }
+    },
+    (next) => {
+      if (root !== nextRoot) return
+      entries = next.entries
+      manifest = next.manifest
+      showingAllFiles = next.showAllFiles
+      ignoredPaths = next.ignored
+      publishWorkspaceChange({ kind: 'tree', paths: takeTreePaths() })
+    },
+  )
   try {
-    watcher = watch(root, { recursive: true, persistent: false }, () => {
-      clearTimeout(refreshTimer)
-      refreshTimer = setTimeout(() => {
-        void refreshWorkspace()
-          .then(onChanged)
-          .catch((error: unknown) =>
-            console.error('workspace refresh failed:', error),
-          )
-      }, 200)
-    })
+    watcher = watch(
+      root,
+      { recursive: true, persistent: false },
+      (eventType, filename) => queueWatcherEvent(nextRoot, eventType, filename),
+    )
     watcher.on('error', (error) =>
       console.error('workspace watcher failed:', error),
     )
@@ -241,7 +593,7 @@ export async function loadWorkspace(
   await rememberWorkspace(nextRoot).catch((error: unknown) =>
     console.error('could not remember workspace:', error),
   )
-  onChanged()
+  publishWorkspaceChange({ kind: 'tree', paths: null })
   return getWorkspace()
 }
 
@@ -280,16 +632,30 @@ export async function deleteKnownWorkspace(
   await shell.trashItem(item.path)
   closeDeletedDocuments(window, item.path)
   if (root === item.path || root?.startsWith(`${item.path}${sep}`)) {
+    loadGeneration += 1
     watcher?.close()
     clearTimeout(refreshTimer)
+    indexJob.reset()
+    scanCoordinator?.close()
+    scanCoordinator = undefined
     watcher = undefined
+    watcherEvents.clear()
+    unknownWatcherEvent = false
+    acknowledgedPaths.clear()
+    pendingTreePaths = new Set()
     root = null
     entries = []
     manifest = null
     obsidian = undefined
+    ignoredPaths = null
+    cachedRoot = null
+    cachedPages.clear()
+    dirtyIndexPaths = null
+    cachedIndexKey = null
+    cachedIndexPages = null
   }
   await forgetWorkspace(item.path)
-  onChanged()
+  publishWorkspaceChange({ kind: 'tree', paths: null })
   return true
 }
 
@@ -407,20 +773,85 @@ export async function snapshotWorkspace(): Promise<WorkspaceSnapshot> {
   }
 }
 
-export async function indexWorkspace(): Promise<WorkspaceIndex | null> {
+function captureIndexRequest(): { key: string; request: IndexRequest } | null {
   const selected = root
-  const workspace = getWorkspace()
-  if (!selected || !workspace) return null
+  if (!selected) return null
+  const open = getOpenDocuments()
+  const workspace = getWorkspace(open)
+  if (!workspace) return null
   const drafts = new Map(
-    getOpenDocuments().flatMap((draft) => {
+    open.flatMap((draft) => {
       const path = draft.file && relativePath(selected, draft.file)
       return path && draft.dirty ? [[path, draft] as const] : []
     }),
   )
+  const revision = indexRevision
+  const key = JSON.stringify([
+    selected,
+    revision,
+    [...drafts]
+      .map(([path, draft]) => [path, draft.tabId, draft.contentVersion])
+      .sort(([a], [b]) => String(a).localeCompare(String(b))),
+  ])
+  return { key, request: { key, selected, workspace, drafts, revision } }
+}
+
+async function runIndexRequest(
+  request: IndexRequest,
+  current: () => boolean,
+): Promise<WorkspaceIndex> {
+  const { selected, workspace, drafts, revision } = request
+  const pages = await collectIndexPages(
+    selected,
+    workspace.entries,
+    drafts,
+    () => current() && root === selected && indexRevision === revision,
+  )
+  const path = getDocumentPath()
+  const activePath = path ? relativePath(selected, path) : null
+  if (current()) {
+    cachedIndexKey = request.key
+    cachedIndexPages = pages
+  }
+  return { workspace: { ...workspace, activePath }, pages }
+}
+
+export function indexWorkspace(
+  verifyAll = false,
+): Promise<WorkspaceIndex | null> {
+  if (verifyAll && root) {
+    dirtyIndexPaths = null
+    indexRevision++
+    indexJob.invalidate()
+  }
+  const captured = captureIndexRequest()
+  if (!captured) return Promise.resolve(null)
+  if (
+    !indexJob.running &&
+    cachedIndexKey === captured.key &&
+    cachedIndexPages &&
+    dirtyIndexPaths?.size === 0
+  )
+    return Promise.resolve({
+      workspace: captured.request.workspace,
+      pages: cachedIndexPages,
+    })
+  return indexJob.request(captured)
+}
+
+async function collectIndexPages(
+  selected: string,
+  entries: readonly WorkspaceEntry[],
+  drafts: Map<string, IndexDraft>,
+  current: () => boolean,
+): Promise<WorkspaceIndex['pages']> {
+  const previous = cachedRoot === selected ? cachedPages : new Map()
+  const next = new Map<string, CachedIndexPage>()
   const pages: WorkspaceIndex['pages'] = []
   let bytes = 0
   async function collect(items: readonly WorkspaceEntry[]) {
     for (const item of items) {
+      if (!current()) return
       if (item.children) {
         await collect(item.children)
         continue
@@ -429,27 +860,53 @@ export async function indexWorkspace(): Promise<WorkspaceIndex | null> {
       if (!isDocumentName(item.name, true)) continue
       try {
         const draft = drafts.get(item.path)
-        const path =
-          draft?.file ?? (await resolveWorkspaceFile(selected!, item.path))
-        const markdown = draft?.markdown ?? (await readMarkdown(path))
-        bytes += Buffer.byteLength(markdown)
+        const existing = previous.get(item.path)
+        let cached: CachedIndexPage
+        if (
+          !draft &&
+          existing?.version.startsWith('disk:') &&
+          !needsIndexVerification(dirtyIndexPaths, item.path)
+        ) {
+          cached = existing
+        } else {
+          const path =
+            draft?.file ?? (await resolveWorkspaceFile(selected, item.path))
+          let version: string
+          if (draft) {
+            version = `draft:${draft.tabId}:${draft.contentVersion}`
+          } else {
+            const file = await stat(path, { bigint: true })
+            version = diskIndexVersion(file)
+          }
+          cached = await readIndexPage(
+            existing,
+            version,
+            existing?.page.id ??
+              createHash('sha256').update(path).digest('hex'),
+            item.path,
+            () => draft?.markdown ?? readMarkdown(path),
+          )
+        }
+        bytes += cached.bytes
         if (pages.length >= 2000 || bytes > 20 * 1024 * 1024)
           throw new Error(
             'Hibi can index up to 2,000 documents and 20 MiB of text. Open a smaller workspace.',
           )
-        pages.push({
-          id: createHash('sha256').update(path).digest('hex'),
-          path: item.path,
-          markdown,
-        })
+        next.set(item.path, cached)
+        pages.push(cached.page)
       } catch (error) {
         // A concurrent rename/delete can remove a cached entry; the watcher refreshes it.
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       }
     }
   }
-  await collect(workspace.entries)
-  return root === selected ? { workspace, pages } : null
+  await collect(entries)
+  if (current()) {
+    cachedRoot = selected
+    cachedPages = next
+    dirtyIndexPaths = new Set()
+  }
+  return pages
 }
 
 import { isMarkdownDocument } from '../shared/document-types'

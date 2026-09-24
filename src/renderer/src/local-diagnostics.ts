@@ -89,7 +89,8 @@ export function installRendererDiagnostics(
         }
       if (
         code === 'SOURCE_WORKER_FAILED' ||
-        code === 'WORD_COUNT_WORKER_FAILED'
+        code === 'WORD_COUNT_WORKER_FAILED' ||
+        code === 'TAGS_WORKER_FAILED'
       ) {
         try {
           const original = projectError(

@@ -26,6 +26,7 @@ import {
   type KnownWorkspace,
   toRecentWorkspaces,
   WORKSPACE_CHANNELS,
+  type WorkspaceChange,
   type WorkspaceState,
 } from '../shared/workspace'
 import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
@@ -217,7 +218,8 @@ if (process.isMainFrame) {
     deleteKnownWorkspace: (id) =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.deleteKnown, id),
     getWorkspaceSnapshot: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.snapshot),
-    getWorkspaceIndex: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.index),
+    getWorkspaceIndex: (verifyAll = false) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.index, verifyAll),
     workspaceAction: (action) =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.action, action),
     openWorkspace: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.open),
@@ -228,7 +230,8 @@ if (process.isMainFrame) {
       const listener = (
         _event: Electron.IpcRendererEvent,
         workspace: WorkspaceState | null,
-      ) => callback(workspace)
+        change?: WorkspaceChange,
+      ) => callback(workspace, change)
       ipcRenderer.on(WORKSPACE_CHANNELS.changed, listener)
       return () => {
         ipcRenderer.removeListener(WORKSPACE_CHANNELS.changed, listener)

@@ -7,6 +7,7 @@ See the [addon API reference](../../development/addon-api-reference/README.md).
 - [RecentWorkspace](../../development/addon-api-reference/RecentWorkspace.md)
 - [WorkspaceEntry](../../development/addon-api-reference/WorkspaceEntry.md)
 - [WorkspaceState](../../development/addon-api-reference/WorkspaceState.md)
+- [WorkspaceChange](../../development/addon-api-reference/WorkspaceChange.md)
 - [ExplorerDecoration](../../development/addon-api-reference/ExplorerDecoration.md)
 - [ExplorerDecorationProvider](../../development/addon-api-reference/ExplorerDecorationProvider.md)
 - [WorkspaceAction](../../development/addon-api-reference/WorkspaceAction.md)

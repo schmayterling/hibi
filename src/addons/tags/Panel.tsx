@@ -3,16 +3,20 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AddonContext } from '../api'
 import { Button, ControlRow, Panel, PanelMessage, TextInput } from '../ui'
 import { useWorkspaceSnapshot } from '../workspace-snapshot'
+import type { TagAnalysis } from './analysis'
 import { type TagIndexCache, tagIndex } from './model'
 
 export function TagsPanel({
   context,
   selection,
+  analysis,
 }: {
   context: AddonContext
   selection: unknown
+  analysis: TagAnalysis
 }) {
-  const { snapshot, workspace, loading, error } = useWorkspaceSnapshot(context)
+  const { snapshot, document, workspace, loading, error } =
+    useWorkspaceSnapshot(context)
   const [query, setQuery] = useState('')
   const [selected, select] = useState('')
   const parsed = useRef<TagIndexCache>({
@@ -29,10 +33,14 @@ export function TagsPanel({
       setQuery('')
     }
   }, [selection])
-  const index = useMemo(
-    () => tagIndex(workspace?.id, snapshot?.pages ?? [], parsed),
-    [workspace?.id, snapshot, parsed],
-  )
+  const index = useMemo(() => {
+    const activeSource = snapshot?.pages.find(
+      (page) => page.id === document?.id,
+    )?.markdown
+    return tagIndex(workspace?.id, snapshot?.pages ?? [], parsed, (source) =>
+      analysis.parsePage(source, activeSource),
+    )
+  }, [workspace?.id, snapshot, document?.id, parsed, analysis])
   const matches = index.filter(([tag]) =>
     tag.includes(query.trim().replace(/^#/, '').toLowerCase()),
   )

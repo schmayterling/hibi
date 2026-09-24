@@ -1,11 +1,54 @@
 import { FileDown } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { WorkspaceChange } from '../../shared/workspace'
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
 import { PreviewActions } from '../../ui/PreviewActions'
 import type { AddonContext } from '../api'
 import { svgSource } from './syntax'
 import type { TypstResult } from './types'
+
+const rendererId = crypto.randomUUID()
+let workspaceRevision = 0
+let stopWorkspaceListener: (() => void) | undefined
+const workspaceListeners = new Set<(change?: WorkspaceChange) => void>()
+
+function onWorkspaceChange(listener: (change?: WorkspaceChange) => void) {
+  workspaceListeners.add(listener)
+  if (!stopWorkspaceListener) {
+    workspaceRevision++
+    stopWorkspaceListener = window.hibi.onWorkspaceChanged(
+      (_workspace, change) => {
+        workspaceRevision++
+        for (const notify of workspaceListeners) notify(change)
+      },
+    )
+  }
+  return () => {
+    workspaceListeners.delete(listener)
+    if (workspaceListeners.size === 0) {
+      stopWorkspaceListener?.()
+      stopWorkspaceListener = undefined
+    }
+  }
+}
+
+function affectsPreview(
+  change: WorkspaceChange | undefined,
+  paths: string[] | null,
+) {
+  if (!change || change.paths === null || paths === null) return true
+  return change.paths.some((path) => {
+    const changed = path.replaceAll('\\', '/')
+    return (
+      /\.(ttf|otf|ttc|otc)$/i.test(changed) ||
+      paths.some(
+        (dependency) =>
+          dependency === changed || dependency.startsWith(`${changed}/`),
+      )
+    )
+  })
+}
 
 export function TypstPreview({
   value,
@@ -26,6 +69,12 @@ export function TypstPreview({
   const [busy, setBusy] = useState(true)
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState('')
+  const compiled = useRef<{
+    source: string
+    documentId: string | undefined
+    block: boolean
+    paths: string[] | null
+  } | null>(null)
   const image = useMemo(
     () => (result?.svg ? svgSource(result.svg) : undefined),
     [result?.svg],
@@ -33,23 +82,48 @@ export function TypstPreview({
   const [projectRevision, setProjectRevision] = useState(0)
   useEffect(
     () =>
-      window.hibi.onWorkspaceChanged(() =>
-        setProjectRevision((value) => value + 1),
-      ),
-    [],
+      onWorkspaceChange((change) => {
+        const current = compiled.current
+        if (
+          !current ||
+          current.source !== value ||
+          current.documentId !== documentId ||
+          current.block !== block ||
+          affectsPreview(change, current.paths)
+        ) {
+          compiled.current = null
+          setProjectRevision(workspaceRevision)
+        }
+      }),
+    [value, documentId, block],
   )
-  // biome-ignore lint/correctness/useExhaustiveDependencies: workspace changes invalidate imported files even when the source string is unchanged.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: relevant workspace paths explicitly invalidate unchanged Typst source.
   useEffect(() => {
     let active = true
+    compiled.current = null
     setBusy(true)
     const timer = setTimeout(() => {
       void context.native
-        .query<TypstResult>('compile', { source: value, documentId, block })
+        .query<TypstResult>('compile', {
+          source: value,
+          documentId,
+          block,
+          revision: `${rendererId}:${workspaceRevision}`,
+        })
         .then((result) => {
-          if (active) setResult(result)
+          if (active) {
+            compiled.current = {
+              source: value,
+              documentId,
+              block,
+              paths: result.dependencies ?? null,
+            }
+            setResult(result)
+          }
         })
         .catch((error: unknown) => {
-          if (active)
+          if (active) {
+            compiled.current = null
             setResult({
               diagnostics: [
                 {
@@ -61,6 +135,7 @@ export function TypstPreview({
                 },
               ],
             })
+          }
         })
         .finally(() => {
           if (active) setBusy(false)

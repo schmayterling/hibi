@@ -158,9 +158,16 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
         sourceButton: document
           .querySelector('[aria-label="Source view"]')
           ?.getAttribute('aria-pressed'),
+        sourceButtonDisabled: document.querySelector(
+          '[aria-label="Source view"]',
+        )?.disabled,
         sourceEditable: source?.isContentEditable,
         sourceContentEditable: source?.getAttribute('contenteditable'),
         sourcePaneInert: document.querySelector('.source-pane')?.inert,
+        richContentEditable: document
+          .querySelector('.tiptap')
+          ?.getAttribute('contenteditable'),
+        visibility: document.visibilityState,
         activeElement: document.activeElement?.getAttribute('aria-label'),
         openDialogs: [...document.querySelectorAll('dialog[open]')].map(
           (dialog) => dialog.getAttribute('aria-label'),

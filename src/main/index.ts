@@ -325,7 +325,8 @@ function createWindow(): void {
     minWidth: 480,
     minHeight: 360,
     show: false,
-    focusable: !testing,
+    // Linux cannot change focusability after creation; CI shows test windows.
+    focusable: !testing || process.platform === 'linux',
     title: 'Hibi',
     ...(process.platform === 'darwin' ? {} : { icon: appIcon }),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',

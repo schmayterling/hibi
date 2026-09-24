@@ -43,9 +43,20 @@ test('review highlights and fixes both editors, keeps undo, and disposes annotat
   await page
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .fill('teh very very note')
+  await page.locator('.toolbar-slot[data-hidden="false"]').waitFor()
   await page
-    .getByRole('button', { name: 'Review document', exact: true })
-    .click()
+    .locator('[data-toolbar-id="review.open"]')
+    .first()
+    .waitFor({ state: 'attached' })
+  const review = page.getByRole('button', {
+    name: 'Review document',
+    exact: true,
+  })
+  if (await review.isVisible()) await review.click()
+  else {
+    await page.getByRole('button', { name: 'More formatting actions' }).click()
+    await page.getByRole('menuitem', { name: 'Review document' }).click()
+  }
   const finding = page.getByRole('button', {
     name: 'Change “teh” to “the”',
     exact: true,

@@ -2,6 +2,12 @@
 
 A workspace is an ordinary folder on your computer. Hibi keeps your files where they are.
 
+## Open an Obsidian vault
+
+Drop the vault folder onto Hibi or choose **Open a folder…**. Hibi opens the notes in place, keeps their folders, and ignores `.obsidian` while browsing. It does not change Obsidian's settings. Back up the vault before editing notes shared with Obsidian; Hibi shows this reminder when you first open the vault. If community plugins are enabled, the reminder also offers a link to Hibi's addons. Hibi does not run Obsidian plugins.
+
+Wikilinks, frontmatter, nested tags, relative links, image and SVG embeds, highlights, and common callouts work without importing the vault. See [media and navigation](../editing/media-and-navigation.md) for link and attachment behavior.
+
 ## Open a folder
 
 Choose **Open a folder…** in the sidebar, use **Open workspace…** in the command palette, or drop a folder onto Hibi. You can also reopen a recent workspace from the welcome screen. Opening a folder leaves your current note intact.

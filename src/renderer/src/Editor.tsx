@@ -78,6 +78,7 @@ import type { OutlineHeading, OutlineRequest } from './OutlineSidebar'
 import { outlineHeadingAt } from './outline-position'
 import { createPlainSourceSync } from './plain-source-sync'
 import { observeRichAnnotations } from './rich-annotations'
+import { preserveRichSource } from './rich-source-preservation'
 import {
   richSourceEcho,
   richSourceSession,
@@ -216,6 +217,8 @@ export function MarkdownEditor({
           (flavor.export?.extensions?.length ||
             flavor.richExtensions?.length) &&
           ![
+            'markdown.github',
+            'markdown.obsidian',
             'github-markdown.github',
             'text-extras.text-extras',
             'math.latex',
@@ -231,7 +234,7 @@ export function MarkdownEditor({
         { gfm: false },
         ...flavors.map((flavor) => flavor.markedOptions),
       ).gfm,
-      alerts: flavors.some((flavor) => flavor.id === 'github-markdown.github'),
+      alerts: flavors.some((flavor) => flavor.id === 'markdown.github'),
       textExtras: flavors.some(
         (flavor) => flavor.id === 'text-extras.text-extras',
       ),
@@ -244,6 +247,8 @@ export function MarkdownEditor({
   // biome-ignore lint/correctness/useExhaustiveDependencies: registry preferences invalidate outline grammar ownership.
   const outlineSyntax = useMemo(() => {
     const known = new Map([
+      ['markdown.github', 'markdown'],
+      ['markdown.obsidian', 'markdown'],
       ['github-markdown.github', 'github-markdown'],
       ['text-extras.text-extras', 'text-extras'],
       ['math.latex', 'math'],
@@ -283,7 +288,7 @@ export function MarkdownEditor({
         { gfm: false },
         ...flavors.map((flavor) => flavor.markedOptions),
       ).gfm,
-      alerts: flavors.some((flavor) => flavor.id === 'github-markdown.github'),
+      alerts: flavors.some((flavor) => flavor.id === 'markdown.github'),
       textExtras: flavors.some(
         (flavor) => flavor.id === 'text-extras.text-extras',
       ),
@@ -302,7 +307,7 @@ export function MarkdownEditor({
   // biome-ignore lint/correctness/useExhaustiveDependencies: syntaxVersion invalidates parser contribution compatibility.
   const plainSyncEligible = useMemo(() => {
     const knownOwner = (owner: string) =>
-      ['github-markdown', 'text-extras'].includes(owner) &&
+      ['markdown', 'github-markdown', 'text-extras'].includes(owner) &&
       addonRegistry.origin(owner) === 'built-in'
     return (
       richSyntaxCompatible &&
@@ -313,9 +318,12 @@ export function MarkdownEditor({
         return (
           registered &&
           knownOwner(registered.addonId) &&
-          ['github-markdown.github', 'text-extras.text-extras'].includes(
-            registered.id,
-          )
+          [
+            'markdown.github',
+            'markdown.obsidian',
+            'github-markdown.github',
+            'text-extras.text-extras',
+          ].includes(registered.id)
         )
       }) &&
       markdownExtensions.every(
@@ -621,11 +629,36 @@ export function MarkdownEditor({
       exactSource.current ??
       exactHistory.current.get(editor)?.get(serialized.source)
     const currentSource = documentRuntime.get()?.markdown ?? value
+    const projection = projectMarkdown(currentSource, markdownExtensions)
+    const original = projection.content
+    let body = serialized.source
+    if (
+      richSyntaxCompatible &&
+      !preserved?.document.eq(nextState.doc) &&
+      original !== body
+    ) {
+      const before = serialize(editor.state.doc).source
+      if (original !== before) {
+        const baseline = editor.schema.nodeFromJSON(
+          editor.markdown!.parse(original),
+        )
+        const patched = baseline.eq(editor.state.doc)
+          ? preserveRichSource(original, before, body, (candidate) =>
+              editor.schema
+                .nodeFromJSON(editor.markdown!.parse(candidate))
+                .eq(nextState.doc),
+            )
+          : null
+        if (patched === null)
+          throw new Error(
+            'This edit would rewrite other Markdown. Use Source view for this document.',
+          )
+        body = patched
+      }
+    }
     const source = preserved?.document.eq(nextState.doc)
       ? preserved.source
-      : projectMarkdown(currentSource, markdownExtensions).serialize(
-          serialized.source,
-        )
+      : projection.serialize(body)
     const now = performance.now()
     groupAt(now)
     const accepted = performanceDiagnostics.measure(

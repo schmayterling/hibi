@@ -280,7 +280,7 @@ test('frontmatter fields preserve comments, types, nested YAML and body edits', 
     page.getByRole('textbox', { name: /document editor/i }),
     'updated body',
   )
-  assert.equal(splitFrontmatter(await read()).content, 'updated body')
+  assert.equal(splitFrontmatter(await read()).content, 'updated body\r\n')
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()

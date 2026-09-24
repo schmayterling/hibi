@@ -1,6 +1,6 @@
 # Markdown syntax controls
 
-Settings → Syntax controls rendered formatting. Core switches cover heading levels, bold, italic, inline code, escapes, code blocks, quotes, lists, dividers, line breaks, links, media, and HTML. Enabled addons supply switches for features such as GitHub tables, tasks, strikethrough and alerts, math, Typst blocks, subscript, and small text.
+Settings → Syntax controls rendered formatting. Base Markdown covers heading levels, bold, italic, inline code, escapes, code blocks, quotes, lists, dividers, line breaks, links, media, HTML, GitHub tables, tasks, strikethrough, alerts, and Obsidian wikilinks, embeds, and highlights. Other addons can supply switches for math, Typst blocks, subscript, and small text.
 
 Disabling syntax displays its original Markdown in rich editing and exports without changing source. Preferences apply across documents and launches. Disabled rich-formatting commands become unavailable; source remains editable. Paragraphs and plain text stay available. HTML still passes through export sanitization, and unsupported raw HTML retains the rich editor's read-only protection.
 

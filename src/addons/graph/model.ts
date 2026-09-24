@@ -1,59 +1,43 @@
-import { Marked } from 'marked'
 import { isMarkdownDocument } from '../../shared/document-types.ts'
-import { readFrontmatter } from '../../shared/frontmatter.ts'
+import {
+  localTarget,
+  noteReferences,
+  noteTargets,
+} from '../../shared/note-links.ts'
 import type { WorkspacePage } from '../../shared/workspace'
+
+export { localTarget }
 
 const links = new WeakMap<
   WorkspacePage,
-  { markdown: string; hrefs: string[] }
+  { markdown: string; references: ReturnType<typeof noteReferences> }
 >()
-
-export function localTarget(
-  from: string,
-  href: string,
-  paths: ReadonlySet<string>,
-) {
-  if (/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(href)) return null
-  let path: string
-  try {
-    path = decodeURIComponent(href.split(/[?#]/)[0] ?? '')
-  } catch {
-    return null
-  }
-  if (!path || path.includes('\\') || path.includes('\0')) return null
-  const parts = path.startsWith('/') ? [] : from.split('/').slice(0, -1)
-  for (const part of path.split('/')) {
-    if (!part || part === '.') continue
-    if (part === '..') {
-      if (!parts.length) return null
-      parts.pop()
-    } else parts.push(part)
-  }
-  const target = parts.join('/')
-  return paths.has(target) ? target : null
-}
 
 export function noteGraph(pages: readonly WorkspacePage[]) {
   const paths = new Set(pages.map((page) => page.path))
-  const parser = new Marked({ gfm: true })
   const edges = new Map<string, { source: string; target: string }>()
   for (const page of pages) {
     if (!isMarkdownDocument(page.path)) continue
     let cached = links.get(page)
     if (!cached || cached.markdown !== page.markdown) {
-      const hrefs: string[] = []
-      const source = readFrontmatter(page.markdown)?.content ?? page.markdown
-      parser.walkTokens(parser.lexer(source), (token) => {
-        if (token.type === 'link') hrefs.push(token.href)
-      })
-      cached = { markdown: page.markdown, hrefs }
+      cached = {
+        markdown: page.markdown,
+        references: noteReferences(page.markdown),
+      }
       links.set(page, cached)
     }
-    for (const href of cached.hrefs) {
-      const target = localTarget(page.path, href, paths)
-      if (!target || target === page.path) continue
-      const pair = [page.path, target].sort()
-      edges.set(JSON.stringify(pair), { source: pair[0]!, target: pair[1]! })
+    for (const target of noteTargets(
+      page.markdown,
+      page.path,
+      paths,
+      cached.references,
+    )) {
+      const source = page.path < target ? page.path : target
+      const destination = page.path < target ? target : page.path
+      edges.set(JSON.stringify([source, destination]), {
+        source,
+        target: destination,
+      })
     }
   }
   const degree = new Map<string, number>()

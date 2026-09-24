@@ -7,7 +7,11 @@ export const GithubAlert = Node.create({
   group: 'block',
   content: 'block+',
   defining: true,
-  addAttributes: () => ({ alertType: { default: 'note', rendered: false } }),
+  addAttributes: () => ({
+    alertType: { default: 'note', rendered: false },
+    title: { default: '', rendered: false },
+    fold: { default: '', rendered: false },
+  }),
   parseHTML: () => [
     {
       tag: 'blockquote[data-alert]',
@@ -15,7 +19,14 @@ export const GithubAlert = Node.create({
       contentElement: '.github-alert-body',
       getAttrs: (element) => {
         const type = alertType(element.getAttribute('data-alert'))
-        return type ? { alertType: type } : false
+        return type
+          ? {
+              alertType: type,
+              title:
+                element.querySelector('.github-alert-title')?.textContent ?? '',
+              fold: element.getAttribute('data-fold') ?? '',
+            }
+          : false
       },
     },
   ],
@@ -26,8 +37,13 @@ export const GithubAlert = Node.create({
       mergeAttributes(HTMLAttributes, {
         class: 'github-alert',
         'data-alert': type,
+        'data-fold': node.attrs.fold,
       }),
-      ['p', { class: 'github-alert-title', contenteditable: 'false' }, type],
+      [
+        'p',
+        { class: 'github-alert-title', contenteditable: 'false' },
+        node.attrs.title || type,
+      ],
       ['div', { class: 'github-alert-body' }, 0],
     ]
   },
@@ -45,14 +61,19 @@ export const GithubAlert = Node.create({
     const content = helpers.parseChildren(token.tokens ?? [])
     return helpers.createNode(
       'githubAlert',
-      { alertType: alertType(token.alertType) ?? 'note' },
+      {
+        alertType: alertType(token.alertType) ?? 'note',
+        title: token.title ?? '',
+        fold: token.fold ?? '',
+      },
       content.length ? content : [helpers.createNode('paragraph')],
     )
   },
   renderMarkdown: (node, helpers) => {
     const type = alertType(node.attrs?.alertType) ?? 'note'
     const body = helpers.renderChildren(node.content ?? [], '\n\n')
-    return `> [!${type.toUpperCase()}]\n${body
+    const marker = `> [!${type.toUpperCase()}]${node.attrs?.fold ?? ''}${node.attrs?.title ? ` ${node.attrs.title}` : ''}`
+    return `${marker}\n${body
       .split('\n')
       .map((line) => (line ? `> ${line}` : '>'))
       .join('\n')}`
@@ -76,6 +97,8 @@ export const GithubAlert = Node.create({
         const transaction = state.tr
           .setNodeMarkup($from.before(1), this.type, {
             alertType: marker[1]!.toLowerCase(),
+            title: marker[3]?.trim() ?? '',
+            fold: marker[2] ?? '',
           })
           .delete($from.start(), $from.end())
         view.dispatch(

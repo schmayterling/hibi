@@ -223,21 +223,17 @@ test('rich codec attachments invalidate plain certificates and source outline as
     () => document.querySelector('.tiptap')?.editor?.isEditable,
   )
   assert.equal(await page.evaluate(() => window.paragraphCodecEditor), null)
-  // Redo uses the native parser's entity behavior. The independent full codec,
-  // rather than an assumed decoded spelling, is the oracle after removal.
-  const afterDisable = await page.evaluate(() => {
+  // Removing the codec leaves existing entity spellings untouched on later edits.
+  await page.evaluate(() => {
     const editor = document.querySelector('.tiptap').editor
     const end = editor.state.doc.content.size - 1
-    const candidate = editor.state.tr.insertText('x', end).doc
-    const expected = editor.markdown.serialize(candidate.toJSON())
     editor.commands.setTextSelection(end)
     editor.view.focus()
-    return expected
   })
   await page.keyboard.insertText('x')
   await waitForAsync(
     page,
     async (expected) => (await window.hibi.getDocument()).markdown === expected,
-    afterDisable,
+    `${encoded}x`,
   )
 })

@@ -33,6 +33,8 @@ export function createMarkdownSemantics(
     flavors.some(
       (flavor) =>
         ![
+          'markdown.github',
+          'markdown.obsidian',
           'github-markdown.github',
           'text-extras.text-extras',
           'math.latex',

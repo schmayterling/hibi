@@ -85,7 +85,6 @@ test('tags and graph plugins browse/open notes, honor drafts, and clean up when 
       .click()
   }
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-  await choose('enable tags')
   await choose('enable graph')
   await waitForAsync(page, async () =>
     (await window.hibi.getAddonStates()).some(

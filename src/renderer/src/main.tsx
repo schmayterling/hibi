@@ -43,7 +43,7 @@ import type {
   WorkspaceActionResult,
   WorkspaceState,
 } from '../../shared/workspace'
-import { IconButton } from '../../ui/Controls'
+import { Button, IconButton } from '../../ui/Controls'
 import { settingsIndex } from '../../ui/settings-index'
 import {
   SIDEBAR_OVERLAY_WIDTH,
@@ -108,6 +108,11 @@ const SettingsScreen = lazy(() =>
 const VersionHistory = lazy(() =>
   import('./VersionHistory').then((module) => ({
     default: module.VersionHistory,
+  })),
+)
+const BacklinksSidebar = lazy(() =>
+  import('./BacklinksSidebar').then((module) => ({
+    default: module.BacklinksSidebar,
   })),
 )
 function App() {
@@ -366,6 +371,7 @@ function App() {
   }, [settingsOpen, paletteOpen])
   const [findOpen, setFindOpen] = useState(false)
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
+  const promptedVaults = useRef(new Set<string>())
   const [recentWorkspaces, setRecentWorkspaces] = useState<
     RecentWorkspace[] | null
   >(null)
@@ -684,7 +690,7 @@ function App() {
   useEffect(() => {
     if (
       addonHost.allReady &&
-      !['none', 'outline'].includes(rightSidebarView) &&
+      !['none', 'outline', 'backlinks'].includes(rightSidebarView) &&
       !addonHost.sidebarViews.some((view) => view.id === rightSidebarView)
     ) {
       setRightSidebarView('none')
@@ -702,6 +708,42 @@ function App() {
       }),
     [refreshKnownWorkspaces, setError],
   )
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the dialog callback uses the current settings opener after a one-time vault prompt.
+  useEffect(() => {
+    if (!addonHost.ready || !workspace?.id || !workspace.obsidian) return
+    const key = `hibi:obsidian-warning:${workspace.id}`
+    if (promptedVaults.current.has(key) || localStorage.getItem(key)) return
+    promptedVaults.current.add(key)
+    const dialog = dialogs.open<'continue' | 'addons'>({
+      title: 'Back up this Obsidian vault',
+      description:
+        'Hibi opens the vault in place and leaves its .obsidian settings unchanged. Make a backup before editing notes shared with Obsidian.',
+      closeOnOutsideClick: false,
+      content: ({ close }) => (
+        <div className="dialog-form">
+          {workspace.obsidian?.externalAddons && (
+            <p>
+              This vault uses community plugins. Hibi does not run Obsidian
+              plugins. Enable a relevant Hibi addon for plugin-specific content
+              when available; that content may still need its original plugin in
+              Obsidian.
+            </p>
+          )}
+          <div className="dialog-actions">
+            {workspace.obsidian?.externalAddons && (
+              <Button onClick={() => close('addons')}>Review addons</Button>
+            )}
+            <Button onClick={() => close('continue')}>Continue</Button>
+          </div>
+        </div>
+      ),
+    })
+    void dialog.result.then((choice) => {
+      if (!choice) return
+      localStorage.setItem(key, '1')
+      if (choice === 'addons') openSetting('addons')
+    })
+  }, [workspace?.id, workspace?.obsidian, addonHost.ready, dialogs])
   const [hotkeys, setHotkeys] = useState<Hotkeys>(() =>
     defaultHotkeys('darwin'),
   )
@@ -1907,6 +1949,19 @@ function App() {
           }))
         }}
       />
+      {sidebarOpen && !zen && !settingsOpen && sidebarView === 'backlinks' && (
+        <Suspense fallback={null}>
+          <BacklinksSidebar
+            overlay={sidebarResize.overlay}
+            onDismiss={() => closeSidebar(false)}
+            open
+            resize={documentSidebarResize}
+            workspace={workspace}
+            revision={document?.contentVersion}
+            onFile={(path) => void openFile(path)}
+          />
+        </Suspense>
+      )}
       <AddonSidebar
         overlay={sidebarResize.overlay}
         onDismiss={() => closeSidebar(false)}
@@ -1938,6 +1993,23 @@ function App() {
           }))
         }}
       />
+      {rightSidebarOpen &&
+        !zen &&
+        !settingsOpen &&
+        rightSidebarView === 'backlinks' && (
+          <Suspense fallback={null}>
+            <BacklinksSidebar
+              side="right"
+              overlay={rightSidebarResize.overlay}
+              onDismiss={closeRightSidebar}
+              open
+              resize={documentRightSidebarResize}
+              workspace={workspace}
+              revision={document?.contentVersion}
+              onFile={(path) => void openFile(path)}
+            />
+          </Suspense>
+        )}
       <AddonSidebar
         side="right"
         overlay={rightSidebarResize.overlay}

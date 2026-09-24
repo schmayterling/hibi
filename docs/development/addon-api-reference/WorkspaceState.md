@@ -16,6 +16,8 @@ type WorkspaceState = {
   name: string
   entries: WorkspaceEntry[]
   activePath: string | null
+  /** Read-only signal for a vault containing an ordinary .obsidian directory. */
+  obsidian?: { externalAddons: boolean }
 }
 ```
 
@@ -30,6 +32,7 @@ type WorkspaceState = {
 - [name](#name)
 - [entries](#entries)
 - [activePath](#activepath)
+- [obsidian](#obsidian)
 
 ## Properties
 
@@ -79,6 +82,16 @@ Related: [WorkspaceEntry](WorkspaceEntry.md).
 
 ```typescript
 activePath: string | null
+```
+
+### obsidian
+
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L40)
+
+Read-only signal for a vault containing an ordinary .obsidian directory.
+
+```typescript
+obsidian?: { externalAddons: boolean }
 ```
 
 ## Related types

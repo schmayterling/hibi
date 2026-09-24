@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { type FSWatcher, watch } from 'node:fs'
-import { lstat, readdir, realpath } from 'node:fs/promises'
+import { lstat, readdir, readFile, realpath } from 'node:fs/promises'
 import { basename, isAbsolute, join, parse, relative, sep } from 'node:path'
 import { app, type BrowserWindow, dialog, shell } from 'electron'
+import { wikiTarget } from '../shared/note-links'
 import type {
   WorkspaceEntry,
   WorkspaceIndex,
@@ -31,6 +32,7 @@ import { showAllWorkspaceFiles } from './workspace-settings'
 let root: string | null = null
 let entries: WorkspaceEntry[] = []
 let manifest: WorkspaceManifest | null = null
+let obsidian: WorkspaceState['obsidian']
 let watcher: FSWatcher | undefined
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
 let onChanged: () => void = () => {}
@@ -40,6 +42,24 @@ export function workspaceRoot(): string | null {
 }
 export function workspaceId(): string | null {
   return root ? createHash('sha256').update(root).digest('hex') : null
+}
+
+async function obsidianVault(
+  base: string,
+): Promise<WorkspaceState['obsidian']> {
+  const settings = join(base, '.obsidian')
+  const folder = await lstat(settings).catch(() => null)
+  if (!folder?.isDirectory() || folder.isSymbolicLink()) return undefined
+  const plugins = join(settings, 'community-plugins.json')
+  const file = await lstat(plugins).catch(() => null)
+  if (!file?.isFile() || file.isSymbolicLink()) return { externalAddons: false }
+  if (file.size > 65536) return { externalAddons: true }
+  try {
+    const enabled = JSON.parse(await readFile(plugins, 'utf8'))
+    return { externalAddons: Array.isArray(enabled) && enabled.length > 0 }
+  } catch {
+    return { externalAddons: false }
+  }
 }
 
 function relativePath(base: string, path: string): string | null {
@@ -144,6 +164,7 @@ export function getWorkspace(): WorkspaceState | null {
     id: workspaceId()!,
     name: manifest?.name ?? basename(root),
     manifest,
+    ...(obsidian ? { obsidian } : {}),
     entries: decorate(visible),
     activePath,
   }
@@ -152,13 +173,15 @@ export function getWorkspace(): WorkspaceState | null {
 export async function refreshWorkspace(): Promise<WorkspaceState | null> {
   const selected = root
   if (selected) {
-    const [next, metadata] = await Promise.all([
+    const [next, metadata, vault] = await Promise.all([
       scanWorkspace(selected, await showAllWorkspaceFiles()),
       workspaceMetadata(selected),
+      obsidianVault(selected),
     ])
     if (root === selected) {
       entries = next
       manifest = metadata.manifest
+      obsidian = vault
     }
   }
   return getWorkspace()
@@ -188,12 +211,16 @@ export async function loadWorkspace(
     nextRoot,
     await showAllWorkspaceFiles(),
   )
-  const metadata = await workspaceMetadata(nextRoot)
+  const [metadata, vault] = await Promise.all([
+    workspaceMetadata(nextRoot),
+    obsidianVault(nextRoot),
+  ])
   watcher?.close()
   clearTimeout(refreshTimer)
   root = nextRoot
   entries = nextEntries
   manifest = metadata.manifest
+  obsidian = vault
   try {
     watcher = watch(root, { recursive: true, persistent: false }, () => {
       clearTimeout(refreshTimer)
@@ -259,6 +286,7 @@ export async function deleteKnownWorkspace(
     root = null
     entries = []
     manifest = null
+    obsidian = undefined
   }
   await forgetWorkspace(item.path)
   onChanged()
@@ -290,6 +318,22 @@ export async function resolveWorkspaceFile(
       'This file is outside the workspace. Open its folder first.',
     )
   return chosen
+}
+
+export async function resolveWikiDocument(from: string | null, target: string) {
+  if (!root || !from) return null
+  const source = relativePath(root, from)
+  if (!source) return null
+  const paths = new Set<string>()
+  const collect = (items: readonly WorkspaceEntry[]) => {
+    for (const item of items) {
+      if (item.children) collect(item.children)
+      else if (item.kind === 'file') paths.add(item.path)
+    }
+  }
+  collect(entries)
+  const path = wikiTarget(source, target, paths)
+  return path ? resolveWorkspaceFile(root, path) : null
 }
 
 export async function openWorkspaceFile(window: BrowserWindow, path: unknown) {

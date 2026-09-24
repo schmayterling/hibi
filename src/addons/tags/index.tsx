@@ -1,9 +1,9 @@
 import { Tags } from 'lucide-react'
 import { isMarkdownDocument } from '../../shared/document-types'
 import { defineAddon } from '../api'
-import { richTags, sourceTags } from './decorations'
 import manifest from './manifest'
 import { TagsPanel } from './Panel'
+import { richTags } from './rich-decorations'
 import css from './style.css?inline'
 import { noteTags } from './syntax'
 
@@ -46,10 +46,14 @@ export default defineAddon({
       })
     })
     context.editor.registerRich(richTags(browse))
-    context.editor.registerSource(
-      sourceTags(browse, () =>
-        isMarkdownDocument(context.editor.getDocument()?.name ?? ''),
-      ),
-    )
+    context.editor.registerSource({
+      id: 'highlights',
+      async create() {
+        const { sourceTags } = await import('./decorations')
+        return sourceTags(browse, () =>
+          isMarkdownDocument(context.editor.getDocument()?.name ?? ''),
+        ).create()
+      },
+    })
   },
 })

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { Marked } from 'marked'
-import { alertMarkdown } from '../src/addons/github-markdown/alerts.ts'
+import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
 import {
   detectTextExtras,
   textExtrasMarkdown,

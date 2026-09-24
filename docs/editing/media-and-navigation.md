@@ -20,9 +20,13 @@ Images can be PNG, JPEG, GIF, WebP, AVIF, or SVG, up to 8 MiB each. Videos can b
 
 Relative paths start from the saved note's folder. Absolute paths and local `file:` URLs also work. Use percent encoding or angle brackets for spaces in Markdown paths. Missing media shows its description instead.
 
+Obsidian `![[image.png]]` and `![[drawing.svg]]` embeds also display in the formatted editor. Hibi looks beside the note, at the vault root, and in the attachment folder named by Obsidian's `attachmentFolderPath` setting. Hibi reads that setting without changing `.obsidian` files. `![[Other note]]` shows a link to the note rather than embedding its content.
+
 ## Links and history
 
 Shift-click a link to follow it. In Normal view, you can also hold Ctrl+Cmd while clicking a link. Web and email links open in your default app; local note links open in Hibi. Regular clicks keep editing.
+
+Obsidian `[[Note]]`, `[[Note|Alias]]`, and links to headings or blocks open their note in the current workspace. A heading-only link in the current note jumps to that heading. Links to headings or blocks in another note open the note; Hibi does not yet scroll to the target within that note. Ambiguous note names do not open a guessed target.
 
 In Markdown source, this also follows reference links such as `[guide][help]` with a `[help]: guide.md` definition elsewhere in the note. Labels ignore case, and the first matching definition wins. Definitions inside enabled frontmatter are excluded. This supports the built-in Markdown, GitHub Markdown and Text extras readers; addons with custom parsers or projections keep their existing link behavior.
 

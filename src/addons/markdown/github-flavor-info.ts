@@ -28,4 +28,4 @@ export const flavorInfo: MarkdownFlavor = {
     return found
   },
 }
-export default [flavorInfo]
+export default []

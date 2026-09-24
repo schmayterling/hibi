@@ -1,6 +1,8 @@
 # Graphs and tags
 
-Enable **Graph** or **Tags** under **Settings → Addons**, then choose it from the sidebar dropdown. Both work locally and update as your notes change.
+Tags are enabled by default. Enable **Graph** under **Settings → Addons** if you want a visual map. Both work locally and update as your notes change.
+
+Choose **Backlinks** from either sidebar's view menu to see notes that link to the current note. Backlinks work without the Graph addon and include relative Markdown links and Obsidian `[[wikilinks]]`.
 
 ## Graph
 
@@ -10,7 +12,7 @@ The graph opens close to the current note. Set **Default zoom** in Graph's addon
 
 Filter by filename or path, and use **Connections** to see links to and from the current note. Moving nodes changes only the graph layout, not your files. Keyboard users can Tab to a node and press Enter or Space; arrow keys pan when the background has focus.
 
-The graph shows up to 500 matching nodes, so filter larger workspaces. It uses links to existing local notes; `[[wikilinks]]` are unsupported.
+The graph shows up to 500 matching nodes, so filter larger workspaces. It uses relative Markdown links and Obsidian `[[wikilinks]]` to existing notes.
 
 ## Tags
 

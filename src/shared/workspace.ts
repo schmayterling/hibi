@@ -36,6 +36,8 @@ export type WorkspaceState = {
   name: string
   entries: WorkspaceEntry[]
   activePath: string | null
+  /** Read-only signal for a vault containing an ordinary .obsidian directory. */
+  obsidian?: { externalAddons: boolean }
 }
 
 export type ExplorerDecoration = {

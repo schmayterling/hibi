@@ -8,7 +8,7 @@ import { Marked } from 'marked'
 import {
   guardNativeTableTokenizer,
   NativeTableKit,
-} from '../src/addons/github-markdown/table-tokenizer.ts'
+} from '../src/addons/markdown/table-tokenizer.ts'
 
 const original = getExtensionField(Table, 'markdownTokenizer')
 const guarded = getExtensionField(

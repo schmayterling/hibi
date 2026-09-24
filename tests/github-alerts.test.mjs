@@ -8,12 +8,12 @@ import {
   alertMarkdown,
   alertToken,
   alertTypes,
-} from '../src/addons/github-markdown/alerts.ts'
+} from '../src/addons/markdown/alerts.ts'
 import { electron } from './electron.mjs'
-import { clickMenu, pressShortcut } from './keyboard.mjs'
+import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-test('github alerts use quote boundaries and leave other markdown alone', () => {
+test('Markdown callouts preserve quote boundaries, titles and fold markers', () => {
   const parser = new Marked(alertMarkdown)
   for (const type of alertTypes) {
     const source = `> [!${type.toUpperCase()}]\n> **hello**\ncontinued\n>\n> - first\n> - second\n\nafter`
@@ -29,13 +29,23 @@ test('github alerts use quote boundaries and leave other markdown alone', () => 
   }
   for (const source of [
     '> ordinary quote',
-    '> [!UNKNOWN]\n> hello',
-    '> [!WARNING] same line',
     '> [!WARNING',
     '```md\n> [!WARNING]\n> hello\n```',
   ])
     assert.ok(!parser.parse(source).includes('data-alert='))
   assert.match(parser.parse('> [!NOTE]'), /data-alert="note"/)
+  assert.match(
+    parser.parse('> [!QUESTION]- Custom title\n> Answer'),
+    /data-alert="question"/,
+  )
+  assert.match(
+    parser.parse('> [!QUESTION]- Custom title\n> Answer'),
+    /data-fold="-"/,
+  )
+  assert.match(
+    parser.parse('> [!QUESTION]- Custom title\n> Answer'),
+    /Custom title/,
+  )
 })
 
 test('github alerts edit in rich view, preview in split, and export with markers and theme colors', {
@@ -197,16 +207,7 @@ test('github alerts edit in rich view, preview in split, and export with markers
     /edited warning/,
   )
   await site.close()
-  await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
-  await page.locator('#addon-github-markdown').click()
-  await page
-    .getByRole('button', { name: /^back to app$/i, exact: true })
-    .click()
-  await page.waitForFunction(
-    () => !document.querySelector('.tiptap .github-alert'),
-  )
   assert.equal(await read(), edited)
-  assert.match(await rich.innerText(), /\[!WARNING\]/)
+  await rich.locator('[data-alert="warning"]').waitFor()
   assert.deepEqual(errors, [])
 })

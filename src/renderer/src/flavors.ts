@@ -76,7 +76,13 @@ export function loadFlavor(id?: string): FlavorChoice {
         (Array.isArray(value.syntax) &&
           value.syntax.every((id: unknown) => typeof id === 'string')))
     )
-      return value
+      return {
+        ...value,
+        dialect:
+          value.dialect === 'github-markdown.github'
+            ? 'markdown.github'
+            : value.dialect,
+      }
   } catch {
     /* Use automatic detection if preferences cannot be read. */
   }

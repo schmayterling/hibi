@@ -53,8 +53,8 @@ export function ActiveDocumentEditor({
       (flavor) =>
         addonRegistry.origin(flavor.addonId) === 'built-in' &&
         ((flavor.addonId === 'math' && flavor.id === 'math.latex') ||
-          (flavor.addonId === 'github-markdown' &&
-            flavor.id === 'github-markdown.github') ||
+          (flavor.addonId === 'markdown' &&
+            ['markdown.github', 'markdown.obsidian'].includes(flavor.id)) ||
           (flavor.addonId === 'text-extras' &&
             flavor.id === 'text-extras.text-extras')),
     )

@@ -1,5 +1,5 @@
 import { Marked } from 'marked'
-import { alertMarkdown } from '../addons/github-markdown/alerts.ts'
+import { alertMarkdown } from '../addons/markdown/alerts.ts'
 import { mathTokens } from '../addons/math/syntax.ts'
 import { textExtrasMarkdown } from '../addons/text-extras/syntax.ts'
 import type { MarkdownReferenceSyntax } from './document-worker-protocol.ts'

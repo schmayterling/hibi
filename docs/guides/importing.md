@@ -12,7 +12,9 @@ Converted documents must fit Hibi’s 2 MiB editing limit. CSV tables support up
 
 ## Obsidian
 
-Choose the vault folder. Notes and attachments keep their folder structure. Resolvable wiki links become Markdown links; embedded notes become links.
+To use an Obsidian vault in place, [open the vault as a workspace](workspaces.md#open-an-obsidian-vault). No import is needed.
+
+Use **Import from Obsidian** only when you want a separate copy. Choose the vault folder. Notes and attachments keep their folder structure. Resolvable wiki links become Markdown links; embedded notes become links.
 
 ## Notion
 

@@ -166,7 +166,13 @@ try {
     localStorage.getItem('hibi:markdown-syntax-disabled') ?? '[]',
   )
   if (Array.isArray(stored))
-    for (const id of stored) if (typeof id === 'string') disabled.add(id)
+    for (const id of stored)
+      if (typeof id === 'string')
+        disabled.add(
+          /^github-markdown\.(?:tables|tasks|strike|alerts)$/.test(id)
+            ? id.replace('github-markdown.', 'markdown.')
+            : id,
+        )
 } catch {
   /* Use enabled defaults when preferences are unavailable. */
 }

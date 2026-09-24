@@ -9,6 +9,7 @@ import {
 } from './document'
 import { isDocumentName } from './document-types'
 import { documentMediaPath } from './images'
+import { resolveWikiDocument } from './workspace'
 
 function webUrl(value: unknown) {
   if (typeof value !== 'string' || value.length > 8192)
@@ -46,7 +47,22 @@ export async function openDocumentLink(
     await openExternalDocumentLink(href)
     return null
   }
-  const path = documentMediaPath(href.split('#')[0]!, getDocumentPath())
+  if (href.startsWith('obsidian-wiki:')) {
+    let target: string
+    try {
+      target = decodeURIComponent(href.slice('obsidian-wiki:'.length))
+    } catch {
+      throw new Error('This wikilink is invalid.')
+    }
+    const file = await resolveWikiDocument(getDocumentPath(), target)
+    if (!file)
+      throw new Error('The wikilink target was not found in this workspace.')
+    return file === getDocumentPath()
+      ? getDocument()
+      : loadDocument(window, file)
+  }
+  let path = documentMediaPath(href.split('#')[0]!, getDocumentPath())
+  if (path && !isDocumentName(path)) path += '.md'
   if (!path || !isDocumentName(path))
     throw new Error('Choose a web link, email address, or supported document.')
   if (path === getDocumentPath()) return getDocument()

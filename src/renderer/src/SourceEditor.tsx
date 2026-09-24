@@ -26,6 +26,7 @@ import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop'
 import { editedSource, sourceEditMatches } from '../../shared/document-edits'
 import type { MarkdownReferenceSyntax } from '../../shared/document-worker-protocol'
 import { markdownLink } from '../../shared/markdown-link'
+import { wikiHref } from '../../shared/note-links'
 import type { RawEdit } from '../../shared/source-operations'
 import {
   editorChangesFromSource,
@@ -531,9 +532,30 @@ export function SourceEditor({
               })
               if (position == null) return false
               let node = syntaxTree(view.state).resolveInner(position, -1)
+              const lexical = node
               while (node.parent && !['Link', 'Autolink'].includes(node.name))
                 node = node.parent
-              if (!['Link', 'Autolink'].includes(node.name)) return false
+              if (!['Link', 'Autolink'].includes(node.name)) {
+                let parent = lexical
+                while (parent.parent) {
+                  if (/code|frontmatter/i.test(parent.name)) return false
+                  parent = parent.parent
+                }
+                const line = view.state.doc.lineAt(position)
+                for (const match of line.text.matchAll(
+                  /!?\[\[([^\]\r\n]+)\]\]/g,
+                )) {
+                  const from = line.from + match.index
+                  if (position < from || position > from + match[0].length)
+                    continue
+                  event.preventDefault()
+                  const target = (match[1] ?? '').split('|')[0]?.trim() ?? ''
+                  if (!target) return false
+                  openLink.current(wikiHref(target))
+                  return true
+                }
+                return false
+              }
               const target = markdownLink(
                 view.state.sliceDoc(node.from, node.to),
               )

@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Lexer, Marked } from 'marked'
-import {
-  alertMarker,
-  alertStart,
-} from '../src/addons/github-markdown/alerts.ts'
-import { flavorInfo as github } from '../src/addons/github-markdown/flavor-info.ts'
+import { alertMarker, alertStart } from '../src/addons/markdown/alerts.ts'
+import { flavorInfo as github } from '../src/addons/markdown/github-flavor-info.ts'
 import { mathFlavor, mathTokens } from '../src/addons/math/syntax.ts'
 import {
   detectTextExtras,
@@ -53,8 +50,7 @@ const pairs = [
 ]
 
 test('block extension starts skip absent markers and retain native boundaries', (t) => {
-  const alertPattern =
-    /^ {0,3}>[ \t]*\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\][ \t]*(?:\n|$)/im
+  const alertPattern = /^ {0,3}>[ \t]*\[![a-z][a-z0-9-]*\]/im
   const subtextPattern = /^-# /m
   for (const prefix of [
     '',

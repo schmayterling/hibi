@@ -1,5 +1,5 @@
 import { constants } from 'node:fs'
-import { open, stat } from 'node:fs/promises'
+import { lstat, open, readFile, realpath, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { marked } from 'marked'
@@ -88,7 +88,8 @@ export async function resolveDocumentMediaPath(
   )
     return path
   const base = workspacePath ?? (documentPath ? dirname(documentPath) : null)
-  if (!base || !source.startsWith('/') || source.startsWith('//')) return null
+  if (!base || source.startsWith('//')) return null
+  const canonicalBase = await realpath(base).catch(() => base)
   let decoded = source
   try {
     decoded = decodeURIComponent(source)
@@ -101,13 +102,47 @@ export async function resolveDocumentMediaPath(
     decoded.startsWith('//')
   )
     return null
-  for (const root of [base, resolve(base, 'public')]) {
-    const candidate = resolve(root, `.${decoded}`)
-    const part = relative(root, candidate)
+  const candidates = source.startsWith('/')
+    ? [resolve(base, `.${decoded}`), resolve(base, 'public', `.${decoded}`)]
+    : workspacePath
+      ? [resolve(workspacePath, decoded)]
+      : []
+  if (workspacePath && !source.startsWith('/')) {
+    const settings = resolve(workspacePath, '.obsidian', 'app.json')
+    const info = await lstat(settings).catch(() => null)
+    if (info?.isFile() && !info.isSymbolicLink() && info.size < 65536) {
+      try {
+        const saved = JSON.parse(await readFile(settings, 'utf8'))
+        const folder = saved.attachmentFolderPath
+        if (
+          typeof folder === 'string' &&
+          folder &&
+          !folder.includes('\\') &&
+          !folder.split('/').includes('..')
+        )
+          candidates.push(
+            resolve(
+              workspacePath,
+              folder.replace(/^\/+/, '').replace(/^\.\//, ''),
+              decoded,
+            ),
+          )
+      } catch {
+        /* Invalid Obsidian settings do not affect ordinary media paths. */
+      }
+    }
+  }
+  for (const candidate of candidates) {
+    const part = relative(base, candidate)
     if (part === '..' || part.startsWith(`..${sep}`) || isAbsolute(part))
       continue
+    const real = await realpath(candidate).catch(() => null)
+    if (!real) continue
+    const child = relative(canonicalBase, real)
+    if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child))
+      continue
     if (
-      await stat(candidate).then(
+      await stat(real).then(
         (info) => info.isFile(),
         () => false,
       )

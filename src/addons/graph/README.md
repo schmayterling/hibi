@@ -8,7 +8,7 @@ Click a dot to open its note. The graph moves smoothly to the selected note; red
 
 Hover over a dot for its full note path and connection count. Connection rows also show the full path on hover. Hints close when you move away or move the graph.
 
-Save new notes inside the workspace before expecting them to appear. Connections use local Markdown links; `[[wikilinks]]` are not supported.
+Save new notes inside the workspace before expecting them to appear. Connections use relative Markdown links and Obsidian `[[wikilinks]]`.
 
 ## Credits
 

@@ -4,7 +4,7 @@ Markdown dialects and extra syntax are extension contributions registered with `
 
 Automatic mode recognizes enabled syntax, but ordinary Markdown may not identify a dialect. Users can override a file through its status pill or **Markdown flavor** in the palette. Choices persist per file and follow Save As and renames within Hibi.
 
-The bundled GitHub Markdown dialect supports tables, task lists, strikethrough, automatic links, and alerts: `> [!NOTE]`, `TIP`, `IMPORTANT`, `WARNING`, and `CAUTION`. Alerts render in normal/split view and exports, retaining their markers after edits.
+Base Markdown includes GitHub tables, task lists, strikethrough, automatic links, and alerts. It also accepts common Obsidian callout titles and fold markers, wikilinks, image embeds, and highlights. These built-in contributions use the same flavor API that remains available to addons.
 
 Automatic mode keeps enabled parsers ready, so typing syntax does not rebuild the editor or reset undo. Explicit flavor changes and schema-addon enable/disable rebuild the rich editor, preserve source, and reset that pane's undo history. Detected unsupported syntax makes the rich pane read-only; source remains editable.
 
@@ -14,4 +14,4 @@ Declare lightweight `Addon.flavors` descriptors so bundled syntax can be detecte
 
 `context.workspace.snapshot()` returns Markdown pages, opaque file IDs, and local images from the open folder. Workspace files cannot register flavors or execute code.
 
-See the [addon API](../reference/addon-api.md), [GitHub Markdown](../../../src/addons/github-markdown/README.md), and [LaTeX](../../../src/addons/math/README.md).
+See the [addon API](../reference/addon-api.md), [Markdown](../../../src/addons/markdown/README.md), and [LaTeX](../../../src/addons/math/README.md).

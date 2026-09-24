@@ -33,7 +33,6 @@ test('extension and core fields share themes, focus states, and narrow layouts',
   }
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await choose('enable graph')
-  await choose('enable tags')
   const fieldStyle = (field) =>
     field.evaluate((element) => {
       const style = getComputedStyle(element)

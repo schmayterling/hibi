@@ -7,6 +7,6 @@ export default {
   version: '1.0.1',
   apiVersion: 2,
   description: 'Organize notes with #tags and find them in the sidebar.',
-  defaultEnabled: false,
+  defaultEnabled: true,
   authors: [authors.may],
 } satisfies AddonManifest

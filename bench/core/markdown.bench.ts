@@ -1,9 +1,6 @@
 import { Marked } from 'marked'
 import { bench, describe } from 'vitest'
-import {
-  alertMarkdown,
-  alertToken,
-} from '../../src/addons/github-markdown/alerts.ts'
+import { alertMarkdown, alertToken } from '../../src/addons/markdown/alerts.ts'
 import { textExtrasMarkdown } from '../../src/addons/text-extras/syntax.ts'
 import { note } from '../fixtures.ts'
 

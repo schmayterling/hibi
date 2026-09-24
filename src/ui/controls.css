@@ -341,6 +341,9 @@ span.select-control > svg {
   margin: 0;
   white-space: pre-wrap;
 }
+.document-notice > div > p + button {
+  margin-top: var(--space-2);
+}
 .document-notice .document-notice-title {
   color: var(--ink);
   font-weight: 500;

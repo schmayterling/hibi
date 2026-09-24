@@ -82,7 +82,6 @@ export async function compileSystemTypst(
     const proxy = `http://127.0.0.1:${address.port}`
     const env = {
       ...process.env,
-      HOME: join(scratch, 'home'),
       TYPST_PACKAGE_PATH: join(scratch, 'packages'),
       TYPST_PACKAGE_CACHE_PATH: packageCache,
       HTTP_PROXY: proxy,

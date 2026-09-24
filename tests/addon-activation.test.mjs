@@ -110,8 +110,7 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
   await clickMenu(app, 'Command palette')
   const search = page.getByRole('combobox', { name: /search commands/i })
   await search.fill('Deferred hello')
-  await page.getByRole('option', { name: /Deferred hello/i }).waitFor()
-  await search.press('Enter')
+  await page.getByRole('option', { name: /Deferred hello/i }).press('Enter')
   await page.waitForFunction(() => window.helloRuns === 1)
   assert.deepEqual(await page.evaluate(() => window.commandSdkKeys), [
     'documents',

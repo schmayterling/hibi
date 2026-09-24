@@ -143,9 +143,35 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
   await page
     .getByRole('button', { name: 'Source view', exact: true })
     .press('Enter')
-  await page.waitForFunction(
-    () => document.querySelector('.cm-content')?.isContentEditable,
-  )
+  try {
+    await page.waitForFunction(
+      () => document.querySelector('.cm-content')?.isContentEditable,
+    )
+  } catch (error) {
+    const state = await page.evaluate(() => {
+      const source = document.querySelector('.cm-content')
+      return {
+        mode: document.querySelector('.editor-panes')?.className,
+        sourceReady: document
+          .querySelector('.editor-panes')
+          ?.getAttribute('data-source-ready'),
+        sourceButton: document
+          .querySelector('[aria-label="Source view"]')
+          ?.getAttribute('aria-pressed'),
+        sourceEditable: source?.isContentEditable,
+        sourceContentEditable: source?.getAttribute('contenteditable'),
+        sourcePaneInert: document.querySelector('.source-pane')?.inert,
+        sourceStarts: window.sourceStarts,
+        sourceCreates: window.sourceCreates,
+        sourceStops: window.sourceStops,
+        notices: [...document.querySelectorAll('.document-notice')].map(
+          (notice) => notice.textContent,
+        ),
+      }
+    })
+    error.message += `\nsource state: ${JSON.stringify(state)}`
+    throw error
+  }
   assert.equal(await page.evaluate(() => window.sourceCreates), 1)
   assert.deepEqual(await page.evaluate(() => window.richDetachments), [
     'alpha',

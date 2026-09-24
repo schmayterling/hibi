@@ -318,8 +318,9 @@ export const electron = {
   },
 }
 
-function startupEntries() {
+function startupEntries({ BrowserWindow } = {}) {
   const doc = globalThis.document
+  const entryScriptUrl = doc?.querySelector('script[type="module"]')?.src
   const editor = doc?.querySelector('.editor-page')
   const input = editor?.querySelector(
     '.tiptap[contenteditable="true"], .cm-content[contenteditable="true"]',
@@ -373,6 +374,36 @@ function startupEntries() {
       ms: Math.round(entry.duration),
       status: entry.detail?.status,
     })),
+    resources:
+      doc?.readyState === 'interactive'
+        ? performance
+            .getEntriesByType('resource')
+            .filter((entry) => entry.name.startsWith('app://hibi/'))
+            .slice(-24)
+            .map((entry) => ({
+              kind:
+                entry.name === entryScriptUrl
+                  ? 'entry-js'
+                  : entry.name.endsWith('.js')
+                    ? 'chunk-js'
+                    : entry.name.endsWith('.css')
+                      ? 'css'
+                      : 'asset',
+              ms: Math.round(entry.duration),
+              size: entry.transferSize,
+            }))
+        : undefined,
+    assets: !doc && globalThis.__hibiStartupTrace?.(),
+    windows:
+      !doc &&
+      BrowserWindow?.getAllWindows()
+        .slice(0, 4)
+        .map((window) => ({
+          visible: window.isVisible(),
+          focused: window.isFocused(),
+          loading: window.webContents.isLoading(),
+          mainFrameLoading: window.webContents.isLoadingMainFrame(),
+        })),
   }
 }
 
@@ -411,7 +442,31 @@ export async function startupDiagnostics(application, page) {
       ),
     ),
   ])
-  return { renderer, main, consoleErrors, pageErrors }
+  const scripts =
+    renderer.dom?.readyState === 'interactive' && !renderer.stages?.length
+      ? await bounded(
+          (async () => {
+            const entryUrl = await page.evaluate(
+              () => document.querySelector('script[type="module"]')?.src,
+            )
+            const session = await page.context().newCDPSession(page)
+            let total = 0
+            let entry = false
+            try {
+              session.on('Debugger.scriptParsed', ({ url }) => {
+                if (!url.startsWith('app://hibi/')) return
+                total++
+                if (url === entryUrl) entry = true
+              })
+              await session.send('Debugger.enable')
+              return { total, entry }
+            } finally {
+              await session.detach().catch(() => {})
+            }
+          })(),
+        )
+      : undefined
+  return { renderer, main, consoleErrors, pageErrors, scripts }
 }
 
 export async function waitForDocumentEditor(application, page) {

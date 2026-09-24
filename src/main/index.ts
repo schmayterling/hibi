@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron'
@@ -169,6 +170,51 @@ if (testing)
   )
 if (testing && process.platform === 'darwin')
   app.setActivationPolicy('accessory')
+const pendingAssets = new Map<
+  number,
+  { kind: string; at: number; phase: string }
+>()
+const recentAssets: { kind: string; ms: number; status: number }[] = []
+const entryAssets = new Map<
+  string,
+  { kind: string; ms: number; status: number }
+>()
+const windowLoadEvents: {
+  event: string
+  at: number
+  code: number | undefined
+}[] = []
+let assetRequestId = 0
+function staticAssetKind(pathname: string) {
+  if (pathname === '/') return 'html'
+  if (pathname === entryScriptPath) return 'entry-js'
+  if (pathname === entryCssPath) return 'entry-css'
+  if (pathname.startsWith('/assets/'))
+    return pathname.endsWith('.js')
+      ? 'chunk-js'
+      : pathname.endsWith('.css')
+        ? 'chunk-css'
+        : 'asset'
+  return 'other-static'
+}
+function traceWindowLoad(event: string, code?: number) {
+  if (!testing) return
+  windowLoadEvents.push({ event, at: Math.round(performance.now()), code })
+  if (windowLoadEvents.length > 16) windowLoadEvents.shift()
+}
+if (testing)
+  Object.defineProperty(globalThis, '__hibiStartupTrace', {
+    value: () => ({
+      pendingAssets: [...pendingAssets.values()].slice(-12).map((request) => ({
+        kind: request.kind,
+        phase: request.phase,
+        ms: Math.round(performance.now() - request.at),
+      })),
+      entryAssets: [...entryAssets.values()],
+      recentAssets: recentAssets.slice(-16),
+      windowLoadEvents: windowLoadEvents.slice(-16),
+    }),
+  })
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'hibi-analysis',
@@ -201,6 +247,17 @@ if (!app.isPackaged) {
 const devUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
 const rendererUrl = devUrl ? new URL(devUrl).href : 'app://hibi/'
 const rendererRoot = join(import.meta.dirname, '../renderer')
+const testRendererHtml =
+  testing && !devUrl
+    ? readFileSync(join(rendererRoot, 'index.html'), 'utf8')
+    : ''
+const entryScriptPath = /<script[^>]+src="\.([^"]+\.js)"/.exec(
+  testRendererHtml,
+)?.[1]
+const entryCssPath =
+  /<link[^>]+rel="stylesheet"[^>]+href="\.([^"]+\.css)"/.exec(
+    testRendererHtml,
+  )?.[1]
 let mainWindow: BrowserWindow | null = null
 let fileOperation: Promise<unknown> | null = null
 let quitting = false
@@ -276,8 +333,25 @@ function titleBarColors() {
 
 async function serveAsset(request: Request): Promise<Response> {
   if (request.method !== 'GET') return new Response(null, { status: 405 })
+  let trace: { kind: string; at: number; phase: string } | undefined
+  let traceId = 0
+  let status = 404
   try {
     const parsed = new URL(request.url)
+    if (
+      testing &&
+      parsed.hostname === 'hibi' &&
+      !parsed.pathname.startsWith('/document-media/') &&
+      !parsed.pathname.startsWith('/installed-addons/')
+    ) {
+      trace = {
+        kind: staticAssetKind(parsed.pathname),
+        at: performance.now(),
+        phase: 'resolve',
+      }
+      traceId = ++assetRequestId
+      pendingAssets.set(traceId, trace)
+    }
     if (
       parsed.hostname === 'hibi' &&
       parsed.pathname.startsWith('/document-media/')
@@ -294,9 +368,14 @@ async function serveAsset(request: Request): Promise<Response> {
           (addon) =>
             addon.id === parsed.pathname.split('/')[2] && addon.enabled,
         ))
-    )
+    ) {
+      status = 403
       return new Response(null, { status: 403 })
+    }
+    if (trace) trace.phase = 'fetch'
     const response = await net.fetch(pathToFileURL(path).href)
+    status = response.status
+    if (trace) trace.phase = 'headers'
     const headers = new Headers(response.headers)
     headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY)
     headers.set('X-Content-Type-Options', 'nosniff')
@@ -311,6 +390,19 @@ async function serveAsset(request: Request): Promise<Response> {
     return new Response(response.body, { status: response.status, headers })
   } catch {
     return new Response(null, { status: 404 })
+  } finally {
+    if (trace) {
+      pendingAssets.delete(traceId)
+      const completed = {
+        kind: trace.kind,
+        ms: Math.round(performance.now() - trace.at),
+        status,
+      }
+      if (['html', 'entry-js', 'entry-css'].includes(trace.kind))
+        entryAssets.set(trace.kind, completed)
+      recentAssets.push(completed)
+      if (recentAssets.length > 16) recentAssets.shift()
+    }
   }
 }
 
@@ -346,6 +438,16 @@ function createWindow(): void {
   })
   startupMark('window-created')
   mainWindow = window
+  if (testing) {
+    const contents = window.webContents
+    contents.on('did-start-loading', () => traceWindowLoad('start'))
+    contents.on('dom-ready', () => traceWindowLoad('dom-ready'))
+    contents.on('did-stop-loading', () => traceWindowLoad('stop'))
+    contents.on('did-finish-load', () => traceWindowLoad('finish'))
+    contents.on('did-fail-load', (_event, code) =>
+      traceWindowLoad('fail', code),
+    )
+  }
   const stopRecording = () => {
     recordingHotkey = false
     window.webContents.setIgnoreMenuShortcuts(false)
@@ -478,6 +580,7 @@ function createWindow(): void {
   })
   window.once('ready-to-show', () => {
     startupMark('window-painted')
+    traceWindowLoad('ready-to-show')
     if (testing) return
     if (!app.isPackaged && app.commandLine.hasSwitch('user-data-dir'))
       window.showInactive()
@@ -528,22 +631,26 @@ function createWindow(): void {
     rendererGone = false
   })
   localDiagnostics.observeWindow(window)
-  void window.loadURL(rendererUrl).catch((error: unknown) => {
-    // Vite dependency optimization can replace the initial navigation with a reload.
-    if (
-      !app.isPackaged &&
-      error instanceof Error &&
-      'code' in error &&
-      error.code === 'ERR_ABORTED'
-    )
-      return
-    console.error('failed to load app:', error)
-    dialog.showErrorBox(
-      'Hibi could not start',
-      'Restart Hibi. If it still cannot start, reinstall it.',
-    )
-    app.quit()
-  })
+  void window
+    .loadURL(rendererUrl)
+    .then(() => traceWindowLoad('load-url-resolved'))
+    .catch((error: unknown) => {
+      traceWindowLoad('load-url-rejected')
+      // Vite dependency optimization can replace the initial navigation with a reload.
+      if (
+        !app.isPackaged &&
+        error instanceof Error &&
+        'code' in error &&
+        error.code === 'ERR_ABORTED'
+      )
+        return
+      console.error('failed to load app:', error)
+      dialog.showErrorBox(
+        'Hibi could not start',
+        'Restart Hibi. If it still cannot start, reinstall it.',
+      )
+      app.quit()
+    })
 }
 
 function installMenu(): void {

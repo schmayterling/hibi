@@ -218,7 +218,8 @@ if (process.isMainFrame) {
     deleteKnownWorkspace: (id) =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.deleteKnown, id),
     getWorkspaceSnapshot: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.snapshot),
-    getWorkspaceIndex: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.index),
+    getWorkspaceIndex: (verifyAll = false) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.index, verifyAll),
     workspaceAction: (action) =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.action, action),
     openWorkspace: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.open),

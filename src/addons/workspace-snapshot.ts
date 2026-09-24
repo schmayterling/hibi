@@ -6,13 +6,32 @@ import {
   useSyncExternalStore,
 } from 'react'
 import { errorMessage } from '../shared/errors.ts'
-import type { WorkspaceIndex } from '../shared/workspace'
+import type { WorkspaceEntry, WorkspaceIndex } from '../shared/workspace'
 import type { AddonContext } from './api'
 
 type IndexState = {
   index: WorkspaceIndex | null
   loading: boolean
   error: string
+}
+
+type IndexedDocument = { id: string; markdown: string; dirty: boolean }
+
+export function workspaceIndexNeedsDocumentRefresh(
+  index: WorkspaceIndex | null,
+  previous: IndexedDocument | null,
+  next: IndexedDocument,
+): boolean {
+  if (!index || !previous) return false
+  const page = index.pages.find(
+    (page) => page.id === (previous.id === next.id ? next.id : previous.id),
+  )
+  return (
+    !!page &&
+    (previous.id !== next.id || (previous.dirty && !next.dirty)) &&
+    page.markdown !==
+      (previous.id === next.id ? next.markdown : previous.markdown)
+  )
 }
 
 const listeners = new Set<() => void>()
@@ -22,6 +41,18 @@ let pending: Promise<void> | null = null
 let timer: ReturnType<typeof setTimeout> | undefined
 let removeWorkspace: (() => void) | undefined
 let indexedPaths = new Set<string>()
+let verifyAll = false
+
+function hasPath(entries: WorkspaceEntry[], path: string): boolean {
+  let level = entries
+  for (const name of path.split('/')) {
+    const entry = level.find((item) => item.name === name)
+    if (!entry) return false
+    if (entry.path === path) return true
+    level = entry.children ?? []
+  }
+  return false
+}
 
 function publish(next: IndexState) {
   state = next
@@ -31,9 +62,11 @@ function publish(next: IndexState) {
 function requestIndex() {
   if (!listeners.size || pending) return
   const requested = revision
+  const verify = verifyAll
+  verifyAll = false
   publish({ ...state, loading: true, error: '' })
   pending = window.hibi
-    .getWorkspaceIndex()
+    .getWorkspaceIndex(verify)
     .then((index) => {
       if (requested === revision) {
         indexedPaths = new Set(index?.pages.map((page) => page.path))
@@ -59,7 +92,10 @@ function scheduleIndex() {
   }, 150)
 }
 
-const onFocus = () => scheduleIndex()
+const onFocus = () => {
+  verifyAll = true
+  scheduleIndex()
+}
 
 /** One workspace-content request and subscription for all mounted built-in panels. */
 export const workspaceIndexStore = {
@@ -75,12 +111,17 @@ export const workspaceIndexStore = {
           change?.kind === 'content' &&
           change.paths &&
           state.index &&
-          !change.paths.some((path) => indexedPaths.has(path))
+          !change.paths.some(
+            (path) =>
+              indexedPaths.has(path) ||
+              (workspace && hasPath(workspace.entries, path)),
+          )
         )
           return
         scheduleIndex()
       })
       window.addEventListener('focus', onFocus)
+      verifyAll = true
       if (!pending) requestIndex()
     }
     return () => {
@@ -93,6 +134,7 @@ export const workspaceIndexStore = {
       timer = undefined
       revision++
       indexedPaths.clear()
+      verifyAll = false
       state = { index: null, loading: true, error: '' }
     }
   },
@@ -113,12 +155,11 @@ export function useWorkspaceSnapshot(context: AddonContext) {
       const previous = latest.current
       latest.current = next
       if (
-        previous?.id !== next.id &&
-        previous?.dirty &&
-        workspaceIndexStore
-          .snapshot()
-          .index?.pages.find((page) => page.id === previous.id)?.markdown !==
-          previous.markdown
+        workspaceIndexNeedsDocumentRefresh(
+          workspaceIndexStore.snapshot().index,
+          previous,
+          next,
+        )
       )
         workspaceIndexStore.refresh()
       clearTimeout(timer)

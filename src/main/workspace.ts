@@ -30,8 +30,10 @@ import {
 import {
   type CachedIndexPage,
   diskIndexVersion,
+  needsIndexVerification,
   readIndexPage,
 } from './workspace-index-cache'
+import { LatestIndexJob } from './workspace-index-job'
 import { workspaceIgnore, workspaceMetadata } from './workspace-metadata'
 import { createScanCoordinator, watchNeedsScan } from './workspace-refresh'
 import { showAllWorkspaceFiles } from './workspace-settings'
@@ -65,24 +67,50 @@ let onChanged: (change: WorkspaceChange) => void = () => {}
 let indexRevision = 0
 let cachedRoot: string | null = null
 let cachedPages = new Map<string, CachedIndexPage>()
-let indexing:
-  | { key: string; pages: Promise<WorkspaceIndex['pages']> }
-  | undefined
+let dirtyIndexPaths: Set<string> | null = null
+let cachedIndexKey: string | null = null
+let cachedIndexPages: WorkspaceIndex['pages'] | null = null
+type IndexDraft = ReturnType<typeof getOpenDocuments>[number]
+type IndexRequest = {
+  key: string
+  selected: string
+  workspace: WorkspaceState
+  drafts: Map<string, IndexDraft>
+  revision: number
+}
+const indexJob = new LatestIndexJob(captureIndexRequest, runIndexRequest)
+
+function indexedContentPath(path: string): boolean {
+  if (cachedPages.has(path)) return true
+  if (!isDocumentName(basename(path), true)) return false
+  if (cachedEntry(path)?.kind === 'file') return true
+  const selected = root
+  if (
+    !selected ||
+    !relevantWatchPath(path) ||
+    path.split('/').includes('node_modules') ||
+    ignoredPaths?.ignores(path)
+  )
+    return false
+  return getOpenDocuments().some(
+    (draft) =>
+      draft.pendingPath && relativePath(selected, draft.pendingPath) === path,
+  )
+}
 
 function publishWorkspaceChange(change: WorkspaceChange) {
   if (
     change.kind === 'tree' ||
     change.paths === null ||
     cachedRoot !== root ||
-    change.paths.some(
-      (path) =>
-        cachedPages.has(path) ||
-        (indexing &&
-          isDocumentName(basename(path), true) &&
-          cachedEntry(path)?.kind === 'file'),
-    )
-  )
+    change.paths.some(indexedContentPath)
+  ) {
+    if (change.paths === null) dirtyIndexPaths = null
+    else if (dirtyIndexPaths)
+      for (const path of change.paths) dirtyIndexPaths.add(path)
     indexRevision++
+    indexJob.invalidate()
+  }
   onChanged(change)
 }
 
@@ -485,6 +513,7 @@ export async function loadWorkspace(
   if (loading !== loadGeneration) return getWorkspace()
   watcher?.close()
   clearTimeout(refreshTimer)
+  indexJob.reset()
   scanCoordinator?.close()
   watcherEvents.clear()
   unknownWatcherEvent = false
@@ -492,6 +521,9 @@ export async function loadWorkspace(
   pendingTreePaths = new Set()
   cachedRoot = null
   cachedPages.clear()
+  dirtyIndexPaths = null
+  cachedIndexKey = null
+  cachedIndexPages = null
   root = nextRoot
   entries = nextEntries
   manifest = metadata.manifest
@@ -577,6 +609,7 @@ export async function deleteKnownWorkspace(
     loadGeneration += 1
     watcher?.close()
     clearTimeout(refreshTimer)
+    indexJob.reset()
     scanCoordinator?.close()
     scanCoordinator = undefined
     watcher = undefined
@@ -590,6 +623,9 @@ export async function deleteKnownWorkspace(
     ignoredPaths = null
     cachedRoot = null
     cachedPages.clear()
+    dirtyIndexPaths = null
+    cachedIndexKey = null
+    cachedIndexPages = null
   }
   await forgetWorkspace(item.path)
   publishWorkspaceChange({ kind: 'tree', paths: null })
@@ -694,7 +730,7 @@ export async function snapshotWorkspace(): Promise<WorkspaceSnapshot> {
   }
 }
 
-export async function indexWorkspace(): Promise<WorkspaceIndex | null> {
+function captureIndexRequest(): { key: string; request: IndexRequest } | null {
   const selected = root
   if (!selected) return null
   const open = getOpenDocuments()
@@ -706,40 +742,65 @@ export async function indexWorkspace(): Promise<WorkspaceIndex | null> {
       return path && draft.dirty ? [[path, draft] as const] : []
     }),
   )
-  const version = indexRevision
+  const revision = indexRevision
   const key = JSON.stringify([
     selected,
-    version,
+    revision,
     [...drafts]
       .map(([path, draft]) => [path, draft.tabId, draft.contentVersion])
       .sort(([a], [b]) => String(a).localeCompare(String(b))),
   ])
-  if (indexing?.key !== key) {
-    const previous = indexing?.pages
-    const pages = (async () => {
-      if (previous) await previous.catch(() => undefined)
-      return collectIndexPages(selected, workspace.entries, drafts, version)
-    })()
-    indexing = { key, pages }
+  return { key, request: { key, selected, workspace, drafts, revision } }
+}
+
+async function runIndexRequest(
+  request: IndexRequest,
+  current: () => boolean,
+): Promise<WorkspaceIndex> {
+  const { selected, workspace, drafts, revision } = request
+  const pages = await collectIndexPages(
+    selected,
+    workspace.entries,
+    drafts,
+    () => current() && root === selected && indexRevision === revision,
+  )
+  const path = getDocumentPath()
+  const activePath = path ? relativePath(selected, path) : null
+  if (current()) {
+    cachedIndexKey = request.key
+    cachedIndexPages = pages
   }
-  const task = indexing.pages
-  try {
-    const pages = await task
-    if (root !== selected) return null
-    if (indexRevision !== version) return indexWorkspace()
-    const path = getDocumentPath()
-    const activePath = path ? relativePath(selected, path) : null
-    return { workspace: { ...workspace, activePath }, pages }
-  } finally {
-    if (indexing?.pages === task) indexing = undefined
+  return { workspace: { ...workspace, activePath }, pages }
+}
+
+export function indexWorkspace(
+  verifyAll = false,
+): Promise<WorkspaceIndex | null> {
+  if (verifyAll && root) {
+    dirtyIndexPaths = null
+    indexRevision++
+    indexJob.invalidate()
   }
+  const captured = captureIndexRequest()
+  if (!captured) return Promise.resolve(null)
+  if (
+    !indexJob.running &&
+    cachedIndexKey === captured.key &&
+    cachedIndexPages &&
+    dirtyIndexPaths?.size === 0
+  )
+    return Promise.resolve({
+      workspace: captured.request.workspace,
+      pages: cachedIndexPages,
+    })
+  return indexJob.request(captured)
 }
 
 async function collectIndexPages(
   selected: string,
   entries: readonly WorkspaceEntry[],
-  drafts: Map<string, ReturnType<typeof getOpenDocuments>[number]>,
-  revision: number,
+  drafts: Map<string, IndexDraft>,
+  current: () => boolean,
 ): Promise<WorkspaceIndex['pages']> {
   const previous = cachedRoot === selected ? cachedPages : new Map()
   const next = new Map<string, CachedIndexPage>()
@@ -747,7 +808,7 @@ async function collectIndexPages(
   let bytes = 0
   async function collect(items: readonly WorkspaceEntry[]) {
     for (const item of items) {
-      if (root !== selected || indexRevision !== revision) return
+      if (!current()) return
       if (item.children) {
         await collect(item.children)
         continue
@@ -756,22 +817,33 @@ async function collectIndexPages(
       if (!isDocumentName(item.name, true)) continue
       try {
         const draft = drafts.get(item.path)
-        const path =
-          draft?.file ?? (await resolveWorkspaceFile(selected, item.path))
-        let version: string
-        if (draft) {
-          version = `draft:${draft.tabId}:${draft.contentVersion}`
+        const existing = previous.get(item.path)
+        let cached: CachedIndexPage
+        if (
+          !draft &&
+          existing?.version.startsWith('disk:') &&
+          !needsIndexVerification(dirtyIndexPaths, item.path)
+        ) {
+          cached = existing
         } else {
-          const file = await stat(path, { bigint: true })
-          version = diskIndexVersion(file)
+          const path =
+            draft?.file ?? (await resolveWorkspaceFile(selected, item.path))
+          let version: string
+          if (draft) {
+            version = `draft:${draft.tabId}:${draft.contentVersion}`
+          } else {
+            const file = await stat(path, { bigint: true })
+            version = diskIndexVersion(file)
+          }
+          cached = await readIndexPage(
+            existing,
+            version,
+            existing?.page.id ??
+              createHash('sha256').update(path).digest('hex'),
+            item.path,
+            () => draft?.markdown ?? readMarkdown(path),
+          )
         }
-        const cached = await readIndexPage(
-          previous.get(item.path),
-          version,
-          createHash('sha256').update(path).digest('hex'),
-          item.path,
-          () => draft?.markdown ?? readMarkdown(path),
-        )
         bytes += cached.bytes
         if (pages.length >= 2000 || bytes > 20 * 1024 * 1024)
           throw new Error(
@@ -786,9 +858,10 @@ async function collectIndexPages(
     }
   }
   await collect(entries)
-  if (root === selected && indexRevision === revision) {
+  if (current()) {
     cachedRoot = selected
     cachedPages = next
+    dirtyIndexPaths = new Set()
   }
   return pages
 }

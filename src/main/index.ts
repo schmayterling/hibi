@@ -1037,8 +1037,8 @@ if (!app.requestSingleInstanceLock()) {
       handle(WORKSPACE_CHANNELS.snapshot, (event) =>
         readAfterFileOperation(event, snapshotWorkspace),
       )
-      handle(WORKSPACE_CHANNELS.index, (event) =>
-        readAfterFileOperation(event, indexWorkspace),
+      handle(WORKSPACE_CHANNELS.index, (event, verifyAll: unknown) =>
+        readAfterFileOperation(event, () => indexWorkspace(verifyAll === true)),
       )
       handle(WORKSPACE_CHANNELS.action, (event, input: unknown) =>
         runFileOperation(event, (window) => workspaceAction(window, input)),

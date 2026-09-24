@@ -191,7 +191,10 @@ export type DesktopApi = {
   ) => Promise<import('./workspace').KnownWorkspace[]>
   deleteKnownWorkspace: (id: string) => Promise<boolean>
   getWorkspaceSnapshot: () => Promise<import('./workspace').WorkspaceSnapshot>
-  getWorkspaceIndex: () => Promise<import('./workspace').WorkspaceIndex | null>
+  /** Recheck every indexed file after focus if a filesystem watcher missed changes. */
+  getWorkspaceIndex: (
+    verifyAll?: boolean,
+  ) => Promise<import('./workspace').WorkspaceIndex | null>
   workspaceAction: (
     action: import('./workspace').WorkspaceAction,
   ) => Promise<import('./workspace').WorkspaceActionResult | null>

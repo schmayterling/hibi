@@ -110,7 +110,7 @@ test('note indexes include drafts, exclude media/symlinks, and coexist with save
   )
   const changedText = `${text}\nchanged`
   await writeFile(join(root, 'saved.md'), changedText)
-  const changed = await page.evaluate(() => window.hibi.getWorkspaceIndex())
+  const changed = await page.evaluate(() => window.hibi.getWorkspaceIndex(true))
   assert.equal(
     changed.pages.find((page) => page.path === 'saved.md').markdown,
     changedText,

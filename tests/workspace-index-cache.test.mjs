@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import {
   diskIndexVersion,
+  needsIndexVerification,
   readIndexPage,
 } from '../src/main/workspace-index-cache.ts'
 
@@ -56,4 +57,12 @@ test('workspace index reuses unchanged text and reads only changed files', async
   )
   assert.equal(changed.page.markdown, 'other')
   assert.equal(reads, 2)
+})
+
+test('known file changes verify only affected paths and folder descendants', () => {
+  const changed = new Set(['folder', 'other.md'])
+  assert.equal(needsIndexVerification(changed, 'folder/a.md'), true)
+  assert.equal(needsIndexVerification(changed, 'other.md'), true)
+  assert.equal(needsIndexVerification(changed, 'stable.md'), false)
+  assert.equal(needsIndexVerification(null, 'stable.md'), true)
 })

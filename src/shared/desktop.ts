@@ -247,7 +247,7 @@ export type DesktopApi = {
   onExternalDocuments: (callback: () => void) => () => void
   newDocument: () => Promise<DocumentState | null>
   saveDocument: (saveAs: boolean) => Promise<DocumentState | null>
-  autosaveDocument: (revision: number) => Promise<AutosaveResult>
+  autosaveDocument: (tabId: string, revision: number) => Promise<AutosaveResult>
   renameDocument: (name: string) => Promise<DocumentState>
   readDocumentImage: (
     source: string,

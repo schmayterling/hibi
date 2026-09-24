@@ -26,6 +26,8 @@ Under **Appearance → Window**, set **Status bar** to **Show**, **Auto-hide**, 
 
 Autosave is off by default. Enable it under **Editor** and choose how long to wait after typing stops. New notes and remote drafts need one manual save to choose a local destination.
 
+Open files keep their autosave timers when you switch tabs. Each file saves after its own typing delay.
+
 If another app changes the file, autosave pauses. Save manually to review the conflict.
 
 ## Keyboard shortcuts

@@ -70,7 +70,9 @@ import {
   discardChanges,
   getDocument,
   getDocumentPath,
+  getDocumentPathForTab,
   getDocumentSource,
+  getDocumentSourceFor,
   loadDocument,
   loadDocumentPreferences,
   moveDocumentTab,
@@ -329,7 +331,7 @@ async function serveAsset(request: Request): Promise<Response> {
 }
 
 let windowSetupReady = false
-const appendDocumentChange = createJournalReceiver(getDocumentSource)
+const appendDocumentChange = createJournalReceiver(getDocumentSourceFor)
 function createWindow(): void {
   if (!windowSetupReady) return
   startupMark('window-start')
@@ -1222,17 +1224,21 @@ if (!app.requestSingleInstanceLock()) {
           return saved
         })
       })
-      handle(DOCUMENT_CHANNELS.autosave, (event, revision: unknown) => {
-        trustedWindow(event)
-        if (fileOperation) return { status: 'skipped', document: null }
-        return runFileOperation(event, async (window) => {
-          const previous = getDocumentPath()
-          const result = await autosaveDocument(window, revision)
-          if (result.status === 'saved')
-            await documentFileChanged(previous, getDocumentPath(), false)
-          return result
-        })
-      })
+      handle(
+        DOCUMENT_CHANNELS.autosave,
+        (event, tabId: unknown, revision: unknown) => {
+          trustedWindow(event)
+          if (fileOperation) return { status: 'skipped', document: null }
+          return runFileOperation(event, async (window) => {
+            const target =
+              typeof tabId === 'string' ? getDocumentPathForTab(tabId) : null
+            const result = await autosaveDocument(window, tabId, revision)
+            if (result.status === 'saved')
+              await documentFileChanged(target, target, false)
+            return result
+          })
+        },
+      )
       handle(DOCUMENT_CHANNELS.rename, (event, name: unknown) =>
         runFileOperation(event, async () => {
           const previous = getDocumentPath()

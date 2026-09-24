@@ -71,6 +71,7 @@ export function ActiveDocumentEditor({
         documentRuntime,
         props.mode === 'markdown',
         certifiedVisual,
+        props.document.tabId,
       ),
     [
       props.mode,
@@ -114,22 +115,27 @@ export function ActiveDocumentEditor({
   useEffect(() => {
     if (!markdown) return
     // Display-only flavor detection can wait for typing to pause.
-    return afterDocumentQuiet(documentRuntime, document, () => {
-      const body = projectMarkdown(source, props.markdownExtensions).content
-      const detected = knownFlavors.filter((flavor) =>
-        flavorMatches(flavor, body),
-      )
-      const label = [
-        (flavorChoice.dialect === 'auto'
-          ? detected.find((flavor) => flavor.kind === 'dialect')?.name
-          : chosenFlavors.find((flavor) => flavor.kind === 'dialect')?.name) ??
-          'markdown',
-        ...detected
-          .filter((flavor) => flavor.kind === 'syntax')
-          .map((flavor) => flavor.name),
-      ].join(' + ')
-      onFlavorStatus({ label, unsupported })
-    })
+    return afterDocumentQuiet(
+      documentRuntime,
+      document,
+      () => {
+        const body = projectMarkdown(source, props.markdownExtensions).content
+        const detected = knownFlavors.filter((flavor) =>
+          flavorMatches(flavor, body),
+        )
+        const label = [
+          (flavorChoice.dialect === 'auto'
+            ? detected.find((flavor) => flavor.kind === 'dialect')?.name
+            : chosenFlavors.find((flavor) => flavor.kind === 'dialect')
+                ?.name) ?? 'markdown',
+          ...detected
+            .filter((flavor) => flavor.kind === 'syntax')
+            .map((flavor) => flavor.name),
+        ].join(' + ')
+        onFlavorStatus({ label, unsupported })
+      },
+      document.tabId,
+    )
   }, [
     markdown,
     document,

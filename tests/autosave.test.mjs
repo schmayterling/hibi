@@ -3,9 +3,66 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
 import { electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
+
+test('autosave keeps a dirty tab scheduled after focus moves to another tab', {
+  timeout: 30000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-autosave-tabs-'))
+  const a = join(profile, 'a.md')
+  const b = join(profile, 'b.md')
+  await writeFile(a, 'a')
+  await writeFile(b, 'b')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(6500)
+  const rich = page.getByRole('textbox', { name: /document editor/i })
+  await rich.waitFor()
+  await page.locator('[data-status-id="autosave"]').click()
+  await page.getByRole('checkbox', { name: /^autosave$/i }).check()
+  await page.getByLabel(/^save after$/i).selectOption('1000')
+  await page.getByRole('button', { name: /^back to app$/i }).click()
+  for (const file of [a, b]) {
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, file)
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      file === a ? 'a.md' : 'b.md',
+    )
+  }
+  await page.getByRole('tab', { name: 'a.md' }).click()
+  await rich.fill('edited a')
+  await page.getByRole('tab', { name: 'b.md' }).click()
+  const deadline = performance.now() + 7000
+  while (
+    (await readFile(a, 'utf8')) !== 'edited a' &&
+    performance.now() < deadline
+  )
+    await delay(30)
+  assert.equal(await readFile(a, 'utf8'), 'edited a')
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).name,
+    'b.md',
+  )
+})
 
 test('autosave preserves later edits, pauses on external changes, and never prompts for unnamed drafts', {
   timeout: 30000,

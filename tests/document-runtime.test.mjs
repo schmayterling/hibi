@@ -105,6 +105,35 @@ test('runtime imports saved V while V+1 remains dirty and preserves history acro
   runtime.dispose()
 })
 
+test('inactive sessions stay addressable and accept their own save acknowledgment', () => {
+  const { runtime, operations } = fixture()
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('first', { tabs }))
+  const first = runtime.session()
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  const notices = []
+  runtime.subscribeDocument((next) => notices.push(next.tabId))
+  first.edit([{ from: 5, to: 5, insert: ' edit' }], 'source', 'typing')
+  assert.equal(runtime.get().markdown, 'second')
+  assert.equal(runtime.get('one').markdown, 'first edit')
+  assert.equal(runtime.get().tabs.find((tab) => tab.id === 'one').dirty, true)
+  assert.equal(operations.at(-1).document.tabId, 'one')
+  runtime.acknowledgeSave({
+    ...runtime.get('one'),
+    savedMarkdown: 'first edit',
+  })
+  assert.equal(runtime.get('one').dirty, false)
+  assert.equal(runtime.get().tabs.find((tab) => tab.id === 'one').dirty, false)
+  assert.deepEqual(notices, ['one', 'one'])
+  runtime.dispose()
+})
+
 test('runtime treats whole-source line-ending transforms as explicit atomic compatibility edits', () => {
   const { runtime, operations } = fixture()
   runtime.activate(document('a\r\nb\n'))

@@ -81,7 +81,10 @@ const editorSelection = (
   )
 
 /** Accepted CM transactions enter the same source/history/recovery authority as visual edits. */
-export function createSourceSession(session: DocumentSession) {
+export function createSourceSession(
+  session: DocumentSession,
+  viewId = 'default',
+) {
   let snapshot = session.snapshot()
   const lineBreak = preferredLineBreak(snapshot)
   let group = '',
@@ -122,6 +125,7 @@ export function createSourceSession(session: DocumentSession) {
         session.select(
           rawSelection(snapshot, state.selection),
           snapshot.version,
+          viewId,
         )
       }
       rememberSourceHistory(state, session.historyDepth())
@@ -148,6 +152,7 @@ export function createSourceSession(session: DocumentSession) {
     session.select(
       rawSelection(snapshot, view.state.selection),
       snapshot.version,
+      viewId,
     )
     session.edit(
       exactChanges ?? sourceChangesFromEditor(snapshot, changes, lineBreak),
@@ -163,6 +168,7 @@ export function createSourceSession(session: DocumentSession) {
         view.update(transactions)
       },
       (prepared) => rawSelection(prepared.after, state.selection),
+      viewId,
     )
     lastEvent = eventGroup
     lastTime = time
@@ -170,7 +176,7 @@ export function createSourceSession(session: DocumentSession) {
   }
   return {
     snapshot: () => snapshot,
-    selection: () => editorSelection(snapshot, session.selection()),
+    selection: () => editorSelection(snapshot, session.selection(viewId)),
     dispatch,
     attach(view: Pick<EditorView, 'state' | 'update'>) {
       if (!session.ownsCurrentSnapshot(snapshot))
@@ -185,7 +191,10 @@ export function createSourceSession(session: DocumentSession) {
         if (snapshot === prepared.after) return
         if (snapshot !== prepared.before)
           throw new Error('The source replica missed an operation.')
-        const selection = editorSelection(prepared.after, session.selection())
+        const selection = editorSelection(
+          prepared.after,
+          session.selection(viewId),
+        )
         const transaction = view.state.update({
           changes: editorChangesFromSource(
             prepared.before,

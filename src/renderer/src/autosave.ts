@@ -53,6 +53,8 @@ export function useAutosave(
       ? result
       : null
   const inFlight = useRef(false)
+  const busyNow = useRef(busy)
+  busyNow.current = busy
   // A manual save, another document, or toggling autosave clears a paused attempt.
   // biome-ignore lint/correctness/useExhaustiveDependencies: these events reset the current autosave status.
   useEffect(
@@ -65,53 +67,73 @@ export function useAutosave(
     ],
   )
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const schedule = (next: DocumentState | null) => {
-      clearTimeout(timer)
+    const timers = new Map<string, ReturnType<typeof setTimeout>>()
+    const paused = new Map<string, unknown>()
+    const schedule = (next: DocumentState) => {
+      clearTimeout(timers.get(next.tabId))
+      timers.delete(next.tabId)
+      const baseline = documentRuntime.session(next.tabId)?.savedSnapshot()
+      if (paused.has(next.tabId) && paused.get(next.tabId) !== baseline)
+        paused.delete(next.tabId)
       if (
         !settings.enabled ||
-        !next?.dirty ||
+        !next.dirty ||
         !next.canAutosave ||
-        busy ||
         inFlight.current ||
-        currentResult?.status === 'conflict' ||
-        currentResult?.status === 'error'
+        paused.has(next.tabId)
       )
         return
-      timer = setTimeout(async () => {
-        inFlight.current = true
-        const identity = { id: next.id, revision: next.revision }
-        setResult({ ...identity, status: 'saving' })
-        try {
-          const saved = await window.hibi.autosaveDocument(next.revision)
-          if (saved.document) onSaved(saved.document)
-          // Results still acknowledge the saved baseline if typing continues during I/O.
-          setResult({
-            ...identity,
-            status: saved.status === 'skipped' ? 'waiting' : saved.status,
-          })
-        } catch (error) {
-          setResult({
-            ...identity,
-            status: 'error',
-            error:
-              error instanceof Error
-                ? error.message
-                : 'Could not save this file.',
-          })
-        } finally {
-          inFlight.current = false
-        }
-      }, settings.delay)
+      timers.set(
+        next.tabId,
+        setTimeout(async () => {
+          timers.delete(next.tabId)
+          if (busyNow.current) {
+            timers.set(
+              next.tabId,
+              setTimeout(() => schedule(next), 100),
+            )
+            return
+          }
+          inFlight.current = true
+          const identity = { id: next.id, revision: next.revision }
+          setResult({ ...identity, status: 'saving' })
+          try {
+            const saved = await window.hibi.autosaveDocument(
+              next.tabId,
+              next.revision,
+            )
+            if (saved.document) onSaved(saved.document)
+            if (saved.status === 'conflict') paused.set(next.tabId, baseline)
+            // Results still acknowledge the saved baseline if typing continues during I/O.
+            setResult({
+              ...identity,
+              status: saved.status === 'skipped' ? 'waiting' : saved.status,
+            })
+          } catch (error) {
+            paused.set(next.tabId, baseline)
+            setResult({
+              ...identity,
+              status: 'error',
+              error:
+                error instanceof Error
+                  ? error.message
+                  : 'Could not save this file.',
+            })
+          } finally {
+            inFlight.current = false
+            for (const pending of documentRuntime.documents()) schedule(pending)
+          }
+        }, settings.delay),
+      )
     }
-    // Actual edits reset the quiet timer without publishing content to App state.
-    const unsubscribe = documentRuntime.subscribe(schedule)
-    schedule(documentRuntime.get() ?? document)
+    // Each document keeps its quiet timer even when another pane gains focus.
+    const unsubscribe = documentRuntime.subscribeDocument(schedule)
+    for (const next of documentRuntime.documents()) schedule(next)
     return () => {
-      clearTimeout(timer)
+      for (const timer of timers.values()) clearTimeout(timer)
       unsubscribe()
     }
-  }, [document, busy, settings, currentResult, onSaved])
+  }, [settings, onSaved])
   const label = !settings.enabled
     ? 'Autosave off'
     : !document?.canAutosave

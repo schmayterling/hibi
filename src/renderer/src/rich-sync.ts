@@ -12,7 +12,8 @@ const refreshers = new WeakMap<Editor, () => void>()
 
 export function richSourceCurrent(editor: Editor) {
   const known = richSourceSnapshot(editor)
-  const source = documentRuntime.session()?.snapshot()
+  const source =
+    known && documentRuntime.session(known.document.tabId)?.snapshot()
   return Boolean(
     !editor.isDestroyed &&
       known &&

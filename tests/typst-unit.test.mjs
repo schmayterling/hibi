@@ -54,6 +54,7 @@ test('pinned native compiler sends package requests through the denying proxy', 
     let timer
     let output = ''
     let ready = false
+    let timedOut
     const child = execFile(
       process.execPath,
       ['--input-type=module', '-e', script],
@@ -72,15 +73,16 @@ test('pinned native compiler sends package requests through the denying proxy', 
       },
       (error, stdout) => {
         clearTimeout(timer)
-        if (error) reject(error)
+        if (timedOut) reject(timedOut)
+        else if (error) reject(error)
         else resolve(stdout)
       },
     )
     const deadline = (phase, delay) => {
       clearTimeout(timer)
       timer = setTimeout(() => {
+        timedOut = new Error(`Typst ${phase} exceeded ${delay / 1000} seconds.`)
         child.kill('SIGKILL')
-        reject(new Error(`Typst ${phase} exceeded ${delay / 1000} seconds.`))
       }, delay)
     }
     deadline('font initialization', 30000)

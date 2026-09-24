@@ -6,8 +6,8 @@ import { electron } from '../tests/electron.mjs'
 import { clickMenu } from '../tests/keyboard.mjs'
 
 const mode = process.argv[2]
-if (!['immediate', 'ready'].includes(mode))
-  throw new Error('Choose immediate or ready')
+if (!['default', 'swiftshader'].includes(mode))
+  throw new Error('Choose default or swiftshader')
 const trials = Number(process.argv[3] ?? 1)
 
 async function bounded(request, timeout) {
@@ -30,13 +30,33 @@ async function bounded(request, timeout) {
 async function probe() {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-raf-probe-'))
   const result = {}
+  const gpuLogs = []
   let app
+  let child
+  let collectGpuLog
   try {
     app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${profile}`],
+      args: [
+        resolve('.'),
+        `--user-data-dir=${profile}`,
+        ...(mode === 'swiftshader'
+          ? ['--use-gl=angle', '--use-angle=swiftshader']
+          : []),
+      ],
       timeout: 10000,
-      testShowAtReady: mode === 'ready',
     })
+    let partial = ''
+    collectGpuLog = (chunk) => {
+      const lines = (partial + String(chunk)).split(/\r?\n/)
+      partial = lines.pop().slice(-500)
+      for (const line of lines) {
+        if (!/gpu|angle|egl|opengl|swiftshader/i.test(line)) continue
+        gpuLogs.push(line.slice(0, 220))
+        if (gpuLogs.length > 6) gpuLogs.shift()
+      }
+    }
+    child = app.process()
+    child.stderr?.on('data', collectGpuLog)
     await app.evaluate(({ app }) => {
       globalThis.__ciGpuExits = 0
       app.on('child-process-gone', (_event, details) => {
@@ -90,6 +110,9 @@ async function probe() {
       app.evaluate(({ app }) => ({
         exits: globalThis.__ciGpuExits,
         alive: app.getAppMetrics().some(({ type }) => type === 'GPU'),
+        compositing: app.getGPUFeatureStatus().gpu_compositing ?? 'unknown',
+        gl: app.commandLine.getSwitchValue('use-gl'),
+        angle: app.commandLine.getSwitchValue('use-angle'),
       })),
       500,
     )
@@ -124,7 +147,10 @@ async function probe() {
       } catch {
         result.cleanup = 'failed'
       }
+      if (collectGpuLog) child?.stderr?.off('data', collectGpuLog)
     }
+    if (result.frames === 0 || result.click === 'timeout')
+      result.gpuLogs = gpuLogs
     try {
       await rm(profile, { recursive: true, force: true })
     } catch {
@@ -169,6 +195,16 @@ console.log(
       0,
     ),
     gpuMissing: count((result) => result.gpu?.alive === false),
+    gpuCompositing: results.reduce((counts, result) => {
+      const status = result.gpu?.compositing ?? 'unavailable'
+      counts[status] = (counts[status] ?? 0) + 1
+      return counts
+    }, {}),
+    switches: results[0]?.gpu && {
+      gl: results[0].gpu.gl,
+      angle: results[0].gpu.angle,
+    },
+    failureGpuLogs: results.flatMap((result) => result.gpuLogs ?? []),
     cleanupErrors: count((result) => result.cleanup || result.profileCleanup),
   }),
 )

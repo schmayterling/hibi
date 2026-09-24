@@ -179,9 +179,8 @@ async function traceElectronClose(application) {
 // so Linux compositors keep painting frames and delivering native keyboard input.
 export const electron = {
   async launch(options) {
-    const { testShowAtReady, ...launchOptions } = options
     const application = await _electron.launch({
-      ...launchOptions,
+      ...options,
       args: [...options.args, '--hibi-test'],
     })
     const close = application.close.bind(application)
@@ -258,7 +257,7 @@ export const electron = {
     }
     if (process.env.GITHUB_ACTIONS === 'true') {
       const page = await application.firstWindow()
-      await application.evaluate(({ app, BrowserWindow }, showAtReady) => {
+      await application.evaluate(({ app, BrowserWindow }) => {
         const show = (window) => {
           if (window.webContents.getURL().startsWith('hibi-analysis:')) return
           window.setFocusable(true)
@@ -268,15 +267,8 @@ export const electron = {
         app.on('browser-window-created', (_event, window) => {
           window.once('ready-to-show', () => show(window))
         })
-        const painted = performance.getEntriesByName(
-          'hibi:window-painted',
-        ).length
-        for (const window of BrowserWindow.getAllWindows()) {
-          if (showAtReady && !painted)
-            window.once('ready-to-show', () => show(window))
-          else show(window)
-        }
-      }, testShowAtReady)
+        for (const window of BrowserWindow.getAllWindows()) show(window)
+      })
       slowStartTimer = setTimeout(async () => {
         if (closing || page.isClosed()) return
         try {

@@ -1,5 +1,5 @@
 import { ArrowUpRight, ChevronRight, File, Heart } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { type MouseEvent, useEffect, useState } from 'react'
 import type { LicenseInfo } from '../../shared/about'
 import type { AppInfo } from '../../shared/desktop'
 import { Button, SettingRow } from '../../ui/Controls'
@@ -68,6 +68,10 @@ export function HibiSettings({ info }: { info: AppInfo | null }) {
       setSponsoring(false)
     }
   }
+  function openCreditLink(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault()
+    void window.hibi.openAddonDocumentationLink(event.currentTarget.href)
+  }
   return (
     <>
       <h1>Hibi</h1>
@@ -85,7 +89,17 @@ export function HibiSettings({ info }: { info: AppInfo | null }) {
           </span>
         </div>
         <p className="hibi-credit">
-          Made with <Heart size={12} aria-label="Love" /> by may{' '}
+          Made by <Heart size={12} aria-label="Love" /> with{' '}
+          <a href="https://github.com/schmayterling" onClick={openCreditLink}>
+            may
+          </a>{' '}
+          and{' '}
+          <a
+            href="https://github.com/schmayterling/hibi/graphs/contributors"
+            onClick={openCreditLink}
+          >
+            beloved contributors
+          </a>{' '}
           <span aria-hidden="true">·</span> © {new Date().getFullYear()}
         </p>
         <SettingRow

@@ -120,12 +120,22 @@ test('hibi opens first, sponsor uses a fixed URL, and license dialogs stay reada
   )
   await app.evaluate(({ shell }) => {
     shell.openExternal = async (url) => {
-      globalThis.openedSponsor = url
+      globalThis.openedUrl = url
     }
   })
+  for (const [name, url] of [
+    ['may', 'https://github.com/schmayterling'],
+    [
+      'beloved contributors',
+      'https://github.com/schmayterling/hibi/graphs/contributors',
+    ],
+  ]) {
+    await panel.getByRole('link', { name, exact: true }).press('Enter')
+    assert.equal(await app.evaluate(() => globalThis.openedUrl), url)
+  }
   await panel.getByRole('button', { name: /sponsor on github/i }).press('Enter')
   assert.equal(
-    await app.evaluate(() => globalThis.openedSponsor),
+    await app.evaluate(() => globalThis.openedUrl),
     'https://github.com/sponsors/schmayterling',
   )
   await page.waitForFunction(

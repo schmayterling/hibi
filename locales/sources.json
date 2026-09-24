@@ -2308,7 +2308,7 @@
   "85a5ac392dfd": [
     "src/addons/_shared/format-worker.ts"
   ],
-  "42c6b818dcbc": [
+  "25a239179c0c": [
     "src/renderer/src/HibiSettings.tsx"
   ],
   "f988f51a872a": [
@@ -4735,7 +4735,10 @@
   "4d48fba6cf5f": [
     "src/shared/hotkeys.ts"
   ],
-  "dcf0f93ff715": [
+  "6201111b83a0": [
+    "src/renderer/src/HibiSettings.tsx"
+  ],
+  "189df083f938": [
     "src/renderer/src/HibiSettings.tsx"
   ],
   "277089d91c0b": [
@@ -4828,6 +4831,9 @@
   "bc18f7068971": [
     "src/renderer/src/main.tsx"
   ],
+  "ee4d988c65de": [
+    "src/renderer/src/HibiSettings.tsx"
+  ],
   "7d982ed61dc3": [
     "src/ui/colorschemes.ts"
   ],
@@ -4895,6 +4901,9 @@
   ],
   "4c94485e0c21": [
     "src/renderer/src/AddonSettings.tsx"
+  ],
+  "0695b563acde": [
+    "src/renderer/src/HibiSettings.tsx"
   ],
   "dafe8af01f1c": [
     "src/renderer/src/workspace-menu.ts"

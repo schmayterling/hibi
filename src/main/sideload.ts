@@ -347,19 +347,27 @@ export async function installPackage(
   builtinIds: readonly string[],
   disable: (id: string) => Promise<() => Promise<void>>,
   url?: unknown,
+  garden?: { id: string; path: string },
 ): Promise<boolean> {
   if (url !== undefined) {
+    if (garden && !repositoryUrl(url))
+      throw new Error('The garden addon repository is invalid.')
     const { downloadAddon, unpackAddon } = await import('./addon-download')
     const temporary = await mkdtemp(join(app.getPath('temp'), 'hibi-addon-'))
     try {
       let download = repositoryUrl(url)
-        ? await downloadRepository(url, temporary)
+        ? await downloadRepository(url, temporary, undefined, garden?.path)
         : await downloadAddon(url)
       if (
         download.zip.length < 4 ||
         download.zip.readUInt32LE(0) !== 0x04034b50
       )
-        download = await downloadRepository(url, temporary)
+        download = await downloadRepository(
+          url,
+          temporary,
+          undefined,
+          garden?.path,
+        )
       const packageDirectory = join(temporary, 'package')
       await mkdir(packageDirectory, { mode: 0o700 })
       await unpackAddon(download.zip, packageDirectory)
@@ -370,6 +378,7 @@ export async function installPackage(
         disable,
         'third-party',
         download.host,
+        garden?.id,
       )
     } finally {
       await rm(temporary, { recursive: true, force: true })
@@ -391,8 +400,11 @@ async function installDirectory(
   disable: (id: string) => Promise<() => Promise<void>>,
   origin: 'local' | 'third-party',
   host?: string,
+  expectedId?: string,
 ): Promise<boolean> {
   const data = await readManifest(source)
+  if (expectedId && data.manifest.id !== expectedId)
+    throw new Error('The garden addon does not match its catalog entry.')
   if (builtinIds.includes(data.manifest.id))
     throw new Error(
       'This addon uses the ID of a built-in addon and cannot replace it.',

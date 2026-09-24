@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
 import { downloadAddon, unpackAddon } from '../src/main/addon-download.ts'
+import { getGardenAddons } from '../src/main/addon-garden.ts'
 import {
   downloadRepository,
   repositoryUrl,
@@ -25,6 +26,28 @@ const packageFiles = [
     deflate: true,
   },
 ]
+test('garden catalog keeps only valid addon folders', async () => {
+  const entry = {
+    id: 'garden-addon',
+    name: 'Garden addon',
+    description: 'Test package',
+    version: '1.0.0',
+    apiVersion: 2,
+    kind: 'extension',
+    authors: [{ displayName: 'test author' }],
+    path: 'addons/garden-addon',
+  }
+  assert.deepEqual(
+    await getGardenAddons(async () => new Response(JSON.stringify([entry]))),
+    [entry],
+  )
+  await assert.rejects(
+    getGardenAddons(
+      async () => new Response(JSON.stringify([{ ...entry, path: '../x' }])),
+    ),
+    /catalog is invalid/,
+  )
+})
 test('addon archives preserve wrappers and reject unsafe or oversized contents', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-unpack-'))
   t.after(() => rm(root, { recursive: true, force: true }))
@@ -132,6 +155,13 @@ test('repository installs archive without checkout, hooks, or inherited git conf
   await mkdir(source)
   for (const file of packageFiles)
     await writeFile(join(source, file.name), file.content)
+  const gardenSource = join(source, 'addons', 'garden-addon')
+  await mkdir(gardenSource, { recursive: true })
+  for (const file of packageFiles)
+    await writeFile(
+      join(gardenSource, file.name),
+      file.name === 'README.md' ? 'garden fixture' : file.content,
+    )
   execFileSync(git, ['-c', 'init.defaultBranch=main', 'init', source])
   const run = (args) =>
     execFileSync(git, [
@@ -155,24 +185,25 @@ test('repository installs archive without checkout, hooks, or inherited git conf
   const temporary = join(root, 'download')
   await mkdir(temporary)
   const commands = []
+  const runDownloaded = (command, args, options) => {
+    commands.push({
+      args: [...args],
+      system: options.env.GIT_CONFIG_NOSYSTEM,
+      config: options.env.GIT_CONFIG_GLOBAL,
+    })
+    const local = args.map((argument) =>
+      argument === 'https://github.com/example/addon.git' ? source : argument,
+    )
+    return promisify(execFile)(
+      command,
+      ['-c', 'protocol.file.allow=always', ...local],
+      options,
+    )
+  }
   const archive = await downloadRepository(
     'https://github.com/example/addon',
     temporary,
-    (command, args, options) => {
-      commands.push({
-        args: [...args],
-        system: options.env.GIT_CONFIG_NOSYSTEM,
-        config: options.env.GIT_CONFIG_GLOBAL,
-      })
-      const local = args.map((argument) =>
-        argument === 'https://github.com/example/addon.git' ? source : argument,
-      )
-      return promisify(execFile)(
-        command,
-        ['-c', 'protocol.file.allow=always', ...local],
-        options,
-      )
-    },
+    runDownloaded,
   )
   const folder = join(root, 'package')
   await mkdir(folder)
@@ -185,6 +216,31 @@ test('repository installs archive without checkout, hooks, or inherited git conf
   assert.equal(commands[0].system, '1')
   assert.equal(await readFile(commands[0].config, 'utf8'), '')
   assert.ok(commands[0].args.includes('credential.helper='))
+  const gardenTemporary = join(root, 'garden-download')
+  await mkdir(gardenTemporary)
+  const gardenArchive = await downloadRepository(
+    'https://github.com/example/addon',
+    gardenTemporary,
+    runDownloaded,
+    'addons/garden-addon',
+  )
+  const gardenFolder = join(root, 'garden-package')
+  await mkdir(gardenFolder)
+  await unpackAddon(gardenArchive.zip, gardenFolder)
+  assert.equal(
+    await readFile(join(gardenFolder, 'README.md'), 'utf8'),
+    'garden fixture',
+  )
+  assert.ok(commands.at(-1).args.includes('HEAD:addons/garden-addon'))
+  await assert.rejects(
+    downloadRepository(
+      'https://github.com/example/addon',
+      gardenTemporary,
+      runDownloaded,
+      '../x',
+    ),
+    /path is invalid/,
+  )
   assert.equal(repositoryUrl('https://github.com/example/addon'), true)
   assert.equal(repositoryUrl('https://git.example.com/addon.git'), true)
   assert.equal(

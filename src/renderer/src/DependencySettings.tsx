@@ -7,7 +7,10 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { AddonState } from '../../addons/api'
-import type { DependencyState } from '../../shared/dependencies'
+import {
+  type DependencyState,
+  dependencyChangedEvent,
+} from '../../shared/dependencies'
 import type { DesktopApi } from '../../shared/desktop'
 import { errorMessage } from '../../shared/errors'
 import {
@@ -201,6 +204,7 @@ export function DependencySettings({
     try {
       await action()
       setTools(await window.hibi.getDependencies())
+      window.dispatchEvent(new Event(dependencyChangedEvent))
       setError('')
     } catch (error) {
       await dialogs.alert({
@@ -345,6 +349,7 @@ export function DependencySettings({
                               item.key === tool.key ? next : item,
                             ) ?? null,
                         )
+                        window.dispatchEvent(new Event(dependencyChangedEvent))
                         return next
                       } finally {
                         setBusy(null)

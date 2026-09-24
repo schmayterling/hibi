@@ -6,6 +6,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react'
+import { dependencyChangedEvent } from '../../shared/dependencies'
 import type { WorkspaceChange } from '../../shared/workspace'
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
@@ -96,6 +97,14 @@ export function TypstPreview({
     [result?.svg, result?.svgs],
   )
   const [projectRevision, setProjectRevision] = useState(0)
+  useEffect(() => {
+    const refresh = () => {
+      if (systemCompilerEnabled())
+        setProjectRevision((revision) => revision + 1)
+    }
+    window.addEventListener(dependencyChangedEvent, refresh)
+    return () => window.removeEventListener(dependencyChangedEvent, refresh)
+  }, [])
   useEffect(
     () =>
       onWorkspaceChange((change) => {

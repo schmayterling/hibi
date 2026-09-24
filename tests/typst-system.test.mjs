@@ -103,6 +103,13 @@ test('selected system Typst compiles newer syntax, local imports, multiple pages
     })
   })
   assert.deepEqual(tracked.dependencies, ['values.typ'])
+  if (process.env.TYPST_TEST_FONT)
+    assert.equal(
+      tracked.diagnostics.some((item) =>
+        /unknown font family/i.test(item.message),
+      ),
+      false,
+    )
   const warning = await page.evaluate(async () => {
     const document = await window.hibi.getDocument()
     return window.hibi.queryAddon('typst', 'compile', {
@@ -136,6 +143,31 @@ test('selected system Typst compiles newer syntax, local imports, multiple pages
   assert.equal(packageResult.svg, undefined)
   assert.equal(packageResult.diagnostics[0].severity, 'error')
   assert.match(packageResult.diagnostics[0].message, /download|403|proxy/i)
+  await clickMenu(app, 'Settings')
+  await search.fill('')
+  await page.getByRole('tab', { name: 'Dependencies', exact: true }).click()
+  await panel
+    .getByRole('searchbox', { name: 'Filter dependencies' })
+    .fill('typst')
+  if (!(await path.isVisible())) await tool.locator('summary').click()
+  await tool.getByRole('button', { name: 'Use PATH' }).click()
+  await page.getByRole('button', { name: 'Back to app' }).click()
+  await page.getByText(/Install Typst or choose its executable/).waitFor()
+  await clickMenu(app, 'Settings')
+  await search.fill('')
+  await page.getByRole('tab', { name: 'Dependencies', exact: true }).click()
+  await panel
+    .getByRole('searchbox', { name: 'Filter dependencies' })
+    .fill('typst')
+  if (!(await path.isVisible())) await tool.locator('summary').click()
+  await path.fill(process.env.TYPST_TEST_BIN)
+  await path.press('Enter')
+  await tool.getByText('Available', { exact: true }).waitFor()
+  await page.getByRole('button', { name: 'Back to app' }).click()
+  await page
+    .getByAltText(/Typst document preview, page/)
+    .first()
+    .waitFor()
   const pdf = join(root, 'report.pdf')
   await app.evaluate(({ dialog }, destination) => {
     dialog.showSaveDialog = async () => ({

@@ -44,6 +44,8 @@ export type DependencyApi = {
   openSettings: () => void
 }
 
+export const dependencyChangedEvent = 'hibi:dependencies-changed'
+
 export const DEPENDENCY_CHANNELS = {
   list: 'dependencies:list',
   check: 'dependencies:check',

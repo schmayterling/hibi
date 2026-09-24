@@ -152,6 +152,7 @@ export function Sidebar({
 }: SidebarProps) {
   const container = useRef<HTMLDivElement>(null)
   const focusedElement = useRef<HTMLElement | null>(null)
+  const pendingOpenFocus = useRef<Element | null>(null)
   const wasOverlayOpen = useRef(false)
   // biome-ignore lint/correctness/useExhaustiveDependencies: row replacement can remove the focused DOM node without changing drawer visibility.
   useLayoutEffect(() => {
@@ -159,28 +160,42 @@ export function Sidebar({
     wasOverlayOpen.current = open && overlay
     if (!open || !overlay) {
       focusedElement.current = null
+      pendingOpenFocus.current = null
       return
     }
-    const previous = focusedElement.current
     if (
-      !opening &&
-      (!previous ||
-        previous.isConnected ||
-        document.activeElement !== document.body)
+      pendingOpenFocus.current &&
+      document.activeElement !== pendingOpenFocus.current
     )
-      return
-    // An async row refresh must not strand drawer keyboard focus on the body.
+      pendingOpenFocus.current = null
+    const previous = focusedElement.current
+    const removedFocusedRow =
+      previous &&
+      !previous.isConnected &&
+      document.activeElement === document.body
+    if (!opening && !pendingOpenFocus.current && !removedFocusedRow) return
     const target =
-      container.current?.querySelector<HTMLElement>('[aria-selected="true"]') ??
       container.current?.querySelector<HTMLElement>(
-        'input, button:not(:disabled):not(.sidebar-scrim)',
+        '[aria-selected="true"]:not(:disabled)',
+      ) ??
+      container.current?.querySelector<HTMLElement>(
+        'input:not(:disabled), button:not(:disabled):not(.sidebar-scrim)',
       )
-    target?.focus({ preventScroll: true })
-  }, [open, overlay, items])
+    if (target) {
+      const owner = document.activeElement
+      target.focus({ preventScroll: true })
+      if (document.activeElement === target) pendingOpenFocus.current = null
+      else if (opening) pendingOpenFocus.current = owner
+    } else if (opening) {
+      // Preserve focus intent until an empty drawer receives its first row.
+      pendingOpenFocus.current = document.activeElement
+    }
+  }, [open, overlay, items, disabled])
   useEffect(() => {
     if (!open || !overlay) return
     const forgetFocus = () => {
       focusedElement.current = null
+      pendingOpenFocus.current = null
     }
     const outsideFocus = (event: FocusEvent) => {
       if (!container.current?.contains(event.target as Node)) forgetFocus()
@@ -364,7 +379,7 @@ export function Sidebar({
           hidden={content !== undefined}
           data-drop-target={dropTarget === ''}
           onDragOver={(event) => {
-            if (!onMove || !draggedItem.current) return
+            if (disabled || !onMove || !draggedItem.current) return
             event.preventDefault()
             event.dataTransfer.dropEffect = 'move'
             setDropTarget('')
@@ -376,7 +391,7 @@ export function Sidebar({
               setDropTarget(null)
           }}
           onDrop={(event) => {
-            if (!onMove || !draggedItem.current) return
+            if (disabled || !onMove || !draggedItem.current) return
             event.preventDefault()
             event.stopPropagation()
             onMove(draggedItem.current, null)

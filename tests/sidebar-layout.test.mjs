@@ -222,9 +222,43 @@ test('settings collapse independently and narrow sidebars overlay full-width des
   await outlineRow.focus()
   await page.keyboard.press('Escape')
   await page.evaluate(() => {
+    const outline = document.querySelector('.outline-sidebar[data-side="left"]')
     window.previousOutlineRow = document.querySelector(
       '.outline-sidebar[data-side="left"] [role="treeitem"]',
     )
+    window.sidebarFocusEvents = []
+    const describe = (element) =>
+      element instanceof HTMLElement
+        ? {
+            tag: element.tagName,
+            role: element.getAttribute('role'),
+            id: element.id,
+            className: element.className.slice(0, 80),
+          }
+        : null
+    const record = (type, target) => {
+      window.sidebarFocusEvents.push({
+        type,
+        target: describe(target),
+        connected: target?.isConnected,
+        active: describe(document.activeElement),
+        row: describe(outline?.querySelector('[role="treeitem"]')),
+        open: outline?.dataset.open,
+      })
+      if (window.sidebarFocusEvents.length > 16)
+        window.sidebarFocusEvents.shift()
+    }
+    const controller = new AbortController()
+    window.sidebarFocusAbort = controller
+    for (const type of ['focusin', 'focusout'])
+      document.addEventListener(type, (event) => record(type, event.target), {
+        capture: true,
+        signal: controller.signal,
+      })
+    for (const type of ['focus', 'blur'])
+      window.addEventListener(type, () => record(`window-${type}`, null), {
+        signal: controller.signal,
+      })
   })
   await workspaceToggle.click()
   await page.waitForFunction(() => {
@@ -233,10 +267,32 @@ test('settings collapse independently and narrow sidebars overlay full-width des
     )
     return row && row !== window.previousOutlineRow
   })
-  assert.equal(
-    await outlineRow.evaluate((element) => element === document.activeElement),
-    true,
+  const restored = await outlineRow.evaluate(
+    (element) => element === document.activeElement,
   )
+  const focusState = restored
+    ? undefined
+    : await page.evaluate(() => {
+        const outline = document.querySelector(
+          '.outline-sidebar[data-side="left"]',
+        )
+        const row = outline?.querySelector('[role="treeitem"]')
+        const active = document.activeElement
+        return {
+          active: active?.outerHTML.slice(0, 220),
+          hasFocus: document.hasFocus(),
+          visibility: document.visibilityState,
+          drawerOpen: outline?.dataset.open,
+          row: row?.outerHTML.slice(0, 220),
+          previousRowConnected: window.previousOutlineRow?.isConnected,
+          sourceReady: document
+            .querySelector('.editor-panes')
+            ?.getAttribute('data-source-ready'),
+          events: window.sidebarFocusEvents,
+        }
+      })
+  assert.equal(restored, true, focusState && JSON.stringify(focusState))
+  await page.evaluate(() => window.sidebarFocusAbort.abort())
   await page.keyboard.press('Escape')
 
   // A newer focus or pointer action while rows are absent cancels restoration,

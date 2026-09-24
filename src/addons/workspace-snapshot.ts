@@ -1,119 +1,159 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { errorMessage } from '../shared/errors'
-import type { WorkspaceEntry, WorkspaceIndex } from '../shared/workspace'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
+import { errorMessage } from '../shared/errors.ts'
+import type { WorkspaceIndex } from '../shared/workspace'
 import type { AddonContext } from './api'
 
-function hasPath(entries: WorkspaceEntry[], path: string): boolean {
-  let level = entries
-  for (const name of path.split('/')) {
-    const entry = level.find((item) => item.name === name)
-    if (!entry) return false
-    if (entry.path === path) return true
-    level = entry.children ?? []
-  }
-  return false
+type IndexState = {
+  index: WorkspaceIndex | null
+  loading: boolean
+  error: string
+}
+
+const listeners = new Set<() => void>()
+let state: IndexState = { index: null, loading: true, error: '' }
+let revision = 0
+let pending: Promise<void> | null = null
+let timer: ReturnType<typeof setTimeout> | undefined
+let removeWorkspace: (() => void) | undefined
+let indexedPaths = new Set<string>()
+
+function publish(next: IndexState) {
+  state = next
+  for (const listener of listeners) listener()
+}
+
+function requestIndex() {
+  if (!listeners.size || pending) return
+  const requested = revision
+  publish({ ...state, loading: true, error: '' })
+  pending = window.hibi
+    .getWorkspaceIndex()
+    .then((index) => {
+      if (requested === revision) {
+        indexedPaths = new Set(index?.pages.map((page) => page.path))
+        publish({ index, loading: false, error: '' })
+      }
+    })
+    .catch((error: unknown) => {
+      if (requested === revision)
+        publish({ ...state, loading: false, error: errorMessage(error) })
+    })
+    .finally(() => {
+      pending = null
+      if (requested !== revision && !timer) requestIndex()
+    })
+}
+
+function scheduleIndex() {
+  revision++
+  clearTimeout(timer)
+  timer = setTimeout(() => {
+    timer = undefined
+    requestIndex()
+  }, 150)
+}
+
+const onFocus = () => scheduleIndex()
+
+/** One workspace-content request and subscription for all mounted built-in panels. */
+export const workspaceIndexStore = {
+  snapshot: () => state,
+  subscribe(listener: () => void) {
+    listeners.add(listener)
+    if (listeners.size === 1) {
+      removeWorkspace = window.hibi.onWorkspaceChanged((workspace, change) => {
+        if (workspace?.id !== state.index?.workspace.id) {
+          indexedPaths.clear()
+          publish({ index: null, loading: true, error: '' })
+        } else if (
+          change?.kind === 'content' &&
+          change.paths &&
+          state.index &&
+          !change.paths.some((path) => indexedPaths.has(path))
+        )
+          return
+        scheduleIndex()
+      })
+      window.addEventListener('focus', onFocus)
+      if (!pending) requestIndex()
+    }
+    return () => {
+      if (!listeners.delete(listener)) return
+      if (listeners.size) return
+      removeWorkspace?.()
+      removeWorkspace = undefined
+      window.removeEventListener('focus', onFocus)
+      clearTimeout(timer)
+      timer = undefined
+      revision++
+      indexedPaths.clear()
+      state = { index: null, loading: true, error: '' }
+    }
+  },
+  refresh: scheduleIndex,
 }
 
 /** Active panels index text only; draft edits update in memory without disk reads. */
 export function useWorkspaceSnapshot(context: AddonContext) {
-  const [revision, refresh] = useState(0)
-  const indexedPaths = useRef(new Set<string>())
+  const indexState = useSyncExternalStore(
+    workspaceIndexStore.subscribe,
+    workspaceIndexStore.snapshot,
+  )
   const [document, setDocument] = useState(() => context.editor.getDocument())
-  const [state, setState] = useState<{
-    index: WorkspaceIndex | null
-    loading: boolean
-    error: string
-  }>({ index: null, loading: true, error: '' })
+  const latest = useRef(document)
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>
-    const schedule = () => {
-      clearTimeout(timer)
-      timer = setTimeout(() => refresh((value) => value + 1), 150)
-    }
-    const remove = window.hibi.onWorkspaceChanged((workspace, change) => {
+    const remove = context.editor.onDocumentChange((next) => {
+      const previous = latest.current
+      latest.current = next
       if (
-        change?.kind === 'content' &&
-        change.paths &&
-        !change.paths.some(
-          (path) =>
-            indexedPaths.current.has(path) ||
-            (workspace && hasPath(workspace.entries, path)),
-        )
+        previous?.id !== next.id &&
+        previous?.dirty &&
+        workspaceIndexStore
+          .snapshot()
+          .index?.pages.find((page) => page.id === previous.id)?.markdown !==
+          previous.markdown
       )
-        return
-      schedule()
-    })
-    window.addEventListener('focus', schedule)
-    return () => {
+        workspaceIndexStore.refresh()
       clearTimeout(timer)
-      remove()
-      window.removeEventListener('focus', schedule)
-    }
-  }, [])
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>
-    let id = context.editor.getDocument()?.id
-    const remove = context.editor.onDocumentChange((document) => {
-      clearTimeout(timer)
-      timer = setTimeout(() => {
-        setDocument(document)
-        if (document.id !== id) {
-          id = document.id
-          refresh((value) => value + 1)
-        }
-      }, 150)
+      timer = setTimeout(() => setDocument(next), 150)
     })
     return () => {
       clearTimeout(timer)
       remove()
     }
   }, [context])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: revision explicitly refreshes workspace contents.
-  useEffect(() => {
-    let active = true
-    setState((value) => ({ ...value, loading: true, error: '' }))
-    void context.workspace
-      .index()
-      .then((index) => {
-        if (!active) return
-        indexedPaths.current = new Set(index?.pages.map((page) => page.path))
-        setDocument(context.editor.getDocument())
-        setState({ index, loading: false, error: '' })
-      })
-      .catch((error: unknown) => {
-        if (active)
-          setState((value) => ({
-            ...value,
-            loading: false,
-            error: errorMessage(error),
-          }))
-      })
-    return () => {
-      active = false
-    }
-  }, [context, revision])
+  const base = useMemo(() => {
+    const index = indexState.index
+    return index ? { name: index.workspace.name, pages: index.pages } : null
+  }, [indexState.index])
   const snapshot = useMemo(() => {
-    const index = state.index
-    if (!index) return null
+    if (!base || !document) return base
+    const active = base.pages.find((page) => page.id === document.id)
+    if (!active || active.markdown === document.markdown) return base
     return {
-      name: index.workspace.name,
-      pages: index.pages.map((page) =>
-        document &&
-        page.id === document.id &&
-        page.markdown !== document.markdown
-          ? { ...page, markdown: document.markdown }
-          : page,
+      ...base,
+      pages: base.pages.map((page) =>
+        page === active ? { ...page, markdown: document.markdown } : page,
       ),
     }
-  }, [state.index, document])
+  }, [base, document])
   const activePath =
     snapshot?.pages.find((page) => page.id === document?.id)?.path ?? null
   return {
     snapshot,
     document,
-    workspace: state.index ? { ...state.index.workspace, activePath } : null,
-    loading: state.loading,
-    error: state.error,
-    refresh: () => refresh((value) => value + 1),
+    workspace: indexState.index
+      ? { ...indexState.index.workspace, activePath }
+      : null,
+    loading: indexState.loading,
+    error: indexState.error,
+    refresh: workspaceIndexStore.refresh,
   }
 }

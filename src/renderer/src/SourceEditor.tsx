@@ -842,14 +842,15 @@ export function SourceEditor({
   ])
 
   useEffect(() => {
-    let canceled = false
     const editor = view.current
     setExtensionError('')
+    if (!editor) return
+    let canceled = false
     void Promise.all(
       sourceExtensions.map(async (extension) => extension.create()),
     )
       .then((extensions) => {
-        if (!canceled && editor) {
+        if (!canceled) {
           editor.dispatch({ effects: addons.current.reconfigure(extensions) })
           setInstalledExtensions({ bridge, extensions: sourceExtensions })
         }

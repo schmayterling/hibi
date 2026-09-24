@@ -86,6 +86,8 @@ test('save emits content changes and rename publishes the updated tree', {
   const directory = await mkdtemp(join(tmpdir(), 'hibi-refresh-'))
   const root = join(directory, 'notes')
   await mkdir(root)
+  await mkdir(join(root, '.git'))
+  await writeFile(join(root, '.git', 'index'), 'before')
   await writeFile(join(root, 'one.md'), 'before')
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(directory, 'profile')}`],
@@ -160,4 +162,21 @@ test('save emits content changes and rename publishes the updated tree', {
   ).filter((change) => change?.kind === 'tree')
   assert.equal(metadataTrees.length, 1)
   assert.deepEqual(metadataTrees[0].paths, ['.hibi/workspace.json'])
+
+  await page.evaluate(() => {
+    window.workspaceChanges = []
+  })
+  await writeFile(join(root, '.git', 'index'), 'after')
+  await page.waitForFunction(() =>
+    window.workspaceChanges.some(
+      (change) =>
+        change?.kind === 'content' && change.paths?.includes('.git/index'),
+    ),
+  )
+  assert.equal(
+    (await page.evaluate(() => window.workspaceChanges)).filter(
+      (change) => change?.kind === 'tree',
+    ).length,
+    0,
+  )
 })

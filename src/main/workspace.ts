@@ -299,8 +299,12 @@ function metadataPath(path: string): boolean {
   )
 }
 
+function gitMetadataPath(path: string): boolean {
+  return path === '.git' || path.startsWith('.git/')
+}
+
 function relevantWatchPath(path: string): boolean {
-  if (metadataPath(path)) return true
+  if (metadataPath(path) || gitMetadataPath(path)) return true
   const parts = path.split('/')
   return !parts.some(
     (part, index) =>
@@ -333,6 +337,10 @@ async function flushWatcherEvents(selected: string) {
     }
     if (metadataPath(path)) {
       treePaths.push(path)
+      continue
+    }
+    if (gitMetadataPath(path)) {
+      contentPaths.push(path)
       continue
     }
     if (
@@ -384,6 +392,7 @@ function queueWatcherEvent(
   if (
     !changedPath ||
     (relevantWatchPath(changedPath) &&
+      !gitMetadataPath(changedPath) &&
       (metadataPath(changedPath) ||
         (!changedPath.split('/').includes('node_modules') &&
           !ignoredPaths?.ignores(changedPath) &&

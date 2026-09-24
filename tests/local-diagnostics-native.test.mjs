@@ -7,15 +7,6 @@ import test from 'node:test'
 import { build } from 'esbuild'
 import { electron, stopElectronTree } from './electron.mjs'
 
-function processState(pid) {
-  try {
-    process.kill(pid, 0)
-    return 'live'
-  } catch (error) {
-    return error.code
-  }
-}
-
 test('pinned Electron exposes exact utility identity and passive JS observation preserves fatal policy', {
   timeout: 30000,
 }, async (t) => {
@@ -51,24 +42,9 @@ test('pinned Electron exposes exact utility identity and passive JS observation 
     },
   })
   const app = await electron.launch({ args: [root] })
-  const owned = []
   t.after(async () => {
     await app.close().catch(() => {})
-    try {
-      await rm(root, { recursive: true, force: true })
-    } catch (error) {
-      console.error(
-        'diagnostic fixture process state:',
-        JSON.stringify(
-          owned.map(({ pid, type }) => ({
-            pid,
-            type,
-            state: processState(pid),
-          })),
-        ),
-      )
-      throw error
-    }
+    await rm(root, { recursive: true, force: true })
   })
   await app.firstWindow()
   const policy = await app.evaluate(() => globalThis.diagnosticFixture.policy())
@@ -125,11 +101,6 @@ test('pinned Electron exposes exact utility identity and passive JS observation 
   assert.ok(crash.report.includes(`"reason":"${crash.reason}"`))
   assert.ok(crash.report.includes(`"exitCode":${crash.exitCode}`))
   assert.ok(crash.report.includes('unavailable-native'))
-  owned.push(
-    ...(await app.evaluate(({ app }) =>
-      app.getAppMetrics().map(({ pid, type }) => ({ pid, type })),
-    )),
-  )
   const crashed = app.process()
   const closed = once(crashed, 'close')
   stopElectronTree(crashed)
@@ -137,11 +108,6 @@ test('pinned Electron exposes exact utility identity and passive JS observation 
   const restarted = await electron.launch({ args: [root] })
   try {
     await restarted.firstWindow()
-    owned.push(
-      ...(await restarted.evaluate(({ app }) =>
-        app.getAppMetrics().map(({ pid, type }) => ({ pid, type })),
-      )),
-    )
     const previous = await restarted.evaluate(() =>
       globalThis.diagnosticFixture.report(),
     )

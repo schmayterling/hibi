@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
-import { planChecks } from '../scripts/ci.mjs'
+import { planChecks, shardTests } from '../scripts/ci.mjs'
 
 test('incremental checks select dependencies and fall back safely for cold, clean, config, and missing builds', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'hibi-ci-plan-'))
@@ -67,6 +67,10 @@ test('incremental checks select dependencies and fall back safely for cold, clea
     'tests/io.test.mjs',
     'tests/one.test.mjs',
   ])
+  const shards = [0, 1].map((index) =>
+    shardTests(source.tests, source.allTests, index, 2),
+  )
+  assert.deepEqual(shards.flat().sort(), source.tests)
   assert.deepEqual(
     plan([], {
       previousTests: previousTests.filter(

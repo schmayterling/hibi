@@ -7,6 +7,9 @@ inputs:
   base:
     description: Previous push or pull request base revision.
     default: ''
+  shard:
+    description: Zero-based test shard and total shard count.
+    default: '0/1'
 outputs:
   build:
     description: Whether this run rebuilt the application.
@@ -34,10 +37,10 @@ runs:
         path: |
           .cache/ci
           out
-        key: checks-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json', '.nvmrc', 'scripts/ci.mjs') }}-${{ steps.image.outputs.version }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+        key: checks-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.shard }}-${{ hashFiles('package-lock.json', '.nvmrc', 'scripts/ci.mjs') }}-${{ steps.image.outputs.version }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          checks-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json', '.nvmrc', 'scripts/ci.mjs') }}-${{ steps.image.outputs.version }}-${{ inputs.base }}-
-          checks-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json', '.nvmrc', 'scripts/ci.mjs') }}-${{ steps.image.outputs.version }}-
+          checks-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.shard }}-${{ hashFiles('package-lock.json', '.nvmrc', 'scripts/ci.mjs') }}-${{ steps.image.outputs.version }}-${{ inputs.base }}-
+          checks-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.shard }}-${{ hashFiles('package-lock.json', '.nvmrc', 'scripts/ci.mjs') }}-${{ steps.image.outputs.version }}-
     - run: npm ci
       shell: bash
     - id: check
@@ -45,6 +48,7 @@ runs:
       env:
         CI_BASE: ${{ inputs.base }}
         CI_CLEAN: ${{ inputs.clean }}
+        CI_SHARD: ${{ inputs.shard }}
       run: |
         if [ "$RUNNER_OS" = Linux ]; then
           dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' npm run check:ci

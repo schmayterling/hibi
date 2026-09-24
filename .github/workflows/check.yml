@@ -21,6 +21,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest, ubuntu-latest]
+        shard: ['0/2', '1/2']
     runs-on: ${{ matrix.os }}
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
@@ -35,8 +36,9 @@ jobs:
         with:
           clean: ${{ inputs.clean || false }}
           base: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          shard: ${{ matrix.shard }}
       - run: npx electron-builder --dir --config.mac.identity=-
         shell: bash
-        if: steps.ci.outputs.build == 'true'
+        if: steps.ci.outputs.build == 'true' && matrix.shard == '0/2'
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'

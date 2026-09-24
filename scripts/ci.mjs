@@ -154,11 +154,28 @@ export function planChecks(
   return { full, build, tests: selected, unitTests, allTests: tests }
 }
 
+export function shardTests(selected, all, index, total) {
+  const assigned = new Set(
+    all.filter((_, position) => position % total === index),
+  )
+  return selected.filter((test) => assigned.has(test))
+}
+
 function runCI() {
   const root = process.cwd()
   const directory = join(root, '.cache/ci')
   const stateFile = join(directory, 'success.json')
-  const runtime = `${process.platform}/${process.arch}/${process.version}/${process.env.ImageVersion ?? 'local'}`
+  const shard = process.env.CI_SHARD ?? '0/1'
+  const [index, total] = shard.split('/').map(Number)
+  if (
+    !Number.isInteger(index) ||
+    !Number.isInteger(total) ||
+    total < 1 ||
+    index < 0 ||
+    index >= total
+  )
+    throw new Error(`Invalid CI shard: ${shard}`)
+  const runtime = `${process.platform}/${process.arch}/${process.version}/${process.env.ImageVersion ?? 'local'}/${shard}`
   const clean = ['true', '1'].includes(process.env.CI_CLEAN ?? '')
   let previous
   try {
@@ -206,13 +223,15 @@ function runCI() {
       'out/site/template.html',
     ].every((file) => existsSync(join(root, file))),
   })
+  const selected = shardTests(plan.tests, plan.allTests, index, total)
+  const unitTests = shardTests(plan.unitTests, plan.allTests, index, total)
   if (clean) {
     rmSync(join(root, 'out'), { recursive: true, force: true })
     rmSync(directory, { recursive: true, force: true })
   }
   mkdirSync(directory, { recursive: true })
   console.log(
-    `ci: ${plan.full ? 'full checks' : 'incremental checks'}; build=${plan.build}; ${plan.tests.length}/${plan.allTests.length} test files; base=${baseline ?? 'none'}`,
+    `ci: ${plan.full ? 'full checks' : 'incremental checks'}; build=${plan.build}; ${selected.length}/${plan.allTests.length} test files; shard=${shard}; base=${baseline ?? 'none'}`,
   )
   const run = (args) => {
     const result = spawnSync(process.execPath, args, {
@@ -244,11 +263,8 @@ function runCI() {
       )
     npm('run', 'build:app')
   }
-  if (plan.unitTests.length)
-    run(['--test', '--test-concurrency=4', ...plan.unitTests])
-  const serialTests = plan.tests.filter(
-    (test) => !plan.unitTests.includes(test),
-  )
+  if (unitTests.length) run(['--test', '--test-concurrency=4', ...unitTests])
+  const serialTests = selected.filter((test) => !unitTests.includes(test))
   if (serialTests.length)
     run(['--test', '--test-concurrency=1', ...serialTests])
   const sha = git(root, 'rev-parse', 'HEAD')
@@ -266,7 +282,7 @@ function runCI() {
   if (process.env.GITHUB_STEP_SUMMARY)
     appendFileSync(
       process.env.GITHUB_STEP_SUMMARY,
-      `## checks\n\n- mode: ${plan.full ? 'full' : 'incremental'}\n- base: ${baseline ?? 'cold cache'}\n- rebuilt app: ${plan.build}\n- test files: ${plan.tests.length}/${plan.allTests.length}\n`,
+      `## checks\n\n- mode: ${plan.full ? 'full' : 'incremental'}\n- base: ${baseline ?? 'cold cache'}\n- rebuilt app: ${plan.build}\n- test files: ${selected.length}/${plan.allTests.length}\n- shard: ${shard}\n`,
     )
 }
 

@@ -506,7 +506,7 @@ export async function openWorkspace(
   window: BrowserWindow,
 ): Promise<WorkspaceState | null> {
   const result = await dialog.showOpenDialog(window, {
-    properties: ['openDirectory'],
+    properties: ['openDirectory', 'createDirectory'],
     title: 'Open workspace',
   })
   const selected = result.filePaths[0]

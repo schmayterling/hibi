@@ -50,12 +50,12 @@ Click anywhere on an addon row outside its controls to read its documentation. O
 
 ### Install an addon
 
-1. Choose **Hibi garden** to browse [available addons](https://hibi.garden/addons).
-2. Choose **Install from URL** and enter a public HTTPS Git repository or addon ZIP URL. For a local package, run **Install addon…** from the command palette.
+1. Search **Addons** for a garden addon and choose **Install**. **Hibi garden** opens the [addon website](https://hibi.garden/addons).
+2. To install another package, choose **Install from URL** and enter a public HTTPS Git repository or addon ZIP URL. For a local package, run **Install addon…** from the command palette.
 3. Review the package details and trust notice, then install it.
 4. Enable the addon when you are ready to use it.
 
-Only install addons you trust. Enabled addons can access your documents and workspace. Git installation requires Git on your computer; private repositories and packages that need a build are unsupported.
+Only install addons you trust. Enabled addons can access your documents and workspace. Garden addons are downloaded from the public [addon repository](https://github.com/hibigarden/addons-repository); browsing them needs a connection. Git installation requires Git on your computer; private repositories and packages that need a build are unsupported.
 
 **Open addons folder** shows installed packages. Replacing a package starts the new version disabled; removing one moves it to the system trash.
 

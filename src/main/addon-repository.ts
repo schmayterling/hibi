@@ -22,7 +22,10 @@ export async function downloadRepository(
   value: unknown,
   temporary: string,
   run = execute,
+  path?: string,
 ) {
+  if (path !== undefined && !/^addons\/[a-z][a-z0-9-]*$/.test(path))
+    throw new Error('The garden addon path is invalid.')
   const url = addonPackageUrl(value)
   if (['github.com', 'gitlab.com', 'codeberg.org'].includes(url.hostname))
     url.pathname = `${url.pathname.replace(/\/$/, '').replace(/\.git$/, '')}.git`
@@ -127,7 +130,14 @@ export async function downloadRepository(
     await checkSize()
     const { stdout } = await run(
       'git',
-      [...config, '-C', repository, 'archive', '--format=zip', 'HEAD'],
+      [
+        ...config,
+        '-C',
+        repository,
+        'archive',
+        '--format=zip',
+        path ? `HEAD:${path}` : 'HEAD',
+      ],
       {
         env,
         windowsHide: true,

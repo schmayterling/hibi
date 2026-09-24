@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import type { Addon, AddonManifest, AddonState } from '../../addons/api'
 import { addonDefaultEnabled } from '../../shared/addon-defaults'
 import { addonPackageUrl } from '../../shared/addon-package'
+import type { GardenAddon } from '../../shared/sideload'
 import { sentenceCase } from '../../shared/ui-case'
 import {
   Button,
@@ -69,13 +70,20 @@ export function AddonMetadata({ manifest }: { manifest: AddonManifest }) {
   )
 }
 
-function matches(manifest: AddonManifest, query: string) {
+function matches(
+  manifest: Pick<
+    AddonManifest,
+    'id' | 'name' | 'description' | 'kind' | 'version' | 'authors'
+  >,
+  query: string,
+  origin = addonRegistry.origin(manifest.id),
+) {
   return [
     manifest.name,
     manifest.description,
     manifest.kind,
     manifest.version,
-    addonRegistry.origin(manifest.id),
+    origin,
     ...(manifest.authors?.map((author) => author.displayName) ?? []),
   ]
     .join(' ')
@@ -84,21 +92,41 @@ function matches(manifest: AddonManifest, query: string) {
 }
 
 export function AddonSettings({
+  active,
   addons,
   states,
   setEnabled,
   install,
   remove,
 }: {
+  active: boolean
   addons: readonly Addon[]
   states: readonly AddonState[]
   setEnabled: (id: string, enabled: boolean) => Promise<void>
-  install: (url?: string) => Promise<void>
+  install: (source?: string | { gardenId: string }) => Promise<void>
   remove: (id: string) => Promise<void>
 }) {
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
+  const [garden, setGarden] = useState<GardenAddon[] | null>(null)
+  const [gardenError, setGardenError] = useState(false)
   const restoreFocus = useRef<string | null>(null)
+  useEffect(() => {
+    if (!active) return
+    let current = true
+    setGardenError(false)
+    void window.hibi.getGardenAddons().then(
+      (entries) => {
+        if (current) setGarden(entries)
+      },
+      () => {
+        if (current) setGardenError(true)
+      },
+    )
+    return () => {
+      current = false
+    }
+  }, [active])
   useEffect(() => {
     if (!busy && restoreFocus.current) {
       const control = document.getElementById(restoreFocus.current)
@@ -131,6 +159,13 @@ export function AddonSettings({
       }) || a.manifest.id.localeCompare(b.manifest.id),
   )
   const matching = ordered.filter(({ manifest }) => matches(manifest, query))
+  const matchingGarden = (garden ?? [])
+    .filter(
+      (entry) =>
+        !addons.some(({ manifest }) => manifest.id === entry.id) &&
+        matches(entry, query, 'garden'),
+    )
+    .toSorted((a, b) => a.name.localeCompare(b.name))
   async function run(action: () => Promise<void>) {
     if (busy) return
     setBusy(true)
@@ -254,7 +289,59 @@ export function AddonSettings({
           </SettingRow>
         ))}
       </div>
-      {!matching.length && (
+      {matchingGarden.length > 0 && <h2>Garden addons</h2>}
+      <div
+        className="settings-group addon-list"
+        hidden={!matchingGarden.length}
+      >
+        {matchingGarden.map((entry) => (
+          <SettingRow
+            key={entry.id}
+            id={`garden-${entry.id}`}
+            label={entry.name}
+            description={
+              <>
+                {entry.description}
+                <span className="addon-metadata">
+                  <span>Garden</span>
+                  <span>{sentenceCase(entry.kind)}</span>
+                  <span>v{entry.version}</span>
+                  <span>
+                    {entry.authors
+                      .map((author) => author.displayName)
+                      .join(', ')}
+                  </span>
+                </span>
+              </>
+            }
+          >
+            <Button
+              disabled={busy}
+              onClick={() => void run(() => install({ gardenId: entry.id }))}
+            >
+              Install
+            </Button>
+          </SettingRow>
+        ))}
+      </div>
+      {active && garden === null && !gardenError && (
+        <Panel>
+          <PanelMessage
+            icon={<Search size={32} strokeWidth={1.5} />}
+            title="Loading garden addons…"
+            loading
+          />
+        </Panel>
+      )}
+      {gardenError && (
+        <Panel>
+          <PanelMessage
+            icon={<Search size={32} strokeWidth={1.5} />}
+            title="Garden addons unavailable"
+          />
+        </Panel>
+      )}
+      {!matching.length && !matchingGarden.length && garden !== null && (
         <Panel>
           <PanelMessage
             icon={<Search size={32} strokeWidth={1.5} />}

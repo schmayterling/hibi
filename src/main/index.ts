@@ -50,6 +50,7 @@ import { UI_CASE_CHANNEL } from '../shared/ui-case'
 import { UPDATE_CHANNELS } from '../shared/updates'
 import { WORKSPACE_CHANNELS } from '../shared/workspace'
 import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
+import { GARDEN_REPOSITORY, getGardenAddons } from './addon-garden'
 import {
   enableAddon,
   getAddonStartupNotices,
@@ -907,8 +908,21 @@ if (!app.requestSingleInstanceLock()) {
         trustedWindow(event)
         return installedAddons()
       })
+      handle(SIDELOAD_CHANNELS.catalog, (event) => {
+        trustedWindow(event)
+        return getGardenAddons()
+      })
       handle(SIDELOAD_CHANNELS.install, (event, url: unknown) =>
         runFileOperation(event, (window) => installAddon(window, url)),
+      )
+      handle(SIDELOAD_CHANNELS.installGarden, (event, id: unknown) =>
+        runFileOperation(event, async (window) => {
+          const addon = (await getGardenAddons()).find(
+            (entry) => entry.id === id,
+          )
+          if (!addon) throw new Error('This garden addon is unavailable.')
+          await installAddon(window, GARDEN_REPOSITORY, addon)
+        }),
       )
       handle(SIDELOAD_CHANNELS.folder, (event) => {
         trustedWindow(event)

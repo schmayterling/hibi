@@ -14,9 +14,21 @@ export type AddonDocument = {
   kind: 'markdown' | 'image'
   content: string
 }
+export type GardenAddon = {
+  id: string
+  name: string
+  description: string
+  version: string
+  apiVersion: number
+  kind: 'extension' | 'theme'
+  authors: NonNullable<AddonManifest['authors']>
+  path: string
+}
 export const SIDELOAD_CHANNELS = {
   list: 'addons:installed',
   install: 'addons:install',
+  catalog: 'addons:catalog',
+  installGarden: 'addons:install-garden',
   folder: 'addons:folder',
   garden: 'addons:garden',
   remove: 'addons:remove',

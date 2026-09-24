@@ -849,6 +849,9 @@
   "f56d1f9d0955": [
     "src/main/updates.ts"
   ],
+  "55b40ff4b936": [
+    "src/main/addon-garden.ts"
+  ],
   "349ceed84d07": [
     "src/renderer/src/HibiSettings.tsx"
   ],
@@ -1687,6 +1690,15 @@
   "c7a8f9cd36ee": [
     "src/addons/frontmatter/Properties.tsx"
   ],
+  "e462ccce4051": [
+    "src/renderer/src/AddonSettings.tsx"
+  ],
+  "47ba45bc8cec": [
+    "src/renderer/src/AddonSettings.tsx"
+  ],
+  "0b21634f38cc": [
+    "src/renderer/src/AddonSettings.tsx"
+  ],
   "c910d474dcd7": [
     "src/renderer/src/settings-pages.ts"
   ],
@@ -1960,7 +1972,8 @@
   ],
   "569ca49f4aaf": [
     "src/main/dependencies.ts",
-    "src/main/sideload.ts"
+    "src/main/sideload.ts",
+    "src/renderer/src/AddonSettings.tsx"
   ],
   "7719857066e6": [
     "src/addons/git/native.ts"
@@ -2239,6 +2252,9 @@
   "7e11e029a961": [
     "src/addons/_shared/FormatPdf.tsx",
     "src/addons/_shared/format-renderer.tsx"
+  ],
+  "5020493c156c": [
+    "src/renderer/src/AddonSettings.tsx"
   ],
   "2de539a660eb": [
     "src/renderer/src/HibiSettings.tsx"
@@ -3977,6 +3993,21 @@
   "60dbdf909175": [
     "src/main/files.ts"
   ],
+  "0a89049792e5": [
+    "src/main/addon-garden.ts"
+  ],
+  "f07d0e1dd9f2": [
+    "src/main/addon-garden.ts"
+  ],
+  "294c082e2625": [
+    "src/main/sideload.ts"
+  ],
+  "f0bd1e74826b": [
+    "src/main/addon-repository.ts"
+  ],
+  "a5f85cf514be": [
+    "src/main/sideload.ts"
+  ],
   "d60d1c552b62": [
     "src/main/import-files.ts"
   ],
@@ -4221,6 +4252,9 @@
   ],
   "f21c0d01153d": [
     "src/main/workspace.ts"
+  ],
+  "923334e2c76d": [
+    "src/main/index.ts"
   ],
   "9a8066d604c9": [
     "src/main/addon-documentation.ts"

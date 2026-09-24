@@ -249,6 +249,7 @@ async function saveEnabled(id: string, value: boolean): Promise<AddonState[]> {
 export async function installAddon(
   window: BrowserWindow,
   url?: unknown,
+  garden?: { id: string; path: string },
 ): Promise<void> {
   await installPackage(
     window,
@@ -261,6 +262,7 @@ export async function installAddon(
       }
     },
     url,
+    garden,
   )
 }
 

@@ -60,6 +60,24 @@ test('compact filters reset preferences, keep addon rows stable, and install rev
       return { response: 1 }
     }
     globalThis.fetch = async (url) => {
+      if (
+        String(url) ===
+        'https://raw.githubusercontent.com/hibigarden/addons-repository/main/catalog.json'
+      )
+        return new Response(
+          JSON.stringify([
+            {
+              id: 'garden-fixture',
+              name: 'garden fixture',
+              description: 'uninstalled garden addon',
+              version: '1.0.0',
+              apiVersion: 2,
+              kind: 'extension',
+              authors: [{ displayName: 'test author' }],
+              path: 'addons/garden-fixture',
+            },
+          ]),
+        )
       if (String(url) !== 'https://example.com/addon.zip')
         throw new Error('unexpected network request')
       return new Response(
@@ -76,6 +94,16 @@ test('compact filters reset preferences, keep addon rows stable, and install rev
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
   const addons = page.locator('#settings-addons')
+  await addons.locator('[data-setting-id="garden-garden-fixture"]').waitFor()
+  await addons
+    .getByRole('searchbox', { name: /filter addons/i })
+    .fill('garden fixture')
+  assert.equal(await addons.locator('.setting-row:visible').count(), 1)
+  assert.equal(
+    await addons.getByRole('button', { name: /^install$/i }).isVisible(),
+    true,
+  )
+  await addons.getByRole('searchbox', { name: /filter addons/i }).fill('')
   assert.equal(await addons.locator('#addon-frontmatter').isChecked(), true)
   const vim = addons.locator('#addon-vim')
   await vim.scrollIntoViewIfNeeded()

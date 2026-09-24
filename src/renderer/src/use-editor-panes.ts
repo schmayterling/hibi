@@ -19,14 +19,27 @@ export function useEditorPanes(mode: DocumentView, markdownDocument: boolean) {
   const content = useRef<HTMLDivElement>(null)
   const previousFocusMode = useRef(mode)
   const focusOwner = useRef<Element | null>(window.document.activeElement)
+  const focusIntent = useRef(0)
+  const modeFocusIntent = useRef(0)
+  useLayoutEffect(() => {
+    const recordIntent = () => focusIntent.current++
+    window.document.addEventListener('pointerdown', recordIntent, true)
+    window.document.addEventListener('focusin', recordIntent, true)
+    return () => {
+      window.document.removeEventListener('pointerdown', recordIntent, true)
+      window.document.removeEventListener('focusin', recordIntent, true)
+    }
+  }, [])
   useLayoutEffect(() => {
     if (previousFocusMode.current === mode) return
     previousFocusMode.current = mode
     focusOwner.current = window.document.activeElement
+    modeFocusIntent.current = focusIntent.current
   }, [mode])
   const focusOwnedByEditor = useCallback(() => {
     const active = window.document.activeElement
     return (
+      focusIntent.current === modeFocusIntent.current &&
       !active?.closest(
         '.settings-screen, [role="dialog"], input, textarea, select',
       ) &&

@@ -123,7 +123,7 @@ test('hibi opens first, sponsor uses a fixed URL, and license dialogs stay reada
       globalThis.openedSponsor = url
     }
   })
-  await panel.getByRole('button', { name: /sponsor on github/i }).click()
+  await panel.getByRole('button', { name: /sponsor on github/i }).press('Enter')
   assert.equal(
     await app.evaluate(() => globalThis.openedSponsor),
     'https://github.com/sponsors/schmayterling',
@@ -136,7 +136,7 @@ test('hibi opens first, sponsor uses a fixed URL, and license dialogs stay reada
     path: 'test-results/hibi-settings.png',
     animations: 'disabled',
   })
-  await react.click()
+  await react.press('Enter')
   const dialog = page.getByRole('dialog', { name: /^react$/i, exact: true })
   await dialog.locator('.license-text').waitFor()
   assert.ok(
@@ -160,7 +160,7 @@ test('hibi opens first, sponsor uses a fixed URL, and license dialogs stay reada
       await panel.evaluate((el) => el.scrollWidth <= el.clientWidth),
       true,
     )
-    await react.click()
+    await react.press('Enter')
     await dialog.locator('.license-text').waitFor()
     assert.equal(
       await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth),

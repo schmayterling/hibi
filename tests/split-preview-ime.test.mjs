@@ -294,7 +294,13 @@ test('native source IME survives split preview catch-up and keeps one undo group
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, richFile)
-  await clickMenu(app, 'Open…')
+  assert.equal(
+    await page.evaluate(() =>
+      window.imeFixture.context.editor.runCommand('open'),
+    ),
+    true,
+    'second file opens before rich IME editing',
+  )
   await expectSource(richOriginal)
   await page.evaluate(() => {
     const editor = document.querySelector('.tiptap').editor

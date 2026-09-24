@@ -149,7 +149,7 @@ export function CommandPalette({
     const finish = () => {
       dialog.current?.close()
       onClose()
-      if (after) requestAnimationFrame(after)
+      if (after) setTimeout(after, 0)
     }
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) finish()
     else {

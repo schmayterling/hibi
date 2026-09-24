@@ -110,8 +110,32 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
   await clickMenu(app, 'Command palette')
   const search = page.getByRole('combobox', { name: /search commands/i })
   await search.fill('Deferred hello')
-  await page.getByRole('option', { name: /Deferred hello/i }).press('Enter')
-  await page.waitForFunction(() => window.helloRuns === 1)
+  await page.evaluate(() => {
+    const original = window.requestAnimationFrame
+    const pending = []
+    let suspended = true
+    window.requestAnimationFrame = (callback) => {
+      if (!suspended) return original(callback)
+      pending.push(callback)
+      return pending.length
+    }
+    window.resumePaletteTestFrames = () => {
+      suspended = false
+      window.requestAnimationFrame = original
+      for (const callback of pending) original(callback)
+    }
+  })
+  try {
+    await page.getByRole('option', { name: /Deferred hello/i }).press('Enter')
+    await page.waitForFunction(() => window.helloRuns === 1, undefined, {
+      polling: 100,
+    })
+  } finally {
+    await page.evaluate(() => {
+      window.resumePaletteTestFrames()
+      delete window.resumePaletteTestFrames
+    })
+  }
   assert.deepEqual(await page.evaluate(() => window.commandSdkKeys), [
     'documents',
   ])

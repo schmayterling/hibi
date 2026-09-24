@@ -1,0 +1,45 @@
+name: editor plugins probe
+on:
+  push:
+    branches: [may/ci-root-cause-audit]
+permissions:
+  contents: read
+concurrency:
+  group: editor-plugins-probe-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  stress:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      electron_config_cache: ${{ github.workspace }}/.cache/electron
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - id: electron
+        shell: bash
+        run: node -e "console.log('version=' + require('./package.json').devDependencies.electron)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/electron
+          key: editor-plugins-electron-${{ runner.os }}-${{ runner.arch }}-${{ steps.electron.outputs.version }}
+          restore-keys: |
+            electron-${{ runner.os }}-${{ runner.arch }}-${{ steps.electron.outputs.version }}
+            electron-${{ runner.os }}-${{ runner.arch }}-
+      - run: npm ci
+      - run: npm run build
+      - name: repeat fresh editor sessions
+        shell: pwsh
+        run: |
+          for ($i = 1; $i -le 30; $i++) {
+            Write-Host "editor plugins run $i/30"
+            node --test tests/editor-plugins.test.mjs
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          Write-Host 'editor plugins probe passed 30/30 fresh launches'

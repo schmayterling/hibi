@@ -45,6 +45,13 @@ export type PaletteCommand = PaletteCommandBase &
     | { children: PaletteCommand[]; run?: never }
   )
 
+function nestedCommands(commands: PaletteCommand[]): PaletteCommand[] {
+  return commands.flatMap((command) => [
+    command,
+    ...(command.children ? nestedCommands(command.children) : []),
+  ])
+}
+
 export function CommandPalette({
   commands,
   onClose,
@@ -82,10 +89,12 @@ export function CommandPalette({
     if (label.startsWith(normalized)) return 1
     return terms.every((term) => label.includes(term)) ? 2 : 3
   }
+  const searchableCommands =
+    normalized && !menuPath.length ? nestedCommands(commands) : currentCommands
   const results =
     searchCommands && !menuPath.length
       ? searchCommands(query)
-      : currentCommands.filter((command) =>
+      : searchableCommands.filter((command) =>
           terms.every((term) =>
             `${command.category} ${command.label} ${command.keywords ?? ''}`
               .toLowerCase()

@@ -310,6 +310,22 @@ test('recent workspace submenu filters, returns, and opens a workspace', {
   const palette = page.getByRole('dialog', { name: 'Command palette' })
   const search = palette.getByRole('combobox', { name: 'Search commands' })
 
+  await search.fill('edit keyboard shortcuts')
+  await search.press('Enter')
+  const shortcuts = palette.getByRole('button', {
+    name: 'Leave Edit keyboard shortcuts',
+  })
+  await shortcuts.waitFor()
+  await search.fill('save document')
+  assert.deepEqual(await palette.locator('.command-label').allTextContents(), [
+    'Shortcut: Save document',
+  ])
+  await search.press('Escape')
+  await search.fill('shortcut: save document')
+  assert.deepEqual(await palette.locator('.command-label').allTextContents(), [
+    'Shortcut: Save document',
+  ])
+
   await search.fill('open recent workspaces')
   await search.press('Enter')
   const scope = palette.getByRole('button', {

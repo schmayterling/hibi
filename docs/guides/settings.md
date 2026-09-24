@@ -2,6 +2,8 @@
 
 Open Settings from the command palette or top bar. Choose a page in the sidebar, or search below **Back to app** for a setting or enabled addon.
 
+In the command palette, open **Edit keyboard shortcuts**, **Choose colorscheme**, **Markdown flavor**, or **Show sidebar view** to browse related commands. You can also search for a command inside these submenus by name from the main palette.
+
 Use the sidebar button or `Cmd/Ctrl+/` to collapse or expand settings navigation. In a narrow window, it opens over the page and closes when you choose a page or search result. Press Escape or click outside to dismiss it.
 
 ## Editor and appearance

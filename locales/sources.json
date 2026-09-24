@@ -502,6 +502,9 @@
   "d4dc94ba2837": [
     "src/main/media.ts"
   ],
+  "97fc4ea85080": [
+    "src/main/global-shortcuts.ts"
+  ],
   "f37b4c631f70": [
     "src/main/imports.ts"
   ],
@@ -4135,6 +4138,9 @@
   "f6bce0d6d212": [
     "src/renderer/src/settings-pages.ts"
   ],
+  "a3474fd0cc48": [
+    "src/renderer/src/addons.ts"
+  ],
   "f59f73db914f": [
     "src/renderer/src/settings-pages.ts"
   ],
@@ -4272,6 +4278,9 @@
   ],
   "c13ad6f975f2": [
     "src/main/history.ts"
+  ],
+  "75df21f548b3": [
+    "src/main/global-shortcuts.ts"
   ],
   "20f489b1e5d4": [
     "src/shared/hotkeys.ts"

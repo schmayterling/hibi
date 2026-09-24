@@ -467,6 +467,15 @@ export type SettingsApi = {
 
 /** APIs available while your renderer addon is enabled. Registrations are removed when it stops. */
 export type AddonContext = {
+  /** OS-wide shortcuts work while Hibi runs, even when another app has focus. */
+  globalShortcuts: {
+    /** Electron accelerator, such as CommandOrControl+Alt+N. Registration can fail if another app owns it. */
+    register: (
+      id: string,
+      accelerator: string,
+      run: () => void | Promise<void>,
+    ) => Promise<() => void>
+  }
   dependencies: import('../shared/dependencies').DependencyApi
   /** Enabled addon settings. Registrations are removed when the addon stops. */
   settings: SettingsApi

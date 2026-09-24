@@ -14,6 +14,7 @@ import {
 import type { JournalCheckpoint } from '../shared/document-checkpoint'
 import { createDocumentJournal } from '../shared/document-journal'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
+import { GLOBAL_SHORTCUT_CHANNELS } from '../shared/global-shortcuts'
 import { HISTORY_CHANNELS } from '../shared/history'
 import { type AppCommand, HOTKEY_CHANNELS } from '../shared/hotkeys'
 import { IMPORT_CHANNELS } from '../shared/imports'
@@ -82,6 +83,17 @@ if (process.isMainFrame) {
   for (const pending of [startupDocument, startupAddons, startupRecent])
     void pending.catch(() => {})
   contextBridge.exposeInMainWorld('hibi', {
+    registerGlobalShortcut: (id, accelerator) =>
+      ipcRenderer.invoke(GLOBAL_SHORTCUT_CHANNELS.register, id, accelerator),
+    unregisterGlobalShortcut: (id) =>
+      ipcRenderer.invoke(GLOBAL_SHORTCUT_CHANNELS.unregister, id),
+    onGlobalShortcut: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, id: string) =>
+        callback(id)
+      ipcRenderer.on(GLOBAL_SHORTCUT_CHANNELS.invoked, listener)
+      return () =>
+        ipcRenderer.removeListener(GLOBAL_SHORTCUT_CHANNELS.invoked, listener)
+    },
     getUpdateState: () => transport.invoke(UPDATE_CHANNELS.get),
     setUpdateChannel: (channel) =>
       transport.invoke(UPDATE_CHANNELS.channel, channel),

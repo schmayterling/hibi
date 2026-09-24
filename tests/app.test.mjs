@@ -60,6 +60,9 @@ test('desktop launch, isolation, offline reload, and recovery', {
       node: 'undefined',
       process: 'undefined',
       api: [
+        'registerGlobalShortcut',
+        'unregisterGlobalShortcut',
+        'onGlobalShortcut',
         'getUpdateState',
         'setUpdateChannel',
         'setUpdateCheckFrequency',

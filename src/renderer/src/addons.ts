@@ -83,6 +83,7 @@ type Environment = Omit<
   | 'tooltips'
   | 'settings'
   | 'dependencies'
+  | 'globalShortcuts'
 > & {
   openDependencySettings: () => void
   workspace: Omit<AddonContext['workspace'], 'registerDecorations'>
@@ -620,6 +621,45 @@ export function useAddons(
               },
             },
             dialogs: dialogScope.api,
+            globalShortcuts: {
+              async register(localId, accelerator, run) {
+                if (disposed) throw new Error('This addon has stopped.')
+                if (!/^[a-z][a-z0-9-]*$/.test(localId))
+                  throw new Error(
+                    'This addon supplied an invalid shortcut name.',
+                  )
+                const key = `${id}.${localId}`
+                let active = true
+                const off = window.hibi.onGlobalShortcut((invoked) => {
+                  if (!active || invoked !== key) return
+                  try {
+                    void Promise.resolve(run()).catch((error) =>
+                      latest.current.error(error),
+                    )
+                  } catch (error) {
+                    latest.current.error(error)
+                  }
+                })
+                const remove = () => {
+                  if (!active) return
+                  active = false
+                  off()
+                  cleanups.delete(remove)
+                  void window.hibi
+                    .unregisterGlobalShortcut(key)
+                    .catch((error) => latest.current.error(error))
+                }
+                cleanups.add(remove)
+                try {
+                  await window.hibi.registerGlobalShortcut(key, accelerator)
+                } catch (error) {
+                  remove()
+                  throw error
+                }
+                if (!active) await window.hibi.unregisterGlobalShortcut(key)
+                return remove
+              },
+            },
             views: { register: registerView },
             analysis: {
               async run(projection) {

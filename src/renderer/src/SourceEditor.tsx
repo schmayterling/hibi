@@ -100,6 +100,7 @@ export function SourceEditor({
   sourceFormat,
   supportsMedia,
   label,
+  waitForFont,
   onReady,
   disabled,
   findActive,
@@ -124,6 +125,7 @@ export function SourceEditor({
   sourceFormat?: DocumentFormat['formatting']
   supportsMedia: boolean
   label: string
+  waitForFont: boolean
   onReady: (status: 'loading' | 'ready' | 'failed') => void
   disabled: boolean
   findActive: boolean
@@ -187,6 +189,9 @@ export function SourceEditor({
     () => createSourceSession(session),
     [session, bridgeRetry],
   )
+  const [fontReadyBridge, setFontReadyBridge] = useState<ReturnType<
+    typeof createSourceSession
+  > | null>(null)
   const inputReady =
     installedExtensions?.bridge === bridge &&
     installedExtensions.extensions === sourceExtensions &&
@@ -810,7 +815,14 @@ export function SourceEditor({
       if (!disposed) editor.requestMeasure()
     }
     measure()
-    void window.document.fonts.load('13px "Geist Mono"').then(measure, measure)
+    const finishFont = () => {
+      if (disposed) return
+      editor.requestMeasure()
+      setFontReadyBridge(bridge)
+    }
+    void window.document.fonts
+      .load('13px "Geist Mono"')
+      .then(finishFont, finishFont)
     return () => {
       clearReferences('unavailable', false)
       sourceFind.current?.dispose()
@@ -878,11 +890,18 @@ export function SourceEditor({
     ready.current(
       extensionError || languageError
         ? 'failed'
-        : inputReady
+        : inputReady && (!waitForFont || fontReadyBridge === bridge)
           ? 'ready'
           : 'loading',
     )
-  }, [inputReady, extensionError, languageError])
+  }, [
+    bridge,
+    inputReady,
+    waitForFont,
+    fontReadyBridge,
+    extensionError,
+    languageError,
+  ])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new bridge replaces the editor view.
   useEffect(() => {

@@ -292,6 +292,12 @@ test('source font and layout are ready before the pane starts moving', {
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('.source-pane .cm-content')
+        ?.getAttribute('contenteditable') === 'true',
+  )
   assert.equal(
     await page.locator('.editor-panes').getAttribute('data-source-ready'),
     'false',

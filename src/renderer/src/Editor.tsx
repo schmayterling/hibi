@@ -1984,6 +1984,7 @@ export function MarkdownEditor({
                   supportsMedia={!!format?.insertMedia}
                   codeLanguage={format?.codeLanguage}
                   label={formatName}
+                  waitForFont
                   onLink={onLink}
                   onFormatting={attachSourceFormatting}
                   sourceExtensions={sourceExtensions}

@@ -184,6 +184,7 @@ export function FormatEditor({
                   supportsMedia={!!format?.insertMedia}
                   codeLanguage={format?.codeLanguage}
                   label={formatName}
+                  waitForFont={false}
                   onLink={onLink}
                   onFormatting={attachSource}
                   sourceExtensions={sourceExtensions}

@@ -1387,9 +1387,11 @@ export function useAddons(
       latest.current.error(error)
     }
   }
-  async function install(url?: string) {
+  async function install(source?: string | { gardenId: string }) {
     try {
-      await window.hibi.installAddon(url)
+      if (typeof source === 'object')
+        await window.hibi.installGardenAddon(source.gardenId)
+      else await window.hibi.installAddon(source)
       const [states, packages] = await Promise.all([
         window.hibi.getAddonStates(),
         window.hibi.getInstalledAddons(),

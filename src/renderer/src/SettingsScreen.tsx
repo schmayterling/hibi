@@ -141,7 +141,7 @@ export function SettingsScreen({
   onHotkeys: (hotkeys: Hotkeys) => void
   addonStates: AddonState[]
   onAddonEnabled: (id: string, enabled: boolean) => Promise<void>
-  onInstallAddon: (url?: string) => Promise<void>
+  onInstallAddon: (source?: string | { gardenId: string }) => Promise<void>
   onRemoveAddon: (id: string) => Promise<void>
   resize: NonNullable<SidebarProps['resize']>
   cursorSettings: CursorSettings
@@ -667,6 +667,7 @@ export function SettingsScreen({
             hidden={category !== 'addons'}
           >
             <AddonSettings
+              active={open && category === 'addons'}
               addons={addons}
               states={addonStates}
               setEnabled={onAddonEnabled}

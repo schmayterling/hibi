@@ -42,6 +42,11 @@
 .hibi-credit svg {
   color: var(--accent);
 }
+.hibi-credit a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .sponsor-button {
   display: inline-flex;
   align-items: center;

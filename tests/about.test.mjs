@@ -59,7 +59,7 @@ test('license catalog retains dependency and palette notices, excluding build to
   )
 })
 
-test('hibi opens first, sponsor uses a fixed URL, and license dialogs stay readable', {
+test('licenses open on their own settings page and dialogs stay readable', {
   timeout: 45000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-about-'))
@@ -86,7 +86,43 @@ test('hibi opens first, sponsor uses a fixed URL, and license dialogs stay reada
   )
   const panel = page.getByRole('tabpanel', { name: /^hibi$/i, exact: true })
   await panel.getByText(/^version 0\.1\.0$/i, { exact: true }).waitFor()
-  const react = panel
+  assert.equal(await panel.locator('.license-row').count(), 0)
+  await app.evaluate(({ shell }) => {
+    shell.openExternal = async (url) => {
+      globalThis.openedUrl = url
+    }
+  })
+  for (const [name, url] of [
+    ['may', 'https://github.com/schmayterling'],
+    [
+      'beloved contributors',
+      'https://github.com/schmayterling/hibi/graphs/contributors',
+    ],
+  ]) {
+    await panel.getByRole('link', { name, exact: true }).press('Enter')
+    assert.equal(await app.evaluate(() => globalThis.openedUrl), url)
+  }
+  await panel.getByRole('button', { name: /sponsor on github/i }).press('Enter')
+  assert.equal(
+    await app.evaluate(() => globalThis.openedUrl),
+    'https://github.com/sponsors/schmayterling',
+  )
+  await page.waitForFunction(
+    () => !document.querySelector('#sponsor-project').disabled,
+  )
+  await mkdir('test-results', { recursive: true })
+  await page.screenshot({
+    path: 'test-results/hibi-settings.png',
+    animations: 'disabled',
+  })
+  await sidebar.getByRole('tab', { name: 'Open source licenses' }).click()
+  const licensesPanel = page.getByRole('tabpanel', {
+    name: 'Open source licenses',
+  })
+  await licensesPanel
+    .getByRole('heading', { name: 'Open source licenses' })
+    .waitFor()
+  const react = licensesPanel
     .getByRole('button')
     .filter({ has: page.locator('.license-name', { hasText: /^react19/ }) })
   await react.waitFor()
@@ -108,7 +144,10 @@ test('hibi opens first, sponsor uses a fixed URL, and license dialogs stay reada
     hoverBounds.every((value) => Math.abs(value - 1) < 1),
     JSON.stringify(hoverBounds),
   )
-  assert.equal(await panel.locator('.license-row').count(), catalog.length)
+  assert.equal(
+    await licensesPanel.locator('.license-row').count(),
+    catalog.length,
+  )
   assert.ok(catalog.every((entry) => !('text' in entry)))
   await assert.rejects(
     page.evaluate(() => window.hibi.getLicense('../package.json')),
@@ -118,22 +157,8 @@ test('hibi opens first, sponsor uses a fixed URL, and license dialogs stay reada
     page.evaluate(() => window.hibi.getLicense(42)),
     /Choose a license to view\./,
   )
-  await app.evaluate(({ shell }) => {
-    shell.openExternal = async (url) => {
-      globalThis.openedSponsor = url
-    }
-  })
-  await panel.getByRole('button', { name: /sponsor on github/i }).press('Enter')
-  assert.equal(
-    await app.evaluate(() => globalThis.openedSponsor),
-    'https://github.com/sponsors/schmayterling',
-  )
-  await page.waitForFunction(
-    () => !document.querySelector('#sponsor-project').disabled,
-  )
-  await mkdir('test-results', { recursive: true })
   await page.screenshot({
-    path: 'test-results/hibi-settings.png',
+    path: 'test-results/licenses-settings.png',
     animations: 'disabled',
   })
   await react.press('Enter')
@@ -157,7 +182,7 @@ test('hibi opens first, sponsor uses a fixed URL, and license dialogs stay reada
   for (const width of [480, 1000]) {
     await page.setViewportSize({ width, height: 720 })
     assert.equal(
-      await panel.evaluate((el) => el.scrollWidth <= el.clientWidth),
+      await licensesPanel.evaluate((el) => el.scrollWidth <= el.clientWidth),
       true,
     )
     await react.press('Enter')

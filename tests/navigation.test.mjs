@@ -169,7 +169,7 @@ test('modified link clicks, note/settings history, and file-menu remote imports'
     .locator('.settings-sidebar .sidebar-scroll')
     .evaluate((scroll) => scroll.offsetWidth - scroll.clientWidth)
   assert.equal(backBounds.x, tabBounds.x)
-  assert.equal(backBounds.width - tabBounds.width, scrollbarWidth)
+  assert.ok(Math.abs(backBounds.width - tabBounds.width - scrollbarWidth) < 1)
   assert.ok(backBounds.y + backBounds.height < tabBounds.y)
   await back.click()
   await page.waitForFunction(

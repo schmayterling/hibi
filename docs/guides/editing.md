@@ -46,7 +46,7 @@ Press `Cmd/Ctrl+F` to find text in the document. Enter moves to the next match, 
 
 In source view, **Searching…** means match counts are still being checked against the current document. Editing or changing the query cancels outdated results. If find becomes unavailable, close and reopen it to retry; document editing and saving stay available.
 
-Press `Cmd/Ctrl+K` to search commands and settings. Use arrow keys and Enter to choose a result, or Escape to close the palette.
+Press `Cmd/Ctrl+K` to search commands and settings. Use arrow keys and Enter to choose a result. Some commands open another list of options; the pill beside the search field shows which list is open. Press Escape, press Backspace in an empty search field, or click the pill's × to return to the previous list. Escape closes the palette from the main list.
 
 ## Save and rename
 

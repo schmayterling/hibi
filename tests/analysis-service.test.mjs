@@ -270,9 +270,8 @@ test('analysis is process-isolated, bounded, connection-bound, and revoked on ca
     'complete',
   )
   await page.reload()
-  await page
-    .getByRole('textbox', { name: 'Document editor', exact: true })
-    .waitFor()
+  await page.locator('.tiptap[contenteditable="true"]').waitFor()
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
   const remaining = await app.evaluate(
     ({ BrowserWindow }) =>
       BrowserWindow.getAllWindows().filter((window) =>

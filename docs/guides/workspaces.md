@@ -10,7 +10,7 @@ Wikilinks, frontmatter, nested tags, relative links, image and SVG embeds, highl
 
 ## Open a folder
 
-Choose **Open a folder…** in the sidebar, use **Open workspace…** in the command palette, or drop a folder onto Hibi. You can also reopen a recent workspace from the welcome screen. Opening a folder leaves your current note intact.
+Choose **Open a folder…** in the sidebar, use **Open workspace…** in the command palette, or drop a folder onto Hibi. To reopen a workspace, choose **Open recent workspaces** in the command palette and select its path, or use the welcome screen. Opening a folder leaves your current note intact.
 
 ## Browse notes
 

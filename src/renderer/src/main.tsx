@@ -1454,80 +1454,104 @@ function App() {
           run: () => addonHost.app.runAction(id),
         })),
     )
+    if (!busy)
+      paletteCommands.push({
+        id: 'workspace.recent',
+        category: 'workspace',
+        label: 'Open recent workspaces',
+        children: (recentWorkspaces ?? []).map(({ id, path }) => ({
+          id: `workspace.recent.${id}`,
+          category: 'workspace',
+          label: path.split(/[/\\]/).at(-1) ?? path,
+          detail: path,
+          run: () => void openFolder(id),
+        })),
+      })
     paletteCommands.push(
-      ...sidebarViews.map((view) => ({
-        id: `sidebar.${view.id}`,
-        category: 'view' as const,
-        label: `Show ${view.label.toLowerCase()}${view.id === 'workspace' ? ' sidebar' : ''}`,
-        run: () => {
-          setSettingsOpen(false)
-          selectSidebarView(
-            view.id,
-            undefined,
-            addonHost.sidebarViews.find((entry) => entry.id === view.id)
-              ?.side ?? 'left',
-          )
-        },
-      })),
       {
-        id: 'settings.licenses',
+        id: 'submenu.sidebar',
+        category: 'view',
+        label: 'Show sidebar view',
+        children: sidebarViews.map((view) => ({
+          id: `sidebar.${view.id}`,
+          category: 'view' as const,
+          label: `Show ${view.label.toLowerCase()}${view.id === 'workspace' ? ' sidebar' : ''}`,
+          run: () => {
+            setSettingsOpen(false)
+            selectSidebarView(
+              view.id,
+              undefined,
+              addonHost.sidebarViews.find((entry) => entry.id === view.id)
+                ?.side ?? 'left',
+            )
+          },
+        })),
+      },
+      {
+        id: 'submenu.shortcuts',
         category: 'settings',
-        label: 'Open source licenses',
-        run: () => openSetting('hibi', 'open-source-licenses'),
-      },
-      ...actions.map(({ id, label }) => ({
-        id: `shortcut.${id}`,
-        category: 'settings' as const,
-        label: `Shortcut: ${label}`,
-        keywords: 'keyboard hotkeys rebind',
-        run: () => openSetting('hotkeys', `hotkey-${id}`),
-      })),
-      {
-        id: 'flavor.choose',
-        category: 'edit',
-        label: 'Change Markdown flavor…',
-        run: openFlavors,
+        label: 'Edit keyboard shortcuts',
+        children: actions.map(({ id, label }) => ({
+          id: `shortcut.${id}`,
+          category: 'settings' as const,
+          label: `Shortcut: ${label}`,
+          keywords: 'keyboard hotkeys rebind',
+          run: () => openSetting('hotkeys', `hotkey-${id}`),
+        })),
       },
       {
-        id: 'flavor.auto',
+        id: 'submenu.flavors',
         category: 'edit',
-        label: 'Automatically detect Markdown flavor',
-        run: () => changeFlavor(automaticFlavor),
+        label: 'Markdown flavor',
+        children: [
+          {
+            id: 'flavor.choose',
+            category: 'edit',
+            label: 'Change Markdown flavor…',
+            run: openFlavors,
+          },
+          {
+            id: 'flavor.auto',
+            category: 'edit',
+            label: 'Automatically detect Markdown flavor',
+            run: () => changeFlavor(automaticFlavor),
+          },
+          {
+            id: 'flavor.markdown',
+            category: 'edit',
+            label: 'Use plain Markdown flavor',
+            run: () => changeFlavor({ dialect: 'markdown', syntax: [] }),
+          },
+          ...availableFlavors.map((flavor) => ({
+            id: `flavor.${flavor.id}`,
+            category: 'edit' as const,
+            label: `Use ${flavor.name} flavor`,
+            keywords: flavor.description,
+            run: () =>
+              changeFlavor(
+                flavor.kind === 'dialect'
+                  ? { ...flavorChoice, dialect: flavor.id }
+                  : {
+                      ...flavorChoice,
+                      syntax: [
+                        ...new Set([
+                          ...(flavorChoice.syntax === 'auto'
+                            ? availableFlavors
+                                .filter((entry) => entry.kind === 'syntax')
+                                .map((entry) => entry.id)
+                            : flavorChoice.syntax),
+                          flavor.id,
+                        ]),
+                      ],
+                    },
+              ),
+          })),
+        ],
       },
-      {
-        id: 'flavor.markdown',
-        category: 'edit',
-        label: 'Use plain Markdown flavor',
-        run: () => changeFlavor({ dialect: 'markdown', syntax: [] }),
-      },
-      ...availableFlavors.map((flavor) => ({
-        id: `flavor.${flavor.id}`,
-        category: 'edit' as const,
-        label: `Use ${flavor.name} flavor`,
-        keywords: flavor.description,
-        run: () =>
-          changeFlavor(
-            flavor.kind === 'dialect'
-              ? { ...flavorChoice, dialect: flavor.id }
-              : {
-                  ...flavorChoice,
-                  syntax: [
-                    ...new Set([
-                      ...(flavorChoice.syntax === 'auto'
-                        ? availableFlavors
-                            .filter((entry) => entry.kind === 'syntax')
-                            .map((entry) => entry.id)
-                        : flavorChoice.syntax),
-                      flavor.id,
-                    ]),
-                  ],
-                },
-          ),
-      })),
       ...settingsCategories.map(({ id, label }) => ({
         id: `settings.${id}`,
         category: 'settings' as const,
-        label: `Open ${label} settings`,
+        label: id === 'licenses' ? label : `Open ${label} settings`,
         run: () => openSetting(id),
       })),
       ...registeredSettings.pages
@@ -1597,17 +1621,22 @@ function App() {
             : []),
         ]
       }),
-      ...themeSnapshot.schemes.map((scheme) => ({
-        id: `theme.${scheme.id}`,
-        category: 'themes' as const,
-        label: scheme.name,
-        keywords: `${scheme.appearance} ${scheme.author}`,
-        run: () =>
-          colorschemes.set({
-            mode: scheme.appearance,
-            [scheme.appearance]: scheme.id,
-          }),
-      })),
+      {
+        id: 'submenu.themes',
+        category: 'themes',
+        label: 'Choose colorscheme',
+        children: themeSnapshot.schemes.map((scheme) => ({
+          id: `theme.${scheme.id}`,
+          category: 'themes' as const,
+          label: scheme.name,
+          keywords: `${scheme.appearance} ${scheme.author}`,
+          run: () =>
+            colorschemes.set({
+              mode: scheme.appearance,
+              [scheme.appearance]: scheme.id,
+            }),
+        })),
+      },
       ...toolbarSnapshot.items
         .filter(
           (item) =>

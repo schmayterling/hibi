@@ -437,6 +437,10 @@ test('frontmatter addon, inline rename, and centered workspace entry preserve do
     .waitFor()
   assert.equal(await page.getByRole('dialog').count(), 0)
   await clickMenu(app, 'Save')
+  await waitForAsync(page, async () => {
+    const document = await window.hibi.getDocument()
+    return document.canAutosave && !document.dirty
+  })
   await page.waitForFunction(
     () =>
       document.querySelector('.titlebar')?.getAttribute('aria-busy') ===

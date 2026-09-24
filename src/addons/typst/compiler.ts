@@ -216,19 +216,29 @@ export async function compileTypst(
       const worker = child
       return new Promise<TypstResult & { pdf?: Uint8Array }>(
         (resolve, reject) => {
-          const startedAt = Date.now()
-          const phases: string[] = []
-          const mark = (stage: string) => {
-            phases.push(`${Date.now() - startedAt}ms ${stage}`)
-            ;(
-              globalThis as typeof globalThis & { typstTiming?: string }
-            ).typstTiming = phases.join(', ')
-          }
+          let phaseTimer: ReturnType<typeof setTimeout>
+          let finished = false
           const clean = () => {
-            clearTimeout(timer)
+            if (finished) return
+            finished = true
+            clearTimeout(phaseTimer)
+            clearTimeout(totalTimer)
             worker.removeListener('message', message)
             worker.removeListener('exit', exited)
             cancel = undefined
+          }
+          const timeout = (error: Error) => {
+            if (finished) return
+            reportOwnedFailure('COMPILER_TIMEOUT', 'typst')
+            clean()
+            terminate(worker)
+            child = null
+            fingerprint = ''
+            reject(error)
+          }
+          const arm = (delay: number, error: Error) => {
+            clearTimeout(phaseTimer)
+            phaseTimer = setTimeout(() => timeout(error), delay)
           }
           const exited = () => {
             clean()
@@ -239,13 +249,18 @@ export async function compileTypst(
           const message = async (
             result:
               | (TypstResult & { pdf?: Uint8Array; missing?: string[] })
-              | { phase: string },
+              | { phase: 'compiling' },
           ) => {
             if ('phase' in result) {
-              mark(result.phase)
+              arm(
+                10000,
+                new Error(
+                  'Typst compilation took longer than 10 seconds. Simplify the document and try again.',
+                ),
+              )
               return
             }
-            mark(result.missing?.length ? 'missing-result' : 'result')
+            clearTimeout(phaseTimer)
             const missing =
               result.missing?.filter((path) => !requested.has(path)) ?? []
             if (missing.length && passes++ < 64) {
@@ -253,7 +268,10 @@ export async function compileTypst(
                 for (const path of missing) requested.add(path)
                 snapshot = await project(context, epoch, documentId, requested)
                 if (epoch !== generation || child !== worker) return
-                mark(`post pass ${passes + 1}`)
+                arm(
+                  20000,
+                  new Error('Typst took too long to start. Try again.'),
+                )
                 worker.postMessage({
                   sandbox: join(scratch, 'project'),
                   entry: snapshot.entry,
@@ -283,22 +301,16 @@ export async function compileTypst(
             clean()
             reject(new Error('Typst compilation canceled.'))
           }
-          const timer = setTimeout(() => {
-            mark('timeout')
-            reportOwnedFailure('COMPILER_TIMEOUT', 'typst')
-            clean()
-            terminate(worker)
-            child = null
-            fingerprint = ''
-            reject(
-              new Error(
-                'Typst compilation took longer than 10 seconds. Simplify the document and try again.',
+          const totalTimer = setTimeout(
+            () =>
+              timeout(
+                new Error('Typst project took too long to compile. Try again.'),
               ),
-            )
-          }, 10000)
+            30000,
+          )
           worker.once('exit', exited)
           worker.on('message', message)
-          mark('post pass 1')
+          arm(20000, new Error('Typst took too long to start. Try again.'))
           worker.postMessage({
             sandbox: join(scratch, 'project'),
             entry: snapshot.entry,

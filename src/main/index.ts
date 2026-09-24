@@ -132,6 +132,7 @@ import {
 } from './updates'
 import {
   deleteKnownWorkspace,
+  documentFileChanged,
   getWorkspace,
   indexWorkspace,
   observeWorkspace,
@@ -1096,10 +1097,11 @@ if (!app.requestSingleInstanceLock()) {
       handle(WORKSPACE_CHANNELS.openFile, (event, path: unknown) =>
         runFileOperation(event, (window) => openWorkspaceFile(window, path)),
       )
-      observeWorkspace(() =>
+      observeWorkspace((change) =>
         mainWindow?.webContents.send(
           WORKSPACE_CHANNELS.changed,
           getWorkspace(),
+          change,
         ),
       )
       observeKnownWorkspaces((known) =>
@@ -1187,23 +1189,43 @@ if (!app.requestSingleInstanceLock()) {
       handle(DOCUMENT_CHANNELS.save, (event, saveAs: unknown) => {
         if (typeof saveAs !== 'boolean')
           throw new Error('Could not read the save request. Try saving again.')
-        return runFileOperation(event, (window) =>
-          saveDocument(
+        return runFileOperation(event, async (window) => {
+          const previous = getDocumentPath()
+          const pending = getDocument().ephemeral
+          const saved = await saveDocument(
             window,
             saveAs,
             join(workspaceRoot() ?? '', getDocument().name),
-          ),
-        )
+          )
+          if (saved)
+            await documentFileChanged(
+              previous,
+              getDocumentPath(),
+              pending || previous !== getDocumentPath(),
+            )
+          return saved
+        })
       })
       handle(DOCUMENT_CHANNELS.autosave, (event, revision: unknown) => {
         trustedWindow(event)
         if (fileOperation) return { status: 'skipped', document: null }
-        return runFileOperation(event, (window) =>
-          autosaveDocument(window, revision),
-        )
+        return runFileOperation(event, async (window) => {
+          const previous = getDocumentPath()
+          const result = await autosaveDocument(window, revision)
+          if (result.status === 'saved')
+            await documentFileChanged(previous, getDocumentPath(), false)
+          return result
+        })
       })
       handle(DOCUMENT_CHANNELS.rename, (event, name: unknown) =>
-        runFileOperation(event, () => renameDocument(name)),
+        runFileOperation(event, async () => {
+          const previous = getDocumentPath()
+          const pending = getDocument().ephemeral
+          const renamed = await renameDocument(name)
+          if (previous !== getDocumentPath())
+            await documentFileChanged(previous, getDocumentPath(), !pending)
+          return renamed
+        }),
       )
       nativeTheme.on('updated', () => {
         mainWindow?.setBackgroundColor(appearanceColors().background)

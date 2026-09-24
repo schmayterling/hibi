@@ -39,6 +39,12 @@ export type WorkspaceState = {
   activePath: string | null
 }
 
+/** Workspace-relative paths use forward slashes; null means the changed paths are unknown. */
+export type WorkspaceChange = {
+  kind: 'content' | 'tree'
+  paths: string[] | null
+}
+
 export type ExplorerDecoration = {
   /** Workspace-relative file or folder path. Empty string decorates the workspace heading. */
   path: string

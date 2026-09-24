@@ -30,7 +30,12 @@ import {
   selectDocumentTab,
 } from './document'
 import { isDocumentName } from './document-types'
-import { refreshWorkspace, workspaceRoot } from './workspace'
+import {
+  getWorkspace,
+  notifyWorkspaceContent,
+  refreshWorkspace,
+  workspaceRoot,
+} from './workspace'
 
 const missing = (error: NodeJS.ErrnoException) => {
   if (error.code !== 'ENOENT') throw error
@@ -167,6 +172,8 @@ export async function workspaceAction(
   )
     throw new Error('Hibi does not support this file operation.')
   let resultPath: string
+  let sourcePath: string | null = null
+  let treeChanged = false
   if (action === 'new-file' || action === 'new-folder') {
     const parent = await resolveEntry(base, path, false, true)
     if (!(await lstat(parent)).isDirectory())
@@ -177,13 +184,16 @@ export async function workspaceAction(
         ? `untitled${extname(getDocument().name) || '.md'}`
         : 'untitled folder',
     )
-    if (action === 'new-folder') await mkdir(resultPath)
-    else if (!(await newPendingDocument(window, resultPath))) return null
+    if (action === 'new-folder') {
+      await mkdir(resultPath)
+      treeChanged = true
+    } else if (!(await newPendingDocument(window, resultPath))) return null
   } else {
     const draft =
       typeof path === 'string' &&
       getOpenDocuments().find((draft) => draft.pendingPath === join(base, path))
     const source = await resolveEntry(base, path, Boolean(draft))
+    sourcePath = source
     if (draft && draft.tabId !== getDocument().tabId)
       await selectDocumentTab(window, draft.tabId)
     const folder = draft ? false : (await lstat(source)).isDirectory()
@@ -191,7 +201,10 @@ export async function workspaceAction(
       throw new Error('Choose a supported document.')
     if (action === 'delete') {
       if (!(await confirmDiscardAll(window, source))) return null
-      if (await lstat(source).catch(missing)) await shell.trashItem(source)
+      if (await lstat(source).catch(missing)) {
+        await shell.trashItem(source)
+        treeChanged = true
+      }
       closeDeletedDocuments(window, source)
       resultPath = source
     } else {
@@ -209,7 +222,7 @@ export async function workspaceAction(
         throw new Error('Use a supported file extension.')
       if (source === resultPath)
         return {
-          workspace: await refreshWorkspace(),
+          workspace: getWorkspace(),
           document: getDocument(),
           path: relative(base, source).split(sep).join('/'),
         }
@@ -246,10 +259,16 @@ export async function workspaceAction(
         await moveEntry(source, resultPath, folder)
         relocateDocument(source, resultPath)
       }
+      treeChanged = !draft
     }
   }
+  const paths = [sourcePath, resultPath]
+    .filter((path): path is string => path !== null)
+    .map((path) => relative(base, path).split(sep).join('/'))
   return {
-    workspace: await refreshWorkspace(),
+    workspace: treeChanged
+      ? await refreshWorkspace(paths)
+      : await notifyWorkspaceContent(paths),
     document: getDocument(),
     path: relative(base, resultPath).split(sep).join('/'),
   }

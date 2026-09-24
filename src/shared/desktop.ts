@@ -199,7 +199,10 @@ export type DesktopApi = {
   refreshWorkspace: () => Promise<WorkspaceState | null>
   openWorkspaceFile: (path: string) => Promise<DocumentState | null>
   onWorkspaceChanged: (
-    callback: (workspace: WorkspaceState | null) => void,
+    callback: (
+      workspace: WorkspaceState | null,
+      change?: import('./workspace').WorkspaceChange,
+    ) => void,
   ) => () => void
   onWorkspaceListChanged: (
     callback: (known: import('./workspace').KnownWorkspace[]) => void,

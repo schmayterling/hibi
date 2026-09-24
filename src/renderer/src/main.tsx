@@ -897,7 +897,7 @@ function App() {
         if (next) {
           acceptDocument(next)
           if (command === 'new' || command === 'open') setSettingsOpen(false)
-          setWorkspace(await window.hibi.refreshWorkspace())
+          setWorkspace(await window.hibi.getWorkspace())
         }
         return Boolean(next)
       } catch (error) {
@@ -987,7 +987,7 @@ function App() {
     setError('')
     try {
       acceptDocument(await window.hibi.renameDocument(name))
-      setWorkspace(await window.hibi.refreshWorkspace())
+      setWorkspace(await window.hibi.getWorkspace())
     } catch (error) {
       setError(
         error instanceof Error ? error.message : 'Could not rename this file.',

@@ -84,6 +84,7 @@ For installed packages, use the [SideloadFactory](SideloadFactory.md) and the [s
 - [toRecentWorkspaces](toRecentWorkspaces.md)
 - [WorkspaceAction](WorkspaceAction.md)
 - [WorkspaceActionResult](WorkspaceActionResult.md)
+- [WorkspaceChange](WorkspaceChange.md)
 - [WorkspaceEntry](WorkspaceEntry.md)
 - [WorkspaceIndex](WorkspaceIndex.md)
 - [WorkspacePage](WorkspacePage.md)

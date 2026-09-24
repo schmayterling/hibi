@@ -175,8 +175,11 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
     .getByRole('button', { name: 'Source view', exact: true })
     .press('Enter')
   try {
+    // Source editing can be ready while Chromium pauses animation frames.
     await page.waitForFunction(
       () => document.querySelector('.cm-content')?.isContentEditable,
+      undefined,
+      { polling: 100 },
     )
   } catch (error) {
     console.error('source activation phases:', phases())

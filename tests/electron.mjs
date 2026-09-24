@@ -119,53 +119,50 @@ export const electron = {
         })
         for (const window of BrowserWindow.getAllWindows()) show(window)
       })
-      if (process.platform === 'win32') {
-        slowStartTimer = setTimeout(async () => {
-          if (closing || page.isClosed()) return
-          try {
-            const snapshot = await startupDiagnostics(application, page)
-            if (closing) return
-            const dom = snapshot.renderer.dom
-            if (
-              dom?.settingsOpen ||
-              dom?.sourceMode ||
-              dom?.recoveryOpen ||
-              dom?.editorHidden
-            )
-              return
-            if (
-              (dom?.editable || dom?.sourceEditable) &&
-              dom.editorBusy !== 'true' &&
-              !dom.editorInert
-            )
-              return
-            console.error('slow editor startup:', JSON.stringify(snapshot))
-          } catch {
-            // Diagnostics must not change test results.
-          }
-        }, 4000)
-        slowStartTimer.unref()
-        void page
-          .waitForFunction(
-            () => {
-              const editor = document.querySelector('.editor-page')
-              return (
-                editor &&
-                !editor.inert &&
-                editor.getAttribute('aria-busy') !== 'true' &&
-                editor.querySelector(
+      slowStartTimer = setTimeout(async () => {
+        if (closing || page.isClosed()) return
+        try {
+          let readinessTimer
+          const ready = await Promise.race([
+            page
+              .evaluate(() => {
+                const editor = document.querySelector('.editor-page')
+                const input = editor?.querySelector(
                   '.tiptap[contenteditable="true"], .cm-content[contenteditable="true"]',
                 )
-              )
-            },
-            undefined,
-            { timeout: 4000 },
+                return !!(
+                  input &&
+                  !editor.closest('[inert], [hidden], [aria-hidden="true"]') &&
+                  editor.getAttribute('aria-busy') !== 'true' &&
+                  input.getClientRects().length &&
+                  getComputedStyle(input).visibility !== 'hidden'
+                )
+              })
+              .catch(() => false),
+            new Promise((resolve) => {
+              readinessTimer = setTimeout(() => resolve(false), 1000)
+              readinessTimer.unref()
+            }),
+          ])
+          clearTimeout(readinessTimer)
+          if (ready || closing) return
+          const snapshot = await startupDiagnostics(application, page)
+          if (closing) return
+          const dom = snapshot.renderer.dom
+          if (
+            dom?.settingsOpen ||
+            dom?.sourceMode ||
+            dom?.recoveryOpen ||
+            dom?.editorHidden
           )
-          .then(
-            () => clearTimeout(slowStartTimer),
-            () => {},
-          )
-      }
+            return
+          if (dom?.visibleEditable) return
+          console.error('slow editor startup:', JSON.stringify(snapshot))
+        } catch {
+          // Diagnostics must not change test results.
+        }
+      }, 4000)
+      slowStartTimer.unref()
     }
     return application
   },
@@ -174,13 +171,27 @@ export const electron = {
 function startupEntries() {
   const doc = globalThis.document
   const editor = doc?.querySelector('.editor-page')
+  const input = editor?.querySelector(
+    '.tiptap[contenteditable="true"], .cm-content[contenteditable="true"]',
+  )
   const recovery = doc?.querySelector('.recovery-screen')
+  const entries = performance
+    .getEntries()
+    .filter((entry) => entry.name.startsWith('hibi:'))
+  const recent = entries.slice(-20)
   return {
     dom: doc && {
       readyState: doc.readyState,
       editorBusy: editor?.getAttribute('aria-busy'),
       editorInert: editor?.inert,
       editorHidden: editor?.hidden,
+      visibleEditable: !!(
+        input &&
+        !editor.closest('[inert], [hidden], [aria-hidden="true"]') &&
+        editor.getAttribute('aria-busy') !== 'true' &&
+        input.getClientRects().length &&
+        getComputedStyle(input).visibility !== 'hidden'
+      ),
       settingsOpen: !!doc.querySelector('.settings-screen:not([hidden])'),
       sourceMode: !!doc.querySelector(
         '.editor-panes.mode-markdown, .editor-panes.mode-side-by-side',
@@ -201,16 +212,17 @@ function startupEntries() {
         '.cm-content[contenteditable="true"]',
       ).length,
     },
-    stages: performance
-      .getEntries()
-      .filter((entry) => entry.name.startsWith('hibi:'))
-      .slice(-24)
-      .map((entry) => ({
-        name: entry.name.slice(5, 85),
-        at: Math.round(entry.startTime),
-        ms: Math.round(entry.duration),
-        status: entry.detail?.status,
-      })),
+    stages: [
+      ...new Set([
+        ...entries.filter((entry) => entry.entryType === 'mark').slice(0, 24),
+        ...recent,
+      ]),
+    ].map((entry) => ({
+      name: entry.name.slice(5, 85),
+      at: Math.round(entry.startTime),
+      ms: Math.round(entry.duration),
+      status: entry.detail?.status,
+    })),
   }
 }
 

@@ -160,7 +160,7 @@ test('file picker and drops attach media safely, stream videos, and move/open wo
         clearTimeout(timer)
       }
     }
-    const [dom, current, main] = await Promise.all([
+    const [dom, current, main, frame] = await Promise.all([
       capture(
         page.evaluate(() => ({
           busy: document.querySelector('.app')?.getAttribute('aria-busy'),
@@ -183,10 +183,22 @@ test('file picker and drops attach media safely, stream videos, and move/open wo
           }
         }),
       ),
+      capture(
+        page.evaluate(
+          () =>
+            new Promise((resolve) => {
+              const timer = setTimeout(() => resolve('timer'), 250)
+              requestAnimationFrame(() => {
+                clearTimeout(timer)
+                resolve('animation-frame')
+              })
+            }),
+        ),
+      ),
     ])
     console.error(
       'media save readiness:',
-      JSON.stringify({ dom, current, main }),
+      JSON.stringify({ dom, current, main, frame }),
     )
     throw error
   }

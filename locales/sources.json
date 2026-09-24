@@ -507,9 +507,6 @@
   "c3a44a6b8a12": [
     "src/main/workspace-settings.ts"
   ],
-  "2874c2767f58": [
-    "src/main/workspace.ts"
-  ],
   "5a3cfacf2245": [
     "src/main/workspace-actions.ts"
   ],
@@ -4196,6 +4193,9 @@
     "src/main/sideload.ts"
   ],
   "f21c0d01153d": [
+    "src/main/workspace.ts"
+  ],
+  "cf3de67d2254": [
     "src/main/workspace.ts"
   ],
   "9a8066d604c9": [

@@ -2,7 +2,7 @@
 
 # WorkspaceActionResult
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L68)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L69)
 
 <details>
 <summary>Declaration</summary>
@@ -29,7 +29,7 @@ type WorkspaceActionResult = {
 
 ### workspace
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L69)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L70)
 
 ```typescript
 workspace: WorkspaceState | null
@@ -39,7 +39,7 @@ Related: [WorkspaceState](WorkspaceState.md).
 
 ### document
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L70)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L71)
 
 ```typescript
 document: import('./desktop').DocumentState
@@ -49,7 +49,7 @@ Related: [DocumentState](DocumentState.md).
 
 ### path
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L71)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L72)
 
 ```typescript
 path: string

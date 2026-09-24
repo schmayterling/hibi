@@ -15,3 +15,4 @@ See the [addon API reference](../../development/addon-api-reference/README.md).
 - [WorkspaceSnapshot](../../development/addon-api-reference/WorkspaceSnapshot.md)
 - [WorkspaceIndex](../../development/addon-api-reference/WorkspaceIndex.md)
 - [KnownWorkspace](../../development/addon-api-reference/KnownWorkspace.md)
+- [toRecentWorkspaces](../../development/addon-api-reference/toRecentWorkspaces.md)

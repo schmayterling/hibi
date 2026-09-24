@@ -11,10 +11,44 @@ test('settings collapse independently and narrow sidebars overlay full-width des
 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'hibi-sidebar-layout-'))
   const workspace = join(directory, 'notes')
+  const profile = join(directory, 'profile')
+  const addon = join(profile, 'installed-addons', 'delayed-source')
   await mkdir(workspace)
   await writeFile(join(workspace, 'first.md'), '# First\n\nA note.')
+  await mkdir(addon, { recursive: true })
+  await writeFile(
+    join(addon, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'delayed-source',
+      name: 'Delayed source',
+      description: 'Source readiness fixture',
+      kind: 'extension',
+      apiVersion: 2,
+      version: '1.0.0',
+      authors: [{ displayName: 'Test' }],
+      capabilities: ['source'],
+      activation: 'source',
+      entry: 'index.js',
+    }),
+  )
+  await writeFile(
+    join(addon, 'index.js'),
+    `export default () => ({ start(context) { context.editor.registerSource({ id: 'delayed-focus', create() { if (window.sourceExtensionReleased) return []; return new Promise(resolve => { window.sourceExtensionWaiters ??= []; window.sourceExtensionWaiters.push(resolve); }); } }); } });`,
+  )
+  await writeFile(
+    join(addon, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['hibi-addon.json', 'index.js'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'delayed-source': true }),
+  )
   const app = await electron.launch({
-    args: [resolve('.'), '--user-data-dir=' + join(directory, 'profile')],
+    args: [resolve('.'), `--user-data-dir=${profile}`],
     colorScheme: 'dark',
   })
   t.after(async () => {
@@ -210,11 +244,39 @@ test('settings collapse independently and narrow sidebars overlay full-width des
     true,
   )
 
-  // Source outlines replace their cached rows after an asynchronous parser read.
-  // Keyboard ownership must survive that refresh too.
+  // Loading source extensions must not steal newer sidebar focus.
   await page.setViewportSize({ width: 1000, height: 760 })
   await page.getByRole('button', { name: /^source view$/i }).click()
+  await page.waitForFunction(() => window.sourceExtensionWaiters?.length > 0)
+  await workspaceToggle.focus()
+  await page.evaluate(() => {
+    for (const resolve of window.sourceExtensionWaiters) resolve([])
+    window.sourceExtensionWaiters = []
+    window.sourceExtensionReleased = true
+  })
   await page.getByRole('textbox', { name: /^markdown editor$/i }).waitFor()
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.editor-panes')?.dataset.sourceReady === 'true',
+  )
+  assert.equal(
+    await workspaceToggle.evaluate(
+      (element) => element === document.activeElement,
+    ),
+    true,
+    'source readiness must preserve newer sidebar focus',
+  )
+  await page.getByRole('button', { name: /^normal$/i }).click()
+  await workspaceToggle.focus()
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+Shift+]' : 'Control+Shift+]',
+  )
+  await page.waitForFunction(() =>
+    document.activeElement?.classList.contains('cm-content'),
+  )
+  // Source outlines replace their cached rows after an asynchronous parser read.
+  // Keyboard ownership must survive that refresh too.
   await page.setViewportSize({ width: 480, height: 760 })
   await workspaceToggle.click()
   const outlineRow = page.getByRole('treeitem', { name: /^first$/i })
@@ -222,43 +284,9 @@ test('settings collapse independently and narrow sidebars overlay full-width des
   await outlineRow.focus()
   await page.keyboard.press('Escape')
   await page.evaluate(() => {
-    const outline = document.querySelector('.outline-sidebar[data-side="left"]')
     window.previousOutlineRow = document.querySelector(
       '.outline-sidebar[data-side="left"] [role="treeitem"]',
     )
-    window.sidebarFocusEvents = []
-    const describe = (element) =>
-      element instanceof HTMLElement
-        ? {
-            tag: element.tagName,
-            role: element.getAttribute('role'),
-            id: element.id,
-            className: element.className.slice(0, 80),
-          }
-        : null
-    const record = (type, target) => {
-      window.sidebarFocusEvents.push({
-        type,
-        target: describe(target),
-        connected: target?.isConnected,
-        active: describe(document.activeElement),
-        row: describe(outline?.querySelector('[role="treeitem"]')),
-        open: outline?.dataset.open,
-      })
-      if (window.sidebarFocusEvents.length > 16)
-        window.sidebarFocusEvents.shift()
-    }
-    const controller = new AbortController()
-    window.sidebarFocusAbort = controller
-    for (const type of ['focusin', 'focusout'])
-      document.addEventListener(type, (event) => record(type, event.target), {
-        capture: true,
-        signal: controller.signal,
-      })
-    for (const type of ['focus', 'blur'])
-      window.addEventListener(type, () => record(`window-${type}`, null), {
-        signal: controller.signal,
-      })
   })
   await workspaceToggle.click()
   await page.waitForFunction(() => {
@@ -267,32 +295,10 @@ test('settings collapse independently and narrow sidebars overlay full-width des
     )
     return row && row !== window.previousOutlineRow
   })
-  const restored = await outlineRow.evaluate(
-    (element) => element === document.activeElement,
+  assert.equal(
+    await outlineRow.evaluate((element) => element === document.activeElement),
+    true,
   )
-  const focusState = restored
-    ? undefined
-    : await page.evaluate(() => {
-        const outline = document.querySelector(
-          '.outline-sidebar[data-side="left"]',
-        )
-        const row = outline?.querySelector('[role="treeitem"]')
-        const active = document.activeElement
-        return {
-          active: active?.outerHTML.slice(0, 220),
-          hasFocus: document.hasFocus(),
-          visibility: document.visibilityState,
-          drawerOpen: outline?.dataset.open,
-          row: row?.outerHTML.slice(0, 220),
-          previousRowConnected: window.previousOutlineRow?.isConnected,
-          sourceReady: document
-            .querySelector('.editor-panes')
-            ?.getAttribute('data-source-ready'),
-          events: window.sidebarFocusEvents,
-        }
-      })
-  assert.equal(restored, true, focusState && JSON.stringify(focusState))
-  await page.evaluate(() => window.sidebarFocusAbort.abort())
   await page.keyboard.press('Escape')
 
   // A newer focus or pointer action while rows are absent cancels restoration,

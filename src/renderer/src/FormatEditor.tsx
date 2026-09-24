@@ -41,6 +41,7 @@ export function FormatEditor({
     sourceReady,
     setSourceReady,
     setSourceSettled,
+    focusOwnedByEditor,
   } = useEditorPanes(mode, false)
   const [findQuery, setFindQuery] = useState('')
   const [findStatus, setFindStatus] = useState<FindStatus>({
@@ -60,6 +61,7 @@ export function FormatEditor({
     focusedPane,
     disabled || mode !== paneMode,
     onAttach,
+    focusOwnedByEditor,
     false,
     format,
   )

@@ -380,6 +380,7 @@ export function MarkdownEditor({
     sourceReady,
     setSourceReady,
     setSourceSettled,
+    focusOwnedByEditor,
   } = useEditorPanes(mode, markdownDocument)
   // Temporarily disable split visual editing while its typing performance is
   // unresolved. Keep preview synchronization and the performance work intact.
@@ -1707,6 +1708,7 @@ export function MarkdownEditor({
         (findTarget === 'rich' &&
           (splitReadOnly || projectionReadOnly || !!richExtensionError)),
       onAttach,
+      focusOwnedByEditor,
       markdownDocument,
       format,
     )

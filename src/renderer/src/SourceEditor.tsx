@@ -865,7 +865,16 @@ export function SourceEditor({
     }
   }, [bridge, sourceExtensions])
   useEffect(() => {
-    // CodeMirror measures on an animation frame; editing cannot wait for paint.
+    view.current?.dispatch({
+      effects: editable.current.reconfigure([
+        EditorView.editable.of(!disabled && inputReady),
+        EditorState.readOnly.of(disabled || !inputReady),
+      ]),
+    })
+  }, [disabled, inputReady])
+
+  useEffect(() => {
+    // Publish readiness after CodeMirror configures input, before its next frame.
     ready.current(
       extensionError || languageError
         ? 'failed'
@@ -874,15 +883,6 @@ export function SourceEditor({
           : 'loading',
     )
   }, [inputReady, extensionError, languageError])
-
-  useEffect(() => {
-    view.current?.dispatch({
-      effects: editable.current.reconfigure([
-        EditorView.editable.of(!disabled && inputReady),
-        EditorState.readOnly.of(disabled || !inputReady),
-      ]),
-    })
-  }, [disabled, inputReady])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new bridge replaces the editor view.
   useEffect(() => {

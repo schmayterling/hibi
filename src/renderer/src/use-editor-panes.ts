@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import type { DocumentView } from '../../shared/document-types'
 
 /** Keep source focus and pane transitions identical across editor surfaces. */
@@ -11,21 +17,42 @@ export function useEditorPanes(mode: DocumentView, markdownDocument: boolean) {
   // Only the first opening from normal view waits for source layout.
   const paneMode = sourceSettled || initialMode !== 'normal' ? mode : 'normal'
   const content = useRef<HTMLDivElement>(null)
+  const previousFocusMode = useRef(mode)
+  const focusOwner = useRef<Element | null>(window.document.activeElement)
+  useLayoutEffect(() => {
+    if (previousFocusMode.current === mode) return
+    previousFocusMode.current = mode
+    focusOwner.current = window.document.activeElement
+  }, [mode])
+  const focusOwnedByEditor = useCallback(() => {
+    const active = window.document.activeElement
+    return (
+      !active?.closest(
+        '.settings-screen, [role="dialog"], input, textarea, select',
+      ) &&
+      (active === window.document.body ||
+        (content.current?.contains(active) &&
+          active?.matches('.tiptap, .cm-content')) ||
+        (active !== null && active === focusOwner.current))
+    )
+  }, [])
   useEffect(() => {
     if (
       sourceReady &&
+      paneMode === mode &&
       (mode === 'markdown' || (!markdownDocument && mode !== 'normal'))
     ) {
-      if (
-        window.document.activeElement?.closest(
-          '.settings-screen, [role="dialog"], input, textarea, select',
-        )
-      )
+      const ownsFocus = focusOwnedByEditor()
+      if (!ownsFocus) {
+        focusOwner.current = null
         return
+      }
       setFocusedPane('source')
-      content.current?.querySelector<HTMLElement>('.cm-content')?.focus()
+      const source = content.current?.querySelector<HTMLElement>('.cm-content')
+      if (source !== window.document.activeElement) source?.focus()
+      if (source === window.document.activeElement) focusOwner.current = null
     }
-  }, [markdownDocument, sourceReady, mode])
+  }, [markdownDocument, sourceReady, paneMode, mode, focusOwnedByEditor])
   const previousMode = useRef(paneMode)
   useLayoutEffect(() => {
     if (previousMode.current === paneMode) return
@@ -64,5 +91,6 @@ export function useEditorPanes(mode: DocumentView, markdownDocument: boolean) {
     sourceReady,
     setSourceReady,
     setSourceSettled,
+    focusOwnedByEditor,
   }
 }

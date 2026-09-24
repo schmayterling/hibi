@@ -217,14 +217,11 @@ function App() {
     let active = true
     // Publish the demanded module as ordinary state: a first Suspense retry can
     // otherwise hold an already loaded editor behind React's reveal throttle.
-    startupMark('rich-editor-import-start')
     void import('./Editor').then(
       ({ MarkdownEditor }) => {
-        startupMark('rich-editor-import-ready')
         if (active) setRichEditor({ Component: MarkdownEditor })
       },
       (error: Error) => {
-        startupMark('rich-editor-import-failed')
         if (active) setRichEditor({ error })
       },
     )

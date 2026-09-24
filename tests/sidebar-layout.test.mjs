@@ -284,9 +284,53 @@ test('settings collapse independently and narrow sidebars overlay full-width des
   await outlineRow.focus()
   await page.keyboard.press('Escape')
   await page.evaluate(() => {
+    const outline = document.querySelector('.outline-sidebar[data-side="left"]')
     window.previousOutlineRow = document.querySelector(
       '.outline-sidebar[data-side="left"] [role="treeitem"]',
     )
+    const events = []
+    window.sidebarFocusEvents = events
+    const name = (element) =>
+      element instanceof HTMLElement
+        ? `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ''}.${element.className.toString().slice(0, 65)}`
+        : null
+    const record = (type, target) => {
+      events.push({
+        type,
+        target: name(target),
+        connected: target?.isConnected,
+        active: name(document.activeElement),
+        row: name(outline?.querySelector('[role="treeitem"]')),
+        open: outline?.dataset.open,
+        ready: document.querySelector('.editor-panes')?.dataset.sourceReady,
+      })
+      if (events.length > 20) events.shift()
+    }
+    const controller = new AbortController()
+    window.stopSidebarFocusTrace = () => controller.abort()
+    for (const type of ['focusin', 'focusout', 'pointerdown'])
+      document.addEventListener(type, (event) => record(type, event.target), {
+        capture: true,
+        signal: controller.signal,
+      })
+    for (const type of ['focus', 'blur'])
+      window.addEventListener(type, () => record(`window-${type}`, null), {
+        signal: controller.signal,
+      })
+    let row = window.previousOutlineRow
+    const observer = new MutationObserver(() => {
+      const next = outline?.querySelector('[role="treeitem"]')
+      if (next !== row) {
+        row = next
+        record('row', next)
+      }
+    })
+    observer.observe(outline, { childList: true, subtree: true })
+    const stop = window.stopSidebarFocusTrace
+    window.stopSidebarFocusTrace = () => {
+      stop()
+      observer.disconnect()
+    }
   })
   await workspaceToggle.click()
   await page.waitForFunction(() => {
@@ -295,10 +339,25 @@ test('settings collapse independently and narrow sidebars overlay full-width des
     )
     return row && row !== window.previousOutlineRow
   })
-  assert.equal(
-    await outlineRow.evaluate((element) => element === document.activeElement),
-    true,
+  const restored = await outlineRow.evaluate(
+    (element) => element === document.activeElement,
   )
+  const focusState = restored
+    ? undefined
+    : await page.evaluate(() => {
+        const outline = document.querySelector(
+          '.outline-sidebar[data-side="left"]',
+        )
+        return {
+          active: document.activeElement?.outerHTML.slice(0, 180),
+          hasFocus: document.hasFocus(),
+          drawerOpen: outline?.dataset.open,
+          previousRowConnected: window.previousOutlineRow?.isConnected,
+          events: window.sidebarFocusEvents,
+        }
+      })
+  assert.equal(restored, true, focusState && JSON.stringify(focusState))
+  await page.evaluate(() => window.stopSidebarFocusTrace())
   await page.keyboard.press('Escape')
 
   // A newer focus or pointer action while rows are absent cancels restoration,

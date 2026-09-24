@@ -5,9 +5,9 @@ export type TagResult = { key: string; tags: string[] }
 
 /** A tab's content version advances on edits and external reloads; revision also advances on tab selection. */
 export function tagVersion(
-  document: Pick<DocumentState, 'tabId' | 'contentVersion'>,
+  document: Pick<DocumentState, 'tabId' | 'id' | 'contentVersion'>,
 ) {
-  return JSON.stringify([document.tabId, document.contentVersion])
+  return JSON.stringify([document.tabId, document.id, document.contentVersion])
 }
 
 /** Delay source materialization until input settles and keep one parse in flight. */

@@ -24,7 +24,9 @@ export default defineAddon({
       id: 'browser',
       label: 'Tags',
       icon: Tags,
-      Content: ({ input }) => <TagsPanel context={context} selection={input} />,
+      Content: ({ input }) => (
+        <TagsPanel context={context} selection={input} analysis={analysis} />
+      ),
     })
     const browse = (tag?: string) => view.open({ tag })
     context.commands.register({

@@ -1,10 +1,20 @@
 import assert from 'node:assert/strict'
+import { once } from 'node:events'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
-import { electron } from './electron.mjs'
+import { electron, stopElectronTree } from './electron.mjs'
+
+function processState(pid) {
+  try {
+    process.kill(pid, 0)
+    return 'live'
+  } catch (error) {
+    return error.code
+  }
+}
 
 test('pinned Electron exposes exact utility identity and passive JS observation preserves fatal policy', {
   timeout: 30000,
@@ -41,9 +51,24 @@ test('pinned Electron exposes exact utility identity and passive JS observation 
     },
   })
   const app = await electron.launch({ args: [root] })
+  const owned = []
   t.after(async () => {
     await app.close().catch(() => {})
-    await rm(root, { recursive: true, force: true })
+    try {
+      await rm(root, { recursive: true, force: true })
+    } catch (error) {
+      console.error(
+        'diagnostic fixture process state:',
+        JSON.stringify(
+          owned.map(({ pid, type }) => ({
+            pid,
+            type,
+            state: processState(pid),
+          })),
+        ),
+      )
+      throw error
+    }
   })
   await app.firstWindow()
   const policy = await app.evaluate(() => globalThis.diagnosticFixture.policy())
@@ -100,17 +125,30 @@ test('pinned Electron exposes exact utility identity and passive JS observation 
   assert.ok(crash.report.includes(`"reason":"${crash.reason}"`))
   assert.ok(crash.report.includes(`"exitCode":${crash.exitCode}`))
   assert.ok(crash.report.includes('unavailable-native'))
-  app.process().kill('SIGKILL')
-  await new Promise((resolve) => app.process().once('exit', resolve))
+  owned.push(
+    ...(await app.evaluate(({ app }) =>
+      app.getAppMetrics().map(({ pid, type }) => ({ pid, type })),
+    )),
+  )
+  const crashed = app.process()
+  const closed = once(crashed, 'close')
+  stopElectronTree(crashed)
+  await closed
   const restarted = await electron.launch({ args: [root] })
   try {
     await restarted.firstWindow()
+    owned.push(
+      ...(await restarted.evaluate(({ app }) =>
+        app.getAppMetrics().map(({ pid, type }) => ({ pid, type })),
+      )),
+    )
     const previous = await restarted.evaluate(() =>
       globalThis.diagnosticFixture.report(),
     )
     assert.match(previous.text, /PREVIOUS_RUN_UNCONFIRMED/)
     assert.doesNotMatch(previous.text, /PRIVATE_|hibi-diagnostic-/)
   } finally {
-    await restarted.close()
+    // This profile cannot be removed until Playwright has closed its transport.
+    await restarted.close({ waitForTransport: true })
   }
 })

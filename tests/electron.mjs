@@ -44,7 +44,7 @@ export function waitForElectronExit(child, closePromise) {
   })
 }
 
-function stopElectronTree(child) {
+export function stopElectronTree(child) {
   if (child.exitCode !== null || child.signalCode !== null) return
   if (process.platform === 'win32') {
     const result = spawnSync(
@@ -79,14 +79,17 @@ export const electron = {
     const close = application.close.bind(application)
     let slowStartTimer
     let closing = false
-    application.close = async () => {
+    application.close = async ({ waitForTransport = false } = {}) => {
       closing = true
       clearTimeout(slowStartTimer)
       const child = application.process()
       let timer
       try {
+        const pendingClose = close()
         await Promise.race([
-          waitForElectronExit(child, close()),
+          waitForTransport
+            ? pendingClose
+            : waitForElectronExit(child, pendingClose),
           new Promise((_, reject) => {
             timer = setTimeout(() => {
               reject(new Error('Electron test cleanup exceeded 20 seconds'))

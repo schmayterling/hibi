@@ -10,7 +10,7 @@ import {
   shortcutLabels,
   validateHotkeys,
 } from '../src/shared/hotkeys.ts'
-import { electron } from './electron.mjs'
+import { electron, waitForAppState } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 test('hotkey validation rejects conflicts and preserves standard editing keys', () => {
@@ -223,7 +223,7 @@ test('rebind, conflict, clear, reset, native menus, and relaunch persistence', {
       exact: true,
     })
     .click()
-  await page.waitForFunction(() =>
+  await waitForAppState(page, () =>
     window.hibi.getHotkeys().then((keys) => keys.find === ''),
   )
   await page
@@ -232,7 +232,7 @@ test('rebind, conflict, clear, reset, native menus, and relaunch persistence', {
       exact: true,
     })
     .click()
-  await page.waitForFunction(() =>
+  await waitForAppState(page, () =>
     window.hibi.getHotkeys().then((keys) => !!keys.find),
   )
   await page.evaluate(() =>
@@ -290,7 +290,7 @@ test('rebind, conflict, clear, reset, native menus, and relaunch persistence', {
   await page.getByRole('combobox', { name: /search commands/i }).press('Enter')
   await page.getByRole('tab', { name: /^hotkeys$/i, exact: true }).click()
   await page.getByRole('button', { name: /^reset all$/i, exact: true }).click()
-  await page.waitForFunction(() =>
+  await waitForAppState(page, () =>
     window.hibi.getHotkeys().then((keys) => keys.palette.endsWith('+k')),
   )
   assert.deepEqual(

@@ -77,10 +77,8 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await page.locator('.tiptap[contenteditable="true"]').waitFor()
   page.setDefaultTimeout(8000)
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.isContentEditable,
-  )
   assert.deepEqual(await page.evaluate(() => window.richAttachments), [
     'alpha',
     'zeta',

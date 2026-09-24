@@ -194,6 +194,16 @@ export async function waitForDocumentEditor(application, page) {
   }
 }
 
+// Playwright's waitForFunction treats a returned Promise as truthy before it settles.
+export async function waitForAppState(page, check, timeout = 10000) {
+  const deadline = Date.now() + timeout
+  do {
+    if (await page.evaluate(check)) return
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  } while (Date.now() < deadline)
+  throw new Error('Timed out waiting for app state')
+}
+
 export async function crashAndReload(application) {
   // Drain pending locator disposal before replacing Playwright's debug target.
   await (await application.firstWindow()).evaluate(() => undefined)

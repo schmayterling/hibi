@@ -10,7 +10,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, waitForAppState } from './electron.mjs'
 
 test('workspace can show all files and opens unsupported text in source only', {
   timeout: 60000,
@@ -58,7 +58,7 @@ test('workspace can show all files and opens unsupported text in source only', {
     name: 'Show all files in sidebar',
   })
   await toggle.click()
-  await page.waitForFunction(() =>
+  await waitForAppState(page, () =>
     window.hibi.getWorkspaceSettings().then((state) => state.showAllFiles),
   )
   const shown = await entries()
@@ -95,7 +95,7 @@ test('workspace can show all files and opens unsupported text in source only', {
     true,
   )
   await source.fill('{"enabled":false}')
-  await page.waitForFunction(() =>
+  await waitForAppState(page, () =>
     window.hibi
       .getDocument()
       .then(
@@ -112,7 +112,7 @@ test('workspace can show all files and opens unsupported text in source only', {
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
   await page.getByRole('tab', { name: 'Workspace', exact: true }).click()
   await toggle.click()
-  await page.waitForFunction(() =>
+  await waitForAppState(page, () =>
     window.hibi.getWorkspaceSettings().then((state) => !state.showAllFiles),
   )
   assert.ok(!(await entries()).some((entry) => entry.name === 'config.json'))

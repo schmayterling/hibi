@@ -125,6 +125,7 @@ console.log(
       (result) => result.capture?.status === 'ok' && result.capture.value.empty,
     ),
     captureTimeout: count((result) => result.capture?.status === 'timeout'),
+    captureError: count((result) => result.capture?.status === 'error'),
     cleanupErrors: count((result) => result.cleanup || result.profileCleanup),
   }),
 )

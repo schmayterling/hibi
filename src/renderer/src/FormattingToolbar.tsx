@@ -530,6 +530,12 @@ export function useFormattingToolbar(
       toolbar.batch(() => {
         const { editor, disabled } = latest.current
         const useSource = inSource()
+        const sourceState = useSource ? source.current?.inspect() : null
+        const inTable =
+          !useSource &&
+          !!editor &&
+          !editor.isDestroyed &&
+          editor.isActive('table')
         const canFormat = (action: Action, editor: Editor) => {
           try {
             return action.rich(editor.can().chain(), editor).run()
@@ -538,23 +544,26 @@ export function useFormattingToolbar(
           }
         }
         actions.forEach((action, index) => {
-          const state = useSource
-            ? source.current?.state(action.id)
-            : editor && !editor.isDestroyed
-              ? {
-                  pressed:
-                    !!action.active &&
-                    editor.isActive(action.active, action.attrs),
-                  disabled: !editor.isEditable || !canFormat(action, editor),
-                }
-              : null
+          const hiddenTable = !!action.table && !inTable
+          const state = hiddenTable
+            ? null
+            : useSource
+              ? sourceState?.state(action.id, !!action.active)
+              : editor && !editor.isDestroyed
+                ? {
+                    supported: true,
+                    pressed:
+                      !!action.active &&
+                      editor.isActive(action.active, action.attrs),
+                    disabled: !editor.isEditable || !canFormat(action, editor),
+                  }
+                : null
           handles[index]?.update({
             ...(action.active ? { pressed: state?.pressed ?? false } : {}),
-            disabled: disabled || !state || state.disabled,
+            disabled: disabled || hiddenTable || !state || state.disabled,
             hidden:
-              (!latest.current.markdownMode &&
-                !source.current?.state(action.id).supported) ||
-              (!!action.table && (useSource || !editor?.isActive('table'))),
+              (!latest.current.markdownMode && !state?.supported) ||
+              hiddenTable,
           })
         })
       })

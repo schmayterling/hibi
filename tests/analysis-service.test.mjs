@@ -9,18 +9,22 @@ import { electron, waitForElectronExit } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 test('electron cleanup trusts clean process exit but reports close and crash failures', async () => {
-  const child = () =>
-    Object.assign(new EventEmitter(), {
+  const child = () => {
+    const process = Object.assign(new EventEmitter(), {
       exitCode: null,
       signalCode: null,
-      stdout: { destroy() {} },
-      stderr: { destroy() {} },
+      drained: 0,
     })
+    process.stdout = { destroy: () => process.drained++ }
+    process.stderr = { destroy: () => process.drained++ }
+    return process
+  }
   const clean = child()
   const closed = waitForElectronExit(clean, new Promise(() => {}))
   clean.exitCode = 0
   clean.emit('exit', 0, null)
   await closed
+  assert.equal(clean.drained, 2)
 
   const live = child()
   let done = false
@@ -33,15 +37,31 @@ test('electron cleanup trusts clean process exit but reports close and crash fai
   live.emit('exit', 0, null)
   await waiting
 
+  const late = child()
+  let rejectClose
+  const lateClose = waitForElectronExit(
+    late,
+    new Promise((_, reject) => {
+      rejectClose = reject
+    }),
+  )
+  late.exitCode = 0
+  late.emit('exit', 0, null)
+  rejectClose(new Error('close failed after exit'))
+  await assert.rejects(lateClose, /close failed after exit/)
+
+  const early = child()
   await assert.rejects(
-    waitForElectronExit(child(), Promise.reject(new Error('close failed'))),
+    waitForElectronExit(early, Promise.reject(new Error('close failed'))),
     /close failed/,
   )
+  assert.equal(early.listenerCount('exit'), 0)
   const crashed = child()
   const failed = waitForElectronExit(crashed, new Promise(() => {}))
   crashed.signalCode = 'SIGKILL'
   crashed.emit('exit', null, 'SIGKILL')
   await assert.rejects(failed, /signal SIGKILL/)
+  assert.equal(crashed.drained, 2)
 })
 
 test('analysis grants contain only exact ranges from the active source', () => {

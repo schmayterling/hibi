@@ -1,39 +1,71 @@
+import { spawnSync } from 'node:child_process'
 import { _electron } from 'playwright'
 
 // Playwright can wait for inherited stdio to close after Electron itself exits.
 export function waitForElectronExit(child, closePromise) {
   return new Promise((resolve, reject) => {
+    let settled = false
     let closeSettled = false
-    const finish = (code, signal) => {
-      child.off('exit', finish)
+    let exited = false
+    let grace
+    const finish = (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(grace)
+      child.off('exit', onExit)
+      if (exited) {
+        child.stdout?.destroy()
+        child.stderr?.destroy()
+      }
+      if (error) reject(error)
+      else resolve()
+    }
+    const onExit = (code, signal) => {
+      exited = true
       if (code !== 0 || signal !== null) {
-        reject(new Error(`Electron exited with code ${code}, signal ${signal}`))
+        finish(new Error(`Electron exited with code ${code}, signal ${signal}`))
         return
       }
-      const drain = setTimeout(() => {
-        if (!closeSettled) {
-          child.stdout?.destroy()
-          child.stderr?.destroy()
-        }
-      }, 1000)
-      drain.unref()
-      resolve()
+      // Playwright may never settle after a clean exit; allow prompt errors first.
+      if (closeSettled) finish()
+      else grace = setTimeout(() => finish(), 100)
     }
-    child.once('exit', finish)
+    child.once('exit', onExit)
     closePromise.then(
       () => {
         closeSettled = true
+        if (exited) finish()
       },
-      (error) => {
-        closeSettled = true
-        child.off('exit', finish)
-        reject(error)
-      },
+      (error) => finish(error),
     )
     if (child.exitCode !== null || child.signalCode !== null) {
-      finish(child.exitCode, child.signalCode)
+      onExit(child.exitCode, child.signalCode)
     }
   })
+}
+
+function stopElectronTree(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  if (process.platform === 'win32') {
+    const result = spawnSync(
+      'taskkill',
+      ['/PID', String(child.pid), '/T', '/F'],
+      {
+        windowsHide: true,
+        timeout: 5000,
+      },
+    )
+    if (result.status === 0) return
+  } else {
+    // Playwright launches Electron as its own process group on Unix.
+    try {
+      process.kill(-child.pid, 'SIGKILL')
+      return
+    } catch {
+      // Fall back to the main process if the group has already exited.
+    }
+  }
+  child.kill('SIGKILL')
 }
 
 // Local tests never take desktop focus. Hosted runners use their isolated desktop
@@ -57,11 +89,15 @@ export const electron = {
           waitForElectronExit(child, close()),
           new Promise((_, reject) => {
             timer = setTimeout(() => {
-              child.kill('SIGKILL')
               reject(new Error('Electron test cleanup exceeded 20 seconds'))
             }, 20000)
           }),
         ])
+      } catch (error) {
+        stopElectronTree(child)
+        child.stdout?.destroy()
+        child.stderr?.destroy()
+        throw error
       } finally {
         clearTimeout(timer)
       }

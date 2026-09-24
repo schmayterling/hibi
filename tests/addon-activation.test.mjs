@@ -117,7 +117,9 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
     'documents',
   ])
   assert.doesNotMatch(loaded(), /src\/addons\/sdk\.ts|@codemirror\//)
-  await page.getByRole('button', { name: 'Source view', exact: true }).press('Enter')
+  await page
+    .getByRole('button', { name: 'Source view', exact: true })
+    .press('Enter')
   await page.waitForFunction(
     () => document.querySelector('.cm-content')?.isContentEditable,
   )

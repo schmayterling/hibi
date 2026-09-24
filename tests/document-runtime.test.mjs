@@ -134,6 +134,37 @@ test('inactive sessions stay addressable and accept their own save acknowledgmen
   runtime.dispose()
 })
 
+test('focus changes active session without materializing or reidentifying its source', () => {
+  const { runtime } = fixture()
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('first', { tabs }))
+  const first = runtime.session()
+  const snapshot = first.snapshot()
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  const firstDocument = runtime.get('one')
+  assert.equal(firstDocument.markdown, 'first')
+  first.counters(true)
+  const {
+    markdown: _markdown,
+    savedMarkdown: _savedMarkdown,
+    ...metadata
+  } = document('first', { tabs })
+  assert.equal(runtime.focus(metadata)?.tabId, 'one')
+  assert.equal(runtime.session(), first)
+  assert.equal(first.snapshot(), snapshot)
+  assert.equal(runtime.get(), firstDocument)
+  assert.equal(runtime.get().markdown, 'first')
+  assert.equal(first.counters().materializations, 0)
+  assert.equal(runtime.focus({ ...metadata, contentVersion: 99 }), null)
+  runtime.dispose()
+})
+
 test('runtime treats whole-source line-ending transforms as explicit atomic compatibility edits', () => {
   const { runtime, operations } = fixture()
   runtime.activate(document('a\r\nb\n'))

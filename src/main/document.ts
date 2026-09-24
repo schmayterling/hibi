@@ -21,9 +21,9 @@ import {
 import { app, type BrowserWindow, dialog } from 'electron'
 import type {
   AutosaveResult,
+  DocumentFocus,
   DocumentState,
   DocumentTab,
-  DocumentTabPreview,
 } from '../shared/desktop'
 import { MAX_DOCUMENT_BYTES } from '../shared/desktop'
 import { HISTORY_CHANNELS } from '../shared/history'
@@ -312,13 +312,6 @@ export function getDocumentTabs(): DocumentTab[] {
     dirty: updateTabDirty(id, draft),
   }))
 }
-export function getDocumentTabPreview(id: unknown): DocumentTabPreview {
-  storeTab()
-  if (typeof id !== 'string' || !tabs.has(id))
-    throw new Error('This tab is no longer open.')
-  const tab = getDocumentTabs().find((item) => item.id === id)!
-  return { ...tab, markdown: textOf(tabs.get(id)!.source.snapshot()) }
-}
 export function hasUnsavedDocuments() {
   storeTab()
   return dirtyTabs.size > 0
@@ -357,6 +350,37 @@ export async function selectDocumentTab(
   revision++
   refreshDirtyIndicator(window)
   return getDocument()
+}
+
+/** Change command focus without refreshing a visible editor's document or revision. */
+export async function focusDocumentTab(
+  window: BrowserWindow,
+  id: unknown,
+): Promise<DocumentFocus> {
+  storeTab()
+  if (typeof id !== 'string' || !tabs.has(id))
+    throw new Error('This tab is no longer open.')
+  if (id !== activeTab) {
+    activateTab(id)
+    revision = source.snapshot().document.revision
+    refreshDirtyIndicator(window)
+  }
+  const currentPath = getDocumentPath()
+  const current = getDocumentSource().snapshot()
+  return {
+    tabId: activeTab,
+    tabs: getDocumentTabs(),
+    tabsEnabled,
+    id: currentPath
+      ? createHash('sha256').update(currentPath).digest('hex')
+      : draftId,
+    name: currentPath ? basename(currentPath) : untitledName,
+    dirty: dirty(source, saved) || !!pendingPath,
+    ephemeral: !!pendingPath,
+    revision,
+    contentVersion: current.version,
+    canAutosave: path !== null,
+  }
 }
 
 async function confirmTabDiscard(window: BrowserWindow, id: string) {

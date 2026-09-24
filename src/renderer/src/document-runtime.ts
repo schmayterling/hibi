@@ -1,4 +1,8 @@
-import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop.ts'
+import {
+  type DocumentFocus,
+  type DocumentState,
+  MAX_DOCUMENT_BYTES,
+} from '../../shared/desktop.ts'
 import { sourceChange } from '../../shared/document-journal.ts'
 import { DocumentSession } from '../../shared/document-session.ts'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
@@ -19,6 +23,14 @@ type Listener = (
   document: DocumentState,
   changes: readonly RawEdit[] | null,
 ) => void
+const sameTabs = (a: DocumentState['tabs'], b: DocumentState['tabs']) =>
+  a.length === b.length &&
+  a.every(
+    (tab, index) =>
+      tab.id === b[index]?.id &&
+      tab.name === b[index].name &&
+      tab.dirty === b[index].dirty,
+  )
 
 /** Per-tab source/history ownership. React and legacy addons receive immutable read facades. */
 export class DocumentRuntime {
@@ -290,6 +302,31 @@ export class DocumentRuntime {
     }
     return this.get()!
   }
+  focus(document: DocumentFocus) {
+    const session = this.session(document.tabId)
+    if (
+      !session ||
+      session.snapshot().version !== document.contentVersion ||
+      session.snapshot().document.revision !== document.revision
+    )
+      return null
+    const previous = this.#metadata.get(document.tabId)
+    const unchanged =
+      previous &&
+      previous.id === document.id &&
+      previous.name === document.name &&
+      previous.ephemeral === document.ephemeral &&
+      previous.canAutosave === document.canAutosave &&
+      previous.tabsEnabled === document.tabsEnabled &&
+      sameTabs(previous.tabs, document.tabs)
+    this.#active = session
+    this.#activeId = document.tabId
+    if (!unchanged) {
+      this.#metadata.set(document.tabId, document)
+      this.#cached.delete(document.tabId)
+    }
+    return this.get()!
+  }
   acknowledgeSave(document: DocumentState) {
     const current = this.get(document.tabId),
       session = this.session(document.tabId)
@@ -332,9 +369,20 @@ export class DocumentRuntime {
     source: string,
     origin: SourceOperation['origin'] = 'addon',
     group: string = crypto.randomUUID(),
+    id?: string,
+    viewId = 'default',
   ) {
-    const edit = this.#replacement(source)
-    return edit?.session.edit(edit.changes, origin, group) ?? null
+    const edit = this.#replacement(source, id)
+    return (
+      edit?.session.edit(
+        edit.changes,
+        origin,
+        group,
+        undefined,
+        undefined,
+        viewId,
+      ) ?? null
+    )
   }
   beginReplace(source: string, group: string, id?: string, viewId = 'default') {
     const edit = this.#replacement(source, id)

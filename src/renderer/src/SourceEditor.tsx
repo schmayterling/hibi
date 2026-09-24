@@ -90,6 +90,7 @@ const sameReferenceSyntax = (
 export function SourceEditor({
   document,
   viewId = 'default',
+  focused = true,
   editTarget,
   markdownMode,
   markdownLanguage,
@@ -113,6 +114,7 @@ export function SourceEditor({
 }: {
   document: DocumentState
   viewId?: string
+  focused?: boolean
   editTarget: boolean
   markdownMode: boolean
   markdownLanguage?: typeof import('@codemirror/lang-markdown').markdown
@@ -181,8 +183,14 @@ export function SourceEditor({
   const [languageReady, setLanguageReady] = useState(!codeLanguage)
   const [inputError, setInputError] = useState('')
   const inputReady = installedExtensions === sourceExtensions && languageReady
-  const editContext = useRef({ document, editTarget, disabled, inputReady })
-  editContext.current = { document, editTarget, disabled, inputReady }
+  const editContext = useRef({
+    document,
+    editTarget,
+    focused,
+    disabled,
+    inputReady,
+  })
+  editContext.current = { document, editTarget, focused, disabled, inputReady }
   const [bridgeRetry, retryBridge] = useState(0)
   const session = documentRuntime.session(document.tabId)!
   // biome-ignore lint/correctness/useExhaustiveDependencies: retry refreshes a bridge whose snapshot went stale before attachment.
@@ -627,6 +635,7 @@ export function SourceEditor({
         const context = editContext.current
         const current = editorDocument.get()
         if (
+          !context.focused ||
           !context.editTarget ||
           context.disabled ||
           !context.inputReady ||
@@ -644,6 +653,11 @@ export function SourceEditor({
     )
     const unregisterEdits = documentEdits.register((request) => {
       const context = editContext.current
+      if (!context.focused)
+        return {
+          status: 'unsupported-view',
+          message: 'Choose this pane before applying the edit.',
+        }
       const current = editorDocument.get()
       if (
         !current ||

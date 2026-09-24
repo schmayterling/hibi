@@ -132,7 +132,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'setUiCase',
         'getDocument',
         'selectDocumentTab',
-        'getDocumentTabPreview',
+        'focusDocumentTab',
         'closeDocumentTab',
         'moveDocumentTab',
         'setTabsEnabled',

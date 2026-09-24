@@ -853,7 +853,7 @@
     "src/main/updates.ts"
   ],
   "349ceed84d07": [
-    "src/renderer/src/HibiSettings.tsx"
+    "src/renderer/src/LicenseSettings.tsx"
   ],
   "ca7ac7cbc82a": [
     "src/renderer/src/SettingsScreen.tsx"
@@ -862,7 +862,7 @@
     "src/ui/DialogProvider.tsx"
   ],
   "a1b6ea912527": [
-    "src/renderer/src/HibiSettings.tsx"
+    "src/renderer/src/LicenseSettings.tsx"
   ],
   "45e0434567cb": [
     "src/renderer/src/AddonViewContent.tsx"
@@ -2244,10 +2244,10 @@
     "src/addons/_shared/format-renderer.tsx"
   ],
   "2de539a660eb": [
-    "src/renderer/src/HibiSettings.tsx"
+    "src/renderer/src/LicenseSettings.tsx"
   ],
   "c1788f811fbc": [
-    "src/renderer/src/HibiSettings.tsx"
+    "src/renderer/src/LicenseSettings.tsx"
   ],
   "2981eae03a7a": [
     "src/addons/math/PackageSettings.tsx"
@@ -2766,8 +2766,9 @@
     "src/shared/hotkeys.ts"
   ],
   "1a1b83db3be8": [
-    "src/renderer/src/HibiSettings.tsx",
-    "src/renderer/src/main.tsx"
+    "src/renderer/src/LicenseSettings.tsx",
+    "src/renderer/src/SettingsScreen.tsx",
+    "src/renderer/src/settings-categories.ts"
   ],
   "2b249c749333": [
     "src/renderer/src/SourceEditor.tsx"

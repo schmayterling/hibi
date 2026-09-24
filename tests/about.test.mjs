@@ -59,7 +59,7 @@ test('license catalog retains dependency and palette notices, excluding build to
   )
 })
 
-test('hibi opens first, sponsor uses a fixed URL, and license dialogs stay readable', {
+test('licenses open on their own settings page and dialogs stay readable', {
   timeout: 45000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-about-'))
@@ -86,38 +86,7 @@ test('hibi opens first, sponsor uses a fixed URL, and license dialogs stay reada
   )
   const panel = page.getByRole('tabpanel', { name: /^hibi$/i, exact: true })
   await panel.getByText(/^version 0\.1\.0$/i, { exact: true }).waitFor()
-  const react = panel
-    .getByRole('button')
-    .filter({ has: page.locator('.license-name', { hasText: /^react19/ }) })
-  await react.waitFor()
-  await page.evaluate(() => document.fonts.ready)
-  assert.deepEqual(
-    await react.evaluate((element) => {
-      const style = getComputedStyle(element)
-      return [style.borderRadius, style.paddingLeft, style.paddingRight]
-    }),
-    ['0px', '16px', '16px'],
-  )
-  const catalog = await page.evaluate(() => window.hibi.getLicenses())
-  const hoverBounds = await react.evaluate((element) => {
-    const row = element.getBoundingClientRect(),
-      card = element.parentElement.getBoundingClientRect()
-    return [row.left - card.left, card.right - row.right]
-  })
-  assert.ok(
-    hoverBounds.every((value) => Math.abs(value - 1) < 1),
-    JSON.stringify(hoverBounds),
-  )
-  assert.equal(await panel.locator('.license-row').count(), catalog.length)
-  assert.ok(catalog.every((entry) => !('text' in entry)))
-  await assert.rejects(
-    page.evaluate(() => window.hibi.getLicense('../package.json')),
-    /This license is no longer available\./,
-  )
-  await assert.rejects(
-    page.evaluate(() => window.hibi.getLicense(42)),
-    /Choose a license to view\./,
-  )
+  assert.equal(await panel.locator('.license-row').count(), 0)
   await app.evaluate(({ shell }) => {
     shell.openExternal = async (url) => {
       globalThis.openedUrl = url
@@ -146,6 +115,52 @@ test('hibi opens first, sponsor uses a fixed URL, and license dialogs stay reada
     path: 'test-results/hibi-settings.png',
     animations: 'disabled',
   })
+  await sidebar.getByRole('tab', { name: 'Open source licenses' }).click()
+  const licensesPanel = page.getByRole('tabpanel', {
+    name: 'Open source licenses',
+  })
+  await licensesPanel
+    .getByRole('heading', { name: 'Open source licenses' })
+    .waitFor()
+  const react = licensesPanel
+    .getByRole('button')
+    .filter({ has: page.locator('.license-name', { hasText: /^react19/ }) })
+  await react.waitFor()
+  await page.evaluate(() => document.fonts.ready)
+  assert.deepEqual(
+    await react.evaluate((element) => {
+      const style = getComputedStyle(element)
+      return [style.borderRadius, style.paddingLeft, style.paddingRight]
+    }),
+    ['0px', '16px', '16px'],
+  )
+  const catalog = await page.evaluate(() => window.hibi.getLicenses())
+  const hoverBounds = await react.evaluate((element) => {
+    const row = element.getBoundingClientRect(),
+      card = element.parentElement.getBoundingClientRect()
+    return [row.left - card.left, card.right - row.right]
+  })
+  assert.ok(
+    hoverBounds.every((value) => Math.abs(value - 1) < 1),
+    JSON.stringify(hoverBounds),
+  )
+  assert.equal(
+    await licensesPanel.locator('.license-row').count(),
+    catalog.length,
+  )
+  assert.ok(catalog.every((entry) => !('text' in entry)))
+  await assert.rejects(
+    page.evaluate(() => window.hibi.getLicense('../package.json')),
+    /This license is no longer available\./,
+  )
+  await assert.rejects(
+    page.evaluate(() => window.hibi.getLicense(42)),
+    /Choose a license to view\./,
+  )
+  await page.screenshot({
+    path: 'test-results/licenses-settings.png',
+    animations: 'disabled',
+  })
   await react.press('Enter')
   const dialog = page.getByRole('dialog', { name: /^react$/i, exact: true })
   await dialog.locator('.license-text').waitFor()
@@ -167,7 +182,7 @@ test('hibi opens first, sponsor uses a fixed URL, and license dialogs stay reada
   for (const width of [480, 1000]) {
     await page.setViewportSize({ width, height: 720 })
     assert.equal(
-      await panel.evaluate((el) => el.scrollWidth <= el.clientWidth),
+      await licensesPanel.evaluate((el) => el.scrollWidth <= el.clientWidth),
       true,
     )
     await react.press('Enter')

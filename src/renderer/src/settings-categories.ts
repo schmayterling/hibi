@@ -13,6 +13,7 @@ import {
   Palette,
   PanelTop,
   Puzzle,
+  ScrollText,
   Settings,
   Sigma,
   Tags,
@@ -25,6 +26,12 @@ import { coreSettingsCategories } from './settings-pages'
 
 export const settingsCategories = [
   { id: 'hibi', label: 'Hibi', icon: File, category: 'general' },
+  {
+    id: 'licenses',
+    label: 'Open source licenses',
+    icon: ScrollText,
+    category: 'general',
+  },
   { id: 'workspace', label: 'Workspace', icon: Folder, category: 'general' },
   { id: 'editor', label: 'Editor', icon: FileText, category: 'editing' },
   { id: 'formats', label: 'Formats', icon: FileText, category: 'editing' },

@@ -1427,12 +1427,6 @@ function App() {
           )
         },
       })),
-      {
-        id: 'settings.licenses',
-        category: 'settings',
-        label: 'Open source licenses',
-        run: () => openSetting('hibi', 'open-source-licenses'),
-      },
       ...actions.map(({ id, label }) => ({
         id: `shortcut.${id}`,
         category: 'settings' as const,
@@ -1485,7 +1479,7 @@ function App() {
       ...settingsCategories.map(({ id, label }) => ({
         id: `settings.${id}`,
         category: 'settings' as const,
-        label: `Open ${label} settings`,
+        label: id === 'licenses' ? label : `Open ${label} settings`,
         run: () => openSetting(id),
       })),
       ...registeredSettings.pages

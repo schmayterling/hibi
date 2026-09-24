@@ -39,6 +39,7 @@ import { ToolbarSettings } from './EditorToolbar'
 import { FormatsSettings } from './FormatsSettings'
 import { HibiSettings } from './HibiSettings'
 import { HotkeySettings } from './HotkeySettings'
+import { LicenseSettings } from './LicenseSettings'
 import { ModalEditingSettings } from './ModalEditingSettings'
 import { NotificationSettings } from './NotificationSettings'
 import type { StatusBarVisibility } from './StatusBar'
@@ -375,6 +376,17 @@ export function SettingsScreen({
           >
             {(discover || (open && (category === 'hibi' || searching))) && (
               <HibiSettings info={info} />
+            )}
+          </section>
+          <section
+            id="settings-licenses"
+            role="tabpanel"
+            aria-labelledby="category-licenses"
+            aria-label="Open source licenses"
+            hidden={category !== 'licenses'}
+          >
+            {(discover || (open && category === 'licenses')) && (
+              <LicenseSettings />
             )}
           </section>
           <section

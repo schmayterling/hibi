@@ -77,4 +77,4 @@ On macOS, install Hibi in Applications once. Later updates replace the installed
 
 Switching channels does not downgrade your installed version. If no build is available yet, or a check or download fails, you can retry from this page.
 
-The **Hibi** page shows the app version and creator. **Sponsor on GitHub** opens [may's sponsor page](https://github.com/sponsors/schmayterling). Select an entry under **Open source licenses** to read its full notice offline.
+The **Hibi** page shows the app version and creator. **Sponsor on GitHub** opens [may's sponsor page](https://github.com/sponsors/schmayterling). Open **Open source licenses** in the settings sidebar, then select an entry to read its full notice offline.

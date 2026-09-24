@@ -1,0 +1,24 @@
+name: ci windows repro b6e7e32
+on:
+  push:
+    branches: [may/ci-windows-repro-b6e7e32]
+permissions:
+  contents: read
+jobs:
+  desktop:
+    name: windows shard 1 (${{ matrix.trial }})
+    runs-on: windows-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        trial: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/ci
+        with:
+          clean: 'true'
+          shard: '1/2'

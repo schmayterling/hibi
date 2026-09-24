@@ -126,7 +126,7 @@ export const journalMessageBytes = (change: JournalMessage) => {
 }
 
 /** Both legacy replacements and atomic batches commit to one persistent recovery replica. */
-export function createJournalReceiver(read: () => SourceStore) {
+export function createJournalReceiver(read: (tabId: string) => SourceStore) {
   const receipts = new Map<
     string,
     { change: JournalMessage; ack: DocumentAcknowledgment; bytes: number }
@@ -142,9 +142,9 @@ export function createJournalReceiver(read: () => SourceStore) {
         )
       return previous.ack
     }
-    const store = read(),
-      current = store.snapshot(),
-      document = identity(change)
+    const document = identity(change),
+      store = read(document.tabId),
+      current = store.snapshot()
     if (
       current.document.tabId !== document.tabId ||
       current.document.revision !== document.revision ||

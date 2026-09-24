@@ -17,12 +17,13 @@ async function closeProbe(app, watchdog, fired, name, preserveFailure = false) {
   } finally {
     clearTimeout(watchdog)
   }
-  if (fired() || error)
+  const watchdogFired = fired()
+  if (watchdogFired || error)
     console.error(
       'source format cleanup:',
       JSON.stringify({
         name,
-        watchdogFired: fired(),
+        watchdogFired,
         closeError: error ? String(error).slice(0, 200) : null,
         closeMs: Math.round(performance.now() - started),
         pid: child.pid,
@@ -30,7 +31,9 @@ async function closeProbe(app, watchdog, fired, name, preserveFailure = false) {
         signalCode: child.signalCode,
       }),
     )
-  if (error && !preserveFailure) throw error
+  if (preserveFailure) return
+  if (error) throw error
+  if (watchdogFired) throw new Error(`${name} Electron watchdog expired.`)
 }
 
 test('lazy rich startup applies view attributes after mounting and accepts native input', {

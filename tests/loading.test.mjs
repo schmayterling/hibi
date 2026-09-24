@@ -13,7 +13,7 @@ test('startup placeholder is styled before javascript runs', {
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
   t.after(async () => {
-    await app.close()
+    await app.close({ trace: true })
     await rm(profile, { recursive: true, force: true })
   })
   await (await app.firstWindow())

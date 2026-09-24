@@ -5,7 +5,7 @@ import {
   ReactNodeViewRenderer,
 } from '@tiptap/react'
 import { Pencil } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { errorMessage } from '../../shared/errors'
 import { fencedBlock, fenceSource } from '../_shared/fenced-block'
 import type { AddonContext } from '../api'
@@ -48,13 +48,17 @@ function Form({
 export function mermaidNode(context: AddonContext) {
   function View({ node, editor, getPos, updateAttributes }: NodeViewProps) {
     const source = String(node.attrs.source ?? '')
+    const scheme = useSyncExternalStore(
+      context.colorschemes.subscribe,
+      context.colorschemes.getActive,
+    )
     const [image, setImage] = useState('')
     const [error, setError] = useState('')
     useEffect(() => {
       let active = true
       setImage('')
       setError('')
-      void renderDiagram(source)
+      void renderDiagram(source, scheme)
         .then((html) => {
           if (active)
             setImage(
@@ -69,7 +73,7 @@ export function mermaidNode(context: AddonContext) {
       return () => {
         active = false
       }
-    }, [source])
+    }, [source, scheme])
     return (
       <NodeViewWrapper className="mermaid-block" contentEditable={false}>
         <IconButton

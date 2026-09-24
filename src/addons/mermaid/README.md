@@ -6,6 +6,8 @@ Mermaid code blocks also render in Markdown. Click the pencil on a diagram to ed
 
 Open **Settings → Mermaid** to set the maximum diagram height. Taller diagrams scale proportionally to fit the editor pane and exported HTML.
 
+Diagram colors follow the active colorscheme, including system light and dark mode. HTML exports keep the colorscheme active when you export them.
+
 ```mermaid
 flowchart LR
   Idea --> Draft --> Publish

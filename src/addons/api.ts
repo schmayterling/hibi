@@ -474,6 +474,10 @@ export type AddonContext = {
     register: (scheme: ColorschemeInput) => () => void
     list: () => readonly Colorscheme[]
     getPreferences: () => ThemePreferences
+    /** The colorscheme resolved from the selected mode and system appearance. */
+    getActive: () => Colorscheme
+    /** Called when the active colorscheme or preferences change. */
+    subscribe: (listener: () => void) => () => void
     setPreferences: (preferences: Partial<ThemePreferences>) => void
   }
   dialogs: DialogApi

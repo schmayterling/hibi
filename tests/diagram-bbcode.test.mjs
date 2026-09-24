@@ -67,6 +67,45 @@ test('Mermaid and BBCode edit, preview, and export without executing content', {
   )
   const diagram = page.locator('.format-content img')
   await diagram.waitFor()
+  const svg = async (image) =>
+    decodeURIComponent((await image.getAttribute('src')).split(',')[1])
+  const waitForSurface = (selector) =>
+    page.waitForFunction((selector) => {
+      const source = document.querySelector(selector)?.getAttribute('src')
+      const surface = getComputedStyle(document.documentElement)
+        .getPropertyValue('--surface')
+        .trim()
+        .toLowerCase()
+      return (
+        source &&
+        decodeURIComponent(source.split(',')[1]).toLowerCase().includes(surface)
+      )
+    }, selector)
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.waitForFunction(
+    () => document.documentElement.dataset.appearance === 'light',
+  )
+  await waitForSurface('.format-content img')
+  const lightSvg = await svg(diagram)
+  const lightSurface = await page.evaluate(() =>
+    getComputedStyle(document.documentElement)
+      .getPropertyValue('--surface')
+      .trim(),
+  )
+  assert.ok(lightSvg.toLowerCase().includes(lightSurface.toLowerCase()))
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.waitForFunction(
+    () => document.documentElement.dataset.appearance === 'dark',
+  )
+  await waitForSurface('.format-content img')
+  const darkSvg = await svg(diagram)
+  const darkSurface = await page.evaluate(() =>
+    getComputedStyle(document.documentElement)
+      .getPropertyValue('--surface')
+      .trim(),
+  )
+  assert.ok(darkSvg.toLowerCase().includes(darkSurface.toLowerCase()))
+  assert.notEqual(darkSvg, lightSvg)
   assert.match(await diagram.getAttribute('src'), /^data:image\/svg\+xml,/)
   assert.ok(
     await diagram.evaluate((image) => image.complete && image.naturalWidth > 0),
@@ -113,9 +152,10 @@ test('Mermaid and BBCode edit, preview, and export without executing content', {
     await page.locator('.format-preview .document-notice').allTextContents(),
     [],
   )
-  const exportedDiagram = await readFile(exported, 'utf8')
-  assert.match(exportedDiagram, /data:image\/svg\+xml/)
-  assert.match(exportedDiagram, /max-height:240px/)
+  const exportedHtml = await readFile(exported, 'utf8')
+  assert.match(exportedHtml, /data:image\/svg\+xml/)
+  assert.match(exportedHtml, /max-height:240px/)
+  assert.ok(exportedHtml.includes(encodeURIComponent(darkSurface)))
   await open(
     'post.bbcode',
     '[b]bold [i]nested[/i][/b]\n[code][b]literal[/b][/code]\n[url=javascript:alert(1)]unsafe[/url]\n<img src=x onerror="window.compromised=true">',
@@ -148,7 +188,18 @@ test('Mermaid and BBCode edit, preview, and export without executing content', {
   await page.getByRole('button', { name: /^bold$/i, exact: true }).waitFor()
   await open('notes.md', '```mermaid\nflowchart LR\n  A --> B\n```', 'Markdown')
   await page.getByRole('button', { name: /^normal$/i }).click()
-  await page.locator('.mermaid-block img').waitFor()
+  const inlineDiagram = page.locator('.mermaid-block img')
+  await inlineDiagram.waitFor()
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.waitForFunction(
+    () => document.documentElement.dataset.appearance === 'light',
+  )
+  await waitForSurface('.mermaid-block img')
+  assert.ok(
+    (await svg(inlineDiagram))
+      .toLowerCase()
+      .includes(lightSurface.toLowerCase()),
+  )
   await page.getByRole('button', { name: /Edit Mermaid diagram/i }).click()
   await page
     .getByLabel('Mermaid source', { exact: true })

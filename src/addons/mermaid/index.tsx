@@ -1,7 +1,7 @@
-import { lazy } from 'react'
+import { lazy, useSyncExternalStore } from 'react'
 import css from '../_shared/format-style.css?inline'
 import { localPreview, localRender } from '../_shared/local-preview'
-import { defineAddon } from '../api'
+import { type DocumentPreviewProps, defineAddon } from '../api'
 import { mermaidNode } from './Block'
 import { mermaidLanguage } from './language'
 import manifest from './manifest'
@@ -33,7 +33,19 @@ export default defineAddon({
       group: 'Mermaid',
       level: 'block',
     })
-    const render = localRender(context, renderDiagram, previewCss)
+    const render = localRender(
+      context,
+      (source) => renderDiagram(source, context.colorschemes.getActive()),
+      previewCss,
+    )
+    const Preview = localPreview(context, render, previewCss)
+    function ThemedPreview(props: DocumentPreviewProps) {
+      const scheme = useSyncExternalStore(
+        context.colorschemes.subscribe,
+        context.colorschemes.getActive,
+      )
+      return <Preview key={scheme.id} {...props} />
+    }
     context.editor.registerDocumentFormat({
       id: 'mermaid',
       name: 'Mermaid',
@@ -41,7 +53,7 @@ export default defineAddon({
       language: mermaidLanguage,
       codeLanguage: 'mermaid',
       views: ['side-by-side', 'markdown'],
-      Preview: localPreview(context, render, previewCss),
+      Preview: ThemedPreview,
       render,
     })
     context.editor.registerSyntax({
@@ -75,6 +87,7 @@ export default defineAddon({
             if (code.parentElement)
               code.parentElement.outerHTML = await renderDiagram(
                 code.textContent ?? '',
+                context.colorschemes.getActive(),
               )
           }
           return { ...rendered, html: document.body.innerHTML }

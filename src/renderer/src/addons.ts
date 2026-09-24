@@ -615,6 +615,8 @@ export function useAddons(
               getPreferences: () => ({
                 ...colorschemes.snapshot().preferences,
               }),
+              getActive: () => colorschemes.snapshot().active,
+              subscribe: colorschemes.subscribe,
               setPreferences: (preferences) => {
                 if (!disposed) colorschemes.set(preferences)
               },

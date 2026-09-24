@@ -2,7 +2,7 @@
 
 # defineAddon
 
-Function · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L658)
+Function · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L662)
 
 Check an addon definition without changing it.
 

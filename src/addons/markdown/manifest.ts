@@ -5,7 +5,7 @@ import { authors } from '../authors'
 export default {
   id: 'markdown',
   name: 'Markdown',
-  settings: { category: 'editing', icon: 'file-text' },
+  settings: { icon: 'file-text' },
   apiVersion: 2,
   version: '1.0.1',
   kind: 'extension',

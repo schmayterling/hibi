@@ -147,7 +147,7 @@ test('sideloads reviewed packages disabled, discovers their settings/themes/comm
     0,
   )
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await pressShortcut(app, `${mod}+k`)
   await page
     .getByRole('combobox', { name: /search commands/i })
@@ -314,7 +314,7 @@ test('sideloads reviewed packages disabled, discovers their settings/themes/comm
     () => document.documentElement.dataset.colorscheme === 'hibi-dark',
   )
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page
     .locator('.setting-row')
     .filter({ has: page.locator('#addon-fixture-addon') })

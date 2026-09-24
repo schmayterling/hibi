@@ -198,7 +198,7 @@ test('github alerts edit in rich view, preview in split, and export with markers
   )
   await site.close()
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-github-markdown').click()
   await page
     .getByRole('button', { name: /^back to app$/i, exact: true })

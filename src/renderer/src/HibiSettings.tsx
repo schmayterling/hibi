@@ -2,37 +2,20 @@ import { ArrowUpRight, File, Heart } from 'lucide-react'
 import { type MouseEvent, useState } from 'react'
 import type { AppInfo } from '../../shared/desktop'
 import { Button, SettingRow } from '../../ui/Controls'
-import { useDialogs } from '../../ui/DialogProvider'
 import { Modal } from '../../ui/Modal'
 import { RecoveryScreen } from './RecoveryScreen'
 import { UpdateSettings } from './UpdateSettings'
 import './hibi-settings.css'
 
 export function HibiSettings({ info }: { info: AppInfo | null }) {
-  const dialogs = useDialogs()
-  const [sponsoring, setSponsoring] = useState(false)
   const [preview, setPreview] = useState(false)
-  async function sponsor() {
-    setSponsoring(true)
-    try {
-      await window.hibi.openSponsor()
-    } catch {
-      void dialogs.alert({
-        title: 'Could not open your browser',
-        description: 'Try again, or visit GitHub.com/sponsors/schmayterling.',
-        confirmLabel: 'Close',
-      })
-    } finally {
-      setSponsoring(false)
-    }
-  }
-  function openCreditLink(event: MouseEvent<HTMLAnchorElement>) {
+  function openExternalLink(event: MouseEvent<HTMLAnchorElement>) {
     event.preventDefault()
     void window.hibi.openAddonDocumentationLink(event.currentTarget.href)
   }
   return (
     <>
-      <h1>Hibi</h1>
+      <h1>About</h1>
       <div className="settings-group hibi-about">
         <div className="hibi-identity">
           <span className="hibi-mark" aria-hidden="true">
@@ -48,34 +31,44 @@ export function HibiSettings({ info }: { info: AppInfo | null }) {
         </div>
         <p className="hibi-credit">
           Made by <Heart size={12} aria-label="Love" /> with{' '}
-          <a href="https://github.com/schmayterling" onClick={openCreditLink}>
+          <a href="https://github.com/schmayterling" onClick={openExternalLink}>
             may
           </a>{' '}
           and{' '}
           <a
             href="https://github.com/schmayterling/hibi/graphs/contributors"
-            onClick={openCreditLink}
+            onClick={openExternalLink}
           >
             beloved contributors
           </a>{' '}
           <span aria-hidden="true">·</span> © {new Date().getFullYear()}
         </p>
-        <SettingRow
-          id="sponsor-project"
-          label="Support Hibi"
-          description="Support development with a donation."
-        >
-          <Button
-            id="sponsor-project"
-            aria-label="Sponsor on GitHub"
-            aria-describedby="sponsor-project-description"
-            className="sponsor-button"
-            disabled={sponsoring}
-            onClick={() => void sponsor()}
+        <nav className="hibi-links" aria-label="Hibi links">
+          <a
+            href="https://github.com/sponsors/schmayterling"
+            onClick={openExternalLink}
           >
-            Sponsor on GitHub <ArrowUpRight aria-hidden="true" />
-          </Button>
-        </SettingRow>
+            Support Hibi development <ArrowUpRight aria-hidden="true" />
+          </a>
+          <a href="https://docs.hibi.garden" onClick={openExternalLink}>
+            Docs <ArrowUpRight aria-hidden="true" />
+          </a>
+          <a
+            href="https://github.com/schmayterling/hibi/issues"
+            onClick={openExternalLink}
+          >
+            Report an issue <ArrowUpRight aria-hidden="true" />
+          </a>
+          <a
+            href="https://github.com/schmayterling/hibi"
+            onClick={openExternalLink}
+          >
+            Contribute <ArrowUpRight aria-hidden="true" />
+          </a>
+          <a href="https://discord.gg/v9r4cABUP2" onClick={openExternalLink}>
+            Join the Discord <ArrowUpRight aria-hidden="true" />
+          </a>
+        </nav>
       </div>
       <UpdateSettings />
       <h2>Diagnostics</h2>

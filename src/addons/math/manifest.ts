@@ -8,7 +8,7 @@ export default {
   kind: 'extension',
   version: '1.1.4',
   dependencies: [tectonicDependency],
-  settings: { category: 'editing', icon: 'sigma' },
+  settings: { icon: 'sigma' },
   apiVersion: 2,
   description:
     'Write LaTeX documents, export PDFs, and add equations to Markdown.',

@@ -74,7 +74,7 @@ test('compact filters reset preferences, keep addon rows stable, and install rev
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   const addons = page.locator('#settings-addons')
   assert.equal(await addons.locator('#addon-frontmatter').isChecked(), true)
   const vim = addons.locator('#addon-vim')
@@ -226,7 +226,7 @@ test('compact filters reset preferences, keep addon rows stable, and install rev
     true,
   )
   await page
-    .getByRole('tab', { name: /^code highlighting$/i, exact: true })
+    .getByRole('tab', { name: /^code highlight$/i, exact: true })
     .click()
   const code = page.locator('#settings-code-syntax')
   await code.getByRole('checkbox', { name: /^python$/i, exact: true }).click()

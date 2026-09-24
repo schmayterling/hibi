@@ -82,7 +82,7 @@ test('editing awaits required addon startup and disabled pending addons cannot r
       'waiting',
   )
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-delayed-background').click()
   await page.waitForFunction(
     () =>

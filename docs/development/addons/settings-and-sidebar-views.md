@@ -56,7 +56,7 @@ Set `settings` in your manifest to place the default page in a category and choo
 { "settings": { "category": "editing", "icon": "book-open" } }
 ```
 
-The built-in category IDs are `general`, `editing`, `interface`, and `addons`. Format pages default to `editing`; other addon pages default to `addons`. Supported manifest icons are `activity`, `audio-lines`, `book-open`, `braces`, `code`, `file`, `file-down`, `file-text`, `folder`, `keyboard`, `palette`, `puzzle`, `settings`, `sigma`, `tags`, and `type`. Unknown names use the addon icon.
+The built-in category IDs are `general` (the unlabeled section after addon settings), `editing`, `interface`, and `addons`. All addon pages appear in the **Addon settings** section by default, after Addons. Set `category` to place a page elsewhere. Supported manifest icons are `activity`, `audio-lines`, `book-open`, `braces`, `code`, `file`, `file-down`, `file-text`, `folder`, `keyboard`, `palette`, `puzzle`, `settings`, `sigma`, `tags`, and `type`. Unknown names use the addon icon.
 
 For extra pages or a custom category, register them inside `start(context)`. Registered pages can use a React icon component, including icons from Lucide.
 

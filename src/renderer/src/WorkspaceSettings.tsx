@@ -63,7 +63,7 @@ export function WorkspaceSettings({
   }
   return (
     <>
-      <h1>Workspace</h1>
+      <h1>Workspace settings</h1>
       <div className="workspace-setting-actions">
         <Button
           disabled={busy}

@@ -190,7 +190,7 @@ test('slash commands work in both editors, preserve undo, and coexist with vim',
 
   await page.mouse.move(450, 18)
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-slash-commands').click()
   await page.waitForFunction(
     () =>
@@ -202,7 +202,7 @@ test('slash commands work in both editors, preserve undo, and coexist with vim',
   const beforeToggle = await read()
   await page.mouse.move(450, 18)
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-slash-commands').click()
   await page.locator('#addon-vim').click()
   await page.getByRole('button', { name: /^back to app$/i }).click()

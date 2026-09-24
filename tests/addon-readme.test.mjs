@@ -151,7 +151,7 @@ test('addon readmes render safely without activation, and settings headers have 
     element.scrollTop = 0
   })
   await page.screenshot({ path: '.cache/hotkeys-aligned.png' })
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   const filter = page.getByRole('searchbox', {
     name: 'Filter addons',
     exact: true,
@@ -283,7 +283,7 @@ test('addon readmes render safely without activation, and settings headers have 
   await page
     .getByRole('button', { name: 'Toggle settings sidebar', exact: true })
     .click()
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await filter.fill('readme fixture')
   const bounds = await row.evaluate((element) => {
     const row = element.getBoundingClientRect()

@@ -136,7 +136,7 @@ test('rich codec attachments invalidate plain certificates and source outline as
   )
 
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   assert.equal(await page.locator('#addon-codec-fixture').isChecked(), false)
   await page.locator('#addon-codec-fixture').click()
   await page.waitForFunction(() => {
@@ -210,7 +210,7 @@ test('rich codec attachments invalidate plain certificates and source outline as
     .getByText(/source outline is unavailable for the active addon syntax/i)
     .waitFor()
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   assert.equal(await page.locator('#addon-codec-fixture').isChecked(), true)
   await page.locator('#addon-codec-fixture').click()
   await page.waitForFunction(

@@ -233,7 +233,7 @@ test('a review addon applies source edits atomically, preserves undo, and reject
     'stale',
   )
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-local-review').click()
   await page.waitForFunction(
     () => !document.querySelector('#addon-local-review').checked,

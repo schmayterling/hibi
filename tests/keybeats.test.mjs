@@ -82,7 +82,7 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
     }
   })
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-keybeats').click()
   await page.waitForFunction(
     () => typeof window.finishAudioPreparation === 'function',
@@ -93,7 +93,7 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
   assert.match(await rich.textContent(), /a/)
   assert.equal(await page.evaluate(() => window.audioTest.contexts), 0)
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-keybeats').click()
   await page
     .getByRole('tab', { name: /^keybeats$/i, exact: true })
@@ -250,7 +250,7 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
   await page.getByRole('button', { name: /^back to app$/i }).click()
   assert.equal(await soundAction.innerText(), 'Mute keyboard sounds')
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-keybeats').click()
   await page.waitForFunction(() => window.audioTest.closed === 1)
   await page.getByRole('button', { name: /^back to app$/i }).click()

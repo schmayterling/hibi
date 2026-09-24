@@ -47,7 +47,7 @@ test('Discord addon is opt-in, documents setup, validates IDs and persists priva
     false,
   )
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i }).click()
   await page.locator('#addon-discord-presence').click()
   await page.getByRole('tab', { name: /^discord rich presence$/i }).click()
   const id = page.getByRole('textbox', { name: /^application id$/i })
@@ -160,7 +160,7 @@ test('Discord addon is opt-in, documents setup, validates IDs and persists priva
   await page.getByRole('tab', { name: /^discord rich presence$/i }).click()
   assert.equal(await names.isChecked(), true)
   assert.equal(await elapsed.isChecked(), false)
-  await page.getByRole('tab', { name: /^addons$/i }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i }).click()
   await page.locator('#addon-discord-presence').click()
   await waitForAsync(
     page,

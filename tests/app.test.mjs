@@ -44,7 +44,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
   if (process.env.GITHUB_ACTIONS !== 'true')
     assert.equal(windowState.focused, false)
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^hibi$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^about$/i, exact: true }).click()
   await page
     .locator('.settings-sidebar .settings-versions')
     .getByText(/^electron 44\.3\.0$/i, { exact: true })

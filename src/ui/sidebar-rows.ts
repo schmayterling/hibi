@@ -8,6 +8,8 @@ export type SidebarRow = {
   size: number
   /** Section count through this row, including its own heading. */
   sections: number
+  /** Divider count through this row. */
+  dividers: number
 }
 
 /** Parent links let selection reveal ancestors without searching every item. */
@@ -37,6 +39,7 @@ export function sidebarRows(
   const indices = new Map<string, number>()
   const stack = [{ items, index: 0, parent: null as string | null }]
   let sections = 0
+  let dividers = 0
   while (stack.length) {
     const frame = stack.at(-1)!
     const item = frame.items[frame.index++]
@@ -45,6 +48,7 @@ export function sidebarRows(
       continue
     }
     if (item.section) sections++
+    if (item.divider) dividers++
     indices.set(item.id, rows.length)
     rows.push({
       item,
@@ -53,6 +57,7 @@ export function sidebarRows(
       position: frame.index,
       size: frame.items.length,
       sections,
+      dividers,
     })
     if (item.children?.length && (!collapsible || expanded.has(item.id)))
       stack.push({ items: item.children, index: 0, parent: item.id })

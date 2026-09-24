@@ -27,6 +27,7 @@ test('recovery preview preserves the live draft; real render failures offer reco
     .getByRole('textbox', { name: /document editor/i })
     .fill('keep this draft')
   await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'About', exact: true }).click()
   await page.getByRole('button', { name: /preview recovery screen/i }).click()
   const preview = page.getByRole('dialog', { name: /recovery preview/i })
   await preview

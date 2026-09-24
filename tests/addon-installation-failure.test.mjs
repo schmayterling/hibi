@@ -87,7 +87,7 @@ test('failed editor attachments stay read-only and disabling the addon restores 
     'false',
   )
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-broken-editor').click()
   await page.waitForFunction(
     () => document.querySelector('#addon-broken-editor')?.checked === false,

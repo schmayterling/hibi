@@ -474,6 +474,7 @@ test('update settings expose both channels, persist choice, and fit narrow windo
     const errors = []
     page.on('pageerror', (error) => errors.push(error.message))
     await clickMenu(app, 'Settings')
+    await page.getByRole('tab', { name: 'About', exact: true }).click()
     const picker = page.getByLabel('Update channel', { exact: true })
     await picker.waitFor()
     await page.waitForFunction(
@@ -603,7 +604,7 @@ test('update settings expose both channels, persist choice, and fit narrow windo
     for (const width of [480, 1000]) {
       await page.setViewportSize({ width, height: 760 })
       await picker.scrollIntoViewIfNeeded()
-      const panel = page.getByRole('tabpanel', { name: 'Hibi', exact: true })
+      const panel = page.getByRole('tabpanel', { name: 'About', exact: true })
       assert.equal(
         await panel.evaluate(
           (element) => element.scrollWidth <= element.clientWidth,

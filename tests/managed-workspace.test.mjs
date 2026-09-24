@@ -167,7 +167,9 @@ test('managed workspaces stay opt-in, preserve files, import safely, and reopen 
   assert.notEqual(second.folder, imported.folder)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await pressShortcut(app, `${mod}+,`)
-  await page.getByRole('tab', { name: 'Workspace', exact: true }).click()
+  await page
+    .getByRole('tab', { name: 'Workspace settings', exact: true })
+    .click()
   await page.getByLabel('Workspace name', { exact: true }).waitFor()
   await page.screenshot({ path: 'test-results/workspace-settings.png' })
   await page.getByRole('button', { name: /^Import…$/i, exact: true }).click()

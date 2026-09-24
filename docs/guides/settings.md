@@ -42,7 +42,7 @@ The right sidebar starts collapsed with no view selected. Use **Toggle right sid
 
 **Formats** lists Markdown, plain text, and enabled format addons. Open a format's settings to configure it or make Hibi its [default application](../features/file-associations.md).
 
-Use **Syntax** to enable or disable formatting features, and **Code highlighting** to choose which programming languages receive highlighting.
+Use **Syntax** to enable or disable formatting features, and **Code Highlight** to choose which programming languages receive highlighting.
 
 ## Addons
 
@@ -71,7 +71,7 @@ Choose **Save a copy** on the recovery screen to keep the draft Hibi still has i
 
 ## App details and licenses
 
-Under **Hibi → Updates**, choose **Recommended nightly** for the latest build that passed every required check, or **Nightly** to also receive builds with failed checks. Recommended nightly is the default. The choice applies across workspaces and stays saved after restarting.
+Under **About → Updates**, choose **Recommended nightly** for the latest build that passed every required check, or **Nightly** to also receive builds with failed checks. Recommended nightly is the default. The choice applies across workspaces and stays saved after restarting.
 
 While Hibi is open, installed builds check for updates every six hours by default. Use **Check frequency** to choose one, six, twelve, or twenty-four hours. **Check for updates on startup** also checks shortly after Hibi opens; it is on by default and can be turned off without changing the chosen frequency. **Check now** checks immediately. Choose **Download update** when a newer build is available, then **Restart and install** on macOS, Windows, or a Linux AppImage. Hibi asks you to save or discard unsaved edits before restarting; cancelling keeps the app open. Back up your documents before using a nightly.
 
@@ -79,4 +79,6 @@ On macOS, install Hibi in Applications once. Later updates replace the installed
 
 Switching channels does not downgrade your installed version. If no build is available yet, or a check or download fails, you can retry from this page.
 
-The **Hibi** page shows the app version and creator. **Sponsor on GitHub** opens [may's sponsor page](https://github.com/sponsors/schmayterling). Open **Open source licenses** in the settings sidebar, then select an entry to read its full notice offline.
+**Workspace settings** is pinned below search. **Editing**, **Interface**, **Addons**, and **Addon settings** each have their own section. Enabled addon pages appear under Addon settings by default; addons can place pages in another section. **About**, **Credits**, and **Diagnostics** (when enabled) follow in a section without a heading. App and Electron versions appear after the last page.
+
+**About** shows the app version and creator. It links to the [documentation](https://docs.hibi.garden), [issue tracker](https://github.com/schmayterling/hibi/issues), [source repository](https://github.com/schmayterling/hibi), [Discord community](https://discord.gg/v9r4cABUP2), and [sponsor page](https://github.com/sponsors/schmayterling). Open **Credits**, then select a license to read its full notice offline.

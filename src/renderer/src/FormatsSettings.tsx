@@ -130,7 +130,7 @@ export function FormatsSettings({
               open('addons')
             }}
           >
-            Addons
+            Addon Manager
           </a>
           .
         </p>

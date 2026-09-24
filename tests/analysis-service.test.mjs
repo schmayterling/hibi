@@ -233,7 +233,7 @@ test('analysis is process-isolated, bounded, connection-bound, and revoked on ca
   )
   await editor.fill('delay disable')
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.evaluate(() => {
     const c = window.analysisFixtures['probe-addon']
     window.analysisPending = c.analysis.run(c.editor.getTextProjection())

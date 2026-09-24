@@ -7,7 +7,7 @@ export default {
   version: '0.1.1',
   authors: [authors.may],
   description: 'Edit note properties stored in YAML, such as titles and dates.',
-  settings: { category: 'editing', icon: 'tags' },
+  settings: { icon: 'tags' },
   apiVersion: 2,
   defaultEnabled: true,
 } satisfies AddonManifest

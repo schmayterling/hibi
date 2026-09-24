@@ -1,10 +1,10 @@
 import type { SettingsCategory, SettingsPage } from '../../addons/api'
 
 export const coreSettingsCategories = [
-  { id: 'general', label: 'General' },
   { id: 'editing', label: 'Editing' },
   { id: 'interface', label: 'Interface' },
   { id: 'addons', label: 'Addons' },
+  { id: 'general', label: 'Others' },
 ] as const
 
 export function settingsCategory(owner: string, category = 'addons') {

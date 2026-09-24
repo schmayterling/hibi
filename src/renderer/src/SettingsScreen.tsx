@@ -220,8 +220,7 @@ export function SettingsScreen({
         ),
         category: settingsCategory(
           manifest.id,
-          manifest.settings?.category ??
-            (manifest.fileExtensions?.length ? 'editing' : 'addons'),
+          manifest.settings?.category ?? 'addons',
         ),
       })),
       ...extraPages.map((page) => ({
@@ -235,11 +234,11 @@ export function SettingsScreen({
     ? selected
     : selected.startsWith('plugin-') || selected.startsWith('addon-')
       ? 'addons'
-      : 'hibi'
+      : 'workspace'
   const matches = (text: string) =>
     terms.every((term) => text.toLocaleLowerCase().includes(term))
   const results = searching
-    ? items.flatMap(({ section: _section, ...item }) => {
+    ? items.flatMap(({ section: _section, divider: _divider, ...item }) => {
         const children = searchable
           .filter(
             (setting) =>
@@ -294,6 +293,7 @@ export function SettingsScreen({
           overlay={overlay}
           onDismiss={onSidebarClose}
           className={`settings-sidebar${searching ? ' settings-searching' : ''}`}
+          fadeEdges
           items={searching ? results : items}
           selected={searching ? (searchSelection ?? category) : category}
           onSelect={selectCategory}
@@ -353,7 +353,8 @@ export function SettingsScreen({
               </search>
             </>
           }
-          footer={
+          afterItems={
+            !searching &&
             info && (
               <div className="settings-versions">
                 <span>Hibi {info.version}</span>
@@ -371,7 +372,7 @@ export function SettingsScreen({
             id="settings-hibi"
             role="tabpanel"
             aria-labelledby="category-hibi"
-            aria-label="Hibi"
+            aria-label="About"
             hidden={category !== 'hibi'}
           >
             {(discover || (open && (category === 'hibi' || searching))) && (
@@ -382,7 +383,7 @@ export function SettingsScreen({
             id="settings-licenses"
             role="tabpanel"
             aria-labelledby="category-licenses"
-            aria-label="Open source licenses"
+            aria-label="Credits"
             hidden={category !== 'licenses'}
           >
             {(discover || (open && category === 'licenses')) && (
@@ -510,7 +511,7 @@ export function SettingsScreen({
             id="settings-code-syntax"
             role="tabpanel"
             aria-labelledby="category-code-syntax"
-            aria-label="Code highlighting"
+            aria-label="Code Highlight"
             hidden={category !== 'code-syntax'}
           >
             <CodeSyntaxSettings />
@@ -675,7 +676,7 @@ export function SettingsScreen({
             id="settings-addons"
             role="tabpanel"
             aria-labelledby="category-addons"
-            aria-label="Addons"
+            aria-label="Addon Manager"
             hidden={category !== 'addons'}
           >
             <AddonSettings
@@ -724,7 +725,7 @@ export function SettingsScreen({
             id="settings-workspace"
             role="tabpanel"
             aria-labelledby="category-workspace"
-            aria-label="Workspace"
+            aria-label="Workspace settings"
             hidden={category !== 'workspace'}
           >
             <WorkspaceSettings

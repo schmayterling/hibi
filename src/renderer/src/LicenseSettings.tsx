@@ -49,10 +49,10 @@ export function LicenseSettings() {
   }, [])
   return (
     <>
-      <h1 id="open-source-licenses">Open source licenses</h1>
+      <h1 id="credits">Credits</h1>
       <section
         className="settings-group license-list"
-        aria-labelledby="open-source-licenses"
+        aria-labelledby="credits"
       >
         {failed ? (
           <p role="alert">

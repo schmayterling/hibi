@@ -257,7 +257,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   })
   await tabContent.getByRole('button', { name: 'Count 0' }).waitFor()
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addons', exact: true }).click()
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-view-fixture').click()
   await page.waitForFunction(
     () => document.querySelector('#addon-view-fixture')?.checked === false,

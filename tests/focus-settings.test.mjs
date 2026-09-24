@@ -97,12 +97,94 @@ test('status visibility, zen mode, settings groups, search clear and import noti
   const groups = await page
     .locator('.settings-sidebar .sidebar-section')
     .allTextContents()
-  assert.deepEqual(groups, ['General', 'Editing', 'Interface', 'Addons'])
+  assert.deepEqual(groups, ['Editing', 'Interface', 'Addons', 'Addon settings'])
+  assert.equal(
+    await page.locator('.settings-sidebar .sidebar-section:empty').count(),
+    0,
+  )
+  assert.equal(
+    await page.locator('#category-hibi').evaluate((button) => {
+      const row = button.parentElement
+      return (
+        row?.hasAttribute('data-divider') &&
+        row.getBoundingClientRect().top -
+          row.previousElementSibling?.getBoundingClientRect().bottom ===
+          12
+      )
+    }),
+    true,
+  )
+  assert.equal(
+    await page
+      .locator('.settings-sidebar .sidebar-section')
+      .filter({ hasText: 'Addon settings' })
+      .evaluate(
+        (section) =>
+          section.previousElementSibling?.querySelector(
+            '#category-dependencies',
+          ) !== null &&
+          section.nextElementSibling?.querySelector(
+            '[id^="category-plugin-"], [id^="category-addon-"]',
+          ) !== null,
+      ),
+    true,
+  )
+  assert.equal(
+    await page
+      .locator('.settings-sidebar .sidebar-scroll > .settings-versions')
+      .count(),
+    1,
+  )
+  const scroll = page.locator('.settings-sidebar .sidebar-scroll')
+  assert.equal(
+    await scroll.evaluate((element) => getComputedStyle(element).paddingTop),
+    '0px',
+  )
+  await page.waitForFunction(() =>
+    document
+      .querySelector('.settings-sidebar .sidebar-scroll')
+      ?.hasAttribute('data-fade-bottom'),
+  )
+  await scroll.evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+  })
+  await page.waitForFunction(() => {
+    const element = document.querySelector('.settings-sidebar .sidebar-scroll')
+    return (
+      element?.hasAttribute('data-fade-top') &&
+      !element.hasAttribute('data-fade-bottom')
+    )
+  })
+  await scroll.evaluate((element) => {
+    element.scrollTop = 0
+  })
+  await page.getByRole('tab', { name: 'About', exact: true }).click()
+  await page.waitForFunction(() => {
+    const selected = document.querySelector(
+      '.settings-sidebar [aria-selected="true"]',
+    )
+    const marker = document.querySelector(
+      '.settings-sidebar .sidebar-selection',
+    )
+    return (
+      selected &&
+      marker &&
+      Math.abs(
+        selected.getBoundingClientRect().top -
+          marker.getBoundingClientRect().top,
+      ) < 1
+    )
+  })
+  await page.getByRole('tab', { name: 'Appearance', exact: true }).click()
   const search = page.getByRole('textbox', {
     name: 'Search settings',
     exact: true,
   })
   await search.fill('status')
+  assert.equal(
+    await scroll.evaluate((element) => getComputedStyle(element).paddingTop),
+    '0px',
+  )
   const clear = page.getByRole('button', {
     name: 'Clear settings search',
     exact: true,

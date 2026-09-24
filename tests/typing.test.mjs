@@ -42,7 +42,7 @@ test('typing pills, source formatting shortcuts, and sidebar shortcut', {
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addons$/i, exact: true }).click()
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.evaluate(() => {
     // Keep the session-rate denominator deterministic without changing native
     // timer delivery. Observe the addon's existing one-second display refresh.

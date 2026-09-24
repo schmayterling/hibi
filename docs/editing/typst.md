@@ -2,6 +2,8 @@
 
 Enable **Typst** under **Settings → Addons**, then open a `.typ` file or run **New Typst document** from the command palette. No separate Typst installation is needed.
 
+To use features from a newer Typst release, turn on **Use system Typst** in the Typst addon settings. Install Typst and check or choose its executable under **Settings → Dependencies**. Hibi then uses that compiler for previews and PDF export. Turn the option off to use the bundled compiler again.
+
 ## Write and export
 
 Use Source view to edit Typst, or Side-by-side for a live typeset preview. Typst has no visual editor.

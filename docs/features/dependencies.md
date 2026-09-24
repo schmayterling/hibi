@@ -22,4 +22,4 @@ The path is saved for this Hibi profile and shared by addons with the same requi
 
 Automatic discovery excludes executables inside the open workspace, including symlink targets. A custom executable is an explicit choice to trust that file. If an installer succeeds but its location is not found, choose its executable or restart Hibi to pick up an updated system `PATH`.
 
-Pandoc-based formats, LaTeX PDF compilation, R Markdown, Quarto, and Git use this manager. R packages and a Quarto document's R or Jupyter libraries still need their own setup; see [document formats](../editing/formats.md).
+Pandoc-based formats, LaTeX PDF compilation, R Markdown, Quarto, Git, and the optional system Typst compiler use this manager. R packages and a Quarto document's R or Jupyter libraries still need their own setup; see [document formats](../editing/formats.md).

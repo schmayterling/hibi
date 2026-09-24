@@ -814,6 +814,9 @@
   "e9cddf67a523": [
     "src/renderer/src/FormattingToolbar.tsx"
   ],
+  "098cae72c6ad": [
+    "src/addons/typst/system-compiler.ts"
+  ],
   "fa5bf6b3b3a8": [
     "src/addons/typst/compiler.ts"
   ],
@@ -2000,6 +2003,9 @@
   ],
   "66146583cc60": [
     "src/main/file-associations.ts"
+  ],
+  "69061a836c36": [
+    "src/addons/typst/compiler.ts"
   ],
   "1e7a5cff30e0": [
     "src/renderer/src/ModalEditingSettings.tsx"
@@ -4223,7 +4229,8 @@
     "src/shared/analysis.ts"
   ],
   "598c7699a784": [
-    "src/addons/_shared/document-project.ts"
+    "src/addons/_shared/document-project.ts",
+    "src/addons/typst/compiler.ts"
   ],
   "0ac0af8cf48f": [
     "src/main/addon-documentation.ts"
@@ -4418,6 +4425,9 @@
     "src/addons/typst/index.tsx",
     "src/addons/typst/manifest.ts"
   ],
+  "a6f3a93777ef": [
+    "src/addons/typst/system-compiler.ts"
+  ],
   "73c9f3bc2e5d": [
     "src/addons/typst/Preview.tsx"
   ],
@@ -4428,7 +4438,8 @@
     "src/addons/typst/manifest.ts"
   ],
   "6ee65ea3f066": [
-    "src/addons/typst/compiler.ts"
+    "src/addons/typst/compiler.ts",
+    "src/addons/typst/system-compiler.ts"
   ],
   "5923dcf849cb": [
     "src/addons/typst/Preview.tsx",
@@ -4440,17 +4451,36 @@
   "a0f88fb28683": [
     "src/addons/typst/compiler.ts"
   ],
+  "e279b654631b": [
+    "src/addons/typst/system-compiler.ts"
+  ],
+  "d64039da19dd": [
+    "src/addons/typst/Preview.tsx"
+  ],
   "aa462ad89611": [
     "src/addons/typst/Preview.tsx"
   ],
   "ebc8ff48bea7": [
     "src/addons/typst/compiler.ts"
   ],
+  "1f6a0ef92031": [
+    "src/addons/typst/system-compiler.ts"
+  ],
   "dd03422977dc": [
     "src/addons/typst/compiler-worker.ts"
   ],
+  "0f8cf07ef366": [
+    "src/addons/typst/system-compiler.ts"
+  ],
   "ce0e7476dad4": [
-    "src/addons/typst/compiler-worker.ts"
+    "src/addons/typst/compiler-worker.ts",
+    "src/addons/typst/system-compiler.ts"
+  ],
+  "7ee97bfa3124": [
+    "src/addons/typst/system-compiler.ts"
+  ],
+  "028fb828f630": [
+    "src/addons/typst/system-compiler.ts"
   ],
   "3b46f542a23f": [
     "src/addons/typst/compiler.ts"
@@ -4600,8 +4630,14 @@
   "f41501c87350": [
     "src/shared/document-session.ts"
   ],
+  "74a378dacc62": [
+    "src/addons/typst/Settings.tsx"
+  ],
   "0e9ce8352f73": [
     "src/renderer/src/SettingsScreen.tsx"
+  ],
+  "3e0e41473d6c": [
+    "src/addons/typst/Settings.tsx"
   ],
   "ca4f485a9985": [
     "src/renderer/src/main.tsx"

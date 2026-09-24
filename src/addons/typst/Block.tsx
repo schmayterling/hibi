@@ -9,6 +9,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { AddonContext } from '../api'
 import { Button, IconButton, TextArea } from '../ui'
 import { TypstPreview } from './Preview'
+import { systemCompilerEnabled } from './preferences'
 import { typstBlock } from './syntax'
 
 function TypstForm({
@@ -76,6 +77,7 @@ export function typstNode(context: AddonContext) {
           source,
           documentId,
           block: true,
+          compiler: systemCompilerEnabled() ? 'system' : 'bundled',
         })
         if (path) context.notify(`Exported PDF to ${path}`)
       } catch (error) {

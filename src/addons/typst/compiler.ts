@@ -12,6 +12,7 @@ import {
 } from '../../main/local-diagnostics/owned'
 import { documentProject } from '../_shared/document-project'
 import type { NativeAddonContext } from '../api'
+import { compileSystemTypst } from './system-compiler'
 import type { TypstResult } from './types'
 
 export type CompileJob = {
@@ -28,6 +29,7 @@ type Input = {
   block?: boolean
   pdf?: boolean
   revision?: string
+  compiler?: 'bundled' | 'system'
 }
 let child: UtilityProcess | null = null
 let networkBlocker: Server | null = null
@@ -40,6 +42,7 @@ let cancel: (() => void) | undefined
 let stopping: Promise<void> | null = null
 const allowed =
   /\.(typ|typc|txt|md|markdown|json|yaml|yml|toml|csv|bib|xml|png|jpe?g|gif|webp|svg|avif|pdf|ttf|otf|ttc|otc|wasm)$/i
+const fonts = /\.(ttf|otf|ttc|otc)$/i
 const dependencies = new Map<string, Set<string>>()
 const inFlight = new Map<string, Promise<TypstResult & { pdf?: Uint8Array }>>()
 
@@ -90,12 +93,13 @@ function project(
   epoch: number,
   id: string | undefined,
   paths: ReadonlySet<string>,
+  previousKey = fingerprint,
 ) {
   return documentProject(context, {
     id,
     entry: 'untitled.typ',
     allowed,
-    previousKey: fingerprint,
+    previousKey,
     paths: [...paths],
     canceled: () => epoch !== generation,
   })
@@ -118,7 +122,10 @@ export async function compileTypst(
     (value.revision !== undefined &&
       (typeof value.revision !== 'string' ||
         value.revision.length > 64 ||
-        !/^[a-zA-Z0-9:-]+$/.test(value.revision)))
+        !/^[a-zA-Z0-9:-]+$/.test(value.revision))) ||
+    (value.compiler !== undefined &&
+      value.compiler !== 'bundled' &&
+      value.compiler !== 'system')
   )
     throw new Error('Could not read this Typst document.')
   const documentId = value.documentId ?? context.document.get().id
@@ -126,6 +133,7 @@ export async function compileTypst(
     context.workspace.id(),
     documentId,
     value.block ?? false,
+    value.compiler ?? 'bundled',
     createHash('sha256').update(value.source).digest('hex'),
   ])
   const requestKey =
@@ -163,6 +171,84 @@ export async function compileTypst(
         }
       }
       if (epoch !== generation) throw new Error('Typst compilation canceled.')
+      if (value.compiler === 'system') {
+        const executable = await context.dependencies.resolve('typst')
+        if (!executable)
+          throw new Error(
+            'Install Typst or choose its executable in Settings → Dependencies.',
+          )
+        const fontSnapshot = await documentProject(context, {
+          id: documentId,
+          entry: 'untitled.typ',
+          allowed: fonts,
+          canceled: () => epoch !== generation,
+        })
+        const controller = new AbortController()
+        let timedOut = false
+        cancel = () => controller.abort()
+        const timer = setTimeout(() => {
+          timedOut = true
+          reportOwnedFailure('COMPILER_TIMEOUT', 'typst')
+          controller.abort()
+        }, 10000)
+        try {
+          const result = await compileSystemTypst(
+            executable,
+            {
+              source: value.source,
+              block: value.block ?? false,
+              pdf: value.pdf ?? false,
+            },
+            async (paths) => {
+              const snapshot = await project(
+                context,
+                epoch,
+                documentId,
+                paths,
+                '',
+              )
+              const files = [
+                ...new Map([
+                  ...(fontSnapshot.files ?? []),
+                  ...(snapshot.files ?? []),
+                ]).entries(),
+              ]
+              if (
+                files.length > 1000 ||
+                files.reduce((size, [, bytes]) => size + bytes.byteLength, 0) >
+                  64 * 1024 * 1024
+              )
+                throw new Error(
+                  'This document needs more than 1,000 files or 64 MiB of files.',
+                )
+              return {
+                entry: snapshot.entry,
+                files,
+              }
+            },
+            controller.signal,
+            join(app.getPath('userData'), 'typst', 'packages'),
+          )
+          const workspace = context.workspace.directory()
+          const { requested, ...compiled } = result
+          return {
+            ...compiled,
+            dependencies:
+              workspace && fontSnapshot.root === workspace
+                ? requested.map((path) => path.replaceAll('\\', '/'))
+                : null,
+          }
+        } catch (error) {
+          if (timedOut)
+            throw new Error(
+              'Typst compilation took longer than 10 seconds. Simplify the document and try again.',
+            )
+          throw error
+        } finally {
+          clearTimeout(timer)
+          cancel = undefined
+        }
+      }
       if (!child) {
         const createdDirectory = await mkdtemp(join(tmpdir(), 'hibi-typst-'))
         if (epoch !== generation) {

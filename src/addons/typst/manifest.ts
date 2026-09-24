@@ -7,10 +7,22 @@ export default {
   id: 'typst',
   name: 'Typst',
   kind: 'extension',
-  version: '1.0.2',
+  version: '1.0.3',
   settings: { icon: 'type' },
   apiVersion: 2,
   description: 'Write Typst documents with live previews and PDF export.',
+  dependencies: [
+    {
+      id: 'typst',
+      name: 'Typst',
+      command: 'typst',
+      homepage: 'https://typst.app/open-source/',
+      reason:
+        'Optional system compiler for previews and PDF export. Use Typst 0.15 or newer for variable fonts.',
+      optional: true,
+      install: { brew: { package: 'typst' }, winget: 'Typst.Typst' },
+    },
+  ],
   defaultEnabled: false,
   fileExtensions: fileAssociations.typst.ext,
   authors: [authors.may],

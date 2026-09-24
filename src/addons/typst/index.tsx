@@ -1,3 +1,4 @@
+import { lazy } from 'react'
 import { isMarkdownDocument } from '../../shared/document-types'
 import { formatToolbar } from '../_shared/format-toolbar'
 import { type DocumentFormat, defineAddon } from '../api'
@@ -5,6 +6,7 @@ import { typstNode } from './Block'
 import { typstLanguage } from './language'
 import manifest from './manifest'
 import { TypstPreview } from './Preview'
+import { systemCompilerEnabled } from './preferences'
 import css from './style.css?inline'
 import { svgSource, typstFlavor, typstTokens } from './syntax'
 import type { TypstResult } from './types'
@@ -12,6 +14,9 @@ import type { TypstResult } from './types'
 export default defineAddon({
   manifest,
   flavors: [typstFlavor],
+  Settings: lazy(() =>
+    import('./Settings').then(({ Settings }) => ({ default: Settings })),
+  ),
   start(context) {
     context.editor.registerSyntax({
       id: 'blocks',
@@ -41,12 +46,18 @@ export default defineAddon({
         source,
         documentId,
         block,
+        compiler: systemCompilerEnabled() ? 'system' : 'bundled',
       })
       if (!result.svg)
         throw new Error(
           result.diagnostics.map((error) => error.message).join('\n'),
         )
-      return `<figure class="typst-preview"><img src="${svgSource(result.svg)}" alt="Typst ${block ? 'block' : 'document'} preview"></figure>`
+      return (result.svgs ?? [result.svg])
+        .map(
+          (svg) =>
+            `<figure class="typst-preview"><img src="${svgSource(svg)}" alt="Typst ${block ? 'block' : 'document'} preview"></figure>`,
+        )
+        .join('')
     }
     const format: DocumentFormat = {
       id: 'typst',
@@ -129,6 +140,7 @@ export default defineAddon({
       const path = await context.native.invoke<string | null>('pdf', {
         source: document.markdown,
         documentId: document.id,
+        compiler: systemCompilerEnabled() ? 'system' : 'bundled',
       })
       if (path) context.notify(`Exported PDF to ${path}`)
     }

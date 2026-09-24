@@ -1,10 +1,17 @@
 import { FileDown } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import type { WorkspaceChange } from '../../shared/workspace'
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
 import { PreviewActions } from '../../ui/PreviewActions'
 import type { AddonContext } from '../api'
+import { settingsEvent, systemCompilerEnabled } from './preferences'
 import { svgSource } from './syntax'
 import type { TypstResult } from './types'
 
@@ -31,6 +38,11 @@ function onWorkspaceChange(listener: (change?: WorkspaceChange) => void) {
       stopWorkspaceListener = undefined
     }
   }
+}
+
+function onCompilerChange(listener: () => void) {
+  window.addEventListener(settingsEvent, listener)
+  return () => window.removeEventListener(settingsEvent, listener)
 }
 
 function affectsPreview(
@@ -69,15 +81,19 @@ export function TypstPreview({
   const [busy, setBusy] = useState(true)
   const [exporting, setExporting] = useState(false)
   const [exportError, setExportError] = useState('')
+  const systemCompiler = useSyncExternalStore(
+    onCompilerChange,
+    systemCompilerEnabled,
+  )
   const compiled = useRef<{
     source: string
     documentId: string | undefined
     block: boolean
     paths: string[] | null
   } | null>(null)
-  const image = useMemo(
-    () => (result?.svg ? svgSource(result.svg) : undefined),
-    [result?.svg],
+  const images = useMemo(
+    () => (result?.svgs ?? (result?.svg ? [result.svg] : [])).map(svgSource),
+    [result?.svg, result?.svgs],
   )
   const [projectRevision, setProjectRevision] = useState(0)
   useEffect(
@@ -108,6 +124,7 @@ export function TypstPreview({
           source: value,
           documentId,
           block,
+          compiler: systemCompiler ? 'system' : 'bundled',
           revision: `${rendererId}:${workspaceRevision}`,
         })
         .then((result) => {
@@ -145,7 +162,7 @@ export function TypstPreview({
       active = false
       clearTimeout(timer)
     }
-  }, [value, documentId, context, block, projectRevision])
+  }, [value, documentId, context, block, projectRevision, systemCompiler])
   return (
     <div
       className="typst-preview"
@@ -155,7 +172,7 @@ export function TypstPreview({
       {onExport && (
         <PreviewActions target={toolbar}>
           <Button
-            disabled={busy || exporting || !image}
+            disabled={busy || exporting || images.length === 0}
             onClick={async () => {
               setExporting(true)
               setExportError('')
@@ -183,18 +200,21 @@ export function TypstPreview({
           Compiling Typst…
         </p>
       )}
-      {image && (
-        <figure>
+      {images.map((image, index) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: Page order is fixed by the compiler.
+        <figure key={index}>
           <img
             src={image}
             alt={
               block
                 ? 'Typst block preview'
-                : `Typst document preview, ${result?.pages ?? 1} ${(result?.pages ?? 1) === 1 ? 'page' : 'pages'}`
+                : images.length > 1
+                  ? `Typst document preview, page ${index + 1} of ${images.length}`
+                  : `Typst document preview, ${result?.pages ?? 1} ${(result?.pages ?? 1) === 1 ? 'page' : 'pages'}`
             }
           />
         </figure>
-      )}
+      ))}
       {!!result?.diagnostics.length && (
         <DocumentNotice
           title={result.svg ? 'Compilation notes' : 'Preview unavailable'}

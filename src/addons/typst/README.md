@@ -4,6 +4,8 @@ Turn on **Typst** in **Settings → Addons** to write and preview typeset docume
 
 Use source view to write or side-by-side view to see the preview. Choose **Export PDF** to save the result.
 
+To compile with an installed Typst version, turn on **Use system Typst** in this addon's settings. Choose its executable under **Settings → Dependencies** if Hibi does not find it. The bundled compiler remains available when this option is off.
+
 ## Typst in Markdown
 
 Choose **Insert Typst block** from the command palette or slash menu, or write a fenced block:

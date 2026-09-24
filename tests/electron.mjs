@@ -92,6 +92,89 @@ export function stopElectronTree(child) {
   child.kill('SIGKILL')
 }
 
+async function traceElectronClose(application) {
+  let timer
+  try {
+    await Promise.race([
+      application.evaluate(({ app, BrowserWindow, dialog, ipcMain }) => {
+        const record = (event) => {
+          try {
+            process.stderr.write(`HIBI_CLOSE ${event}\n`)
+          } catch {
+            // Diagnostics cannot interrupt shutdown.
+          }
+        }
+        const windows = () => {
+          try {
+            return (
+              BrowserWindow.getAllWindows()
+                .map((window) => {
+                  const contents = window.webContents
+                  if (contents.isDestroyed()) return 'destroyed'
+                  const url = contents.getURL()
+                  const kind = url.startsWith('file:')
+                    ? 'file'
+                    : url.startsWith('hibi-analysis:')
+                      ? 'analysis'
+                      : 'app'
+                  return `${kind}:${contents.isLoading() ? 'loading' : 'idle'}`
+                })
+                .join(',') || 'none'
+            )
+          } catch {
+            return 'unavailable'
+          }
+        }
+        record(`windows ${windows()}`)
+        const pulse = setInterval(() => record(`windows ${windows()}`), 2000)
+        pulse.unref()
+        app.on('before-quit', () => record(`before-quit ${windows()}`))
+        app.on('will-quit', () => record(`will-quit ${windows()}`))
+        app.on('quit', () => {
+          record('quit')
+          clearInterval(pulse)
+        })
+        for (const window of BrowserWindow.getAllWindows()) {
+          const kind = window.webContents.getURL().startsWith('file:')
+            ? 'file'
+            : 'app'
+          window.on('close', () => record(`window-close ${kind}`))
+          window.on('closed', () => record(`window-closed ${kind}`))
+        }
+        ipcMain.on('document:flushed', (_event, token, error) => {
+          if (token !== 'ready')
+            record(`flush ${error === null ? 'ok' : 'error'}`)
+        })
+        const showMessageBox = dialog.showMessageBox.bind(dialog)
+        dialog.showMessageBox = async (...args) => {
+          record('message-box open')
+          const result = await showMessageBox(...args)
+          record(`message-box response ${result.response}`)
+          return result
+        }
+        const showErrorBox = dialog.showErrorBox.bind(dialog)
+        dialog.showErrorBox = (title, message) => {
+          record(
+            `error-box ${title}: ${message.startsWith('The editor did not confirm') ? 'flush timeout' : 'other'}`,
+          )
+          return showErrorBox(title, message)
+        }
+      }),
+      new Promise((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('trace setup timed out')),
+          500,
+        )
+      }),
+    ])
+    return 'ready'
+  } catch {
+    return 'unavailable'
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 // Local tests never take desktop focus. Hosted runners use their isolated desktop
 // so Linux compositors keep painting frames and delivering native keyboard input.
 export const electron = {
@@ -103,13 +186,45 @@ export const electron = {
     const close = application.close.bind(application)
     let slowStartTimer
     let closing = false
-    application.close = async ({ waitForTransport = false } = {}) => {
+    application.close = async ({
+      waitForTransport = false,
+      trace = false,
+    } = {}) => {
       closing = true
       clearTimeout(slowStartTimer)
       const child = application.process()
+      const events = []
+      const note = (event) => {
+        events.push(event)
+        if (events.length > 24) events.shift()
+      }
+      let partial = ''
+      const collect = (chunk) => {
+        const lines = (partial + String(chunk)).split(/\r?\n/)
+        partial = lines.pop()
+        for (const line of lines)
+          if (line.startsWith('HIBI_CLOSE ')) note(line.slice(11))
+      }
+      const onExit = (code, signal) => note(`child-exit ${code ?? signal}`)
+      const onClose = () => note('child-close')
+      if (trace) {
+        child.stderr?.on('data', collect)
+        child.once('exit', onExit)
+        child.once('close', onClose)
+      }
+      const traceState = trace ? await traceElectronClose(application) : 'off'
+      let transportState = 'pending'
       let timer
       try {
         const pendingClose = close()
+        void pendingClose.then(
+          () => {
+            transportState = 'resolved'
+          },
+          () => {
+            transportState = 'rejected'
+          },
+        )
         await Promise.race([
           waitForElectronShutdown(
             child,
@@ -124,12 +239,20 @@ export const electron = {
           }),
         ])
       } catch (error) {
+        if (partial.startsWith('HIBI_CLOSE ')) note(partial.slice(11))
+        if (trace && error instanceof Error)
+          error.message += ` (main=${child.exitCode ?? child.signalCode ?? 'live'}, transport=${transportState}, trace=${traceState}, events=${events.join(' -> ') || 'none'})`
         stopElectronTree(child)
         child.stdout?.destroy()
         child.stderr?.destroy()
         throw error
       } finally {
         clearTimeout(timer)
+        if (trace) {
+          child.stderr?.off('data', collect)
+          child.off('exit', onExit)
+          child.off('close', onClose)
+        }
       }
     }
     if (process.env.GITHUB_ACTIONS === 'true') {

@@ -179,6 +179,15 @@ const entryAssets = new Map<
   string,
   { kind: string; ms: number; status: number }
 >()
+const deliveredAssets = new Map<
+  string,
+  { kind: string; at: number; status: number | string }
+>()
+const recentDeliveries: {
+  kind: string
+  at: number
+  status: number | string
+}[] = []
 const windowLoadEvents: {
   event: string
   at: number
@@ -202,6 +211,23 @@ function traceWindowLoad(event: string, code?: number) {
   windowLoadEvents.push({ event, at: Math.round(performance.now()), code })
   if (windowLoadEvents.length > 16) windowLoadEvents.shift()
 }
+function traceDeliveredAsset(url: string, status: number | string) {
+  const pathname = new URL(url).pathname
+  if (
+    pathname.startsWith('/document-media/') ||
+    pathname.startsWith('/installed-addons/')
+  )
+    return
+  const completed = {
+    kind: staticAssetKind(pathname),
+    at: Math.round(performance.now()),
+    status,
+  }
+  if (['html', 'entry-js', 'entry-css'].includes(completed.kind))
+    deliveredAssets.set(completed.kind, completed)
+  recentDeliveries.push(completed)
+  if (recentDeliveries.length > 16) recentDeliveries.shift()
+}
 if (testing)
   Object.defineProperty(globalThis, '__hibiStartupTrace', {
     value: () => ({
@@ -211,6 +237,8 @@ if (testing)
         ms: Math.round(performance.now() - request.at),
       })),
       entryAssets: [...entryAssets.values()],
+      deliveredAssets: [...deliveredAssets.values()],
+      recentDeliveries: recentDeliveries.slice(-16),
       recentAssets: recentAssets.slice(-16),
       windowLoadEvents: windowLoadEvents.slice(-16),
     }),
@@ -857,6 +885,17 @@ if (!app.requestSingleInstanceLock()) {
       handle(UPDATE_CHANNELS.download, downloadUpdate, updatesReady)
       handle(UPDATE_CHANNELS.install, installUpdate, updatesReady)
       protocol.handle('app', serveAsset)
+      if (testing) {
+        const filter = { urls: ['app://hibi/*'] }
+        session.defaultSession.webRequest.onCompleted(
+          filter,
+          ({ url, statusCode }) => traceDeliveredAsset(url, statusCode),
+        )
+        session.defaultSession.webRequest.onErrorOccurred(
+          filter,
+          ({ url, error }) => traceDeliveredAsset(url, error),
+        )
+      }
       session.defaultSession.setPermissionCheckHandler(() => false)
       session.defaultSession.setPermissionRequestHandler(
         (_contents, _permission, callback) => callback(false),

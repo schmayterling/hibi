@@ -108,6 +108,7 @@ test('analysis is process-isolated, bounded, connection-bound, and revoked on ca
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1 })
     })
+    app.traceClose = true
     await app.close()
     await rm(profile, { recursive: true, force: true })
   })

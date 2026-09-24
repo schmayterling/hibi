@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { _electron } from 'playwright'
 
 // Local tests never take desktop focus. Hosted runners use their isolated desktop
@@ -14,19 +15,101 @@ export const electron = {
     application.close = async () => {
       closing = true
       clearTimeout(slowStartTimer)
+      const child = application.process()
+      let stderr = ''
+      const collect = (chunk) => {
+        stderr = (stderr + String(chunk)).slice(-8192)
+      }
+      if (application.traceClose) {
+        child.stderr?.on('data', collect)
+        let setupTimer
+        try {
+          await Promise.race([
+            application.evaluate(({ app, BrowserWindow, dialog, ipcMain }) => {
+              const record = (event) => {
+                try {
+                  process.stderr.write(`HIBI_CLOSE_EVENT: ${event}\n`)
+                } catch {
+                  // Close diagnostics cannot interrupt app shutdown.
+                }
+              }
+              app.on('before-quit', () => record('before-quit'))
+              app.on('will-quit', () => record('will-quit'))
+              for (const window of BrowserWindow.getAllWindows()) {
+                const kind = window.webContents
+                  .getURL()
+                  .startsWith('hibi-analysis:')
+                  ? 'analysis'
+                  : 'app'
+                window.on('close', () => record(`window-close ${kind}`))
+                window.on('closed', () => record(`window-closed ${kind}`))
+              }
+              ipcMain.on('document:flushed', (_event, token, error) =>
+                record(
+                  `document-flushed ${token === 'ready' ? 'ready' : 'close'} ${error === null ? 'ok' : 'error'}`,
+                ),
+              )
+              const showErrorBox = dialog.showErrorBox.bind(dialog)
+              dialog.showErrorBox = (title, message) => {
+                record(
+                  `error-box ${title}: ${message.startsWith('The editor did not confirm') ? 'flush timeout' : 'other'}`,
+                )
+                return showErrorBox(title, message)
+              }
+            }),
+            new Promise((_, reject) => {
+              setupTimer = setTimeout(
+                () => reject(new Error('close trace setup timed out')),
+                1000,
+              )
+            }),
+          ])
+        } catch {
+          // Electron may already be closing. Preserve the original close result.
+        } finally {
+          clearTimeout(setupTimer)
+        }
+      }
       let timer
       try {
         await Promise.race([
           close(),
           new Promise((_, reject) => {
             timer = setTimeout(() => {
-              application.process().kill('SIGKILL')
-              reject(new Error('Electron test cleanup exceeded 20 seconds'))
+              let killResult = 'already exited'
+              if (child.exitCode === null && child.signalCode === null) {
+                if (process.platform === 'win32') {
+                  const killed = spawnSync(
+                    'taskkill',
+                    ['/pid', String(child.pid), '/T', '/F'],
+                    { windowsHide: true, timeout: 5000 },
+                  )
+                  killResult = killed.status === 0 ? 'task tree' : 'main only'
+                  if (killed.status !== 0) child.kill('SIGKILL')
+                } else {
+                  try {
+                    process.kill(-child.pid, 'SIGKILL')
+                    killResult = 'process group'
+                  } catch {
+                    child.kill('SIGKILL')
+                    killResult = 'main only'
+                  }
+                }
+              }
+              const events = [...stderr.matchAll(/HIBI_CLOSE_EVENT: ([^\n]+)/g)]
+                .map((match) => match[1])
+                .join(' -> ')
+              reject(
+                new Error(
+                  `Electron test cleanup exceeded 20 seconds (${killResult}). Close events: ${events || 'none'}`,
+                ),
+              )
             }, 20000)
           }),
         ])
       } finally {
         clearTimeout(timer)
+        child.stderr?.off('data', collect)
       }
     }
     if (process.env.GITHUB_ACTIONS === 'true') {

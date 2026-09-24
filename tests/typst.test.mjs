@@ -75,11 +75,19 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     .getByRole('treeitem', { name: /^report\.typ$/i, exact: true })
     .click()
   const preview = page.getByAltText(/Typst document preview/)
-  await preview.waitFor()
+  await page.locator('.typst-preview').waitFor()
+  // The native compile has its own 10-second deadline after worker startup.
   await page.waitForFunction(
     () =>
       document.querySelector('.typst-preview')?.getAttribute('aria-busy') ===
       'false',
+    undefined,
+    { timeout: 15000 },
+  )
+  assert.equal(
+    await preview.isVisible(),
+    true,
+    await page.locator('.typst-preview').innerText(),
   )
   await page.waitForTimeout(250)
   await page.evaluate(() => {

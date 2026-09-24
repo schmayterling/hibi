@@ -137,6 +137,10 @@ test('slash commands work in both editors, preserve undo, and coexist with vim',
   await menu.waitFor()
   await rich.press('Tab')
   assert.equal(await rich.locator('table').count(), 1)
+  // A DOM fill cannot remove the table and quote nodes from earlier commands.
+  await rich.evaluate((element) =>
+    element.editor.commands.setContent('<p></p>'),
+  )
   await rich.fill('/alerts')
   await menu.waitFor()
   await rich.press('Enter')

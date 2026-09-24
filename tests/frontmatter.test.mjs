@@ -125,6 +125,7 @@ test('frontmatter contributes slash actions in rich and source panes only while 
   const existing = '---\ntitle: keep\n---\n\n/frontmatter'
   await source.fill(existing)
   await menu.waitFor()
+  await action.waitFor({ state: 'hidden' })
   assert.equal(await action.count(), 0)
   assert.equal(await read(), existing)
   await source.press('Escape')

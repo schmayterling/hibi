@@ -26,6 +26,17 @@ export default defineAddon({
         level: id === 'subscript' ? 'inline' : 'block',
         extensions: [id],
         matches: (token) => token.type === id,
+        slash:
+          id === 'subscript'
+            ? {
+                markdown: '~~',
+                cursor: 1,
+                rich: (chain) => chain.toggleMark('subscript'),
+              }
+            : {
+                markdown: '-# ',
+                rich: (chain) => chain.setNode('subtext'),
+              },
       })
   },
 })

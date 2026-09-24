@@ -2,7 +2,7 @@
 
 # MarkdownSyntaxFeature
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L4)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L18)
 
 One renderable Markdown feature, exposed in settings → syntax.
 
@@ -21,6 +21,8 @@ type MarkdownSyntaxFeature = {
   scope?: 'markdown'
   /** Rich extension names to disable with this feature; keep export tokenizers registered. */
   extensions?: readonly string[]
+  /** Optional insertion recipe shown by the slash-command addon while enabled. */
+  slash?: SyntaxSlashCommand
 }
 ```
 
@@ -37,6 +39,7 @@ type MarkdownSyntaxFeature = {
 - [level](#level)
 - [scope](#scope)
 - [extensions](#extensions)
+- [slash](#slash)
 
 **Methods**
 
@@ -46,7 +49,7 @@ type MarkdownSyntaxFeature = {
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L5)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L19)
 
 ```typescript
 id: string
@@ -54,7 +57,7 @@ id: string
 
 ### label
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L6)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L20)
 
 ```typescript
 label: string
@@ -62,7 +65,7 @@ label: string
 
 ### group
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L7)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L21)
 
 ```typescript
 group: string
@@ -70,7 +73,7 @@ group: string
 
 ### description
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L8)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L22)
 
 ```typescript
 description?: string
@@ -78,7 +81,7 @@ description?: string
 
 ### level
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L9)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L23)
 
 ```typescript
 level: 'block' | 'inline'
@@ -86,7 +89,7 @@ level: 'block' | 'inline'
 
 ### scope
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L12)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L26)
 
 ```typescript
 scope?: 'markdown'
@@ -94,7 +97,7 @@ scope?: 'markdown'
 
 ### extensions
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L14)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L28)
 
 Rich extension names to disable with this feature; keep export tokenizers registered.
 
@@ -102,11 +105,23 @@ Rich extension names to disable with this feature; keep export tokenizers regist
 extensions?: readonly string[]
 ```
 
+### slash
+
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L30)
+
+Optional insertion recipe shown by the slash-command addon while enabled.
+
+```typescript
+slash?: SyntaxSlashCommand
+```
+
+Related: [SyntaxSlashCommand](SyntaxSlashCommand.md).
+
 ## Methods
 
 ### matches
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L11)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L25)
 
 Match lexer tokens, including the token emitted by the export parser.
 
@@ -121,3 +136,7 @@ matches: (token: Readonly<Token>) => boolean
 | <code>token</code> | <code>Readonly&lt;Token&gt;</code> |
 
 **Returns:** <code>boolean</code>
+
+## Related types
+
+[SyntaxSlashCommand](SyntaxSlashCommand.md).

@@ -23,6 +23,12 @@ export default defineAddon({
       matches: (token) =>
         token.type === 'typstBlock' ||
         (token.type === 'code' && /^typst(?:\s|$)/i.test(token.lang ?? '')),
+      slash: {
+        markdown: '```typst\n\n```',
+        cursor: 9,
+        rich: (chain) =>
+          chain.insertContent({ type: 'typstBlock', attrs: { source: '' } }),
+      },
     })
     context.styles.register('preview', css)
     context.editor.registerCodeLanguage({

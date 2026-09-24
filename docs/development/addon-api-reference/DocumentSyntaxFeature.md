@@ -2,7 +2,7 @@
 
 # DocumentSyntaxFeature
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L18)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L34)
 
 Format rendering control, queried through the same syntax preferences.
 
@@ -12,10 +12,11 @@ Format rendering control, queried through the same syntax preferences.
 ```typescript
 type DocumentSyntaxFeature = Omit<
   MarkdownSyntaxFeature,
-  'matches' | 'scope'
+  'matches' | 'scope' | 'slash'
 > & {
   scope: 'document'
   matches?: never
+  slash?: never
 }
 ```
 
@@ -27,12 +28,13 @@ type DocumentSyntaxFeature = Omit<
 
 - [scope](#scope)
 - [matches](#matches)
+- [slash](#slash)
 
 ## Properties
 
 ### scope
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L22)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L38)
 
 ```typescript
 scope: 'document'
@@ -40,10 +42,18 @@ scope: 'document'
 
 ### matches
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L23)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L39)
 
 ```typescript
 matches?: never
+```
+
+### slash
+
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/markdown-syntax.ts#L40)
+
+```typescript
+slash?: never
 ```
 
 ## Related types

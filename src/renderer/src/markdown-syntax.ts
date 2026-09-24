@@ -15,6 +15,15 @@ const core: MarkdownSyntaxFeature[] = [
       level: 'block',
       extensions: ['heading'],
       matches: (token) => token.type === 'heading' && token.depth === index + 1,
+      slash: {
+        markdown: `${'#'.repeat(index + 1)} `,
+        description:
+          ['Large heading', 'Medium heading', 'Small heading'][index] ??
+          `${'#'.repeat(index + 1)} heading`,
+        keywords: `h${index + 1} title`,
+        rich: (chain) =>
+          chain.setHeading({ level: (index + 1) as 1 | 2 | 3 | 4 | 5 | 6 }),
+      },
     }),
   ),
   {
@@ -25,6 +34,7 @@ const core: MarkdownSyntaxFeature[] = [
     level: 'inline',
     extensions: ['bold'],
     matches: (token) => token.type === 'strong',
+    slash: { markdown: '****', cursor: 2, rich: (chain) => chain.toggleBold() },
   },
   {
     id: 'italic',
@@ -34,6 +44,7 @@ const core: MarkdownSyntaxFeature[] = [
     level: 'inline',
     extensions: ['italic'],
     matches: (token) => token.type === 'em',
+    slash: { markdown: '**', cursor: 1, rich: (chain) => chain.toggleItalic() },
   },
   {
     id: 'inline-code',
@@ -43,6 +54,7 @@ const core: MarkdownSyntaxFeature[] = [
     level: 'inline',
     extensions: ['code'],
     matches: (token) => token.type === 'codespan',
+    slash: { markdown: '``', cursor: 1, rich: (chain) => chain.toggleCode() },
   },
   {
     id: 'escapes',
@@ -52,6 +64,7 @@ const core: MarkdownSyntaxFeature[] = [
       'Put a backslash before punctuation, such as \\*, to show it as text.',
     level: 'inline',
     matches: (token) => token.type === 'escape',
+    slash: { markdown: '\\*' },
   },
   {
     id: 'code-blocks',
@@ -62,6 +75,13 @@ const core: MarkdownSyntaxFeature[] = [
     level: 'block',
     extensions: ['codeBlock'],
     matches: (token) => token.type === 'code',
+    slash: {
+      markdown: '```\n\n```',
+      cursor: 4,
+      description: 'Code with syntax highlighting',
+      keywords: 'code codeblock pre',
+      rich: (chain) => chain.setCodeBlock(),
+    },
   },
   {
     id: 'quotes',
@@ -71,6 +91,12 @@ const core: MarkdownSyntaxFeature[] = [
     level: 'block',
     extensions: ['blockquote'],
     matches: (token) => token.type === 'blockquote',
+    slash: {
+      markdown: '> ',
+      description: 'Indented quotation',
+      keywords: 'quotation',
+      rich: (chain) => chain.toggleBlockquote(),
+    },
   },
   {
     id: 'bullet-lists',
@@ -83,6 +109,12 @@ const core: MarkdownSyntaxFeature[] = [
       token.type === 'list' &&
       !token.ordered &&
       !token.items.some((item: { task?: boolean }) => item.task),
+    slash: {
+      markdown: '- ',
+      description: 'List with bullet points',
+      keywords: 'ul bullets',
+      rich: (chain) => chain.toggleBulletList(),
+    },
   },
   {
     id: 'numbered-lists',
@@ -95,6 +127,12 @@ const core: MarkdownSyntaxFeature[] = [
       token.type === 'list' &&
       token.ordered &&
       !token.items.some((item: { task?: boolean }) => item.task),
+    slash: {
+      markdown: '1. ',
+      description: 'List with numbered steps',
+      keywords: 'ol numbers',
+      rich: (chain) => chain.toggleOrderedList(),
+    },
   },
   {
     id: 'dividers',
@@ -104,6 +142,12 @@ const core: MarkdownSyntaxFeature[] = [
     level: 'block',
     extensions: ['horizontalRule'],
     matches: (token) => token.type === 'hr',
+    slash: {
+      markdown: '---\n\n',
+      description: 'Horizontal dividing line',
+      keywords: 'hr separator line',
+      rich: (chain) => chain.setHorizontalRule(),
+    },
   },
   {
     id: 'line-breaks',
@@ -114,6 +158,7 @@ const core: MarkdownSyntaxFeature[] = [
     level: 'inline',
     extensions: ['hardBreak'],
     matches: (token) => token.type === 'br',
+    slash: { markdown: '  \n', rich: (chain) => chain.setHardBreak() },
   },
   {
     id: 'links',
@@ -123,6 +168,7 @@ const core: MarkdownSyntaxFeature[] = [
     level: 'inline',
     extensions: ['link'],
     matches: (token) => token.type === 'link',
+    slash: { markdown: '[text](url)', cursor: 1 },
   },
   {
     id: 'images',
@@ -132,6 +178,7 @@ const core: MarkdownSyntaxFeature[] = [
     level: 'inline',
     extensions: ['image'],
     matches: (token) => token.type === 'image',
+    slash: { markdown: '![description](path)', cursor: 2 },
   },
   {
     id: 'html-blocks',
@@ -140,6 +187,7 @@ const core: MarkdownSyntaxFeature[] = [
     description: 'Include HTML in exports with unsafe content removed.',
     level: 'block',
     matches: (token) => token.type === 'html' && !!token.block,
+    slash: { markdown: '<div>\n\n</div>', cursor: 6 },
   },
   {
     id: 'inline-html',
@@ -149,6 +197,7 @@ const core: MarkdownSyntaxFeature[] = [
       'Include HTML within text in exports, with unsafe content removed.',
     level: 'inline',
     matches: (token) => token.type === 'html' && !token.block,
+    slash: { markdown: '<span></span>', cursor: 6 },
   },
 ]
 type Feature = MarkdownSyntaxFeature | DocumentSyntaxFeature
@@ -251,7 +300,20 @@ export const markdownSyntax = {
       (feature.scope !== 'document' && typeof feature.matches !== 'function') ||
       (feature.extensions !== undefined &&
         (!Array.isArray(feature.extensions) ||
-          feature.extensions.some((name) => typeof name !== 'string')))
+          feature.extensions.some((name) => typeof name !== 'string'))) ||
+      (feature.slash !== undefined &&
+        (!feature.slash ||
+          typeof feature.slash.markdown !== 'string' ||
+          (feature.slash.description !== undefined &&
+            typeof feature.slash.description !== 'string') ||
+          (feature.slash.keywords !== undefined &&
+            typeof feature.slash.keywords !== 'string') ||
+          (feature.slash.cursor !== undefined &&
+            (!Number.isInteger(feature.slash.cursor) ||
+              feature.slash.cursor < 0 ||
+              feature.slash.cursor > feature.slash.markdown.length)) ||
+          (feature.slash.rich !== undefined &&
+            typeof feature.slash.rich !== 'function')))
     )
       throw new Error('invalid or duplicate markdown syntax feature.')
     const entry = {

@@ -4,11 +4,33 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { filterCommands } from '../src/addons/slash-commands/commands.ts'
+import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
 import { electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 test('slash search matches labels, descriptions, and extension keywords without case sensitivity', () => {
+  assert.deepEqual(
+    markdownSyntax
+      .snapshot()
+      .filter((feature) => feature.id.startsWith('core.') && !feature.slash),
+    [],
+  )
+  const unregister = markdownSyntax.register('test', {
+    id: 'table',
+    label: 'Tables',
+    group: 'test',
+    level: 'block',
+    matches: (token) => token.type === 'table',
+    slash: {
+      markdown: '| a | b |',
+      description: 'Two columns with a header',
+      keywords: 'table grid',
+    },
+  })
   const context = {
+    editor: {
+      getSyntaxFeatures: () => markdownSyntax.snapshot(),
+    },
     commands: {
       getSlashCommands: () => [
         {
@@ -20,14 +42,29 @@ test('slash search matches labels, descriptions, and extension keywords without 
       ],
     },
   }
-  for (const query of ['table', 'TABLE', 'two COLUMNS'])
+  try {
+    for (const query of ['table', 'TABLE', 'two COLUMNS'])
+      assert.ok(
+        filterCommands(query, context).some(
+          (command) => command.id === 'test.table',
+        ),
+      )
+    for (const query of ['mixedcase', 'example', 'upper'])
+      assert.ok(
+        filterCommands(query, context).some(
+          (command) => command.id === 'custom',
+        ),
+      )
+    markdownSyntax.setEnabled('test.table', false)
     assert.ok(
-      filterCommands(query, context).some((command) => command.id === 'table'),
+      !filterCommands('table', context).some(
+        (command) => command.id === 'test.table',
+      ),
     )
-  for (const query of ['mixedcase', 'example', 'upper'])
-    assert.ok(
-      filterCommands(query, context).some((command) => command.id === 'custom'),
-    )
+  } finally {
+    markdownSyntax.setEnabled('test.table', true)
+    unregister()
+  }
 })
 
 test('slash commands work in both editors, preserve undo, and coexist with vim', {
@@ -61,14 +98,18 @@ test('slash commands work in both editors, preserve undo, and coexist with vim',
   assert.equal(await rich.locator('h2').count(), 1)
   await rich.press(undo)
   assert.equal(await read(), '/h2')
+  await rich.fill('/h6')
+  await menu.waitFor()
+  await rich.press('Enter')
+  assert.equal(await rich.locator('h6').count(), 1)
   await rich.fill('/')
   await menu.waitFor()
   await page.waitForFunction(
     () =>
       document.querySelectorAll('.slash-menu:popover-open [role="option"]')
-        .length === 12,
+        .length > 12,
   )
-  assert.equal(await menu.getByRole('option').count(), 12)
+  assert.ok((await menu.getByRole('option').count()) > 12)
   await menu
     .getByRole('option', { name: /^text plain paragraph$/i, exact: true })
     .click()
@@ -80,7 +121,9 @@ test('slash commands work in both editors, preserve undo, and coexist with vim',
   assert.equal(await rich.locator('h1').count(), 1)
   await rich.fill('/quote')
   await menu.waitFor()
-  await menu.getByRole('option', { name: /^Quote Indented quotation$/ }).click()
+  await menu
+    .getByRole('option', { name: /^Quotes Indented quotation$/ })
+    .click()
   assert.equal(await rich.locator('blockquote').count(), 1)
   await rich.fill('/')
   await menu.waitFor()
@@ -94,6 +137,11 @@ test('slash commands work in both editors, preserve undo, and coexist with vim',
   await menu.waitFor()
   await rich.press('Tab')
   assert.equal(await rich.locator('table').count(), 1)
+  await rich.fill('/alerts')
+  await menu.waitFor()
+  await rich.press('Enter')
+  assert.equal(await rich.locator('.github-alert').count(), 1)
+  assert.match(await read(), /> \[!NOTE\]/)
 
   await page.mouse.move(450, 18)
   await page
@@ -108,6 +156,10 @@ test('slash commands work in both editors, preserve undo, and coexist with vim',
   await source.press(undo)
   await source.press(undo)
   assert.equal(await read(), '/code')
+  await source.fill('/h6')
+  await menu.waitFor()
+  await source.press('Enter')
+  assert.equal(await read(), '###### ')
   await source.fill('/h1')
   await menu.waitFor()
   await page.mouse.click(500, 20)

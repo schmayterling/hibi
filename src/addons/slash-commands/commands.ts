@@ -1,4 +1,4 @@
-import type { ChainedCommands } from '@tiptap/core'
+import type { SyntaxSlashCommand } from '../../shared/markdown-syntax'
 import type { AddonContext } from '../api'
 
 type BlockCommand = {
@@ -6,10 +6,7 @@ type BlockCommand = {
   label: string
   description: string
   keywords: string
-  markdown: string
-  cursor?: number
-  rich: (chain: ChainedCommands) => ChainedCommands
-}
+} & SyntaxSlashCommand
 
 export type SlashCommand =
   | BlockCommand
@@ -21,7 +18,7 @@ export type SlashCommand =
       transform: (source: string) => string | null
     }
 
-export const commands: BlockCommand[] = [
+const commands: BlockCommand[] = [
   {
     id: 'text',
     label: 'Text',
@@ -29,74 +26,6 @@ export const commands: BlockCommand[] = [
     keywords: 'paragraph normal',
     markdown: '',
     rich: (chain) => chain.setParagraph(),
-  },
-  ...([1, 2, 3] as const).map((level) => ({
-    id: `heading-${level}`,
-    label: `Heading ${level}`,
-    description:
-      ['Large heading', 'Medium heading', 'Small heading'][level - 1] ?? '',
-    keywords: `h${level} title`,
-    markdown: `${'#'.repeat(level)} `,
-    rich: (chain: ChainedCommands) => chain.setHeading({ level }),
-  })),
-  {
-    id: 'bullet-list',
-    label: 'Bullet list',
-    description: 'List with bullet points',
-    keywords: 'ul bullets',
-    markdown: '- ',
-    rich: (chain) => chain.toggleBulletList(),
-  },
-  {
-    id: 'numbered-list',
-    label: 'Numbered list',
-    description: 'List with numbered steps',
-    keywords: 'ol numbers',
-    markdown: '1. ',
-    rich: (chain) => chain.toggleOrderedList(),
-  },
-  {
-    id: 'checklist',
-    label: 'Checklist',
-    description: 'Tasks with checkboxes',
-    keywords: 'todo task list',
-    markdown: '- [ ] ',
-    rich: (chain) => chain.toggleTaskList(),
-  },
-  {
-    id: 'quote',
-    label: 'Quote',
-    description: 'Indented quotation',
-    keywords: 'quotation',
-    markdown: '> ',
-    rich: (chain) => chain.toggleBlockquote(),
-  },
-  {
-    id: 'code',
-    label: 'Code block',
-    description: 'Code with syntax highlighting',
-    keywords: 'codeblock pre',
-    markdown: '```\n\n```',
-    cursor: 4,
-    rich: (chain) => chain.setCodeBlock(),
-  },
-  {
-    id: 'divider',
-    label: 'Divider',
-    description: 'Horizontal dividing line',
-    keywords: 'hr separator line',
-    markdown: '---\n\n',
-    rich: (chain) => chain.setHorizontalRule(),
-  },
-  {
-    id: 'table',
-    label: 'Table',
-    description: 'Two columns with a header',
-    keywords: 'grid columns',
-    markdown: '| column 1 | column 2 |\n| --- | --- |\n|  |  |',
-    cursor: 2,
-    rich: (chain) =>
-      chain.insertTable({ rows: 2, cols: 2, withHeaderRow: true }),
   },
 ]
 
@@ -106,18 +35,43 @@ export function slashQuery(text: string) {
 }
 
 export function filterCommands(query: string, context: AddonContext) {
-  const terms = query.toLowerCase().trim().split(/\s+/)
+  const normalized = query.toLowerCase().trim()
+  const terms = normalized.split(/\s+/)
   const available: SlashCommand[] = [
     ...commands,
+    ...context.editor.getSyntaxFeatures().flatMap((feature) =>
+      feature.enabled && feature.slash
+        ? [
+            {
+              id: feature.id,
+              label: feature.label,
+              ...feature.slash,
+              description:
+                feature.slash.description ?? feature.description ?? '',
+              keywords: feature.slash.keywords ?? '',
+            },
+          ]
+        : [],
+    ),
     ...context.commands
       .getSlashCommands()
       .map((command) => ({ ...command, keywords: command.keywords ?? '' })),
   ]
-  return available.filter((command) =>
-    terms.every((term) =>
-      `${command.label} ${command.description} ${command.keywords}`
-        .toLowerCase()
-        .includes(term),
-    ),
-  )
+  return available
+    .filter((command) =>
+      terms.every((term) =>
+        `${command.label} ${command.description} ${command.keywords}`
+          .toLowerCase()
+          .includes(term),
+      ),
+    )
+    .sort((a, b) => Number(exact(b)) - Number(exact(a)))
+
+  function exact(command: SlashCommand) {
+    return (
+      !!normalized &&
+      (command.label.toLowerCase() === normalized ||
+        command.keywords.toLowerCase().split(/\s+/).includes(normalized))
+    )
+  }
 }

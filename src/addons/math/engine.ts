@@ -27,6 +27,11 @@ export function startMath(context: AddonContext) {
     level: 'inline',
     extensions: ['inlineMath'],
     matches: (token) => token.type === 'inlineMath',
+    slash: {
+      markdown: '$$',
+      cursor: 1,
+      rich: (chain) => chain.insertInlineMath({ latex: '' }),
+    },
   })
   context.editor.registerSyntax({
     id: 'block',
@@ -36,6 +41,11 @@ export function startMath(context: AddonContext) {
     level: 'block',
     extensions: ['blockMath'],
     matches: (token) => token.type === 'blockMath',
+    slash: {
+      markdown: '$$\n\n$$',
+      cursor: 3,
+      rich: (chain) => chain.insertBlockMath({ latex: '' }),
+    },
   })
   let rich: Editor | null = null
   let source: EditorView | null = null

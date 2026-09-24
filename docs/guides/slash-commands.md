@@ -1,14 +1,14 @@
 # Slash commands
 
-Slash commands insert common blocks without leaving the keyboard. The addon is enabled by default; turn it on or off under **Settings → Addons**.
+Slash commands insert Markdown syntax without leaving the keyboard. The addon is enabled by default; turn it on or off under **Settings → Addons**.
 
-## Insert a block
+## Insert syntax
 
 1. Start a paragraph or source line with `/`.
 2. Type a command or keyword, such as `/h2`, `/todo`, or `/table`.
 3. Choose a result with Up/Down Arrow, then press Enter or Tab. You can also click a result.
 
-Escape or an outside click closes the menu and leaves your text unchanged. Commands can insert headings, lists, quotes, code blocks, dividers, and tables. Undo restores the previous block.
+Escape or an outside click closes the menu and leaves your text unchanged. The menu follows enabled syntax under **Settings → Syntax**, including syntax added by addons. Some syntax, such as links and HTML, appears only in source view. Undo restores the previous text.
 
 ## Addon actions
 

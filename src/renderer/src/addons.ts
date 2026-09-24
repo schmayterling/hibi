@@ -763,6 +763,10 @@ export function useAddons(
               },
               isSyntaxEnabled: (localId) =>
                 markdownSyntax.enabled(`${id}.${localId}`),
+              getSyntaxFeatures: () =>
+                markdownSyntax
+                  .snapshot()
+                  .filter((feature) => feature.scope !== 'document'),
               onSyntaxChange: (listener) =>
                 observe(markdownSyntax.subscribe, listener),
               onCodeHighlightingChange: (listener) =>

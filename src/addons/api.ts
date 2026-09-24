@@ -544,6 +544,10 @@ export type AddonContext = {
     ) => () => void
     /** Query this addon's local syntax id. */
     isSyntaxEnabled: (id: string) => boolean
+    /** Registered Markdown syntax and enabled state, including other addons. */
+    getSyntaxFeatures: () => readonly (MarkdownSyntaxFeature & {
+      enabled: boolean
+    })[]
     onSyntaxChange: (listener: () => void) => () => void
     /** Observe editor keydown/keyup without consuming input. Removed on addon stop. */
     onKeyEvent: (listener: (event: EditorKeyEvent) => void) => () => void

@@ -65,6 +65,12 @@ export default defineAddon({
       matches: (token) =>
         token.type === 'mermaidBlock' ||
         (token.type === 'code' && token.lang === 'mermaid'),
+      slash: {
+        markdown: '```mermaid\n\n```',
+        cursor: 11,
+        rich: (chain) =>
+          chain.insertContent({ type: 'mermaidBlock', attrs: { source: '' } }),
+      },
     })
     context.editor.registerFlavor({
       id: 'blocks',

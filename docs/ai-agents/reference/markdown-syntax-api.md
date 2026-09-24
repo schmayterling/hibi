@@ -4,5 +4,6 @@
 
 See the [addon API reference](../../development/addon-api-reference/README.md).
 
+- [SyntaxSlashCommand](../../development/addon-api-reference/SyntaxSlashCommand.md)
 - [MarkdownSyntaxFeature](../../development/addon-api-reference/MarkdownSyntaxFeature.md)
 - [DocumentSyntaxFeature](../../development/addon-api-reference/DocumentSyntaxFeature.md)

@@ -70,6 +70,7 @@ For installed packages, use the [SideloadFactory](SideloadFactory.md) and the [s
 
 - [DocumentSyntaxFeature](DocumentSyntaxFeature.md)
 - [MarkdownSyntaxFeature](MarkdownSyntaxFeature.md)
+- [SyntaxSlashCommand](SyntaxSlashCommand.md)
 
 ## Code languages
 

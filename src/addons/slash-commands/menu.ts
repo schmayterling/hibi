@@ -108,6 +108,7 @@ export function createSlashMenu(
   window.addEventListener('blur', blur)
   editor.addEventListener('blur', blur)
   menu.addEventListener('pointerdown', (event) => event.preventDefault())
+  const unsubscribeSyntax = context.editor.onSyntaxChange(reposition)
   return {
     update(next: SlashMatch | null) {
       if (destroyed) return
@@ -222,6 +223,7 @@ export function createSlashMenu(
       window.removeEventListener('resize', blur)
       window.removeEventListener('blur', blur)
       editor.removeEventListener('blur', blur)
+      unsubscribeSyntax()
       menu.remove()
     },
   }

@@ -1,6 +1,7 @@
 import { Strike } from '@tiptap/extension-strike'
 import { TaskItem } from '@tiptap/extension-task-item'
 import { TaskList } from '@tiptap/extension-task-list'
+import type { SyntaxSlashCommand } from '../../shared/markdown-syntax'
 import { defineAddon, type MarkdownFlavor } from '../api'
 import { alertMarkdown, alertMarker } from './alerts'
 import alertCss from './alerts.css?inline'
@@ -48,6 +49,40 @@ export default defineAddon({
     context.styles.register('alerts', alertCss)
     context.editor.registerFlavor(github)
     context.editor.registerFlavor(obsidian)
+    const slash: Record<
+      'tables' | 'tasks' | 'strike' | 'alerts',
+      SyntaxSlashCommand
+    > = {
+      tables: {
+        markdown: '| column 1 | column 2 |\n| --- | --- |\n|  |  |',
+        cursor: 2,
+        description: 'Two columns with a header',
+        keywords: 'table grid columns',
+        rich: (chain) =>
+          chain.insertTable({ rows: 2, cols: 2, withHeaderRow: true }),
+      },
+      tasks: {
+        markdown: '- [ ] ',
+        description: 'Tasks with checkboxes',
+        keywords: 'checklist todo task list',
+        rich: (chain) => chain.toggleTaskList(),
+      },
+      strike: {
+        markdown: '~~~~',
+        cursor: 2,
+        rich: (chain) => chain.toggleStrike(),
+      },
+      alerts: {
+        markdown: '> [!NOTE]\n> ',
+        keywords: 'callout admonition',
+        rich: (chain) =>
+          chain.insertContent({
+            type: 'githubAlert',
+            attrs: { alertType: 'note' },
+            content: [{ type: 'paragraph' }],
+          }),
+      },
+    }
     for (const [id, label, extensions, matches] of [
       [
         'tables',
@@ -84,6 +119,7 @@ export default defineAddon({
         level: id === 'strike' ? 'inline' : 'block',
         extensions,
         matches,
+        slash: slash[id],
       })
     context.editor.registerCodeLanguage({
       id: 'markdown',

@@ -346,7 +346,6 @@
     "src/addons/tags/index.tsx"
   ],
   "a2b5baef0f36": [
-    "src/addons/slash-commands/commands.ts",
     "src/renderer/src/FormattingToolbar.tsx"
   ],
   "42575392ebf8": [
@@ -449,7 +448,6 @@
     "src/renderer/src/UpdateSettings.tsx"
   ],
   "7346030400bf": [
-    "src/addons/slash-commands/commands.ts",
     "src/renderer/src/FormattingToolbar.tsx"
   ],
   "1a9f084bf2db": [
@@ -703,7 +701,6 @@
     "src/renderer/src/settings-categories.ts"
   ],
   "7545380a2996": [
-    "src/addons/slash-commands/commands.ts",
     "src/renderer/src/FormattingToolbar.tsx"
   ],
   "ea9255d5c74d": [
@@ -713,7 +710,7 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "662b650e135e": [
-    "src/addons/slash-commands/commands.ts"
+    "src/renderer/src/markdown-syntax.ts"
   ],
   "10ee94005bb9": [
     "src/site/main.tsx"
@@ -1118,7 +1115,6 @@
     "src/renderer/src/StartupPlaceholder.tsx"
   ],
   "cc29053ff492": [
-    "src/addons/slash-commands/commands.ts",
     "src/renderer/src/FormattingToolbar.tsx"
   ],
   "5f4b5459628f": [
@@ -1771,7 +1767,6 @@
     "src/renderer/src/markdown-syntax.ts"
   ],
   "a6cd26010456": [
-    "src/addons/slash-commands/commands.ts",
     "src/renderer/src/FormattingToolbar.tsx"
   ],
   "3407149a6920": [
@@ -1851,7 +1846,7 @@
     "src/renderer/src/WorkspacesSidebar.tsx"
   ],
   "3e7e6d92f47d": [
-    "src/addons/slash-commands/commands.ts"
+    "src/renderer/src/markdown-syntax.ts"
   ],
   "c15f1530d219": [
     "src/renderer/src/HotkeySettings.tsx",
@@ -1956,7 +1951,7 @@
     "src/renderer/src/FormattingToolbar.tsx"
   ],
   "996d077b651b": [
-    "src/addons/slash-commands/commands.ts"
+    "src/renderer/src/markdown-syntax.ts"
   ],
   "9ee1102f2828": [
     "src/renderer/src/markdown-syntax.ts"
@@ -2262,10 +2257,10 @@
     "src/addons/frontmatter/Properties.tsx"
   ],
   "744bd1526d4c": [
-    "src/addons/slash-commands/commands.ts"
+    "src/renderer/src/markdown-syntax.ts"
   ],
   "556dc1b4d78c": [
-    "src/addons/slash-commands/commands.ts"
+    "src/renderer/src/markdown-syntax.ts"
   ],
   "8a6bdb6b18da": [
     "src/addons/diagnostics/Settings.tsx"
@@ -2674,7 +2669,6 @@
     "src/addons/frontmatter/Properties.tsx"
   ],
   "cc62f6c7b2a8": [
-    "src/addons/slash-commands/commands.ts",
     "src/renderer/src/FormattingToolbar.tsx"
   ],
   "ccece659dfb1": [
@@ -3072,7 +3066,6 @@
     "src/main/index.ts"
   ],
   "eb4cdebd82bf": [
-    "src/addons/slash-commands/commands.ts",
     "src/renderer/src/FormattingToolbar.tsx"
   ],
   "8dc37869d63b": [
@@ -3779,7 +3772,6 @@
     "src/ui/ColorschemeSettings.tsx"
   ],
   "16d1c9050a0b": [
-    "src/addons/slash-commands/commands.ts",
     "src/renderer/src/FormattingToolbar.tsx"
   ],
   "45cb20fc920a": [
@@ -3796,7 +3788,7 @@
     "src/addons/tags/index.tsx"
   ],
   "b846ef5125c2": [
-    "src/addons/slash-commands/commands.ts"
+    "src/addons/markdown/index.tsx"
   ],
   "71988c4d8e08": [
     "src/addons/frontmatter/Properties.tsx",
@@ -4412,7 +4404,7 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "9a928ba210da": [
-    "src/addons/slash-commands/commands.ts"
+    "src/addons/markdown/index.tsx"
   ],
   "47561c884131": [
     "src/addons/slash-commands/manifest.ts"

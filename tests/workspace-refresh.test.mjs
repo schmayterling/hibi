@@ -147,4 +147,17 @@ test('save emits content changes and rename publishes the updated tree', {
     ),
     ['two.md'],
   )
+
+  await page.evaluate(() => {
+    window.workspaceChanges = []
+  })
+  await page.evaluate(() =>
+    window.hibi.updateWorkspaceSettings({ action: 'create-manifest' }),
+  )
+  await delay(450)
+  const metadataTrees = (
+    await page.evaluate(() => window.workspaceChanges)
+  ).filter((change) => change?.kind === 'tree')
+  assert.equal(metadataTrees.length, 1)
+  assert.deepEqual(metadataTrees[0].paths, ['.hibi/workspace.json'])
 })

@@ -324,16 +324,16 @@ async function flushWatcherEvents(selected: string) {
   const contentPaths: string[] = []
   for (const [path] of events) {
     if (!relevantWatchPath(path)) continue
-    if (metadataPath(path)) {
-      treePaths.push(path)
-      continue
-    }
     const stat = await fileStatus(selected, path)
     const current = fingerprint(stat)
     const acknowledged = acknowledgedPaths.get(path)
     if (acknowledged) {
       if (Date.now() > acknowledged.expires) acknowledgedPaths.delete(path)
       else if (acknowledged.fingerprint === current) continue
+    }
+    if (metadataPath(path)) {
+      treePaths.push(path)
+      continue
     }
     if (
       path.split('/').includes('node_modules') ||

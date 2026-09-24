@@ -93,7 +93,7 @@
     "@vitejs/plugin-react": "5.2.0",
     "d3-force": "3.0.0",
     "dompurify": "3.4.15",
-    "electron": "44.3.0",
+    "electron": "44.4.3",
     "electron-builder": "26.15.3",
     "electron-vite": "5.0.0",
     "geist": "1.7.2",

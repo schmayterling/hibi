@@ -699,6 +699,9 @@
   "58ff373bd894": [
     "src/addons/quick-note/Settings.tsx"
   ],
+  "e4ca16a3ca1e": [
+    "src/renderer/src/SourceEditor.tsx"
+  ],
   "26a5aa15d2b1": [
     "src/main/media.ts"
   ],
@@ -1460,9 +1463,6 @@
   "0daa134af314": [
     "src/shared/document-edits.ts"
   ],
-  "b3cfc66057c5": [
-    "src/renderer/src/main.tsx"
-  ],
   "c7bf14938074": [
     "src/addons/asciidoc/manifest.ts"
   ],
@@ -1495,6 +1495,9 @@
   ],
   "fab4539d26e0": [
     "src/renderer/src/settings-pages.ts"
+  ],
+  "f447a42481d6": [
+    "src/renderer/src/main.tsx"
   ],
   "936a161c3931": [
     "src/renderer/src/SettingsScreen.tsx",

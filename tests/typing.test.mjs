@@ -60,14 +60,29 @@ test('typing pills, source formatting shortcuts, and sidebar shortcut', {
         delay,
         ...args,
       )
+    const idle = window.requestIdleCallback.bind(window)
+    const pending = []
+    window.requestIdleCallback = (callback, options) => {
+      pending.push([callback, options])
+      return pending.length
+    }
+    window.releaseTypingIdle = () => {
+      window.requestIdleCallback = idle
+      for (const [callback, options] of pending) idle(callback, options)
+    }
   })
   await page.locator('#addon-typing-speed').click()
   await page.getByRole('button', { name: /^back to app$/i }).click()
+  const cpm = page.locator('[data-status-id="typing-speed.cpm"]')
+  const wpm = page.locator('[data-status-id="typing-speed.wpm"]')
+  try {
+    await cpm.waitFor()
+  } finally {
+    await page.evaluate(() => window.releaseTypingIdle())
+  }
   await page
     .getByRole('textbox', { name: /document editor/i })
     .pressSequentially('hello')
-  const cpm = page.locator('[data-status-id="typing-speed.cpm"]')
-  const wpm = page.locator('[data-status-id="typing-speed.wpm"]')
   await page.waitForFunction(
     () =>
       document.querySelector('[data-status-id="typing-speed.cpm"]')

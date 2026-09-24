@@ -27,6 +27,7 @@ export default defineConfig({
           'typst-worker': resolve('src/addons/typst/compiler-worker.ts'),
           'format-worker': resolve('src/addons/_shared/format-worker.ts'),
         },
+        output: { chunkFileNames: 'chunks/[name].js' },
       },
     },
   },

@@ -75,19 +75,7 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     .getByRole('treeitem', { name: /^report\.typ$/i, exact: true })
     .click()
   const preview = page.getByAltText(/Typst document preview/)
-  try {
-    await preview.waitFor()
-  } catch {
-    const state = await page.evaluate(() => {
-      const preview = document.querySelector('.typst-preview')
-      return {
-        mounted: !!preview,
-        busy: preview?.getAttribute('aria-busy'),
-        message: preview?.textContent?.slice(0, 500),
-      }
-    })
-    assert.fail(`Typst preview unavailable: ${JSON.stringify(state)}`)
-  }
+  await preview.waitFor()
   await page.waitForFunction(
     () =>
       document.querySelector('.typst-preview')?.getAttribute('aria-busy') ===

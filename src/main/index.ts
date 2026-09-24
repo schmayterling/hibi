@@ -172,21 +172,28 @@ if (testing && process.platform === 'darwin')
   app.setActivationPolicy('accessory')
 const pendingAssets = new Map<
   number,
-  { kind: string; at: number; phase: string }
+  { kind: string; at: number; phase: string; generation: number }
 >()
-const recentAssets: { kind: string; ms: number; status: number }[] = []
+const recentAssets: {
+  kind: string
+  at: number
+  ms: number
+  status: number
+  generation: number
+}[] = []
 const entryAssets = new Map<
   string,
-  { kind: string; ms: number; status: number }
+  { kind: string; at: number; ms: number; status: number; generation: number }
 >()
 const deliveredAssets = new Map<
   string,
-  { kind: string; at: number; status: number | string }
+  { kind: string; at: number; status: number | string; generation: number }
 >()
 const recentDeliveries: {
   kind: string
   at: number
   status: number | string
+  generation: number
 }[] = []
 const windowLoadEvents: {
   event: string
@@ -194,6 +201,8 @@ const windowLoadEvents: {
   code: number | undefined
 }[] = []
 let assetRequestId = 0
+let assetGeneration = 0
+let navigationAt = 0
 function staticAssetKind(pathname: string) {
   if (pathname === '/') return 'html'
   if (pathname === entryScriptPath) return 'entry-js'
@@ -211,6 +220,18 @@ function traceWindowLoad(event: string, code?: number) {
   windowLoadEvents.push({ event, at: Math.round(performance.now()), code })
   if (windowLoadEvents.length > 16) windowLoadEvents.shift()
 }
+function resetStartupTrace() {
+  if (!testing) return
+  assetGeneration++
+  navigationAt = Math.round(performance.now())
+  pendingAssets.clear()
+  recentAssets.length = 0
+  entryAssets.clear()
+  deliveredAssets.clear()
+  recentDeliveries.length = 0
+  windowLoadEvents.length = 0
+  traceWindowLoad('navigation-start')
+}
 function traceDeliveredAsset(url: string, status: number | string) {
   const pathname = new URL(url).pathname
   if (
@@ -222,6 +243,7 @@ function traceDeliveredAsset(url: string, status: number | string) {
     kind: staticAssetKind(pathname),
     at: Math.round(performance.now()),
     status,
+    generation: assetGeneration,
   }
   if (['html', 'entry-js', 'entry-css'].includes(completed.kind))
     deliveredAssets.set(completed.kind, completed)
@@ -231,10 +253,13 @@ function traceDeliveredAsset(url: string, status: number | string) {
 if (testing)
   Object.defineProperty(globalThis, '__hibiStartupTrace', {
     value: () => ({
+      generation: assetGeneration,
+      navigationAt,
       pendingAssets: [...pendingAssets.values()].slice(-12).map((request) => ({
         kind: request.kind,
         phase: request.phase,
         ms: Math.round(performance.now() - request.at),
+        generation: request.generation,
       })),
       entryAssets: [...entryAssets.values()],
       deliveredAssets: [...deliveredAssets.values()],
@@ -361,7 +386,9 @@ function titleBarColors() {
 
 async function serveAsset(request: Request): Promise<Response> {
   if (request.method !== 'GET') return new Response(null, { status: 405 })
-  let trace: { kind: string; at: number; phase: string } | undefined
+  let trace:
+    | { kind: string; at: number; phase: string; generation: number }
+    | undefined
   let traceId = 0
   let status = 404
   try {
@@ -376,6 +403,7 @@ async function serveAsset(request: Request): Promise<Response> {
         kind: staticAssetKind(parsed.pathname),
         at: performance.now(),
         phase: 'resolve',
+        generation: assetGeneration,
       }
       traceId = ++assetRequestId
       pendingAssets.set(traceId, trace)
@@ -421,15 +449,19 @@ async function serveAsset(request: Request): Promise<Response> {
   } finally {
     if (trace) {
       pendingAssets.delete(traceId)
-      const completed = {
-        kind: trace.kind,
-        ms: Math.round(performance.now() - trace.at),
-        status,
+      if (trace.generation === assetGeneration) {
+        const completed = {
+          kind: trace.kind,
+          at: Math.round(trace.at),
+          ms: Math.round(performance.now() - trace.at),
+          status,
+          generation: trace.generation,
+        }
+        if (['html', 'entry-js', 'entry-css'].includes(trace.kind))
+          entryAssets.set(trace.kind, completed)
+        recentAssets.push(completed)
+        if (recentAssets.length > 16) recentAssets.shift()
       }
-      if (['html', 'entry-js', 'entry-css'].includes(trace.kind))
-        entryAssets.set(trace.kind, completed)
-      recentAssets.push(completed)
-      if (recentAssets.length > 16) recentAssets.shift()
     }
   }
 }
@@ -514,7 +546,10 @@ function createWindow(): void {
   window.webContents.on(
     'did-start-navigation',
     (_event, _url, _inPlace, isMainFrame) => {
-      if (isMainFrame) journalReady = false
+      if (isMainFrame) {
+        journalReady = false
+        if (!_inPlace) resetStartupTrace()
+      }
     },
   )
   let flushRequest:

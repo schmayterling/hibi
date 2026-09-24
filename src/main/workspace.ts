@@ -319,6 +319,7 @@ async function flushWatcherEvents(selected: string) {
     return
   }
   const ignored = await workspaceIgnore(selected)
+  if (root !== selected) return
   const treePaths: string[] = []
   const contentPaths: string[] = []
   for (const [path] of events) {
@@ -352,6 +353,7 @@ async function flushWatcherEvents(selected: string) {
       treePaths.push(path)
     else contentPaths.push(path)
   }
+  if (root !== selected) return
   if (treePaths.length)
     await requestWorkspaceScan([...treePaths, ...contentPaths])
   else if (contentPaths.length)

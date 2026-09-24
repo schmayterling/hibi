@@ -90,6 +90,7 @@ const sameReferenceSyntax = (
 
 export function SourceEditor({
   document,
+  viewId = 'default',
   editTarget,
   markdownMode,
   markdownLanguage,
@@ -113,6 +114,7 @@ export function SourceEditor({
   onLink,
 }: {
   document: DocumentState
+  viewId?: string
   editTarget: boolean
   markdownMode: boolean
   markdownLanguage?: typeof import('@codemirror/lang-markdown').markdown
@@ -183,11 +185,11 @@ export function SourceEditor({
   const [languageReady, setLanguageReady] = useState(!codeLanguage)
   const [inputError, setInputError] = useState('')
   const [bridgeRetry, retryBridge] = useState(0)
-  const session = documentRuntime.session()!
+  const session = documentRuntime.session(document.tabId)!
   // biome-ignore lint/correctness/useExhaustiveDependencies: retry refreshes a bridge whose snapshot went stale before attachment.
   const bridge = useMemo(
-    () => createSourceSession(session),
-    [session, bridgeRetry],
+    () => createSourceSession(session, viewId),
+    [session, viewId, bridgeRetry],
   )
   const [fontReadyBridge, setFontReadyBridge] = useState<ReturnType<
     typeof createSourceSession
@@ -431,7 +433,7 @@ export function SourceEditor({
 
   useEffect(() => {
     if (!host.current) return
-    const active = documentRuntime.get()
+    const active = documentRuntime.get(document.tabId)
     if (
       !active ||
       active.tabId !== document.tabId ||
@@ -439,7 +441,7 @@ export function SourceEditor({
     )
       return
     if (
-      documentRuntime.session() !== session ||
+      documentRuntime.session(document.tabId) !== session ||
       !session.ownsCurrentSnapshot(bridge.snapshot())
     ) {
       retryBridge((retry) => retry + 1)

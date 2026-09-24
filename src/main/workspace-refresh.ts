@@ -34,10 +34,19 @@ export function createScanCoordinator<T>(
       }
       return task
     },
-    current: () => task,
+    invalidate() {
+      if (!closed && task) generation += 1
+    },
     close() {
       closed = true
       generation += 1
     },
   }
+}
+
+export function watchNeedsScan(
+  cached: 'file' | 'folder' | null,
+  current: 'file' | 'folder' | null,
+): boolean {
+  return cached !== current || current === 'folder'
 }

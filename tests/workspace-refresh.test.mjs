@@ -14,7 +14,7 @@ const bundle = await build({
   format: 'esm',
   write: false,
 })
-const { createScanCoordinator } = await import(
+const { createScanCoordinator, watchNeedsScan } = await import(
   `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
 )
 
@@ -54,6 +54,30 @@ test('closing a workspace prevents an in-flight scan from publishing', async () 
   complete('old workspace')
   assert.equal(await pending, null)
   assert.deepEqual(published, [])
+})
+
+test('watcher invalidation during a scan suppresses its stale result', async () => {
+  const scans = []
+  const published = []
+  const coordinator = createScanCoordinator(
+    () => new Promise((resolve) => scans.push(resolve)),
+    (value) => published.push(value),
+  )
+  const pending = coordinator.request()
+  coordinator.invalidate()
+  scans.shift()('before change')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(published, [])
+  scans.shift()('after change')
+  assert.equal(await pending, 'after change')
+  assert.deepEqual(published, ['after change'])
+})
+
+test('watcher rescans new, removed, and parent directory changes', () => {
+  assert.equal(watchNeedsScan(null, 'file'), true)
+  assert.equal(watchNeedsScan('file', null), true)
+  assert.equal(watchNeedsScan('folder', 'folder'), true)
+  assert.equal(watchNeedsScan('file', 'file'), false)
 })
 
 test('save emits content changes and rename publishes the updated tree', {

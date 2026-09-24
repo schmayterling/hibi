@@ -1,11 +1,23 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { errorMessage } from '../shared/errors'
-import type { WorkspaceIndex } from '../shared/workspace'
+import type { WorkspaceEntry, WorkspaceIndex } from '../shared/workspace'
 import type { AddonContext } from './api'
+
+function hasPath(entries: WorkspaceEntry[], path: string): boolean {
+  let level = entries
+  for (const name of path.split('/')) {
+    const entry = level.find((item) => item.name === name)
+    if (!entry) return false
+    if (entry.path === path) return true
+    level = entry.children ?? []
+  }
+  return false
+}
 
 /** Active panels index text only; draft edits update in memory without disk reads. */
 export function useWorkspaceSnapshot(context: AddonContext) {
   const [revision, refresh] = useState(0)
+  const indexedPaths = useRef(new Set<string>())
   const [document, setDocument] = useState(() => context.editor.getDocument())
   const [state, setState] = useState<{
     index: WorkspaceIndex | null
@@ -18,7 +30,19 @@ export function useWorkspaceSnapshot(context: AddonContext) {
       clearTimeout(timer)
       timer = setTimeout(() => refresh((value) => value + 1), 150)
     }
-    const remove = window.hibi.onWorkspaceChanged(schedule)
+    const remove = window.hibi.onWorkspaceChanged((workspace, change) => {
+      if (
+        change?.kind === 'content' &&
+        change.paths &&
+        !change.paths.some(
+          (path) =>
+            indexedPaths.current.has(path) ||
+            (workspace && hasPath(workspace.entries, path)),
+        )
+      )
+        return
+      schedule()
+    })
     window.addEventListener('focus', schedule)
     return () => {
       clearTimeout(timer)
@@ -52,6 +76,7 @@ export function useWorkspaceSnapshot(context: AddonContext) {
       .index()
       .then((index) => {
         if (!active) return
+        indexedPaths.current = new Set(index?.pages.map((page) => page.path))
         setDocument(context.editor.getDocument())
         setState({ index, loading: false, error: '' })
       })

@@ -3,6 +3,7 @@ import { type FSWatcher, type Stats, watch } from 'node:fs'
 import { lstat, readdir, realpath } from 'node:fs/promises'
 import { basename, isAbsolute, join, parse, relative, sep } from 'node:path'
 import { app, type BrowserWindow, dialog, shell } from 'electron'
+import ignore from 'ignore'
 import type {
   WorkspaceChange,
   WorkspaceEntry,
@@ -27,19 +28,21 @@ import {
   rememberWorkspace,
 } from './recent-workspaces'
 import { workspaceIgnore, workspaceMetadata } from './workspace-metadata'
-import { createScanCoordinator } from './workspace-refresh'
+import { createScanCoordinator, watchNeedsScan } from './workspace-refresh'
 import { showAllWorkspaceFiles } from './workspace-settings'
 
 type ScanResult = {
   entries: WorkspaceEntry[]
   manifest: WorkspaceManifest | null
   showAllFiles: boolean
+  ignored: ReturnType<typeof ignore>
 }
 
 let root: string | null = null
 let entries: WorkspaceEntry[] = []
 let manifest: WorkspaceManifest | null = null
 let showingAllFiles = false
+let ignoredPaths: ReturnType<typeof ignore> | null = null
 let watcher: FSWatcher | undefined
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
 let scanCoordinator:
@@ -48,7 +51,6 @@ let scanCoordinator:
 let pendingTreePaths: Set<string> | null = new Set()
 let watcherEvents = new Map<string, 'change' | 'rename'>()
 let unknownWatcherEvent = false
-let unknownWatcherContent = false
 let loadGeneration = 0
 const acknowledgedPaths = new Map<
   string,
@@ -209,8 +211,17 @@ function fingerprint(info: Stats | null): string | null {
 }
 
 async function acknowledgePaths(base: string, paths: string[]) {
+  const now = Date.now()
+  for (const [path, acknowledged] of acknowledgedPaths)
+    if (acknowledged.expires < now) acknowledgedPaths.delete(path)
+  const affected = new Set(paths)
+  for (const path of paths) {
+    const parts = path.split('/')
+    for (let length = 1; length < parts.length; length++)
+      affected.add(parts.slice(0, length).join('/'))
+  }
   await Promise.all(
-    paths.map(async (path) => {
+    [...affected].map(async (path) => {
       const current = fingerprint(await fileStatus(base, path))
       if (root === base)
         acknowledgedPaths.set(path, {
@@ -300,11 +311,8 @@ function relevantWatchPath(path: string): boolean {
 async function flushWatcherEvents(selected: string) {
   const events = watcherEvents
   const unknown = unknownWatcherEvent
-  const unknownContent = unknownWatcherContent
   watcherEvents = new Map()
   unknownWatcherEvent = false
-  unknownWatcherContent = false
-  await scanCoordinator?.current()?.catch(() => undefined)
   if (root !== selected) return
   if (unknown) {
     await requestWorkspaceScan(null)
@@ -313,7 +321,7 @@ async function flushWatcherEvents(selected: string) {
   const ignored = await workspaceIgnore(selected)
   const treePaths: string[] = []
   const contentPaths: string[] = []
-  for (const [path, eventType] of events) {
+  for (const [path] of events) {
     if (!relevantWatchPath(path)) continue
     if (metadataPath(path)) {
       treePaths.push(path)
@@ -334,28 +342,20 @@ async function flushWatcherEvents(selected: string) {
       contentPaths.push(path)
       continue
     }
-    if (eventType === 'change') {
-      contentPaths.push(path)
-      continue
-    }
     const visibleKind = stat?.isDirectory()
       ? 'folder'
       : stat?.isFile() &&
           (showingAllFiles || isDocumentName(basename(path), true))
         ? 'file'
         : null
-    if ((cachedEntry(path)?.kind ?? null) !== visibleKind) treePaths.push(path)
+    if (watchNeedsScan(cachedEntry(path)?.kind ?? null, visibleKind))
+      treePaths.push(path)
     else contentPaths.push(path)
   }
   if (treePaths.length)
-    await requestWorkspaceScan(
-      unknownContent ? null : [...treePaths, ...contentPaths],
-    )
-  else if (contentPaths.length || unknownContent)
-    onChanged({
-      kind: 'content',
-      paths: unknownContent ? null : contentPaths,
-    })
+    await requestWorkspaceScan([...treePaths, ...contentPaths])
+  else if (contentPaths.length)
+    onChanged({ kind: 'content', paths: contentPaths })
 }
 
 function atomicTempTarget(path: string): string | null {
@@ -377,16 +377,19 @@ function queueWatcherEvent(
   const path =
     filename && relativePath(selected, join(selected, filename.toString()))
   const target = path && atomicTempTarget(path)
-  if (target) watcherEvents.set(target, 'rename')
-  else if (
-    path &&
-    !showingAllFiles &&
-    !metadataPath(path) &&
-    path.split('/').length === 1 &&
-    path.startsWith('.') &&
-    eventType === 'rename'
+  const changedPath = target || path
+  const acknowledged = changedPath && acknowledgedPaths.get(changedPath)
+  if (
+    !changedPath ||
+    (relevantWatchPath(changedPath) &&
+      (metadataPath(changedPath) ||
+        (!changedPath.split('/').includes('node_modules') &&
+          !ignoredPaths?.ignores(changedPath) &&
+          !ignoredPaths?.ignores(`${changedPath}/`))) &&
+      (!acknowledged || acknowledged.expires < Date.now()))
   )
-    unknownWatcherContent = true
+    scanCoordinator?.invalidate()
+  if (target) watcherEvents.set(target, 'rename')
   else if (path)
     watcherEvents.set(
       path,
@@ -424,13 +427,15 @@ export async function openWorkspace(
 export async function loadWorkspace(
   selected: string,
 ): Promise<WorkspaceState | null> {
+  const loading = ++loadGeneration
   const nextRoot = await realpath(selected)
+  if (loading !== loadGeneration) return getWorkspace()
   if (nextRoot === root) {
     await refreshWorkspace()
+    if (loading !== loadGeneration) return getWorkspace()
     await rememberWorkspace(nextRoot)
     return getWorkspace()
   }
-  const loading = ++loadGeneration
   const showAllFiles = await showAllWorkspaceFiles()
   const [nextEntries, metadata] = await Promise.all([
     scanWorkspace(nextRoot, showAllFiles),
@@ -442,13 +447,13 @@ export async function loadWorkspace(
   scanCoordinator?.close()
   watcherEvents.clear()
   unknownWatcherEvent = false
-  unknownWatcherContent = false
   acknowledgedPaths.clear()
   pendingTreePaths = new Set()
   root = nextRoot
   entries = nextEntries
   manifest = metadata.manifest
   showingAllFiles = showAllFiles
+  ignoredPaths = ignore().add(metadata.ignore)
   scanCoordinator = createScanCoordinator(
     async () => {
       const showAllFiles = await showAllWorkspaceFiles()
@@ -456,13 +461,19 @@ export async function loadWorkspace(
         scanWorkspace(nextRoot, showAllFiles),
         workspaceMetadata(nextRoot),
       ])
-      return { entries: next, manifest: metadata.manifest, showAllFiles }
+      return {
+        entries: next,
+        manifest: metadata.manifest,
+        showAllFiles,
+        ignored: ignore().add(metadata.ignore),
+      }
     },
     (next) => {
       if (root !== nextRoot) return
       entries = next.entries
       manifest = next.manifest
       showingAllFiles = next.showAllFiles
+      ignoredPaths = next.ignored
       onChanged({ kind: 'tree', paths: takeTreePaths() })
     },
   )
@@ -528,12 +539,12 @@ export async function deleteKnownWorkspace(
     watcher = undefined
     watcherEvents.clear()
     unknownWatcherEvent = false
-    unknownWatcherContent = false
     acknowledgedPaths.clear()
     pendingTreePaths = new Set()
     root = null
     entries = []
     manifest = null
+    ignoredPaths = null
   }
   await forgetWorkspace(item.path)
   onChanged({ kind: 'tree', paths: null })

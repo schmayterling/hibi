@@ -1573,9 +1573,40 @@ summary {
   color: var(--muted);
 }
 .command-search .ui-input {
-  width: 100%;
+  flex: 1;
+  min-width: 100px;
   font-size: var(--text-heading);
   height: 26px;
+}
+.command-scopes {
+  display: flex;
+  gap: 4px;
+  max-width: 55%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.command-scopes::-webkit-scrollbar {
+  display: none;
+}
+.command-scope {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  max-width: 180px;
+  min-width: 0;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--active);
+  color: var(--ink);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.command-scope span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .command-search .ui-input[data-variant="inline"]:focus-visible {
   box-shadow: none;
@@ -1611,12 +1642,20 @@ summary {
   color: var(--muted);
   flex-shrink: 0;
 }
-.command-label {
+.command-copy {
   flex: 1;
   min-width: 0;
+}
+.command-label,
+.command-detail {
+  display: block;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+.command-detail {
+  color: var(--muted);
+  font-size: var(--text-xs);
 }
 .command-category {
   color: var(--muted);

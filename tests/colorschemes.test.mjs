@@ -331,4 +331,5 @@ test('app palettes update all surfaces, preserve editing, and persist native app
   await harness.waitForFunction(
     () => document.documentElement.dataset.colorscheme === 'custom.midnight',
   )
+  await harness.close()
 })

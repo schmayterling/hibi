@@ -165,8 +165,11 @@ test('modified link clicks, note/settings history, and file-menu remote imports'
   const categoryTab = page.getByRole('tab', { name: /^hibi$/i, exact: true })
   const backBounds = await back.boundingBox()
   const tabBounds = await categoryTab.boundingBox()
+  const scrollbarWidth = await page
+    .locator('.settings-sidebar .sidebar-scroll')
+    .evaluate((scroll) => scroll.offsetWidth - scroll.clientWidth)
   assert.equal(backBounds.x, tabBounds.x)
-  assert.equal(backBounds.width, tabBounds.width)
+  assert.ok(Math.abs(backBounds.width - tabBounds.width - scrollbarWidth) < 1)
   assert.ok(backBounds.y + backBounds.height < tabBounds.y)
   await back.click()
   await page.waitForFunction(

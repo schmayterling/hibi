@@ -283,7 +283,8 @@
   ],
   "76900f1bfd16": [
     "src/main/index.ts",
-    "src/renderer/src/AddonReadme.tsx"
+    "src/renderer/src/AddonReadme.tsx",
+    "src/renderer/src/CommandPalette.tsx"
   ],
   "a6989680b352": [
     "src/renderer/src/SettingsScreen.tsx",
@@ -559,6 +560,9 @@
   "c7c709c5d2bb": [
     "src/addons/documentation/native.ts"
   ],
+  "7beddfe6d6c2": [
+    "src/renderer/src/main.tsx"
+  ],
   "3426e2f6e182": [
     "src/addons/vim/Settings.tsx"
   ],
@@ -719,9 +723,6 @@
   ],
   "ecf83f59ca6c": [
     "src/main/sideload.ts"
-  ],
-  "b269dc4e81a5": [
-    "src/renderer/src/CommandPalette.tsx"
   ],
   "82a9c46ffa47": [
     "src/addons/git/Panel.tsx"
@@ -1271,6 +1272,9 @@
   "14c7bbeb603c": [
     "src/renderer/src/Editor.tsx",
     "src/renderer/src/SourceEditor.tsx"
+  ],
+  "7ce59a82b75c": [
+    "src/renderer/src/main.tsx"
   ],
   "7bc860ccf5e3": [
     "src/addons/frontmatter/manifest.ts"
@@ -2204,6 +2208,9 @@
   "a511909161e1": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
+  "bcccb5388362": [
+    "src/renderer/src/CommandPalette.tsx"
+  ],
   "dbcd5e7bb7a0": [
     "src/addons/documentation/ExportDialog.tsx",
     "src/ui/ColorschemeSettings.tsx"
@@ -2573,6 +2580,9 @@
   "a092ad6b8be0": [
     "src/addons/graph/Panel.tsx"
   ],
+  "633975ad88f7": [
+    "src/renderer/src/CommandPalette.tsx"
+  ],
   "92a350272aa9": [
     "src/renderer/src/StartupPlaceholder.tsx"
   ],
@@ -2683,6 +2693,7 @@
     "src/addons/vim/Settings.tsx"
   ],
   "ed077f3d8125": [
+    "src/renderer/src/CommandPalette.tsx",
     "src/renderer/src/main.tsx"
   ],
   "48b28302e75c": [
@@ -2761,6 +2772,9 @@
   ],
   "cb30b7d97617": [
     "src/main/local-diagnostics/runtime.ts"
+  ],
+  "45fb43016315": [
+    "src/renderer/src/main.tsx"
   ],
   "ca381c1e76e6": [
     "src/shared/hotkeys.ts"
@@ -3498,6 +3512,9 @@
   ],
   "0e53b6d8c928": [
     "src/renderer/src/NotificationSettings.tsx"
+  ],
+  "76364e3fbcbc": [
+    "src/renderer/src/main.tsx"
   ],
   "1da402fd1aeb": [
     "src/renderer/src/EditorToolbar.tsx",

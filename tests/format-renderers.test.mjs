@@ -206,7 +206,12 @@ test('format plugins render natively, keep previews inert, and run only on reque
   const tools = await query('math', 'tools')
   await t.test(
     'LaTeX compiles project inputs and exports a real PDF',
-    { skip: tools.diagnostics.includes('Install tectonic') },
+    {
+      // A fresh profile downloads Tectonic's bundle from the network.
+      skip:
+        process.env.HIBI_TEST_LATEX !== '1' ||
+        tools.diagnostics.includes('Install tectonic'),
+    },
     async () => {
       await writeFile(join(temp, 'included.tex'), 'Included equation: $x^2$.')
       const source =

@@ -1,5 +1,7 @@
 import {
+  ChevronRight,
   FileText,
+  FolderOpen,
   LayoutTemplate,
   Search,
   Settings2,
@@ -15,6 +17,7 @@ import { ShortcutKeys } from '../../ui/ShortcutKeys'
 const categoryIcons = {
   app: LayoutTemplate,
   file: FileText,
+  workspace: FolderOpen,
   edit: Search,
   view: LayoutTemplate,
   preferences: Settings2,
@@ -27,13 +30,26 @@ const categoryIcons = {
   format: FileText,
 }
 
-export type PaletteCommand = {
+type PaletteCommandBase = {
   id: string
   label: string
   category: keyof typeof categoryIcons
   shortcut?: string
   keywords?: string
-  run: () => void
+  detail?: string
+}
+
+export type PaletteCommand = PaletteCommandBase &
+  (
+    | { run: () => void; children?: never }
+    | { children: PaletteCommand[]; run?: never }
+  )
+
+function nestedCommands(commands: PaletteCommand[]): PaletteCommand[] {
+  return commands.flatMap((command) => [
+    command,
+    ...(command.children ? nestedCommands(command.children) : []),
+  ])
 }
 
 export function CommandPalette({
@@ -55,28 +71,37 @@ export function CommandPalette({
   )
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(0)
+  const [menuPath, setMenuPath] = useState<{ id: string; label: string }[]>([])
   const list = useRef<HTMLDivElement>(null)
   const [marker, setMarker] = useState<{ top: number; height: number } | null>(
     null,
   )
   const normalized = query.toLowerCase().trim()
   const terms = normalized.split(/\s+/)
+  const currentCommands = menuPath.reduce(
+    (options, menu) =>
+      options.find((command) => command.id === menu.id)?.children ?? [],
+    commands,
+  )
   const rank = (command: PaletteCommand) => {
     const label = command.label.toLowerCase()
     if (label === normalized) return 0
     if (label.startsWith(normalized)) return 1
     return terms.every((term) => label.includes(term)) ? 2 : 3
   }
-  const results = searchCommands
-    ? searchCommands(query)
-    : commands.filter((command) =>
-        terms.every((term) =>
-          `${command.category} ${command.label} ${command.keywords ?? ''}`
-            .toLowerCase()
-            .includes(term),
-        ),
-      )
-  if (!searchCommands && normalized)
+  const searchableCommands =
+    normalized && !menuPath.length ? nestedCommands(commands) : currentCommands
+  const results =
+    searchCommands && !menuPath.length
+      ? searchCommands(query)
+      : searchableCommands.filter((command) =>
+          terms.every((term) =>
+            `${command.category} ${command.label} ${command.keywords ?? ''}`
+              .toLowerCase()
+              .includes(term),
+          ),
+        )
+  if ((!searchCommands || menuPath.length) && normalized)
     results.sort((left, right) => rank(left) - rank(right))
   const active = Math.min(selected, results.length - 1)
   const activeId = results[active]?.id
@@ -133,8 +158,23 @@ export function CommandPalette({
     }
   }
 
+  function backTo(depth: number) {
+    setMenuPath((current) => current.slice(0, depth))
+    setQuery('')
+    setSelected(0)
+    input.current?.focus()
+  }
+
   function execute(command: PaletteCommand) {
-    close(command.run)
+    if (command.children) {
+      setMenuPath((current) => [
+        ...current,
+        { id: command.id, label: command.label },
+      ])
+      setQuery('')
+      setSelected(0)
+      input.current?.focus()
+    } else close(command.run)
   }
 
   return (
@@ -145,13 +185,31 @@ export function CommandPalette({
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.preventDefault()
-          close()
+          if (menuPath.length) backTo(menuPath.length - 1)
+          else close()
         }
       }}
       onDismiss={() => close()}
     >
       <div className="command-search">
         <Search size={16} aria-hidden="true" />
+        {menuPath.length > 0 && (
+          <div className="command-scopes">
+            {menuPath.map((menu, index) => (
+              <button
+                key={menu.id}
+                type="button"
+                className="command-scope"
+                aria-label={`Leave ${menu.label}`}
+                title={`Leave ${menu.label}`}
+                onClick={() => backTo(index)}
+              >
+                <X size={12} aria-hidden="true" />
+                <span>{sentenceCase(menu.label)}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <TextInput
           variant="inline"
           ref={input}
@@ -172,7 +230,10 @@ export function CommandPalette({
             setSelected(0)
           }}
           onKeyDown={(event) => {
-            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            if (event.key === 'Backspace' && !query && menuPath.length) {
+              event.preventDefault()
+              backTo(menuPath.length - 1)
+            } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
               event.preventDefault()
               if (results.length)
                 setSelected(
@@ -202,7 +263,7 @@ export function CommandPalette({
         ref={list}
         className="command-results"
         role="listbox"
-        aria-label="Commands"
+        aria-label={menuPath.at(-1)?.label ?? 'Commands'}
       >
         {marker && (
           <div
@@ -236,22 +297,35 @@ export function CommandPalette({
                 className="command-icon"
                 aria-hidden="true"
               />
-              <span className="command-label">
-                {sentenceCase(command.label)}
+              <span className="command-copy">
+                <span className="command-label">
+                  {command.detail ? command.label : sentenceCase(command.label)}
+                </span>
+                {command.detail && (
+                  <span className="command-detail" title={command.detail}>
+                    {command.detail}
+                  </span>
+                )}
               </span>
-              <span className="command-category">
-                {sentenceCase(command.category)}
-              </span>
-              {command.shortcut && (
-                <ShortcutKeys shortcut={command.shortcut} platform={platform} />
+              {!command.detail && (
+                <span className="command-category">
+                  {sentenceCase(command.category)}
+                </span>
               )}
+              {command.children ? (
+                <ChevronRight size={16} aria-hidden="true" />
+              ) : command.shortcut ? (
+                <ShortcutKeys shortcut={command.shortcut} platform={platform} />
+              ) : null}
             </div>
           )
         })}
       </div>
       {results.length === 0 && (
         <p className="commands-empty" role="status">
-          No commands found.
+          {menuPath.length && !query
+            ? 'No options available.'
+            : 'No commands found.'}
         </p>
       )}
       <footer className="palette-footer">
@@ -260,10 +334,12 @@ export function CommandPalette({
           <ShortcutKeys shortcut="arrowdown" platform={platform} /> Navigate
         </span>
         <span>
-          <ShortcutKeys shortcut="enter" platform={platform} /> Run
+          <ShortcutKeys shortcut="enter" platform={platform} />{' '}
+          {results[active]?.children ? 'Open' : 'Run'}
         </span>
         <span className="palette-escape">
-          <ShortcutKeys shortcut="escape" platform={platform} /> Close
+          <ShortcutKeys shortcut="escape" platform={platform} />{' '}
+          {menuPath.length ? 'Back' : 'Close'}
         </span>
       </footer>
     </Modal>

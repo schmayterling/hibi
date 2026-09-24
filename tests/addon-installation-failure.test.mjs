@@ -72,7 +72,9 @@ test('failed editor attachments stay read-only and disabling the addon restores 
     await page.evaluate(() => document.documentElement.dataset.partialDetached),
     'true',
   )
-  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await page
+    .getByRole('button', { name: 'Source view', exact: true })
+    .press('Enter')
   await page
     .locator('.source-pane .document-notice')
     .waitFor({ state: 'visible' })

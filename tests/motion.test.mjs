@@ -276,7 +276,11 @@ test('source font and layout are ready before the pane starts moving', {
     document.fonts.load = (font, text) =>
       font.includes('Geist Mono')
         ? new Promise((resolve) => {
-            window.releaseSourceFont = () => load(font, text).then(resolve)
+            window.releaseSourceFont = () =>
+              load(font, text).then((faces) => {
+                window.sourceFontLoadSettled = true
+                resolve(faces)
+              })
           })
         : load(font, text)
   })
@@ -309,7 +313,39 @@ test('source font and layout are ready before the pane starts moving', {
   await page.waitForFunction(
     () => typeof window.releaseSourceFont === 'function',
   )
+  await page.evaluate(() => new Promise(requestAnimationFrame))
+  await page.evaluate(() => {
+    const request = window.requestAnimationFrame.bind(window)
+    window.requestAnimationFrame = (callback) => {
+      // Hold CodeMirror's own measure frame; other app frames keep running.
+      if (
+        !window.releaseSourceMeasure &&
+        callback.toString().includes('this.measure()')
+      ) {
+        window.releaseSourceMeasure = () => {
+          window.requestAnimationFrame = request
+          request(callback)
+        }
+        return request(() => {})
+      }
+      return request(callback)
+    }
+  })
   await page.evaluate(() => window.releaseSourceFont())
+  await page.waitForFunction(
+    () =>
+      window.sourceFontLoadSettled &&
+      typeof window.releaseSourceMeasure === 'function',
+  )
+  assert.equal(
+    await page.locator('.editor-panes').getAttribute('data-source-ready'),
+    'false',
+  )
+  assert.match(
+    await page.locator('.editor-panes').getAttribute('class'),
+    /mode-normal/,
+  )
+  await page.evaluate(() => window.releaseSourceMeasure())
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   await source.waitFor()
   assert.equal(

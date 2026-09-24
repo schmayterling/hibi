@@ -817,8 +817,12 @@ export function SourceEditor({
     measure()
     const finishFont = () => {
       if (disposed) return
-      editor.requestMeasure()
-      setFontReadyBridge(bridge)
+      editor.requestMeasure({
+        read: () => null,
+        write: () => {
+          if (!disposed) setFontReadyBridge(bridge)
+        },
+      })
     }
     void window.document.fonts
       .load('13px "Geist Mono"')

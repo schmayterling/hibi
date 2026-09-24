@@ -81,7 +81,78 @@ test('licenses open on their own settings page and dialogs stay readable', {
     await sidebar.getByRole('tab').first().innerText(),
     'Workspace settings',
   )
-  await sidebar.getByRole('tab', { name: 'About', exact: true }).click()
+  try {
+    await sidebar.getByRole('tab', { name: 'About', exact: true }).click()
+  } catch (error) {
+    const bounded = async (request) => {
+      let timer
+      try {
+        return await Promise.race([
+          request.catch(() => ({ unavailable: true })),
+          new Promise((resolve) => {
+            timer = setTimeout(() => resolve({ unavailable: true }), 1000)
+          }),
+        ])
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    const inspect = () =>
+      page.evaluate(() => {
+        const tab = document.querySelector('#category-hibi')
+        const scroll = tab?.closest('.sidebar-scroll')
+        const rect = tab?.getBoundingClientRect()
+        return {
+          visibility: document.visibilityState,
+          focused: document.hasFocus(),
+          frame: window.__aboutFrameProbe,
+          tab: rect && {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          },
+          scroll: scroll && {
+            top: scroll.scrollTop,
+            height: scroll.clientHeight,
+            contentHeight: scroll.scrollHeight,
+          },
+        }
+      })
+    const [renderer, main] = await Promise.all([
+      bounded(
+        page
+          .evaluate(() => {
+            window.__aboutFrameProbe = false
+            requestAnimationFrame(() => {
+              window.__aboutFrameProbe = true
+            })
+          })
+          .then(inspect),
+      ),
+      bounded(
+        app.evaluate(({ BrowserWindow }) => {
+          const window = BrowserWindow.getAllWindows()[0]
+          return {
+            visible: window?.isVisible(),
+            focused: window?.isFocused(),
+            minimized: window?.isMinimized(),
+            backgroundThrottling: window?.webContents.getBackgroundThrottling(),
+          }
+        }),
+      ),
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    console.error(
+      'about tab click diagnostics:',
+      JSON.stringify({
+        renderer,
+        rendererAfter: await bounded(inspect()),
+        main,
+      }),
+    )
+    throw error
+  }
   assert.equal(
     await page
       .getByRole('tab', { name: /^about$/i, exact: true })

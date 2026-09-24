@@ -1,0 +1,43 @@
+name: raf probe
+on:
+  push:
+    branches: [may/ci-root-cause-audit]
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends openbox x11-utils
+      - name: bare xvfb
+        run: dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' node scripts/ci-raf-probe.mjs bare
+      - name: xvfb with openbox
+        run: |
+          # shellcheck disable=SC2016
+          dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' bash -ec '
+            openbox --sm-disable >/tmp/hibi-openbox.log 2>&1 &
+            wm=$!
+            trap "kill $wm 2>/dev/null || true" EXIT
+            ready=0
+            for i in $(seq 1 50); do
+              if xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q "window id"; then
+                ready=1
+                break
+              fi
+              sleep 0.1
+            done
+            test "$ready" = 1
+            node scripts/ci-raf-probe.mjs openbox
+          '

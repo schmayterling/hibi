@@ -156,16 +156,54 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
     'documents',
   ])
   assert.doesNotMatch(loaded(), /src\/addons\/sdk\.ts|@codemirror\//)
+  await page.evaluate(() => {
+    const load = document.fonts.load.bind(document.fonts)
+    const pending = []
+    document.fonts.load = (font, text) =>
+      font.includes('Geist Mono')
+        ? new Promise((resolve, reject) => {
+            pending.push(() => load(font, text).then(resolve, reject))
+            window.sourceFontsHeld = pending.length
+          })
+        : load(font, text)
+    window.releaseSourceFonts = () => {
+      document.fonts.load = load
+      for (const release of pending) release()
+    }
+  })
   await page
     .getByRole('button', { name: 'Source view', exact: true })
     .press('Enter')
-  // Source editing can be ready while Chromium pauses animation frames.
+  // Source input can be editable before the font-gated pane switch finishes.
   await page.waitForFunction(
-    () => document.querySelector('.cm-content')?.isContentEditable,
+    () =>
+      document.querySelector('.cm-content')?.isContentEditable &&
+      window.sourceFontsHeld > 0,
     undefined,
     { polling: 100 },
   )
   assert.equal(await page.evaluate(() => window.sourceCreates), 1)
+  assert.match(
+    await page.locator('.editor-panes').getAttribute('class'),
+    /mode-normal/,
+  )
+  assert.equal(
+    await page.locator('.source-pane').evaluate((pane) => pane.inert),
+    true,
+  )
+  assert.equal(await page.evaluate(() => window.richDetachments), undefined)
+  await page.evaluate(() => window.releaseSourceFonts())
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.editor-panes.mode-markdown') &&
+      window.richDetachments?.join(',') === 'alpha,zeta',
+    undefined,
+    { polling: 100 },
+  )
+  assert.equal(
+    await page.locator('.source-pane').evaluate((pane) => pane.inert),
+    false,
+  )
   assert.deepEqual(await page.evaluate(() => window.richDetachments), [
     'alpha',
     'zeta',

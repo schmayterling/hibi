@@ -303,49 +303,60 @@ export function sourceFormatting(
     }
     return applyEdit({ from, to, insert, selection: { from: start, to: end } })
   }
+  const inspect = () => {
+    const state = view.state
+    const range = state.selection.main
+    const line =
+      format === 'markdown' ? state.doc.lineAt(range.from).text.trimStart() : ''
+    let activeSelection: DocumentSelection | undefined
+    const selected = () => {
+      if (!activeSelection) activeSelection = selection()
+      return activeSelection
+    }
+    return {
+      state(id: string, checkPressed = true) {
+        if (!supported(id))
+          return { supported: false, pressed: false, disabled: true }
+        const blockActive = id.startsWith('heading-')
+          ? line.startsWith(`${'#'.repeat(Number(id.slice(-1)))} `)
+          : id === 'numbered-list'
+            ? /^\d+[.)] /.test(line)
+            : id === 'bullet-list'
+              ? /^[-+*] (?!\[[ xX]\] )/.test(line)
+              : id === 'checklist'
+                ? /^[-+*] \[[ xX]\] /.test(line)
+                : prefixes[id]
+                  ? line.startsWith(prefixes[id])
+                  : false
+        return {
+          supported: true,
+          pressed:
+            checkPressed &&
+            (format === 'markdown'
+              ? marked(id) || blockActive
+              : (format?.isActive?.(id, { ...selected() }) ?? false)),
+          disabled:
+            state.readOnly ||
+            (state.selection.ranges.length !== 1 &&
+              !['undo', 'redo', 'indent', 'outdent'].includes(id)) ||
+            (id === 'undo'
+              ? !(history ? history.state().canUndo : undoDepth(state))
+              : id === 'redo'
+                ? !(history ? history.state().canRedo : redoDepth(state))
+                : id === 'unlink'
+                  ? !/\[[^\]]+\]\(/.test(state.sliceDoc(range.from, range.to))
+                  : false),
+        }
+      },
+    }
+  }
   return {
     focus: () => view.focus(),
     run,
     state(id: string) {
-      const line = view.state.doc
-        .lineAt(view.state.selection.main.from)
-        .text.trimStart()
-      const blockActive = id.startsWith('heading-')
-        ? line.startsWith(`${'#'.repeat(Number(id.slice(-1)))} `)
-        : id === 'numbered-list'
-          ? /^\d+[.)] /.test(line)
-          : id === 'bullet-list'
-            ? /^[-+*] (?!\[[ xX]\] )/.test(line)
-            : id === 'checklist'
-              ? /^[-+*] \[[ xX]\] /.test(line)
-              : prefixes[id]
-                ? line.startsWith(prefixes[id])
-                : false
-      return {
-        supported: supported(id),
-        pressed:
-          format === 'markdown'
-            ? marked(id) || blockActive
-            : (format?.isActive?.(id, selection()) ?? false),
-        disabled:
-          !supported(id) ||
-          !editable() ||
-          (view.state.selection.ranges.length !== 1 &&
-            !['undo', 'redo', 'indent', 'outdent'].includes(id)) ||
-          (id === 'undo'
-            ? !(history ? history.state().canUndo : undoDepth(view.state))
-            : id === 'redo'
-              ? !(history ? history.state().canRedo : redoDepth(view.state))
-              : id === 'unlink'
-                ? !/\[[^\]]+\]\(/.test(
-                    view.state.sliceDoc(
-                      view.state.selection.main.from,
-                      view.state.selection.main.to,
-                    ),
-                  )
-                : false),
-      }
+      return inspect().state(id)
     },
+    inspect,
     capture(coords?: { x: number; y: number }) {
       const doc = view.state.doc,
         position = coords ? view.posAtCoords(coords) : null,

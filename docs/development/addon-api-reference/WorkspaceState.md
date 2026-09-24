@@ -2,7 +2,7 @@
 
 # WorkspaceState
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L31)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L32)
 
 <details>
 <summary>Declaration</summary>
@@ -38,7 +38,7 @@ type WorkspaceState = {
 
 ### manifest
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L33)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L34)
 
 Present when this folder contains a workspace manifest in .hibi/workspace.json (or legacy .hibi.json).
 
@@ -50,7 +50,7 @@ Related: [WorkspaceManifest](WorkspaceManifest.md).
 
 ### id
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L35)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L36)
 
 Opaque identity; changes when a different folder is opened.
 
@@ -60,7 +60,7 @@ id?: string
 
 ### name
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L36)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L37)
 
 ```typescript
 name: string
@@ -68,7 +68,7 @@ name: string
 
 ### entries
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L37)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L38)
 
 ```typescript
 entries: WorkspaceEntry[]
@@ -78,7 +78,7 @@ Related: [WorkspaceEntry](WorkspaceEntry.md).
 
 ### activePath
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L38)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L39)
 
 ```typescript
 activePath: string | null
@@ -86,7 +86,7 @@ activePath: string | null
 
 ### obsidian
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L40)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L41)
 
 Read-only signal for a vault containing an ordinary .obsidian directory.
 

@@ -36,12 +36,12 @@ import './styles.css'
 import '../../ui/ui-case'
 import { Minimize2 } from 'lucide-react'
 import { documentExtension, isDocumentView } from '../../shared/document-types'
-import type {
-  KnownWorkspace,
-  RecentWorkspace,
-  WorkspaceAction,
-  WorkspaceActionResult,
-  WorkspaceState,
+import {
+  type KnownWorkspace,
+  toRecentWorkspaces,
+  type WorkspaceAction,
+  type WorkspaceActionResult,
+  type WorkspaceState,
 } from '../../shared/workspace'
 import { Button, IconButton } from '../../ui/Controls'
 import { settingsIndex } from '../../ui/settings-index'
@@ -372,20 +372,12 @@ function App() {
   const [findOpen, setFindOpen] = useState(false)
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
   const promptedVaults = useRef(new Set<string>())
-  const [recentWorkspaces, setRecentWorkspaces] = useState<
-    RecentWorkspace[] | null
-  >(null)
   const [knownWorkspaces, setKnownWorkspaces] = useState<
     KnownWorkspace[] | null
   >(null)
-  const refreshKnownWorkspaces = useCallback(async () => {
-    const [known, recent] = await Promise.all([
-      window.hibi.getKnownWorkspaces(),
-      window.hibi.getRecentWorkspaces(),
-    ])
-    setKnownWorkspaces(known)
-    setRecentWorkspaces(recent)
-  }, [])
+  const recentWorkspaces = knownWorkspaces
+    ? toRecentWorkspaces(knownWorkspaces)
+    : null
   const showWelcome = document?.tabs.length === 0
   const [workspaceRename, setWorkspaceRename] = useState<WorkspaceRename>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -704,9 +696,8 @@ function App() {
     () =>
       window.hibi.onWorkspaceChanged((next) => {
         setWorkspace(next)
-        void refreshKnownWorkspaces().catch((error) => setError(String(error)))
       }),
-    [refreshKnownWorkspaces, setError],
+    [],
   )
   // biome-ignore lint/correctness/useExhaustiveDependencies: the dialog callback uses the current settings opener after a one-time vault prompt.
   useEffect(() => {
@@ -744,6 +735,27 @@ function App() {
       if (choice === 'addons') openSetting('addons')
     })
   }, [workspace?.id, workspace?.obsidian, addonHost.ready, dialogs])
+  useEffect(() => {
+    let active = true
+    let changed = false
+    const unsubscribe = window.hibi.onWorkspaceListChanged((known) => {
+      changed = true
+      setKnownWorkspaces(known)
+    })
+    // Preload starts this read before the renderer mounts.
+    void window.hibi.bootstrap
+      .knownWorkspaces()
+      .then((known) => {
+        if (active && !changed) setKnownWorkspaces(known)
+      })
+      .catch(() => {
+        if (active && !changed) setKnownWorkspaces([])
+      })
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [])
   const [hotkeys, setHotkeys] = useState<Hotkeys>(() =>
     defaultHotkeys('darwin'),
   )
@@ -841,22 +853,7 @@ function App() {
 
   useEffect(() => {
     let active = true
-    // Read the welcome list alongside document/addon state, before the editor mounts.
-    void window.hibi.bootstrap
-      .recentWorkspaces()
-      .catch(() => [])
-      .then((items) => {
-        if (active) setRecentWorkspaces(items)
-      })
     startupMark('bootstrap-document-effect')
-    void window.hibi
-      .getKnownWorkspaces()
-      .then((items) => {
-        if (active) setKnownWorkspaces(items)
-      })
-      .catch(() => {
-        if (active) setKnownWorkspaces([])
-      })
     window.hibi.bootstrap
       .document()
       .then(({ info, document, hotkeys, workspace, externalPending }) => {
@@ -1930,7 +1927,6 @@ function App() {
         workspace={workspace}
         workspaces={knownWorkspaces}
         onOpen={(id) => void openFolder(id)}
-        onChange={refreshKnownWorkspaces}
         onError={(error) => setError(String(error))}
       />
       <OutlineSidebar

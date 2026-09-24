@@ -8,24 +8,28 @@ import type { WorkspacePage } from '../../shared/workspace'
 
 export { localTarget }
 
-const links = new WeakMap<
-  WorkspacePage,
+let links = new Map<
+  string,
   { markdown: string; references: ReturnType<typeof noteReferences> }
 >()
 
 export function noteGraph(pages: readonly WorkspacePage[]) {
   const paths = new Set(pages.map((page) => page.path))
   const edges = new Map<string, { source: string; target: string }>()
+  const nextLinks = new Map<
+    string,
+    { markdown: string; references: ReturnType<typeof noteReferences> }
+  >()
   for (const page of pages) {
     if (!isMarkdownDocument(page.path)) continue
-    let cached = links.get(page)
+    let cached = links.get(page.path)
     if (!cached || cached.markdown !== page.markdown) {
       cached = {
         markdown: page.markdown,
         references: noteReferences(page.markdown),
       }
-      links.set(page, cached)
     }
+    nextLinks.set(page.path, cached)
     for (const target of noteTargets(
       page.markdown,
       page.path,
@@ -40,6 +44,7 @@ export function noteGraph(pages: readonly WorkspacePage[]) {
       })
     }
   }
+  links = nextLinks
   const degree = new Map<string, number>()
   for (const edge of edges.values())
     for (const path of [edge.source, edge.target])

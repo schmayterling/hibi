@@ -10,7 +10,7 @@ import {
   type SimulationNodeDatum,
 } from 'd3-force'
 import { Focus, Maximize2, Minus, Plus } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { IconButton } from '../../ui/Controls'
 import type { noteGraph } from './model'
 import { defaultZoom } from './preferences'
@@ -203,15 +203,36 @@ export function GraphCanvas({
     simulation.current = engine
     const publish = () =>
       setLayout({ nodes: [...nodes], edges: links as unknown as Edge[] })
+    let frame: number | null = null
     if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
       engine.stop()
-      engine.tick(160)
       publish()
+      if (nodes.length > 80) {
+        let ticks = 0
+        const settle = () => {
+          engine.tick(2)
+          ticks += 2
+          if (ticks < 160) frame = requestAnimationFrame(settle)
+          else publish()
+        }
+        frame = requestAnimationFrame(settle)
+      } else {
+        engine.tick(160)
+        publish()
+      }
     } else {
-      engine.on('tick', publish)
+      let lastPublish = performance.now()
+      engine.on('tick', () => {
+        const now = performance.now()
+        if (nodes.length > 80 && now - lastPublish < 50) return
+        lastPublish = now
+        publish()
+      })
+      engine.on('end', publish)
       publish()
     }
     return () => {
+      if (frame !== null) cancelAnimationFrame(frame)
       engine.stop()
       simulation.current = null
     }
@@ -280,6 +301,40 @@ export function GraphCanvas({
       }
     })
   }
+  const graphItems = useMemo(
+    () => (
+      <>
+        {layout.edges.map((edge) => (
+          <line
+            key={JSON.stringify([edge.source.id, edge.target.id])}
+            x1={edge.source.x}
+            y1={edge.source.y}
+            x2={edge.target.x}
+            y2={edge.target.y}
+          />
+        ))}
+        {layout.nodes.map((node) => (
+          <g
+            key={node.id}
+            data-node={node.id}
+            data-tooltip={`${node.id} · ${node.degree} connections`}
+            data-verbatim="true"
+            data-active={node.id === active}
+            transform={`translate(${node.x ?? 0} ${node.y ?? 0})`}
+            role="button"
+            tabIndex={0}
+            aria-label={`Open ${node.id}`}
+          >
+            <circle r={Math.max(radius(node), 2.5 / position.scale)} />
+            <text y={-14} textAnchor="middle">
+              {label(node)}
+            </text>
+          </g>
+        ))}
+      </>
+    ),
+    [layout, active, position.scale],
+  )
   return (
     <div
       className="graph-canvas"
@@ -301,7 +356,20 @@ export function GraphCanvas({
         tabIndex={0}
         viewBox={`${-size.width / 2} ${-size.height / 2} ${size.width} ${size.height}`}
         onKeyDown={(event) => {
-          if (event.target !== event.currentTarget) return
+          if (event.target !== event.currentTarget) {
+            if (event.key !== 'Enter' && event.key !== ' ') return
+            const id =
+              event.target instanceof Element
+                ? event.target.closest('[data-node]')?.getAttribute('data-node')
+                : null
+            const node = layout.nodes.find((node) => node.id === id)
+            if (node) {
+              event.preventDefault()
+              event.stopPropagation()
+              activate(node)
+            }
+            return
+          }
           const steps: Record<string, [number, number]> = {
             ArrowLeft: [30, 0],
             ArrowRight: [-30, 0],
@@ -365,7 +433,7 @@ export function GraphCanvas({
             current.node.x = current.node.fx
             current.node.y = current.node.fy
             if (matchMedia('(prefers-reduced-motion: reduce)').matches)
-              simulation.current?.tick(30)
+              simulation.current?.tick(layout.nodes.length > 80 ? 2 : 30)
             else simulation.current?.alpha(0.15).restart()
             setLayout((old) => ({ ...old }))
           } else
@@ -388,40 +456,7 @@ export function GraphCanvas({
         <g
           transform={`translate(${position.x} ${position.y}) scale(${position.scale})`}
         >
-          {layout.edges.map((edge) => (
-            <line
-              key={JSON.stringify([edge.source.id, edge.target.id])}
-              x1={edge.source.x}
-              y1={edge.source.y}
-              x2={edge.target.x}
-              y2={edge.target.y}
-            />
-          ))}
-          {layout.nodes.map((node) => (
-            <g
-              key={node.id}
-              data-node={node.id}
-              data-tooltip={`${node.id} · ${node.degree} connections`}
-              data-verbatim="true"
-              data-active={node.id === active}
-              transform={`translate(${node.x ?? 0} ${node.y ?? 0})`}
-              role="button"
-              tabIndex={0}
-              aria-label={`Open ${node.id}`}
-              onKeyDown={(event) => {
-                if (['Enter', ' '].includes(event.key)) {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  activate(node)
-                }
-              }}
-            >
-              <circle r={Math.max(radius(node), 2.5 / position.scale)} />
-              <text y={-14} textAnchor="middle">
-                {label(node)}
-              </text>
-            </g>
-          ))}
+          {graphItems}
         </g>
       </svg>
       <div className="graph-zoom">

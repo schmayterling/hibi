@@ -120,6 +120,7 @@ export type DesktopApi = {
       notices: string[]
     }>
     recentWorkspaces: () => Promise<import('./workspace').RecentWorkspace[]>
+    knownWorkspaces: () => Promise<import('./workspace').KnownWorkspace[]>
   }
   listImporters: () => Promise<import('./imports').Importer[]>
   importIntoWorkspace: (
@@ -199,6 +200,9 @@ export type DesktopApi = {
   openWorkspaceFile: (path: string) => Promise<DocumentState | null>
   onWorkspaceChanged: (
     callback: (workspace: WorkspaceState | null) => void,
+  ) => () => void
+  onWorkspaceListChanged: (
+    callback: (known: import('./workspace').KnownWorkspace[]) => void,
   ) => () => void
   getAppInfo: () => Promise<AppInfo>
   setUiCase: (value: import('./ui-case').UiCase) => Promise<void>

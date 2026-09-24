@@ -30,6 +30,7 @@ test('graph resolves only existing local note links and deduplicates connections
   assert.equal(graph.nodes.length, 4)
   assert.equal(graph.edges.length, 2)
   assert.equal(graph.nodes.find((node) => node.id === 'a.md').degree, 2)
+  assert.deepEqual(noteGraph(pages.map((page) => ({ ...page }))), graph)
   pages[3].markdown = '[a](a.md)'
   assert.equal(noteGraph(pages).edges.length, 3)
   const paths = new Set(pages.map((page) => page.path))

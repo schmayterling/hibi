@@ -1,11 +1,9 @@
 import { CircleAlert, FileText, Tags } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { isMarkdownDocument } from '../../shared/document-types'
-import type { WorkspacePage } from '../../shared/workspace'
 import type { AddonContext } from '../api'
 import { Button, ControlRow, Panel, PanelMessage, TextInput } from '../ui'
 import { useWorkspaceSnapshot } from '../workspace-snapshot'
-import { noteTags } from './syntax'
+import { type TagIndexCache, tagIndex } from './model'
 
 export function TagsPanel({
   context,
@@ -17,7 +15,10 @@ export function TagsPanel({
   const { snapshot, workspace, loading, error } = useWorkspaceSnapshot(context)
   const [query, setQuery] = useState('')
   const [selected, select] = useState('')
-  const parsed = useRef(new WeakMap<WorkspacePage, string[]>()).current
+  const parsed = useRef<TagIndexCache>({
+    workspaceId: undefined,
+    pages: new Map(),
+  }).current
   useEffect(() => {
     const tag =
       selection && typeof selection === 'object' && 'tag' in selection
@@ -28,20 +29,10 @@ export function TagsPanel({
       setQuery('')
     }
   }, [selection])
-  const index = useMemo(() => {
-    const tags = new Map<string, string[]>()
-    for (const page of snapshot?.pages ?? []) {
-      if (!isMarkdownDocument(page.path)) continue
-      let pageTags = parsed.get(page)
-      if (!pageTags) {
-        pageTags = noteTags(page.markdown)
-        parsed.set(page, pageTags)
-      }
-      for (const tag of pageTags)
-        tags.set(tag, [...(tags.get(tag) ?? []), page.path])
-    }
-    return [...tags].sort(([a], [b]) => a.localeCompare(b))
-  }, [snapshot, parsed])
+  const index = useMemo(
+    () => tagIndex(workspace?.id, snapshot?.pages ?? [], parsed),
+    [workspace?.id, snapshot, parsed],
+  )
   const matches = index.filter(([tag]) =>
     tag.includes(query.trim().replace(/^#/, '').toLowerCase()),
   )

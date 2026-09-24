@@ -2,13 +2,27 @@ import { createHash } from 'node:crypto'
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { app } from 'electron'
-import type { KnownWorkspace, RecentWorkspace } from '../shared/workspace'
+import {
+  type KnownWorkspace,
+  type RecentWorkspace,
+  toRecentWorkspaces,
+} from '../shared/workspace'
 
 type SavedWorkspace = { path: string; pinned: boolean; hidden: boolean }
 
 let writing: Promise<void> = Promise.resolve()
+const listeners = new Set<(known: KnownWorkspace[]) => void>()
 const location = () => join(app.getPath('userData'), 'recent-workspaces.json')
 const idFor = (path: string) => createHash('sha256').update(path).digest('hex')
+const asKnown = (saved: SavedWorkspace[]): KnownWorkspace[] =>
+  saved.map((item) => ({ ...item, id: idFor(item.path) }))
+
+export function observeKnownWorkspaces(
+  listener: (known: KnownWorkspace[]) => void,
+) {
+  listeners.add(listener)
+  return () => listeners.delete(listener)
+}
 const validPath = (path: unknown): path is string =>
   typeof path === 'string' &&
   path.length <= 4096 &&
@@ -55,37 +69,32 @@ async function readWorkspaces(): Promise<SavedWorkspace[]> {
 function writeWorkspaces(
   update: (saved: SavedWorkspace[]) => SavedWorkspace[],
 ) {
-  writing = writing
+  const next = writing
     .catch(() => {})
     .then(async () => {
       const file = location()
-      await writeFile(
-        `${file}.tmp`,
-        JSON.stringify(update(await readWorkspaces())),
-        { mode: 0o600 },
-      )
+      const saved = update(await readWorkspaces())
+      await writeFile(`${file}.tmp`, JSON.stringify(saved), { mode: 0o600 })
       await rename(`${file}.tmp`, file)
+      const known = asKnown(saved)
+      for (const listener of listeners) listener(known)
+      return known
     })
-  return writing
+  writing = next.then(() => {})
+  return next
 }
 
 export async function getKnownWorkspaces(): Promise<KnownWorkspace[]> {
   await writing.catch(() => {})
-  return (await readWorkspaces()).map((item) => ({
-    ...item,
-    id: idFor(item.path),
-  }))
+  return asKnown(await readWorkspaces())
 }
 
 export async function getRecentWorkspaces(): Promise<RecentWorkspace[]> {
-  return (await getKnownWorkspaces())
-    .filter((item) => !item.hidden)
-    .slice(0, 5)
-    .map(({ id, path }) => ({ id, path }))
+  return toRecentWorkspaces(await getKnownWorkspaces())
 }
 
-export function rememberWorkspace(path: string): Promise<void> {
-  return writeWorkspaces((saved) => [
+export async function rememberWorkspace(path: string): Promise<void> {
+  await writeWorkspaces((saved) => [
     {
       path,
       pinned: saved.find((item) => item.path === path)?.pinned ?? false,
@@ -105,7 +114,7 @@ export async function setKnownWorkspace(
     !['pin', 'unpin', 'hide'].includes(action)
   )
     throw new Error('Choose a workspace action from the menu.')
-  await writeWorkspaces((saved) => {
+  return writeWorkspaces((saved) => {
     if (!saved.some((item) => idFor(item.path) === id))
       throw new Error('This workspace is no longer in the list.')
     return saved.map((item) =>
@@ -123,9 +132,8 @@ export async function setKnownWorkspace(
         : item,
     )
   })
-  return getKnownWorkspaces()
 }
 
-export function forgetWorkspace(path: string): Promise<void> {
-  return writeWorkspaces((saved) => saved.filter((item) => item.path !== path))
+export async function forgetWorkspace(path: string): Promise<void> {
+  await writeWorkspaces((saved) => saved.filter((item) => item.path !== path))
 }

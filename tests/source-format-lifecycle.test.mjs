@@ -38,12 +38,46 @@ async function closeProbe(app, watchdog, fired, name, preserveFailure = false) {
 test('lazy rich startup applies view attributes after mounting and accepts native input', {
   timeout: 40000,
 }, async (t) => {
+  const started = performance.now()
+  const attempts = []
+  let activeAttempt = -1
+  let phase = 'setup'
+  let attemptStarted = started
+  const mark = (name) => {
+    phase = name
+    if (activeAttempt >= 0)
+      attempts[activeAttempt][name] = Math.round(
+        performance.now() - attemptStarted,
+      )
+  }
+  const report = (reason) =>
+    console.error(
+      'source format startup phases:',
+      JSON.stringify({
+        reason,
+        totalMs: Math.round(performance.now() - started),
+        activeAttempt,
+        phase,
+        attempts,
+      }),
+    )
+  const slow = setTimeout(() => report('30s'), 30000)
+  slow.unref()
   const folder = await mkdtemp(join(tmpdir(), 'hibi-rich-startup-'))
-  t.after(() => rm(folder, { recursive: true, force: true }))
+  t.after(async () => {
+    clearTimeout(slow)
+    report('end')
+    await rm(folder, { recursive: true, force: true })
+  })
   for (let attempt = 0; attempt < 4; attempt++) {
+    activeAttempt = attempt
+    attemptStarted = performance.now()
+    attempts.push({ attempt, launch: 0 })
+    phase = 'launch'
     const app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${join(folder, String(attempt))}`],
     })
+    mark('launched')
     let watchdogFired = false
     const watchdog = setTimeout(() => {
       watchdogFired = true
@@ -52,18 +86,22 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
     let failed = false
     try {
       const page = await app.firstWindow()
+      mark('firstWindow')
       page.setDefaultTimeout(5000)
       const editor = page.getByRole('textbox', {
         name: 'Document editor',
         exact: true,
       })
       await editor.waitFor({ timeout: 5000 })
+      mark('editorReady')
       await page.waitForFunction(
         () =>
           document.querySelector('.tiptap')?.getAttribute('spellcheck') ===
           'true',
       )
+      mark('spellcheckReady')
       await editor.fill(`ready ${attempt}`)
+      mark('filled')
       assert.equal(
         (await page.evaluate(() => window.hibi.getDocument())).markdown,
         `ready ${attempt}`,
@@ -82,10 +120,14 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
         ),
         false,
       )
+      mark('verified')
     } catch (error) {
       failed = true
+      attempts[attempt].error = String(error).slice(0, 180)
+      report('failure')
       throw error
     } finally {
+      mark('cleanupStart')
       clearTimeout(watchdog)
       if (failed || watchdogFired) stopElectronTree(app.process())
       else
@@ -94,6 +136,7 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
             dialog.showMessageBox = async () => ({ response: 1 })
           })
           .catch(() => {})
+      if (!failed && !watchdogFired) mark('dialogReady')
       await closeProbe(
         app,
         watchdog,
@@ -101,6 +144,7 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
         `rich ${attempt}`,
         failed,
       )
+      mark('closed')
     }
   }
 })

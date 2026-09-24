@@ -84,13 +84,13 @@ test('licenses open on their own settings page and dialogs stay readable', {
   try {
     await sidebar.getByRole('tab', { name: 'About', exact: true }).click()
   } catch (error) {
-    const bounded = async (request) => {
+    const bounded = async (request, timeout = 1000) => {
       let timer
       try {
         return await Promise.race([
           request.catch(() => ({ unavailable: true })),
           new Promise((resolve) => {
-            timer = setTimeout(() => resolve({ unavailable: true }), 1000)
+            timer = setTimeout(() => resolve({ unavailable: true }), timeout)
           }),
         ])
       } finally {
@@ -143,12 +143,37 @@ test('licenses open on their own settings page and dialogs stay readable', {
       ),
     ])
     await new Promise((resolve) => setTimeout(resolve, 250))
+    const rendererAfter = await bounded(inspect())
+    const [capture, gpu] = await Promise.all([
+      bounded(
+        app.evaluate(async ({ BrowserWindow }) => {
+          const image = await BrowserWindow.getAllWindows()[0].capturePage()
+          return { empty: image.isEmpty(), size: image.getSize() }
+        }),
+        500,
+      ),
+      bounded(
+        app.evaluate(({ app }) =>
+          app
+            .getAppMetrics()
+            .filter(({ type }) => type === 'GPU' || type === 'Tab')
+            .map(({ pid, type, cpu }) => ({
+              pid,
+              type,
+              cpu: cpu.percentCPUUsage,
+            })),
+        ),
+        500,
+      ),
+    ])
     console.error(
       'about tab click diagnostics:',
       JSON.stringify({
         renderer,
-        rendererAfter: await bounded(inspect()),
+        rendererAfter,
         main,
+        capture,
+        gpu,
       }),
     )
     throw error

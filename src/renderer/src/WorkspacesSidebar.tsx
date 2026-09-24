@@ -13,7 +13,6 @@ export function WorkspacesSidebar({
   resize,
   onDismiss,
   onOpen,
-  onChange,
   onError,
 }: {
   workspaces: readonly KnownWorkspace[] | null
@@ -23,7 +22,6 @@ export function WorkspacesSidebar({
   resize: NonNullable<SidebarProps['resize']>
   onDismiss: () => void
   onOpen: (id?: string) => void
-  onChange: () => Promise<void>
   onError: (error: unknown) => void
 }) {
   const dialogs = useDialogs()
@@ -39,7 +37,6 @@ export function WorkspacesSidebar({
   async function update(id: string, action: 'pin' | 'unpin' | 'hide') {
     try {
       await window.hibi.setKnownWorkspace(id, action)
-      await onChange()
     } catch (error) {
       onError(error)
     }
@@ -57,7 +54,7 @@ export function WorkspacesSidebar({
     )
       return
     try {
-      if (await window.hibi.deleteKnownWorkspace(item.id)) await onChange()
+      await window.hibi.deleteKnownWorkspace(item.id)
     } catch (error) {
       onError(error)
     }

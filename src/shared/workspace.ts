@@ -4,6 +4,7 @@ export const WORKSPACE_CHANNELS = {
   refresh: 'workspace:refresh',
   openFile: 'workspace:open-file',
   changed: 'workspace:changed',
+  listChanged: 'workspace:list-changed',
   action: 'workspace:action',
   snapshot: 'workspace:snapshot',
   index: 'workspace:index',
@@ -96,4 +97,13 @@ export type WorkspaceIndex = {
 export type KnownWorkspace = RecentWorkspace & {
   pinned: boolean
   hidden: boolean
+}
+
+export function toRecentWorkspaces(
+  known: readonly KnownWorkspace[],
+): RecentWorkspace[] {
+  return known
+    .filter((item) => !item.hidden)
+    .slice(0, 5)
+    .map(({ id, path }) => ({ id, path }))
 }

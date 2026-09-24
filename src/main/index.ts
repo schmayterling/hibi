@@ -106,6 +106,7 @@ import {
 import {
   getKnownWorkspaces,
   getRecentWorkspaces,
+  observeKnownWorkspaces,
   setKnownWorkspace,
 } from './recent-workspaces'
 import {
@@ -1100,6 +1101,9 @@ if (!app.requestSingleInstanceLock()) {
           WORKSPACE_CHANNELS.changed,
           getWorkspace(),
         ),
+      )
+      observeKnownWorkspaces((known) =>
+        mainWindow?.webContents.send(WORKSPACE_CHANNELS.listChanged, known),
       )
       handle(DOCUMENT_CHANNELS.update, (event, value: unknown) => {
         const window = trustedWindow(event)

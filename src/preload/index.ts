@@ -22,7 +22,12 @@ import { MEDIA_CHANNELS } from '../shared/media'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
 import { UPDATE_CHANNELS, type UpdateState } from '../shared/updates'
-import { WORKSPACE_CHANNELS, type WorkspaceState } from '../shared/workspace'
+import {
+  type KnownWorkspace,
+  toRecentWorkspaces,
+  WORKSPACE_CHANNELS,
+  type WorkspaceState,
+} from '../shared/workspace'
 import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
 import { DiagnosticProducer } from './local-diagnostics'
 
@@ -78,8 +83,10 @@ if (process.isMainFrame) {
   })
   const startupDocument = ipcRenderer.invoke(BOOTSTRAP_CHANNELS.document)
   const startupAddons = ipcRenderer.invoke(BOOTSTRAP_CHANNELS.addons)
-  const startupRecent = ipcRenderer.invoke(WORKSPACE_CHANNELS.recent)
-  for (const pending of [startupDocument, startupAddons, startupRecent])
+  const startupKnown: Promise<KnownWorkspace[]> = ipcRenderer.invoke(
+    WORKSPACE_CHANNELS.known,
+  )
+  for (const pending of [startupDocument, startupAddons, startupKnown])
     void pending.catch(() => {})
   contextBridge.exposeInMainWorld('hibi', {
     getUpdateState: () => transport.invoke(UPDATE_CHANNELS.get),
@@ -130,7 +137,8 @@ if (process.isMainFrame) {
     bootstrap: {
       document: () => startupDocument,
       addons: () => startupAddons,
-      recentWorkspaces: () => startupRecent,
+      knownWorkspaces: () => startupKnown,
+      recentWorkspaces: () => startupKnown.then(toRecentWorkspaces),
     },
     getAddonDocumentation: (id, path) =>
       ipcRenderer.invoke(SIDELOAD_CHANNELS.documentation, id, path),
@@ -224,6 +232,16 @@ if (process.isMainFrame) {
       ipcRenderer.on(WORKSPACE_CHANNELS.changed, listener)
       return () => {
         ipcRenderer.removeListener(WORKSPACE_CHANNELS.changed, listener)
+      }
+    },
+    onWorkspaceListChanged: (callback) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        known: KnownWorkspace[],
+      ) => callback(known)
+      ipcRenderer.on(WORKSPACE_CHANNELS.listChanged, listener)
+      return () => {
+        ipcRenderer.removeListener(WORKSPACE_CHANNELS.listChanged, listener)
       }
     },
     getAppInfo: () => ipcRenderer.invoke(APP_INFO_CHANNEL),

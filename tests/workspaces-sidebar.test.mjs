@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -22,6 +22,7 @@ test('workspaces sidebar pins, hides, reopens, and confirms trash', {
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   for (const path of paths) {
     await mkdir(path)
+    if (path === paths[2]) await writeFile(join(path, 'note.md'), 'before')
     await app.evaluate(({ dialog }, selected) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
@@ -43,6 +44,20 @@ test('workspaces sidebar pins, hides, reopens, and confirms trash', {
     /hibi-workspaces-/,
   )
 
+  await page.evaluate(() => window.hibi.openWorkspaceFile('note.md'))
+  await page.evaluate(() => {
+    globalThis.workspaceListChanges = 0
+    window.hibi.onWorkspaceListChanged(() => {
+      globalThis.workspaceListChanges++
+    })
+  })
+  await page.evaluate(async () => {
+    await window.hibi.updateDocument('after')
+    await window.hibi.saveDocument(false)
+  })
+  await page.waitForTimeout(400)
+  assert.equal(await page.evaluate(() => globalThis.workspaceListChanges), 0)
+
   await sidebar.getByRole('button', { name: 'Actions for one' }).click()
   await page.getByRole('menuitem', { name: 'Pin to top' }).click()
   await page.waitForFunction(
@@ -52,6 +67,7 @@ test('workspaces sidebar pins, hides, reopens, and confirms trash', {
     'one',
   )
   assert.deepEqual(await rows.allTextContents(), ['one', 'three', 'two'])
+  assert.equal(await page.evaluate(() => globalThis.workspaceListChanges), 1)
 
   await sidebar.getByRole('button', { name: 'Actions for two' }).click()
   await page.getByRole('menuitem', { name: 'Hide workspace' }).click()

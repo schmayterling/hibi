@@ -134,7 +134,59 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
       '.editor-panes.mode-markdown[data-source-ready="true"] .source-pane:not([inert]) .cm-content[contenteditable="true"]',
     )
     .waitFor({ timeout: 15_000 })
-  await source.fill('# cafe\u0301 👨‍👩‍👧‍👦\n\n中文')
+  try {
+    await source.fill('# cafe\u0301 👨‍👩‍👧‍👦\n\n中文')
+  } catch (error) {
+    const state = await Promise.race([
+      page.evaluate(() => {
+        const content = document.querySelector('.cm-content')
+        const path = []
+        for (
+          let node = content;
+          node && path.length < 12;
+          node = node.parentElement
+        ) {
+          const rect = node.getBoundingClientRect()
+          const style = getComputedStyle(node)
+          path.push({
+            tag: node.tagName,
+            className: String(node.className).slice(0, 100),
+            inert: node.inert,
+            hidden: node.hidden,
+            ariaHidden: node.getAttribute('aria-hidden'),
+            ariaReadOnly: node.getAttribute('aria-readonly'),
+            contentEditable: node.getAttribute('contenteditable'),
+            rect: [rect.x, rect.y, rect.width, rect.height].map(Math.round),
+            display: style.display,
+            visibility: style.visibility,
+            opacity: style.opacity,
+          })
+        }
+        return {
+          mode: document.querySelector('.editor-panes')?.className,
+          sourceReady: document
+            .querySelector('.editor-panes')
+            ?.getAttribute('data-source-ready'),
+          sourceEditable: content?.isContentEditable,
+          sourceButton: document
+            .querySelector('[aria-label="Source view"]')
+            ?.getAttribute('aria-pressed'),
+          activeElement: document.activeElement?.getAttribute('aria-label'),
+          visibility: document.visibilityState,
+          viewport: [innerWidth, innerHeight],
+          dialogs: [...document.querySelectorAll('dialog[open]')].map(
+            (dialog) => dialog.getAttribute('aria-label'),
+          ),
+          path,
+        }
+      }),
+      new Promise((resolve) =>
+        setTimeout(() => resolve({ capture: 'timed out' }), 2000),
+      ),
+    ])
+    console.error('editor plugins source fill state:', JSON.stringify(state))
+    throw error
+  }
   await count('2 words · 12 characters')
   await pressShortcut(app, `${mod}+Shift+[`)
   await count('2 words · 9 characters')

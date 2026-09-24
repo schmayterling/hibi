@@ -216,6 +216,14 @@ export async function compileTypst(
       const worker = child
       return new Promise<TypstResult & { pdf?: Uint8Array }>(
         (resolve, reject) => {
+          const startedAt = Date.now()
+          const phases: string[] = []
+          const mark = (stage: string) => {
+            phases.push(`${Date.now() - startedAt}ms ${stage}`)
+            ;(
+              globalThis as typeof globalThis & { typstTiming?: string }
+            ).typstTiming = phases.join(', ')
+          }
           const clean = () => {
             clearTimeout(timer)
             worker.removeListener('message', message)
@@ -229,8 +237,15 @@ export async function compileTypst(
             reject(new Error('Typst stopped while compiling. Try again.'))
           }
           const message = async (
-            result: TypstResult & { pdf?: Uint8Array; missing?: string[] },
+            result:
+              | (TypstResult & { pdf?: Uint8Array; missing?: string[] })
+              | { phase: string },
           ) => {
+            if ('phase' in result) {
+              mark(result.phase)
+              return
+            }
+            mark(result.missing?.length ? 'missing-result' : 'result')
             const missing =
               result.missing?.filter((path) => !requested.has(path)) ?? []
             if (missing.length && passes++ < 64) {
@@ -238,6 +253,7 @@ export async function compileTypst(
                 for (const path of missing) requested.add(path)
                 snapshot = await project(context, epoch, documentId, requested)
                 if (epoch !== generation || child !== worker) return
+                mark(`post pass ${passes + 1}`)
                 worker.postMessage({
                   sandbox: join(scratch, 'project'),
                   entry: snapshot.entry,
@@ -268,6 +284,7 @@ export async function compileTypst(
             reject(new Error('Typst compilation canceled.'))
           }
           const timer = setTimeout(() => {
+            mark('timeout')
             reportOwnedFailure('COMPILER_TIMEOUT', 'typst')
             clean()
             terminate(worker)
@@ -275,12 +292,13 @@ export async function compileTypst(
             fingerprint = ''
             reject(
               new Error(
-                'Typst compilation took longer than 10 seconds. Simplify the document and try again.',
+                `Typst compilation took longer than 10 seconds. Simplify the document and try again. [${phases.join(', ')}]`,
               ),
             )
           }, 10000)
           worker.once('exit', exited)
           worker.on('message', message)
+          mark('post pass 1')
           worker.postMessage({
             sandbox: join(scratch, 'project'),
             entry: snapshot.entry,

@@ -84,6 +84,10 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     undefined,
     { timeout: 15000 },
   )
+  console.log(
+    'typst first preview timing:',
+    await app.evaluate(() => globalThis.typstTiming),
+  )
   assert.equal(
     await preview.isVisible(),
     true,

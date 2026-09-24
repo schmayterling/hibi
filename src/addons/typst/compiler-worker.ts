@@ -9,6 +9,7 @@ let previousEntry: string | null = null
 let originals = new Map<string, Buffer>()
 let fontKey = ''
 process.parentPort.on('message', ({ data }: { data: CompileJob }) => {
+  process.parentPort.postMessage({ phase: 'module-loaded' })
   try {
     const fonts = data.files?.filter(([path]) =>
       /\.(ttf|otf|ttc|otc)$/i.test(path),
@@ -17,12 +18,14 @@ process.parentPort.on('message', ({ data }: { data: CompileJob }) => {
     for (const [path, bytes] of fonts ?? []) fontHash.update(path).update(bytes)
     const nextFontKey = fonts ? fontHash.digest('hex') : fontKey
     if (!compiler || nextFontKey !== fontKey) {
+      process.parentPort.postMessage({ phase: 'create-start' })
       compiler = NodeCompiler.create({
         workspace: data.sandbox,
         fontArgs: [
           { fontBlobs: fonts?.map(([, bytes]) => Buffer.from(bytes)) ?? [] },
         ],
       })
+      process.parentPort.postMessage({ phase: 'create-done' })
       fontKey = nextFontKey
     }
     if (data.files) {
@@ -51,7 +54,9 @@ process.parentPort.on('message', ({ data }: { data: CompileJob }) => {
           : data.source,
       ),
     )
+    process.parentPort.postMessage({ phase: 'compile-start' })
     const result = compiler.compile({ mainFilePath: entry, resetRead: true })
+    process.parentPort.postMessage({ phase: 'compile-done' })
     const rawDiagnostics = result.takeDiagnostics()?.shortDiagnostics ?? []
     const missing = rawDiagnostics.flatMap((error) => {
       const path = /^file not found \(searched at (.*)\)$/.exec(
@@ -72,6 +77,7 @@ process.parentPort.on('message', ({ data }: { data: CompileJob }) => {
         throw new Error('Typst previews support up to 200 pages.')
       const svg = compiler.plainSvg(result.result)
       const pdf = data.pdf ? compiler.pdf(result.result) : undefined
+      process.parentPort.postMessage({ phase: 'render-done' })
       if (
         Buffer.byteLength(svg) > 20 * 1024 * 1024 ||
         (pdf && pdf.byteLength > 64 * 1024 * 1024)

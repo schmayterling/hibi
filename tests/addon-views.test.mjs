@@ -78,10 +78,9 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  const editor = page.getByRole('textbox', {
-    name: 'Document editor',
-    exact: true,
-  })
+  const editor = page
+    .locator('#document-editor-panel')
+    .getByRole('textbox', { name: 'Document editor', exact: true })
   await page.waitForFunction(() => window.viewsFixture)
   const start = page.getByRole('region', { name: 'Start writing' })
   await page.evaluate(() => window.viewsFixture.alternateStart.open())
@@ -195,6 +194,12 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   await right.waitFor({ state: 'hidden' })
   await page.evaluate(() => window.viewsFixture.queuedRight.show())
   await right.getByRole('button', { name: 'Count 1' }).waitFor()
+  const other = (
+    await page.evaluate(() => window.hibi.getDocument())
+  ).tabs.find((tab) => tab.id !== first).id
+  await page.locator(`[data-tab-key="${other}"] .tab-split`).click()
+  const splitRight = page.locator('.editor-page[data-side="right"]')
+  await splitRight.waitFor()
   await page.evaluate(() => {
     window.viewsFixture.handles.rightFollow = window.viewsFixture.follow.open({
       side: 'right',
@@ -225,8 +230,10 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   await tabContent.getByRole('button', { name: 'Count 0' }).click()
   assert.equal(await addonTab.getAttribute('aria-selected'), 'true')
   assert.equal(await editor.isVisible(), false)
+  assert.equal(await splitRight.isVisible(), false)
   await page.locator(`#document-tab-${first}`).click()
   assert.equal(await editor.isVisible(), true)
+  assert.equal(await splitRight.isVisible(), true)
   await addonTab.click()
   await tabContent.getByRole('button', { name: 'Count 1' }).waitFor()
   await addonTab.focus()

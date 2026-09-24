@@ -593,6 +593,9 @@
   "79bce0799896": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
+  "e4ca16a3ca1e": [
+    "src/renderer/src/SourceEditor.tsx"
+  ],
   "26a5aa15d2b1": [
     "src/main/media.ts"
   ],
@@ -676,6 +679,9 @@
   ],
   "17e28e230217": [
     "src/ui/Sidebar.tsx"
+  ],
+  "b9295ef7f3fd": [
+    "src/renderer/src/main.tsx"
   ],
   "50a3f9523122": [
     "src/main/index.ts",
@@ -1310,6 +1316,9 @@
   ],
   "fab4539d26e0": [
     "src/renderer/src/settings-pages.ts"
+  ],
+  "f447a42481d6": [
+    "src/renderer/src/main.tsx"
   ],
   "936a161c3931": [
     "src/renderer/src/SettingsScreen.tsx",
@@ -2798,6 +2807,9 @@
   "656d97eb82c8": [
     "src/renderer/src/main.tsx"
   ],
+  "5e30537bee2e": [
+    "src/renderer/src/DocumentTabs.tsx"
+  ],
   "f5cc17a5ad18": [
     "src/addons/graph/Canvas.tsx"
   ],
@@ -3661,6 +3673,9 @@
   ],
   "c75049813154": [
     "src/renderer/src/SettingsScreen.tsx"
+  ],
+  "aa9997bb1d8c": [
+    "src/renderer/src/DocumentTabs.tsx"
   ],
   "2d69944804aa": [
     "src/renderer/src/HibiSettings.tsx"

@@ -34,7 +34,7 @@ import { ToastProvider, useToasts } from '../../ui/Sonner'
 import type { ToastHandle } from '../../ui/toasts'
 import './styles.css'
 import '../../ui/ui-case'
-import { Minimize2 } from 'lucide-react'
+import { Minimize2, X } from 'lucide-react'
 import { documentExtension, isDocumentView } from '../../shared/document-types'
 import {
   type KnownWorkspace,
@@ -110,6 +110,15 @@ const VersionHistory = lazy(() =>
     default: module.VersionHistory,
   })),
 )
+type PaneSide = 'left' | 'right'
+type SplitTabs = {
+  left: string
+  right: string
+  active: PaneSide
+  leftMode: ViewMode
+  rightMode: ViewMode
+}
+
 function App() {
   startupMark('app-render')
   const addonViewState = useSyncExternalStore(
@@ -196,6 +205,21 @@ function App() {
     [toasts],
   )
   const [document, setDocument] = useState<DocumentState | null>(null)
+  const [splitTabs, setSplitTabs] = useState<SplitTabs | null>(null)
+  const splitTabsRef = useRef(splitTabs)
+  splitTabsRef.current = splitTabs
+  const splitLeftId = splitTabs?.left
+  const splitRightId = splitTabs?.right
+  const focusSplitSide = useRef<PaneSide | null>(null)
+  const focusQueue = useRef<Promise<void>>(Promise.resolve())
+  const focusPending = useRef(false)
+  useEffect(() => {
+    if (!splitLeftId || !splitRightId) return
+    return () => {
+      documentRuntime.session(splitLeftId)?.releaseView('left')
+      documentRuntime.session(splitRightId)?.releaseView('right')
+    }
+  }, [splitLeftId, splitRightId])
   useSyncExternalStore(documentFormats.subscribe, documentFormats.snapshot)
   const documentFormat = document
     ? documentFormats.get(document.name)
@@ -206,7 +230,16 @@ function App() {
     Component?: typeof import('./Editor').MarkdownEditor
     error?: Error
   }>({})
-  const needsRichEditor = document !== null && markdownDocument
+  const needsRichEditor =
+    document !== null &&
+    (markdownDocument ||
+      !!(
+        splitTabs &&
+        [splitTabs.left, splitTabs.right].some((id) => {
+          const pane = documentRuntime.get(id)
+          return pane && documentFormats.isMarkdown(pane.name)
+        })
+      ))
   useEffect(() => {
     if (!needsRichEditor || richEditor.Component || richEditor.error) return
     let active = true
@@ -265,8 +298,22 @@ function App() {
       ),
     [setError],
   )
-  const acceptDocument = useCallback((next: DocumentState) => {
+  const acceptDocument = useCallback((next: DocumentState, focus = false) => {
     const previous = currentDocument.current
+    setSplitTabs((current) => {
+      if (!current) return null
+      const ids = new Set(next.tabs.map((tab) => tab.id))
+      if (
+        !next.tabsEnabled ||
+        !ids.has(current.left) ||
+        !ids.has(current.right)
+      )
+        return null
+      if (next.tabId === current[current.active]) return current
+      if (next.tabId === current.left) return { ...current, active: 'left' }
+      if (next.tabId === current.right) return { ...current, active: 'right' }
+      return { ...current, [current.active]: next.tabId }
+    })
     if (previous?.revision !== next.revision) setOutlineTarget(null)
     if (
       previous &&
@@ -276,7 +323,9 @@ function App() {
       const choice = localStorage.getItem(`hibi:flavor:${previous.id}`)
       if (choice) localStorage.setItem(`hibi:flavor:${next.id}`, choice)
     }
-    const active = documentRuntime.activate(next)
+    const active = focus
+      ? (documentRuntime.focus(next) ?? documentRuntime.activate(next))
+      : documentRuntime.activate(next)
     currentDocument.current = active
     shellDocument.current = active
     setDocument(active)
@@ -306,9 +355,48 @@ function App() {
       ),
     [flavorIds, availableFlavors],
   )
+  const splitFlavors = useMemo(() => {
+    if (!splitLeftId || !splitRightId) return null
+    const forTab = (id: string) => {
+      const pane = documentRuntime.get(id)
+      const choice =
+        flavorOverride && flavorOverride.id === pane?.id
+          ? flavorOverride.choice
+          : loadFlavor(pane?.id)
+      const selected = selectedFlavors(choice, availableFlavors)
+      return { choice, selected }
+    }
+    return { left: forTab(splitLeftId), right: forTab(splitRightId) }
+  }, [splitLeftId, splitRightId, availableFlavors, flavorOverride])
   const [resetEditor, setResetEditor] = useState(0)
   const busyRef = useRef(false)
   const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    const side = focusSplitSide.current
+    if (busy || !DocumentEditor || !side || splitTabs?.active !== side) return
+    const reveal = () => {
+      const target = Array.from(
+        window.document.querySelectorAll<HTMLElement>(
+          `.editor-page[data-side="${side}"] [contenteditable="true"]`,
+        ),
+      ).find(
+        (element) =>
+          !element.closest('[inert]') && element.getClientRects().length,
+      )
+      if (target) {
+        target.focus({ preventScroll: true })
+        focusSplitSide.current = null
+        observer.disconnect()
+      }
+    }
+    const observer = new MutationObserver(reveal)
+    observer.observe(window.document.body, { childList: true, subtree: true })
+    const frame = requestAnimationFrame(reveal)
+    return () => {
+      observer.disconnect()
+      cancelAnimationFrame(frame)
+    }
+  }, [busy, DocumentEditor, splitTabs?.active])
   const acknowledgeSave = useCallback((saved: DocumentState) => {
     documentRuntime.acknowledgeSave(saved)
   }, [])
@@ -317,7 +405,17 @@ function App() {
     const saved = localStorage.getItem('default-view')
     return saved && isDocumentView(saved) ? saved : 'normal'
   })
-  const [selectedMode, setMode] = useState<ViewMode>(defaultView)
+  const [selectedMode, setSelectedMode] = useState<ViewMode>(defaultView)
+  const setMode = useCallback((view: ViewMode) => {
+    setSelectedMode(view)
+    setSplitTabs((current) =>
+      current
+        ? current.active === 'left'
+          ? { ...current, leftMode: view }
+          : { ...current, rightMode: view }
+        : null,
+    )
+  }, [])
   useEffect(() => {
     localStorage.setItem('default-view', defaultView)
   }, [defaultView])
@@ -1009,7 +1107,12 @@ function App() {
 
   useEffect(() => window.hibi.onNotice(setNotice), [setNotice])
 
-  function updateMarkdown(markdown: string, historyGroup?: string) {
+  function updateMarkdown(
+    markdown: string,
+    historyGroup?: string,
+    tabId?: string,
+    viewId?: string,
+  ) {
     if (exceedsUtf8Limit(markdown, MAX_DOCUMENT_BYTES)) {
       setError(
         'This edit would exceed the 2 MiB document limit, so it was not applied.',
@@ -1018,7 +1121,7 @@ function App() {
       return
     }
     try {
-      documentRuntime.replace(markdown, 'visual', historyGroup)
+      documentRuntime.replace(markdown, 'visual', historyGroup, tabId, viewId)
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error))
       setResetEditor((value) => value + 1)
@@ -1129,6 +1232,110 @@ function App() {
       busyRef.current = false
       setBusy(false)
     }
+  }
+
+  async function splitDocumentTab(id: string) {
+    if (busyRef.current) return
+    const left = currentDocument.current?.tabId
+    if (!left || !currentDocument.current?.tabs.some((tab) => tab.id === id))
+      return
+    if (left !== id)
+      await applyDocumentOperation(() => window.hibi.selectDocumentTab(id))
+    if (currentDocument.current?.tabId === id) {
+      setSplitTabs({
+        left,
+        right: id,
+        active: 'right',
+        leftMode: mode,
+        rightMode: mode,
+      })
+      focusSplitSide.current = 'right'
+    }
+  }
+
+  async function focusSplitTab(side: PaneSide) {
+    const current = splitTabsRef.current
+    if (!current || (current.active === side && !focusPending.current)) return
+    if (busyRef.current && !focusPending.current) return
+    const id = current[side]
+    focusSplitSide.current = side
+    splitTabsRef.current = { ...current, active: side }
+    setSplitTabs(splitTabsRef.current)
+    setSelectedMode(side === 'left' ? current.leftMode : current.rightMode)
+    updateFlavorStatus(
+      paneFlavorStatus.current[side] ?? {
+        label: 'markdown',
+        unsupported: false,
+      },
+    )
+    if (currentDocument.current?.tabId === id && !focusPending.current) return
+    focusPending.current = true
+    busyRef.current = true
+    const task = focusQueue.current.then(async () => {
+      if (currentDocument.current?.tabId === id) return
+      try {
+        const metadata = await window.hibi.focusDocumentTab(id)
+        const retained = documentRuntime.focus(metadata)
+        acceptDocument(
+          retained ?? (await window.hibi.getDocument()),
+          !!retained,
+        )
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error))
+      }
+    })
+    focusQueue.current = task
+    await task
+    if (focusQueue.current === task) {
+      focusPending.current = false
+      busyRef.current = false
+      const latest = splitTabsRef.current
+      const actual = currentDocument.current?.tabId
+      if (
+        latest &&
+        actual &&
+        (actual === latest.left || actual === latest.right) &&
+        latest[latest.active] !== actual
+      ) {
+        const restored = actual === latest.left ? 'left' : 'right'
+        splitTabsRef.current = { ...latest, active: restored }
+        setSplitTabs(splitTabsRef.current)
+        setSelectedMode(
+          restored === 'left' ? latest.leftMode : latest.rightMode,
+        )
+        focusSplitSide.current = null
+      }
+    }
+  }
+
+  async function closeSplit() {
+    await focusQueue.current
+    const current = splitTabsRef.current
+    if (!current) return
+    const active =
+      current.left !== current.right &&
+      currentDocument.current?.tabId === current.right
+        ? 'right'
+        : current.active
+    if (active === 'right' && current.left !== current.right) {
+      busyRef.current = true
+      try {
+        const metadata = await window.hibi.focusDocumentTab(current.left)
+        const retained = documentRuntime.focus(metadata)
+        acceptDocument(
+          retained ?? (await window.hibi.getDocument()),
+          !!retained,
+        )
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error))
+        return
+      } finally {
+        busyRef.current = false
+      }
+    }
+    setSelectedMode(current.leftMode)
+    splitTabsRef.current = null
+    setSplitTabs(null)
   }
 
   async function openRemote() {
@@ -1347,6 +1554,33 @@ function App() {
         : next,
     )
   }, [])
+  const paneFlavorStatus = useRef<
+    Partial<Record<PaneSide, DocumentFlavorStatus>>
+  >({})
+  useEffect(() => {
+    if (!splitLeftId || !splitRightId) return
+    paneFlavorStatus.current = {}
+  }, [splitLeftId, splitRightId])
+  const activePane = useRef<PaneSide>('left')
+  activePane.current = splitTabs?.active ?? 'left'
+  const paneReports = useMemo(() => {
+    const forSide = (side: PaneSide) => ({
+      flavor: (status: DocumentFlavorStatus) => {
+        paneFlavorStatus.current[side] = status
+        if (activePane.current === side) updateFlavorStatus(status)
+      },
+      outline: (headings: OutlineHeading[]) => {
+        if (activePane.current === side) setOutline(headings)
+      },
+      unavailable: (reason: string | null) => {
+        if (activePane.current === side) setOutlineUnavailable(reason)
+      },
+      activeOutline: (id: string | null) => {
+        if (activePane.current === side) setActiveOutline(id)
+      },
+    })
+    return { left: forSide('left'), right: forSide('right') }
+  }, [updateFlavorStatus])
   function changeFlavor(choice: FlavorChoice) {
     if (!document) return
     localStorage.setItem(`hibi:flavor:${document.id}`, JSON.stringify(choice))
@@ -1683,6 +1917,219 @@ function App() {
         },
       })
   }
+  const renderPane = (side: PaneSide) => {
+    const paneDocument = splitTabs
+      ? documentRuntime.get(splitTabs[side])
+      : document
+    const active = !splitTabs || splitTabs.active === side
+    const paneFormat = paneDocument
+      ? documentFormats.get(paneDocument.name)
+      : undefined
+    const paneMarkdown =
+      !paneDocument || documentFormats.isMarkdown(paneDocument.name)
+    const PaneEditor = paneMarkdown ? richEditor.Component : FormatEditor
+    const requestedMode = splitTabs
+      ? side === 'left'
+        ? splitTabs.leftMode
+        : splitTabs.rightMode
+      : mode
+    const paneViews = addonHost.sourceOnly
+      ? (['markdown'] as const)
+      : documentFormats.views(paneDocument?.name ?? 'untitled.md')
+    const paneMode: ViewMode = paneViews.includes(requestedMode)
+      ? requestedMode
+      : paneViews.includes('side-by-side')
+        ? 'side-by-side'
+        : 'markdown'
+    const paneChoice = splitFlavors?.[side].choice ?? flavorChoice
+    const paneChosen = splitFlavors?.[side].selected ?? chosenFlavors
+    const paneSourceName =
+      paneFormat?.name ??
+      addonHost.catalog.find((addon) =>
+        addon.manifest.fileExtensions?.includes(
+          documentExtension(paneDocument?.name ?? ''),
+        ),
+      )?.manifest.name ??
+      'source'
+    return (
+      // biome-ignore lint/a11y/useAriaPropsSupportedByRole: tabpanel and region both support accessible names.
+      <div
+        className="editor-page"
+        key={side}
+        data-side={splitTabs ? side : undefined}
+        data-active={active}
+        id={active ? 'document-editor-panel' : 'split-document-editor-panel'}
+        hidden={!!activeAddonTab}
+        role={
+          splitTabs
+            ? 'region'
+            : paneDocument?.tabsEnabled === false && addonTabs.length === 0
+              ? 'region'
+              : 'tabpanel'
+        }
+        aria-label={
+          splitTabs
+            ? `Editing ${paneDocument?.name ?? 'document'}`
+            : paneDocument?.tabsEnabled === false && addonTabs.length === 0
+              ? paneDocument.name
+              : undefined
+        }
+        aria-labelledby={
+          !splitTabs &&
+          paneDocument &&
+          (paneDocument.tabsEnabled || addonTabs.length > 0) &&
+          !activeAddonTab
+            ? `document-tab-${paneDocument.tabId}`
+            : undefined
+        }
+        data-startup={!splitTabs && showWelcome}
+        inert={!addonHost.ready}
+        aria-busy={!addonHost.ready}
+        onPointerDown={(event) => {
+          if ((event.target as Element).closest('[aria-label="Close split"]'))
+            return
+          if (splitTabs && !active) void focusSplitTab(side)
+        }}
+        onFocusCapture={(event) => {
+          if ((event.target as Element).closest('[aria-label="Close split"]'))
+            return
+          if (splitTabs && !active) void focusSplitTab(side)
+        }}
+      >
+        {splitTabs && paneDocument && (
+          <header className="split-tab-heading">
+            <span>
+              {paneDocument.name}
+              {paneDocument.dirty ? ' •' : ''}
+            </span>
+            {side === 'right' && (
+              <IconButton
+                aria-label="Close split"
+                title="Close split"
+                onClick={() => void closeSplit()}
+              >
+                <X size={14} />
+              </IconButton>
+            )}
+          </header>
+        )}
+        {(!editorStarted.current || !PaneEditor) && <LoadingScreen />}
+        {paneDocument && editorStarted.current && PaneEditor && (
+          <Suspense fallback={<LoadingScreen />}>
+            <ActiveDocumentEditor
+              Component={PaneEditor}
+              {...(splitTabs ? { viewId: side } : {})}
+              focused={active}
+              autoFocus={!splitTabs}
+              markdown={paneMarkdown}
+              knownFlavors={knownFlavors}
+              chosenFlavors={paneChosen}
+              flavorChoice={paneChoice}
+              manifests={manifests}
+              enabledAddons={enabledAddons}
+              onFlavorStatus={paneReports[side].flavor}
+              onOutline={paneReports[side].outline}
+              onOutlineUnavailable={paneReports[side].unavailable}
+              outlineActive={
+                active &&
+                !settingsOpen &&
+                !zen &&
+                ((sidebarOpen && sidebarView === 'outline') ||
+                  (rightSidebarOpen && rightSidebarView === 'outline'))
+              }
+              onActiveOutline={paneReports[side].activeOutline}
+              outlineTarget={active ? outlineTarget : null}
+              document={paneDocument}
+              format={paneFormat}
+              formatName={paneSourceName}
+              onAttach={attachMedia}
+              onLink={openLink}
+              flavors={paneChosen}
+              sourceExtensions={addonHost.sourceExtensions}
+              richExtensions={addonHost.richExtensions}
+              documentRevision={paneDocument.revision}
+              showLineNumbers={showLineNumbers}
+              spellCheck={spellCheck}
+              showMarkdownMarkers={showMarkdownMarkers}
+              cursorSettings={cursorSettings}
+              markdownExtensions={editorConfiguration.current.projections}
+              key={`${paneDocument.tabId}-${paneDocument.revision}-${resetEditor}-${paneMarkdown ? 'markdown' : documentExtension(paneDocument.name)}`}
+              onChange={(value, group) =>
+                updateMarkdown(
+                  value,
+                  group,
+                  paneDocument.tabId,
+                  splitTabs ? side : undefined,
+                )
+              }
+              mode={paneMode}
+              disabled={busy || !addonHost.ready}
+              findOpen={findOpen && active && !settingsOpen}
+              onCloseFind={() => setFindOpen(false)}
+            />
+          </Suspense>
+        )}
+        {!splitTabs &&
+          showWelcome &&
+          addonHost.ready &&
+          (activeStartView ? (
+            <section
+              className="startup-placeholder addon-start-view"
+              aria-label="Start writing"
+            >
+              <AddonViewContent entry={activeStartView} visible />
+            </section>
+          ) : (
+            <StartupPlaceholder
+              recent={recentWorkspaces}
+              mode={mode}
+              busy={busy}
+              onOpen={(id) => void openFolder(id)}
+              onOpenFile={() => void runCommand('open')}
+              onDismiss={() => {
+                void applyDocumentOperation(() =>
+                  window.hibi.newDocument(),
+                ).then(() =>
+                  window.document
+                    .querySelector<HTMLElement>(
+                      mode === 'normal' ? '.tiptap' : '.cm-content',
+                    )
+                    ?.focus(),
+                )
+              }}
+            />
+          ))}
+        {!settingsOpen && active && (
+          <StatusBar
+            visibility={zen ? 'hidden' : statusBar}
+            items={[
+              {
+                id: 'flavor',
+                label: markdownDocument ? flavorStatus.label : sourceName,
+                tooltip: !markdownDocument
+                  ? `${sourceName} document · click for format settings`
+                  : flavorStatus.unsupported
+                    ? 'Some Markdown features are disabled. Choose a flavor or enable the addon.'
+                    : `${flavorChoice.dialect === 'auto' ? 'Detected' : 'Selected'} Markdown flavor · click to change`,
+                onClick: openFlavors,
+              },
+              {
+                id: 'autosave',
+                ...autosaveStatus,
+                onClick: () => openSetting('editor', 'autosave-enabled'),
+              },
+              ...addonHost.statusItems.filter(
+                (item) =>
+                  item.label &&
+                  (item.when !== 'source' || mode !== 'normal') &&
+                  (item.when !== 'normal' || mode === 'normal'),
+              ),
+            ]}
+          />
+        )}
+      </div>
+    )
+  }
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: OS file drops supplement the keyboard-accessible file menu.
     <div
@@ -1818,7 +2265,15 @@ function App() {
         }
         onSelectTab={(id) => {
           addonViews.selectDocument()
-          if (id !== document?.tabId)
+          if (splitTabs && (id === splitTabs.left || id === splitTabs.right)) {
+            const side =
+              id === splitTabs.left && id === splitTabs.right
+                ? splitTabs.active
+                : id === splitTabs.left
+                  ? 'left'
+                  : 'right'
+            void focusSplitTab(side)
+          } else if (id !== document?.tabId)
             void applyDocumentOperation(() => window.hibi.selectDocumentTab(id))
         }}
         onCloseTab={(id) =>
@@ -1837,6 +2292,11 @@ function App() {
         onCloseAddonTab={(id) =>
           addonTabs.find((tab) => tab.id === id)?.handle.close()
         }
+        onSplitTab={(id) => {
+          addonViews.selectDocument()
+          void splitDocumentTab(id)
+        }}
+        splitTabs={splitTabs}
         sidebarOpen={settingsOpen ? settingsSidebarOpen : sidebarOpen}
         onSidebar={toggleSidebar}
         onSettings={toggleSettings}
@@ -2013,133 +2473,12 @@ function App() {
         }
       >
         {!activeAddonTab && <EditorToolbar mode={mode} typing={typing} />}
-        {/* biome-ignore lint/a11y/useAriaPropsSupportedByRole: tabpanel and region both support accessible names. */}
         <div
-          className="editor-page"
-          id="document-editor-panel"
-          hidden={!!activeAddonTab}
-          role={
-            document?.tabsEnabled === false && addonTabs.length === 0
-              ? 'region'
-              : 'tabpanel'
-          }
-          aria-label={
-            document?.tabsEnabled === false && addonTabs.length === 0
-              ? document.name
-              : undefined
-          }
-          aria-labelledby={
-            document &&
-            (document.tabsEnabled || addonTabs.length > 0) &&
-            !activeAddonTab
-              ? `document-tab-${document.tabId}`
-              : undefined
-          }
-          data-startup={showWelcome}
-          inert={!addonHost.ready}
-          aria-busy={!addonHost.ready}
+          className="split-tab-pages"
+          data-split={!!splitTabs && !activeAddonTab}
         >
-          {(!editorStarted.current || !DocumentEditor) && <LoadingScreen />}
-          {document && editorStarted.current && DocumentEditor && (
-            <Suspense fallback={<LoadingScreen />}>
-              <ActiveDocumentEditor
-                Component={DocumentEditor}
-                markdown={markdownDocument}
-                knownFlavors={knownFlavors}
-                chosenFlavors={chosenFlavors}
-                flavorChoice={flavorChoice}
-                manifests={manifests}
-                enabledAddons={enabledAddons}
-                onFlavorStatus={updateFlavorStatus}
-                onOutline={setOutline}
-                onOutlineUnavailable={setOutlineUnavailable}
-                outlineActive={
-                  !settingsOpen &&
-                  !zen &&
-                  ((sidebarOpen && sidebarView === 'outline') ||
-                    (rightSidebarOpen && rightSidebarView === 'outline'))
-                }
-                onActiveOutline={setActiveOutline}
-                outlineTarget={outlineTarget}
-                document={document}
-                format={documentFormat}
-                formatName={sourceName}
-                onAttach={attachMedia}
-                onLink={openLink}
-                flavors={editorConfiguration.current.flavors}
-                sourceExtensions={addonHost.sourceExtensions}
-                richExtensions={addonHost.richExtensions}
-                documentRevision={document.revision}
-                showLineNumbers={showLineNumbers}
-                spellCheck={spellCheck}
-                showMarkdownMarkers={showMarkdownMarkers}
-                cursorSettings={cursorSettings}
-                markdownExtensions={editorConfiguration.current.projections}
-                key={`${document.revision}-${resetEditor}-${markdownDocument ? 'markdown' : documentExtension(document.name)}`}
-                onChange={updateMarkdown}
-                mode={mode}
-                disabled={busy || !addonHost.ready}
-                findOpen={findOpen && !settingsOpen}
-                onCloseFind={() => setFindOpen(false)}
-              />
-            </Suspense>
-          )}
-          {showWelcome &&
-            addonHost.ready &&
-            (activeStartView ? (
-              <section
-                className="startup-placeholder addon-start-view"
-                aria-label="Start writing"
-              >
-                <AddonViewContent entry={activeStartView} visible />
-              </section>
-            ) : (
-              <StartupPlaceholder
-                recent={recentWorkspaces}
-                mode={mode}
-                busy={busy}
-                onOpen={(id) => void openFolder(id)}
-                onOpenFile={() => void runCommand('open')}
-                onDismiss={() => {
-                  void applyDocumentOperation(() =>
-                    window.hibi.newDocument(),
-                  ).then(() =>
-                    window.document
-                      .querySelector<HTMLElement>(
-                        mode === 'normal' ? '.tiptap' : '.cm-content',
-                      )
-                      ?.focus(),
-                  )
-                }}
-              />
-            ))}
-          {!settingsOpen && (
-            <StatusBar
-              visibility={zen ? 'hidden' : statusBar}
-              items={[
-                {
-                  id: 'flavor',
-                  label: markdownDocument ? flavorStatus.label : sourceName,
-                  tooltip: !markdownDocument
-                    ? `${sourceName} document · click for format settings`
-                    : flavorStatus.unsupported
-                      ? 'Some Markdown features are disabled. Choose a flavor or enable the addon.'
-                      : `${flavorChoice.dialect === 'auto' ? 'Detected' : 'Selected'} Markdown flavor · click to change`,
-                  onClick: openFlavors,
-                },
-                {
-                  id: 'autosave',
-                  ...autosaveStatus,
-                  onClick: () => openSetting('editor', 'autosave-enabled'),
-                },
-                ...addonHost.statusItems.filter(
-                  (item) =>
-                    item.label &&
-                    (item.when !== 'source' || mode !== 'normal') &&
-                    (item.when !== 'normal' || mode === 'normal'),
-                ),
-              ]}
-            />
+          {(splitTabs ? (['left', 'right'] as const) : (['left'] as const)).map(
+            renderPane,
           )}
         </div>
         <AddonTab hidden={settingsOpen} />

@@ -68,6 +68,7 @@ import {
   confirmDiscard,
   confirmDiscardAll,
   discardChanges,
+  focusDocumentTab,
   getDocument,
   getDocumentPath,
   getDocumentPathForTab,
@@ -972,6 +973,9 @@ if (!app.requestSingleInstanceLock()) {
       })
       handle(DOCUMENT_CHANNELS.selectTab, (event, id: unknown) =>
         runFileOperation(event, (window) => selectDocumentTab(window, id)),
+      )
+      handle(DOCUMENT_CHANNELS.focusTab, (event, id: unknown) =>
+        runFileOperation(event, (window) => focusDocumentTab(window, id)),
       )
       handle(DOCUMENT_CHANNELS.closeTab, (event, id: unknown) =>
         runFileOperation(event, (window) => closeDocumentTab(window, id)),

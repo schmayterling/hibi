@@ -320,6 +320,7 @@ export function useFormattingToolbar(
   onAttach: (files: File[] | null) => Promise<MediaAttachment[] | null>,
   markdownMode = true,
   format?: DocumentFormat,
+  active = true,
 ) {
   const dialogs = useDialogs()
   const toasts = useToasts()
@@ -445,6 +446,7 @@ export function useFormattingToolbar(
     if (initial && latest.current.mode === 'markdown') value?.focus()
   }, [])
   useLayoutEffect(() => {
+    if (!active) return
     const scope = toolbar.scope('format', (error) =>
       console.error('formatting failed:', error),
     )
@@ -572,7 +574,7 @@ export function useFormattingToolbar(
       refresh.current = () => {}
       scope.dispose()
     }
-  }, [attachFiles])
+  }, [attachFiles, active])
   useLayoutEffect(() => {
     let frame = 0
     const update = () => {

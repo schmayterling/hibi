@@ -18,6 +18,7 @@ export const DOCUMENT_CHANNELS = {
   save: 'document:save',
   autosave: 'document:autosave',
   selectTab: 'document:select-tab',
+  focusTab: 'document:focus-tab',
   closeTab: 'document:close-tab',
   moveTab: 'document:move-tab',
   tabsEnabled: 'document:tabs-enabled',
@@ -51,6 +52,7 @@ export type DocumentState = {
   canAutosave: boolean
 }
 export type DocumentTab = { id: string; name: string; dirty: boolean }
+export type DocumentFocus = Omit<DocumentState, 'markdown' | 'savedMarkdown'>
 export type AutosaveResult = {
   status: 'saved' | 'skipped' | 'conflict'
   document: DocumentState | null
@@ -214,6 +216,7 @@ export type DesktopApi = {
   setUiCase: (value: import('./ui-case').UiCase) => Promise<void>
   getDocument: () => Promise<DocumentState>
   selectDocumentTab: (id: string) => Promise<DocumentState>
+  focusDocumentTab: (id: string) => Promise<DocumentFocus>
   closeDocumentTab: (id: string) => Promise<DocumentState | null>
   moveDocumentTab: (
     id: string,

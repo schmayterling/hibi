@@ -2,7 +2,7 @@
   "name": "hibi",
   "desktopName": "com.ryanaque.hibi.desktop",
   "version": "0.1.0",
-  "license": "AGPL-3.0-only",
+  "license": "GPL-3.0-only",
   "description": "hibi desktop",
   "private": true,
   "type": "module",

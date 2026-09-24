@@ -1,6 +1,6 @@
 # Releases and publishing
 
-Hibi uses AGPL-3.0-only. Packaged applications include the root `LICENSE`.
+Hibi uses GPL-3.0-only. Packaged applications include the root `LICENSE.md`.
 
 ## Nightly builds
 

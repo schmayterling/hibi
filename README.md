@@ -40,4 +40,4 @@ allowed, i mean what did u expect but lets try to keep code quality great, hibi 
 
 ## license
 
-hibi uses the [GNU Affero General Public License v3.0](LICENSE). third-party credits and license texts are available in **Settings → Hibi → Open source licenses**.
+hibi uses the [GNU General Public License v3.0](LICENSE.md). third-party credits and license texts are available in **Settings → Hibi → Open source licenses**.

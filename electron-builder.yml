@@ -6,7 +6,7 @@ directories:
 files:
   - out/**/*
   - package.json
-  - LICENSE
+  - LICENSE.md
 asar: true
 asarUnpack:
   - node_modules/@esbuild/**/*

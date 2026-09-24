@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { crashAndReload, electron } from './electron.mjs'
+import { crashAndReload, electron, stopElectronTree } from './electron.mjs'
 
 test('journal barriers preserve immediate saves, retries, renderer recovery, and native close', {
   timeout: 45000,
@@ -86,7 +86,7 @@ test('J07/J09: native receipt recovery and saturated rich input preserve exact a
   let stage = 'startup'
   const watchdog = setTimeout(() => {
     console.error(`journal pressure test stalled during ${stage}`)
-    app.process().kill('SIGKILL')
+    stopElectronTree(app.process())
   }, 55000)
   t.after(async () => {
     await app

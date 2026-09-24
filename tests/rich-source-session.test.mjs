@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, stopElectronTree } from './electron.mjs'
 
 test('S01/S03/S07/J01: accepted rich transformations are savable before callbacks and rejected changes stay atomic', {
   timeout: 45000,
@@ -48,7 +48,7 @@ test('S01/S03/S07/J01: accepted rich transformations are savable before callback
   let stage = 'startup'
   const watchdog = setTimeout(() => {
     console.error(`rich source test stalled during ${stage}`)
-    app.process().kill('SIGKILL')
+    stopElectronTree(app.process())
   }, 30_000)
   t.after(async () => {
     await app

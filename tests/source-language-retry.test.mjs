@@ -124,11 +124,21 @@ test('failed source languages retry in the same view and preserve native input, 
     'ab!c\r\n',
   )
   await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    'abc\r\n',
+  )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     'abc\r\n',
   )
   await pressShortcut(app, `${mod}+Shift+z`)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    'ab!c\r\n',
+  )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     'ab!c\r\n',

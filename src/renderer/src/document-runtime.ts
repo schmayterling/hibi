@@ -48,6 +48,7 @@ export class DocumentRuntime {
   readonly #listeners = new Set<Listener>()
   readonly #documentListeners = new Set<Listener>()
   readonly #catalogListeners = new Set<() => void>()
+  readonly #viewListeners = new Set<() => void>()
   readonly #options: RuntimeOptions
   readonly #history = new Map<
     DocumentSession,
@@ -126,18 +127,44 @@ export class DocumentRuntime {
     })
     this.#views.set(viewId, target)
     this.#activeView ??= viewId
+    this.#notifyViews()
     return () => {
       if (this.#views.get(viewId) !== target) return
       this.#views.delete(viewId)
       if (this.#activeView === viewId) this.#activeView = null
+      this.#notifyViews()
     }
   }
   focusView(viewId: ViewId) {
-    if (this.#views.has(viewId)) this.#activeView = viewId
+    if (this.#views.has(viewId) && this.#activeView !== viewId) {
+      this.#activeView = viewId
+      this.#notifyViews()
+    }
   }
-  captureActiveView = () => {
-    const target = this.#activeView && this.#views.get(this.#activeView)
+  captureView = (viewId: ViewId) => {
+    const target = this.#views.get(viewId)
     return target && this.resolveDocument(target) ? target : null
+  }
+  captureActiveView = () =>
+    this.#activeView ? this.captureView(this.#activeView) : null
+  listViews = () =>
+    Object.freeze(
+      [...this.#views.keys()].flatMap((viewId) => this.captureView(viewId) ?? []),
+    )
+  subscribeViews = (listener: () => void) => {
+    this.#viewListeners.add(listener)
+    return () => {
+      this.#viewListeners.delete(listener)
+    }
+  }
+  #notifyViews() {
+    for (const listener of [...this.#viewListeners]) {
+      try {
+        listener()
+      } catch (error) {
+        this.#options.onError(error)
+      }
+    }
   }
   isLiveView = (target: ViewTarget) => {
     const registered = this.#views.get(target.viewId)
@@ -171,14 +198,17 @@ export class DocumentRuntime {
   }
   #discardSession(id: string, session: DocumentSession) {
     const target = this.#documentTargets.get(id)
+    let removedView = false
     if (target) {
       this.#targetSessions.delete(target.documentId)
       for (const [viewId, view] of this.#views)
         if (view.documentId === target.documentId) {
           this.#views.delete(viewId)
+          removedView = true
           if (this.#activeView === viewId) this.#activeView = null
         }
     }
+    if (removedView) this.#notifyViews()
     this.#documentTargets.delete(id)
     this.#primaryViewIds.delete(id)
     this.#saves.delete(id)
@@ -499,6 +529,8 @@ export class DocumentRuntime {
     this.#sessions.clear()
     this.#views.clear()
     this.#activeView = null
+    this.#notifyViews()
+    this.#viewListeners.clear()
     this.#history.clear()
     this.#historySize = { bytes: 0, groups: 0 }
     this.#listeners.clear()

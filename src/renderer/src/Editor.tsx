@@ -71,6 +71,7 @@ import { certifyVisualEcho } from './document-shell'
 import { type CursorSettings, EditorCursor } from './EditorCursor'
 import { registerEditorSelectionCapture } from './editor-command-targets'
 import { emitEditorKeyEvent } from './editor-events'
+import { editorViewRegistry } from './editor-view-api'
 import {
   hasEditorInteractionProviders,
   onEditorInteractionProvidersChanged,
@@ -380,6 +381,8 @@ export function MarkdownEditor({
     composition: undefined as number | undefined,
   })
   const [richInputError, setRichInputError] = useState('')
+  const viewIdRef = useRef(viewId)
+  viewIdRef.current = viewId
   const retryRich = useRef(() => {})
   const prepareRichRef = useRef(prepareRich)
   prepareRichRef.current = prepareRich
@@ -416,6 +419,13 @@ export function MarkdownEditor({
         : mode === 'markdown'
           ? 'source'
           : focusedPane
+  useEffect(() => {
+    editorViewRegistry.setActive(viewId as ViewId, findTarget)
+  }, [viewId, findTarget])
+  useEffect(
+    () => () => editorViewRegistry.clearActive(viewId as ViewId),
+    [viewId],
+  )
   const scrollContent = useRef({
     source: value,
     body: projection.content,
@@ -455,6 +465,7 @@ export function MarkdownEditor({
               certifyVisualEcho(source)
           }
           setRichInputError('')
+          editorViewRegistry.changed(viewIdRef.current as ViewId, 'rich')
         },
       }),
       ...(markdownSyntax.enabled('core.images')
@@ -507,10 +518,60 @@ export function MarkdownEditor({
           transaction.getMeta('composition') == null
         )
           richHistoryGroup.current.id = ''
+        if (!transaction.docChanged)
+          editorViewRegistry.changed(viewIdRef.current as ViewId, 'rich')
       },
     },
     [markdownExtensions, flavors, syntaxVersion],
   )
+  useEffect(() => {
+    if (!editor) return
+    return editorViewRegistry.register(
+      documentState.tabId,
+      viewId as ViewId,
+      'rich',
+      {
+        read: () => {
+          const source = richSourceSnapshot(editor)
+          if (!source || !richSourceCurrent(editor)) return null
+          const selection = editor.state.selection
+          return {
+            contentVersion: source.version,
+            anchor: selection.anchor,
+            head: selection.head,
+            length: editor.state.doc.content.size,
+          }
+        },
+        setSelection: (anchor, head) => {
+          try {
+            const state = editor.view.state
+            const selection = TextSelection.create(state.doc, anchor, head)
+            if (selection.anchor !== anchor || selection.head !== head)
+              return false
+            editor.view.dispatch(state.tr.setSelection(selection))
+            return (
+              editor.state.selection.anchor === anchor &&
+              editor.state.selection.head === head
+            )
+          } catch {
+            return false
+          }
+        },
+        reveal: (position) => {
+          try {
+            const { node } = editor.view.domAtPos(position)
+            const element =
+              node instanceof Element ? node : node.parentElement
+            if (!element) return false
+            element.scrollIntoView({ block: 'nearest' })
+            return true
+          } catch {
+            return false
+          }
+        },
+      },
+    )
+  }, [editor, documentState.tabId, viewId])
   const updateRichEditable = useCallback(() => {
     if (!editor || editor.isDestroyed) return
     editor.setEditable(

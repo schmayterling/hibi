@@ -44,6 +44,30 @@ Source offsets include the original line endings. CodeMirror uses normalized pos
 
 Rich corrections also keep a per-editor source-preservation cache of up to 32 entries and 8 Mi UTF-16 units for matching subsequent serialization results. That cache is separate from authoritative operation history; its eviction does not make retained host undo normalize Markdown. A schema change creates a new rich editor and follows the syntax transition policy. Source editor recreation restores the session's source selection.
 
+## Work with mounted editor views
+
+`context.editorViews` lists mounted editor instances and returns the active view. A view target includes document and view generations, so closing and reopening a note invalidates old targets. The current layout mounts one editor view at a time; rich and source panes share that view target.
+
+```typescript
+const view = context.editorViews.getActive()
+if (view) {
+  const result = context.editorViews.getSelection(view)
+  if (result.ok) {
+    const selection = result.value
+    context.editorViews.reveal({
+      view,
+      editor: selection.editor,
+      contentVersion: selection.contentVersion,
+      position: selection.head,
+    })
+  }
+}
+```
+
+Selection positions are UTF-16 offsets in the named editor: CodeMirror positions in Source view and ProseMirror positions in rich view. They are not Markdown source offsets. `getSelection()` returns the primary selection with its anchor and head. Pass the captured view, editor kind, and content version to `setSelection()` or `reveal()`; these methods reject stale or unavailable panes and do not focus the editor. Use `documents.applyEdits()` for source changes instead of treating navigation positions as source edit ranges.
+
+`onDidChangeActive()` reports a new active view or `null`. `onDidChangeSelection()` reports the active pane's primary selection or `null` when that pane is unavailable. Both subscriptions are removed when the addon stops.
+
 ## Analyze and mark text
 
 `getTextProjection()` lazily returns literal text with exact spans back to the source. It excludes Markdown code, metadata, destinations, and text that cannot be mapped safely. A projection has its own `id` as well as the document identity and content version. Include that ID as `projectionId` in edit requests so a view or schema change also invalidates stale results.

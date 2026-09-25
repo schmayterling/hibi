@@ -1,6 +1,7 @@
 # Foundations open issues
 
 - Targeted edits of a mounted background editor view still return `unsupported-view`; a view-aware adapter must preserve selection and history before allowing them.
+- The public `editorViews` API addresses mounted views and validates view generation, editor pane, and content version. It exposes the primary selection in explicit editor coordinates; these positions cannot be used as Markdown source edit offsets. The current layout has one editor view; two live split panes from draft #90 are not integrated.
 - Legacy `context.editor.updateMarkdown` now rejects a stale pending command target. Background callbacks outside a command remain active-only; use `context.documents` for captured asynchronous edits.
 - Workspace closed-file update requires explicit metadata reset. Rename/trash/source unlink and folder moves still have same-user path-swap races without native identity-bound, no-replace filesystem operations. A failed folder move may leave its reserved empty destination. Paged listing bounds IPC payloads but may walk the retained tree from its start for each page.
 - Workspace watcher events identify generation and ordered invalidations, but cannot truthfully report every external mutation's origin or content version.

@@ -390,6 +390,43 @@ export type DocumentsApi = {
     target: import('../shared/foundation-contracts').VersionedDocumentTarget,
   ) => Promise<import('../shared/document-edits').TargetDocumentSaveResult>
 }
+/** Positions are UTF-16 offsets in the named editor, not Markdown source offsets. */
+export type EditorViewSelection = {
+  view: import('../shared/foundation-contracts').ViewTarget
+  editor: 'source' | 'rich'
+  contentVersion: number
+  /** Primary selection only; anchor and head preserve its direction. */
+  anchor: number
+  head: number
+}
+export type EditorViewPosition = Pick<
+  EditorViewSelection,
+  'view' | 'editor' | 'contentVersion'
+> & { position: number }
+export type EditorViewsApi = {
+  /** Mounted editor instances; one instance is available in the current layout. */
+  list: () => readonly import('../shared/foundation-contracts').ViewTarget[]
+  getActive: () => import('../shared/foundation-contracts').ViewTarget | null
+  getSelection: (
+    view: import('../shared/foundation-contracts').ViewTarget,
+  ) => import('../shared/foundation-contracts').OperationResult<EditorViewSelection>
+  /** Does not focus the editor. Requires its current view generation and content version. */
+  setSelection: (
+    selection: EditorViewSelection,
+  ) => import('../shared/foundation-contracts').OperationResult<void>
+  reveal: (
+    position: EditorViewPosition,
+  ) => import('../shared/foundation-contracts').OperationResult<void>
+  onDidChangeActive: (
+    listener: (
+      view: import('../shared/foundation-contracts').ViewTarget | null,
+    ) => void,
+  ) => () => void
+  onDidChangeSelection: (
+    /** Active editor selection, or null when its pane becomes unavailable. */
+    listener: (selection: EditorViewSelection | null) => void,
+  ) => () => void
+}
 export type DocumentFormatting = {
   actions: readonly string[]
   apply: (action: string, selection: DocumentSelection) => DocumentEdit | null
@@ -659,6 +696,7 @@ export type AddonContext = {
     ) => void
   }
   documents: DocumentsApi
+  editorViews: EditorViewsApi
   host: {
     selectedText: import('../shared/selected-text').SelectedTextHostApi
     selectedIo: import('../shared/host-selected-io').HostSelectedIoHostApi

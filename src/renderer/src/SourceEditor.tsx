@@ -45,6 +45,7 @@ import {
   type EditorInteractionRequest,
   sameInteraction,
 } from '../../shared/editor-interactions'
+import type { ViewId } from '../../shared/foundation-contracts'
 import { markdownLink } from '../../shared/markdown-link'
 import { wikiHref } from '../../shared/note-links'
 import type { RawEdit } from '../../shared/source-operations'
@@ -66,6 +67,7 @@ import {
   hasEditorInteractionProviders,
   onEditorInteractionProvidersChanged,
 } from './editor-interaction-presence'
+import { editorViewRegistry } from './editor-view-api'
 import type { FindMove, FindStatus } from './FindBar'
 import {
   observeSourceAnnotations,
@@ -939,6 +941,8 @@ export function SourceEditor({
             spellcheck: 'false',
           }),
           EditorView.updateListener.of((update) => {
+            if (update.selectionSet || update.docChanged)
+              editorViewRegistry.changed(viewId as ViewId, 'source')
             if (
               update.docChanged ||
               update.selectionSet ||
@@ -1205,6 +1209,34 @@ export function SourceEditor({
       },
       resolveReference,
     )
+    const unregisterViewApi = editorViewRegistry.register(
+      document.tabId,
+      viewId as ViewId,
+      'source',
+      {
+        read: () => {
+          const source = bridge.snapshot()
+          if (view.current !== editor || !session.ownsCurrentSnapshot(source))
+            return null
+          const selection = editor.state.selection.main
+          return {
+            contentVersion: source.version,
+            anchor: selection.anchor,
+            head: selection.head,
+            length: editor.state.doc.length,
+          }
+        },
+        setSelection: (anchor, head) => {
+          editor.dispatch({ selection: { anchor, head } })
+          const selection = editor.state.selection.main
+          return selection.anchor === anchor && selection.head === head
+        },
+        reveal: (position) => {
+          editor.dispatch({ effects: EditorView.scrollIntoView(position) })
+          return true
+        },
+      },
+    )
     configureParser.current = () => {
       const id = parserOptions.current.codeLanguage
       const enabled = () =>
@@ -1271,6 +1303,7 @@ export function SourceEditor({
       formatting.current = null
       reportFormatting.current(null)
       unregister()
+      unregisterViewApi()
       detachInteractions()
       editor.contentDOM.removeEventListener(
         'hibi:editor-actions-open',

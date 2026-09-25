@@ -3931,6 +3931,9 @@
   "96c5ae0b5065": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
+  "2ea18168d79b": [
+    "src/renderer/src/addons.ts"
+  ],
   "32c1f3399caa": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
@@ -4118,6 +4121,9 @@
   "b29376d8e035": [
     "src/main/links.ts"
   ],
+  "d560cd1db8eb": [
+    "src/renderer/src/addon-global-shortcuts.ts"
+  ],
   "7b1a3f290d48": [
     "src/renderer/src/addon-registry.ts"
   ],
@@ -4140,6 +4146,7 @@
     "src/renderer/src/addon-registry.ts"
   ],
   "0d3f68fa85cf": [
+    "src/renderer/src/addon-global-shortcuts.ts",
     "src/renderer/src/addons.ts",
     "src/renderer/src/document-edits.ts"
   ],
@@ -4171,6 +4178,9 @@
   "3c4b2c687d81": [
     "src/renderer/src/addons.ts"
   ],
+  "88da438b7956": [
+    "src/renderer/src/addon-global-shortcuts.ts"
+  ],
   "44aefe8adcd8": [
     "src/renderer/src/addons.ts"
   ],
@@ -4181,7 +4191,7 @@
     "src/renderer/src/settings-pages.ts"
   ],
   "a3474fd0cc48": [
-    "src/renderer/src/addons.ts"
+    "src/renderer/src/addon-global-shortcuts.ts"
   ],
   "f59f73db914f": [
     "src/renderer/src/settings-pages.ts"
@@ -4325,11 +4335,17 @@
   "c13ad6f975f2": [
     "src/main/history.ts"
   ],
+  "980892e485b4": [
+    "src/main/global-shortcuts.ts"
+  ],
   "75df21f548b3": [
     "src/main/global-shortcuts.ts"
   ],
   "20f489b1e5d4": [
     "src/shared/hotkeys.ts"
+  ],
+  "3ec61208f558": [
+    "src/main/global-shortcuts.ts"
   ],
   "a6da99875af4": [
     "src/main/document.ts"

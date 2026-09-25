@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   desktop:
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:

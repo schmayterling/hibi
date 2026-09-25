@@ -382,6 +382,10 @@ function App() {
   const editorStarted = useRef(false)
   const [typing, setTyping] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsVisible = useRef(settingsOpen)
+  settingsVisible.current = settingsOpen
+  const settingsIntent = useRef(0)
+  const settingsLeaving = useRef(false)
   const [settingsSidebarOpen, setSettingsSidebarOpen] = useState(
     () => innerWidth > SIDEBAR_OVERLAY_WIDTH,
   )
@@ -960,29 +964,53 @@ function App() {
     setPaletteOpen(true)
   }
 
-  function toggleSettings() {
+  function openSettings() {
+    settingsIntent.current++
+    settingsLeaving.current = false
+    showTitlebar()
+    setFindOpen(false)
+    settingsVisible.current = true
+    setSettingsOpen(true)
+  }
+
+  function closeSettings() {
+    settingsIntent.current++
+    settingsLeaving.current = false
     const previousFocus = window.document.activeElement
     showTitlebar()
-    if (!settingsOpen) setFindOpen(false)
-    setSettingsOpen(!settingsOpen)
-    if (settingsOpen)
-      requestAnimationFrame(() => {
-        // A click into either pane wins over this deferred focus restoration.
-        const active = window.document.activeElement
-        if (active !== previousFocus && active !== window.document.body) return
-        window.document
-          .querySelector<HTMLElement>(
-            mode === 'markdown' ? '.cm-content' : '.tiptap',
-          )
-          ?.focus()
-      })
+    settingsVisible.current = false
+    setSettingsOpen(false)
+    requestAnimationFrame(() => {
+      // A click into either pane wins over this deferred focus restoration.
+      const active = window.document.activeElement
+      if (active !== previousFocus && active !== window.document.body) return
+      window.document
+        .querySelector<HTMLElement>(
+          mode === 'markdown' ? '.cm-content' : '.tiptap',
+        )
+        ?.focus()
+    })
+  }
+
+  function leaveSettings() {
+    if (settingsLeaving.current) return
+    settingsLeaving.current = true
+    const intent = ++settingsIntent.current
+    const finish = () => {
+      if (settingsLeaving.current && settingsIntent.current === intent)
+        closeSettings()
+    }
+    void window.hibi.setHotkeyRecording(false).then(finish, finish)
+  }
+
+  function toggleSettings() {
+    if (settingsLeaving.current || !settingsVisible.current) openSettings()
+    else leaveSettings()
   }
 
   function openSetting(category: string, id?: string) {
-    showTitlebar()
-    setFindOpen(false)
+    openSettings()
     setSettingsCategory(category)
-    setSettingsOpen(true)
     setSettingTarget(id ?? null)
     if (sidebarResize.overlay) setSettingsSidebarOpen(false)
   }
@@ -2235,7 +2263,7 @@ function App() {
             overlay={sidebarResize.overlay}
             onSidebarClose={() => closeSidebar(true)}
             discover={paletteOpen}
-            onBack={toggleSettings}
+            onBack={leaveSettings}
             onInstallAddon={addonHost.install}
             onRemoveAddon={addonHost.remove}
             selected={settingsCategory}

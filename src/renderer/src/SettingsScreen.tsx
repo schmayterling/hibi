@@ -164,17 +164,6 @@ export function SettingsScreen({
   const screen = useRef<HTMLElement>(null)
   const openReadme = useAddonReadme()
   const wasOpen = useRef(false)
-  const leaving = useRef(false)
-  const leaveSettings = () => {
-    if (leaving.current) return
-    leaving.current = true
-    void window.hibi
-      .setHotkeyRecording(false)
-      .then(onBack, onBack)
-      .finally(() => {
-        leaving.current = false
-      })
-  }
   const search = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
   const [searchSelection, setSearchSelection] = useState<string | null>(null)
@@ -324,7 +313,7 @@ export function SettingsScreen({
           header={
             <>
               <div className="sidebar-items">
-                <button type="button" onClick={leaveSettings}>
+                <button type="button" onClick={onBack}>
                   <ArrowLeft size={16} aria-hidden />
                   <span className="sidebar-label">Back to app</span>
                 </button>

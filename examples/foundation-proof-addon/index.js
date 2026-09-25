@@ -82,6 +82,7 @@ export default ({ React }) => {
       active = true
       eventCount = 0
       const global = await context.storage.global('preferences', 2)
+      if (!active) return
       const snapshot = global.snapshot()
       const preferences = preferencesFrom(snapshot)
       if (!preferences)
@@ -236,7 +237,10 @@ export default ({ React }) => {
                   ? credentialStatus.value.persistence
                   : credentialStatus.code,
             }
-            const saved = await workspace.set(result)
+            const saved = await workspace.set({
+              tag: preferences.tag,
+              lastRun: result,
+            })
             if (!active || saved.status !== 'saved') return
             lastResult = `Proof run ${result.run}: ${result.edit}; ${result.note}.`
             panel.open({ id: 'results', focus: false })
@@ -254,7 +258,8 @@ export default ({ React }) => {
           if (active) disposers.push(dispose)
           else dispose()
         } catch {
-          context.notify('Foundation proof global shortcut is unavailable.')
+          if (active)
+            context.notify('Foundation proof global shortcut is unavailable.')
         }
       }
     },

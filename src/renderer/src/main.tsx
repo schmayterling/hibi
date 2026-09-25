@@ -386,6 +386,10 @@ function App() {
   settingsVisible.current = settingsOpen
   const settingsIntent = useRef(0)
   const settingsLeaving = useRef(false)
+  const settingsFocus = useRef<{
+    intent: number
+    previous: Element | null
+  } | null>(null)
   const [settingsSidebarOpen, setSettingsSidebarOpen] = useState(
     () => innerWidth > SIDEBAR_OVERLAY_WIDTH,
   )
@@ -800,6 +804,27 @@ function App() {
     : availableViews.includes('side-by-side')
       ? 'side-by-side'
       : 'markdown'
+  useLayoutEffect(() => {
+    if (settingsOpen || !settingsFocus.current) return
+    const { intent, previous } = settingsFocus.current
+    settingsFocus.current = null
+    if (settingsIntent.current !== intent) return
+    // The editor surface is no longer inert after this layout commit.
+    const active = window.document.activeElement
+    if (
+      active !== previous &&
+      active !== window.document.body &&
+      !(active instanceof HTMLElement && active.closest('.settings-screen'))
+    )
+      return
+    window.document
+      .querySelector<HTMLElement>(
+        mode === 'markdown'
+          ? '.editor-surface:not([inert]) .cm-content'
+          : '.editor-surface:not([inert]) .tiptap',
+      )
+      ?.focus()
+  }, [settingsOpen, mode])
   const sidebarViews = [
     ...builtInViews,
     ...addonHost.sidebarViews.map(viewShortcut),
@@ -967,6 +992,7 @@ function App() {
   function openSettings() {
     settingsIntent.current++
     settingsLeaving.current = false
+    settingsFocus.current = null
     showTitlebar()
     setFindOpen(false)
     settingsVisible.current = true
@@ -974,22 +1000,13 @@ function App() {
   }
 
   function closeSettings() {
-    settingsIntent.current++
+    const intent = ++settingsIntent.current
     settingsLeaving.current = false
     const previousFocus = window.document.activeElement
     showTitlebar()
     settingsVisible.current = false
+    settingsFocus.current = { intent, previous: previousFocus }
     setSettingsOpen(false)
-    requestAnimationFrame(() => {
-      // A click into either pane wins over this deferred focus restoration.
-      const active = window.document.activeElement
-      if (active !== previousFocus && active !== window.document.body) return
-      window.document
-        .querySelector<HTMLElement>(
-          mode === 'markdown' ? '.cm-content' : '.tiptap',
-        )
-        ?.focus()
-    })
   }
 
   function leaveSettings() {

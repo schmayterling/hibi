@@ -17,6 +17,7 @@ import {
   type AddonManifest,
   compatibleAddonManifest,
 } from '../addons/api'
+import { validCommandMenu } from '../shared/addon-hotkeys'
 import {
   MAX_ADDON_BYTES,
   MAX_ADDON_ENTRIES,
@@ -141,7 +142,8 @@ function manifest(value: unknown): {
           !command ||
           !validId(command.id) ||
           !string(command.label, 100) ||
-          (command.keywords !== undefined && !string(command.keywords, 300)),
+          (command.keywords !== undefined && !string(command.keywords, 300)) ||
+          (command.menu !== undefined && !validCommandMenu(command.menu)),
       ))
   )
     throw new Error('The addon command descriptors are invalid.')

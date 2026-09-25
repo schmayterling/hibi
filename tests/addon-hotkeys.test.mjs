@@ -4,7 +4,25 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
 import { AddonHotkeys } from '../src/main/addon-hotkeys.ts'
+import { validCommandMenu } from '../src/shared/addon-hotkeys.ts'
 import { defaultHotkeys } from '../src/shared/hotkeys.ts'
+
+test('menu descriptors bound installed command locations and ordering', () => {
+  for (const location of ['app', 'explorer', 'editor'])
+    assert.equal(
+      validCommandMenu({ location, group: 'notes', order: -2 }),
+      true,
+    )
+  for (const menu of [
+    null,
+    [],
+    { location: 'other' },
+    { location: 'editor', group: 'Not valid' },
+    { location: 'app', order: 10001 },
+    { location: 'explorer', order: 0.5 },
+  ])
+    assert.equal(validCommandMenu(menu), false)
+})
 
 async function withService(t) {
   const directory = await mkdtemp(join(tmpdir(), 'hibi-addon-hotkeys-'))

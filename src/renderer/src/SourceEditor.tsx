@@ -1,3 +1,14 @@
+import {
+  acceptCompletion,
+  autocompletion,
+  type Completion,
+  type CompletionContext,
+  type CompletionResult,
+  closeCompletion,
+  completionStatus,
+  pickedCompletion,
+  startCompletion,
+} from '@codemirror/autocomplete'
 import { defaultKeymap, isolateHistory, selectAll } from '@codemirror/commands'
 import {
   HighlightStyle,
@@ -22,6 +33,10 @@ import { EditorView, keymap, lineNumbers, placeholder } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DocumentFormat, SourceExtension } from '../../addons/api'
+import type {
+  CompletionItem,
+  CompletionRequest,
+} from '../../shared/completions'
 import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop'
 import { editedSource, sourceEditMatches } from '../../shared/document-edits'
 import type { MarkdownReferenceSyntax } from '../../shared/document-worker-protocol'
@@ -35,6 +50,7 @@ import {
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
 import { codeHighlighter, codeLanguages } from './code-languages'
+import { completionBroker } from './completion-broker'
 import { documentEdits } from './document-edits'
 import { editorDocument } from './document-formats'
 import { documentProjections } from './document-projections'
@@ -87,6 +103,20 @@ const sameReferenceSyntax = (
   a.textExtras === b.textExtras &&
   !!a.math === !!b.math &&
   a.frontmatter === b.frontmatter
+
+const sameCompletionContext = (
+  a: CompletionRequest,
+  b: CompletionRequest | null,
+) =>
+  !!b &&
+  a.view.documentId === b.view.documentId &&
+  a.view.documentGeneration === b.view.documentGeneration &&
+  a.view.viewId === b.view.viewId &&
+  a.view.viewGeneration === b.view.viewGeneration &&
+  a.contentVersion === b.contentVersion &&
+  a.documentLength === b.documentLength &&
+  a.selection.anchor === b.selection.anchor &&
+  a.selection.head === b.selection.head
 
 export function SourceEditor({
   document,
@@ -474,6 +504,222 @@ export function SourceEditor({
       ]
     }
     const selection = bridge.selection()
+    type PendingCompletion = {
+      request: CompletionRequest
+      items: readonly CompletionItem[]
+      done: boolean
+      cancel: (() => void) | null
+      waiting: ((result: CompletionResult | null) => void)[]
+      refresh: ReturnType<typeof setTimeout> | null
+      options: Map<CompletionItem, Completion>
+    }
+    let completion: PendingCompletion | null = null
+    let typed: {
+      doc: EditorState['doc']
+      pos: number
+      character: string
+    } | null = null
+    let closingCompletion = false
+    const captureCompletion = (
+      trigger: CompletionRequest['trigger'],
+    ): CompletionRequest | null => {
+      const context = editContext.current
+      const active = documentRuntime.get(document.tabId)
+      const target = documentRuntime.captureActiveView()
+      const owner = documentRuntime.captureDocument(document.tabId)
+      const selected = editor.state.selection
+      if (
+        view.current !== editor ||
+        !editor.hasFocus ||
+        editor.composing ||
+        !context.editTarget ||
+        context.disabled ||
+        !context.inputReady ||
+        !active ||
+        active.revision !== context.document.revision ||
+        documentRuntime.session(document.tabId) !== session ||
+        !target ||
+        !owner ||
+        target.documentId !== owner.documentId ||
+        target.documentGeneration !== owner.documentGeneration ||
+        target.viewId !== viewId ||
+        !documentRuntime.isLiveView(target) ||
+        selected.ranges.length !== 1 ||
+        !selected.main.empty
+      )
+        return null
+      const snapshot = bridge.snapshot()
+      if (snapshot.version !== active.contentVersion) return null
+      const pos = selected.main.head
+      return {
+        view: target,
+        contentVersion: snapshot.version,
+        editor: 'source',
+        documentLength: editor.state.doc.length,
+        selection: { anchor: selected.main.anchor, head: pos },
+        before: editor.state.sliceDoc(Math.max(0, pos - 256), pos),
+        after: editor.state.sliceDoc(
+          pos,
+          Math.min(editor.state.doc.length, pos + 256),
+        ),
+        trigger,
+      }
+    }
+    const cancelCompletion = () => {
+      const pending = completion
+      completion = null
+      if (!pending) return
+      if (pending.refresh) clearTimeout(pending.refresh)
+      pending.cancel?.()
+      for (const resolve of pending.waiting.splice(0)) resolve(null)
+    }
+    const resultFor = (pending: PendingCompletion): CompletionResult => ({
+      from: pending.request.selection.head,
+      to: pending.request.selection.head,
+      filter: false,
+      update: (_result, _from, _to, context) =>
+        context.state.doc === editor.state.doc &&
+        completion === pending &&
+        pending.items.length &&
+        sameCompletionContext(
+          pending.request,
+          captureCompletion(pending.request.trigger),
+        )
+          ? resultFor(pending)
+          : null,
+      options: pending.items.map((item): Completion => {
+        const previous = pending.options.get(item)
+        if (previous) return previous
+        const option: Completion = {
+          label: item.label,
+          ...(item.detail === undefined ? {} : { detail: item.detail }),
+          apply: (view, picked) => {
+            const current = captureCompletion(pending.request.trigger)
+            const pos = pending.request.selection.head
+            if (
+              view !== editor ||
+              completion !== pending ||
+              !sameCompletionContext(pending.request, current) ||
+              item.from > pos ||
+              item.to < pos ||
+              item.from > item.to ||
+              item.to > view.state.doc.length
+            ) {
+              closeCompletion(view)
+              return
+            }
+            view.dispatch({
+              changes: {
+                from: item.from,
+                to: item.to,
+                insert: item.insertText,
+              },
+              selection: { anchor: item.from + item.insertText.length },
+              annotations: [
+                isolateHistory.of('full'),
+                pickedCompletion.of(picked),
+                Transaction.userEvent.of('input.complete'),
+              ],
+            })
+          },
+        }
+        pending.options.set(item, option)
+        return option
+      }),
+    })
+    const refreshCompletion = (pending: PendingCompletion) => {
+      if (pending.refresh) return
+      pending.refresh = setTimeout(() => {
+        pending.refresh = null
+        if (completion !== pending) return
+        if (
+          !sameCompletionContext(
+            pending.request,
+            captureCompletion(pending.request.trigger),
+          )
+        ) {
+          cancelCompletion()
+          return
+        }
+        if (pending.items.length) {
+          if (completionStatus(editor.state) === 'active')
+            // Ask CodeMirror to refresh result.update without closing the menu.
+            editor.dispatch({
+              annotations: Transaction.userEvent.of(
+                'input.type.completion-refresh',
+              ),
+            })
+          else if (completionStatus(editor.state) === 'pending') {
+            pending.refresh = setTimeout(() => {
+              pending.refresh = null
+              refreshCompletion(pending)
+            }, 10)
+          } else startCompletion(editor)
+        } else {
+          closingCompletion = true
+          closeCompletion(editor)
+          closingCompletion = false
+          if (pending.done) cancelCompletion()
+        }
+      }, 0)
+    }
+    const sourceCompletions = (context: CompletionContext) => {
+      if (!completionBroker.hasProviders()) return null
+      const trigger: CompletionRequest['trigger'] | null = context.explicit
+        ? { kind: 'explicit' }
+        : typed?.doc === context.state.doc && typed.pos === context.pos
+          ? { kind: 'input', character: typed.character }
+          : null
+      if (!trigger) return null
+      const request = captureCompletion(trigger)
+      if (!request) return null
+      const current = completion
+      if (current && sameCompletionContext(current.request, request))
+        return current.items.length
+          ? resultFor(current)
+          : current.done
+            ? null
+            : new Promise<CompletionResult | null>((resolve) =>
+                current.waiting.push(resolve),
+              )
+      cancelCompletion()
+      const pending: PendingCompletion = {
+        request,
+        items: [],
+        done: false,
+        cancel: null,
+        waiting: [],
+        refresh: null,
+        options: new Map(),
+      }
+      completion = pending
+      pending.cancel = completionBroker.request(
+        () => request,
+        () => captureCompletion(trigger),
+        (update) => {
+          if (completion !== pending) return
+          pending.items = update.items.filter(
+            (item) =>
+              item.from <= request.selection.head &&
+              item.to >= request.selection.head,
+          )
+          pending.done = update.done
+          if (pending.waiting.length) {
+            if (pending.items.length || pending.done) {
+              const result = pending.items.length ? resultFor(pending) : null
+              for (const resolve of pending.waiting.splice(0)) resolve(result)
+            }
+          } else refreshCompletion(pending)
+        },
+      )
+      if (!pending.cancel) {
+        cancelCompletion()
+        return null
+      }
+      return new Promise<CompletionResult | null>((resolve) =>
+        pending.waiting.push(resolve),
+      )
+    }
     const editor = new EditorView({
       parent: host.current,
       dispatchTransactions(transactions, editor) {
@@ -504,6 +750,8 @@ export function SourceEditor({
           numbers.current.of([]),
           language.of(markdown()),
           sourceAnnotationExtension,
+          autocompletion({ override: [sourceCompletions] }),
+          keymap.of([{ key: 'Tab', run: acceptCompletion }]),
           EditorView.domEventHandlers({
             beforeinput(event) {
               if (
@@ -624,6 +872,46 @@ export function SourceEditor({
             spellcheck: 'false',
           }),
           EditorView.updateListener.of((update) => {
+            if (
+              update.docChanged ||
+              update.selectionSet ||
+              (update.focusChanged && !update.view.hasFocus)
+            ) {
+              cancelCompletion()
+              typed = null
+              const transaction =
+                update.transactions.length === 1 ? update.transactions[0] : null
+              if (
+                  update.docChanged &&
+                  transaction?.isUserEvent('input.type') &&
+                  !transaction.isUserEvent('input.type.compose') &&
+                  !update.view.composing &&
+                update.state.selection.ranges.length === 1 &&
+                update.state.selection.main.empty
+              ) {
+                let changes = 0
+                transaction.changes.iterChanges(
+                  (fromA, toA, fromB, toB, inserted) => {
+                    const character = inserted.toString()
+                    changes++
+                    if (
+                      changes === 1 &&
+                      fromA === toA &&
+                      toB === fromB + character.length &&
+                      Array.from(character).length === 1 &&
+                      update.state.selection.main.head === toB
+                    )
+                      typed = { doc: update.state.doc, pos: toB, character }
+                  },
+                )
+                if (changes !== 1) typed = null
+              }
+            } else if (
+              !closingCompletion &&
+              completionStatus(update.startState) !== null &&
+              completionStatus(update.state) === null
+            )
+              cancelCompletion()
             if (update.docChanged || update.selectionSet || update.focusChanged)
               update.view.contentDOM.dispatchEvent(
                 new Event('hibi:source-caret', { bubbles: true }),
@@ -830,6 +1118,7 @@ export function SourceEditor({
       .load('13px "Geist Mono"')
       .then(finishFont, finishFont)
     return () => {
+      cancelCompletion()
       clearReferences('unavailable', false)
       sourceFind.current?.dispose()
       sourceFind.current = null
@@ -857,7 +1146,15 @@ export function SourceEditor({
     requestReference,
     resolveReference,
     clearReferences,
+    viewId,
   ])
+
+  useEffect(() => {
+    if (disabled || !editTarget || !inputReady) {
+      const editor = view.current
+      if (editor) closeCompletion(editor)
+    }
+  }, [disabled, editTarget, inputReady])
 
   useEffect(() => {
     const editor = view.current

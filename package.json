@@ -42,6 +42,7 @@
     "@bbob/html": "4.4.1",
     "@bbob/preset-html5": "4.4.1",
     "@biomejs/biome": "2.5.13",
+    "@codemirror/autocomplete": "6.20.3",
     "@codemirror/commands": "6.11.0",
     "@codemirror/lang-cpp": "6.0.3",
     "@codemirror/lang-css": "6.3.1",

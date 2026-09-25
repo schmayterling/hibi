@@ -1,6 +1,12 @@
 import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop.ts'
 import { sourceChange } from '../../shared/document-journal.ts'
 import { DocumentSession } from '../../shared/document-session.ts'
+import type {
+  DocumentId,
+  DocumentTarget,
+  ViewId,
+  ViewTarget,
+} from '../../shared/foundation-contracts.ts'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import type {
   RawEdit,
@@ -23,6 +29,11 @@ type Listener = (
 /** Per-tab source/history ownership. React and legacy addons receive immutable read facades. */
 export class DocumentRuntime {
   readonly #sessions = new Map<string, DocumentSession>()
+  readonly #documentTargets = new Map<string, DocumentTarget>()
+  readonly #targetSessions = new Map<DocumentId, DocumentSession>()
+  readonly #views = new Map<ViewId, ViewTarget>()
+  #generation = 0
+  #activeView: ViewId | null = null
   readonly #sources = new WeakMap<DocumentState, SourceSnapshot>()
   readonly #listeners = new Set<Listener>()
   readonly #documentListeners = new Set<Listener>()
@@ -68,6 +79,47 @@ export class DocumentRuntime {
   }
   session = (id: string | null = this.#activeId) =>
     id ? (this.#sessions.get(id) ?? null) : null
+  captureDocument = (id: string | null = this.#activeId) =>
+    id && this.#sessions.has(id)
+      ? (this.#documentTargets.get(id) ?? null)
+      : null
+  resolveDocument = (target: DocumentTarget) => {
+    const session = this.#targetSessions.get(target.documentId)
+    if (!session) return null
+    const id = session.state().document.tabId
+    return this.#sessions.get(id) === session &&
+      this.#documentTargets.get(id)?.documentGeneration ===
+        target.documentGeneration
+      ? session
+      : null
+  }
+  registerView(tabId: string, viewId: ViewId) {
+    const document = this.captureDocument(tabId)
+    if (!document || this.#views.has(viewId))
+      throw new Error('This editor view is unavailable.')
+    const target = Object.freeze({
+      ...document,
+      viewId,
+      viewGeneration: ++this.#generation,
+    })
+    this.#views.set(viewId, target)
+    this.#activeView = viewId
+    return () => {
+      if (this.#views.get(viewId) !== target) return
+      this.#views.delete(viewId)
+      if (this.#activeView === viewId) this.#activeView = null
+    }
+  }
+  focusView(viewId: ViewId) {
+    if (this.#views.has(viewId)) this.#activeView = viewId
+  }
+  captureActiveView = () => {
+    const target = this.#activeView && this.#views.get(this.#activeView)
+    return target && this.resolveDocument(target) ? target : null
+  }
+  isLiveView = (target: ViewTarget) =>
+    this.#views.get(target.viewId)?.viewGeneration === target.viewGeneration &&
+    this.resolveDocument(target) !== null
   retainedHistory = () => ({
     ...this.#historySize,
     sessions: this.#history.size,
@@ -80,6 +132,16 @@ export class DocumentRuntime {
     this.#history.delete(session)
   }
   #discardSession(id: string, session: DocumentSession) {
+    const target = this.#documentTargets.get(id)
+    if (target) {
+      this.#targetSessions.delete(target.documentId)
+      for (const [viewId, view] of this.#views)
+        if (view.documentId === target.documentId) {
+          this.#views.delete(viewId)
+          if (this.#activeView === viewId) this.#activeView = null
+        }
+    }
+    this.#documentTargets.delete(id)
     for (const detach of this.#detach.get(id) ?? []) detach()
     this.#detach.delete(id)
     this.#metadata.delete(id)
@@ -250,6 +312,12 @@ export class DocumentRuntime {
           },
         )
         this.#sessions.set(document.tabId, session)
+        const target = Object.freeze({
+          documentId: crypto.randomUUID() as DocumentId,
+          documentGeneration: ++this.#generation,
+        })
+        this.#documentTargets.set(document.tabId, target)
+        this.#targetSessions.set(target.documentId, session)
         const retained = session
         this.#historySubscriptions.set(
           session,
@@ -360,6 +428,8 @@ export class DocumentRuntime {
     for (const [id, session] of this.#sessions)
       this.#discardSession(id, session)
     this.#sessions.clear()
+    this.#views.clear()
+    this.#activeView = null
     this.#history.clear()
     this.#historySize = { bytes: 0, groups: 0 }
     this.#listeners.clear()

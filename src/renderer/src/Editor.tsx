@@ -80,6 +80,7 @@ import { useFormattingToolbar } from './FormattingToolbar'
 import { flavors as flavorRegistry } from './flavors'
 import { LoadingScreen } from './LoadingScreen'
 import { linkScroll } from './linked-scroll'
+import { MarkdownFootnotePreview } from './MarkdownFootnotePreview'
 import { MirrorCursor } from './MirrorCursor'
 import { editorExtensions, projectMarkdown } from './markdown'
 import { observeMarkdownMarkers } from './markdown-markers'
@@ -156,6 +157,7 @@ export function MarkdownEditor({
   showMarkdownMarkers,
   documentRevision,
   flavors,
+  footnoteDocument,
   onAttach,
   onLink,
   onOutline,
@@ -183,6 +185,7 @@ export function MarkdownEditor({
   showMarkdownMarkers: boolean
   documentRevision: number
   flavors: readonly MarkdownFlavor[]
+  footnoteDocument: boolean
   onAttach: (
     files: File[] | null,
   ) => Promise<import('../../shared/media').MediaAttachment[] | null>
@@ -405,13 +408,14 @@ export function MarkdownEditor({
   // Temporarily disable split visual editing while its typing performance is
   // unresolved. Keep preview synchronization and the performance work intact.
   const splitReadOnly = mode === 'side-by-side' || paneMode === 'side-by-side'
-  const findTarget = !markdownDocument
-    ? 'source'
-    : mode === 'normal'
-      ? 'rich'
-      : mode === 'markdown'
-        ? 'source'
-        : focusedPane
+  const findTarget =
+    footnoteDocument || !markdownDocument
+      ? 'source'
+      : mode === 'normal'
+        ? 'rich'
+        : mode === 'markdown'
+          ? 'source'
+          : focusedPane
   const scrollContent = useRef({
     source: value,
     body: projection.content,
@@ -511,6 +515,7 @@ export function MarkdownEditor({
     if (!editor || editor.isDestroyed) return
     editor.setEditable(
       paneMode !== 'markdown' &&
+        !footnoteDocument &&
         !splitReadOnly &&
         !projectionReadOnly &&
         !disabled &&
@@ -522,6 +527,7 @@ export function MarkdownEditor({
   }, [
     editor,
     paneMode,
+    footnoteDocument,
     splitReadOnly,
     projectionReadOnly,
     disabled,
@@ -1443,7 +1449,7 @@ export function MarkdownEditor({
       identity.revision !== documentState.revision
     )
       return
-    const visible = paneMode !== 'markdown'
+    const visible = paneMode !== 'markdown' && !footnoteDocument
     let disposed = false,
       scheduled = false,
       syncing = false
@@ -1705,6 +1711,7 @@ export function MarkdownEditor({
     markdownDocument,
     markdownExtensions,
     paneMode,
+    footnoteDocument,
     plainSyncEligible,
     projectionReadOnly,
     disabled,
@@ -2404,7 +2411,7 @@ export function MarkdownEditor({
       rich,
       source,
       source.contains(window.document.activeElement) ? source : rich,
-      markdownDocument
+      markdownDocument && !footnoteDocument
         ? { editor, content: geometryContent, positions }
         : undefined,
     )
@@ -2414,6 +2421,7 @@ export function MarkdownEditor({
     sourceReady,
     editor,
     markdownDocument,
+    footnoteDocument,
     positions,
     geometryContent,
   ])
@@ -2550,6 +2558,7 @@ export function MarkdownEditor({
     const link = (event.target as HTMLElement).closest<HTMLAnchorElement>(
       '.tiptap a[href], .format-content a[href]',
     )
+    if (link?.matches('[data-footnote-ref], [data-footnote-backref]')) return
     if (
       !link ||
       (!link.closest('.format-content') &&
@@ -2593,9 +2602,11 @@ export function MarkdownEditor({
           if (!files.length || !files.every(isMediaFile)) return
           event.preventDefault()
           event.stopPropagation()
-          const pane = (event.target as HTMLElement).closest('.source-pane')
-            ? 'source'
-            : 'rich'
+          const pane =
+            footnoteDocument ||
+            (event.target as HTMLElement).closest('.source-pane')
+              ? 'source'
+              : 'rich'
           void attachFiles(files, pane, { x: event.clientX, y: event.clientY })
         }}
         onKeyDownCapture={(event) => emitEditorKeyEvent(event.nativeEvent)}
@@ -2610,6 +2621,7 @@ export function MarkdownEditor({
             content={geometryContent}
             active={
               paneMode === 'side-by-side' &&
+              !footnoteDocument &&
               sourceReady &&
               !disabled &&
               !projectionReadOnly
@@ -2638,7 +2650,10 @@ export function MarkdownEditor({
                   />
                 ) : null,
               )}
-            <div className="rich-editor-host" hidden={!markdownDocument}>
+            <div
+              className="rich-editor-host"
+              hidden={!markdownDocument || footnoteDocument}
+            >
               {(richExtensionError || projectionReadOnly) && (
                 <DocumentNotice
                   title="Editor addon unavailable"
@@ -2663,6 +2678,14 @@ export function MarkdownEditor({
               )}
               <EditorContent editor={editor} />
             </div>
+            {footnoteDocument && paneMode !== 'markdown' && (
+              <MarkdownFootnotePreview
+                source={projection.content}
+                documentId={documentState.id}
+                revision={documentState.revision}
+                version={`${syntaxVersion}:${flavors.map((flavor) => flavor.id).join(',')}`}
+              />
+            )}
           </section>
           <section
             className="source-pane"

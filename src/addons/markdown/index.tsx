@@ -1,6 +1,7 @@
 import { Strike } from '@tiptap/extension-strike'
 import { TaskItem } from '@tiptap/extension-task-item'
 import { TaskList } from '@tiptap/extension-task-list'
+import { markedGithubFootnote } from 'marked-github-footnote'
 import type { SyntaxSlashCommand } from '../../shared/markdown-syntax'
 import { defineAddon, type MarkdownFlavor } from '../api'
 import { alertMarkdown, alertMarker } from './alerts'
@@ -21,7 +22,7 @@ const github: MarkdownFlavor = {
   name: 'GitHub Markdown',
   kind: 'dialect',
   description:
-    'Alerts, tables, task lists, strikethrough, and automatic links.',
+    'Alerts, footnotes, tables, task lists, strikethrough, and automatic links.',
   detect: () => true,
   serialization: 'block-local',
   markedOptions: { gfm: true },
@@ -32,7 +33,10 @@ const github: MarkdownFlavor = {
     TaskList,
     TaskItem.configure({ nested: true }),
   ],
-  export: { extensions: [alertMarkdown], css: alertCss },
+  export: {
+    extensions: [alertMarkdown, markedGithubFootnote()],
+    css: alertCss,
+  },
 }
 
 const obsidian: MarkdownFlavor = {

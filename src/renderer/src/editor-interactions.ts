@@ -4,7 +4,19 @@ import {
   type EditorInteractionRequest,
   sameInteraction,
 } from '../../shared/editor-interactions'
+import type { CommandExecutionContext } from '../../shared/foundation-contracts'
+import type { RegisteredCommand } from './addons'
+import { captureEditorCommandTarget } from './editor-command-targets'
 import { contextActionBroker, hoverBroker } from './editor-interaction-broker'
+import { editorCommandMenu } from './editor-interaction-presence'
+
+type MenuEntry =
+  | { kind: 'edit'; action: EditorContextAction }
+  | {
+      kind: 'command'
+      command: RegisteredCommand
+      context: CommandExecutionContext
+    }
 
 type Adapter = {
   element: HTMLElement
@@ -19,6 +31,7 @@ type Adapter = {
     request: EditorInteractionRequest,
   ) => boolean
   focus: () => void
+  error: (error: unknown) => void
 }
 
 function panel(role: string, label: string) {
@@ -76,8 +89,10 @@ export function attachEditorInteractions(adapter: Adapter) {
   let hoveredPosition: number | null = null
   let shown: {
     request: EditorInteractionRequest
-    items: readonly EditorContextAction[]
+    items: readonly MenuEntry[]
   } | null = null
+  let commandRelease: (() => void) | null = null
+  let menuGeneration = 0
   let selected = 0
   let disposed = false
 
@@ -92,9 +107,12 @@ export function attachEditorInteractions(adapter: Adapter) {
     hoveredPosition = null
     hide(hover)
   }
-  const closeMenu = () => {
+  const closeMenu = (keepCommandTarget = false) => {
+    menuGeneration++
     actionCancel?.()
     actionCancel = null
+    if (!keepCommandTarget) commandRelease?.()
+    commandRelease = null
     shown = null
     selected = 0
     hide(menu)
@@ -126,7 +144,7 @@ export function attachEditorInteractions(adapter: Adapter) {
     )
   }
   const pointerMove = (event: PointerEvent) => {
-    if (!hoverBroker.hasProviders() || actionCancel || event.buttons) {
+    if (!hoverBroker.hasProviders() || shown || actionCancel || event.buttons) {
       closeHover()
       return
     }
@@ -159,48 +177,95 @@ export function attachEditorInteractions(adapter: Adapter) {
       current.request,
       adapter.capture(current.request.position),
     )
-    closeMenu()
-    if (live) adapter.apply(item, current.request)
+    if (!live) {
+      closeMenu()
+      return
+    }
+    if (item.kind === 'command') {
+      const release = commandRelease
+      closeMenu(true)
+      void item.command
+        .run(item.context)
+        .catch(adapter.error)
+        .finally(() => release?.())
+    } else {
+      closeMenu()
+      adapter.apply(item.action, current.request)
+    }
     adapter.focus()
   }
   const openMenu = (position: number, x: number, y: number) => {
     closeHover()
     closeMenu()
-    if (!contextActionBroker.hasProviders()) return false
+    const commands = editorCommandMenu()
+    if (!contextActionBroker.hasProviders() && !commands.commands.length)
+      return false
     const request = adapter.capture(position)
     if (!request) return false
-    adapter.element.dispatchEvent(new Event('hibi:editor-actions-open'))
-    actionCancel = contextActionBroker.request(
-      () => request,
-      () => adapter.capture(position),
-      (items: readonly EditorContextAction[]) => {
-        if (disposed || !items.length) {
-          shown = null
-          hide(menu)
-          return
-        }
-        shown = { request, items }
-        selected = Math.min(selected, items.length - 1)
-        menu.replaceChildren(
-          ...items.map((item, index) => {
-            const button = document.createElement('button')
-            button.type = 'button'
-            button.setAttribute('role', 'menuitem')
-            button.append(copy(item.label, item.detail))
-            button.addEventListener('pointermove', () => select(index))
-            button.addEventListener('click', () => accept(index))
-            return button
-          }),
+    const target = commands.commands.length
+      ? captureEditorCommandTarget(commands.capture(), request, () =>
+          adapter.capture(position),
         )
-        show(menu, x, y)
-        select(selected)
-      },
-    )
-    return !!actionCancel
+      : null
+    const commandItems: MenuEntry[] = target
+      ? commands.commands
+          .filter((command) => command.canRun(target.context))
+          .map((command) => ({
+            kind: 'command',
+            command,
+            context: target.context,
+          }))
+      : []
+    if (commandItems.length) commandRelease = target?.release ?? null
+    else target?.release()
+    if (!commandItems.length && !contextActionBroker.hasProviders())
+      return false
+    adapter.element.dispatchEvent(new Event('hibi:editor-actions-open'))
+    const generation = menuGeneration
+    const render = (items: readonly MenuEntry[]) => {
+      if (disposed || generation !== menuGeneration) return
+      if (!items.length) {
+        shown = null
+        hide(menu)
+        return
+      }
+      shown = { request, items }
+      selected = Math.min(selected, items.length - 1)
+      menu.replaceChildren(
+        ...items.map((item, index) => {
+          const button = document.createElement('button')
+          button.type = 'button'
+          button.setAttribute('role', 'menuitem')
+          button.append(
+            copy(
+              item.kind === 'command' ? item.command.label : item.action.label,
+              item.kind === 'edit' ? item.action.detail : undefined,
+            ),
+          )
+          button.addEventListener('pointermove', () => select(index))
+          button.addEventListener('click', () => accept(index))
+          return button
+        }),
+      )
+      show(menu, x, y)
+      select(selected)
+    }
+    if (commandItems.length) render(commandItems)
+    if (contextActionBroker.hasProviders())
+      actionCancel = contextActionBroker.request(
+        () => request,
+        () => adapter.capture(position),
+        (items: readonly EditorContextAction[]) =>
+          render([
+            ...commandItems,
+            ...items.map((action): MenuEntry => ({ kind: 'edit', action })),
+          ]),
+      )
+    return !!shown || !!actionCancel
   }
   const contextMenu = (event: MouseEvent) => {
     const position = adapter.positionAt(event.clientX, event.clientY)
-    if (position === null || !contextActionBroker.hasProviders()) return
+    if (position === null) return
     if (openMenu(position, event.clientX, event.clientY)) event.preventDefault()
   }
   const keyDown = (event: KeyboardEvent) => {

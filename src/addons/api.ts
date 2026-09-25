@@ -115,6 +115,7 @@ export type AddonCommandDescriptor = {
 export type CommandMenuContribution =
   | { location: 'app'; group?: string; order?: number }
   | { location: 'explorer'; group?: string; order?: number }
+  | { location: 'editor'; group?: string; order?: number }
 export type AddonSyntaxDescriptor = {
   id: string
   kind: 'flavor' | 'projection'

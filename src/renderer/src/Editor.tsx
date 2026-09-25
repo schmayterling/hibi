@@ -1110,6 +1110,7 @@ export function MarkdownEditor({
             capture,
             apply,
             focus: () => view.focus(),
+            error: (error) => setRichInputError(String(error)),
           })
         })
         .catch((error) => setRichInputError(String(error)))

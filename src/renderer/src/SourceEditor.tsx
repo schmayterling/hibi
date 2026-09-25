@@ -1168,6 +1168,7 @@ export function SourceEditor({
             capture: captureInteraction,
             apply: applyInteraction,
             focus: () => editor.focus(),
+            error: (error) => setInputError(String(error)),
           })
         })
         .catch((error) => setInputError(String(error)))

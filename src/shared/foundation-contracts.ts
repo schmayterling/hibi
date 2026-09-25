@@ -71,6 +71,17 @@ export interface CommandExecutionContext {
   readonly file?: FileTarget
   readonly document?: DocumentTarget
   readonly view?: ViewTarget
+  /** Captured editor selection; offsets belong to the named editor, not Markdown source. */
+  readonly selection?: {
+    readonly targetId: string
+    readonly editor: 'source' | 'rich'
+    readonly contentVersion: number
+    readonly position: number
+    readonly anchor: number
+    readonly head: number
+    /** Preview capped at 256 characters. Use the selected-text service for more. */
+    readonly selectedText: string
+  }
 }
 
 /** Ordered within one workspace generation. A null path set requires resync. */

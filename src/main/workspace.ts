@@ -398,6 +398,7 @@ async function requestWorkspaceScan(
       workspaceScanCapReached =
         error instanceof Error &&
         error.message.includes('more than 20,000 items')
+      workspaceStream.publish('resync', null)
     }
     throw error
   } finally {
@@ -479,6 +480,15 @@ async function flushWatcherEvents(selected: string, target: WorkspaceTarget) {
   watcherFlushesInFlight++
   try {
     await reconcileWatcherEvents(selected, target)
+  } catch (error) {
+    if (isCurrentWorkspaceTarget(target)) {
+      unknownWatcherEvent = true
+      if (!workspaceScanFailed) {
+        workspaceScanFailed = true
+        workspaceStream.publish('resync', null)
+      }
+    }
+    throw error
   } finally {
     if (isCurrentWorkspaceTarget(target)) watcherFlushesInFlight--
   }
@@ -627,12 +637,51 @@ export async function loadWorkspace(
     return getWorkspace()
   }
   const showAllFiles = await showAllWorkspaceFiles()
-  const [nextEntries, metadata, vault] = await Promise.all([
-    scanWorkspace(nextRoot, showAllFiles),
-    workspaceMetadata(nextRoot),
-    obsidianVault(nextRoot),
-  ])
-  if (loading !== loadGeneration) return getWorkspace()
+  let candidateWatcher: FSWatcher | undefined
+  let candidateTarget: WorkspaceTarget | null = null
+  let changedDuringScan = false
+  try {
+    const prepared = watch(
+      nextRoot,
+      { recursive: true, persistent: false },
+      (eventType, filename) => {
+        if (candidateTarget)
+          queueWatcherEvent(nextRoot, candidateTarget, eventType, filename)
+        else changedDuringScan = true
+      },
+    )
+    candidateWatcher = prepared
+    prepared.on('error', (error) => {
+      console.error('workspace watcher failed:', error)
+      prepared.close()
+      if (watcher === prepared) {
+        watcher = undefined
+        workspaceStream.publish('resync', null)
+      } else {
+        if (candidateWatcher === prepared) candidateWatcher = undefined
+        changedDuringScan = true
+      }
+    })
+  } catch (error) {
+    console.error('workspace watcher unavailable:', error)
+  }
+  let nextEntries: WorkspaceEntry[]
+  let metadata: Awaited<ReturnType<typeof workspaceMetadata>>
+  let vault: WorkspaceState['obsidian']
+  try {
+    ;[nextEntries, metadata, vault] = await Promise.all([
+      scanWorkspace(nextRoot, showAllFiles),
+      workspaceMetadata(nextRoot),
+      obsidianVault(nextRoot),
+    ])
+  } catch (error) {
+    candidateWatcher?.close()
+    throw error
+  }
+  if (loading !== loadGeneration) {
+    candidateWatcher?.close()
+    return getWorkspace()
+  }
   watcher?.close()
   watcher = undefined
   clearTimeout(refreshTimer)
@@ -687,28 +736,23 @@ export async function loadWorkspace(
       publishWorkspaceChange({ kind: 'tree', paths: takeTreePaths() })
     },
   )
-  try {
-    const activeWatcher = watch(
-      root,
-      { recursive: true, persistent: false },
-      (eventType, filename) =>
-        queueWatcherEvent(nextRoot, selectedTarget, eventType, filename),
-    )
-    watcher = activeWatcher
-    activeWatcher.on('error', (error) => {
-      console.error('workspace watcher failed:', error)
-      if (watcher !== activeWatcher) return
-      activeWatcher.close()
-      watcher = undefined
-      workspaceStream.publish('resync', null)
-    })
-  } catch (error) {
-    console.error('workspace watcher unavailable:', error)
-  }
+  watcher = candidateWatcher
+  candidateTarget = selectedTarget
+  let startupReconciled = false
+  if (changedDuringScan)
+    startupReconciled =
+      (await requestWorkspaceScan(null).catch((error: unknown) => {
+        console.error('workspace startup rescan failed:', error)
+        return null
+      })) !== null
+  if (loading !== loadGeneration || !isCurrentWorkspaceTarget(selectedTarget))
+    return getWorkspace()
   await rememberWorkspace(nextRoot).catch((error: unknown) =>
     console.error('could not remember workspace:', error),
   )
-  publishWorkspaceChange({ kind: 'tree', paths: null })
+  if (loading !== loadGeneration || !isCurrentWorkspaceTarget(selectedTarget))
+    return getWorkspace()
+  if (!startupReconciled) publishWorkspaceChange({ kind: 'tree', paths: null })
   return getWorkspace()
 }
 

@@ -1,11 +1,14 @@
-import { relative, sep } from 'node:path'
+import { constants } from 'node:fs'
+import { lstat, open, realpath } from 'node:fs/promises'
+import { dirname, isAbsolute, relative, sep } from 'node:path'
+import { MAX_DOCUMENT_BYTES } from '../shared/desktop'
 import type {
   OperationResult,
   WorkspaceTarget,
 } from '../shared/foundation-contracts'
 import { getOpenDocuments } from './document'
 import { isDocumentName } from './document-types'
-import { readMarkdown, validateMarkdown } from './files'
+import { validateMarkdown } from './files'
 import {
   isCurrentWorkspaceTarget,
   notifyWorkspaceContent,
@@ -31,6 +34,7 @@ export interface WorkspaceTextCreation {
   readonly indexed: boolean
   readonly directorySynced: boolean
   readonly atomicVisibility: boolean
+  readonly scopeVerifiedAfterCommit: boolean
 }
 
 type FileResult<T> = OperationResult<
@@ -49,6 +53,104 @@ const stale = (): FileResult<never> => ({
   message: 'This workspace is no longer open.',
 })
 
+function inside(root: string, candidate: string): boolean {
+  const path = relative(root, candidate)
+  return !isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`)
+}
+
+type ParentIdentity = { canonical: string; dev: number; ino: number }
+
+async function parentIdentity(
+  root: string,
+  file: string,
+): Promise<ParentIdentity> {
+  const parent = dirname(file)
+  const [canonical, info] = await Promise.all([realpath(parent), lstat(parent)])
+  if (!inside(root, canonical) || info.isSymbolicLink() || !info.isDirectory())
+    throw Object.assign(new Error('This path is outside the workspace.'), {
+      code: 'EACCES',
+    })
+  return { canonical, dev: info.dev, ino: info.ino }
+}
+
+async function verifyParent(
+  root: string,
+  file: string,
+  expected: ParentIdentity,
+): Promise<void> {
+  const current = await parentIdentity(root, file)
+  if (
+    current.canonical !== expected.canonical ||
+    current.dev !== expected.dev ||
+    current.ino !== expected.ino
+  )
+    throw Object.assign(new Error('The workspace folder changed. Try again.'), {
+      code: 'ESTALE',
+    })
+}
+
+async function readScopedText(root: string, file: string): Promise<string> {
+  const parent = await parentIdentity(root, file)
+  const handle = await open(
+    file,
+    constants.O_RDONLY |
+      (constants.O_NONBLOCK ?? 0) |
+      (constants.O_NOFOLLOW ?? 0),
+  )
+  try {
+    const info = await handle.stat()
+    if (!info.isFile())
+      throw new Error('Choose a text file, not a folder or device.')
+    if (info.size > MAX_DOCUMENT_BYTES)
+      throw new Error(
+        'This document exceeds the 2 MiB limit. Open a smaller file.',
+      )
+    const canonical = await realpath(file)
+    const opened = await lstat(file)
+    if (
+      !inside(root, canonical) ||
+      opened.isSymbolicLink() ||
+      opened.dev !== info.dev ||
+      opened.ino !== info.ino
+    )
+      throw Object.assign(new Error('The workspace file changed. Try again.'), {
+        code: 'ESTALE',
+      })
+    await verifyParent(root, file, parent)
+    const bytes = Buffer.alloc(info.size + 1)
+    let bytesRead = 0
+    while (bytesRead < bytes.length) {
+      const chunk = await handle.read(
+        bytes,
+        bytesRead,
+        bytes.length - bytesRead,
+        bytesRead,
+      )
+      if (!chunk.bytesRead) break
+      bytesRead += chunk.bytesRead
+    }
+    if (bytesRead !== info.size)
+      throw Object.assign(new Error('The workspace file changed. Try again.'), {
+        code: 'ESTALE',
+      })
+    await verifyParent(root, file, parent)
+    const after = await lstat(file)
+    if (
+      after.dev !== info.dev ||
+      after.ino !== info.ino ||
+      (await realpath(file)) !== canonical
+    )
+      throw Object.assign(new Error('The workspace file changed. Try again.'), {
+        code: 'ESTALE',
+      })
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
+      bytes.subarray(0, bytesRead),
+    )
+  } finally {
+    await handle.close()
+  }
+}
+
 function knownFailure(error: unknown): FileResult<never> | null {
   const code =
     typeof error === 'object' && error !== null
@@ -66,7 +168,24 @@ function knownFailure(error: unknown): FileResult<never> | null {
       code: 'conflict',
       message: 'A file already exists at that path.',
     }
-  if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS')
+  if (code === 'ESTALE')
+    return {
+      ok: false,
+      code: 'conflict',
+      message: 'The workspace path changed. Try again.',
+    }
+  if (code === 'ENAMETOOLONG')
+    return {
+      ok: false,
+      code: 'limit-exceeded',
+      message: 'Choose a shorter file name.',
+    }
+  if (
+    code === 'EACCES' ||
+    code === 'EPERM' ||
+    code === 'EROFS' ||
+    code === 'ELOOP'
+  )
     return {
       ok: false,
       code: 'permission-denied',
@@ -103,7 +222,7 @@ export async function readWorkspaceText(
   try {
     const file = await resolveWorkspaceEntry(root, path)
     if (!isCurrentWorkspaceTarget(target)) return stale()
-    const markdown = await readMarkdown(file)
+    const markdown = await readScopedText(root, file)
     if (!isCurrentWorkspaceTarget(target)) return stale()
     return {
       ok: true,
@@ -142,6 +261,8 @@ export async function createWorkspaceText(
         code: 'unsupported',
         message: 'Use a supported document extension.',
       }
+    const parent = await parentIdentity(root, file)
+    if (!isCurrentWorkspaceTarget(target)) return stale()
     if (getOpenDocuments().some((draft) => draft.file === file))
       return {
         ok: false,
@@ -150,8 +271,9 @@ export async function createWorkspaceText(
       }
     // The scope is rechecked after staging and immediately before commit.
     let openDocumentConflict = false
-    const commit = await createExclusiveText(file, markdown, () => {
+    const commit = await createExclusiveText(file, markdown, async () => {
       if (!isCurrentWorkspaceTarget(target)) return false
+      await verifyParent(root, file, parent)
       openDocumentConflict = getOpenDocuments().some(
         (draft) => draft.file === file,
       )
@@ -167,7 +289,14 @@ export async function createWorkspaceText(
         : stale()
     const changedPath = relative(root, file).split(sep).join('/')
     let indexed = false
-    if (isCurrentWorkspaceTarget(target)) {
+    let scopeVerifiedAfterCommit = false
+    try {
+      await verifyParent(root, file, parent)
+      scopeVerifiedAfterCommit = true
+    } catch (error) {
+      console.error('workspace parent changed after create:', error)
+    }
+    if (scopeVerifiedAfterCommit && isCurrentWorkspaceTarget(target)) {
       try {
         indexed = (await refreshWorkspace([changedPath])) !== null
       } catch (error) {
@@ -180,7 +309,14 @@ export async function createWorkspaceText(
     }
     return {
       ok: true,
-      value: { target, path: changedPath, persisted: true, indexed, ...commit },
+      value: {
+        target,
+        path: changedPath,
+        persisted: true,
+        indexed,
+        scopeVerifiedAfterCommit,
+        ...commit,
+      },
     }
   } catch (error) {
     if (!isCurrentWorkspaceTarget(target)) return stale()

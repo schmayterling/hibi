@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { link, open, unlink } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 export interface ExclusiveCreateCommit {
   readonly directorySynced: boolean
@@ -11,12 +11,9 @@ export interface ExclusiveCreateCommit {
 export async function createExclusiveText(
   path: string,
   text: string,
-  current: () => boolean,
+  current: () => boolean | Promise<boolean>,
 ): Promise<ExclusiveCreateCommit | false> {
-  const temporary = join(
-    dirname(path),
-    `.${basename(path)}.${randomUUID()}.tmp`,
-  )
+  const temporary = join(dirname(path), `.${randomUUID()}.tmp`)
   const staged = await open(temporary, 'wx', 0o600)
   try {
     try {
@@ -25,7 +22,7 @@ export async function createExclusiveText(
     } finally {
       await staged.close()
     }
-    if (!current()) return false
+    if (!(await current())) return false
     let atomicVisibility = true
     try {
       await link(temporary, path)
@@ -36,7 +33,7 @@ export async function createExclusiveText(
         )
       )
         throw error
-      if (!current()) return false
+      if (!(await current())) return false
       atomicVisibility = false
       // Some filesystems reject hard links. 'wx' still reserves the target
       // exclusively, though a crash can expose an incomplete fallback file.

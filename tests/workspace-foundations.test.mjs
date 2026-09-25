@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
+import { renameSync, symlinkSync } from 'node:fs'
 import {
+  mkdir,
   mkdtemp,
   readdir,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -179,7 +182,9 @@ test('workspace paths reject traversal and symlinks; create is exclusive', async
 })
 
 test('scoped text service reads disk and rejects stale or conflicting creates', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'hibi-workspace-service-'))
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), 'hibi-workspace-service-')),
+  )
   t.after(() => rm(root, { recursive: true, force: true }))
   const target = { workspaceId: 'workspace', workspaceGeneration: 1 }
   const host = {
@@ -238,6 +243,8 @@ test('scoped text service reads disk and rejects stale or conflicting creates', 
   assert.equal(created.value.persisted, true)
   assert.equal(created.value.indexed, true)
   assert.deepEqual(host.changed, [['note.md']])
+  const longName = `${'x'.repeat(240)}.md`
+  assert.equal((await createWorkspaceText(target, longName, 'long')).ok, true)
   assert.deepEqual((await readWorkspaceText(target, 'note.md')).value, {
     target,
     path: 'note.md',
@@ -296,4 +303,39 @@ test('scoped text service reads disk and rejects stale or conflicting creates', 
   host.guard = () => true
   host.target = { workspaceId: 'workspace', workspaceGeneration: 2 }
   assert.equal((await readWorkspaceText(target, 'note.md')).code, 'stale')
+  host.target = target
+  const outside = await realpath(
+    await mkdtemp(join(tmpdir(), 'hibi-workspace-outside-')),
+  )
+  t.after(() => rm(outside, { recursive: true, force: true }))
+  await mkdir(join(root, 'safe'))
+  await writeFile(join(root, 'safe', 'nested.md'), 'inside')
+  await writeFile(join(outside, 'nested.md'), 'outside')
+  let swapChecks = 0
+  host.guard = () => {
+    if (++swapChecks === 2) {
+      renameSync(join(root, 'safe'), join(root, 'safe-moved'))
+      symlinkSync(outside, join(root, 'safe'))
+    }
+    return true
+  }
+  const swapped = await readWorkspaceText(target, 'safe/nested.md')
+  assert.equal(swapped.ok, false)
+  assert.notEqual(swapped.value?.markdown, 'outside')
+  host.guard = () => true
+  await rm(join(root, 'safe'))
+  renameSync(join(root, 'safe-moved'), join(root, 'safe'))
+  swapChecks = 0
+  host.guard = () => {
+    if (++swapChecks === 2) {
+      renameSync(join(root, 'safe'), join(root, 'safe-moved'))
+      symlinkSync(outside, join(root, 'safe'))
+    }
+    return true
+  }
+  assert.equal(
+    (await createWorkspaceText(target, 'safe/new.md', 'text')).ok,
+    false,
+  )
+  await assert.rejects(readFile(join(outside, 'new.md')), { code: 'ENOENT' })
 })

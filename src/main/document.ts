@@ -306,6 +306,24 @@ export function hasOpenDocumentPath(file: string) {
     if (draft.path === file || draft.pendingPath === file) return true
   return false
 }
+export function getOpenDocumentVersions(): readonly {
+  file: string
+  tabId: string
+  contentVersion: number
+}[] {
+  storeTab()
+  const versions = []
+  for (const [tabId, draft] of tabs) {
+    const file = draft.path ?? draft.pendingPath
+    if (file)
+      versions.push({
+        file,
+        tabId,
+        contentVersion: draft.source.snapshot().version,
+      })
+  }
+  return versions
+}
 export function getDocumentTabs(): DocumentTab[] {
   storeTab()
   return [...tabs].map(([id, draft]) => ({

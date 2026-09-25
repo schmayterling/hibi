@@ -97,9 +97,12 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
   const rebind = page.getByRole('button', { name: 'Rebind Example action' })
   await rebind.waitFor()
   await rebind.click()
-  await page
-    .locator('button[aria-label="Rebind Example action"][aria-pressed="true"]')
-    .waitFor()
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('[aria-label="Rebind Example action"]')
+        ?.getAttribute('aria-pressed') === 'true',
+  )
   await rebind.press(`${modifier}+Alt+Shift+J`)
   await page
     .getByRole('button', { name: 'Save shortcut for Example action' })
@@ -112,9 +115,12 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
   )
 
   await rebind.click()
-  await page
-    .locator('button[aria-label="Rebind Example action"][aria-pressed="true"]')
-    .waitFor()
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('[aria-label="Rebind Example action"]')
+        ?.getAttribute('aria-pressed') === 'true',
+  )
   await page.getByRole('button', { name: 'Back to app' }).click()
   await pressShortcut(app, `${modifier}+Alt+Shift+J`)
   await page.waitForFunction(() => window.commandProbeSources?.length === 3)
@@ -147,4 +153,57 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
     (await page.evaluate(() => window.commandProbeSources)).at(-1),
     'shortcut',
   )
+
+  await enabled.click()
+  await page.waitForFunction(
+    () => document.querySelector('#addon-command-probe')?.checked === false,
+  )
+  await enabled.click()
+  await page.waitForFunction(async () =>
+    (await window.hibi.getAddonHotkeys()).some(
+      ({ id, effectiveShortcut }) =>
+        id === 'command-probe.run' &&
+        effectiveShortcut ===
+          `${navigator.platform.startsWith('Mac') ? 'meta' : 'ctrl'}+alt+shift+j`,
+    ),
+  )
+  await pressShortcut(app, `${modifier}+Alt+Shift+J`)
+  await page.waitForFunction(() => window.commandProbeSources?.length === 5)
+
+  await page.getByRole('tab', { name: 'Hotkeys', exact: true }).click()
+  await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('hotkeys:record')
+    ipcMain.handle('hotkeys:record', async (_event, recording) => {
+      if (recording)
+        await new Promise((resolve) => {
+          globalThis.releaseAddonRecording = resolve
+        })
+    })
+  })
+  await rebind.click()
+  await page.getByText('Preparing shortcut…', { exact: true }).waitFor()
+  assert.equal(await rebind.getAttribute('aria-pressed'), 'false')
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'Reset shortcut for Example action' })
+      .isDisabled(),
+    true,
+  )
+  await app.evaluate(async () => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (typeof globalThis.releaseAddonRecording === 'function') {
+        globalThis.releaseAddonRecording()
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    throw new Error('Shortcut recording request did not reach main process.')
+  })
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('[aria-label="Rebind Example action"]')
+        ?.getAttribute('aria-pressed') === 'true',
+  )
+  await page.getByRole('button', { name: 'Cancel rebinding' }).click()
 })

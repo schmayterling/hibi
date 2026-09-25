@@ -8,16 +8,16 @@ export interface ExclusiveCreateCommit {
 }
 
 /** Stage and sync bytes before an exclusive commit. False means scope went stale. */
-export async function createExclusiveText(
+async function createExclusiveFile(
   path: string,
-  text: string,
+  contents: string | Uint8Array,
   current: () => boolean | Promise<boolean>,
 ): Promise<ExclusiveCreateCommit | false> {
   const temporary = join(dirname(path), `.${randomUUID()}.tmp`)
   const staged = await open(temporary, 'wx', 0o600)
   try {
     try {
-      await staged.writeFile(text, 'utf8')
+      await staged.writeFile(contents)
       await staged.sync()
     } finally {
       await staged.close()
@@ -39,7 +39,7 @@ export async function createExclusiveText(
       // exclusively, though a crash can expose an incomplete fallback file.
       const destination = await open(path, 'wx', 0o600)
       try {
-        await destination.writeFile(text, 'utf8')
+        await destination.writeFile(contents)
         await destination.sync()
       } catch (failure) {
         await destination.close().catch(() => {})
@@ -73,4 +73,20 @@ export async function createExclusiveText(
       console.error('workspace create temporary cleanup failed:', error),
     )
   }
+}
+
+export function createExclusiveText(
+  path: string,
+  text: string,
+  current: () => boolean | Promise<boolean>,
+): Promise<ExclusiveCreateCommit | false> {
+  return createExclusiveFile(path, text, current)
+}
+
+export function createExclusiveBytes(
+  path: string,
+  bytes: Uint8Array,
+  current: () => boolean | Promise<boolean>,
+): Promise<ExclusiveCreateCommit | false> {
+  return createExclusiveFile(path, bytes, current)
 }

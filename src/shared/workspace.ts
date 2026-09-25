@@ -92,11 +92,13 @@ export interface WorkspaceTextCreation {
   readonly directorySynced: boolean
   readonly atomicVisibility: boolean
   readonly scopeVerifiedAfterCommit: boolean
+  readonly ownerActiveAfterCommit: boolean
 }
 
 export type WorkspaceFileResult<T> = OperationResult<
   T,
   | 'stale'
+  | 'disposed'
   | 'not-found'
   | 'conflict'
   | 'permission-denied'

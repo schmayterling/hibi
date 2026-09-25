@@ -299,15 +299,23 @@ export class DocumentRuntime {
       current.tabId !== document.tabId ||
       current.revision !== document.revision
     )
-      return
+      return null
     this.#updating = true
     try {
       session.importSaved(document.savedMarkdown)
+      this.#metadata.set(document.tabId, {
+        ...this.#metadata.get(document.tabId)!,
+        id: document.id,
+        name: document.name,
+        ephemeral: document.ephemeral,
+        canAutosave: document.canAutosave,
+      })
       this.#cached.delete(document.tabId)
     } finally {
       this.#updating = false
     }
     this.#publish(document.tabId)
+    return this.get(document.tabId)
   }
   #replacement(source: string, id: string | null = this.#activeId) {
     const session = this.session(id)

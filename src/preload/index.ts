@@ -304,10 +304,16 @@ if (process.isMainFrame) {
     getWorkspaceChangeSnapshot: () =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.changeSnapshot),
     subscribeWorkspaceChanges,
-    readWorkspaceText: (target, path) =>
-      ipcRenderer.invoke(WORKSPACE_CHANNELS.readText, target, path),
-    createWorkspaceText: (target, path, markdown) =>
-      ipcRenderer.invoke(WORKSPACE_CHANNELS.createText, target, path, markdown),
+    readWorkspaceText: (owner, target, path) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.readText, owner, target, path),
+    createWorkspaceText: (owner, target, path, markdown) =>
+      ipcRenderer.invoke(
+        WORKSPACE_CHANNELS.createText,
+        owner,
+        target,
+        path,
+        markdown,
+      ),
     listImporters: () => ipcRenderer.invoke(IMPORT_CHANNELS.list),
     importIntoWorkspace: (request) =>
       ipcRenderer.invoke(IMPORT_CHANNELS.run, request),

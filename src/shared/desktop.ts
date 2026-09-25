@@ -216,6 +216,7 @@ export type DesktopApi = {
     callback: import('./workspace').WorkspaceChangeListener,
   ) => Promise<import('./workspace').WorkspaceChangeSubscription>
   readWorkspaceText: (
+    owner: string,
     target: import('./foundation-contracts').WorkspaceTarget,
     path: string,
   ) => Promise<
@@ -224,6 +225,7 @@ export type DesktopApi = {
     >
   >
   createWorkspaceText: (
+    owner: string,
     target: import('./foundation-contracts').WorkspaceTarget,
     path: string,
     markdown: string,

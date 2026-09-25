@@ -63,10 +63,12 @@ import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
 import { AddonHotkeys } from './addon-hotkeys'
 import {
   enableAddon,
+  getAddonActivationGeneration,
   getAddonStartupNotices,
   getAddonStates,
   installAddon,
   invokeAddon,
+  isAddonActivationCurrent,
   loadAddons,
   readAddonDocumentation,
   removeAddon,
@@ -308,6 +310,13 @@ function trustedWindow(
   }
   return mainWindow
 }
+
+const addonFileUnavailable = () =>
+  ({
+    ok: false,
+    code: 'disposed',
+    message: 'This addon is no longer active.',
+  }) as const
 
 function runFileOperation<T>(
   event: IpcMainInvokeEvent,
@@ -1224,17 +1233,41 @@ if (!app.requestSingleInstanceLock()) {
       )
       handle(
         WORKSPACE_CHANNELS.readText,
-        (event, target: unknown, path: unknown) =>
-          readAfterFileOperation(event, () =>
-            readWorkspaceText(target as WorkspaceTarget, path),
-          ),
+        (event, owner: unknown, target: unknown, path: unknown) => {
+          const id = typeof owner === 'string' ? owner : null
+          const generation =
+            id === null ? null : getAddonActivationGeneration(id)
+          if (id === null || generation === null) return addonFileUnavailable()
+          return readAfterFileOperation(event, async () => {
+            const result = await readWorkspaceText(
+              target as WorkspaceTarget,
+              path,
+            )
+            return isAddonActivationCurrent(id, generation)
+              ? result
+              : addonFileUnavailable()
+          })
+        },
       )
       handle(
         WORKSPACE_CHANNELS.createText,
-        (event, target: unknown, path: unknown, markdown: unknown) =>
-          runFileOperation(event, () =>
-            createWorkspaceText(target as WorkspaceTarget, path, markdown),
-          ),
+        (
+          event,
+          owner: unknown,
+          target: unknown,
+          path: unknown,
+          markdown: unknown,
+        ) => {
+          const id = typeof owner === 'string' ? owner : null
+          const generation =
+            id === null ? null : getAddonActivationGeneration(id)
+          if (id === null || generation === null) return addonFileUnavailable()
+          return runFileOperation(event, () =>
+            createWorkspaceText(target as WorkspaceTarget, path, markdown, () =>
+              isAddonActivationCurrent(id, generation),
+            ),
+          )
+        },
       )
       handle(WORKSPACE_CHANNELS.index, (event, verifyAll: unknown) =>
         readAfterFileOperation(event, () => indexWorkspace(verifyAll === true)),

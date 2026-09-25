@@ -61,6 +61,27 @@ For installed packages, use the [SideloadFactory](SideloadFactory.md) and the [s
 - [ViewNotificationHandle](ViewNotificationHandle.md)
 - [ViewRegistration](ViewRegistration.md)
 
+## Foundations
+
+- [AddonId](AddonId.md)
+- [AddonOwner](AddonOwner.md)
+- [CommandExecutionContext](CommandExecutionContext.md)
+- [Dispose](Dispose.md)
+- [DocumentId](DocumentId.md)
+- [DocumentTarget](DocumentTarget.md)
+- [FailureCode](FailureCode.md)
+- [FileId](FileId.md)
+- [FileTarget](FileTarget.md)
+- [OperationResult](OperationResult.md)
+- [OwnerScope](OwnerScope.md)
+- [RequestId](RequestId.md)
+- [VersionedDocumentTarget](VersionedDocumentTarget.md)
+- [ViewId](ViewId.md)
+- [ViewTarget](ViewTarget.md)
+- [WorkspaceChangeEvent](WorkspaceChangeEvent.md)
+- [WorkspaceId](WorkspaceId.md)
+- [WorkspaceTarget](WorkspaceTarget.md)
+
 ## Sideloading
 
 - [CapabilityFactory](CapabilityFactory.md)

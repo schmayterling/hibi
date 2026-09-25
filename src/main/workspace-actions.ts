@@ -36,57 +36,13 @@ import {
   refreshWorkspace,
   workspaceRoot,
 } from './workspace'
+import { resolveWorkspaceEntry, validateWorkspaceName } from './workspace-paths'
+
+export { validateWorkspaceName } from './workspace-paths'
 
 const missing = (error: NodeJS.ErrnoException) => {
   if (error.code !== 'ENOENT') throw error
   return null
-}
-export function validateWorkspaceName(name: unknown): asserts name is string {
-  if (
-    typeof name !== 'string' ||
-    !name ||
-    name.startsWith('.') ||
-    name === 'node_modules' ||
-    /[\\/<>:"|?*]|\p{Cc}/u.test(name) ||
-    /[. ]$/.test(name) ||
-    Buffer.byteLength(name) > 255 ||
-    /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)
-  )
-    throw new Error(
-      'Choose a file or folder name without slashes or reserved characters.',
-    )
-}
-async function resolveEntry(
-  base: string,
-  value: unknown,
-  allowMissing = false,
-  allowRoot = false,
-): Promise<string> {
-  if (allowRoot && value === '') return base
-  if (
-    typeof value !== 'string' ||
-    !value ||
-    value.length > 4096 ||
-    isAbsolute(value)
-  )
-    throw new Error('Choose a file or folder inside this workspace.')
-  const parts = value.split('/')
-  let path = base
-  for (const [index, part] of parts.entries()) {
-    validateWorkspaceName(part)
-    path = join(path, part)
-    const stat = await lstat(path).catch(missing)
-    if (!stat && allowMissing && index === parts.length - 1) return path
-    if (
-      !stat ||
-      stat.isSymbolicLink() ||
-      (index < parts.length - 1 && !stat.isDirectory())
-    )
-      throw new Error(
-        'This path is missing or contains a symbolic link. Choose the original file or folder.',
-      )
-  }
-  return path
 }
 function contains(parent: string, child: string | null) {
   if (!child) return false
@@ -175,7 +131,7 @@ export async function workspaceAction(
   let sourcePath: string | null = null
   let treeChanged = false
   if (action === 'new-file' || action === 'new-folder') {
-    const parent = await resolveEntry(base, path, false, true)
+    const parent = await resolveWorkspaceEntry(base, path, false, true)
     if (!(await lstat(parent)).isDirectory())
       throw new Error('Choose a folder for the new item.')
     resultPath = await unique(
@@ -192,7 +148,7 @@ export async function workspaceAction(
     const draft =
       typeof path === 'string' &&
       getOpenDocuments().find((draft) => draft.pendingPath === join(base, path))
-    const source = await resolveEntry(base, path, Boolean(draft))
+    const source = await resolveWorkspaceEntry(base, path, Boolean(draft))
     sourcePath = source
     if (draft && draft.tabId !== getDocument().tabId)
       await selectDocumentTab(window, draft.tabId)
@@ -217,7 +173,7 @@ export async function workspaceAction(
         const extension = folder ? '' : extname(source)
         const name = basename(source, extension)
         resultPath = await unique(dirname(source), `${name} copy${extension}`)
-      } else resultPath = await resolveEntry(base, destination, true)
+      } else resultPath = await resolveWorkspaceEntry(base, destination, true)
       if (!folder && !isDocumentName(resultPath, true))
         throw new Error('Use a supported file extension.')
       if (source === resultPath)

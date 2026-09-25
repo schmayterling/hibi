@@ -665,6 +665,15 @@ export type AddonContext = {
         import('../shared/workspace').WorkspaceTextCreation
       >
     >
+    /** Bounded metadata and text queries over one captured workspace generation. */
+    query: (
+      request: import('../shared/workspace-query').WorkspaceReferenceQueryRequest,
+    ) => Promise<
+      import('../shared/foundation-contracts').OperationResult<
+        import('../shared/workspace-query').WorkspaceReferenceQueryResult,
+        import('../shared/workspace-query').QueryFailure
+      >
+    >
     get: () => Promise<WorkspaceState | null>
     open: () => Promise<WorkspaceState | null>
     openFile: (path: string) => Promise<void>

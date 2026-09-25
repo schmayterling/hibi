@@ -336,6 +336,8 @@ if (process.isMainFrame) {
         path,
         markdown,
       ),
+    queryWorkspaceReferences: (request) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.queryReferences, request),
     listImporters: () => ipcRenderer.invoke(IMPORT_CHANNELS.list),
     importIntoWorkspace: (request) =>
       ipcRenderer.invoke(IMPORT_CHANNELS.run, request),

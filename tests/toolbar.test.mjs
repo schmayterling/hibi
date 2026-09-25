@@ -98,85 +98,135 @@ test('toolbar auto-hide defaults on, shares top-bar timing, and moves content sm
   const expanded = await page
     .locator('.toolbar-slot')
     .evaluate((element) => element.getBoundingClientRect().height)
-  const sample = () =>
-    page.evaluate(async () => {
-      const values = []
-      for (let frame = 0; frame < 32; frame++) {
-        await new Promise(requestAnimationFrame)
-        values.push({
-          height: document
-            .querySelector('.toolbar-slot')
-            .getBoundingClientRect().height,
-          top: document.querySelector('.editor-page').getBoundingClientRect()
-            .top,
-          title: Number(
-            getComputedStyle(document.querySelector('.titlebar')).opacity,
-          ),
-          toolbar: Number(
-            getComputedStyle(document.querySelector('.editor-toolbar')).opacity,
-          ),
-          fade: Number.parseFloat(
-            getComputedStyle(document.querySelector('.app')).getPropertyValue(
-              '--editor-top-fade',
+  await page.evaluate(() => {
+    const slot = document.querySelector('.toolbar-slot')
+    const toolbar = slot.querySelector('.editor-toolbar')
+    const titlebar = document.querySelector('.titlebar')
+    const app = document.querySelector('.app')
+    const motion = { snapshots: [], error: undefined }
+    window.toolbarMotion = motion
+    let timer
+    const stop = (error) => {
+      clearTimeout(timer)
+      observer.disconnect()
+      motion.error = error
+    }
+    const observer = new MutationObserver(() => {
+      try {
+        if (
+          slot.dataset.hidden !== (motion.snapshots.length ? 'false' : 'true')
+        )
+          return
+        // Flush the new style before reading the transitions it creates.
+        getComputedStyle(slot).gridTemplateRows
+        const available = [
+          ...slot.getAnimations({ subtree: true }),
+          ...titlebar.getAnimations(),
+          ...app.getAnimations(),
+        ]
+        const transition = (element, property) =>
+          available.find(
+            (animation) =>
+              animation.effect?.target === element &&
+              animation.transitionProperty === property,
+          )
+        const grid = transition(slot, 'grid-template-rows')
+        const opacity = transition(toolbar, 'opacity')
+        const title = transition(titlebar, 'opacity')
+        const margin = transition(titlebar, 'margin-bottom')
+        const fade = transition(app, '--editor-top-fade')
+        const missing = Object.entries({ grid, opacity, title, margin, fade })
+          .filter(([, animation]) => !animation)
+          .map(([name]) => name)
+        if (missing.length)
+          throw new Error(`missing toolbar transitions: ${missing.join(', ')}`)
+        // Seek native transitions: busy CI renderers can skip their short paint window.
+        const animations = [grid, opacity, title, margin, fade]
+        const duration = grid.effect.getComputedTiming().duration
+        const read = () => {
+          const paragraph = document
+            .querySelector('.tiptap p')
+            .getBoundingClientRect()
+          return {
+            height: slot.getBoundingClientRect().height,
+            top: document.querySelector('.editor-page').getBoundingClientRect()
+              .top,
+            title: Number(getComputedStyle(titlebar).opacity),
+            toolbar: Number(getComputedStyle(toolbar).opacity),
+            fade: Number.parseFloat(
+              getComputedStyle(app).getPropertyValue('--editor-top-fade'),
             ),
-          ),
+            insets: { top: paragraph.top, left: paragraph.left },
+            mask: getComputedStyle(document.querySelector('.editor-content'))
+              .maskImage,
+          }
+        }
+        for (const animation of animations) animation.pause()
+        for (const animation of animations) animation.currentTime = duration / 2
+        const middle = read()
+        for (const animation of animations) animation.finish()
+        motion.snapshots.push({
+          middle,
+          end: read(),
+          duration,
+          opacityDuration: opacity.effect.getComputedTiming().duration,
+          opacityDelay: opacity.effect.getComputedTiming().delay,
+          titleDuration: title.effect.getComputedTiming().duration,
         })
+        if (motion.snapshots.length === 2) stop()
+      } catch (error) {
+        stop(error instanceof Error ? error.message : String(error))
       }
-      return values
     })
-  const [hiding] = await Promise.all([sample(), rich.press('a')])
-  assert.ok(
-    hiding.some((value) => value.height > 1 && value.height < expanded - 1),
-  )
-  assert.equal(hiding.at(-1).height, 0)
-  assert.equal(hiding.at(-1).top, 0)
-  const insets = await page
-    .locator('.tiptap p')
-    .first()
-    .evaluate((paragraph) => {
-      const rect = paragraph.getBoundingClientRect()
-      return { top: rect.top, left: rect.left }
+    observer.observe(slot, {
+      attributes: true,
+      attributeFilter: ['data-hidden'],
     })
-  assert.ok(Math.abs(insets.top - insets.left) < 1, JSON.stringify(insets))
-  assert.equal(hiding.at(-1).title, 0)
-  assert.equal(hiding.at(-1).toolbar, 0)
-  assert.ok(
-    hiding.some(
-      (value) =>
-        value.height > 2 && value.toolbar < value.height / expanded - 0.15,
-    ),
-  )
-  assert.equal(hiding.at(-1).fade, 24)
-  assert.match(
-    await page
-      .locator('.editor-content')
-      .evaluate((element) => getComputedStyle(element).maskImage),
-    /24px/,
-  )
-  assert.ok(
-    hiding.every(
-      (value) => Math.abs(value.height / expanded - value.title) < 0.13,
-    ),
-  )
+    timer = setTimeout(
+      () =>
+        stop(
+          `toolbar motion observed ${motion.snapshots.length}/2 state changes`,
+        ),
+      6000,
+    )
+  })
+  await rich.press('a')
   await page.waitForFunction(
-    () => document.querySelector('.app').dataset.typing === 'false',
+    () =>
+      window.toolbarMotion.error || window.toolbarMotion.snapshots.length === 2,
+    undefined,
+    { timeout: 7000 },
   )
-  const showing = await sample()
+  const motion = await page.evaluate(() => window.toolbarMotion)
+  assert.equal(motion.error, undefined, motion.error)
+  const [hiding, showing] = motion.snapshots
+  for (const motion of [hiding, showing]) {
+    assert.ok(motion.middle.height > 1 && motion.middle.height < expanded - 1)
+    assert.ok(motion.opacityDuration < motion.duration)
+    assert.equal(motion.titleDuration, motion.duration)
+    assert.ok(
+      Math.abs(motion.middle.height / expanded - motion.middle.title) < 0.13,
+    )
+    assert.ok(motion.middle.toolbar < motion.middle.height / expanded - 0.15)
+  }
+  assert.equal(hiding.opacityDelay, 0)
+  assert.equal(hiding.end.height, 0)
+  assert.equal(hiding.end.top, 0)
   assert.ok(
-    showing.some((value) => value.height > 1 && value.height < expanded - 1),
+    Math.abs(hiding.end.insets.top - hiding.end.insets.left) < 1,
+    JSON.stringify(hiding.end.insets),
   )
-  assert.equal(showing.at(-1).height, expanded)
-  assert.equal(showing.at(-1).top, 36 + expanded)
-  assert.equal(showing.at(-1).title, 1)
-  assert.equal(showing.at(-1).toolbar, 1)
-  assert.ok(showing.some((value) => value.toolbar > 0 && value.toolbar < 1))
-  assert.ok(
-    showing.some(
-      (value) =>
-        value.height > 2 && value.toolbar < value.height / expanded - 0.15,
-    ),
-  )
-  assert.equal(showing.at(-1).fade, 0)
+  assert.equal(hiding.end.title, 0)
+  assert.equal(hiding.end.toolbar, 0)
+  assert.equal(hiding.end.fade, 24)
+  assert.match(hiding.end.mask, /24px/)
+  assert.ok(showing.opacityDelay > 0)
+  assert.ok(showing.middle.toolbar > 0 && showing.middle.toolbar < 1)
+  assert.equal(showing.end.height, expanded)
+  assert.equal(showing.end.top, 36 + expanded)
+  assert.equal(showing.end.title, 1)
+  assert.equal(showing.end.toolbar, 1)
+  assert.equal(showing.end.fade, 0)
   await clickMenu(app, 'Settings')
   await autoHide.uncheck()
   await page.getByRole('button', { name: /^back to app$/i }).click()

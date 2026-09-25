@@ -318,6 +318,7 @@ export function useFormattingToolbar(
   focusedPane: 'rich' | 'source',
   disabled: boolean,
   onAttach: (files: File[] | null) => Promise<MediaAttachment[] | null>,
+  focusOwnedByEditor: () => boolean,
   markdownMode = true,
   format?: DocumentFormat,
 ) {
@@ -438,12 +439,16 @@ export function useFormattingToolbar(
     [toasts],
   )
   const refresh = useRef(() => {})
-  const attachSource = useCallback((value: SourceFormatting | null) => {
-    const initial = !source.current
-    source.current = value
-    refresh.current()
-    if (initial && latest.current.mode === 'markdown') value?.focus()
-  }, [])
+  const attachSource = useCallback(
+    (value: SourceFormatting | null) => {
+      const initial = !source.current
+      source.current = value
+      refresh.current()
+      if (initial && latest.current.mode === 'markdown' && focusOwnedByEditor())
+        value?.focus()
+    },
+    [focusOwnedByEditor],
+  )
   useLayoutEffect(() => {
     const scope = toolbar.scope('format', (error) =>
       console.error('formatting failed:', error),
@@ -597,6 +602,7 @@ export function useFormattingToolbar(
   useLayoutEffect(() => {
     if (previousMode.current === mode) return
     previousMode.current = mode
+    if (!focusOwnedByEditor()) return
     if (
       !markdownMode ||
       mode === 'markdown' ||
@@ -605,6 +611,6 @@ export function useFormattingToolbar(
       source.current?.focus()
     // Tiptap's focus command defers to a frame and can override a newer click into source.
     else if (editor && !editor.isDestroyed) editor.view.focus()
-  }, [mode, focusedPane, editor, markdownMode])
+  }, [mode, focusedPane, editor, markdownMode, focusOwnedByEditor])
   return { attachSource, attachFiles }
 }

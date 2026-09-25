@@ -41,6 +41,7 @@ export function FormatEditor({
     sourceReady,
     setSourceReady,
     setSourceSettled,
+    focusOwnedByEditor,
   } = useEditorPanes(mode, false)
   const [findQuery, setFindQuery] = useState('')
   const [findStatus, setFindStatus] = useState<FindStatus>({
@@ -60,6 +61,7 @@ export function FormatEditor({
     focusedPane,
     disabled || mode !== paneMode,
     onAttach,
+    focusOwnedByEditor,
     false,
     format,
   )
@@ -182,6 +184,7 @@ export function FormatEditor({
                   supportsMedia={!!format?.insertMedia}
                   codeLanguage={format?.codeLanguage}
                   label={formatName}
+                  waitForFont={false}
                   onLink={onLink}
                   onFormatting={attachSource}
                   sourceExtensions={sourceExtensions}

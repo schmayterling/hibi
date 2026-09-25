@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, stopElectronTree } from './electron.mjs'
 
 test('ENG23/J01: fragmented source remains editable and savable across quiet-time storage maintenance', {
   timeout: 45000,
@@ -45,7 +45,7 @@ test('ENG23/J01: fragmented source remains editable and savable across quiet-tim
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
-  const watchdog = setTimeout(() => app.process().kill('SIGKILL'), 40000)
+  const watchdog = setTimeout(() => stopElectronTree(app.process()), 40000)
   t.after(async () => {
     await app
       .evaluate(({ dialog }) => {

@@ -215,7 +215,8 @@
     "src/main/dependencies.ts"
   ],
   "46e7dbbc93e5": [
-    "src/main/index.ts"
+    "src/main/index.ts",
+    "src/renderer/src/main.tsx"
   ],
   "3907fa7f8072": [
     "src/addons/documentation/ExportDialog.tsx",
@@ -4436,6 +4437,9 @@
   "b2a12ed05860": [
     "src/addons/typst/compiler.ts"
   ],
+  "a0f88fb28683": [
+    "src/addons/typst/compiler.ts"
+  ],
   "aa462ad89611": [
     "src/addons/typst/Preview.tsx"
   ],
@@ -4448,10 +4452,16 @@
   "ce0e7476dad4": [
     "src/addons/typst/compiler-worker.ts"
   ],
+  "3b46f542a23f": [
+    "src/addons/typst/compiler.ts"
+  ],
   "7ba8dc6d48a0": [
     "src/addons/typst/Block.tsx"
   ],
   "433fa57cd74a": [
+    "src/addons/typst/compiler.ts"
+  ],
+  "598180809be3": [
     "src/addons/typst/compiler.ts"
   ],
   "eecd4c4fc8ee": [

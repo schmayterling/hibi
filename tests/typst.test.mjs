@@ -17,7 +17,7 @@ import { renameDocument } from './rename.mjs'
 import { uiName } from './ui.mjs'
 
 test('typst documents and markdown blocks preview locally, export, and preserve source', {
-  timeout: 60000,
+  timeout: 75000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-typst-test-'))
   const notes = join(root, 'notes')
@@ -82,7 +82,7 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
       document.querySelector('.typst-preview')?.getAttribute('aria-busy') ===
       'false',
     undefined,
-    { timeout: 15000 },
+    { timeout: 35000 },
   )
   assert.equal(
     await preview.isVisible(),
@@ -251,11 +251,26 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     globalThis.typstOriginalTimer = setTimeout
     globalThis.typstDedupPosts = 0
     globalThis.typstFakeRespond = true
+    globalThis.typstFakePendingExit = false
+    globalThis.typstForkDuringExit = 0
     const { EventEmitter } = process.getBuiltinModule('events')
     utilityProcess.fork = () => {
       const worker = new EventEmitter()
       worker.postMessage = (job) => {
+        worker.lastSource = job.source
         if (job.source === 'dedup fixture') globalThis.typstDedupPosts++
+        if (job.source === 'slow initialization fixture') {
+          globalThis.typstOriginalTimer(() => {
+            worker.emit('message', { phase: 'compiling' })
+            worker.emit('message', {
+              svg: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+              pages: 1,
+              diagnostics: [],
+            })
+          }, 40)
+          return
+        }
+        worker.emit('message', { phase: 'compiling' })
         if (globalThis.typstFakeRespond)
           globalThis.typstOriginalTimer(
             () =>
@@ -268,7 +283,13 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
           )
       }
       worker.kill = () => {
-        worker.emit('exit', 0)
+        if (worker.lastSource === 'timeout fixture') {
+          globalThis.typstFakePendingExit = true
+          globalThis.typstOriginalTimer(() => {
+            worker.emit('exit', 0)
+            globalThis.typstFakePendingExit = false
+          }, 500)
+        } else worker.emit('exit', 0)
         return true
       }
       return worker
@@ -290,27 +311,39 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     )
     assert.equal(pair[0].svg, pair[1].svg)
     assert.equal(await app.evaluate(() => globalThis.typstDedupPosts), 1)
-    // Exercise timeout/restart without allocating an enormous document.
+    // Font initialization has a separate budget from document compilation.
     await app.evaluate(() => {
-      globalThis.typstFakeRespond = false
       globalThis.setTimeout = (callback, delay, ...args) =>
         globalThis.typstOriginalTimer(
           callback,
-          delay === 10000 ? 20 : delay,
+          delay === 10000 ? 20 : delay === 20000 ? 80 : delay,
           ...args,
         )
+    })
+    assert.ok((await query('slow initialization fixture')).svg)
+    // Document-controlled loops still expire after the shorter compile budget.
+    await app.evaluate(() => {
+      globalThis.typstFakeRespond = false
     })
     await assert.rejects(
       query('timeout fixture'),
       /Typst compilation took longer than 10 seconds\./,
     )
+    await app.evaluate(({ utilityProcess }) => {
+      globalThis.setTimeout = globalThis.typstOriginalTimer
+      utilityProcess.fork = (...args) => {
+        if (globalThis.typstFakePendingExit) globalThis.typstForkDuringExit++
+        return globalThis.typstOriginalFork(...args)
+      }
+    })
+    assert.ok((await query('restarted')).svg)
+    assert.equal(await app.evaluate(() => globalThis.typstForkDuringExit), 0)
   } finally {
     await app.evaluate(({ utilityProcess }) => {
       utilityProcess.fork = globalThis.typstOriginalFork
       globalThis.setTimeout = globalThis.typstOriginalTimer
     })
   }
-  assert.ok((await query('restarted')).svg)
   // Empty/incomplete syntax reports diagnostics without modifying the buffer.
   await source.fill('#let =')
   await page.locator('.typst-preview .document-notice').waitFor()
@@ -406,7 +439,12 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   await tree
     .getByRole('treeitem', { name: /^report\.typ$/i, exact: true })
     .click()
-  await source.waitFor()
+  // Opening a file keeps source read-only until its bridge and the file operation settle.
+  await page
+    .locator(
+      '.editor-panes.mode-markdown[data-source-ready="true"] .source-pane:not([inert]) .cm-content[contenteditable="true"][aria-label="Typst editor"]',
+    )
+    .waitFor()
   assert.equal(
     await page
       .getByRole('button', { name: /^side-by-side$/i, exact: true })

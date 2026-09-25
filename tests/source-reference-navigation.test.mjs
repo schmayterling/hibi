@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, stopElectronTree } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -74,7 +74,7 @@ test('source reference links use current definitions and coexist with find', {
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
   })
-  const watchdog = setTimeout(() => app.process().kill('SIGKILL'), 25000)
+  const watchdog = setTimeout(() => stopElectronTree(app.process()), 25000)
   t.after(async () => {
     await app
       .evaluate(({ dialog }) => {
@@ -202,7 +202,7 @@ test('rich-only addon syntax keeps source references out of the built-in reader'
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
-  const watchdog = setTimeout(() => app.process().kill('SIGKILL'), 25000)
+  const watchdog = setTimeout(() => stopElectronTree(app.process()), 25000)
   t.after(async () => {
     await app
       .evaluate(({ dialog }) => {

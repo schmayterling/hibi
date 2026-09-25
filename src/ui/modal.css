@@ -80,9 +80,6 @@
 .dialog-content .document-notice {
   margin: 0;
 }
-.dialog-content:empty + .dialog-footer {
-  border-top: 0;
-}
 .dialog-footer {
   flex-shrink: 0;
   display: flex;
@@ -91,6 +88,9 @@
   padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--border);
   background: var(--surface);
+}
+.dialog-content:empty + .dialog-footer {
+  border-top: 0;
 }
 .dialog-footer .dialog-danger {
   background: var(--status-danger);
@@ -129,6 +129,19 @@
   flex: 1;
   display: flex;
   flex-direction: column;
+}
+.app-dialog:not([data-size="fullscreen"]):has(> .dialog-content:empty)
+  .dialog-heading {
+  padding-block: var(--space-1) var(--space-2);
+}
+.app-dialog:not([data-size="fullscreen"]):has(> .dialog-content:empty)
+  .dialog-description {
+  margin-top: 0;
+}
+.app-dialog:not([data-size="fullscreen"])
+  .dialog-content:empty
+  + .dialog-footer {
+  padding-block: var(--space-1);
 }
 @keyframes dialog-in {
   from {

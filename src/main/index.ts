@@ -297,7 +297,7 @@ async function serveAsset(request: Request): Promise<Response> {
     )
       return new Response(null, { status: 403 })
     const response = await net.fetch(pathToFileURL(path).href)
-    const headers = new Headers(response.headers)
+    const headers = response.headers
     headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY)
     headers.set('X-Content-Type-Options', 'nosniff')
     if (isAddon) {
@@ -308,7 +308,7 @@ async function serveAsset(request: Request): Promise<Response> {
       if (/\.m?js$/i.test(path))
         headers.set('Content-Type', 'text/javascript; charset=utf-8')
     }
-    return new Response(response.body, { status: response.status, headers })
+    return response
   } catch {
     return new Response(null, { status: 404 })
   }
@@ -325,7 +325,8 @@ function createWindow(): void {
     minWidth: 480,
     minHeight: 360,
     show: false,
-    focusable: !testing,
+    // Linux cannot change focusability after creation; CI shows test windows.
+    focusable: !testing || process.platform === 'linux',
     title: 'Hibi',
     ...(process.platform === 'darwin' ? {} : { icon: appIcon }),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
@@ -982,14 +983,14 @@ if (!app.requestSingleInstanceLock()) {
       handle(DOCUMENT_CHANNELS.tabsEnabled, (event, enabled: unknown) =>
         runFileOperation(event, (window) => setTabsEnabled(window, enabled)),
       )
-      handle(HISTORY_CHANNELS.list, (event) => {
-        trustedWindow(event)
-        return listVersions(getDocumentPath())
-      })
-      handle(HISTORY_CHANNELS.preview, (event, id: unknown) => {
-        trustedWindow(event)
-        return previewVersion(getDocumentPath(), id)
-      })
+      handle(HISTORY_CHANNELS.list, (event) =>
+        readAfterFileOperation(event, () => listVersions(getDocumentPath())),
+      )
+      handle(HISTORY_CHANNELS.preview, (event, id: unknown) =>
+        readAfterFileOperation(event, () =>
+          previewVersion(getDocumentPath(), id),
+        ),
+      )
       handle(HISTORY_CHANNELS.restore, (event, id: unknown) =>
         runFileOperation(event, async (window) => {
           const content = await previewVersion(getDocumentPath(), id)

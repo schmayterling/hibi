@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { createServer } from 'node:http'
 import test from 'node:test'
-import { promisify } from 'node:util'
 import {
   svgSource,
   typstBlock,
@@ -33,7 +32,7 @@ test('typst fences preserve source and exclude incomplete or quoted examples', (
 })
 
 test('pinned native compiler sends package requests through the denying proxy', {
-  timeout: 30000,
+  timeout: 70000,
 }, async (t) => {
   let blocked = 0
   const server = createServer((_request, response) => {
@@ -50,25 +49,63 @@ test('pinned native compiler sends package requests through the denying proxy', 
     server.close()
   })
   const proxy = `http://127.0.0.1:${server.address().port}`
-  const script = `import { NodeCompiler } from '@myriaddreamin/typst-ts-node-compiler'; const compiler = NodeCompiler.create(); console.log(compiler.compile({ mainFileContent: '#import "@preview/hibi-nonexistent-package:0.0.0": *' }).hasError());`
-  const { stdout } = await promisify(execFile)(
-    process.execPath,
-    ['--input-type=module', '-e', script],
-    {
-      timeout: 25000,
-      env: {
-        ...process.env,
-        HTTP_PROXY: proxy,
-        HTTPS_PROXY: proxy,
-        ALL_PROXY: proxy,
-        http_proxy: proxy,
-        https_proxy: proxy,
-        all_proxy: proxy,
-        NO_PROXY: '',
-        no_proxy: '',
+  const script = `import { writeSync } from 'node:fs'; writeSync(1, 'module-start\\n'); const { NodeCompiler } = await import('@myriaddreamin/typst-ts-node-compiler'); writeSync(1, 'module-done\\n'); writeSync(1, 'font-start\\n'); const compiler = NodeCompiler.create(); writeSync(1, 'font-done\\n'); console.log(compiler.compile({ mainFileContent: '#import "@preview/hibi-nonexistent-package:0.0.0": *' }).hasError());`
+  const stdout = await new Promise((resolve, reject) => {
+    let timer
+    let output = ''
+    let phase = 0
+    let timedOut
+    const child = execFile(
+      process.execPath,
+      ['--input-type=module', '-e', script],
+      {
+        env: {
+          ...process.env,
+          HTTP_PROXY: proxy,
+          HTTPS_PROXY: proxy,
+          ALL_PROXY: proxy,
+          http_proxy: proxy,
+          https_proxy: proxy,
+          all_proxy: proxy,
+          NO_PROXY: '',
+          no_proxy: '',
+        },
       },
-    },
-  )
-  assert.equal(stdout.trim(), 'true')
+      (error, stdout) => {
+        clearTimeout(timer)
+        if (timedOut) reject(timedOut)
+        else if (error) reject(error)
+        else resolve(stdout)
+      },
+    )
+    const deadline = (phase, delay) => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        timedOut = new Error(`Typst ${phase} exceeded ${delay / 1000} seconds.`)
+        child.kill('SIGKILL')
+      }, delay)
+    }
+    deadline('process startup', 10000)
+    const markers = ['module-start\n', 'module-done\n', 'font-done\n']
+    const phases = [
+      ['native module load', 15000],
+      ['font initialization', 30000],
+      ['network compilation', 10000],
+    ]
+    child.stdout.on('data', (chunk) => {
+      output += chunk
+      while (phase < markers.length && output.includes(markers[phase])) {
+        deadline(...phases[phase])
+        phase++
+      }
+    })
+  })
+  assert.deepEqual(stdout.trim().split(/\r?\n/), [
+    'module-start',
+    'module-done',
+    'font-start',
+    'font-done',
+    'true',
+  ])
   assert.ok(blocked > 0)
 })

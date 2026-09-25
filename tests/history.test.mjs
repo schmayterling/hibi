@@ -3,8 +3,9 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('local history snapshots on save, previews, and restores without overwriting disk', {
@@ -18,6 +19,7 @@ test('local history snapshots on save, previews, and restores without overwritin
   })
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
+      globalThis.historyWriteGate?.release()
       dialog.showMessageBox = async () => ({ response: 1 })
     })
     await app.close()
@@ -43,13 +45,18 @@ test('local history snapshots on save, previews, and restores without overwritin
       document.querySelector('.tiptap')?.getAttribute('contenteditable') ===
         'true',
   )
-  await rich.fill('saved change')
+  await replaceRichText(page, rich, 'saved change')
+  await waitForAsync(page, async () => {
+    const document = await window.hibi.getDocument()
+    return document.dirty && document.markdown === 'saved change'
+  })
   await pressShortcut(app, `${mod}+s`)
   await waitForAsync(
     page,
     async () => (await window.hibi.listVersions()).length === 2,
   )
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  assert.equal(await readFile(file, 'utf8'), 'saved change')
   const versions = await page.evaluate(() => window.hibi.listVersions())
   assert.equal(
     await page.evaluate((id) => window.hibi.previewVersion(id), versions[1].id),
@@ -101,7 +108,11 @@ test('local history snapshots on save, previews, and restores without overwritin
       document.querySelector('.tiptap')?.getAttribute('contenteditable') ===
         'true',
   )
-  await rich.fill('unsaved buffer')
+  await replaceRichText(page, rich, 'unsaved buffer')
+  await waitForAsync(page, async () => {
+    const document = await window.hibi.getDocument()
+    return document.dirty && document.markdown === 'unsaved buffer'
+  })
   await app.evaluate(({ dialog }) => {
     dialog.showMessageBox = async () => ({ response: 2 })
   })
@@ -116,4 +127,67 @@ test('local history snapshots on save, previews, and restores without overwritin
   await app.evaluate(({ dialog }) => {
     dialog.showMessageBox = async () => ({ response: 1 })
   })
+  // Hold the history commit so reads can prove they wait for the save.
+  await app.evaluate(() => {
+    const fs = process.getBuiltinModule('node:fs/promises')
+    const { syncBuiltinESMExports } = process.getBuiltinModule('node:module')
+    const rename = fs.rename
+    let release = () => {}
+    let reached = false
+    fs.rename = async (from, to) => {
+      if (String(to).endsWith('index.json')) {
+        reached = true
+        await new Promise((resolve) => {
+          release = resolve
+        })
+      }
+      return rename(from, to)
+    }
+    syncBuiltinESMExports()
+    globalThis.historyWriteGate = {
+      get reached() {
+        return reached
+      },
+      release: () => {
+        fs.rename = rename
+        syncBuiltinESMExports()
+        release()
+      },
+    }
+  })
+  await page.evaluate(() => {
+    window.historySave = window.hibi.saveDocument(false)
+  })
+  const started = performance.now()
+  while (!(await app.evaluate(() => globalThis.historyWriteGate.reached))) {
+    assert.ok(
+      performance.now() - started < 10000,
+      'history write did not pause',
+    )
+    await delay(20)
+  }
+  await page.evaluate((id) => {
+    window.historyList = window.hibi.listVersions()
+    window.historyPreview = window.hibi.previewVersion(id)
+  }, versions[1].id)
+  assert.deepEqual(
+    await page.evaluate(() =>
+      Promise.all(
+        [window.historyList, window.historyPreview].map((read) =>
+          Promise.race([
+            read.then(() => 'resolved'),
+            new Promise((resolve) => setTimeout(() => resolve('pending'), 250)),
+          ]),
+        ),
+      ),
+    ),
+    ['pending', 'pending'],
+  )
+  await app.evaluate(() => globalThis.historyWriteGate.release())
+  assert.equal((await page.evaluate(() => window.historySave)).dirty, false)
+  const [savedVersions, preview] = await page.evaluate(() =>
+    Promise.all([window.historyList, window.historyPreview]),
+  )
+  assert.equal(savedVersions.length, 3)
+  assert.equal(preview, 'original')
 })

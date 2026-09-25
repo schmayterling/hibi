@@ -1388,7 +1388,18 @@ export function useAddons(
         )
       )
         modalSwitch.current = { requested: id, previous: previousModal }
-      setStates(await window.hibi.setAddonEnabled(id, enabled))
+      const next = await window.hibi.setAddonEnabled(id, enabled)
+      if (
+        enabled &&
+        catalog.some(
+          ({ manifest }) =>
+            manifest.id === id &&
+            manifest.startup === 'background' &&
+            !manifest.activation,
+        )
+      )
+        setRequested((current) => new Set([...current, id]))
+      setStates(next)
     } catch (error) {
       latest.current.error(error)
     }
@@ -1409,6 +1420,11 @@ export function useAddons(
   async function remove(id: string) {
     try {
       await window.hibi.removeAddon(id)
+      setRequested((current) => {
+        const next = new Set(current)
+        next.delete(id)
+        return next
+      })
       const [states, packages] = await Promise.all([
         window.hibi.getAddonStates(),
         window.hibi.getInstalledAddons(),

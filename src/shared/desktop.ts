@@ -250,6 +250,18 @@ export type DesktopApi = {
       import('./workspace').WorkspaceTextCreation
     >
   >
+  updateWorkspaceText: (
+    owner: string,
+    target: import('./foundation-contracts').WorkspaceTarget,
+    path: string,
+    expectedVersion: string,
+    markdown: string,
+    options: import('./workspace').WorkspaceTextUpdateOptions,
+  ) => Promise<
+    import('./workspace').WorkspaceFileResult<
+      import('./workspace').WorkspaceTextUpdate
+    >
+  >
   queryWorkspaceReferences: (
     request: import('./workspace-query').WorkspaceReferenceQueryRequest,
   ) => Promise<

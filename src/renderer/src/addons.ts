@@ -1366,6 +1366,17 @@ export function useAddons(
                 disposed
                   ? Promise.reject(new Error('This addon has stopped.'))
                   : window.hibi.createWorkspaceText(id, target, path, markdown),
+              updateText: (target, path, expectedVersion, markdown, options) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.updateWorkspaceText(
+                      id,
+                      target,
+                      path,
+                      expectedVersion,
+                      markdown,
+                      options,
+                    ),
               query: (request) =>
                 disposed
                   ? Promise.reject(new Error('This addon has stopped.'))

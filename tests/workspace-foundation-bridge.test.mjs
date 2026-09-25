@@ -43,15 +43,55 @@ test('workspace addon bridge keeps scoped reads, creates, and changes together',
       window.hibi.readWorkspaceText('markdown', captured, 'existing.md'),
     target,
   )
-  assert.deepEqual(read, {
-    ok: true,
-    value: {
+  assert.equal(read.ok, true)
+  assert.deepEqual(
+    { ...read.value, version: undefined },
+    {
       target,
       path: 'existing.md',
       markdown: '# existing',
+      version: undefined,
       source: 'disk',
     },
-  })
+  )
+  assert.match(read.value.version, /^[a-f0-9]{64}$/)
+  const withoutReset = await page.evaluate(
+    ({ target, version }) =>
+      window.hibi.updateWorkspaceText(
+        'markdown',
+        target,
+        'existing.md',
+        version,
+        '# changed',
+      ),
+    { target, version: read.value.version },
+  )
+  assert.equal(withoutReset.code, 'unsupported')
+  assert.equal(
+    await readFile(join(workspace, 'existing.md'), 'utf8'),
+    '# existing',
+  )
+  const updated = await page.evaluate(
+    ({ target, version }) =>
+      window.hibi.updateWorkspaceText(
+        'markdown',
+        target,
+        'existing.md',
+        version,
+        '# changed',
+        { allowMetadataReset: true },
+      ),
+    { target, version: read.value.version },
+  )
+  if (process.platform === 'win32') assert.equal(updated.code, 'unsupported')
+  else {
+    assert.equal(updated.ok, true)
+    assert.equal(updated.value.metadataPreserved, false)
+    assert.equal(
+      await readFile(join(workspace, 'existing.md'), 'utf8'),
+      '# changed',
+    )
+  }
   const created = await page.evaluate(
     (captured) =>
       window.hibi.createWorkspaceText('markdown', captured, 'new.md', '# new'),

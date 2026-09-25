@@ -14,6 +14,7 @@ export const WORKSPACE_CHANNELS = {
   changeSnapshot: 'workspace:change-snapshot',
   readText: 'workspace:read-text',
   createText: 'workspace:create-text',
+  updateText: 'workspace:update-text',
   queryReferences: 'workspace:query-references',
   listChanged: 'workspace:list-changed',
   action: 'workspace:action',

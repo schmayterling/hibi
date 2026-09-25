@@ -1,4 +1,4 @@
-import { resolve } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'electron-vite'
 import { analysisBundles, analysisPreload } from './scripts/analysis-bundles'
@@ -10,6 +10,7 @@ import {
 import { startupBundle } from './scripts/startup-bundle'
 
 const diagnosticArtifacts = diagnosticsBuild()
+const mainOutput = resolve('out/main')
 
 export default defineConfig({
   main: {
@@ -25,7 +26,17 @@ export default defineConfig({
       commonjsOptions: { ignore: ['@aws-sdk/client-s3'] },
       rollupOptions: {
         watch: {
-          chokidar: { ignored: resolve('out/main/**').replaceAll('\\', '/') },
+          chokidar: {
+            ignored: (path: string) => {
+              const part = relative(mainOutput, path)
+              return (
+                part === '' ||
+                (part !== '..' &&
+                  !part.startsWith(`..${sep}`) &&
+                  !isAbsolute(part))
+              )
+            },
+          },
         },
         input: {
           index: resolve('src/main/index.ts'),

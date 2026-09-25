@@ -9,6 +9,38 @@ type Target = {
 }
 
 const targets = new Map<string, Target>()
+const selectionCaptures = new Set<{
+  capture: () => EditorInteractionRequest | null
+  current: (position: number) => EditorInteractionRequest | null
+}>()
+
+export function registerEditorSelectionCapture(
+  capture: () => EditorInteractionRequest | null,
+  current: (position: number) => EditorInteractionRequest | null,
+) {
+  const entry = { capture, current }
+  selectionCaptures.add(entry)
+  return () => selectionCaptures.delete(entry)
+}
+
+export function captureEditorSelectionCommandTarget(
+  base: CommandExecutionContext,
+) {
+  if (!base.view) return null
+  for (const entry of selectionCaptures) {
+    const request = entry.capture()
+    if (
+      !request ||
+      request.view.viewId !== base.view.viewId ||
+      request.view.viewGeneration !== base.view.viewGeneration
+    )
+      continue
+    return captureEditorCommandTarget(base, request, () =>
+      entry.current(request.position),
+    )
+  }
+  return null
+}
 
 export function captureEditorCommandTarget(
   base: CommandExecutionContext,
@@ -18,7 +50,6 @@ export function captureEditorCommandTarget(
   const targetId = crypto.randomUUID()
   const context: CommandExecutionContext = {
     ...base,
-    source: 'menu',
     document: {
       documentId: request.view.documentId,
       documentGeneration: request.view.documentGeneration,
@@ -59,7 +90,7 @@ export function isEditorCommandTargetCurrent(context: CommandExecutionContext) {
   if (!target) return false
   const captured = target.context
   if (
-    context.source !== 'menu' ||
+    context.source !== captured.source ||
     context.workspace?.workspaceId !== captured.workspace?.workspaceId ||
     context.workspace?.workspaceGeneration !==
       captured.workspace?.workspaceGeneration ||

@@ -24,7 +24,10 @@ export type ToolbarItem = {
   hidden?: boolean
   pressed?: boolean
   when?: 'normal' | 'source'
-  onClick: () => void | Promise<void>
+  /** Local command id registered with this addon's commands API. */
+  commandId?: string
+  /** Legacy action. Provide this or commandId, not both. */
+  onClick?: () => void | Promise<void>
 }
 export type ToolbarHandle = {
   update: (changes: Partial<Omit<ToolbarItem, 'id'>>) => void

@@ -37,7 +37,7 @@ export default defineAddon({
       id: 'browse',
       label: 'Browse tags',
       icon: Tags,
-      onClick: () => browse(),
+      commandId: 'browse',
     })
     const status = context.statusBar.register({
       id: 'tags',

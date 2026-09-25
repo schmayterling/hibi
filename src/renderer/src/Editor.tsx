@@ -69,6 +69,7 @@ import { documentProjections } from './document-projections'
 import { documentRuntime } from './document-runtime'
 import { certifyVisualEcho } from './document-shell'
 import { type CursorSettings, EditorCursor } from './EditorCursor'
+import { registerEditorSelectionCapture } from './editor-command-targets'
 import { emitEditorKeyEvent } from './editor-events'
 import {
   hasEditorInteractionProviders,
@@ -999,7 +1000,10 @@ export function MarkdownEditor({
     const view = editor.view
     const serialize = markdownSerializer(manager, true)
     const scope = documentEdits.scope(() => false)
-    const capture = (position: number): EditorInteractionRequest | null => {
+    const capture = (
+      position: number,
+      allowBlurred = false,
+    ): EditorInteractionRequest | null => {
       const context = completionContext.current
       if (
         editor.isDestroyed ||
@@ -1011,7 +1015,7 @@ export function MarkdownEditor({
         markdownSyntax.version() !== context.syntaxVersion ||
         !editor.isEditable ||
         view.composing ||
-        !view.hasFocus() ||
+        (!view.hasFocus() && !allowBlurred) ||
         !richSourceCurrent(editor) ||
         !Number.isSafeInteger(position) ||
         position < 0 ||
@@ -1145,12 +1149,17 @@ export function MarkdownEditor({
     }
     const unsubscribe = onEditorInteractionProvidersChanged(refresh)
     refresh()
+    const unregisterSelection = registerEditorSelectionCapture(
+      () => capture(view.state.selection.head, true),
+      (position) => capture(position, true),
+    )
     const invalidate = () =>
       view.dom.dispatchEvent(new Event('hibi:editor-interactions-invalidate'))
     editor.on('transaction', invalidate)
     return () => {
       disposed = true
       unsubscribe()
+      unregisterSelection()
       editor.off('transaction', invalidate)
       detach()
       scope.dispose()

@@ -1,3 +1,4 @@
+import type { CommandExecutionContext } from '../../shared/foundation-contracts'
 import { performanceDiagnostics } from '../../ui/diagnostics'
 import type {
   ToolbarApi,
@@ -38,8 +39,11 @@ try {
 } catch {
   /* Keep defaults when stored preferences cannot be read. */
 }
-const items = new Map<string, ToolbarItem>()
-let snapshot = { preferences, items: [] as ToolbarItem[] }
+type RegisteredToolbarItem = ToolbarItem & {
+  onClick: (context?: CommandExecutionContext) => Promise<void>
+}
+const items = new Map<string, RegisteredToolbarItem>()
+let snapshot = { preferences, items: [] as RegisteredToolbarItem[] }
 const listeners = new Set<() => void>()
 let batchDepth = 0
 let pending = false
@@ -120,7 +124,14 @@ export const toolbar = {
     order.splice(order.indexOf(target) + Number(after), 0, id)
     setPreferences({ order })
   },
-  scope(owner: string, onError: (error: unknown) => void) {
+  scope(
+    owner: string,
+    onError: (error: unknown) => void,
+    runCommand?: (
+      commandId: string,
+      context?: CommandExecutionContext,
+    ) => Promise<void>,
+  ) {
     let disposed = false
     const owned = new Set<() => void>()
     const api: ToolbarApi = {
@@ -139,17 +150,30 @@ export const toolbar = {
           throw new Error(`duplicate or invalid toolbar item: ${id}`)
         let active = true
         let item = initial
+        const validate = (next: ToolbarItem) => {
+          if (
+            (next.commandId !== undefined &&
+              (!/^[a-z][a-z0-9-]*$/.test(next.commandId) || !runCommand)) ||
+            (next.commandId === undefined) ===
+              (typeof next.onClick !== 'function')
+          )
+            throw new Error(`invalid toolbar action: ${id}`)
+        }
+        validate(item)
         const render = () => {
           items.set(id, {
             ...item,
             id,
-            async onClick() {
+            async onClick(context?: CommandExecutionContext) {
               if (!active || disposed || item.disabled) return
               try {
                 await performanceDiagnostics.measure(
                   owner,
                   `toolbar:${item.id}`,
-                  () => item.onClick(),
+                  () =>
+                    item.commandId
+                      ? runCommand?.(item.commandId, context)
+                      : item.onClick?.(),
                 )
               } catch (error) {
                 onError(error)
@@ -177,7 +201,9 @@ export const toolbar = {
               )
             )
               return
-            item = { ...item, ...changes }
+            const next = { ...item, ...changes }
+            validate(next)
+            item = next
             render()
           },
         }

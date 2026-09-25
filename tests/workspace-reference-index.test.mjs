@@ -142,3 +142,30 @@ test('lazy tag, property, heading and path queries invalidate changed notes', ()
     { depth: 1, text: 'Changed' },
   ])
 })
+
+test('oversized frontmatter never reaches reference or tag parsers', () => {
+  let parses = 0
+  const index = new WorkspaceReferenceIndex((source) => {
+    parses++
+    return noteReferences(source)
+  })
+  index.apply(workspace, [
+    page(
+      'a.md',
+      `---\nlong: ${'x'.repeat(100_000)}\n---\n# Heading [[b]] #work`,
+    ),
+    page('b.md'),
+  ])
+  assert.equal(parses, 1)
+  assert.equal(index.isComplete(), false)
+  assert.deepEqual(index.links('a.md', 0, 10).items, [])
+  assert.deepEqual(index.tagged('work', 0, 10).items, [])
+  assert.equal(index.property('long', 'x', 0, 10).complete, false)
+  assert.equal(index.headings('a.md', 0, 10).complete, false)
+  index.apply(workspace, [page('a.md', '# Heading [[b]] #work'), page('b.md')])
+  assert.equal(index.isComplete(), true)
+  assert.deepEqual(index.links('a.md', 0, 10).items, ['b.md'])
+  index.apply(workspace, [page('a.md', '---\n[B](b.md)'), page('b.md')])
+  assert.equal(index.isComplete(), true)
+  assert.deepEqual(index.links('a.md', 0, 10).items, ['b.md'])
+})

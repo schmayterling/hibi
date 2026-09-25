@@ -8,6 +8,7 @@ import {
   wikiTarget,
 } from '../shared/note-links.ts'
 import {
+  metadataFrontmatterWithinLimit,
   type NoteHeading,
   noteHeadings,
   noteProperties,
@@ -20,6 +21,7 @@ type References = ReturnType<typeof noteReferences>
 type DocumentLinks = {
   markdown: string
   references: References
+  referenceComplete: boolean
   targets: ReadonlySet<string>
   tags?: readonly string[]
   properties?: ReturnType<typeof noteProperties>
@@ -40,6 +42,7 @@ export class WorkspaceReferenceIndex {
   private paths = new Set<string>()
   private basenames = new Map<string, string[]>()
   private tagPaths: Map<string, Set<string>> | null = null
+  private complete = true
   private readonly parse: typeof noteReferences
 
   constructor(parse = noteReferences) {
@@ -53,6 +56,7 @@ export class WorkspaceReferenceIndex {
     this.paths = new Set()
     this.basenames = new Map()
     this.tagPaths = null
+    this.complete = true
   }
 
   apply(
@@ -80,15 +84,19 @@ export class WorkspaceReferenceIndex {
         continue
       }
       const markdownSource = isMarkdownDocument(page.path)
+      const referenceComplete =
+        !markdownSource || metadataFrontmatterWithinLimit(page.markdown)
       next.set(page.path, {
         markdown: page.markdown,
-        references: markdownSource
-          ? this.parse(page.markdown)
-          : { links: [], wikilinks: [] },
+        references:
+          markdownSource && referenceComplete
+            ? this.parse(page.markdown)
+            : { links: [], wikilinks: [] },
+        referenceComplete,
         targets: new Set(),
       })
       changed.add(page.path)
-      if (markdownSource) parsed++
+      if (markdownSource && referenceComplete) parsed++
     }
     const pathsChanged =
       !sameWorkspace ||
@@ -134,6 +142,9 @@ export class WorkspaceReferenceIndex {
       }
     }
     this.documents = next
+    this.complete = [...next.values()].every(
+      (document) => document.referenceComplete,
+    )
     this.paths = paths
     this.basenames = basenames
     this.target = target
@@ -142,6 +153,10 @@ export class WorkspaceReferenceIndex {
 
   has(path: string): boolean {
     return this.documents.has(path)
+  }
+
+  isComplete(): boolean {
+    return this.complete
   }
 
   links(path: string, offset: number, limit: number): ReferencePage {
@@ -154,19 +169,20 @@ export class WorkspaceReferenceIndex {
 
   tagged(tag: string, offset: number, limit: number): ReferencePage {
     if (!this.tagPaths) {
-      this.tagPaths = new Map()
+      const nextTags = new Map<string, Set<string>>()
       for (const [path, document] of this.documents) {
-        if (!isMarkdownDocument(path)) continue
+        if (!isMarkdownDocument(path) || !document.referenceComplete) continue
         document.tags ??= noteTags(document.markdown)
         for (const name of document.tags) {
-          let paths = this.tagPaths.get(name)
+          let paths = nextTags.get(name)
           if (!paths) {
             paths = new Set()
-            this.tagPaths.set(name, paths)
+            nextTags.set(name, paths)
           }
           paths.add(path)
         }
       }
+      this.tagPaths = nextTags
     }
     return this.page(this.tagPaths.get(tag) ?? [], offset, limit)
   }

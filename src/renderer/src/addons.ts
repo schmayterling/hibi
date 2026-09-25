@@ -107,7 +107,10 @@ type Environment = Omit<
   | 'globalShortcuts'
 > & {
   openDependencySettings: () => void
-  workspace: Omit<AddonContext['workspace'], 'registerDecorations'>
+  workspace: Pick<
+    AddonContext['workspace'],
+    'index' | 'snapshot' | 'get' | 'open' | 'openFile'
+  >
   invoke: (id: string, method: string, input?: unknown) => Promise<unknown>
   error: (error: unknown) => void
   isBusy: () => boolean
@@ -1256,6 +1259,35 @@ export function useAddons(
                       ),
                     )
                   : latest.current.workspace.snapshot(),
+              changeSnapshot: () =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.getWorkspaceChangeSnapshot(),
+              async subscribeChanges(listener) {
+                if (disposed) throw new Error('This addon has stopped.')
+                const subscription =
+                  await window.hibi.subscribeWorkspaceChanges((event) => {
+                    if (!disposed) listener(event)
+                  })
+                if (disposed) {
+                  subscription.dispose()
+                  throw new Error('This addon has stopped.')
+                }
+                const dispose = () => {
+                  subscription.dispose()
+                  cleanups.delete(dispose)
+                }
+                cleanups.add(dispose)
+                return { snapshot: subscription.snapshot, dispose }
+              },
+              readText: (target, path) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.readWorkspaceText(target, path),
+              createText: (target, path, markdown) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.createWorkspaceText(target, path, markdown),
               index: () =>
                 disposed
                   ? Promise.reject(

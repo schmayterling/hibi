@@ -209,6 +209,29 @@ export type DesktopApi = {
   invokeAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   queryAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   getWorkspace: () => Promise<WorkspaceState | null>
+  getWorkspaceChangeSnapshot: () => Promise<
+    import('./workspace').WorkspaceStreamSnapshot
+  >
+  subscribeWorkspaceChanges: (
+    callback: import('./workspace').WorkspaceChangeListener,
+  ) => Promise<import('./workspace').WorkspaceChangeSubscription>
+  readWorkspaceText: (
+    target: import('./foundation-contracts').WorkspaceTarget,
+    path: string,
+  ) => Promise<
+    import('./workspace').WorkspaceFileResult<
+      import('./workspace').WorkspaceTextRead
+    >
+  >
+  createWorkspaceText: (
+    target: import('./foundation-contracts').WorkspaceTarget,
+    path: string,
+    markdown: string,
+  ) => Promise<
+    import('./workspace').WorkspaceFileResult<
+      import('./workspace').WorkspaceTextCreation
+    >
+  >
   getWorkspaceSettings: () => Promise<
     import('./workspace-settings').WorkspaceSettings
   >

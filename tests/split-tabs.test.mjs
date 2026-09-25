@@ -114,6 +114,34 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   assert.equal(await right.isVisible(), true)
   await page.setViewportSize({ width: 1200, height: 700 })
   assert.equal(await left.isVisible(), true)
+  await app.evaluate(({ ipcMain }) => {
+    const attach = ipcMain._invokeHandlers.get('media:attach')
+    if (!attach) throw new Error('Media attachment handler is unavailable.')
+    globalThis.splitAttachCalls = 0
+    ipcMain.removeHandler('media:attach')
+    ipcMain.handle('media:attach', (...args) => {
+      globalThis.splitAttachCalls++
+      return attach(...args)
+    })
+  })
+  await left.evaluate((element) => {
+    const transfer = new DataTransfer()
+    transfer.items.add(new File(['image'], 'photo.png', { type: 'image/png' }))
+    element.dispatchEvent(
+      new DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: transfer,
+      }),
+    )
+  })
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  )
+  assert.equal(await app.evaluate(() => globalThis.splitAttachCalls), 0)
   await page.evaluate(() => {
     window.splitNodes = {
       left: document.querySelector('.editor-page[data-side="left"] .tiptap'),

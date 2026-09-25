@@ -148,6 +148,15 @@ test('rich codec attachments invalidate plain certificates and source outline as
     )
   })
   await page.getByRole('button', { name: 'Back to app', exact: true }).click()
+  await page.locator('.settings-screen').waitFor({ state: 'hidden' })
+  await page.waitForFunction(() => {
+    const surface = document.querySelector('.editor-surface')
+    return (
+      surface &&
+      !surface.inert &&
+      surface.querySelector('.tiptap')?.editor?.isEditable
+    )
+  })
   await page.evaluate(() => {
     const editor = document.querySelector('.tiptap').editor
     editor.commands.setTextSelection(editor.state.doc.content.size - 1)

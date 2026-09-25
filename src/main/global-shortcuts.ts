@@ -92,7 +92,10 @@ export class GlobalShortcuts {
     if (
       previous?.accelerator.toLowerCase() === next.accelerator.toLowerCase()
     ) {
-      this.registrations.set(id, next)
+      this.registrations.set(id, {
+        ...next,
+        accelerator: previous.accelerator,
+      })
       return
     }
     if (

@@ -669,6 +669,18 @@ export type AddonContext = {
         import('../shared/workspace').WorkspaceTextCreation
       >
     >
+    /** Replace a closed file using its disk version and an explicit metadata reset. */
+    updateText: (
+      target: import('../shared/foundation-contracts').WorkspaceTarget,
+      path: string,
+      expectedVersion: string,
+      markdown: string,
+      options: import('../shared/workspace').WorkspaceTextUpdateOptions,
+    ) => Promise<
+      import('../shared/workspace').WorkspaceFileResult<
+        import('../shared/workspace').WorkspaceTextUpdate
+      >
+    >
     /** Bounded metadata and text queries over one captured workspace generation. */
     query: (
       request: import('../shared/workspace-query').WorkspaceReferenceQueryRequest,

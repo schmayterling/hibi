@@ -171,7 +171,11 @@ import {
   workspaceRoot,
 } from './workspace'
 import { workspaceAction } from './workspace-actions'
-import { createWorkspaceText, readWorkspaceText } from './workspace-files'
+import {
+  createWorkspaceText,
+  readWorkspaceText,
+  updateWorkspaceText,
+} from './workspace-files'
 import {
   getWorkspaceSettings,
   openStartupWorkspace,
@@ -348,6 +352,11 @@ const addonFileUnavailable = () =>
     code: 'disposed',
     message: 'This addon is no longer active.',
   }) as const
+function fileOwner(owner: unknown) {
+  if (typeof owner !== 'string') return null
+  const generation = getAddonActivationGeneration(owner)
+  return generation === null ? null : { id: owner, generation }
+}
 function storageGeneration(request: unknown): number {
   if (!request || typeof request !== 'object' || Array.isArray(request))
     throw new Error('Invalid addon storage request.')
@@ -1309,16 +1318,17 @@ if (!app.requestSingleInstanceLock()) {
       handle(
         WORKSPACE_CHANNELS.readText,
         (event, owner: unknown, target: unknown, path: unknown) => {
-          const id = typeof owner === 'string' ? owner : null
-          const generation =
-            id === null ? null : getAddonActivationGeneration(id)
-          if (id === null || generation === null) return addonFileUnavailable()
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
           return readAfterFileOperation(event, async () => {
             const result = await readWorkspaceText(
               target as WorkspaceTarget,
               path,
             )
-            return isAddonActivationCurrent(id, generation)
+            return isAddonActivationCurrent(
+              activation.id,
+              activation.generation,
+            )
               ? result
               : addonFileUnavailable()
           })
@@ -1333,13 +1343,37 @@ if (!app.requestSingleInstanceLock()) {
           path: unknown,
           markdown: unknown,
         ) => {
-          const id = typeof owner === 'string' ? owner : null
-          const generation =
-            id === null ? null : getAddonActivationGeneration(id)
-          if (id === null || generation === null) return addonFileUnavailable()
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
           return runFileOperation(event, () =>
             createWorkspaceText(target as WorkspaceTarget, path, markdown, () =>
-              isAddonActivationCurrent(id, generation),
+              isAddonActivationCurrent(activation.id, activation.generation),
+            ),
+          )
+        },
+      )
+      handle(
+        WORKSPACE_CHANNELS.updateText,
+        (
+          event,
+          owner: unknown,
+          target: unknown,
+          path: unknown,
+          expectedVersion: unknown,
+          markdown: unknown,
+          options: unknown,
+        ) => {
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
+          return runFileOperation(event, () =>
+            updateWorkspaceText(
+              target as WorkspaceTarget,
+              path,
+              expectedVersion,
+              markdown,
+              options,
+              () =>
+                isAddonActivationCurrent(activation.id, activation.generation),
             ),
           )
         },

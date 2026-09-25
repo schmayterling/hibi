@@ -336,6 +336,23 @@ if (process.isMainFrame) {
         path,
         markdown,
       ),
+    updateWorkspaceText: (
+      owner,
+      target,
+      path,
+      expectedVersion,
+      markdown,
+      options,
+    ) =>
+      ipcRenderer.invoke(
+        WORKSPACE_CHANNELS.updateText,
+        owner,
+        target,
+        path,
+        expectedVersion,
+        markdown,
+        options,
+      ),
     queryWorkspaceReferences: (request) =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.queryReferences, request),
     listImporters: () => ipcRenderer.invoke(IMPORT_CHANNELS.list),

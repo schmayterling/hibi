@@ -479,6 +479,7 @@ export function MarkdownEditor({
       extensions,
       content: '',
       contentType: 'markdown',
+      editable: false,
       autofocus: false,
       injectCSS: false,
       shouldRerenderOnTransaction: false,

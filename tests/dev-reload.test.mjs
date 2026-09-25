@@ -301,18 +301,114 @@ dialog.showMessageBox = (...args) => {
     false,
   )
   async function clearDraft(expected) {
-    await page.waitForFunction(
-      (expected) =>
-        document.querySelector('[role="textbox"][aria-label="Document editor"]')
-          ?.textContent === expected,
-      expected,
-    )
+    await page
+      .waitForFunction((expected) => {
+        const editor = document.querySelector(
+          '[role="textbox"][aria-label="Document editor"]',
+        )
+        const panel = editor?.closest('.editor-page')
+        return (
+          editor?.textContent === expected &&
+          editor.getAttribute('contenteditable') === 'true' &&
+          editor.getAttribute('aria-readonly') === 'false' &&
+          panel?.getAttribute('aria-busy') === 'false' &&
+          !panel.hasAttribute('inert')
+        )
+      }, expected)
+      .catch(async (error) => {
+        const state = await page.evaluate(async () => {
+          const editor = document.querySelector(
+            '[role="textbox"][aria-label="Document editor"]',
+          )
+          const panel = editor?.closest('.editor-page')
+          return {
+            native: await window.hibi.getDocument(),
+            editor: editor?.outerHTML.slice(0, 300),
+            busy: panel?.getAttribute('aria-busy'),
+            inert: panel?.hasAttribute('inert'),
+          }
+        })
+        assert.fail(
+          `draft editor never became ready: ${error.message}\n${JSON.stringify(state)}`,
+        )
+      })
+    await page.evaluate(() => {
+      const trace = {
+        nodes: new WeakMap(),
+        next: 0,
+        events: [],
+      }
+      window.__devReloadInputTrace = trace
+      for (const type of ['beforeinput', 'input'])
+        document.addEventListener(
+          type,
+          (event) => {
+            if (
+              !(event.target instanceof Element) ||
+              !event.target.closest('[aria-label="Document editor"]')
+            )
+              return
+            const record = {
+              type,
+              inputType: event.inputType,
+              prevented: event.defaultPrevented,
+            }
+            trace.events.push(record)
+            if (type === 'beforeinput')
+              queueMicrotask(() => {
+                record.prevented = event.defaultPrevented
+              })
+          },
+          true,
+        )
+    })
+    const inspect = () =>
+      page.evaluate(async () => {
+        const editor = document.querySelector(
+          '[role="textbox"][aria-label="Document editor"]',
+        )
+        const panel = editor?.closest('.editor-page')
+        const trace = window.__devReloadInputTrace
+        if (editor && trace && !trace.nodes.has(editor))
+          trace.nodes.set(editor, ++trace.next)
+        const native = await window.hibi.getDocument()
+        return {
+          pageEpoch: performance.timeOrigin,
+          editorNode: editor && trace?.nodes.get(editor),
+          native: {
+            markdown: native.markdown,
+            contentVersion: native.contentVersion,
+            dirty: native.dirty,
+          },
+          editor: {
+            text: editor?.textContent,
+            html: editor?.innerHTML,
+            contenteditable: editor?.getAttribute('contenteditable'),
+            readonly: editor?.getAttribute('aria-readonly'),
+            connected: editor?.isConnected,
+          },
+          panel: {
+            busy: panel?.getAttribute('aria-busy'),
+            inert: panel?.hasAttribute('inert'),
+          },
+          sourceReady: document
+            .querySelector('.editor-panes')
+            ?.getAttribute('data-source-ready'),
+          notices: [...document.querySelectorAll('.document-notice')].map(
+            (notice) => notice.textContent,
+          ),
+          events: trace?.events.slice(-8) ?? [],
+        }
+      })
+    const before = await inspect()
     const editor = page.getByRole('textbox', {
       name: 'Document editor',
       exact: true,
     })
     await editor.fill('')
+    const afterFill = await inspect()
     await page.evaluate(() => window.hibi.flushDocumentChanges())
+    const afterFlush = await inspect()
     try {
       await waitForAsync(page, async () => {
         const document = await window.hibi.getDocument()
@@ -323,28 +419,9 @@ dialog.showMessageBox = (...args) => {
         )
       })
     } catch (error) {
-      const state = await page.evaluate(async () => {
-        const editor = document.querySelector(
-          '[role="textbox"][aria-label="Document editor"]',
-        )
-        return {
-          native: await window.hibi.getDocument(),
-          editor: {
-            text: editor?.textContent,
-            html: editor?.innerHTML,
-            contenteditable: editor?.getAttribute('contenteditable'),
-            readonly: editor?.getAttribute('aria-readonly'),
-          },
-          sourceReady: document
-            .querySelector('.editor-panes')
-            ?.getAttribute('data-source-ready'),
-          notices: [...document.querySelectorAll('.document-notice')].map(
-            (notice) => notice.textContent,
-          ),
-        }
-      })
+      const state = await inspect()
       assert.fail(
-        `draft did not clear: ${error.message}\n${JSON.stringify(state)}`,
+        `draft did not clear: ${error.message}\n${JSON.stringify({ before, afterFill, afterFlush, state })}`,
       )
     }
   }

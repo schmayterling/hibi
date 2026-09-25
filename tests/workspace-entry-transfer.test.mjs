@@ -6,6 +6,7 @@ import {
   rename,
   rm,
   rmdir,
+  symlink,
   unlink,
   writeFile,
 } from 'node:fs/promises'
@@ -60,8 +61,40 @@ test('folder copy still copies saved files', async (t) => {
   const destination = join(root, 'destination')
   await mkdir(source)
   await writeFile(join(source, 'note.md'), 'original')
+  await mkdir(join(source, 'nested'))
+  await writeFile(join(source, 'nested', 'child.md'), 'nested')
+  await mkdir(join(source, 'empty'))
   await copyEntry(source, destination, true, () => true)
   assert.equal(await readFile(join(destination, 'note.md'), 'utf8'), 'original')
+  assert.equal(
+    await readFile(join(destination, 'nested', 'child.md'), 'utf8'),
+    'nested',
+  )
+  await rmdir(join(destination, 'empty'))
+})
+
+test('folder copy rejects a source swapped for a symbolic link', async (t) => {
+  if (process.platform === 'win32')
+    return t.skip('Windows symbolic links require privileges')
+  const root = await mkdtemp(join(tmpdir(), 'hibi-folder-copy-source-swap-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const source = join(root, 'source')
+  const saved = join(root, 'saved')
+  const destination = join(root, 'destination')
+  await mkdir(source)
+  await writeFile(join(source, 'note.md'), 'original')
+  await assert.rejects(
+    copyEntry(source, destination, true, async () => {
+      await rename(source, saved)
+      await symlink(saved, source, 'dir')
+      return true
+    }),
+    /Symbolic links cannot be copied/,
+  )
+  assert.equal(await readFile(join(saved, 'note.md'), 'utf8'), 'original')
+  await assert.rejects(readFile(join(destination, 'note.md')), {
+    code: 'ENOENT',
+  })
 })
 
 test('file move creates its destination exclusively', async (t) => {

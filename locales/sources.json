@@ -5297,6 +5297,9 @@
   "b0d13165bbc2": [
     "src/renderer/src/markdown-syntax.ts"
   ],
+  "77422a358e59": [
+    "src/renderer/src/toolbar.ts"
+  ],
   "1e0534e54772": [
     "src/addons/keybeats/manifest.ts"
   ],

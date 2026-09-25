@@ -56,12 +56,14 @@ test('proof package uses public addon surface and bounds editor intents', async 
       from: 0,
       to: 3,
     })
-    if (editor === 'source')
-      assert.equal(
-        completionItems(request('[[pr'))[0].insertText,
-        '[[proof-note]]',
-      )
-    else assert.deepEqual(completionItems(request('[[pr')), [])
+    assert.equal(
+      completionItems(request('[[pr'))[0].insertText,
+      '[[proof-note]]',
+    )
+    assert.equal(
+      completionItems(request('@pr'))[0].insertText,
+      '[[proof-note]]',
+    )
     assert.deepEqual(completionItems(request('ordinary text')), [])
     assert.equal(
       hoverInfo({ selectedText: '#proof', before: '', after: '' }).label,
@@ -464,6 +466,25 @@ test('installed proof addon migrates state and composes captured edits, queries,
   await rich.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
   await page.waitForFunction(
     async () => !(await window.hibi.getDocument())?.markdown.includes('#proof'),
+  )
+  await rich.locator('p').last().click()
+  await rich.press('End')
+  await page.keyboard.type(' @pr')
+  await richMenu.getByRole('option', { name: /\[\[proof-note\]\]/ }).waitFor()
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(async () =>
+    (await window.hibi.getDocument())?.markdown.includes('[[proof-note]]'),
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown.includes(
+      '[[proof-note|proof-note]]',
+    ),
+    false,
+  )
+  await rich.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
+  await page.waitForFunction(
+    async () =>
+      !(await window.hibi.getDocument())?.markdown.includes('[[proof-note]]'),
   )
 
   await page.getByRole('button', { name: 'Source view', exact: true }).click()

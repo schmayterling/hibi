@@ -2,7 +2,7 @@
 
 # DocumentPreviewProps
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L324)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L338)
 
 <details>
 <summary>Declaration</summary>
@@ -30,7 +30,7 @@ type DocumentPreviewProps = {
 
 ### value
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L325)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L339)
 
 ```typescript
 value: string
@@ -38,7 +38,7 @@ value: string
 
 ### document
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L326)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L340)
 
 ```typescript
 document: Readonly<import('../shared/desktop').DocumentState>
@@ -48,7 +48,7 @@ Related: [DocumentState](DocumentState.md).
 
 ### toolbar
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L328)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L342)
 
 Host-owned pinned action row. Render shared PreviewActions into this target.
 

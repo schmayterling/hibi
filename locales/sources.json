@@ -38,11 +38,17 @@
   "b107fad60f86": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
+  "a1700d8ffdda": [
+    "src/main/workspace-files.ts"
+  ],
   "d9ee2b8b5fe8": [
     "src/main/workspace-actions.ts"
   ],
   "6417304a8a8b": [
     "src/shared/document-journal.ts"
+  ],
+  "036ff1df1f61": [
+    "src/main/workspace-files.ts"
   ],
   "db042b1a7322": [
     "src/main/import-files.ts"
@@ -126,6 +132,9 @@
   "6a2133724e54": [
     "src/main/addon-download.ts"
   ],
+  "4b392ad897a3": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
+  ],
   "9939894c9461": [
     "src/main/sideload.ts"
   ],
@@ -139,6 +148,7 @@
     "src/renderer/src/settings-categories.ts"
   ],
   "af3185c7197e": [
+    "src/main/index.ts",
     "src/renderer/src/settings-pages.ts"
   ],
   "7e778f24c85b": [
@@ -150,6 +160,12 @@
   ],
   "b1295e49f642": [
     "src/addons/git/Panel.tsx"
+  ],
+  "3b63ed958363": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
+  ],
+  "4fe47287172e": [
+    "src/main/addon-hotkeys.ts"
   ],
   "f94cb81af39b": [
     "src/renderer/src/CodeSyntaxSettings.tsx"
@@ -371,6 +387,7 @@
     "src/main/dependencies.ts",
     "src/main/document.ts",
     "src/main/sideload.ts",
+    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/FormattingToolbar.tsx",
     "src/renderer/src/ImportDialog.tsx",
     "src/renderer/src/VersionHistory.tsx"
@@ -379,6 +396,7 @@
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "cb141fb6cd63": [
+    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "d353a99eb455": [
@@ -466,6 +484,9 @@
   "b02e490743df": [
     "src/addons/import-notion/convert.ts"
   ],
+  "5389a69dd998": [
+    "src/main/workspace-files.ts"
+  ],
   "ddfe19879e4e": [
     "src/addons/vim/native.ts"
   ],
@@ -488,10 +509,10 @@
     "src/main/addon-documentation.ts"
   ],
   "5f7d0390ae07": [
-    "src/main/workspace-actions.ts"
+    "src/main/workspace-paths.ts"
   ],
   "1d7031f78966": [
-    "src/main/workspace-actions.ts"
+    "src/main/workspace-paths.ts"
   ],
   "3b24e1f87361": [
     "src/main/workspace-actions.ts"
@@ -510,6 +531,12 @@
   ],
   "d4dc94ba2837": [
     "src/main/media.ts"
+  ],
+  "97fc4ea85080": [
+    "src/main/global-shortcuts.ts"
+  ],
+  "6db91532c149": [
+    "src/main/workspace-files.ts"
   ],
   "f37b4c631f70": [
     "src/main/imports.ts"
@@ -530,10 +557,13 @@
     "src/main/media.ts"
   ],
   "f84eb17965b6": [
+    "src/main/addon-hotkeys.ts",
+    "src/main/index.ts",
     "src/shared/hotkeys.ts"
   ],
   "4498a0e9706f": [
-    "src/main/files.ts"
+    "src/main/files.ts",
+    "src/main/workspace-files.ts"
   ],
   "26a5af5d66ea": [
     "src/shared/updates.ts"
@@ -648,10 +678,14 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "b22b0b3873a1": [
+    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "954d1afa8200": [
     "src/renderer/src/HotkeySettings.tsx"
+  ],
+  "79a3988c60c2": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
   ],
   "830121754331": [
     "src/addons/math/PackageSettings.tsx"
@@ -910,6 +944,9 @@
   "da2df709d46e": [
     "src/renderer/src/document-worker-client.ts"
   ],
+  "ce6331b7277c": [
+    "src/main/addon-hotkeys.ts"
+  ],
   "278a4d546369": [
     "src/main/index.ts"
   ],
@@ -932,6 +969,7 @@
     "src/addons/_shared/format-native.ts"
   ],
   "2fe18391f790": [
+    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "77db28621bac": [
@@ -940,14 +978,26 @@
   "76934949f22e": [
     "src/renderer/src/main.tsx"
   ],
+  "2f6dcb75d5a0": [
+    "src/main/addon-hotkeys.ts"
+  ],
+  "1521183700f9": [
+    "src/main/addon-hotkeys.ts"
+  ],
   "9c78aa9fb78e": [
     "src/renderer/src/main.tsx"
+  ],
+  "1cc686099dd9": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
   ],
   "5dc1e07e8c69": [
     "src/renderer/src/main.tsx"
   ],
   "2a30abd5f2ce": [
     "src/main/dependencies.ts"
+  ],
+  "a032fdba4bce": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
   ],
   "6704c0f053f8": [
     "src/renderer/src/HotkeySettings.tsx"
@@ -1411,6 +1461,7 @@
   ],
   "ea91f021982f": [
     "src/main/addons.ts",
+    "src/renderer/src/addon-storage.ts",
     "src/renderer/src/addons.ts"
   ],
   "24c9ca0efd8d": [
@@ -2055,6 +2106,30 @@
   "2e8a09a716d9": [
     "src/shared/dependencies.ts"
   ],
+  "30dc5cee01f7": [
+    "src/main/addon-storage.ts"
+  ],
+  "9320580b8583": [
+    "src/main/addon-storage.ts"
+  ],
+  "5fdbc4fe9533": [
+    "src/main/addon-storage.ts"
+  ],
+  "64197af51495": [
+    "src/main/addon-storage.ts"
+  ],
+  "6ce093a8d751": [
+    "src/main/addon-storage.ts"
+  ],
+  "5d7f77f85ab4": [
+    "src/main/addon-storage.ts"
+  ],
+  "fe6852d2af5c": [
+    "src/main/addon-storage.ts"
+  ],
+  "b03fef19c343": [
+    "src/main/addon-storage.ts"
+  ],
   "d55e67954314": [
     "src/main/analysis.ts"
   ],
@@ -2189,6 +2264,9 @@
   ],
   "38f048094b0e": [
     "src/main/workspace-settings.ts"
+  ],
+  "5acc423ed1f6": [
+    "src/main/addon-storage.ts"
   ],
   "9bf37cb58a69": [
     "src/renderer/src/FormattingToolbar.tsx",
@@ -2758,6 +2836,9 @@
   "7693e6fba57c": [
     "src/addons/graph/Panel.tsx"
   ],
+  "84040f5486e6": [
+    "src/renderer/src/addon-storage.ts"
+  ],
   "ad5aa51d2d83": [
     "src/main/workspace-actions.ts",
     "src/main/workspace.ts"
@@ -2970,6 +3051,7 @@
     "src/renderer/src/DependencySettings.tsx"
   ],
   "95d3d7e8feed": [
+    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "324b134f57c7": [
@@ -3095,6 +3177,9 @@
   ],
   "e88bb0e03de7": [
     "src/renderer/src/HotkeySettings.tsx"
+  ],
+  "7329f549ae73": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
   ],
   "78f021c43d7b": [
     "src/addons/diagnostics/Settings.tsx"
@@ -3255,10 +3340,14 @@
     "src/renderer/src/EditorToolbar.tsx"
   ],
   "e4af9a2eda8c": [
+    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "aca879baa006": [
     "src/renderer/src/HotkeySettings.tsx"
+  ],
+  "0a9b767dc873": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
   ],
   "46f6013774d6": [
     "src/renderer/src/SettingsScreen.tsx"
@@ -3356,11 +3445,17 @@
   "73c583fedbc0": [
     "src/main/addons.ts"
   ],
+  "5a88d622ebec": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
+  ],
   "34d21cb11ffc": [
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "1a0ec19679a9": [
     "src/renderer/src/HotkeySettings.tsx"
+  ],
+  "6d5648313edc": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
   ],
   "4b77ec6e263f": [
     "src/main/workspace-actions.ts"
@@ -3741,6 +3836,9 @@
   "0bc4c2af5c39": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
+  "d3938f7b87bb": [
+    "src/main/addon-storage.ts"
+  ],
   "9aabbcb2c18d": [
     "src/renderer/src/FormattingToolbar.tsx"
   ],
@@ -3928,6 +4026,9 @@
   "96c5ae0b5065": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
+  "2ea18168d79b": [
+    "src/renderer/src/addons.ts"
+  ],
   "32c1f3399caa": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
@@ -4091,8 +4192,17 @@
   "3a6e6f7e43b2": [
     "src/addons/documentation/site.ts"
   ],
+  "319a6b937c66": [
+    "src/main/workspace-files.ts"
+  ],
+  "1cba65de3fa0": [
+    "src/main/workspace-files.ts"
+  ],
   "7b09fb630786": [
     "src/main/workspace-metadata.ts"
+  ],
+  "45d06c4d0746": [
+    "src/main/workspace-files.ts"
   ],
   "dbb4c5f7df5c": [
     "src/renderer/src/addons.ts"
@@ -4115,8 +4225,15 @@
   "b29376d8e035": [
     "src/main/links.ts"
   ],
+  "d560cd1db8eb": [
+    "src/renderer/src/addon-global-shortcuts.ts"
+  ],
   "7b1a3f290d48": [
     "src/renderer/src/addon-registry.ts"
+  ],
+  "a8a565024afb": [
+    "src/main/addon-hotkeys.ts",
+    "src/main/index.ts"
   ],
   "1f5c15aebf70": [
     "src/renderer/src/addons.ts"
@@ -4137,6 +4254,7 @@
     "src/renderer/src/addon-registry.ts"
   ],
   "0d3f68fa85cf": [
+    "src/renderer/src/addon-global-shortcuts.ts",
     "src/renderer/src/addons.ts",
     "src/renderer/src/document-edits.ts"
   ],
@@ -4146,6 +4264,18 @@
   "c58889003b80": [
     "src/main/addons.ts",
     "src/main/dependencies.ts"
+  ],
+  "e64719f55f97": [
+    "src/main/addon-storage.ts"
+  ],
+  "afad49bee9c2": [
+    "src/main/addon-storage.ts"
+  ],
+  "9cb2128dbd19": [
+    "src/main/addon-storage.ts"
+  ],
+  "7d2ca59834b9": [
+    "src/main/addon-storage.ts"
   ],
   "820da9bbf36f": [
     "src/renderer/src/addons.ts"
@@ -4168,6 +4298,9 @@
   "3c4b2c687d81": [
     "src/renderer/src/addons.ts"
   ],
+  "88da438b7956": [
+    "src/renderer/src/addon-global-shortcuts.ts"
+  ],
   "44aefe8adcd8": [
     "src/renderer/src/addons.ts"
   ],
@@ -4176,6 +4309,9 @@
   ],
   "f6bce0d6d212": [
     "src/renderer/src/settings-pages.ts"
+  ],
+  "a3474fd0cc48": [
+    "src/renderer/src/addon-global-shortcuts.ts"
   ],
   "f59f73db914f": [
     "src/renderer/src/settings-pages.ts"
@@ -4217,7 +4353,8 @@
     "src/addons/_shared/import-markdown.ts"
   ],
   "b3e591b2b962": [
-    "src/main/files.ts"
+    "src/main/files.ts",
+    "src/main/workspace-files.ts"
   ],
   "73b6a9218822": [
     "src/addons/bbcode/render.ts"
@@ -4244,8 +4381,14 @@
   "4396b1d0a374": [
     "src/renderer/src/Editor.tsx"
   ],
+  "dd81768f0d54": [
+    "src/renderer/src/document-runtime.ts"
+  ],
   "6a25699e5870": [
     "src/addons/typing-speed/index.ts"
+  ],
+  "160f0858f2bd": [
+    "src/main/workspace-files.ts"
   ],
   "4646993d0c2f": [
     "src/main/document.ts"
@@ -4264,6 +4407,9 @@
   ],
   "d854979ab2cc": [
     "src/addons/git/native.ts"
+  ],
+  "718fb2f4f052": [
+    "src/main/workspace-files.ts"
   ],
   "2fad5aad9df6": [
     "src/main/sideload.ts"
@@ -4299,7 +4445,10 @@
     "src/renderer/src/WorkspacesSidebar.tsx"
   ],
   "a8509d324773": [
-    "src/main/workspace-actions.ts"
+    "src/main/workspace-paths.ts"
+  ],
+  "7026bfea8279": [
+    "src/main/workspace-files.ts"
   ],
   "5089081cf601": [
     "src/renderer/src/document-edits.ts"
@@ -4319,8 +4468,17 @@
   "c13ad6f975f2": [
     "src/main/history.ts"
   ],
+  "980892e485b4": [
+    "src/main/global-shortcuts.ts"
+  ],
+  "75df21f548b3": [
+    "src/main/global-shortcuts.ts"
+  ],
   "20f489b1e5d4": [
     "src/shared/hotkeys.ts"
+  ],
+  "3ec61208f558": [
+    "src/main/global-shortcuts.ts"
   ],
   "a6da99875af4": [
     "src/main/document.ts"
@@ -4353,6 +4511,9 @@
   ],
   "d2714d88ce4e": [
     "src/main/workspace.ts"
+  ],
+  "2b9947edaee2": [
+    "src/main/workspace-files.ts"
   ],
   "dfc1e6d16ba5": [
     "src/site/main.tsx"
@@ -4507,6 +4668,7 @@
     "src/renderer/src/addons.ts"
   ],
   "14d33bd014e6": [
+    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "a5c4e03c56e0": [
@@ -4588,6 +4750,9 @@
   "0c78f3e5ef4e": [
     "src/renderer/src/DependencySettings.tsx"
   ],
+  "5b31cbaacd39": [
+    "src/main/workspace-files.ts"
+  ],
   "b9fea9d6320c": [
     "src/addons/vim/manifest.ts"
   ],
@@ -4614,6 +4779,9 @@
   ],
   "7674c6f9fdd5": [
     "src/main/workspace-metadata.ts"
+  ],
+  "dfa48f0d383b": [
+    "src/main/workspace-files.ts"
   ],
   "815013862844": [
     "src/main/workspace-actions.ts"

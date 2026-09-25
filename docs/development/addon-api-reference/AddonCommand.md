@@ -2,7 +2,7 @@
 
 # AddonCommand
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L255)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L259)
 
 <details>
 <summary>Declaration</summary>
@@ -16,9 +16,19 @@ type AddonCommand = {
   keywords?: string
   /** Also show this command below the workspace tree. */
   workspace?: boolean
+  /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. */
+  defaultShortcut?: string
+  /** Show this command in a built-in application menu. */
+  menu?: { location: 'app'; group?: string; order?: number }
+  /** Cheap synchronous check against the context captured when invoked. */
+  when?: (
+    context: import('../shared/foundation-contracts').CommandExecutionContext,
+  ) => boolean
   /** Optional whole-note action exposed by the slash-commands addon. */
   slash?: AddonSlashCommand
-  run: () => void | Promise<void>
+  run: (
+    context: import('../shared/foundation-contracts').CommandExecutionContext,
+  ) => void | Promise<void>
 }
 ```
 
@@ -32,17 +42,20 @@ type AddonCommand = {
 - [label](#label)
 - [keywords](#keywords)
 - [workspace](#workspace)
+- [defaultShortcut](#defaultshortcut)
+- [menu](#menu)
 - [slash](#slash)
 
 **Methods**
 
+- [when](#when)
 - [run](#run)
 
 ## Properties
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L257)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L261)
 
 Local id; the host prefixes it with the addon id.
 
@@ -52,7 +65,7 @@ id: string
 
 ### label
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L258)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L262)
 
 ```typescript
 label: string
@@ -60,7 +73,7 @@ label: string
 
 ### keywords
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L260)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L264)
 
 Searchable terms in the command palette, without duplicating the label.
 
@@ -70,7 +83,7 @@ keywords?: string
 
 ### workspace
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L262)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L266)
 
 Also show this command below the workspace tree.
 
@@ -78,9 +91,29 @@ Also show this command below the workspace tree.
 workspace?: boolean
 ```
 
+### defaultShortcut
+
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L268)
+
+Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere.
+
+```typescript
+defaultShortcut?: string
+```
+
+### menu
+
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L270)
+
+Show this command in a built-in application menu.
+
+```typescript
+menu?: { location: 'app'; group?: string; order?: number }
+```
+
 ### slash
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L264)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L276)
 
 Optional whole-note action exposed by the slash-commands addon.
 
@@ -92,16 +125,48 @@ Related: [AddonSlashCommand](AddonSlashCommand.md).
 
 ## Methods
 
-### run
+### when
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L265)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L272)
+
+Cheap synchronous check against the context captured when invoked.
 
 ```typescript
-run: () => void | Promise<void>
+when?: (
+    context: import('../shared/foundation-contracts').CommandExecutionContext,
+  ) => boolean
 ```
+
+Related: [CommandExecutionContext](CommandExecutionContext.md).
+
+**Parameters**
+
+| Name | Type |
+| --- | --- |
+| <code>context</code> | <code>import('../shared/foundation-contracts').<a href="CommandExecutionContext.md">CommandExecutionContext</a></code> |
+
+**Returns:** <code>boolean</code>
+
+### run
+
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L277)
+
+```typescript
+run: (
+    context: import('../shared/foundation-contracts').CommandExecutionContext,
+  ) => void | Promise<void>
+```
+
+Related: [CommandExecutionContext](CommandExecutionContext.md).
+
+**Parameters**
+
+| Name | Type |
+| --- | --- |
+| <code>context</code> | <code>import('../shared/foundation-contracts').<a href="CommandExecutionContext.md">CommandExecutionContext</a></code> |
 
 **Returns:** <code>void &#124; Promise&lt;void&gt;</code>
 
 ## Related types
 
-[AddonSlashCommand](AddonSlashCommand.md).
+[CommandExecutionContext](CommandExecutionContext.md), [AddonSlashCommand](AddonSlashCommand.md).

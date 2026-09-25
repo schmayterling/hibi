@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer as transport, webUtils } from 'electron'
 import { ADDON_CHANNELS } from '../addons/api'
 import { ABOUT_CHANNELS } from '../shared/about'
+import {
+  ADDON_HOTKEY_CHANNELS,
+  type AddonCommandInvocation,
+  type AddonHotkeyBinding,
+} from '../shared/addon-hotkeys'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
 import { DEPENDENCY_CHANNELS } from '../shared/dependencies'
@@ -14,6 +19,10 @@ import {
 import type { JournalCheckpoint } from '../shared/document-checkpoint'
 import { createDocumentJournal } from '../shared/document-journal'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
+import {
+  GLOBAL_SHORTCUT_CHANNELS,
+  type GlobalShortcutInvocation,
+} from '../shared/global-shortcuts'
 import { HISTORY_CHANNELS } from '../shared/history'
 import { type AppCommand, HOTKEY_CHANNELS } from '../shared/hotkeys'
 import { IMPORT_CHANNELS } from '../shared/imports'
@@ -90,6 +99,24 @@ if (process.isMainFrame) {
   for (const pending of [startupDocument, startupAddons, startupKnown])
     void pending.catch(() => {})
   contextBridge.exposeInMainWorld('hibi', {
+    registerGlobalShortcut: (id, accelerator, token) =>
+      ipcRenderer.invoke(
+        GLOBAL_SHORTCUT_CHANNELS.register,
+        id,
+        accelerator,
+        token,
+      ),
+    unregisterGlobalShortcut: (id, token) =>
+      ipcRenderer.invoke(GLOBAL_SHORTCUT_CHANNELS.unregister, id, token),
+    onGlobalShortcut: (callback) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        invocation: GlobalShortcutInvocation,
+      ) => callback(invocation)
+      ipcRenderer.on(GLOBAL_SHORTCUT_CHANNELS.invoked, listener)
+      return () =>
+        ipcRenderer.removeListener(GLOBAL_SHORTCUT_CHANNELS.invoked, listener)
+    },
     getUpdateState: () => transport.invoke(UPDATE_CHANNELS.get),
     setUpdateChannel: (channel) =>
       transport.invoke(UPDATE_CHANNELS.channel, channel),
@@ -282,6 +309,33 @@ if (process.isMainFrame) {
     readDocumentImage: (source, revision) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.image, source, revision),
     getHotkeys: () => ipcRenderer.invoke(HOTKEY_CHANNELS.get),
+    getAddonHotkeys: () => ipcRenderer.invoke(ADDON_HOTKEY_CHANNELS.get),
+    registerAddonHotkey: (registration) =>
+      ipcRenderer.invoke(ADDON_HOTKEY_CHANNELS.register, registration),
+    unregisterAddonHotkey: (id, token) =>
+      ipcRenderer.invoke(ADDON_HOTKEY_CHANNELS.unregister, id, token),
+    saveAddonHotkey: (id, shortcut) =>
+      ipcRenderer.invoke(ADDON_HOTKEY_CHANNELS.save, id, shortcut),
+    resetAddonHotkey: (id) =>
+      ipcRenderer.invoke(ADDON_HOTKEY_CHANNELS.reset, id),
+    onAddonHotkeysChanged: (callback) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        bindings: AddonHotkeyBinding[],
+      ) => callback(bindings)
+      ipcRenderer.on(ADDON_HOTKEY_CHANNELS.changed, listener)
+      return () =>
+        ipcRenderer.removeListener(ADDON_HOTKEY_CHANNELS.changed, listener)
+    },
+    onAddonCommand: (callback) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        invocation: AddonCommandInvocation,
+      ) => callback(invocation)
+      ipcRenderer.on(ADDON_HOTKEY_CHANNELS.invoke, listener)
+      return () =>
+        ipcRenderer.removeListener(ADDON_HOTKEY_CHANNELS.invoke, listener)
+    },
     saveHotkeys: (hotkeys) => ipcRenderer.invoke(HOTKEY_CHANNELS.save, hotkeys),
     setHotkeyRecording: (recording) =>
       ipcRenderer.invoke(HOTKEY_CHANNELS.record, recording),

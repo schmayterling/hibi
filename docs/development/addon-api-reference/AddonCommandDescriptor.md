@@ -12,6 +12,10 @@ type AddonCommandDescriptor = {
   id: string
   label: string
   keywords?: string
+  /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. */
+  defaultShortcut?: string
+  /** Show this command in a built-in application menu. */
+  menu?: { location: 'app'; group?: string; order?: number }
 }
 ```
 
@@ -24,6 +28,8 @@ type AddonCommandDescriptor = {
 - [id](#id)
 - [label](#label)
 - [keywords](#keywords)
+- [defaultShortcut](#defaultshortcut)
+- [menu](#menu)
 
 ## Properties
 
@@ -49,4 +55,24 @@ Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/
 
 ```typescript
 keywords?: string
+```
+
+### defaultShortcut
+
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L104)
+
+Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere.
+
+```typescript
+defaultShortcut?: string
+```
+
+### menu
+
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L106)
+
+Show this command in a built-in application menu.
+
+```typescript
+menu?: { location: 'app'; group?: string; order?: number }
 ```

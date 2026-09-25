@@ -11,6 +11,7 @@ import {
   type Addon,
   type AddonApp,
   type AddonCommand,
+  type AddonCommandDescriptor,
   type AddonContext,
   type AddonManifest,
   type AddonState,
@@ -27,6 +28,7 @@ import {
   documentExtension,
   isMarkdownDocument,
 } from '../../shared/document-types'
+import type { CommandExecutionContext } from '../../shared/foundation-contracts'
 import {
   parseSyntaxDescriptors,
   validatePreservation,
@@ -37,6 +39,7 @@ import { performanceDiagnostics } from '../../ui/diagnostics'
 import { menus } from '../../ui/menu-store'
 import { useToastService } from '../../ui/Sonner'
 import { createTooltipScope } from '../../ui/tooltip-store'
+import { createAddonGlobalShortcuts } from './addon-global-shortcuts'
 import { createAddonOverrides } from './addon-overrides'
 import { addonRegistry } from './addon-registry'
 import { addonViews } from './addon-views'
@@ -61,7 +64,11 @@ export { addons } from './addon-registry'
 
 const ADDON_ISSUE_URL = 'https://github.com/schmayterling/hibi/issues/new'
 
-export type RegisteredCommand = AddonCommand & { addonId: string }
+export type RegisteredCommand = Omit<AddonCommand, 'run'> & {
+  addonId: string
+  canRun: (context: CommandExecutionContext) => boolean
+  run: (context?: CommandExecutionContext) => Promise<void>
+}
 type Environment = Omit<
   AddonContext,
   | 'commands'
@@ -84,6 +91,7 @@ type Environment = Omit<
   | 'tooltips'
   | 'settings'
   | 'dependencies'
+  | 'globalShortcuts'
 > & {
   openDependencySettings: () => void
   workspace: Omit<AddonContext['workspace'], 'registerDecorations'>
@@ -98,6 +106,10 @@ type Environment = Omit<
   closeSidebar: (side: 'left' | 'right') => void
   openTab: () => void
   focusDocument: (tabId: string) => Promise<boolean>
+  captureCommandContext?: (
+    source: CommandExecutionContext['source'],
+  ) => CommandExecutionContext
+  isCommandContextCurrent?: (context: CommandExecutionContext) => boolean
 }
 
 export function useAddons(
@@ -113,6 +125,11 @@ export function useAddons(
   const toastService = useToastService()
   const latest = useRef(environment)
   latest.current = environment
+  const captureCommandContext = useCallback(
+    (source: CommandExecutionContext['source']): CommandExecutionContext =>
+      latest.current.captureCommandContext?.(source) ?? { source },
+    [],
+  )
   const app = useRef<AddonApp>({
     runCommand: (command) => latest.current.runCommand(command),
     runAction: (command) => latest.current.runAction(command),
@@ -210,6 +227,7 @@ export function useAddons(
     [viewState.definitions],
   )
   const registered = useRef(new Map<string, RegisteredCommand>()).current
+  const hotkeyTokens = useRef(new Map<string, string>()).current
   const started = useRef(new Set<string>()).current
   const activation = useRef(
     new Map<
@@ -224,7 +242,11 @@ export function useAddons(
   const currentActivation = useRef({ states, settled, catalog })
   currentActivation.current = { states, settled, catalog }
   const executeCommand = useCallback(
-    async (owner: string, commandId: string) => {
+    async (
+      owner: string,
+      commandId: string,
+      context: CommandExecutionContext = captureCommandContext('api'),
+    ) => {
       if (
         !currentActivation.current.states.some(
           (state) => state.id === owner && state.enabled,
@@ -274,9 +296,28 @@ export function useAddons(
         )
       )
         throw new Error('This command is no longer available.')
-      await command.run()
+      if (
+        latest.current.isCommandContextCurrent &&
+        !latest.current.isCommandContextCurrent(context)
+      )
+        throw new Error('The command target is no longer available.')
+      await command.run(context)
     },
-    [activation, registered, started],
+    [activation, captureCommandContext, registered, started],
+  )
+  useEffect(
+    () =>
+      window.hibi.onAddonCommand(({ id, token, source }) => {
+        if (hotkeyTokens.get(id) !== token) return
+        const separator = id.indexOf('.')
+        if (separator < 1) return
+        void executeCommand(
+          id.slice(0, separator),
+          id.slice(separator + 1),
+          captureCommandContext(source),
+        ).catch((error) => latest.current.error(error))
+      }),
+    [captureCommandContext, executeCommand, hotkeyTokens],
   )
   const extensions = useRef(
     new Map<string, MarkdownExtension & { addonId: string }>(),
@@ -387,6 +428,18 @@ export function useAddons(
       const notificationScope = viewNotifications.scope()
       const tooltipScope = createTooltipScope()
       const cleanups = new Set<() => void>()
+      const shortcutScope = createAddonGlobalShortcuts(
+        id,
+        window.hibi,
+        (command) => {
+          const context = captureCommandContext('global-shortcut')
+          return typeof command === 'string'
+            ? executeCommand(id, command, context)
+            : command()
+        },
+        (error) => latest.current.error(error),
+      )
+      cleanups.add(shortcutScope.dispose)
       const editScope = documentEdits.scope(() => latest.current.isBusy())
       const annotationScope = editorAnnotations.scope(id)
       const batch = registrationBatch(addon.manifest.capabilities !== undefined)
@@ -634,6 +687,7 @@ export function useAddons(
               },
             },
             dialogs: dialogScope.api,
+            globalShortcuts: { register: shortcutScope.register },
             views: { register: registerView, notify: notificationScope.notify },
             analysis: {
               async run(projection) {
@@ -1077,10 +1131,25 @@ export function useAddons(
                     `This addon supplied a duplicate or invalid command: ${key}.`,
                   )
                 let active = true
+                const canRun = (context: CommandExecutionContext) => {
+                  if (!active || disposed) return false
+                  if (
+                    latest.current.isCommandContextCurrent &&
+                    !latest.current.isCommandContextCurrent(context)
+                  )
+                    return false
+                  try {
+                    return command.when?.(context) ?? true
+                  } catch (error) {
+                    latest.current.error(error)
+                    return false
+                  }
+                }
                 const entry: RegisteredCommand = {
                   ...command,
                   id: key,
                   addonId: id,
+                  canRun,
                   ...(command.slash
                     ? {
                         slash: {
@@ -1106,13 +1175,13 @@ export function useAddons(
                         },
                       }
                     : {}),
-                  run: async () => {
-                    if (!active || disposed) return
+                  run: async (context = captureCommandContext('api')) => {
+                    if (!canRun(context)) return
                     try {
                       await performanceDiagnostics.measure(
                         id,
                         `command:${command.id}`,
-                        () => command.run(),
+                        () => command.run(context),
                       )
                     } catch (error) {
                       latest.current.error(error)
@@ -1330,6 +1399,7 @@ export function useAddons(
     activation,
     started,
     executeCommand,
+    captureCommandContext,
     loaded,
     documentName,
     states,
@@ -1457,9 +1527,25 @@ export function useAddons(
       latest.current.error(error)
     }
   }
-  const visibleCommands = useMemo(
-    () => [
-      ...commands,
+  const visibleCommands = useMemo<RegisteredCommand[]>(() => {
+    const descriptors = new Map<string, AddonCommandDescriptor>(
+      catalog.flatMap((addon) =>
+        (addon.manifest.commands ?? []).map(
+          (command) => [`${addon.manifest.id}.${command.id}`, command] as const,
+        ),
+      ),
+    )
+    return [
+      ...commands.map((command) => ({
+        ...descriptors.get(command.id),
+        ...command,
+        run: (context?: CommandExecutionContext) =>
+          executeCommand(
+            command.addonId,
+            command.id.slice(command.addonId.length + 1),
+            context ?? captureCommandContext('api'),
+          ),
+      })),
       ...catalog
         .filter((addon) =>
           states.some(
@@ -1476,12 +1562,58 @@ export function useAddons(
               ...command,
               id: `${addon.manifest.id}.${command.id}`,
               addonId: addon.manifest.id,
-              run: () => executeCommand(addon.manifest.id, command.id),
+              canRun: () => true,
+              run: (context?: CommandExecutionContext) =>
+                executeCommand(
+                  addon.manifest.id,
+                  command.id,
+                  context ?? captureCommandContext('api'),
+                ),
             })),
         ),
-    ],
-    [commands, catalog, states, registered, executeCommand],
-  )
+    ]
+  }, [
+    commands,
+    catalog,
+    states,
+    registered,
+    executeCommand,
+    captureCommandContext,
+  ])
+  useEffect(() => {
+    const registrations = visibleCommands
+      .filter((command) => command.defaultShortcut || command.menu)
+      .map((command) => {
+        const token = crypto.randomUUID()
+        hotkeyTokens.set(command.id, token)
+        const unregister = () =>
+          window.hibi
+            .unregisterAddonHotkey(command.id, token)
+            .catch((error) => latest.current.error(error))
+        void window.hibi
+          .registerAddonHotkey({
+            id: command.id,
+            label: command.label,
+            token,
+            ...(command.defaultShortcut
+              ? { defaultShortcut: command.defaultShortcut }
+              : {}),
+            ...(command.menu ? { menu: command.menu } : {}),
+          })
+          .then(() => {
+            if (hotkeyTokens.get(command.id) !== token) void unregister()
+          })
+          .catch((error) => latest.current.error(error))
+        return { id: command.id, token, unregister }
+      })
+    return () => {
+      for (const registration of registrations) {
+        if (hotkeyTokens.get(registration.id) === registration.token)
+          hotkeyTokens.delete(registration.id)
+        void registration.unregister()
+      }
+    }
+  }, [hotkeyTokens, visibleCommands])
   return {
     catalog,
     ready,
@@ -1490,6 +1622,7 @@ export function useAddons(
     app,
     states,
     commands: visibleCommands,
+    captureCommandContext,
     markdownExtensions,
     richExtensions,
     sourceExtensions,

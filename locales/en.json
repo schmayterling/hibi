@@ -1704,6 +1704,7 @@
   "57a1579f83d3": "invalid or duplicate code language.",
   "fb2d17b5aa0f": "invalid or duplicate flavor: {id}",
   "b0d13165bbc2": "invalid or duplicate markdown syntax feature.",
+  "77422a358e59": "invalid toolbar action: {id}",
   "1e0534e54772": "keyBeats",
   "55ea09e5715d": "limit",
   "a6375ee99716": "mapping",

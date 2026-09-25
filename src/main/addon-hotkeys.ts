@@ -5,6 +5,7 @@ import type {
   AddonHotkeyRegistration,
   AddonMenuItem,
 } from '../shared/addon-hotkeys'
+import { validCommandMenu } from '../shared/addon-hotkeys.ts'
 import {
   actions,
   type Hotkeys,
@@ -108,14 +109,7 @@ export class AddonHotkeys {
       throw new Error('Could not register this addon shortcut.')
     if (
       value.menu !== undefined &&
-      (value.menu?.location !== 'app' ||
-        (value.menu.group !== undefined &&
-          (typeof value.menu.group !== 'string' ||
-            value.menu.group.length > 40 ||
-            !/^[a-z][a-z0-9-]*$/.test(value.menu.group))) ||
-        (value.menu.order !== undefined &&
-          (!Number.isInteger(value.menu.order) ||
-            Math.abs(value.menu.order) > 10000)))
+      (value.menu?.location !== 'app' || !validCommandMenu(value.menu))
     )
       throw new Error('Could not register this addon menu item.')
     const defaultShortcut = validShortcut(

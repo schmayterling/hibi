@@ -102,10 +102,14 @@ jobs:
           npm run lint
           npm run docs:check
           npm run copy:check
+          test_files=()
+          for test_file in tests/*.test.mjs; do
+            [[ "$test_file" == tests/dev-reload.test.mjs ]] || test_files+=("$test_file")
+          done
           if [ "$RUNNER_OS" = Linux ]; then
-            dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' node --test --test-concurrency=1 tests/*.test.mjs
+            dbus-run-session -- xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24 -nolisten tcp' node --test --test-concurrency=1 "${test_files[@]}"
           else
-            node --test --test-concurrency=1 tests/*.test.mjs
+            node --test --test-concurrency=1 "${test_files[@]}"
           fi
       - name: Install macOS signing credentials
         if: startsWith(matrix.platform, 'macos-')

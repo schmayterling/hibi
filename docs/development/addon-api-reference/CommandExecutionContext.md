@@ -19,6 +19,7 @@ interface CommandExecutionContext {
     | 'toolbar'
     | 'api'
   readonly workspace?: WorkspaceTarget
+  readonly file?: FileTarget
   readonly document?: DocumentTarget
   readonly view?: ViewTarget
 }
@@ -32,6 +33,7 @@ interface CommandExecutionContext {
 
 - [source](#source)
 - [workspace](#workspace)
+- [file](#file)
 - [document](#document)
 - [view](#view)
 
@@ -60,9 +62,19 @@ readonly workspace?: WorkspaceTarget
 
 Related: [WorkspaceTarget](WorkspaceTarget.md).
 
-### document
+### file
 
 Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L69)
+
+```typescript
+readonly file?: FileTarget
+```
+
+Related: [FileTarget](FileTarget.md).
+
+### document
+
+Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L70)
 
 ```typescript
 readonly document?: DocumentTarget
@@ -72,7 +84,7 @@ Related: [DocumentTarget](DocumentTarget.md).
 
 ### view
 
-Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L70)
+Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L71)
 
 ```typescript
 readonly view?: ViewTarget
@@ -82,4 +94,4 @@ Related: [ViewTarget](ViewTarget.md).
 
 ## Related types
 
-[WorkspaceTarget](WorkspaceTarget.md), [DocumentTarget](DocumentTarget.md), [ViewTarget](ViewTarget.md).
+[WorkspaceTarget](WorkspaceTarget.md), [FileTarget](FileTarget.md), [DocumentTarget](DocumentTarget.md), [ViewTarget](ViewTarget.md).

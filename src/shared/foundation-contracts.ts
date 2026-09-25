@@ -66,6 +66,7 @@ export interface CommandExecutionContext {
     | 'toolbar'
     | 'api'
   readonly workspace?: WorkspaceTarget
+  readonly file?: FileTarget
   readonly document?: DocumentTarget
   readonly view?: ViewTarget
 }

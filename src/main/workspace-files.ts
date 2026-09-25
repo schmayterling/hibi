@@ -11,7 +11,6 @@ import { isDocumentName } from './document-types'
 import { validateMarkdown } from './files'
 import {
   isCurrentWorkspaceTarget,
-  notifyWorkspaceContent,
   refreshWorkspace,
   workspaceRoot,
 } from './workspace'
@@ -60,6 +59,8 @@ function inside(root: string, candidate: string): boolean {
 
 type ParentIdentity = { canonical: string; dev: number; ino: number }
 
+// ponytail: path checks cannot defeat a same-user swap-back race without
+// directory-handle-relative IO; use native openat-style IO if required.
 async function parentIdentity(
   root: string,
   file: string,
@@ -301,10 +302,6 @@ export async function createWorkspaceText(
         indexed = (await refreshWorkspace([changedPath])) !== null
       } catch (error) {
         console.error('workspace refresh after create failed:', error)
-        if (isCurrentWorkspaceTarget(target))
-          await notifyWorkspaceContent(null).catch((notifyError: unknown) =>
-            console.error('workspace resync notification failed:', notifyError),
-          )
       }
     }
     return {

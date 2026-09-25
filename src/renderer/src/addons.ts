@@ -29,7 +29,10 @@ import {
   documentExtension,
   isMarkdownDocument,
 } from '../../shared/document-types'
-import type { CommandExecutionContext } from '../../shared/foundation-contracts'
+import type {
+  AddonId,
+  CommandExecutionContext,
+} from '../../shared/foundation-contracts'
 import {
   parseSyntaxDescriptors,
   validatePreservation,
@@ -47,6 +50,7 @@ import { createAddonStorageScope } from './addon-storage'
 import { addonViews } from './addon-views'
 import { codeHtml, codeLanguages } from './code-languages'
 import { colorschemes } from './colorschemes'
+import { completionBroker } from './completion-broker'
 import { disposeAll } from './dispose'
 import { documentEdits } from './document-edits'
 import { documentFormats, editorDocument } from './document-formats'
@@ -67,6 +71,7 @@ import { viewNotifications } from './view-notifications'
 export { addons } from './addon-registry'
 
 const ADDON_ISSUE_URL = 'https://github.com/schmayterling/hibi/issues/new'
+const completionActivations = new Map<string, number>()
 
 export type RegisteredCommand = Omit<AddonCommand, 'run'> & {
   addonId: string
@@ -472,6 +477,11 @@ export function useAddons(
       const notificationScope = viewNotifications.scope()
       const tooltipScope = createTooltipScope()
       const cleanups = new Set<() => void>()
+      const completionOwner = {
+        addonId: id as AddonId,
+        activationGeneration: (completionActivations.get(id) ?? 0) + 1,
+      }
+      completionActivations.set(id, completionOwner.activationGeneration)
       const shortcutScope = createAddonGlobalShortcuts(
         id,
         window.hibi,
@@ -608,6 +618,7 @@ export function useAddons(
       const stop = () => {
         if (disposed) return
         disposed = true
+        completionBroker.stopOwner(completionOwner)
         storageScope.dispose()
         started.delete(id)
         activation
@@ -1005,6 +1016,19 @@ export function useAddons(
                     latest.current.error(error)
                   }
                 })
+                const cleanup = () => {
+                  remove()
+                  cleanups.delete(cleanup)
+                }
+                cleanups.add(cleanup)
+                return cleanup
+              },
+              registerCompletionProvider(provider) {
+                if (disposed) throw new Error('This addon has stopped.')
+                const remove = completionBroker.register(
+                  completionOwner,
+                  provider,
+                )
                 const cleanup = () => {
                   remove()
                   cleanups.delete(cleanup)

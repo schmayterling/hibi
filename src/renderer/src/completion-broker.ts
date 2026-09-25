@@ -479,3 +479,5 @@ export class CompletionBroker {
     }
   }
 }
+
+export const completionBroker = new CompletionBroker()

@@ -43,9 +43,22 @@ export async function pressShortcut(app, shortcut) {
       ({ Meta: 'meta', Control: 'control', Shift: 'shift', Alt: 'alt' })[part],
   )
   await app.evaluate(
-    ({ BrowserWindow }, input) => {
-      const contents = BrowserWindow.getAllWindows()[0].webContents
+    async ({ app, BrowserWindow }, input) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      if (!window.isFocusable()) window.setFocusable(true)
+      window.show()
+      if (process.platform === 'darwin') app.focus({ steal: true })
+      window.focus()
+      const contents = window.webContents
+      contents.focus()
+      const deadline = Date.now() + 2000
+      while (!window.isFocused() || !contents.isFocused()) {
+        if (Date.now() >= deadline)
+          throw new Error('Could not focus Electron window for native input.')
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
       contents.sendInputEvent({ type: 'keyDown', ...input })
+      await new Promise((resolve) => setImmediate(resolve))
       contents.sendInputEvent({ type: 'keyUp', ...input })
     },
     { keyCode, modifiers },

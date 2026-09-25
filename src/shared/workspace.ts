@@ -12,6 +12,7 @@ export const WORKSPACE_CHANNELS = {
   changed: 'workspace:changed',
   changedV2: 'workspace:changed-v2',
   changeSnapshot: 'workspace:change-snapshot',
+  listPage: 'workspace:list-page',
   readText: 'workspace:read-text',
   createText: 'workspace:create-text',
   updateText: 'workspace:update-text',
@@ -80,6 +81,34 @@ export interface WorkspaceChangeSubscription {
   readonly snapshot: WorkspaceStreamSnapshot
   dispose(): void
 }
+
+/** Flat pages of the retained workspace tree. Each cursor is valid for one tree sequence. */
+export interface WorkspaceEntryPageRequest {
+  readonly target: WorkspaceTarget
+  readonly cursor?: string
+  /** Match a subscription snapshot when starting a paged traversal. */
+  readonly sequence?: number
+  /** Defaults to 100; at most 200 entries or 64 KiB are returned. */
+  readonly limit?: number
+}
+
+export interface WorkspaceListedEntry {
+  readonly path: string
+  readonly name: string
+  readonly kind: WorkspaceEntry['kind']
+}
+
+export interface WorkspaceEntryPage
+  extends Omit<WorkspaceStreamSnapshot, 'entries'> {
+  readonly target: WorkspaceTarget
+  readonly entries: readonly WorkspaceListedEntry[]
+  readonly nextCursor: string | null
+}
+
+export type WorkspaceEntryPageResult = OperationResult<
+  WorkspaceEntryPage,
+  'stale' | 'resync-needed' | 'limit-exceeded'
+>
 
 export interface WorkspaceTextRead {
   readonly target: WorkspaceTarget

@@ -90,6 +90,7 @@ export type FailureCode =
   | 'unsupported'
   | 'permission-denied'
   | 'limit-exceeded'
+  | 'resync-needed'
 
 /** Services can narrow the failure codes they return. */
 export type OperationResult<T, Code extends FailureCode = FailureCode> =

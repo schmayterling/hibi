@@ -12,6 +12,8 @@ import { wikiTarget } from '../shared/note-links'
 import type {
   WorkspaceChange,
   WorkspaceEntry,
+  WorkspaceEntryPageRequest,
+  WorkspaceEntryPageResult,
   WorkspaceIndex,
   WorkspaceSnapshot,
   WorkspaceState,
@@ -38,6 +40,7 @@ import {
   type WorkspaceStreamCursor,
   type WorkspaceStreamStatus,
 } from './workspace-change-stream'
+import { pageWorkspaceEntries } from './workspace-entry-page'
 import {
   type CachedIndexPage,
   diskIndexVersion,
@@ -180,6 +183,12 @@ export function workspaceChangeSnapshot(): WorkspaceStreamSnapshot {
 
 export function workspaceChangeCursor(): WorkspaceStreamCursor {
   return workspaceStream.cursor(workspaceStreamStatus())
+}
+
+export function listWorkspaceEntryPage(
+  request: WorkspaceEntryPageRequest,
+): WorkspaceEntryPageResult {
+  return pageWorkspaceEntries(entries, workspaceChangeCursor(), request)
 }
 
 export function workspaceIndexRevision(): number {

@@ -15,6 +15,10 @@ export const WORKSPACE_CHANNELS = {
   readText: 'workspace:read-text',
   createText: 'workspace:create-text',
   updateText: 'workspace:update-text',
+  readBinary: 'workspace:read-binary',
+  createBinary: 'workspace:create-binary',
+  renameFile: 'workspace:rename-file',
+  trashFile: 'workspace:trash-file',
   queryReferences: 'workspace:query-references',
   listChanged: 'workspace:list-changed',
   action: 'workspace:action',
@@ -82,9 +86,49 @@ export interface WorkspaceTextRead {
   readonly path: string
   readonly markdown: string
   /** Opaque disk precondition. Supply this value when replacing closed-file text. */
-  readonly version: string
+  readonly version: WorkspaceFileVersion
   /** Persisted bytes; unsaved document content is separate. */
   readonly source: 'disk'
+}
+
+/** Opaque disk precondition; metadata and bytes both affect this value. */
+export type WorkspaceFileVersion = string
+
+/** Explicit disk read capped at 16 MiB; binary bytes never enter text events. */
+export interface WorkspaceBinaryRead {
+  readonly target: WorkspaceTarget
+  readonly path: string
+  readonly bytes: Uint8Array
+  readonly version: WorkspaceFileVersion
+  readonly source: 'disk'
+}
+
+export interface WorkspaceBinaryCreation extends WorkspaceTextCreation {}
+
+/** A move may have created the destination while retaining the source. */
+export interface WorkspaceFileRename {
+  readonly target: WorkspaceTarget
+  readonly path: string
+  readonly destinationPath: string
+  readonly previousVersion: WorkspaceFileVersion
+  readonly persisted: true
+  readonly sourceRemoved: boolean
+  readonly indexed: boolean
+  readonly directorySynced: boolean
+  /** Hard-link and unlink provide exclusive destination creation, not one-step visibility. */
+  readonly atomicVisibility: false
+  readonly scopeVerifiedAfterCommit: boolean
+  readonly ownerActiveAfterCommit: boolean
+}
+
+export interface WorkspaceFileTrash {
+  readonly target: WorkspaceTarget
+  readonly path: string
+  readonly previousVersion: WorkspaceFileVersion
+  readonly persisted: true
+  readonly indexed: boolean
+  readonly scopeVerifiedAfterCommit: boolean
+  readonly ownerActiveAfterCommit: boolean
 }
 
 export interface WorkspaceTextCreation {

@@ -1,11 +1,15 @@
 import { createHash } from 'node:crypto'
 import { type BigIntStats, constants } from 'node:fs'
-import { lstat, open, realpath } from 'node:fs/promises'
+import { link, lstat, open, realpath, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, sep } from 'node:path'
 import { MAX_DOCUMENT_BYTES } from '../shared/desktop'
 import type { WorkspaceTarget } from '../shared/foundation-contracts'
 import type {
+  WorkspaceBinaryCreation,
+  WorkspaceBinaryRead,
+  WorkspaceFileRename,
   WorkspaceFileResult,
+  WorkspaceFileTrash,
   WorkspaceTextCreation,
   WorkspaceTextRead,
   WorkspaceTextUpdate,
@@ -20,8 +24,13 @@ import {
   workspaceRoot,
 } from './workspace'
 import { replaceExistingText } from './workspace-atomic-update'
-import { createExclusiveText } from './workspace-exclusive-create'
+import {
+  createExclusiveBytes,
+  createExclusiveText,
+} from './workspace-exclusive-create'
 import { resolveWorkspaceEntry } from './workspace-paths'
+
+const MAX_BINARY_BYTES = 16 * 1024 * 1024
 
 const stale = (): WorkspaceFileResult<never> => ({
   ok: false,
@@ -96,15 +105,19 @@ function diskVersion(info: BigIntStats, bytes: Uint8Array): string {
     .digest('hex')
 }
 
-type ScopedText = {
-  markdown: string
+type ScopedBytes = {
+  bytes: Uint8Array
   version: string
-  contentHash: string
   canonical: string
   links: bigint
+  info: BigIntStats
 }
 
-async function readScopedText(root: string, file: string): Promise<ScopedText> {
+async function readScopedBytes(
+  root: string,
+  file: string,
+  limit: number,
+): Promise<ScopedBytes> {
   const parent = await parentIdentity(root, file)
   const handle = await open(
     file,
@@ -115,10 +128,10 @@ async function readScopedText(root: string, file: string): Promise<ScopedText> {
   try {
     const info = await handle.stat({ bigint: true })
     if (!info.isFile())
-      throw new Error('Choose a text file, not a folder or device.')
-    if (info.size > BigInt(MAX_DOCUMENT_BYTES))
+      throw new Error('Choose a file, not a folder or device.')
+    if (info.size > BigInt(limit))
       throw new Error(
-        'This document exceeds the 2 MiB limit. Open a smaller file.',
+        `This file exceeds the ${limit / (1024 * 1024)} MiB limit. Choose a smaller file.`,
       )
     const canonical = await realpath(file)
     const opened = await lstat(file, { bigint: true })
@@ -160,17 +173,31 @@ async function readScopedText(root: string, file: string): Promise<ScopedText> {
       })
     const content = bytes.subarray(0, bytesRead)
     return {
-      markdown: new TextDecoder('utf-8', {
-        fatal: true,
-        ignoreBOM: true,
-      }).decode(content),
+      bytes: content,
       version: diskVersion(info, content),
-      contentHash: createHash('sha256').update(content).digest('hex'),
       canonical,
       links: info.nlink,
+      info,
     }
   } finally {
     await handle.close()
+  }
+}
+
+type ScopedText = ScopedBytes & {
+  markdown: string
+  contentHash: string
+}
+
+async function readScopedText(root: string, file: string): Promise<ScopedText> {
+  const read = await readScopedBytes(root, file, MAX_DOCUMENT_BYTES)
+  return {
+    ...read,
+    markdown: new TextDecoder('utf-8', {
+      fatal: true,
+      ignoreBOM: true,
+    }).decode(read.bytes),
+    contentHash: createHash('sha256').update(read.bytes).digest('hex'),
   }
 }
 
@@ -224,6 +251,17 @@ function knownFailure(error: unknown): WorkspaceFileResult<never> | null {
       message: 'Choose a shorter file name.',
     }
   if (
+    code === 'EXDEV' ||
+    code === 'ENOTSUP' ||
+    code === 'EOPNOTSUPP' ||
+    code === 'ENOSYS'
+  )
+    return {
+      ok: false,
+      code: 'unsupported',
+      message: 'This filesystem cannot move this file safely.',
+    }
+  if (
     code === 'EACCES' ||
     code === 'EPERM' ||
     code === 'EROFS' ||
@@ -235,7 +273,7 @@ function knownFailure(error: unknown): WorkspaceFileResult<never> | null {
       message: 'This file cannot be accessed.',
     }
   if (!(error instanceof Error)) return null
-  if (error.message.includes('2 MiB'))
+  if (/\b(?:2|16) MiB\b/.test(error.message))
     return { ok: false, code: 'limit-exceeded', message: error.message }
   if (
     error.message.includes('Choose a file or folder') ||
@@ -243,7 +281,7 @@ function knownFailure(error: unknown): WorkspaceFileResult<never> | null {
   )
     return { ok: false, code: 'permission-denied', message: error.message }
   if (
-    error.message.includes('text file') ||
+    error.message.includes('Choose a file') ||
     error.message.includes('UTF-8') ||
     /not valid for encoding utf-8/i.test(error.message)
   )
@@ -253,6 +291,36 @@ function knownFailure(error: unknown): WorkspaceFileResult<never> | null {
       message: 'Choose a UTF-8 text document.',
     }
   return null
+}
+
+/** Explicit, bounded binary read; no buffer or active-tab state is consulted. */
+export async function readWorkspaceBinary(
+  target: WorkspaceTarget,
+  path: unknown,
+): Promise<WorkspaceFileResult<WorkspaceBinaryRead>> {
+  const root = workspaceRoot()
+  if (!root || !isCurrentWorkspaceTarget(target)) return stale()
+  try {
+    const file = await resolveWorkspaceEntry(root, path)
+    if (!isCurrentWorkspaceTarget(target)) return stale()
+    const read = await readScopedBytes(root, file, MAX_BINARY_BYTES)
+    if (!isCurrentWorkspaceTarget(target)) return stale()
+    return {
+      ok: true,
+      value: {
+        target,
+        path: relative(root, read.canonical).split(sep).join('/'),
+        bytes: read.bytes,
+        version: read.version,
+        source: 'disk',
+      },
+    }
+  } catch (error) {
+    if (!isCurrentWorkspaceTarget(target)) return stale()
+    const failure = knownFailure(error)
+    if (failure) return failure
+    throw error
+  }
 }
 
 /** Explicit disk read: never follows current tab or active editor focus. */
@@ -285,29 +353,30 @@ export async function readWorkspaceText(
   }
 }
 
-/** Exclusive create with the existing document size limit and path rules. */
-export async function createWorkspaceText(
+/** Exclusive create under a captured workspace and addon activation. */
+async function createWorkspaceFile(
   target: WorkspaceTarget,
   path: unknown,
-  markdown: unknown,
+  contents: string | Uint8Array,
+  kind: 'text' | 'binary',
   isCurrentOwner?: () => boolean,
 ): Promise<WorkspaceFileResult<WorkspaceTextCreation>> {
   const ownerActive = () => isCurrentOwner?.() ?? true
   const root = workspaceRoot()
   if (!root || !isCurrentWorkspaceTarget(target)) return stale()
   if (!ownerActive()) return disposed()
-  if (typeof markdown !== 'string')
-    return { ok: false, code: 'unsupported', message: 'Use UTF-8 text.' }
   try {
-    validateMarkdown(markdown)
     const file = await resolveWorkspaceEntry(root, path, true)
     if (!isCurrentWorkspaceTarget(target)) return stale()
     if (!ownerActive()) return disposed()
-    if (!isDocumentName(file, true))
+    if (isDocumentName(file, true) !== (kind === 'text'))
       return {
         ok: false,
         code: 'unsupported',
-        message: 'Use a supported document extension.',
+        message:
+          kind === 'text'
+            ? 'Use a supported document extension.'
+            : 'Use a non-document attachment extension.',
       }
     const parent = await parentIdentity(root, file)
     if (!isCurrentWorkspaceTarget(target)) return stale()
@@ -320,13 +389,16 @@ export async function createWorkspaceText(
       }
     // The scope is rechecked after staging and immediately before commit.
     let openDocumentConflict = false
-    const commit = await createExclusiveText(file, markdown, async () => {
+    const commitIfCurrent = async () => {
       if (!isCurrentWorkspaceTarget(target) || !ownerActive()) return false
       await verifyParent(root, file, parent)
       if (!isCurrentWorkspaceTarget(target) || !ownerActive()) return false
       openDocumentConflict = hasOpenDocumentPath(file)
       return !openDocumentConflict
-    })
+    }
+    const commit = await (kind === 'text'
+      ? createExclusiveText(file, contents as string, commitIfCurrent)
+      : createExclusiveBytes(file, contents as Uint8Array, commitIfCurrent))
     if (!commit) {
       if (!isCurrentWorkspaceTarget(target)) return stale()
       if (!ownerActive()) return disposed()
@@ -375,9 +447,52 @@ export async function createWorkspaceText(
   }
 }
 
+/** Exclusive text creation retains the existing 2 MiB document limit. */
+export async function createWorkspaceText(
+  target: WorkspaceTarget,
+  path: unknown,
+  markdown: unknown,
+  isCurrentOwner?: () => boolean,
+): Promise<WorkspaceFileResult<WorkspaceTextCreation>> {
+  if (typeof markdown !== 'string')
+    return { ok: false, code: 'unsupported', message: 'Use UTF-8 text.' }
+  try {
+    validateMarkdown(markdown)
+  } catch (error) {
+    const failure = knownFailure(error)
+    if (failure) return failure
+    throw error
+  }
+  return createWorkspaceFile(target, path, markdown, 'text', isCurrentOwner)
+}
+
+/** Exclusive attachment creation copies caller bytes before awaiting disk IO. */
+export async function createWorkspaceBinary(
+  target: WorkspaceTarget,
+  path: unknown,
+  bytes: unknown,
+  isCurrentOwner?: () => boolean,
+): Promise<WorkspaceFileResult<WorkspaceBinaryCreation>> {
+  if (!(bytes instanceof Uint8Array))
+    return { ok: false, code: 'unsupported', message: 'Use binary bytes.' }
+  if (bytes.byteLength > MAX_BINARY_BYTES)
+    return {
+      ok: false,
+      code: 'limit-exceeded',
+      message: 'This attachment exceeds the 16 MiB limit.',
+    }
+  return createWorkspaceFile(
+    target,
+    path,
+    Uint8Array.from(bytes),
+    'binary',
+    isCurrentOwner,
+  )
+}
+
 const pendingUpdates = new Map<string, Promise<void>>()
 
-async function serializeUpdate<T>(
+async function serializeMutation<T>(
   file: string,
   work: () => Promise<T>,
 ): Promise<T> {
@@ -455,7 +570,7 @@ export async function updateWorkspaceText(
     const canonical = await realpath(file)
     if (!inside(root, canonical))
       throw mutationError('EACCES', 'This path is outside the workspace.')
-    return await serializeUpdate(canonical, async () => {
+    return await serializeMutation(canonical, async () => {
       const ensureActive = () => {
         if (!isCurrentWorkspaceTarget(target))
           throw mutationError('EWORKSPACE', 'This workspace is no longer open.')
@@ -540,6 +655,274 @@ export async function updateWorkspaceText(
           ownerActiveAfterCommit,
           metadataPreserved: false,
           ...commit,
+        },
+      }
+    })
+  } catch (error) {
+    if (!isCurrentWorkspaceTarget(target)) return stale()
+    if (!ownerActive()) return disposed()
+    const failure = knownFailure(error)
+    if (failure) return failure
+    throw error
+  }
+}
+
+function sameInode(left: BigIntStats, right: BigIntStats): boolean {
+  return left.dev === right.dev && left.ino === right.ino
+}
+
+async function syncDirectories(...paths: string[]): Promise<boolean> {
+  if (process.platform === 'win32') return false
+  try {
+    for (const path of new Set(paths.map(dirname))) {
+      const directory = await open(path, 'r')
+      try {
+        await directory.sync()
+      } finally {
+        await directory.close()
+      }
+    }
+    return true
+  } catch (error) {
+    console.error('workspace file directory sync failed:', error)
+    return false
+  }
+}
+
+function validVersion(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+}
+
+/** Closed-file move. An exclusive hard link prevents destination overwrite. */
+export async function renameWorkspaceFile(
+  target: WorkspaceTarget,
+  sourcePath: unknown,
+  destinationPath: unknown,
+  expectedVersion: unknown,
+  isCurrentOwner?: () => boolean,
+): Promise<WorkspaceFileResult<WorkspaceFileRename>> {
+  const ownerActive = () => isCurrentOwner?.() ?? true
+  const root = workspaceRoot()
+  if (!root || !isCurrentWorkspaceTarget(target)) return stale()
+  if (!ownerActive()) return disposed()
+  if (!validVersion(expectedVersion))
+    return {
+      ok: false,
+      code: 'unsupported',
+      message: 'Read this file before moving it.',
+    }
+  try {
+    const source = await resolveWorkspaceEntry(root, sourcePath)
+    const destination = await resolveWorkspaceEntry(root, destinationPath, true)
+    if (source === destination)
+      return {
+        ok: false,
+        code: 'conflict',
+        message: 'Choose a different destination.',
+      }
+    if (!isCurrentWorkspaceTarget(target)) return stale()
+    if (!ownerActive()) return disposed()
+    const sourceCanonical = await realpath(source)
+    if (!inside(root, sourceCanonical))
+      throw mutationError('EACCES', 'This path is outside the workspace.')
+    return await serializeMutation(sourceCanonical, async () => {
+      const ensureActive = () => {
+        if (!isCurrentWorkspaceTarget(target))
+          throw mutationError('EWORKSPACE', 'This workspace is no longer open.')
+        if (!ownerActive())
+          throw mutationError('EOWNER', 'This addon is no longer active.')
+      }
+      ensureActive()
+      const original = await readScopedBytes(root, source, MAX_BINARY_BYTES)
+      ensureActive()
+      if (original.version !== expectedVersion)
+        throw mutationError('EVERSION', 'This file changed on disk.')
+      if (
+        hasOpenDocumentPath(source) ||
+        hasOpenDocumentPath(original.canonical) ||
+        hasOpenDocumentPath(destination)
+      )
+        throw mutationError('EOPEN', 'This document is open.')
+      const sourceParent = await parentIdentity(root, source)
+      const destinationParent = await parentIdentity(root, destination)
+      ensureActive()
+      await verifyParent(root, source, sourceParent)
+      await verifyParent(root, destination, destinationParent)
+      const latest = await readScopedBytes(root, source, MAX_BINARY_BYTES)
+      ensureActive()
+      if (latest.version !== expectedVersion)
+        throw mutationError('EVERSION', 'This file changed on disk.')
+      if (
+        hasOpenDocumentPath(source) ||
+        hasOpenDocumentPath(latest.canonical) ||
+        hasOpenDocumentPath(destination)
+      )
+        throw mutationError('EOPEN', 'This document is open.')
+      // link is exclusive on supported filesystems. Once it succeeds, both
+      // names may exist; a later failure must never erase the new entry.
+      // ponytail: path-based unlink can race an external source replacement;
+      // native inode-conditional file operations are needed to close that gap.
+      await link(source, destination)
+      let sourceRemoved = false
+      let scopeVerifiedAfterCommit = false
+      try {
+        ensureActive()
+        await verifyParent(root, source, sourceParent)
+        await verifyParent(root, destination, destinationParent)
+        const [currentSource, currentDestination] = await Promise.all([
+          readScopedBytes(root, source, MAX_BINARY_BYTES),
+          lstat(destination, { bigint: true }),
+        ])
+        if (
+          !sameInode(currentSource.info, original.info) ||
+          !sameInode(currentDestination, original.info) ||
+          createHash('sha256').update(currentSource.bytes).digest('hex') !==
+            createHash('sha256').update(original.bytes).digest('hex') ||
+          hasOpenDocumentPath(source) ||
+          hasOpenDocumentPath(destination)
+        )
+          throw mutationError('ESTALE', 'This workspace file changed.')
+        ensureActive()
+        await unlink(source)
+        sourceRemoved = true
+      } catch (error) {
+        // The destination has committed. Keep both names on any uncertainty.
+        console.error(
+          'workspace source retained after move:',
+          error instanceof Error ? error.message : error,
+        )
+      }
+      try {
+        await verifyParent(root, destination, destinationParent)
+        const currentDestination = await lstat(destination, { bigint: true })
+        scopeVerifiedAfterCommit = sameInode(currentDestination, original.info)
+      } catch (error) {
+        console.error('workspace destination changed after move:', error)
+      }
+      const directorySynced = scopeVerifiedAfterCommit
+        ? await syncDirectories(source, destination)
+        : false
+      const oldPath = relative(root, original.canonical).split(sep).join('/')
+      const newPath = relative(root, destination).split(sep).join('/')
+      let indexed = false
+      if (scopeVerifiedAfterCommit && isCurrentWorkspaceTarget(target)) {
+        try {
+          indexed = (await refreshWorkspace([oldPath, newPath])) !== null
+        } catch (error) {
+          console.error('workspace refresh after move failed:', error)
+        }
+      }
+      let ownerActiveAfterCommit = false
+      try {
+        ownerActiveAfterCommit = ownerActive()
+      } catch (error) {
+        console.error('workspace owner check after move failed:', error)
+      }
+      return {
+        ok: true,
+        value: {
+          target,
+          path: oldPath,
+          destinationPath: newPath,
+          previousVersion: expectedVersion,
+          persisted: true,
+          sourceRemoved,
+          indexed,
+          directorySynced,
+          atomicVisibility: false,
+          scopeVerifiedAfterCommit,
+          ownerActiveAfterCommit,
+        },
+      }
+    })
+  } catch (error) {
+    if (!isCurrentWorkspaceTarget(target)) return stale()
+    if (!ownerActive()) return disposed()
+    const failure = knownFailure(error)
+    if (failure) return failure
+    throw error
+  }
+}
+
+/** Trash a closed regular file only after verifying its disk version. */
+export async function trashWorkspaceFile(
+  target: WorkspaceTarget,
+  path: unknown,
+  expectedVersion: unknown,
+  trashItem: (file: string) => Promise<void>,
+  isCurrentOwner?: () => boolean,
+): Promise<WorkspaceFileResult<WorkspaceFileTrash>> {
+  const ownerActive = () => isCurrentOwner?.() ?? true
+  const root = workspaceRoot()
+  if (!root || !isCurrentWorkspaceTarget(target)) return stale()
+  if (!ownerActive()) return disposed()
+  if (!validVersion(expectedVersion))
+    return {
+      ok: false,
+      code: 'unsupported',
+      message: 'Read this file before trashing it.',
+    }
+  try {
+    const file = await resolveWorkspaceEntry(root, path)
+    if (!isCurrentWorkspaceTarget(target)) return stale()
+    if (!ownerActive()) return disposed()
+    const canonical = await realpath(file)
+    if (!inside(root, canonical))
+      throw mutationError('EACCES', 'This path is outside the workspace.')
+    return await serializeMutation(canonical, async () => {
+      const original = await readScopedBytes(root, file, MAX_BINARY_BYTES)
+      if (original.version !== expectedVersion)
+        throw mutationError('EVERSION', 'This file changed on disk.')
+      if (hasOpenDocumentPath(file) || hasOpenDocumentPath(original.canonical))
+        throw mutationError('EOPEN', 'This document is open.')
+      const parent = await parentIdentity(root, file)
+      if (!isCurrentWorkspaceTarget(target)) return stale()
+      if (!ownerActive()) return disposed()
+      await verifyParent(root, file, parent)
+      const latest = await readScopedBytes(root, file, MAX_BINARY_BYTES)
+      if (latest.version !== expectedVersion)
+        throw mutationError('EVERSION', 'This file changed on disk.')
+      if (hasOpenDocumentPath(file) || hasOpenDocumentPath(latest.canonical))
+        throw mutationError('EOPEN', 'This document is open.')
+      if (!isCurrentWorkspaceTarget(target)) return stale()
+      if (!ownerActive()) return disposed()
+      // ponytail: the OS trash API accepts a path, so an external replacement
+      // between this check and trash needs native identity-bound IO to exclude.
+      await trashItem(file)
+      const changedPath = relative(root, original.canonical)
+        .split(sep)
+        .join('/')
+      let scopeVerifiedAfterCommit = false
+      let indexed = false
+      try {
+        await verifyParent(root, file, parent)
+        scopeVerifiedAfterCommit = true
+      } catch (error) {
+        console.error('workspace parent changed after trash:', error)
+      }
+      if (scopeVerifiedAfterCommit && isCurrentWorkspaceTarget(target)) {
+        try {
+          indexed = (await refreshWorkspace([changedPath])) !== null
+        } catch (error) {
+          console.error('workspace refresh after trash failed:', error)
+        }
+      }
+      let ownerActiveAfterCommit = false
+      try {
+        ownerActiveAfterCommit = ownerActive()
+      } catch (error) {
+        console.error('workspace owner check after trash failed:', error)
+      }
+      return {
+        ok: true,
+        value: {
+          target,
+          path: changedPath,
+          previousVersion: expectedVersion,
+          persisted: true,
+          indexed,
+          scopeVerifiedAfterCommit,
+          ownerActiveAfterCommit,
         },
       }
     })

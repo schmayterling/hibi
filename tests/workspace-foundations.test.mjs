@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { renameSync, symlinkSync } from 'node:fs'
+import { existsSync, renameSync, symlinkSync } from 'node:fs'
 import {
   link,
   mkdir,
@@ -240,10 +240,17 @@ test('scoped text service guards reads, creates and closed-file updates', async 
       },
     ],
   })
-  const { createWorkspaceText, readWorkspaceText, updateWorkspaceText } =
-    await import(
-      `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
-    )
+  const {
+    createWorkspaceBinary,
+    createWorkspaceText,
+    readWorkspaceBinary,
+    readWorkspaceText,
+    renameWorkspaceFile,
+    trashWorkspaceFile,
+    updateWorkspaceText,
+  } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
+  )
   const updateText = (target, path, version, markdown, owner) =>
     updateWorkspaceText(
       target,
@@ -454,6 +461,150 @@ test('scoped text service guards reads, creates and closed-file updates', async 
     'conflict',
   )
   assert.equal(await readFile(join(root, 'note.md'), 'utf8'), finalNoteText)
+  const noteBeforeMove = await readWorkspaceText(target, 'note.md')
+  host.openDocuments = [{ file: join(root, 'note.md') }]
+  assert.equal(
+    (
+      await renameWorkspaceFile(
+        target,
+        'note.md',
+        'should-stay.md',
+        noteBeforeMove.value.version,
+      )
+    ).code,
+    'conflict',
+  )
+  host.openDocuments = []
+  await assert.rejects(readFile(join(root, 'should-stay.md')), {
+    code: 'ENOENT',
+  })
+  const attachment = new Uint8Array([0, 255, 1])
+  const createdAttachment = await createWorkspaceBinary(
+    target,
+    'image.bin',
+    attachment,
+  )
+  assert.equal(createdAttachment.ok, true)
+  assert.equal(createdAttachment.value.persisted, true)
+  assert.deepEqual(
+    await readFile(join(root, 'image.bin')),
+    Buffer.from(attachment),
+  )
+  assert.equal(
+    (await createWorkspaceBinary(target, 'image.bin', attachment)).code,
+    'conflict',
+  )
+  assert.equal(
+    (await createWorkspaceBinary(target, 'binary.md', attachment)).code,
+    'unsupported',
+  )
+  assert.equal(
+    (await createWorkspaceBinary(target, '../outside.bin', attachment)).code,
+    'permission-denied',
+  )
+  assert.equal(
+    (
+      await createWorkspaceBinary(
+        target,
+        'large.bin',
+        new Uint8Array(16 * 1024 * 1024 + 1),
+      )
+    ).code,
+    'limit-exceeded',
+  )
+  const binaryRead = await readWorkspaceBinary(target, 'image.bin')
+  assert.equal(binaryRead.ok, true)
+  assert.deepEqual(binaryRead.value.bytes, Buffer.from(attachment))
+  assert.match(binaryRead.value.version, /^[a-f0-9]{64}$/)
+  assert.equal(
+    (await readWorkspaceText(target, 'image.bin')).code,
+    'unsupported',
+  )
+  assert.equal(
+    (
+      await renameWorkspaceFile(
+        target,
+        'image.bin',
+        'note.md',
+        binaryRead.value.version,
+      )
+    ).code,
+    'conflict',
+  )
+  const renamed = await renameWorkspaceFile(
+    target,
+    'image.bin',
+    'renamed.bin',
+    binaryRead.value.version,
+  )
+  assert.equal(renamed.ok, true)
+  assert.equal(renamed.value.sourceRemoved, true)
+  assert.equal(renamed.value.atomicVisibility, false)
+  assert.deepEqual(
+    await readFile(join(root, 'renamed.bin')),
+    Buffer.from(attachment),
+  )
+  await assert.rejects(readFile(join(root, 'image.bin')), { code: 'ENOENT' })
+  assert.equal(
+    (
+      await renameWorkspaceFile(
+        target,
+        'renamed.bin',
+        'later.bin',
+        binaryRead.value.version,
+      )
+    ).code,
+    'conflict',
+  )
+  const movedRead = await readWorkspaceBinary(target, 'renamed.bin')
+  host.guard = () => !existsSync(join(root, 'retained.bin'))
+  const partial = await renameWorkspaceFile(
+    target,
+    'renamed.bin',
+    'retained.bin',
+    movedRead.value.version,
+  )
+  assert.equal(partial.ok, true)
+  assert.equal(partial.value.sourceRemoved, false)
+  assert.equal(existsSync(join(root, 'renamed.bin')), true)
+  assert.equal(existsSync(join(root, 'retained.bin')), true)
+  host.guard = () => true
+  const retainedRead = await readWorkspaceBinary(target, 'retained.bin')
+  host.openDocuments = [{ file: join(root, 'retained.bin') }]
+  assert.equal(
+    (
+      await trashWorkspaceFile(
+        target,
+        'retained.bin',
+        retainedRead.value.version,
+        (file) => rm(file),
+      )
+    ).code,
+    'conflict',
+  )
+  host.openDocuments = []
+  await writeFile(join(root, 'retained.bin'), Buffer.from([4]))
+  assert.equal(
+    (
+      await trashWorkspaceFile(
+        target,
+        'retained.bin',
+        retainedRead.value.version,
+        (file) => rm(file),
+      )
+    ).code,
+    'conflict',
+  )
+  const newestRead = await readWorkspaceBinary(target, 'retained.bin')
+  const trashed = await trashWorkspaceFile(
+    target,
+    'retained.bin',
+    newestRead.value.version,
+    (file) => rm(file),
+  )
+  assert.equal(trashed.ok, true)
+  assert.equal(trashed.value.persisted, true)
+  await assert.rejects(readFile(join(root, 'retained.bin')), { code: 'ENOENT' })
   assert.equal(
     (await readWorkspaceText(target, 'missing.md')).code,
     'not-found',

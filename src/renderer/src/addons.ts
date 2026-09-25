@@ -523,6 +523,17 @@ export function useAddons(
         documentRuntime,
         (request) => editScope.apply(request),
         () => latest.current.isBusy(),
+        async (tabId, revision, contentVersion) => {
+          if (disposed) return { status: 'stale', document: null }
+          await window.hibi.flushDocumentChanges()
+          if (disposed) return { status: 'stale', document: null }
+          return window.hibi.saveTargetDocument(
+            id,
+            tabId,
+            revision,
+            contentVersion,
+          )
+        },
       )
       const pendingCommandTargets = new Set<CommandExecutionContext>()
       const annotationScope = editorAnnotations.scope(id)
@@ -723,8 +734,11 @@ export function useAddons(
             storage: storageScope.api,
             documents: {
               listOpen: targetEditScope.listOpen,
+              getMetadata: targetEditScope.getMetadata,
+              subscribe: targetEditScope.subscribe,
               readSource: targetEditScope.readSource,
               applyEdits: targetEditScope.applyEdits,
+              save: targetEditScope.save,
             },
             host: {
               selectedText: {

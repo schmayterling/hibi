@@ -99,6 +99,40 @@ test('installed addon network bridge asks for each destination and private addre
   const local = await app.evaluate(() => globalThis.networkPrompts)
   assert.equal(local.length, 2)
   assert.match(local[1].message, /local or private address/)
+  await app.evaluate(async ({ BrowserWindow, dialog }) => {
+    const contents = BrowserWindow.getAllWindows()[0].webContents
+    while (contents.isLoadingMainFrame())
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    contents.emit('did-start-navigation', {}, 'app://hibi/', false, true)
+    dialog.showMessageBox = () =>
+      new Promise((resolve) => {
+        globalThis.releaseNetworkGrant = resolve
+      })
+  })
+  await page.evaluate(() => {
+    window.pendingNetworkResult = undefined
+    void window.networkProbe
+      .get('https://example.com/pending')
+      .then((result) => {
+        window.pendingNetworkResult = result
+      })
+  })
+  await app.evaluate(async ({ BrowserWindow }) => {
+    while (!globalThis.releaseNetworkGrant)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    const contents = BrowserWindow.getAllWindows()[0].webContents
+    contents.emit('did-start-navigation', {}, 'app://hibi/', false, true)
+  })
+  await page.waitForFunction(() => !!window.pendingNetworkResult, undefined, {
+    timeout: 5000,
+  })
+  assert.equal(
+    (await page.evaluate(() => window.pendingNetworkResult)).ok,
+    false,
+  )
+  await app.evaluate(() => {
+    globalThis.releaseNetworkGrant({ response: 0 })
+  })
   await page.evaluate(() => window.hibi.setAddonEnabled('network-probe', false))
   assert.deepEqual(
     await page.evaluate(() =>

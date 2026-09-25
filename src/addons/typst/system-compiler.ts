@@ -18,6 +18,24 @@ import type { TypstResult } from './types'
 type Snapshot = { entry: string; files?: [string, Uint8Array][] }
 type Job = { source: string; block: boolean; pdf: boolean }
 
+function awaitSnapshot(snapshot: () => Promise<Snapshot>, signal: AbortSignal) {
+  return new Promise<Snapshot>((resolve, reject) => {
+    const abort = () => reject(new Error('Typst compilation canceled.'))
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) {
+      abort()
+      return
+    }
+    void Promise.resolve()
+      .then(() => {
+        if (signal.aborted) throw new Error('Typst compilation canceled.')
+        return snapshot()
+      })
+      .then(resolve, reject)
+      .finally(() => signal.removeEventListener('abort', abort))
+  })
+}
+
 function command(
   executable: string,
   args: string[],
@@ -35,19 +53,23 @@ function command(
     let stderr = ''
     const abort = () => child.kill('SIGKILL')
     signal.addEventListener('abort', abort, { once: true })
-    if (signal.aborted) abort()
     child.stdout.on('data', () => {})
-    child.stderr.on('data', (chunk: Buffer) => {
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => {
       if (Buffer.byteLength(stderr) >= 128 * 1024) return
-      stderr += chunk.toString()
+      stderr += chunk
       if (Buffer.byteLength(stderr) > 128 * 1024) abort()
     })
-    child.once('error', fail)
+    child.once('error', (error) => {
+      signal.removeEventListener('abort', abort)
+      fail(error)
+    })
     child.once('close', (code) => {
       signal.removeEventListener('abort', abort)
       done({ code, stderr: stderr.slice(-6000) })
     })
     child.stdin.end()
+    if (signal.aborted) abort()
   })
 }
 
@@ -69,13 +91,18 @@ export async function compileSystemTypst(
   blocker.on('connect', (_request, socket) =>
     socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'),
   )
+  const check = () => {
+    if (signal.aborted) throw new Error('Typst compilation canceled.')
+  }
   try {
+    check()
     await mkdir(project)
     await mkdir(join(scratch, 'packages'))
     await new Promise<void>((done, fail) => {
       blocker.once('error', fail)
       blocker.listen(0, '127.0.0.1', done)
     })
+    check()
     const address = blocker.address()
     if (!address || typeof address === 'string')
       throw new Error('Could not block network access for Typst.')
@@ -94,20 +121,26 @@ export async function compileSystemTypst(
       no_proxy: '',
     }
     const requested = new Set<string>()
+    let pending = new Set<string>()
     for (let pass = 0; pass < 64; pass++) {
-      if (signal.aborted) throw new Error('Typst compilation canceled.')
-      const files = await snapshot(requested)
+      check()
+      const files = await awaitSnapshot(() => snapshot(pending), signal)
+      check()
       for (const [name, bytes] of files.files ?? []) {
+        check()
         const path = resolve(project, name)
         if (!withinProject(project, path))
           throw new Error('Typst project contains an invalid file path.')
         await mkdir(dirname(path), { recursive: true })
+        check()
         await writeFile(path, bytes)
       }
+      check()
       const entry = resolve(project, files.entry)
       if (!withinProject(project, entry))
         throw new Error('Typst document has an invalid file path.')
       await mkdir(dirname(entry), { recursive: true })
+      check()
       await writeFile(
         entry,
         job.block
@@ -116,6 +149,7 @@ export async function compileSystemTypst(
       )
       await rm(output, { recursive: true, force: true })
       await mkdir(output)
+      check()
       const target = join(output, job.pdf ? 'document.pdf' : 'page-{p}.svg')
       const { code, stderr } = await command(
         executable,
@@ -134,10 +168,12 @@ export async function compileSystemTypst(
         env,
         signal,
       )
-      if (signal.aborted) throw new Error('Typst compilation canceled.')
+      check()
       if (code !== 0) {
         const missing = [
-          ...stderr.matchAll(/file not found \(searched at ([^)]+)\)/g),
+          ...stderr.matchAll(
+            /file not found \(searched at ([^\r\n]+)\)(?=\r?$)/gm,
+          ),
         ]
           .map((match) => match[1])
           .filter((path): path is string => path !== undefined)
@@ -146,8 +182,10 @@ export async function compileSystemTypst(
           .filter((path) => !requested.has(path))
         if (missing.length) {
           for (const path of missing) requested.add(path)
+          pending = new Set(missing)
           continue
         }
+        check()
         return {
           requested: [...requested],
           diagnostics: [
@@ -170,8 +208,11 @@ export async function compileSystemTypst(
       if (job.pdf) {
         if ((await stat(target)).size > 64 * 1024 * 1024)
           throw new Error('Typst PDF exceeds 64 MiB.')
+        check()
+        const pdf = await readFile(target)
+        check()
         return {
-          pdf: await readFile(target),
+          pdf,
           requested: [...requested],
           diagnostics,
         }
@@ -187,12 +228,17 @@ export async function compileSystemTypst(
       if (names.length > 200)
         throw new Error('Typst previews support up to 200 pages.')
       let size = 0
-      for (const name of names) size += (await stat(join(output, name))).size
+      for (const name of names) {
+        check()
+        size += (await stat(join(output, name))).size
+      }
       if (size > 20 * 1024 * 1024)
         throw new Error('Typst preview exceeds 20 MiB.')
+      check()
       const svgs = await Promise.all(
         names.map((name) => readFile(join(output, name), 'utf8')),
       )
+      check()
       return {
         svg: svgs[0] ?? '',
         ...(svgs.length > 1 ? { svgs } : {}),

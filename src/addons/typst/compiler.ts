@@ -94,6 +94,7 @@ function project(
   id: string | undefined,
   paths: ReadonlySet<string>,
   previousKey = fingerprint,
+  signal?: AbortSignal,
 ) {
   return documentProject(context, {
     id,
@@ -101,8 +102,20 @@ function project(
     allowed,
     previousKey,
     paths: [...paths],
-    canceled: () => epoch !== generation,
+    canceled: () => epoch !== generation || signal?.aborted === true,
   })
+}
+
+function raceAbort<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
+  let abort = () => {}
+  const canceled = new Promise<never>((_resolve, reject) => {
+    abort = () => reject(new Error('Typst compilation canceled.'))
+    signal.addEventListener('abort', abort, { once: true })
+  })
+  if (signal.aborted) abort()
+  return Promise.race([pending, canceled]).finally(() =>
+    signal.removeEventListener('abort', abort),
+  )
 }
 
 export async function compileTypst(
@@ -129,10 +142,12 @@ export async function compileTypst(
   )
     throw new Error('Could not read this Typst document.')
   const documentId = value.documentId ?? context.document.get().id
+  const epoch = generation
   const executable =
     value.compiler === 'system'
       ? await context.dependencies.resolve('typst')
       : null
+  if (epoch !== generation) throw new Error('Typst compilation canceled.')
   if (value.compiler === 'system' && !executable)
     throw new Error(
       'Install Typst or choose its executable in Settings → Dependencies.',
@@ -153,7 +168,6 @@ export async function compileTypst(
   if (duplicate) return duplicate
   if (queued >= 16) throw new Error('Typst is busy. Try again shortly.')
   queued++
-  const epoch = generation
   const run = tail
     .catch(() => {})
     .then(async () => {
@@ -181,12 +195,6 @@ export async function compileTypst(
       }
       if (epoch !== generation) throw new Error('Typst compilation canceled.')
       if (executable) {
-        const fontSnapshot = await documentProject(context, {
-          id: documentId,
-          entry: 'untitled.typ',
-          allowed: fonts,
-          canceled: () => epoch !== generation,
-        })
         const controller = new AbortController()
         let timedOut = false
         cancel = () => controller.abort()
@@ -194,8 +202,22 @@ export async function compileTypst(
           timedOut = true
           reportOwnedFailure('COMPILER_TIMEOUT', 'typst')
           controller.abort()
-        }, 10000)
+        }, 30000)
         try {
+          const fontSnapshot = await raceAbort(
+            documentProject(context, {
+              id: documentId,
+              entry: 'untitled.typ',
+              allowed: fonts,
+              canceled: () => epoch !== generation || controller.signal.aborted,
+            }),
+            controller.signal,
+          )
+          if (controller.signal.aborted || epoch !== generation)
+            throw new Error('Typst compilation canceled.')
+          const staged = new Map<string, number>()
+          let stagedBytes = 0
+          let firstPass = true
           const result = await compileSystemTypst(
             executable,
             {
@@ -210,21 +232,25 @@ export async function compileTypst(
                 documentId,
                 paths,
                 '',
+                controller.signal,
               )
+              if (controller.signal.aborted || epoch !== generation)
+                throw new Error('Typst compilation canceled.')
               const files = [
                 ...new Map([
-                  ...(fontSnapshot.files ?? []),
+                  ...(firstPass ? (fontSnapshot.files ?? []) : []),
                   ...(snapshot.files ?? []),
                 ]).entries(),
               ]
-              if (
-                files.length > 1000 ||
-                files.reduce((size, [, bytes]) => size + bytes.byteLength, 0) >
-                  64 * 1024 * 1024
-              )
-                throw new Error(
-                  'This document needs more than 1,000 files or 64 MiB of files.',
-                )
+              for (const [name, bytes] of files) {
+                stagedBytes += bytes.byteLength - (staged.get(name) ?? 0)
+                staged.set(name, bytes.byteLength)
+                if (staged.size > 1000 || stagedBytes > 64 * 1024 * 1024)
+                  throw new Error(
+                    'This document needs more than 1,000 files or 64 MiB of files.',
+                  )
+              }
+              firstPass = false
               return {
                 entry: snapshot.entry,
                 files,
@@ -233,6 +259,8 @@ export async function compileTypst(
             controller.signal,
             join(app.getPath('userData'), 'typst', 'packages'),
           )
+          if (controller.signal.aborted || epoch !== generation)
+            throw new Error('Typst compilation canceled.')
           const workspace = context.workspace.directory()
           const { requested, ...compiled } = result
           return {
@@ -245,7 +273,7 @@ export async function compileTypst(
         } catch (error) {
           if (timedOut)
             throw new Error(
-              'Typst compilation took longer than 10 seconds. Simplify the document and try again.',
+              'Typst project took too long to compile. Try again.',
             )
           throw error
         } finally {

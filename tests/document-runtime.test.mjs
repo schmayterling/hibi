@@ -196,6 +196,7 @@ test('document and editor-view targets survive focus and expire on close or unmo
   runtime.activate(document('first', { tabs }))
   const firstDocument = { ...runtime.get() }
   const target = runtime.captureDocument()
+  const primaryView = runtime.primaryViewId('one')
   const firstSession = runtime.session()
   const unmount = runtime.registerView('one', 'editor-one')
   const view = runtime.captureActiveView()
@@ -219,11 +220,12 @@ test('document and editor-view targets survive focus and expire on close or unmo
   assert.equal(runtime.captureDocument('one'), target)
   runtime.activate({ ...firstDocument, revision: 3, tabs })
   assert.equal(runtime.captureDocument(), target)
+  assert.equal(runtime.primaryViewId('one'), primaryView)
   assert.equal(runtime.resolveDocument(target), firstSession)
   assert.equal(runtime.isLiveView(view), true)
   unmount()
   assert.equal(runtime.isLiveView(view), false)
-  assert.equal(firstSession.selection('editor-one'), null)
+  assert.equal(firstSession.selection('editor-one').ranges[0].head, 1)
   const unmountAgain = runtime.registerView('one', 'editor-one')
   assert.notEqual(
     runtime.captureActiveView().viewGeneration,
@@ -239,10 +241,12 @@ test('document and editor-view targets survive focus and expire on close or unmo
     }),
   )
   assert.equal(runtime.resolveDocument(target), null)
+  assert.equal(firstSession.selection('editor-one'), null)
   runtime.activate(document('reopened', { revision: 5, tabs }))
   const reopened = runtime.captureDocument()
   assert.notEqual(reopened.documentId, target.documentId)
   assert.notEqual(reopened.documentGeneration, target.documentGeneration)
+  assert.notEqual(runtime.primaryViewId('one'), primaryView)
   assert.equal(runtime.resolveDocument(target), null)
   runtime.dispose()
 })

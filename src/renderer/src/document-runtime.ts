@@ -36,6 +36,7 @@ export class DocumentRuntime {
   readonly #sessions = new Map<string, DocumentSession>()
   readonly #documentTargets = new Map<string, DocumentTarget>()
   readonly #targetSessions = new Map<DocumentId, DocumentSession>()
+  readonly #primaryViewIds = new Map<string, ViewId>()
   readonly #saves = new Map<
     string,
     { next: number; acknowledged: number; epoch: number }
@@ -92,6 +93,7 @@ export class DocumentRuntime {
     id && this.#sessions.has(id)
       ? (this.#documentTargets.get(id) ?? null)
       : null
+  primaryViewId = (tabId: string) => this.#primaryViewIds.get(tabId) ?? null
   beginSave(id: string | null = this.#activeId): DocumentSaveToken | null {
     const target = this.captureDocument(id),
       progress = id ? this.#saves.get(id) : null
@@ -113,9 +115,8 @@ export class DocumentRuntime {
       : null
   }
   registerView(tabId: string, viewId: ViewId) {
-    const document = this.captureDocument(tabId),
-      session = this.session(tabId)
-    if (!document || !session || this.#views.has(viewId))
+    const document = this.captureDocument(tabId)
+    if (!document || this.#views.has(viewId))
       throw new Error('This editor view is unavailable.')
     const target = Object.freeze({
       ...document,
@@ -127,7 +128,6 @@ export class DocumentRuntime {
     return () => {
       if (this.#views.get(viewId) !== target) return
       this.#views.delete(viewId)
-      session.releaseView(viewId)
       if (this.#activeView === viewId) this.#activeView = null
     }
   }
@@ -170,6 +170,7 @@ export class DocumentRuntime {
         }
     }
     this.#documentTargets.delete(id)
+    this.#primaryViewIds.delete(id)
     this.#saves.delete(id)
     for (const detach of this.#detach.get(id) ?? []) detach()
     this.#detach.delete(id)
@@ -347,6 +348,7 @@ export class DocumentRuntime {
         })
         this.#documentTargets.set(document.tabId, target)
         this.#targetSessions.set(target.documentId, session)
+        this.#primaryViewIds.set(document.tabId, crypto.randomUUID() as ViewId)
         this.#saves.set(document.tabId, {
           next: 0,
           acknowledged: 0,

@@ -31,15 +31,17 @@ test('closing settings never overrides a newer editor focus', {
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   await source.waitFor()
   await clickMenu(app, 'Settings')
-  await page.evaluate(async () => {
+  await page.evaluate(() => {
     document.activeElement.dispatchEvent(
       new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
     )
-    // A new focus happens after React closes settings, before its queued frame.
-    await Promise.resolve()
-    document.querySelector('.cm-content').focus()
-    await new Promise(requestAnimationFrame)
   })
+  await page
+    .getByRole('main', { name: /^settings$/i })
+    .waitFor({ state: 'hidden' })
+  await page.locator('.editor-surface:not([inert])').waitFor()
+  await source.focus()
+  await page.evaluate(() => new Promise(requestAnimationFrame))
   assert.equal(
     await source.evaluate((element) => element === document.activeElement),
     true,

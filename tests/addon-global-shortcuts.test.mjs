@@ -67,3 +67,41 @@ test('pending registration and old disposer cannot remove a replacement', async 
   removeNext()
   assert.equal(current, null)
 })
+
+test('callback registration used by existing addons remains owned', async () => {
+  let listener
+  let currentToken
+  let calls = 0
+  const transport = {
+    async registerGlobalShortcut(_id, _accelerator, token) {
+      currentToken = token
+    },
+    async unregisterGlobalShortcut(_id, token) {
+      if (currentToken === token) currentToken = undefined
+    },
+    onGlobalShortcut(callback) {
+      listener = callback
+      return () => {
+        listener = undefined
+      }
+    },
+  }
+  const scope = createAddonGlobalShortcuts(
+    'quick-note',
+    transport,
+    (command) => command(),
+    assert.fail,
+  )
+  const remove = await scope.register(
+    'capture',
+    'CommandOrControl+Alt+N',
+    () => {
+      calls += 1
+    },
+  )
+  listener({ id: 'quick-note.capture', token: currentToken })
+  assert.equal(calls, 1)
+  remove()
+  assert.equal(currentToken, undefined)
+  assert.equal(listener, undefined)
+})

@@ -19,6 +19,10 @@ import {
 } from 'electron'
 import { ADDON_CHANNELS } from '../addons/api'
 import { ABOUT_CHANNELS, SPONSOR_URL } from '../shared/about'
+import {
+  ADDON_HOTKEY_CHANNELS,
+  type AddonHotkeyRegistration,
+} from '../shared/addon-hotkeys'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
 import { DEPENDENCY_CHANNELS } from '../shared/dependencies'
@@ -55,6 +59,7 @@ import { UI_CASE_CHANNEL } from '../shared/ui-case'
 import { UPDATE_CHANNELS } from '../shared/updates'
 import { WORKSPACE_CHANNELS } from '../shared/workspace'
 import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
+import { AddonHotkeys } from './addon-hotkeys'
 import {
   enableAddon,
   getAddonStartupNotices,
@@ -212,6 +217,19 @@ let fileOperation: Promise<unknown> | null = null
 let quitting = false
 let recordingHotkey = false
 const globalShortcuts = new GlobalShortcuts(globalShortcut)
+const addonHotkeys = new AddonHotkeys(
+  join(app.getPath('userData'), 'addon-hotkeys.json'),
+  process.platform,
+  hotkeys,
+)
+let addonHotkeysLoading: Promise<void> | null = null
+const loadAddonHotkeys = () => {
+  if (!addonHotkeysLoading) {
+    addonHotkeys.setCoreHotkeys(hotkeys)
+    addonHotkeysLoading = addonHotkeys.load()
+  }
+  return addonHotkeysLoading
+}
 let pendingGlobalShortcut: { id: string; accelerator: string } | null = null
 const externalFiles: string[] = []
 function queueExternalFiles(paths: string[]) {
@@ -392,18 +410,30 @@ function createWindow(): void {
   mainWindow = window
   const stopRecording = () => {
     recordingHotkey = false
-    window.webContents.setIgnoreMenuShortcuts(false)
+    if (!window.isDestroyed()) window.webContents.setIgnoreMenuShortcuts(false)
   }
   window.on('blur', stopRecording)
   window.webContents.on('did-start-loading', stopRecording)
-  window.webContents.on('did-start-loading', () => globalShortcuts.clear())
+  window.webContents.on('did-start-loading', () => {
+    globalShortcuts.clear()
+    addonHotkeys.clearRegistrations()
+    installMenu()
+  })
   window.webContents.on('did-start-loading', () => analysisService.cancel())
   window.webContents.on('render-process-gone', () => {
+    stopRecording()
     globalShortcuts.clear()
+    addonHotkeys.clearRegistrations()
+    installMenu()
     pendingGlobalShortcut = null
     analysisService.cancel()
   })
-  window.on('closed', () => analysisService.cancel())
+  window.on('closed', () => {
+    recordingHotkey = false
+    addonHotkeys.clearRegistrations()
+    installMenu()
+    analysisService.cancel()
+  })
   window.webContents.on('before-input-event', (event, input) => {
     if (recordingHotkey || input.type !== 'keyDown' || input.isComposing) return
     const shortcut = shortcutFromEvent({
@@ -420,6 +450,13 @@ function createWindow(): void {
       event.preventDefault()
       if (!input.isAutoRepeat)
         window.webContents.send(HOTKEY_CHANNELS.command, action.id)
+      return
+    }
+    const addon = shortcut ? addonHotkeys.resolve(shortcut) : undefined
+    if (addon) {
+      event.preventDefault()
+      if (!input.isAutoRepeat)
+        window.webContents.send(ADDON_HOTKEY_CHANNELS.invoke, addon)
     }
   })
   let allowClose = false
@@ -600,6 +637,23 @@ function createWindow(): void {
 function installMenu(): void {
   const command = (action: AppCommand) => () =>
     mainWindow?.webContents.send(HOTKEY_CHANNELS.command, action)
+  const addonItems: MenuItemConstructorOptions[] = []
+  let group: string | null = null
+  for (const item of addonHotkeys.menuContributions()) {
+    const nextGroup = item.menu.group ?? ''
+    if (group !== null && group !== nextGroup)
+      addonItems.push({ type: 'separator' })
+    addonItems.push({
+      label: item.label,
+      click: () =>
+        mainWindow?.webContents.send(ADDON_HOTKEY_CHANNELS.invoke, {
+          id: item.id,
+          token: item.token,
+          source: 'menu',
+        }),
+    })
+    group = nextGroup
+  }
   const menu: MenuItemConstructorOptions[] = [
     ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
     {
@@ -689,6 +743,7 @@ function installMenu(): void {
         { role: 'togglefullscreen' },
       ],
     },
+    ...(addonItems.length ? [{ label: 'Addons', submenu: addonItems }] : []),
     { role: 'windowMenu' },
     { role: 'help', submenu: localDiagnostics.menuItems() },
   ]
@@ -1003,6 +1058,49 @@ if (!app.requestSingleInstanceLock()) {
         trustedWindow(event)
         return hotkeys
       })
+      handle(ADDON_HOTKEY_CHANNELS.get, async () => {
+        await loadAddonHotkeys()
+        return addonHotkeys.bindings()
+      })
+      handle(ADDON_HOTKEY_CHANNELS.register, async (event, value: unknown) => {
+        await loadAddonHotkeys()
+        addonHotkeys.register(value as AddonHotkeyRegistration)
+        installMenu()
+        const bindings = addonHotkeys.bindings()
+        event.sender.send(ADDON_HOTKEY_CHANNELS.changed, bindings)
+        return bindings
+      })
+      handle(
+        ADDON_HOTKEY_CHANNELS.unregister,
+        (event, id: unknown, token: unknown) => {
+          if (typeof id !== 'string' || typeof token !== 'string') return
+          if (!addonHotkeys.unregister(id, token)) return
+          installMenu()
+          event.sender.send(
+            ADDON_HOTKEY_CHANNELS.changed,
+            addonHotkeys.bindings(),
+          )
+        },
+      )
+      handle(
+        ADDON_HOTKEY_CHANNELS.save,
+        async (event, id: unknown, shortcut: unknown) => {
+          await loadAddonHotkeys()
+          if (typeof id !== 'string' || typeof shortcut !== 'string')
+            throw new Error('Choose a supported key combination.')
+          const bindings = await addonHotkeys.setOverride(id, shortcut)
+          event.sender.send(ADDON_HOTKEY_CHANNELS.changed, bindings)
+          return bindings
+        },
+      )
+      handle(ADDON_HOTKEY_CHANNELS.reset, async (event, id: unknown) => {
+        await loadAddonHotkeys()
+        if (typeof id !== 'string')
+          throw new Error('This addon command is not available.')
+        const bindings = await addonHotkeys.resetOverride(id)
+        event.sender.send(ADDON_HOTKEY_CHANNELS.changed, bindings)
+        return bindings
+      })
       handle(
         GLOBAL_SHORTCUT_CHANNELS.register,
         (event, id: unknown, accelerator: unknown, token: unknown) => {
@@ -1027,7 +1125,12 @@ if (!app.requestSingleInstanceLock()) {
       handle(HOTKEY_CHANNELS.save, async (event, value: unknown) => {
         trustedWindow(event)
         const next = await saveHotkeys(value)
+        addonHotkeys.setCoreHotkeys(next)
         installMenu()
+        event.sender.send(
+          ADDON_HOTKEY_CHANNELS.changed,
+          addonHotkeys.bindings(),
+        )
         return next
       })
       handle(HOTKEY_CHANNELS.record, (event, value: unknown) => {

@@ -71,11 +71,17 @@ Commands and toolbar buttons are separate registrations. Route the toolbar actio
 ```typescript
 const greet = () => context.notify('Hello.')
 
-context.commands.register({ id: 'greet', label: 'Say hello', run: greet })
+context.commands.register({
+  id: 'greet',
+  label: 'Say hello',
+  defaultShortcut: 'mod+alt+shift+g',
+  menu: { location: 'app' },
+  run: greet,
+})
 context.toolbar.register({ id: 'greet', label: 'Say hello', onClick: () => context.commands.execute('greet') })
 ```
 
-Toolbar and status-bar registrations return handles with `update` and `dispose` methods. Update an existing item when its value changes. Status-bar items should show useful state, such as a count, rather than repeat the addon name.
+The command appears in Hibi's Addons menu. Its in-app shortcut can be changed under **Settings → Hotkeys**; `mod` means Command on macOS and Control on Windows and Linux. Toolbar and status-bar registrations return handles with `update` and `dispose` methods. Update an existing item when its value changes. Status-bar items should show useful state, such as a count, rather than repeat the addon name.
 
 Users control toolbar order and each action's placement in Appearance settings. Actions can appear in the toolbar, stay in its dropdown, or be hidden. These choices persist across addon reloads. The shared [ToolbarPreferences](../addon-api-reference/ToolbarPreferences.md) API exposes them as `order` and `placements`; preserve other entries when changing one action. Context-specific `hidden` and `when` rules still apply.
 

@@ -126,6 +126,9 @@
   "6a2133724e54": [
     "src/main/addon-download.ts"
   ],
+  "4b392ad897a3": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
+  ],
   "9939894c9461": [
     "src/main/sideload.ts"
   ],
@@ -139,6 +142,7 @@
     "src/renderer/src/settings-categories.ts"
   ],
   "af3185c7197e": [
+    "src/main/index.ts",
     "src/renderer/src/settings-pages.ts"
   ],
   "7e778f24c85b": [
@@ -150,6 +154,12 @@
   ],
   "b1295e49f642": [
     "src/addons/git/Panel.tsx"
+  ],
+  "3b63ed958363": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
+  ],
+  "4fe47287172e": [
+    "src/main/addon-hotkeys.ts"
   ],
   "f94cb81af39b": [
     "src/renderer/src/CodeSyntaxSettings.tsx"
@@ -371,6 +381,7 @@
     "src/main/dependencies.ts",
     "src/main/document.ts",
     "src/main/sideload.ts",
+    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/FormattingToolbar.tsx",
     "src/renderer/src/ImportDialog.tsx",
     "src/renderer/src/VersionHistory.tsx"
@@ -379,6 +390,7 @@
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "cb141fb6cd63": [
+    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "d353a99eb455": [
@@ -533,6 +545,8 @@
     "src/main/media.ts"
   ],
   "f84eb17965b6": [
+    "src/main/addon-hotkeys.ts",
+    "src/main/index.ts",
     "src/shared/hotkeys.ts"
   ],
   "4498a0e9706f": [
@@ -651,10 +665,14 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "b22b0b3873a1": [
+    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "954d1afa8200": [
     "src/renderer/src/HotkeySettings.tsx"
+  ],
+  "79a3988c60c2": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
   ],
   "830121754331": [
     "src/addons/math/PackageSettings.tsx"
@@ -913,6 +931,9 @@
   "da2df709d46e": [
     "src/renderer/src/document-worker-client.ts"
   ],
+  "ce6331b7277c": [
+    "src/main/addon-hotkeys.ts"
+  ],
   "278a4d546369": [
     "src/main/index.ts"
   ],
@@ -935,6 +956,7 @@
     "src/addons/_shared/format-native.ts"
   ],
   "2fe18391f790": [
+    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "77db28621bac": [
@@ -943,14 +965,26 @@
   "76934949f22e": [
     "src/renderer/src/main.tsx"
   ],
+  "2f6dcb75d5a0": [
+    "src/main/addon-hotkeys.ts"
+  ],
+  "1521183700f9": [
+    "src/main/addon-hotkeys.ts"
+  ],
   "9c78aa9fb78e": [
     "src/renderer/src/main.tsx"
+  ],
+  "1cc686099dd9": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
   ],
   "5dc1e07e8c69": [
     "src/renderer/src/main.tsx"
   ],
   "2a30abd5f2ce": [
     "src/main/dependencies.ts"
+  ],
+  "a032fdba4bce": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
   ],
   "6704c0f053f8": [
     "src/renderer/src/HotkeySettings.tsx"
@@ -2973,6 +3007,7 @@
     "src/renderer/src/DependencySettings.tsx"
   ],
   "95d3d7e8feed": [
+    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "324b134f57c7": [
@@ -3098,6 +3133,9 @@
   ],
   "e88bb0e03de7": [
     "src/renderer/src/HotkeySettings.tsx"
+  ],
+  "7329f549ae73": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
   ],
   "78f021c43d7b": [
     "src/addons/diagnostics/Settings.tsx"
@@ -3258,10 +3296,14 @@
     "src/renderer/src/EditorToolbar.tsx"
   ],
   "e4af9a2eda8c": [
+    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "aca879baa006": [
     "src/renderer/src/HotkeySettings.tsx"
+  ],
+  "0a9b767dc873": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
   ],
   "46f6013774d6": [
     "src/renderer/src/SettingsScreen.tsx"
@@ -3359,11 +3401,17 @@
   "73c583fedbc0": [
     "src/main/addons.ts"
   ],
+  "5a88d622ebec": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
+  ],
   "34d21cb11ffc": [
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "1a0ec19679a9": [
     "src/renderer/src/HotkeySettings.tsx"
+  ],
+  "6d5648313edc": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
   ],
   "4b77ec6e263f": [
     "src/main/workspace-actions.ts"
@@ -4127,6 +4175,10 @@
   "7b1a3f290d48": [
     "src/renderer/src/addon-registry.ts"
   ],
+  "a8a565024afb": [
+    "src/main/addon-hotkeys.ts",
+    "src/main/index.ts"
+  ],
   "1f5c15aebf70": [
     "src/renderer/src/addons.ts"
   ],
@@ -4532,6 +4584,7 @@
     "src/renderer/src/addons.ts"
   ],
   "14d33bd014e6": [
+    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/HotkeySettings.tsx"
   ],
   "a5c4e03c56e0": [

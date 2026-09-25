@@ -100,6 +100,10 @@ export type AddonCommandDescriptor = {
   id: string
   label: string
   keywords?: string
+  /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. */
+  defaultShortcut?: string
+  /** Show this command in a built-in application menu. */
+  menu?: { location: 'app'; group?: string; order?: number }
 }
 export type AddonSyntaxDescriptor = {
   id: string
@@ -260,6 +264,10 @@ export type AddonCommand = {
   keywords?: string
   /** Also show this command below the workspace tree. */
   workspace?: boolean
+  /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. */
+  defaultShortcut?: string
+  /** Show this command in a built-in application menu. */
+  menu?: { location: 'app'; group?: string; order?: number }
   /** Cheap synchronous check against the context captured when invoked. */
   when?: (
     context: import('../shared/foundation-contracts').CommandExecutionContext,

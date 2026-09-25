@@ -17,7 +17,10 @@ for (const seed of seeds)
     const closed = new Map()
     const stale = []
     const pending = []
+    const views = new Map()
+    const pendingAddonSaves = []
     let active = null
+    let focusedView = null
     let revision = 0
     let requestId = 0
     const runtime = new DocumentRuntime({
@@ -26,11 +29,17 @@ for (const seed of seeds)
         throw error
       },
     })
-    const scope = createDocumentTargetEditScope(
-      runtime,
-      () => ({ status: 'unsupported-view', message: 'No mounted editor.' }),
-      () => false,
-    )
+    const createScope = () =>
+      createDocumentTargetEditScope(
+        runtime,
+        () => ({ status: 'unsupported-view', message: 'No mounted editor.' }),
+        () => false,
+        (tabId) =>
+          new Promise((resolve) => {
+            pendingAddonSaves.push({ tabId, resolve })
+          }),
+      )
+    let scope = createScope()
     const record = (action) => trace.push(action)
     const state = (id) => {
       const doc = docs.get(id)
@@ -56,6 +65,10 @@ for (const seed of seeds)
     const check = () => {
       assert.equal(runtime.get().tabId, active)
       assert.equal(runtime.documents().length, docs.size)
+      assert.equal(
+        runtime.captureActiveView(),
+        focusedView ? views.get(focusedView).target : null,
+      )
       for (const [id, expected] of docs) {
         const actual = runtime.get(id)
         assert.equal(actual.markdown, expected.source, `${id} source`)
@@ -70,6 +83,10 @@ for (const seed of seeds)
         assert.equal(actual.name, expected.name, `${id} name`)
         assert.equal(runtime.captureDocument(id), expected.target)
         assert.equal(scope.readSource(expected.target).source, expected.source)
+      }
+      for (const { id, target } of views.values()) {
+        assert.equal(runtime.isLiveView(target), true)
+        assert.equal(target.documentId, docs.get(id).target.documentId)
       }
     }
     const activate = (id) => {
@@ -103,10 +120,42 @@ for (const seed of seeds)
       const doc = docs.get(id)
       stale.push({ ...doc.target, contentVersion: doc.version })
       closed.set(id, { fileId: doc.fileId, name: doc.name, saved: doc.saved })
+      const retiredViews = [...views.values()].filter((view) => view.id === id)
+      for (const view of retiredViews) {
+        views.delete(view.target.viewId)
+        if (focusedView === view.target.viewId) focusedView = null
+      }
       docs.delete(id)
       activate([...docs.keys()][0])
       assert.equal(runtime.resolveDocument(doc.target), null)
+      for (const view of retiredViews)
+        assert.equal(runtime.isLiveView(view.target), false)
       record(`close ${id}`)
+    }
+    const mountView = (id, viewId) => {
+      const release = runtime.registerView(id, viewId)
+      runtime.focusView(viewId)
+      const target = runtime.captureActiveView()
+      views.set(viewId, { id, target, release })
+      focusedView = viewId
+      record(`mount ${viewId} on ${id}`)
+      check()
+      return target
+    }
+    const focusView = (viewId) => {
+      runtime.focusView(viewId)
+      focusedView = viewId
+      record(`focus view ${viewId}`)
+      check()
+    }
+    const unmountView = (viewId) => {
+      const view = views.get(viewId)
+      view.release()
+      views.delete(viewId)
+      if (focusedView === viewId) focusedView = null
+      assert.equal(runtime.isLiveView(view.target), false)
+      record(`unmount ${viewId}`)
+      check()
     }
     const edit = (id) => {
       const doc = docs.get(id)
@@ -194,6 +243,31 @@ for (const seed of seeds)
       record('reject stale edit')
       check()
     }
+    const disableOwner = (id) => {
+      const oldScope = scope
+      oldScope.dispose()
+      const doc = docs.get(id)
+      assert.equal(oldScope.readSource(doc.target).status, 'disposed')
+      assert.equal(oldScope.listOpen().length, 0)
+      assert.equal(
+        oldScope.applyEdits({
+          requestId: `model-${++requestId}`,
+          target: { ...doc.target, contentVersion: doc.version },
+          changes: [
+            {
+              from: doc.source.length,
+              to: doc.source.length,
+              expectedText: '',
+              insert: 'x',
+            },
+          ],
+        }).status,
+        'disposed',
+      )
+      scope = createScope()
+      record(`disable and re-enable owner on ${id}`)
+      check()
+    }
     try {
       open('one')
       edit('one')
@@ -206,8 +280,21 @@ for (const seed of seeds)
       staleEdit()
       rename('one')
       activate('one')
+      // Runtime supports two view identities; the app does not mount split panes yet.
+      const firstView = mountView('one', 'model-view-a')
+      const secondView = mountView('one', 'model-view-b')
+      assert.equal(firstView.documentId, secondView.documentId)
+      assert.notEqual(firstView.viewGeneration, secondView.viewGeneration)
+      const fileIdBeforeRename = docs.get('one').fileId
+      rename('one')
+      assert.notEqual(docs.get('one').fileId, fileIdBeforeRename)
+      assert.equal(runtime.isLiveView(firstView), true)
+      assert.equal(runtime.isLiveView(secondView), true)
+      focusView('model-view-a')
+      unmountView('model-view-b')
       activate('two')
       close('one')
+      assert.equal(runtime.isLiveView(firstView), false)
       open('one')
       staleEdit(stale[stale.length - 1]) // old incarnation cannot edit reopened tab
       edit('one')
@@ -219,7 +306,7 @@ for (const seed of seeds)
       for (let step = 0; step < 64; step++) {
         const ids = [...docs.keys()]
         const id = ids[random(ids.length)]
-        switch (random(9)) {
+        switch (random(10)) {
           case 0:
           case 1:
             edit(id)
@@ -251,9 +338,55 @@ for (const seed of seeds)
           case 8:
             rename(id)
             break
+          case 9:
+            disableOwner(id)
+            break
         }
       }
       while (pending.length) await completeSave(random(pending.length))
+
+      // A workspace switch retires every old tab, view, and pending save token.
+      const previousTargets = [...docs.values()].map((doc) => ({
+        ...doc.target,
+        contentVersion: doc.version,
+      }))
+      const previousFileIds = [...docs.values()].map((doc) => doc.fileId)
+      const workspaceView = mountView(active, 'model-workspace-view')
+      beginSave(active)
+      docs.clear()
+      closed.clear()
+      views.clear()
+      focusedView = null
+      open('new-workspace-one')
+      assert.equal(previousFileIds.includes(docs.get(active).fileId), false)
+      assert.equal(runtime.isLiveView(workspaceView), false)
+      for (const target of previousTargets) {
+        assert.equal(runtime.resolveDocument(target), null)
+        staleEdit(target)
+      }
+      await completeSave(0)
+
+      // Disabling an owner while its save is in flight cancels its authority
+      // to acknowledge the reply. The document remains dirty for the new owner.
+      edit('new-workspace-one')
+      const doc = docs.get('new-workspace-one')
+      const oldScope = scope
+      const save = oldScope.save({
+        ...doc.target,
+        contentVersion: doc.version,
+      })
+      assert.equal(pendingAddonSaves.length, 1)
+      assert.equal(pendingAddonSaves[0].tabId, 'new-workspace-one')
+      oldScope.dispose()
+      pendingAddonSaves.shift().resolve({
+        status: 'saved',
+        document: { ...state('new-workspace-one'), savedMarkdown: doc.source },
+      })
+      assert.equal((await save).status, 'disposed')
+      assert.equal(runtime.get('new-workspace-one').dirty, true)
+      scope = createScope()
+      record('cancel addon save on owner disable')
+      check()
     } catch (error) {
       error.message += `\nseed ${seed}; trace: ${trace.join(', ')}`
       throw error

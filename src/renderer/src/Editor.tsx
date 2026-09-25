@@ -44,9 +44,10 @@ import type {
   DocumentSession,
 } from '../../shared/document-session'
 import type { DocumentView } from '../../shared/document-types'
-import type {
-  EditorContextAction,
-  EditorInteractionRequest,
+import {
+  type EditorContextAction,
+  type EditorInteractionRequest,
+  sameInteraction,
 } from '../../shared/editor-interactions'
 import type { ViewId } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
@@ -69,8 +70,10 @@ import { documentRuntime } from './document-runtime'
 import { certifyVisualEcho } from './document-shell'
 import { type CursorSettings, EditorCursor } from './EditorCursor'
 import { emitEditorKeyEvent } from './editor-events'
-import { sameInteraction } from './editor-interaction-broker'
-import { attachEditorInteractions } from './editor-interactions'
+import {
+  hasEditorInteractionProviders,
+  onEditorInteractionProvidersChanged,
+} from './editor-interaction-presence'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
 import { flavors as flavorRegistry } from './flavors'
@@ -1080,22 +1083,45 @@ export function MarkdownEditor({
       if (result.status !== 'applied') setRichInputError(result.message)
       return result.status === 'applied'
     }
-    const detach = attachEditorInteractions({
-      element: view.dom,
-      positionAt: (x, y) => {
-        const result = view.posAtCoords({ left: x, top: y })
-        return result && result.inside >= 0 ? result.pos : null
-      },
-      anchorAt: (position) => view.coordsAtPos(position),
-      selectionPosition: () => view.state.selection.head,
-      capture,
-      apply,
-      focus: () => view.focus(),
-    })
+    let detach = () => {}
+    let generation = 0
+    let disposed = false
+    const refresh = () => {
+      const current = ++generation
+      detach()
+      detach = () => {}
+      if (!hasEditorInteractionProviders()) return
+      void import('./editor-interactions')
+        .then(({ attachEditorInteractions }) => {
+          if (
+            disposed ||
+            current !== generation ||
+            !hasEditorInteractionProviders()
+          )
+            return
+          detach = attachEditorInteractions({
+            element: view.dom,
+            positionAt: (x, y) => {
+              const result = view.posAtCoords({ left: x, top: y })
+              return result && result.inside >= 0 ? result.pos : null
+            },
+            anchorAt: (position) => view.coordsAtPos(position),
+            selectionPosition: () => view.state.selection.head,
+            capture,
+            apply,
+            focus: () => view.focus(),
+          })
+        })
+        .catch((error) => setRichInputError(String(error)))
+    }
+    const unsubscribe = onEditorInteractionProvidersChanged(refresh)
+    refresh()
     const invalidate = () =>
       view.dom.dispatchEvent(new Event('hibi:editor-interactions-invalidate'))
     editor.on('transaction', invalidate)
     return () => {
+      disposed = true
+      unsubscribe()
       editor.off('transaction', invalidate)
       detach()
       scope.dispose()

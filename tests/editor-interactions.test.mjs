@@ -34,18 +34,23 @@ test('installed addon hover and context actions work in rich and source views', 
     join(folder, 'index.js'),
     `export default () => ({ async start(context) {
       const stops = []
-      stops.push(await context.editor.registerHoverProvider((request) => ({
-        label: 'Hovered note', detail: request.editor,
-      })))
-      stops.push(await context.editor.registerContextActionProvider((request) => {
-        const from = Math.min(request.selection.anchor, request.selection.head)
-        const to = Math.max(request.selection.anchor, request.selection.head)
-        return from === to ? [] : [{
-          label: 'Replace selection',
-          edit: { from, to, insertText: 'bye' },
-        }]
-      }))
-      window.interactionProbe = { ready: true, stop: () => stops.forEach(stop => stop()) }
+      window.interactionProbe = {
+        ready: true,
+        activate: async () => {
+          stops.push(await context.editor.registerHoverProvider((request) => ({
+            label: 'Hovered note', detail: request.editor,
+          })))
+          stops.push(await context.editor.registerContextActionProvider((request) => {
+            const from = Math.min(request.selection.anchor, request.selection.head)
+            const to = Math.max(request.selection.anchor, request.selection.head)
+            return from === to ? [] : [{
+              label: 'Replace selection',
+              edit: { from, to, insertText: 'bye' },
+            }]
+          }))
+        },
+        stop: () => stops.forEach(stop => stop()),
+      }
     } })`,
   )
   await writeFile(
@@ -81,6 +86,7 @@ test('installed addon hover and context actions work in rich and source views', 
   const rich = page.locator('.rich-pane .tiptap[contenteditable="true"]')
   await rich.waitFor()
   await rich.click()
+  await page.evaluate(() => window.interactionProbe.activate())
   await rich.locator('p').hover()
   await page.getByRole('tooltip', { name: 'Editor hover' }).waitFor()
   await rich.evaluate((element) =>

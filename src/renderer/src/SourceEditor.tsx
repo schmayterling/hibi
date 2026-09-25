@@ -40,9 +40,10 @@ import type {
 import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop'
 import { editedSource, sourceEditMatches } from '../../shared/document-edits'
 import type { MarkdownReferenceSyntax } from '../../shared/document-worker-protocol'
-import type {
-  EditorContextAction,
-  EditorInteractionRequest,
+import {
+  type EditorContextAction,
+  type EditorInteractionRequest,
+  sameInteraction,
 } from '../../shared/editor-interactions'
 import { markdownLink } from '../../shared/markdown-link'
 import { wikiHref } from '../../shared/note-links'
@@ -60,8 +61,10 @@ import { editorDocument } from './document-formats'
 import { documentProjections } from './document-projections'
 import { documentRuntime } from './document-runtime'
 import { DocumentWorkerClient, type FindAction } from './document-worker-client'
-import { sameInteraction } from './editor-interaction-broker'
-import { attachEditorInteractions } from './editor-interactions'
+import {
+  hasEditorInteractionProviders,
+  onEditorInteractionProvidersChanged,
+} from './editor-interaction-presence'
 import type { FindMove, FindStatus } from './FindBar'
 import {
   observeSourceAnnotations,
@@ -1141,16 +1144,37 @@ export function SourceEditor({
       'hibi:editor-actions-open',
       closeForActions,
     )
-    const detachInteractions = attachEditorInteractions({
-      element: editor.contentDOM,
-      positionAt: (x, y) => editor.posAtCoords({ x, y }, false),
-      anchorAt: (position) => editor.coordsAtPos(position),
-      selectionPosition: () => editor.state.selection.main.head,
-      capture: captureInteraction,
-      apply: applyInteraction,
-      focus: () => editor.focus(),
-    })
     let disposed = false
+    let detachInteractions = () => {}
+    let interactionGeneration = 0
+    const refreshInteractions = () => {
+      const current = ++interactionGeneration
+      detachInteractions()
+      detachInteractions = () => {}
+      if (!hasEditorInteractionProviders()) return
+      void import('./editor-interactions')
+        .then(({ attachEditorInteractions }) => {
+          if (
+            disposed ||
+            current !== interactionGeneration ||
+            !hasEditorInteractionProviders()
+          )
+            return
+          detachInteractions = attachEditorInteractions({
+            element: editor.contentDOM,
+            positionAt: (x, y) => editor.posAtCoords({ x, y }, false),
+            anchorAt: (position) => editor.coordsAtPos(position),
+            selectionPosition: () => editor.state.selection.main.head,
+            capture: captureInteraction,
+            apply: applyInteraction,
+            focus: () => editor.focus(),
+          })
+        })
+        .catch((error) => setInputError(String(error)))
+    }
+    const unsubscribeInteractions =
+      onEditorInteractionProvidersChanged(refreshInteractions)
+    refreshInteractions()
     const unregister = registerSourceView(
       editor,
       (raw) => {
@@ -1232,6 +1256,7 @@ export function SourceEditor({
       unsubscribe()
       configureParser.current = () => {}
       disposed = true
+      unsubscribeInteractions()
       formatting.current = null
       reportFormatting.current(null)
       unregister()

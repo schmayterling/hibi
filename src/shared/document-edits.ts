@@ -1,5 +1,8 @@
 import type { DocumentState } from './desktop'
-import type { VersionedDocumentTarget } from './foundation-contracts'
+import type {
+  DocumentTarget,
+  VersionedDocumentTarget,
+} from './foundation-contracts'
 import { exceedsUtf8Limit } from './text-size.ts'
 
 /** UTF-16 offsets in the complete, unprojected document source. */
@@ -38,6 +41,12 @@ export type OpenDocumentMetadata = Readonly<{
   ephemeral: boolean
   canAutosave: boolean
 }>
+export type DocumentMetadataResult =
+  | { status: 'read'; metadata: OpenDocumentMetadata }
+  | { status: 'invalid' | 'stale' | 'disposed'; message: string }
+export type DocumentLifecycleEvent =
+  | { kind: 'opened' | 'changed'; metadata: OpenDocumentMetadata }
+  | { kind: 'closed'; target: DocumentTarget }
 export type DocumentSourceReadResult =
   | { status: 'read'; target: VersionedDocumentTarget; source: string }
   | { status: 'invalid' | 'stale' | 'disposed'; message: string }

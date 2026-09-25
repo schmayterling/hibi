@@ -47,6 +47,7 @@ export class DocumentRuntime {
   readonly #sources = new WeakMap<DocumentState, SourceSnapshot>()
   readonly #listeners = new Set<Listener>()
   readonly #documentListeners = new Set<Listener>()
+  readonly #catalogListeners = new Set<() => void>()
   readonly #options: RuntimeOptions
   readonly #history = new Map<
     DocumentSession,
@@ -241,6 +242,12 @@ export class DocumentRuntime {
       this.#documentListeners.delete(listener)
     }
   }
+  subscribeCatalog = (listener: () => void) => {
+    this.#catalogListeners.add(listener)
+    return () => {
+      this.#catalogListeners.delete(listener)
+    }
+  }
   documents = () =>
     [...this.#sessions.keys()].flatMap((id) => this.get(id) ?? [])
   get = (id: string | null = this.#activeId): DocumentState | null => {
@@ -405,6 +412,7 @@ export class DocumentRuntime {
     } finally {
       this.#updating = false
     }
+    for (const listener of [...this.#catalogListeners]) listener()
     return this.get()!
   }
   acknowledgeSave(
@@ -497,6 +505,8 @@ export class DocumentRuntime {
     this.#documentListeners.clear()
     this.#active = null
     this.#activeId = null
+    for (const listener of [...this.#catalogListeners]) listener()
+    this.#catalogListeners.clear()
   }
 }
 

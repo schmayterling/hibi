@@ -14,3 +14,10 @@
 - Pushed integration branch through `8c63cd8`. No pull request was created. Generated API docs, full `npm run check`, hosted checks, and candidate performance runs remain pending.
 - Exposed bounded metadata queries through main IPC and addon context. Installed-addon query test passed; 20 focused metadata/workspace tests passed. Added completion broker registration, with editor adapters in isolated branches.
 - Regenerated addon API reference and English copy catalog. `docs:check` and `copy:check` passed before the full integration check started. Pushed branch through `e48290d`; no pull request or hosted branch run exists.
+- Full `npm run check` at source `e48290d` completed: 765 tests, 747 passed, 15 failed, 1 cancelled, 2 skipped. The run was not green. It included an expected stale preload-key snapshot and multiple focus/cleanup desktop failures; focused diagnosis is in progress. The runner duration was 1,925,385 ms.
+
+## 2026-09-26
+
+- Integrated lazy completion loading, source and rich completion adapters, versioned closed-file text updates, and a prompted bounded HTTPS GET host service. Focused source, rich, workspace, network, preload, and focus desktop tests passed in one serial group; addon shortcut re-enable remained the sole failure (17 passed, 1 failed).
+- Reverted a global Electron test-helper focus change that correlated with full-suite UI failures. Kept settings exit synchronous from the app's perspective while clearing shortcut recording before returning. Pushed the integration branch through `0579d75` without a pull request.
+- `npm run typecheck` passed at the current bridge state. `docs:check` and `copy:check` reported generated docs/catalogs outdated after the new public APIs; regeneration follows the remaining API integrations.

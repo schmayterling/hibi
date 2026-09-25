@@ -10,3 +10,9 @@
 - Limitation: emitted bytes are not compressed transfer size, parse/evaluation time, heap use, or user-visible startup latency. No latency or regression claim is made from this result.
 
 Serialized startup, input, document, command, completion, indexing, and retained-memory measurements remain pending until worktree builds and tests stop competing for the reference machine.
+
+## Intermediate static bundle snapshot — 2026-09-26
+
+- Candidate source SHA: `e48290d`. `npm run check` built this source on the same Apple M2, macOS arm64, and Node 24.11.0 machine. The check later finished with 15 failures and one cancellation; its build completed, but the test gate was not green.
+- Method: same renderer-entry `imports` closure and emitted `bytes` field as the baseline. One reachable entry chunk totals 693,872 JavaScript bytes: 24,293 bytes (+3.63%) above baseline.
+- This snapshot precedes the lazy completion-broker import at `b00fd16` and the source/rich completion adapters. It is an intermediate size comparison, not a final performance claim. Startup latency, evaluation time, and input-to-paint remain unmeasured.

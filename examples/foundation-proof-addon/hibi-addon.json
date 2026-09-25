@@ -1,0 +1,20 @@
+{
+  "id": "foundation-proof",
+  "name": "Foundation proof",
+  "description": "A small consumer of Hibi's public foundation APIs.",
+  "version": "1.0.0",
+  "apiVersion": 2,
+  "kind": "extension",
+  "authors": [{ "displayName": "Hibi contributors" }],
+  "entry": "index.js",
+  "capabilities": ["ui"],
+  "startup": "background",
+  "commands": [
+    {
+      "id": "capture",
+      "label": "Capture foundation proof",
+      "defaultShortcut": "mod+alt+shift+f11",
+      "menu": { "location": "app", "group": "foundation-proof" }
+    }
+  ]
+}

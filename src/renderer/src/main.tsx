@@ -886,8 +886,7 @@ function App() {
     setPaletteOpen(true)
   }
 
-  async function toggleSettings() {
-    if (settingsOpen) await window.hibi.setHotkeyRecording(false)
+  function toggleSettings() {
     const previousFocus = window.document.activeElement
     showTitlebar()
     if (!settingsOpen) setFindOpen(false)

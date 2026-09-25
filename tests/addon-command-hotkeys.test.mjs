@@ -147,6 +147,9 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
         ?.getAttribute('aria-pressed') === 'true',
   )
   await page.getByRole('button', { name: 'Back to app' }).click()
+  await page
+    .getByRole('main', { name: /^settings$/i })
+    .waitFor({ state: 'hidden' })
   await pressAddonShortcut(app, `${modifier}+Alt+Shift+J`)
   await page.waitForFunction(() => window.commandProbeSources?.length === 3)
 

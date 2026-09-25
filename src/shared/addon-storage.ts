@@ -29,7 +29,11 @@ export type AddonStorageReadResult<T = unknown> =
     }
   | {
       status: 'unavailable'
-      reason: 'corrupt' | 'newer-format' | 'stale-workspace'
+      reason:
+        | 'corrupt'
+        | 'newer-format'
+        | 'stale-workspace'
+        | 'stale-activation'
     }
 
 export type AddonStorageWriteRequest = AddonStorageReadRequest & {
@@ -46,7 +50,11 @@ export type AddonStorageWriteResult<T = unknown> =
   | { status: 'version-mismatch'; current: AddonStorageReadResult<T> }
   | {
       status: 'unavailable'
-      reason: 'corrupt' | 'newer-format' | 'stale-workspace'
+      reason:
+        | 'corrupt'
+        | 'newer-format'
+        | 'stale-workspace'
+        | 'stale-activation'
     }
 
 export type AddonStorageChange = {

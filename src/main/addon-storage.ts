@@ -128,6 +128,7 @@ function recordResult(
 export function createAddonStorage(
   baseDirectory: string,
   isCurrentWorkspace: (target: WorkspaceTarget) => boolean,
+  isCurrentActivation: (owner: string, generation: number) => boolean,
 ) {
   const namespaces = new Map<string, Namespace>()
   const listeners = new Set<(change: AddonStorageChange) => void>()
@@ -234,22 +235,36 @@ export function createAddonStorage(
     return scope.kind !== 'workspace' || isCurrentWorkspace(scope.target)
   }
 
-  async function read(
+  function stale(
     request: AddonStorageReadRequest,
-  ): Promise<AddonStorageReadResult> {
-    validate(request)
+    generation: number,
+  ): Unavailable | null {
+    if (!isCurrentActivation(request.owner, generation))
+      return { status: 'unavailable', reason: 'stale-activation' }
     if (!current(request.scope))
       return { status: 'unavailable', reason: 'stale-workspace' }
+    return null
+  }
+
+  async function read(
+    request: AddonStorageReadRequest,
+    generation: number,
+  ): Promise<AddonStorageReadResult> {
+    validate(request)
+    const before = stale(request, generation)
+    if (before) return before
     const namespace = state(request.owner, request.scope)
     await namespace.tail
     await load(namespace, location(request.owner, request.scope))
-    return current(request.scope)
-      ? recordResult(namespace, request.key, request.version)
-      : { status: 'unavailable', reason: 'stale-workspace' }
+    return (
+      stale(request, generation) ??
+      recordResult(namespace, request.key, request.version)
+    )
   }
 
   async function write(
     request: AddonStorageWriteRequest,
+    generation: number,
   ): Promise<AddonStorageWriteResult> {
     validate(request)
     if (!Number.isSafeInteger(request.baseRevision) || request.baseRevision < 0)
@@ -264,12 +279,12 @@ export function createAddonStorage(
     const namespace = state(request.owner, request.scope)
     const run = namespace.tail.then(
       async (): Promise<AddonStorageWriteResult> => {
-        if (!current(request.scope))
-          return { status: 'unavailable', reason: 'stale-workspace' }
+        const before = stale(request, generation)
+        if (before) return before
         const file = location(request.owner, request.scope)
         await load(namespace, file)
-        if (!current(request.scope))
-          return { status: 'unavailable', reason: 'stale-workspace' }
+        const afterLoad = stale(request, generation)
+        if (afterLoad) return afterLoad
         if (namespace.unavailable) return namespace.unavailable
         const existing = namespace.entries[request.key]
         if ((existing?.revision ?? 0) !== request.baseRevision)
@@ -300,20 +315,24 @@ export function createAddonStorage(
           const encoded = JSON.stringify({ format: FORMAT, entries: next })
           if (Buffer.byteLength(encoded) > FILE_LIMIT)
             throw new Error('This addon storage scope is full.')
-          if (!current(request.scope))
-            return { status: 'unavailable', reason: 'stale-workspace' }
+          const beforeWrite = stale(request, generation)
+          if (beforeWrite) return beforeWrite
           await mkdir(dirname(file), { recursive: true, mode: 0o700 })
           const temporary = `${file}.${randomUUID()}.tmp`
           try {
             await writeFile(temporary, encoded, { mode: 0o600 })
-            if (!current(request.scope))
-              return { status: 'unavailable', reason: 'stale-workspace' }
+            const beforeRename = stale(request, generation)
+            if (beforeRename) return beforeRename
             await rename(temporary, file)
           } finally {
             await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
               if (error.code !== 'ENOENT') throw error
             })
           }
+        }
+        if (!file) {
+          const beforeCommit = stale(request, generation)
+          if (beforeCommit) return beforeCommit
         }
         namespace.entries = next
         const result: AddonStorageWriteResult = {
@@ -348,22 +367,28 @@ export function createAddonStorage(
     if (!/^[a-z][a-z0-9-]{0,79}$/.test(owner)) return
     const namespace = namespaces.get(`session:${owner}`)
     if (!namespace) return
-    await namespace.tail
-    const keys = Object.keys(namespace.entries)
-    namespace.entries = Object.create(null) as Record<string, Entry>
-    for (const key of keys)
-      for (const listener of listeners)
-        try {
-          listener({
-            owner,
-            scope: { kind: 'session' },
-            key,
-            version: null,
-            current: { status: 'missing', revision: 0 },
-          })
-        } catch (error) {
-          console.error('Could not publish addon storage change:', error)
-        }
+    const run = namespace.tail.then(() => {
+      const keys = Object.keys(namespace.entries)
+      namespace.entries = Object.create(null) as Record<string, Entry>
+      for (const key of keys)
+        for (const listener of listeners)
+          try {
+            listener({
+              owner,
+              scope: { kind: 'session' },
+              key,
+              version: null,
+              current: { status: 'missing', revision: 0 },
+            })
+          } catch (error) {
+            console.error('Could not publish addon storage change:', error)
+          }
+    })
+    namespace.tail = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    await run
   }
 
   async function clearAllSessions(): Promise<void> {

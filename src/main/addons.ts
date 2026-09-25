@@ -192,6 +192,32 @@ export function getAddonStates(): AddonState[] {
         )),
   }))
 }
+
+/** Main-owned token for requests admitted during one addon activation. */
+export function getAddonActivationGeneration(id: string): number | null {
+  return getAddonStates().some((state) => state.id === id && state.enabled)
+    ? (generations.get(id) ?? 0)
+    : null
+}
+
+export function isAddonActivationCurrent(
+  id: string,
+  generation: number,
+): boolean {
+  return (
+    Number.isSafeInteger(generation) &&
+    generation >= 0 &&
+    getAddonActivationGeneration(id) === generation
+  )
+}
+
+/** Invalidate pending renderer requests before clearing sessions on renderer restart. */
+export function invalidateAddonActivations(): void {
+  for (const state of getAddonStates())
+    if (state.enabled)
+      generations.set(state.id, (generations.get(state.id) ?? 0) + 1)
+}
+
 export function getImporters(): import('../shared/imports').Importer[] {
   const enabled = new Set(
     getAddonStates()

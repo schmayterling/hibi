@@ -335,8 +335,19 @@ export async function selectDocumentTab(
   const current = source.snapshot()
   // Refresh clean files on return; dirty tabs keep their saved baseline for conflict checks.
   if (draft.path && !dirty(draft.source, draft.saved)) {
+    const target = draft.source.snapshot(),
+      baseline = draft.saved
     const content = await readMarkdown(draft.path)
     if (!source.ownsCurrentSnapshot(current))
+      throw new Error('The document changed while switching tabs. Try again.')
+    const latest = id === activeTab ? snapshot() : tabs.get(id)
+    if (
+      !latest ||
+      latest.source !== draft.source ||
+      !latest.source.ownsCurrentSnapshot(target) ||
+      latest.saved !== baseline ||
+      latest.path !== draft.path
+    )
       throw new Error('The document changed while switching tabs. Try again.')
     const version =
       draft.source.snapshot().version +

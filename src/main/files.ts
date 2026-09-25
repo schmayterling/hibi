@@ -55,15 +55,17 @@ export async function writeMarkdown(
   path: string,
   markdown: string,
   exclusive = false,
+  canCommit?: () => boolean,
 ): Promise<void> {
   validateMarkdown(markdown)
-  return writeText(path, markdown, exclusive)
+  return writeText(path, markdown, exclusive, canCommit)
 }
 
 export async function writeText(
   path: string,
   text: string | Uint8Array,
   exclusive = false,
+  canCommit?: () => boolean,
 ): Promise<void> {
   const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`)
   const existing = await stat(path).catch((error: NodeJS.ErrnoException) => {
@@ -78,6 +80,8 @@ export async function writeText(
     } finally {
       await file.close()
     }
+    if (canCommit && !canCommit())
+      throw new Error('The save request is no longer current.')
     if (exclusive) {
       try {
         await link(temp, path)

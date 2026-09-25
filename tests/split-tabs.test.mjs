@@ -21,6 +21,7 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   })
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
+      globalThis.releaseSplitAppend?.()
       dialog.showMessageBox = async () => ({ response: 1 })
     })
     await app.close()
@@ -50,7 +51,8 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   await open(a)
   const aId = (await page.evaluate(() => window.hibi.getDocument())).tabId
   await open(b)
-  const bId = (await page.evaluate(() => window.hibi.getDocument())).tabId
+  const bDocument = await page.evaluate(() => window.hibi.getDocument())
+  const bId = bDocument.tabId
   await page.getByRole('tab', { name: 'a.md' }).click()
   await waitForAsync(
     page,
@@ -134,10 +136,68 @@ test('split panes keep both editors mounted, edit both files, and share one docu
         ?.getAttribute('data-active') === 'true',
   )
 
-  await left.fill('edited a')
+  await left.click()
   await waitForAsync(
     page,
     async (id) => (await window.hibi.getDocument()).tabId === id,
+    aId,
+  )
+  await app.evaluate(({ ipcMain }) => {
+    const append = ipcMain._invokeHandlers.get('document:append')
+    if (!append) throw new Error('Document journal handler is unavailable.')
+    let started
+    globalThis.splitAppendStarted = new Promise((resolve) => {
+      started = resolve
+    })
+    globalThis.pauseSplitAppend = true
+    ipcMain.removeHandler('document:append')
+    ipcMain.handle('document:append', async (...args) => {
+      if (!globalThis.pauseSplitAppend) return append(...args)
+      globalThis.pauseSplitAppend = false
+      started()
+      await new Promise((resolve) => {
+        globalThis.releaseSplitAppend = resolve
+      })
+      return append(...args)
+    })
+  })
+  await left.fill('edited a')
+  await app.evaluate(() => globalThis.splitAppendStarted)
+  await right.click()
+  await page.waitForFunction(
+    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'true',
+  )
+  assert.match(await left.innerText(), /edited a/)
+  await app.evaluate(() => globalThis.releaseSplitAppend())
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    bId,
+  )
+  await left.click()
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    aId,
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    'edited a',
+  )
+  await assert.rejects(
+    page.evaluate(
+      (target) => window.hibi.focusDocumentTab(target.id, target.expected),
+      {
+        id: bId,
+        expected: {
+          contentVersion: bDocument.contentVersion + 1,
+          revision: bDocument.revision,
+        },
+      },
+    ),
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabId,
     aId,
   )
   const aRevision = (await page.evaluate(() => window.hibi.getDocument()))

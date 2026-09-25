@@ -402,7 +402,10 @@ export type DesktopApi = {
   setUiCase: (value: import('./ui-case').UiCase) => Promise<void>
   getDocument: () => Promise<DocumentState>
   selectDocumentTab: (id: string) => Promise<DocumentState>
-  focusDocumentTab: (id: string) => Promise<DocumentFocus>
+  focusDocumentTab: (
+    id: string,
+    expected: Pick<DocumentFocus, 'contentVersion' | 'revision'>,
+  ) => Promise<DocumentFocus>
   closeDocumentTab: (id: string) => Promise<DocumentState | null>
   moveDocumentTab: (
     id: string,

@@ -238,6 +238,7 @@ function App() {
   const focusSplitSide = useRef<PaneSide | null>(null)
   const focusQueue = useRef<Promise<void>>(Promise.resolve())
   const focusPending = useRef(false)
+  const focusUnsafe = useRef(false)
   useEffect(() => {
     if (!splitLeftId || !splitRightId) return
     return () => {
@@ -325,6 +326,11 @@ function App() {
   )
   const acceptDocument = useCallback((next: DocumentState, focus = false) => {
     const previous = currentDocument.current
+    const active = focus
+      ? documentRuntime.focus(next)
+      : documentRuntime.activate(next)
+    if (!active)
+      throw new Error('This pane changed while synchronizing. Try again.')
     setSplitTabs((current) => {
       if (!current) return null
       const ids = new Set(next.tabs.map((tab) => tab.id))
@@ -348,9 +354,6 @@ function App() {
       const choice = localStorage.getItem(`hibi:flavor:${previous.id}`)
       if (choice) localStorage.setItem(`hibi:flavor:${next.id}`, choice)
     }
-    const active = focus
-      ? (documentRuntime.focus(next) ?? documentRuntime.activate(next))
-      : documentRuntime.activate(next)
     currentDocument.current = active
     shellDocument.current = active
     setDocument(active)
@@ -792,20 +795,42 @@ function App() {
       async focusDocument(tabId) {
         if (!currentDocument.current?.tabs.some((tab) => tab.id === tabId))
           return false
-        if (currentDocument.current.tabId !== tabId)
+        const split = splitTabsRef.current
+        const side = split
+          ? split.left === tabId && split.right === tabId
+            ? split.active
+            : split.left === tabId
+              ? 'left'
+              : split.right === tabId
+                ? 'right'
+                : null
+          : null
+        if (side) await focusSplitTab(side)
+        else if (currentDocument.current.tabId !== tabId)
           await applyDocumentOperation(() =>
             window.hibi.selectDocumentTab(tabId),
           )
         if (currentDocument.current?.tabId !== tabId) return false
         addonViews.selectDocument()
         setSettingsOpen(false)
-        requestAnimationFrame(() =>
-          window.document
-            .querySelector<HTMLElement>(
-              mode === 'normal' ? '.tiptap' : '.cm-content',
+        requestAnimationFrame(() => {
+          if (currentDocument.current?.tabId !== tabId) return
+          const current = splitTabsRef.current
+          const pane = window.document.querySelector<HTMLElement>(
+            current
+              ? `.editor-page[data-side="${current.active}"]`
+              : '#document-editor-panel',
+          )
+          Array.from(
+            pane?.querySelectorAll<HTMLElement>('[contenteditable="true"]') ??
+              [],
+          )
+            .find(
+              (element) =>
+                !element.closest('[inert]') && element.getClientRects().length,
             )
-            ?.focus({ preventScroll: true }),
-        )
+            ?.focus({ preventScroll: true })
+        })
         return true
       },
       isBusy: () => busyRef.current,
@@ -1418,12 +1443,25 @@ function App() {
     }
   }
 
-  async function attachMedia(files: File[] | null) {
-    if (busyRef.current || !document) return null
+  async function attachMedia(
+    files: File[] | null,
+    tabId: string,
+    side: PaneSide,
+  ) {
+    const target = currentDocument.current
+    const split = splitTabsRef.current
+    if (
+      busyRef.current ||
+      focusPending.current ||
+      !target ||
+      target.tabId !== tabId ||
+      (split ? split[side] !== tabId || split.active !== side : side !== 'left')
+    )
+      return null
     busyRef.current = true
     setBusy(true)
     try {
-      const result = await window.hibi.attachMedia(files, document.revision)
+      const result = await window.hibi.attachMedia(files, target.revision)
       if (!result) return null
       acceptDocument(result.document)
       setWorkspace(await window.hibi.getWorkspace())
@@ -1514,9 +1552,53 @@ function App() {
     }
   }
 
+  async function focusRetainedTab(id: string) {
+    const previous = currentDocument.current
+    const expected = documentRuntime.get(id)
+    if (!expected) throw new Error('This tab is no longer open.')
+    // Never replace a retained source with an older main-process snapshot.
+    const metadata = await window.hibi.focusDocumentTab(id, {
+      contentVersion: expected.contentVersion,
+      revision: expected.revision,
+    })
+    focusUnsafe.current = previous?.tabId !== id
+    try {
+      const retained = documentRuntime.focus(metadata)
+      if (!retained)
+        throw new Error('This pane changed while synchronizing. Try again.')
+      acceptDocument(retained, true)
+      focusUnsafe.current = false
+    } catch (error) {
+      if (previous && previous.tabId !== id) {
+        const restore = documentRuntime.get(previous.tabId)
+        try {
+          if (!restore) throw new Error('The previous tab closed.')
+          await window.hibi.focusDocumentTab(previous.tabId, {
+            contentVersion: restore.contentVersion,
+            revision: restore.revision,
+          })
+          if (!documentRuntime.focus(restore))
+            throw new Error('The previous pane changed during recovery.')
+          focusUnsafe.current = false
+        } catch {
+          throw new Error(
+            'Could not restore document focus. Editing is paused to protect unsent changes.',
+          )
+        }
+      }
+      throw error
+    }
+  }
+
   async function focusSplitTab(side: PaneSide) {
     const current = splitTabsRef.current
-    if (!current || (current.active === side && !focusPending.current)) return
+    if (
+      !current ||
+      (current.active === side &&
+        !focusPending.current &&
+        currentDocument.current?.tabId === current[side])
+    )
+      return
     if (busyRef.current && !focusPending.current) return
     const id = current[side]
     focusSplitSide.current = side
@@ -1532,15 +1614,11 @@ function App() {
     if (currentDocument.current?.tabId === id && !focusPending.current) return
     focusPending.current = true
     busyRef.current = true
+    setBusy(true)
     const task = focusQueue.current.then(async () => {
       if (currentDocument.current?.tabId === id) return
       try {
-        const metadata = await window.hibi.focusDocumentTab(id)
-        const retained = documentRuntime.focus(metadata)
-        acceptDocument(
-          retained ?? (await window.hibi.getDocument()),
-          !!retained,
-        )
+        await focusRetainedTab(id)
       } catch (error) {
         setError(error instanceof Error ? error.message : String(error))
       }
@@ -1549,7 +1627,8 @@ function App() {
     await task
     if (focusQueue.current === task) {
       focusPending.current = false
-      busyRef.current = false
+      busyRef.current = focusUnsafe.current
+      setBusy(focusUnsafe.current)
       const latest = splitTabsRef.current
       const actual = currentDocument.current?.tabId
       if (
@@ -1580,18 +1659,15 @@ function App() {
         : current.active
     if (active === 'right' && current.left !== current.right) {
       busyRef.current = true
+      setBusy(true)
       try {
-        const metadata = await window.hibi.focusDocumentTab(current.left)
-        const retained = documentRuntime.focus(metadata)
-        acceptDocument(
-          retained ?? (await window.hibi.getDocument()),
-          !!retained,
-        )
+        await focusRetainedTab(current.left)
       } catch (error) {
         setError(error instanceof Error ? error.message : String(error))
         return
       } finally {
-        busyRef.current = false
+        busyRef.current = focusUnsafe.current
+        setBusy(focusUnsafe.current)
       }
     }
     setSelectedMode(current.leftMode)
@@ -1613,7 +1689,22 @@ function App() {
       await applyDocumentOperation(() => window.hibi.openRemoteDocument(url))
   }
 
-  function openLink(href: string) {
+  async function openLink(href: string, tabId: string, side: PaneSide) {
+    const split = splitTabsRef.current
+    if (split) {
+      if (split[side] !== tabId) return
+      await focusSplitTab(side)
+      const current = splitTabsRef.current
+      if (
+        !current ||
+        current[side] !== tabId ||
+        current.active !== side ||
+        focusPending.current
+      )
+        return
+    } else if (side !== 'left') return
+    const target = currentDocument.current
+    if (!target || target.tabId !== tabId || busyRef.current) return
     if (href.startsWith('#')) {
       let anchor: string
       try {
@@ -1621,10 +1712,12 @@ function App() {
       } catch {
         return
       }
+      const pane = window.document.querySelector<HTMLElement>(
+        split ? `.editor-page[data-side="${side}"]` : '#document-editor-panel',
+      )
       const heading = Array.from(
-        window.document.querySelectorAll<HTMLElement>(
-          '.tiptap :is(h1,h2,h3,h4,h5,h6)',
-        ),
+        pane?.querySelectorAll<HTMLElement>('.tiptap :is(h1,h2,h3,h4,h5,h6)') ??
+          [],
       ).find(
         (element) =>
           (element.textContent ?? '')
@@ -1636,10 +1729,9 @@ function App() {
       heading?.scrollIntoView({ block: 'start' })
       return
     }
-    if (document)
-      void applyDocumentOperation(() =>
-        window.hibi.openDocumentLink(href, document.revision),
-      )
+    void applyDocumentOperation(() =>
+      window.hibi.openDocumentLink(href, target.revision),
+    )
   }
 
   function navigate(direction: 'back' | 'forward') {
@@ -2338,8 +2430,8 @@ function App() {
               document={paneDocument}
               format={paneFormat}
               formatName={paneSourceName}
-              onAttach={attachMedia}
-              onLink={openLink}
+              onAttach={(files) => attachMedia(files, paneDocument.tabId, side)}
+              onLink={(href) => void openLink(href, paneDocument.tabId, side)}
               flavors={paneChosen}
               footnoteDocument={paneFootnoteDocument}
               sourceExtensions={addonHost.sourceExtensions}

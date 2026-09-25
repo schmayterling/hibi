@@ -242,7 +242,13 @@ export function SourceEditor({
     installedExtensions?.bridge === bridge &&
     installedExtensions.extensions === sourceExtensions &&
     languageReady
-  const editContext = useRef({ document, editTarget, focused, disabled, inputReady })
+  const editContext = useRef({
+    document,
+    editTarget,
+    focused,
+    disabled,
+    inputReady,
+  })
   editContext.current = { document, editTarget, focused, disabled, inputReady }
   const exactChanges = useRef<readonly RawEdit[] | undefined>(undefined)
   const editable = useRef(new Compartment())

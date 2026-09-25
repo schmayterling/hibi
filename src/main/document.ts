@@ -728,7 +728,8 @@ export async function autosaveDocument(
     current.saved !== draft.saved ||
     current.path !== destination ||
     (expectedContentVersion !== undefined &&
-      current.source.snapshot().version !== expectedContentVersion) ||
+      (current.source.snapshot().version !== expectedContentVersion ||
+        current.source.snapshot().document.revision !== expectedRevision)) ||
     !canContinue()
   )
     return { status: 'skipped', document: null }

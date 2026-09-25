@@ -274,6 +274,8 @@ export function createDocumentTargetEditScope(
                 : 'The document changed. Read it before saving.',
         }
       } catch (error) {
+        if (disposed)
+          return { status: 'disposed', message: 'This addon has stopped.' }
         const message = error instanceof Error ? error.message : String(error)
         return {
           status: /Another file operation|busy/i.test(message)

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -62,6 +62,7 @@ test('installed addon edits inactive documents and guards deferred legacy comman
           list: () => context.documents.listOpen(),
           read: target => context.documents.readSource(target),
           edit: request => context.documents.applyEdits(request),
+          save: target => context.documents.save(target),
           begin() {
             this.started = false
             this.result = null
@@ -139,6 +140,12 @@ test('installed addon edits inactive documents and guards deferred legacy comman
     source.target,
   )
   assert.equal(result.status, 'applied')
+  const saved = await page.evaluate(
+    (target) => window.targetProbe.save(target),
+    { ...source.target, contentVersion: result.contentVersion },
+  )
+  assert.ok(['saved', 'clean'].includes(saved.status))
+  assert.equal(await readFile(first, 'utf8'), '# ONE')
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).name,
     'second.md',

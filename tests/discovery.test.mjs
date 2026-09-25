@@ -58,10 +58,21 @@ test('palette discovers settings, addon controls, themes, and formatting without
   await choose('start in insert mode')
   await page.waitForFunction(() => document.activeElement?.id === 'vim-insert')
   await choose('disable vim')
+  await waitForAsync(
+    page,
+    async () =>
+      !(await window.hibi.getAddonStates()).some(
+        ({ id, enabled }) => id === 'vim' && enabled,
+      ),
+  )
   await pressShortcut(app, `${mod}+k`)
   await page
     .getByRole('combobox', { name: /search commands/i })
     .fill('start in insert mode')
+  await page
+    .getByRole('dialog', { name: /command palette/i })
+    .getByText('No commands found.', { exact: true })
+    .waitFor()
   assert.equal(await page.getByRole('option').count(), 0)
   await page.keyboard.press('Escape')
   await page

@@ -58,11 +58,12 @@ const nativeLoaders = new Map(
 const natives = new Map<string, NativeAddon>()
 const pendingNatives = new Map<string, Promise<NativeAddon>>()
 const generations = new Map<string, number>()
-let onAddonDeactivated: (id: string) => Promise<void> = async () => {}
+let onAddonDeactivated: (id: string, generation: number) => Promise<void> =
+  async () => {}
 
 /** Register host cleanup before addon state changes are accepted. */
 export function setAddonDeactivationHandler(
-  handler: (id: string) => Promise<void>,
+  handler: (id: string, generation: number) => Promise<void>,
 ): void {
   onAddonDeactivated = handler
 }
@@ -289,13 +290,17 @@ async function saveEnabled(id: string, value: boolean): Promise<AddonState[]> {
   await writeFile(`${path}.tmp`, JSON.stringify(next), { mode: 0o600 })
   await rename(`${path}.tmp`, path)
   enabled = next
-  generations.set(id, (generations.get(id) ?? 0) + 1)
+  const previousGeneration = generations.get(id) ?? 0
+  generations.set(id, previousGeneration + 1)
   for (const state of getAddonStates())
     if (previouslyEnabled.has(state.id) && !state.enabled) {
-      if (state.id !== id)
-        generations.set(state.id, (generations.get(state.id) ?? 0) + 1)
+      let generation = previousGeneration
+      if (state.id !== id) {
+        generation = generations.get(state.id) ?? 0
+        generations.set(state.id, generation + 1)
+      }
       natives.get(state.id)?.stop?.()
-      await onAddonDeactivated(state.id)
+      await onAddonDeactivated(state.id, generation)
     }
   return getAddonStates()
 }

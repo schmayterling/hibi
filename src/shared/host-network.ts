@@ -1,4 +1,8 @@
 /** This first network capability reads bounded UTF-8 text over HTTPS GET. */
+export const HOST_NETWORK_CHANNELS = {
+  getText: 'host-network:get-text',
+} as const
+
 export interface HostTextRequest {
   readonly url: string
 }

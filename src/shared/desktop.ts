@@ -222,6 +222,10 @@ export type DesktopApi = {
     owner: string,
     handle: string,
   ) => Promise<import('./selected-text').SelectedTextRead>
+  getHostText: (
+    owner: string,
+    request: import('./host-network').HostTextRequest,
+  ) => Promise<import('./host-network').HostTextResult>
   invokeAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   queryAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   getWorkspace: () => Promise<WorkspaceState | null>

@@ -40,12 +40,13 @@ import {
 } from '../shared/document-checkpoint'
 import { createJournalReceiver } from '../shared/document-journal'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
-import type { WorkspaceTarget } from '../shared/foundation-contracts'
+import type { AddonId, WorkspaceTarget } from '../shared/foundation-contracts'
 import {
   GLOBAL_SHORTCUT_CHANNELS,
   type GlobalShortcutInvocation,
 } from '../shared/global-shortcuts'
 import { HISTORY_CHANNELS } from '../shared/history'
+import { HOST_NETWORK_CHANNELS } from '../shared/host-network'
 import {
   type AppCommand,
   accelerator,
@@ -111,6 +112,7 @@ import { isDocumentName } from './document-types'
 import { externalFileArguments } from './external-files'
 import { GlobalShortcuts } from './global-shortcuts'
 import { listVersions, previewVersion } from './history'
+import { HostNetwork } from './host-network'
 import { hotkeys, loadHotkeys, saveHotkeys } from './hotkeys'
 import { readDocumentImage } from './images'
 import { listLicenses, readLicense } from './licenses'
@@ -234,13 +236,73 @@ const devUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
 const rendererUrl = devUrl ? new URL(devUrl).href : 'app://hibi/'
 const rendererRoot = join(import.meta.dirname, '../renderer')
 let mainWindow: BrowserWindow | null = null
+let networkWindowKey: object = {}
 const addonStorage = createAddonStorage(
   join(app.getPath('userData'), 'addon-storage'),
   isCurrentWorkspaceTarget,
   isAddonActivationCurrent,
 )
 const selectedText = new SelectedTextService(currentAddonOwner)
-setAddonDeactivationHandler(async (id) => {
+async function askNetworkGrant(
+  windowKey: object,
+  signal: AbortSignal,
+  message: string,
+  detail: string,
+) {
+  const window = mainWindow
+  if (
+    !window ||
+    window.isDestroyed() ||
+    windowKey !== networkWindowKey ||
+    signal.aborted
+  )
+    return false
+  try {
+    const { response } = await dialog.showMessageBox(window, {
+      type: 'question',
+      buttons: ['Cancel', 'Allow once'],
+      defaultId: 0,
+      cancelId: 0,
+      message,
+      detail,
+    })
+    return (
+      response === 1 &&
+      !signal.aborted &&
+      windowKey === networkWindowKey &&
+      !window.isDestroyed()
+    )
+  } catch {
+    return false
+  }
+}
+const hostNetwork = new HostNetwork({
+  currentOwner: currentAddonOwner,
+  isWindowLive: (key) =>
+    key === networkWindowKey &&
+    !!mainWindow &&
+    !mainWindow.isDestroyed() &&
+    !mainWindow.webContents.isDestroyed(),
+  grantDestination: (grant, signal) =>
+    askNetworkGrant(
+      grant.windowKey,
+      signal,
+      `Allow ${grant.addonId} to read this HTTPS URL?`,
+      `${grant.url}\n\nOnly this GET request is allowed. Redirects ask again.`,
+    ),
+  grantPrivateAddress: (grant, signal) =>
+    askNetworkGrant(
+      grant.windowKey,
+      signal,
+      `Allow ${grant.addonId} to contact a local or private address?`,
+      `${grant.url}\nAddress: ${grant.address}\n\nOnly this GET request is allowed.`,
+    ),
+})
+setAddonDeactivationHandler(async (id, generation) => {
+  hostNetwork.stopOwner({
+    addonId: id as AddonId,
+    activationGeneration: generation,
+  })
   selectedText.revokeAddon(id)
   await addonStorage.clearSession(id)
 })
@@ -250,6 +312,8 @@ addonStorage.subscribe((change) => {
 })
 function resetAddonSessions(): void {
   invalidateAddonActivations()
+  hostNetwork.stopWindow(networkWindowKey)
+  networkWindowKey = {}
   selectedText.clear()
   void addonStorage.clearAllSessions().catch((error: unknown) => {
     console.error('Could not clear addon sessions:', error)
@@ -1096,6 +1160,16 @@ if (!app.requestSingleInstanceLock()) {
         SELECTED_TEXT_CHANNELS.read,
         (event, owner: unknown, handle: unknown) =>
           selectedText.read(trustedWindow(event), owner, handle),
+        addonsReady,
+      )
+      handle(
+        HOST_NETWORK_CHANNELS.getText,
+        (event, owner: unknown, request: unknown) => {
+          trustedWindow(event)
+          return typeof owner === 'string'
+            ? hostNetwork.request(owner, networkWindowKey, request)
+            : { ok: false, code: 'invalid-request' }
+        },
         addonsReady,
       )
       handle(

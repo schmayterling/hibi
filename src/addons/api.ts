@@ -629,6 +629,12 @@ export type AddonContext = {
   documents: DocumentsApi
   host: {
     selectedText: import('../shared/selected-text').SelectedTextHostApi
+    network: {
+      /** Ask the user for each HTTPS GET destination and return bounded UTF-8 text. */
+      getText: (
+        request: import('../shared/host-network').HostTextRequest,
+      ) => Promise<import('../shared/host-network').HostTextResult>
+    }
   }
   commands: {
     /** Invoke this addon's registered command through the same guarded dispatcher as the palette. */

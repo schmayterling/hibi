@@ -32,6 +32,7 @@ import {
   type GlobalShortcutInvocation,
 } from '../shared/global-shortcuts'
 import { HISTORY_CHANNELS } from '../shared/history'
+import { HOST_NETWORK_CHANNELS } from '../shared/host-network'
 import { type AppCommand, HOTKEY_CHANNELS } from '../shared/hotkeys'
 import { IMPORT_CHANNELS } from '../shared/imports'
 import { DIAGNOSTIC_CHANNEL } from '../shared/local-diagnostics'
@@ -318,6 +319,8 @@ if (process.isMainFrame) {
       transport.invoke(SELECTED_TEXT_CHANNELS.select, owner),
     readSelectedText: (owner, handle) =>
       transport.invoke(SELECTED_TEXT_CHANNELS.read, owner, handle),
+    getHostText: (owner, request) =>
+      transport.invoke(HOST_NETWORK_CHANNELS.getText, owner, request),
     invokeAddon: (id, method, input) =>
       ipcRenderer.invoke(ADDON_CHANNELS.invoke, id, method, input),
     queryAddon: (id, method, input) =>

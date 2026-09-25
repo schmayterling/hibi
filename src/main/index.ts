@@ -169,6 +169,7 @@ import {
   getWorkspace,
   indexWorkspace,
   isCurrentWorkspaceTarget,
+  listWorkspaceEntryPage,
   observeWorkspace,
   openRecentWorkspace,
   openWorkspace,
@@ -1483,6 +1484,24 @@ if (!app.requestSingleInstanceLock()) {
       )
       handle(WORKSPACE_CHANNELS.changeSnapshot, (event) =>
         readAfterFileOperation(event, async () => workspaceChangeSnapshot()),
+      )
+      handle(
+        WORKSPACE_CHANNELS.listPage,
+        (event, owner: unknown, request: unknown) => {
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
+          return readAfterFileOperation(event, async () => {
+            const result = listWorkspaceEntryPage(
+              request as import('../shared/workspace').WorkspaceEntryPageRequest,
+            )
+            return isAddonActivationCurrent(
+              activation.id,
+              activation.generation,
+            )
+              ? result
+              : addonFileUnavailable()
+          })
+        },
       )
       handle(
         WORKSPACE_CHANNELS.readText,

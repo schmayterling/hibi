@@ -1466,6 +1466,10 @@ export function useAddons(
                 disposed
                   ? Promise.reject(new Error('This addon has stopped.'))
                   : window.hibi.getWorkspaceChangeSnapshot(),
+              listPage: (request) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.listWorkspaceEntryPage(id, request),
               async subscribeChanges(listener) {
                 if (disposed) throw new Error('This addon has stopped.')
                 const subscription =

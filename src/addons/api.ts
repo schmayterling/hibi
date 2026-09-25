@@ -684,6 +684,10 @@ export type AddonContext = {
     changeSnapshot: () => Promise<
       import('../shared/workspace').WorkspaceStreamSnapshot
     >
+    /** Bounded flat entries tied to one workspace change sequence. */
+    listPage: (
+      request: import('../shared/workspace').WorkspaceEntryPageRequest,
+    ) => Promise<import('../shared/workspace').WorkspaceEntryPageResult>
     subscribeChanges: (
       listener: import('../shared/workspace').WorkspaceChangeListener,
     ) => Promise<import('../shared/workspace').WorkspaceChangeSubscription>

@@ -351,6 +351,8 @@ if (process.isMainFrame) {
     getWorkspace: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.get),
     getWorkspaceChangeSnapshot: () =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.changeSnapshot),
+    listWorkspaceEntryPage: (owner, request) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.listPage, owner, request),
     subscribeWorkspaceChanges,
     readWorkspaceText: (owner, target, path) =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.readText, owner, target, path),

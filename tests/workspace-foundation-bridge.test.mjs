@@ -12,6 +12,7 @@ test('workspace addon bridge keeps scoped reads, creates, and changes together',
   const workspace = join(directory, 'notes')
   await mkdir(workspace)
   await writeFile(join(workspace, 'existing.md'), '# existing')
+  await writeFile(join(workspace, 'other.md'), '# other')
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(directory, 'profile')}`],
   })
@@ -38,6 +39,38 @@ test('workspace addon bridge keeps scoped reads, creates, and changes together',
   assert.ok(snapshot.target)
   assert.equal(snapshot.complete, true)
   const target = snapshot.target
+  const firstPage = await page.evaluate(
+    ({ target, sequence }) =>
+      window.hibi.listWorkspaceEntryPage('markdown', {
+        target,
+        sequence,
+        limit: 1,
+      }),
+    { target, sequence: snapshot.sequence },
+  )
+  assert.equal(firstPage.ok, true)
+  assert.equal(firstPage.value.entries.length, 1)
+  assert.ok(firstPage.value.nextCursor)
+  const secondPage = await page.evaluate(
+    ({ target, cursor }) =>
+      window.hibi.listWorkspaceEntryPage('markdown', {
+        target,
+        cursor,
+        limit: 1,
+      }),
+    { target, cursor: firstPage.value.nextCursor },
+  )
+  assert.equal(secondPage.ok, true)
+  assert.notEqual(
+    secondPage.value.entries[0].path,
+    firstPage.value.entries[0].path,
+  )
+  const oldPage = await page.evaluate(
+    ({ target, sequence }) =>
+      window.hibi.listWorkspaceEntryPage('markdown', { target, sequence }),
+    { target, sequence: snapshot.sequence + 1 },
+  )
+  assert.equal(oldPage.code, 'resync-needed')
   const read = await page.evaluate(
     (captured) =>
       window.hibi.readWorkspaceText('markdown', captured, 'existing.md'),

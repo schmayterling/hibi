@@ -101,6 +101,61 @@ test('target edits keep inactive source, history and focus independent', () => {
   runtime.dispose()
 })
 
+test('metadata and lifecycle events track live sessions without reading source', () => {
+  const { runtime, scope } = fixture()
+  runtime.activate(document('first'))
+  const first = scope.listOpen()[0]
+  const session = runtime.session()
+  session.counters(true)
+  assert.deepEqual(scope.getMetadata(first.target), {
+    status: 'read',
+    metadata: first,
+  })
+  assert.equal(session.counters().materializations, 0)
+  const events = []
+  const stop = scope.subscribe((event) => events.push(event))
+  session.edit([{ from: 5, to: 5, insert: '!' }], 'addon', 'change')
+  assert.equal(events[0].kind, 'changed')
+  assert.equal(events[0].metadata.target.contentVersion, 1)
+  assert.equal(events[0].metadata.dirty, true)
+  assert.equal(session.counters().materializations, 0)
+  runtime.activate(
+    document('second', {
+      tabId: 'two',
+      id: 'file-two',
+      name: 'two.md',
+      revision: 2,
+      tabs: [
+        { id: 'one', name: 'one.md', dirty: true },
+        { id: 'two', name: 'two.md', dirty: false },
+      ],
+    }),
+  )
+  assert.equal(events.at(-1).kind, 'opened')
+  const second = scope.listOpen().find((entry) => entry.name === 'two.md')
+  assert.equal(second.target.contentVersion, 0)
+  runtime.activate(
+    document('second', {
+      tabId: 'two',
+      id: 'file-two',
+      name: 'two.md',
+      revision: 2,
+      tabs: [{ id: 'two', name: 'two.md', dirty: false }],
+    }),
+  )
+  assert.equal(events.at(-1).kind, 'closed')
+  assert.equal(events.at(-1).target.documentId, first.target.documentId)
+  assert.equal(scope.getMetadata(first.target).status, 'stale')
+  stop()
+  runtime
+    .session()
+    .edit([{ from: 6, to: 6, insert: '!' }], 'addon', 'after-stop')
+  assert.equal(events.at(-1).kind, 'closed')
+  scope.dispose()
+  assert.equal(scope.getMetadata(second.target).status, 'disposed')
+  runtime.dispose()
+})
+
 test('target edits validate source boundaries, expected text, version and generation', () => {
   const { runtime, scope, operations } = fixture()
   runtime.activate(document('a\r\n😀b'))

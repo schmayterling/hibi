@@ -1,5 +1,8 @@
 import type { DocumentsApi } from '../../addons/api'
+import type { DocumentState } from '../../shared/desktop.ts'
 import {
+  type DocumentLifecycleEvent,
+  type DocumentMetadataResult,
   type OpenDocumentMetadata,
   parseSourceEditRequest,
   type SourceEditRequest,
@@ -56,7 +59,11 @@ export function createDocumentTargetEditScope(
   runtime: DocumentRuntime,
   activeApply: (request: SourceEditRequest) => SourceEditResult,
   isBusy: () => boolean,
-): DocumentsApi & { dispose: () => void } {
+): DocumentsApi & {
+  getMetadata: (target: DocumentTarget) => DocumentMetadataResult
+  subscribe: (listener: (event: DocumentLifecycleEvent) => void) => () => void
+  dispose: () => void
+} {
   const receipts = new Map<
     string,
     { fingerprint: string; result: TargetSourceEditResult | null }
@@ -64,6 +71,68 @@ export function createDocumentTargetEditScope(
   let receiptBytes = 0,
     disposed = false,
     applying = false
+  const listeners = new Set<(event: DocumentLifecycleEvent) => void>()
+  const observed = new Map<DocumentId, OpenDocumentMetadata>()
+  let stopDocument: (() => void) | null = null
+  let stopCatalog: (() => void) | null = null
+  const metadataFor = (document: DocumentState) => {
+    if (!document.tabs.length) return null
+    const identity = runtime.captureDocument(document.tabId)
+    if (!identity) return null
+    return Object.freeze({
+      target: Object.freeze({
+        ...identity,
+        contentVersion: document.contentVersion,
+      }),
+      name: document.name,
+      dirty: document.dirty,
+      ephemeral: document.ephemeral,
+      canAutosave: document.canAutosave,
+    })
+  }
+  const listOpen = () => {
+    if (disposed) return []
+    const open: OpenDocumentMetadata[] = []
+    for (const document of runtime.documents()) {
+      const metadata = metadataFor(document)
+      if (metadata) open.push(metadata)
+    }
+    return Object.freeze(open)
+  }
+  const emit = (event: DocumentLifecycleEvent) => {
+    for (const listener of [...listeners]) {
+      try {
+        listener(event)
+      } catch (error) {
+        console.error('Document addon listener failed:', error)
+      }
+    }
+  }
+  const changed = (before: OpenDocumentMetadata, after: OpenDocumentMetadata) =>
+    before.target.contentVersion !== after.target.contentVersion ||
+    before.name !== after.name ||
+    before.dirty !== after.dirty ||
+    before.ephemeral !== after.ephemeral ||
+    before.canAutosave !== after.canAutosave
+  const observe = (metadata: OpenDocumentMetadata) => {
+    const id = metadata.target.documentId
+    const before = observed.get(id)
+    observed.set(id, metadata)
+    if (!before) emit(Object.freeze({ kind: 'opened', metadata }))
+    else if (changed(before, metadata))
+      emit(Object.freeze({ kind: 'changed', metadata }))
+  }
+  const reconcile = () => {
+    const current = new Map(
+      listOpen().map((metadata) => [metadata.target.documentId, metadata]),
+    )
+    for (const [id, metadata] of observed)
+      if (!current.has(id)) {
+        observed.delete(id)
+        emit(Object.freeze({ kind: 'closed', target: metadata.target }))
+      }
+    for (const metadata of current.values()) observe(metadata)
+  }
   const claim = (requestId: string, fingerprint: string) => {
     receipts.set(requestId, { fingerprint, result: null })
     receiptBytes += fingerprint.length
@@ -93,30 +162,56 @@ export function createDocumentTargetEditScope(
   return {
     dispose() {
       disposed = true
+      stopDocument?.()
+      stopCatalog?.()
+      stopDocument = null
+      stopCatalog = null
+      listeners.clear()
+      observed.clear()
       receipts.clear()
       receiptBytes = 0
     },
-    listOpen() {
-      if (disposed) return []
-      const open: OpenDocumentMetadata[] = []
-      for (const document of runtime.documents()) {
-        if (!document.tabs.length) continue
-        const identity = runtime.captureDocument(document.tabId)
-        if (!identity) continue
-        open.push(
-          Object.freeze({
-            target: Object.freeze({
-              ...identity,
-              contentVersion: document.contentVersion,
-            }),
-            name: document.name,
-            dirty: document.dirty,
-            ephemeral: document.ephemeral,
-            canAutosave: document.canAutosave,
-          }),
-        )
+    listOpen,
+    getMetadata(value) {
+      if (disposed)
+        return { status: 'disposed', message: 'This addon has stopped.' }
+      let target: DocumentTarget | null
+      try {
+        target = parseTarget(value)
+      } catch {
+        return invalid('Invalid document target.')
       }
-      return Object.freeze(open)
+      if (!target) return invalid('Invalid document target.')
+      const session = runtime.resolveDocument(target)
+      if (!session) return unavailable
+      const document = runtime.get(session.state().document.tabId)
+      const metadata = document && metadataFor(document)
+      return metadata ? { status: 'read', metadata } : unavailable
+    },
+    subscribe(listener) {
+      if (disposed) return () => {}
+      if (typeof listener !== 'function')
+        throw new Error('A document listener is required.')
+      if (!listeners.size) {
+        for (const metadata of listOpen())
+          observed.set(metadata.target.documentId, metadata)
+        stopDocument = runtime.subscribeDocument((document) => {
+          const metadata = metadataFor(document)
+          if (metadata) observe(metadata)
+        })
+        stopCatalog = runtime.subscribeCatalog(reconcile)
+      }
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+        if (!listeners.size) {
+          stopDocument?.()
+          stopCatalog?.()
+          stopDocument = null
+          stopCatalog = null
+          observed.clear()
+        }
+      }
     },
     readSource(value) {
       if (disposed)

@@ -244,6 +244,15 @@ export type DesktopApi = {
       import('./workspace').WorkspaceTextRead
     >
   >
+  readWorkspaceBinary: (
+    owner: string,
+    target: import('./foundation-contracts').WorkspaceTarget,
+    path: string,
+  ) => Promise<
+    import('./workspace').WorkspaceFileResult<
+      import('./workspace').WorkspaceBinaryRead
+    >
+  >
   createWorkspaceText: (
     owner: string,
     target: import('./foundation-contracts').WorkspaceTarget,
@@ -252,6 +261,16 @@ export type DesktopApi = {
   ) => Promise<
     import('./workspace').WorkspaceFileResult<
       import('./workspace').WorkspaceTextCreation
+    >
+  >
+  createWorkspaceBinary: (
+    owner: string,
+    target: import('./foundation-contracts').WorkspaceTarget,
+    path: string,
+    bytes: Uint8Array,
+  ) => Promise<
+    import('./workspace').WorkspaceFileResult<
+      import('./workspace').WorkspaceBinaryCreation
     >
   >
   updateWorkspaceText: (
@@ -264,6 +283,27 @@ export type DesktopApi = {
   ) => Promise<
     import('./workspace').WorkspaceFileResult<
       import('./workspace').WorkspaceTextUpdate
+    >
+  >
+  renameWorkspaceFile: (
+    owner: string,
+    target: import('./foundation-contracts').WorkspaceTarget,
+    sourcePath: string,
+    destinationPath: string,
+    expectedVersion: import('./workspace').WorkspaceFileVersion,
+  ) => Promise<
+    import('./workspace').WorkspaceFileResult<
+      import('./workspace').WorkspaceFileRename
+    >
+  >
+  trashWorkspaceFile: (
+    owner: string,
+    target: import('./foundation-contracts').WorkspaceTarget,
+    path: string,
+    expectedVersion: import('./workspace').WorkspaceFileVersion,
+  ) => Promise<
+    import('./workspace').WorkspaceFileResult<
+      import('./workspace').WorkspaceFileTrash
     >
   >
   queryWorkspaceReferences: (

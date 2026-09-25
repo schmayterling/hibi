@@ -331,6 +331,8 @@ if (process.isMainFrame) {
     subscribeWorkspaceChanges,
     readWorkspaceText: (owner, target, path) =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.readText, owner, target, path),
+    readWorkspaceBinary: (owner, target, path) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.readBinary, owner, target, path),
     createWorkspaceText: (owner, target, path, markdown) =>
       ipcRenderer.invoke(
         WORKSPACE_CHANNELS.createText,
@@ -338,6 +340,14 @@ if (process.isMainFrame) {
         target,
         path,
         markdown,
+      ),
+    createWorkspaceBinary: (owner, target, path, bytes) =>
+      ipcRenderer.invoke(
+        WORKSPACE_CHANNELS.createBinary,
+        owner,
+        target,
+        path,
+        bytes,
       ),
     updateWorkspaceText: (
       owner,
@@ -355,6 +365,29 @@ if (process.isMainFrame) {
         expectedVersion,
         markdown,
         options,
+      ),
+    renameWorkspaceFile: (
+      owner,
+      target,
+      sourcePath,
+      destinationPath,
+      expectedVersion,
+    ) =>
+      ipcRenderer.invoke(
+        WORKSPACE_CHANNELS.renameFile,
+        owner,
+        target,
+        sourcePath,
+        destinationPath,
+        expectedVersion,
+      ),
+    trashWorkspaceFile: (owner, target, path, expectedVersion) =>
+      ipcRenderer.invoke(
+        WORKSPACE_CHANNELS.trashFile,
+        owner,
+        target,
+        path,
+        expectedVersion,
       ),
     queryWorkspaceReferences: (request) =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.queryReferences, request),

@@ -665,6 +665,15 @@ export type AddonContext = {
         import('../shared/workspace').WorkspaceTextRead
       >
     >
+    /** Read bounded persisted attachment bytes at a captured workspace target. */
+    readBinary: (
+      target: import('../shared/foundation-contracts').WorkspaceTarget,
+      path: string,
+    ) => Promise<
+      import('../shared/workspace').WorkspaceFileResult<
+        import('../shared/workspace').WorkspaceBinaryRead
+      >
+    >
     /** Create new text with exclusive commit at a captured workspace target. */
     createText: (
       target: import('../shared/foundation-contracts').WorkspaceTarget,
@@ -673,6 +682,16 @@ export type AddonContext = {
     ) => Promise<
       import('../shared/workspace').WorkspaceFileResult<
         import('../shared/workspace').WorkspaceTextCreation
+      >
+    >
+    /** Create a new binary attachment without replacing another file. */
+    createBinary: (
+      target: import('../shared/foundation-contracts').WorkspaceTarget,
+      path: string,
+      bytes: Uint8Array,
+    ) => Promise<
+      import('../shared/workspace').WorkspaceFileResult<
+        import('../shared/workspace').WorkspaceBinaryCreation
       >
     >
     /** Replace a closed file using its disk version and an explicit metadata reset. */
@@ -685,6 +704,27 @@ export type AddonContext = {
     ) => Promise<
       import('../shared/workspace').WorkspaceFileResult<
         import('../shared/workspace').WorkspaceTextUpdate
+      >
+    >
+    /** Move a closed file to a new path using its last-read disk version. */
+    renameFile: (
+      target: import('../shared/foundation-contracts').WorkspaceTarget,
+      sourcePath: string,
+      destinationPath: string,
+      expectedVersion: import('../shared/workspace').WorkspaceFileVersion,
+    ) => Promise<
+      import('../shared/workspace').WorkspaceFileResult<
+        import('../shared/workspace').WorkspaceFileRename
+      >
+    >
+    /** Send a closed file to the OS trash using its last-read disk version. */
+    trashFile: (
+      target: import('../shared/foundation-contracts').WorkspaceTarget,
+      path: string,
+      expectedVersion: import('../shared/workspace').WorkspaceFileVersion,
+    ) => Promise<
+      import('../shared/workspace').WorkspaceFileResult<
+        import('../shared/workspace').WorkspaceFileTrash
       >
     >
     /** Bounded metadata and text queries over one captured workspace generation. */

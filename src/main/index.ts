@@ -174,8 +174,12 @@ import {
 } from './workspace'
 import { workspaceAction } from './workspace-actions'
 import {
+  createWorkspaceBinary,
   createWorkspaceText,
+  readWorkspaceBinary,
   readWorkspaceText,
+  renameWorkspaceFile,
+  trashWorkspaceFile,
   updateWorkspaceText,
 } from './workspace-files'
 import {
@@ -1409,6 +1413,25 @@ if (!app.requestSingleInstanceLock()) {
         },
       )
       handle(
+        WORKSPACE_CHANNELS.readBinary,
+        (event, owner: unknown, target: unknown, path: unknown) => {
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
+          return readAfterFileOperation(event, async () => {
+            const result = await readWorkspaceBinary(
+              target as WorkspaceTarget,
+              path,
+            )
+            return isAddonActivationCurrent(
+              activation.id,
+              activation.generation,
+            )
+              ? result
+              : addonFileUnavailable()
+          })
+        },
+      )
+      handle(
         WORKSPACE_CHANNELS.createText,
         (
           event,
@@ -1421,6 +1444,24 @@ if (!app.requestSingleInstanceLock()) {
           if (!activation) return addonFileUnavailable()
           return runFileOperation(event, () =>
             createWorkspaceText(target as WorkspaceTarget, path, markdown, () =>
+              isAddonActivationCurrent(activation.id, activation.generation),
+            ),
+          )
+        },
+      )
+      handle(
+        WORKSPACE_CHANNELS.createBinary,
+        (
+          event,
+          owner: unknown,
+          target: unknown,
+          path: unknown,
+          bytes: unknown,
+        ) => {
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
+          return runFileOperation(event, () =>
+            createWorkspaceBinary(target as WorkspaceTarget, path, bytes, () =>
               isAddonActivationCurrent(activation.id, activation.generation),
             ),
           )
@@ -1446,6 +1487,53 @@ if (!app.requestSingleInstanceLock()) {
               expectedVersion,
               markdown,
               options,
+              () =>
+                isAddonActivationCurrent(activation.id, activation.generation),
+            ),
+          )
+        },
+      )
+      handle(
+        WORKSPACE_CHANNELS.renameFile,
+        (
+          event,
+          owner: unknown,
+          target: unknown,
+          sourcePath: unknown,
+          destinationPath: unknown,
+          expectedVersion: unknown,
+        ) => {
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
+          return runFileOperation(event, () =>
+            renameWorkspaceFile(
+              target as WorkspaceTarget,
+              sourcePath,
+              destinationPath,
+              expectedVersion,
+              () =>
+                isAddonActivationCurrent(activation.id, activation.generation),
+            ),
+          )
+        },
+      )
+      handle(
+        WORKSPACE_CHANNELS.trashFile,
+        (
+          event,
+          owner: unknown,
+          target: unknown,
+          path: unknown,
+          expectedVersion: unknown,
+        ) => {
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
+          return runFileOperation(event, () =>
+            trashWorkspaceFile(
+              target as WorkspaceTarget,
+              path,
+              expectedVersion,
+              (file) => shell.trashItem(file),
               () =>
                 isAddonActivationCurrent(activation.id, activation.generation),
             ),

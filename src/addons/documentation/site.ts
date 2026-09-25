@@ -191,7 +191,19 @@ function content(site: SiteData, page: SitePage, prefix: string) {
     ],
     allowedAttributes: {
       '*': ['class'],
-      a: ['href', 'title', 'rel'],
+      a: [
+        'href',
+        'title',
+        'rel',
+        'id',
+        'data-footnote-ref',
+        'data-footnote-backref',
+        'aria-describedby',
+        'aria-label',
+      ],
+      h2: ['id'],
+      li: ['id'],
+      section: ['data-footnotes', 'role'],
       img: ['src', 'alt', 'title'],
       input: ['type', 'checked', 'disabled'],
     },
@@ -208,9 +220,51 @@ function content(site: SiteData, page: SitePage, prefix: string) {
             : undefined
         return {
           tagName: 'a',
-          attribs: { ...(href ? { href } : {}), rel: 'noopener noreferrer' },
+          attribs: {
+            ...(href ? { href } : {}),
+            rel: 'noopener noreferrer',
+            ...(attrs['data-footnote-ref'] !== undefined &&
+            /^fnref-[\w%.~-]+$/.test(attrs.id ?? '')
+              ? {
+                  id: attrs.id,
+                  'data-footnote-ref': '',
+                  'aria-describedby': 'footnote-label',
+                }
+              : {}),
+            ...(attrs['data-footnote-backref'] !== undefined
+              ? {
+                  'data-footnote-backref': '',
+                  'aria-label': attrs['aria-label'] ?? 'Back to reference',
+                }
+              : {}),
+          },
         }
       },
+      h2: (_tag, attrs) => ({
+        tagName: 'h2',
+        attribs: {
+          ...(attrs.class ? { class: attrs.class } : {}),
+          ...(attrs.class === 'sr-only' && attrs.id === 'footnote-label'
+            ? { id: 'footnote-label' }
+            : {}),
+        },
+      }),
+      li: (_tag, attrs) => ({
+        tagName: 'li',
+        attribs: {
+          ...(attrs.class ? { class: attrs.class } : {}),
+          ...(/^fn-[\w%.~-]+$/.test(attrs.id ?? '') ? { id: attrs.id } : {}),
+        },
+      }),
+      section: (_tag, attrs) => ({
+        tagName: 'section',
+        attribs: {
+          ...(attrs.class ? { class: attrs.class } : {}),
+          ...(attrs['data-footnotes'] === undefined
+            ? {}
+            : { 'data-footnotes': '', role: 'doc-endnotes' }),
+        },
+      }),
       img: (_tag, attrs) => {
         const src = page.images?.[attrs.src ?? '']
         return {
@@ -235,6 +289,7 @@ function content(site: SiteData, page: SitePage, prefix: string) {
   html = html.replace(
     /<(h[1-6])([^>]*)>([\s\S]*?)<\/\1>/g,
     (_match, tag: string, attrs: string, body: string) => {
+      if (/\sid="[^"]+"/.test(attrs)) return `<${tag}${attrs}>${body}</${tag}>`
       const slug = plain(body)
         .toLowerCase()
         .replace(/[^\p{L}\p{N}\s-]/gu, '')

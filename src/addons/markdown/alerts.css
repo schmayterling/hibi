@@ -31,3 +31,19 @@ blockquote.github-alert {
 .github-alert-body > :last-child {
   margin-bottom: 0;
 }
+
+[data-footnotes] {
+  margin-top: 2em;
+  padding-top: 1em;
+  border-top: 1px solid var(--border);
+  font-size: 0.9em;
+}
+[data-footnotes] .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}

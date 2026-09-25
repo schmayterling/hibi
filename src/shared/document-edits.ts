@@ -1,4 +1,5 @@
 import type { DocumentState } from './desktop'
+import type { VersionedDocumentTarget } from './foundation-contracts'
 import { exceedsUtf8Limit } from './text-size.ts'
 
 /** UTF-16 offsets in the complete, unprojected document source. */
@@ -29,6 +30,29 @@ export type SourceEditResult =
         | 'disposed'
       message: string
     }
+
+export type OpenDocumentMetadata = Readonly<{
+  target: VersionedDocumentTarget
+  name: string
+  dirty: boolean
+  ephemeral: boolean
+  canAutosave: boolean
+}>
+export type DocumentSourceReadResult =
+  | { status: 'read'; target: VersionedDocumentTarget; source: string }
+  | { status: 'invalid' | 'stale' | 'disposed'; message: string }
+export type TargetSourceEditRequest = Readonly<{
+  /** Unique within one addon activation; retries with different edits fail. */
+  requestId: string
+  target: VersionedDocumentTarget
+  /** Optional proof returned by the active editor's text projection. */
+  projectionId?: string
+  /** Exact expected text at UTF-16 offsets in the canonical source. */
+  changes: readonly SourceEdit[]
+}>
+export type TargetSourceEditResult =
+  | SourceEditResult
+  | { status: 'conflict'; message: string }
 
 export function parseSourceEditRequest(value: unknown): SourceEditRequest {
   if (!value || typeof value !== 'object')

@@ -16,11 +16,7 @@ import {
   TextInput,
   Toggle,
 } from '../ui'
-import {
-  type ExportOptions,
-  exportOptions,
-  validateExportOptions,
-} from './options'
+import { type ExportOptions, validateExportOptions } from './options'
 import './style.css'
 
 export function ExportDialog({
@@ -28,12 +24,14 @@ export function ExportDialog({
   context,
   initial,
   graph,
+  warning,
   save,
 }: {
   formId: string
   context: AddonContext
   initial: ExportOptions
   graph: boolean
+  warning: string | null
   save: (options: ExportOptions, password: string) => Promise<boolean>
 }) {
   const [options, setOptions] = useState(initial)
@@ -104,6 +102,13 @@ export function ExportDialog({
       }}
     >
       <fieldset disabled={busy}>
+        {warning && (
+          <DocumentNotice
+            variant="warning"
+            title="Saved export options unavailable"
+            message={warning}
+          />
+        )}
         <div className="settings-group">
           {text('title', 'Site title')}
           {text('description', 'Description')}
@@ -304,20 +309,4 @@ export function ExportDialog({
         )}
     </form>
   )
-}
-
-export function savedExportOptions(
-  key: string,
-  name: string,
-  theme: ThemePreferences,
-) {
-  try {
-    return exportOptions(
-      JSON.parse(localStorage.getItem(key) ?? '{}'),
-      name,
-      theme,
-    )
-  } catch {
-    return exportOptions({}, name, theme)
-  }
 }

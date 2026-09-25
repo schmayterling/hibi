@@ -310,7 +310,8 @@ test('command-palette export opens options and writes a configured static folder
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-export-options-'))
   const workspace = join(folder, 'notes'),
-    output = join(folder, 'output')
+    output = join(folder, 'output'),
+    profile = join(folder, 'profile')
   await mkdir(workspace)
   await mkdir(output)
   await writeFile(join(workspace, 'README.md'), '# Garden\n\n[More](more.md)')
@@ -318,7 +319,7 @@ test('command-palette export opens options and writes a configured static folder
   await mkdir(join(output, 'notes-site'))
   await writeFile(join(output, 'notes-site', 'keep.txt'), 'keep me')
   const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+    args: [resolve('.'), `--user-data-dir=${profile}`],
   })
   t.after(async () => {
     await app.close()
@@ -339,6 +340,16 @@ test('command-palette export opens options and writes a configured static folder
       .querySelector('.workspace-sidebar')
       ?.textContent.includes('README.md'),
   )
+  const workspaceId = await page.evaluate(
+    async () => (await window.hibi.getWorkspace()).id,
+  )
+  const legacy = JSON.stringify(
+    exportOptions({ title: 'Legacy garden' }, 'notes'),
+  )
+  await page.evaluate(
+    ({ id, value }) => localStorage.setItem(`hibi:export:${id}`, value),
+    { id: workspaceId, value: legacy },
+  )
   await clickMenu(app, 'Command palette')
   await page
     .getByRole('combobox', { name: /search commands/i })
@@ -355,6 +366,29 @@ test('command-palette export opens options and writes a configured static folder
   await modal.waitFor()
   const footer = modal.locator('.dialog-footer')
   await footer.getByRole('button', { name: /^export$/i }).waitFor()
+  assert.equal(
+    await modal.getByLabel('Site title', { exact: true }).inputValue(),
+    'Legacy garden',
+  )
+  const storedOptions = join(
+    profile,
+    'addon-storage',
+    'workspace',
+    workspaceId,
+    'documentation.json',
+  )
+  assert.equal(
+    JSON.parse(await readFile(storedOptions, 'utf8')).entries['export-options']
+      .value.title,
+    'Legacy garden',
+  )
+  assert.equal(
+    await page.evaluate(
+      (id) => localStorage.getItem(`hibi:export:${id}`),
+      workspaceId,
+    ),
+    legacy,
+  )
   await modal.evaluate((dialog) =>
     Promise.all(dialog.getAnimations().map((animation) => animation.finished)),
   )
@@ -395,6 +429,11 @@ test('command-palette export opens options and writes a configured static folder
   await page.screenshot({ path: 'test-results/export-options-modal.png' })
   await modal.getByRole('button', { name: /^export$/i, exact: true }).click()
   await modal.waitFor({ state: 'hidden' })
+  assert.equal(
+    JSON.parse(await readFile(storedOptions, 'utf8')).entries['export-options']
+      .value.title,
+    'My published garden',
+  )
   assert.equal(
     await readFile(join(output, 'notes-site', 'keep.txt'), 'utf8'),
     'keep me',

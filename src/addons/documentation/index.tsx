@@ -1,6 +1,7 @@
 import type { ThemePreferences } from '../../shared/colorschemes'
 import { defineAddon, type ExportResult } from '../api'
 import manifest from './manifest'
+import type { ExportOptions } from './options'
 
 export default defineAddon({
   manifest,
@@ -12,15 +13,45 @@ export default defineAddon({
         const workspace =
           (await context.workspace.get()) ?? (await context.workspace.open())
         if (!workspace) return
-        const [{ ExportDialog, savedExportOptions }, defaults] =
+        if (!workspace.id || workspace.workspaceGeneration === undefined)
+          throw new Error('Open a workspace to export it.')
+        const [{ ExportDialog }, { loadExportOptions }, defaults] =
           await Promise.all([
             import('./ExportDialog'),
+            import('./saved-options'),
             context.native.query<{ theme: ThemePreferences; graph: boolean }>(
               'options',
             ),
           ])
-        const key = `hibi:export:${workspace.id ?? workspace.name}`
-        const initial = savedExportOptions(key, workspace.name, defaults.theme)
+        const legacyKey = `hibi:export:${workspace.id}`
+        let legacyText: string | null = null
+        try {
+          legacyText = localStorage.getItem(legacyKey)
+        } catch {
+          /* Host-owned storage remains usable when legacy storage is unavailable. */
+        }
+        const store = await context.storage.workspace<ExportOptions>(
+          {
+            id: workspace.id,
+            workspaceGeneration: workspace.workspaceGeneration,
+          },
+          'export-options',
+          1,
+        )
+        const { initial, warning, canSave } = await loadExportOptions(
+          store,
+          legacyText,
+          workspace.name,
+          defaults.theme,
+        )
+        const requireWorkspace = async () => {
+          const current = await context.workspace.get()
+          if (
+            current?.id !== workspace.id ||
+            current?.workspaceGeneration !== workspace.workspaceGeneration
+          )
+            throw new Error('Workspace changed. Open export again.')
+        }
         const formId = `export-${crypto.randomUUID()}`
         const dialog = context.dialogs.open({
           title: 'Export workspace',
@@ -32,7 +63,9 @@ export default defineAddon({
               context={context}
               initial={initial}
               graph={defaults.graph}
+              warning={warning}
               save={async (options, password) => {
+                await requireWorkspace()
                 const snapshot = await context.workspace.snapshot()
                 const styles = new Set<string>()
                 const pages = []
@@ -49,19 +82,23 @@ export default defineAddon({
                     html: rendered.html,
                   })
                 }
+                await requireWorkspace()
                 const result = await context.native.invoke<ExportResult | null>(
                   'export',
                   { pages, css: [...styles].join('\n'), options, password },
                 )
                 if (!result) return false
-                try {
-                  localStorage.setItem(key, JSON.stringify(options))
-                } catch {
-                  /* Export still succeeds when preference storage is full. */
-                }
+                let preferencesSaved = false
+                if (canSave)
+                  try {
+                    preferencesSaved =
+                      (await store.set(options)).status === 'saved'
+                  } catch {
+                    /* Export succeeds even if preference storage fails. */
+                  }
                 close()
                 context.notify(
-                  `Exported ${result.pages} ${result.pages === 1 ? 'page' : 'pages'} to ${result.path}`,
+                  `Exported ${result.pages} ${result.pages === 1 ? 'page' : 'pages'} to ${result.path}${preferencesSaved ? '' : '. Export options were not saved.'}`,
                 )
                 return true
               }}

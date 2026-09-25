@@ -16,6 +16,7 @@ export const DOCUMENT_CHANNELS = {
   externalPending: 'document:external-pending',
   new: 'document:new',
   save: 'document:save',
+  saveTarget: 'document:save-target',
   autosave: 'document:autosave',
   selectTab: 'document:select-tab',
   closeTab: 'document:close-tab',
@@ -428,6 +429,12 @@ export type DesktopApi = {
   onExternalDocuments: (callback: () => void) => () => void
   newDocument: () => Promise<DocumentState | null>
   saveDocument: (saveAs: boolean) => Promise<DocumentState | null>
+  saveTargetDocument: (
+    owner: string,
+    tabId: string,
+    revision: number,
+    contentVersion: number,
+  ) => Promise<import('./document-edits').DocumentSaveResult>
   autosaveDocument: (tabId: string, revision: number) => Promise<AutosaveResult>
   renameDocument: (name: string) => Promise<DocumentState>
   readDocumentImage: (

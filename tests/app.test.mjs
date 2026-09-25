@@ -168,6 +168,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'onExternalDocuments',
         'newDocument',
         'saveDocument',
+        'saveTargetDocument',
         'autosaveDocument',
         'renameDocument',
         'readDocumentImage',

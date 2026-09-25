@@ -107,6 +107,7 @@ import {
   renameDocument,
   restoreDocument,
   saveDocument,
+  saveTargetDocument,
   selectDocumentTab,
   setTabsEnabled,
   updateDocument,
@@ -623,15 +624,16 @@ function createWindow(): void {
   })
   let confirmingClose = false
   let rendererGone = false
-  let rendererLoaded = false
+  let navigationStarted = false
   let journalReady = false
   window.webContents.on(
     'did-start-navigation',
     (_event, _url, _inPlace, isMainFrame) => {
       if (isMainFrame) {
         journalReady = false
-        if (rendererLoaded) resetAddonSessions()
-        rendererLoaded = false
+        // A Vite or recovery reload can replace a frame before its first finish.
+        if (navigationStarted) resetAddonSessions()
+        navigationStarted = true
       }
     },
   )
@@ -778,7 +780,6 @@ function createWindow(): void {
   })
   window.webContents.on('did-finish-load', () => {
     rendererGone = false
-    rendererLoaded = true
   })
   localDiagnostics.observeWindow(window)
   void window.loadURL(rendererUrl).catch((error: unknown) => {
@@ -1809,6 +1810,34 @@ if (!app.requestSingleInstanceLock()) {
           return saved
         })
       })
+      handle(
+        DOCUMENT_CHANNELS.saveTarget,
+        (
+          event,
+          owner: unknown,
+          tabId: unknown,
+          revision: unknown,
+          contentVersion: unknown,
+        ) => {
+          const activation = fileOwner(owner)
+          if (!activation) return { status: 'stale', document: null }
+          return runFileOperation(event, async (window) => {
+            const path =
+              typeof tabId === 'string' ? getDocumentPathForTab(tabId) : null
+            const result = await saveTargetDocument(
+              window,
+              tabId,
+              revision,
+              contentVersion,
+              () =>
+                isAddonActivationCurrent(activation.id, activation.generation),
+            )
+            if (result.status === 'saved' && path)
+              await documentFileChanged(path, path, false)
+            return result
+          })
+        },
+      )
       handle(
         DOCUMENT_CHANNELS.autosave,
         (event, tabId: unknown, revision: unknown) => {

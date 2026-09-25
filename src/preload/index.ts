@@ -487,6 +487,14 @@ if (process.isMainFrame) {
     newDocument: () => ipcRenderer.invoke(DOCUMENT_CHANNELS.new),
     saveDocument: (saveAs) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.save, saveAs),
+    saveTargetDocument: (owner, tabId, revision, contentVersion) =>
+      ipcRenderer.invoke(
+        DOCUMENT_CHANNELS.saveTarget,
+        owner,
+        tabId,
+        revision,
+        contentVersion,
+      ),
     autosaveDocument: (tabId, revision) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.autosave, tabId, revision),
     renameDocument: (name) =>

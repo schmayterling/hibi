@@ -365,6 +365,15 @@ export type DocumentEdit = {
 export type DocumentsApi = {
   /** Lightweight metadata; source text is read only through readSource. */
   listOpen: () => readonly import('../shared/document-edits').OpenDocumentMetadata[]
+  getMetadata: (
+    target: import('../shared/foundation-contracts').DocumentTarget,
+  ) => import('../shared/document-edits').DocumentMetadataResult
+  /** Open, change, and close events belong to this addon activation. */
+  subscribe: (
+    listener: (
+      event: import('../shared/document-edits').DocumentLifecycleEvent,
+    ) => void,
+  ) => () => void
   readSource: (
     target: import('../shared/foundation-contracts').DocumentTarget,
   ) => import('../shared/document-edits').DocumentSourceReadResult
@@ -372,6 +381,10 @@ export type DocumentsApi = {
   applyEdits: (
     request: import('../shared/document-edits').TargetSourceEditRequest,
   ) => import('../shared/document-edits').TargetSourceEditResult
+  /** Save an existing file from the captured document version without focusing it. */
+  save: (
+    target: import('../shared/foundation-contracts').VersionedDocumentTarget,
+  ) => Promise<import('../shared/document-edits').TargetDocumentSaveResult>
 }
 export type DocumentFormatting = {
   actions: readonly string[]

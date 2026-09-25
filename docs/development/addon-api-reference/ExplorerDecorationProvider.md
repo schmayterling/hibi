@@ -2,7 +2,7 @@
 
 # ExplorerDecorationProvider
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L119)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L218)
 
 <details>
 <summary>Declaration</summary>
@@ -31,7 +31,7 @@ type ExplorerDecorationProvider = {
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L120)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L219)
 
 ```typescript
 id: string
@@ -41,7 +41,7 @@ id: string
 
 ### provide
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L122)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L221)
 
 Called after workspace changes. Return a complete replacement set.
 

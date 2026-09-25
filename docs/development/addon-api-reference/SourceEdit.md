@@ -2,7 +2,7 @@
 
 # SourceEdit
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L6)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L9)
 
 UTF-16 offsets in the complete, unprojected document source.
 
@@ -33,7 +33,7 @@ type SourceEdit = {
 
 ### from
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L7)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L10)
 
 ```typescript
 from: number
@@ -41,7 +41,7 @@ from: number
 
 ### to
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L8)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L11)
 
 ```typescript
 to: number
@@ -49,7 +49,7 @@ to: number
 
 ### insert
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L9)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L12)
 
 ```typescript
 insert: string
@@ -57,7 +57,7 @@ insert: string
 
 ### expectedText
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L10)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L13)
 
 ```typescript
 expectedText: string

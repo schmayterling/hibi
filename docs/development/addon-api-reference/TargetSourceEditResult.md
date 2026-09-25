@@ -2,7 +2,7 @@
 
 # TargetSourceEditResult
 
-Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L53)
+Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L79)
 
 ```typescript
 type TargetSourceEditResult =

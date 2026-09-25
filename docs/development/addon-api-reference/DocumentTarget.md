@@ -2,7 +2,7 @@
 
 # DocumentTarget
 
-Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L28)
+Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L30)
 
 <details>
 <summary>Declaration</summary>
@@ -27,7 +27,7 @@ interface DocumentTarget {
 
 ### documentId
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L29)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L31)
 
 ```typescript
 readonly documentId: DocumentId
@@ -37,7 +37,7 @@ Related: [DocumentId](DocumentId.md).
 
 ### documentGeneration
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L30)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L32)
 
 ```typescript
 readonly documentGeneration: number

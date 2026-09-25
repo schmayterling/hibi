@@ -2,7 +2,7 @@
 
 # WorkspaceChangeEvent
 
-Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L75)
+Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L77)
 
 Ordered within one workspace generation. A null path set requires resync.
 
@@ -31,7 +31,7 @@ interface WorkspaceChangeEvent extends WorkspaceTarget {
 
 ### sequence
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L76)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L78)
 
 ```typescript
 readonly sequence: number
@@ -39,7 +39,7 @@ readonly sequence: number
 
 ### kind
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L77)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L79)
 
 ```typescript
 readonly kind: 'content' | 'tree' | 'resync'
@@ -47,7 +47,7 @@ readonly kind: 'content' | 'tree' | 'resync'
 
 ### paths
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L78)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L80)
 
 ```typescript
 readonly paths: readonly string[] | null

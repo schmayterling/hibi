@@ -2,7 +2,7 @@
 
 # OwnerScope
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L47)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L49)
 
 ```typescript
 type OwnerScope =

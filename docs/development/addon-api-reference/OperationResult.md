@@ -2,7 +2,7 @@
 
 # OperationResult
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L95)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L98)
 
 Services can narrow the failure codes they return.
 

@@ -2,7 +2,7 @@
 
 # WorkspaceChangeListener
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L110)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L209)
 
 ```typescript
 type WorkspaceChangeListener = (event: WorkspaceChangeEvent) => void

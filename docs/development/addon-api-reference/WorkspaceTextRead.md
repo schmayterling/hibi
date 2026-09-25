@@ -2,7 +2,7 @@
 
 # WorkspaceTextRead
 
-Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L79)
+Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L113)
 
 <details>
 <summary>Declaration</summary>
@@ -12,6 +12,8 @@ interface WorkspaceTextRead {
   readonly target: WorkspaceTarget
   readonly path: string
   readonly markdown: string
+  /** Opaque disk precondition. Supply this value when replacing closed-file text. */
+  readonly version: WorkspaceFileVersion
   /** Persisted bytes; unsaved document content is separate. */
   readonly source: 'disk'
 }
@@ -26,13 +28,14 @@ interface WorkspaceTextRead {
 - [target](#target)
 - [path](#path)
 - [markdown](#markdown)
+- [version](#version)
 - [source](#source)
 
 ## Properties
 
 ### target
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L80)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L114)
 
 ```typescript
 readonly target: WorkspaceTarget
@@ -42,7 +45,7 @@ Related: [WorkspaceTarget](WorkspaceTarget.md).
 
 ### path
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L81)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L115)
 
 ```typescript
 readonly path: string
@@ -50,15 +53,27 @@ readonly path: string
 
 ### markdown
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L82)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L116)
 
 ```typescript
 readonly markdown: string
 ```
 
+### version
+
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L118)
+
+Opaque disk precondition. Supply this value when replacing closed-file text.
+
+```typescript
+readonly version: WorkspaceFileVersion
+```
+
+Related: [WorkspaceFileVersion](WorkspaceFileVersion.md).
+
 ### source
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L84)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L120)
 
 Persisted bytes; unsaved document content is separate.
 
@@ -68,4 +83,4 @@ readonly source: 'disk'
 
 ## Related types
 
-[WorkspaceTarget](WorkspaceTarget.md).
+[WorkspaceTarget](WorkspaceTarget.md), [WorkspaceFileVersion](WorkspaceFileVersion.md).

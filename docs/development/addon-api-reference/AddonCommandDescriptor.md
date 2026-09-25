@@ -2,7 +2,7 @@
 
 # AddonCommandDescriptor
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L99)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L106)
 
 <details>
 <summary>Declaration</summary>
@@ -14,8 +14,8 @@ type AddonCommandDescriptor = {
   keywords?: string
   /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. */
   defaultShortcut?: string
-  /** Show this command in a built-in application menu. */
-  menu?: { location: 'app'; group?: string; order?: number }
+  /** Show this command in a built-in menu. */
+  menu?: CommandMenuContribution
 }
 ```
 
@@ -35,7 +35,7 @@ type AddonCommandDescriptor = {
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L100)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L107)
 
 ```typescript
 id: string
@@ -43,7 +43,7 @@ id: string
 
 ### label
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L101)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L108)
 
 ```typescript
 label: string
@@ -51,7 +51,7 @@ label: string
 
 ### keywords
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L102)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L109)
 
 ```typescript
 keywords?: string
@@ -59,7 +59,7 @@ keywords?: string
 
 ### defaultShortcut
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L104)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L111)
 
 Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere.
 
@@ -69,10 +69,16 @@ defaultShortcut?: string
 
 ### menu
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L106)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L113)
 
-Show this command in a built-in application menu.
+Show this command in a built-in menu.
 
 ```typescript
-menu?: { location: 'app'; group?: string; order?: number }
+menu?: CommandMenuContribution
 ```
+
+Related: [CommandMenuContribution](CommandMenuContribution.md).
+
+## Related types
+
+[CommandMenuContribution](CommandMenuContribution.md).

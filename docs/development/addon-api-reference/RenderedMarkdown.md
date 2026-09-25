@@ -2,7 +2,7 @@
 
 # RenderedMarkdown
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L337)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L347)
 
 <details>
 <summary>Declaration</summary>
@@ -24,7 +24,7 @@ type RenderedMarkdown = { html: string; css: string }
 
 ### html
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L337)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L347)
 
 ```typescript
 html: string
@@ -32,7 +32,7 @@ html: string
 
 ### css
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L337)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L347)
 
 ```typescript
 css: string

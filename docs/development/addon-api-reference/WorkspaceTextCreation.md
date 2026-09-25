@@ -2,7 +2,7 @@
 
 # WorkspaceTextCreation
 
-Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L87)
+Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L163)
 
 <details>
 <summary>Declaration</summary>
@@ -40,7 +40,7 @@ interface WorkspaceTextCreation {
 
 ### target
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L88)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L164)
 
 ```typescript
 readonly target: WorkspaceTarget
@@ -50,7 +50,7 @@ Related: [WorkspaceTarget](WorkspaceTarget.md).
 
 ### path
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L89)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L165)
 
 ```typescript
 readonly path: string
@@ -58,7 +58,7 @@ readonly path: string
 
 ### persisted
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L91)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L167)
 
 The file may have committed even if workspace changed before indexing.
 
@@ -68,7 +68,7 @@ readonly persisted: true
 
 ### indexed
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L92)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L168)
 
 ```typescript
 readonly indexed: boolean
@@ -76,7 +76,7 @@ readonly indexed: boolean
 
 ### directorySynced
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L93)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L169)
 
 ```typescript
 readonly directorySynced: boolean
@@ -84,7 +84,7 @@ readonly directorySynced: boolean
 
 ### atomicVisibility
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L94)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L170)
 
 ```typescript
 readonly atomicVisibility: boolean
@@ -92,7 +92,7 @@ readonly atomicVisibility: boolean
 
 ### scopeVerifiedAfterCommit
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L95)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L171)
 
 ```typescript
 readonly scopeVerifiedAfterCommit: boolean
@@ -100,7 +100,7 @@ readonly scopeVerifiedAfterCommit: boolean
 
 ### ownerActiveAfterCommit
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L96)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L172)
 
 ```typescript
 readonly ownerActiveAfterCommit: boolean

@@ -2,7 +2,7 @@
 
 # FailureCode
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L83)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L85)
 
 ```typescript
 type FailureCode =
@@ -15,4 +15,5 @@ type FailureCode =
   | 'unsupported'
   | 'permission-denied'
   | 'limit-exceeded'
+  | 'resync-needed'
 ```

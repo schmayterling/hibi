@@ -44,6 +44,28 @@ async function pressAddonShortcut(app, shortcut) {
   throw new Error('Native addon shortcut chord did not reach Electron.')
 }
 
+async function waitForAddonHotkey(page, present, shortcut) {
+  const deadline = Date.now() + 5000
+  let binding
+  do {
+    binding = await page.evaluate(async () =>
+      (await window.hibi.getAddonHotkeys()).find(
+        ({ id }) => id === 'command-probe.run',
+      ),
+    )
+    if (
+      present
+        ? binding && (!shortcut || binding.effectiveShortcut === shortcut)
+        : !binding
+    )
+      return binding
+    await delay(20)
+  } while (Date.now() < deadline)
+  throw new Error(
+    `Addon hotkey did not become ${present ? 'active' : 'inactive'}: ${JSON.stringify(binding)}`,
+  )
+}
+
 test('addon menu and configurable in-app shortcut use one lazy command', {
   timeout: 60000,
 }, async (t) => {
@@ -127,11 +149,7 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
       },
     )
   })
-  await page.waitForFunction(async () =>
-    (await window.hibi.getAddonHotkeys()).some(
-      ({ id }) => id === 'command-probe.run',
-    ),
-  )
+  await waitForAddonHotkey(page, true)
   assert.equal(await page.evaluate(() => window.commandProbeStarts), undefined)
 
   await clickMenu(app, 'Example action')
@@ -189,12 +207,7 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   const enabled = page.locator('#addon-command-probe')
   await enabled.click()
-  await page.waitForFunction(
-    async () =>
-      !(await window.hibi.getAddonHotkeys()).some(
-        ({ id }) => id === 'command-probe.run',
-      ),
-  )
+  await waitForAddonHotkey(page, false)
   await app.evaluate(async ({ Menu }) => {
     for (let attempt = 0; attempt < 200; attempt++) {
       const addons = Menu.getApplicationMenu()?.items.find(
@@ -211,14 +224,8 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
   await assert.rejects(clickMenu(app, 'Example action'), /unavailable/)
 
   await enabled.click()
-  await page.waitForFunction(async () =>
-    (await window.hibi.getAddonHotkeys()).some(
-      ({ id, effectiveShortcut }) =>
-        id === 'command-probe.run' &&
-        effectiveShortcut ===
-          `${navigator.platform.startsWith('Mac') ? 'meta' : 'ctrl'}+alt+shift+j`,
-    ),
-  )
+  const reboundShortcut = `${modifier === 'Meta' ? 'meta' : 'ctrl'}+alt+shift+j`
+  await waitForAddonHotkey(page, true, reboundShortcut)
   await pressAddonShortcut(app, `${modifier}+Alt+Shift+J`)
   try {
     await page.waitForFunction(() => window.commandProbeSources?.length === 4)
@@ -254,21 +261,9 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
   await page.waitForFunction(
     () => document.querySelector('#addon-command-probe')?.checked === false,
   )
-  await page.waitForFunction(
-    async () =>
-      !(await window.hibi.getAddonHotkeys()).some(
-        ({ id }) => id === 'command-probe.run',
-      ),
-  )
+  await waitForAddonHotkey(page, false)
   await enabled.click()
-  await page.waitForFunction(async () =>
-    (await window.hibi.getAddonHotkeys()).some(
-      ({ id, effectiveShortcut }) =>
-        id === 'command-probe.run' &&
-        effectiveShortcut ===
-          `${navigator.platform.startsWith('Mac') ? 'meta' : 'ctrl'}+alt+shift+j`,
-    ),
-  )
+  await waitForAddonHotkey(page, true, reboundShortcut)
   await pressAddonShortcut(app, `${modifier}+Alt+Shift+J`)
   await page.waitForFunction(() => window.commandProbeSources?.length === 5)
 

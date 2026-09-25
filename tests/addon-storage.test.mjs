@@ -8,10 +8,19 @@ import { createAddonStorageScope } from '../src/renderer/src/addon-storage.ts'
 
 const target = { workspaceId: 'a'.repeat(64), workspaceGeneration: 1 }
 
+function testStorage(directory, isCurrent = () => true) {
+  const service = createAddonStorage(directory, isCurrent, () => true)
+  return {
+    ...service,
+    read: (request) => service.read(request, 0),
+    write: (request) => service.write(request, 0),
+  }
+}
+
 async function temporaryStorage(t, isCurrent = () => true) {
   const directory = await mkdtemp(join(tmpdir(), 'hibi-addon-storage-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  return { directory, storage: createAddonStorage(directory, isCurrent) }
+  return { directory, storage: testStorage(directory, isCurrent) }
 }
 
 test('addon storage isolates owners and scopes, persists acknowledged writes, and clears sessions', async (t) => {
@@ -73,7 +82,7 @@ test('addon storage isolates owners and scopes, persists acknowledged writes, an
   await storage.clearSession('documentation')
   assert.equal((await storage.read(session)).status, 'missing')
 
-  const restarted = createAddonStorage(directory, () => true)
+  const restarted = testStorage(directory)
   assert.deepEqual(await restarted.read(global), {
     status: 'ready',
     revision: 1,
@@ -173,7 +182,7 @@ test('corrupt and newer files stay recoverable; stale workspace targets cannot w
   )
   assert.equal(JSON.parse(await readFile(file, 'utf8')).format, 2)
 
-  const corrupt = createAddonStorage(directory, () => true)
+  const corrupt = testStorage(directory)
   await writeFile(file, '{broken')
   assert.deepEqual(await corrupt.read(request), {
     status: 'unavailable',
@@ -256,7 +265,7 @@ test('a maximum stored revision refuses another write without damaging its file'
     },
   })
   await writeFile(file, stored)
-  const storage = createAddonStorage(directory, () => true)
+  const storage = testStorage(directory)
   await assert.rejects(
     storage.write({
       owner: 'documentation',
@@ -271,8 +280,53 @@ test('a maximum stored revision refuses another write without damaging its file'
   assert.equal(await readFile(file, 'utf8'), stored)
 })
 
+test('a queued old activation cannot restore a cleared session after re-enable', async (t) => {
+  const { directory } = await temporaryStorage(t)
+  let generation = 0
+  const storage = createAddonStorage(
+    directory,
+    () => true,
+    (_owner, captured) => captured === generation,
+  )
+  const request = {
+    owner: 'documentation',
+    scope: { kind: 'session' },
+    key: 'draft',
+    version: 1,
+  }
+  assert.equal(
+    (await storage.write({ ...request, baseRevision: 0, value: 'before' }, 0))
+      .status,
+    'saved',
+  )
+  generation = -1
+  const clearing = storage.clearSession('documentation')
+  const stale = storage.write({ ...request, baseRevision: 0, value: 'old' }, 0)
+  generation = 1
+  const fresh = storage.write(
+    { ...request, baseRevision: 0, value: 'fresh' },
+    1,
+  )
+  await clearing
+  assert.deepEqual(await stale, {
+    status: 'unavailable',
+    reason: 'stale-activation',
+  })
+  assert.equal((await fresh).status, 'saved')
+  assert.deepEqual(await storage.read(request, 1), {
+    status: 'ready',
+    revision: 1,
+    value: 'fresh',
+  })
+  assert.deepEqual(await storage.read(request, 0), {
+    status: 'unavailable',
+    reason: 'stale-activation',
+  })
+})
+
 test('deactivation waits for pending session writes and renderer subscriptions stop', async (t) => {
   const { storage } = await temporaryStorage(t)
+  t.mock.method(console, 'error', () => {})
   const callbacks = new Set()
   const scope = createAddonStorageScope('documentation', () => true, {
     readAddonStorage: (request) => storage.read(request),
@@ -288,10 +342,13 @@ test('deactivation waits for pending session writes and renderer subscriptions s
   t.after(release)
   const handle = await scope.api.session('draft', 1)
   let notifications = 0
+  handle.subscribe(() => {
+    throw new Error('bad subscriber')
+  })
   handle.subscribe(() => notifications++)
   const pending = handle.set('pending')
   await storage.clearSession('documentation')
-  await pending
+  assert.equal((await pending).status, 'saved')
   assert.deepEqual(
     await storage.read({
       owner: 'documentation',
@@ -303,6 +360,10 @@ test('deactivation waits for pending session writes and renderer subscriptions s
   )
   assert.equal(handle.snapshot().status, 'missing')
   scope.dispose()
+  assert.deepEqual(handle.snapshot(), {
+    status: 'unavailable',
+    reason: 'stale-activation',
+  })
   assert.equal(callbacks.size, 0)
   await assert.rejects(handle.set('late'), /Enable this addon/)
   assert.equal(notifications, 2)

@@ -31,7 +31,6 @@ type OpenHandle = {
   key: string
   version: number
   current: AddonStorageReadResult
-  changedWhileLoading: boolean
   changeCounter: number
   listeners: Set<() => void>
 }
@@ -59,12 +58,19 @@ export function createAddonStorageScope(
     if (!active())
       throw new Error('Enable this addon in Settings → Addons first.')
   }
+  const notify = (handle: OpenHandle) => {
+    for (const listener of handle.listeners)
+      try {
+        listener()
+      } catch (error) {
+        console.error('Could not notify addon storage subscriber:', error)
+      }
+  }
   const release = bridge.onAddonStorageChanged((change) => {
     if (!active() || change.owner !== owner) return
     for (const handle of handles.values()) {
       if (handle.key !== change.key || !sameScope(handle.scope, change.scope))
         continue
-      handle.changedWhileLoading = true
       handle.changeCounter++
       handle.current =
         change.current.status === 'ready' &&
@@ -77,7 +83,7 @@ export function createAddonStorageScope(
               value: change.current.value,
             }
           : change.current
-      for (const listener of handle.listeners) listener()
+      notify(handle)
     }
   })
 
@@ -95,7 +101,6 @@ export function createAddonStorageScope(
         key,
         version,
         current: { status: 'missing', revision: 0 },
-        changedWhileLoading: false,
         changeCounter: 0,
         listeners: new Set(),
       }
@@ -109,7 +114,7 @@ export function createAddonStorageScope(
             version,
           })
           requireActive()
-          if (!handle.changedWhileLoading) handle.current = initial
+          if (handle.changeCounter === 0) handle.current = initial
         } catch (error) {
           handles.delete(identity)
           pending.delete(identity)
@@ -149,7 +154,7 @@ export function createAddonStorageScope(
                 value: result.value,
               }
             else if ('current' in result) handle.current = result.current
-            for (const listener of handle.listeners) listener()
+            notify(handle)
             return result
           },
         }
@@ -187,7 +192,10 @@ export function createAddonStorageScope(
     dispose() {
       disposed = true
       release()
-      for (const handle of handles.values()) handle.listeners.clear()
+      for (const handle of handles.values()) {
+        handle.current = { status: 'unavailable', reason: 'stale-activation' }
+        handle.listeners.clear()
+      }
       handles.clear()
       pending.clear()
     },

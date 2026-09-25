@@ -716,6 +716,28 @@ export function useAddons(
                     ? Promise.reject(new Error('This addon has stopped.'))
                     : window.hibi.readSelectedText(id, handle),
               },
+              selectedIo: {
+                selectImport: (choice) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.selectHostImport(id, choice),
+                readImport: (handle) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.readHostImport(id, handle),
+                selectExport: (choice) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.selectHostExport(id, choice),
+                writeExport: (handle, bytes) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.writeHostExport(id, handle, bytes),
+                cancel: (handle) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.cancelHostSelectedIo(id, handle),
+              },
               network: {
                 getText: (request) =>
                   disposed

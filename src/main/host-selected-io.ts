@@ -140,7 +140,7 @@ function exportChoice(value: unknown): HostExportChoice {
     suggestedName.length > 128 ||
     suggestedName === '.' ||
     suggestedName === '..' ||
-    /[\\/\p{Cc}]|[. ]$/u.test(suggestedName) ||
+    /[\\/:*?"<>|\p{Cc}]|[. ]$/u.test(suggestedName) ||
     (extension !== undefined &&
       (typeof extension !== 'string' || !/^[a-z0-9]{1,12}$/.test(extension)))
   )

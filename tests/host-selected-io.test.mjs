@@ -120,6 +120,49 @@ test('dialog cancellation creates no grant; import bytes are one-use and owner s
   service.clear()
 })
 
+test('untrusted chooser options are rejected before opening a dialog', async (t) => {
+  const { input, output } = await fixture(t)
+  let dialogs = 0
+  const { service } = serviceFor(input, output, {
+    selectImport: async () => {
+      dialogs++
+      return input
+    },
+    selectExport: async () => {
+      dialogs++
+      return output
+    },
+  })
+  const target = window()
+  expectFailure(
+    await service.selectImport(target, 'demo', { extensions: ['../'] }),
+    'unsupported',
+  )
+  expectFailure(
+    await service.selectExport(target, 'demo', {
+      suggestedName: '../secret.bin',
+    }),
+    'unsupported',
+  )
+  expectFailure(
+    await service.selectExport(target, 'demo', {
+      suggestedName: 'CON:secret.bin',
+    }),
+    'unsupported',
+  )
+  assert.equal(dialogs, 0)
+  service.clear()
+})
+
+test('outstanding handles are bounded', async (t) => {
+  const { input, output } = await fixture(t)
+  const { service } = serviceFor(input, output)
+  const target = window()
+  for (let index = 0; index < 16; index++) await importHandle(service, target)
+  expectFailure(await service.selectImport(target, 'demo'), 'busy')
+  service.clear()
+})
+
 test('owner restart, expiry, replacement, and file limits invalidate imports', async (t) => {
   const { directory, input, output } = await fixture(t)
   const { service, owners, advance } = serviceFor(input, output)

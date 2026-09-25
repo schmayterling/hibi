@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { localTarget, noteGraph } from '../src/addons/graph/model.ts'
+import {
+  localTarget,
+  metadataGraph,
+  noteGraph,
+} from '../src/addons/graph/model.ts'
 import { noteTags } from '../src/addons/tags/syntax.ts'
 import { electron } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
@@ -43,6 +47,21 @@ test('graph resolves only existing local note links and deduplicates connections
     '%GG',
   ])
     assert.equal(localTarget('folder/b.md', link, paths), null)
+})
+
+test('graph panel deduplicates shared metadata edges and skips incomplete targets', () => {
+  const graph = metadataGraph([
+    { kind: 'node', path: 'a.md' },
+    { kind: 'node', path: 'b.md' },
+    { kind: 'edge', source: 'a.md', target: 'b.md' },
+    { kind: 'edge', source: 'b.md', target: 'a.md' },
+    { kind: 'edge', source: 'a.md', target: 'missing.md' },
+  ])
+  assert.deepEqual(graph.edges, [{ source: 'a.md', target: 'b.md' }])
+  assert.deepEqual(
+    graph.nodes.map((node) => node.degree),
+    [1, 1],
+  )
 })
 
 test('tags and graph plugins browse/open notes, honor drafts, and clean up when disabled', {

@@ -30,6 +30,8 @@ export type WorkspaceReferenceQueryRequest =
     })
   | (QueryTarget & QueryPage & { readonly kind: 'tag'; readonly tag: string })
   | (QueryTarget & QueryPage & { readonly kind: 'tags' })
+  | (QueryTarget &
+      QueryPage & { readonly kind: 'search-tags'; readonly query: string })
   | (QueryTarget & {
       readonly kind: 'graph'
       readonly cursor?: string
@@ -86,7 +88,7 @@ export type WorkspaceReferenceQueryResult = WorkspaceReferenceQueryBase &
         readonly metadataComplete?: boolean
       }
     | {
-        readonly kind: 'tags'
+        readonly kind: 'tags' | 'search-tags'
         readonly items: readonly WorkspaceTagSummary[]
         readonly hasMore: boolean
         readonly nextOffset: number

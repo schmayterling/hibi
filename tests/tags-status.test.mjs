@@ -1,67 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createTagAnalysis } from '../src/addons/tags/analysis.ts'
-import { tagIndex } from '../src/addons/tags/model.ts'
 import { scheduleTagCounts, tagVersion } from '../src/addons/tags/schedule.ts'
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 300))
 
-test('panel and status reuse the active note result', () => {
-  const parsed = []
-  const analysis = createTagAnalysis((source) => {
-    parsed.push(source)
-    return [source.slice(1)]
-  })
+test('status cache keeps only the current source result', () => {
+  const analysis = createTagAnalysis()
   analysis.remember('#one', ['one'])
-  assert.deepEqual(analysis.parsePage('#one', '#one'), ['one'])
-  assert.deepEqual(analysis.parsePage('#other', '#one'), ['other'])
   assert.deepEqual(analysis.get('#one'), ['one'])
-  assert.deepEqual(analysis.parsePage('#two', '#two'), ['two'])
+  assert.equal(analysis.get('#other'), null)
+  analysis.remember('#two', ['two'])
   assert.deepEqual(analysis.get('#two'), ['two'])
-  assert.deepEqual(parsed, ['#other', '#two'])
-})
-
-test('open panel and status count parse an edited active note once', async () => {
-  let parses = 0
-  const analysis = createTagAnalysis((source) => {
-    parses++
-    return [source.slice(1)]
-  })
-  const cache = { workspaceId: undefined, pages: new Map() }
-  let source = '#one'
-  let page = { id: 'active', path: 'active.md', markdown: source }
-  const index = () =>
-    tagIndex('workspace', [page], cache, (markdown) =>
-      analysis.parsePage(markdown, source),
-    )
-  const sent = []
-  const published = []
-  let key = 'active:1'
-  const counter = scheduleTagCounts(
-    () => ({ key, source }),
-    (job) => {
-      const tags = analysis.get(job.source)
-      if (tags) counter.receive({ key: job.key, tags })
-      else sent.push(job)
-    },
-    (tags) => published.push(tags),
-  )
-  try {
-    index()
-    counter.refresh(key)
-    await settle()
-    source = '#two'
-    page = { ...page, markdown: source }
-    key = 'active:2'
-    index()
-    counter.refresh(key)
-    await settle()
-    assert.equal(parses, 2)
-    assert.deepEqual(sent, [])
-    assert.deepEqual(published, [['one'], ['two']])
-  } finally {
-    counter.stop()
-  }
+  assert.equal(analysis.get('#one'), null)
 })
 
 test('tag count key survives tab switches but advances with content', () => {

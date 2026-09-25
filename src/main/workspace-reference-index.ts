@@ -209,6 +209,7 @@ export class WorkspaceReferenceIndex {
   tags(
     offset: number,
     limit: number,
+    prefix?: string,
   ): {
     items: readonly WorkspaceTagSummary[]
     hasMore: boolean
@@ -216,9 +217,13 @@ export class WorkspaceReferenceIndex {
     capReached: boolean
   } {
     this.ensureTags()
-    const sorted = [...(this.tagPaths ?? [])].sort(([a], [b]) =>
-      a.localeCompare(b),
-    )
+    const sorted = [...(this.tagPaths ?? [])]
+      .filter(([tag]) => prefix === undefined || tag.startsWith(prefix))
+      .sort(([a, aPaths], [b, bPaths]) =>
+        prefix === undefined
+          ? a.localeCompare(b)
+          : bPaths.size - aPaths.size || (a < b ? -1 : a > b ? 1 : 0),
+      )
     const items: WorkspaceTagSummary[] = []
     let bytes = 0
     for (

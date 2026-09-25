@@ -1,0 +1,336 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
+import { createDocumentTargetEditScope } from '../src/renderer/src/document-target-edits.ts'
+
+const document = (source, overrides = {}) => ({
+  tabId: 'one',
+  tabs: [{ id: 'one', name: 'one.md', dirty: false }],
+  tabsEnabled: true,
+  id: 'file-one',
+  ephemeral: false,
+  markdown: source,
+  savedMarkdown: source,
+  name: 'one.md',
+  dirty: false,
+  revision: 1,
+  contentVersion: 0,
+  canAutosave: true,
+  ...overrides,
+})
+const fixture = () => {
+  const operations = [],
+    errors = []
+  const runtime = new DocumentRuntime({
+    enqueue: (operation) => operations.push(operation),
+    onError: (error) => errors.push(error),
+  })
+  let busy = false,
+    mounted = () => ({ status: 'unsupported-view', message: 'No adapter.' })
+  const scope = createDocumentTargetEditScope(
+    runtime,
+    (request) => mounted(request),
+    () => busy,
+  )
+  return {
+    runtime,
+    scope,
+    operations,
+    errors,
+    setBusy: (value) => {
+      busy = value
+    },
+    setMounted: (handler) => {
+      mounted = handler
+    },
+  }
+}
+const request = (target, requestId, changes) => ({
+  requestId,
+  target,
+  changes,
+})
+
+test('target edits keep inactive source, history and focus independent', () => {
+  const { runtime, scope, operations, errors } = fixture()
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('a\r\n😀b', { tabs }))
+  const first = runtime.session()
+  first.counters(true)
+  const [listed] = scope.listOpen()
+  assert.equal(first.counters().materializations, 0)
+  assert.equal(listed.name, 'one.md')
+  const read = scope.readSource(listed.target)
+  assert.equal(read.status, 'read')
+  assert.equal(read.source, 'a\r\n😀b')
+  assert.equal(
+    scope.readSource({ documentId: '', documentGeneration: 1 }).status,
+    'invalid',
+  )
+  assert.equal(
+    scope.readSource({
+      get documentId() {
+        throw new Error('hostile getter')
+      },
+    }).status,
+    'invalid',
+  )
+  runtime.activate(
+    document('other', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  assert.equal(scope.listOpen().length, 2)
+  const applied = scope.applyEdits(
+    request(listed.target, 'edit-one', [
+      { from: 5, to: 6, expectedText: 'b', insert: '🌊b' },
+    ]),
+  )
+  assert.deepEqual(applied, { status: 'applied', contentVersion: 1 })
+  assert.equal(runtime.get().markdown, 'other')
+  assert.equal(runtime.get('one').markdown, 'a\r\n😀🌊b')
+  assert.equal(operations.at(-1).document.tabId, 'one')
+  assert.equal(operations.at(-1).origin, 'addon')
+  first.undo()
+  assert.equal(runtime.get('one').markdown, 'a\r\n😀b')
+  assert.equal(runtime.get().markdown, 'other')
+  assert.deepEqual(errors, [])
+  scope.dispose()
+  runtime.dispose()
+})
+
+test('target edits validate source boundaries, expected text, version and generation', () => {
+  const { runtime, scope, operations } = fixture()
+  runtime.activate(document('a\r\n😀b'))
+  const target = scope.listOpen()[0].target
+  assert.equal(
+    scope.applyEdits(
+      request(target, 'crlf', [
+        { from: 2, to: 2, expectedText: '', insert: 'x' },
+      ]),
+    ).status,
+    'invalid',
+  )
+  assert.equal(
+    scope.applyEdits(
+      request(target, 'emoji', [
+        { from: 4, to: 4, expectedText: '', insert: 'x' },
+      ]),
+    ).status,
+    'invalid',
+  )
+  assert.equal(
+    scope.applyEdits(
+      request(target, 'expected', [
+        { from: 0, to: 1, expectedText: 'a', insert: 'A' },
+        { from: 5, to: 6, expectedText: 'c', insert: 'x' },
+      ]),
+    ).status,
+    'conflict',
+  )
+  assert.equal(
+    scope.applyEdits(
+      request(target, 'unpaired', [
+        { from: 5, to: 5, expectedText: '', insert: '\ud800' },
+      ]),
+    ).status,
+    'invalid',
+  )
+  assert.equal(operations.length, 0)
+  runtime.replace('changed')
+  assert.equal(
+    scope.applyEdits(
+      request(target, 'stale-version', [
+        { from: 0, to: 1, expectedText: 'a', insert: 'A' },
+      ]),
+    ).status,
+    'stale',
+  )
+  runtime.activate(document('reopened', { revision: 3 }))
+  assert.equal(scope.readSource(target).status, 'stale')
+  assert.equal(
+    scope.applyEdits(
+      request(target, 'stale-generation', [
+        { from: 0, to: 1, expectedText: 'a', insert: 'A' },
+      ]),
+    ).status,
+    'stale',
+  )
+  scope.dispose()
+  runtime.dispose()
+})
+
+test('request IDs deduplicate accepted edits and allow busy retries within one activation', () => {
+  const { runtime, scope, operations, setBusy } = fixture()
+  runtime.activate(document('a'))
+  const target = scope.listOpen()[0].target
+  const edit = request(target, 'same-id', [
+    { from: 0, to: 1, expectedText: 'a', insert: 'A' },
+  ])
+  assert.deepEqual(scope.applyEdits(edit), {
+    status: 'applied',
+    contentVersion: 1,
+  })
+  assert.deepEqual(scope.applyEdits(edit), {
+    status: 'applied',
+    contentVersion: 1,
+  })
+  assert.equal(operations.length, 1)
+  assert.equal(
+    scope.applyEdits(
+      request(target, 'same-id', [
+        { from: 0, to: 1, expectedText: 'a', insert: 'B' },
+      ]),
+    ).status,
+    'invalid',
+  )
+  const next = scope.listOpen()[0].target
+  const later = request(next, 'retry-id', [
+    { from: 1, to: 1, expectedText: '', insert: '!' },
+  ])
+  setBusy(true)
+  assert.equal(scope.applyEdits(later).status, 'busy')
+  assert.equal(
+    scope.applyEdits(
+      request(next, 'retry-id', [
+        { from: 1, to: 1, expectedText: '', insert: '?' },
+      ]),
+    ).status,
+    'invalid',
+  )
+  setBusy(false)
+  assert.equal(scope.applyEdits(later).status, 'applied')
+  scope.dispose()
+  assert.equal(scope.applyEdits(later).status, 'disposed')
+  runtime.dispose()
+})
+
+test('accepted source edit keeps its receipt if recovery reporting throws', () => {
+  const runtime = new DocumentRuntime({
+    enqueue() {
+      throw new Error('lost transport')
+    },
+    onError() {
+      throw new Error('observer failed')
+    },
+  })
+  runtime.activate(document('a'))
+  const scope = createDocumentTargetEditScope(
+    runtime,
+    () => ({ status: 'unsupported-view', message: 'No view.' }),
+    () => false,
+  )
+  const edit = request(scope.listOpen()[0].target, 'accepted-with-error', [
+    { from: 0, to: 1, expectedText: 'a', insert: 'A' },
+  ])
+  assert.deepEqual(scope.applyEdits(edit), {
+    status: 'applied',
+    contentVersion: 1,
+  })
+  assert.deepEqual(scope.applyEdits(edit), {
+    status: 'applied',
+    contentVersion: 1,
+  })
+  assert.equal(runtime.get().markdown, 'A')
+  scope.dispose()
+  runtime.dispose()
+})
+
+test('mounted views use their adapter and cannot be edited behind another focused view', () => {
+  const { runtime, scope, setMounted } = fixture()
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('first', { tabs }))
+  const firstTarget = scope.listOpen()[0].target
+  const unmountFirst = runtime.registerView('one', runtime.primaryViewId('one'))
+  setMounted(() => ({ status: 'applied', contentVersion: 0 }))
+  assert.equal(
+    scope.applyEdits({
+      ...request(firstTarget, 'projection-noop', [
+        { from: 0, to: 5, expectedText: 'first', insert: 'first' },
+      ]),
+      projectionId: 'current-proof',
+    }).status,
+    'applied',
+  )
+  const firstEdit = request(firstTarget, 'mounted-one', [
+    { from: 0, to: 5, expectedText: 'first', insert: 'FIRST' },
+  ])
+  const forwardedIds = []
+  setMounted((input) => {
+    forwardedIds.push(input.requestId)
+    return { status: 'applied', contentVersion: 1 }
+  })
+  assert.equal(scope.applyEdits(firstEdit).status, 'busy')
+  let received = 0
+  setMounted((input) => {
+    received++
+    forwardedIds.push(input.requestId)
+    runtime.session('one').edit(
+      input.changes.map(({ from, to, insert }) => ({ from, to, insert })),
+      'addon',
+      'mounted-edit',
+    )
+    return {
+      status: 'applied',
+      contentVersion: runtime.session('one').snapshot().version,
+    }
+  })
+  assert.equal(scope.applyEdits(firstEdit).status, 'applied')
+  assert.equal(received, 1)
+  assert.notEqual(forwardedIds[0], forwardedIds[1])
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  const unmountSecond = runtime.registerView(
+    'two',
+    runtime.primaryViewId('two'),
+  )
+  const current = scope.listOpen().find((entry) => entry.name === 'one.md')
+  assert.equal(
+    scope.applyEdits(
+      request(current.target, 'mounted-inactive', [
+        { from: 0, to: 5, expectedText: 'FIRST', insert: 'First' },
+      ]),
+    ).status,
+    'unsupported-view',
+  )
+  assert.equal(runtime.get('one').markdown, 'FIRST')
+  assert.equal(received, 1)
+  unmountFirst()
+  assert.equal(
+    scope.applyEdits({
+      ...request(current.target, 'projection-noop-unmounted', [
+        { from: 0, to: 5, expectedText: 'FIRST', insert: 'FIRST' },
+      ]),
+      projectionId: 'old-proof',
+    }).status,
+    'unsupported-view',
+  )
+  assert.equal(
+    scope.applyEdits({
+      ...request(current.target, 'projection-unmounted', [
+        { from: 0, to: 5, expectedText: 'FIRST', insert: 'First' },
+      ]),
+      projectionId: 'from-mounted-editor',
+    }).status,
+    'unsupported-view',
+  )
+  assert.equal(runtime.get('one').markdown, 'FIRST')
+  assert.equal(
+    scope.applyEdits(
+      request(current.target, 'mounted-inactive', [
+        { from: 0, to: 5, expectedText: 'FIRST', insert: 'First' },
+      ]),
+    ).status,
+    'applied',
+  )
+  unmountSecond()
+  scope.dispose()
+  runtime.dispose()
+})

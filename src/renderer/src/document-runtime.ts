@@ -148,6 +148,15 @@ export class DocumentRuntime {
       this.resolveDocument(registered) !== null
     )
   }
+  hasMountedView(target: DocumentTarget) {
+    for (const view of this.#views.values())
+      if (
+        view.documentId === target.documentId &&
+        view.documentGeneration === target.documentGeneration
+      )
+        return true
+    return false
+  }
   retainedHistory = () => ({
     ...this.#historySize,
     sessions: this.#history.size,

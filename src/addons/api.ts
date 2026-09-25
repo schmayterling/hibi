@@ -354,6 +354,18 @@ export type DocumentEdit = {
   /** Selection offsets within the inserted text; defaults to its end. */
   selection?: { from: number; to: number }
 }
+/** Live source sessions, addressable without changing the focused editor. */
+export type DocumentsApi = {
+  /** Lightweight metadata; source text is read only through readSource. */
+  listOpen: () => readonly import('../shared/document-edits').OpenDocumentMetadata[]
+  readSource: (
+    target: import('../shared/foundation-contracts').DocumentTarget,
+  ) => import('../shared/document-edits').DocumentSourceReadResult
+  /** One version-checked, atomic UTF-16 edit batch. Mounted views require a compatible editor adapter. */
+  applyEdits: (
+    request: import('../shared/document-edits').TargetSourceEditRequest,
+  ) => import('../shared/document-edits').TargetSourceEditResult
+}
 export type DocumentFormatting = {
   actions: readonly string[]
   apply: (action: string, selection: DocumentSelection) => DocumentEdit | null

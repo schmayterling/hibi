@@ -60,10 +60,47 @@ test('failed editor attachments stay read-only and disabling the addon restores 
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  await page
-    .locator('.rich-pane .document-notice')
-    .filter({ hasText: /editor addon unavailable/i })
-    .waitFor()
+  const pageErrors = []
+  page.on('pageerror', (error) => pageErrors.push(String(error)))
+  page.on('console', (message) => {
+    if (message.type() === 'error') pageErrors.push(message.text())
+  })
+  try {
+    await page
+      .locator('.rich-pane .document-notice')
+      .filter({ hasText: /editor addon unavailable/i })
+      .waitFor()
+  } catch (error) {
+    const state = await page
+      .evaluate(async () => ({
+        main: {
+          states: await window.hibi.getAddonStates(),
+          installed: (await window.hibi.getInstalledAddons()).map(
+            ({ manifest, url }) => ({
+              id: manifest.id,
+              url,
+            }),
+          ),
+        },
+        renderer: {
+          body: document.body.innerText.slice(0, 1000),
+          busy: document
+            .querySelector('.editor-page')
+            ?.getAttribute('aria-busy'),
+          richPane: document
+            .querySelector('.rich-pane')
+            ?.outerHTML.slice(0, 800),
+          detached: document.documentElement.dataset.partialDetached,
+          measures: performance
+            .getEntriesByType('measure')
+            .filter(({ name }) => name.startsWith('hibi:addon'))
+            .map(({ name, duration, detail }) => ({ name, duration, detail })),
+        },
+      }))
+      .catch((diagnosticError) => ({ error: String(diagnosticError) }))
+    console.error('addon failure state:', JSON.stringify({ state, pageErrors }))
+    throw error
+  }
   assert.equal(
     await page.locator('.tiptap').evaluate((el) => el.isContentEditable),
     false,

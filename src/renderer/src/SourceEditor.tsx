@@ -40,6 +40,10 @@ import type {
 import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop'
 import { editedSource, sourceEditMatches } from '../../shared/document-edits'
 import type { MarkdownReferenceSyntax } from '../../shared/document-worker-protocol'
+import type {
+  EditorContextAction,
+  EditorInteractionRequest,
+} from '../../shared/editor-interactions'
 import { markdownLink } from '../../shared/markdown-link'
 import { wikiHref } from '../../shared/note-links'
 import type { RawEdit } from '../../shared/source-operations'
@@ -56,6 +60,8 @@ import { editorDocument } from './document-formats'
 import { documentProjections } from './document-projections'
 import { documentRuntime } from './document-runtime'
 import { DocumentWorkerClient, type FindAction } from './document-worker-client'
+import { sameInteraction } from './editor-interaction-broker'
+import { attachEditorInteractions } from './editor-interactions'
 import type { FindMove, FindStatus } from './FindBar'
 import {
   observeSourceAnnotations,
@@ -565,6 +571,59 @@ export function SourceEditor({
         trigger,
       }
     }
+    const captureInteraction = (
+      position: number,
+    ): EditorInteractionRequest | null => {
+      const context = editContext.current
+      const active = documentRuntime.get(document.tabId)
+      const target = documentRuntime.captureActiveView()
+      const owner = documentRuntime.captureDocument(document.tabId)
+      const selected = editor.state.selection
+      if (
+        view.current !== editor ||
+        !editor.hasFocus ||
+        editor.composing ||
+        !context.editTarget ||
+        context.disabled ||
+        !context.inputReady ||
+        !active ||
+        active.revision !== context.document.revision ||
+        documentRuntime.session(document.tabId) !== session ||
+        !target ||
+        !owner ||
+        target.documentId !== owner.documentId ||
+        target.documentGeneration !== owner.documentGeneration ||
+        target.viewId !== viewId ||
+        !documentRuntime.isLiveView(target) ||
+        selected.ranges.length !== 1 ||
+        !Number.isSafeInteger(position) ||
+        position < 0 ||
+        position > editor.state.doc.length
+      )
+        return null
+      const snapshot = bridge.snapshot()
+      if (snapshot.version !== active.contentVersion) return null
+      return {
+        view: target,
+        contentVersion: snapshot.version,
+        editor: 'source',
+        documentLength: editor.state.doc.length,
+        position,
+        selection: {
+          anchor: selected.main.anchor,
+          head: selected.main.head,
+        },
+        before: editor.state.sliceDoc(Math.max(0, position - 256), position),
+        after: editor.state.sliceDoc(
+          position,
+          Math.min(editor.state.doc.length, position + 256),
+        ),
+        selectedText: editor.state.sliceDoc(
+          selected.main.from,
+          selected.main.to,
+        ),
+      }
+    }
     const cancelCompletion = () => {
       const pending = completion
       completion = null
@@ -916,6 +975,10 @@ export function SourceEditor({
               update.view.contentDOM.dispatchEvent(
                 new Event('hibi:source-caret', { bubbles: true }),
               )
+            if (update.docChanged || update.selectionSet || update.focusChanged)
+              update.view.contentDOM.dispatchEvent(
+                new Event('hibi:editor-interactions-invalidate'),
+              )
             if (
               update.docChanged ||
               update.selectionSet ||
@@ -1045,6 +1108,48 @@ export function SourceEditor({
         contentVersion: editorDocument.get()!.contentVersion,
       }
     })
+    const actionScope = documentEdits.scope(() => false)
+    const applyInteraction = (
+      action: EditorContextAction,
+      request: EditorInteractionRequest,
+    ) => {
+      if (!sameInteraction(request, captureInteraction(request.position)))
+        return false
+      const snapshot = bridge.snapshot()
+      const from = snapshot.editorToRaw(action.edit.from)
+      const to = snapshot.editorToRaw(action.edit.to)
+      if (from === null || to === null) return false
+      const result = actionScope.apply({
+        requestId: crypto.randomUUID(),
+        tabId: document.tabId,
+        revision: document.revision,
+        contentVersion: snapshot.version,
+        changes: [
+          {
+            from,
+            to,
+            expectedText: snapshot.sliceRaw(from, to),
+            insert: action.edit.insertText,
+          },
+        ],
+      })
+      if (result.status !== 'applied') setInputError(result.message)
+      return result.status === 'applied'
+    }
+    const closeForActions = () => closeCompletion(editor)
+    editor.contentDOM.addEventListener(
+      'hibi:editor-actions-open',
+      closeForActions,
+    )
+    const detachInteractions = attachEditorInteractions({
+      element: editor.contentDOM,
+      positionAt: (x, y) => editor.posAtCoords({ x, y }, false),
+      anchorAt: (position) => editor.coordsAtPos(position),
+      selectionPosition: () => editor.state.selection.main.head,
+      capture: captureInteraction,
+      apply: applyInteraction,
+      focus: () => editor.focus(),
+    })
     let disposed = false
     const unregister = registerSourceView(
       editor,
@@ -1130,6 +1235,12 @@ export function SourceEditor({
       formatting.current = null
       reportFormatting.current(null)
       unregister()
+      detachInteractions()
+      editor.contentDOM.removeEventListener(
+        'hibi:editor-actions-open',
+        closeForActions,
+      )
+      actionScope.dispose()
       unregisterEdits()
       unregisterProjection()
       removeAnnotations()

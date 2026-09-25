@@ -21,6 +21,13 @@ export type {
   DependencyState,
 } from '../shared/dependencies'
 export type {
+  EditorContextAction,
+  EditorContextActionProvider,
+  EditorHover,
+  EditorHoverProvider,
+  EditorInteractionRequest,
+} from '../shared/editor-interactions'
+export type {
   DocumentSyntaxFeature,
   MarkdownSyntaxFeature,
 } from '../shared/markdown-syntax'
@@ -610,6 +617,14 @@ export type AddonContext = {
     /** Data-only suggestions; provider work is bounded and stopped with this addon. */
     registerCompletionProvider: (
       provider: import('../shared/completions').CompletionProvider,
+    ) => Promise<() => void>
+    /** Plain-text hover content. Work is cancelled when the hovered target changes. */
+    registerHoverProvider: (
+      provider: import('../shared/editor-interactions').EditorHoverProvider,
+    ) => Promise<() => void>
+    /** Data-only actions whose edits are checked against the captured document. */
+    registerContextActionProvider: (
+      provider: import('../shared/editor-interactions').EditorContextActionProvider,
     ) => Promise<() => void>
     registerRich: (extension: RichExtension) => () => void
     registerMarkdown: (extension: MarkdownExtension) => () => void

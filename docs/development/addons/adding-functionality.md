@@ -97,6 +97,27 @@ Throw when an attachment cannot be installed. Hibi displays the failure and keep
 
 Use `onInput()` to observe typed characters, or `onKeyEvent()` to observe editor key events. These hooks do not receive input from settings, search fields, or dialogs.
 
+### Show hover information and context actions
+
+Register providers with `registerHoverProvider()` and `registerContextActionProvider()`. Hibi calls them for the relevant editor position, displays plain-text results, and cancels work when the target changes. The request includes the document and view identity, content version, editor-local positions, and at most 256 characters of nearby or selected text. Check the abort signal before returning from slow work.
+
+```typescript
+await context.editor.registerHoverProvider((request) =>
+  request.selectedText ? { label: request.selectedText } : null,
+)
+await context.editor.registerContextActionProvider((request) => {
+  const from = Math.min(request.selection.anchor, request.selection.head)
+  const to = Math.max(request.selection.anchor, request.selection.head)
+  return from === to
+    ? []
+    : [{ label: 'Uppercase selection', edit: {
+        from, to, insertText: request.selectedText.toUpperCase(),
+      } }]
+})
+```
+
+Hibi owns the menus and applies accepted edits through its version-checked document edit path as one undo operation. Rich view accepts only exact plain-text ranges that preserve the surrounding Markdown. Invalid ranges and edits from a changed document are rejected. The returned removal functions and addon shutdown cancel pending work and remove visible results.
+
 ## Add a system-wide shortcut
 
 Register a command, then assign it an Electron accelerator to run it while Hibi is open, even when another application has focus. The registration returns a removal function. Hibi also removes it when the addon stops. Registration rejects a shortcut already owned by another application.

@@ -314,6 +314,10 @@ export class WorkspaceReferenceIndex {
       if (!isMarkdownDocument(path) || !document.referenceComplete) continue
       document.tags ??= noteTags(document.markdown)
       for (const name of document.tags) {
+        if (name.length > 128) {
+          this.tagCapReached = true
+          continue
+        }
         let paths = next.get(name)
         if (!paths) {
           if (next.size >= 2000) {

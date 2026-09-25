@@ -22,6 +22,7 @@ export async function replaceExistingText(
       await staged.close()
     }
     await beforeCommit()
+    // Node rename has no expected-inode condition for an external writer.
     await rename(temporary, path)
     committed = true
 

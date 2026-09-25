@@ -1,4 +1,5 @@
-import { constants } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { type BigIntStats, constants } from 'node:fs'
 import { lstat, open, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, sep } from 'node:path'
 import { MAX_DOCUMENT_BYTES } from '../shared/desktop'
@@ -7,15 +8,18 @@ import type {
   WorkspaceFileResult,
   WorkspaceTextCreation,
   WorkspaceTextRead,
+  WorkspaceTextUpdate,
 } from '../shared/workspace'
 import { hasOpenDocumentPath } from './document'
 import { isDocumentName } from './document-types'
 import { validateMarkdown } from './files'
 import {
   isCurrentWorkspaceTarget,
+  notifyWorkspaceContent,
   refreshWorkspace,
   workspaceRoot,
 } from './workspace'
+import { replaceExistingText } from './workspace-atomic-update'
 import { createExclusiveText } from './workspace-exclusive-create'
 import { resolveWorkspaceEntry } from './workspace-paths'
 
@@ -69,7 +73,38 @@ async function verifyParent(
     })
 }
 
-async function readScopedText(root: string, file: string): Promise<string> {
+function sameFile(left: BigIntStats, right: BigIntStats): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs &&
+    left.mode === right.mode &&
+    left.uid === right.uid &&
+    left.gid === right.gid &&
+    left.nlink === right.nlink
+  )
+}
+
+function diskVersion(info: BigIntStats, bytes: Uint8Array): string {
+  return createHash('sha256')
+    .update(
+      `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}:${info.mode}:${info.uid}:${info.gid}:${info.nlink}\0`,
+    )
+    .update(bytes)
+    .digest('hex')
+}
+
+type ScopedText = {
+  markdown: string
+  version: string
+  contentHash: string
+  canonical: string
+  links: bigint
+}
+
+async function readScopedText(root: string, file: string): Promise<ScopedText> {
   const parent = await parentIdentity(root, file)
   const handle = await open(
     file,
@@ -78,26 +113,25 @@ async function readScopedText(root: string, file: string): Promise<string> {
       (constants.O_NOFOLLOW ?? 0),
   )
   try {
-    const info = await handle.stat()
+    const info = await handle.stat({ bigint: true })
     if (!info.isFile())
       throw new Error('Choose a text file, not a folder or device.')
-    if (info.size > MAX_DOCUMENT_BYTES)
+    if (info.size > BigInt(MAX_DOCUMENT_BYTES))
       throw new Error(
         'This document exceeds the 2 MiB limit. Open a smaller file.',
       )
     const canonical = await realpath(file)
-    const opened = await lstat(file)
+    const opened = await lstat(file, { bigint: true })
     if (
       !inside(root, canonical) ||
       opened.isSymbolicLink() ||
-      opened.dev !== info.dev ||
-      opened.ino !== info.ino
+      !sameFile(opened, info)
     )
       throw Object.assign(new Error('The workspace file changed. Try again.'), {
         code: 'ESTALE',
       })
     await verifyParent(root, file, parent)
-    const bytes = Buffer.alloc(info.size + 1)
+    const bytes = Buffer.alloc(Number(info.size) + 1)
     let bytesRead = 0
     while (bytesRead < bytes.length) {
       const chunk = await handle.read(
@@ -109,23 +143,32 @@ async function readScopedText(root: string, file: string): Promise<string> {
       if (!chunk.bytesRead) break
       bytesRead += chunk.bytesRead
     }
-    if (bytesRead !== info.size)
+    if (bytesRead !== Number(info.size))
       throw Object.assign(new Error('The workspace file changed. Try again.'), {
         code: 'ESTALE',
       })
     await verifyParent(root, file, parent)
-    const after = await lstat(file)
+    const afterHandle = await handle.stat({ bigint: true })
+    const after = await lstat(file, { bigint: true })
     if (
-      after.dev !== info.dev ||
-      after.ino !== info.ino ||
+      !sameFile(afterHandle, info) ||
+      !sameFile(after, info) ||
       (await realpath(file)) !== canonical
     )
       throw Object.assign(new Error('The workspace file changed. Try again.'), {
         code: 'ESTALE',
       })
-    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
-      bytes.subarray(0, bytesRead),
-    )
+    const content = bytes.subarray(0, bytesRead)
+    return {
+      markdown: new TextDecoder('utf-8', {
+        fatal: true,
+        ignoreBOM: true,
+      }).decode(content),
+      version: diskVersion(info, content),
+      contentHash: createHash('sha256').update(content).digest('hex'),
+      canonical,
+      links: info.nlink,
+    }
   } finally {
     await handle.close()
   }
@@ -136,6 +179,26 @@ function knownFailure(error: unknown): WorkspaceFileResult<never> | null {
     typeof error === 'object' && error !== null
       ? (error as NodeJS.ErrnoException).code
       : undefined
+  if (code === 'EWORKSPACE') return stale()
+  if (code === 'EOWNER') return disposed()
+  if (code === 'EOPEN')
+    return {
+      ok: false,
+      code: 'conflict',
+      message: 'Close this document before updating its disk file.',
+    }
+  if (code === 'EVERSION')
+    return {
+      ok: false,
+      code: 'conflict',
+      message: 'This file changed on disk. Read it again before updating.',
+    }
+  if (code === 'EHARDLINK')
+    return {
+      ok: false,
+      code: 'unsupported',
+      message: 'Files with hard links cannot be replaced this way.',
+    }
   if (code === 'ENOENT')
     return {
       ok: false,
@@ -202,14 +265,15 @@ export async function readWorkspaceText(
   try {
     const file = await resolveWorkspaceEntry(root, path)
     if (!isCurrentWorkspaceTarget(target)) return stale()
-    const markdown = await readScopedText(root, file)
+    const read = await readScopedText(root, file)
     if (!isCurrentWorkspaceTarget(target)) return stale()
     return {
       ok: true,
       value: {
         target,
-        path: relative(root, file).split(sep).join('/'),
-        markdown,
+        path: relative(root, read.canonical).split(sep).join('/'),
+        markdown: read.markdown,
+        version: read.version,
         source: 'disk',
       },
     }
@@ -302,6 +366,183 @@ export async function createWorkspaceText(
         ...commit,
       },
     }
+  } catch (error) {
+    if (!isCurrentWorkspaceTarget(target)) return stale()
+    if (!ownerActive()) return disposed()
+    const failure = knownFailure(error)
+    if (failure) return failure
+    throw error
+  }
+}
+
+const pendingUpdates = new Map<string, Promise<void>>()
+
+async function serializeUpdate<T>(
+  file: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const previous = pendingUpdates.get(file) ?? Promise.resolve()
+  let release: () => void = () => {}
+  const current = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  pendingUpdates.set(file, current)
+  try {
+    await previous
+    return await work()
+  } finally {
+    release()
+    if (pendingUpdates.get(file) === current) pendingUpdates.delete(file)
+  }
+}
+
+function mutationError(code: string, message: string): Error {
+  return Object.assign(new Error(message), { code })
+}
+
+/** A closed-file replacement requires the exact disk version returned by read. */
+export async function updateWorkspaceText(
+  target: WorkspaceTarget,
+  path: unknown,
+  expectedVersion: unknown,
+  markdown: unknown,
+  options?: unknown,
+  isCurrentOwner?: () => boolean,
+): Promise<WorkspaceFileResult<WorkspaceTextUpdate>> {
+  const ownerActive = () => isCurrentOwner?.() ?? true
+  const root = workspaceRoot()
+  if (!root || !isCurrentWorkspaceTarget(target)) return stale()
+  if (!ownerActive()) return disposed()
+  if (process.platform === 'win32')
+    return {
+      ok: false,
+      code: 'unsupported',
+      message: 'Private workspace replacements are not available on Windows.',
+    }
+  if (
+    !options ||
+    typeof options !== 'object' ||
+    (options as { allowMetadataReset?: unknown }).allowMetadataReset !== true
+  )
+    return {
+      ok: false,
+      code: 'unsupported',
+      message:
+        'Replacing a disk file resets its metadata. Allow that reset explicitly.',
+    }
+  if (
+    typeof expectedVersion !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(expectedVersion)
+  )
+    return {
+      ok: false,
+      code: 'unsupported',
+      message: 'Read this file before updating it.',
+    }
+  if (typeof markdown !== 'string')
+    return { ok: false, code: 'unsupported', message: 'Use UTF-8 text.' }
+  try {
+    validateMarkdown(markdown)
+    const file = await resolveWorkspaceEntry(root, path)
+    if (!isCurrentWorkspaceTarget(target)) return stale()
+    if (!ownerActive()) return disposed()
+    if (!isDocumentName(file, true))
+      return {
+        ok: false,
+        code: 'unsupported',
+        message: 'Use a supported document extension.',
+      }
+    const canonical = await realpath(file)
+    if (!inside(root, canonical))
+      throw mutationError('EACCES', 'This path is outside the workspace.')
+    return await serializeUpdate(canonical, async () => {
+      const ensureActive = () => {
+        if (!isCurrentWorkspaceTarget(target))
+          throw mutationError('EWORKSPACE', 'This workspace is no longer open.')
+        if (!ownerActive())
+          throw mutationError('EOWNER', 'This addon is no longer active.')
+      }
+      const ensureClosed = (current: ScopedText) => {
+        if (hasOpenDocumentPath(file) || hasOpenDocumentPath(current.canonical))
+          throw mutationError('EOPEN', 'This document is open.')
+      }
+      ensureActive()
+      const original = await readScopedText(root, file)
+      ensureActive()
+      ensureClosed(original)
+      if (original.links > 1n)
+        throw mutationError('EHARDLINK', 'This file has hard links.')
+      if (original.version !== expectedVersion)
+        throw mutationError('EVERSION', 'This file changed on disk.')
+      const parent = await parentIdentity(root, file)
+      ensureActive()
+      const commit = await replaceExistingText(
+        file,
+        markdown,
+        0o600,
+        async () => {
+          ensureActive()
+          await verifyParent(root, file, parent)
+          const latest = await readScopedText(root, file)
+          ensureActive()
+          ensureClosed(latest)
+          if (latest.links > 1n)
+            throw mutationError('EHARDLINK', 'This file has hard links.')
+          if (latest.version !== expectedVersion)
+            throw mutationError('EVERSION', 'This file changed on disk.')
+          await verifyParent(root, file, parent)
+          ensureActive()
+          ensureClosed(latest)
+        },
+      )
+      const changedPath = relative(root, original.canonical)
+        .split(sep)
+        .join('/')
+      let scopeVerifiedAfterCommit = false
+      let version: string | null = null
+      let indexed = false
+      let ownerActiveAfterCommit = false
+      try {
+        await verifyParent(root, file, parent)
+        const updated = await readScopedText(root, file)
+        scopeVerifiedAfterCommit = updated.canonical === original.canonical
+        if (
+          scopeVerifiedAfterCommit &&
+          updated.contentHash ===
+            createHash('sha256').update(markdown, 'utf8').digest('hex')
+        )
+          version = updated.version
+      } catch (error) {
+        console.error('workspace file changed after update:', error)
+      }
+      if (scopeVerifiedAfterCommit && isCurrentWorkspaceTarget(target)) {
+        try {
+          indexed = (await notifyWorkspaceContent([changedPath])) !== null
+        } catch (error) {
+          console.error('workspace content refresh after update failed:', error)
+        }
+      }
+      try {
+        ownerActiveAfterCommit = ownerActive()
+      } catch (error) {
+        console.error('workspace owner check after update failed:', error)
+      }
+      return {
+        ok: true,
+        value: {
+          target,
+          path: changedPath,
+          previousVersion: expectedVersion,
+          version,
+          persisted: true,
+          indexed,
+          scopeVerifiedAfterCommit,
+          ownerActiveAfterCommit,
+          metadataPreserved: false,
+          ...commit,
+        },
+      }
+    })
   } catch (error) {
     if (!isCurrentWorkspaceTarget(target)) return stale()
     if (!ownerActive()) return disposed()

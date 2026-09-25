@@ -80,6 +80,8 @@ export interface WorkspaceTextRead {
   readonly target: WorkspaceTarget
   readonly path: string
   readonly markdown: string
+  /** Opaque disk precondition. Supply this value when replacing closed-file text. */
+  readonly version: string
   /** Persisted bytes; unsaved document content is separate. */
   readonly source: 'disk'
 }
@@ -94,6 +96,29 @@ export interface WorkspaceTextCreation {
   readonly atomicVisibility: boolean
   readonly scopeVerifiedAfterCommit: boolean
   readonly ownerActiveAfterCommit: boolean
+}
+
+/** Updates serialize in Hibi, but external writers can race the final check and rename. */
+export interface WorkspaceTextUpdate {
+  readonly target: WorkspaceTarget
+  readonly path: string
+  readonly previousVersion: string
+  /** Null if the committed file could not be read again; re-read before retrying. */
+  readonly version: string | null
+  /** A committed replacement remains successful if scope or owner ends afterward. */
+  readonly persisted: true
+  readonly indexed: boolean
+  readonly directorySynced: boolean
+  readonly atomicVisibility: true
+  /** Replacement deliberately resets file metadata with a private mode. */
+  readonly metadataPreserved: false
+  readonly scopeVerifiedAfterCommit: boolean
+  readonly ownerActiveAfterCommit: boolean
+}
+
+export interface WorkspaceTextUpdateOptions {
+  /** Required: replacement discards ACLs, extended attributes, and ownership. */
+  readonly allowMetadataReset: true
 }
 
 export type WorkspaceFileResult<T> = OperationResult<

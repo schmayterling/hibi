@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rename,
   rm,
@@ -88,6 +89,56 @@ test('folder copy rejects a source swapped for a symbolic link', async (t) => {
       await rename(source, saved)
       await symlink(saved, source, 'dir')
       return true
+    }),
+    /Symbolic links cannot be copied/,
+  )
+  assert.equal(await readFile(join(saved, 'note.md'), 'utf8'), 'original')
+  await assert.rejects(readFile(join(destination, 'note.md')), {
+    code: 'ENOENT',
+  })
+})
+
+test('folder copy rejects a destination swapped for a symbolic link', async (t) => {
+  if (process.platform === 'win32')
+    return t.skip('Windows symbolic links require privileges')
+  const root = await mkdtemp(join(tmpdir(), 'hibi-folder-copy-dest-swap-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const source = join(root, 'source')
+  const destination = join(root, 'destination')
+  const reserved = join(root, 'reserved')
+  const outside = join(root, 'outside')
+  await mkdir(source)
+  await mkdir(outside)
+  await writeFile(join(source, 'note.md'), 'original')
+  await assert.rejects(
+    copyEntry(source, destination, true, () => true, async (path) => {
+      const names = await readdir(path)
+      await rename(destination, reserved)
+      await symlink(outside, destination, 'dir')
+      return names
+    }),
+    /destination folder changed/i,
+  )
+  assert.equal(await readFile(join(source, 'note.md'), 'utf8'), 'original')
+  await assert.rejects(readFile(join(outside, 'note.md')), { code: 'ENOENT' })
+})
+
+test('folder copy rejects a source swapped after listing', async (t) => {
+  if (process.platform === 'win32')
+    return t.skip('Windows symbolic links require privileges')
+  const root = await mkdtemp(join(tmpdir(), 'hibi-folder-copy-listed-swap-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const source = join(root, 'source')
+  const saved = join(root, 'saved')
+  const destination = join(root, 'destination')
+  await mkdir(source)
+  await writeFile(join(source, 'note.md'), 'original')
+  await assert.rejects(
+    copyEntry(source, destination, true, () => true, async (path) => {
+      const names = await readdir(path)
+      await rename(source, saved)
+      await symlink(saved, source, 'dir')
+      return names
     }),
     /Symbolic links cannot be copied/,
   )

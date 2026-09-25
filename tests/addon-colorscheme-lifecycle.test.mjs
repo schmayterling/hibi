@@ -69,23 +69,9 @@ test('addon colorscheme subscriptions stop with their owner', async (t) => {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  try {
-    await page.waitForFunction(
-      () => window.colorWatchStarts === 1 && !!window.setAddonColor,
-      undefined,
-      { timeout: 10000 },
-    )
-  } catch (error) {
-    const state = await page.evaluate(async () => ({
-      starts: window.colorWatchStarts,
-      control: !!window.setAddonColor,
-      addons: await window.hibi.getAddonStates(),
-      text: document.body.textContent?.slice(-1000),
-    }))
-    throw new Error(`Colorscheme fixture did not start: ${JSON.stringify(state)}`, {
-      cause: error,
-    })
-  }
+  await page.waitForFunction(
+    () => window.colorWatchStarts === 1 && !!window.setAddonColor,
+  )
   await page.evaluate(() => window.setAddonColor('light'))
   const before = await page.evaluate(() => window.colorWatchCalls)
   await clickMenu(app, 'Settings')

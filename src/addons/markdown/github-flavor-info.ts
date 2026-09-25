@@ -1,4 +1,5 @@
 import { Marked } from 'marked'
+import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes'
 import type { MarkdownFlavor } from '../api'
 import { alertMarker } from './alerts.ts'
 
@@ -9,8 +10,9 @@ export const flavorInfo: MarkdownFlavor = {
   kind: 'dialect',
   preservation: { level: 'semantic', version: '1', fallback: 'source' },
   description:
-    'Alerts, tables, task lists, strikethrough, and automatic links.',
+    'Alerts, footnotes, tables, task lists, strikethrough, and automatic links.',
   detect(source) {
+    if (hasFootnoteDefinitions(source)) return true
     // Tables can omit pipes when their delimiter contains an alignment colon.
     if (!/(?:[|:~@<]|\[|www\.)/i.test(source)) return false
     let found = false

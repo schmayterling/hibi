@@ -144,7 +144,7 @@
   "7e778f24c85b": [
     "src/renderer/src/DependencySettings.tsx"
   ],
-  "0a8ddfae4889": [
+  "f003198c9d2c": [
     "src/addons/markdown/github-flavor-info.ts",
     "src/addons/markdown/index.tsx"
   ],
@@ -1294,6 +1294,9 @@
   "14c7bbeb603c": [
     "src/renderer/src/Editor.tsx",
     "src/renderer/src/SourceEditor.tsx"
+  ],
+  "b9598f73f10e": [
+    "src/renderer/src/main.tsx"
   ],
   "7ce59a82b75c": [
     "src/renderer/src/main.tsx"

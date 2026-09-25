@@ -116,6 +116,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'onAddonStorageChanged',
         'selectUserText',
         'readSelectedText',
+        'getHostText',
         'invokeAddon',
         'queryAddon',
         'getWorkspace',

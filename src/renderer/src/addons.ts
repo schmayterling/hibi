@@ -716,6 +716,12 @@ export function useAddons(
                     ? Promise.reject(new Error('This addon has stopped.'))
                     : window.hibi.readSelectedText(id, handle),
               },
+              network: {
+                getText: (request) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.getHostText(id, request),
+              },
             },
             dependencies: {
               list: () =>

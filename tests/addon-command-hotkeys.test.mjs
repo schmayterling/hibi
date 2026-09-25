@@ -181,11 +181,10 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
   await page
     .getByRole('button', { name: 'Save shortcut for Example action' })
     .click()
+  const reboundShortcut = `${modifier === 'Meta' ? 'meta' : 'ctrl'}+alt+shift+j`
   assert.equal(
-    (await page.evaluate(() => window.hibi.getAddonHotkeys())).find(
-      ({ id }) => id === 'command-probe.run',
-    )?.effectiveShortcut,
-    `${modifier === 'Meta' ? 'meta' : 'ctrl'}+alt+shift+j`,
+    (await waitForAddonHotkey(page, true, reboundShortcut))?.effectiveShortcut,
+    reboundShortcut,
   )
 
   await rebind.click()
@@ -224,7 +223,6 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
   await assert.rejects(clickMenu(app, 'Example action'), /unavailable/)
 
   await enabled.click()
-  const reboundShortcut = `${modifier === 'Meta' ? 'meta' : 'ctrl'}+alt+shift+j`
   await waitForAddonHotkey(page, true, reboundShortcut)
   await pressAddonShortcut(app, `${modifier}+Alt+Shift+J`)
   try {

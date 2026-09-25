@@ -28,6 +28,49 @@ export async function loadExportOptions(
       throw new Error('Invalid saved export options.')
     return validateExportOptions(exportOptions(value, name, theme))
   }
+  const storedValue = (value: unknown) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new Error('Invalid saved export options.')
+    const item = value as Record<string, unknown>
+    for (const key of [
+      'title',
+      'description',
+      'author',
+      'language',
+      'url',
+      'socialImage',
+      'logo',
+      'favicon',
+      'css',
+    ])
+      if (typeof item[key] !== 'string')
+        throw new Error('Invalid saved export options.')
+    for (const key of [
+      'singleFile',
+      'autoSeo',
+      'indexing',
+      'graph',
+      'lockTheme',
+      'passwordProtected',
+    ])
+      if (typeof item[key] !== 'boolean')
+        throw new Error('Invalid saved export options.')
+    if (
+      !item.theme ||
+      typeof item.theme !== 'object' ||
+      Array.isArray(item.theme)
+    )
+      throw new Error('Invalid saved export options.')
+    const savedTheme = item.theme as Record<string, unknown>
+    const options = normalized(value)
+    if (
+      options.theme.mode !== savedTheme.mode ||
+      options.theme.light !== savedTheme.light ||
+      options.theme.dark !== savedTheme.dark
+    )
+      throw new Error('Invalid saved export options.')
+    return options
+  }
   const stored = (current: AddonStorageReadResult): LoadedOptions => {
     if (current.status !== 'ready')
       return {
@@ -38,7 +81,7 @@ export async function loadExportOptions(
       }
     try {
       return {
-        initial: normalized(current.value),
+        initial: storedValue(current.value),
         warning: null,
         canSave: true,
       }

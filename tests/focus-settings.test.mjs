@@ -59,6 +59,61 @@ test('settings registrations use addon ownership and clean up without collisions
   assert.deepEqual(settingsPages.snapshot(), { categories: [], pages: [] })
 })
 
+test('reopening settings cancels a pending Back close', {
+  timeout: 30000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-settings-leave-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(6000)
+  await page.locator('.titlebar').waitFor()
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.recordingOffReleases = []
+    globalThis.recordingOffRequests = 0
+    ipcMain.removeHandler('hotkeys:record')
+    ipcMain.handle('hotkeys:record', (_event, recording) => {
+      if (recording) return
+      globalThis.recordingOffRequests++
+      return new Promise((resolve) =>
+        globalThis.recordingOffReleases.push(resolve),
+      )
+    })
+  })
+  await page.evaluate(() => {
+    window.settingsCommandCount = 0
+    window.hibi.onCommand((command) => {
+      if (command === 'settings') window.settingsCommandCount++
+    })
+  })
+  const requests = async (count) =>
+    app.evaluate(async (_electron, expected) => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (globalThis.recordingOffRequests === expected) return
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      throw new Error('Recording shutdown request did not arrive.')
+    }, count)
+  await clickMenu(app, 'Settings')
+  const settings = page.getByRole('main', { name: /^settings$/i })
+  const back = page.getByRole('button', { name: /^back to app$/i })
+  await back.click()
+  await requests(1)
+  await clickMenu(app, 'Settings')
+  await page.waitForFunction(() => window.settingsCommandCount === 2)
+  await app.evaluate(() => globalThis.recordingOffReleases.shift()())
+  await back.click()
+  await requests(2)
+  assert.equal(await settings.isVisible(), true)
+  await app.evaluate(() => globalThis.recordingOffReleases.shift()())
+  await settings.waitFor({ state: 'hidden' })
+})
+
 test('status visibility, zen mode, settings groups, search clear and import notice use shared layout', {
   timeout: 45000,
 }, async (t) => {
@@ -91,8 +146,12 @@ test('status visibility, zen mode, settings groups, search clear and import noti
     await clickMenu(app, 'Settings')
     await page.getByRole('tab', { name: 'Appearance', exact: true }).click()
   }
-  const back = () =>
-    page.getByRole('button', { name: /^back to app$/i }).click()
+  const back = async () => {
+    await page.getByRole('button', { name: /^back to app$/i }).click()
+    await page
+      .getByRole('main', { name: /^settings$/i })
+      .waitFor({ state: 'hidden' })
+  }
   await settings()
   const groups = await page
     .locator('.settings-sidebar .sidebar-section')

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import {
+  access,
   cp,
   mkdir,
   mkdtemp,
@@ -16,7 +17,7 @@ import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { chromium } from 'playwright'
 
-test('development watches renderer, preload, addons, and documentation generation', {
+test('development watches main, renderer, preload, addons, and documentation generation', {
   timeout: 180000,
 }, async (t) => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'hibi-dev-watch-')))
@@ -37,10 +38,30 @@ test('development watches renderer, preload, addons, and documentation generatio
       filter: (file) => !file.split(sep).includes('useraddons'),
     })
   await symlink(resolve('node_modules'), join(root, 'node_modules'), 'junction')
+  const holdMainBuild = join(root, 'hold-main-build')
+  const mainBuildPaused = join(root, 'main-build-paused')
+  const releaseMainBuild = join(root, 'release-main-build')
   const configPath = join(root, 'electron.vite.config.ts')
+  const config = (await readFile(configPath, 'utf8')).replace(
+    'analysisBundles(),',
+    `analysisBundles(),
+      {
+        name: 'hold-main-rebuild',
+        async writeBundle() {
+          const fs = await import('node:fs/promises')
+          try { await fs.access(${JSON.stringify(holdMainBuild)}) } catch { return }
+          await fs.writeFile(${JSON.stringify(mainBuildPaused)}, '')
+          while (true) {
+            try { await fs.access(${JSON.stringify(releaseMainBuild)}); return } catch {}
+            await new Promise((done) => setTimeout(done, 50))
+          }
+        },
+      },`,
+  )
+  assert.ok(config.includes("name: 'hold-main-rebuild'"))
   await writeFile(
     configPath,
-    (await readFile(configPath, 'utf8')).replace(
+    config.replace(
       "server: { host: '127.0.0.1' }",
       `server: { host: '127.0.0.1', fs: { allow: ${JSON.stringify([root, resolve('node_modules')])} } }`,
     ),
@@ -122,7 +143,7 @@ test('development watches renderer, preload, addons, and documentation generatio
   browser = await chromium.connectOverCDP(
     output.match(/DevTools listening on (ws:\/\/\S+)/)[1],
   )
-  const page = browser.contexts()[0].pages()[0]
+  let page = browser.contexts()[0].pages()[0]
   page.setDefaultTimeout(30000)
   await page.locator('[data-status-id="typing-speed.wpm"]').waitFor()
   assert.equal(
@@ -244,6 +265,74 @@ test('development watches renderer, preload, addons, and documentation generatio
     ),
     false,
   )
+  // Main rebuild restarts Electron; close the draft without a discard prompt.
+  await page
+    .getByRole('textbox', { name: 'Document editor', exact: true })
+    .fill('')
+  await page.waitForFunction(
+    async () => !(await window.hibi.getDocument()).dirty,
+  )
+  const endpoints = () =>
+    [...output.matchAll(/DevTools listening on (ws:\/\/\S+)/g)].map(
+      (match) => match[1],
+    )
+  const initialStarts = endpoints().length
+  await writeFile(holdMainBuild, '')
+  await replace(
+    'src/main/imports.ts',
+    "instructions: '',",
+    "instructions: 'Updated folder importer.',",
+  )
+  await until(
+    () =>
+      access(mainBuildPaused).then(
+        () => true,
+        () => false,
+      ),
+    'main rebuild writes output before restart',
+    60000,
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.listImporters())).find(
+      (importer) => importer.id === 'folder',
+    ).instructions,
+    '',
+    'running main process still loads its original importer chunk',
+  )
+  await writeFile(releaseMainBuild, '')
+  await until(
+    () => endpoints().length > initialStarts,
+    'main process restarts after rebuild',
+    60000,
+  )
+  await until(
+    async () => {
+      try {
+        browser = await chromium.connectOverCDP(endpoints().at(-1), {
+          timeout: 1000,
+        })
+        return true
+      } catch {
+        return false
+      }
+    },
+    'restarted devtools is available',
+    15000,
+  )
+  await until(
+    () => browser.contexts()[0]?.pages()[0],
+    'restarted app opens a page',
+  )
+  page = browser.contexts()[0].pages()[0]
+  await page.waitForFunction(() => Boolean(window.hibi))
+  assert.equal(
+    (await page.evaluate(() => window.hibi.listImporters())).find(
+      (importer) => importer.id === 'folder',
+    ).instructions,
+    'Updated folder importer.',
+  )
+  t.diagnostic('main rebuild keeps old importer code until restart')
+
   await replace('scripts/addon-reference.mjs', '[Source]', '[Updated source]')
   await until(
     async () =>

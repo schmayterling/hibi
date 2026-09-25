@@ -19,15 +19,17 @@ export default defineConfig({
       analysisBundles(),
     ],
     build: {
+      // Keep old lazy chunks available until the dev watcher restarts Electron.
+      emptyOutDir: process.env.NODE_ENV_ELECTRON_VITE !== 'development',
       // unzipper's optional S3 adapter must stay lazy; hibi only opens local buffers.
       commonjsOptions: { ignore: ['@aws-sdk/client-s3'] },
       rollupOptions: {
+        watch: { chokidar: { ignored: resolve('out/main/**') } },
         input: {
           index: resolve('src/main/index.ts'),
           'typst-worker': resolve('src/addons/typst/compiler-worker.ts'),
           'format-worker': resolve('src/addons/_shared/format-worker.ts'),
         },
-        output: { chunkFileNames: 'chunks/[name].js' },
       },
     },
   },

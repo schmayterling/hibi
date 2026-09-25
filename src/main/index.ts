@@ -654,7 +654,18 @@ function installMenu(): void {
   Menu.setApplicationMenu(built)
 }
 
-if (!app.requestSingleInstanceLock()) {
+let hasSingleInstanceLock = app.requestSingleInstanceLock()
+if (
+  !hasSingleInstanceLock &&
+  process.env.NODE_ENV_ELECTRON_VITE === 'development'
+) {
+  // electron-vite starts the replacement before the old process releases its lock.
+  for (let attempt = 0; attempt < 50 && !hasSingleInstanceLock; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    hasSingleInstanceLock = app.requestSingleInstanceLock()
+  }
+}
+if (!hasSingleInstanceLock) {
   app.quit()
 } else {
   localDiagnostics.start({

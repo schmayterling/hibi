@@ -222,12 +222,24 @@ export function startSite(workspace: SiteData, root: Root) {
               'audio',
               'video',
             ],
-            FORBID_ATTR: ['id', 'name'],
+            FORBID_ATTR: ['name'],
           },
     )
+    for (const element of fragment.querySelectorAll('[id]')) {
+      const id = element.id
+      if (
+        (element.matches('a[data-footnote-ref]') &&
+          /^fnref-[\w%.~-]+$/.test(id)) ||
+        (element.matches('li') && /^fn-[\w%.~-]+$/.test(id)) ||
+        (element.matches('h2.sr-only') && id === 'footnote-label')
+      )
+        continue
+      element.removeAttribute('id')
+    }
     const slugs = new Map<string, number>()
     const outline: { id: string; label: string; depth: number }[] = []
     for (const heading of fragment.querySelectorAll('h1,h2,h3,h4,h5,h6')) {
+      if (heading.id === 'footnote-label') continue
       const slug = (heading.textContent ?? '')
         .toLowerCase()
         .replace(/[^\p{L}\p{N}\s-]/gu, '')
@@ -428,7 +440,10 @@ export function startSite(workspace: SiteData, root: Root) {
           })
       }
       if (current.anchor)
-        document.getElementById(`doc-${current.anchor}`)?.scrollIntoView()
+        (
+          document.getElementById(`doc-${current.anchor}`) ??
+          document.getElementById(current.anchor)
+        )?.scrollIntoView()
       else document.querySelector('.site-content')?.scrollTo(0, 0)
     }, [page, current.path, current.anchor])
     useEffect(() => {

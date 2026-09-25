@@ -36,6 +36,22 @@ const plain = (value: string) =>
   )
     .replace(/\s+/g, ' ')
     .trim()
+const alertAttributes = ({
+  'data-alert': type,
+  'data-fold': fold,
+  ...attrs
+}: Record<string, string>) => ({
+  ...attrs,
+  ...(/(?:^|\s)github-alert(?:\s|$)/.test(attrs.class ?? '') &&
+  /^[a-z][a-z0-9-]{0,39}$/.test(type ?? '')
+    ? {
+        'data-alert': type,
+        ...(fold === '' || fold === '+' || fold === '-'
+          ? { 'data-fold': fold }
+          : {}),
+      }
+    : {}),
+})
 const renderedHtml = (html: string) =>
   sanitizeHtml(html, {
     allowedTags: [
@@ -73,7 +89,11 @@ const renderedHtml = (html: string) =>
     ],
     allowedAttributes: {
       '*': ['class', 'style', 'title', 'role', 'aria-*'],
-      a: ['href', 'rel'],
+      a: ['href', 'rel', 'id', 'data-footnote-ref', 'data-footnote-backref'],
+      blockquote: ['data-alert', 'data-fold'],
+      h2: ['id'],
+      li: ['id'],
+      section: ['data-footnotes'],
       img: ['src', 'alt', 'width', 'height'],
       input: ['type', 'checked', 'disabled'],
       svg: ['viewBox', 'width', 'height'],
@@ -84,6 +104,46 @@ const renderedHtml = (html: string) =>
     allowedSchemes: ['http', 'https', 'mailto'],
     allowedSchemesByTag: { img: ['data'] },
     allowProtocolRelative: false,
+    transformTags: {
+      blockquote: (_tag, attrs) => ({
+        tagName: 'blockquote',
+        attribs: alertAttributes(attrs),
+      }),
+      a: (
+        _tag,
+        {
+          id,
+          'data-footnote-ref': ref,
+          'data-footnote-backref': backref,
+          ...attrs
+        },
+      ) => ({
+        tagName: 'a',
+        attribs: {
+          ...attrs,
+          ...(ref !== undefined && /^fnref-[\w%.~-]+$/.test(id ?? '')
+            ? { id, 'data-footnote-ref': '' }
+            : {}),
+          ...(backref !== undefined ? { 'data-footnote-backref': '' } : {}),
+        },
+      }),
+      h2: (_tag, { id, ...attrs }) => ({
+        tagName: 'h2',
+        attribs: {
+          ...attrs,
+          ...(attrs.class === 'sr-only' && id === 'footnote-label'
+            ? { id }
+            : {}),
+        },
+      }),
+      li: (_tag, { id, ...attrs }) => ({
+        tagName: 'li',
+        attribs: {
+          ...attrs,
+          ...(/^fn-[\w%.~-]+$/.test(id ?? '') ? { id } : {}),
+        },
+      }),
+    },
   })
 
 export function prepareSite(
@@ -201,6 +261,7 @@ function content(site: SiteData, page: SitePage, prefix: string) {
         'aria-describedby',
         'aria-label',
       ],
+      blockquote: ['data-alert', 'data-fold'],
       h2: ['id'],
       li: ['id'],
       section: ['data-footnotes', 'role'],
@@ -209,6 +270,10 @@ function content(site: SiteData, page: SitePage, prefix: string) {
     },
     allowedSchemes: ['http', 'https', 'mailto', 'data'],
     transformTags: {
+      blockquote: (_tag, attrs) => ({
+        tagName: 'blockquote',
+        attribs: alertAttributes(attrs),
+      }),
       a: (_tag, attrs) => {
         const target = localPage(page.path, attrs.href ?? '', paths)
         const href = target

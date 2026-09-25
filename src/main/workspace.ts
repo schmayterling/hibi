@@ -35,6 +35,7 @@ import {
 } from './recent-workspaces'
 import {
   WorkspaceChangeStream,
+  type WorkspaceStreamCursor,
   type WorkspaceStreamStatus,
 } from './workspace-change-stream'
 import {
@@ -175,6 +176,10 @@ function workspaceStreamStatus(): WorkspaceStreamStatus {
 
 export function workspaceChangeSnapshot(): WorkspaceStreamSnapshot {
   return workspaceStream.snapshot(entries, workspaceStreamStatus())
+}
+
+export function workspaceChangeCursor(): WorkspaceStreamCursor {
+  return workspaceStream.cursor(workspaceStreamStatus())
 }
 
 export function subscribeWorkspaceChanges(

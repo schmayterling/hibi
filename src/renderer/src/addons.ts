@@ -60,6 +60,7 @@ import { editorAnnotations } from './editor-annotations'
 import { captureEditorSelectionCommandTarget } from './editor-command-targets'
 import { onEditorInput, onEditorKeyEvent } from './editor-events'
 import { countEditorInteractionProvider } from './editor-interaction-presence'
+import { createEditorViewScope, editorViewRegistry } from './editor-view-api'
 import { explorerDecorations } from './explorer-decorations'
 import { flavors, renderMarkdown, renderMarkdownAsync } from './flavors'
 import { projectMarkdown } from './markdown-projection'
@@ -121,6 +122,7 @@ type Environment = Omit<
   | 'native'
   | 'editor'
   | 'documents'
+  | 'editorViews'
   | 'host'
   | 'statusBar'
   | 'app'
@@ -548,6 +550,10 @@ export function useAddons(
           )
         },
       )
+      const editorViewScope = createEditorViewScope(
+        documentRuntime,
+        editorViewRegistry,
+      )
       const pendingCommandTargets = new Set<CommandExecutionContext>()
       const annotationScope = editorAnnotations.scope(id)
       const batch = registrationBatch(addon.manifest.capabilities !== undefined)
@@ -685,6 +691,7 @@ export function useAddons(
           ?.reject(new Error('The addon stopped before its command could run.'))
         editScope.dispose()
         targetEditScope.dispose()
+        editorViewScope.dispose()
         annotationScope.dispose()
         void window.hibi.cancelAnalysis(id).catch(() => {})
         running.delete(id)
@@ -753,6 +760,7 @@ export function useAddons(
               applyEdits: targetEditScope.applyEdits,
               save: targetEditScope.save,
             },
+            editorViews: editorViewScope,
             host: {
               selectedText: {
                 select: () =>

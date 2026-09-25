@@ -47,6 +47,7 @@ import {
 } from '../shared/global-shortcuts'
 import { HISTORY_CHANNELS } from '../shared/history'
 import { HOST_NETWORK_CHANNELS } from '../shared/host-network'
+import { HOST_SELECTED_IO_CHANNELS } from '../shared/host-selected-io'
 import {
   type AppCommand,
   accelerator,
@@ -94,6 +95,7 @@ import {
   getDocumentSource,
   getDocumentSourceFor,
   getOpenDocumentVersions,
+  hasOpenDocumentPath,
   loadDocument,
   loadDocumentPreferences,
   moveDocumentTab,
@@ -113,6 +115,7 @@ import { externalFileArguments } from './external-files'
 import { GlobalShortcuts } from './global-shortcuts'
 import { listVersions, previewVersion } from './history'
 import { HostNetwork } from './host-network'
+import { HostSelectedIoService } from './host-selected-io'
 import { hotkeys, loadHotkeys, saveHotkeys } from './hotkeys'
 import { readDocumentImage } from './images'
 import { listLicenses, readLicense } from './licenses'
@@ -247,6 +250,9 @@ const addonStorage = createAddonStorage(
   isAddonActivationCurrent,
 )
 const selectedText = new SelectedTextService(currentAddonOwner)
+const selectedIo = new HostSelectedIoService(currentAddonOwner, {
+  isOpenDocument: hasOpenDocumentPath,
+})
 async function askNetworkGrant(
   windowKey: object,
   signal: AbortSignal,
@@ -308,6 +314,7 @@ setAddonDeactivationHandler(async (id, generation) => {
     activationGeneration: generation,
   })
   selectedText.revokeAddon(id)
+  selectedIo.revokeAddon(id)
   await addonStorage.clearSession(id)
 })
 addonStorage.subscribe((change) => {
@@ -319,6 +326,7 @@ function resetAddonSessions(): void {
   hostNetwork.stopWindow(networkWindowKey)
   networkWindowKey = {}
   selectedText.clear()
+  selectedIo.clear()
   void addonStorage.clearAllSessions().catch((error: unknown) => {
     console.error('Could not clear addon sessions:', error)
   })
@@ -1164,6 +1172,42 @@ if (!app.requestSingleInstanceLock()) {
         SELECTED_TEXT_CHANNELS.read,
         (event, owner: unknown, handle: unknown) =>
           selectedText.read(trustedWindow(event), owner, handle),
+        addonsReady,
+      )
+      handle(
+        HOST_SELECTED_IO_CHANNELS.selectImport,
+        (event, owner: unknown, choice: unknown) =>
+          runFileOperation(event, (window) =>
+            selectedIo.selectImport(window, owner, choice),
+          ),
+        addonsReady,
+      )
+      handle(
+        HOST_SELECTED_IO_CHANNELS.readImport,
+        (event, owner: unknown, handle: unknown) =>
+          selectedIo.readImport(trustedWindow(event), owner, handle),
+        addonsReady,
+      )
+      handle(
+        HOST_SELECTED_IO_CHANNELS.selectExport,
+        (event, owner: unknown, choice: unknown) =>
+          runFileOperation(event, (window) =>
+            selectedIo.selectExport(window, owner, choice),
+          ),
+        addonsReady,
+      )
+      handle(
+        HOST_SELECTED_IO_CHANNELS.writeExport,
+        (event, owner: unknown, handle: unknown, bytes: unknown) =>
+          runFileOperation(event, (window) =>
+            selectedIo.writeExport(window, owner, handle, bytes),
+          ),
+        addonsReady,
+      )
+      handle(
+        HOST_SELECTED_IO_CHANNELS.cancel,
+        (event, owner: unknown, handle: unknown) =>
+          selectedIo.cancel(trustedWindow(event), owner, handle),
         addonsReady,
       )
       handle(

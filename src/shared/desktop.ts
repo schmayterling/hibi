@@ -222,6 +222,27 @@ export type DesktopApi = {
     owner: string,
     handle: string,
   ) => Promise<import('./selected-text').SelectedTextRead>
+  selectHostImport: (
+    owner: string,
+    choice?: import('./host-selected-io').HostImportChoice,
+  ) => Promise<import('./host-selected-io').HostSelectedIoSelection>
+  readHostImport: (
+    owner: string,
+    handle: string,
+  ) => Promise<import('./host-selected-io').HostSelectedIoRead>
+  selectHostExport: (
+    owner: string,
+    choice: import('./host-selected-io').HostExportChoice,
+  ) => Promise<import('./host-selected-io').HostSelectedIoSelection>
+  writeHostExport: (
+    owner: string,
+    handle: string,
+    bytes: Uint8Array,
+  ) => Promise<import('./host-selected-io').HostSelectedIoWrite>
+  cancelHostSelectedIo: (
+    owner: string,
+    handle: string,
+  ) => Promise<import('./host-selected-io').HostSelectedIoCancel>
   getHostText: (
     owner: string,
     request: import('./host-network').HostTextRequest,

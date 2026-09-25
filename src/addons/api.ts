@@ -629,6 +629,7 @@ export type AddonContext = {
   documents: DocumentsApi
   host: {
     selectedText: import('../shared/selected-text').SelectedTextHostApi
+    selectedIo: import('../shared/host-selected-io').HostSelectedIoHostApi
     network: {
       /** Ask the user for each HTTPS GET destination and return bounded UTF-8 text. */
       getText: (

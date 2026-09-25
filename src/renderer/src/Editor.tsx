@@ -789,11 +789,29 @@ export function MarkdownEditor({
           proposed,
           completionContext.current.markdownExtensions,
         )
-        const transaction = closeHistory(view.state.tr).insertText(
-          item.insertText,
-          item.from,
-          item.to,
-        )
+        const transaction = closeHistory(view.state.tr)
+        let markedLink = false
+        if (
+          item.insertText.startsWith('[[') &&
+          item.insertText.endsWith(']]')
+        ) {
+          const parsed = editor.schema.nodeFromJSON(
+            manager.parse(item.insertText),
+          )
+          const paragraph = parsed.firstChild
+          const link = paragraph?.firstChild
+          if (
+            parsed.childCount !== 1 ||
+            paragraph?.type.name !== 'paragraph' ||
+            paragraph.childCount !== 1 ||
+            !link?.isText ||
+            link.marks.length !== 1 ||
+            link.marks[0]?.type.name !== 'obsidianWikiLink'
+          )
+            throw new Error('This completion needs Source view.')
+          transaction.replaceWith(item.from, item.to, link)
+          markedLink = true
+        } else transaction.insertText(item.insertText, item.from, item.to)
         if (
           projection.readOnly ||
           projection.serialize(projection.content) !== proposed ||
@@ -804,7 +822,17 @@ export function MarkdownEditor({
           throw new Error('This completion needs Source view.')
         dismiss()
         richHistoryGroup.current.id = ''
-        view.dispatch(transaction)
+        if (markedLink) {
+          // Mark serialization expands unaliased links; keep proven source bytes.
+          exactSource.current = { source: proposed, document: transaction.doc }
+        }
+        try {
+          view.dispatch(transaction)
+        } finally {
+          if (markedLink) exactSource.current = null
+        }
+        if (!view.state.doc.eq(transaction.doc))
+          throw new Error('This completion needs Source view.')
         richHistoryGroup.current.id = ''
         view.dispatch(closeHistory(view.state.tr))
         view.focus()

@@ -4,7 +4,9 @@ import {
   mkdtemp,
   readFile,
   realpath,
+  rename,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -204,4 +206,102 @@ test('quick note captures to a chosen folder without replacing files', {
   await assert.rejects(readFile(join(other, 'Pinned.md'), 'utf8'), {
     code: 'ENOENT',
   })
+
+  const originalPath = await realpath(workspace)
+  const originalId = (
+    await page.evaluate(() => window.hibi.getRecentWorkspaces())
+  ).find((item) => item.path === originalPath)?.id
+  assert.ok(originalId)
+  let lastChosen
+  for (let number = 0; number < 6; number++) {
+    const destination = join(root, `later-${number}`)
+    await mkdir(destination)
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, destination)
+    lastChosen = await page.evaluate(() =>
+      window.hibi.invokeAddon('quick-note', 'chooseWorkspace'),
+    )
+  }
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getRecentWorkspaces())).some(
+      (item) => item.id === originalId,
+    ),
+    false,
+  )
+  await page.evaluate(
+    (workspaceId) =>
+      window.hibi.invokeAddon('quick-note', 'save', {
+        workspaceId,
+        folder: '',
+        title: 'Older',
+        markdown: 'Still selected',
+      }),
+    originalId,
+  )
+  assert.equal(
+    await readFile(join(workspace, 'Older.md'), 'utf8'),
+    'Still selected',
+  )
+
+  assert.ok(lastChosen)
+  const selected = join(root, 'later-5')
+  const moved = join(root, 'moved-later-5')
+  const outside = join(root, 'outside')
+  await mkdir(outside)
+  await rename(selected, moved)
+  await symlink(outside, selected, 'junction')
+  await assert.rejects(
+    page.evaluate(
+      (workspaceId) =>
+        window.hibi.invokeAddon('quick-note', 'save', {
+          workspaceId,
+          folder: '',
+          title: 'Escape',
+          markdown: 'Must stay inside',
+        }),
+      lastChosen.id,
+    ),
+    /workspace location changed/i,
+  )
+  await assert.rejects(readFile(join(outside, 'Escape.md'), 'utf8'), {
+    code: 'ENOENT',
+  })
+
+  const parent = join(root, 'chosen-parent')
+  const nested = join(parent, 'Notes')
+  const replacement = join(root, 'replacement-parent')
+  await mkdir(nested, { recursive: true })
+  await mkdir(join(replacement, 'Notes'), { recursive: true })
+  await app.evaluate(({ dialog }, destination) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [destination],
+    })
+  }, nested)
+  const nestedChosen = await page.evaluate(() =>
+    window.hibi.invokeAddon('quick-note', 'chooseWorkspace'),
+  )
+  await rename(parent, join(root, 'moved-chosen-parent'))
+  await symlink(replacement, parent, 'junction')
+  await assert.rejects(
+    page.evaluate(
+      (workspaceId) =>
+        window.hibi.invokeAddon('quick-note', 'save', {
+          workspaceId,
+          folder: '',
+          title: 'Ancestor escape',
+          markdown: 'Must stay inside',
+        }),
+      nestedChosen.id,
+    ),
+    /workspace location changed/i,
+  )
+  await assert.rejects(
+    readFile(join(replacement, 'Notes', 'Ancestor escape.md'), 'utf8'),
+    { code: 'ENOENT' },
+  )
 })

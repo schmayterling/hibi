@@ -4800,9 +4800,6 @@
   "78c4a3ab448e": [
     "src/main/workspace.ts"
   ],
-  "1fe8aa868253": [
-    "src/addons/quick-note/native.ts"
-  ],
   "a5d897d361ec": [
     "src/main/recent-workspaces.ts",
     "src/main/workspace.ts"
@@ -4813,6 +4810,9 @@
   "2b9947edaee2": [
     "src/main/workspace-entry-page.ts",
     "src/main/workspace-files.ts"
+  ],
+  "1c59a85f5059": [
+    "src/addons/quick-note/native.ts"
   ],
   "7e8cd2056da7": [
     "src/addons/quick-note/CaptureDialog.tsx"

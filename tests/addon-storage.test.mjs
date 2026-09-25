@@ -45,6 +45,21 @@ test('addon storage isolates owners and scopes, persists acknowledged writes, an
     (await storage.read({ ...global, owner: 'other' })).status,
     'missing',
   )
+  assert.deepEqual(await storage.read({ ...global, key: 'constructor' }), {
+    status: 'missing',
+    revision: 0,
+  })
+  assert.equal(
+    (
+      await storage.write({
+        ...global,
+        key: 'constructor',
+        baseRevision: 0,
+        value: true,
+      })
+    ).status,
+    'saved',
+  )
   assert.equal(
     (await storage.write({ ...workspace, baseRevision: 0, value: 'workspace' }))
       .status,
@@ -198,6 +213,15 @@ test('addon storage rejects non-JSON and oversized values', async (t) => {
     storage.write({ ...request, value: sparse }),
     /JSON value/,
   )
+  sparse.extra = 'offset key count'
+  await assert.rejects(
+    storage.write({ ...request, value: sparse }),
+    /JSON value/,
+  )
+  await assert.rejects(
+    storage.write({ ...request, owner: 'a'.repeat(81), value: true }),
+    /owner/,
+  )
   assert.equal((await storage.read(request)).status, 'missing')
 })
 
@@ -219,6 +243,32 @@ test('workspace switch during an asynchronous write leaves its old target untouc
     ),
     { code: 'ENOENT' },
   )
+})
+
+test('a maximum stored revision refuses another write without damaging its file', async (t) => {
+  const { directory } = await temporaryStorage(t)
+  await mkdir(join(directory, 'global'), { recursive: true })
+  const file = join(directory, 'global', 'documentation.json')
+  const stored = JSON.stringify({
+    format: 1,
+    entries: {
+      options: { version: 1, revision: Number.MAX_SAFE_INTEGER, value: 'old' },
+    },
+  })
+  await writeFile(file, stored)
+  const storage = createAddonStorage(directory, () => true)
+  await assert.rejects(
+    storage.write({
+      owner: 'documentation',
+      scope: { kind: 'global' },
+      key: 'options',
+      version: 1,
+      baseRevision: Number.MAX_SAFE_INTEGER,
+      value: 'new',
+    }),
+    /revision limit/,
+  )
+  assert.equal(await readFile(file, 'utf8'), stored)
 })
 
 test('deactivation waits for pending session writes and renderer subscriptions stop', async (t) => {

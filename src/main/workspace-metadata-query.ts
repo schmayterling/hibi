@@ -5,7 +5,9 @@ import type {
 import {
   indexWorkspace,
   isCurrentWorkspaceTarget,
+  subscribeWorkspaceChanges,
   workspaceChangeCursor,
+  workspaceIndexRevision,
 } from './workspace'
 import { WorkspaceReferenceIndex } from './workspace-reference-index'
 
@@ -35,6 +37,27 @@ export type WorkspaceReferenceQueryResult = QueryBase &
   )
 
 const references = new WorkspaceReferenceIndex()
+let indexedTarget: WorkspaceTarget | null = null
+let indexedSequence = -1
+let indexedRevision = -1
+let indexedSourceVersions = ''
+
+function clearCache(): void {
+  references.clear()
+  indexedTarget = null
+  indexedSequence = -1
+  indexedRevision = -1
+  indexedSourceVersions = ''
+}
+
+const subscription = subscribeWorkspaceChanges((event) => {
+  if (event.kind === 'resync') clearCache()
+})
+
+export function disposeWorkspaceReferenceQueries(): void {
+  subscription.dispose()
+  clearCache()
+}
 
 export interface OpenDocumentVersion {
   readonly file: string
@@ -108,34 +131,49 @@ export async function queryWorkspaceReferences(
       return failure('limit-exceeded', 'Use a page of 1 to 100 results.')
   }
   const before = workspaceChangeCursor()
+  const revision = workspaceIndexRevision()
   const sourceVersions = versionKey(getOpenDocumentVersions())
   if (
     before.target?.workspaceId !== target.workspaceId ||
     before.target.workspaceGeneration !== target.workspaceGeneration
   )
     return failure('stale', 'This workspace changed. Try again.')
-  let index: Awaited<ReturnType<typeof indexWorkspace>>
-  try {
-    index = await indexWorkspace()
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message.includes('index up to 2,000 documents')
-    )
-      return failure('limit-exceeded', error.message)
-    throw error
-  }
+  const refresh =
+    indexedTarget?.workspaceId !== target.workspaceId ||
+    indexedTarget.workspaceGeneration !== target.workspaceGeneration ||
+    indexedSequence !== before.sequence ||
+    indexedRevision !== revision ||
+    indexedSourceVersions !== sourceVersions
+  let index: Awaited<ReturnType<typeof indexWorkspace>> = null
+  if (refresh)
+    try {
+      index = await indexWorkspace()
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes('index up to 2,000 documents')
+      )
+        return failure('limit-exceeded', error.message)
+      throw error
+    }
   const after = workspaceChangeCursor()
   if (
     !isCurrentWorkspaceTarget(target) ||
     after.target?.workspaceId !== target.workspaceId ||
     after.target.workspaceGeneration !== target.workspaceGeneration ||
     before.sequence !== after.sequence ||
+    revision !== workspaceIndexRevision() ||
     sourceVersions !== versionKey(getOpenDocumentVersions()) ||
-    index?.workspace.id !== target.workspaceId
+    (refresh && index?.workspace.id !== target.workspaceId)
   )
     return failure('stale', 'This workspace changed. Try again.')
-  references.apply(target, index.pages)
+  if (index) {
+    references.apply(target, index.pages)
+    indexedTarget = target
+    indexedSequence = after.sequence
+    indexedRevision = revision
+    indexedSourceVersions = sourceVersions
+  }
   if (!references.has(path))
     return failure('not-found', 'This document is not in the workspace index.')
   const base: QueryBase = {

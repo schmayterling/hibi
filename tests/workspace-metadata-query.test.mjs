@@ -6,6 +6,9 @@ import { build } from 'esbuild'
 const host = {
   target: { workspaceId: 'notes', workspaceGeneration: 1 },
   sequence: 1,
+  revision: 1,
+  indexReads: 0,
+  listener: null,
   stale: false,
   changeDuringRead: false,
   editDuringRead: false,
@@ -41,7 +44,13 @@ const bundle = await build({
             target: host().target, sequence: host().sequence,
             stale: host().stale, complete: true, capReached: false,
           })
+          export const workspaceIndexRevision = () => host().revision
+          export const subscribeWorkspaceChanges = (listener) => {
+            host().listener = listener
+            return { snapshot: {}, dispose: () => { host().listener = null } }
+          }
           export const indexWorkspace = async () => {
+            host().indexReads++
             if (host().changeDuringRead) host().sequence++
             if (host().editDuringRead) host().versions[0].contentVersion++
             return { workspace: { id: host().target.workspaceId }, pages: host().pages }
@@ -88,6 +97,10 @@ test('metadata queries return bounded links and backlinks from shared pages', as
     syntax: 'markdown',
   })
   assert.equal(resolved.value.resolved, 'b.md')
+  assert.equal(host.indexReads, 1)
+  host.listener({ kind: 'resync' })
+  assert.equal((await query({ target, kind: 'links', path: 'a.md' })).ok, true)
+  assert.equal(host.indexReads, 2)
   assert.equal(
     (
       await query({
@@ -109,17 +122,22 @@ test('metadata queries return bounded links and backlinks from shared pages', as
     ).code,
     'limit-exceeded',
   )
+  host.revision++
+  assert.equal((await query({ target, kind: 'links', path: 'a.md' })).ok, true)
+  assert.equal(host.indexReads, 3)
 })
 
 test('metadata query rejects a workspace change during its index read', async () => {
   const target = host.target
   host.changeDuringRead = true
+  host.revision++
   assert.equal(
     (await query({ target, kind: 'links', path: 'a.md' })).code,
     'stale',
   )
   host.changeDuringRead = false
   host.editDuringRead = true
+  host.revision++
   assert.equal(
     (await query({ target, kind: 'links', path: 'a.md' })).code,
     'stale',

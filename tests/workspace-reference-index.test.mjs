@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { WorkspaceReferenceIndex } from '../src/main/workspace-reference-index.ts'
-import { noteReferences } from '../src/shared/note-links.ts'
+import {
+  noteBasenames,
+  noteReferences,
+  wikiTarget,
+} from '../src/shared/note-links.ts'
 
 const workspace = { workspaceId: 'notes', workspaceGeneration: 1 }
 const page = (path, markdown = '') => ({ path, markdown })
@@ -63,9 +67,54 @@ test('generation replacement clears reverse links and bounds pages', () => {
   assert.deepEqual(index.backlinks('b.md', 0, 1), {
     items: ['a.md'],
     hasMore: true,
+    nextOffset: 1,
   })
   assert.deepEqual(index.backlinks('b.md', 1, 1), {
     items: ['c.md'],
     hasMore: false,
+    nextOffset: 2,
   })
+})
+
+test('indexed basename lookup preserves wiki resolution semantics', () => {
+  const paths = new Set([
+    'notes/start.md',
+    'notes/next.md',
+    'root.md',
+    'x/note.md',
+    'y/note.md',
+  ])
+  const basenames = noteBasenames(paths)
+  for (const target of [
+    'next',
+    'root',
+    'note',
+    'missing',
+    'notes/next',
+    '#Heading',
+  ])
+    assert.equal(
+      wikiTarget('notes/start.md', target, paths, basenames),
+      wikiTarget('notes/start.md', target, paths),
+    )
+})
+
+test('non-markdown pages do not add source links and result bytes are capped', () => {
+  const index = new WorkspaceReferenceIndex()
+  const longPaths = Array.from(
+    { length: 100 },
+    (_, number) => `folder-${number}/${'a'.repeat(190)}/${'b'.repeat(190)}.md`,
+  )
+  index.apply(workspace, [
+    page('target.md'),
+    page('plain.txt', '[[target]]'),
+    ...longPaths.map((path) => page(path, '[[target]]')),
+  ])
+  const first = index.backlinks('target.md', 0, 100)
+  assert.equal(first.items.includes('plain.txt'), false)
+  assert.equal(first.hasMore, true)
+  assert.ok(Buffer.byteLength(first.items.join('')) <= 32 * 1024)
+  const second = index.backlinks('target.md', first.nextOffset, 100)
+  assert.equal(first.items.length + second.items.length, 100)
+  assert.equal(second.hasMore, false)
 })

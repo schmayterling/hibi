@@ -4,6 +4,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  rename,
   rm,
   writeFile,
 } from 'node:fs/promises'
@@ -62,6 +63,8 @@ async function fixture(t, options = {}) {
       directory,
       storage,
       platform: options.platform ?? 'darwin',
+      storageTimeoutMs: options.storageTimeoutMs,
+      renameFile: options.renameFile,
       currentOwner: (id) => owners.get(id) ?? null,
       isWindowLive: (key) => windows.has(key),
     })
@@ -81,6 +84,20 @@ function failure(result, code) {
 function success(result) {
   assert.equal(result.ok, true, JSON.stringify(result))
   return result.value
+}
+
+async function within(promise, ms = 2000) {
+  let timer
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('operation hung')), ms)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 async function filesIn(directory) {
@@ -528,4 +545,220 @@ test('parallel persistent writes leave one readable, private credential file', a
     ),
   )
   assert.equal(/^synthetic-secret-[0-7]$/.test(applied[0]), true)
+})
+
+test('never-settling safeStorage availability times out with active requests bounded', async (t) => {
+  let availabilityCalls = 0
+  const storage = mockStorage({
+    isAsyncEncryptionAvailable: () => {
+      availabilityCalls++
+      return new Promise(() => {})
+    },
+  })
+  const { host, windowKey, directory } = await fixture(t, {
+    storage,
+    storageTimeoutMs: 25,
+  })
+  const pending = ['demo', 'demo', 'other', 'other'].map((owner, index) =>
+    host.store(owner, windowKey, {
+      key: `token-${index}`,
+      secret: 'synthetic-secret',
+      mode: 'persistent',
+    }),
+  )
+  failure(
+    await host.store('other', windowKey, {
+      key: 'extra',
+      secret: 'synthetic-secret',
+      mode: 'persistent',
+    }),
+    'busy',
+  )
+  for (const result of await within(Promise.all(pending)))
+    failure(result, 'locked-or-unavailable')
+  assert.equal(availabilityCalls, 4)
+  failure(
+    await host.store('demo', windowKey, {
+      key: 'later',
+      secret: 'synthetic-secret',
+      mode: 'persistent',
+    }),
+    'busy',
+  )
+  assert.equal(availabilityCalls, 4)
+  assert.deepEqual(await filesIn(directory), [])
+})
+
+test('disabling addon releases active and queued secret work before backend settles', async (t) => {
+  const started = deferred()
+  const release = deferred()
+  let encryptCalls = 0
+  const storage = mockStorage({
+    encryptStringAsync: () => {
+      encryptCalls++
+      started.resolve()
+      return release.promise
+    },
+  })
+  const { host, owners, windowKey, directory } = await fixture(t, {
+    storage,
+    storageTimeoutMs: 5000,
+  })
+  const active = host.store('demo', windowKey, {
+    key: 'first',
+    secret: 'synthetic-secret',
+    mode: 'persistent',
+  })
+  await started.promise
+  const queued = host.store('demo', windowKey, {
+    key: 'second',
+    secret: 'synthetic-other-secret',
+    mode: 'persistent',
+  })
+  const owner = owners.get('demo')
+  host.stopOwner(owner)
+  owners.set('demo', { addonId: 'demo', activationGeneration: 2 })
+  failure(await within(active), 'stale')
+  failure(await within(queued), 'stale')
+  const late = Buffer.from('synthetic-late-ciphertext')
+  release.resolve(late)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(encryptCalls, 1)
+  assert.equal(
+    late.every((byte) => byte === 0),
+    true,
+  )
+  assert.deepEqual(await filesIn(directory), [])
+})
+
+test('late encrypted buffer is zeroed after backend timeout', async (t) => {
+  const started = deferred()
+  const release = deferred()
+  const storage = mockStorage({
+    encryptStringAsync: () => {
+      started.resolve()
+      return release.promise
+    },
+  })
+  const { host, windowKey, directory } = await fixture(t, {
+    storage,
+    storageTimeoutMs: 25,
+  })
+  const pending = host.store('demo', windowKey, {
+    key: 'token',
+    secret: 'synthetic-secret',
+    mode: 'persistent',
+  })
+  await started.promise
+  failure(await within(pending), 'locked-or-unavailable')
+  const late = Buffer.from('synthetic-ciphertext')
+  release.resolve(late)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(
+    late.every((byte) => byte === 0),
+    true,
+  )
+  assert.deepEqual(await filesIn(directory), [])
+})
+
+test('one hung addon does not block another addon vault', async (t) => {
+  const started = deferred()
+  const base = mockStorage()
+  const storage = {
+    ...base,
+    encryptStringAsync: (secret) => {
+      if (secret === 'demo-secret') {
+        started.resolve()
+        return new Promise(() => {})
+      }
+      return base.encryptStringAsync(secret)
+    },
+  }
+  const { host, owners, windowKey } = await fixture(t, {
+    storage,
+    storageTimeoutMs: 5000,
+  })
+  const hung = host.store('demo', windowKey, {
+    key: 'token',
+    secret: 'demo-secret',
+    mode: 'persistent',
+  })
+  await started.promise
+  success(
+    await within(
+      host.store('other', windowKey, {
+        key: 'token',
+        secret: 'other-secret',
+        mode: 'persistent',
+      }),
+    ),
+  )
+  assert.equal(
+    success(await host.status('other', windowKey, { key: 'token' })).stored,
+    'persistent',
+  )
+  host.stopOwner(owners.get('demo'))
+  failure(await within(hung), 'stale')
+})
+
+test('never-settling decrypt cannot invoke approved sink', async (t) => {
+  const storage = mockStorage({
+    decryptStringAsync: () => new Promise(() => {}),
+  })
+  const { host, owners, windowKey } = await fixture(t, {
+    storage,
+    storageTimeoutMs: 25,
+  })
+  success(
+    await host.store('demo', windowKey, {
+      key: 'token',
+      secret: 'synthetic-secret',
+      mode: 'persistent',
+    }),
+  )
+  failure(
+    await within(
+      host.applyForApprovedRequest(owners.get('demo'), windowKey, 'token', () =>
+        assert.fail('timed-out decrypt cannot use secret'),
+      ),
+    ),
+    'locked-or-unavailable',
+  )
+})
+
+test('revocation during atomic rename waits to report committed outcome', async (t) => {
+  const entered = deferred()
+  const release = deferred()
+  const { host, owners, windowKey, directory } = await fixture(t, {
+    renameFile: async (source, destination) => {
+      entered.resolve()
+      await release.promise
+      await rename(source, destination)
+    },
+  })
+  const pending = host.store('demo', windowKey, {
+    key: 'token',
+    secret: 'synthetic-secret',
+    mode: 'persistent',
+  })
+  await entered.promise
+  let settled = false
+  void pending.then(() => {
+    settled = true
+  })
+  const owner = owners.get('demo')
+  host.stopOwner(owner)
+  owners.set('demo', { addonId: 'demo', activationGeneration: 2 })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(settled, false)
+  release.resolve()
+  const result = await within(pending)
+  failure(result, 'stale')
+  assert.equal(result.committed, true)
+  const files = await filesIn(directory)
+  assert.equal(files.length, 1)
+  assert.equal(
+    (await readFile(files[0], 'utf8')).includes('synthetic-secret'),
+    false,
+  )
 })

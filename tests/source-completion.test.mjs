@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
 
-test('source completions stream, accept in one undo step, and retract on addon stop', {
+test('source completions stream, accept in one undo step, and retract on provider disposal', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-source-completion-'))
@@ -40,17 +41,19 @@ test('source completions stream, accept in one undo step, and retract on addon s
     join(directory, 'index.js'),
     `export default () => ({ async start(context) {
       window.completionProbe = { requests: [], pending: [] };
-      await context.editor.registerCompletionProvider((request) => {
+      const stops = [];
+      stops.push(await context.editor.registerCompletionProvider((request) => {
         window.completionProbe.requests.push(request);
         return [{ label: 'beta', insertText: 'beta', from: request.selection.head - 1, to: request.selection.head }];
-      });
-      await context.editor.registerCompletionProvider((request, signal) => {
+      }));
+      stops.push(await context.editor.registerCompletionProvider((request, signal) => {
         if (request.trigger.kind !== 'explicit') return [];
         return new Promise(resolve => window.completionProbe.pending.push({
           signal,
           resolve(label) { resolve([{ label, insertText: label, from: request.selection.head - 1, to: request.selection.head }]); }
         }));
-      });
+      }));
+      window.completionProbe.dispose = () => stops.forEach(stop => stop());
       window.completionProbe.ready = true;
     } });`,
   )
@@ -78,15 +81,16 @@ test('source completions stream, accept in one undo step, and retract on addon s
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
-  await page.evaluate(() => window.hibi.openDocument())
+  await clickMenu(app, 'Open…')
   const source = page.getByRole('textbox', {
     name: 'Markdown editor',
     exact: true,
   })
   await source.waitFor()
-  await page.waitForFunction(
-    () => document.querySelector('.source-pane .cm-content')?.isContentEditable,
-  )
+  await page.waitForFunction(() => {
+    const content = document.querySelector('.source-pane .cm-content')
+    return content?.isContentEditable && content.textContent === 'a'
+  })
   await source.focus()
   await source.press(
     process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End',
@@ -136,9 +140,7 @@ test('source completions stream, accept in one undo step, and retract on addon s
       hasText: 'beta',
     })
     .waitFor()
-  await page.evaluate(() =>
-    window.hibi.setAddonEnabled('completion-probe', false),
-  )
+  await page.evaluate(() => window.completionProbe.dispose())
   await page.locator('.cm-tooltip-autocomplete').waitFor({ state: 'hidden' })
   const count = await page.evaluate(
     () => window.completionProbe.requests.length,

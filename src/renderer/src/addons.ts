@@ -50,7 +50,6 @@ import { createAddonStorageScope } from './addon-storage'
 import { addonViews } from './addon-views'
 import { codeHtml, codeLanguages } from './code-languages'
 import { colorschemes } from './colorschemes'
-import { completionBroker } from './completion-broker'
 import { disposeAll } from './dispose'
 import { documentEdits } from './document-edits'
 import { documentFormats, editorDocument } from './document-formats'
@@ -72,6 +71,17 @@ export { addons } from './addon-registry'
 
 const ADDON_ISSUE_URL = 'https://github.com/schmayterling/hibi/issues/new'
 const completionActivations = new Map<string, number>()
+let completionBrokerModule: Promise<
+  typeof import('./completion-broker')
+> | null = null
+function loadCompletionBroker() {
+  if (!completionBrokerModule)
+    completionBrokerModule = import('./completion-broker').catch((error) => {
+      completionBrokerModule = null
+      throw error
+    })
+  return completionBrokerModule
+}
 
 export type RegisteredCommand = Omit<AddonCommand, 'run'> & {
   addonId: string
@@ -618,7 +628,11 @@ export function useAddons(
       const stop = () => {
         if (disposed) return
         disposed = true
-        completionBroker.stopOwner(completionOwner)
+        void completionBrokerModule
+          ?.then(({ completionBroker }) =>
+            completionBroker.stopOwner(completionOwner),
+          )
+          .catch((error) => latest.current.error(error))
         storageScope.dispose()
         started.delete(id)
         activation
@@ -1023,7 +1037,11 @@ export function useAddons(
                 cleanups.add(cleanup)
                 return cleanup
               },
-              registerCompletionProvider(provider) {
+              async registerCompletionProvider(provider) {
+                if (disposed) throw new Error('This addon has stopped.')
+                if (typeof provider !== 'function')
+                  throw new Error('Choose a completion provider function.')
+                const { completionBroker } = await loadCompletionBroker()
                 if (disposed) throw new Error('This addon has stopped.')
                 const remove = completionBroker.register(
                   completionOwner,

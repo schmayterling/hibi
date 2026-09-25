@@ -610,7 +610,7 @@ export type AddonContext = {
     /** Data-only suggestions; provider work is bounded and stopped with this addon. */
     registerCompletionProvider: (
       provider: import('../shared/completions').CompletionProvider,
-    ) => () => void
+    ) => Promise<() => void>
     registerRich: (extension: RichExtension) => () => void
     registerMarkdown: (extension: MarkdownExtension) => () => void
     registerSource: (extension: SourceExtension) => () => void

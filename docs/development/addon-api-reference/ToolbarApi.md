@@ -2,7 +2,7 @@
 
 # ToolbarApi
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/toolbar.ts#L33)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/toolbar.ts#L36)
 
 <details>
 <summary>Declaration</summary>
@@ -30,7 +30,7 @@ type ToolbarApi = {
 
 ### register
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/toolbar.ts#L34)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/toolbar.ts#L37)
 
 ```typescript
 register: (item: ToolbarItem) => ToolbarHandle
@@ -48,7 +48,7 @@ Related: [ToolbarItem](ToolbarItem.md), [ToolbarHandle](ToolbarHandle.md).
 
 ### getPreferences
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/toolbar.ts#L35)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/toolbar.ts#L38)
 
 ```typescript
 getPreferences: () => ToolbarPreferences
@@ -60,7 +60,7 @@ Related: [ToolbarPreferences](ToolbarPreferences.md).
 
 ### setPreferences
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/toolbar.ts#L37)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/toolbar.ts#L40)
 
 Changes the shared toolbar; preferences persist across app restarts.
 

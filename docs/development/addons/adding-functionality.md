@@ -66,7 +66,7 @@ The host allows four analyzer processes, up to 10,000 projection spans, and 256 
 
 ## Add a toolbar action
 
-Commands and toolbar buttons are separate registrations. Route the toolbar action through `commands.execute()` to use the command's lifecycle checks and diagnostics.
+Commands and toolbar buttons are separate registrations. Set `commandId` to the local command ID to use the command's lifecycle checks and captured document, view, and selection. The command receives `source: 'toolbar'` when the button is clicked. Existing `onClick` toolbar actions continue to work.
 
 ```typescript
 const greet = () => context.notify('Hello.')
@@ -78,7 +78,7 @@ context.commands.register({
   menu: { location: 'app' },
   run: greet,
 })
-context.toolbar.register({ id: 'greet', label: 'Say hello', onClick: () => context.commands.execute('greet') })
+context.toolbar.register({ id: 'greet', label: 'Say hello', commandId: 'greet' })
 ```
 
 The command appears in Hibi's Addons menu. Its in-app shortcut can be changed under **Settings → Hotkeys**; `mod` means Command on macOS and Control on Windows and Linux. Toolbar and status-bar registrations return handles with `update` and `dispose` methods. Update an existing item when its value changes. Status-bar items should show useful state, such as a count, rather than repeat the addon name.

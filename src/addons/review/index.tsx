@@ -292,7 +292,7 @@ export default defineAddon({
       id: 'open',
       label: 'Review document',
       icon: SpellCheck,
-      onClick: () => context.commands.execute('open'),
+      commandId: 'open',
     })
     stop = () => {
       disposed = true

@@ -49,7 +49,7 @@ export default defineAddon({
       id: 'open',
       label: 'Workspace graph',
       icon: Network,
-      onClick: open,
+      commandId: 'open',
     })
   },
 })

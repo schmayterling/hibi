@@ -57,6 +57,7 @@ import { documentProjections } from './document-projections'
 import { documentRuntime } from './document-runtime'
 import { createDocumentTargetEditScope } from './document-target-edits'
 import { editorAnnotations } from './editor-annotations'
+import { captureEditorSelectionCommandTarget } from './editor-command-targets'
 import { onEditorInput, onEditorKeyEvent } from './editor-events'
 import { countEditorInteractionProvider } from './editor-interaction-presence'
 import { explorerDecorations } from './explorer-decorations'
@@ -495,8 +496,20 @@ export function useAddons(
       const dialogScope = dialogService.scope()
       const toastScope = toastService.scope()
       const menuScope = menus.scope((error) => latest.current.error(error))
-      const toolbarScope = toolbar.scope(id, (error) =>
-        latest.current.error(error),
+      const toolbarScope = toolbar.scope(
+        id,
+        (error) => latest.current.error(error),
+        async (commandId, context) => {
+          const base = context ?? captureCommandContext('toolbar')
+          const selection = context
+            ? null
+            : captureEditorSelectionCommandTarget(base)
+          try {
+            await executeCommand(id, commandId, selection?.context ?? base)
+          } finally {
+            selection?.release()
+          }
+        },
       )
       const notificationScope = viewNotifications.scope()
       const tooltipScope = createTooltipScope()

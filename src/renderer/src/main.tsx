@@ -1817,8 +1817,8 @@ function App() {
           id: `toolbar.${item.id}`,
           category: 'format' as const,
           label: item.label,
-          run: () => {
-            void item.onClick()
+          run: (context?: CommandExecutionContext) => {
+            void item.onClick(context ?? captureAddonCommandContext('palette'))
           },
         })),
       {

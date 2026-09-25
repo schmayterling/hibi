@@ -61,6 +61,7 @@ import { editorDocument } from './document-formats'
 import { documentProjections } from './document-projections'
 import { documentRuntime } from './document-runtime'
 import { DocumentWorkerClient, type FindAction } from './document-worker-client'
+import { registerEditorSelectionCapture } from './editor-command-targets'
 import {
   hasEditorInteractionProviders,
   onEditorInteractionProvidersChanged,
@@ -576,6 +577,7 @@ export function SourceEditor({
     }
     const captureInteraction = (
       position: number,
+      allowBlurred = false,
     ): EditorInteractionRequest | null => {
       const context = editContext.current
       const active = documentRuntime.get(document.tabId)
@@ -584,7 +586,7 @@ export function SourceEditor({
       const selected = editor.state.selection
       if (
         view.current !== editor ||
-        !editor.hasFocus ||
+        (!editor.hasFocus && !allowBlurred) ||
         editor.composing ||
         !context.editTarget ||
         context.disabled ||
@@ -1176,6 +1178,10 @@ export function SourceEditor({
     const unsubscribeInteractions =
       onEditorInteractionProvidersChanged(refreshInteractions)
     refreshInteractions()
+    const unregisterSelection = registerEditorSelectionCapture(
+      () => captureInteraction(editor.state.selection.main.head, true),
+      (position) => captureInteraction(position, true),
+    )
     const unregister = registerSourceView(
       editor,
       (raw) => {
@@ -1258,6 +1264,7 @@ export function SourceEditor({
       configureParser.current = () => {}
       disposed = true
       unsubscribeInteractions()
+      unregisterSelection()
       formatting.current = null
       reportFormatting.current(null)
       unregister()

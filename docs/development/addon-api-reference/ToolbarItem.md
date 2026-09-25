@@ -22,7 +22,10 @@ type ToolbarItem = {
   hidden?: boolean
   pressed?: boolean
   when?: 'normal' | 'source'
-  onClick: () => void | Promise<void>
+  /** Local command id registered with this addon's commands API. */
+  commandId?: string
+  /** Legacy action. Provide this or commandId, not both. */
+  onClick?: () => void | Promise<void>
 }
 ```
 
@@ -40,6 +43,7 @@ type ToolbarItem = {
 - [hidden](#hidden)
 - [pressed](#pressed)
 - [when](#when)
+- [commandId](#commandid)
 
 **Methods**
 
@@ -117,14 +121,26 @@ Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/tool
 when?: 'normal' | 'source'
 ```
 
+### commandId
+
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/toolbar.ts#L28)
+
+Local command id registered with this addon's commands API.
+
+```typescript
+commandId?: string
+```
+
 ## Methods
 
 ### onClick
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/toolbar.ts#L27)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/toolbar.ts#L30)
+
+Legacy action. Provide this or commandId, not both.
 
 ```typescript
-onClick: () => void | Promise<void>
+onClick?: () => void | Promise<void>
 ```
 
 **Returns:** <code>void &#124; Promise&lt;void&gt;</code>

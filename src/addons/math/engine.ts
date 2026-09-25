@@ -239,7 +239,7 @@ export function startMath(context: AddonContext) {
       id,
       label,
       icon: block ? Sigma : SquareRadical,
-      onClick: () => insert(block),
+      commandId: id,
       hidden: true,
     })
     context.editor.onDocumentChange((document) =>

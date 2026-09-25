@@ -3,10 +3,12 @@ import type { DocumentState } from '../../shared/desktop.ts'
 import {
   type DocumentLifecycleEvent,
   type DocumentMetadataResult,
+  type DocumentSaveResult,
   type OpenDocumentMetadata,
   parseSourceEditRequest,
   type SourceEditRequest,
   type SourceEditResult,
+  type TargetDocumentSaveResult,
   type TargetSourceEditRequest,
   type TargetSourceEditResult,
 } from '../../shared/document-edits.ts'
@@ -59,9 +61,15 @@ export function createDocumentTargetEditScope(
   runtime: DocumentRuntime,
   activeApply: (request: SourceEditRequest) => SourceEditResult,
   isBusy: () => boolean,
+  saveTarget?: (
+    tabId: string,
+    revision: number,
+    contentVersion: number,
+  ) => Promise<DocumentSaveResult>,
 ): DocumentsApi & {
   getMetadata: (target: DocumentTarget) => DocumentMetadataResult
   subscribe: (listener: (event: DocumentLifecycleEvent) => void) => () => void
+  save: (target: VersionedDocumentTarget) => Promise<TargetDocumentSaveResult>
   dispose: () => void
 } {
   const receipts = new Map<
@@ -73,6 +81,7 @@ export function createDocumentTargetEditScope(
     applying = false
   const listeners = new Set<(event: DocumentLifecycleEvent) => void>()
   const observed = new Map<DocumentId, OpenDocumentMetadata>()
+  const saving = new Set<DocumentId>()
   let stopDocument: (() => void) | null = null
   let stopCatalog: (() => void) | null = null
   const metadataFor = (document: DocumentState) => {
@@ -168,6 +177,7 @@ export function createDocumentTargetEditScope(
       stopCatalog = null
       listeners.clear()
       observed.clear()
+      saving.clear()
       receipts.clear()
       receiptBytes = 0
     },
@@ -211,6 +221,68 @@ export function createDocumentTargetEditScope(
           stopCatalog = null
           observed.clear()
         }
+      }
+    },
+    async save(value) {
+      if (disposed)
+        return { status: 'disposed', message: 'This addon has stopped.' }
+      let target: VersionedDocumentTarget | null
+      try {
+        target = parseVersionedTarget(value)
+      } catch {
+        return invalid('Invalid document target or version.')
+      }
+      if (!target) return invalid('Invalid document target or version.')
+      const session = runtime.resolveDocument(target)
+      if (!session) return unavailable
+      const snapshot = session.snapshot()
+      if (snapshot.version !== target.contentVersion)
+        return {
+          status: 'stale',
+          message: 'The document changed. Read it before saving.',
+        }
+      const document = runtime.get(snapshot.document.tabId)
+      if (!document?.canAutosave || !saveTarget)
+        return {
+          status: 'unsupported',
+          message: 'Save this document in Hibi before saving it from an addon.',
+        }
+      if (saving.has(target.documentId) || isBusy())
+        return { status: 'busy', message: 'The document is busy. Try again.' }
+      const token = runtime.beginSave(snapshot.document.tabId)
+      if (!token) return unavailable
+      saving.add(target.documentId)
+      try {
+        const result = await saveTarget(
+          snapshot.document.tabId,
+          snapshot.document.revision,
+          snapshot.version,
+        )
+        if (disposed)
+          return { status: 'disposed', message: 'This addon has stopped.' }
+        if (result.status === 'saved' || result.status === 'clean') {
+          if (result.document) runtime.acknowledgeSave(result.document, token)
+          return { status: result.status, savedVersion: snapshot.version }
+        }
+        return {
+          status: result.status,
+          message:
+            result.status === 'conflict'
+              ? 'The file changed outside Hibi. Resolve the conflict before saving.'
+              : result.status === 'unsupported'
+                ? 'Save this document in Hibi before saving it from an addon.'
+                : 'The document changed. Read it before saving.',
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return {
+          status: /Another file operation|busy/i.test(message)
+            ? 'busy'
+            : 'failed',
+          message,
+        }
+      } finally {
+        saving.delete(target.documentId)
       }
     },
     readSource(value) {

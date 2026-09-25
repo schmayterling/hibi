@@ -156,6 +156,66 @@ test('metadata and lifecycle events track live sessions without reading source',
   runtime.dispose()
 })
 
+test('targeted save acknowledges one snapshot while focus and source advance', async () => {
+  const runtime = new DocumentRuntime({
+    enqueue() {},
+    onError(error) {
+      throw error
+    },
+  })
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('base', { tabs }))
+  runtime
+    .session()
+    .edit([{ from: 4, to: 4, insert: ' saved' }], 'source', 'first')
+  const saved = {
+    ...runtime.get(),
+    savedMarkdown: 'base saved',
+  }
+  let reply
+  const calls = []
+  const scope = createDocumentTargetEditScope(
+    runtime,
+    () => ({ status: 'unsupported-view', message: 'No view.' }),
+    () => false,
+    (...args) => {
+      calls.push(args)
+      return new Promise((resolve) => {
+        reply = resolve
+      })
+    },
+  )
+  const target = scope.listOpen()[0].target
+  const pending = scope.save(target)
+  assert.deepEqual(calls, [['one', 1, 1]])
+  assert.equal((await scope.save(target)).status, 'busy')
+  runtime.activate(
+    document('other', {
+      tabId: 'two',
+      id: 'file-two',
+      name: 'two.md',
+      revision: 2,
+      tabs,
+    }),
+  )
+  runtime
+    .session('one')
+    .edit([{ from: 10, to: 10, insert: ' more' }], 'source', 'later')
+  reply({ status: 'saved', document: saved })
+  assert.deepEqual(await pending, { status: 'saved', savedVersion: 1 })
+  assert.equal(runtime.get().name, 'two.md')
+  assert.equal(runtime.get('one').markdown, 'base saved more')
+  assert.equal(runtime.get('one').savedMarkdown, 'base saved')
+  assert.equal(runtime.get('one').dirty, true)
+  assert.equal((await scope.save(target)).status, 'stale')
+  scope.dispose()
+  runtime.dispose()
+})
+
 test('target edits validate source boundaries, expected text, version and generation', () => {
   const { runtime, scope, operations } = fixture()
   runtime.activate(document('a\r\n😀b'))

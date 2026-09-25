@@ -24,7 +24,9 @@ export default defineConfig({
       // unzipper's optional S3 adapter must stay lazy; hibi only opens local buffers.
       commonjsOptions: { ignore: ['@aws-sdk/client-s3'] },
       rollupOptions: {
-        watch: { chokidar: { ignored: resolve('out/main/**') } },
+        watch: {
+          chokidar: { ignored: resolve('out/main/**').replaceAll('\\', '/') },
+        },
         input: {
           index: resolve('src/main/index.ts'),
           'typst-worker': resolve('src/addons/typst/compiler-worker.ts'),

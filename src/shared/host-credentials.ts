@@ -1,6 +1,12 @@
 /** Session storage is explicit and expires with its addon/window lifecycle. */
 export type CredentialMode = 'persistent' | 'session'
 
+export const HOST_CREDENTIAL_CHANNELS = {
+  store: 'host-credentials:store',
+  remove: 'host-credentials:remove',
+  status: 'host-credentials:status',
+} as const
+
 export interface StoreCredentialRequest {
   readonly key: string
   readonly secret: string
@@ -41,3 +47,16 @@ export type CredentialResult<T> =
       /** A durable vault write may have crossed its atomic commit before invalidation. */
       readonly committed?: boolean
     }
+
+/** Secret values only cross this bridge while explicitly being stored. */
+export interface CredentialHostApi {
+  store(
+    request: StoreCredentialRequest,
+  ): Promise<CredentialResult<{ mode: CredentialMode }>>
+  remove(
+    request: CredentialKeyRequest,
+  ): Promise<CredentialResult<{ removed: boolean }>>
+  status(
+    request: CredentialKeyRequest,
+  ): Promise<CredentialResult<CredentialStatus>>
+}

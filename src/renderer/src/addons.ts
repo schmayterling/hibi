@@ -744,6 +744,20 @@ export function useAddons(
                     ? Promise.reject(new Error('This addon has stopped.'))
                     : window.hibi.getHostText(id, request),
               },
+              credentials: {
+                store: (request) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.storeHostCredential(id, request),
+                remove: (request) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.removeHostCredential(id, request),
+                status: (request) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.getHostCredentialStatus(id, request),
+              },
             },
             dependencies: {
               list: () =>

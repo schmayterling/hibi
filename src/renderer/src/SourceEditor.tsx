@@ -882,10 +882,10 @@ export function SourceEditor({
               const transaction =
                 update.transactions.length === 1 ? update.transactions[0] : null
               if (
-                  update.docChanged &&
-                  transaction?.isUserEvent('input.type') &&
-                  !transaction.isUserEvent('input.type.compose') &&
-                  !update.view.composing &&
+                update.docChanged &&
+                transaction?.isUserEvent('input.type') &&
+                !transaction.isUserEvent('input.type.compose') &&
+                !update.view.composing &&
                 update.state.selection.ranges.length === 1 &&
                 update.state.selection.main.empty
               ) {

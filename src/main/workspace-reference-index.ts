@@ -16,6 +16,10 @@ import {
 } from '../shared/note-metadata.ts'
 import { noteTags } from '../shared/note-tags.ts'
 import type { WorkspacePage } from '../shared/workspace'
+import type {
+  WorkspaceGraphItem,
+  WorkspaceTagSummary,
+} from '../shared/workspace-query.ts'
 
 type References = ReturnType<typeof noteReferences>
 type DocumentLinks = {
@@ -39,6 +43,13 @@ export interface TextSearchPosition {
   readonly sourceOffset: number
 }
 
+export interface GraphPosition {
+  readonly pathIndex: number
+  readonly targetIndex: number
+  readonly nodeEmitted: boolean
+  readonly emitted: number
+}
+
 /** Parsed references share the existing workspace page cache; no filesystem scan. */
 export class WorkspaceReferenceIndex {
   private target: WorkspaceTarget | null = null
@@ -48,6 +59,7 @@ export class WorkspaceReferenceIndex {
   private sortedPaths: string[] = []
   private basenames = new Map<string, string[]>()
   private tagPaths: Map<string, Set<string>> | null = null
+  private tagCapReached = false
   private complete = true
   private readonly parse: typeof noteReferences
 
@@ -63,6 +75,7 @@ export class WorkspaceReferenceIndex {
     this.sortedPaths = []
     this.basenames = new Map()
     this.tagPaths = null
+    this.tagCapReached = false
     this.complete = true
   }
 
@@ -109,7 +122,10 @@ export class WorkspaceReferenceIndex {
       !sameWorkspace ||
       previous.size !== next.size ||
       [...next.keys()].some((path) => !previous.has(path))
-    if (pathsChanged || changed.size) this.tagPaths = null
+    if (pathsChanged || changed.size) {
+      this.tagPaths = null
+      this.tagCapReached = false
+    }
     const paths = new Set(next.keys())
     const basenames = pathsChanged ? noteBasenames(paths) : this.basenames
     const toResolve = pathsChanged ? [...next.keys()] : [...changed]
@@ -177,23 +193,135 @@ export class WorkspaceReferenceIndex {
   }
 
   tagged(tag: string, offset: number, limit: number): ReferencePage {
-    if (!this.tagPaths) {
-      const nextTags = new Map<string, Set<string>>()
-      for (const [path, document] of this.documents) {
-        if (!isMarkdownDocument(path) || !document.referenceComplete) continue
-        document.tags ??= noteTags(document.markdown)
-        for (const name of document.tags) {
-          let paths = nextTags.get(name)
-          if (!paths) {
-            paths = new Set()
-            nextTags.set(name, paths)
-          }
-          paths.add(path)
-        }
-      }
-      this.tagPaths = nextTags
+    this.ensureTags()
+    const indexed = this.tagPaths?.get(tag)
+    if (indexed) return this.page(indexed, offset, limit)
+    if (!this.tagCapReached) return this.page([], offset, limit)
+    return this.page(
+      [...this.documents].flatMap(([path, document]) =>
+        document.tags?.includes(tag) ? [path] : [],
+      ),
+      offset,
+      limit,
+    )
+  }
+
+  tags(
+    offset: number,
+    limit: number,
+  ): {
+    items: readonly WorkspaceTagSummary[]
+    hasMore: boolean
+    nextOffset: number
+    capReached: boolean
+  } {
+    this.ensureTags()
+    const sorted = [...(this.tagPaths ?? [])].sort(([a], [b]) =>
+      a.localeCompare(b),
+    )
+    const items: WorkspaceTagSummary[] = []
+    let bytes = 0
+    for (
+      let index = offset;
+      index < sorted.length && items.length < limit;
+      index++
+    ) {
+      const entry = sorted[index]
+      if (!entry) break
+      const size = Buffer.byteLength(entry[0]) + 8
+      if (bytes + size > 32 * 1024) break
+      items.push({ tag: entry[0], count: entry[1].size })
+      bytes += size
     }
-    return this.page(this.tagPaths.get(tag) ?? [], offset, limit)
+    const nextOffset = offset + items.length
+    return {
+      items,
+      hasMore: nextOffset < sorted.length,
+      nextOffset,
+      capReached: this.tagCapReached,
+    }
+  }
+
+  /** Resume graph enumeration without rescanning links or returning note source. */
+  graph(
+    start: GraphPosition,
+    limit: number,
+  ): {
+    items: readonly WorkspaceGraphItem[]
+    position: GraphPosition
+    hasMore: boolean
+    capReached: boolean
+  } {
+    const items: WorkspaceGraphItem[] = []
+    let { pathIndex, targetIndex, nodeEmitted, emitted } = start
+    let bytes = 0
+    let targetsPath = ''
+    let targets: string[] = []
+    while (
+      pathIndex < this.sortedPaths.length &&
+      items.length < limit &&
+      emitted < 10_000
+    ) {
+      const path = this.sortedPaths[pathIndex]
+      if (!path) break
+      let item: WorkspaceGraphItem
+      if (!nodeEmitted) item = { kind: 'node', path }
+      else {
+        if (targetsPath !== path) {
+          targetsPath = path
+          targets = [...(this.documents.get(path)?.targets ?? [])].sort(
+            (a, b) => a.localeCompare(b),
+          )
+        }
+        const target = targets[targetIndex]
+        if (!target) {
+          pathIndex++
+          targetIndex = 0
+          nodeEmitted = false
+          continue
+        }
+        item = { kind: 'edge', source: path, target }
+      }
+      const size =
+        item.kind === 'node'
+          ? Buffer.byteLength(item.path)
+          : Buffer.byteLength(item.source) + Buffer.byteLength(item.target)
+      if (bytes + size > 32 * 1024) break
+      items.push(item)
+      bytes += size
+      emitted++
+      if (item.kind === 'node') nodeEmitted = true
+      else targetIndex++
+    }
+    const hasMore = pathIndex < this.sortedPaths.length && emitted < 10_000
+    return {
+      items,
+      position: { pathIndex, targetIndex, nodeEmitted, emitted },
+      hasMore,
+      capReached: pathIndex < this.sortedPaths.length && emitted >= 10_000,
+    }
+  }
+
+  private ensureTags(): void {
+    if (this.tagPaths) return
+    const next = new Map<string, Set<string>>()
+    for (const [path, document] of this.documents) {
+      if (!isMarkdownDocument(path) || !document.referenceComplete) continue
+      document.tags ??= noteTags(document.markdown)
+      for (const name of document.tags) {
+        let paths = next.get(name)
+        if (!paths) {
+          if (next.size >= 2000) {
+            this.tagCapReached = true
+            continue
+          }
+          paths = new Set()
+          next.set(name, paths)
+        }
+        paths.add(path)
+      }
+    }
+    this.tagPaths = next
   }
 
   property(

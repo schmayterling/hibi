@@ -126,6 +126,7 @@ test('lazy tag, property, heading and path queries invalidate changed notes', ()
     page('plain.txt', '#work'),
   ])
   assert.deepEqual(index.tagged('work', 0, 10).items, ['a.md'])
+  assert.deepEqual(index.tags(0, 10).items, [{ tag: 'work', count: 1 }])
   assert.deepEqual(index.property('tags', 'two', 0, 10).items, ['a.md'])
   assert.deepEqual(index.headings('a.md', 0, 10).items, [
     { depth: 1, text: 'Intro' },
@@ -137,10 +138,60 @@ test('lazy tag, property, heading and path queries invalidate changed notes', ()
   ])
   assert.deepEqual(index.tagged('work', 0, 10).items, [])
   assert.deepEqual(index.tagged('other', 0, 10).items, ['a.md'])
+  assert.deepEqual(index.tags(0, 10).items, [{ tag: 'other', count: 1 }])
   assert.deepEqual(index.property('title', 'Alpha', 0, 10).items, [])
   assert.deepEqual(index.headings('a.md', 0, 10).items, [
     { depth: 1, text: 'Changed' },
   ])
+})
+
+test('graph pages contain every node and resolved link without another parse', () => {
+  let parses = 0
+  const index = new WorkspaceReferenceIndex((source) => {
+    parses++
+    return noteReferences(source)
+  })
+  index.apply(workspace, [
+    page('a.md', '[[b]]'),
+    page('b.md', '[[a]]'),
+    page('plain.txt'),
+  ])
+  const items = []
+  let position = {
+    pathIndex: 0,
+    targetIndex: 0,
+    nodeEmitted: false,
+    emitted: 0,
+  }
+  let result
+  do {
+    result = index.graph(position, 2)
+    items.push(...result.items)
+    position = result.position
+  } while (result.hasMore)
+  assert.deepEqual(items, [
+    { kind: 'node', path: 'a.md' },
+    { kind: 'edge', source: 'a.md', target: 'b.md' },
+    { kind: 'node', path: 'b.md' },
+    { kind: 'edge', source: 'b.md', target: 'a.md' },
+    { kind: 'node', path: 'plain.txt' },
+  ])
+  assert.equal(parses, 2)
+  assert.equal(result.capReached, false)
+  const capped = index.graph({ ...position, pathIndex: 0, emitted: 9999 }, 2)
+  assert.equal(capped.capReached, true)
+  assert.equal(capped.hasMore, false)
+})
+
+test('tag summaries cap distinct names while exact queries still find later tags', () => {
+  const index = new WorkspaceReferenceIndex()
+  index.apply(workspace, [
+    page('a.md', Array.from({ length: 2001 }, (_, i) => `#tag${i}`).join(' ')),
+  ])
+  const summary = index.tags(0, 100)
+  assert.equal(summary.capReached, true)
+  assert.equal(summary.hasMore, true)
+  assert.deepEqual(index.tagged('tag2000', 0, 10).items, ['a.md'])
 })
 
 test('oversized frontmatter never reaches reference or tag parsers', () => {

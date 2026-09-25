@@ -17,6 +17,7 @@ import {
   workspaceIndexRevision,
 } from './workspace'
 import {
+  type GraphPosition,
   type TextSearchPosition,
   WorkspaceReferenceIndex,
 } from './workspace-reference-index'
@@ -31,6 +32,10 @@ type SearchCursorState = {
   position: TextSearchPosition
 }
 const searchCursors = new Map<string, SearchCursorState>()
+type GraphCursorState = Omit<SearchCursorState, 'query' | 'position'> & {
+  position: GraphPosition
+}
+const graphCursors = new Map<string, GraphCursorState>()
 let indexedTarget: WorkspaceTarget | null = null
 let indexedSequence = -1
 let indexedRevision = -1
@@ -39,6 +44,7 @@ let indexedSourceVersions = ''
 function clearCache(): void {
   references.clear()
   searchCursors.clear()
+  graphCursors.clear()
   indexedTarget = null
   indexedSequence = -1
   indexedRevision = -1
@@ -94,6 +100,8 @@ export async function queryWorkspaceReferences(
     kind !== 'backlinks' &&
     kind !== 'resolve' &&
     kind !== 'tag' &&
+    kind !== 'tags' &&
+    kind !== 'graph' &&
     kind !== 'property' &&
     kind !== 'headings' &&
     kind !== 'search-paths' &&
@@ -147,6 +155,13 @@ export async function queryWorkspaceReferences(
         (typeof request.cursor !== 'string' || request.cursor.length > 64)))
   )
     return failure('unsupported', 'Use a valid search cursor.')
+  if (
+    kind === 'graph' &&
+    (request.offset !== undefined ||
+      (request.cursor !== undefined &&
+        (typeof request.cursor !== 'string' || request.cursor.length > 64)))
+  )
+    return failure('unsupported', 'Use a valid graph cursor.')
   let offset = 0
   let limit = 50
   if (kind === 'resolve') {
@@ -158,7 +173,11 @@ export async function queryWorkspaceReferences(
     )
       return failure('unsupported', 'Choose a valid link target.')
   } else {
-    if (kind !== 'search-text' && request.offset !== undefined) {
+    if (
+      kind !== 'search-text' &&
+      kind !== 'graph' &&
+      request.offset !== undefined
+    ) {
       if (typeof request.offset !== 'number')
         return failure('unsupported', 'Choose a numeric query offset.')
       offset = request.offset
@@ -218,6 +237,7 @@ export async function queryWorkspaceReferences(
   if (index) {
     references.apply(target, index.pages)
     searchCursors.clear()
+    graphCursors.clear()
     indexedTarget = target
     indexedSequence = after.sequence
     indexedRevision = revision
@@ -260,6 +280,69 @@ export async function queryWorkspaceReferences(
         ),
       },
     }
+  if (kind === 'tags') {
+    const result = references.tags(offset, limit)
+    return {
+      ok: true,
+      value: {
+        ...base,
+        kind,
+        items: result.items,
+        hasMore: result.hasMore,
+        nextOffset: result.nextOffset,
+        complete: base.complete && !result.capReached,
+        capReached: base.capReached || result.capReached,
+      },
+    }
+  }
+  if (kind === 'graph') {
+    let position: GraphPosition = {
+      pathIndex: 0,
+      targetIndex: 0,
+      nodeEmitted: false,
+      emitted: 0,
+    }
+    if (request.cursor !== undefined) {
+      const old = graphCursors.get(request.cursor as string)
+      if (
+        !old ||
+        old.target.workspaceId !== target.workspaceId ||
+        old.target.workspaceGeneration !== target.workspaceGeneration ||
+        old.sequence !== after.sequence ||
+        old.revision !== revision ||
+        old.sourceVersions !== sourceVersions
+      )
+        return failure('stale', 'This graph changed. Start again.')
+      graphCursors.delete(request.cursor as string)
+      position = old.position
+    }
+    const result = references.graph(position, limit)
+    let nextCursor: string | null = null
+    if (result.hasMore) {
+      nextCursor = randomUUID()
+      if (graphCursors.size >= 16)
+        graphCursors.delete(graphCursors.keys().next().value as string)
+      graphCursors.set(nextCursor, {
+        target,
+        sequence: after.sequence,
+        revision,
+        sourceVersions,
+        position: result.position,
+      })
+    }
+    return {
+      ok: true,
+      value: {
+        ...base,
+        kind,
+        items: result.items,
+        hasMore: result.hasMore,
+        nextCursor,
+        complete: base.complete && !result.hasMore && !result.capReached,
+        capReached: base.capReached || result.capReached,
+      },
+    }
+  }
   if (kind === 'property') {
     const result = references.property(
       request.key as string,

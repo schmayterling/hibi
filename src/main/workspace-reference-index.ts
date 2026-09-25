@@ -34,12 +34,18 @@ export interface ReferencePage {
   readonly nextOffset: number
 }
 
+export interface TextSearchPosition {
+  readonly pathIndex: number
+  readonly sourceOffset: number
+}
+
 /** Parsed references share the existing workspace page cache; no filesystem scan. */
 export class WorkspaceReferenceIndex {
   private target: WorkspaceTarget | null = null
   private documents = new Map<string, DocumentLinks>()
   private reverse = new Map<string, Set<string>>()
   private paths = new Set<string>()
+  private sortedPaths: string[] = []
   private basenames = new Map<string, string[]>()
   private tagPaths: Map<string, Set<string>> | null = null
   private complete = true
@@ -54,6 +60,7 @@ export class WorkspaceReferenceIndex {
     this.documents = new Map()
     this.reverse = new Map()
     this.paths = new Set()
+    this.sortedPaths = []
     this.basenames = new Map()
     this.tagPaths = null
     this.complete = true
@@ -146,6 +153,8 @@ export class WorkspaceReferenceIndex {
       (document) => document.referenceComplete,
     )
     this.paths = paths
+    if (pathsChanged)
+      this.sortedPaths = [...paths].sort((a, b) => a.localeCompare(b))
     this.basenames = basenames
     this.target = target
     return { parsed, resolved: toResolve.length }
@@ -257,6 +266,57 @@ export class WorkspaceReferenceIndex {
       offset,
       limit,
     )
+  }
+
+  /** Scan at most one million source characters per call; cursor resumes long notes. */
+  searchText(
+    query: string,
+    start: TextSearchPosition,
+    limit: number,
+  ): {
+    items: readonly string[]
+    position: TextSearchPosition
+    hasMore: boolean
+  } {
+    const term = query.toLowerCase()
+    const items: string[] = []
+    let pathIndex = start.pathIndex
+    let sourceOffset = start.sourceOffset
+    let budget = 1024 * 1024
+    let bytes = 0
+    while (pathIndex < this.sortedPaths.length && items.length < limit) {
+      const path = this.sortedPaths[pathIndex]
+      const source = path ? (this.documents.get(path)?.markdown ?? '') : ''
+      if (sourceOffset >= source.length) {
+        pathIndex++
+        sourceOffset = 0
+        continue
+      }
+      if (!budget) break
+      const length = Math.min(64 * 1024, budget, source.length - sourceOffset)
+      const overlap = Math.max(0, sourceOffset - query.length * 4)
+      const chunk = source.slice(overlap, sourceOffset + length)
+      budget -= length
+      if (chunk.toLowerCase().includes(term)) {
+        const size = Buffer.byteLength(path ?? '')
+        if (bytes + size > 32 * 1024) break
+        if (path) items.push(path)
+        bytes += size
+        pathIndex++
+        sourceOffset = 0
+      } else {
+        sourceOffset += length
+        if (sourceOffset >= source.length) {
+          pathIndex++
+          sourceOffset = 0
+        }
+      }
+    }
+    return {
+      items,
+      position: { pathIndex, sourceOffset },
+      hasMore: pathIndex < this.sortedPaths.length,
+    }
   }
 
   resolve(

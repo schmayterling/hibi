@@ -169,3 +169,17 @@ test('oversized frontmatter never reaches reference or tag parsers', () => {
   assert.equal(index.isComplete(), true)
   assert.deepEqual(index.links('a.md', 0, 10).items, ['b.md'])
 })
+
+test('text search resumes long notes and finds boundary-spanning matches', () => {
+  const index = new WorkspaceReferenceIndex()
+  index.apply(workspace, [
+    page('a.md', `${'x'.repeat(65_534)}needle${'y'.repeat(1_100_000)}`),
+    page('b.md', 'needle'),
+  ])
+  let result = index.searchText('NEEDLE', { pathIndex: 0, sourceOffset: 0 }, 1)
+  assert.deepEqual(result.items, ['a.md'])
+  assert.equal(result.hasMore, true)
+  result = index.searchText('NEEDLE', result.position, 1)
+  assert.deepEqual(result.items, ['b.md'])
+  assert.equal(result.hasMore, false)
+})

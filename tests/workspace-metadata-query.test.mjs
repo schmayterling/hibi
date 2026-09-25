@@ -149,6 +149,71 @@ test('metadata queries return bounded links and backlinks from shared pages', as
   assert.equal(host.indexReads, 3)
 })
 
+test('text search cursors resume bounded scans and expire after edits', async () => {
+  const originalPages = host.pages
+  const target = host.target
+  host.pages = [
+    { path: 'a.md', markdown: `${'x'.repeat(1_100_000)}needle` },
+    { path: 'b.md', markdown: 'needle' },
+  ]
+  host.revision++
+  const first = await query({
+    target,
+    kind: 'search-text',
+    query: 'needle',
+    limit: 1,
+  })
+  assert.equal(first.ok, true)
+  assert.deepEqual(first.value.items, [])
+  assert.equal(first.value.complete, false)
+  assert.equal(first.value.hasMore, true)
+  const second = await query({
+    target,
+    kind: 'search-text',
+    query: 'needle',
+    cursor: first.value.nextCursor,
+    limit: 1,
+  })
+  assert.deepEqual(second.value.items, ['a.md'])
+  assert.equal(second.value.hasMore, true)
+  const third = await query({
+    target,
+    kind: 'search-text',
+    query: 'needle',
+    cursor: second.value.nextCursor,
+    limit: 1,
+  })
+  assert.deepEqual(third.value.items, ['b.md'])
+  assert.equal(third.value.complete, true)
+  assert.equal(third.value.nextCursor, null)
+  assert.equal(
+    (
+      await query({
+        target,
+        kind: 'search-text',
+        query: 'needle',
+        cursor: first.value.nextCursor,
+      })
+    ).code,
+    'stale',
+  )
+  const pending = await query({ target, kind: 'search-text', query: 'missing' })
+  host.revision++
+  assert.equal(
+    (
+      await query({
+        target,
+        kind: 'search-text',
+        query: 'missing',
+        cursor: pending.value.nextCursor,
+      })
+    ).code,
+    'stale',
+  )
+  host.pages = originalPages
+  host.revision++
+})
+
 test('metadata query rejects a workspace change during its index read', async () => {
   const target = host.target
   host.changeDuringRead = true

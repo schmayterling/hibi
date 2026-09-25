@@ -321,7 +321,21 @@ function App() {
   const busyRef = useRef(false)
   const [busy, setBusy] = useState(false)
   const acknowledgeSave = useCallback((saved: DocumentState) => {
-    documentRuntime.acknowledgeSave(saved)
+    const previous = documentRuntime.get(saved.tabId)
+    const acknowledged = documentRuntime.acknowledgeSave(saved)
+    if (!acknowledged) return
+    if (
+      previous &&
+      previous.id !== acknowledged.id &&
+      previous.revision === acknowledged.revision
+    ) {
+      const choice = localStorage.getItem(`hibi:flavor:${previous.id}`)
+      if (choice) localStorage.setItem(`hibi:flavor:${acknowledged.id}`, choice)
+    }
+    if (documentRuntime.get()?.tabId !== saved.tabId) return
+    currentDocument.current = acknowledged
+    shellDocument.current = acknowledged
+    setDocument(acknowledged)
   }, [])
   const autosaveStatus = useAutosave(document, busy, acknowledgeSave)
   const [defaultView, setDefaultView] = useState<ViewMode>(() => {
@@ -947,7 +961,8 @@ function App() {
             ? window.hibi.openDocument()
             : window.hibi.saveDocument(command === 'saveAs'))
         if (next) {
-          acceptDocument(next)
+          if (command === 'save' || command === 'saveAs') acknowledgeSave(next)
+          else acceptDocument(next)
           if (command === 'new' || command === 'open') setSettingsOpen(false)
           setWorkspace(await window.hibi.getWorkspace())
         }
@@ -976,7 +991,7 @@ function App() {
           })
       }
     },
-    [dialogs, acceptDocument, setError],
+    [dialogs, acceptDocument, acknowledgeSave, setError],
   )
 
   async function openFolder(recentId?: string): Promise<WorkspaceState | null> {

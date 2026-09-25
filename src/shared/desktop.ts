@@ -276,6 +276,10 @@ export type DesktopApi = {
   getWorkspaceChangeSnapshot: () => Promise<
     import('./workspace').WorkspaceStreamSnapshot
   >
+  listWorkspaceEntryPage: (
+    owner: string,
+    request: import('./workspace').WorkspaceEntryPageRequest,
+  ) => Promise<import('./workspace').WorkspaceEntryPageResult>
   subscribeWorkspaceChanges: (
     callback: import('./workspace').WorkspaceChangeListener,
   ) => Promise<import('./workspace').WorkspaceChangeSubscription>

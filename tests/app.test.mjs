@@ -129,6 +129,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'queryAddon',
         'getWorkspace',
         'getWorkspaceChangeSnapshot',
+        'listWorkspaceEntryPage',
         'subscribeWorkspaceChanges',
         'readWorkspaceText',
         'readWorkspaceBinary',

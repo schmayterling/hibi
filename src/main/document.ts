@@ -300,6 +300,12 @@ export function getOpenDocuments() {
     dirty: updateTabDirty(id, draft),
   }))
 }
+export function hasOpenDocumentPath(file: string) {
+  storeTab()
+  for (const draft of tabs.values())
+    if (draft.path === file || draft.pendingPath === file) return true
+  return false
+}
 export function getDocumentTabs(): DocumentTab[] {
   storeTab()
   return [...tabs].map(([id, draft]) => ({

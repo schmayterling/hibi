@@ -18,7 +18,7 @@ import {
   siteJson,
 } from '../../site/data.ts'
 import { noteGraph } from '../graph/model.ts'
-import type { ExportOptions } from './options'
+import { type ExportOptions, exportOptions } from './options.ts'
 
 const escapeHtml = (value: string) =>
   value
@@ -36,11 +36,61 @@ const plain = (value: string) =>
   )
     .replace(/\s+/g, ' ')
     .trim()
+const renderedHtml = (html: string) =>
+  sanitizeHtml(html, {
+    allowedTags: [
+      ...sanitizeHtml.defaults.allowedTags,
+      'img',
+      'details',
+      'summary',
+      'input',
+      'del',
+      's',
+      'svg',
+      'g',
+      'path',
+      'rect',
+      'circle',
+      'line',
+      'polyline',
+      'polygon',
+      'text',
+      'tspan',
+      'math',
+      'semantics',
+      'mrow',
+      'mi',
+      'mn',
+      'mo',
+      'mfrac',
+      'msup',
+      'msub',
+      'msubsup',
+      'msqrt',
+      'mroot',
+      'mtext',
+      'annotation',
+    ],
+    allowedAttributes: {
+      '*': ['class', 'style', 'title', 'role', 'aria-*'],
+      a: ['href', 'rel'],
+      img: ['src', 'alt', 'width', 'height'],
+      input: ['type', 'checked', 'disabled'],
+      svg: ['viewBox', 'width', 'height'],
+      path: ['d', 'fill', 'stroke', 'stroke-width', 'transform'],
+      math: ['display'],
+      annotation: ['encoding'],
+    },
+    allowedSchemes: ['http', 'https', 'mailto'],
+    allowedSchemesByTag: { img: ['data'] },
+    allowProtocolRelative: false,
+  })
 
 export function prepareSite(
   snapshot: WorkspaceSnapshot,
   options: ExportOptions,
 ): SiteData {
+  options = exportOptions(options)
   const seen = new Set<string>()
   const pages = snapshot.pages.map((page) => {
     if (
@@ -79,6 +129,18 @@ export function prepareSite(
     }
     const source = frontmatter?.content ?? page.markdown
     const tokens = marked.lexer(source)
+    const images: Record<string, string> = Object.create(null)
+    marked.walkTokens(tokens, (token) => {
+      if (token.type !== 'image') return
+      const data = page.images?.[token.href]
+      if (
+        typeof data === 'string' &&
+        /^data:(?:image\/(?:png|jpeg|gif|webp|avif|svg\+xml)|video\/(?:mp4|webm|ogg));base64,[a-z\d+/]+={0,2}$/i.test(
+          data,
+        )
+      )
+        images[token.href] = data
+    })
     const heading = tokens.find((token) => token.type === 'heading')
     const paragraph = tokens.find((token) => token.type === 'paragraph')
     const title =
@@ -96,19 +158,21 @@ export function prepareSite(
         : '') ||
       options.description
     return {
-      ...page,
+      path: page.path,
+      markdown: page.markdown,
       title: title.slice(0, 200),
       description: description.slice(0, 500),
-      html: page.html ?? marked.parse(source, { async: false }),
+      html: renderedHtml(page.html ?? marked.parse(source, { async: false })),
+      ...(Object.keys(images).length ? { images } : {}),
     }
   })
   return {
-    ...snapshot,
     name: options.title || snapshot.name,
     pages,
     options,
     appearance: options.theme,
     routing: options.singleFile ? 'hash' : 'paths',
+    ...(typeof snapshot.css === 'string' ? { css: snapshot.css } : {}),
     ...(options.graph ? { graph: noteGraph(pages) } : {}),
   }
 }

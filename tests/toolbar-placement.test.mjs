@@ -70,8 +70,10 @@ test('toolbar placements persist, keep menu-only actions in overflow, and recove
       .getByRole('combobox', { name: /toolbar placement for/i })
       .selectOption(value)
   }
-  const closeSettings = () =>
-    page.getByRole('button', { name: /back to app/i }).click()
+  const closeSettings = async () => {
+    await page.getByRole('button', { name: /back to app/i }).click()
+    await page.locator('.settings-screen').waitFor({ state: 'hidden' })
+  }
   const preferences = () =>
     page.evaluate(() => JSON.parse(localStorage.getItem('hibi:toolbar')))
   await openSettings()

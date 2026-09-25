@@ -14,6 +14,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react'
+import type { CommandExecutionContext } from '../../shared/foundation-contracts'
 import type {
   WorkspaceAction,
   WorkspaceActionResult,
@@ -34,6 +35,7 @@ export function WorkspaceSidebar({
   onFile,
   onRefresh,
   commands,
+  captureCommandContext,
   open,
   overlay,
   onDismiss,
@@ -50,6 +52,9 @@ export function WorkspaceSidebar({
   onFile: (path: string) => void
   onRefresh: () => void
   commands: RegisteredCommand[]
+  captureCommandContext: (
+    entry: WorkspaceEntry,
+  ) => CommandExecutionContext | null
   open: boolean
   overlay: boolean
   onDismiss: () => void
@@ -117,15 +122,39 @@ export function WorkspaceSidebar({
     }
     const entry = find(workspace?.entries ?? [])
     if (!entry) return
+    const contributions = commands
+      .filter((command) => command.menu?.location === 'explorer')
+      .sort(
+        (left, right) =>
+          String(left.menu?.group ?? '').localeCompare(
+            String(right.menu?.group ?? ''),
+          ) ||
+          (left.menu?.order ?? 0) - (right.menu?.order ?? 0) ||
+          left.id.localeCompare(right.id),
+      )
+    const context = contributions.length ? captureCommandContext(entry) : null
     menu.open({
       label: `Actions for ${entry.name}`,
       anchor,
-      items: workspaceMenuItems(entry, {
-        dialogs,
-        onAction,
-        create,
-        rename: setEditing,
-      }),
+      items: [
+        ...workspaceMenuItems(entry, {
+          dialogs,
+          onAction,
+          create,
+          rename: setEditing,
+        }),
+        ...(context
+          ? contributions.map((command, index) => ({
+              id: command.id,
+              label: command.label,
+              disabled: !command.canRun(context),
+              separatorBefore:
+                index === 0 ||
+                command.menu?.group !== contributions[index - 1]?.menu?.group,
+              onSelect: () => command.run(context),
+            }))
+          : []),
+      ],
     })
   }
   const items = useMemo(() => {

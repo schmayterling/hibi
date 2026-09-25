@@ -1899,7 +1899,10 @@ export function useAddons(
   useEffect(() => {
     const desired = new Map<string, HotkeyDescriptor>(
       visibleCommands
-        .filter((command) => command.defaultShortcut || command.menu)
+        .filter(
+          (command) =>
+            command.defaultShortcut || command.menu?.location === 'app',
+        )
         .map((command) => [
           command.id,
           {
@@ -1908,7 +1911,7 @@ export function useAddons(
             ...(command.defaultShortcut
               ? { defaultShortcut: command.defaultShortcut }
               : {}),
-            ...(command.menu ? { menu: command.menu } : {}),
+            ...(command.menu?.location === 'app' ? { menu: command.menu } : {}),
           },
         ]),
     )

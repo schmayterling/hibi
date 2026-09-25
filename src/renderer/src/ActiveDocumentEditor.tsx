@@ -34,10 +34,13 @@ export function ActiveDocumentEditor({
   enabledAddons: ReadonlySet<string>
   onFlavorStatus: (status: DocumentFlavorStatus) => void
 }) {
-  const viewId = useMemo(() => crypto.randomUUID() as ViewId, [])
+  const viewId =
+    (props.viewId as ViewId | undefined) ??
+    documentRuntime.primaryViewId(props.document.tabId)
   const documentTarget = documentRuntime.captureDocument(props.document.tabId)
   useEffect(() => {
     if (
+      !viewId ||
       !documentTarget ||
       documentRuntime.captureDocument(props.document.tabId) !== documentTarget
     )
@@ -159,6 +162,11 @@ export function ActiveDocumentEditor({
     onFlavorStatus,
   ])
   return (
-    <Component {...props} viewId={viewId} document={document} value={source} />
+    <Component
+      {...props}
+      {...(viewId ? { viewId } : {})}
+      document={document}
+      value={source}
+    />
   )
 }

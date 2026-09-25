@@ -251,16 +251,25 @@ export function attachEditorInteractions(adapter: Adapter) {
       select(selected)
     }
     if (commandItems.length) render(commandItems)
-    if (contextActionBroker.hasProviders())
+    if (contextActionBroker.hasProviders()) {
+      let displayedActions: readonly EditorContextAction[] = []
       actionCancel = contextActionBroker.request(
         () => request,
         () => adapter.capture(position),
-        (items: readonly EditorContextAction[]) =>
+        (items: readonly EditorContextAction[]) => {
+          if (
+            displayedActions.length === items.length &&
+            displayedActions.every((item, index) => item === items[index])
+          )
+            return
+          displayedActions = items
           render([
             ...commandItems,
             ...items.map((action): MenuEntry => ({ kind: 'edit', action })),
-          ]),
+          ])
+        },
       )
+    }
     return !!shown || !!actionCancel
   }
   const contextMenu = (event: MouseEvent) => {

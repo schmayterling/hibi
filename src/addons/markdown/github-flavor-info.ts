@@ -1,5 +1,5 @@
 import { Marked } from 'marked'
-import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes'
+import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes.ts'
 import type { MarkdownFlavor } from '../api'
 import { alertMarker } from './alerts.ts'
 

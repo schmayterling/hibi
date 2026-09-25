@@ -1,0 +1,14 @@
+{
+  "id": "__HIBI_ID__",
+  "name": "__HIBI_NAME__",
+  "description": "A starter Hibi addon.",
+  "version": "1.0.0",
+  "apiVersion": 2,
+  "kind": "extension",
+  "authors": [
+    {
+      "displayName": "__HIBI_AUTHOR__"
+    }
+  ],
+  "entry": "index.js"
+}

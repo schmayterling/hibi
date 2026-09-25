@@ -33,3 +33,9 @@ Push a `v<version>` tag that exactly matches the non-prerelease version in `pack
 For local distribution packages, use `npm run dist`. It runs `npm run check` before creating installers. `npm run package` creates an unpacked development app and does not certify a release.
 
 Publication requires no extra token: only the publish job has repository contents write permission. Nightlies remain prereleases and never replace GitHub's latest stable release. Failed uploads leave a draft for retry; temporary Actions artifacts expire after one day. If one platform fails packaging, successful platform artifacts may remain in that workflow run for inspection, but no release is published.
+
+## Addon starter package
+
+The first release requires a maintainer with npm 2FA to run `npm publish --access public` from `packages/create-hibi-addon` after the PR is merged. npm cannot stage a new package or register its trusted publisher before the package exists. Confirm the first release with `npm view create-hibi-addon version` before recommending `npx create-hibi-addon`.
+
+For later versions, configure `create-hibi-addon` on npm with GitHub user `schmayterling`, repository `hibi`, and workflow filename `publish-create-hibi-addon.yml`. Allow `npm stage publish` only. Bump the version in its `package.json`, then run **stage create-hibi-addon** manually on `main`. The workflow tests the generator and stages that version with provenance, but the version is not public yet. Review it with `npm stage list create-hibi-addon` and `npm stage view <stage-id>` or on npmjs.com. A maintainer with 2FA must run `npm stage approve <stage-id>` or approve it on npmjs.com. Confirm the live version with `npm view create-hibi-addon version`. The workflow does not run when a PR merges and needs no npm token.

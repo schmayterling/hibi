@@ -1003,17 +1003,19 @@ export function MarkdownEditor({
     const capture = (
       position: number,
       allowBlurred = false,
+      toolbarSelection = false,
     ): EditorInteractionRequest | null => {
       const context = completionContext.current
       if (
         editor.isDestroyed ||
         context.paneMode === 'markdown' ||
-        context.disabled ||
-        context.splitReadOnly ||
-        context.projectionReadOnly ||
-        !context.plainSyncEligible ||
-        markdownSyntax.version() !== context.syntaxVersion ||
-        !editor.isEditable ||
+        (!toolbarSelection &&
+          (context.disabled ||
+            context.splitReadOnly ||
+            context.projectionReadOnly ||
+            !context.plainSyncEligible ||
+            markdownSyntax.version() !== context.syntaxVersion ||
+            !editor.isEditable)) ||
         view.composing ||
         (!view.hasFocus() && !allowBlurred) ||
         !richSourceCurrent(editor) ||
@@ -1034,24 +1036,28 @@ export function MarkdownEditor({
         !source ||
         current.contentVersion !== source.version ||
         !(selection instanceof TextSelection) ||
-        !selection.$from.sameParent(selection.$to) ||
-        !selection.$from.parent.isTextblock ||
-        selection.$from.parent.type.spec.code ||
-        selection.$from.marks().some((mark) => mark.type.spec.code)
+        (!toolbarSelection &&
+          (!selection.$from.sameParent(selection.$to) ||
+            !selection.$from.parent.isTextblock ||
+            selection.$from.parent.type.spec.code ||
+            selection.$from.marks().some((mark) => mark.type.spec.code)))
       )
         return null
       const at = view.state.doc.resolve(position)
-      if (!at.parent.isTextblock || at.parent.type.spec.code) return null
-      if (!plainSync.current)
-        plainSync.current = createPlainSourceSync(
-          source,
-          view.state.doc,
-          serialize(view.state.doc),
+      if (!toolbarSelection) {
+        if (!at.parent.isTextblock || at.parent.type.spec.code) return null
+        if (!plainSync.current)
+          plainSync.current = createPlainSourceSync(
+            source,
+            view.state.doc,
+            serialize(view.state.doc),
+          )
+        if (
+          plainSync.current?.map(source, view.state.doc, position, 'rich') ==
+          null
         )
-      if (
-        plainSync.current?.map(source, view.state.doc, position, 'rich') == null
-      )
-        return null
+          return null
+      }
       const offset = at.parentOffset
       return {
         view: target,
@@ -1060,12 +1066,22 @@ export function MarkdownEditor({
         documentLength: view.state.doc.content.size,
         position,
         selection: { anchor: selection.anchor, head: selection.head },
-        before: at.parent.textBetween(Math.max(0, offset - 128), offset),
-        after: at.parent.textBetween(
-          offset,
-          Math.min(at.parent.content.size, offset + 128),
+        before: toolbarSelection
+          ? ''
+          : at.parent.textBetween(Math.max(0, offset - 128), offset),
+        after: toolbarSelection
+          ? ''
+          : at.parent.textBetween(
+              offset,
+              Math.min(at.parent.content.size, offset + 128),
+            ),
+        selectedText: view.state.doc.textBetween(
+          selection.from,
+          toolbarSelection
+            ? Math.min(selection.to, selection.from + 256)
+            : selection.to,
+          toolbarSelection ? '\n' : undefined,
         ),
-        selectedText: view.state.doc.textBetween(selection.from, selection.to),
       }
     }
     const apply = (
@@ -1150,8 +1166,8 @@ export function MarkdownEditor({
     const unsubscribe = onEditorInteractionProvidersChanged(refresh)
     refresh()
     const unregisterSelection = registerEditorSelectionCapture(
-      () => capture(view.state.selection.head, true),
-      (position) => capture(position, true),
+      () => capture(view.state.selection.head, true, true),
+      (position) => capture(position, true, true),
     )
     const invalidate = () =>
       view.dom.dispatchEvent(new Event('hibi:editor-interactions-invalidate'))

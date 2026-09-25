@@ -578,6 +578,7 @@ export function SourceEditor({
     const captureInteraction = (
       position: number,
       allowBlurred = false,
+      toolbarSelection = false,
     ): EditorInteractionRequest | null => {
       const context = editContext.current
       const active = documentRuntime.get(document.tabId)
@@ -625,7 +626,9 @@ export function SourceEditor({
         ),
         selectedText: editor.state.sliceDoc(
           selected.main.from,
-          selected.main.to,
+          toolbarSelection
+            ? Math.min(selected.main.to, selected.main.from + 256)
+            : selected.main.to,
         ),
       }
     }
@@ -1179,8 +1182,8 @@ export function SourceEditor({
       onEditorInteractionProvidersChanged(refreshInteractions)
     refreshInteractions()
     const unregisterSelection = registerEditorSelectionCapture(
-      () => captureInteraction(editor.state.selection.main.head, true),
-      (position) => captureInteraction(position, true),
+      () => captureInteraction(editor.state.selection.main.head, true, true),
+      (position) => captureInteraction(position, true, true),
     )
     const unregister = registerSourceView(
       editor,

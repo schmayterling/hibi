@@ -39,6 +39,7 @@ import {
 } from '../shared/document-checkpoint'
 import { createJournalReceiver } from '../shared/document-journal'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
+import type { WorkspaceTarget } from '../shared/foundation-contracts'
 import {
   GLOBAL_SHORTCUT_CHANNELS,
   type GlobalShortcutInvocation,
@@ -154,9 +155,12 @@ import {
   openWorkspaceFile,
   refreshWorkspace,
   snapshotWorkspace,
+  subscribeWorkspaceChanges,
+  workspaceChangeSnapshot,
   workspaceRoot,
 } from './workspace'
 import { workspaceAction } from './workspace-actions'
+import { createWorkspaceText, readWorkspaceText } from './workspace-files'
 import {
   getWorkspaceSettings,
   openStartupWorkspace,
@@ -1215,6 +1219,23 @@ if (!app.requestSingleInstanceLock()) {
       handle(WORKSPACE_CHANNELS.snapshot, (event) =>
         readAfterFileOperation(event, snapshotWorkspace),
       )
+      handle(WORKSPACE_CHANNELS.changeSnapshot, (event) =>
+        readAfterFileOperation(event, async () => workspaceChangeSnapshot()),
+      )
+      handle(
+        WORKSPACE_CHANNELS.readText,
+        (event, target: unknown, path: unknown) =>
+          readAfterFileOperation(event, () =>
+            readWorkspaceText(target as WorkspaceTarget, path),
+          ),
+      )
+      handle(
+        WORKSPACE_CHANNELS.createText,
+        (event, target: unknown, path: unknown, markdown: unknown) =>
+          runFileOperation(event, () =>
+            createWorkspaceText(target as WorkspaceTarget, path, markdown),
+          ),
+      )
       handle(WORKSPACE_CHANNELS.index, (event, verifyAll: unknown) =>
         readAfterFileOperation(event, () => indexWorkspace(verifyAll === true)),
       )
@@ -1281,6 +1302,9 @@ if (!app.requestSingleInstanceLock()) {
           getWorkspace(),
           change,
         ),
+      )
+      subscribeWorkspaceChanges((change) =>
+        mainWindow?.webContents.send(WORKSPACE_CHANNELS.changedV2, change),
       )
       observeKnownWorkspaces((known) =>
         mainWindow?.webContents.send(WORKSPACE_CHANNELS.listChanged, known),

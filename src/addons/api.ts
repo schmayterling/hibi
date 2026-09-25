@@ -621,6 +621,32 @@ export type AddonContext = {
     /** Read note text and workspace drafts without embedding media or blocking writes. */
     index: () => Promise<WorkspaceIndex | null>
     snapshot: () => Promise<WorkspaceSnapshot>
+    /** Snapshot and sequenced changes for this workspace generation. */
+    changeSnapshot: () => Promise<
+      import('../shared/workspace').WorkspaceStreamSnapshot
+    >
+    subscribeChanges: (
+      listener: import('../shared/workspace').WorkspaceChangeListener,
+    ) => Promise<import('../shared/workspace').WorkspaceChangeSubscription>
+    /** Read persisted UTF-8 text at a captured workspace target. */
+    readText: (
+      target: import('../shared/foundation-contracts').WorkspaceTarget,
+      path: string,
+    ) => Promise<
+      import('../shared/workspace').WorkspaceFileResult<
+        import('../shared/workspace').WorkspaceTextRead
+      >
+    >
+    /** Create new text with exclusive commit at a captured workspace target. */
+    createText: (
+      target: import('../shared/foundation-contracts').WorkspaceTarget,
+      path: string,
+      markdown: string,
+    ) => Promise<
+      import('../shared/workspace').WorkspaceFileResult<
+        import('../shared/workspace').WorkspaceTextCreation
+      >
+    >
     get: () => Promise<WorkspaceState | null>
     open: () => Promise<WorkspaceState | null>
     openFile: (path: string) => Promise<void>

@@ -19,6 +19,10 @@ import {
 import type { JournalCheckpoint } from '../shared/document-checkpoint'
 import { createDocumentJournal } from '../shared/document-journal'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
+import type {
+  WorkspaceChangeEvent,
+  WorkspaceTarget,
+} from '../shared/foundation-contracts'
 import {
   GLOBAL_SHORTCUT_CHANNELS,
   type GlobalShortcutInvocation,
@@ -36,7 +40,9 @@ import {
   toRecentWorkspaces,
   WORKSPACE_CHANNELS,
   type WorkspaceChange,
+  type WorkspaceChangeListener,
   type WorkspaceState,
+  type WorkspaceStreamSnapshot,
 } from '../shared/workspace'
 import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
 import { DiagnosticProducer } from './local-diagnostics'
@@ -96,6 +102,72 @@ if (process.isMainFrame) {
   const startupKnown: Promise<KnownWorkspace[]> = ipcRenderer.invoke(
     WORKSPACE_CHANNELS.known,
   )
+  async function subscribeWorkspaceChanges(callback: WorkspaceChangeListener) {
+    let pending: WorkspaceChangeEvent[] = []
+    let latest: WorkspaceChangeEvent | null = null
+    let overflow = false
+    let ready = false
+    let disposed = false
+    let target: WorkspaceTarget | null = null
+    let sequence = 0
+    const sameTarget = (change: WorkspaceChangeEvent) =>
+      target?.workspaceId === change.workspaceId &&
+      target.workspaceGeneration === change.workspaceGeneration
+    const deliver = (change: WorkspaceChangeEvent, forceResync = false) => {
+      if (disposed || (sameTarget(change) && change.sequence <= sequence))
+        return
+      const gap = !sameTarget(change) || change.sequence !== sequence + 1
+      target = {
+        workspaceId: change.workspaceId,
+        workspaceGeneration: change.workspaceGeneration,
+      }
+      sequence = change.sequence
+      try {
+        callback(
+          forceResync || gap
+            ? { ...change, kind: 'resync', paths: null }
+            : change,
+        )
+      } catch (error) {
+        console.error('Could not notify workspace change subscriber:', error)
+      }
+    }
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      change: WorkspaceChangeEvent,
+    ) => {
+      if (!ready) {
+        latest = change
+        if (pending.length < 256) pending.push(change)
+        else overflow = true
+      } else deliver(change)
+    }
+    ipcRenderer.on(WORKSPACE_CHANNELS.changedV2, listener)
+    try {
+      const snapshot: WorkspaceStreamSnapshot = await ipcRenderer.invoke(
+        WORKSPACE_CHANNELS.changeSnapshot,
+      )
+      if (disposed) return { snapshot, dispose: () => {} }
+      target = snapshot.target
+      sequence = snapshot.sequence
+      ready = true
+      if (overflow) {
+        if (latest) deliver(latest, true)
+      } else for (const change of pending) deliver(change)
+      pending = []
+      return {
+        snapshot,
+        dispose() {
+          disposed = true
+          ipcRenderer.removeListener(WORKSPACE_CHANNELS.changedV2, listener)
+        },
+      }
+    } catch (error) {
+      disposed = true
+      ipcRenderer.removeListener(WORKSPACE_CHANNELS.changedV2, listener)
+      throw error
+    }
+  }
   for (const pending of [startupDocument, startupAddons, startupKnown])
     void pending.catch(() => {})
   contextBridge.exposeInMainWorld('hibi', {
@@ -229,6 +301,13 @@ if (process.isMainFrame) {
     queryAddon: (id, method, input) =>
       ipcRenderer.invoke(ADDON_CHANNELS.query, id, method, input),
     getWorkspace: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.get),
+    getWorkspaceChangeSnapshot: () =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.changeSnapshot),
+    subscribeWorkspaceChanges,
+    readWorkspaceText: (target, path) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.readText, target, path),
+    createWorkspaceText: (target, path, markdown) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.createText, target, path, markdown),
     listImporters: () => ipcRenderer.invoke(IMPORT_CHANNELS.list),
     importIntoWorkspace: (request) =>
       ipcRenderer.invoke(IMPORT_CHANNELS.run, request),

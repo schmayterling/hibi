@@ -27,6 +27,22 @@ async function eventually(read, predicate, message) {
   throw new Error(`${message}: ${JSON.stringify(last)}`)
 }
 
+async function boundedDiagnostic(read) {
+  let timer
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(read)
+        .catch((error) => ({ error: String(error).slice(0, 160) })),
+      new Promise((done) => {
+        timer = setTimeout(() => done({ error: 'timed out' }), 1000)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function storageValue(path, key) {
   const data = JSON.parse(await readFile(path, 'utf8'))
   return data.entries[key]
@@ -274,9 +290,25 @@ test('installed proof addon migrates state and composes captured edits, queries,
     },
   )
   await new Promise((done) => server.listen(0, '127.0.0.1', done))
+  let app
   t.after(async () => {
-    await new Promise((done) => server.close(done))
-    await rm(root, { recursive: true, force: true })
+    try {
+      if (app) {
+        await app
+          .evaluate(({ dialog }) => {
+            globalThis.releaseProofGrant?.()
+            dialog.showMessageBox = async () => ({ response: 1 })
+          })
+          .catch(() => {})
+        await app.close()
+      }
+    } finally {
+      await new Promise((done) => {
+        server.close(done)
+        server.closeAllConnections()
+      })
+      await rm(root, { recursive: true, force: true })
+    }
   })
   const url = `https://127.0.0.1:${server.address().port}/proof`
   await cp(packagePath, folder, { recursive: true })
@@ -315,25 +347,55 @@ test('installed proof addon migrates state and composes captured edits, queries,
     }),
   )
 
-  const app = await electron.launch({
+  app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
     env: { ...process.env, NODE_EXTRA_CA_CERTS: cert },
   })
-  t.after(async () => {
-    await app
-      .evaluate(({ dialog }) => {
-        dialog.showMessageBox = async () => ({ response: 1 })
-      })
-      .catch(() => {})
-    await app.close()
-  })
   const page = await app.firstWindow()
   page.setDefaultTimeout(10000)
-  const migrated = await eventually(
-    () => storageValue(globalFile, 'preferences'),
-    (value) => value?.version === 2,
-    'global preferences did not migrate',
-  )
+  let migrated
+  try {
+    migrated = await eventually(
+      () => storageValue(globalFile, 'preferences'),
+      (value) => value?.version === 2,
+      'global preferences did not migrate',
+    )
+  } catch (error) {
+    const file = await readFile(globalFile, 'utf8')
+      .then((text) => {
+        const stored = JSON.parse(text)
+        return {
+          format: stored.format,
+          version: stored.entries?.preferences?.version,
+          revision: stored.entries?.preferences?.revision,
+        }
+      })
+      .catch((failure) => ({ error: failure.code ?? String(failure) }))
+    const main = await boundedDiagnostic(() =>
+      app.evaluate(({ app, BrowserWindow }) => ({
+        userData: app.getPath('userData'),
+        windows: BrowserWindow.getAllWindows().map((window) => ({
+          url: window.webContents.getURL(),
+          loading: window.webContents.isLoadingMainFrame(),
+        })),
+      })),
+    )
+    const renderer = await boundedDiagnostic(() =>
+      page.evaluate(async () => ({
+        addon: (await window.hibi.getAddonStates()).find(
+          ({ id }) => id === 'foundation-proof',
+        ),
+        alerts: [...document.querySelectorAll('[role="alert"]')]
+          .map((element) => element.textContent?.slice(0, 160))
+          .slice(0, 3),
+      })),
+    )
+    console.error(
+      'proof global migration diagnostic:',
+      JSON.stringify({ file, main, renderer }),
+    )
+    throw error
+  }
   assert.equal(migrated.revision, 2)
   assert.deepEqual(migrated.value, {
     tag: 'proof',

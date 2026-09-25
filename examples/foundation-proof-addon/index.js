@@ -30,13 +30,16 @@ function preferencesFrom(snapshot) {
 }
 
 export function completionItems(request) {
-  const match = request.before.match(/(\[\[[a-z0-9-]*|#[a-z0-9-]*)$/i)
+  const match = request.before.match(
+    /(\[\[[a-z0-9-]*|@[a-z0-9-]*|#[a-z0-9-]*)$/i,
+  )
   if (!match) return []
   const token = match[0]
-  const link = token.startsWith('[[')
-  if (link && request.editor !== 'source') return []
+  const link = token.startsWith('[[') || token.startsWith('@')
   const value = link ? '[[proof-note]]' : '#proof'
-  if (!value.toLowerCase().startsWith(token.toLowerCase())) return []
+  const prefix = token.startsWith('@') ? token.slice(1) : token
+  const candidate = token.startsWith('@') ? 'proof-note' : value
+  if (!candidate.toLowerCase().startsWith(prefix.toLowerCase())) return []
   return [
     {
       label: value,

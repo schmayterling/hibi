@@ -739,10 +739,12 @@ export async function loadWorkspace(
   watcher = candidateWatcher
   candidateTarget = selectedTarget
   let startupReconciled = false
+  let startupScanFailed = false
   if (changedDuringScan)
     startupReconciled =
       (await requestWorkspaceScan(null).catch((error: unknown) => {
         console.error('workspace startup rescan failed:', error)
+        startupScanFailed = true
         return null
       })) !== null
   if (loading !== loadGeneration || !isCurrentWorkspaceTarget(selectedTarget))
@@ -752,7 +754,8 @@ export async function loadWorkspace(
   )
   if (loading !== loadGeneration || !isCurrentWorkspaceTarget(selectedTarget))
     return getWorkspace()
-  if (!startupReconciled) publishWorkspaceChange({ kind: 'tree', paths: null })
+  if (!startupReconciled && !startupScanFailed)
+    publishWorkspaceChange({ kind: 'tree', paths: null })
   return getWorkspace()
 }
 

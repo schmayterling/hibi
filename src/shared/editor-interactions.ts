@@ -13,6 +13,25 @@ export interface EditorInteractionRequest {
   readonly selectedText: string
 }
 
+export function sameInteraction(
+  left: EditorInteractionRequest,
+  right: EditorInteractionRequest | null,
+) {
+  return (
+    !!right &&
+    left.view.documentId === right.view.documentId &&
+    left.view.documentGeneration === right.view.documentGeneration &&
+    left.view.viewId === right.view.viewId &&
+    left.view.viewGeneration === right.view.viewGeneration &&
+    left.contentVersion === right.contentVersion &&
+    left.editor === right.editor &&
+    left.documentLength === right.documentLength &&
+    left.position === right.position &&
+    left.selection.anchor === right.selection.anchor &&
+    left.selection.head === right.selection.head
+  )
+}
+
 /** Plain text only. Hibi owns placement, presentation, and dismissal. */
 export interface EditorHover {
   readonly label: string

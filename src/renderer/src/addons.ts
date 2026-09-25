@@ -58,6 +58,7 @@ import { documentRuntime } from './document-runtime'
 import { createDocumentTargetEditScope } from './document-target-edits'
 import { editorAnnotations } from './editor-annotations'
 import { onEditorInput, onEditorKeyEvent } from './editor-events'
+import { countEditorInteractionProvider } from './editor-interaction-presence'
 import { explorerDecorations } from './explorer-decorations'
 import { flavors, renderMarkdown, renderMarkdownAsync } from './flavors'
 import { projectMarkdown } from './markdown-projection'
@@ -1124,8 +1125,10 @@ export function useAddons(
                 const { registerHoverProvider } = await loadInteractionBroker()
                 if (disposed) throw new Error('This addon has stopped.')
                 const remove = registerHoverProvider(completionOwner, provider)
+                const stopPresence = countEditorInteractionProvider()
                 const cleanup = () => {
                   remove()
+                  stopPresence()
                   cleanups.delete(cleanup)
                 }
                 cleanups.add(cleanup)
@@ -1142,8 +1145,10 @@ export function useAddons(
                   completionOwner,
                   provider,
                 )
+                const stopPresence = countEditorInteractionProvider()
                 const cleanup = () => {
                   remove()
+                  stopPresence()
                   cleanups.delete(cleanup)
                 }
                 cleanups.add(cleanup)

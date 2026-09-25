@@ -1,10 +1,11 @@
-import type {
-  EditorContextAction,
-  EditorContextActionProvider,
-  EditorHover,
-  EditorHoverProvider,
-  EditorInteractionRequest,
-} from '../../shared/editor-interactions'
+import {
+  type EditorContextAction,
+  type EditorContextActionProvider,
+  type EditorHover,
+  type EditorHoverProvider,
+  type EditorInteractionRequest,
+  sameInteraction,
+} from '../../shared/editor-interactions.ts'
 import type { AddonOwner, Dispose } from '../../shared/foundation-contracts'
 
 const MAX_PROVIDERS = 16
@@ -73,25 +74,6 @@ function snapshot(value: EditorInteractionRequest | null) {
     after: value.after.slice(0, 256),
     selectedText: value.selectedText.slice(0, 256),
   })
-}
-
-export function sameInteraction(
-  left: EditorInteractionRequest,
-  right: EditorInteractionRequest | null,
-) {
-  return (
-    !!right &&
-    left.view.documentId === right.view.documentId &&
-    left.view.documentGeneration === right.view.documentGeneration &&
-    left.view.viewId === right.view.viewId &&
-    left.view.viewGeneration === right.view.viewGeneration &&
-    left.contentVersion === right.contentVersion &&
-    left.editor === right.editor &&
-    left.documentLength === right.documentLength &&
-    left.position === right.position &&
-    left.selection.anchor === right.selection.anchor &&
-    left.selection.head === right.selection.head
-  )
 }
 
 const validLabel = (value: unknown): value is string =>

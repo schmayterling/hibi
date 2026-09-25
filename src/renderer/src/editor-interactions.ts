@@ -1,13 +1,10 @@
-import type {
-  EditorContextAction,
-  EditorHover,
-  EditorInteractionRequest,
-} from '../../shared/editor-interactions'
 import {
-  contextActionBroker,
-  hoverBroker,
+  type EditorContextAction,
+  type EditorHover,
+  type EditorInteractionRequest,
   sameInteraction,
-} from './editor-interaction-broker'
+} from '../../shared/editor-interactions'
+import { contextActionBroker, hoverBroker } from './editor-interaction-broker'
 
 type Adapter = {
   element: HTMLElement

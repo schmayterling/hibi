@@ -40,7 +40,9 @@ export async function copyEntry(
     if (!currentSource.isDirectory() || !sameInode(currentSource, original))
       throw new Error('The source folder changed. Review it before copying.')
     const sourceHandle =
-      process.platform === 'win32' ? null : await open(source, noFollowDirectory)
+      process.platform === 'win32'
+        ? null
+        : await open(source, noFollowDirectory)
     try {
       const sourceInode = sourceHandle
         ? await sourceHandle.stat({ bigint: true })
@@ -67,7 +69,9 @@ export async function copyEntry(
           ])
           if (from.isSymbolicLink()) throw new Error(symbolicLinkCopyError)
           if (!from.isDirectory() || !sameInode(from, sourceInode))
-            throw new Error('The source folder changed. Review it before copying.')
+            throw new Error(
+              'The source folder changed. Review it before copying.',
+            )
           if (!to.isDirectory() || !sameInode(to, reserved))
             throw new Error(
               'The destination folder changed. Review it before copying.',
@@ -121,7 +125,9 @@ export async function moveEntry(
     try {
       const reserved = await reservation.stat({ bigint: true })
       if (!(await beforeRemove()))
-        throw new Error('The workspace folder changed. Review it before moving.')
+        throw new Error(
+          'The workspace folder changed. Review it before moving.',
+        )
       const current = await lstat(destination, { bigint: true })
       if (!current.isDirectory() || !sameInode(current, reserved))
         throw new Error(

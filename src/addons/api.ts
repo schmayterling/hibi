@@ -622,6 +622,10 @@ export type AddonContext = {
       options?: { body: string },
     ) => void
   }
+  documents: DocumentsApi
+  host: {
+    selectedText: import('../shared/selected-text').SelectedTextHostApi
+  }
   commands: {
     /** Invoke this addon's registered command through the same guarded dispatcher as the palette. */
     execute: (id: string) => Promise<void>

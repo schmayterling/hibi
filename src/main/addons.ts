@@ -11,6 +11,7 @@ import {
 import { addonDefaultEnabled } from '../shared/addon-defaults'
 import { parseDependencies } from '../shared/dependencies'
 import { validDocumentExtensions } from '../shared/document-types'
+import type { AddonId, AddonOwner } from '../shared/foundation-contracts'
 import { exportedAppearance } from './appearance'
 import {
   clearDocument,
@@ -198,6 +199,13 @@ export function getAddonActivationGeneration(id: string): number | null {
   return getAddonStates().some((state) => state.id === id && state.enabled)
     ? (generations.get(id) ?? 0)
     : null
+}
+
+export function currentAddonOwner(id: string): AddonOwner | null {
+  const activationGeneration = getAddonActivationGeneration(id)
+  return activationGeneration === null
+    ? null
+    : { addonId: id as AddonId, activationGeneration }
 }
 
 export function isAddonActivationCurrent(

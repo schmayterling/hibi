@@ -51,6 +51,8 @@ import { disposeAll } from './dispose'
 import { documentEdits } from './document-edits'
 import { documentFormats, editorDocument } from './document-formats'
 import { documentProjections } from './document-projections'
+import { documentRuntime } from './document-runtime'
+import { createDocumentTargetEditScope } from './document-target-edits'
 import { editorAnnotations } from './editor-annotations'
 import { onEditorInput, onEditorKeyEvent } from './editor-events'
 import { explorerDecorations } from './explorer-decorations'
@@ -88,6 +90,8 @@ type Environment = Omit<
   | 'commands'
   | 'native'
   | 'editor'
+  | 'documents'
+  | 'host'
   | 'statusBar'
   | 'app'
   | 'styles'
@@ -481,6 +485,11 @@ export function useAddons(
       )
       cleanups.add(shortcutScope.dispose)
       const editScope = documentEdits.scope(() => latest.current.isBusy())
+      const targetEditScope = createDocumentTargetEditScope(
+        documentRuntime,
+        (request) => editScope.apply(request),
+        () => latest.current.isBusy(),
+      )
       const annotationScope = editorAnnotations.scope(id)
       const batch = registrationBatch(addon.manifest.capabilities !== undefined)
       const registerView: ViewApi['register'] = (view) => {
@@ -605,6 +614,7 @@ export function useAddons(
           .get(id)
           ?.reject(new Error('The addon stopped before its command could run.'))
         editScope.dispose()
+        targetEditScope.dispose()
         annotationScope.dispose()
         void window.hibi.cancelAnalysis(id).catch(() => {})
         running.delete(id)
@@ -665,6 +675,23 @@ export function useAddons(
         const start = () =>
           addon.start({
             storage: storageScope.api,
+            documents: {
+              listOpen: targetEditScope.listOpen,
+              readSource: targetEditScope.readSource,
+              applyEdits: targetEditScope.applyEdits,
+            },
+            host: {
+              selectedText: {
+                select: () =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.selectUserText(id),
+                read: (handle) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.readSelectedText(id, handle),
+              },
+            },
             dependencies: {
               list: () =>
                 disposed

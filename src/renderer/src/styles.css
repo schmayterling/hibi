@@ -231,7 +231,7 @@ button:disabled {
   border-top-left-radius: var(--window-corner-radius);
 }
 .sidebar-toolbar {
-  --window-controls-width: 96px;
+  --window-controls-width: 80px;
   --sidebar-action-size: 28px;
   display: flex;
   align-items: center;

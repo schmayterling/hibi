@@ -3,33 +3,105 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, startupDiagnostics } from './electron.mjs'
+import { electron, startupDiagnostics, stopElectronTree } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
+
+async function closeProbe(app, watchdog, fired, name, preserveFailure = false) {
+  clearTimeout(watchdog)
+  const watchdogFired = fired()
+  const child = app.process()
+  const started = performance.now()
+  let error
+  try {
+    await app.close()
+  } catch (failure) {
+    error = failure
+  }
+  if (watchdogFired || error)
+    console.error(
+      'source format cleanup:',
+      JSON.stringify({
+        name,
+        watchdogFired,
+        closeError: error ? String(error).slice(0, 200) : null,
+        closeMs: Math.round(performance.now() - started),
+        pid: child.pid,
+        exitCode: child.exitCode,
+        signalCode: child.signalCode,
+      }),
+    )
+  if (preserveFailure) return
+  if (error) throw error
+  if (watchdogFired) throw new Error(`${name} Electron watchdog expired.`)
+}
 
 test('lazy rich startup applies view attributes after mounting and accepts native input', {
   timeout: 40000,
 }, async (t) => {
+  const started = performance.now()
+  const attempts = []
+  let activeAttempt = -1
+  let phase = 'setup'
+  let attemptStarted = started
+  const mark = (name) => {
+    phase = name
+    if (activeAttempt >= 0)
+      attempts[activeAttempt][name] = Math.round(
+        performance.now() - attemptStarted,
+      )
+  }
+  const report = (reason) =>
+    console.error(
+      'source format startup phases:',
+      JSON.stringify({
+        reason,
+        totalMs: Math.round(performance.now() - started),
+        activeAttempt,
+        phase,
+        attempts,
+      }),
+    )
+  const slow = setTimeout(() => report('30s'), 30000)
+  slow.unref()
   const folder = await mkdtemp(join(tmpdir(), 'hibi-rich-startup-'))
-  t.after(() => rm(folder, { recursive: true, force: true }))
+  t.after(async () => {
+    clearTimeout(slow)
+    report('end')
+    await rm(folder, { recursive: true, force: true })
+  })
   for (let attempt = 0; attempt < 4; attempt++) {
+    activeAttempt = attempt
+    attemptStarted = performance.now()
+    attempts.push({ attempt, launch: 0 })
+    phase = 'launch'
     const app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${join(folder, String(attempt))}`],
     })
-    const watchdog = setTimeout(() => app.process().kill('SIGKILL'), 8000)
+    mark('launched')
+    let watchdogFired = false
+    const watchdog = setTimeout(() => {
+      watchdogFired = true
+      stopElectronTree(app.process())
+    }, 8000)
+    let failed = false
     try {
       const page = await app.firstWindow()
+      mark('firstWindow')
       page.setDefaultTimeout(5000)
       const editor = page.getByRole('textbox', {
         name: 'Document editor',
         exact: true,
       })
       await editor.waitFor({ timeout: 5000 })
+      mark('editorReady')
       await page.waitForFunction(
         () =>
           document.querySelector('.tiptap')?.getAttribute('spellcheck') ===
           'true',
       )
+      mark('spellcheckReady')
       await editor.fill(`ready ${attempt}`)
+      mark('filled')
       assert.equal(
         (await page.evaluate(() => window.hibi.getDocument())).markdown,
         `ready ${attempt}`,
@@ -48,14 +120,31 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
         ),
         false,
       )
+      mark('verified')
+    } catch (error) {
+      failed = true
+      attempts[attempt].error = String(error).slice(0, 180)
+      report('failure')
+      throw error
     } finally {
-      await app
-        .evaluate(({ dialog }) => {
-          dialog.showMessageBox = async () => ({ response: 1 })
-        })
-        .catch(() => {})
-      await app.close().catch(() => {})
+      mark('cleanupStart')
       clearTimeout(watchdog)
+      if (failed || watchdogFired) stopElectronTree(app.process())
+      else
+        await app
+          .evaluate(({ dialog }) => {
+            dialog.showMessageBox = async () => ({ response: 1 })
+          })
+          .catch(() => {})
+      if (!failed && !watchdogFired) mark('dialogReady')
+      await closeProbe(
+        app,
+        watchdog,
+        () => watchdogFired,
+        `rich ${attempt}`,
+        failed,
+      )
+      mark('closed')
     }
   }
 })
@@ -111,16 +200,24 @@ test('standalone source skips rich attachment and hidden previews while preservi
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
-  const watchdog = setTimeout(() => app.process().kill('SIGKILL'), 55000)
+  let watchdogFired = false
+  const watchdog = setTimeout(() => {
+    watchdogFired = true
+    stopElectronTree(app.process())
+  }, 55000)
   t.after(async () => {
-    await app
-      .evaluate(({ dialog }) => {
-        dialog.showMessageBox = async () => ({ response: 1 })
-      })
-      .catch(() => {})
-    await app.close().catch(() => {})
     clearTimeout(watchdog)
-    await rm(profile, { recursive: true, force: true })
+    if (!watchdogFired)
+      await app
+        .evaluate(({ dialog }) => {
+          dialog.showMessageBox = async () => ({ response: 1 })
+        })
+        .catch(() => {})
+    try {
+      await closeProbe(app, watchdog, () => watchdogFired, 'standalone source')
+    } finally {
+      await rm(profile, { recursive: true, force: true })
+    }
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)

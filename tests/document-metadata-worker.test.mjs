@@ -3,7 +3,7 @@ import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, stopElectronTree } from './electron.mjs'
 
 test('native module worker loads metadata lazily, shares find, and releases parser owners', {
   timeout: 30000,
@@ -20,7 +20,7 @@ test('native module worker loads metadata lazily, shares find, and releases pars
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
-  const watchdog = setTimeout(() => app.process().kill('SIGKILL'), 25000)
+  const watchdog = setTimeout(() => stopElectronTree(app.process()), 25000)
   t.after(async () => {
     await app
       .evaluate(({ dialog }) => {

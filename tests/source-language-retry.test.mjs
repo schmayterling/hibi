@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, stopElectronTree } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -60,7 +60,7 @@ test('failed source languages retry in the same view and preserve native input, 
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
-  const watchdog = setTimeout(() => app.process().kill('SIGKILL'), 27000)
+  const watchdog = setTimeout(() => stopElectronTree(app.process()), 27000)
   t.after(async () => {
     await app
       .evaluate(({ dialog }) => {
@@ -124,11 +124,21 @@ test('failed source languages retry in the same view and preserve native input, 
     'ab!c\r\n',
   )
   await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    'abc\r\n',
+  )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     'abc\r\n',
   )
   await pressShortcut(app, `${mod}+Shift+z`)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    'ab!c\r\n',
+  )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     'ab!c\r\n',

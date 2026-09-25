@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
+import { once } from 'node:events'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
-import { electron } from './electron.mjs'
+import { electron, stopElectronTree } from './electron.mjs'
 
 test('pinned Electron exposes exact utility identity and passive JS observation preserves fatal policy', {
   timeout: 30000,
@@ -100,8 +101,10 @@ test('pinned Electron exposes exact utility identity and passive JS observation 
   assert.ok(crash.report.includes(`"reason":"${crash.reason}"`))
   assert.ok(crash.report.includes(`"exitCode":${crash.exitCode}`))
   assert.ok(crash.report.includes('unavailable-native'))
-  app.process().kill('SIGKILL')
-  await new Promise((resolve) => app.process().once('exit', resolve))
+  const crashed = app.process()
+  const closed = once(crashed, 'close')
+  stopElectronTree(crashed)
+  await closed
   const restarted = await electron.launch({ args: [root] })
   try {
     await restarted.firstWindow()
@@ -111,6 +114,7 @@ test('pinned Electron exposes exact utility identity and passive JS observation 
     assert.match(previous.text, /PREVIOUS_RUN_UNCONFIRMED/)
     assert.doesNotMatch(previous.text, /PRIVATE_|hibi-diagnostic-/)
   } finally {
-    await restarted.close()
+    // This profile cannot be removed until Playwright has closed its transport.
+    await restarted.close({ waitForTransport: true })
   }
 })

@@ -78,6 +78,22 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
   })
   const page = await app.firstWindow()
   await page.locator('.tiptap[contenteditable="true"]').waitFor()
+  const assetHeaders = await page.evaluate(async () => {
+    const addon = (await window.hibi.getInstalledAddons()).find(
+      (entry) => entry.manifest.id === 'deferred-command',
+    )
+    const response = await fetch(addon.url)
+    return {
+      status: response.status,
+      type: response.headers.get('Content-Type'),
+      origin: response.headers.get('Access-Control-Allow-Origin'),
+      noSniff: response.headers.get('X-Content-Type-Options'),
+    }
+  })
+  assert.equal(assetHeaders.status, 200)
+  assert.match(assetHeaders.type, /^text\/javascript/)
+  assert.equal(assetHeaders.origin, 'app://hibi')
+  assert.equal(assetHeaders.noSniff, 'nosniff')
   page.setDefaultTimeout(8000)
   assert.deepEqual(await page.evaluate(() => window.richAttachments), [
     'alpha',
@@ -110,19 +126,84 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
   await clickMenu(app, 'Command palette')
   const search = page.getByRole('combobox', { name: /search commands/i })
   await search.fill('Deferred hello')
-  await page.getByRole('option', { name: /Deferred hello/i }).press('Enter')
-  await page.waitForFunction(() => window.helloRuns === 1)
+  await page.evaluate(() => {
+    const original = window.requestAnimationFrame
+    const pending = []
+    let suspended = true
+    window.requestAnimationFrame = (callback) => {
+      if (!suspended) return original(callback)
+      pending.push(callback)
+      return pending.length
+    }
+    window.resumePaletteTestFrames = () => {
+      suspended = false
+      window.requestAnimationFrame = original
+      for (const callback of pending) original(callback)
+    }
+  })
+  try {
+    await page.getByRole('option', { name: /Deferred hello/i }).press('Enter')
+    await page.waitForFunction(() => window.helloRuns === 1, undefined, {
+      polling: 100,
+    })
+  } finally {
+    await page.evaluate(() => {
+      window.resumePaletteTestFrames()
+      delete window.resumePaletteTestFrames
+    })
+  }
   assert.deepEqual(await page.evaluate(() => window.commandSdkKeys), [
     'documents',
   ])
   assert.doesNotMatch(loaded(), /src\/addons\/sdk\.ts|@codemirror\//)
+  await page.evaluate(() => {
+    const load = document.fonts.load.bind(document.fonts)
+    const pending = []
+    document.fonts.load = (font, text) =>
+      font.includes('Geist Mono')
+        ? new Promise((resolve, reject) => {
+            pending.push(() => load(font, text).then(resolve, reject))
+            window.sourceFontsHeld = pending.length
+          })
+        : load(font, text)
+    window.releaseSourceFonts = () => {
+      document.fonts.load = load
+      for (const release of pending) release()
+    }
+  })
   await page
     .getByRole('button', { name: 'Source view', exact: true })
     .press('Enter')
+  // Source input can be editable before the font-gated pane switch finishes.
   await page.waitForFunction(
-    () => document.querySelector('.cm-content')?.isContentEditable,
+    () =>
+      document.querySelector('.cm-content')?.isContentEditable &&
+      window.sourceFontsHeld > 0,
+    undefined,
+    { polling: 100 },
   )
   assert.equal(await page.evaluate(() => window.sourceCreates), 1)
+  assert.match(
+    await page.locator('.editor-panes').getAttribute('class'),
+    /mode-normal/,
+  )
+  assert.equal(
+    await page.locator('.source-pane').evaluate((pane) => pane.inert),
+    true,
+  )
+  assert.equal(await page.evaluate(() => window.richDetachments), undefined)
+  await page.evaluate(() => window.releaseSourceFonts())
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.editor-panes.mode-markdown') &&
+      window.richDetachments?.join(',') === 'alpha,zeta',
+    undefined,
+    { polling: 100 },
+  )
+  assert.equal(
+    await page.locator('.source-pane').evaluate((pane) => pane.inert),
+    false,
+  )
   assert.deepEqual(await page.evaluate(() => window.richDetachments), [
     'alpha',
     'zeta',

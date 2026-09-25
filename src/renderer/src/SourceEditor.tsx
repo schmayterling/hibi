@@ -100,6 +100,7 @@ export function SourceEditor({
   sourceFormat,
   supportsMedia,
   label,
+  waitForFont,
   onReady,
   disabled,
   findActive,
@@ -124,6 +125,7 @@ export function SourceEditor({
   sourceFormat?: DocumentFormat['formatting']
   supportsMedia: boolean
   label: string
+  waitForFont: boolean
   onReady: (status: 'loading' | 'ready' | 'failed') => void
   disabled: boolean
   findActive: boolean
@@ -172,16 +174,14 @@ export function SourceEditor({
   ])
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
-  const [installedExtensions, setInstalledExtensions] = useState<
-    readonly SourceExtension[] | null
-  >(null)
+  const [installedExtensions, setInstalledExtensions] = useState<{
+    bridge: ReturnType<typeof createSourceSession>
+    extensions: readonly SourceExtension[]
+  } | null>(null)
   const [extensionError, setExtensionError] = useState('')
   const [languageError, setLanguageError] = useState('')
   const [languageReady, setLanguageReady] = useState(!codeLanguage)
   const [inputError, setInputError] = useState('')
-  const inputReady = installedExtensions === sourceExtensions && languageReady
-  const editContext = useRef({ document, editTarget, disabled, inputReady })
-  editContext.current = { document, editTarget, disabled, inputReady }
   const [bridgeRetry, retryBridge] = useState(0)
   const session = documentRuntime.session()!
   // biome-ignore lint/correctness/useExhaustiveDependencies: retry refreshes a bridge whose snapshot went stale before attachment.
@@ -189,6 +189,15 @@ export function SourceEditor({
     () => createSourceSession(session),
     [session, bridgeRetry],
   )
+  const [fontReadyBridge, setFontReadyBridge] = useState<ReturnType<
+    typeof createSourceSession
+  > | null>(null)
+  const inputReady =
+    installedExtensions?.bridge === bridge &&
+    installedExtensions.extensions === sourceExtensions &&
+    languageReady
+  const editContext = useRef({ document, editTarget, disabled, inputReady })
+  editContext.current = { document, editTarget, disabled, inputReady }
   const exactChanges = useRef<readonly RawEdit[] | undefined>(undefined)
   const editable = useRef(new Compartment())
   const numbers = useRef(new Compartment())
@@ -806,7 +815,18 @@ export function SourceEditor({
       if (!disposed) editor.requestMeasure()
     }
     measure()
-    void window.document.fonts.load('13px "Geist Mono"').then(measure, measure)
+    const finishFont = () => {
+      if (disposed) return
+      editor.requestMeasure({
+        read: () => null,
+        write: () => {
+          if (!disposed) setFontReadyBridge(bridge)
+        },
+      })
+    }
+    void window.document.fonts
+      .load('13px "Geist Mono"')
+      .then(finishFont, finishFont)
     return () => {
       clearReferences('unavailable', false)
       sourceFind.current?.dispose()
@@ -838,16 +858,17 @@ export function SourceEditor({
   ])
 
   useEffect(() => {
-    let canceled = false
     const editor = view.current
     setExtensionError('')
+    if (!editor) return
+    let canceled = false
     void Promise.all(
       sourceExtensions.map(async (extension) => extension.create()),
     )
       .then((extensions) => {
-        if (!canceled && editor) {
+        if (!canceled) {
           editor.dispatch({ effects: addons.current.reconfigure(extensions) })
-          setInstalledExtensions(sourceExtensions)
+          setInstalledExtensions({ bridge, extensions: sourceExtensions })
         }
       })
       .catch((error: unknown) => {
@@ -858,18 +879,7 @@ export function SourceEditor({
     return () => {
       canceled = true
     }
-  }, [sourceExtensions])
-  useEffect(() => {
-    // CodeMirror measures on an animation frame; editing cannot wait for paint.
-    ready.current(
-      extensionError || languageError
-        ? 'failed'
-        : inputReady
-          ? 'ready'
-          : 'loading',
-    )
-  }, [inputReady, extensionError, languageError])
-
+  }, [bridge, sourceExtensions])
   useEffect(() => {
     view.current?.dispatch({
       effects: editable.current.reconfigure([
@@ -879,6 +889,25 @@ export function SourceEditor({
     })
   }, [disabled, inputReady])
 
+  useEffect(() => {
+    // Publish readiness after CodeMirror configures input, before its next frame.
+    ready.current(
+      extensionError || languageError
+        ? 'failed'
+        : inputReady && (!waitForFont || fontReadyBridge === bridge)
+          ? 'ready'
+          : 'loading',
+    )
+  }, [
+    bridge,
+    inputReady,
+    waitForFont,
+    fontReadyBridge,
+    extensionError,
+    languageError,
+  ])
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new bridge replaces the editor view.
   useEffect(() => {
     view.current?.dispatch({
       effects: numbers.current.reconfigure(
@@ -899,8 +928,9 @@ export function SourceEditor({
           : [],
       ),
     })
-  }, [showLineNumbers])
+  }, [bridge, showLineNumbers])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new bridge replaces the editor view.
   useEffect(() => {
     const editor = view.current
     if (!editor) return
@@ -928,7 +958,7 @@ export function SourceEditor({
       stopFind()
       find.current.report({ current: 0, total: 0 })
     }
-  }, [findActive, findQuery, requestFind])
+  }, [bridge, findActive, findQuery, requestFind])
 
   useEffect(() => {
     if (handledFindMove.current === findMove.id) return

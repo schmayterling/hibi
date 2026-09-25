@@ -160,6 +160,19 @@ test('development watches renderer, preload, addons, and documentation generatio
         .trim() === 'updated',
   )
   t.diagnostic('renderer stylesheet updated')
+  let viteReady = false
+  const viteEvents = []
+  const onViteSocket = (socket) => {
+    if (!socket.url().includes('?token=')) return
+    viteEvents.push(`created ${socket.url().split('?')[0]}`)
+    socket.on('framereceived', ({ payload }) => {
+      if (String(payload).includes('"type":"connected"')) {
+        viteReady = true
+        viteEvents.push('connected')
+      }
+    })
+  }
+  page.on('websocket', onViteSocket)
   await replace(
     'src/addons/typing-speed/index.ts',
     'This estimates how many words you type per minute.',
@@ -176,12 +189,27 @@ test('development watches renderer, preload, addons, and documentation generatio
     'unsaved watch draft',
   )
   t.diagnostic('addon runtime updated and draft retained')
+  // The addon change reloads the page; a preload rebuild must reach its new Vite socket.
+  await until(
+    () => viteReady,
+    'vite websocket reconnects after addon reload',
+  ).catch((error) => {
+    t.diagnostic(`vite websocket events: ${viteEvents.join(', ') || 'none'}`)
+    throw error
+  })
+  page.off('websocket', onViteSocket)
   const preload = join(root, 'src/preload/index.ts')
   await writeFile(
     preload,
     `${await readFile(preload, 'utf8')}\ncontextBridge.exposeInMainWorld('devWatchProbe', 'updated')\n`,
   )
-  await page.waitForFunction(() => window.devWatchProbe === 'updated')
+  await page
+    .waitForFunction(() => window.devWatchProbe === 'updated')
+    .catch((error) => {
+      assert.fail(
+        `preload did not update: ${error.message}\n${output.slice(-2500)}`,
+      )
+    })
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     'unsaved watch draft',

@@ -51,6 +51,7 @@ process.parentPort.on('message', ({ data }: { data: CompileJob }) => {
           : data.source,
       ),
     )
+    process.parentPort.postMessage({ phase: 'compiling' })
     const result = compiler.compile({ mainFilePath: entry, resetRead: true })
     const rawDiagnostics = result.takeDiagnostics()?.shortDiagnostics ?? []
     const missing = rawDiagnostics.flatMap((error) => {

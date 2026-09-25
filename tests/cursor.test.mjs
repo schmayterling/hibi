@@ -113,28 +113,48 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
       ),
   )
   const before = (await cursor.boundingBox()).x
+  await page.evaluate(() => {
+    const caret = document.querySelector('.editor-cursor')
+    window.cursorMotion = null
+    caret.addEventListener(
+      'transitionrun',
+      (event) => {
+        if (event.propertyName !== 'transform') return
+        const transition = caret
+          .getAnimations()
+          .find((animation) => animation.transitionProperty === 'transform')
+        if (!transition) return
+        transition.pause()
+        transition.currentTime =
+          Number(transition.effect.getTiming().duration) / 2
+        const middle = caret.getBoundingClientRect().x
+        transition.finish()
+        window.cursorMotion = {
+          middle,
+          after: caret.getBoundingClientRect().x,
+        }
+      },
+      { once: true },
+    )
+  })
   await rich.press('ArrowLeft')
-  const motion = await page.evaluate(async () => {
-    const points = []
-    const start = performance.now()
-    while (performance.now() - start < 160) {
-      await new Promise(requestAnimationFrame)
-      points.push(
-        document.querySelector('.editor-cursor').getBoundingClientRect().x,
-      )
-    }
+  await page.waitForFunction(() => window.cursorMotion, null, {
+    polling: 100,
+    timeout: 2000,
+  })
+  const motion = await page.evaluate(() => {
     const style = getComputedStyle(
       document.querySelector('.editor-cursor'),
       '::after',
     )
     return {
-      points,
+      ...window.cursorMotion,
       duration: style.animationDuration,
       name: style.animationName,
       border: style.borderTopWidth,
     }
   })
-  assert.ok(motion.points.some((x) => x < before && x > motion.points.at(-1)))
+  assert.ok(motion.middle < before && motion.middle > motion.after)
   assert.equal(motion.duration, '0.6s')
   assert.equal(motion.name, 'cursor-smooth')
   assert.notEqual(motion.border, '0px')

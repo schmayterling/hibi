@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  stopElectronTree,
+  waitForDocumentEditor,
+} from './electron.mjs'
 
 const cases = [
   { name: 'empty', source: '' },
@@ -224,7 +228,7 @@ test('paginated worker semantics match native schema text, headings and counts',
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
   })
-  const watchdog = setTimeout(() => app.process().kill('SIGKILL'), 50000)
+  const watchdog = setTimeout(() => stopElectronTree(app.process()), 50000)
   t.after(async () => {
     await app
       .evaluate(({ dialog }) => {

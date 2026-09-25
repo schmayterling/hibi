@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 test('spell checking toggles live, persists, and preserves text in both views', {
@@ -23,7 +23,7 @@ test('spell checking toggles live, persists, and preserves text in both views', 
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
   const rich = page.getByRole('textbox', { name: /document editor/i })
-  await rich.waitFor()
+  await waitForDocumentEditor(app, page)
   assert.equal(await rich.getAttribute('spellcheck'), 'true')
   await rich.fill('mispellled text')
   const change = async () => {

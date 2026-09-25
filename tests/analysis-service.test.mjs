@@ -1,11 +1,85 @@
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { validateAnalysisProjection } from '../src/shared/analysis.ts'
-import { electron } from './electron.mjs'
+import { electron, waitForElectronExit } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
+
+test('electron cleanup trusts clean process exit but reports close and crash failures', async () => {
+  const child = () => {
+    const process = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      signalCode: null,
+      drained: 0,
+    })
+    process.stdout = { destroy: () => process.drained++ }
+    process.stderr = { destroy: () => process.drained++ }
+    return process
+  }
+  const clean = child()
+  const closed = waitForElectronExit(clean, new Promise(() => {}))
+  clean.exitCode = 0
+  clean.emit('exit', 0, null)
+  await closed
+  assert.equal(clean.drained, 2)
+
+  const live = child()
+  let done = false
+  const waiting = waitForElectronExit(live, Promise.resolve()).then(() => {
+    done = true
+  })
+  await Promise.resolve()
+  assert.equal(done, false)
+  live.exitCode = 0
+  live.emit('exit', 0, null)
+  await waiting
+
+  const late = child()
+  let rejectClose
+  const lateClose = waitForElectronExit(
+    late,
+    new Promise((_, reject) => {
+      rejectClose = reject
+    }),
+  )
+  late.exitCode = 0
+  late.emit('exit', 0, null)
+  rejectClose(new Error('close failed after exit'))
+  await assert.rejects(lateClose, /close failed after exit/)
+
+  const early = child()
+  await assert.rejects(
+    waitForElectronExit(early, Promise.reject(new Error('close failed'))),
+    /close failed/,
+  )
+  assert.equal(early.listenerCount('exit'), 0)
+  const crashed = child()
+  const failed = waitForElectronExit(crashed, new Promise(() => {}))
+  crashed.signalCode = 'SIGKILL'
+  crashed.emit('exit', null, 'SIGKILL')
+  await assert.rejects(failed, /signal SIGKILL/)
+  assert.equal(crashed.drained, 2)
+})
+
+test('electron cleanup drains transport pipes inherited by a surviving child', {
+  timeout: 5000,
+}, async () => {
+  const parent = `const {spawn}=require('node:child_process');const child=spawn(process.execPath,['-e','setTimeout(()=>{},2000)'],{stdio:['ignore',1,2,3,4],detached:true});child.unref();`
+  const child = spawn(process.execPath, ['-e', parent], {
+    stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'],
+  })
+  const exited = new Promise((resolve) => child.once('exit', resolve))
+  const closed = new Promise((resolve) => child.once('close', resolve))
+  const shutdown = waitForElectronExit(child, new Promise(() => {}))
+  await exited
+  await shutdown
+  assert.ok(child.stdio.slice(1).every((stream) => stream.destroyed))
+  await closed
+})
 
 test('analysis grants contain only exact ranges from the active source', () => {
   const document = {
@@ -208,13 +282,18 @@ test('analysis is process-isolated, bounded, connection-bound, and revoked on ca
     const c = window.analysisFixtures['probe-addon']
     window.analysisPending = c.analysis.run(c.editor.getTextProjection())
   })
-  await app.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()
-      .find((window) =>
-        window.webContents.getURL().startsWith('hibi-analysis:'),
-      )
-      .webContents.forcefullyCrashRenderer(),
-  )
+  await app.evaluate(({ BrowserWindow }) => {
+    const contents = BrowserWindow.getAllWindows().find((window) =>
+      window.webContents.getURL().startsWith('hibi-analysis:'),
+    ).webContents
+    // Linux's crash handler can outlive Electron and keep Playwright's pipes open.
+    if (process.platform === 'linux') {
+      const pid = contents.getOSProcessId()
+      if (!Number.isInteger(pid) || pid <= 0)
+        throw new Error('Analyzer renderer has no process to stop.')
+      process.kill(pid, 'SIGKILL')
+    } else contents.forcefullyCrashRenderer()
+  })
   assert.equal(
     (await page.evaluate(() => window.analysisPending)).status,
     'failed',

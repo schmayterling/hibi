@@ -11,10 +11,44 @@ test('settings collapse independently and narrow sidebars overlay full-width des
 }, async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'hibi-sidebar-layout-'))
   const workspace = join(directory, 'notes')
+  const profile = join(directory, 'profile')
+  const addon = join(profile, 'installed-addons', 'delayed-source')
   await mkdir(workspace)
   await writeFile(join(workspace, 'first.md'), '# First\n\nA note.')
+  await mkdir(addon, { recursive: true })
+  await writeFile(
+    join(addon, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'delayed-source',
+      name: 'Delayed source',
+      description: 'Source readiness fixture',
+      kind: 'extension',
+      apiVersion: 2,
+      version: '1.0.0',
+      authors: [{ displayName: 'Test' }],
+      capabilities: ['source'],
+      activation: 'source',
+      entry: 'index.js',
+    }),
+  )
+  await writeFile(
+    join(addon, 'index.js'),
+    `export default () => ({ start(context) { context.editor.registerSource({ id: 'delayed-focus', create() { if (window.sourceExtensionReleased) return []; return new Promise(resolve => { window.sourceExtensionWaiters ??= []; window.sourceExtensionWaiters.push(resolve); }); } }); } });`,
+  )
+  await writeFile(
+    join(addon, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['hibi-addon.json', 'index.js'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'delayed-source': true }),
+  )
   const app = await electron.launch({
-    args: [resolve('.'), '--user-data-dir=' + join(directory, 'profile')],
+    args: [resolve('.'), `--user-data-dir=${profile}`],
     colorScheme: 'dark',
   })
   t.after(async () => {
@@ -210,11 +244,39 @@ test('settings collapse independently and narrow sidebars overlay full-width des
     true,
   )
 
-  // Source outlines replace their cached rows after an asynchronous parser read.
-  // Keyboard ownership must survive that refresh too.
+  // Loading source extensions must not steal newer sidebar focus.
   await page.setViewportSize({ width: 1000, height: 760 })
   await page.getByRole('button', { name: /^source view$/i }).click()
+  await page.waitForFunction(() => window.sourceExtensionWaiters?.length > 0)
+  await workspaceToggle.focus()
+  await page.evaluate(() => {
+    for (const resolve of window.sourceExtensionWaiters) resolve([])
+    window.sourceExtensionWaiters = []
+    window.sourceExtensionReleased = true
+  })
   await page.getByRole('textbox', { name: /^markdown editor$/i }).waitFor()
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.editor-panes')?.dataset.sourceReady === 'true',
+  )
+  assert.equal(
+    await workspaceToggle.evaluate(
+      (element) => element === document.activeElement,
+    ),
+    true,
+    'source readiness must preserve newer sidebar focus',
+  )
+  await page.getByRole('button', { name: /^normal$/i }).click()
+  await workspaceToggle.focus()
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+Shift+]' : 'Control+Shift+]',
+  )
+  await page.waitForFunction(() =>
+    document.activeElement?.classList.contains('cm-content'),
+  )
+  // Source outlines replace their cached rows after an asynchronous parser read.
+  // Keyboard ownership must survive that refresh too.
   await page.setViewportSize({ width: 480, height: 760 })
   await workspaceToggle.click()
   const outlineRow = page.getByRole('treeitem', { name: /^first$/i })
@@ -239,9 +301,9 @@ test('settings collapse independently and narrow sidebars overlay full-width des
   )
   await page.keyboard.press('Escape')
 
-  // A newer focus or pointer action while rows are absent cancels restoration,
-  // including when the user explicitly leaves focus on the body.
-  for (const intent of ['focus-and-blur', 'pointer']) {
+  // A newly opened empty drawer focuses rows when they arrive, unless a newer
+  // focus or pointer action cancels restoration.
+  for (const intent of ['none', 'focus-and-blur', 'pointer']) {
     await page.evaluate(() => {
       const pending = new Map()
       let next = 0
@@ -262,11 +324,29 @@ test('settings collapse independently and narrow sidebars overlay full-width des
       }
     })
     await workspaceToggle.click()
-    await page.waitForFunction(() => window.pendingOutlineReads.size > 0)
+    await page.waitForFunction(
+      () =>
+        window.pendingOutlineReads.size > 0 &&
+        !document.querySelector(
+          '.outline-sidebar[data-side="left"] [role="treeitem"]',
+        ),
+    )
+    await workspaceToggle.click()
+    await page.waitForFunction(
+      () =>
+        document.querySelector('.outline-sidebar[data-side="left"]').dataset
+          .open === 'false' && window.pendingOutlineReads.size === 0,
+    )
+    await workspaceToggle.click()
+    await page.waitForFunction(
+      () =>
+        document.querySelector('.outline-sidebar[data-side="left"]').dataset
+          .open === 'true' && window.pendingOutlineReads.size > 0,
+    )
     if (intent === 'focus-and-blur') {
       await workspaceToggle.focus()
       await workspaceToggle.evaluate((element) => element.blur())
-    } else {
+    } else if (intent === 'pointer') {
       await page.evaluate(() => {
         const outside = document.createElement('div')
         outside.id = 'outside-focus-intent'
@@ -282,7 +362,11 @@ test('settings collapse independently and narrow sidebars overlay full-width des
     await page.evaluate(() => window.releaseOutlineReads())
     await outlineRow.waitFor()
     assert.equal(
-      await page.evaluate(() => document.activeElement === document.body),
+      intent === 'none'
+        ? await outlineRow.evaluate(
+            (element) => element === document.activeElement,
+          )
+        : await page.evaluate(() => document.activeElement === document.body),
       true,
       intent,
     )

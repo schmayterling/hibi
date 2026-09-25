@@ -139,9 +139,69 @@ test('file picker and drops attach media safely, stream videos, and move/open wo
   )
   await pressShortcut(app, `${mod}+s`)
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
-  await page.waitForFunction(
-    () => document.querySelector('.app').getAttribute('aria-busy') === 'false',
-  )
+  try {
+    await page.waitForFunction(
+      () =>
+        document.querySelector('.app').getAttribute('aria-busy') === 'false',
+    )
+  } catch (error) {
+    const capture = async (operation) => {
+      let timer
+      try {
+        return await Promise.race([
+          operation,
+          new Promise((resolve) => {
+            timer = setTimeout(() => resolve({ timeout: true }), 1500)
+          }),
+        ])
+      } catch (failure) {
+        return { error: String(failure).slice(0, 200) }
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    const [dom, current, main, frame] = await Promise.all([
+      capture(
+        page.evaluate(() => ({
+          busy: document.querySelector('.app')?.getAttribute('aria-busy'),
+          visibility: document.visibilityState,
+          readyState: document.readyState,
+        })),
+      ),
+      capture(
+        page.evaluate(async () => {
+          const { dirty, revision, name } = await window.hibi.getDocument()
+          return { dirty, revision, name }
+        }),
+      ),
+      capture(
+        app.evaluate(({ BrowserWindow }) => {
+          const contents = BrowserWindow.getAllWindows()[0]?.webContents
+          return {
+            loading: contents?.isLoading(),
+            mainFrameLoading: contents?.isLoadingMainFrame(),
+          }
+        }),
+      ),
+      capture(
+        page.evaluate(
+          () =>
+            new Promise((resolve) => {
+              const timer = setTimeout(() => resolve('timer'), 250)
+              requestAnimationFrame(() => {
+                clearTimeout(timer)
+                resolve('animation-frame')
+              })
+            }),
+        ),
+      ),
+    ])
+    console.error(
+      'media save readiness:',
+      JSON.stringify({ dom, current, main, frame }),
+    )
+    throw error
+  }
   const cdp = await page.context().newCDPSession(page)
   const folderDrop = {
     x: 400,

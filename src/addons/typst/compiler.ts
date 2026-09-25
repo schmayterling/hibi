@@ -37,6 +37,7 @@ let generation = 0
 let queued = 0
 let tail: Promise<unknown> = Promise.resolve()
 let cancel: (() => void) | undefined
+let stopping: Promise<void> | null = null
 const allowed =
   /\.(typ|typc|txt|md|markdown|json|yaml|yml|toml|csv|bib|xml|png|jpe?g|gif|webp|svg|avif|pdf|ttf|otf|ttc|otc|wasm)$/i
 const dependencies = new Map<string, Set<string>>()
@@ -44,6 +45,16 @@ const inFlight = new Map<string, Promise<TypstResult & { pdf?: Uint8Array }>>()
 
 function terminate(worker: UtilityProcess | null) {
   if (!worker) return
+  const exited = new Promise<void>((resolve) =>
+    worker.once('exit', () => resolve()),
+  )
+  const pending = stopping
+    ? Promise.all([stopping, exited]).then(() => {})
+    : exited
+  stopping = pending
+  void pending.then(() => {
+    if (stopping === pending) stopping = null
+  })
   expectDiagnosticStop(worker)
   // A synchronous native compile may never process SIGTERM; terminate only this owned utility process.
   if (worker.pid) {
@@ -59,15 +70,18 @@ export function stopCompiler() {
   generation++
   inFlight.clear()
   cancel?.()
+  const owned = child
   terminate(child)
   child = null
-  networkBlocker?.close()
-  networkBlocker = null
   fingerprint = ''
-  const previous = scratch
+  if (!owned && !stopping) {
+    networkBlocker?.close()
+    networkBlocker = null
+    const previous = scratch
+    if (previous)
+      void rm(previous, { recursive: true, force: true }).catch(() => {})
+  }
   scratch = ''
-  if (previous)
-    void rm(previous, { recursive: true, force: true }).catch(() => {})
 }
 app.on('before-quit', stopCompiler)
 
@@ -126,6 +140,28 @@ export async function compileTypst(
   const run = tail
     .catch(() => {})
     .then(async () => {
+      const pending = stopping
+      if (pending) {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        try {
+          await Promise.race([
+            pending,
+            new Promise<void>((_resolve, reject) => {
+              timer = setTimeout(
+                () =>
+                  reject(
+                    new Error(
+                      'Typst could not stop its previous compiler. Try again.',
+                    ),
+                  ),
+                5000,
+              )
+            }),
+          ])
+        } finally {
+          if (timer) clearTimeout(timer)
+        }
+      }
       if (epoch !== generation) throw new Error('Typst compilation canceled.')
       if (!child) {
         const createdDirectory = await mkdtemp(join(tmpdir(), 'hibi-typst-'))
@@ -216,11 +252,30 @@ export async function compileTypst(
       const worker = child
       return new Promise<TypstResult & { pdf?: Uint8Array }>(
         (resolve, reject) => {
+          let phaseTimer: ReturnType<typeof setTimeout>
+          let finished = false
           const clean = () => {
-            clearTimeout(timer)
+            if (finished) return
+            finished = true
+            clearTimeout(phaseTimer)
+            clearTimeout(totalTimer)
             worker.removeListener('message', message)
             worker.removeListener('exit', exited)
             cancel = undefined
+          }
+          const timeout = (error: Error) => {
+            if (finished) return
+            reportOwnedFailure('COMPILER_TIMEOUT', 'typst')
+            clean()
+            terminate(worker)
+            child = null
+            fingerprint = ''
+            scratch = ''
+            reject(error)
+          }
+          const arm = (delay: number, error: Error) => {
+            clearTimeout(phaseTimer)
+            phaseTimer = setTimeout(() => timeout(error), delay)
           }
           const exited = () => {
             clean()
@@ -229,8 +284,20 @@ export async function compileTypst(
             reject(new Error('Typst stopped while compiling. Try again.'))
           }
           const message = async (
-            result: TypstResult & { pdf?: Uint8Array; missing?: string[] },
+            result:
+              | (TypstResult & { pdf?: Uint8Array; missing?: string[] })
+              | { phase: 'compiling' },
           ) => {
+            if ('phase' in result) {
+              arm(
+                10000,
+                new Error(
+                  'Typst compilation took longer than 10 seconds. Simplify the document and try again.',
+                ),
+              )
+              return
+            }
+            clearTimeout(phaseTimer)
             const missing =
               result.missing?.filter((path) => !requested.has(path)) ?? []
             if (missing.length && passes++ < 64) {
@@ -238,6 +305,10 @@ export async function compileTypst(
                 for (const path of missing) requested.add(path)
                 snapshot = await project(context, epoch, documentId, requested)
                 if (epoch !== generation || child !== worker) return
+                arm(
+                  20000,
+                  new Error('Typst took too long to start. Try again.'),
+                )
                 worker.postMessage({
                   sandbox: join(scratch, 'project'),
                   entry: snapshot.entry,
@@ -267,20 +338,16 @@ export async function compileTypst(
             clean()
             reject(new Error('Typst compilation canceled.'))
           }
-          const timer = setTimeout(() => {
-            reportOwnedFailure('COMPILER_TIMEOUT', 'typst')
-            clean()
-            terminate(worker)
-            child = null
-            fingerprint = ''
-            reject(
-              new Error(
-                'Typst compilation took longer than 10 seconds. Simplify the document and try again.',
+          const totalTimer = setTimeout(
+            () =>
+              timeout(
+                new Error('Typst project took too long to compile. Try again.'),
               ),
-            )
-          }, 10000)
+            30000,
+          )
           worker.once('exit', exited)
           worker.on('message', message)
+          arm(20000, new Error('Typst took too long to start. Try again.'))
           worker.postMessage({
             sandbox: join(scratch, 'project'),
             entry: snapshot.entry,

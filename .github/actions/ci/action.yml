@@ -21,13 +21,17 @@ runs:
       with:
         node-version-file: .nvmrc
         cache: ${{ inputs.clean != 'true' && 'npm' || '' }}
+    - id: electron
+      shell: bash
+      run: node -e "console.log('version=' + require('./package.json').devDependencies.electron)" >> "$GITHUB_OUTPUT"
     - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       if: inputs.clean != 'true'
       with:
         path: |
           .cache/electron
           .cache/electron-builder
-        key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package-lock.json', '.nvmrc') }}
+        key: electron-${{ runner.os }}-${{ runner.arch }}-${{ steps.electron.outputs.version }}
+        restore-keys: electron-${{ runner.os }}-${{ runner.arch }}-
     - id: image
       shell: bash
       run: echo "version=${ImageVersion:-local}" >> "$GITHUB_OUTPUT"
@@ -43,6 +47,8 @@ runs:
           checks-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.shard }}-${{ hashFiles('package-lock.json', '.nvmrc', 'scripts/ci.mjs') }}-${{ steps.image.outputs.version }}-
     - run: npm ci
       shell: bash
+      env:
+        electron_config_cache: ${{ github.workspace }}/.cache/electron
     - id: check
       shell: bash
       env:

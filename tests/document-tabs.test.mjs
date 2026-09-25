@@ -23,10 +23,12 @@ test('an inactive journal edit survives a pending disk refresh', {
   })
   t.after(async () => {
     await writeFile(released, '')
-    await app.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async () => ({ response: 1 })
-      globalThis.reloadGate?.restore()
-    }).catch(() => {})
+    await app
+      .evaluate(({ dialog }) => {
+        dialog.showMessageBox = async () => ({ response: 1 })
+        globalThis.reloadGate?.restore()
+      })
+      .catch(() => {})
     await app.close()
     await rm(root, { recursive: true, force: true })
   })
@@ -43,44 +45,47 @@ test('an inactive journal edit survives a pending disk refresh', {
   }
   const first = await open(a)
   const second = await open(b)
-  await app.evaluate(async (_, { file, entered, released, root }) => {
-    const { open, stat } = process.getBuiltinModule('node:fs/promises')
-    const fs = process.getBuiltinModule('node:fs')
-    const target = await stat(file)
-    const handle = await open(file, 'r')
-    const prototype = Object.getPrototypeOf(handle)
-    await handle.close()
-    const originalStat = prototype.stat,
-      originalRead = prototype.read,
-      handles = new WeakSet()
-    let blocked = true
-    prototype.stat = async function (...args) {
-      const info = await originalStat.apply(this, args)
-      if (info.dev === target.dev && info.ino === target.ino)
-        handles.add(this)
-      return info
-    }
-    prototype.read = async function (...args) {
-      if (blocked && handles.has(this)) {
-        blocked = false
-        await new Promise((resolve) => {
-          const watcher = fs.watch(root, () => {
-            if (!fs.existsSync(released)) return
-            watcher.close()
-            resolve()
-          })
-          fs.writeFileSync(entered, '')
-        })
+  await app.evaluate(
+    async (_, { file, entered, released, root }) => {
+      const { open, stat } = process.getBuiltinModule('node:fs/promises')
+      const fs = process.getBuiltinModule('node:fs')
+      const target = await stat(file)
+      const handle = await open(file, 'r')
+      const prototype = Object.getPrototypeOf(handle)
+      await handle.close()
+      const originalStat = prototype.stat,
+        originalRead = prototype.read,
+        handles = new WeakSet()
+      let blocked = true
+      prototype.stat = async function (...args) {
+        const info = await originalStat.apply(this, args)
+        if (info.dev === target.dev && info.ino === target.ino)
+          handles.add(this)
+        return info
       }
-      return originalRead.apply(this, args)
-    }
-    globalThis.reloadGate = {
-      restore: () => {
-        prototype.stat = originalStat
-        prototype.read = originalRead
-      },
-    }
-  }, { file: a, entered, released, root })
+      prototype.read = async function (...args) {
+        if (blocked && handles.has(this)) {
+          blocked = false
+          await new Promise((resolve) => {
+            const watcher = fs.watch(root, () => {
+              if (!fs.existsSync(released)) return
+              watcher.close()
+              resolve()
+            })
+            fs.writeFileSync(entered, '')
+          })
+        }
+        return originalRead.apply(this, args)
+      }
+      globalThis.reloadGate = {
+        restore: () => {
+          prototype.stat = originalStat
+          prototype.read = originalRead
+        },
+      }
+    },
+    { file: a, entered, released, root },
+  )
   const readEntered = new Promise((resolve) => {
     const watcher = watch(root, (_event, name) => {
       if (name !== 'read-entered') return
@@ -88,31 +93,42 @@ test('an inactive journal edit survives a pending disk refresh', {
       resolve()
     })
   })
-  const switching = page.evaluate((id) => window.hibi.selectDocumentTab(id), first.tabId)
+  const switching = page.evaluate(
+    (id) => window.hibi.selectDocumentTab(id),
+    first.tabId,
+  )
   await readEntered
-  const ack = await page.evaluate((before) =>
-    window.hibi.appendSourceOperation({
-      document: { tabId: before.tabId, revision: before.revision },
-      operationId: 'inactive-during-reload',
-      baseVersion: before.contentVersion,
-      contentVersion: before.contentVersion + 1,
-      origin: 'source',
-      historyGroup: 'typing',
-      changes: [
-        {
-          from: before.markdown.length,
-          to: before.markdown.length,
-          insert: ' live',
-        },
-      ],
-    }),
-  first)
+  const ack = await page.evaluate(
+    (before) =>
+      window.hibi.appendSourceOperation({
+        document: { tabId: before.tabId, revision: before.revision },
+        operationId: 'inactive-during-reload',
+        baseVersion: before.contentVersion,
+        contentVersion: before.contentVersion + 1,
+        origin: 'source',
+        historyGroup: 'typing',
+        changes: [
+          {
+            from: before.markdown.length,
+            to: before.markdown.length,
+            insert: ' live',
+          },
+        ],
+      }),
+    first,
+  )
   assert.equal(ack.tabId, first.tabId)
   await writeFile(released, '')
   await assert.rejects(switching, /changed while switching tabs/)
-  assert.equal((await page.evaluate(() => window.hibi.getDocument())).tabId, second.tabId)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabId,
+    second.tabId,
+  )
   await app.evaluate(() => globalThis.reloadGate.restore())
-  const retained = await page.evaluate((id) => window.hibi.selectDocumentTab(id), first.tabId)
+  const retained = await page.evaluate(
+    (id) => window.hibi.selectDocumentTab(id),
+    first.tabId,
+  )
   assert.equal(retained.markdown, 'original a live')
   assert.equal(retained.dirty, true)
   assert.equal(await readFile(a, 'utf8'), 'original a')

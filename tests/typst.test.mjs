@@ -439,7 +439,12 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   await tree
     .getByRole('treeitem', { name: /^report\.typ$/i, exact: true })
     .click()
-  await source.waitFor()
+  // Opening a file keeps source read-only until its bridge and the file operation settle.
+  await page
+    .locator(
+      '.editor-panes.mode-markdown[data-source-ready="true"] .source-pane:not([inert]) .cm-content[contenteditable="true"][aria-label="Typst editor"]',
+    )
+    .waitFor()
   assert.equal(
     await page
       .getByRole('button', { name: /^side-by-side$/i, exact: true })

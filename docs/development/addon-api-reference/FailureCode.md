@@ -2,7 +2,7 @@
 
 # FailureCode
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L82)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L83)
 
 ```typescript
 type FailureCode =

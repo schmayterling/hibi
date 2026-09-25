@@ -156,6 +156,10 @@ export class CompletionBroker {
   #visible: Session | null = null
   #disposed = false
 
+  hasProviders(): boolean {
+    return !this.#disposed && this.#registrations.size > 0
+  }
+
   register(
     owner: AddonOwner,
     provider: CompletionProvider,

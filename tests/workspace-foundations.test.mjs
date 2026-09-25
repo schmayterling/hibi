@@ -210,7 +210,7 @@ test('scoped text service guards reads, creates and closed-file updates', async 
         name: 'workspace-host',
         setup(build) {
           build.onResolve({ filter: /^\.\/(workspace|document)$/ }, (args) =>
-            args.importer.endsWith('/workspace-files.ts')
+            /[/\\]workspace-files\.ts$/.test(args.importer)
               ? { path: args.path, namespace: 'workspace-host' }
               : null,
           )

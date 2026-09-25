@@ -2,7 +2,7 @@
 
 # AddonViewProps
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L456)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L493)
 
 <details>
 <summary>Declaration</summary>
@@ -42,7 +42,7 @@ type AddonViewProps = {
 
 ### instanceId
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L457)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L494)
 
 ```typescript
 instanceId: string
@@ -50,7 +50,7 @@ instanceId: string
 
 ### input
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L458)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L495)
 
 ```typescript
 input: unknown
@@ -58,7 +58,7 @@ input: unknown
 
 ### document
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L460)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L497)
 
 Follow views receive the current document. Pinned views retain their opening snapshot.
 
@@ -70,7 +70,7 @@ Related: [DocumentState](DocumentState.md).
 
 ### binding
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L461)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L498)
 
 ```typescript
 binding: 'follow' | 'pinned'
@@ -78,7 +78,7 @@ binding: 'follow' | 'pinned'
 
 ### visible
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L462)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L499)
 
 ```typescript
 visible: boolean
@@ -88,7 +88,7 @@ visible: boolean
 
 ### close
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L463)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L500)
 
 ```typescript
 close: () => void
@@ -98,7 +98,7 @@ close: () => void
 
 ### focusDocument
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L465)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L502)
 
 Activate the bound tab if it still exists, then focus its editor.
 

@@ -11,6 +11,7 @@ import {
 import { IconButton } from '../../ui/Controls'
 import { SettingsFilter } from '../../ui/SettingsFilter'
 import { ShortcutKeys } from '../../ui/ShortcutKeys'
+import { AddonHotkeySettings } from './AddonHotkeySettings'
 
 export function HotkeySettings({
   active,
@@ -28,8 +29,18 @@ export function HotkeySettings({
   const [candidate, setCandidate] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [addonRecording, setAddonRecording] = useState(false)
+  const [startingCore, setStartingCore] = useState(false)
   const recorder = useRef<HTMLButtonElement>(null)
+  const activeRef = useRef(active)
   const defaults = defaultHotkeys(platform)
+
+  useEffect(() => {
+    activeRef.current = active
+    return () => {
+      activeRef.current = false
+    }
+  }, [active])
 
   const cancel = useCallback(() => {
     setRecording(null)
@@ -84,7 +95,7 @@ export function HotkeySettings({
         placeholder="Filter commands…"
         value={query}
         onChange={setQuery}
-        disabled={!!recording || saving}
+        disabled={!!recording || addonRecording || startingCore || saving}
         resetDisabled={actions.every(({ id }) => hotkeys[id] === defaults[id])}
         onReset={() => void save(defaults)}
       />
@@ -111,16 +122,28 @@ export function HotkeySettings({
                   ref={recording === id ? recorder : undefined}
                   aria-label={`Rebind ${label}`}
                   aria-pressed={recording === id}
-                  disabled={saving || (!!recording && recording !== id)}
+                  disabled={
+                    saving ||
+                    addonRecording ||
+                    startingCore ||
+                    (!!recording && recording !== id)
+                  }
                   onClick={async () => {
-                    if (recording) return
+                    if (recording || addonRecording || startingCore) return
+                    setStartingCore(true)
                     setError('')
                     try {
                       await window.hibi.setHotkeyRecording(true)
+                      if (!activeRef.current) {
+                        await window.hibi.setHotkeyRecording(false)
+                        return
+                      }
                       setCandidate('')
                       setRecording(id)
                     } catch {
                       setError('Could not record a shortcut. Try again.')
+                    } finally {
+                      setStartingCore(false)
                     }
                   }}
                   onKeyDown={(event) => {
@@ -169,7 +192,9 @@ export function HotkeySettings({
                       type="button"
                       aria-label={`Save shortcut for ${label}`}
                       title="Save shortcut (Enter)"
-                      disabled={saving || !candidate || !!invalid}
+                      disabled={
+                        saving || addonRecording || !candidate || !!invalid
+                      }
                       onClick={() => void save({ ...hotkeys, [id]: candidate })}
                     >
                       <Check size={15} />
@@ -178,7 +203,7 @@ export function HotkeySettings({
                       type="button"
                       aria-label="Cancel rebinding"
                       title="Cancel (Escape)"
-                      disabled={saving}
+                      disabled={saving || addonRecording}
                       onClick={cancel}
                     >
                       <X size={15} />
@@ -191,7 +216,10 @@ export function HotkeySettings({
                       aria-label={`Reset shortcut for ${label}`}
                       title="Reset shortcut"
                       disabled={
-                        saving || !!recording || hotkeys[id] === defaults[id]
+                        saving ||
+                        addonRecording ||
+                        !!recording ||
+                        hotkeys[id] === defaults[id]
                       }
                       onClick={() =>
                         void save({ ...hotkeys, [id]: defaults[id] })
@@ -203,7 +231,9 @@ export function HotkeySettings({
                       type="button"
                       aria-label={`Clear shortcut for ${label}`}
                       title="Clear shortcut"
-                      disabled={saving || !!recording || !hotkeys[id]}
+                      disabled={
+                        saving || addonRecording || !!recording || !hotkeys[id]
+                      }
                       onClick={() => void save({ ...hotkeys, [id]: '' })}
                     >
                       <X size={14} />
@@ -219,6 +249,13 @@ export function HotkeySettings({
             </div>
           ))}
       </div>
+      <AddonHotkeySettings
+        active={active}
+        platform={platform}
+        query={query}
+        disabled={saving || !!recording || startingCore}
+        onRecordingChange={setAddonRecording}
+      />
       {error && (
         <p className="hotkey-feedback" role="alert">
           {error}

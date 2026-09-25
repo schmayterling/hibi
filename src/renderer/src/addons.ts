@@ -11,6 +11,7 @@ import {
   type Addon,
   type AddonApp,
   type AddonCommand,
+  type AddonCommandDescriptor,
   type AddonContext,
   type AddonManifest,
   type AddonState,
@@ -226,6 +227,7 @@ export function useAddons(
     [viewState.definitions],
   )
   const registered = useRef(new Map<string, RegisteredCommand>()).current
+  const hotkeyTokens = useRef(new Map<string, string>()).current
   const started = useRef(new Set<string>()).current
   const activation = useRef(
     new Map<
@@ -302,6 +304,20 @@ export function useAddons(
       await command.run(context)
     },
     [activation, captureCommandContext, registered, started],
+  )
+  useEffect(
+    () =>
+      window.hibi.onAddonCommand(({ id, token, source }) => {
+        if (hotkeyTokens.get(id) !== token) return
+        const separator = id.indexOf('.')
+        if (separator < 1) return
+        void executeCommand(
+          id.slice(0, separator),
+          id.slice(separator + 1),
+          captureCommandContext(source),
+        ).catch((error) => latest.current.error(error))
+      }),
+    [captureCommandContext, executeCommand, hotkeyTokens],
   )
   const extensions = useRef(
     new Map<string, MarkdownExtension & { addonId: string }>(),
@@ -1511,9 +1527,25 @@ export function useAddons(
       latest.current.error(error)
     }
   }
-  const visibleCommands = useMemo<RegisteredCommand[]>(
-    () => [
-      ...commands,
+  const visibleCommands = useMemo<RegisteredCommand[]>(() => {
+    const descriptors = new Map<string, AddonCommandDescriptor>(
+      catalog.flatMap((addon) =>
+        (addon.manifest.commands ?? []).map(
+          (command) => [`${addon.manifest.id}.${command.id}`, command] as const,
+        ),
+      ),
+    )
+    return [
+      ...commands.map((command) => ({
+        ...descriptors.get(command.id),
+        ...command,
+        run: (context?: CommandExecutionContext) =>
+          executeCommand(
+            command.addonId,
+            command.id.slice(command.addonId.length + 1),
+            context ?? captureCommandContext('api'),
+          ),
+      })),
       ...catalog
         .filter((addon) =>
           states.some(
@@ -1539,16 +1571,49 @@ export function useAddons(
                 ),
             })),
         ),
-    ],
-    [
-      commands,
-      catalog,
-      states,
-      registered,
-      executeCommand,
-      captureCommandContext,
-    ],
-  )
+    ]
+  }, [
+    commands,
+    catalog,
+    states,
+    registered,
+    executeCommand,
+    captureCommandContext,
+  ])
+  useEffect(() => {
+    const registrations = visibleCommands
+      .filter((command) => command.defaultShortcut || command.menu)
+      .map((command) => {
+        const token = crypto.randomUUID()
+        hotkeyTokens.set(command.id, token)
+        const unregister = () =>
+          window.hibi
+            .unregisterAddonHotkey(command.id, token)
+            .catch((error) => latest.current.error(error))
+        void window.hibi
+          .registerAddonHotkey({
+            id: command.id,
+            label: command.label,
+            token,
+            ...(command.defaultShortcut
+              ? { defaultShortcut: command.defaultShortcut }
+              : {}),
+            ...(command.menu ? { menu: command.menu } : {}),
+          })
+          .then(() => {
+            if (hotkeyTokens.get(command.id) !== token) void unregister()
+          })
+          .catch((error) => latest.current.error(error))
+        return { id: command.id, token, unregister }
+      })
+    return () => {
+      for (const registration of registrations) {
+        if (hotkeyTokens.get(registration.id) === registration.token)
+          hotkeyTokens.delete(registration.id)
+        void registration.unregister()
+      }
+    }
+  }, [hotkeyTokens, visibleCommands])
   return {
     catalog,
     ready,

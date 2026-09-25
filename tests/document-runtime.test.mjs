@@ -143,6 +143,54 @@ test('inactive sessions stay addressable and accept their own save acknowledgmen
   runtime.dispose()
 })
 
+test('document and editor-view targets survive focus and expire on close or unmount', () => {
+  const { runtime } = fixture()
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('first', { tabs }))
+  const firstDocument = { ...runtime.get() }
+  const target = runtime.captureDocument()
+  const firstSession = runtime.session()
+  const unmount = runtime.registerView('one', 'editor-one')
+  const view = runtime.captureActiveView()
+  assert.equal(view.documentId, target.documentId)
+  assert.equal(runtime.resolveDocument(target), firstSession)
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  assert.equal(runtime.captureDocument('one'), target)
+  runtime.activate({ ...firstDocument, revision: 3, tabs })
+  assert.equal(runtime.captureDocument(), target)
+  assert.equal(runtime.resolveDocument(target), firstSession)
+  assert.equal(runtime.isLiveView(view), true)
+  unmount()
+  assert.equal(runtime.isLiveView(view), false)
+  const unmountAgain = runtime.registerView('one', 'editor-one')
+  assert.notEqual(
+    runtime.captureActiveView().viewGeneration,
+    view.viewGeneration,
+  )
+  unmountAgain()
+  runtime.activate(
+    document('second', {
+      tabId: 'two',
+      id: 'file-two',
+      revision: 4,
+      tabs: [tabs[1]],
+    }),
+  )
+  assert.equal(runtime.resolveDocument(target), null)
+  runtime.activate(document('reopened', { revision: 5, tabs }))
+  const reopened = runtime.captureDocument()
+  assert.notEqual(reopened.documentId, target.documentId)
+  assert.notEqual(reopened.documentGeneration, target.documentGeneration)
+  assert.equal(runtime.resolveDocument(target), null)
+  runtime.dispose()
+})
+
 test('runtime treats whole-source line-ending transforms as explicit atomic compatibility edits', () => {
   const { runtime, operations } = fixture()
   runtime.activate(document('a\r\nb\n'))

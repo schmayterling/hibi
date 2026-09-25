@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import type { AddonManifest, MarkdownFlavor } from '../../addons/api'
+import type { ViewId } from '../../shared/foundation-contracts'
 import { needsOwnedSource } from '../../shared/preservation'
 import { addonRegistry } from './addon-registry'
 import { documentRuntime } from './document-runtime'
@@ -33,6 +34,12 @@ export function ActiveDocumentEditor({
   enabledAddons: ReadonlySet<string>
   onFlavorStatus: (status: DocumentFlavorStatus) => void
 }) {
+  const viewId = useMemo(() => crypto.randomUUID() as ViewId, [])
+  const documentTarget = documentRuntime.captureDocument(props.document.tabId)
+  useEffect(() => {
+    if (!documentTarget) return
+    return documentRuntime.registerView(props.document.tabId, viewId)
+  }, [props.document.tabId, documentTarget, viewId])
   const protectionFlavors = useMemo(
     () =>
       knownFlavors.filter(
@@ -147,5 +154,7 @@ export function ActiveDocumentEditor({
     unsupported,
     onFlavorStatus,
   ])
-  return <Component {...props} document={document} value={source} />
+  return (
+    <Component {...props} viewId={viewId} document={document} value={source} />
+  )
 }

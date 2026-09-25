@@ -39,6 +39,7 @@ import type {
   DocumentSession,
 } from '../../shared/document-session'
 import type { DocumentView } from '../../shared/document-types'
+import type { ViewId } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import type { SourceSnapshot } from '../../shared/source-buffer'
 import {
@@ -1946,7 +1947,10 @@ export function MarkdownEditor({
           />
           <section
             className="rich-pane"
-            onFocusCapture={() => setFocusedPane('rich')}
+            onFocusCapture={() => {
+              setFocusedPane('rich')
+              documentRuntime.focusView(viewId as ViewId)
+            }}
             aria-label="Formatted document"
             aria-hidden={paneMode === 'markdown'}
             inert={paneMode === 'markdown'}
@@ -1992,7 +1996,10 @@ export function MarkdownEditor({
           </section>
           <section
             className="source-pane"
-            onFocusCapture={() => setFocusedPane('source')}
+            onFocusCapture={() => {
+              setFocusedPane('source')
+              documentRuntime.focusView(viewId as ViewId)
+            }}
             aria-label="Document source"
             aria-hidden={paneMode === 'normal'}
             inert={paneMode === 'normal'}

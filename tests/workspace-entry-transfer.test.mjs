@@ -111,12 +111,18 @@ test('folder copy rejects a destination swapped for a symbolic link', async (t) 
   await mkdir(outside)
   await writeFile(join(source, 'note.md'), 'original')
   await assert.rejects(
-    copyEntry(source, destination, true, () => true, async (path) => {
-      const names = await readdir(path)
-      await rename(destination, reserved)
-      await symlink(outside, destination, 'dir')
-      return names
-    }),
+    copyEntry(
+      source,
+      destination,
+      true,
+      () => true,
+      async (path) => {
+        const names = await readdir(path)
+        await rename(destination, reserved)
+        await symlink(outside, destination, 'dir')
+        return names
+      },
+    ),
     /destination folder changed/i,
   )
   assert.equal(await readFile(join(source, 'note.md'), 'utf8'), 'original')
@@ -134,12 +140,18 @@ test('folder copy rejects a source swapped after listing', async (t) => {
   await mkdir(source)
   await writeFile(join(source, 'note.md'), 'original')
   await assert.rejects(
-    copyEntry(source, destination, true, () => true, async (path) => {
-      const names = await readdir(path)
-      await rename(source, saved)
-      await symlink(saved, source, 'dir')
-      return names
-    }),
+    copyEntry(
+      source,
+      destination,
+      true,
+      () => true,
+      async (path) => {
+        const names = await readdir(path)
+        await rename(source, saved)
+        await symlink(saved, source, 'dir')
+        return names
+      },
+    ),
     /Symbolic links cannot be copied/,
   )
   assert.equal(await readFile(join(saved, 'note.md'), 'utf8'), 'original')

@@ -41,6 +41,7 @@ export function wikiTarget(
   from: string,
   target: string,
   paths: ReadonlySet<string>,
+  basenames?: ReadonlyMap<string, readonly string[]>,
 ) {
   const file = target.split('#')[0]?.trim() ?? ''
   if (!file) return from
@@ -59,10 +60,23 @@ export function wikiTarget(
     if (paths.has(beside)) return beside
   }
   if (name.includes('/')) return null
-  const matches = [...paths].filter((path) =>
-    candidates.some((candidate) => path.split('/').at(-1) === candidate),
-  )
+  const matches = basenames
+    ? candidates.flatMap((candidate) => basenames.get(candidate) ?? [])
+    : [...paths].filter((path) =>
+        candidates.some((candidate) => path.split('/').at(-1) === candidate),
+      )
   return matches.length === 1 ? (matches[0] ?? null) : null
+}
+
+export function noteBasenames(paths: ReadonlySet<string>) {
+  const basenames = new Map<string, string[]>()
+  for (const path of paths) {
+    const name = path.split('/').at(-1) ?? path
+    const matches = basenames.get(name)
+    if (matches) matches.push(path)
+    else basenames.set(name, [path])
+  }
+  return basenames
 }
 
 export function noteReferences(source: string) {
@@ -84,6 +98,7 @@ export function noteTargets(
   from: string,
   paths: ReadonlySet<string>,
   references = noteReferences(source),
+  basenames?: ReadonlyMap<string, readonly string[]>,
 ) {
   const targets = new Set<string>()
   for (const href of references.links) {
@@ -91,7 +106,7 @@ export function noteTargets(
     if (target) targets.add(target)
   }
   for (const href of references.wikilinks) {
-    const target = wikiTarget(from, href, paths)
+    const target = wikiTarget(from, href, paths, basenames)
     if (target) targets.add(target)
   }
   targets.delete(from)

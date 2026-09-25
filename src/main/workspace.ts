@@ -182,6 +182,10 @@ export function workspaceChangeCursor(): WorkspaceStreamCursor {
   return workspaceStream.cursor(workspaceStreamStatus())
 }
 
+export function workspaceIndexRevision(): number {
+  return indexRevision
+}
+
 export function subscribeWorkspaceChanges(
   listener: (event: WorkspaceChangeEvent) => void,
 ): { snapshot: WorkspaceStreamSnapshot; dispose: () => void } {

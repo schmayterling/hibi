@@ -149,7 +149,9 @@ export class DocumentRuntime {
     this.#activeView ? this.captureView(this.#activeView) : null
   listViews = () =>
     Object.freeze(
-      [...this.#views.keys()].flatMap((viewId) => this.captureView(viewId) ?? []),
+      [...this.#views.keys()].flatMap(
+        (viewId) => this.captureView(viewId) ?? [],
+      ),
     )
   subscribeViews = (listener: () => void) => {
     this.#viewListeners.add(listener)

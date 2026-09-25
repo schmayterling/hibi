@@ -112,7 +112,10 @@ test('view api rejects stale generations, versions, and pane switches', () => {
     scope.setSelection({ ...original, anchor: 4, head: 4 }).code,
     'conflict',
   )
-  assert.equal(scope.getSelection({ ...original.view, viewGeneration: 99 }).code, 'stale')
+  assert.equal(
+    scope.getSelection({ ...original.view, viewGeneration: 99 }).code,
+    'stale',
+  )
   assert.equal(scope.getSelection({ viewId }).code, 'conflict')
   registry.setActive(viewId, 'rich')
   assert.equal(scope.setSelection(original).code, 'stale')

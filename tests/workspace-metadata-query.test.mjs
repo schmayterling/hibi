@@ -14,7 +14,11 @@ const host = {
   editDuringRead: false,
   versions: [{ file: '/notes/a.md', tabId: 'tab-a', contentVersion: 1 }],
   pages: [
-    { path: 'a.md', markdown: '[B](b.md)' },
+    {
+      path: 'a.md',
+      markdown:
+        '---\ntitle: Example\nrating: 3\n---\n# Intro\n\n#work [B](b.md)',
+    },
     { path: 'b.md', markdown: '' },
   ],
 }
@@ -97,6 +101,23 @@ test('metadata queries return bounded links and backlinks from shared pages', as
     syntax: 'markdown',
   })
   assert.equal(resolved.value.resolved, 'b.md')
+  assert.deepEqual(
+    (await query({ target, kind: 'tag', tag: 'work' })).value.items,
+    ['a.md'],
+  )
+  assert.deepEqual(
+    (await query({ target, kind: 'property', key: 'rating', value: 3 })).value
+      .items,
+    ['a.md'],
+  )
+  assert.deepEqual(
+    (await query({ target, kind: 'headings', path: 'a.md' })).value.items,
+    [{ depth: 1, text: 'Intro' }],
+  )
+  assert.deepEqual(
+    (await query({ target, kind: 'search-paths', query: 'A.MD' })).value.items,
+    ['a.md'],
+  )
   assert.equal(host.indexReads, 1)
   host.listener({ kind: 'resync' })
   assert.equal((await query({ target, kind: 'links', path: 'a.md' })).ok, true)

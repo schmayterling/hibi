@@ -7,6 +7,13 @@ import {
   noteTargets,
   wikiTarget,
 } from '../shared/note-links.ts'
+import {
+  type NoteHeading,
+  noteHeadings,
+  noteProperties,
+  type PropertyScalar,
+} from '../shared/note-metadata.ts'
+import { noteTags } from '../shared/note-tags.ts'
 import type { WorkspacePage } from '../shared/workspace'
 
 type References = ReturnType<typeof noteReferences>
@@ -14,6 +21,9 @@ type DocumentLinks = {
   markdown: string
   references: References
   targets: ReadonlySet<string>
+  tags?: readonly string[]
+  properties?: ReturnType<typeof noteProperties>
+  headings?: ReturnType<typeof noteHeadings>
 }
 
 export interface ReferencePage {
@@ -29,6 +39,7 @@ export class WorkspaceReferenceIndex {
   private reverse = new Map<string, Set<string>>()
   private paths = new Set<string>()
   private basenames = new Map<string, string[]>()
+  private tagPaths: Map<string, Set<string>> | null = null
   private readonly parse: typeof noteReferences
 
   constructor(parse = noteReferences) {
@@ -41,6 +52,7 @@ export class WorkspaceReferenceIndex {
     this.reverse = new Map()
     this.paths = new Set()
     this.basenames = new Map()
+    this.tagPaths = null
   }
 
   apply(
@@ -82,6 +94,7 @@ export class WorkspaceReferenceIndex {
       !sameWorkspace ||
       previous.size !== next.size ||
       [...next.keys()].some((path) => !previous.has(path))
+    if (pathsChanged || changed.size) this.tagPaths = null
     const paths = new Set(next.keys())
     const basenames = pathsChanged ? noteBasenames(paths) : this.basenames
     const toResolve = pathsChanged ? [...next.keys()] : [...changed]
@@ -137,6 +150,97 @@ export class WorkspaceReferenceIndex {
 
   backlinks(path: string, offset: number, limit: number): ReferencePage {
     return this.page(this.reverse.get(path) ?? [], offset, limit)
+  }
+
+  tagged(tag: string, offset: number, limit: number): ReferencePage {
+    if (!this.tagPaths) {
+      this.tagPaths = new Map()
+      for (const [path, document] of this.documents) {
+        if (!isMarkdownDocument(path)) continue
+        document.tags ??= noteTags(document.markdown)
+        for (const name of document.tags) {
+          let paths = this.tagPaths.get(name)
+          if (!paths) {
+            paths = new Set()
+            this.tagPaths.set(name, paths)
+          }
+          paths.add(path)
+        }
+      }
+    }
+    return this.page(this.tagPaths.get(tag) ?? [], offset, limit)
+  }
+
+  property(
+    key: string,
+    value: PropertyScalar,
+    offset: number,
+    limit: number,
+  ): ReferencePage & { complete: boolean } {
+    const matches: string[] = []
+    let complete = true
+    for (const [path, document] of this.documents) {
+      if (!isMarkdownDocument(path)) continue
+      document.properties ??= noteProperties(document.markdown)
+      if (!document.properties.complete) complete = false
+      if (!Object.hasOwn(document.properties.values, key)) continue
+      const found = document.properties.values[key]
+      if (
+        (Array.isArray(found) &&
+          found.some((item) => Object.is(item, value))) ||
+        Object.is(found, value)
+      )
+        matches.push(path)
+    }
+    return { ...this.page(matches, offset, limit), complete }
+  }
+
+  headings(
+    path: string,
+    offset: number,
+    limit: number,
+  ): {
+    items: readonly NoteHeading[]
+    hasMore: boolean
+    nextOffset: number
+    complete: boolean
+  } {
+    const document = this.documents.get(path)
+    if (!document || !isMarkdownDocument(path))
+      return { items: [], hasMore: false, nextOffset: offset, complete: true }
+    document.headings ??= noteHeadings(document.markdown)
+    const items: NoteHeading[] = []
+    let bytes = 0
+    for (
+      let index = offset;
+      index < document.headings.items.length && items.length < limit;
+      index++
+    ) {
+      const heading = document.headings.items[index]
+      if (!heading) break
+      const size = Buffer.byteLength(heading.text)
+      if (bytes + size > 32 * 1024) break
+      items.push(heading)
+      bytes += size
+    }
+    const nextOffset = offset + items.length
+    return {
+      items,
+      hasMore: nextOffset < document.headings.items.length,
+      nextOffset,
+      complete: document.headings.complete,
+    }
+  }
+
+  searchPaths(query: string, offset: number, limit: number): ReferencePage {
+    const folded = query.toLocaleLowerCase()
+    return this.page(
+      [...this.paths].filter((path) =>
+        path.toLocaleLowerCase().includes(folded),
+      ),
+      offset,
+      limit,
+    )
   }
 
   resolve(

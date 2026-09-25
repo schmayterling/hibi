@@ -6,7 +6,11 @@ import {
   getRecentWorkspaces,
   rememberWorkspace,
 } from '../../main/recent-workspaces'
-import { refreshWorkspace, scanWorkspace } from '../../main/workspace'
+import {
+  refreshWorkspace,
+  scanWorkspace,
+  workspaceId,
+} from '../../main/workspace'
 import { validateWorkspaceName } from '../../main/workspace-actions'
 import type { WorkspaceEntry } from '../../shared/workspace'
 import type { NativeAddon, NativeAddonContext } from '../api'
@@ -15,7 +19,8 @@ import manifest from './manifest'
 async function target(id: unknown, context: NativeAddonContext) {
   if (typeof id !== 'string') throw new Error('Choose a workspace.')
   const path = id
-    ? (await getRecentWorkspaces()).find((item) => item.id === id)?.path
+    ? ((await getRecentWorkspaces()).find((item) => item.id === id)?.path ??
+      (id === workspaceId() ? context.workspace.directory() : null))
     : context.workspace.directory()
   if (!path) throw new Error('Open a workspace or choose a recent one.')
   const root = await realpath(path)

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { pathToFileURL } from 'node:url'
 import { Marked } from 'marked'
 import { markedGithubFootnote } from 'marked-github-footnote'
 import { exportOptions } from '../src/addons/documentation/options.ts'
@@ -48,6 +49,8 @@ test('footnotes render once per reference and retain export anchors', async () =
       },
       exportOptions({ singleFile }),
     )
+    assert.match(site.pages[0].html, /id="fnref-source"/)
+    assert.match(site.pages[0].html, /data-footnotes/)
     const files = await siteFiles(template, site)
     const exported = files.get(
       singleFile ? 'index.html' : 'README.md/index.html',
@@ -64,6 +67,93 @@ test('footnotes render once per reference and retain export anchors', async () =
         : /href="[^"]*#fn-source"/,
     )
   }
+  const hostile = prepareSite(
+    {
+      name: 'Notes',
+      pages: [
+        {
+          path: 'README.md',
+          markdown: source,
+          html: `${rendered}<a id="root" data-footnote-ref href="#fn-source" onclick="window.attack=true">fake</a><li id="root">fake</li>`,
+        },
+      ],
+    },
+    exportOptions(),
+  )
+  assert.doesNotMatch(hostile.pages[0].html, /id="root"|onclick/)
+})
+
+test('exported footnote links survive site hydration', {
+  timeout: 45000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-site-footnotes-'))
+  const markdown = source.replace(
+    '\n\n[^source]:',
+    `\n\n${'A long paragraph between the note and its definition.\n\n'.repeat(60)}[^source]:`,
+  )
+  const parser = new Marked({ gfm: true }, markedGithubFootnote())
+  const site = prepareSite(
+    {
+      name: 'Notes',
+      pages: [
+        {
+          path: 'README.md',
+          markdown,
+          html: parser.parse(markdown, { async: false }),
+        },
+      ],
+    },
+    exportOptions(),
+  )
+  const template = await readFile('out/site/template.html', 'utf8')
+  const files = await siteFiles(template, site)
+  const file = join(folder, 'index.html')
+  await writeFile(file, files.get('index.html'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  await app.firstWindow()
+  const next = app.waitForEvent('window')
+  await app.evaluate(({ BrowserWindow }, url) => {
+    const viewer = new BrowserWindow({
+      show: false,
+      width: 1000,
+      height: 780,
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        backgroundThrottling: false,
+      },
+    })
+    void viewer.loadURL(url)
+  }, pathToFileURL(file).href)
+  const page = await next
+  page.setDefaultTimeout(7000)
+  await page.getByRole('button', { name: /^toggle navigation$/i }).waitFor()
+  assert.equal(
+    await page.locator('a#fnref-source[data-footnote-ref]').count(),
+    1,
+  )
+  assert.equal(
+    await page.locator('a#fnref-source-2[data-footnote-ref]').count(),
+    1,
+  )
+  assert.equal(await page.locator('li#fn-source').count(), 1)
+  assert.equal(await page.locator('h2#footnote-label').count(), 1)
+  await page.locator('a#fnref-source[data-footnote-ref]').click()
+  await page.waitForFunction(
+    () => document.querySelector('.site-content')?.scrollTop > 0,
+  )
+  assert.match(page.url(), /anchor=fn-source/)
+  await page.locator('a[data-footnote-backref]').first().click()
+  await page.waitForFunction(() =>
+    location.hash.includes('anchor=fnref-source'),
+  )
 })
 
 test('source footnotes preview and save without changing markdown', {

@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { Marked } from 'marked'
+import { exportOptions } from '../src/addons/documentation/options.ts'
+import { prepareSite, siteFiles } from '../src/addons/documentation/site.ts'
 import {
   alertMarkdown,
   alertToken,
@@ -46,6 +48,43 @@ test('Markdown callouts preserve quote boundaries, titles and fold markers', () 
     parser.parse('> [!QUESTION]- Custom title\n> Answer'),
     /Custom title/,
   )
+})
+
+test('github alert markers survive sanitized site export', async () => {
+  const markdown = '> [!WARNING]- Custom title\n> Stay alert.'
+  const parser = new Marked(alertMarkdown)
+  const rendered = parser.parse(markdown)
+  const site = prepareSite(
+    {
+      name: 'Notes',
+      pages: [{ path: 'README.md', markdown, html: rendered }],
+    },
+    exportOptions(),
+  )
+  assert.match(site.pages[0].html, /data-alert="warning"/)
+  assert.match(site.pages[0].html, /data-fold="-"/)
+  const template = await readFile('out/site/template.html', 'utf8')
+  const files = await siteFiles(template, site)
+  const article = files
+    .get('index.html')
+    .match(/<article class="tiptap">([\s\S]*?)<\/article>/)?.[1]
+  assert.match(article, /class="github-alert"/)
+  assert.match(article, /data-alert="warning"/)
+  assert.match(article, /data-fold="-"/)
+  const hostile = prepareSite(
+    {
+      name: 'Notes',
+      pages: [
+        {
+          path: 'README.md',
+          markdown,
+          html: '<blockquote class="github-alert" data-alert="<script>" data-fold="x" onmouseover="window.attack=true">fake</blockquote>',
+        },
+      ],
+    },
+    exportOptions(),
+  )
+  assert.doesNotMatch(hostile.pages[0].html, /data-alert|data-fold|onmouseover/)
 })
 
 test('github alerts edit in rich view, preview in split, and export with markers and theme colors', {

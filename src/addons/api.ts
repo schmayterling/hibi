@@ -109,9 +109,12 @@ export type AddonCommandDescriptor = {
   keywords?: string
   /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. */
   defaultShortcut?: string
-  /** Show this command in a built-in application menu. */
-  menu?: { location: 'app'; group?: string; order?: number }
+  /** Show this command in a built-in menu. */
+  menu?: CommandMenuContribution
 }
+export type CommandMenuContribution =
+  | { location: 'app'; group?: string; order?: number }
+  | { location: 'explorer'; group?: string; order?: number }
 export type AddonSyntaxDescriptor = {
   id: string
   kind: 'flavor' | 'projection'
@@ -273,8 +276,8 @@ export type AddonCommand = {
   workspace?: boolean
   /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. */
   defaultShortcut?: string
-  /** Show this command in a built-in application menu. */
-  menu?: { location: 'app'; group?: string; order?: number }
+  /** Show this command in a built-in menu. */
+  menu?: CommandMenuContribution
   /** Cheap synchronous check against the context captured when invoked. */
   when?: (
     context: import('../shared/foundation-contracts').CommandExecutionContext,

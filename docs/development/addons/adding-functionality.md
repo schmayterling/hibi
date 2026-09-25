@@ -85,6 +85,22 @@ The command appears in Hibi's Addons menu. Its in-app shortcut can be changed un
 
 Users control toolbar order and each action's placement in Appearance settings. Actions can appear in the toolbar, stay in its dropdown, or be hidden. These choices persist across addon reloads. The shared [ToolbarPreferences](../addon-api-reference/ToolbarPreferences.md) API exposes them as `order` and `placements`; preserve other entries when changing one action. Context-specific `hidden` and `when` rules still apply.
 
+For an action on a right-clicked workspace entry, register the command with `menu: { location: 'explorer' }`. The captured `file.path` is relative to the workspace; `file.fileId` is opaque. Use `when` to disable actions that do not apply to folders or files.
+
+```typescript
+context.commands.register({
+  id: 'inspect-file',
+  label: 'Inspect file',
+  menu: { location: 'explorer' },
+  when: ({ file }) => file?.kind === 'file',
+  run: ({ file }) => {
+    if (file) context.notify(file.path)
+  },
+})
+```
+
+The command receives the clicked entry even when another note is active. Hibi rejects it if the workspace tree changes before execution, so handle a stale target by asking the user to open the menu again. For command-activated addons, a menu declaration in the manifest shows the item before startup; `when` takes effect once the addon registers its command.
+
 ## Read the workspace
 
 Use `context.workspace.index()` for note text and drafts. It returns `null` when no workspace is open. Use `snapshot()` when you also need the export data. Pass a workspace-relative path to `openFile()` to open a document.

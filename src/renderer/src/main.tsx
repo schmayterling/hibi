@@ -21,6 +21,8 @@ import type {
 import { MAX_DOCUMENT_BYTES } from '../../shared/desktop'
 import type {
   CommandExecutionContext,
+  FileId,
+  FileTarget,
   WorkspaceId,
 } from '../../shared/foundation-contracts'
 import {
@@ -45,6 +47,7 @@ import {
   toRecentWorkspaces,
   type WorkspaceAction,
   type WorkspaceActionResult,
+  type WorkspaceEntry,
   type WorkspaceState,
 } from '../../shared/workspace'
 import { Button, IconButton } from '../../ui/Controls'
@@ -407,6 +410,10 @@ function App() {
   }, [settingsOpen, paletteOpen])
   const [findOpen, setFindOpen] = useState(false)
   const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
+  const fileMenuTarget = useRef<{
+    workspace: WorkspaceState
+    file: FileTarget
+  } | null>(null)
   const promptedVaults = useRef(new Set<string>())
   const [knownWorkspaces, setKnownWorkspaces] = useState<
     KnownWorkspace[] | null
@@ -591,8 +598,45 @@ function App() {
         : {}),
     }
   }
+  function captureFileCommandContext(
+    entry: WorkspaceEntry,
+  ): CommandExecutionContext | null {
+    if (!workspace?.id || workspace.workspaceGeneration === undefined)
+      return null
+    const file: FileTarget = {
+      workspaceId: workspace.id as WorkspaceId,
+      workspaceGeneration: workspace.workspaceGeneration,
+      fileId: crypto.randomUUID() as FileId,
+      path: entry.path,
+      kind: entry.kind,
+    }
+    // ponytail: a new workspace snapshot invalidates the target until entries carry host file ids.
+    fileMenuTarget.current = { workspace, file }
+    return {
+      source: 'menu',
+      workspace: {
+        workspaceId: file.workspaceId,
+        workspaceGeneration: file.workspaceGeneration,
+      },
+      file,
+    }
+  }
   function isAddonCommandContextCurrent(context: CommandExecutionContext) {
-    if (context.file) return false
+    if (context.file) {
+      const target = fileMenuTarget.current
+      return (
+        !!target &&
+        target.workspace === workspace &&
+        target.file.fileId === context.file.fileId &&
+        target.file.path === context.file.path &&
+        target.file.kind === context.file.kind &&
+        target.file.workspaceId === context.file.workspaceId &&
+        target.file.workspaceGeneration === context.file.workspaceGeneration &&
+        context.workspace?.workspaceId === context.file.workspaceId &&
+        context.workspace?.workspaceGeneration ===
+          context.file.workspaceGeneration
+      )
+    }
     const current = captureAddonCommandContext(context.source)
     return (
       context.workspace?.workspaceId === current.workspace?.workspaceId &&
@@ -2050,6 +2094,7 @@ function App() {
         onFile={(path) => void openFile(path)}
         onRefresh={() => void refreshFiles()}
         commands={addonHost.commands}
+        captureCommandContext={captureFileCommandContext}
       />
       <WorkspacesSidebar
         overlay={sidebarResize.overlay}

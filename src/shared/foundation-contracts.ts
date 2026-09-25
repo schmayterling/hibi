@@ -23,6 +23,8 @@ export interface WorkspaceTarget {
 
 export interface FileTarget extends WorkspaceTarget {
   readonly fileId: FileId
+  readonly path: string
+  readonly kind: 'file' | 'folder'
 }
 
 export interface DocumentTarget {

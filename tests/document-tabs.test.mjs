@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { watch } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
@@ -6,6 +7,116 @@ import test from 'node:test'
 import { electron } from './electron.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
+
+test('an inactive journal edit survives a pending disk refresh', {
+  timeout: 30000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-tab-refresh-'))
+  const a = join(root, 'a.md'),
+    b = join(root, 'b.md'),
+    entered = join(root, 'read-entered'),
+    released = join(root, 'read-released')
+  await writeFile(a, 'original a')
+  await writeFile(b, 'original b')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    await writeFile(released, '')
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+      globalThis.reloadGate?.restore()
+    }).catch(() => {})
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  const open = async (file) => {
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    }, file)
+    return page.evaluate(() => window.hibi.openDocument())
+  }
+  const first = await open(a)
+  const second = await open(b)
+  await app.evaluate(async (_, { file, entered, released, root }) => {
+    const { open, stat } = process.getBuiltinModule('node:fs/promises')
+    const fs = process.getBuiltinModule('node:fs')
+    const target = await stat(file)
+    const handle = await open(file, 'r')
+    const prototype = Object.getPrototypeOf(handle)
+    await handle.close()
+    const originalStat = prototype.stat,
+      originalRead = prototype.read,
+      handles = new WeakSet()
+    let blocked = true
+    prototype.stat = async function (...args) {
+      const info = await originalStat.apply(this, args)
+      if (info.dev === target.dev && info.ino === target.ino)
+        handles.add(this)
+      return info
+    }
+    prototype.read = async function (...args) {
+      if (blocked && handles.has(this)) {
+        blocked = false
+        await new Promise((resolve) => {
+          const watcher = fs.watch(root, () => {
+            if (!fs.existsSync(released)) return
+            watcher.close()
+            resolve()
+          })
+          fs.writeFileSync(entered, '')
+        })
+      }
+      return originalRead.apply(this, args)
+    }
+    globalThis.reloadGate = {
+      restore: () => {
+        prototype.stat = originalStat
+        prototype.read = originalRead
+      },
+    }
+  }, { file: a, entered, released, root })
+  const readEntered = new Promise((resolve) => {
+    const watcher = watch(root, (_event, name) => {
+      if (name !== 'read-entered') return
+      watcher.close()
+      resolve()
+    })
+  })
+  const switching = page.evaluate((id) => window.hibi.selectDocumentTab(id), first.tabId)
+  await readEntered
+  const ack = await page.evaluate((before) =>
+    window.hibi.appendSourceOperation({
+      document: { tabId: before.tabId, revision: before.revision },
+      operationId: 'inactive-during-reload',
+      baseVersion: before.contentVersion,
+      contentVersion: before.contentVersion + 1,
+      origin: 'source',
+      historyGroup: 'typing',
+      changes: [
+        {
+          from: before.markdown.length,
+          to: before.markdown.length,
+          insert: ' live',
+        },
+      ],
+    }),
+  first)
+  assert.equal(ack.tabId, first.tabId)
+  await writeFile(released, '')
+  await assert.rejects(switching, /changed while switching tabs/)
+  assert.equal((await page.evaluate(() => window.hibi.getDocument())).tabId, second.tabId)
+  await app.evaluate(() => globalThis.reloadGate.restore())
+  const retained = await page.evaluate((id) => window.hibi.selectDocumentTab(id), first.tabId)
+  assert.equal(retained.markdown, 'original a live')
+  assert.equal(retained.dirty, true)
+  assert.equal(await readFile(a, 'utf8'), 'original a')
+})
 
 test('overflowing tabs reveal close buttons and reorder without losing drafts', {
   timeout: 45000,

@@ -24,6 +24,7 @@ import {
   type ViewInstance,
   type ViewRegistration,
 } from '../../addons/api'
+import type { AddonHotkeyRegistration } from '../../shared/addon-hotkeys'
 import {
   documentExtension,
   isMarkdownDocument,
@@ -68,6 +69,18 @@ export type RegisteredCommand = Omit<AddonCommand, 'run'> & {
   addonId: string
   canRun: (context: CommandExecutionContext) => boolean
   run: (context?: CommandExecutionContext) => Promise<void>
+}
+type HotkeyDescriptor = Omit<AddonHotkeyRegistration, 'token'>
+type ActiveHotkey = { descriptor: HotkeyDescriptor; token: string }
+
+function sameHotkey(left: HotkeyDescriptor, right: HotkeyDescriptor): boolean {
+  return (
+    left.label === right.label &&
+    left.defaultShortcut === right.defaultShortcut &&
+    left.menu?.location === right.menu?.location &&
+    left.menu?.group === right.menu?.group &&
+    left.menu?.order === right.menu?.order
+  )
 }
 type Environment = Omit<
   AddonContext,
@@ -228,6 +241,23 @@ export function useAddons(
   )
   const registered = useRef(new Map<string, RegisteredCommand>()).current
   const hotkeyTokens = useRef(new Map<string, string>()).current
+  const hotkeyRegistrations = useRef(new Map<string, ActiveHotkey>()).current
+  const hotkeyQueue = useRef(new Map<string, Promise<unknown>>()).current
+  const queueHotkey = useCallback(
+    (id: string, operation: () => Promise<unknown>) => {
+      const pending = (hotkeyQueue.get(id) ?? Promise.resolve())
+        .catch(() => {})
+        .then(operation)
+      hotkeyQueue.set(id, pending)
+      void pending
+        .finally(() => {
+          if (hotkeyQueue.get(id) === pending) hotkeyQueue.delete(id)
+        })
+        .catch(() => {})
+      return pending
+    },
+    [hotkeyQueue],
+  )
   const started = useRef(new Set<string>()).current
   const activation = useRef(
     new Map<
@@ -1581,39 +1611,52 @@ export function useAddons(
     captureCommandContext,
   ])
   useEffect(() => {
-    const registrations = visibleCommands
-      .filter((command) => command.defaultShortcut || command.menu)
-      .map((command) => {
-        const token = crypto.randomUUID()
-        hotkeyTokens.set(command.id, token)
-        const unregister = () =>
-          window.hibi
-            .unregisterAddonHotkey(command.id, token)
-            .catch((error) => latest.current.error(error))
-        void window.hibi
-          .registerAddonHotkey({
+    const desired = new Map<string, HotkeyDescriptor>(
+      visibleCommands
+        .filter((command) => command.defaultShortcut || command.menu)
+        .map((command) => [
+          command.id,
+          {
             id: command.id,
             label: command.label,
-            token,
             ...(command.defaultShortcut
               ? { defaultShortcut: command.defaultShortcut }
               : {}),
             ...(command.menu ? { menu: command.menu } : {}),
-          })
-          .then(() => {
-            if (hotkeyTokens.get(command.id) !== token) void unregister()
-          })
-          .catch((error) => latest.current.error(error))
-        return { id: command.id, token, unregister }
-      })
-    return () => {
-      for (const registration of registrations) {
-        if (hotkeyTokens.get(registration.id) === registration.token)
-          hotkeyTokens.delete(registration.id)
-        void registration.unregister()
-      }
+          },
+        ]),
+    )
+    for (const [id, current] of hotkeyRegistrations) {
+      const next = desired.get(id)
+      if (next && sameHotkey(current.descriptor, next)) continue
+      hotkeyRegistrations.delete(id)
+      if (hotkeyTokens.get(id) === current.token) hotkeyTokens.delete(id)
+      void queueHotkey(id, () =>
+        window.hibi.unregisterAddonHotkey(id, current.token),
+      ).catch((error) => latest.current.error(error))
     }
-  }, [hotkeyTokens, visibleCommands])
+    for (const [id, descriptor] of desired) {
+      if (hotkeyRegistrations.has(id)) continue
+      const token = crypto.randomUUID()
+      hotkeyRegistrations.set(id, { descriptor, token })
+      hotkeyTokens.set(id, token)
+      void queueHotkey(id, () =>
+        window.hibi.registerAddonHotkey({ ...descriptor, token }),
+      ).catch((error) => latest.current.error(error))
+    }
+  }, [hotkeyRegistrations, hotkeyTokens, queueHotkey, visibleCommands])
+  useEffect(
+    () => () => {
+      for (const [id, current] of hotkeyRegistrations) {
+        if (hotkeyTokens.get(id) === current.token) hotkeyTokens.delete(id)
+        void queueHotkey(id, () =>
+          window.hibi.unregisterAddonHotkey(id, current.token),
+        ).catch((error) => latest.current.error(error))
+      }
+      hotkeyRegistrations.clear()
+    },
+    [hotkeyRegistrations, hotkeyTokens, queueHotkey],
+  )
   return {
     catalog,
     ready,

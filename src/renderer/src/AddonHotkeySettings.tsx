@@ -20,17 +20,20 @@ export function AddonHotkeySettings({
 }) {
   const [bindings, setBindings] = useState<AddonHotkeyBinding[]>([])
   const [recording, setRecording] = useState<string | null>(null)
+  const [pending, setPending] = useState<string | null>(null)
   const [candidate, setCandidate] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const recorder = useRef<HTMLButtonElement>(null)
   const activeRef = useRef(active)
   const starting = useRef(false)
+  const generation = useRef(0)
 
   useEffect(() => {
     activeRef.current = active
     return () => {
       activeRef.current = false
+      generation.current += 1
     }
   }, [active])
 
@@ -142,16 +145,21 @@ export function AddonHotkeySettings({
               aria-label={`Rebind ${binding.label}`}
               aria-pressed={recording === binding.id}
               disabled={
-                saving || disabled || (!!recording && recording !== binding.id)
+                saving ||
+                disabled ||
+                !!pending ||
+                (!!recording && recording !== binding.id)
               }
               onClick={async () => {
                 if (recording || starting.current || !activeRef.current) return
                 starting.current = true
+                const started = generation.current
+                setPending(binding.id)
                 setError('')
                 onRecordingChange(true)
                 try {
                   await window.hibi.setHotkeyRecording(true)
-                  if (!activeRef.current) {
+                  if (!activeRef.current || generation.current !== started) {
                     await window.hibi.setHotkeyRecording(false)
                     onRecordingChange(false)
                     return
@@ -163,6 +171,7 @@ export function AddonHotkeySettings({
                   setError('Could not record a shortcut. Try again.')
                 } finally {
                   starting.current = false
+                  setPending(null)
                 }
               }}
               onKeyDown={(event) => {
@@ -188,7 +197,9 @@ export function AddonHotkeySettings({
                 if (shortcut) setCandidate(shortcut)
               }}
             >
-              {recording === binding.id ? (
+              {pending === binding.id ? (
+                <span>Preparing shortcut…</span>
+              ) : recording === binding.id ? (
                 candidate ? (
                   <ShortcutKeys shortcut={candidate} platform={platform} />
                 ) : (
@@ -228,7 +239,11 @@ export function AddonHotkeySettings({
                   aria-label={`Reset shortcut for ${binding.label}`}
                   title="Reset shortcut"
                   disabled={
-                    saving || disabled || !!recording || !binding.overridden
+                    saving ||
+                    disabled ||
+                    !!pending ||
+                    !!recording ||
+                    !binding.overridden
                   }
                   onClick={() => void reset(binding.id)}
                 >
@@ -239,7 +254,11 @@ export function AddonHotkeySettings({
                   aria-label={`Clear shortcut for ${binding.label}`}
                   title="Clear shortcut"
                   disabled={
-                    saving || disabled || !!recording || !binding.shortcut
+                    saving ||
+                    disabled ||
+                    !!pending ||
+                    !!recording ||
+                    !binding.shortcut
                   }
                   onClick={() => void save(binding.id, '')}
                 >

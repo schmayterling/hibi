@@ -3047,6 +3047,9 @@
   "6d031af10da7": [
     "src/renderer/src/NotificationSettings.tsx"
   ],
+  "066305f46edb": [
+    "src/renderer/src/AddonHotkeySettings.tsx"
+  ],
   "ac81d61ec2b5": [
     "src/renderer/src/DependencySettings.tsx"
   ],

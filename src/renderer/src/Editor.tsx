@@ -525,6 +525,7 @@ export function MarkdownEditor({
     splitReadOnly,
     projectionReadOnly,
     plainSyncEligible,
+    syntaxVersion,
     markdownExtensions,
   })
   completionContext.current = {
@@ -535,11 +536,13 @@ export function MarkdownEditor({
     splitReadOnly,
     projectionReadOnly,
     plainSyncEligible,
+    syntaxVersion,
     markdownExtensions,
   }
   useEffect(() => {
     const manager = editor?.markdown
     if (!editor || !manager || !markdownDocument) return
+    const serializeCompletionSource = markdownSerializer(manager, true)
     const view = editor.view
     const menu = document.createElement('div')
     menu.id = `rich-completions-${crypto.randomUUID()}`
@@ -614,6 +617,7 @@ export function MarkdownEditor({
         context.splitReadOnly ||
         context.projectionReadOnly ||
         !context.plainSyncEligible ||
+        markdownSyntax.version() !== context.syntaxVersion ||
         !editor.isEditable ||
         view.composing ||
         !view.hasFocus()
@@ -638,7 +642,16 @@ export function MarkdownEditor({
         !selection.empty ||
         !selection.$head.parent.isTextblock ||
         selection.$head.parent.type.spec.code ||
-        selection.$head.marks().some((mark) => mark.type.spec.code) ||
+        selection.$head.marks().some((mark) => mark.type.spec.code)
+      )
+        return null
+      if (!plainSync.current)
+        plainSync.current = createPlainSourceSync(
+          source,
+          view.state.doc,
+          serializeCompletionSource(view.state.doc),
+        )
+      if (
         plainSync.current?.map(
           source,
           view.state.doc,

@@ -508,6 +508,8 @@ export type AddonContext = {
     ) => Promise<() => void>
   }
   dependencies: import('../shared/dependencies').DependencyApi
+  /** Namespaced JSON state retained across disablement. Session values expire on stop. */
+  storage: import('../shared/addon-storage').AddonStorageApi
   /** Enabled addon settings. Registrations are removed when the addon stops. */
   settings: SettingsApi
   colorschemes: {

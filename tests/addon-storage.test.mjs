@@ -379,7 +379,9 @@ test('deactivation waits for pending session writes and renderer subscriptions s
     for (const callback of callbacks) callback(change)
   })
   t.after(release)
+  assert.equal(callbacks.size, 0)
   const handle = await scope.api.session('draft', 1)
+  assert.equal(callbacks.size, 1)
   let notifications = 0
   handle.subscribe(() => {
     throw new Error('bad subscriber')

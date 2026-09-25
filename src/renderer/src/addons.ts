@@ -43,6 +43,7 @@ import { createTooltipScope } from '../../ui/tooltip-store'
 import { createAddonGlobalShortcuts } from './addon-global-shortcuts'
 import { createAddonOverrides } from './addon-overrides'
 import { addonRegistry } from './addon-registry'
+import { createAddonStorageScope } from './addon-storage'
 import { addonViews } from './addon-views'
 import { codeHtml, codeLanguages } from './code-languages'
 import { colorschemes } from './colorschemes'
@@ -103,6 +104,7 @@ type Environment = Omit<
   | 'toolbar'
   | 'tooltips'
   | 'settings'
+  | 'storage'
   | 'dependencies'
   | 'globalShortcuts'
 > & {
@@ -451,6 +453,11 @@ export function useAddons(
       )
         continue
       let disposed = false
+      const storageScope = createAddonStorageScope(
+        id,
+        () => !disposed,
+        window.hibi,
+      )
       const overrides = createAddonOverrides(id)
       const dialogScope = dialogService.scope()
       const toastScope = toastService.scope()
@@ -592,6 +599,7 @@ export function useAddons(
       const stop = () => {
         if (disposed) return
         disposed = true
+        storageScope.dispose()
         started.delete(id)
         activation
           .get(id)
@@ -656,6 +664,7 @@ export function useAddons(
         running.set(id, { addon, stop })
         const start = () =>
           addon.start({
+            storage: storageScope.api,
             dependencies: {
               list: () =>
                 disposed

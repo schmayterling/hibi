@@ -6,6 +6,10 @@ import {
   type AddonCommandInvocation,
   type AddonHotkeyBinding,
 } from '../shared/addon-hotkeys'
+import {
+  ADDON_STORAGE_CHANNELS,
+  type AddonStorageChange,
+} from '../shared/addon-storage'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
 import { DEPENDENCY_CHANNELS } from '../shared/dependencies'
@@ -296,6 +300,19 @@ if (process.isMainFrame) {
     getAddonStates: () => ipcRenderer.invoke(ADDON_CHANNELS.states),
     setAddonEnabled: (id, enabled) =>
       ipcRenderer.invoke(ADDON_CHANNELS.enable, id, enabled),
+    readAddonStorage: (request) =>
+      transport.invoke(ADDON_STORAGE_CHANNELS.read, request),
+    writeAddonStorage: (request) =>
+      transport.invoke(ADDON_STORAGE_CHANNELS.write, request),
+    onAddonStorageChanged: (callback) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        change: AddonStorageChange,
+      ) => callback(change)
+      transport.on(ADDON_STORAGE_CHANNELS.changed, listener)
+      return () =>
+        transport.removeListener(ADDON_STORAGE_CHANNELS.changed, listener)
+    },
     invokeAddon: (id, method, input) =>
       ipcRenderer.invoke(ADDON_CHANNELS.invoke, id, method, input),
     queryAddon: (id, method, input) =>

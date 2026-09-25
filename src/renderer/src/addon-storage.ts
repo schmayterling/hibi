@@ -66,7 +66,7 @@ export function createAddonStorageScope(
         console.error('Could not notify addon storage subscriber:', error)
       }
   }
-  const release = bridge.onAddonStorageChanged((change) => {
+  const onChange = (change: AddonStorageChange) => {
     if (!active() || change.owner !== owner) return
     for (const handle of handles.values()) {
       if (handle.key !== change.key || !sameScope(handle.scope, change.scope))
@@ -85,7 +85,8 @@ export function createAddonStorageScope(
           : change.current
       notify(handle)
     }
-  })
+  }
+  let release: (() => void) | undefined
 
   function open<T>(
     scope: AddonStorageScope,
@@ -93,6 +94,7 @@ export function createAddonStorageScope(
     version: number,
   ): Promise<AddonStorageHandle<T>> {
     requireActive()
+    release ??= bridge.onAddonStorageChanged(onChange)
     const identity = JSON.stringify([scope, key, version])
     let loading = pending.get(identity)
     if (!loading) {
@@ -191,7 +193,8 @@ export function createAddonStorageScope(
     api,
     dispose() {
       disposed = true
-      release()
+      release?.()
+      release = undefined
       for (const handle of handles.values()) {
         handle.current = { status: 'unavailable', reason: 'stale-activation' }
         handle.listeners.clear()

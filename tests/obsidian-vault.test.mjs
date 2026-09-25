@@ -142,9 +142,9 @@ test('Obsidian vault opens in place with wiki links, SVG embeds and backup promp
     `${process.platform === 'darwin' ? 'Meta' : 'Control'}+Shift+o`,
   )
   await warning.waitFor()
-  assert.equal(await warning.locator('.dialog-content').isVisible(), false)
+  assert.equal(await warning.locator('.dialog-content').isVisible(), true)
   const continueButton = warning
-    .locator('.dialog-footer')
+    .locator('.dialog-actions')
     .getByRole('button', { name: 'Continue' })
   await continueButton.click()
   await warning.waitFor({ state: 'hidden' })

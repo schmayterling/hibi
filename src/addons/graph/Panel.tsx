@@ -1,10 +1,11 @@
 import { CircleAlert, FileText, Network } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { WorkspaceGraphItem } from '../../shared/workspace-query'
 import type { AddonContext } from '../api'
 import { Button, ControlRow, Panel, PanelMessage, TextInput } from '../ui'
-import { useWorkspaceSnapshot } from '../workspace-snapshot'
+import { useWorkspaceQueryTarget } from '../use-workspace-query'
 import { GraphCanvas } from './Canvas'
-import { noteGraph } from './model'
+import { metadataGraph } from './model'
 
 export function GraphPanel({
   context,
@@ -17,27 +18,96 @@ export function GraphPanel({
   initialQuery?: string
   onExpand?: (query: string) => void
 }) {
-  const { snapshot, workspace, loading, error } = useWorkspaceSnapshot(context)
+  const {
+    target,
+    workspace,
+    loading: targetLoading,
+    error: targetError,
+  } = useWorkspaceQueryTarget(context)
   const [query, setQuery] = useState(initialQuery)
-  const previous = useRef<ReturnType<typeof noteGraph> | null>(null)
-  const full = useMemo(() => {
-    const next = noteGraph(snapshot?.pages ?? [])
-    const last = previous.current
-    if (
-      last &&
-      last.nodes.length === next.nodes.length &&
-      last.edges.length === next.edges.length &&
-      last.nodes.every((node, index) => node.id === next.nodes[index]?.id) &&
-      last.edges.every(
-        (edge, index) =>
-          edge.source === next.edges[index]?.source &&
-          edge.target === next.edges[index]?.target,
-      )
-    )
-      return last
-    previous.current = next
-    return next
-  }, [snapshot])
+  const previous = useRef<ReturnType<typeof metadataGraph> | null>(null)
+  const [result, setResult] = useState<{
+    workspaceId: string
+    generation: number
+    graph: ReturnType<typeof metadataGraph>
+    complete: boolean
+  } | null>(null)
+  const [queryError, setQueryError] = useState('')
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    if (!target) {
+      setResult(null)
+      setLoading(false)
+      return
+    }
+    let active = true
+    setLoading(true)
+    setQueryError('')
+    const load = async () => {
+      try {
+        const items: WorkspaceGraphItem[] = []
+        let cursor: string | undefined
+        let complete = false
+        do {
+          const response = await context.workspace.query({
+            target,
+            kind: 'graph',
+            ...(cursor ? { cursor } : {}),
+            limit: 100,
+          })
+          if (!response.ok) throw new Error(response.message)
+          if (response.value.kind !== 'graph')
+            throw new Error('Invalid graph query.')
+          items.push(...response.value.items)
+          complete = response.value.complete
+          if (!response.value.hasMore) break
+          if (!response.value.nextCursor)
+            throw new Error('Graph query stopped early.')
+          cursor = response.value.nextCursor
+        } while (active)
+        if (!active) return
+        const next = metadataGraph(items)
+        const last = previous.current
+        const graph =
+          last &&
+          last.nodes.length === next.nodes.length &&
+          last.edges.length === next.edges.length &&
+          last.nodes.every(
+            (node, index) => node.id === next.nodes[index]?.id,
+          ) &&
+          last.edges.every(
+            (edge, index) =>
+              edge.source === next.edges[index]?.source &&
+              edge.target === next.edges[index]?.target,
+          )
+            ? last
+            : next
+        previous.current = graph
+        setResult({
+          workspaceId: target.workspaceId,
+          generation: target.workspaceGeneration,
+          graph,
+          complete,
+        })
+      } catch (error) {
+        if (active)
+          setQueryError(error instanceof Error ? error.message : String(error))
+      } finally {
+        if (active) setLoading(false)
+      }
+    }
+    void load()
+    return () => {
+      active = false
+    }
+  }, [context, target])
+  const current =
+    result?.workspaceId === target?.workspaceId &&
+    result?.generation === target?.workspaceGeneration
+      ? result
+      : null
+  const full = current?.graph ?? metadataGraph([])
+  const error = targetError || queryError
   const connections = useMemo(() => {
     const neighbors = new Set<string>()
     for (const edge of full.edges)
@@ -88,7 +158,7 @@ export function GraphPanel({
         >
           {error}
         </PanelMessage>
-      ) : loading && !snapshot ? (
+      ) : (targetLoading || loading) && !current ? (
         <PanelMessage
           icon={<Network size={24} />}
           title="Reading workspace…"
@@ -108,6 +178,7 @@ export function GraphPanel({
             {graph.nodes.length} of {graph.total} notes · {graph.edges.length}{' '}
             {graph.edges.length === 1 ? 'connection' : 'connections'}
             {graph.total > 500 ? ' · filter to see more notes' : ''}
+            {current && !current.complete ? ' · graph index incomplete' : ''}
           </p>
           {graph.nodes.length ? (
             <GraphCanvas

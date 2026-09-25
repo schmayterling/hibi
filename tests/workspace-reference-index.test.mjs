@@ -194,6 +194,28 @@ test('tag summaries cap distinct names while exact queries still find later tags
   assert.deepEqual(index.tagged('tag2000', 0, 10).items, ['a.md'])
 })
 
+test('tag suggestions match prefixes and rank by note count then name', () => {
+  const index = new WorkspaceReferenceIndex()
+  index.apply(workspace, [
+    page('a.md', '#Work #work/task #work/idea #work/low'),
+    page('b.md', '#WORK #work/idea'),
+    page('c.md', '#work/task #personal'),
+  ])
+  assert.deepEqual(index.tags(0, 10, 'work').items, [
+    { tag: 'work', count: 2 },
+    { tag: 'work/idea', count: 2 },
+    { tag: 'work/task', count: 2 },
+    { tag: 'work/low', count: 1 },
+  ])
+  assert.deepEqual(index.tags(1, 1, 'work'), {
+    items: [{ tag: 'work/idea', count: 2 }],
+    hasMore: true,
+    nextOffset: 2,
+    capReached: false,
+  })
+  assert.deepEqual(index.tags(0, 10, 'idea').items, [])
+})
+
 test('oversized frontmatter never reaches reference or tag parsers', () => {
   let parses = 0
   const index = new WorkspaceReferenceIndex((source) => {

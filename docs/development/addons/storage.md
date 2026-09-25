@@ -34,6 +34,6 @@ Values must be JSON without cycles and fit within 10 MiB. Each addon and scope c
 
 Persistent files live under Hibi's user data directory in `addon-storage/global/<addon>.json` and `addon-storage/workspace/<workspace-id>/<addon>.json`. Disabling or uninstalling an addon retains those files so re-enabling or reinstalling it restores preferences. Hibi does not automatically delete them. To export or clean up an addon's state, quit Hibi, back up or delete that addon's files, then reopen Hibi. Moving a workspace can change its path-derived ID; its old data remains available for manual recovery. If a file is corrupt or uses a newer host format, reads return `unavailable` and writes leave it untouched. Back up the file before replacing it, then restart Hibi to reload the repaired file.
 
-Storage does not protect secrets. Installed renderer addons share one renderer realm; owner names and main-process checks prevent mistakes but do not isolate mutually untrusted addon code. Use a separate host credential service for secrets.
+Storage does not protect secrets. Installed renderer addons share one renderer realm; owner names and main-process checks prevent mistakes but do not isolate mutually untrusted addon code. Use [host credentials](credentials.md) for secrets.
 
 The built-in Export addon moves valid earlier `localStorage` options into its workspace store when the Export dialog first opens. It waits for the durable write and keeps the earlier key as a recovery copy. Corrupt or newer stored options show a warning and are not overwritten.

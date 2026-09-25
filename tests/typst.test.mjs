@@ -17,7 +17,7 @@ import { renameDocument } from './rename.mjs'
 import { uiName } from './ui.mjs'
 
 test('typst documents and markdown blocks preview locally, export, and preserve source', {
-  timeout: 75000,
+  timeout: 120000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-typst-test-'))
   const notes = join(root, 'notes')
@@ -76,13 +76,13 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     .click()
   const preview = page.getByAltText(/Typst document preview/)
   await page.locator('.typst-preview').waitFor()
-  // The native compile has its own 10-second deadline after worker startup.
+  // Native module loading and system font initialization have separate deadlines before compilation.
   await page.waitForFunction(
     () =>
       document.querySelector('.typst-preview')?.getAttribute('aria-busy') ===
       'false',
     undefined,
-    { timeout: 35000 },
+    { timeout: 65000 },
   )
   assert.equal(
     await preview.isVisible(),

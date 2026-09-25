@@ -1,15 +1,21 @@
 import { createHash } from 'node:crypto'
 import { join, relative } from 'node:path'
-import { NodeCompiler } from '@myriaddreamin/typst-ts-node-compiler'
+import type { NodeCompiler } from '@myriaddreamin/typst-ts-node-compiler'
 import { withinProject } from '../_shared/document-project'
 import type { CompileJob } from './compiler'
 
 let compiler: NodeCompiler | null = null
+let compilerClass: typeof NodeCompiler | null = null
 let previousEntry: string | null = null
 let originals = new Map<string, Buffer>()
 let fontKey = ''
-process.parentPort.on('message', ({ data }: { data: CompileJob }) => {
+process.parentPort.on('message', async ({ data }: { data: CompileJob }) => {
   try {
+    if (!compilerClass) {
+      process.parentPort.postMessage({ phase: 'loading-native' })
+      compilerClass = (await import('@myriaddreamin/typst-ts-node-compiler'))
+        .NodeCompiler
+    }
     const fonts = data.files?.filter(([path]) =>
       /\.(ttf|otf|ttc|otc)$/i.test(path),
     )
@@ -17,7 +23,8 @@ process.parentPort.on('message', ({ data }: { data: CompileJob }) => {
     for (const [path, bytes] of fonts ?? []) fontHash.update(path).update(bytes)
     const nextFontKey = fonts ? fontHash.digest('hex') : fontKey
     if (!compiler || nextFontKey !== fontKey) {
-      compiler = NodeCompiler.create({
+      process.parentPort.postMessage({ phase: 'initializing-fonts' })
+      compiler = compilerClass.create({
         workspace: data.sandbox,
         fontArgs: [
           { fontBlobs: fonts?.map(([, bytes]) => Buffer.from(bytes)) ?? [] },

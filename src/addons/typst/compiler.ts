@@ -404,15 +404,32 @@ export async function compileTypst(
           const message = async (
             result:
               | (TypstResult & { pdf?: Uint8Array; missing?: string[] })
-              | { phase: 'compiling' },
+              | {
+                  phase: 'loading-native' | 'initializing-fonts' | 'compiling'
+                },
           ) => {
             if ('phase' in result) {
-              arm(
-                10000,
-                new Error(
-                  'Typst compilation took longer than 10 seconds. Simplify the document and try again.',
-                ),
-              )
+              if (result.phase === 'loading-native')
+                arm(
+                  15000,
+                  new Error(
+                    'Typst native module took too long to load. Try again.',
+                  ),
+                )
+              else if (result.phase === 'initializing-fonts')
+                arm(
+                  30000,
+                  new Error(
+                    'Typst fonts took too long to initialize. Try again.',
+                  ),
+                )
+              else
+                arm(
+                  10000,
+                  new Error(
+                    'Typst compilation took longer than 10 seconds. Simplify the document and try again.',
+                  ),
+                )
               return
             }
             clearTimeout(phaseTimer)
@@ -461,7 +478,7 @@ export async function compileTypst(
               timeout(
                 new Error('Typst project took too long to compile. Try again.'),
               ),
-            30000,
+            60000,
           )
           worker.once('exit', exited)
           worker.on('message', message)

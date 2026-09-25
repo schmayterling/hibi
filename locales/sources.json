@@ -4460,7 +4460,13 @@
   "aa462ad89611": [
     "src/addons/typst/Preview.tsx"
   ],
+  "ad67aa920f23": [
+    "src/addons/typst/compiler.ts"
+  ],
   "ebc8ff48bea7": [
+    "src/addons/typst/compiler.ts"
+  ],
+  "94348652d03c": [
     "src/addons/typst/compiler.ts"
   ],
   "1f6a0ef92031": [

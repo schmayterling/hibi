@@ -1283,11 +1283,11 @@ export function useAddons(
               readText: (target, path) =>
                 disposed
                   ? Promise.reject(new Error('This addon has stopped.'))
-                  : window.hibi.readWorkspaceText(target, path),
+                  : window.hibi.readWorkspaceText(id, target, path),
               createText: (target, path, markdown) =>
                 disposed
                   ? Promise.reject(new Error('This addon has stopped.'))
-                  : window.hibi.createWorkspaceText(target, path, markdown),
+                  : window.hibi.createWorkspaceText(id, target, path, markdown),
               index: () =>
                 disposed
                   ? Promise.reject(

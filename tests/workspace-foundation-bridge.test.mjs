@@ -39,7 +39,8 @@ test('workspace addon bridge keeps scoped reads, creates, and changes together',
   assert.equal(snapshot.complete, true)
   const target = snapshot.target
   const read = await page.evaluate(
-    (captured) => window.hibi.readWorkspaceText(captured, 'existing.md'),
+    (captured) =>
+      window.hibi.readWorkspaceText('markdown', captured, 'existing.md'),
     target,
   )
   assert.deepEqual(read, {
@@ -52,11 +53,24 @@ test('workspace addon bridge keeps scoped reads, creates, and changes together',
     },
   })
   const created = await page.evaluate(
-    (captured) => window.hibi.createWorkspaceText(captured, 'new.md', '# new'),
+    (captured) =>
+      window.hibi.createWorkspaceText('markdown', captured, 'new.md', '# new'),
     target,
   )
   assert.equal(created.ok, true)
+  assert.equal(created.value.ownerActiveAfterCommit, true)
   assert.equal(await readFile(join(workspace, 'new.md'), 'utf8'), '# new')
+  const disabled = await page.evaluate(
+    (captured) =>
+      window.hibi.createWorkspaceText(
+        'not-installed',
+        captured,
+        'denied.md',
+        '',
+      ),
+    target,
+  )
+  assert.equal(disabled.code, 'disposed')
   await page.waitForFunction(() => window.workspaceChanges.length > 0)
   assert.equal(
     (await page.evaluate(() => window.workspaceChanges)).every(
@@ -68,7 +82,12 @@ test('workspace addon bridge keeps scoped reads, creates, and changes together',
   )
   const duplicate = await page.evaluate(
     (captured) =>
-      window.hibi.createWorkspaceText(captured, 'new.md', 'overwrite'),
+      window.hibi.createWorkspaceText(
+        'markdown',
+        captured,
+        'new.md',
+        'overwrite',
+      ),
     target,
   )
   assert.deepEqual(duplicate, {

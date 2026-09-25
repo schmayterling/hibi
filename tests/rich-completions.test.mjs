@@ -33,6 +33,7 @@ test('rich completions replace exact plain text in one undo step and retract on 
     `export default () => ({
     async start(context) {
       window.completionCalls = 0
+      window.completionUnsafeRange = false
       const dispose = await context.editor.registerCompletionProvider(async (request) => {
         if (request.editor !== 'rich') return []
         window.completionCalls++
@@ -41,7 +42,7 @@ test('rich completions replace exact plain text in one undo step and retract on 
           label: 'hello',
           detail: 'plain text',
           insertText: 'hello',
-          from: request.selection.head - 3,
+          from: window.completionUnsafeRange ? 0 : request.selection.head - 3,
           to: request.selection.head,
         }]
       })
@@ -105,6 +106,25 @@ test('rich completions replace exact plain text in one undo step and retract on 
     (await page.evaluate(() => window.hibi.getDocument())).markdown.trim(),
     'hel',
   )
+  const beforeUnsafe = await page.evaluate(() => {
+    window.completionUnsafeRange = true
+    return window.completionCalls
+  })
+  await page.keyboard.press('Control+Space')
+  await page.waitForFunction(
+    (before) => window.completionCalls > before,
+    beforeUnsafe,
+  )
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  )
+  await menu.waitFor({ state: 'hidden' })
+  await page.evaluate(() => {
+    window.completionUnsafeRange = false
+  })
   await page.keyboard.press('Control+Space')
   await menu.getByRole('option', { name: /hello/ }).waitFor()
   await page.evaluate(() => window.stopCompletionProbe())

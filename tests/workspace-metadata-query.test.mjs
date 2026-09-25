@@ -35,7 +35,7 @@ const bundle = await build({
       name: 'metadata-host',
       setup(build) {
         build.onResolve({ filter: /^\.\/workspace$/ }, (args) =>
-          args.importer.endsWith('/workspace-metadata-query.ts')
+          /[/\\]workspace-metadata-query\.ts$/.test(args.importer)
             ? { path: args.path, namespace: 'metadata-host' }
             : null,
         )

@@ -385,6 +385,15 @@ test('installed proof addon migrates state and composes captured edits, queries,
         addon: (await window.hibi.getAddonStates()).find(
           ({ id }) => id === 'foundation-proof',
         ),
+        stages: performance
+          .getEntries()
+          .filter((entry) => entry.name.includes('foundation-proof'))
+          .slice(-8)
+          .map((entry) => ({
+            name: entry.name,
+            duration: entry.duration,
+            status: entry.detail?.status,
+          })),
         alerts: [...document.querySelectorAll('[role="alert"]')]
           .map((element) => element.textContent?.slice(0, 160))
           .slice(0, 3),

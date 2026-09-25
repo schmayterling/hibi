@@ -56,10 +56,12 @@ test('proof package uses public addon surface and bounds editor intents', async 
       from: 0,
       to: 3,
     })
-    assert.equal(
-      completionItems(request('[[pr'))[0].insertText,
-      '[[proof-note]]',
-    )
+    if (editor === 'source')
+      assert.equal(
+        completionItems(request('[[pr'))[0].insertText,
+        '[[proof-note]]',
+      )
+    else assert.deepEqual(completionItems(request('[[pr')), [])
     assert.deepEqual(completionItems(request('ordinary text')), [])
     assert.equal(
       hoverInfo({ selectedText: '#proof', before: '', after: '' }).label,

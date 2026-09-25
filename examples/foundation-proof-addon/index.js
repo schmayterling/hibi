@@ -34,6 +34,7 @@ export function completionItems(request) {
   if (!match) return []
   const token = match[0]
   const link = token.startsWith('[[')
+  if (link && request.editor !== 'source') return []
   const value = link ? '[[proof-note]]' : '#proof'
   if (!value.toLowerCase().startsWith(token.toLowerCase())) return []
   return [

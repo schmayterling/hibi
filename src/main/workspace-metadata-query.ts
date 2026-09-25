@@ -1,8 +1,14 @@
+import { randomUUID } from 'node:crypto'
 import type {
   OperationResult,
   WorkspaceTarget,
 } from '../shared/foundation-contracts'
-import type { NoteHeading, PropertyScalar } from '../shared/note-metadata.ts'
+import type { PropertyScalar } from '../shared/note-metadata.ts'
+import type {
+  QueryFailure,
+  WorkspaceReferenceQueryBase,
+  WorkspaceReferenceQueryResult,
+} from '../shared/workspace-query.ts'
 import {
   indexWorkspace,
   isCurrentWorkspaceTarget,
@@ -10,51 +16,21 @@ import {
   workspaceChangeCursor,
   workspaceIndexRevision,
 } from './workspace'
-import { WorkspaceReferenceIndex } from './workspace-reference-index'
-
-type QueryFailure = 'stale' | 'not-found' | 'limit-exceeded' | 'unsupported'
-
-interface QueryBase {
-  readonly target: WorkspaceTarget
-  /** Source index includes wiki links and hashtags regardless of preview flavor choice. */
-  readonly syntax: 'gfm+wikilinks+hashtags'
-  readonly sequence: number
-  readonly stale: boolean
-  readonly complete: boolean
-  readonly capReached: boolean
-}
-
-export type WorkspaceReferenceQueryResult = QueryBase &
-  (
-    | {
-        readonly kind: 'links' | 'backlinks'
-        readonly path: string
-        readonly items: readonly string[]
-        readonly hasMore: boolean
-        readonly nextOffset: number
-      }
-    | {
-        readonly kind: 'tag' | 'search-paths' | 'property'
-        readonly items: readonly string[]
-        readonly hasMore: boolean
-        readonly nextOffset: number
-        readonly metadataComplete?: boolean
-      }
-    | {
-        readonly kind: 'headings'
-        readonly path: string
-        readonly items: readonly NoteHeading[]
-        readonly hasMore: boolean
-        readonly nextOffset: number
-      }
-    | {
-        readonly kind: 'resolve'
-        readonly from: string
-        readonly resolved: string | null
-      }
-  )
+import {
+  type TextSearchPosition,
+  WorkspaceReferenceIndex,
+} from './workspace-reference-index'
 
 const references = new WorkspaceReferenceIndex()
+type SearchCursorState = {
+  target: WorkspaceTarget
+  sequence: number
+  revision: number
+  sourceVersions: string
+  query: string
+  position: TextSearchPosition
+}
+const searchCursors = new Map<string, SearchCursorState>()
 let indexedTarget: WorkspaceTarget | null = null
 let indexedSequence = -1
 let indexedRevision = -1
@@ -62,6 +38,7 @@ let indexedSourceVersions = ''
 
 function clearCache(): void {
   references.clear()
+  searchCursors.clear()
   indexedTarget = null
   indexedSequence = -1
   indexedRevision = -1
@@ -119,7 +96,8 @@ export async function queryWorkspaceReferences(
     kind !== 'tag' &&
     kind !== 'property' &&
     kind !== 'headings' &&
-    kind !== 'search-paths'
+    kind !== 'search-paths' &&
+    kind !== 'search-text'
   )
     return failure('unsupported', 'This workspace query is not supported.')
   const path = request.path
@@ -153,15 +131,22 @@ export async function queryWorkspaceReferences(
   )
     return failure('unsupported', 'Choose a bounded property predicate.')
   if (
-    kind === 'search-paths' &&
+    (kind === 'search-paths' || kind === 'search-text') &&
     (typeof request.query !== 'string' ||
       !request.query.trim() ||
-      request.query.length > 256)
+      request.query.length > (kind === 'search-text' ? 128 : 256))
   )
     return failure(
       'unsupported',
-      'Choose a path search of 1 to 256 characters.',
+      `Choose a search of 1 to ${kind === 'search-text' ? 128 : 256} characters.`,
     )
+  if (
+    kind === 'search-text' &&
+    (request.offset !== undefined ||
+      (request.cursor !== undefined &&
+        (typeof request.cursor !== 'string' || request.cursor.length > 64)))
+  )
+    return failure('unsupported', 'Use a valid search cursor.')
   let offset = 0
   let limit = 50
   if (kind === 'resolve') {
@@ -173,7 +158,7 @@ export async function queryWorkspaceReferences(
     )
       return failure('unsupported', 'Choose a valid link target.')
   } else {
-    if (request.offset !== undefined) {
+    if (kind !== 'search-text' && request.offset !== undefined) {
       if (typeof request.offset !== 'number')
         return failure('unsupported', 'Choose a numeric query offset.')
       offset = request.offset
@@ -232,6 +217,7 @@ export async function queryWorkspaceReferences(
     return failure('stale', 'This workspace changed. Try again.')
   if (index) {
     references.apply(target, index.pages)
+    searchCursors.clear()
     indexedTarget = target
     indexedSequence = after.sequence
     indexedRevision = revision
@@ -239,7 +225,7 @@ export async function queryWorkspaceReferences(
   }
   if (pathRequired && !references.has(path as string))
     return failure('not-found', 'This document is not in the workspace index.')
-  const base: QueryBase = {
+  const base: WorkspaceReferenceQueryBase = {
     target,
     syntax: 'gfm+wikilinks+hashtags',
     sequence: after.sequence,
@@ -303,6 +289,54 @@ export async function queryWorkspaceReferences(
         ...references.searchPaths(request.query as string, offset, limit),
       },
     }
+  if (kind === 'search-text') {
+    let position: TextSearchPosition = { pathIndex: 0, sourceOffset: 0 }
+    if (request.cursor !== undefined) {
+      const old = searchCursors.get(request.cursor as string)
+      if (
+        !old ||
+        old.target.workspaceId !== target.workspaceId ||
+        old.target.workspaceGeneration !== target.workspaceGeneration ||
+        old.sequence !== after.sequence ||
+        old.revision !== revision ||
+        old.sourceVersions !== sourceVersions ||
+        old.query !== request.query
+      )
+        return failure('stale', 'This search changed. Start again.')
+      searchCursors.delete(request.cursor as string)
+      position = old.position
+    }
+    const result = references.searchText(
+      request.query as string,
+      position,
+      limit,
+    )
+    let nextCursor: string | null = null
+    if (result.hasMore) {
+      nextCursor = randomUUID()
+      if (searchCursors.size >= 16)
+        searchCursors.delete(searchCursors.keys().next().value as string)
+      searchCursors.set(nextCursor, {
+        target,
+        sequence: after.sequence,
+        revision,
+        sourceVersions,
+        query: request.query as string,
+        position: result.position,
+      })
+    }
+    return {
+      ok: true,
+      value: {
+        ...base,
+        kind,
+        items: result.items,
+        hasMore: result.hasMore,
+        nextCursor,
+        complete: base.complete && !result.hasMore,
+      },
+    }
+  }
   if (kind === 'headings') {
     const result = references.headings(path as string, offset, limit)
     return {

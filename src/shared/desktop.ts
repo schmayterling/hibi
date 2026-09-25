@@ -70,6 +70,39 @@ export type AppInfo = {
 }
 
 export type DesktopApi = {
+  getAddonHotkeys: () => Promise<import('./addon-hotkeys').AddonHotkeyBinding[]>
+  registerAddonHotkey: (
+    registration: import('./addon-hotkeys').AddonHotkeyRegistration,
+  ) => Promise<import('./addon-hotkeys').AddonHotkeyBinding[]>
+  unregisterAddonHotkey: (id: string, token: string) => Promise<void>
+  saveAddonHotkey: (
+    id: string,
+    shortcut: string,
+  ) => Promise<import('./addon-hotkeys').AddonHotkeyBinding[]>
+  resetAddonHotkey: (
+    id: string,
+  ) => Promise<import('./addon-hotkeys').AddonHotkeyBinding[]>
+  onAddonHotkeysChanged: (
+    callback: (
+      bindings: import('./addon-hotkeys').AddonHotkeyBinding[],
+    ) => void,
+  ) => () => void
+  onAddonCommand: (
+    callback: (
+      invocation: import('./addon-hotkeys').AddonCommandInvocation,
+    ) => void,
+  ) => () => void
+  registerGlobalShortcut: (
+    id: string,
+    accelerator: string,
+    token: string,
+  ) => Promise<void>
+  unregisterGlobalShortcut: (id: string, token: string) => Promise<void>
+  onGlobalShortcut: (
+    callback: (
+      invocation: import('./global-shortcuts').GlobalShortcutInvocation,
+    ) => void,
+  ) => () => void
   getUpdateState: () => Promise<import('./updates').UpdateState>
   setUpdateChannel: (
     channel: import('./updates').UpdateChannel,

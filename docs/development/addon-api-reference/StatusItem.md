@@ -2,7 +2,7 @@
 
 # StatusItem
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L174)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L178)
 
 <details>
 <summary>Declaration</summary>
@@ -40,7 +40,7 @@ type StatusItem = {
 
 ### verbatim
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L176)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L180)
 
 Keep case-sensitive content such as Vim commands unchanged by UI casing.
 
@@ -50,7 +50,7 @@ verbatim?: boolean
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L177)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L181)
 
 ```typescript
 id: string
@@ -58,7 +58,7 @@ id: string
 
 ### label
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L178)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L182)
 
 ```typescript
 label: string
@@ -66,7 +66,7 @@ label: string
 
 ### tooltip
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L179)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L183)
 
 ```typescript
 tooltip?: string
@@ -74,7 +74,7 @@ tooltip?: string
 
 ### when
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L181)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L185)
 
 Omit to show in every editor view. Empty labels hide the pill.
 
@@ -86,7 +86,7 @@ when?: 'normal' | 'source'
 
 ### onClick
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L182)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L186)
 
 ```typescript
 onClick?: () => void | Promise<void>

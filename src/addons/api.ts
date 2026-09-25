@@ -100,6 +100,10 @@ export type AddonCommandDescriptor = {
   id: string
   label: string
   keywords?: string
+  /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. */
+  defaultShortcut?: string
+  /** Show this command in a built-in application menu. */
+  menu?: { location: 'app'; group?: string; order?: number }
 }
 export type AddonSyntaxDescriptor = {
   id: string
@@ -260,9 +264,19 @@ export type AddonCommand = {
   keywords?: string
   /** Also show this command below the workspace tree. */
   workspace?: boolean
+  /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. */
+  defaultShortcut?: string
+  /** Show this command in a built-in application menu. */
+  menu?: { location: 'app'; group?: string; order?: number }
+  /** Cheap synchronous check against the context captured when invoked. */
+  when?: (
+    context: import('../shared/foundation-contracts').CommandExecutionContext,
+  ) => boolean
   /** Optional whole-note action exposed by the slash-commands addon. */
   slash?: AddonSlashCommand
-  run: () => void | Promise<void>
+  run: (
+    context: import('../shared/foundation-contracts').CommandExecutionContext,
+  ) => void | Promise<void>
 }
 
 export type AddonSlashCommand = {
@@ -483,6 +497,16 @@ export type SettingsApi = {
 
 /** APIs available while your renderer addon is enabled. Registrations are removed when it stops. */
 export type AddonContext = {
+  /** OS-wide shortcuts work while Hibi runs, even when another app has focus. */
+  globalShortcuts: {
+    /** Electron accelerator, such as CommandOrControl+Alt+N. Registration can fail if another app owns it. */
+    register: (
+      id: string,
+      accelerator: string,
+      /** Local command id. Callbacks remain supported for existing addons. */
+      command: string | (() => void | Promise<void>),
+    ) => Promise<() => void>
+  }
   dependencies: import('../shared/dependencies').DependencyApi
   /** Enabled addon settings. Registrations are removed when the addon stops. */
   settings: SettingsApi

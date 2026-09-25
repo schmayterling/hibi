@@ -71,11 +71,17 @@ Commands and toolbar buttons are separate registrations. Route the toolbar actio
 ```typescript
 const greet = () => context.notify('Hello.')
 
-context.commands.register({ id: 'greet', label: 'Say hello', run: greet })
+context.commands.register({
+  id: 'greet',
+  label: 'Say hello',
+  defaultShortcut: 'mod+alt+shift+g',
+  menu: { location: 'app' },
+  run: greet,
+})
 context.toolbar.register({ id: 'greet', label: 'Say hello', onClick: () => context.commands.execute('greet') })
 ```
 
-Toolbar and status-bar registrations return handles with `update` and `dispose` methods. Update an existing item when its value changes. Status-bar items should show useful state, such as a count, rather than repeat the addon name.
+The command appears in Hibi's Addons menu. Its in-app shortcut can be changed under **Settings → Hotkeys**; `mod` means Command on macOS and Control on Windows and Linux. Toolbar and status-bar registrations return handles with `update` and `dispose` methods. Update an existing item when its value changes. Status-bar items should show useful state, such as a count, rather than repeat the addon name.
 
 Users control toolbar order and each action's placement in Appearance settings. Actions can appear in the toolbar, stay in its dropdown, or be hidden. These choices persist across addon reloads. The shared [ToolbarPreferences](../addon-api-reference/ToolbarPreferences.md) API exposes them as `order` and `placements`; preserve other entries when changing one action. Context-specific `hidden` and `when` rules still apply.
 
@@ -90,6 +96,20 @@ Use `context.workspace.index()` for note text and drafts. It returns `null` when
 Throw when an attachment cannot be installed. Hibi displays the failure and keeps that editor read-only until the failing addon is disabled or successfully installed. Already attached rich-editor features are detached if a later attachment fails.
 
 Use `onInput()` to observe typed characters, or `onKeyEvent()` to observe editor key events. These hooks do not receive input from settings, search fields, or dialogs.
+
+## Add a system-wide shortcut
+
+Register a command, then assign it an Electron accelerator to run it while Hibi is open, even when another application has focus. The registration returns a removal function. Hibi also removes it when the addon stops. Registration rejects a shortcut already owned by another application.
+
+```typescript
+const remove = await context.globalShortcuts.register(
+  'capture',
+  'CommandOrControl+Alt+N',
+  'capture',
+)
+```
+
+The command receives a context captured when the shortcut is pressed. Existing addons may still pass a callback as the third argument. Choose a shortcut that does not overlap with a Hibi editing command. System-wide shortcuts are active only while Hibi is running and this addon is enabled. The operating system may reserve some combinations.
 
 ## Clean up
 

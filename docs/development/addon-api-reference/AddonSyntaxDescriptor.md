@@ -2,7 +2,7 @@
 
 # AddonSyntaxDescriptor
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L104)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L108)
 
 <details>
 <summary>Declaration</summary>
@@ -32,7 +32,7 @@ type AddonSyntaxDescriptor = {
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L105)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L109)
 
 ```typescript
 id: string
@@ -40,7 +40,7 @@ id: string
 
 ### kind
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L106)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L110)
 
 ```typescript
 kind: 'flavor' | 'projection'
@@ -48,7 +48,7 @@ kind: 'flavor' | 'projection'
 
 ### markers
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L108)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L112)
 
 Unique literal source markers, not regular expressions. Detection is conservative.
 
@@ -58,7 +58,7 @@ markers: readonly string[]
 
 ### preservation.fallback
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L109)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L113)
 
 ```typescript
 preservation.fallback: 'source' | 'literal'

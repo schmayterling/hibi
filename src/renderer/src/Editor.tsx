@@ -16,6 +16,7 @@ import {
   lazy,
   type MouseEvent,
   Suspense,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -487,6 +488,26 @@ export function MarkdownEditor({
     },
     [markdownExtensions, flavors, syntaxVersion],
   )
+  const updateRichEditable = useCallback(() => {
+    if (!editor || editor.isDestroyed) return
+    editor.setEditable(
+      paneMode !== 'markdown' &&
+        !splitReadOnly &&
+        !projectionReadOnly &&
+        !disabled &&
+        !richExtensionError &&
+        richSourceCurrent(editor),
+      false,
+    )
+    editor.view.dom.setAttribute('aria-readonly', String(!editor.isEditable))
+  }, [
+    editor,
+    paneMode,
+    splitReadOnly,
+    projectionReadOnly,
+    disabled,
+    richExtensionError,
+  ])
   // biome-ignore lint/correctness/useExhaustiveDependencies: maps belong to this rich editor and syntax generation.
   const positions = useMemo<MarkdownPositionLookup>(() => {
     const fallback = createMarkdownPositionCache()
@@ -800,6 +821,7 @@ export function MarkdownEditor({
         preview = null
         setRichInputError('')
         if (!plainSync.current) certify(session.snapshot())
+        updateRichEditable()
         return
       }
       const snapshot = session.snapshot(),
@@ -848,6 +870,7 @@ export function MarkdownEditor({
         preview = null
         certify(snapshot)
       }
+      updateRichEditable()
     }
     retryRich.current = visible ? sync : () => {}
     const flush = () => {
@@ -1006,6 +1029,7 @@ export function MarkdownEditor({
     documentState.revision,
     content,
     positions,
+    updateRichEditable,
   ])
   const richEditContext = useRef({
     document: documentState,
@@ -1714,26 +1738,8 @@ export function MarkdownEditor({
     )
 
   useLayoutEffect(() => {
-    if (!editor) return
-    // why the fuck is this here
-    // Document size and Markdown syntax must never disable visual editing.
-    editor.setEditable(
-      paneMode !== 'markdown' &&
-        !splitReadOnly &&
-        !projectionReadOnly &&
-        !disabled &&
-        !richExtensionError,
-      false,
-    )
-    editor.view.dom.setAttribute('aria-readonly', String(!editor.isEditable))
-  }, [
-    editor,
-    paneMode,
-    splitReadOnly,
-    projectionReadOnly,
-    disabled,
-    richExtensionError,
-  ])
+    updateRichEditable()
+  }, [updateRichEditable])
 
   useEffect(() => {
     if (!editor) return

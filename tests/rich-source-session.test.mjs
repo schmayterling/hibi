@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, stopElectronTree } from './electron.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('S01/S03/S07/J01: accepted rich transformations are savable before callbacks and rejected changes stay atomic', {
   timeout: 45000,
@@ -248,5 +249,52 @@ test('S01/S03/S07/J01: accepted rich transformations are savable before callback
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     'quiet',
+  )
+
+  stage = 'failed source echo stays read-only until retry'
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await page
+    .getByRole('textbox', { name: 'Markdown editor', exact: true })
+    .fill('source echo fixture')
+  await waitForAsync(
+    page,
+    async () =>
+      (await window.hibi.getDocument()).markdown === 'source echo fixture',
+  )
+  await page.evaluate(() => {
+    const editor = document.querySelector('.tiptap').editor
+    const rejectOnce = ({ transaction }) => {
+      if (transaction.doc.textContent !== 'source echo fixture') return
+      editor.off('transaction', rejectOnce)
+      throw new Error('Fixture rejected the source echo after rendering.')
+    }
+    editor.on('transaction', rejectOnce)
+  })
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await page
+    .getByText('Fixture rejected the source echo after rendering.')
+    .waitFor()
+  const failedSync = await page.evaluate(async () => {
+    const rich = document.querySelector('.tiptap')
+    return {
+      source: (await window.hibi.getDocument()).markdown,
+      rendered: rich.editor.state.doc.textContent,
+      editable: rich.isContentEditable,
+      readonly: rich.getAttribute('aria-readonly'),
+    }
+  })
+  assert.deepEqual(failedSync, {
+    source: 'source echo fixture',
+    rendered: 'source echo fixture',
+    editable: false,
+    readonly: 'true',
+  })
+  await page.getByRole('button', { name: 'Retry', exact: true }).click()
+  await page.waitForFunction(
+    () => document.querySelector('.tiptap')?.isContentEditable,
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    'source echo fixture',
   )
 })

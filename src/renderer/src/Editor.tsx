@@ -44,6 +44,10 @@ import type {
   DocumentSession,
 } from '../../shared/document-session'
 import type { DocumentView } from '../../shared/document-types'
+import type {
+  EditorContextAction,
+  EditorInteractionRequest,
+} from '../../shared/editor-interactions'
 import type { ViewId } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import type { SourceSnapshot } from '../../shared/source-buffer'
@@ -65,6 +69,8 @@ import { documentRuntime } from './document-runtime'
 import { certifyVisualEcho } from './document-shell'
 import { type CursorSettings, EditorCursor } from './EditorCursor'
 import { emitEditorKeyEvent } from './editor-events'
+import { sameInteraction } from './editor-interaction-broker'
+import { attachEditorInteractions } from './editor-interactions'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
 import { flavors as flavorRegistry } from './flavors'
@@ -936,6 +942,7 @@ export function MarkdownEditor({
     menu.addEventListener('pointerdown', (event) => event.preventDefault())
     view.dom.addEventListener('keydown', onKeyDown, true)
     view.dom.addEventListener('blur', dismiss)
+    view.dom.addEventListener('hibi:editor-actions-open', dismiss)
     document.addEventListener('pointerdown', onOutside, true)
     document.addEventListener('scroll', onScroll, true)
     window.addEventListener('resize', reposition)
@@ -947,11 +954,151 @@ export function MarkdownEditor({
       editor.off('transaction', onTransaction)
       view.dom.removeEventListener('keydown', onKeyDown, true)
       view.dom.removeEventListener('blur', dismiss)
+      view.dom.removeEventListener('hibi:editor-actions-open', dismiss)
       document.removeEventListener('pointerdown', onOutside, true)
       document.removeEventListener('scroll', onScroll, true)
       window.removeEventListener('resize', reposition)
       window.removeEventListener('blur', dismiss)
       menu.remove()
+    }
+  }, [editor, markdownDocument])
+  useEffect(() => {
+    const manager = editor?.markdown
+    if (!editor || !manager || !markdownDocument) return
+    const view = editor.view
+    const serialize = markdownSerializer(manager, true)
+    const scope = documentEdits.scope(() => false)
+    const capture = (position: number): EditorInteractionRequest | null => {
+      const context = completionContext.current
+      if (
+        editor.isDestroyed ||
+        context.paneMode === 'markdown' ||
+        context.disabled ||
+        context.splitReadOnly ||
+        context.projectionReadOnly ||
+        !context.plainSyncEligible ||
+        markdownSyntax.version() !== context.syntaxVersion ||
+        !editor.isEditable ||
+        view.composing ||
+        !view.hasFocus() ||
+        !richSourceCurrent(editor) ||
+        !Number.isSafeInteger(position) ||
+        position < 0 ||
+        position > view.state.doc.content.size
+      )
+        return null
+      const target = documentRuntime.captureActiveView()
+      const current = documentRuntime.get(context.tabId)
+      const source = documentRuntime.session(context.tabId)?.snapshot()
+      const selection = view.state.selection
+      if (
+        !target ||
+        target.viewId !== context.viewId ||
+        !documentRuntime.isLiveView(target) ||
+        !current ||
+        !source ||
+        current.contentVersion !== source.version ||
+        !(selection instanceof TextSelection) ||
+        !selection.$from.sameParent(selection.$to) ||
+        !selection.$from.parent.isTextblock ||
+        selection.$from.parent.type.spec.code ||
+        selection.$from.marks().some((mark) => mark.type.spec.code)
+      )
+        return null
+      const at = view.state.doc.resolve(position)
+      if (!at.parent.isTextblock || at.parent.type.spec.code) return null
+      if (!plainSync.current)
+        plainSync.current = createPlainSourceSync(
+          source,
+          view.state.doc,
+          serialize(view.state.doc),
+        )
+      if (
+        plainSync.current?.map(source, view.state.doc, position, 'rich') == null
+      )
+        return null
+      const offset = at.parentOffset
+      return {
+        view: target,
+        contentVersion: current.contentVersion,
+        editor: 'rich',
+        documentLength: view.state.doc.content.size,
+        position,
+        selection: { anchor: selection.anchor, head: selection.head },
+        before: at.parent.textBetween(Math.max(0, offset - 128), offset),
+        after: at.parent.textBetween(
+          offset,
+          Math.min(at.parent.content.size, offset + 128),
+        ),
+        selectedText: view.state.doc.textBetween(selection.from, selection.to),
+      }
+    }
+    const apply = (
+      action: EditorContextAction,
+      request: EditorInteractionRequest,
+    ) => {
+      if (!sameInteraction(request, capture(request.position))) return false
+      const source = documentRuntime
+        .session(completionContext.current.tabId)
+        ?.snapshot()
+      if (!source || source.version !== request.contentVersion) return false
+      const { from, to, insertText } = action.edit
+      if (/[\r\n]/.test(insertText)) return false
+      const start = view.state.doc.resolve(from)
+      const end = view.state.doc.resolve(to)
+      if (!start.sameParent(end) || !start.parent.isTextblock) return false
+      const rawFrom = plainSync.current?.map(
+        source,
+        view.state.doc,
+        from,
+        'rich',
+      )
+      const rawTo = plainSync.current?.map(source, view.state.doc, to, 'rich')
+      if (
+        rawFrom == null ||
+        rawTo == null ||
+        rawFrom > rawTo ||
+        source.sliceRaw(rawFrom, rawTo) !== view.state.doc.textBetween(from, to)
+      )
+        return false
+      const current = documentRuntime.get(completionContext.current.tabId)
+      if (!current) return false
+      const result = scope.apply({
+        requestId: crypto.randomUUID(),
+        tabId: current.tabId,
+        revision: current.revision,
+        contentVersion: source.version,
+        changes: [
+          {
+            from: rawFrom,
+            to: rawTo,
+            expectedText: source.sliceRaw(rawFrom, rawTo),
+            insert: insertText,
+          },
+        ],
+      })
+      if (result.status !== 'applied') setRichInputError(result.message)
+      return result.status === 'applied'
+    }
+    const detach = attachEditorInteractions({
+      element: view.dom,
+      positionAt: (x, y) => {
+        const result = view.posAtCoords({ left: x, top: y })
+        return result && result.inside >= 0 ? result.pos : null
+      },
+      anchorAt: (position) => view.coordsAtPos(position),
+      selectionPosition: () => view.state.selection.head,
+      capture,
+      apply,
+      focus: () => view.focus(),
+    })
+    const invalidate = () =>
+      view.dom.dispatchEvent(new Event('hibi:editor-interactions-invalidate'))
+    editor.on('transaction', invalidate)
+    return () => {
+      editor.off('transaction', invalidate)
+      detach()
+      scope.dispose()
     }
   }, [editor, markdownDocument])
   // biome-ignore lint/correctness/useExhaustiveDependencies: maps belong to this rich editor and syntax generation.

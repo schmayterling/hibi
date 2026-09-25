@@ -82,6 +82,19 @@ function loadCompletionBroker() {
     })
   return completionBrokerModule
 }
+let interactionBrokerModule: Promise<
+  typeof import('./editor-interaction-broker')
+> | null = null
+function loadInteractionBroker() {
+  if (!interactionBrokerModule)
+    interactionBrokerModule = import('./editor-interaction-broker').catch(
+      (error) => {
+        interactionBrokerModule = null
+        throw error
+      },
+    )
+  return interactionBrokerModule
+}
 
 export type RegisteredCommand = Omit<AddonCommand, 'run'> & {
   addonId: string
@@ -633,6 +646,12 @@ export function useAddons(
             completionBroker.stopOwner(completionOwner),
           )
           .catch((error) => latest.current.error(error))
+        void interactionBrokerModule
+          ?.then(({ hoverBroker, contextActionBroker }) => {
+            hoverBroker.stopOwner(completionOwner)
+            contextActionBroker.stopOwner(completionOwner)
+          })
+          .catch((error) => latest.current.error(error))
         storageScope.dispose()
         started.delete(id)
         activation
@@ -1087,6 +1106,38 @@ export function useAddons(
                 const { completionBroker } = await loadCompletionBroker()
                 if (disposed) throw new Error('This addon has stopped.')
                 const remove = completionBroker.register(
+                  completionOwner,
+                  provider,
+                )
+                const cleanup = () => {
+                  remove()
+                  cleanups.delete(cleanup)
+                }
+                cleanups.add(cleanup)
+                return cleanup
+              },
+              async registerHoverProvider(provider) {
+                if (disposed) throw new Error('This addon has stopped.')
+                if (typeof provider !== 'function')
+                  throw new Error('Choose a hover provider function.')
+                const { registerHoverProvider } = await loadInteractionBroker()
+                if (disposed) throw new Error('This addon has stopped.')
+                const remove = registerHoverProvider(completionOwner, provider)
+                const cleanup = () => {
+                  remove()
+                  cleanups.delete(cleanup)
+                }
+                cleanups.add(cleanup)
+                return cleanup
+              },
+              async registerContextActionProvider(provider) {
+                if (disposed) throw new Error('This addon has stopped.')
+                if (typeof provider !== 'function')
+                  throw new Error('Choose a context action provider function.')
+                const { registerContextActionProvider } =
+                  await loadInteractionBroker()
+                if (disposed) throw new Error('This addon has stopped.')
+                const remove = registerContextActionProvider(
                   completionOwner,
                   provider,
                 )

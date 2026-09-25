@@ -10,14 +10,18 @@ export default defineAddon({
   async start(context) {
     async function capture() {
       const settings = readSettings()
+      const current = settings.workspaceId
+        ? null
+        : await context.workspace.get()
+      const workspaceId = settings.workspaceId || current?.id
       const target = settings.workspaceId
         ? (
             await context.native.query<{ id: string; path: string }[]>(
               'targets',
             )
           ).find((item) => item.id === settings.workspaceId)?.path
-        : (await context.workspace.get())?.name
-      if (!target) {
+        : current?.name
+      if (!target || !workspaceId) {
         await context.dialogs.alert({
           title: 'Choose a workspace',
           description:
@@ -37,7 +41,7 @@ export default defineAddon({
               const result = await context.native.invoke<{ name: string }>(
                 'save',
                 {
-                  workspaceId: settings.workspaceId,
+                  workspaceId,
                   folder: settings.folder,
                   title,
                   markdown,
@@ -67,7 +71,7 @@ export default defineAddon({
         const remove = await context.globalShortcuts.register(
           'capture',
           shortcut,
-          () => context.commands.execute('capture'),
+          'capture',
         )
         if (current === generation) removeShortcut = remove
         else remove()

@@ -166,4 +166,42 @@ test('quick note captures to a chosen folder without replacing files', {
     await readFile(join(other, 'Inbox', 'Elsewhere.md'), 'utf8'),
     'Another workspace',
   )
+
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note settings')
+  await page.getByRole('option', { name: /Quick note settings/i }).click()
+  await page
+    .getByRole('tabpanel', { name: 'Quick note' })
+    .getByLabel('Workspace', { exact: true })
+    .selectOption('')
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note: capture')
+  await page.getByRole('option', { name: /Quick note: capture/i }).click()
+  const pinnedDialog = page.getByRole('dialog', { name: 'Quick note' })
+  await pinnedDialog.getByRole('textbox', { name: 'Title' }).fill('Pinned')
+  await pinnedDialog
+    .getByRole('textbox', { name: 'Note' })
+    .fill('Pinned to original workspace')
+  await app.evaluate(({ dialog }, destination) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [destination],
+    })
+  }, other)
+  const switched = await page.evaluate(() => window.hibi.openWorkspace())
+  assert.equal(switched?.id, otherId)
+  await pinnedDialog.getByRole('button', { name: 'Save note' }).click()
+  await pinnedDialog.waitFor({ state: 'hidden' })
+  assert.equal(
+    await readFile(join(workspace, 'Pinned.md'), 'utf8'),
+    'Pinned to original workspace',
+  )
+  await assert.rejects(readFile(join(other, 'Pinned.md'), 'utf8'), {
+    code: 'ENOENT',
+  })
 })

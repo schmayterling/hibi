@@ -302,16 +302,22 @@ const hostNetwork = new HostNetwork({
     askNetworkGrant(
       grant.windowKey,
       signal,
-      `Allow ${grant.addonId} to read this HTTPS URL?`,
-      `${grant.url}\n\nOnly this GET request is allowed. Redirects ask again.`,
+      grant.credentialKey
+        ? `Allow ${grant.addonId} to use a stored credential for this HTTPS URL?`
+        : `Allow ${grant.addonId} to read this HTTPS URL?`,
+      grant.credentialKey
+        ? `${grant.url}\nCredential: ${grant.credentialKey} (bearer token)\n\nOnly this GET request is allowed. Credentials are not sent to redirects.`
+        : `${grant.url}\n\nOnly this GET request is allowed. Redirects ask again.`,
     ),
   grantPrivateAddress: (grant, signal) =>
     askNetworkGrant(
       grant.windowKey,
       signal,
       `Allow ${grant.addonId} to contact a local or private address?`,
-      `${grant.url}\nAddress: ${grant.address}\n\nOnly this GET request is allowed.`,
+      `${grant.url}\nAddress: ${grant.address}${grant.credentialKey ? `\nCredential: ${grant.credentialKey} (bearer token)` : ''}\n\nOnly this GET request is allowed.`,
     ),
+  applyCredential: (owner, windowKey, key, apply) =>
+    hostCredentials.applyForApprovedRequest(owner, windowKey, key, apply),
 })
 const hostCredentials = new HostCredentials({
   directory: join(app.getPath('userData'), 'addon-credentials'),

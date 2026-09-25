@@ -32,7 +32,8 @@ test('installed addon network bridge asks for each destination and private addre
     `export default () => ({
       start(context) {
         window.networkProbe = {
-          get: url => context.host.network.getText({ url }),
+          get: (url, credentialKey) => context.host.network.getText({ url, ...(credentialKey ? { credentialKey } : {}) }),
+          store: (key, secret) => context.host.credentials.store({ key, secret, mode: 'session' }),
         }
       },
       stop() { delete window.networkProbe },
@@ -99,6 +100,54 @@ test('installed addon network bridge asks for each destination and private addre
   const local = await app.evaluate(() => globalThis.networkPrompts)
   assert.equal(local.length, 2)
   assert.match(local[1].message, /local or private address/)
+  assert.deepEqual(
+    await page.evaluate(() =>
+      window.networkProbe.store('api-token', 'bridge-only-secret'),
+    ),
+    { ok: true, value: { mode: 'session' } },
+  )
+  await app.evaluate(() => {
+    globalThis.networkPrompts = []
+    globalThis.networkResponses = [0]
+  })
+  assert.deepEqual(
+    await page.evaluate(() =>
+      window.networkProbe.get('https://example.com/auth', 'api-token'),
+    ),
+    { ok: false, code: 'permission-denied' },
+  )
+  const credentialPrompt = await app.evaluate(() => globalThis.networkPrompts)
+  assert.equal(credentialPrompt.length, 1)
+  assert.match(
+    credentialPrompt[0].detail,
+    /Credential: api-token \(bearer token\)/,
+  )
+  assert.equal(
+    JSON.stringify(credentialPrompt).includes('bridge-only-secret'),
+    false,
+  )
+  await app.evaluate(() => {
+    globalThis.networkPrompts = []
+    globalThis.networkResponses = [1, 0]
+  })
+  assert.deepEqual(
+    await page.evaluate(() =>
+      window.networkProbe.get('https://127.0.0.1/auth', 'api-token'),
+    ),
+    { ok: false, code: 'permission-denied' },
+  )
+  const privateCredentialPrompts = await app.evaluate(
+    () => globalThis.networkPrompts,
+  )
+  assert.equal(privateCredentialPrompts.length, 2)
+  assert.match(
+    privateCredentialPrompts[1].detail,
+    /Credential: api-token \(bearer token\)/,
+  )
+  assert.equal(
+    JSON.stringify(privateCredentialPrompts).includes('bridge-only-secret'),
+    false,
+  )
   await app.evaluate(async ({ BrowserWindow, dialog }) => {
     const contents = BrowserWindow.getAllWindows()[0].webContents
     while (contents.isLoadingMainFrame())

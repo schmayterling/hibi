@@ -80,9 +80,18 @@ test('runtime imports saved V while V+1 remains dirty and preserves history acro
   const { runtime, operations, errors } = fixture()
   runtime.activate(document('a'))
   runtime.replace('ab')
-  const saving = { ...runtime.get(), savedMarkdown: 'ab', dirty: false }
+  const saving = {
+    ...runtime.get(),
+    id: 'file-renamed',
+    name: 'renamed.md',
+    savedMarkdown: 'ab',
+    dirty: false,
+  }
   runtime.replace('abc')
-  runtime.acknowledgeSave(saving)
+  const acknowledged = runtime.acknowledgeSave(saving)
+  assert.equal(acknowledged.markdown, 'abc')
+  assert.equal(acknowledged.id, 'file-renamed')
+  assert.equal(acknowledged.name, 'renamed.md')
   assert.equal(runtime.get().dirty, true)
   assert.equal(runtime.get().savedMarkdown, 'ab')
   const first = { ...runtime.get() },

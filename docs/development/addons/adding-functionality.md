@@ -101,6 +101,8 @@ context.commands.register({
 
 The command receives the clicked entry even when another note is active. Hibi rejects it if the workspace tree changes before execution, so handle a stale target by asking the user to open the menu again. For command-activated addons, a menu declaration in the manifest shows the item before startup; `when` takes effect once the addon registers its command.
 
+Use `menu: { location: 'editor' }` for a command in the source and rich editor context menus. Its invocation includes the captured document, view, and `selection` with editor-specific offsets, content version, and up to 256 characters of selected text. Hibi checks that target again after command activation. Existing context-action providers appear in the same menu and continue to apply version-checked edits.
+
 ## Read the workspace
 
 Use `context.workspace.index()` for note text and drafts. It returns `null` when no workspace is open. Use `snapshot()` when you also need the export data. Pass a workspace-relative path to `openFile()` to open a document.

@@ -81,6 +81,8 @@ import { sameDocumentShell } from './document-shell'
 import type { ViewMode } from './Editor'
 import { loadCursor } from './EditorCursor'
 import { EditorToolbar } from './EditorToolbar'
+import { isEditorCommandTargetCurrent } from './editor-command-targets'
+import { setEditorCommandMenu } from './editor-interaction-presence'
 import { FlavorPicker } from './FlavorPicker'
 import { FormatEditor } from './FormatEditor'
 import {
@@ -623,6 +625,7 @@ function App() {
   }
   function isAddonCommandContextCurrent(context: CommandExecutionContext) {
     if (context.file) {
+      if (context.selection) return false
       const target = fileMenuTarget.current
       return (
         !!target &&
@@ -635,6 +638,15 @@ function App() {
         context.workspace?.workspaceId === context.file.workspaceId &&
         context.workspace?.workspaceGeneration ===
           context.file.workspaceGeneration
+      )
+    }
+    if (context.selection) {
+      const current = captureAddonCommandContext(context.source)
+      return (
+        context.workspace?.workspaceId === current.workspace?.workspaceId &&
+        context.workspace?.workspaceGeneration ===
+          current.workspace?.workspaceGeneration &&
+        isEditorCommandTargetCurrent(context)
       )
     }
     const current = captureAddonCommandContext(context.source)
@@ -748,6 +760,15 @@ function App() {
         ? 'side-by-side'
         : 'markdown'
       : selectedMode,
+  )
+  useEffect(() => {
+    setEditorCommandMenu(addonHost.commands, () =>
+      addonHost.captureCommandContext('menu'),
+    )
+  }, [addonHost.commands, addonHost.captureCommandContext])
+  useEffect(
+    () => () => setEditorCommandMenu([], () => ({ source: 'menu' })),
+    [],
   )
   // Retain the installed schema while required addons finish registering their replacement.
   const editorConfiguration = useRef({

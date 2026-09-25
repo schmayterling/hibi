@@ -55,6 +55,7 @@ import {
 } from '../shared/hotkeys'
 import { IMPORT_CHANNELS } from '../shared/imports'
 import { MEDIA_CHANNELS } from '../shared/media'
+import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
 import { startupMark, startupSpan } from '../shared/startup'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
@@ -64,6 +65,7 @@ import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
 import { AddonHotkeys } from './addon-hotkeys'
 import { createAddonStorage } from './addon-storage'
 import {
+  currentAddonOwner,
   enableAddon,
   getAddonActivationGeneration,
   getAddonStartupNotices,
@@ -134,6 +136,7 @@ import {
   isTrustedRendererUrl,
   resolveAssetPath,
 } from './security'
+import { SelectedTextService } from './selected-text'
 import { installedAddons, installedAsset, openAddonsFolder } from './sideload'
 import { getUiCase, loadUiCase, saveUiCase } from './ui-case'
 import {
@@ -231,13 +234,18 @@ const addonStorage = createAddonStorage(
   isCurrentWorkspaceTarget,
   isAddonActivationCurrent,
 )
-setAddonDeactivationHandler(addonStorage.clearSession)
+const selectedText = new SelectedTextService(currentAddonOwner)
+setAddonDeactivationHandler(async (id) => {
+  selectedText.revokeAddon(id)
+  await addonStorage.clearSession(id)
+})
 addonStorage.subscribe((change) => {
   if (mainWindow && !mainWindow.isDestroyed())
     mainWindow.webContents.send(ADDON_STORAGE_CHANNELS.changed, change)
 })
 function resetAddonSessions(): void {
   invalidateAddonActivations()
+  selectedText.clear()
   void addonStorage.clearAllSessions().catch((error: unknown) => {
     console.error('Could not clear addon sessions:', error)
   })
@@ -1064,6 +1072,20 @@ if (!app.requestSingleInstanceLock()) {
         ADDON_STORAGE_CHANNELS.write,
         (_event, request: unknown) =>
           addonStorage.write(request, storageGeneration(request)),
+        addonsReady,
+      )
+      handle(
+        SELECTED_TEXT_CHANNELS.select,
+        (event, owner: unknown) =>
+          runFileOperation(event, (window) =>
+            selectedText.select(window, owner),
+          ),
+        addonsReady,
+      )
+      handle(
+        SELECTED_TEXT_CHANNELS.read,
+        (event, owner: unknown, handle: unknown) =>
+          selectedText.read(trustedWindow(event), owner, handle),
         addonsReady,
       )
       handle(

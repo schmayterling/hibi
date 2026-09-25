@@ -215,6 +215,13 @@ export type DesktopApi = {
   onAddonStorageChanged: (
     callback: (change: import('./addon-storage').AddonStorageChange) => void,
   ) => () => void
+  selectUserText: (
+    owner: string,
+  ) => Promise<import('./selected-text').SelectedTextSelection>
+  readSelectedText: (
+    owner: string,
+    handle: string,
+  ) => Promise<import('./selected-text').SelectedTextRead>
   invokeAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   queryAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   getWorkspace: () => Promise<WorkspaceState | null>

@@ -36,6 +36,7 @@ import { type AppCommand, HOTKEY_CHANNELS } from '../shared/hotkeys'
 import { IMPORT_CHANNELS } from '../shared/imports'
 import { DIAGNOSTIC_CHANNEL } from '../shared/local-diagnostics'
 import { MEDIA_CHANNELS } from '../shared/media'
+import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
 import { UPDATE_CHANNELS, type UpdateState } from '../shared/updates'
@@ -313,6 +314,10 @@ if (process.isMainFrame) {
       return () =>
         transport.removeListener(ADDON_STORAGE_CHANNELS.changed, listener)
     },
+    selectUserText: (owner) =>
+      transport.invoke(SELECTED_TEXT_CHANNELS.select, owner),
+    readSelectedText: (owner, handle) =>
+      transport.invoke(SELECTED_TEXT_CHANNELS.read, owner, handle),
     invokeAddon: (id, method, input) =>
       ipcRenderer.invoke(ADDON_CHANNELS.invoke, id, method, input),
     queryAddon: (id, method, input) =>

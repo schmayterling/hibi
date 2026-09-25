@@ -9,6 +9,7 @@ import {
   X,
 } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { CommandExecutionContext } from '../../shared/foundation-contracts'
 import { sentenceCase } from '../../shared/ui-case'
 import { IconButton, TextInput } from '../../ui/Controls'
 import { Modal } from '../../ui/Modal'
@@ -41,7 +42,7 @@ type PaletteCommandBase = {
 
 export type PaletteCommand = PaletteCommandBase &
   (
-    | { run: () => void; children?: never }
+    | { run: (context?: CommandExecutionContext) => void; children?: never }
     | { children: PaletteCommand[]; run?: never }
   )
 
@@ -57,11 +58,13 @@ export function CommandPalette({
   onClose,
   platform,
   searchCommands,
+  captureContext,
 }: {
   commands: PaletteCommand[]
   onClose: () => void
   platform: string
   searchCommands?: (query: string) => PaletteCommand[]
+  captureContext?: () => CommandExecutionContext
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const input = useRef<HTMLInputElement>(null)
@@ -174,7 +177,10 @@ export function CommandPalette({
       setQuery('')
       setSelected(0)
       input.current?.focus()
-    } else close(command.run)
+    } else {
+      const context = captureContext?.()
+      close(() => command.run(context))
+    }
   }
 
   return (

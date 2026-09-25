@@ -3,8 +3,23 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
 import { electron } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
+
+async function pressAddonShortcut(app, shortcut) {
+  // Retry only if Electron never delivered the injected key to main.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const before = await app.evaluate(() => globalThis.commandTestInputs)
+    await pressShortcut(app, shortcut)
+    for (let check = 0; check < 20; check++) {
+      if ((await app.evaluate(() => globalThis.commandTestInputs)) > before)
+        return
+      await delay(10)
+    }
+  }
+  throw new Error('Native addon shortcut input did not reach Electron.')
+}
 
 test('addon menu and configurable in-app shortcut use one lazy command', {
   timeout: 60000,
@@ -71,6 +86,16 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
   })
   const page = await app.firstWindow()
   await page.locator('.titlebar').waitFor()
+  await app.evaluate(({ BrowserWindow }) => {
+    globalThis.commandTestInputs = 0
+    BrowserWindow.getAllWindows()[0].webContents.on(
+      'before-input-event',
+      (_event, input) => {
+        if (input.type === 'keyDown' && input.key.toLowerCase() === 'j')
+          globalThis.commandTestInputs++
+      },
+    )
+  })
   await page.waitForFunction(async () =>
     (await window.hibi.getAddonHotkeys()).some(
       ({ id }) => id === 'command-probe.run',
@@ -122,7 +147,7 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
         ?.getAttribute('aria-pressed') === 'true',
   )
   await page.getByRole('button', { name: 'Back to app' }).click()
-  await pressShortcut(app, `${modifier}+Alt+Shift+J`)
+  await pressAddonShortcut(app, `${modifier}+Alt+Shift+J`)
   await page.waitForFunction(() => window.commandProbeSources?.length === 3)
 
   await clickMenu(app, 'Settings')
@@ -136,6 +161,19 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
         ({ id }) => id === 'command-probe.run',
       ),
   )
+  await app.evaluate(async ({ Menu }) => {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const addons = Menu.getApplicationMenu()?.items.find(
+        ({ label }) => label.toLowerCase() === 'addons',
+      )
+      if (
+        !addons?.submenu?.items.some(({ label }) => label === 'Example action')
+      )
+        return
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    throw new Error('Addon menu item remained after disable.')
+  })
   await assert.rejects(clickMenu(app, 'Example action'), /unavailable/)
 
   await enabled.click()
@@ -147,7 +185,7 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
           `${navigator.platform.startsWith('Mac') ? 'meta' : 'ctrl'}+alt+shift+j`,
     ),
   )
-  await pressShortcut(app, `${modifier}+Alt+Shift+J`)
+  await pressAddonShortcut(app, `${modifier}+Alt+Shift+J`)
   await page.waitForFunction(() => window.commandProbeSources?.length === 4)
   assert.equal(
     (await page.evaluate(() => window.commandProbeSources)).at(-1),
@@ -158,6 +196,12 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
   await page.waitForFunction(
     () => document.querySelector('#addon-command-probe')?.checked === false,
   )
+  await page.waitForFunction(
+    async () =>
+      !(await window.hibi.getAddonHotkeys()).some(
+        ({ id }) => id === 'command-probe.run',
+      ),
+  )
   await enabled.click()
   await page.waitForFunction(async () =>
     (await window.hibi.getAddonHotkeys()).some(
@@ -167,7 +211,7 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
           `${navigator.platform.startsWith('Mac') ? 'meta' : 'ctrl'}+alt+shift+j`,
     ),
   )
-  await pressShortcut(app, `${modifier}+Alt+Shift+J`)
+  await pressAddonShortcut(app, `${modifier}+Alt+Shift+J`)
   await page.waitForFunction(() => window.commandProbeSources?.length === 5)
 
   await page.getByRole('tab', { name: 'Hotkeys', exact: true }).click()
@@ -206,4 +250,16 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
         ?.getAttribute('aria-pressed') === 'true',
   )
   await page.getByRole('button', { name: 'Cancel rebinding' }).click()
+  await page.getByRole('button', { name: 'Back to app' }).click()
+  await clickMenu(app, 'Command palette')
+  const palette = page.getByRole('dialog', { name: 'Command palette' })
+  await palette
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Example action')
+  await palette.getByRole('option', { name: /Example action/i }).press('Enter')
+  await page.waitForFunction(() => window.commandProbeSources?.length === 6)
+  assert.equal(
+    (await page.evaluate(() => window.commandProbeSources)).at(-1),
+    'palette',
+  )
 })

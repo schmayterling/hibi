@@ -19,6 +19,10 @@ import type {
   DocumentState,
 } from '../../shared/desktop'
 import { MAX_DOCUMENT_BYTES } from '../../shared/desktop'
+import type {
+  CommandExecutionContext,
+  WorkspaceId,
+} from '../../shared/foundation-contracts'
 import {
   type AppCommand,
   actions,
@@ -563,8 +567,49 @@ function App() {
   useEffect(() => {
     localStorage.setItem('cursor-settings', JSON.stringify(cursorSettings))
   }, [cursorSettings])
+  function captureAddonCommandContext(
+    source: CommandExecutionContext['source'],
+  ): CommandExecutionContext {
+    const active = currentDocument.current
+    const document = active && documentRuntime.captureDocument(active.tabId)
+    const view = documentRuntime.captureActiveView()
+    return {
+      source,
+      ...(workspace?.id && workspace.workspaceGeneration !== undefined
+        ? {
+            workspace: {
+              workspaceId: workspace.id as WorkspaceId,
+              workspaceGeneration: workspace.workspaceGeneration,
+            },
+          }
+        : {}),
+      ...(document ? { document } : {}),
+      ...(document &&
+      view?.documentId === document.documentId &&
+      view.documentGeneration === document.documentGeneration
+        ? { view }
+        : {}),
+    }
+  }
+  function isAddonCommandContextCurrent(context: CommandExecutionContext) {
+    if (context.file) return false
+    const current = captureAddonCommandContext(context.source)
+    return (
+      context.workspace?.workspaceId === current.workspace?.workspaceId &&
+      context.workspace?.workspaceGeneration ===
+        current.workspace?.workspaceGeneration &&
+      context.document?.documentId === current.document?.documentId &&
+      context.document?.documentGeneration ===
+        current.document?.documentGeneration &&
+      (!context.view ||
+        (context.view.viewId === current.view?.viewId &&
+          context.view.viewGeneration === current.view.viewGeneration))
+    )
+  }
   const addonHost = useAddons(
     {
+      captureCommandContext: captureAddonCommandContext,
+      isCommandContextCurrent: isAddonCommandContextCurrent,
       openDependencySettings: () => openSetting('dependencies'),
       openSidebar: selectSidebarView,
       closeSidebar: (side) => {
@@ -841,7 +886,8 @@ function App() {
     setPaletteOpen(true)
   }
 
-  function toggleSettings() {
+  async function toggleSettings() {
+    if (settingsOpen) await window.hibi.setHotkeyRecording(false)
     const previousFocus = window.document.activeElement
     showTitlebar()
     if (!settingsOpen) setFindOpen(false)
@@ -1726,9 +1772,11 @@ function App() {
         label: command.label,
         category: 'addons' as const,
         keywords: command.keywords ?? '',
-        run: () => {
+        run: (context?: CommandExecutionContext) => {
           void Promise.resolve()
-            .then(() => command.run())
+            .then(() =>
+              command.run(context ?? captureAddonCommandContext('palette')),
+            )
             .catch((error) =>
               setError(
                 error instanceof Error
@@ -1980,6 +2028,7 @@ function App() {
         <CommandPalette
           platform={info?.platform ?? 'darwin'}
           commands={paletteCommands}
+          captureContext={() => captureAddonCommandContext('palette')}
           onClose={() => setPaletteOpen(false)}
         />
       )}

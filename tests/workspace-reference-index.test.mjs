@@ -216,6 +216,17 @@ test('tag suggestions match prefixes and rank by note count then name', () => {
   assert.deepEqual(index.tags(0, 10, 'idea').items, [])
 })
 
+test('unqueryable long tags do not block bounded tag pages', () => {
+  const index = new WorkspaceReferenceIndex()
+  index.apply(workspace, [page('a.md', `#${'a'.repeat(129)} #work`)])
+  assert.deepEqual(index.tags(0, 10), {
+    items: [{ tag: 'work', count: 1 }],
+    hasMore: false,
+    nextOffset: 1,
+    capReached: true,
+  })
+})
+
 test('oversized frontmatter never reaches reference or tag parsers', () => {
   let parses = 0
   const index = new WorkspaceReferenceIndex((source) => {

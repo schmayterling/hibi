@@ -71,11 +71,11 @@ import { certifyVisualEcho } from './document-shell'
 import { type CursorSettings, EditorCursor } from './EditorCursor'
 import { registerEditorSelectionCapture } from './editor-command-targets'
 import { emitEditorKeyEvent } from './editor-events'
-import { editorViewRegistry } from './editor-view-api'
 import {
   hasEditorInteractionProviders,
   onEditorInteractionProvidersChanged,
 } from './editor-interaction-presence'
+import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
 import { flavors as flavorRegistry } from './flavors'
@@ -560,8 +560,7 @@ export function MarkdownEditor({
         reveal: (position) => {
           try {
             const { node } = editor.view.domAtPos(position)
-            const element =
-              node instanceof Element ? node : node.parentElement
+            const element = node instanceof Element ? node : node.parentElement
             if (!element) return false
             element.scrollIntoView({ block: 'nearest' })
             return true

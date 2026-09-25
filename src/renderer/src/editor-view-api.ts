@@ -109,9 +109,15 @@ export class EditorViewRegistry {
     for (const listener of [...this.#listeners]) listener()
   }
   #current(value: unknown):
-    | { target: ViewTarget; editor: EditorKind; entry: Entry; selection: AdapterSelection }
+    | {
+        target: ViewTarget
+        editor: EditorKind
+        entry: Entry
+        selection: AdapterSelection
+      }
     | Failure {
-    if (!validView(value)) return failure('conflict', 'Invalid editor view target.')
+    if (!validView(value))
+      return failure('conflict', 'Invalid editor view target.')
     const target = this.#runtime.captureView(value.viewId)
     if (
       !target ||
@@ -185,7 +191,11 @@ export class EditorViewRegistry {
     }
   }
   reveal(value: EditorViewPosition): OperationResult<void> {
-    if (!value || !validPosition(value.contentVersion) || !validPosition(value.position))
+    if (
+      !value ||
+      !validPosition(value.contentVersion) ||
+      !validPosition(value.position)
+    )
       return failure('conflict', 'Invalid editor position.')
     const current = this.#current(value.view)
     if ('ok' in current) return current
@@ -232,7 +242,10 @@ export function createEditorViewScope(
     left?.contentVersion === right?.contentVersion &&
     left?.anchor === right?.anchor &&
     left?.head === right?.head
-  const observe = (subscribe: (listener: () => void) => () => void, listener: () => void) => {
+  const observe = (
+    subscribe: (listener: () => void) => () => void,
+    listener: () => void,
+  ) => {
     if (disposed) return () => {}
     const remove = subscribe(listener)
     cleanups.add(remove)
@@ -297,7 +310,10 @@ export function createEditorViewScope(
         }
       }
       const stopView = observe(runtime.subscribeViews, emit)
-      const stopSelection = observe((callback) => registry.subscribe(callback), emit)
+      const stopSelection = observe(
+        (callback) => registry.subscribe(callback),
+        emit,
+      )
       return () => {
         stopView()
         stopSelection()

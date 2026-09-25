@@ -106,6 +106,18 @@ The shared `Sidebar` also accepts `side: 'right'` to mirror its collapse motion 
 
 ## Bind a view to a document
 
+Call `context.views.notify()` to show a persistent notice below the editor toolbar. The returned handle supports `update()` and `dispose()`. Notices disappear when their addon stops and stay hidden while an addon tab is active. Use `variant: 'warning'` for the built-in yellow warning style; `className` works with styles registered through `context.styles`, and `style` accepts inline React styles.
+
+```tsx
+const notice = context.views.notify({
+  title: 'Warning',
+  message: 'This file is unsupported.',
+  variant: 'warning',
+})
+notice.update({ message: 'This file is now supported.' })
+notice.dispose()
+```
+
 `context.views.register()` supports sidebars, a panel below the editor, and dedicated tabs. Its `Content` receives `document`, `input`, `instanceId`, `binding`, `visible`, `close()`, and `focusDocument()`. Follow views receive the active document. Open with `binding: 'pinned'` to retain the current document snapshot, including its version, when the user switches tabs or continues editing. A pinned snapshot does not grant permission to edit an inactive document; normal edit validation still applies.
 
 ```tsx

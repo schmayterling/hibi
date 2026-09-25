@@ -55,6 +55,7 @@ import { markdownSyntax } from './markdown-syntax'
 import { registrationBatch } from './registration-batch'
 import { settingsPages } from './settings-pages'
 import { toolbar } from './toolbar'
+import { viewNotifications } from './view-notifications'
 
 export { addons } from './addon-registry'
 
@@ -121,6 +122,9 @@ export function useAddons(
   const [settled, setSettled] = useState<ReadonlyMap<string, boolean>>(
     new Map(),
   )
+  const [transitioning, setTransitioning] = useState<
+    ReadonlySet<{ id: string }>
+  >(new Set())
   const modalSwitch = useRef<{
     requested: string
     previous: string | null
@@ -167,11 +171,17 @@ export function useAddons(
   const ready =
     loaded &&
     !!documentName &&
+    ![...transitioning].some(({ id }) => required.has(id)) &&
     enabledStates.every(
       (state) => !required.has(state.id) || settled.has(state.id),
     )
   const allReady =
     loaded &&
+    ![...transitioning].some(({ id }) =>
+      catalog.some(
+        (addon) => addon.manifest.id === id && relevant(addon.manifest),
+      ),
+    ) &&
     enabledStates.every(
       (state) =>
         !catalog.some(
@@ -374,6 +384,7 @@ export function useAddons(
       const toolbarScope = toolbar.scope(id, (error) =>
         latest.current.error(error),
       )
+      const notificationScope = viewNotifications.scope()
       const tooltipScope = createTooltipScope()
       const cleanups = new Set<() => void>()
       const editScope = documentEdits.scope(() => latest.current.isBusy())
@@ -535,6 +546,7 @@ export function useAddons(
               () => toastScope.dispose(),
               () => menuScope.dispose(),
               () => toolbarScope.dispose(),
+              () => notificationScope.dispose(),
               () => tooltipScope.dispose(),
               () => overrides.dispose(),
             ],
@@ -622,7 +634,7 @@ export function useAddons(
               },
             },
             dialogs: dialogScope.api,
-            views: { register: registerView },
+            views: { register: registerView, notify: notificationScope.notify },
             analysis: {
               async run(projection) {
                 if (disposed)
@@ -1366,40 +1378,50 @@ export function useAddons(
         if (requested?.capabilities?.includes('modalEditing'))
           previousModal = current?.id ?? null
       }
-      if (!enabled && modalSwitch.current?.requested === id)
-        modalSwitch.current = null
-      if (!enabled)
-        setRequested((current) => {
-          const next = new Set(current)
+      const transition = { id }
+      setTransitioning((current) => new Set([...current, transition]))
+      try {
+        const next = await window.hibi.setAddonEnabled(id, enabled)
+        if (!enabled && modalSwitch.current?.requested === id)
+          modalSwitch.current = null
+        if (!enabled)
+          setRequested((current) => {
+            const next = new Set(current)
+            next.delete(id)
+            return next
+          })
+        setSettled((current) => {
+          const next = new Map(current)
           next.delete(id)
           return next
         })
-      setSettled((current) => {
-        const next = new Map(current)
-        next.delete(id)
-        return next
-      })
-      if (
-        enabled &&
-        catalog.some(
-          (addon) =>
-            addon.manifest.id === id &&
-            addon.manifest.capabilities?.includes('modalEditing'),
+        if (
+          enabled &&
+          catalog.some(
+            (addon) =>
+              addon.manifest.id === id &&
+              addon.manifest.capabilities?.includes('modalEditing'),
+          )
         )
-      )
-        modalSwitch.current = { requested: id, previous: previousModal }
-      const next = await window.hibi.setAddonEnabled(id, enabled)
-      if (
-        enabled &&
-        catalog.some(
-          ({ manifest }) =>
-            manifest.id === id &&
-            manifest.startup === 'background' &&
-            !manifest.activation,
+          modalSwitch.current = { requested: id, previous: previousModal }
+        if (
+          enabled &&
+          catalog.some(
+            ({ manifest }) =>
+              manifest.id === id &&
+              manifest.startup === 'background' &&
+              !manifest.activation,
+          )
         )
-      )
-        setRequested((current) => new Set([...current, id]))
-      setStates(next)
+          setRequested((current) => new Set([...current, id]))
+        setStates(next)
+      } finally {
+        setTransitioning((current) => {
+          const next = new Set(current)
+          next.delete(transition)
+          return next
+        })
+      }
     } catch (error) {
       latest.current.error(error)
     }

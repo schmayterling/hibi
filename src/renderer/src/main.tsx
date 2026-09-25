@@ -44,6 +44,7 @@ import {
   type WorkspaceState,
 } from '../../shared/workspace'
 import { Button, IconButton } from '../../ui/Controls'
+import { DocumentNotice } from '../../ui/DocumentNotice'
 import { settingsIndex } from '../../ui/settings-index'
 import {
   SIDEBAR_OVERLAY_WIDTH,
@@ -93,6 +94,7 @@ import { settingsCategories } from './settings-categories'
 import { settingsPages } from './settings-pages'
 import { Titlebar } from './Titlebar'
 import { toolbar } from './toolbar'
+import { viewNotifications } from './view-notifications'
 import { WorkspaceSidebar } from './WorkspaceSidebar'
 import { WorkspacesSidebar } from './WorkspacesSidebar'
 import { type WorkspaceRename, workspaceMenuItems } from './workspace-menu'
@@ -138,6 +140,10 @@ function App() {
   const toolbarSnapshot = useSyncExternalStore(
     toolbar.subscribe,
     toolbar.snapshot,
+  )
+  const notifications = useSyncExternalStore(
+    viewNotifications.subscribe,
+    viewNotifications.snapshot,
   )
   useEffect(() => {
     if (!settingTarget) return
@@ -2134,6 +2140,13 @@ function App() {
         }
       >
         {!activeAddonTab && <EditorToolbar mode={mode} typing={typing} />}
+        {!activeAddonTab && notifications.length > 0 && (
+          <div className="view-notifications">
+            {notifications.map(({ id, notification }) => (
+              <DocumentNotice key={id} {...notification} />
+            ))}
+          </div>
+        )}
         {/* biome-ignore lint/a11y/useAriaPropsSupportedByRole: tabpanel and region both support accessible names. */}
         <div
           className="editor-page"

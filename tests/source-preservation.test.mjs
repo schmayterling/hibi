@@ -91,7 +91,7 @@ test('inert syntax ownership is validated and protects never-loaded addons', () 
     assert.throws(() => parseSyntaxDescriptors(value))
 })
 
-test('unsaved custom source survives enabling, rich editing, disabling, saving, and a fresh renderer', {
+test('custom source stays locked while its addon enables and survives rich editing, saving, and reload', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-preservation-'))
@@ -144,6 +144,7 @@ test('unsaved custom source survives enabling, rich editing, disabling, saving, 
   })
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
+      globalThis.releaseCitationsEnable?.()
       dialog.showMessageBox = async () => ({ response: 1 })
     })
     await app.close()
@@ -162,11 +163,40 @@ test('unsaved custom source survives enabling, rich editing, disabling, saving, 
   await page
     .getByRole('textbox', { name: 'Markdown editor', exact: true })
     .fill(`${prefix}Unsaved body`)
+  await app.evaluate(({ ipcMain }) => {
+    const enable = ipcMain._invokeHandlers.get('addons:enable')
+    if (!enable) throw new Error('The addon enable handler is not ready.')
+    let started
+    globalThis.citationsEnableStarted = new Promise((resolve) => {
+      started = resolve
+    })
+    ipcMain.removeHandler('addons:enable')
+    ipcMain.handle('addons:enable', async (...args) => {
+      if (args[1] === 'citations' && args[2] === true) {
+        await new Promise((resolve) => {
+          globalThis.releaseCitationsEnable = resolve
+          started()
+        })
+      }
+      return enable(...args)
+    })
+  })
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-citations').click()
+  await app.evaluate(() => globalThis.citationsEnableStarted)
   await clickMenu(app, 'Settings')
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await page.waitForFunction(
+    () => document.querySelector('#document-editor-panel')?.inert,
+  )
+  assert.equal(
+    await page
+      .locator('.tiptap')
+      .evaluate((element) => element.isContentEditable),
+    false,
+  )
+  await app.evaluate(() => globalThis.releaseCitationsEnable())
   await page.waitForFunction(
     () => document.querySelector('.tiptap')?.isContentEditable,
   )

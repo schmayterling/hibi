@@ -258,3 +258,18 @@
     transition: none;
   }
 }
+.view-notifications {
+  flex-shrink: 0;
+}
+.view-notifications .document-notice {
+  margin: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+.view-notifications .document-notice > div {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-2);
+}
+.view-notifications .document-notice-title {
+  margin-bottom: 0;
+}

@@ -206,6 +206,15 @@ export type DesktopApi = {
   ) => Promise<void>
   getAddonStates: () => Promise<AddonState[]>
   setAddonEnabled: (id: string, enabled: boolean) => Promise<AddonState[]>
+  readAddonStorage: (
+    request: import('./addon-storage').AddonStorageReadRequest,
+  ) => Promise<import('./addon-storage').AddonStorageReadResult>
+  writeAddonStorage: (
+    request: import('./addon-storage').AddonStorageWriteRequest,
+  ) => Promise<import('./addon-storage').AddonStorageWriteResult>
+  onAddonStorageChanged: (
+    callback: (change: import('./addon-storage').AddonStorageChange) => void,
+  ) => () => void
   invokeAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   queryAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   getWorkspace: () => Promise<WorkspaceState | null>

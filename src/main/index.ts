@@ -23,6 +23,7 @@ import {
   ADDON_HOTKEY_CHANNELS,
   type AddonHotkeyRegistration,
 } from '../shared/addon-hotkeys'
+import { ADDON_STORAGE_CHANNELS } from '../shared/addon-storage'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
 import { DEPENDENCY_CHANNELS } from '../shared/dependencies'
@@ -61,17 +62,20 @@ import { UPDATE_CHANNELS } from '../shared/updates'
 import { WORKSPACE_CHANNELS } from '../shared/workspace'
 import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
 import { AddonHotkeys } from './addon-hotkeys'
+import { createAddonStorage } from './addon-storage'
 import {
   enableAddon,
   getAddonActivationGeneration,
   getAddonStartupNotices,
   getAddonStates,
   installAddon,
+  invalidateAddonActivations,
   invokeAddon,
   isAddonActivationCurrent,
   loadAddons,
   readAddonDocumentation,
   removeAddon,
+  setAddonDeactivationHandler,
 } from './addons'
 import { analysisService } from './analysis'
 import { appearanceColors, loadAppearance, saveAppearance } from './appearance'
@@ -151,6 +155,7 @@ import {
   documentFileChanged,
   getWorkspace,
   indexWorkspace,
+  isCurrentWorkspaceTarget,
   observeWorkspace,
   openRecentWorkspace,
   openWorkspace,
@@ -221,6 +226,23 @@ const devUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
 const rendererUrl = devUrl ? new URL(devUrl).href : 'app://hibi/'
 const rendererRoot = join(import.meta.dirname, '../renderer')
 let mainWindow: BrowserWindow | null = null
+const addonStorage = createAddonStorage(
+  join(app.getPath('userData'), 'addon-storage'),
+  isCurrentWorkspaceTarget,
+  isAddonActivationCurrent,
+)
+setAddonDeactivationHandler(addonStorage.clearSession)
+addonStorage.subscribe((change) => {
+  if (mainWindow && !mainWindow.isDestroyed())
+    mainWindow.webContents.send(ADDON_STORAGE_CHANNELS.changed, change)
+})
+function resetAddonSessions(): void {
+  invalidateAddonActivations()
+  void addonStorage.clearAllSessions().catch((error: unknown) => {
+    console.error('Could not clear addon sessions:', error)
+  })
+}
+
 let fileOperation: Promise<unknown> | null = null
 let quitting = false
 let recordingHotkey = false
@@ -317,6 +339,16 @@ const addonFileUnavailable = () =>
     code: 'disposed',
     message: 'This addon is no longer active.',
   }) as const
+function storageGeneration(request: unknown): number {
+  if (!request || typeof request !== 'object' || Array.isArray(request))
+    throw new Error('Invalid addon storage request.')
+  const owner = (request as { owner?: unknown }).owner
+  if (typeof owner !== 'string') throw new Error('Invalid addon storage owner.')
+  const generation = getAddonActivationGeneration(owner)
+  if (generation === null)
+    throw new Error('Enable this addon in Settings → Addons first.')
+  return generation
+}
 
 function runFileOperation<T>(
   event: IpcMainInvokeEvent,
@@ -481,11 +513,16 @@ function createWindow(): void {
   })
   let confirmingClose = false
   let rendererGone = false
+  let rendererLoaded = false
   let journalReady = false
   window.webContents.on(
     'did-start-navigation',
     (_event, _url, _inPlace, isMainFrame) => {
-      if (isMainFrame) journalReady = false
+      if (isMainFrame) {
+        journalReady = false
+        if (rendererLoaded) resetAddonSessions()
+        rendererLoaded = false
+      }
     },
   )
   let flushRequest:
@@ -586,6 +623,7 @@ function createWindow(): void {
     else window.show()
   })
   window.on('closed', () => {
+    resetAddonSessions()
     onUpdateInstallFailure()
     ipcMain.removeListener(DOCUMENT_CHANNELS.flushed, flushed)
     flushRequest?.reject(
@@ -605,6 +643,7 @@ function createWindow(): void {
     event.preventDefault(),
   )
   window.webContents.on('render-process-gone', (_event, details) => {
+    resetAddonSessions()
     rendererGone = true
     flushRequest?.resolve()
     console.error('renderer exited:', details.reason, details.exitCode)
@@ -629,6 +668,7 @@ function createWindow(): void {
   })
   window.webContents.on('did-finish-load', () => {
     rendererGone = false
+    rendererLoaded = true
   })
   localDiagnostics.observeWindow(window)
   void window.loadURL(rendererUrl).catch((error: unknown) => {
@@ -1014,6 +1054,18 @@ if (!app.requestSingleInstanceLock()) {
         trustedWindow(event)
         return getAddonStates()
       })
+      handle(
+        ADDON_STORAGE_CHANNELS.read,
+        (_event, request: unknown) =>
+          addonStorage.read(request, storageGeneration(request)),
+        addonsReady,
+      )
+      handle(
+        ADDON_STORAGE_CHANNELS.write,
+        (_event, request: unknown) =>
+          addonStorage.write(request, storageGeneration(request)),
+        addonsReady,
+      )
       handle(
         ANALYSIS_CHANNELS.run,
         (event, owner: unknown, projection: unknown) =>

@@ -34,6 +34,7 @@ test('rich completions replace exact plain text in one undo step and retract on 
     async start(context) {
       window.completionCalls = 0
       window.completionUnsafeRange = false
+      window.completionReplacement = 'hello'
       const dispose = await context.editor.registerCompletionProvider(async (request) => {
         if (request.editor !== 'rich') return []
         window.completionCalls++
@@ -41,7 +42,7 @@ test('rich completions replace exact plain text in one undo step and retract on 
         return [{
           label: 'hello',
           detail: 'plain text',
-          insertText: 'hello',
+          insertText: window.completionReplacement,
           from: window.completionUnsafeRange ? 0 : request.selection.head - 3,
           to: request.selection.head,
         }]
@@ -98,6 +99,58 @@ test('rich completions replace exact plain text in one undo step and retract on 
     page,
     async () => (await window.hibi.getDocument()).markdown.trim() === 'hel',
   )
+  await page.evaluate(() => {
+    window.completionReplacement = '[[proof-note]]'
+  })
+  await page.keyboard.press('Control+Space')
+  await menu.getByRole('option', { name: /hello/ }).waitFor()
+  await page.keyboard.press('Enter')
+  await menu.waitFor({ state: 'hidden' })
+  await waitForAsync(
+    page,
+    async () =>
+      (await window.hibi.getDocument()).markdown.trim() === '[[proof-note]]',
+  )
+  assert.equal(
+    await rich.locator('a[data-wiki-link="proof-note"]').innerText(),
+    'proof-note',
+  )
+  await rich.evaluate((element) => element.editor.commands.undo())
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown.trim() === 'hel',
+  )
+  await rich.evaluate((element) => element.editor.commands.redo())
+  await waitForAsync(
+    page,
+    async () =>
+      (await window.hibi.getDocument()).markdown.trim() === '[[proof-note]]',
+  )
+  await rich.evaluate((element) => {
+    const editor = element.editor
+    editor.commands.setTextSelection(editor.state.doc.content.size - 1)
+    editor.view.focus()
+  })
+  await page.keyboard.insertText('x')
+  await waitForAsync(
+    page,
+    async () =>
+      (await window.hibi.getDocument()).markdown.trim() === '[[proof-note]]x',
+  )
+  await rich.evaluate((element) => element.editor.commands.undo())
+  await waitForAsync(
+    page,
+    async () =>
+      (await window.hibi.getDocument()).markdown.trim() === '[[proof-note]]',
+  )
+  await rich.evaluate((element) => element.editor.commands.undo())
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown.trim() === 'hel',
+  )
+  await page.evaluate(() => {
+    window.completionReplacement = 'hello'
+  })
   await page.keyboard.press('Control+Space')
   await menu.getByRole('option', { name: /hello/ }).waitFor()
   await page.keyboard.press('Escape')

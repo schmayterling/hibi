@@ -84,25 +84,62 @@ function jsonValue(value: unknown): unknown {
   return JSON.parse(encoded) as unknown
 }
 
-function validate(request: AddonStorageReadRequest): void {
-  if (!/^[a-z][a-z0-9-]{0,79}$/.test(request.owner))
+function validate(
+  request: unknown,
+): asserts request is AddonStorageReadRequest {
+  if (!isRecord(request)) throw new Error('Invalid addon storage request.')
+  if (
+    typeof request.owner !== 'string' ||
+    !/^[a-z][a-z0-9-]{0,79}$/.test(request.owner)
+  )
     throw new Error('Invalid addon storage owner.')
-  if (!/^[a-z][a-z0-9._-]{0,79}$/.test(request.key))
+  if (
+    typeof request.key !== 'string' ||
+    !/^[a-z][a-z0-9._-]{0,79}$/.test(request.key)
+  )
     throw new Error('Invalid addon storage key.')
   if (!isVersion(request.version))
     throw new Error('Invalid addon storage version.')
+  if (!isRecord(request.scope)) throw new Error('Invalid addon storage scope.')
   if (request.scope.kind === 'workspace') {
-    const { workspaceId, workspaceGeneration } = request.scope.target ?? {}
+    if (!isRecord(request.scope.target))
+      throw new Error('Invalid workspace storage target.')
+    const { workspaceId, workspaceGeneration } = request.scope.target
     if (
       typeof workspaceId !== 'string' ||
       !/^[a-f0-9]{64}$/.test(workspaceId) ||
+      typeof workspaceGeneration !== 'number' ||
       !Number.isSafeInteger(workspaceGeneration) ||
       workspaceGeneration < 0
     )
       throw new Error('Invalid workspace storage target.')
-  } else if (!['global', 'session'].includes(request.scope.kind)) {
+  } else if (
+    request.scope.kind !== 'global' &&
+    request.scope.kind !== 'session'
+  ) {
     throw new Error('Invalid addon storage scope.')
   }
+}
+
+function validateWrite(
+  request: unknown,
+): asserts request is AddonStorageWriteRequest {
+  validate(request)
+  const wire = request as AddonStorageReadRequest & Record<string, unknown>
+  if (
+    typeof wire.baseRevision !== 'number' ||
+    !Number.isSafeInteger(wire.baseRevision) ||
+    wire.baseRevision < 0
+  )
+    throw new Error('Invalid addon storage revision.')
+  if (
+    wire.migrateFromVersion !== undefined &&
+    (!isVersion(wire.migrateFromVersion) ||
+      wire.migrateFromVersion >= wire.version)
+  )
+    throw new Error('Invalid addon storage migration version.')
+  if (!Object.hasOwn(request, 'value'))
+    throw new Error('Invalid addon storage value.')
 }
 
 function recordResult(
@@ -247,7 +284,7 @@ export function createAddonStorage(
   }
 
   async function read(
-    request: AddonStorageReadRequest,
+    request: unknown,
     generation: number,
   ): Promise<AddonStorageReadResult> {
     validate(request)
@@ -263,18 +300,10 @@ export function createAddonStorage(
   }
 
   async function write(
-    request: AddonStorageWriteRequest,
+    request: unknown,
     generation: number,
   ): Promise<AddonStorageWriteResult> {
-    validate(request)
-    if (!Number.isSafeInteger(request.baseRevision) || request.baseRevision < 0)
-      throw new Error('Invalid addon storage revision.')
-    if (
-      request.migrateFromVersion !== undefined &&
-      (!isVersion(request.migrateFromVersion) ||
-        request.migrateFromVersion >= request.version)
-    )
-      throw new Error('Invalid addon storage migration version.')
+    validateWrite(request)
     const value = jsonValue(request.value)
     const namespace = state(request.owner, request.scope)
     const run = namespace.tail.then(

@@ -234,6 +234,45 @@ test('addon storage rejects non-JSON and oversized values', async (t) => {
   assert.equal((await storage.read(request)).status, 'missing')
 })
 
+test('malformed IPC requests fail before touching storage files', async (t) => {
+  const { directory, storage } = await temporaryStorage(t)
+  const base = {
+    owner: 'documentation',
+    scope: { kind: 'global' },
+    key: 'options',
+    version: 1,
+  }
+  for (const malformed of [
+    null,
+    [],
+    {},
+    { ...base, scope: null },
+    { ...base, scope: [] },
+    { ...base, scope: { kind: 'wrong' } },
+    { ...base, scope: { kind: 'workspace', target: null } },
+    { ...base, scope: { kind: 'workspace', target: [] } },
+    { ...base, key: null },
+    { ...base, version: '1' },
+  ]) {
+    await assert.rejects(storage.read(malformed), /Invalid/)
+    await assert.rejects(storage.write(malformed), /Invalid/)
+  }
+  for (const malformed of [
+    { ...base, baseRevision: null, value: true },
+    { ...base, baseRevision: -1, value: true },
+    { ...base, baseRevision: 0 },
+  ])
+    await assert.rejects(storage.write(malformed), /Invalid/)
+  await assert.rejects(
+    storage.write({ ...base, baseRevision: 0, value: undefined }),
+    /JSON value/,
+  )
+  await assert.rejects(
+    readFile(join(directory, 'global', 'documentation.json')),
+    { code: 'ENOENT' },
+  )
+})
+
 test('workspace switch during an asynchronous write leaves its old target untouched', async (t) => {
   let checks = 0
   const { directory, storage } = await temporaryStorage(t, () => ++checks < 4)

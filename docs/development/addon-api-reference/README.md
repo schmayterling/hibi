@@ -28,6 +28,7 @@ For installed packages, use the [SideloadFactory](SideloadFactory.md) and the [s
 - [DocumentFormat](DocumentFormat.md)
 - [DocumentFormatting](DocumentFormatting.md)
 - [DocumentPreviewProps](DocumentPreviewProps.md)
+- [DocumentsApi](DocumentsApi.md)
 - [DocumentSelection](DocumentSelection.md)
 - [EditorInputEvent](EditorInputEvent.md)
 - [EditorKeyEvent](EditorKeyEvent.md)
@@ -244,9 +245,13 @@ For installed packages, use the [SideloadFactory](SideloadFactory.md) and the [s
 
 ## Document edits
 
+- [DocumentSourceReadResult](DocumentSourceReadResult.md)
+- [OpenDocumentMetadata](OpenDocumentMetadata.md)
 - [SourceEdit](SourceEdit.md)
 - [SourceEditRequest](SourceEditRequest.md)
 - [SourceEditResult](SourceEditResult.md)
+- [TargetSourceEditRequest](TargetSourceEditRequest.md)
+- [TargetSourceEditResult](TargetSourceEditResult.md)
 
 ## Commands
 

@@ -2,7 +2,7 @@
 
 # KnownWorkspace
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L164)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L167)
 
 <details>
 <summary>Declaration</summary>
@@ -27,7 +27,7 @@ type KnownWorkspace = RecentWorkspace & {
 
 ### pinned
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L165)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L168)
 
 ```typescript
 pinned: boolean
@@ -35,7 +35,7 @@ pinned: boolean
 
 ### hidden
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L166)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L169)
 
 ```typescript
 hidden: boolean

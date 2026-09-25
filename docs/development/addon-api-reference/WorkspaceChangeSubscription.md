@@ -2,7 +2,7 @@
 
 # WorkspaceChangeSubscription
 
-Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L73)
+Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L74)
 
 <details>
 <summary>Declaration</summary>
@@ -30,7 +30,7 @@ interface WorkspaceChangeSubscription {
 
 ### snapshot
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L74)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L75)
 
 ```typescript
 readonly snapshot: WorkspaceStreamSnapshot
@@ -42,7 +42,7 @@ Related: [WorkspaceStreamSnapshot](WorkspaceStreamSnapshot.md).
 
 ### dispose
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L75)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L76)
 
 ```typescript
 dispose(): void

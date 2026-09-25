@@ -1,7 +1,11 @@
 # Foundations open issues
 
-- #99's inactive-tab reload can replace a journal edit accepted while disk reading is pending. Workstream A must guard the target snapshot after the await and test that race before integration.
-- #83's global shortcut registration uses addon/local ID as ownership. Duplicate IDs and a stale asynchronous disposer can remove a newer registration. Workstream B must use a registration token or serialized replacement and test both races.
-- Current `workspaceAction` couples disk operations to explorer focus and draft tabs. Workstream C needs a targeted headless file path while reusing main-process path validation and document coordination.
-- Installed addons share the renderer and global preload bridge. Workstream G cannot claim enforceable per-addon privileged grants without isolation; choose an honest trust boundary before exposing such services.
+- Targeted edits of a mounted background editor view still return `unsupported-view`; a view-aware adapter must preserve selection and history before allowing them.
+- Legacy active-only `context.editor.updateMarkdown` can follow focus after an addon command awaits. New commands should use captured document targets and `context.documents`; a host-enforced async guard remains open.
+- Workspace API still needs version-checked closed-file updates, rename/move, trash, binary attachment IO, and paged listing. Its path checks cannot defeat a same-user symlink swap-back race without native directory-handle IO.
+- Workspace watcher events identify generation and ordered invalidations, but cannot truthfully report every external mutation's origin or content version.
+- Metadata query service is exposed to addons, but Graph/Tags/Backlinks still use their prior caches. Source extraction includes wiki links and hashtags regardless of renderer flavor. Text search is a bounded scan, not an indexed/ranked search; worker offload remains open.
+- Completion broker is registered through the addon API, but source/rich editor adapters and acceptance UI are not yet integrated.
+- Installed addons share the renderer and global preload bridge. Main-owned activation checks prevent cooperative stale requests; they do not isolate hostile addon code or prevent another addon from spoofing an ID.
+- Host services beyond user-selected text, including network and credentials, remain open.
 - Baseline and candidate performance evidence, including startup, input, targeted edits, indexing, activation, completion, and retained memory, remains to be measured on a quiet reference machine.

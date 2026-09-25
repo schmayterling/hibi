@@ -2,7 +2,7 @@
 
 # WorkspaceStreamSnapshot
 
-Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L62)
+Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L63)
 
 <details>
 <summary>Declaration</summary>
@@ -37,7 +37,7 @@ interface WorkspaceStreamSnapshot {
 
 ### target
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L63)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L64)
 
 ```typescript
 readonly target: WorkspaceTarget | null
@@ -47,7 +47,7 @@ Related: [WorkspaceTarget](WorkspaceTarget.md).
 
 ### sequence
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L64)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L65)
 
 ```typescript
 readonly sequence: number
@@ -55,7 +55,7 @@ readonly sequence: number
 
 ### entries
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L65)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L66)
 
 ```typescript
 readonly entries: readonly WorkspaceEntry[]
@@ -65,7 +65,7 @@ Related: [WorkspaceEntry](WorkspaceEntry.md).
 
 ### stale
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L67)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L68)
 
 A failed watcher makes this snapshot a point-in-time view only.
 
@@ -75,7 +75,7 @@ readonly stale: boolean
 
 ### complete
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L69)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L70)
 
 A failed size-capped scan leaves the retained tree incomplete.
 
@@ -85,7 +85,7 @@ readonly complete: boolean
 
 ### capReached
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L70)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L71)
 
 ```typescript
 readonly capReached: boolean

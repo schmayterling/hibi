@@ -2,7 +2,7 @@
 
 # AddonView
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L431)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L443)
 
 <details>
 <summary>Declaration</summary>
@@ -39,7 +39,7 @@ type AddonView = {
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L432)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L444)
 
 ```typescript
 id: string
@@ -47,7 +47,7 @@ id: string
 
 ### label
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L433)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L445)
 
 ```typescript
 label: string
@@ -55,7 +55,7 @@ label: string
 
 ### icon
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L434)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L446)
 
 ```typescript
 icon?: SidebarView['icon']
@@ -65,7 +65,7 @@ Related: [SidebarView](SidebarView.md).
 
 ### location
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L435)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L447)
 
 ```typescript
 location?: 'sidebar' | 'panel' | 'tab' | 'start'
@@ -73,7 +73,7 @@ location?: 'sidebar' | 'panel' | 'tab' | 'start'
 
 ### side
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L437)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L449)
 
 Preferred side for sidebar views. Users can choose either side in its picker.
 
@@ -83,7 +83,7 @@ side?: 'left' | 'right'
 
 ### lifetime
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L439)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L451)
 
 Visible views unmount when hidden; session views retain local state until closed or disposed.
 
@@ -93,7 +93,7 @@ lifetime?: 'visible' | 'session'
 
 ### Content
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L440)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L452)
 
 ```typescript
 Content: ComponentType<AddonViewProps>

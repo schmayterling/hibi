@@ -2,7 +2,7 @@
 
 # SourceEditRequest
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L11)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L12)
 
 <details>
 <summary>Declaration</summary>
@@ -36,7 +36,7 @@ type SourceEditRequest = {
 
 ### requestId
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L12)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L13)
 
 ```typescript
 requestId: string
@@ -44,7 +44,7 @@ requestId: string
 
 ### tabId
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L13)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L14)
 
 ```typescript
 tabId: string
@@ -52,7 +52,7 @@ tabId: string
 
 ### revision
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L14)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L15)
 
 ```typescript
 revision: number
@@ -60,7 +60,7 @@ revision: number
 
 ### contentVersion
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L15)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L16)
 
 ```typescript
 contentVersion: number
@@ -68,7 +68,7 @@ contentVersion: number
 
 ### projectionId
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L17)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L18)
 
 Optional exact analysis/schema identity returned by getTextProjection().
 
@@ -78,7 +78,7 @@ projectionId?: string
 
 ### changes
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L18)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L19)
 
 ```typescript
 changes: readonly SourceEdit[]

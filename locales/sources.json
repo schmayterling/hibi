@@ -74,6 +74,9 @@
   "e008e52e004d": [
     "src/addons/_shared/document-project.ts"
   ],
+  "6502445ea9af": [
+    "src/renderer/src/document-target-edits.ts"
+  ],
   "dbd4fb5faedf": [
     "src/addons/frontmatter/Properties.tsx"
   ],
@@ -561,6 +564,9 @@
     "src/main/index.ts",
     "src/shared/hotkeys.ts"
   ],
+  "387bea5c5e14": [
+    "src/main/selected-text.ts"
+  ],
   "4498a0e9706f": [
     "src/main/files.ts",
     "src/main/workspace-files.ts"
@@ -802,6 +808,12 @@
   ],
   "22a970d2e5b1": [
     "src/addons/diagnostics/Settings.tsx"
+  ],
+  "84d045b2d5b9": [
+    "src/renderer/src/completion-broker.ts"
+  ],
+  "bd24d61194eb": [
+    "src/renderer/src/completion-broker.ts"
   ],
   "34c65fb85a2d": [
     "src/shared/source-operations.ts"
@@ -1461,6 +1473,7 @@
   ],
   "ea91f021982f": [
     "src/main/addons.ts",
+    "src/main/index.ts",
     "src/renderer/src/addon-storage.ts",
     "src/renderer/src/addons.ts"
   ],
@@ -2113,10 +2126,12 @@
     "src/main/addon-storage.ts"
   ],
   "5fdbc4fe9533": [
-    "src/main/addon-storage.ts"
+    "src/main/addon-storage.ts",
+    "src/main/index.ts"
   ],
   "64197af51495": [
-    "src/main/addon-storage.ts"
+    "src/main/addon-storage.ts",
+    "src/main/index.ts"
   ],
   "6ce093a8d751": [
     "src/main/addon-storage.ts"
@@ -2144,6 +2159,12 @@
   ],
   "2296b7344bc6": [
     "src/renderer/src/document-runtime.ts"
+  ],
+  "00a88c02618e": [
+    "src/renderer/src/completion-broker.ts"
+  ],
+  "c6575e3bf649": [
+    "src/renderer/src/completion-broker.ts"
   ],
   "78fc79d2cefd": [
     "src/shared/source-operations.ts"
@@ -2207,6 +2228,9 @@
   ],
   "e0d30e96afde": [
     "src/shared/source-references.ts"
+  ],
+  "152b3cdea888": [
+    "src/addons/documentation/saved-options.ts"
   ],
   "46a8d88171b3": [
     "src/shared/markdown-semantic-cache.ts"
@@ -2849,6 +2873,9 @@
   "b177c63e4070": [
     "src/addons/graph/Panel.tsx"
   ],
+  "480cbf78a0ec": [
+    "src/addons/documentation/index.tsx"
+  ],
   "48a7ae24583b": [
     "src/renderer/src/ImportDialog.tsx"
   ],
@@ -3478,6 +3505,9 @@
   "67fe7834e543": [
     "src/main/workspace-settings.ts"
   ],
+  "bf72b619b5bd": [
+    "src/addons/documentation/ExportDialog.tsx"
+  ],
   "d41d8ff626a3": [
     "src/shared/document-session.ts"
   ],
@@ -4048,6 +4078,9 @@
   "33848694bf6a": [
     "src/shared/document-checkpoint.ts"
   ],
+  "4f933c48f0a0": [
+    "src/renderer/src/document-target-edits.ts"
+  ],
   "6ad5e9ddb386": [
     "src/main/links.ts"
   ],
@@ -4056,6 +4089,9 @@
   ],
   "602cad822b0c": [
     "src/main/document.ts"
+  ],
+  "22f211fd2570": [
+    "src/renderer/src/document-target-edits.ts"
   ],
   "2a4bec529492": [
     "src/renderer/src/Editor.tsx",
@@ -4070,6 +4106,7 @@
   ],
   "a5aedb8a518f": [
     "src/renderer/src/document-edits.ts",
+    "src/renderer/src/document-target-edits.ts",
     "src/renderer/src/main.tsx"
   ],
   "8ea97b4e248c": [
@@ -4104,6 +4141,9 @@
   ],
   "e786eb038293": [
     "src/main/index.ts"
+  ],
+  "0eef1e3fcbb7": [
+    "src/renderer/src/document-target-edits.ts"
   ],
   "c6a567e88234": [
     "src/main/index.ts"
@@ -4163,6 +4203,7 @@
     "src/renderer/src/source-session.ts"
   ],
   "bee50784d023": [
+    "src/renderer/src/document-target-edits.ts",
     "src/shared/document-edits.ts"
   ],
   "2c9095034e70": [
@@ -4259,10 +4300,15 @@
   "0d3f68fa85cf": [
     "src/renderer/src/addon-global-shortcuts.ts",
     "src/renderer/src/addons.ts",
-    "src/renderer/src/document-edits.ts"
+    "src/renderer/src/document-edits.ts",
+    "src/renderer/src/document-target-edits.ts"
   ],
   "2094abfa005b": [
     "src/renderer/src/addon-registry.ts"
+  ],
+  "649c2c0bd161": [
+    "src/main/index.ts",
+    "src/main/workspace-files.ts"
   ],
   "c58889003b80": [
     "src/main/addons.ts",
@@ -4372,6 +4418,9 @@
     "src/addons/_shared/document-project.ts",
     "src/addons/typst/compiler.ts"
   ],
+  "e7cdb1b6ae71": [
+    "src/renderer/src/document-target-edits.ts"
+  ],
   "0ac0af8cf48f": [
     "src/main/addon-documentation.ts"
   ],
@@ -4443,6 +4492,9 @@
   ],
   "62a6fbf88b17": [
     "src/main/links.ts"
+  ],
+  "4360555eb341": [
+    "src/renderer/src/document-target-edits.ts"
   ],
   "557e75befd2a": [
     "src/renderer/src/WorkspacesSidebar.tsx"
@@ -4543,6 +4595,9 @@
   ],
   "f8889763cb31": [
     "src/main/analysis.ts"
+  ],
+  "55674746977e": [
+    "src/renderer/src/completion-broker.ts"
   ],
   "451aa51a0fb5": [
     "src/renderer/src/EditorToolbar.tsx"
@@ -4886,6 +4941,9 @@
   "87bb59ba2f92": [
     "src/renderer/src/AddonSidebar.tsx"
   ],
+  "2649c35c1ccf": [
+    "src/addons/documentation/index.tsx"
+  ],
   "6fe0aebfb90a": [
     "src/main/workspace-settings.ts"
   ],
@@ -4905,8 +4963,14 @@
   "8ebd7fbef943": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
+  "cfac7c431f69": [
+    "src/main/workspace-reference-index.ts"
+  ],
   "9619649d8dc1": [
     "src/renderer/src/WorkspaceSettings.tsx"
+  ],
+  "73dff0b88724": [
+    "src/addons/documentation/saved-options.ts"
   ],
   "5ebc59145b59": [
     "src/renderer/src/ImportDialog.tsx",

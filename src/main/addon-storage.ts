@@ -57,15 +57,20 @@ function validJson(
   )
     return false
   seen.add(value)
-  const valid = Array.isArray(value)
-    ? Object.keys(value).length === value.length &&
-      value.every((item) => validJson(item, depth + 1, seen))
-    : Object.entries(value).every(
-        ([key, item]) =>
-          key !== '__proto__' &&
-          key !== 'constructor' &&
-          validJson(item, depth + 1, seen),
-      )
+  let valid: boolean
+  if (Array.isArray(value)) {
+    valid = Object.keys(value).length === value.length
+    for (let index = 0; valid && index < value.length; index++)
+      valid =
+        Object.hasOwn(value, index) && validJson(value[index], depth + 1, seen)
+  } else {
+    valid = Object.entries(value).every(
+      ([key, item]) =>
+        key !== '__proto__' &&
+        key !== 'constructor' &&
+        validJson(item, depth + 1, seen),
+    )
+  }
   seen.delete(value)
   return valid
 }
@@ -80,7 +85,7 @@ function jsonValue(value: unknown): unknown {
 }
 
 function validate(request: AddonStorageReadRequest): void {
-  if (!/^[a-z][a-z0-9-]*$/.test(request.owner))
+  if (!/^[a-z][a-z0-9-]{0,79}$/.test(request.owner))
     throw new Error('Invalid addon storage owner.')
   if (!/^[a-z][a-z0-9._-]{0,79}$/.test(request.key))
     throw new Error('Invalid addon storage key.')
@@ -283,11 +288,14 @@ export function createAddonStorage(
           }
         if (!existing && Object.keys(namespace.entries).length >= KEY_LIMIT)
           throw new Error('This addon storage scope has too many keys.')
+        if (existing?.revision === Number.MAX_SAFE_INTEGER)
+          throw new Error('This addon storage key reached its revision limit.')
         const revision = (existing?.revision ?? 0) + 1
-        const next = {
-          ...namespace.entries,
-          [request.key]: { version: request.version, revision, value },
-        }
+        const next = Object.assign(
+          Object.create(null) as Record<string, Entry>,
+          namespace.entries,
+        )
+        next[request.key] = { version: request.version, revision, value }
         if (file) {
           const encoded = JSON.stringify({ format: FORMAT, entries: next })
           if (Buffer.byteLength(encoded) > FILE_LIMIT)
@@ -337,7 +345,7 @@ export function createAddonStorage(
   }
 
   async function clearSession(owner: string): Promise<void> {
-    if (!/^[a-z][a-z0-9-]*$/.test(owner)) return
+    if (!/^[a-z][a-z0-9-]{0,79}$/.test(owner)) return
     const namespace = namespaces.get(`session:${owner}`)
     if (!namespace) return
     await namespace.tail

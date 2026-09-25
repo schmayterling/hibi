@@ -18,6 +18,7 @@ export default defineAddon({
         ? (
             await context.native.query<{ id: string; path: string }[]>(
               'targets',
+              settings.workspaceId,
             )
           ).find((item) => item.id === settings.workspaceId)?.path
         : current?.name

@@ -17,9 +17,11 @@ export function Settings() {
     const refresh = () => {
       const current = ++generation
       void Promise.all([
-        window.hibi.queryAddon('quick-note', 'targets') as Promise<
-          RecentWorkspace[]
-        >,
+        window.hibi.queryAddon(
+          'quick-note',
+          'targets',
+          value.workspaceId,
+        ) as Promise<RecentWorkspace[]>,
         window.hibi.getWorkspace(),
       ]).then(
         ([recent, workspace]) => {
@@ -38,7 +40,7 @@ export function Settings() {
       active = false
       off()
     }
-  }, [])
+  }, [value.workspaceId])
   useEffect(() => {
     let active = true
     void (

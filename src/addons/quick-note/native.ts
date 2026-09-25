@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto'
 import { lstat, realpath } from 'node:fs/promises'
 import { basename, join, relative, sep } from 'node:path'
 import { dialog } from 'electron'
 import { writeMarkdown } from '../../main/files'
 import {
+  getKnownWorkspaces,
   getRecentWorkspaces,
   rememberWorkspace,
 } from '../../main/recent-workspaces'
@@ -19,13 +21,19 @@ import manifest from './manifest'
 async function target(id: unknown, context: NativeAddonContext) {
   if (typeof id !== 'string') throw new Error('Choose a workspace.')
   const path = id
-    ? ((await getRecentWorkspaces()).find((item) => item.id === id)?.path ??
+    ? ((await getKnownWorkspaces()).find((item) => item.id === id)?.path ??
       (id === workspaceId() ? context.workspace.directory() : null))
     : context.workspace.directory()
   if (!path) throw new Error('Open a workspace or choose a recent one.')
+  const info = await lstat(path)
+  if (!info.isDirectory() || info.isSymbolicLink())
+    throw new Error('This workspace location changed. Choose it again.')
   const root = await realpath(path)
-  if (!(await lstat(root)).isDirectory())
-    throw new Error('This workspace is no longer a folder.')
+  if (
+    root !== path ||
+    (id && createHash('sha256').update(root).digest('hex') !== id)
+  )
+    throw new Error('This workspace location changed. Choose it again.')
   return root
 }
 

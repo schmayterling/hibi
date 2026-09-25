@@ -5,6 +5,8 @@ export const HOST_NETWORK_CHANNELS = {
 
 export interface HostTextRequest {
   readonly url: string
+  /** Stored under this addon's host credentials; sent once as an HTTPS bearer token. */
+  readonly credentialKey?: string
 }
 
 export interface HostTextResponse {

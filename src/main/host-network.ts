@@ -6,6 +6,7 @@ import { Transform, Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib'
 import type { AddonOwner } from '../shared/foundation-contracts'
+import type { CredentialResult } from '../shared/host-credentials'
 import type {
   HostNetworkFailure,
   HostTextResponse,
@@ -84,6 +85,7 @@ type Grant = {
   readonly windowKey: object
   readonly operation: 'get-utf8'
   readonly url: string
+  readonly credentialKey?: string
   readonly redirectFrom?: string
 }
 type PrivateGrant = Grant & { readonly address: string }
@@ -96,11 +98,18 @@ type Options = {
     request: PrivateGrant,
     signal: AbortSignal,
   ) => Promise<boolean>
+  applyCredential?: (
+    owner: AddonOwner,
+    windowKey: object,
+    key: string,
+    apply: (secret: string, signal: AbortSignal) => void,
+  ) => Promise<CredentialResult<{ applied: true }>>
   resolve?: (hostname: string) => Promise<readonly Address[]>
   transport?: (
     url: URL,
     address: Address,
     signal: AbortSignal,
+    bearer?: string,
   ) => Promise<Response>
   timeoutMs?: number
 }
@@ -241,6 +250,7 @@ async function sendHttps(
   url: URL,
   address: Address,
   signal: AbortSignal,
+  bearer?: string,
 ): Promise<Response> {
   return new Promise((resolve, reject) => {
     const request = httpsRequest(
@@ -254,6 +264,7 @@ async function sendHttps(
         headers: {
           Accept: 'text/plain, application/json;q=0.9, */*;q=0.1',
           'Accept-Encoding': 'gzip, deflate, br',
+          ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
         },
         lookup: (_hostname, options, callback) => {
           if (options.all) callback(null, [address])
@@ -425,9 +436,21 @@ export class HostNetwork {
         typeof input !== 'object' ||
         Array.isArray(input) ||
         !Object.hasOwn(input, 'url') ||
-        Object.keys(input).length !== 1
+        Object.keys(input).some(
+          (key) => key !== 'url' && key !== 'credentialKey',
+        )
       )
         fail('invalid-request')
+      const requestedKey = (input as { credentialKey?: unknown }).credentialKey
+      let credentialKey: string | undefined
+      if (requestedKey !== undefined) {
+        if (
+          typeof requestedKey === 'string' &&
+          /^[a-z][a-z0-9-]{0,63}$/.test(requestedKey)
+        )
+          credentialKey = requestedKey
+        else fail('invalid-request')
+      }
       let url = parseUrl((input as { url: unknown }).url)
       let redirectFrom: string | undefined
       for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
@@ -438,6 +461,7 @@ export class HostNetwork {
           windowKey,
           operation: 'get-utf8',
           url: url.href,
+          ...(credentialKey ? { credentialKey } : {}),
           ...(redirectFrom ? { redirectFrom } : {}),
         }
         if (
@@ -489,6 +513,32 @@ export class HostNetwork {
             fail('permission-denied')
           live()
         }
+        let bearer: string | undefined
+        if (credentialKey) {
+          const key = credentialKey
+          const applyCredential = this.#options.applyCredential
+          if (!applyCredential) throw new NetworkFailure('unavailable')
+          const applied = await this.#call(
+            () =>
+              applyCredential(owner, windowKey, key, (secret) => {
+                if (controller.signal.aborted) return
+                // RFC 6750 bearer syntax also excludes HTTP header injection.
+                if (!/^[A-Za-z0-9\-._~+/]+=*$/.test(secret)) fail('unavailable')
+                bearer = secret
+              }),
+            controller.signal,
+          )
+          live()
+          if (!applied.ok)
+            fail(
+              applied.code === 'stale'
+                ? 'stale'
+                : applied.code === 'busy'
+                  ? 'busy'
+                  : 'unavailable',
+            )
+          if (!bearer) fail('unavailable')
+        }
         let hopTimedOut = false
         const hop = new AbortController()
         const hopTimer = setTimeout(() => {
@@ -500,7 +550,12 @@ export class HostNetwork {
         try {
           response = await this.#call(
             () =>
-              (this.#options.transport ?? sendHttps)(url, selected, hopSignal),
+              (this.#options.transport ?? sendHttps)(
+                url,
+                selected,
+                hopSignal,
+                bearer,
+              ),
             hopSignal,
             (late) => late.body.destroy(),
           )
@@ -515,6 +570,7 @@ export class HostNetwork {
           }
           if ([301, 302, 303, 307, 308].includes(response.status)) {
             response.body.destroy()
+            if (credentialKey) fail('permission-denied')
             if (redirects === MAX_REDIRECTS) fail('limit-exceeded')
             const location = header(response.headers, 'location')
             if (!location) fail('unavailable')
@@ -540,6 +596,8 @@ export class HostNetwork {
           } finally {
             response.body.destroy()
           }
+          // A server may echo the Authorization header; never surface that text.
+          if (bearer && text.includes(bearer)) fail('unavailable')
           live()
           const value: HostTextResponse = {
             url: url.href,
@@ -552,6 +610,7 @@ export class HostNetwork {
           throw error
         } finally {
           response?.body.destroy()
+          bearer = undefined
           clearTimeout(hopTimer)
         }
       }

@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { createServer } from 'node:https'
+import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import test from 'node:test'
+import { getCACertificates, setDefaultCACertificates } from 'node:tls'
 import { brotliCompressSync, deflateSync, gzipSync } from 'node:zlib'
 import {
   HostNetwork,
@@ -34,6 +38,7 @@ function fixture(t, overrides = {}) {
   const privateGrants = []
   const lookups = []
   const transports = []
+  const credentials = new Map([['demo:token', 'host-only-secret']])
   const host = new HostNetwork({
     currentOwner: (id) => owners.get(id) ?? null,
     isWindowLive: (key) => windows.has(key),
@@ -45,13 +50,24 @@ function fixture(t, overrides = {}) {
       privateGrants.push(grant)
       return (await overrides.grantPrivateAddress?.(grant, signal)) ?? true
     },
+    applyCredential: async (owner, key, credentialKey, apply) => {
+      if (overrides.applyCredential)
+        return overrides.applyCredential(owner, key, credentialKey, apply)
+      const secret = credentials.get(`${owner.addonId}:${credentialKey}`)
+      if (!secret) return { ok: false, code: 'not-found' }
+      apply(secret, new AbortController().signal)
+      return { ok: true, value: { applied: true } }
+    },
     resolve: async (hostname) => {
       lookups.push(hostname)
       return (await overrides.resolve?.(hostname)) ?? [publicAddress]
     },
-    transport: async (url, address, signal) => {
-      transports.push({ url: url.href, address, signal })
-      return (await overrides.transport?.(url, address, signal)) ?? response()
+    transport: async (url, address, signal, bearer) => {
+      transports.push({ url: url.href, address, signal, bearer })
+      return (
+        (await overrides.transport?.(url, address, signal, bearer)) ??
+        response()
+      )
     },
     ...(overrides.timeoutMs ? { timeoutMs: overrides.timeoutMs } : {}),
   })
@@ -64,6 +80,7 @@ function fixture(t, overrides = {}) {
     privateGrants,
     lookups,
     transports,
+    credentials,
   }
 }
 
@@ -171,6 +188,9 @@ test('malformed requests and non-https destinations fail before a grant', async 
     {},
     { url: 5 },
     { url: 'https://example.test/', extra: true },
+    { url: 'https://example.test/', credentialKey: '' },
+    { url: 'https://example.test/', credentialKey: '../token' },
+    { url: 'https://example.test/', credentialKey: 1 },
     { url: 'http://example.test/' },
     { url: 'file:///tmp/note' },
     { url: 'https://user@example.test/' },
@@ -187,6 +207,178 @@ test('malformed requests and non-https destinations fail before a grant', async 
     'invalid-request',
   )
   assert.deepEqual(destinations, [])
+})
+
+test('stored bearer use follows destination and private grants, with no redirect forwarding', async (t) => {
+  const events = []
+  const { host, destinations, privateGrants, transports } = fixture(t, {
+    resolve: async () => [{ address: '127.0.0.1', family: 4 }],
+    grantDestination: async () => {
+      events.push('destination')
+      return true
+    },
+    grantPrivateAddress: async () => {
+      events.push('private')
+      return true
+    },
+    applyCredential: async (_owner, _window, key, apply) => {
+      events.push('credential')
+      assert.equal(key, 'token')
+      apply('host-only-secret', new AbortController().signal)
+      return { ok: true, value: { applied: true } }
+    },
+    transport: async () => {
+      events.push('transport')
+      return response(302, '', { location: 'https://elsewhere.test/' })
+    },
+  })
+  failure(
+    await host.request('demo', windowKey, {
+      url: 'https://example.test/start',
+      credentialKey: 'token',
+    }),
+    'permission-denied',
+  )
+  assert.deepEqual(events, [
+    'destination',
+    'private',
+    'credential',
+    'transport',
+  ])
+  assert.equal(destinations[0].credentialKey, 'token')
+  assert.equal(privateGrants[0].credentialKey, 'token')
+  assert.equal(transports[0].bearer, 'host-only-secret')
+  assert.equal(destinations.length, 1)
+  assert.equal(transports.length, 1)
+})
+
+test('missing, denied, and wrong-owner credentials never reach transport', async (t) => {
+  const { host, credentials, transports, destinations } = fixture(t)
+  credentials.delete('demo:token')
+  failure(
+    await host.request('demo', windowKey, {
+      url: 'https://example.test/',
+      credentialKey: 'token',
+    }),
+    'unavailable',
+  )
+  credentials.set('other:token', 'other-secret')
+  failure(
+    await host.request('demo', windowKey, {
+      url: 'https://example.test/',
+      credentialKey: 'token',
+    }),
+    'unavailable',
+  )
+  assert.equal(transports.length, 0)
+  assert.equal(destinations.length, 2)
+})
+
+test('invalid bearer values and stale vault results never reach transport', async (t) => {
+  const invalid = fixture(t, {
+    applyCredential: async (_owner, _window, _key, apply) => {
+      apply('bad\r\nHeader: injected', new AbortController().signal)
+      return { ok: true, value: { applied: true } }
+    },
+  })
+  failure(
+    await invalid.host.request('demo', windowKey, {
+      url: 'https://example.test/',
+      credentialKey: 'token',
+    }),
+    'unavailable',
+  )
+  assert.equal(invalid.transports.length, 0)
+
+  const stale = fixture(t, {
+    applyCredential: async () => ({ ok: false, code: 'stale' }),
+  })
+  failure(
+    await stale.host.request('demo', windowKey, {
+      url: 'https://example.test/',
+      credentialKey: 'token',
+    }),
+    'stale',
+  )
+  assert.equal(stale.transports.length, 0)
+})
+
+test('real HTTPS transport sends bearer only after grants and blocks reflected secret', async (t) => {
+  const certificate = await readFile(
+    join(import.meta.dirname, 'fixtures/host-network-localhost-cert.pem'),
+    'utf8',
+  )
+  const key = await readFile(
+    join(import.meta.dirname, 'fixtures/host-network-localhost-key.pem'),
+    'utf8',
+  )
+  const originalCAs = getCACertificates('default')
+  setDefaultCACertificates([...originalCAs, certificate])
+  t.after(() => setDefaultCACertificates(originalCAs))
+  const seen = []
+  const server = createServer({ cert: certificate, key }, (request, reply) => {
+    seen.push({
+      path: request.url,
+      authorization: request.headers.authorization,
+      cookie: request.headers.cookie,
+    })
+    reply.setHeader('content-type', 'text/plain; charset=utf-8')
+    reply.end(
+      request.url === '/reflect'
+        ? request.headers.authorization
+        : 'approved response',
+    )
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const port = server.address().port
+  const events = []
+  const host = new HostNetwork({
+    currentOwner: () => ({ addonId: 'demo', activationGeneration: 1 }),
+    isWindowLive: () => true,
+    grantDestination: async () => {
+      events.push('destination')
+      return true
+    },
+    grantPrivateAddress: async () => {
+      events.push('private')
+      return true
+    },
+    applyCredential: async (_owner, _window, _key, apply) => {
+      events.push('credential')
+      apply('host-only-secret', new AbortController().signal)
+      return { ok: true, value: { applied: true } }
+    },
+    resolve: async () => [{ address: '127.0.0.1', family: 4 }],
+  })
+  t.after(() => host.dispose())
+  const request = (path) =>
+    host.request('demo', windowKey, {
+      url: `https://localhost:${port}${path}`,
+      credentialKey: 'token',
+    })
+  assert.equal((await request('/plain')).ok, true)
+  failure(await request('/reflect'), 'unavailable')
+  assert.deepEqual(events, [
+    'destination',
+    'private',
+    'credential',
+    'destination',
+    'private',
+    'credential',
+  ])
+  assert.deepEqual(seen, [
+    {
+      path: '/plain',
+      authorization: 'Bearer host-only-secret',
+      cookie: undefined,
+    },
+    {
+      path: '/reflect',
+      authorization: 'Bearer host-only-secret',
+      cookie: undefined,
+    },
+  ])
 })
 
 test('private and local names require separate grants for exact pinned addresses', async (t) => {

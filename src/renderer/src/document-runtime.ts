@@ -25,12 +25,21 @@ type Listener = (
   document: DocumentState,
   changes: readonly RawEdit[] | null,
 ) => void
+export type DocumentSaveToken = Readonly<{
+  target: DocumentTarget
+  sequence: number
+  epoch: number
+}>
 
 /** Per-tab source/history ownership. React and legacy addons receive immutable read facades. */
 export class DocumentRuntime {
   readonly #sessions = new Map<string, DocumentSession>()
   readonly #documentTargets = new Map<string, DocumentTarget>()
   readonly #targetSessions = new Map<DocumentId, DocumentSession>()
+  readonly #saves = new Map<
+    string,
+    { next: number; acknowledged: number; epoch: number }
+  >()
   readonly #views = new Map<ViewId, ViewTarget>()
   #generation = 0
   #activeView: ViewId | null = null
@@ -83,6 +92,16 @@ export class DocumentRuntime {
     id && this.#sessions.has(id)
       ? (this.#documentTargets.get(id) ?? null)
       : null
+  beginSave(id: string | null = this.#activeId): DocumentSaveToken | null {
+    const target = this.captureDocument(id),
+      progress = id ? this.#saves.get(id) : null
+    if (!target || !progress) return null
+    return Object.freeze({
+      target,
+      sequence: ++progress.next,
+      epoch: progress.epoch,
+    })
+  }
   resolveDocument = (target: DocumentTarget) => {
     const session = this.#targetSessions.get(target.documentId)
     if (!session) return null
@@ -94,8 +113,9 @@ export class DocumentRuntime {
       : null
   }
   registerView(tabId: string, viewId: ViewId) {
-    const document = this.captureDocument(tabId)
-    if (!document || this.#views.has(viewId))
+    const document = this.captureDocument(tabId),
+      session = this.session(tabId)
+    if (!document || !session || this.#views.has(viewId))
       throw new Error('This editor view is unavailable.')
     const target = Object.freeze({
       ...document,
@@ -103,10 +123,11 @@ export class DocumentRuntime {
       viewGeneration: ++this.#generation,
     })
     this.#views.set(viewId, target)
-    this.#activeView = viewId
+    this.#activeView ??= viewId
     return () => {
       if (this.#views.get(viewId) !== target) return
       this.#views.delete(viewId)
+      session.releaseView(viewId)
       if (this.#activeView === viewId) this.#activeView = null
     }
   }
@@ -117,9 +138,16 @@ export class DocumentRuntime {
     const target = this.#activeView && this.#views.get(this.#activeView)
     return target && this.resolveDocument(target) ? target : null
   }
-  isLiveView = (target: ViewTarget) =>
-    this.#views.get(target.viewId)?.viewGeneration === target.viewGeneration &&
-    this.resolveDocument(target) !== null
+  isLiveView = (target: ViewTarget) => {
+    const registered = this.#views.get(target.viewId)
+    return (
+      !!registered &&
+      registered.viewGeneration === target.viewGeneration &&
+      registered.documentId === target.documentId &&
+      registered.documentGeneration === target.documentGeneration &&
+      this.resolveDocument(registered) !== null
+    )
+  }
   retainedHistory = () => ({
     ...this.#historySize,
     sessions: this.#history.size,
@@ -142,6 +170,7 @@ export class DocumentRuntime {
         }
     }
     this.#documentTargets.delete(id)
+    this.#saves.delete(id)
     for (const detach of this.#detach.get(id) ?? []) detach()
     this.#detach.delete(id)
     this.#metadata.delete(id)
@@ -318,6 +347,11 @@ export class DocumentRuntime {
         })
         this.#documentTargets.set(document.tabId, target)
         this.#targetSessions.set(target.documentId, session)
+        this.#saves.set(document.tabId, {
+          next: 0,
+          acknowledged: 0,
+          epoch: 0,
+        })
         const retained = session
         this.#historySubscriptions.set(
           session,
@@ -335,7 +369,11 @@ export class DocumentRuntime {
             this.#savedText.delete(id)
           }),
         ])
-      } else session.reidentify(document)
+      } else {
+        session.reidentify(document)
+        const progress = this.#saves.get(document.tabId)
+        if (progress) progress.epoch++
+      }
       session.importSaved(savedMarkdown)
       this.#active = session
       this.#activeId = document.tabId
@@ -358,12 +396,22 @@ export class DocumentRuntime {
     }
     return this.get()!
   }
-  acknowledgeSave(document: DocumentState) {
+  acknowledgeSave(
+    document: DocumentState,
+    token?: DocumentSaveToken,
+    expectedId?: string,
+  ) {
     const current = this.get(document.tabId),
-      session = this.session(document.tabId)
+      session = this.session(document.tabId),
+      progress = this.#saves.get(document.tabId)
     if (
       !current ||
       !session ||
+      !progress ||
+      !token ||
+      this.resolveDocument(token.target) !== session ||
+      token.epoch !== progress.epoch ||
+      token.sequence <= progress.acknowledged ||
       current.tabId !== document.tabId ||
       current.revision !== document.revision
     )
@@ -371,13 +419,15 @@ export class DocumentRuntime {
     this.#updating = true
     try {
       session.importSaved(document.savedMarkdown)
-      this.#metadata.set(document.tabId, {
-        ...this.#metadata.get(document.tabId)!,
-        id: document.id,
-        name: document.name,
-        ephemeral: document.ephemeral,
-        canAutosave: document.canAutosave,
-      })
+      progress.acknowledged = token.sequence
+      if (expectedId !== undefined && current.id === expectedId)
+        this.#metadata.set(document.tabId, {
+          ...this.#metadata.get(document.tabId)!,
+          id: document.id,
+          name: document.name,
+          ephemeral: document.ephemeral,
+          canAutosave: document.canAutosave,
+        })
       this.#cached.delete(document.tabId)
     } finally {
       this.#updating = false

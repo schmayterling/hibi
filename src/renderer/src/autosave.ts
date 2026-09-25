@@ -94,6 +94,8 @@ export function useAutosave(
             )
             return
           }
+          const token = documentRuntime.beginSave(next.tabId)
+          if (!token) return
           inFlight.current = true
           const identity = { id: next.id, revision: next.revision }
           setResult({ ...identity, status: 'saving' })
@@ -102,7 +104,11 @@ export function useAutosave(
               next.tabId,
               next.revision,
             )
-            if (saved.document) onSaved(saved.document)
+            if (
+              saved.document &&
+              documentRuntime.acknowledgeSave(saved.document, token)
+            )
+              onSaved(saved.document)
             if (saved.status === 'conflict') paused.set(next.tabId, baseline)
             // Results still acknowledge the saved baseline if typing continues during I/O.
             setResult({

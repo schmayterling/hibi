@@ -37,7 +37,11 @@ export function ActiveDocumentEditor({
   const viewId = useMemo(() => crypto.randomUUID() as ViewId, [])
   const documentTarget = documentRuntime.captureDocument(props.document.tabId)
   useEffect(() => {
-    if (!documentTarget) return
+    if (
+      !documentTarget ||
+      documentRuntime.captureDocument(props.document.tabId) !== documentTarget
+    )
+      return
     return documentRuntime.registerView(props.document.tabId, viewId)
   }, [props.document.tabId, documentTarget, viewId])
   const protectionFlavors = useMemo(

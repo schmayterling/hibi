@@ -87,8 +87,9 @@ test('runtime imports saved V while V+1 remains dirty and preserves history acro
     savedMarkdown: 'ab',
     dirty: false,
   }
+  const token = runtime.beginSave()
   runtime.replace('abc')
-  const acknowledged = runtime.acknowledgeSave(saving)
+  const acknowledged = runtime.acknowledgeSave(saving, token, 'file-one')
   assert.equal(acknowledged.markdown, 'abc')
   assert.equal(acknowledged.id, 'file-renamed')
   assert.equal(acknowledged.name, 'renamed.md')
@@ -123,6 +124,7 @@ test('inactive sessions stay addressable and accept their own save acknowledgmen
   }))
   runtime.activate(document('first', { tabs }))
   const first = runtime.session()
+  const token = runtime.beginSave('one')
   runtime.activate(
     document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
   )
@@ -133,13 +135,54 @@ test('inactive sessions stay addressable and accept their own save acknowledgmen
   assert.equal(runtime.get('one').markdown, 'first edit')
   assert.equal(runtime.get().tabs.find((tab) => tab.id === 'one').dirty, true)
   assert.equal(operations.at(-1).document.tabId, 'one')
-  runtime.acknowledgeSave({
-    ...runtime.get('one'),
-    savedMarkdown: 'first edit',
-  })
+  runtime.acknowledgeSave(
+    {
+      ...runtime.get('one'),
+      savedMarkdown: 'first edit',
+    },
+    token,
+  )
   assert.equal(runtime.get('one').dirty, false)
   assert.equal(runtime.get().tabs.find((tab) => tab.id === 'one').dirty, false)
   assert.deepEqual(notices, ['one', 'one'])
+  runtime.dispose()
+})
+
+test('late save acknowledgments leave newer file identity and live text intact', () => {
+  const { runtime } = fixture()
+  runtime.activate(document('saved'))
+  const older = { ...runtime.get() }
+  const oldToken = runtime.beginSave()
+  runtime.activate({ ...older, id: 'renamed-file', name: 'renamed.md' })
+  runtime.replace('newer edit')
+  assert.equal(runtime.acknowledgeSave(older, oldToken), null)
+  const laterToken = runtime.beginSave()
+  runtime.acknowledgeSave(
+    { ...older, id: 'late-save-as', name: 'late.md' },
+    laterToken,
+    'file-one',
+  )
+  assert.equal(runtime.get().id, 'renamed-file')
+  assert.equal(runtime.get().name, 'renamed.md')
+  assert.equal(runtime.get().markdown, 'newer edit')
+  assert.equal(runtime.get().savedMarkdown, 'saved')
+  assert.equal(runtime.get().dirty, true)
+  runtime.dispose()
+})
+
+test('older save replies cannot roll back a newer saved baseline', () => {
+  const { runtime } = fixture()
+  runtime.activate(document('base'))
+  runtime.replace('first save')
+  const first = { ...runtime.get(), savedMarkdown: 'first save' }
+  const firstToken = runtime.beginSave()
+  runtime.replace('second save')
+  const second = { ...runtime.get(), savedMarkdown: 'second save' }
+  const secondToken = runtime.beginSave()
+  runtime.acknowledgeSave(second, secondToken)
+  assert.equal(runtime.acknowledgeSave(first, firstToken), null)
+  assert.equal(runtime.get().savedMarkdown, 'second save')
+  assert.equal(runtime.get().dirty, false)
   runtime.dispose()
 })
 
@@ -156,11 +199,23 @@ test('document and editor-view targets survive focus and expire on close or unmo
   const firstSession = runtime.session()
   const unmount = runtime.registerView('one', 'editor-one')
   const view = runtime.captureActiveView()
+  firstSession.select(
+    { ranges: [{ anchor: 1, head: 1, association: 1 }], mainIndex: 0 },
+    firstSession.snapshot().version,
+    'editor-one',
+  )
   assert.equal(view.documentId, target.documentId)
   assert.equal(runtime.resolveDocument(target), firstSession)
   runtime.activate(
     document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
   )
+  const secondTarget = runtime.captureDocument()
+  assert.equal(runtime.isLiveView({ ...view, ...secondTarget }), false)
+  const unmountSecond = runtime.registerView('two', 'editor-two')
+  assert.equal(runtime.captureActiveView().viewId, 'editor-one')
+  runtime.focusView('editor-two')
+  assert.equal(runtime.captureActiveView().viewId, 'editor-two')
+  unmountSecond()
   assert.equal(runtime.captureDocument('one'), target)
   runtime.activate({ ...firstDocument, revision: 3, tabs })
   assert.equal(runtime.captureDocument(), target)
@@ -168,6 +223,7 @@ test('document and editor-view targets survive focus and expire on close or unmo
   assert.equal(runtime.isLiveView(view), true)
   unmount()
   assert.equal(runtime.isLiveView(view), false)
+  assert.equal(firstSession.selection('editor-one'), null)
   const unmountAgain = runtime.registerView('one', 'editor-one')
   assert.notEqual(
     runtime.captureActiveView().viewGeneration,

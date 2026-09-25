@@ -56,8 +56,9 @@ test('typing keeps shell metadata stable while every canonical edit reaches subs
   assert.equal(session.counters().materializations, 0)
   assert.equal(runtime.get().markdown, `initial${'s'.repeat(100)}`)
   const saved = { ...runtime.get(), savedMarkdown: runtime.get().markdown }
+  const token = runtime.beginSave()
   session.edit([{ from: 0, to: 0, insert: 'new ' }], 'source', 'later')
-  runtime.acknowledgeSave(saved)
+  runtime.acknowledgeSave(saved, token)
   assert.equal(shell.length, 2)
   assert.equal(shell.at(-1).dirty, true)
   assert.equal(shell.at(-1).savedMarkdown, saved.savedMarkdown)
@@ -160,10 +161,14 @@ test('visual snapshots and save acknowledgments update immediately', (t) => {
   stop()
   const deferred = editorDocumentUpdates(runtime, true)
   const stopDeferred = deferred.subscribe(() => notices++)
-  runtime.acknowledgeSave({
-    ...runtime.get(),
-    savedMarkdown: runtime.get().markdown,
-  })
+  const token = runtime.beginSave()
+  runtime.acknowledgeSave(
+    {
+      ...runtime.get(),
+      savedMarkdown: runtime.get().markdown,
+    },
+    token,
+  )
   assert.equal(deferred.get(), runtime.get())
   assert.equal(deferred.get().dirty, false)
   assert.equal(notices, 2)
@@ -296,10 +301,14 @@ test('visual configuration opt-out, unproved edits, undo and save remain immedia
   assert.equal(updates.get(), runtime.get())
   assert.equal(notifications, 4)
   certified('save-target')
-  runtime.acknowledgeSave({
-    ...runtime.get(),
-    savedMarkdown: runtime.get().markdown,
-  })
+  const token = runtime.beginSave()
+  runtime.acknowledgeSave(
+    {
+      ...runtime.get(),
+      savedMarkdown: runtime.get().markdown,
+    },
+    token,
+  )
   assert.equal(updates.get(), runtime.get())
   assert.equal(notifications, 5)
   t.mock.timers.tick(250)

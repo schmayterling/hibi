@@ -192,7 +192,33 @@ test('addon storage rejects non-JSON and oversized values', async (t) => {
     storage.write({ ...request, value: 'x'.repeat(10 * 1024 * 1024) }),
     /too large/,
   )
+  const sparse = [1, 2, 3]
+  Reflect.deleteProperty(sparse, '1')
+  await assert.rejects(
+    storage.write({ ...request, value: sparse }),
+    /JSON value/,
+  )
   assert.equal((await storage.read(request)).status, 'missing')
+})
+
+test('workspace switch during an asynchronous write leaves its old target untouched', async (t) => {
+  let checks = 0
+  const { directory, storage } = await temporaryStorage(t, () => ++checks < 4)
+  const result = await storage.write({
+    owner: 'documentation',
+    scope: { kind: 'workspace', target },
+    key: 'options',
+    version: 1,
+    baseRevision: 0,
+    value: 'old workspace',
+  })
+  assert.deepEqual(result, { status: 'unavailable', reason: 'stale-workspace' })
+  await assert.rejects(
+    readFile(
+      join(directory, 'workspace', target.workspaceId, 'documentation.json'),
+    ),
+    { code: 'ENOENT' },
+  )
 })
 
 test('deactivation waits for pending session writes and renderer subscriptions stop', async (t) => {

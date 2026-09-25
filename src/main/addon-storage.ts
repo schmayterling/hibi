@@ -58,7 +58,8 @@ function validJson(
     return false
   seen.add(value)
   const valid = Array.isArray(value)
-    ? value.every((item) => validJson(item, depth + 1, seen))
+    ? Object.keys(value).length === value.length &&
+      value.every((item) => validJson(item, depth + 1, seen))
     : Object.entries(value).every(
         ([key, item]) =>
           key !== '__proto__' &&

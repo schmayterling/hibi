@@ -607,6 +607,10 @@ export type AddonContext = {
     onKeyEvent: (listener: (event: EditorKeyEvent) => void) => () => void
     /** Observe committed typing, including IME composition. Removed on addon stop. */
     onInput: (listener: (event: EditorInputEvent) => void) => () => void
+    /** Data-only suggestions; provider work is bounded and stopped with this addon. */
+    registerCompletionProvider: (
+      provider: import('../shared/completions').CompletionProvider,
+    ) => () => void
     registerRich: (extension: RichExtension) => () => void
     registerMarkdown: (extension: MarkdownExtension) => () => void
     registerSource: (extension: SourceExtension) => () => void

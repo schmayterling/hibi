@@ -300,24 +300,56 @@ dialog.showMessageBox = (...args) => {
     ),
     false,
   )
-  // Main rebuild restarts Electron; close the draft without a discard prompt.
-  await page.waitForFunction(
-    () =>
-      document.querySelector('[role="textbox"][aria-label="Document editor"]')
-        ?.textContent === 'unsaved watch draft',
-  )
-  await page
-    .getByRole('textbox', { name: 'Document editor', exact: true })
-    .fill('')
-  await page.evaluate(() => window.hibi.flushDocumentChanges())
-  await waitForAsync(page, async () => {
-    const document = await window.hibi.getDocument()
-    return (
-      document.markdown === '' &&
-      !document.dirty &&
-      document.tabs.every((tab) => !tab.dirty)
+  async function clearDraft(expected) {
+    await page.waitForFunction(
+      (expected) =>
+        document.querySelector('[role="textbox"][aria-label="Document editor"]')
+          ?.textContent === expected,
+      expected,
     )
-  })
+    const editor = page.getByRole('textbox', {
+      name: 'Document editor',
+      exact: true,
+    })
+    await editor.fill('')
+    await page.evaluate(() => window.hibi.flushDocumentChanges())
+    try {
+      await waitForAsync(page, async () => {
+        const document = await window.hibi.getDocument()
+        return (
+          document.markdown === '' &&
+          !document.dirty &&
+          document.tabs.every((tab) => !tab.dirty)
+        )
+      })
+    } catch (error) {
+      const state = await page.evaluate(async () => {
+        const editor = document.querySelector(
+          '[role="textbox"][aria-label="Document editor"]',
+        )
+        return {
+          native: await window.hibi.getDocument(),
+          editor: {
+            text: editor?.textContent,
+            html: editor?.innerHTML,
+            contenteditable: editor?.getAttribute('contenteditable'),
+            readonly: editor?.getAttribute('aria-readonly'),
+          },
+          sourceReady: document
+            .querySelector('.editor-panes')
+            ?.getAttribute('data-source-ready'),
+          notices: [...document.querySelectorAll('.document-notice')].map(
+            (notice) => notice.textContent,
+          ),
+        }
+      })
+      assert.fail(
+        `draft did not clear: ${error.message}\n${JSON.stringify(state)}`,
+      )
+    }
+  }
+  // Main rebuild restarts Electron; close the draft without a discard prompt.
+  await clearDraft('unsaved watch draft')
   async function connectRestartedPage(previousStarts) {
     await until(
       () => seenEndpoints.length > previousStarts,
@@ -433,18 +465,7 @@ dialog.showMessageBox = (...args) => {
   )
   mark('canceled restart keeps running app and dirty draft')
 
-  await page
-    .getByRole('textbox', { name: 'Document editor', exact: true })
-    .fill('')
-  await page.evaluate(() => window.hibi.flushDocumentChanges())
-  await waitForAsync(page, async () => {
-    const document = await window.hibi.getDocument()
-    return (
-      document.markdown === '' &&
-      !document.dirty &&
-      document.tabs.every((tab) => !tab.dirty)
-    )
-  })
+  await clearDraft('draft protected from restart')
   await replace(
     'src/main/imports.ts',
     "instructions: 'Canceled rebuild importer.',",

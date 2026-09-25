@@ -2,7 +2,7 @@
 
 # SettingsCategory
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L514)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L515)
 
 <details>
 <summary>Declaration</summary>
@@ -28,7 +28,7 @@ type SettingsCategory = {
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L516)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L517)
 
 Local ID. The host prefixes custom categories with the addon ID.
 
@@ -38,7 +38,7 @@ id: string
 
 ### label
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L517)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L518)
 
 ```typescript
 label: string

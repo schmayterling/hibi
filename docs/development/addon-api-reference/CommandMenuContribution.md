@@ -8,4 +8,5 @@ Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addon
 type CommandMenuContribution =
   | { location: 'app'; group?: string; order?: number }
   | { location: 'explorer'; group?: string; order?: number }
+  | { location: 'editor'; group?: string; order?: number }
 ```

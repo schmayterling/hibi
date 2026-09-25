@@ -2,7 +2,7 @@
 
 # AddonAuthor
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L169)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L170)
 
 <details>
 <summary>Declaration</summary>
@@ -31,7 +31,7 @@ type AddonAuthor = {
 
 ### discordId
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L170)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L171)
 
 ```typescript
 discordId?: string
@@ -39,7 +39,7 @@ discordId?: string
 
 ### displayName
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L171)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L172)
 
 ```typescript
 displayName: string
@@ -47,7 +47,7 @@ displayName: string
 
 ### github
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L172)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L173)
 
 ```typescript
 github?: string
@@ -55,7 +55,7 @@ github?: string
 
 ### role
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L173)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L174)
 
 ```typescript
 role?: string

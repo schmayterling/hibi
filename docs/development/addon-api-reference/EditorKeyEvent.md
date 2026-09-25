@@ -2,7 +2,7 @@
 
 # EditorKeyEvent
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L200)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L201)
 
 Editor-only input. Never emitted from settings, search, dialogs, or hidden panes.
 
@@ -43,7 +43,7 @@ type EditorKeyEvent = Readonly<{
 
 ### phase
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L201)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L202)
 
 ```typescript
 readonly phase: 'down' | 'up'
@@ -51,7 +51,7 @@ readonly phase: 'down' | 'up'
 
 ### view
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L202)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L203)
 
 ```typescript
 readonly view: 'normal' | 'source'
@@ -59,7 +59,7 @@ readonly view: 'normal' | 'source'
 
 ### key
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L203)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L204)
 
 ```typescript
 readonly key: string
@@ -67,7 +67,7 @@ readonly key: string
 
 ### code
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L204)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L205)
 
 ```typescript
 readonly code: string
@@ -75,7 +75,7 @@ readonly code: string
 
 ### repeat
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L205)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L206)
 
 ```typescript
 readonly repeat: boolean
@@ -83,7 +83,7 @@ readonly repeat: boolean
 
 ### altKey
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L206)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L207)
 
 ```typescript
 readonly altKey: boolean
@@ -91,7 +91,7 @@ readonly altKey: boolean
 
 ### ctrlKey
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L207)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L208)
 
 ```typescript
 readonly ctrlKey: boolean
@@ -99,7 +99,7 @@ readonly ctrlKey: boolean
 
 ### metaKey
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L208)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L209)
 
 ```typescript
 readonly metaKey: boolean
@@ -107,7 +107,7 @@ readonly metaKey: boolean
 
 ### shiftKey
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L209)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L210)
 
 ```typescript
 readonly shiftKey: boolean

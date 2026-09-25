@@ -2,7 +2,7 @@
 
 # ExportResult
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L301)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L302)
 
 <details>
 <summary>Declaration</summary>
@@ -24,7 +24,7 @@ type ExportResult = { path: string; pages: number }
 
 ### path
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L301)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L302)
 
 ```typescript
 path: string
@@ -32,7 +32,7 @@ path: string
 
 ### pages
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L301)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L302)
 
 ```typescript
 pages: number

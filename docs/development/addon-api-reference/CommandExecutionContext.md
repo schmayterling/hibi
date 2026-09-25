@@ -22,6 +22,17 @@ interface CommandExecutionContext {
   readonly file?: FileTarget
   readonly document?: DocumentTarget
   readonly view?: ViewTarget
+  /** Captured editor selection; offsets belong to the named editor, not Markdown source. */
+  readonly selection?: {
+    readonly targetId: string
+    readonly editor: 'source' | 'rich'
+    readonly contentVersion: number
+    readonly position: number
+    readonly anchor: number
+    readonly head: number
+    /** Preview capped at 256 characters. Use the selected-text service for more. */
+    readonly selectedText: string
+  }
 }
 ```
 
@@ -36,6 +47,7 @@ interface CommandExecutionContext {
 - [file](#file)
 - [document](#document)
 - [view](#view)
+- [selection](#selection)
 
 ## Properties
 
@@ -91,6 +103,25 @@ readonly view?: ViewTarget
 ```
 
 Related: [ViewTarget](ViewTarget.md).
+
+### selection
+
+Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L75)
+
+Captured editor selection; offsets belong to the named editor, not Markdown source.
+
+```typescript
+readonly selection?: {
+    readonly targetId: string
+    readonly editor: 'source' | 'rich'
+    readonly contentVersion: number
+    readonly position: number
+    readonly anchor: number
+    readonly head: number
+    /** Preview capped at 256 characters. Use the selected-text service for more. */
+    readonly selectedText: string
+  }
+```
 
 ## Related types
 

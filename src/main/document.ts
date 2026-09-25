@@ -25,6 +25,7 @@ import type {
   DocumentTab,
 } from '../shared/desktop'
 import { MAX_DOCUMENT_BYTES } from '../shared/desktop'
+import type { DocumentSaveResult } from '../shared/document-edits'
 import { HISTORY_CHANNELS } from '../shared/history'
 import { type SourceSnapshot, SourceStore } from '../shared/source-buffer'
 import { SourceMaintenance } from '../shared/source-maintenance'
@@ -686,6 +687,8 @@ export async function autosaveDocument(
   window: BrowserWindow,
   target: unknown,
   expectedRevision: unknown,
+  expectedContentVersion?: number,
+  canContinue: () => boolean = () => true,
 ): Promise<AutosaveResult> {
   if (
     typeof target !== 'string' ||
@@ -699,8 +702,11 @@ export async function autosaveDocument(
   if (
     !draft ||
     expectedRevision !== draft.source.snapshot().document.revision ||
+    (expectedContentVersion !== undefined &&
+      expectedContentVersion !== draft.source.snapshot().version) ||
     !draft.path ||
-    !dirty(draft.source, draft.saved)
+    !dirty(draft.source, draft.saved) ||
+    !canContinue()
   )
     return { status: 'skipped', document: null }
   const destination = draft.path
@@ -716,7 +722,15 @@ export async function autosaveDocument(
     return { status: 'conflict', document: null }
   // The source and tab may change while disk I/O is pending.
   const current = id === activeTab ? snapshot() : tabs.get(id)
-  if (!current || current.source !== draft.source)
+  if (
+    !current ||
+    current.source !== draft.source ||
+    current.saved !== draft.saved ||
+    current.path !== destination ||
+    (expectedContentVersion !== undefined &&
+      current.source.snapshot().version !== expectedContentVersion) ||
+    !canContinue()
+  )
     return { status: 'skipped', document: null }
   await writeMarkdown(destination, content, false)
   if (id === activeTab) saved = saving
@@ -737,6 +751,47 @@ export async function autosaveDocument(
     )
   }
   return { status: 'saved', document: getDocumentForTab(id) }
+}
+
+/** Saves one already-named tab without selecting it or opening a file dialog. */
+export async function saveTargetDocument(
+  window: BrowserWindow,
+  target: unknown,
+  expectedRevision: unknown,
+  expectedContentVersion: unknown,
+  canContinue: () => boolean,
+): Promise<DocumentSaveResult> {
+  if (
+    typeof target !== 'string' ||
+    !target ||
+    target.length > 128 ||
+    !Number.isSafeInteger(expectedRevision) ||
+    !Number.isSafeInteger(expectedContentVersion) ||
+    (expectedContentVersion as number) < 0
+  )
+    return { status: 'stale', document: null }
+  const id = target
+  const draft = id === activeTab ? snapshot() : tabs.get(id)
+  if (
+    !draft ||
+    draft.source.snapshot().document.revision !== expectedRevision ||
+    draft.source.snapshot().version !== expectedContentVersion ||
+    !canContinue()
+  )
+    return { status: 'stale', document: null }
+  if (!draft.path || draft.pendingPath)
+    return { status: 'unsupported', document: null }
+  if (!dirty(draft.source, draft.saved))
+    return { status: 'clean', document: getDocumentForTab(id) }
+  const result = await autosaveDocument(
+    window,
+    id,
+    expectedRevision,
+    expectedContentVersion as number,
+    canContinue,
+  )
+  if (result.status === 'skipped') return { status: 'stale', document: null }
+  return { status: result.status, document: result.document }
 }
 
 export function restoreDocument(

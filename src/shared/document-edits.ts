@@ -47,6 +47,23 @@ export type DocumentMetadataResult =
 export type DocumentLifecycleEvent =
   | { kind: 'opened' | 'changed'; metadata: OpenDocumentMetadata }
   | { kind: 'closed'; target: DocumentTarget }
+export type DocumentSaveResult = {
+  status: 'saved' | 'clean' | 'stale' | 'conflict' | 'unsupported'
+  document: DocumentState | null
+}
+export type TargetDocumentSaveResult =
+  | { status: 'saved' | 'clean'; savedVersion: number }
+  | {
+      status:
+        | 'invalid'
+        | 'stale'
+        | 'conflict'
+        | 'unsupported'
+        | 'busy'
+        | 'failed'
+        | 'disposed'
+      message: string
+    }
 export type DocumentSourceReadResult =
   | { status: 'read'; target: VersionedDocumentTarget; source: string }
   | { status: 'invalid' | 'stale' | 'disposed'; message: string }

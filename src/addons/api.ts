@@ -394,6 +394,8 @@ export type DocumentsApi = {
 export type EditorViewSelection = {
   view: import('../shared/foundation-contracts').ViewTarget
   editor: 'source' | 'rich'
+  /** Changes when this pane's editor instance is replaced, even if source does not. */
+  editorGeneration: number
   contentVersion: number
   /** Primary selection only; anchor and head preserve its direction. */
   anchor: number
@@ -401,7 +403,7 @@ export type EditorViewSelection = {
 }
 export type EditorViewPosition = Pick<
   EditorViewSelection,
-  'view' | 'editor' | 'contentVersion'
+  'view' | 'editor' | 'editorGeneration' | 'contentVersion'
 > & { position: number }
 export type EditorViewsApi = {
   /** Mounted editor instances; one instance is available in the current layout. */

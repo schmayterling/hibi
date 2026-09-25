@@ -559,10 +559,20 @@ export function MarkdownEditor({
         },
         reveal: (position) => {
           try {
-            const { node } = editor.view.domAtPos(position)
-            const element = node instanceof Element ? node : node.parentElement
-            if (!element) return false
-            element.scrollIntoView({ block: 'nearest' })
+            const pane = editor.view.dom.closest<HTMLElement>('.rich-pane')
+            if (!pane) return false
+            const bounds = pane.getBoundingClientRect()
+            if (!bounds.width || !bounds.height) return false
+            const cursor = editor.view.coordsAtPos(position)
+            const margin = 24
+            if (cursor.top < bounds.top + margin)
+              pane.scrollTop += cursor.top - bounds.top - margin
+            else if (cursor.bottom > bounds.bottom - margin)
+              pane.scrollTop += cursor.bottom - bounds.bottom + margin
+            if (cursor.left < bounds.left + margin)
+              pane.scrollLeft += cursor.left - bounds.left - margin
+            else if (cursor.right > bounds.right - margin)
+              pane.scrollLeft += cursor.right - bounds.right + margin
             return true
           } catch {
             return false
@@ -2691,6 +2701,7 @@ export function MarkdownEditor({
             className="rich-pane"
             onFocusCapture={() => {
               setFocusedPane('rich')
+              editorViewRegistry.setActive(viewId as ViewId, 'rich')
               documentRuntime.focusView(viewId as ViewId)
             }}
             aria-label="Formatted document"
@@ -2751,6 +2762,7 @@ export function MarkdownEditor({
             className="source-pane"
             onFocusCapture={() => {
               setFocusedPane('source')
+              editorViewRegistry.setActive(viewId as ViewId, 'source')
               documentRuntime.focusView(viewId as ViewId)
             }}
             aria-label="Document source"

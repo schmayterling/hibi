@@ -1,9 +1,12 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
+import type { ViewId } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import { documentProjections } from './document-projections'
+import { documentRuntime } from './document-runtime'
 import type { MarkdownEditor } from './Editor'
 import { EditorCursor } from './EditorCursor'
 import { emitEditorKeyEvent } from './editor-events'
+import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
 import { LoadingScreen } from './LoadingScreen'
@@ -17,6 +20,7 @@ const SourceEditor = lazy(() =>
 /** Standalone formats own source and requested previews, without a hidden rich editor. */
 export function FormatEditor({
   document,
+  viewId = 'default',
   format,
   formatName,
   mode,
@@ -55,6 +59,11 @@ export function FormatEditor({
   const [previewToolbar, setPreviewToolbar] = useState<HTMLDivElement | null>(
     null,
   )
+  useEffect(() => {
+    if (paneMode === 'normal') editorViewRegistry.clearActive(viewId as ViewId)
+    else editorViewRegistry.setActive(viewId as ViewId, 'source')
+    return () => editorViewRegistry.clearActive(viewId as ViewId)
+  }, [paneMode, viewId])
   const { attachSource, attachFiles } = useFormattingToolbar(
     null,
     paneMode,
@@ -164,7 +173,11 @@ export function FormatEditor({
           </section>
           <section
             className="source-pane"
-            onFocusCapture={() => setFocusedPane('source')}
+            onFocusCapture={() => {
+              setFocusedPane('source')
+              editorViewRegistry.setActive(viewId as ViewId, 'source')
+              documentRuntime.focusView(viewId as ViewId)
+            }}
             aria-label="Document source"
             aria-hidden={paneMode === 'normal'}
             inert={paneMode === 'normal'}
@@ -177,6 +190,7 @@ export function FormatEditor({
               >
                 <SourceEditor
                   document={document}
+                  viewId={viewId}
                   editTarget={true}
                   markdownMode={false}
                   sourceLanguage={format?.language}

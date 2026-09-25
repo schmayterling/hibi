@@ -57,6 +57,7 @@ if (view) {
     context.editorViews.reveal({
       view,
       editor: selection.editor,
+      editorGeneration: selection.editorGeneration,
       contentVersion: selection.contentVersion,
       position: selection.head,
     })
@@ -64,7 +65,7 @@ if (view) {
 }
 ```
 
-Selection positions are UTF-16 offsets in the named editor: CodeMirror positions in Source view and ProseMirror positions in rich view. They are not Markdown source offsets. `getSelection()` returns the primary selection with its anchor and head. Pass the captured view, editor kind, and content version to `setSelection()` or `reveal()`; these methods reject stale or unavailable panes and do not focus the editor. Use `documents.applyEdits()` for source changes instead of treating navigation positions as source edit ranges.
+Selection positions are UTF-16 offsets in the named editor: CodeMirror positions in Source view and ProseMirror positions in rich view. They are not Markdown source offsets. `getSelection()` returns the primary selection with its anchor and head. Pass the captured view, editor kind, editor generation, and content version to `setSelection()` or `reveal()`; these methods reject stale or unavailable panes and do not focus the editor. Editor generation changes when a pane is rebuilt without changing source. Use `documents.applyEdits()` for source changes instead of treating navigation positions as source edit ranges.
 
 `onDidChangeActive()` reports a new active view or `null`. `onDidChangeSelection()` reports the active pane's primary selection or `null` when that pane is unavailable. Both subscriptions are removed when the addon stops.
 

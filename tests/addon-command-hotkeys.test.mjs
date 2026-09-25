@@ -8,17 +8,40 @@ import { electron } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 async function pressAddonShortcut(app, shortcut) {
-  // Retry only if Electron never delivered the injected key to main.
+  const parts = shortcut.split('+')
+  const key = parts.pop().toLowerCase()
+  const expected = {
+    control: parts.includes('Control'),
+    meta: parts.includes('Meta'),
+    alt: parts.includes('Alt'),
+    shift: parts.includes('Shift'),
+  }
+  // Retry only if Electron did not deliver the complete chord to main.
   for (let attempt = 0; attempt < 3; attempt++) {
-    const before = await app.evaluate(() => globalThis.commandTestInputs)
+    const before = await app.evaluate(() => globalThis.commandTestInputs.length)
     await pressShortcut(app, shortcut)
     for (let check = 0; check < 20; check++) {
-      if ((await app.evaluate(() => globalThis.commandTestInputs)) > before)
+      const inputs = await app.evaluate(
+        (_electron, from) => globalThis.commandTestInputs.slice(from),
+        before,
+      )
+      if (
+        inputs.some(
+          (input) =>
+            input.key.toLowerCase() === key &&
+            input.control === expected.control &&
+            input.meta === expected.meta &&
+            input.alt === expected.alt &&
+            input.shift === expected.shift &&
+            !input.isComposing &&
+            !input.isAutoRepeat,
+        )
+      )
         return
       await delay(10)
     }
   }
-  throw new Error('Native addon shortcut input did not reach Electron.')
+  throw new Error('Native addon shortcut chord did not reach Electron.')
 }
 
 test('addon menu and configurable in-app shortcut use one lazy command', {
@@ -87,12 +110,20 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
   const page = await app.firstWindow()
   await page.locator('.titlebar').waitFor()
   await app.evaluate(({ BrowserWindow }) => {
-    globalThis.commandTestInputs = 0
+    globalThis.commandTestInputs = []
     BrowserWindow.getAllWindows()[0].webContents.on(
       'before-input-event',
       (_event, input) => {
         if (input.type === 'keyDown' && input.key.toLowerCase() === 'j')
-          globalThis.commandTestInputs++
+          globalThis.commandTestInputs.push({
+            key: input.key,
+            control: input.control,
+            meta: input.meta,
+            alt: input.alt,
+            shift: input.shift,
+            isComposing: input.isComposing,
+            isAutoRepeat: input.isAutoRepeat,
+          })
       },
     )
   })
@@ -189,7 +220,31 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
     ),
   )
   await pressAddonShortcut(app, `${modifier}+Alt+Shift+J`)
-  await page.waitForFunction(() => window.commandProbeSources?.length === 4)
+  try {
+    await page.waitForFunction(() => window.commandProbeSources?.length === 4)
+  } catch (error) {
+    const renderer = await page.evaluate(async () => ({
+      sources: window.commandProbeSources,
+      starts: window.commandProbeStarts,
+      binding: (await window.hibi.getAddonHotkeys()).find(
+        ({ id }) => id === 'command-probe.run',
+      ),
+    }))
+    const main = await app.evaluate(({ Menu }) => ({
+      inputs: globalThis.commandTestInputs,
+      addonMenu: Menu.getApplicationMenu()
+        ?.items.find(({ label }) => label.toLowerCase() === 'addons')
+        ?.submenu?.items.map(({ label, accelerator, enabled }) => ({
+          label,
+          accelerator,
+          enabled,
+        })),
+    }))
+    throw new Error(
+      `Re-enabled shortcut did not invoke command: ${JSON.stringify({ renderer, main })}`,
+      { cause: error },
+    )
+  }
   assert.equal(
     (await page.evaluate(() => window.commandProbeSources)).at(-1),
     'shortcut',

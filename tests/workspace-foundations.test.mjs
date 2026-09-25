@@ -193,6 +193,7 @@ test('scoped text service reads disk and rejects stale or conflicting creates', 
     openDocuments: [],
     changed: [],
     guard: () => true,
+    onRefresh: null,
   }
   globalThis.__hibiWorkspaceTestHost = host
   t.after(() => delete globalThis.__hibiWorkspaceTestHost)
@@ -223,7 +224,8 @@ test('scoped text service reads disk and rejects stale or conflicting creates', 
                  host().target?.workspaceId === target?.workspaceId &&
                  host().target?.workspaceGeneration === target?.workspaceGeneration
                export const refreshWorkspace = async (paths) => {
-                 host().changed.push(paths); return { id: host().target.workspaceId }
+                 host().changed.push(paths); host().onRefresh?.()
+                 return { id: host().target.workspaceId }
                }
                export const notifyWorkspaceContent = async (paths) => {
                  host().changed.push(paths); return { id: host().target.workspaceId }
@@ -245,6 +247,30 @@ test('scoped text service reads disk and rejects stale or conflicting creates', 
   assert.deepEqual(host.changed, [['note.md']])
   const longName = `${'x'.repeat(240)}.md`
   assert.equal((await createWorkspaceText(target, longName, 'long')).ok, true)
+  let ownerChecks = 0
+  const disabled = await createWorkspaceText(
+    target,
+    'disabled.md',
+    'text',
+    () => ++ownerChecks < 4,
+  )
+  assert.equal(disabled.code, 'disposed')
+  await assert.rejects(readFile(join(root, 'disabled.md')), { code: 'ENOENT' })
+  let ownerActive = true
+  host.onRefresh = () => {
+    ownerActive = false
+  }
+  const committedAfterDisable = await createWorkspaceText(
+    target,
+    'committed.md',
+    'text',
+    () => ownerActive,
+  )
+  assert.equal(committedAfterDisable.ok, true)
+  assert.equal(committedAfterDisable.value.persisted, true)
+  assert.equal(committedAfterDisable.value.ownerActiveAfterCommit, false)
+  assert.equal(await readFile(join(root, 'committed.md'), 'utf8'), 'text')
+  host.onRefresh = null
   assert.deepEqual((await readWorkspaceText(target, 'note.md')).value, {
     target,
     path: 'note.md',

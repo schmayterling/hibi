@@ -25,6 +25,12 @@ const stale = (): WorkspaceFileResult<never> => ({
   message: 'This workspace is no longer open.',
 })
 
+const disposed = (): WorkspaceFileResult<never> => ({
+  ok: false,
+  code: 'disposed',
+  message: 'This addon is no longer active.',
+})
+
 function inside(root: string, candidate: string): boolean {
   const path = relative(root, candidate)
   return !isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`)
@@ -220,15 +226,19 @@ export async function createWorkspaceText(
   target: WorkspaceTarget,
   path: unknown,
   markdown: unknown,
+  isCurrentOwner?: () => boolean,
 ): Promise<WorkspaceFileResult<WorkspaceTextCreation>> {
+  const ownerActive = () => isCurrentOwner?.() ?? true
   const root = workspaceRoot()
   if (!root || !isCurrentWorkspaceTarget(target)) return stale()
+  if (!ownerActive()) return disposed()
   if (typeof markdown !== 'string')
     return { ok: false, code: 'unsupported', message: 'Use UTF-8 text.' }
   try {
     validateMarkdown(markdown)
     const file = await resolveWorkspaceEntry(root, path, true)
     if (!isCurrentWorkspaceTarget(target)) return stale()
+    if (!ownerActive()) return disposed()
     if (!isDocumentName(file, true))
       return {
         ok: false,
@@ -237,6 +247,7 @@ export async function createWorkspaceText(
       }
     const parent = await parentIdentity(root, file)
     if (!isCurrentWorkspaceTarget(target)) return stale()
+    if (!ownerActive()) return disposed()
     if (hasOpenDocumentPath(file))
       return {
         ok: false,
@@ -246,19 +257,23 @@ export async function createWorkspaceText(
     // The scope is rechecked after staging and immediately before commit.
     let openDocumentConflict = false
     const commit = await createExclusiveText(file, markdown, async () => {
-      if (!isCurrentWorkspaceTarget(target)) return false
+      if (!isCurrentWorkspaceTarget(target) || !ownerActive()) return false
       await verifyParent(root, file, parent)
+      if (!isCurrentWorkspaceTarget(target) || !ownerActive()) return false
       openDocumentConflict = hasOpenDocumentPath(file)
       return !openDocumentConflict
     })
-    if (!commit)
-      return openDocumentConflict && isCurrentWorkspaceTarget(target)
+    if (!commit) {
+      if (!isCurrentWorkspaceTarget(target)) return stale()
+      if (!ownerActive()) return disposed()
+      return openDocumentConflict
         ? {
             ok: false,
             code: 'conflict',
             message: 'A document is already open at that path.',
           }
         : stale()
+    }
     const changedPath = relative(root, file).split(sep).join('/')
     let indexed = false
     let scopeVerifiedAfterCommit = false
@@ -283,11 +298,13 @@ export async function createWorkspaceText(
         persisted: true,
         indexed,
         scopeVerifiedAfterCommit,
+        ownerActiveAfterCommit: ownerActive(),
         ...commit,
       },
     }
   } catch (error) {
     if (!isCurrentWorkspaceTarget(target)) return stale()
+    if (!ownerActive()) return disposed()
     const failure = knownFailure(error)
     if (failure) return failure
     throw error

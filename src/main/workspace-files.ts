@@ -2,11 +2,13 @@ import { constants } from 'node:fs'
 import { lstat, open, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, sep } from 'node:path'
 import { MAX_DOCUMENT_BYTES } from '../shared/desktop'
+import type { WorkspaceTarget } from '../shared/foundation-contracts'
 import type {
-  OperationResult,
-  WorkspaceTarget,
-} from '../shared/foundation-contracts'
-import { getOpenDocuments } from './document'
+  WorkspaceFileResult,
+  WorkspaceTextCreation,
+  WorkspaceTextRead,
+} from '../shared/workspace'
+import { hasOpenDocumentPath } from './document'
 import { isDocumentName } from './document-types'
 import { validateMarkdown } from './files'
 import {
@@ -17,36 +19,7 @@ import {
 import { createExclusiveText } from './workspace-exclusive-create'
 import { resolveWorkspaceEntry } from './workspace-paths'
 
-export interface WorkspaceTextRead {
-  readonly target: WorkspaceTarget
-  readonly path: string
-  readonly markdown: string
-  /** This reads persisted bytes. Open unsaved document content is separate. */
-  readonly source: 'disk'
-}
-
-export interface WorkspaceTextCreation {
-  readonly target: WorkspaceTarget
-  readonly path: string
-  /** The file was committed even if workspace changed before indexing finished. */
-  readonly persisted: true
-  readonly indexed: boolean
-  readonly directorySynced: boolean
-  readonly atomicVisibility: boolean
-  readonly scopeVerifiedAfterCommit: boolean
-}
-
-type FileResult<T> = OperationResult<
-  T,
-  | 'stale'
-  | 'not-found'
-  | 'conflict'
-  | 'permission-denied'
-  | 'limit-exceeded'
-  | 'unsupported'
->
-
-const stale = (): FileResult<never> => ({
+const stale = (): WorkspaceFileResult<never> => ({
   ok: false,
   code: 'stale',
   message: 'This workspace is no longer open.',
@@ -152,7 +125,7 @@ async function readScopedText(root: string, file: string): Promise<string> {
   }
 }
 
-function knownFailure(error: unknown): FileResult<never> | null {
+function knownFailure(error: unknown): WorkspaceFileResult<never> | null {
   const code =
     typeof error === 'object' && error !== null
       ? (error as NodeJS.ErrnoException).code
@@ -217,7 +190,7 @@ function knownFailure(error: unknown): FileResult<never> | null {
 export async function readWorkspaceText(
   target: WorkspaceTarget,
   path: unknown,
-): Promise<FileResult<WorkspaceTextRead>> {
+): Promise<WorkspaceFileResult<WorkspaceTextRead>> {
   const root = workspaceRoot()
   if (!root || !isCurrentWorkspaceTarget(target)) return stale()
   try {
@@ -247,7 +220,7 @@ export async function createWorkspaceText(
   target: WorkspaceTarget,
   path: unknown,
   markdown: unknown,
-): Promise<FileResult<WorkspaceTextCreation>> {
+): Promise<WorkspaceFileResult<WorkspaceTextCreation>> {
   const root = workspaceRoot()
   if (!root || !isCurrentWorkspaceTarget(target)) return stale()
   if (typeof markdown !== 'string')
@@ -264,7 +237,7 @@ export async function createWorkspaceText(
       }
     const parent = await parentIdentity(root, file)
     if (!isCurrentWorkspaceTarget(target)) return stale()
-    if (getOpenDocuments().some((draft) => draft.file === file))
+    if (hasOpenDocumentPath(file))
       return {
         ok: false,
         code: 'conflict',
@@ -275,9 +248,7 @@ export async function createWorkspaceText(
     const commit = await createExclusiveText(file, markdown, async () => {
       if (!isCurrentWorkspaceTarget(target)) return false
       await verifyParent(root, file, parent)
-      openDocumentConflict = getOpenDocuments().some(
-        (draft) => draft.file === file,
-      )
+      openDocumentConflict = hasOpenDocumentPath(file)
       return !openDocumentConflict
     })
     if (!commit)

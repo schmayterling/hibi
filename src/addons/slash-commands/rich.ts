@@ -73,7 +73,9 @@ export function attachRich(editor: Editor, context: AddonContext) {
     )
   }
   const schedule = () => {
-    if (!current()) menu?.update(null)
+    const match = current()
+    menu?.observe(match)
+    if (!match) menu?.update(null)
     cancelAnimationFrame(frame)
     frame = requestAnimationFrame(refresh)
   }

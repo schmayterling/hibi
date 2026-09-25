@@ -54,7 +54,9 @@ export function sourceSlashCommands(context: AddonContext) {
           this.schedule()
         }
         schedule() {
-          if (!current(this.view)) this.menu.update(null)
+          const match = current(this.view)
+          this.menu.observe(match)
+          if (!match) this.menu.update(null)
           cancelAnimationFrame(this.frame)
           this.frame = requestAnimationFrame(() => this.refresh())
         }

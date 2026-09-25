@@ -636,6 +636,8 @@ export type AddonContext = {
         request: import('../shared/host-network').HostTextRequest,
       ) => Promise<import('../shared/host-network').HostTextResult>
     }
+    /** Store and inspect host-owned secrets without returning stored plaintext. */
+    credentials: import('../shared/host-credentials').CredentialHostApi
   }
   commands: {
     /** Invoke this addon's registered command through the same guarded dispatcher as the palette. */

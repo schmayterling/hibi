@@ -247,6 +247,28 @@ export type DesktopApi = {
     owner: string,
     request: import('./host-network').HostTextRequest,
   ) => Promise<import('./host-network').HostTextResult>
+  storeHostCredential: (
+    owner: string,
+    request: import('./host-credentials').StoreCredentialRequest,
+  ) => Promise<
+    import('./host-credentials').CredentialResult<{
+      mode: import('./host-credentials').CredentialMode
+    }>
+  >
+  removeHostCredential: (
+    owner: string,
+    request: import('./host-credentials').CredentialKeyRequest,
+  ) => Promise<
+    import('./host-credentials').CredentialResult<{ removed: boolean }>
+  >
+  getHostCredentialStatus: (
+    owner: string,
+    request: import('./host-credentials').CredentialKeyRequest,
+  ) => Promise<
+    import('./host-credentials').CredentialResult<
+      import('./host-credentials').CredentialStatus
+    >
+  >
   invokeAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   queryAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   getWorkspace: () => Promise<WorkspaceState | null>

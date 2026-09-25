@@ -13,6 +13,7 @@ import {
   nativeTheme,
   net,
   protocol,
+  safeStorage,
   session,
   shell,
   systemPreferences,
@@ -46,6 +47,7 @@ import {
   type GlobalShortcutInvocation,
 } from '../shared/global-shortcuts'
 import { HISTORY_CHANNELS } from '../shared/history'
+import { HOST_CREDENTIAL_CHANNELS } from '../shared/host-credentials'
 import { HOST_NETWORK_CHANNELS } from '../shared/host-network'
 import { HOST_SELECTED_IO_CHANNELS } from '../shared/host-selected-io'
 import {
@@ -114,6 +116,7 @@ import { isDocumentName } from './document-types'
 import { externalFileArguments } from './external-files'
 import { GlobalShortcuts } from './global-shortcuts'
 import { listVersions, previewVersion } from './history'
+import { HostCredentials } from './host-credentials'
 import { HostNetwork } from './host-network'
 import { HostSelectedIoService } from './host-selected-io'
 import { hotkeys, loadHotkeys, saveHotkeys } from './hotkeys'
@@ -308,11 +311,23 @@ const hostNetwork = new HostNetwork({
       `${grant.url}\nAddress: ${grant.address}\n\nOnly this GET request is allowed.`,
     ),
 })
+const hostCredentials = new HostCredentials({
+  directory: join(app.getPath('userData'), 'addon-credentials'),
+  storage: safeStorage,
+  currentOwner: currentAddonOwner,
+  isWindowLive: (key) =>
+    key === networkWindowKey &&
+    !!mainWindow &&
+    !mainWindow.isDestroyed() &&
+    !mainWindow.webContents.isDestroyed(),
+})
 setAddonDeactivationHandler(async (id, generation) => {
-  hostNetwork.stopOwner({
+  const owner = {
     addonId: id as AddonId,
     activationGeneration: generation,
-  })
+  }
+  hostNetwork.stopOwner(owner)
+  hostCredentials.stopOwner(owner)
   selectedText.revokeAddon(id)
   selectedIo.revokeAddon(id)
   await addonStorage.clearSession(id)
@@ -324,6 +339,7 @@ addonStorage.subscribe((change) => {
 function resetAddonSessions(): void {
   invalidateAddonActivations()
   hostNetwork.stopWindow(networkWindowKey)
+  hostCredentials.stopWindow(networkWindowKey)
   networkWindowKey = {}
   selectedText.clear()
   selectedIo.clear()
@@ -1216,6 +1232,36 @@ if (!app.requestSingleInstanceLock()) {
           trustedWindow(event)
           return typeof owner === 'string'
             ? hostNetwork.request(owner, networkWindowKey, request)
+            : { ok: false, code: 'invalid-request' }
+        },
+        addonsReady,
+      )
+      handle(
+        HOST_CREDENTIAL_CHANNELS.store,
+        (event, owner: unknown, request: unknown) => {
+          trustedWindow(event)
+          return typeof owner === 'string'
+            ? hostCredentials.store(owner, networkWindowKey, request)
+            : { ok: false, code: 'invalid-request' }
+        },
+        addonsReady,
+      )
+      handle(
+        HOST_CREDENTIAL_CHANNELS.remove,
+        (event, owner: unknown, request: unknown) => {
+          trustedWindow(event)
+          return typeof owner === 'string'
+            ? hostCredentials.remove(owner, networkWindowKey, request)
+            : { ok: false, code: 'invalid-request' }
+        },
+        addonsReady,
+      )
+      handle(
+        HOST_CREDENTIAL_CHANNELS.status,
+        (event, owner: unknown, request: unknown) => {
+          trustedWindow(event)
+          return typeof owner === 'string'
+            ? hostCredentials.status(owner, networkWindowKey, request)
             : { ok: false, code: 'invalid-request' }
         },
         addonsReady,

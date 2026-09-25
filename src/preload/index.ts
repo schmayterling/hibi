@@ -32,6 +32,7 @@ import {
   type GlobalShortcutInvocation,
 } from '../shared/global-shortcuts'
 import { HISTORY_CHANNELS } from '../shared/history'
+import { HOST_CREDENTIAL_CHANNELS } from '../shared/host-credentials'
 import { HOST_NETWORK_CHANNELS } from '../shared/host-network'
 import { HOST_SELECTED_IO_CHANNELS } from '../shared/host-selected-io'
 import { type AppCommand, HOTKEY_CHANNELS } from '../shared/hotkeys'
@@ -337,6 +338,12 @@ if (process.isMainFrame) {
       transport.invoke(HOST_SELECTED_IO_CHANNELS.cancel, owner, handle),
     getHostText: (owner, request) =>
       transport.invoke(HOST_NETWORK_CHANNELS.getText, owner, request),
+    storeHostCredential: (owner, request) =>
+      transport.invoke(HOST_CREDENTIAL_CHANNELS.store, owner, request),
+    removeHostCredential: (owner, request) =>
+      transport.invoke(HOST_CREDENTIAL_CHANNELS.remove, owner, request),
+    getHostCredentialStatus: (owner, request) =>
+      transport.invoke(HOST_CREDENTIAL_CHANNELS.status, owner, request),
     invokeAddon: (id, method, input) =>
       ipcRenderer.invoke(ADDON_CHANNELS.invoke, id, method, input),
     queryAddon: (id, method, input) =>

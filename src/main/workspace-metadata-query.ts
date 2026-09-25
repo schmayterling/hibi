@@ -41,6 +41,21 @@ let indexedSequence = -1
 let indexedRevision = -1
 let indexedSourceVersions = ''
 
+function hasIndexedSnapshot(
+  target: WorkspaceTarget,
+  sequence: number,
+  revision: number,
+  sourceVersions: string,
+): boolean {
+  return (
+    indexedTarget?.workspaceId === target.workspaceId &&
+    indexedTarget.workspaceGeneration === target.workspaceGeneration &&
+    indexedSequence === sequence &&
+    indexedRevision === revision &&
+    indexedSourceVersions === sourceVersions
+  )
+}
+
 function clearCache(): void {
   references.clear()
   searchCursors.clear()
@@ -101,6 +116,7 @@ export async function queryWorkspaceReferences(
     kind !== 'resolve' &&
     kind !== 'tag' &&
     kind !== 'tags' &&
+    kind !== 'search-tags' &&
     kind !== 'graph' &&
     kind !== 'property' &&
     kind !== 'headings' &&
@@ -124,6 +140,14 @@ export async function queryWorkspaceReferences(
       !/[\p{L}_]/u.test(request.tag))
   )
     return failure('unsupported', 'Choose a valid tag.')
+  if (
+    kind === 'search-tags' &&
+    (typeof request.query !== 'string' || request.query.length > 128)
+  )
+    return failure(
+      'unsupported',
+      'Choose a tag search of up to 128 characters.',
+    )
   if (
     kind === 'property' &&
     (typeof request.key !== 'string' ||
@@ -205,12 +229,12 @@ export async function queryWorkspaceReferences(
     before.target.workspaceGeneration !== target.workspaceGeneration
   )
     return failure('stale', 'This workspace changed. Try again.')
-  const refresh =
-    indexedTarget?.workspaceId !== target.workspaceId ||
-    indexedTarget.workspaceGeneration !== target.workspaceGeneration ||
-    indexedSequence !== before.sequence ||
-    indexedRevision !== revision ||
-    indexedSourceVersions !== sourceVersions
+  const refresh = !hasIndexedSnapshot(
+    target,
+    before.sequence,
+    revision,
+    sourceVersions,
+  )
   let index: Awaited<ReturnType<typeof indexWorkspace>> = null
   if (refresh)
     try {
@@ -234,7 +258,10 @@ export async function queryWorkspaceReferences(
     (refresh && index?.workspace.id !== target.workspaceId)
   )
     return failure('stale', 'This workspace changed. Try again.')
-  if (index) {
+  if (
+    index &&
+    !hasIndexedSnapshot(target, after.sequence, revision, sourceVersions)
+  ) {
     references.apply(target, index.pages)
     searchCursors.clear()
     graphCursors.clear()
@@ -280,8 +307,14 @@ export async function queryWorkspaceReferences(
         ),
       },
     }
-  if (kind === 'tags') {
-    const result = references.tags(offset, limit)
+  if (kind === 'tags' || kind === 'search-tags') {
+    const result = references.tags(
+      offset,
+      limit,
+      kind === 'search-tags'
+        ? (request.query as string).normalize('NFC').toLowerCase()
+        : undefined,
+    )
     return {
       ok: true,
       value: {

@@ -109,6 +109,18 @@ test('metadata queries return bounded links and backlinks from shared pages', as
   assert.deepEqual((await query({ target, kind: 'tags' })).value.items, [
     { tag: 'work', count: 1 },
   ])
+  assert.deepEqual(
+    (await query({ target, kind: 'search-tags', query: 'WO' })).value.items,
+    [{ tag: 'work', count: 1 }],
+  )
+  assert.deepEqual(
+    (await query({ target, kind: 'search-tags', query: '' })).value.items,
+    [{ tag: 'work', count: 1 }],
+  )
+  assert.equal(
+    (await query({ target, kind: 'search-tags', query: 'x'.repeat(129) })).code,
+    'unsupported',
+  )
   const graph = await query({ target, kind: 'graph', limit: 2 })
   assert.deepEqual(graph.value.items, [
     { kind: 'node', path: 'a.md' },
@@ -233,6 +245,63 @@ test('text search cursors resume bounded scans and expire after edits', async ()
   )
   host.pages = originalPages
   host.revision++
+})
+
+test("concurrent initial queries preserve each other's graph and text cursors", async () => {
+  const target = host.target
+  host.listener({ kind: 'resync' })
+  const [graph, text] = await Promise.all([
+    query({ target, kind: 'graph', limit: 1 }),
+    query({ target, kind: 'search-text', query: 'Intro', limit: 1 }),
+  ])
+  assert.equal(graph.ok, true)
+  assert.equal(text.ok, true)
+  assert.ok(graph.value.nextCursor)
+  assert.ok(text.value.nextCursor)
+  assert.equal(
+    (
+      await query({
+        target,
+        kind: 'graph',
+        cursor: graph.value.nextCursor,
+        limit: 1,
+      })
+    ).ok,
+    true,
+  )
+  assert.equal(
+    (
+      await query({
+        target,
+        kind: 'search-text',
+        query: 'Intro',
+        cursor: text.value.nextCursor,
+        limit: 1,
+      })
+    ).ok,
+    true,
+  )
+
+  host.revision++
+  const [textFirst, graphSecond] = await Promise.all([
+    query({ target, kind: 'search-text', query: 'Intro', limit: 1 }),
+    query({ target, kind: 'graph', limit: 1 }),
+  ])
+  assert.equal(textFirst.ok, true)
+  assert.equal(graphSecond.ok, true)
+  assert.ok(textFirst.value.nextCursor)
+  assert.equal(
+    (
+      await query({
+        target,
+        kind: 'search-text',
+        query: 'Intro',
+        cursor: textFirst.value.nextCursor,
+        limit: 1,
+      })
+    ).ok,
+    true,
+  )
 })
 
 test('metadata query rejects a workspace change during its index read', async () => {

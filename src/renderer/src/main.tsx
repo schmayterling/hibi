@@ -25,6 +25,7 @@ import {
   defaultHotkeys,
   type Hotkeys,
 } from '../../shared/hotkeys'
+import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes'
 import { isMediaFile } from '../../shared/media'
 import { startupMark } from '../../shared/startup'
 import { exceedsUtf8Limit } from '../../shared/text-size'
@@ -644,9 +645,16 @@ function App() {
       flavors: chosenFlavors,
       projections: addonHost.markdownExtensions,
     }
+  const footnoteDocument =
+    markdownDocument &&
+    hasFootnoteDefinitions(
+      currentDocument.current?.markdown ?? document?.markdown ?? '',
+    )
   const availableViews = addonHost.sourceOnly
     ? ['markdown' as const]
-    : documentFormats.views(document?.name ?? 'untitled.md')
+    : documentFormats
+        .views(document?.name ?? 'untitled.md')
+        .filter((view) => !footnoteDocument || view !== 'normal')
   const mode: ViewMode = availableViews.includes(selectedMode)
     ? selectedMode
     : availableViews.includes('side-by-side')
@@ -2201,6 +2209,7 @@ function App() {
                 onAttach={attachMedia}
                 onLink={openLink}
                 flavors={editorConfiguration.current.flavors}
+                footnoteDocument={footnoteDocument}
                 sourceExtensions={addonHost.sourceExtensions}
                 richExtensions={addonHost.richExtensions}
                 documentRevision={document.revision}
@@ -2256,9 +2265,11 @@ function App() {
                   label: markdownDocument ? flavorStatus.label : sourceName,
                   tooltip: !markdownDocument
                     ? `${sourceName} document · click for format settings`
-                    : flavorStatus.unsupported
-                      ? 'Some Markdown features are disabled. Choose a flavor or enable the addon.'
-                      : `${flavorChoice.dialect === 'auto' ? 'Detected' : 'Selected'} Markdown flavor · click to change`,
+                    : footnoteDocument
+                      ? 'Edit footnotes in Source view. Side-by-side shows their preview.'
+                      : flavorStatus.unsupported
+                        ? 'Some Markdown features are disabled. Choose a flavor or enable the addon.'
+                        : `${flavorChoice.dialect === 'auto' ? 'Detected' : 'Selected'} Markdown flavor · click to change`,
                   onClick: openFlavors,
                 },
                 {

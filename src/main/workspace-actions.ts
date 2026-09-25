@@ -1,13 +1,4 @@
-import { constants } from 'node:fs'
-import {
-  copyFile,
-  cp,
-  link,
-  lstat,
-  mkdir,
-  rename,
-  unlink,
-} from 'node:fs/promises'
+import { lstat, mkdir } from 'node:fs/promises'
 import {
   basename,
   dirname,
@@ -36,6 +27,7 @@ import {
   refreshWorkspace,
   workspaceRoot,
 } from './workspace'
+import { copyEntry, moveEntry } from './workspace-entry-transfer'
 import { resolveWorkspaceEntry, validateWorkspaceName } from './workspace-paths'
 
 export { validateWorkspaceName } from './workspace-paths'
@@ -67,44 +59,6 @@ async function unique(parent: string, name: string) {
       return candidate
   }
   throw new Error('Choose a different name.')
-}
-async function moveEntry(source: string, destination: string, folder: boolean) {
-  if (folder) {
-    // Windows refuses to replace even an empty directory, so rename itself
-    // reserves the destination there without overwriting an existing folder.
-    if (process.platform === 'win32') {
-      await rename(source, destination)
-      return
-    }
-    // Reserve the destination first: never replace a pre-existing directory.
-    await mkdir(destination)
-    try {
-      await rename(source, destination)
-    } catch (error) {
-      await import('node:fs/promises')
-        .then(({ rmdir }) => rmdir(destination))
-        .catch(() => {})
-      throw error
-    }
-  } else {
-    try {
-      await link(source, destination)
-    } catch (error) {
-      if (
-        !['ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'EPERM'].includes(
-          (error as NodeJS.ErrnoException).code ?? '',
-        )
-      )
-        throw error
-      await copyFile(source, destination, constants.COPYFILE_EXCL)
-    }
-    try {
-      await unlink(source)
-    } catch (error) {
-      await unlink(destination)
-      throw error
-    }
-  }
 }
 export async function workspaceAction(
   window: BrowserWindow,
@@ -199,20 +153,37 @@ export async function workspaceAction(
         else if (action === 'move') relocateDocument(source, resultPath)
         else throw new Error('Save this draft before copying it.')
       } else if (action === 'copy' || action === 'duplicate') {
-        await cp(source, resultPath, {
-          recursive: folder,
-          force: false,
-          errorOnExist: true,
-          filter: async (path) => {
-            if ((await lstat(path)).isSymbolicLink())
-              throw new Error(
-                'Symbolic links cannot be copied. Copy the original file or folder instead.',
-              )
-            return true
-          },
+        await copyEntry(source, resultPath, folder, async () => {
+          await resolveWorkspaceEntry(base, path)
+          await resolveWorkspaceEntry(
+            base,
+            relative(base, resultPath).split(sep).join('/'),
+            true,
+          )
+          return !getOpenDocuments().some((draft) => draft.file === resultPath)
         })
       } else {
-        await moveEntry(source, resultPath, folder)
+        const moved = await moveEntry(source, resultPath, folder, async () => {
+          await resolveWorkspaceEntry(base, path)
+          await resolveWorkspaceEntry(
+            base,
+            relative(base, resultPath).split(sep).join('/'),
+          )
+          return !getOpenDocuments().some((draft) => draft.file === resultPath)
+        })
+        if (!moved.sourceRemoved) {
+          try {
+            await refreshWorkspace([
+              relative(base, source).split(sep).join('/'),
+              relative(base, resultPath).split(sep).join('/'),
+            ])
+          } catch (error) {
+            console.error('workspace refresh after partial move failed:', error)
+          }
+          throw new Error(
+            'Destination was created, but the original could not be removed. Both files may exist.',
+          )
+        }
         relocateDocument(source, resultPath)
       }
       treeChanged = !draft

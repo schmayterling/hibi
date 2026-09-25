@@ -135,5 +135,48 @@ test('workspace addon bridge keeps scoped reads, creates, and changes together',
     code: 'conflict',
     message: 'A file already exists at that path.',
   })
+  const attachment = await page.evaluate(
+    (captured) =>
+      window.hibi.createWorkspaceBinary(
+        'markdown',
+        captured,
+        'image.bin',
+        new Uint8Array([0, 255, 65]),
+      ),
+    target,
+  )
+  assert.equal(attachment.ok, true)
+  const binary = await page.evaluate(
+    (captured) =>
+      window.hibi.readWorkspaceBinary('markdown', captured, 'image.bin'),
+    target,
+  )
+  assert.equal(binary.ok, true)
+  assert.deepEqual(Array.from(binary.value.bytes), [0, 255, 65])
+  assert.match(binary.value.version, /^[a-f0-9]{64}$/)
+  const newFile = await page.evaluate(
+    (captured) => window.hibi.readWorkspaceText('markdown', captured, 'new.md'),
+    target,
+  )
+  const moved = await page.evaluate(
+    ({ target, version }) =>
+      window.hibi.renameWorkspaceFile(
+        'markdown',
+        target,
+        'new.md',
+        'moved.md',
+        version,
+      ),
+    { target, version: newFile.value.version },
+  )
+  assert.equal(moved.ok, true)
+  assert.equal(moved.value.sourceRemoved, true)
+  assert.equal(await readFile(join(workspace, 'moved.md'), 'utf8'), '# new')
+  const unversionedTrash = await page.evaluate(
+    (captured) =>
+      window.hibi.trashWorkspaceFile('markdown', captured, 'moved.md', ''),
+    target,
+  )
+  assert.equal(unversionedTrash.code, 'unsupported')
   await page.evaluate(() => window.workspaceSubscription.dispose())
 })

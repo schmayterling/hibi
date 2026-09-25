@@ -781,7 +781,8 @@ export function useAddons(
                 ...colorschemes.snapshot().preferences,
               }),
               getActive: () => colorschemes.snapshot().active,
-              subscribe: (listener) => observe(colorschemes.subscribe, listener),
+              subscribe: (listener) =>
+                observe(colorschemes.subscribe, listener),
               setPreferences: (preferences) => {
                 if (!disposed) colorschemes.set(preferences)
               },
@@ -1368,10 +1369,18 @@ export function useAddons(
                 disposed
                   ? Promise.reject(new Error('This addon has stopped.'))
                   : window.hibi.readWorkspaceText(id, target, path),
+              readBinary: (target, path) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.readWorkspaceBinary(id, target, path),
               createText: (target, path, markdown) =>
                 disposed
                   ? Promise.reject(new Error('This addon has stopped.'))
                   : window.hibi.createWorkspaceText(id, target, path, markdown),
+              createBinary: (target, path, bytes) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.createWorkspaceBinary(id, target, path, bytes),
               updateText: (target, path, expectedVersion, markdown, options) =>
                 disposed
                   ? Promise.reject(new Error('This addon has stopped.'))
@@ -1382,6 +1391,30 @@ export function useAddons(
                       expectedVersion,
                       markdown,
                       options,
+                    ),
+              renameFile: (
+                target,
+                sourcePath,
+                destinationPath,
+                expectedVersion,
+              ) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.renameWorkspaceFile(
+                      id,
+                      target,
+                      sourcePath,
+                      destinationPath,
+                      expectedVersion,
+                    ),
+              trashFile: (target, path, expectedVersion) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.trashWorkspaceFile(
+                      id,
+                      target,
+                      path,
+                      expectedVersion,
                     ),
               query: (request) =>
                 disposed

@@ -2,7 +2,7 @@
 
 # VersionedDocumentTarget
 
-Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L33)
+Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L35)
 
 <details>
 <summary>Declaration</summary>
@@ -25,7 +25,7 @@ interface VersionedDocumentTarget extends DocumentTarget {
 
 ### contentVersion
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L34)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L36)
 
 ```typescript
 readonly contentVersion: number

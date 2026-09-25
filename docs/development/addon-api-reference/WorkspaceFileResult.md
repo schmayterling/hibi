@@ -2,7 +2,7 @@
 
 # WorkspaceFileResult
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L99)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L198)
 
 ```typescript
 type WorkspaceFileResult<T> = OperationResult<

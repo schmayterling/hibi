@@ -2,7 +2,7 @@
 
 # OpenDocumentMetadata
 
-Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L34)
+Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L37)
 
 <details>
 <summary>Declaration</summary>
@@ -33,7 +33,7 @@ type OpenDocumentMetadata = Readonly<{
 
 ### target
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L35)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L38)
 
 ```typescript
 readonly target: VersionedDocumentTarget
@@ -43,7 +43,7 @@ Related: [VersionedDocumentTarget](VersionedDocumentTarget.md).
 
 ### name
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L36)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L39)
 
 ```typescript
 readonly name: string
@@ -51,7 +51,7 @@ readonly name: string
 
 ### dirty
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L37)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L40)
 
 ```typescript
 readonly dirty: boolean
@@ -59,7 +59,7 @@ readonly dirty: boolean
 
 ### ephemeral
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L38)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L41)
 
 ```typescript
 readonly ephemeral: boolean
@@ -67,7 +67,7 @@ readonly ephemeral: boolean
 
 ### canAutosave
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L39)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L42)
 
 ```typescript
 readonly canAutosave: boolean

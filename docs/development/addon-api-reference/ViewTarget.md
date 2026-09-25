@@ -2,7 +2,7 @@
 
 # ViewTarget
 
-Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L37)
+Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L39)
 
 <details>
 <summary>Declaration</summary>
@@ -27,7 +27,7 @@ interface ViewTarget extends DocumentTarget {
 
 ### viewId
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L38)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L40)
 
 ```typescript
 readonly viewId: ViewId
@@ -37,7 +37,7 @@ Related: [ViewId](ViewId.md).
 
 ### viewGeneration
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L39)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L41)
 
 ```typescript
 readonly viewGeneration: number

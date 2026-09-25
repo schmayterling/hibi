@@ -2,7 +2,7 @@
 
 # WorkspaceChange
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L58)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L64)
 
 Workspace-relative paths use forward slashes; null means the changed paths are unknown.
 
@@ -29,7 +29,7 @@ type WorkspaceChange = {
 
 ### kind
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L59)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L65)
 
 ```typescript
 kind: 'content' | 'tree'
@@ -37,7 +37,7 @@ kind: 'content' | 'tree'
 
 ### paths
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L60)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L66)
 
 ```typescript
 paths: string[] | null

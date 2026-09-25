@@ -2,7 +2,7 @@
 
 # AddonOwner
 
-Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L42)
+Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L44)
 
 <details>
 <summary>Declaration</summary>
@@ -27,7 +27,7 @@ interface AddonOwner {
 
 ### addonId
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L43)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L45)
 
 ```typescript
 readonly addonId: AddonId
@@ -37,7 +37,7 @@ Related: [AddonId](AddonId.md).
 
 ### activationGeneration
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L44)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L46)
 
 ```typescript
 readonly activationGeneration: number

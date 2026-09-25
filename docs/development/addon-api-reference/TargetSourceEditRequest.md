@@ -2,7 +2,7 @@
 
 # TargetSourceEditRequest
 
-Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L44)
+Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L70)
 
 <details>
 <summary>Declaration</summary>
@@ -34,7 +34,7 @@ type TargetSourceEditRequest = Readonly<{
 
 ### requestId
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L46)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L72)
 
 Unique within one addon activation; retries with different edits fail.
 
@@ -44,7 +44,7 @@ readonly requestId: string
 
 ### target
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L47)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L73)
 
 ```typescript
 readonly target: VersionedDocumentTarget
@@ -54,7 +54,7 @@ Related: [VersionedDocumentTarget](VersionedDocumentTarget.md).
 
 ### projectionId
 
-Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L49)
+Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L75)
 
 Optional proof returned by the active editor's text projection.
 
@@ -64,7 +64,7 @@ readonly projectionId?: string
 
 ### changes
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L51)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L77)
 
 Exact expected text at UTF-16 offsets in the canonical source.
 

@@ -44,6 +44,9 @@
   "d9ee2b8b5fe8": [
     "src/main/workspace-actions.ts"
   ],
+  "1d97bd2bf825": [
+    "src/renderer/src/document-target-edits.ts"
+  ],
   "6417304a8a8b": [
     "src/shared/document-journal.ts"
   ],
@@ -163,6 +166,9 @@
   ],
   "b1295e49f642": [
     "src/addons/git/Panel.tsx"
+  ],
+  "168511d24d9e": [
+    "src/main/index.ts"
   ],
   "3b63ed958363": [
     "src/renderer/src/AddonHotkeySettings.tsx"
@@ -389,6 +395,7 @@
     "src/addons/typst/Block.tsx",
     "src/main/dependencies.ts",
     "src/main/document.ts",
+    "src/main/index.ts",
     "src/main/sideload.ts",
     "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/FormattingToolbar.tsx",
@@ -499,8 +506,17 @@
   "7dd81854ac3a": [
     "src/addons/git/native.ts"
   ],
+  "58682ec341a5": [
+    "src/renderer/src/addons.ts"
+  ],
+  "71e4634faa8c": [
+    "src/renderer/src/addons.ts"
+  ],
   "7968c66288c4": [
     "src/main/dependencies.ts"
+  ],
+  "ac4c5b45fbd9": [
+    "src/main/workspace-files.ts"
   ],
   "9c47b4fb088f": [
     "src/main/addons.ts"
@@ -517,14 +533,23 @@
   "1d7031f78966": [
     "src/main/workspace-paths.ts"
   ],
+  "141ea665a226": [
+    "src/main/workspace-files.ts"
+  ],
   "3b24e1f87361": [
     "src/main/workspace-actions.ts"
   ],
   "0433bc8a92c0": [
     "src/main/workspace-settings.ts"
   ],
+  "3e7054593349": [
+    "src/main/workspace-entry-transfer.ts"
+  ],
   "dbdbacffd9f6": [
     "src/renderer/src/WorkspaceSettings.tsx"
+  ],
+  "beb39bee9f77": [
+    "src/renderer/src/addons.ts"
   ],
   "6ac54b5f1dce": [
     "src/main/licenses.ts"
@@ -534,6 +559,12 @@
   ],
   "d4dc94ba2837": [
     "src/main/media.ts"
+  ],
+  "b05315dde820": [
+    "src/main/workspace-entry-transfer.ts"
+  ],
+  "c5e6dc6d1789": [
+    "src/main/workspace-entry-transfer.ts"
   ],
   "97fc4ea85080": [
     "src/main/global-shortcuts.ts"
@@ -568,8 +599,7 @@
     "src/main/selected-text.ts"
   ],
   "4498a0e9706f": [
-    "src/main/files.ts",
-    "src/main/workspace-files.ts"
+    "src/main/files.ts"
   ],
   "26a5af5d66ea": [
     "src/shared/updates.ts"
@@ -733,6 +763,9 @@
     "src/renderer/src/DocumentTabs.tsx",
     "src/shared/hotkeys.ts"
   ],
+  "426be84ac71a": [
+    "src/main/workspace-files.ts"
+  ],
   "31a8910a7cf4": [
     "src/renderer/src/DocumentTabs.tsx"
   ],
@@ -805,6 +838,9 @@
   ],
   "4d18892d5f18": [
     "src/addons/typst/Preview.tsx"
+  ],
+  "7f37c8c8332a": [
+    "src/addons/writing-suggestions/manifest.ts"
   ],
   "22a970d2e5b1": [
     "src/addons/diagnostics/Settings.tsx"
@@ -1108,6 +1144,9 @@
   ],
   "b7c2fd280c22": [
     "src/renderer/src/workspace-menu.ts"
+  ],
+  "8f70f6e47c2b": [
+    "src/main/workspace-actions.ts"
   ],
   "7ebe6d8acd59": [
     "src/renderer/src/FlavorPicker.tsx"
@@ -1591,6 +1630,9 @@
   "a5c1b2b5e1d5": [
     "src/main/addons.ts"
   ],
+  "d9d979c63132": [
+    "src/main/host-selected-io.ts"
+  ],
   "423a85dca9b6": [
     "src/main/workspace.ts"
   ],
@@ -1633,6 +1675,9 @@
   ],
   "3efed3de9d4b": [
     "src/renderer/src/main.tsx"
+  ],
+  "5e43497ec5da": [
+    "src/main/workspace-files.ts"
   ],
   "379c501e44a3": [
     "src/renderer/src/AddonSettings.tsx"
@@ -1824,6 +1869,9 @@
     "src/addons/graph/manifest.ts",
     "src/site/main.tsx"
   ],
+  "d9b2b1f797c3": [
+    "src/addons/graph/Panel.tsx"
+  ],
   "ef2233a0710d": [
     "src/addons/graph/Panel.tsx"
   ],
@@ -1959,6 +2007,9 @@
   ],
   "0a26f41abd00": [
     "src/renderer/src/ImportDialog.tsx"
+  ],
+  "6a9e73cf0d42": [
+    "src/main/host-selected-io.ts"
   ],
   "f9e4378d7a08": [
     "src/renderer/src/ImportDialog.tsx"
@@ -2169,6 +2220,12 @@
   "78fc79d2cefd": [
     "src/shared/source-operations.ts"
   ],
+  "a535f8013c5a": [
+    "src/main/host-credentials.ts"
+  ],
+  "5ba39deb9bad": [
+    "src/main/host-credentials.ts"
+  ],
   "9e9f2a70c53e": [
     "src/main/dependencies.ts"
   ],
@@ -2196,6 +2253,9 @@
   "b09a8754e304": [
     "src/shared/document-edits.ts"
   ],
+  "150a8e64f692": [
+    "src/renderer/src/editor-interaction-broker.ts"
+  ],
   "ecd4ced04911": [
     "src/main/tool-paths.ts"
   ],
@@ -2204,6 +2264,12 @@
   ],
   "69f28a73355e": [
     "src/shared/frontmatter-parser.ts"
+  ],
+  "5d583d8cb31c": [
+    "src/addons/graph/Panel.tsx"
+  ],
+  "a15329b91731": [
+    "src/main/host-network.ts"
   ],
   "e3957d71c9bf": [
     "src/addons/_shared/format-image-native.ts"
@@ -2283,6 +2349,12 @@
   "d09eb4ceda72": [
     "src/main/document.ts"
   ],
+  "5749ca3ae114": [
+    "src/addons/tags/Panel.tsx"
+  ],
+  "89380eae1dad": [
+    "src/addons/tags/Panel.tsx"
+  ],
   "9a9bb3ad8cbc": [
     "src/renderer/src/addon-views.ts"
   ],
@@ -2357,6 +2429,9 @@
   ],
   "0be7db8d7ab7": [
     "src/renderer/src/FormattingToolbar.tsx"
+  ],
+  "74f6ba9605bc": [
+    "src/addons/writing-suggestions/index.ts"
   ],
   "9024c197d849": [
     "src/addons/_shared/format-renderer.tsx",
@@ -3124,6 +3199,9 @@
   "a1ac3c3a93fa": [
     "src/renderer/src/FindBar.tsx"
   ],
+  "640e704e6f69": [
+    "src/main/workspace-files.ts"
+  ],
   "e083bd83e9d3": [
     "src/addons/diagnostics/Settings.tsx"
   ],
@@ -3192,6 +3270,15 @@
   ],
   "e1dda8fa3404": [
     "src/addons/rmarkdown/manifest.ts"
+  ],
+  "4646ea9c2a6e": [
+    "src/main/workspace-files.ts"
+  ],
+  "9aec6222d9a0": [
+    "src/main/workspace-files.ts"
+  ],
+  "e1e24c78a64b": [
+    "src/main/workspace-files.ts"
   ],
   "156aba86640e": [
     "src/addons/git/Panel.tsx"
@@ -3345,6 +3432,9 @@
   "6beb76e49302": [
     "src/main/document.ts"
   ],
+  "cff651bb978f": [
+    "src/main/workspace-files.ts"
+  ],
   "635ae219ad13": [
     "src/renderer/src/HibiSettings.tsx"
   ],
@@ -3486,6 +3576,9 @@
   ],
   "6d5648313edc": [
     "src/renderer/src/AddonHotkeySettings.tsx"
+  ],
+  "dbb4cb54de95": [
+    "src/renderer/src/document-target-edits.ts"
   ],
   "4b77ec6e263f": [
     "src/main/workspace-actions.ts"
@@ -3892,7 +3985,7 @@
     "src/addons/vim/index.ts"
   ],
   "270d8cb4f014": [
-    "src/main/workspace-actions.ts"
+    "src/main/workspace-entry-transfer.ts"
   ],
   "5d04fcd66b47": [
     "src/main/workspace.ts"
@@ -3909,8 +4002,17 @@
     "src/addons/documentation/ExportDialog.tsx",
     "src/ui/ColorschemeSettings.tsx"
   ],
+  "49c50576529d": [
+    "src/addons/writing-suggestions/index.ts"
+  ],
   "16d1c9050a0b": [
     "src/renderer/src/FormattingToolbar.tsx"
+  ],
+  "47a6a75ccb73": [
+    "src/addons/tags/Panel.tsx"
+  ],
+  "49fdfe8f8361": [
+    "src/addons/tags/Panel.tsx"
   ],
   "45cb20fc920a": [
     "src/addons/tags/Panel.tsx"
@@ -3918,6 +4020,9 @@
   "1331275bc537": [
     "src/addons/tags/index.tsx",
     "src/addons/tags/manifest.ts"
+  ],
+  "5ac3d4652d44": [
+    "src/addons/tags/Panel.tsx"
   ],
   "1b4de2674796": [
     "src/addons/tags/Panel.tsx"
@@ -4065,6 +4170,9 @@
   "32c1f3399caa": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
+  "3beb69ab6d1d": [
+    "src/main/workspace-entry-transfer.ts"
+  ],
   "d32e2bd6bb09": [
     "src/main/analysis.ts",
     "src/shared/analysis.ts"
@@ -4093,6 +4201,9 @@
   "22f211fd2570": [
     "src/renderer/src/document-target-edits.ts"
   ],
+  "5994ba207c9c": [
+    "src/renderer/src/document-target-edits.ts"
+  ],
   "2a4bec529492": [
     "src/renderer/src/Editor.tsx",
     "src/renderer/src/SourceEditor.tsx",
@@ -4108,6 +4219,9 @@
     "src/renderer/src/document-edits.ts",
     "src/renderer/src/document-target-edits.ts",
     "src/renderer/src/main.tsx"
+  ],
+  "cb65399b7ce1": [
+    "src/renderer/src/document-target-edits.ts"
   ],
   "8ea97b4e248c": [
     "src/shared/document-checkpoint.ts"
@@ -4163,6 +4277,9 @@
   "ac1dd1f24840": [
     "src/main/sideload.ts"
   ],
+  "a22ad77d6876": [
+    "src/renderer/src/document-target-edits.ts"
+  ],
   "60dbdf909175": [
     "src/main/files.ts"
   ],
@@ -4192,6 +4309,9 @@
   ],
   "f6be6c1fe3f5": [
     "src/addons/_shared/format-native.ts"
+  ],
+  "1a9c37310c3f": [
+    "src/main/files.ts"
   ],
   "e16af0263168": [
     "src/renderer/src/document-edits.ts"
@@ -4230,6 +4350,12 @@
   "fc77ba3291d5": [
     "src/addons/git/Panel.tsx"
   ],
+  "5323945db89a": [
+    "src/main/workspace-entry-transfer.ts"
+  ],
+  "a83fa5eca26c": [
+    "src/main/workspace-entry-page.ts"
+  ],
   "2a3a78043479": [
     "src/main/imports.ts"
   ],
@@ -4238,6 +4364,9 @@
   ],
   "319a6b937c66": [
     "src/main/workspace-files.ts"
+  ],
+  "78ec2bffb9db": [
+    "src/main/workspace-entry-transfer.ts"
   ],
   "1cba65de3fa0": [
     "src/main/workspace-files.ts"
@@ -4374,6 +4503,9 @@
   "a7742e0a996e": [
     "src/renderer/src/addon-registry.ts"
   ],
+  "92382357bcdf": [
+    "src/main/workspace-files.ts"
+  ],
   "27f866079733": [
     "src/shared/document-journal.ts"
   ],
@@ -4389,6 +4521,9 @@
   "77e59683be73": [
     "src/renderer/src/addons.ts"
   ],
+  "1824f46c0e29": [
+    "src/renderer/src/Editor.tsx"
+  ],
   "53d696e8d077": [
     "src/addons/typing-speed/index.ts"
   ],
@@ -4402,8 +4537,7 @@
     "src/addons/_shared/import-markdown.ts"
   ],
   "b3e591b2b962": [
-    "src/main/files.ts",
-    "src/main/workspace-files.ts"
+    "src/main/files.ts"
   ],
   "73b6a9218822": [
     "src/addons/bbcode/render.ts"
@@ -4442,8 +4576,14 @@
   "160f0858f2bd": [
     "src/main/workspace-files.ts"
   ],
+  "6080b3043bae": [
+    "src/main/workspace-files.ts"
+  ],
   "4646993d0c2f": [
     "src/main/document.ts"
+  ],
+  "49f84ccd45bb": [
+    "src/main/workspace-files.ts"
   ],
   "926ea461092b": [
     "src/addons/git/native.ts"
@@ -4465,6 +4605,9 @@
   ],
   "2fad5aad9df6": [
     "src/main/sideload.ts"
+  ],
+  "cf8ff1213c6d": [
+    "src/main/workspace-files.ts"
   ],
   "cb628f15bb2c": [
     "src/main/workspace.ts"
@@ -4568,6 +4711,7 @@
     "src/main/workspace.ts"
   ],
   "2b9947edaee2": [
+    "src/main/workspace-entry-page.ts",
     "src/main/workspace-files.ts"
   ],
   "dfc1e6d16ba5": [
@@ -4598,6 +4742,9 @@
   ],
   "55674746977e": [
     "src/renderer/src/completion-broker.ts"
+  ],
+  "38555cec15e2": [
+    "src/renderer/src/editor-interaction-broker.ts"
   ],
   "451aa51a0fb5": [
     "src/renderer/src/EditorToolbar.tsx"
@@ -4829,6 +4976,9 @@
   "f925f3416d29": [
     "src/addons/documentation/options.ts"
   ],
+  "f938add87c1f": [
+    "src/main/workspace-files.ts"
+  ],
   "c71af82d80c1": [
     "src/addons/documentation/site.ts"
   ],
@@ -4849,6 +4999,9 @@
   ],
   "328fe89a4f4d": [
     "src/shared/addon-package.ts"
+  ],
+  "3b7b319783c7": [
+    "src/main/workspace-files.ts"
   ],
   "07680653db5c": [
     "src/renderer/src/CodeSyntaxSettings.tsx"
@@ -5014,6 +5167,9 @@
   ],
   "a8bfae3eee94": [
     "src/renderer/src/SettingsScreen.tsx"
+  ],
+  "47dee81a2783": [
+    "src/addons/writing-suggestions/manifest.ts"
   ],
   "9b6e8abe425e": [
     "src/addons/frontmatter/Properties.tsx"
@@ -5308,6 +5464,9 @@
     "src/addons/diagnostics/Settings.tsx"
   ],
   "abfda98c8bbd": [
+    "src/addons/graph/Panel.tsx"
+  ],
+  "20eac6938637": [
     "src/addons/graph/Panel.tsx"
   ],
   "57aea1c5dbe7": [

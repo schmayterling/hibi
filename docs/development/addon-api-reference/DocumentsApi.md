@@ -2,7 +2,7 @@
 
 # DocumentsApi
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L358)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L368)
 
 Live source sessions, addressable without changing the focused editor.
 
@@ -13,6 +13,15 @@ Live source sessions, addressable without changing the focused editor.
 type DocumentsApi = {
   /** Lightweight metadata; source text is read only through readSource. */
   listOpen: () => readonly import('../shared/document-edits').OpenDocumentMetadata[]
+  getMetadata: (
+    target: import('../shared/foundation-contracts').DocumentTarget,
+  ) => import('../shared/document-edits').DocumentMetadataResult
+  /** Open, change, and close events belong to this addon activation. */
+  subscribe: (
+    listener: (
+      event: import('../shared/document-edits').DocumentLifecycleEvent,
+    ) => void,
+  ) => () => void
   readSource: (
     target: import('../shared/foundation-contracts').DocumentTarget,
   ) => import('../shared/document-edits').DocumentSourceReadResult
@@ -20,6 +29,10 @@ type DocumentsApi = {
   applyEdits: (
     request: import('../shared/document-edits').TargetSourceEditRequest,
   ) => import('../shared/document-edits').TargetSourceEditResult
+  /** Save an existing file from the captured document version without focusing it. */
+  save: (
+    target: import('../shared/foundation-contracts').VersionedDocumentTarget,
+  ) => Promise<import('../shared/document-edits').TargetDocumentSaveResult>
 }
 ```
 
@@ -30,14 +43,17 @@ type DocumentsApi = {
 **Methods**
 
 - [listOpen](#listopen)
+- [getMetadata](#getmetadata)
+- [subscribe](#subscribe)
 - [readSource](#readsource)
 - [applyEdits](#applyedits)
+- [save](#save)
 
 ## Methods
 
 ### listOpen
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L360)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L370)
 
 Lightweight metadata; source text is read only through readSource.
 
@@ -49,9 +65,53 @@ Related: [OpenDocumentMetadata](OpenDocumentMetadata.md).
 
 **Returns:** <code>readonly import('../shared/document-edits').<a href="OpenDocumentMetadata.md">OpenDocumentMetadata</a>[]</code>
 
+### getMetadata
+
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L371)
+
+```typescript
+getMetadata: (
+    target: import('../shared/foundation-contracts').DocumentTarget,
+  ) => import('../shared/document-edits').DocumentMetadataResult
+```
+
+Related: [DocumentTarget](DocumentTarget.md), [DocumentMetadataResult](DocumentMetadataResult.md).
+
+**Parameters**
+
+| Name | Type |
+| --- | --- |
+| <code>target</code> | <code>import('../shared/foundation-contracts').<a href="DocumentTarget.md">DocumentTarget</a></code> |
+
+**Returns:** <code>import('../shared/document-edits').<a href="DocumentMetadataResult.md">DocumentMetadataResult</a></code>
+
+### subscribe
+
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L375)
+
+Open, change, and close events belong to this addon activation.
+
+```typescript
+subscribe: (
+    listener: (
+      event: import('../shared/document-edits').DocumentLifecycleEvent,
+    ) => void,
+  ) => () => void
+```
+
+Related: [DocumentLifecycleEvent](DocumentLifecycleEvent.md).
+
+**Parameters**
+
+| Name | Type |
+| --- | --- |
+| <code>listener</code> | <code>( event: import('../shared/document-edits').<a href="DocumentLifecycleEvent.md">DocumentLifecycleEvent</a>, ) =&gt; void</code> |
+
+**Returns:** <code>() =&gt; void</code>
+
 ### readSource
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L361)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L380)
 
 ```typescript
 readSource: (
@@ -71,7 +131,7 @@ Related: [DocumentTarget](DocumentTarget.md), [DocumentSourceReadResult](Documen
 
 ### applyEdits
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L365)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L384)
 
 One version-checked, atomic UTF-16 edit batch. Mounted views require a compatible editor adapter.
 
@@ -91,6 +151,28 @@ Related: [TargetSourceEditRequest](TargetSourceEditRequest.md), [TargetSourceEdi
 
 **Returns:** <code>import('../shared/document-edits').<a href="TargetSourceEditResult.md">TargetSourceEditResult</a></code>
 
+### save
+
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L388)
+
+Save an existing file from the captured document version without focusing it.
+
+```typescript
+save: (
+    target: import('../shared/foundation-contracts').VersionedDocumentTarget,
+  ) => Promise<import('../shared/document-edits').TargetDocumentSaveResult>
+```
+
+Related: [VersionedDocumentTarget](VersionedDocumentTarget.md), [TargetDocumentSaveResult](TargetDocumentSaveResult.md).
+
+**Parameters**
+
+| Name | Type |
+| --- | --- |
+| <code>target</code> | <code>import('../shared/foundation-contracts').<a href="VersionedDocumentTarget.md">VersionedDocumentTarget</a></code> |
+
+**Returns:** <code>Promise&lt;import('../shared/document-edits').<a href="TargetDocumentSaveResult.md">TargetDocumentSaveResult</a>&gt;</code>
+
 ## Related types
 
-[OpenDocumentMetadata](OpenDocumentMetadata.md), [DocumentTarget](DocumentTarget.md), [DocumentSourceReadResult](DocumentSourceReadResult.md), [TargetSourceEditRequest](TargetSourceEditRequest.md), [TargetSourceEditResult](TargetSourceEditResult.md).
+[OpenDocumentMetadata](OpenDocumentMetadata.md), [DocumentTarget](DocumentTarget.md), [DocumentMetadataResult](DocumentMetadataResult.md), [DocumentLifecycleEvent](DocumentLifecycleEvent.md), [DocumentSourceReadResult](DocumentSourceReadResult.md), [TargetSourceEditRequest](TargetSourceEditRequest.md), [TargetSourceEditResult](TargetSourceEditResult.md), [VersionedDocumentTarget](VersionedDocumentTarget.md), [TargetDocumentSaveResult](TargetDocumentSaveResult.md).

@@ -10,6 +10,8 @@ Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared
 ```typescript
 interface FileTarget extends WorkspaceTarget {
   readonly fileId: FileId
+  readonly path: string
+  readonly kind: 'file' | 'folder'
 }
 ```
 
@@ -20,6 +22,8 @@ interface FileTarget extends WorkspaceTarget {
 **Properties**
 
 - [fileId](#fileid)
+- [path](#path)
+- [kind](#kind)
 
 ## Properties
 
@@ -32,6 +36,22 @@ readonly fileId: FileId
 ```
 
 Related: [FileId](FileId.md).
+
+### path
+
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L26)
+
+```typescript
+readonly path: string
+```
+
+### kind
+
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L27)
+
+```typescript
+readonly kind: 'file' | 'folder'
+```
 
 ## Related types
 

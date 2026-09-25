@@ -2,7 +2,7 @@
 
 # SidebarApi
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L427)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L450)
 
 <details>
 <summary>Declaration</summary>
@@ -26,7 +26,7 @@ type SidebarApi = {
 
 ### register
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L429)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L452)
 
 Views appear in the titlebar picker and command palette; cleanup is automatic.
 

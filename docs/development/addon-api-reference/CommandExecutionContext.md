@@ -2,7 +2,7 @@
 
 # CommandExecutionContext
 
-Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L60)
+Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L62)
 
 Captured at invocation; a later focus change cannot retarget the command.
 
@@ -41,7 +41,7 @@ interface CommandExecutionContext {
 
 ### source
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L61)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L63)
 
 ```typescript
 readonly source: | 'palette'
@@ -54,7 +54,7 @@ readonly source: | 'palette'
 
 ### workspace
 
-Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L68)
+Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L70)
 
 ```typescript
 readonly workspace?: WorkspaceTarget
@@ -64,7 +64,7 @@ Related: [WorkspaceTarget](WorkspaceTarget.md).
 
 ### file
 
-Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L69)
+Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L71)
 
 ```typescript
 readonly file?: FileTarget
@@ -74,7 +74,7 @@ Related: [FileTarget](FileTarget.md).
 
 ### document
 
-Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L70)
+Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L72)
 
 ```typescript
 readonly document?: DocumentTarget
@@ -84,7 +84,7 @@ Related: [DocumentTarget](DocumentTarget.md).
 
 ### view
 
-Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L71)
+Readonly · Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/foundation-contracts.ts#L73)
 
 ```typescript
 readonly view?: ViewTarget

@@ -17,6 +17,7 @@ const MAX_KEYS = 32
 const MAX_SECRET_BYTES = 8 * 1024
 const MAX_CIPHER_BYTES = 32 * 1024
 const MAX_FILE_BYTES = 512 * 1024
+const STORAGE_TIMEOUT_MS = 10_000
 const keyPattern = /^[a-z][a-z0-9-]{0,63}$/
 const protectedLinux = new Set([
   'gnome_libsecret',
@@ -42,6 +43,10 @@ type Options = {
   directory: string
   storage: SafeStorage
   platform?: NodeJS.Platform
+  /** Host-owned override for controlled tests and slow platform backends. */
+  storageTimeoutMs?: number
+  /** Host-owned filesystem operation for deterministic commit-race tests. */
+  renameFile?: typeof rename
   /** Main-owned activation and renderer-session identity, never client generations. */
   currentOwner: (addonId: string) => AddonOwner | null
   isWindowLive: (windowKey: object) => boolean
@@ -53,6 +58,7 @@ type Active = {
   controller: AbortController
   revoked: boolean
   committed: boolean
+  commitPending?: Promise<void> | undefined
 }
 type SessionEntry = {
   owner: AddonOwner
@@ -192,6 +198,8 @@ async function writeEntries(
   commitGuard: () => void,
   onCommitted: () => void,
   platform: NodeJS.Platform,
+  renameFile: typeof rename,
+  onCommitPending: (pending: Promise<void>) => void,
 ): Promise<void> {
   const bytes = Buffer.from(JSON.stringify({ version: 1, entries }), 'utf8')
   if (bytes.length > MAX_FILE_BYTES) return fail('limit-exceeded')
@@ -214,8 +222,9 @@ async function writeEntries(
     }
     await beforeCommit()
     commitGuard()
-    await rename(temp, path)
-    onCommitted()
+    const commit = renameFile(temp, path).then(onCommitted)
+    onCommitPending(commit)
+    await commit
   } finally {
     await rm(temp, { force: true }).catch(() => {})
     bytes.fill(0)
@@ -230,7 +239,10 @@ export class HostCredentials {
   readonly #session = new Map<object, Map<string, SessionEntry>>()
   readonly #stopped = new Map<string, number>()
   readonly #stoppedWindows = new WeakSet<object>()
-  #tail: Promise<void> = Promise.resolve()
+  readonly #tails = new Map<string, Promise<void>>()
+  /** Native promises may outlive our timeout; retain a cap until they settle. */
+  readonly #pendingStorage = new Set<Promise<unknown>>()
+  readonly #storageTimeoutMs: number
   #disposed = false
 
   constructor(options: Options) {
@@ -238,6 +250,12 @@ export class HostCredentials {
       throw new Error('Invalid credential directory.')
     this.#options = options
     this.#platform = options.platform ?? process.platform
+    this.#storageTimeoutMs = options.storageTimeoutMs ?? STORAGE_TIMEOUT_MS
+    if (
+      !Number.isSafeInteger(this.#storageTimeoutMs) ||
+      this.#storageTimeoutMs < 1
+    )
+      throw new Error('Invalid credential storage timeout.')
   }
 
   #path(addonId: string) {
@@ -318,7 +336,7 @@ export class HostCredentials {
     let active: Active | undefined
     try {
       active = this.#admit(addonId, windowKey, expected)
-      const value = await work(active)
+      const value = await this.#awaitOrAbort(active, work(active))
       this.#guard(active)
       return { ok: true, value }
     } catch (error) {
@@ -338,16 +356,112 @@ export class HostCredentials {
     }
   }
 
-  #serialize<T>(work: () => Promise<T>): Promise<T> {
-    const result = this.#tail.then(work)
-    this.#tail = result.then(
+  #awaitOrAbort<T>(active: Active, pending: Promise<T>): Promise<T> {
+    const signal = active.controller.signal
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        signal.removeEventListener('abort', onAbort)
+        const commit = active.commitPending
+        if (commit)
+          void commit.then(
+            () => reject(new VaultFailure('stale')),
+            () => reject(new VaultFailure('stale')),
+          )
+        else reject(new VaultFailure('stale'))
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      if (signal.aborted) onAbort()
+      pending.then(
+        (value) => {
+          signal.removeEventListener('abort', onAbort)
+          resolve(value)
+        },
+        (error) => {
+          signal.removeEventListener('abort', onAbort)
+          reject(error)
+        },
+      )
+    })
+  }
+
+  #serialize<T>(active: Active, work: () => Promise<T>): Promise<T> {
+    const id = active.owner.addonId
+    const previous = this.#tails.get(id) ?? Promise.resolve()
+    const result = previous.then(() => {
+      this.#guard(active)
+      return work()
+    })
+    const tail = result.then(
       () => {},
       () => {},
     )
+    this.#tails.set(id, tail)
+    void tail.then(() => {
+      if (this.#tails.get(id) === tail) this.#tails.delete(id)
+    })
     return result
   }
 
-  async #availability(): Promise<CredentialAvailability> {
+  #callStorage<T>(
+    active: Active,
+    call: () => Promise<T>,
+    discardLate?: (value: T) => void,
+  ): Promise<T> {
+    this.#guard(active)
+    if (this.#pendingStorage.size >= MAX_ACTIVE) return fail('busy')
+    const pending = Promise.resolve().then(() => {
+      this.#guard(active)
+      return call()
+    })
+    this.#pendingStorage.add(pending)
+    return new Promise((resolve, reject) => {
+      let finished = false
+      const signal = active.controller.signal
+      const finish = (error: VaultFailure) => {
+        if (finished) return
+        finished = true
+        clearTimeout(timer)
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      }
+      const onAbort = () => finish(new VaultFailure('stale'))
+      const timer = setTimeout(
+        () => finish(new VaultFailure('locked-or-unavailable')),
+        this.#storageTimeoutMs,
+      )
+      signal.addEventListener('abort', onAbort, { once: true })
+      pending.then(
+        (value) => {
+          this.#pendingStorage.delete(pending)
+          if (finished) {
+            discardLate?.(value)
+            return
+          }
+          try {
+            this.#guard(active)
+          } catch (error) {
+            discardLate?.(value)
+            finish(error as VaultFailure)
+            return
+          }
+          finished = true
+          clearTimeout(timer)
+          signal.removeEventListener('abort', onAbort)
+          resolve(value)
+        },
+        (error) => {
+          this.#pendingStorage.delete(pending)
+          finish(
+            error instanceof VaultFailure
+              ? error
+              : new VaultFailure('locked-or-unavailable'),
+          )
+        },
+      )
+    })
+  }
+
+  async #availability(active: Active): Promise<CredentialAvailability> {
     try {
       if (this.#platform === 'linux') {
         // ponytail: electron 44's linux async provider has an unprotected
@@ -361,10 +475,13 @@ export class HostCredentials {
           : 'locked-or-unavailable'
       }
       if (this.#platform === 'darwin' || this.#platform === 'win32')
-        return (await this.#options.storage.isAsyncEncryptionAvailable())
+        return (await this.#callStorage(active, () =>
+          this.#options.storage.isAsyncEncryptionAvailable(),
+        ))
           ? 'protected'
           : 'locked-or-unavailable'
-    } catch {
+    } catch (error) {
+      if (error instanceof VaultFailure) throw error
       // A locked keychain or unavailable provider must never trigger plaintext fallback.
     }
     return 'locked-or-unavailable'
@@ -376,40 +493,52 @@ export class HostCredentials {
     )
   }
 
-  async #encrypt(secret: string): Promise<Buffer> {
+  async #encrypt(active: Active, secret: string): Promise<Buffer> {
     let bytes: Buffer
     try {
       bytes =
         this.#platform === 'linux'
           ? this.#options.storage.encryptString(secret)
-          : await this.#options.storage.encryptStringAsync(secret)
-    } catch {
+          : await this.#callStorage(
+              active,
+              () => this.#options.storage.encryptStringAsync(secret),
+              (late) => {
+                if (Buffer.isBuffer(late)) late.fill(0)
+              },
+            )
+    } catch (error) {
+      if (error instanceof VaultFailure) throw error
       return fail('locked-or-unavailable')
     }
-    if (
-      !Buffer.isBuffer(bytes) ||
-      !bytes.length ||
-      bytes.length > MAX_CIPHER_BYTES
-    )
+    if (!Buffer.isBuffer(bytes)) return fail('locked-or-unavailable')
+    if (!bytes.length || bytes.length > MAX_CIPHER_BYTES) {
+      bytes.fill(0)
       return fail('locked-or-unavailable')
+    }
     return bytes
   }
 
-  async #decrypt(bytes: Buffer): Promise<{ secret: string; rotate: boolean }> {
+  async #decrypt(
+    active: Active,
+    bytes: Buffer,
+  ): Promise<{ secret: string; rotate: boolean }> {
     try {
       if (this.#platform === 'linux')
         return {
           secret: this.#options.storage.decryptString(bytes),
           rotate: false,
         }
-      const result = await this.#options.storage.decryptStringAsync(bytes)
+      const result = await this.#callStorage(active, () =>
+        this.#options.storage.decryptStringAsync(bytes),
+      )
       if (
         typeof result.result !== 'string' ||
         typeof result.shouldReEncrypt !== 'boolean'
       )
         return fail('locked-or-unavailable')
       return { secret: result.result, rotate: result.shouldReEncrypt }
-    } catch {
+    } catch (error) {
+      if (error instanceof VaultFailure) throw error
       return fail('locked-or-unavailable')
     } finally {
       bytes.fill(0)
@@ -430,22 +559,30 @@ export class HostCredentials {
     const beforeCommit = async () => {
       this.#guard(active)
       if (protectedRequired) {
-        const available = await this.#availability()
+        const available = await this.#availability(active)
         this.#guard(active)
         if (available !== 'protected') this.#availabilityFailure(available)
       }
     }
-    await writeEntries(
-      this.#options.directory,
-      this.#path(active.owner.addonId),
-      entries,
-      beforeCommit,
-      () => this.#guard(active),
-      () => {
-        active.committed = true
-      },
-      this.#platform,
-    )
+    try {
+      await writeEntries(
+        this.#options.directory,
+        this.#path(active.owner.addonId),
+        entries,
+        beforeCommit,
+        () => this.#guard(active),
+        () => {
+          active.committed = true
+        },
+        this.#platform,
+        this.#options.renameFile ?? rename,
+        (pending) => {
+          active.commitPending = pending
+        },
+      )
+    } finally {
+      active.commitPending = undefined
+    }
   }
 
   #sessionFor(active: Active, key: string): SessionEntry | undefined {
@@ -499,12 +636,12 @@ export class HostCredentials {
         this.#session.set(windowKey, entries)
         return { mode }
       }
-      return this.#serialize(async () => {
+      return this.#serialize(active, async () => {
         this.#guard(active)
-        const available = await this.#availability()
+        const available = await this.#availability(active)
         this.#guard(active)
         if (available !== 'protected') this.#availabilityFailure(available)
-        const encrypted = await this.#encrypt(secret)
+        const encrypted = await this.#encrypt(active, secret)
         try {
           this.#guard(active)
           const entries = await this.#load(active)
@@ -535,7 +672,7 @@ export class HostCredentials {
       return { ok: false, code: 'invalid-request' }
     }
     return this.#run(addonId, windowKey, (active) =>
-      this.#serialize(async () => {
+      this.#serialize(active, async () => {
         this.#guard(active)
         const entries = await this.#load(active)
         const next = entries.filter((entry) => entry.key !== key)
@@ -563,9 +700,9 @@ export class HostCredentials {
       return { ok: false, code: 'invalid-request' }
     }
     return this.#run(addonId, windowKey, (active) =>
-      this.#serialize(async () => {
+      this.#serialize(active, async () => {
         this.#guard(active)
-        const persistence = await this.#availability()
+        const persistence = await this.#availability(active)
         this.#guard(active)
         const entries = await this.#load(active)
         const stored = this.#sessionFor(active, key)
@@ -595,15 +732,16 @@ export class HostCredentials {
         const session = this.#sessionFor(active, key)
         const secret = session
           ? session.bytes.toString('utf8')
-          : await this.#serialize(async () => {
+          : await this.#serialize(active, async () => {
               this.#guard(active)
-              const available = await this.#availability()
+              const available = await this.#availability(active)
               this.#guard(active)
               if (available !== 'protected')
                 this.#availabilityFailure(available)
               const entries = await this.#load(active)
               const entry = entries.find((item) => item.key === key)
               const decoded = await this.#decrypt(
+                active,
                 Buffer.from(entry?.ciphertext ?? fail('not-found'), 'base64'),
               )
               this.#guard(active)
@@ -614,7 +752,7 @@ export class HostCredentials {
               )
                 fail('corrupt')
               if (decoded.rotate) {
-                const encrypted = await this.#encrypt(decoded.secret)
+                const encrypted = await this.#encrypt(active, decoded.secret)
                 try {
                   this.#guard(active)
                   const next = entries.map((item) =>

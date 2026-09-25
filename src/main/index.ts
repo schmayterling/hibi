@@ -226,6 +226,20 @@ app.on('open-file', (event, path) => {
 app.on('before-quit', () => {
   quitting = true
 })
+let devRestartRequested = false
+function cancelDevRestart() {
+  if (!devRestartRequested) return
+  devRestartRequested = false
+  process.send?.('hibi:dev-restart-cancelled')
+}
+if (process.env.NODE_ENV_ELECTRON_VITE === 'development')
+  process.on('message', (message: unknown) => {
+    if (message === 'hibi:dev-restart') {
+      devRestartRequested = true
+      process.send?.('hibi:dev-restart-accepted')
+      app.quit()
+    }
+  })
 
 function trustedWindow(
   event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>,
@@ -474,6 +488,7 @@ function createWindow(): void {
       })
       .finally(() => {
         confirmingClose = false
+        if (!quitting) cancelDevRestart()
       })
   })
   window.once('ready-to-show', () => {
@@ -654,18 +669,7 @@ function installMenu(): void {
   Menu.setApplicationMenu(built)
 }
 
-let hasSingleInstanceLock = app.requestSingleInstanceLock()
-if (
-  !hasSingleInstanceLock &&
-  process.env.NODE_ENV_ELECTRON_VITE === 'development'
-) {
-  // electron-vite starts the replacement before the old process releases its lock.
-  for (let attempt = 0; attempt < 50 && !hasSingleInstanceLock; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    hasSingleInstanceLock = app.requestSingleInstanceLock()
-  }
-}
-if (!hasSingleInstanceLock) {
+if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   localDiagnostics.start({

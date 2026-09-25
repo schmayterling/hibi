@@ -11,7 +11,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "postinstall": "node scripts/patch-vim.mjs && install-electron --no",
+    "postinstall": "node scripts/patch-vim.mjs && node scripts/patch-electron-vite.mjs && install-electron --no",
     "dev": "node scripts/dev.mjs",
     "start": "npm run dev",
     "preview": "node scripts/preview.mjs",

@@ -36,11 +36,7 @@ export const autosave = {
   },
 }
 
-export function useAutosave(
-  document: DocumentState | null,
-  busy: boolean,
-  onSaved: (document: DocumentState) => void,
-) {
+export function useAutosave(document: DocumentState | null, busy: boolean) {
   const settings = useSyncExternalStore(autosave.subscribe, autosave.snapshot)
   const [result, setResult] = useState<{
     id: string
@@ -104,11 +100,8 @@ export function useAutosave(
               next.tabId,
               next.revision,
             )
-            if (
-              saved.document &&
+            if (saved.document)
               documentRuntime.acknowledgeSave(saved.document, token)
-            )
-              onSaved(saved.document)
             if (saved.status === 'conflict') paused.set(next.tabId, baseline)
             // Results still acknowledge the saved baseline if typing continues during I/O.
             setResult({
@@ -139,7 +132,7 @@ export function useAutosave(
       for (const timer of timers.values()) clearTimeout(timer)
       unsubscribe()
     }
-  }, [settings, onSaved])
+  }, [settings])
   const label = !settings.enabled
     ? 'Autosave off'
     : !document?.canAutosave

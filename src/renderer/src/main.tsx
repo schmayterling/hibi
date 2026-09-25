@@ -65,7 +65,11 @@ import { useAutosave } from './autosave'
 import { CommandPalette, type PaletteCommand } from './CommandPalette'
 import { colorschemes } from './colorschemes'
 import { documentFormats, editorDocument } from './document-formats'
-import { documentRuntime, observeDocumentErrors } from './document-runtime'
+import {
+  type DocumentSaveToken,
+  documentRuntime,
+  observeDocumentErrors,
+} from './document-runtime'
 import { sameDocumentShell } from './document-shell'
 import type { ViewMode } from './Editor'
 import { loadCursor } from './EditorCursor'
@@ -320,24 +324,32 @@ function App() {
   const [resetEditor, setResetEditor] = useState(0)
   const busyRef = useRef(false)
   const [busy, setBusy] = useState(false)
-  const acknowledgeSave = useCallback((saved: DocumentState) => {
-    const previous = documentRuntime.get(saved.tabId)
-    const acknowledged = documentRuntime.acknowledgeSave(saved)
-    if (!acknowledged) return
-    if (
-      previous &&
-      previous.id !== acknowledged.id &&
-      previous.revision === acknowledged.revision
-    ) {
-      const choice = localStorage.getItem(`hibi:flavor:${previous.id}`)
-      if (choice) localStorage.setItem(`hibi:flavor:${acknowledged.id}`, choice)
-    }
-    if (documentRuntime.get()?.tabId !== saved.tabId) return
-    currentDocument.current = acknowledged
-    shellDocument.current = acknowledged
-    setDocument(acknowledged)
-  }, [])
-  const autosaveStatus = useAutosave(document, busy, acknowledgeSave)
+  const acknowledgeSave = useCallback(
+    (saved: DocumentState, token: DocumentSaveToken, expectedId?: string) => {
+      const previous = documentRuntime.get(saved.tabId)
+      const acknowledged = documentRuntime.acknowledgeSave(
+        saved,
+        token,
+        expectedId,
+      )
+      if (!acknowledged) return
+      if (
+        previous &&
+        previous.id !== acknowledged.id &&
+        previous.revision === acknowledged.revision
+      ) {
+        const choice = localStorage.getItem(`hibi:flavor:${previous.id}`)
+        if (choice)
+          localStorage.setItem(`hibi:flavor:${acknowledged.id}`, choice)
+      }
+      if (documentRuntime.get()?.tabId !== saved.tabId) return
+      currentDocument.current = acknowledged
+      shellDocument.current = acknowledged
+      setDocument(acknowledged)
+    },
+    [],
+  )
+  const autosaveStatus = useAutosave(document, busy)
   const [defaultView, setDefaultView] = useState<ViewMode>(() => {
     const saved = localStorage.getItem('default-view')
     return saved && isDocumentView(saved) ? saved : 'normal'
@@ -946,8 +958,11 @@ function App() {
       if (busyRef.current || dialogs.isOpen()) return false
       if (command === 'undo' || command === 'redo')
         return Boolean(documentRuntime.session()?.[command]())
+      const saving = command === 'save' || command === 'saveAs'
+      const token = saving ? documentRuntime.beginSave() : null
+      const expectedId = saving ? currentDocument.current?.id : undefined
       const source =
-        (command === 'save' || command === 'saveAs') &&
+        saving &&
         window.document.activeElement
           ?.closest('.cm-editor')
           ?.querySelector<HTMLElement>('.cm-content')
@@ -961,7 +976,7 @@ function App() {
             ? window.hibi.openDocument()
             : window.hibi.saveDocument(command === 'saveAs'))
         if (next) {
-          if (command === 'save' || command === 'saveAs') acknowledgeSave(next)
+          if (saving && token) acknowledgeSave(next, token, expectedId)
           else acceptDocument(next)
           if (command === 'new' || command === 'open') setSettingsOpen(false)
           setWorkspace(await window.hibi.getWorkspace())

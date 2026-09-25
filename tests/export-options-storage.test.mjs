@@ -75,6 +75,22 @@ test('corrupt legacy and newer stored options remain recoverable', async () => {
   assert.equal(safe.canSave, false)
   assert.match(safe.warning, /different version/)
   assert.equal(writes, 0)
+
+  const damagedHost = {
+    snapshot: () => ({
+      status: 'ready',
+      revision: 1,
+      value: { ...exportOptions({}, 'workspace', theme), title: 42 },
+    }),
+    set: async () => {
+      writes++
+      throw new Error('must not replace damaged host data')
+    },
+  }
+  const damaged = await loadExportOptions(damagedHost, null, 'workspace', theme)
+  assert.equal(damaged.canSave, false)
+  assert.match(damaged.warning, /stored options will not be changed/)
+  assert.equal(writes, 0)
 })
 
 test('host value wins over legacy text and concurrent migration conflict', async () => {

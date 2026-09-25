@@ -689,3 +689,24 @@ export const ADDON_CHANNELS = {
   invoke: 'addons:invoke',
   query: 'addons:query',
 } as const
+
+export type {
+  AddonId,
+  AddonOwner,
+  CommandExecutionContext,
+  Dispose,
+  DocumentId,
+  DocumentTarget,
+  FailureCode,
+  FileId,
+  FileTarget,
+  OperationResult,
+  OwnerScope,
+  RequestId,
+  VersionedDocumentTarget,
+  ViewId,
+  ViewTarget,
+  WorkspaceChangeEvent,
+  WorkspaceId,
+  WorkspaceTarget,
+} from '../shared/foundation-contracts'

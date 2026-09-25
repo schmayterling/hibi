@@ -17,7 +17,7 @@ const host = {
     {
       path: 'a.md',
       markdown:
-        '---\ntitle: Example\nrating: 3\n---\n# Intro\n\n#work [B](b.md)',
+        '---\ntitle: Example\nrating: 3\n---\n# Intro\n\n#work [B](b.md) [[b]]',
     },
     { path: 'b.md', markdown: '' },
   ],
@@ -87,6 +87,7 @@ test('metadata queries return bounded links and backlinks from shared pages', as
   assert.deepEqual(links.value.items, ['b.md'])
   assert.equal(links.value.hasMore, false)
   assert.equal(links.value.sequence, 1)
+  assert.equal(links.value.syntax, 'gfm+wikilinks+hashtags')
   const backlinks = await query({
     target,
     kind: 'backlinks',

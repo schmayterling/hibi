@@ -23,7 +23,12 @@ test('properties keep bounded scalars and reject nested or invalid yaml', () => 
   assert.equal(Object.hasOwn(result.values, 'nested'), false)
   assert.equal(result.complete, false)
   assert.equal(noteProperties('---\nbad: [\n---\nbody').complete, false)
+  assert.equal(
+    noteProperties(`---\nlong: ${'x'.repeat(100_000)}\n---\nbody`).complete,
+    false,
+  )
   assert.equal(noteProperties('plain markdown').complete, true)
+  assert.equal(noteProperties('---\n[link](a.md)').complete, false)
 })
 
 test('headings follow standard gfm text while excluding code and frontmatter', () => {
@@ -36,4 +41,14 @@ test('headings follow standard gfm text while excluding code and frontmatter', (
       { depth: 2, text: 'Subheading' },
     ],
   )
+  const long = noteHeadings(`# ${'x'.repeat(40_000)}`)
+  assert.equal(long.complete, false)
+  assert.ok(new TextEncoder().encode(long.items[0].text).length <= 4099)
+  assert.deepEqual(
+    noteHeadings(`---\nlong: ${'x'.repeat(100_000)}\n---\n# Visible`),
+    { items: [], complete: false },
+  )
+  assert.deepEqual(noteHeadings('---\n# Visible').items, [
+    { depth: 1, text: 'Visible' },
+  ])
 })

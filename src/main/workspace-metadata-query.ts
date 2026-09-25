@@ -16,8 +16,8 @@ type QueryFailure = 'stale' | 'not-found' | 'limit-exceeded' | 'unsupported'
 
 interface QueryBase {
   readonly target: WorkspaceTarget
-  /** This slice interprets standard GFM, independent of optional addon flavors. */
-  readonly syntax: 'gfm'
+  /** Source index includes wiki links and hashtags regardless of preview flavor choice. */
+  readonly syntax: 'gfm+wikilinks+hashtags'
   readonly sequence: number
   readonly stale: boolean
   readonly complete: boolean
@@ -241,10 +241,10 @@ export async function queryWorkspaceReferences(
     return failure('not-found', 'This document is not in the workspace index.')
   const base: QueryBase = {
     target,
-    syntax: 'gfm',
+    syntax: 'gfm+wikilinks+hashtags',
     sequence: after.sequence,
     stale: after.stale,
-    complete: after.complete,
+    complete: after.complete && references.isComplete(),
     capReached: after.capReached,
   }
   if (kind === 'resolve')

@@ -71,7 +71,8 @@ test('failed editor attachments stay read-only and disabling the addon restores 
       .filter({ hasText: /editor addon unavailable/i })
       .waitFor()
   } catch (error) {
-    const state = await page
+    let diagnosticTimer
+    const snapshot = page
       .evaluate(async () => ({
         main: {
           states: await window.hibi.getAddonStates(),
@@ -98,6 +99,16 @@ test('failed editor attachments stay read-only and disabling the addon restores 
         },
       }))
       .catch((diagnosticError) => ({ error: String(diagnosticError) }))
+    const state = await Promise.race([
+      snapshot,
+      new Promise((resolve) => {
+        diagnosticTimer = setTimeout(
+          () => resolve({ error: 'Renderer diagnostic timed out' }),
+          1000,
+        )
+      }),
+    ])
+    clearTimeout(diagnosticTimer)
     console.error('addon failure state:', JSON.stringify({ state, pageErrors }))
     throw error
   }

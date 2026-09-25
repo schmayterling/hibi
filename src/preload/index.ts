@@ -14,7 +14,10 @@ import {
 import type { JournalCheckpoint } from '../shared/document-checkpoint'
 import { createDocumentJournal } from '../shared/document-journal'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
-import { GLOBAL_SHORTCUT_CHANNELS } from '../shared/global-shortcuts'
+import {
+  GLOBAL_SHORTCUT_CHANNELS,
+  type GlobalShortcutInvocation,
+} from '../shared/global-shortcuts'
 import { HISTORY_CHANNELS } from '../shared/history'
 import { type AppCommand, HOTKEY_CHANNELS } from '../shared/hotkeys'
 import { IMPORT_CHANNELS } from '../shared/imports'
@@ -91,13 +94,20 @@ if (process.isMainFrame) {
   for (const pending of [startupDocument, startupAddons, startupKnown])
     void pending.catch(() => {})
   contextBridge.exposeInMainWorld('hibi', {
-    registerGlobalShortcut: (id, accelerator) =>
-      ipcRenderer.invoke(GLOBAL_SHORTCUT_CHANNELS.register, id, accelerator),
-    unregisterGlobalShortcut: (id) =>
-      ipcRenderer.invoke(GLOBAL_SHORTCUT_CHANNELS.unregister, id),
+    registerGlobalShortcut: (id, accelerator, token) =>
+      ipcRenderer.invoke(
+        GLOBAL_SHORTCUT_CHANNELS.register,
+        id,
+        accelerator,
+        token,
+      ),
+    unregisterGlobalShortcut: (id, token) =>
+      ipcRenderer.invoke(GLOBAL_SHORTCUT_CHANNELS.unregister, id, token),
     onGlobalShortcut: (callback) => {
-      const listener = (_event: Electron.IpcRendererEvent, id: string) =>
-        callback(id)
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        invocation: GlobalShortcutInvocation,
+      ) => callback(invocation)
       ipcRenderer.on(GLOBAL_SHORTCUT_CHANNELS.invoked, listener)
       return () =>
         ipcRenderer.removeListener(GLOBAL_SHORTCUT_CHANNELS.invoked, listener)

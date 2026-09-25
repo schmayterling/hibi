@@ -27,6 +27,7 @@ import {
   documentExtension,
   isMarkdownDocument,
 } from '../../shared/document-types'
+import type { CommandExecutionContext } from '../../shared/foundation-contracts'
 import {
   parseSyntaxDescriptors,
   validatePreservation,
@@ -37,6 +38,7 @@ import { performanceDiagnostics } from '../../ui/diagnostics'
 import { menus } from '../../ui/menu-store'
 import { useToastService } from '../../ui/Sonner'
 import { createTooltipScope } from '../../ui/tooltip-store'
+import { createAddonGlobalShortcuts } from './addon-global-shortcuts'
 import { createAddonOverrides } from './addon-overrides'
 import { addonRegistry } from './addon-registry'
 import { addonViews } from './addon-views'
@@ -61,7 +63,11 @@ export { addons } from './addon-registry'
 
 const ADDON_ISSUE_URL = 'https://github.com/schmayterling/hibi/issues/new'
 
-export type RegisteredCommand = AddonCommand & { addonId: string }
+export type RegisteredCommand = Omit<AddonCommand, 'run'> & {
+  addonId: string
+  canRun: (context: CommandExecutionContext) => boolean
+  run: (context?: CommandExecutionContext) => Promise<void>
+}
 type Environment = Omit<
   AddonContext,
   | 'commands'
@@ -99,6 +105,10 @@ type Environment = Omit<
   closeSidebar: (side: 'left' | 'right') => void
   openTab: () => void
   focusDocument: (tabId: string) => Promise<boolean>
+  captureCommandContext?: (
+    source: CommandExecutionContext['source'],
+  ) => CommandExecutionContext
+  isCommandContextCurrent?: (context: CommandExecutionContext) => boolean
 }
 
 export function useAddons(
@@ -114,6 +124,11 @@ export function useAddons(
   const toastService = useToastService()
   const latest = useRef(environment)
   latest.current = environment
+  const captureCommandContext = useCallback(
+    (source: CommandExecutionContext['source']): CommandExecutionContext =>
+      latest.current.captureCommandContext?.(source) ?? { source },
+    [],
+  )
   const app = useRef<AddonApp>({
     runCommand: (command) => latest.current.runCommand(command),
     runAction: (command) => latest.current.runAction(command),
@@ -225,7 +240,11 @@ export function useAddons(
   const currentActivation = useRef({ states, settled, catalog })
   currentActivation.current = { states, settled, catalog }
   const executeCommand = useCallback(
-    async (owner: string, commandId: string) => {
+    async (
+      owner: string,
+      commandId: string,
+      context: CommandExecutionContext = captureCommandContext('api'),
+    ) => {
       if (
         !currentActivation.current.states.some(
           (state) => state.id === owner && state.enabled,
@@ -275,9 +294,14 @@ export function useAddons(
         )
       )
         throw new Error('This command is no longer available.')
-      await command.run()
+      if (
+        latest.current.isCommandContextCurrent &&
+        !latest.current.isCommandContextCurrent(context)
+      )
+        throw new Error('The command target is no longer available.')
+      await command.run(context)
     },
-    [activation, registered, started],
+    [activation, captureCommandContext, registered, started],
   )
   const extensions = useRef(
     new Map<string, MarkdownExtension & { addonId: string }>(),
@@ -388,6 +412,18 @@ export function useAddons(
       const notificationScope = viewNotifications.scope()
       const tooltipScope = createTooltipScope()
       const cleanups = new Set<() => void>()
+      const shortcutScope = createAddonGlobalShortcuts(
+        id,
+        window.hibi,
+        (command) => {
+          const context = captureCommandContext('global-shortcut')
+          return typeof command === 'string'
+            ? executeCommand(id, command, context)
+            : command()
+        },
+        (error) => latest.current.error(error),
+      )
+      cleanups.add(shortcutScope.dispose)
       const editScope = documentEdits.scope(() => latest.current.isBusy())
       const annotationScope = editorAnnotations.scope(id)
       const batch = registrationBatch(addon.manifest.capabilities !== undefined)
@@ -635,45 +671,7 @@ export function useAddons(
               },
             },
             dialogs: dialogScope.api,
-            globalShortcuts: {
-              async register(localId, accelerator, run) {
-                if (disposed) throw new Error('This addon has stopped.')
-                if (!/^[a-z][a-z0-9-]*$/.test(localId))
-                  throw new Error(
-                    'This addon supplied an invalid shortcut name.',
-                  )
-                const key = `${id}.${localId}`
-                let active = true
-                const off = window.hibi.onGlobalShortcut((invoked) => {
-                  if (!active || invoked !== key) return
-                  try {
-                    void Promise.resolve(run()).catch((error) =>
-                      latest.current.error(error),
-                    )
-                  } catch (error) {
-                    latest.current.error(error)
-                  }
-                })
-                const remove = () => {
-                  if (!active) return
-                  active = false
-                  off()
-                  cleanups.delete(remove)
-                  void window.hibi
-                    .unregisterGlobalShortcut(key)
-                    .catch((error) => latest.current.error(error))
-                }
-                cleanups.add(remove)
-                try {
-                  await window.hibi.registerGlobalShortcut(key, accelerator)
-                } catch (error) {
-                  remove()
-                  throw error
-                }
-                if (!active) await window.hibi.unregisterGlobalShortcut(key)
-                return remove
-              },
-            },
+            globalShortcuts: { register: shortcutScope.register },
             views: { register: registerView, notify: notificationScope.notify },
             analysis: {
               async run(projection) {
@@ -1117,10 +1115,25 @@ export function useAddons(
                     `This addon supplied a duplicate or invalid command: ${key}.`,
                   )
                 let active = true
+                const canRun = (context: CommandExecutionContext) => {
+                  if (!active || disposed) return false
+                  if (
+                    latest.current.isCommandContextCurrent &&
+                    !latest.current.isCommandContextCurrent(context)
+                  )
+                    return false
+                  try {
+                    return command.when?.(context) ?? true
+                  } catch (error) {
+                    latest.current.error(error)
+                    return false
+                  }
+                }
                 const entry: RegisteredCommand = {
                   ...command,
                   id: key,
                   addonId: id,
+                  canRun,
                   ...(command.slash
                     ? {
                         slash: {
@@ -1146,13 +1159,13 @@ export function useAddons(
                         },
                       }
                     : {}),
-                  run: async () => {
-                    if (!active || disposed) return
+                  run: async (context = captureCommandContext('api')) => {
+                    if (!canRun(context)) return
                     try {
                       await performanceDiagnostics.measure(
                         id,
                         `command:${command.id}`,
-                        () => command.run(),
+                        () => command.run(context),
                       )
                     } catch (error) {
                       latest.current.error(error)
@@ -1370,6 +1383,7 @@ export function useAddons(
     activation,
     started,
     executeCommand,
+    captureCommandContext,
     loaded,
     documentName,
     states,
@@ -1497,7 +1511,7 @@ export function useAddons(
       latest.current.error(error)
     }
   }
-  const visibleCommands = useMemo(
+  const visibleCommands = useMemo<RegisteredCommand[]>(
     () => [
       ...commands,
       ...catalog
@@ -1516,11 +1530,24 @@ export function useAddons(
               ...command,
               id: `${addon.manifest.id}.${command.id}`,
               addonId: addon.manifest.id,
-              run: () => executeCommand(addon.manifest.id, command.id),
+              canRun: () => true,
+              run: (context?: CommandExecutionContext) =>
+                executeCommand(
+                  addon.manifest.id,
+                  command.id,
+                  context ?? captureCommandContext('api'),
+                ),
             })),
         ),
     ],
-    [commands, catalog, states, registered, executeCommand],
+    [
+      commands,
+      catalog,
+      states,
+      registered,
+      executeCommand,
+      captureCommandContext,
+    ],
   )
   return {
     catalog,
@@ -1530,6 +1557,7 @@ export function useAddons(
     app,
     states,
     commands: visibleCommands,
+    captureCommandContext,
     markdownExtensions,
     richExtensions,
     sourceExtensions,

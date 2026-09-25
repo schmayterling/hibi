@@ -93,17 +93,17 @@ Use `onInput()` to observe typed characters, or `onKeyEvent()` to observe editor
 
 ## Add a system-wide shortcut
 
-Register an Electron accelerator to run an addon action while Hibi is open, even when another application has focus. The registration returns a removal function. Hibi also removes it when the addon stops. Registration rejects a shortcut already owned by another application.
+Register a command, then assign it an Electron accelerator to run it while Hibi is open, even when another application has focus. The registration returns a removal function. Hibi also removes it when the addon stops. Registration rejects a shortcut already owned by another application.
 
 ```typescript
 const remove = await context.globalShortcuts.register(
   'capture',
   'CommandOrControl+Alt+N',
-  () => context.commands.execute('capture'),
+  'capture',
 )
 ```
 
-Choose a shortcut that does not overlap with a Hibi editing command. System-wide shortcuts are active only while Hibi is running and this addon is enabled. The operating system may reserve some combinations.
+The command receives a context captured when the shortcut is pressed. Existing addons may still pass a callback as the third argument. Choose a shortcut that does not overlap with a Hibi editing command. System-wide shortcuts are active only while Hibi is running and this addon is enabled. The operating system may reserve some combinations.
 
 ## Clean up
 

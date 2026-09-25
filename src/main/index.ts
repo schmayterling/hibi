@@ -6,6 +6,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  globalShortcut,
   ipcMain,
   Menu,
   nativeImage,
@@ -34,7 +35,10 @@ import {
 } from '../shared/document-checkpoint'
 import { createJournalReceiver } from '../shared/document-journal'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
-import { GLOBAL_SHORTCUT_CHANNELS } from '../shared/global-shortcuts'
+import {
+  GLOBAL_SHORTCUT_CHANNELS,
+  type GlobalShortcutInvocation,
+} from '../shared/global-shortcuts'
 import { HISTORY_CHANNELS } from '../shared/history'
 import {
   type AppCommand,
@@ -88,11 +92,7 @@ import {
 } from './document'
 import { isDocumentName } from './document-types'
 import { externalFileArguments } from './external-files'
-import {
-  clearGlobalShortcuts,
-  registerGlobalShortcut,
-  unregisterGlobalShortcut,
-} from './global-shortcuts'
+import { GlobalShortcuts } from './global-shortcuts'
 import { listVersions, previewVersion } from './history'
 import { hotkeys, loadHotkeys, saveHotkeys } from './hotkeys'
 import { readDocumentImage } from './images'
@@ -211,7 +211,8 @@ let mainWindow: BrowserWindow | null = null
 let fileOperation: Promise<unknown> | null = null
 let quitting = false
 let recordingHotkey = false
-let pendingGlobalShortcut: string | null = null
+const globalShortcuts = new GlobalShortcuts(globalShortcut)
+let pendingGlobalShortcut: { id: string; accelerator: string } | null = null
 const externalFiles: string[] = []
 function queueExternalFiles(paths: string[]) {
   for (const path of paths) {
@@ -247,23 +248,27 @@ if (process.env.NODE_ENV_ELECTRON_VITE === 'development')
       app.quit()
     }
   })
-app.on('will-quit', clearGlobalShortcuts)
+app.on('will-quit', () => globalShortcuts.clear())
 
-function invokeGlobalShortcut(id: string) {
-  if (!mainWindow) {
-    pendingGlobalShortcut = id
+function invokeGlobalShortcut(invocation: GlobalShortcutInvocation) {
+  const { id, token } = invocation
+  const openingWindow = !mainWindow
+  if (openingWindow) {
+    const registration = globalShortcuts.get(id)
+    if (registration?.token !== token) return
+    pendingGlobalShortcut = { id, accelerator: registration.accelerator }
     createWindow()
   }
   if (!mainWindow) return
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
-  if (mainWindow.webContents.isLoadingMainFrame()) {
-    pendingGlobalShortcut = id
-    return
-  }
-  if (pendingGlobalShortcut !== id)
-    mainWindow.webContents.send(GLOBAL_SHORTCUT_CHANNELS.invoked, id)
+  if (
+    !openingWindow &&
+    pendingGlobalShortcut?.id !== id &&
+    !mainWindow.webContents.isLoadingMainFrame()
+  )
+    mainWindow.webContents.send(GLOBAL_SHORTCUT_CHANNELS.invoked, invocation)
 }
 
 function trustedWindow(
@@ -391,9 +396,13 @@ function createWindow(): void {
   }
   window.on('blur', stopRecording)
   window.webContents.on('did-start-loading', stopRecording)
-  window.webContents.on('did-start-loading', clearGlobalShortcuts)
+  window.webContents.on('did-start-loading', () => globalShortcuts.clear())
   window.webContents.on('did-start-loading', () => analysisService.cancel())
-  window.webContents.on('render-process-gone', () => analysisService.cancel())
+  window.webContents.on('render-process-gone', () => {
+    globalShortcuts.clear()
+    pendingGlobalShortcut = null
+    analysisService.cancel()
+  })
   window.on('closed', () => analysisService.cancel())
   window.webContents.on('before-input-event', (event, input) => {
     if (recordingHotkey || input.type !== 'keyDown' || input.isComposing) return
@@ -531,6 +540,7 @@ function createWindow(): void {
       new Error('The editor closed before confirming its changes.'),
     )
     mainWindow = null
+    if (process.platform !== 'darwin' || quitting) globalShortcuts.clear()
   })
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-frame-navigate', (event) => {
@@ -995,18 +1005,25 @@ if (!app.requestSingleInstanceLock()) {
       })
       handle(
         GLOBAL_SHORTCUT_CHANNELS.register,
-        (_event, id: unknown, accelerator: unknown) => {
-          registerGlobalShortcut(id, accelerator, invokeGlobalShortcut)
-          if (pendingGlobalShortcut === id) {
+        (event, id: unknown, accelerator: unknown, token: unknown) => {
+          globalShortcuts.register(id, accelerator, token, invokeGlobalShortcut)
+          const pending = pendingGlobalShortcut
+          if (
+            pending &&
+            pending.id === id &&
+            pending.accelerator === accelerator
+          ) {
             pendingGlobalShortcut = null
-            mainWindow?.webContents.send(GLOBAL_SHORTCUT_CHANNELS.invoked, id)
+            event.sender.send(GLOBAL_SHORTCUT_CHANNELS.invoked, { id, token })
           }
         },
       )
-      handle(GLOBAL_SHORTCUT_CHANNELS.unregister, (_event, id: unknown) => {
-        unregisterGlobalShortcut(id)
-        if (pendingGlobalShortcut === id) pendingGlobalShortcut = null
-      })
+      handle(
+        GLOBAL_SHORTCUT_CHANNELS.unregister,
+        (_event, id: unknown, token: unknown) => {
+          globalShortcuts.unregister(id, token)
+        },
+      )
       handle(HOTKEY_CHANNELS.save, async (event, value: unknown) => {
         trustedWindow(event)
         const next = await saveHotkeys(value)

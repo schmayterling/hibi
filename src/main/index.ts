@@ -92,6 +92,7 @@ import {
   getDocumentPathForTab,
   getDocumentSource,
   getDocumentSourceFor,
+  getOpenDocumentVersions,
   loadDocument,
   loadDocumentPreferences,
   moveDocumentTab,
@@ -1345,6 +1346,13 @@ if (!app.requestSingleInstanceLock()) {
       )
       handle(WORKSPACE_CHANNELS.index, (event, verifyAll: unknown) =>
         readAfterFileOperation(event, () => indexWorkspace(verifyAll === true)),
+      )
+      handle(WORKSPACE_CHANNELS.queryReferences, (event, request: unknown) =>
+        readAfterFileOperation(event, () =>
+          import('./workspace-metadata-query').then((module) =>
+            module.queryWorkspaceReferences(request, getOpenDocumentVersions),
+          ),
+        ),
       )
       handle(WORKSPACE_CHANNELS.action, (event, input: unknown) =>
         runFileOperation(event, (window) => workspaceAction(window, input)),

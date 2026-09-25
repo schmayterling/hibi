@@ -250,6 +250,14 @@ export type DesktopApi = {
       import('./workspace').WorkspaceTextCreation
     >
   >
+  queryWorkspaceReferences: (
+    request: import('./workspace-query').WorkspaceReferenceQueryRequest,
+  ) => Promise<
+    import('./foundation-contracts').OperationResult<
+      import('./workspace-query').WorkspaceReferenceQueryResult,
+      import('./workspace-query').QueryFailure
+    >
+  >
   getWorkspaceSettings: () => Promise<
     import('./workspace-settings').WorkspaceSettings
   >

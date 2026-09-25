@@ -392,10 +392,21 @@ export async function selectDocumentTab(
 export async function focusDocumentTab(
   window: BrowserWindow,
   id: unknown,
+  expected: unknown,
 ): Promise<DocumentFocus> {
   storeTab()
   if (typeof id !== 'string' || !tabs.has(id))
     throw new Error('This tab is no longer open.')
+  const version = getDocumentSourceFor(id).snapshot()
+  if (
+    !expected ||
+    typeof expected !== 'object' ||
+    !('contentVersion' in expected) ||
+    !('revision' in expected) ||
+    expected.contentVersion !== version.version ||
+    expected.revision !== version.document.revision
+  )
+    throw new Error('This pane has edits pending synchronization. Try again.')
   if (id !== activeTab) {
     activateTab(id)
     revision = source.snapshot().document.revision

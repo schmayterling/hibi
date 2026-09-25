@@ -1423,8 +1423,12 @@ if (!app.requestSingleInstanceLock()) {
       handle(DOCUMENT_CHANNELS.selectTab, (event, id: unknown) =>
         runFileOperation(event, (window) => selectDocumentTab(window, id)),
       )
-      handle(DOCUMENT_CHANNELS.focusTab, (event, id: unknown) =>
-        runFileOperation(event, (window) => focusDocumentTab(window, id)),
+      handle(
+        DOCUMENT_CHANNELS.focusTab,
+        (event, id: unknown, expected: unknown) =>
+          runFileOperation(event, (window) =>
+            focusDocumentTab(window, id, expected),
+          ),
       )
       handle(DOCUMENT_CHANNELS.closeTab, (event, id: unknown) =>
         runFileOperation(event, (window) => closeDocumentTab(window, id)),

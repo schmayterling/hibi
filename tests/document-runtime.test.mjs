@@ -279,6 +279,13 @@ test('focus changes active session without materializing or reidentifying its so
   assert.equal(runtime.get().markdown, 'first')
   assert.equal(first.counters().materializations, 0)
   assert.equal(runtime.focus({ ...metadata, contentVersion: 99 }), null)
+  first.edit([{ from: 5, to: 5, insert: ' local' }], 'source', 'typing')
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  assert.equal(runtime.focus(metadata), null)
+  assert.equal(runtime.get().tabId, 'two')
+  assert.equal(runtime.get('one').markdown, 'first local')
   runtime.dispose()
 })
 

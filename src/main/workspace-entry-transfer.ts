@@ -5,9 +5,12 @@ import {
   link,
   lstat,
   mkdir,
+  opendir,
+  readdir,
   rename,
   unlink,
 } from 'node:fs/promises'
+import { join } from 'node:path'
 
 function sameInode(left: BigIntStats, right: BigIntStats): boolean {
   return left.dev === right.dev && left.ino === right.ino
@@ -32,19 +35,24 @@ export async function copyEntry(
     await mkdir(destination)
     // A later external swap can still replace this reservation. Never clean
     // the destination on failure because it may then belong to someone else.
-    await cp(source, destination, {
-      recursive: true,
-      force: false,
-      errorOnExist: true,
-      mode: constants.COPYFILE_EXCL,
-      filter: async (path) => {
-        if ((await lstat(path)).isSymbolicLink())
-          throw new Error(
-            'Symbolic links cannot be copied. Copy the original file or folder instead.',
-          )
-        return true
-      },
-    })
+    if ((await lstat(source)).isSymbolicLink())
+      throw new Error(
+        'Symbolic links cannot be copied. Copy the original file or folder instead.',
+      )
+    for (const name of await readdir(source))
+      await cp(join(source, name), join(destination, name), {
+        recursive: true,
+        force: false,
+        errorOnExist: true,
+        mode: constants.COPYFILE_EXCL,
+        filter: async (path) => {
+          if ((await lstat(path)).isSymbolicLink())
+            throw new Error(
+              'Symbolic links cannot be copied. Copy the original file or folder instead.',
+            )
+          return true
+        },
+      })
   } else {
     if (!original.isFile()) throw new Error('Choose a regular file to copy.')
     await copyFile(source, destination, constants.COPYFILE_EXCL)
@@ -65,19 +73,26 @@ export async function moveEntry(
       return { sourceRemoved: true }
     }
     await mkdir(destination)
-    const reserved = await lstat(destination, { bigint: true })
-    if (!(await beforeRemove()))
-      throw new Error('The workspace folder changed. Review it before moving.')
-    const current = await lstat(destination, { bigint: true })
-    if (!current.isDirectory() || !sameInode(current, reserved))
-      throw new Error(
-        'The destination folder changed. Review it before moving.',
-      )
-    // ponytail: node has no portable no-replace directory rename; a swap
-    // after this check can still replace a competing empty folder.
-    // Failed moves retain the reservation because cleanup could erase a swap.
-    await rename(source, destination)
-    return { sourceRemoved: true }
+    // Keep the reserved inode open so a removed folder cannot reuse it before
+    // the identity check on filesystems that recycle directory inodes quickly.
+    const reservation = await opendir(destination)
+    try {
+      const reserved = await lstat(destination, { bigint: true })
+      if (!(await beforeRemove()))
+        throw new Error('The workspace folder changed. Review it before moving.')
+      const current = await lstat(destination, { bigint: true })
+      if (!current.isDirectory() || !sameInode(current, reserved))
+        throw new Error(
+          'The destination folder changed. Review it before moving.',
+        )
+      // ponytail: node has no portable no-replace directory rename; a swap
+      // after this check can still replace a competing empty folder.
+      // Failed moves retain the reservation because cleanup could erase a swap.
+      await rename(source, destination)
+      return { sourceRemoved: true }
+    } finally {
+      await reservation.close()
+    }
   }
   const original = await lstat(source, { bigint: true })
   if (!original.isFile()) throw new Error('Choose a regular file to move.')

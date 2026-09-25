@@ -106,6 +106,27 @@ test('metadata queries return bounded links and backlinks from shared pages', as
     (await query({ target, kind: 'tag', tag: 'work' })).value.items,
     ['a.md'],
   )
+  assert.deepEqual((await query({ target, kind: 'tags' })).value.items, [
+    { tag: 'work', count: 1 },
+  ])
+  const graph = await query({ target, kind: 'graph', limit: 2 })
+  assert.deepEqual(graph.value.items, [
+    { kind: 'node', path: 'a.md' },
+    { kind: 'edge', source: 'a.md', target: 'b.md' },
+  ])
+  const graphNext = await query({
+    target,
+    kind: 'graph',
+    cursor: graph.value.nextCursor,
+    limit: 2,
+  })
+  assert.deepEqual(graphNext.value.items, [{ kind: 'node', path: 'b.md' }])
+  assert.equal(graphNext.value.hasMore, false)
+  assert.equal(
+    (await query({ target, kind: 'graph', cursor: graph.value.nextCursor }))
+      .code,
+    'stale',
+  )
   assert.deepEqual(
     (await query({ target, kind: 'property', key: 'rating', value: 3 })).value
       .items,

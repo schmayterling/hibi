@@ -29,6 +29,12 @@ export type WorkspaceReferenceQueryRequest =
       readonly syntax: 'markdown' | 'wiki'
     })
   | (QueryTarget & QueryPage & { readonly kind: 'tag'; readonly tag: string })
+  | (QueryTarget & QueryPage & { readonly kind: 'tags' })
+  | (QueryTarget & {
+      readonly kind: 'graph'
+      readonly cursor?: string
+      readonly limit?: number
+    })
   | (QueryTarget &
       QueryPage & {
         readonly kind: 'property'
@@ -54,6 +60,15 @@ export interface WorkspaceReferenceQueryBase {
   readonly capReached: boolean
 }
 
+export type WorkspaceGraphItem =
+  | { readonly kind: 'node'; readonly path: string }
+  | { readonly kind: 'edge'; readonly source: string; readonly target: string }
+
+export interface WorkspaceTagSummary {
+  readonly tag: string
+  readonly count: number
+}
+
 export type WorkspaceReferenceQueryResult = WorkspaceReferenceQueryBase &
   (
     | {
@@ -69,6 +84,18 @@ export type WorkspaceReferenceQueryResult = WorkspaceReferenceQueryBase &
         readonly hasMore: boolean
         readonly nextOffset: number
         readonly metadataComplete?: boolean
+      }
+    | {
+        readonly kind: 'tags'
+        readonly items: readonly WorkspaceTagSummary[]
+        readonly hasMore: boolean
+        readonly nextOffset: number
+      }
+    | {
+        readonly kind: 'graph'
+        readonly items: readonly WorkspaceGraphItem[]
+        readonly hasMore: boolean
+        readonly nextCursor: string | null
       }
     | {
         readonly kind: 'headings'

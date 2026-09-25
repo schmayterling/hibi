@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import katex from 'katex'
 import {
   exportOptions,
   validateExportOptions,
@@ -106,6 +107,73 @@ test('export options validate URLs, images and portable paths; protected files c
     assert.match(encrypted.get('index.html'), /content="noindex, nofollow"/)
     assert.ok(!encrypted.has('sitemap.xml'))
     assert.ok(!encrypted.has('development/README.md/index.html'))
+  }
+})
+
+test('site export keeps supported static content and omits addon runtime state', async () => {
+  const template = await readFile('out/site/template.html', 'utf8')
+  const math = katex.renderToString('x^2')
+  const installedAddonCode = await readFile(
+    'examples/foundation-proof-addon/index.js',
+    'utf8',
+  )
+  const attachment = 'data:image/png;base64,aGVsbG8='
+  const unusedAttachment = 'data:image/png;base64,cHJpdmF0ZQ=='
+  const snapshot = {
+    name: 'Public notes',
+    pages: [
+      {
+        id: 'private-document-id',
+        path: 'README.md',
+        markdown: '# Public\n\n![preview](images/preview.png)',
+        html: `<h1>Public</h1><p><strong>Supported flavor</strong>${math}<img src="images/preview.png" onerror="window.exportAttack=true"></p><script>window.exportAttack=true</script>`,
+        images: {
+          'images/preview.png': attachment,
+          'unused.png': unusedAttachment,
+        },
+        addonContext: {
+          host: { credentials: 'credential-value-sentinel' },
+          workspace: { grant: 'workspace-grant-sentinel' },
+          code: installedAddonCode,
+        },
+      },
+      {
+        path: 'fallback.md',
+        markdown: '## Plain fallback **works**\n\n:::unsupported',
+      },
+    ],
+    addonRuntime: { bridge: 'privileged-bridge-sentinel' },
+  }
+  for (const singleFile of [true, false]) {
+    const options = {
+      ...exportOptions({ singleFile, graph: false }),
+      credential: 'option-secret-sentinel',
+    }
+    const site = prepareSite(snapshot, options)
+    assert.match(site.pages[1].html, /<strong>works<\/strong>/)
+    assert.match(site.pages[1].html, /:::unsupported/)
+    const files = await siteFiles(template, site)
+    const output = [...files.values()].join('\n')
+    for (const secret of [
+      'private-document-id',
+      'credential-value-sentinel',
+      'workspace-grant-sentinel',
+      'privileged-bridge-sentinel',
+      'option-secret-sentinel',
+      'Foundation proof preferences need a supported version.',
+      unusedAttachment,
+      'window.hibi',
+      'ipcRenderer',
+      'window.exportAttack',
+    ])
+      assert.ok(!output.includes(secret), secret)
+    assert.ok(output.includes(attachment))
+    const article = (
+      singleFile ? files.get('index.html') : files.get('README.md/index.html')
+    ).match(/<article class="tiptap">([\s\S]*?)<\/article>/)?.[1]
+    assert.match(article, /<strong>Supported flavor<\/strong>/)
+    assert.match(article, /class="katex"/)
+    assert.doesNotMatch(article, /<script|onerror|window\.exportAttack/i)
   }
 })
 

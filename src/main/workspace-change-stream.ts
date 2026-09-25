@@ -7,6 +7,8 @@ import type {
   WorkspaceStreamSnapshot,
 } from '../shared/workspace'
 
+export type WorkspaceStreamCursor = Omit<WorkspaceStreamSnapshot, 'entries'>
+
 export interface WorkspaceStreamStatus {
   readonly stale: boolean
   readonly complete: boolean
@@ -135,11 +137,13 @@ export class WorkspaceChangeStream {
     status: WorkspaceStreamStatus,
   ): WorkspaceStreamSnapshot {
     const snapshot: WorkspaceStreamSnapshot = {
-      target: this.target,
-      sequence: this.sequence,
+      ...this.cursor(status),
       entries: structuredClone(entries),
-      ...status,
     }
     return snapshot
+  }
+
+  cursor(status: WorkspaceStreamStatus): WorkspaceStreamCursor {
+    return { target: this.target, sequence: this.sequence, ...status }
   }
 }

@@ -2,7 +2,7 @@
 
 # DocumentsApi
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L368)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L369)
 
 Live source sessions, addressable without changing the focused editor.
 
@@ -53,7 +53,7 @@ type DocumentsApi = {
 
 ### listOpen
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L370)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L371)
 
 Lightweight metadata; source text is read only through readSource.
 
@@ -67,7 +67,7 @@ Related: [OpenDocumentMetadata](OpenDocumentMetadata.md).
 
 ### getMetadata
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L371)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L372)
 
 ```typescript
 getMetadata: (
@@ -87,7 +87,7 @@ Related: [DocumentTarget](DocumentTarget.md), [DocumentMetadataResult](DocumentM
 
 ### subscribe
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L375)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L376)
 
 Open, change, and close events belong to this addon activation.
 
@@ -111,7 +111,7 @@ Related: [DocumentLifecycleEvent](DocumentLifecycleEvent.md).
 
 ### readSource
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L380)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L381)
 
 ```typescript
 readSource: (
@@ -131,7 +131,7 @@ Related: [DocumentTarget](DocumentTarget.md), [DocumentSourceReadResult](Documen
 
 ### applyEdits
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L384)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L385)
 
 One version-checked, atomic UTF-16 edit batch. Mounted views require a compatible editor adapter.
 
@@ -153,7 +153,7 @@ Related: [TargetSourceEditRequest](TargetSourceEditRequest.md), [TargetSourceEdi
 
 ### save
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L388)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L389)
 
 Save an existing file from the captured document version without focusing it.
 

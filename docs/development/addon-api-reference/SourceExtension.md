@@ -2,7 +2,7 @@
 
 # SourceExtension
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L176)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L177)
 
 <details>
 <summary>Declaration</summary>
@@ -31,7 +31,7 @@ type SourceExtension = {
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L177)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L178)
 
 ```typescript
 id: string
@@ -41,7 +41,7 @@ id: string
 
 ### create
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L179)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L180)
 
 Created per source editor; may lazy-load an editor integration.
 

@@ -216,10 +216,22 @@ test('slash commands work in both editors, preserve undo, and coexist with vim',
   assert.match(await menu.innerText(), /No commands found/)
   await source.press('Escape')
 
+  await source.fill('/h2')
+  await menu.waitFor()
   await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0].setContentSize(720, 520),
   )
+  await page.waitForFunction(() => innerWidth === 720 && innerHeight === 520)
+  await page.evaluate(
+    () =>
+      new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      ),
+  )
+  await menu.waitFor()
   await source.fill(`${'paragraph\n\n'.repeat(24)}/h2`)
+  await source.press('ArrowLeft')
+  await source.press('ArrowRight')
   await menu.waitFor()
   const bounds = await page
     .locator('.slash-menu:popover-open')

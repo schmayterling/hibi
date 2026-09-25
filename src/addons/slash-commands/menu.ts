@@ -116,7 +116,7 @@ export function createSlashMenu(
   }
   document.addEventListener('pointerdown', outside, true)
   document.addEventListener('scroll', scroll, true)
-  window.addEventListener('resize', blur)
+  window.addEventListener('resize', reposition)
   window.addEventListener('blur', blur)
   editor.addEventListener('blur', blur)
   menu.addEventListener('pointerdown', (event) => event.preventDefault())
@@ -228,7 +228,7 @@ export function createSlashMenu(
       hide()
       document.removeEventListener('pointerdown', outside, true)
       document.removeEventListener('scroll', scroll, true)
-      window.removeEventListener('resize', blur)
+      window.removeEventListener('resize', reposition)
       window.removeEventListener('blur', blur)
       editor.removeEventListener('blur', blur)
       unsubscribeSyntax()

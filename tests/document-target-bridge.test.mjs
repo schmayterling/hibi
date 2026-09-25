@@ -6,7 +6,7 @@ import test from 'node:test'
 import { electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
-test('installed addon edits an inactive document without changing focus', {
+test('installed addon edits inactive documents and guards deferred legacy commands', {
   timeout: 45000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-target-bridge-'))
@@ -36,10 +36,42 @@ test('installed addon edits an inactive document without changing focus', {
     join(folder, 'index.js'),
     `export default () => ({
       start(context) {
+        context.commands.register({
+          id: 'deferred-update',
+          label: 'Deferred update',
+          async run() {
+            const probe = window.targetProbe
+            probe.started = true
+            await new Promise(resolve => { probe.release = resolve })
+            try {
+              context.editor.updateMarkdown(source => source + '\\nfrom command')
+              probe.result = 'applied'
+            } catch (error) {
+              probe.result = error.message
+            }
+          },
+        })
+        context.commands.register({
+          id: 'sync-update',
+          label: 'Sync update',
+          run() {
+            context.editor.updateMarkdown(source => source + '\\nfrom sync command')
+          },
+        })
         window.targetProbe = {
           list: () => context.documents.listOpen(),
           read: target => context.documents.readSource(target),
           edit: request => context.documents.applyEdits(request),
+          begin() {
+            this.started = false
+            this.result = null
+            this.release = null
+            void context.commands.execute('deferred-update').catch(error => {
+              this.result = error.message
+            })
+          },
+          sync: () => context.commands.execute('sync-update'),
+          background: () => context.editor.updateMarkdown(source => source + '\\nfrom background'),
         }
       },
       stop() { delete window.targetProbe },
@@ -118,5 +150,50 @@ test('installed addon edits an inactive document without changing focus', {
   await page.getByRole('tab', { name: 'first.md' }).click()
   await page.waitForFunction(
     async () => (await window.hibi.getDocument()).markdown === '# ONE',
+  )
+
+  await page.evaluate(() => window.targetProbe.begin())
+  await page.waitForFunction(() => window.targetProbe.started)
+  await page.getByRole('tab', { name: 'second.md' }).click()
+  await page.evaluate(() => window.targetProbe.release())
+  await page.waitForFunction(() => window.targetProbe.result !== null)
+  assert.match(
+    await page.evaluate(() => window.targetProbe.result),
+    /command target is no longer available/i,
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    '# two',
+  )
+
+  await page.evaluate(() => window.targetProbe.begin())
+  await page.waitForFunction(() => window.targetProbe.started)
+  await page.evaluate(() => window.targetProbe.release())
+  await page.waitForFunction(() => window.targetProbe.result !== null)
+  assert.equal(await page.evaluate(() => window.targetProbe.result), 'applied')
+  await page.waitForFunction(
+    async () =>
+      (await window.hibi.getDocument()).markdown === '# two\nfrom command',
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    '# two\nfrom command',
+  )
+
+  await page.evaluate(() => window.targetProbe.sync())
+  await page.waitForFunction(
+    async () =>
+      (await window.hibi.getDocument()).markdown ===
+      '# two\nfrom command\nfrom sync command',
+  )
+  await page.evaluate(() => window.targetProbe.background())
+  await page.waitForFunction(
+    async () =>
+      (await window.hibi.getDocument()).markdown ===
+      '# two\nfrom command\nfrom sync command\nfrom background',
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    '# two\nfrom command\nfrom sync command\nfrom background',
   )
 })

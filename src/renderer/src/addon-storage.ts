@@ -5,10 +5,14 @@ import type {
   AddonStorageReadRequest,
   AddonStorageReadResult,
   AddonStorageScope,
+  AddonStorageWorkspace,
   AddonStorageWriteRequest,
   AddonStorageWriteResult,
 } from '../../shared/addon-storage'
-import type { WorkspaceTarget } from '../../shared/foundation-contracts'
+import type {
+  WorkspaceId,
+  WorkspaceTarget,
+} from '../../shared/foundation-contracts'
 
 export type AddonStorageBridge = {
   readAddonStorage: (
@@ -158,8 +162,23 @@ export function createAddonStorageScope(
   const api: AddonStorageApi = {
     global: <T>(key: string, version: number) =>
       open<T>({ kind: 'global' }, key, version),
-    workspace: <T>(target: WorkspaceTarget, key: string, version: number) =>
-      open<T>({ kind: 'workspace', target }, key, version),
+    workspace: <T>(
+      workspace: AddonStorageWorkspace,
+      key: string,
+      version: number,
+    ) => {
+      if (
+        !/^[a-f0-9]{64}$/.test(workspace.id) ||
+        !Number.isSafeInteger(workspace.workspaceGeneration) ||
+        workspace.workspaceGeneration < 0
+      )
+        throw new Error('Open a workspace before using workspace storage.')
+      const target: WorkspaceTarget = {
+        workspaceId: workspace.id as WorkspaceId,
+        workspaceGeneration: workspace.workspaceGeneration,
+      }
+      return open<T>({ kind: 'workspace', target }, key, version)
+    },
     session: <T>(key: string, version: number) =>
       open<T>({ kind: 'session' }, key, version),
   }

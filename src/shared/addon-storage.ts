@@ -1,5 +1,10 @@
 import type { WorkspaceTarget } from './foundation-contracts'
 
+export type AddonStorageWorkspace = {
+  id: string
+  workspaceGeneration: number
+}
+
 /** Storage is owned by the addon that opens it. Workspace handles capture identity at open time. */
 export type AddonStorageScope =
   | { kind: 'global' }
@@ -69,7 +74,7 @@ export type AddonStorageApi = {
     version: number,
   ) => Promise<AddonStorageHandle<T>>
   workspace: <T = unknown>(
-    target: import('./foundation-contracts').WorkspaceTarget,
+    workspace: AddonStorageWorkspace,
     key: string,
     version: number,
   ) => Promise<AddonStorageHandle<T>>

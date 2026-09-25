@@ -344,19 +344,32 @@ export function createAddonStorage(
     namespace.entries = Object.create(null) as Record<string, Entry>
     for (const key of keys)
       for (const listener of listeners)
-        listener({
-          owner,
-          scope: { kind: 'session' },
-          key,
-          version: null,
-          current: { status: 'missing', revision: 0 },
-        })
+        try {
+          listener({
+            owner,
+            scope: { kind: 'session' },
+            key,
+            version: null,
+            current: { status: 'missing', revision: 0 },
+          })
+        } catch (error) {
+          console.error('Could not publish addon storage change:', error)
+        }
+  }
+
+  async function clearAllSessions(): Promise<void> {
+    await Promise.all(
+      [...namespaces.keys()]
+        .filter((key) => key.startsWith('session:'))
+        .map((key) => clearSession(key.slice('session:'.length))),
+    )
   }
 
   return {
     read,
     write,
     clearSession,
+    clearAllSessions,
     subscribe(listener: (change: AddonStorageChange) => void) {
       listeners.add(listener)
       return () => listeners.delete(listener)

@@ -13,7 +13,11 @@ export function createAddonGlobalShortcuts(
   invoke: (command: Command) => void | Promise<void>,
   onError: (error: unknown) => void,
 ) {
-  const registrations = new Map<string, () => void>()
+  const registrations = new Map<
+    string,
+    { remove: () => void; retire: () => void }
+  >()
+  const pending = new Map<string, () => void>()
   let disposed = false
 
   return {
@@ -21,7 +25,7 @@ export function createAddonGlobalShortcuts(
       if (disposed) throw new Error('This addon has stopped.')
       if (!/^[a-z][a-z0-9-]*$/.test(localId))
         throw new Error('This addon supplied an invalid shortcut name.')
-      if (registrations.has(localId))
+      if (pending.has(localId))
         throw new Error(`This addon already registered shortcut ${localId}.`)
       if (typeof command !== 'function' && !/^[a-z][a-z0-9-]*$/.test(command))
         throw new Error('This addon supplied an invalid command name.')
@@ -37,26 +41,46 @@ export function createAddonGlobalShortcuts(
           onError(error)
         }
       })
-      const remove = () => {
+      const retire = () => {
         if (!active) return
         active = false
         off()
-        if (registrations.get(localId) === remove) registrations.delete(localId)
+      }
+      const remove = () => {
+        if (!active) return
+        retire()
+        if (registrations.get(localId)?.remove !== remove) return
+        registrations.delete(localId)
         void transport.unregisterGlobalShortcut(id, token).catch(onError)
       }
-      registrations.set(localId, remove)
+      const cancelPending = () => {
+        retire()
+        void transport.unregisterGlobalShortcut(id, token).catch(onError)
+      }
+      pending.set(localId, cancelPending)
       try {
         await transport.registerGlobalShortcut(id, accelerator, token)
       } catch (error) {
-        remove()
+        retire()
         throw error
+      } finally {
+        pending.delete(localId)
       }
-      if (!active) await transport.unregisterGlobalShortcut(id, token)
+      if (!active || disposed) {
+        retire()
+        await transport.unregisterGlobalShortcut(id, token)
+        return remove
+      }
+      const previous = registrations.get(localId)
+      registrations.set(localId, { remove, retire })
+      previous?.retire()
       return remove
     },
     dispose() {
       disposed = true
-      for (const remove of registrations.values()) remove()
+      for (const cancel of pending.values()) cancel()
+      pending.clear()
+      for (const registration of registrations.values()) registration.remove()
     },
   }
 }

@@ -33,12 +33,44 @@ test('global shortcut ownership survives replacement and stale callbacks', () =>
     /already in use or was denied/,
   )
   assert.equal(shortcuts.get('test.one').token, 'second')
+  oldCallback()
+  assert.deepEqual(invoked.at(-1), { id: 'test.one', token: 'second' })
+  assert.throws(
+    () => shortcuts.register('test.two', 'Control+Alt+F9', 'occupied', invoke),
+    /already in use/,
+  )
+  assert.equal(bindings.get('Control+Alt+F9'), oldCallback)
   shortcuts.register('test.one', 'Control+Alt+Plus', 'fourth', invoke)
   oldCallback()
-  assert.deepEqual(invoked, [{ id: 'test.one', token: 'second' }])
+  assert.deepEqual(invoked, [
+    { id: 'test.one', token: 'second' },
+    { id: 'test.one', token: 'second' },
+  ])
   bindings.get('Control+Alt+Plus')()
   assert.deepEqual(invoked.at(-1), { id: 'test.one', token: 'fourth' })
   shortcuts.clear()
+  assert.equal(bindings.size, 0)
+})
+
+test('same shortcut with different capitalization unregisters original binding', () => {
+  const bindings = new Map()
+  const shortcuts = new GlobalShortcuts(
+    {
+      register(accelerator, callback) {
+        bindings.set(accelerator, callback)
+        return true
+      },
+      unregister(accelerator) {
+        bindings.delete(accelerator)
+      },
+    },
+    'linux',
+  )
+  shortcuts.register('test.one', 'Control+Alt+F9', 'old', () => {})
+  shortcuts.register('test.one', 'control+alt+f9', 'new', () => {})
+  assert.equal(shortcuts.get('test.one').accelerator, 'Control+Alt+F9')
+  assert.equal(shortcuts.unregister('test.one', 'old'), false)
+  assert.equal(shortcuts.unregister('test.one', 'new'), true)
   assert.equal(bindings.size, 0)
 })
 

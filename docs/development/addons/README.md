@@ -6,6 +6,7 @@ Addons can add commands, editor behavior, sidebar views, document formats, and t
 - [Adding functionality](adding-functionality.md)
 - [Settings and sidebar views](settings-and-sidebar-views.md)
 - [Addon storage](storage.md)
+- [Host credentials](credentials.md)
 - [Managing external dependencies](managing-dependencies.md)
 - [Document formats and syntax](document-formats-and-syntax.md)
 - [Creating an importer](creating-an-importer.md)

@@ -212,6 +212,17 @@ test('quick note captures to a chosen folder without replacing files', {
     await page.evaluate(() => window.hibi.getRecentWorkspaces())
   ).find((item) => item.path === originalPath)?.id
   assert.ok(originalId)
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note settings')
+  await page.getByRole('option', { name: /Quick note settings/i }).click()
+  await page
+    .getByRole('tabpanel', { name: 'Quick note' })
+    .getByLabel('Workspace', { exact: true })
+    .selectOption(originalId)
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await page.getByRole('button', { name: 'Back to app' }).click()
   let lastChosen
   for (let number = 0; number < 6; number++) {
     const destination = join(root, `later-${number}`)
@@ -232,16 +243,36 @@ test('quick note captures to a chosen folder without replacing files', {
     ),
     false,
   )
-  await page.evaluate(
-    (workspaceId) =>
-      window.hibi.invokeAddon('quick-note', 'save', {
-        workspaceId,
-        folder: '',
-        title: 'Older',
-        markdown: 'Still selected',
-      }),
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note settings')
+  await page.getByRole('option', { name: /Quick note settings/i }).click()
+  const oldSettings = page.getByRole('tabpanel', { name: 'Quick note' })
+  await page.waitForFunction(
+    (id) => document.querySelector('#quick-note-workspace')?.value === id,
     originalId,
   )
+  assert.equal(
+    await oldSettings.getByLabel('Workspace', { exact: true }).inputValue(),
+    originalId,
+  )
+  assert.equal(
+    await oldSettings.locator(`option[value="${originalId}"]`).innerText(),
+    originalPath,
+  )
+  await page.getByRole('button', { name: 'Back to app' }).click()
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note: capture')
+  await page.getByRole('option', { name: /Quick note: capture/i }).click()
+  const oldDialog = page.getByRole('dialog', { name: 'Quick note' })
+  assert.ok((await oldDialog.innerText()).includes(originalPath))
+  await oldDialog.getByRole('textbox', { name: 'Title' }).fill('Older')
+  await oldDialog.getByRole('textbox', { name: 'Note' }).fill('Still selected')
+  await oldDialog.getByRole('button', { name: 'Save note' }).click()
+  await oldDialog.waitFor({ state: 'hidden' })
   assert.equal(
     await readFile(join(workspace, 'Older.md'), 'utf8'),
     'Still selected',

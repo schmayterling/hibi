@@ -69,8 +69,18 @@ function folders(entries: WorkspaceEntry[], found: string[] = []): string[] {
 export default {
   id: manifest.id,
   queries: {
-    async targets() {
-      return getRecentWorkspaces()
+    async targets(selected) {
+      const recent = await getRecentWorkspaces()
+      if (
+        typeof selected !== 'string' ||
+        !selected ||
+        recent.some((item) => item.id === selected)
+      )
+        return recent
+      const chosen = (await getKnownWorkspaces()).find(
+        (item) => item.id === selected,
+      )
+      return chosen ? [...recent, { id: chosen.id, path: chosen.path }] : recent
     },
     async folders(input, context) {
       const root = await target(input, context)

@@ -34,6 +34,7 @@ See the [addon API reference](../../development/addon-api-reference/README.md).
 - [DocumentPreviewProps](../../development/addon-api-reference/DocumentPreviewProps.md)
 - [DocumentSelection](../../development/addon-api-reference/DocumentSelection.md)
 - [DocumentEdit](../../development/addon-api-reference/DocumentEdit.md)
+- [DocumentsApi](../../development/addon-api-reference/DocumentsApi.md)
 - [DocumentFormatting](../../development/addon-api-reference/DocumentFormatting.md)
 - [DocumentFormat](../../development/addon-api-reference/DocumentFormat.md)
 - [MarkdownExtension](../../development/addon-api-reference/MarkdownExtension.md)

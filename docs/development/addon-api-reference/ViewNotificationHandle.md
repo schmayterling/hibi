@@ -2,7 +2,7 @@
 
 # ViewNotificationHandle
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L469)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L481)
 
 <details>
 <summary>Declaration</summary>
@@ -27,7 +27,7 @@ type ViewNotificationHandle = {
 
 ### update
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L470)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L482)
 
 ```typescript
 update: (changes: Partial<ViewNotification>) => void
@@ -45,7 +45,7 @@ Related: [ViewNotification](ViewNotification.md).
 
 ### dispose
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L471)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L483)
 
 ```typescript
 dispose: () => void

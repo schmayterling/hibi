@@ -2,7 +2,7 @@
 
 # RecentWorkspace
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L28)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L29)
 
 <details>
 <summary>Declaration</summary>
@@ -28,7 +28,7 @@ type RecentWorkspace = {
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L30)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L31)
 
 Host-issued identity for reopening a previously chosen directory.
 
@@ -38,7 +38,7 @@ id: string
 
 ### path
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L31)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L32)
 
 ```typescript
 path: string

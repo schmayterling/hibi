@@ -2,7 +2,7 @@
 
 # WorkspaceState
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L42)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L43)
 
 <details>
 <summary>Declaration</summary>
@@ -41,7 +41,7 @@ type WorkspaceState = {
 
 ### manifest
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L44)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L45)
 
 Present when this folder contains a workspace manifest in .hibi/workspace.json (or legacy .hibi.json).
 
@@ -53,7 +53,7 @@ Related: [WorkspaceManifest](WorkspaceManifest.md).
 
 ### id
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L46)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L47)
 
 Opaque identity; changes when a different folder is opened.
 
@@ -63,7 +63,7 @@ id?: string
 
 ### workspaceGeneration
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L48)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L49)
 
 Changes when this workspace session is replaced; capture with id for scoped work.
 
@@ -73,7 +73,7 @@ workspaceGeneration?: number
 
 ### name
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L49)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L50)
 
 ```typescript
 name: string
@@ -81,7 +81,7 @@ name: string
 
 ### entries
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L50)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L51)
 
 ```typescript
 entries: WorkspaceEntry[]
@@ -91,7 +91,7 @@ Related: [WorkspaceEntry](WorkspaceEntry.md).
 
 ### activePath
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L51)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L52)
 
 ```typescript
 activePath: string | null
@@ -99,7 +99,7 @@ activePath: string | null
 
 ### obsidian
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L53)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L54)
 
 Read-only signal for a vault containing an ordinary .obsidian directory.
 

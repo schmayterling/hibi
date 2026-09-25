@@ -2,7 +2,7 @@
 
 # SidebarHandle
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L410)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L422)
 
 <details>
 <summary>Declaration</summary>
@@ -28,7 +28,7 @@ type SidebarHandle = {
 
 ### open
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L412)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L424)
 
 Reveal this view, optionally passing selection data to its content.
 
@@ -47,7 +47,7 @@ open: (input?: unknown, side?: 'left' | 'right') => void
 
 ### dispose
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L413)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L425)
 
 ```typescript
 dispose: () => void

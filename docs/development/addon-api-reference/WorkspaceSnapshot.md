@@ -2,7 +2,7 @@
 
 # WorkspaceSnapshot
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L151)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L154)
 
 <details>
 <summary>Declaration</summary>
@@ -31,7 +31,7 @@ type WorkspaceSnapshot = {
 
 ### css
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L152)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L155)
 
 ```typescript
 css?: string
@@ -39,7 +39,7 @@ css?: string
 
 ### name
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L153)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L156)
 
 ```typescript
 name: string
@@ -47,7 +47,7 @@ name: string
 
 ### pages
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L154)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L157)
 
 ```typescript
 pages: WorkspacePage[]
@@ -57,7 +57,7 @@ Related: [WorkspacePage](WorkspacePage.md).
 
 ### appearance
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L155)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L158)
 
 ```typescript
 appearance?: import('./colorschemes').ThemePreferences

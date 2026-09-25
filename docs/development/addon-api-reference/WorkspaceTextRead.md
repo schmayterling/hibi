@@ -2,7 +2,7 @@
 
 # WorkspaceTextRead
 
-Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L78)
+Interface · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L79)
 
 <details>
 <summary>Declaration</summary>
@@ -32,7 +32,7 @@ interface WorkspaceTextRead {
 
 ### target
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L79)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L80)
 
 ```typescript
 readonly target: WorkspaceTarget
@@ -42,7 +42,7 @@ Related: [WorkspaceTarget](WorkspaceTarget.md).
 
 ### path
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L80)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L81)
 
 ```typescript
 readonly path: string
@@ -50,7 +50,7 @@ readonly path: string
 
 ### markdown
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L81)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L82)
 
 ```typescript
 readonly markdown: string
@@ -58,7 +58,7 @@ readonly markdown: string
 
 ### source
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L83)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L84)
 
 Persisted bytes; unsaved document content is separate.
 

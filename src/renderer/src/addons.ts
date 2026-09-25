@@ -523,6 +523,7 @@ export function useAddons(
         (request) => editScope.apply(request),
         () => latest.current.isBusy(),
       )
+      const pendingCommandTargets = new Set<CommandExecutionContext>()
       const annotationScope = editorAnnotations.scope(id)
       const batch = registrationBatch(addon.manifest.capabilities !== undefined)
       const registerView: ViewApi['register'] = (view) => {
@@ -1254,7 +1255,14 @@ export function useAddons(
                 })
               },
               updateMarkdown(transform, options) {
-                if (!disposed) latest.current.updateMarkdown(transform, options)
+                if (disposed) return
+                const isCurrent = latest.current.isCommandContextCurrent
+                for (const target of pendingCommandTargets)
+                  if (isCurrent && !isCurrent(target))
+                    throw new Error(
+                      'The command target is no longer available.',
+                    )
+                latest.current.updateMarkdown(transform, options)
               },
               registerMarkdown(extension) {
                 if (disposed) return () => {}
@@ -1381,7 +1389,9 @@ export function useAddons(
                       }
                     : {}),
                   run: async (context = captureCommandContext('api')) => {
+                    const target = structuredClone(context)
                     if (!canRun(context)) return
+                    pendingCommandTargets.add(target)
                     try {
                       await performanceDiagnostics.measure(
                         id,
@@ -1390,6 +1400,8 @@ export function useAddons(
                       )
                     } catch (error) {
                       latest.current.error(error)
+                    } finally {
+                      pendingCommandTargets.delete(target)
                     }
                   },
                 }

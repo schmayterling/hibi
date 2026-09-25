@@ -14,8 +14,10 @@ test('installed addon addresses source and rich selections by live view', {
   await mkdir(addon, { recursive: true })
   const first = join(profile, 'first.md')
   const second = join(profile, 'second.md')
-  await writeFile(first, '# alpha')
+  const plain = join(profile, 'plain.txt')
+  await writeFile(first, `# alpha\n\n${'word '.repeat(1200)}`)
   await writeFile(second, '# beta')
+  await writeFile(plain, 'plain text')
   await writeFile(
     join(addon, 'hibi-addon.json'),
     JSON.stringify({
@@ -123,6 +125,21 @@ test('installed addon addresses source and rich selections by live view', {
     ).ok,
     true,
   )
+  await page.locator('.rich-pane').evaluate((pane) => {
+    pane.scrollTop = 0
+  })
+  assert.equal(
+    (
+      await page.evaluate((position) => window.viewProbe.reveal(position), {
+        ...rich,
+        position: 5000,
+      })
+    ).ok,
+    true,
+  )
+  assert.ok(
+    (await page.locator('.rich-pane').evaluate((pane) => pane.scrollTop)) > 100,
+  )
 
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await page.waitForFunction(() => {
@@ -178,6 +195,27 @@ test('installed addon addresses source and rich selections by live view', {
     (await page.evaluate((view) => window.viewProbe.selection(view), rich.view))
       .code,
     'stale',
+  )
+  await open(plain)
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await page.waitForFunction(() => {
+    const view = window.viewProbe.active()
+    const result = view && window.viewProbe.selection(view)
+    return result?.ok && result.value.editor === 'source'
+  })
+  const plainSelection = await page.evaluate(() => {
+    const view = window.viewProbe.active()
+    return window.viewProbe.selection(view).value
+  })
+  assert.equal(
+    (
+      await page.evaluate((selection) => window.viewProbe.set(selection), {
+        ...plainSelection,
+        anchor: 2,
+        head: 4,
+      })
+    ).ok,
+    true,
   )
   const events = await page.evaluate(() => window.viewProbe.events)
   assert.ok(events.some(([kind]) => kind === 'active'))

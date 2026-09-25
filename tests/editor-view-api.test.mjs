@@ -81,7 +81,13 @@ test('view api lists mounted identities and tracks active and primary selection'
   assert.equal(selections[1].anchor, 1)
   assert.equal(selections[1].head, 3)
   assert.deepEqual(
-    scope.reveal({ view, editor: 'source', contentVersion: 0, position: 2 }),
+    scope.reveal({
+      view,
+      editor: 'source',
+      editorGeneration: selections[1].editorGeneration,
+      contentVersion: 0,
+      position: 2,
+    }),
     { ok: true, value: undefined },
   )
   assert.deepEqual(source.revealed, [2])
@@ -181,5 +187,28 @@ test('active-view subscription follows focus between live views', () => {
   assert.equal(scope.getActive(), null)
   assert.deepEqual(events, [secondId, null])
   first()
+  runtime.dispose()
+})
+
+test('editor replacement invalidates positions without changing source or view', () => {
+  const { runtime, registry, scope, viewId } = fixture()
+  registry.setActive(viewId, 'rich')
+  const first = registry.register('one', viewId, 'rich', adapter())
+  const unmount = runtime.registerView('one', viewId)
+  const view = scope.getActive()
+  const original = scope.getSelection(view).value
+  const events = []
+  scope.onDidChangeSelection((selection) => events.push(selection))
+  first()
+  const second = registry.register('one', viewId, 'rich', adapter())
+  const replacement = scope.getSelection(view).value
+  assert.equal(replacement.view.viewGeneration, original.view.viewGeneration)
+  assert.equal(replacement.contentVersion, original.contentVersion)
+  assert.notEqual(replacement.editorGeneration, original.editorGeneration)
+  assert.equal(scope.setSelection(original).code, 'stale')
+  assert.equal(scope.reveal({ ...original, position: 2 }).code, 'stale')
+  assert.equal(events.at(-1).editorGeneration, replacement.editorGeneration)
+  second()
+  unmount()
   runtime.dispose()
 })

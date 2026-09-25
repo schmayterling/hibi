@@ -24,7 +24,11 @@ export type EditorViewAdapter = {
   setSelection: (anchor: number, head: number) => boolean
   reveal: (position: number) => boolean
 }
-type Entry = { document: DocumentTarget; adapter: EditorViewAdapter }
+type Entry = {
+  document: DocumentTarget
+  generation: number
+  adapter: EditorViewAdapter
+}
 type Failure = Extract<OperationResult<never>, { ok: false }>
 const failure = (code: Failure['code'], message: string): Failure => ({
   ok: false,
@@ -60,6 +64,7 @@ export class EditorViewRegistry {
   readonly #adapters = new Map<ViewId, Partial<Record<EditorKind, Entry>>>()
   readonly #active = new Map<ViewId, EditorKind>()
   readonly #listeners = new Set<() => void>()
+  #generation = 0
 
   constructor(runtime: DocumentRuntime) {
     this.#runtime = runtime
@@ -72,7 +77,7 @@ export class EditorViewRegistry {
   ) {
     const document = this.#runtime.captureDocument(tabId)
     if (!document) return () => {}
-    const entry = { document, adapter }
+    const entry = { document, generation: ++this.#generation, adapter }
     const adapters: Partial<Record<EditorKind, Entry>> =
       this.#adapters.get(viewId) ?? {}
     adapters[editor] = entry
@@ -156,6 +161,7 @@ export class EditorViewRegistry {
       value: Object.freeze({
         view: target,
         editor,
+        editorGeneration: current.entry.generation,
         contentVersion: selection.contentVersion,
         anchor: selection.anchor,
         head: selection.head,
@@ -165,6 +171,7 @@ export class EditorViewRegistry {
   setSelection(value: EditorViewSelection): OperationResult<void> {
     if (
       !value ||
+      !validPosition(value.editorGeneration) ||
       !validPosition(value.contentVersion) ||
       !validPosition(value.anchor) ||
       !validPosition(value.head)
@@ -174,6 +181,7 @@ export class EditorViewRegistry {
     if ('ok' in current) return current
     if (
       value.editor !== current.editor ||
+      value.editorGeneration !== current.entry.generation ||
       value.contentVersion !== current.selection.contentVersion
     )
       return stale()
@@ -193,6 +201,7 @@ export class EditorViewRegistry {
   reveal(value: EditorViewPosition): OperationResult<void> {
     if (
       !value ||
+      !validPosition(value.editorGeneration) ||
       !validPosition(value.contentVersion) ||
       !validPosition(value.position)
     )
@@ -201,6 +210,7 @@ export class EditorViewRegistry {
     if ('ok' in current) return current
     if (
       value.editor !== current.editor ||
+      value.editorGeneration !== current.entry.generation ||
       value.contentVersion !== current.selection.contentVersion
     )
       return stale()
@@ -239,6 +249,7 @@ export function createEditorViewScope(
   ) =>
     sameView(left?.view ?? null, right?.view ?? null) &&
     left?.editor === right?.editor &&
+    left?.editorGeneration === right?.editorGeneration &&
     left?.contentVersion === right?.contentVersion &&
     left?.anchor === right?.anchor &&
     left?.head === right?.head

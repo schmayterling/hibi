@@ -83,6 +83,9 @@
   "dbd4fb5faedf": [
     "src/addons/frontmatter/Properties.tsx"
   ],
+  "d8aa9d7083d6": [
+    "src/renderer/src/editor-view-api.ts"
+  ],
   "4efca0d10c5f": [
     "src/renderer/src/HibiSettings.tsx",
     "src/renderer/src/SettingsScreen.tsx",
@@ -181,6 +184,9 @@
   ],
   "c91da2e0203b": [
     "src/shared/hotkeys.ts"
+  ],
+  "9e3db30bfe7c": [
+    "src/renderer/src/editor-view-api.ts"
   ],
   "b7209017b20b": [
     "src/main/sideload.ts"

@@ -13,6 +13,8 @@ Positions are UTF-16 offsets in the named editor, not Markdown source offsets.
 type EditorViewSelection = {
   view: import('../shared/foundation-contracts').ViewTarget
   editor: 'source' | 'rich'
+  /** Changes when this pane's editor instance is replaced, even if source does not. */
+  editorGeneration: number
   contentVersion: number
   /** Primary selection only; anchor and head preserve its direction. */
   anchor: number
@@ -28,6 +30,7 @@ type EditorViewSelection = {
 
 - [view](#view)
 - [editor](#editor)
+- [editorGeneration](#editorgeneration)
 - [contentVersion](#contentversion)
 - [anchor](#anchor)
 - [head](#head)
@@ -52,9 +55,19 @@ Related: [ViewTarget](ViewTarget.md).
 editor: 'source' | 'rich'
 ```
 
+### editorGeneration
+
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L398)
+
+Changes when this pane's editor instance is replaced, even if source does not.
+
+```typescript
+editorGeneration: number
+```
+
 ### contentVersion
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L397)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L399)
 
 ```typescript
 contentVersion: number
@@ -62,7 +75,7 @@ contentVersion: number
 
 ### anchor
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L399)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L401)
 
 Primary selection only; anchor and head preserve its direction.
 
@@ -72,7 +85,7 @@ anchor: number
 
 ### head
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L400)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L402)
 
 ```typescript
 head: number

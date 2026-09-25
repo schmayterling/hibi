@@ -2,7 +2,7 @@
 
 # EditorViewPosition
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L402)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L404)
 
 <details>
 <summary>Declaration</summary>
@@ -10,7 +10,7 @@ Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addon
 ```typescript
 type EditorViewPosition = Pick<
   EditorViewSelection,
-  'view' | 'editor' | 'contentVersion'
+  'view' | 'editor' | 'editorGeneration' | 'contentVersion'
 > & { position: number }
 ```
 
@@ -26,7 +26,7 @@ type EditorViewPosition = Pick<
 
 ### position
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L405)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L407)
 
 ```typescript
 position: number

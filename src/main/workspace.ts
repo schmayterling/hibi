@@ -15,6 +15,7 @@ import type {
   WorkspaceIndex,
   WorkspaceSnapshot,
   WorkspaceState,
+  WorkspaceStreamSnapshot,
 } from '../shared/workspace'
 import type { WorkspaceManifest } from '../shared/workspace-settings'
 import {
@@ -34,7 +35,6 @@ import {
 } from './recent-workspaces'
 import {
   WorkspaceChangeStream,
-  type WorkspaceStreamSnapshot,
   type WorkspaceStreamStatus,
 } from './workspace-change-stream'
 import {
@@ -307,6 +307,9 @@ export function getWorkspace(
     }))
   return {
     id: workspaceId()!,
+    ...(workspaceTarget
+      ? { workspaceGeneration: workspaceTarget.workspaceGeneration }
+      : {}),
     name: manifest?.name ?? basename(root),
     manifest,
     ...(obsidian ? { obsidian } : {}),

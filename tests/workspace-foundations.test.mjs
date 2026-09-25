@@ -216,7 +216,7 @@ test('scoped text service reads disk and rejects stale or conflicting creates', 
             (args) => ({
               contents:
                 args.path === './document'
-                  ? 'export const getOpenDocuments = () => globalThis.__hibiWorkspaceTestHost.openDocuments'
+                  ? 'export const hasOpenDocumentPath = (file) => globalThis.__hibiWorkspaceTestHost.openDocuments.some((draft) => draft.file === file)'
                   : `const host = () => globalThis.__hibiWorkspaceTestHost
                export const workspaceRoot = () => host().root
                export const isCurrentWorkspaceTarget = (target) => host().guard() &&

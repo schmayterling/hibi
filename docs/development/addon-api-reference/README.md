@@ -109,11 +109,17 @@ For installed packages, use the [SideloadFactory](SideloadFactory.md) and the [s
 - [WorkspaceAction](WorkspaceAction.md)
 - [WorkspaceActionResult](WorkspaceActionResult.md)
 - [WorkspaceChange](WorkspaceChange.md)
+- [WorkspaceChangeListener](WorkspaceChangeListener.md)
+- [WorkspaceChangeSubscription](WorkspaceChangeSubscription.md)
 - [WorkspaceEntry](WorkspaceEntry.md)
+- [WorkspaceFileResult](WorkspaceFileResult.md)
 - [WorkspaceIndex](WorkspaceIndex.md)
 - [WorkspacePage](WorkspacePage.md)
 - [WorkspaceSnapshot](WorkspaceSnapshot.md)
 - [WorkspaceState](WorkspaceState.md)
+- [WorkspaceStreamSnapshot](WorkspaceStreamSnapshot.md)
+- [WorkspaceTextCreation](WorkspaceTextCreation.md)
+- [WorkspaceTextRead](WorkspaceTextRead.md)
 
 ## Workspace settings
 

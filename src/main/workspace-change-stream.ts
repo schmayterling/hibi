@@ -2,18 +2,10 @@ import type {
   WorkspaceChangeEvent,
   WorkspaceTarget,
 } from '../shared/foundation-contracts'
-import type { WorkspaceEntry } from '../shared/workspace'
-
-export interface WorkspaceStreamSnapshot {
-  readonly target: WorkspaceTarget | null
-  readonly sequence: number
-  readonly entries: readonly WorkspaceEntry[]
-  /** A failed watcher makes this snapshot a point-in-time view only. */
-  readonly stale: boolean
-  /** A failed size-capped scan leaves the retained tree incomplete. */
-  readonly complete: boolean
-  readonly capReached: boolean
-}
+import type {
+  WorkspaceEntry,
+  WorkspaceStreamSnapshot,
+} from '../shared/workspace'
 
 export interface WorkspaceStreamStatus {
   readonly stale: boolean

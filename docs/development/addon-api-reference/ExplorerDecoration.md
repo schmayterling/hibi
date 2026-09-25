@@ -2,7 +2,7 @@
 
 # ExplorerDecoration
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L50)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L109)
 
 <details>
 <summary>Declaration</summary>
@@ -32,7 +32,7 @@ type ExplorerDecoration = {
 
 ### path
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L52)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L111)
 
 Workspace-relative file or folder path. Empty string decorates the workspace heading.
 
@@ -42,7 +42,7 @@ path: string
 
 ### label
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L53)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L112)
 
 ```typescript
 label: string
@@ -50,7 +50,7 @@ label: string
 
 ### badge
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L54)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L113)
 
 ```typescript
 badge?: string
@@ -58,7 +58,7 @@ badge?: string
 
 ### color
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L55)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L114)
 
 ```typescript
 color?: import('./colorschemes').ColorToken

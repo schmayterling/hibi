@@ -1,9 +1,19 @@
+import type {
+  OperationResult,
+  WorkspaceChangeEvent,
+  WorkspaceTarget,
+} from './foundation-contracts'
+
 export const WORKSPACE_CHANNELS = {
   get: 'workspace:get',
   open: 'workspace:open',
   refresh: 'workspace:refresh',
   openFile: 'workspace:open-file',
   changed: 'workspace:changed',
+  changedV2: 'workspace:changed-v2',
+  changeSnapshot: 'workspace:change-snapshot',
+  readText: 'workspace:read-text',
+  createText: 'workspace:create-text',
   listChanged: 'workspace:list-changed',
   action: 'workspace:action',
   snapshot: 'workspace:snapshot',
@@ -34,6 +44,8 @@ export type WorkspaceState = {
   manifest?: import('./workspace-settings').WorkspaceManifest | null
   /** Opaque identity; changes when a different folder is opened. */
   id?: string
+  /** Changes when this workspace session is replaced; capture with id for scoped work. */
+  workspaceGeneration?: number
   name: string
   entries: WorkspaceEntry[]
   activePath: string | null
@@ -46,6 +58,53 @@ export type WorkspaceChange = {
   kind: 'content' | 'tree'
   paths: string[] | null
 }
+
+export interface WorkspaceStreamSnapshot {
+  readonly target: WorkspaceTarget | null
+  readonly sequence: number
+  readonly entries: readonly WorkspaceEntry[]
+  /** A failed watcher makes this snapshot a point-in-time view only. */
+  readonly stale: boolean
+  /** A failed size-capped scan leaves the retained tree incomplete. */
+  readonly complete: boolean
+  readonly capReached: boolean
+}
+
+export interface WorkspaceChangeSubscription {
+  readonly snapshot: WorkspaceStreamSnapshot
+  dispose(): void
+}
+
+export interface WorkspaceTextRead {
+  readonly target: WorkspaceTarget
+  readonly path: string
+  readonly markdown: string
+  /** Persisted bytes; unsaved document content is separate. */
+  readonly source: 'disk'
+}
+
+export interface WorkspaceTextCreation {
+  readonly target: WorkspaceTarget
+  readonly path: string
+  /** The file may have committed even if workspace changed before indexing. */
+  readonly persisted: true
+  readonly indexed: boolean
+  readonly directorySynced: boolean
+  readonly atomicVisibility: boolean
+  readonly scopeVerifiedAfterCommit: boolean
+}
+
+export type WorkspaceFileResult<T> = OperationResult<
+  T,
+  | 'stale'
+  | 'not-found'
+  | 'conflict'
+  | 'permission-denied'
+  | 'limit-exceeded'
+  | 'unsupported'
+>
+
+export type WorkspaceChangeListener = (event: WorkspaceChangeEvent) => void
 
 export type ExplorerDecoration = {
   /** Workspace-relative file or folder path. Empty string decorates the workspace heading. */

@@ -118,3 +118,27 @@ test('non-markdown pages do not add source links and result bytes are capped', (
   assert.equal(first.items.length + second.items.length, 100)
   assert.equal(second.hasMore, false)
 })
+
+test('lazy tag, property, heading and path queries invalidate changed notes', () => {
+  const index = new WorkspaceReferenceIndex()
+  index.apply(workspace, [
+    page('a.md', '---\ntitle: Alpha\ntags: [one, two]\n---\n# Intro\n\n#work'),
+    page('plain.txt', '#work'),
+  ])
+  assert.deepEqual(index.tagged('work', 0, 10).items, ['a.md'])
+  assert.deepEqual(index.property('tags', 'two', 0, 10).items, ['a.md'])
+  assert.deepEqual(index.headings('a.md', 0, 10).items, [
+    { depth: 1, text: 'Intro' },
+  ])
+  assert.deepEqual(index.searchPaths('A.MD', 0, 10).items, ['a.md'])
+  index.apply(workspace, [
+    page('a.md', '---\ntitle: Beta\n---\n# Changed\n\n#other'),
+    page('plain.txt', '#work'),
+  ])
+  assert.deepEqual(index.tagged('work', 0, 10).items, [])
+  assert.deepEqual(index.tagged('other', 0, 10).items, ['a.md'])
+  assert.deepEqual(index.property('title', 'Alpha', 0, 10).items, [])
+  assert.deepEqual(index.headings('a.md', 0, 10).items, [
+    { depth: 1, text: 'Changed' },
+  ])
+})

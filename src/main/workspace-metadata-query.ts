@@ -2,6 +2,7 @@ import type {
   OperationResult,
   WorkspaceTarget,
 } from '../shared/foundation-contracts'
+import type { NoteHeading, PropertyScalar } from '../shared/note-metadata.ts'
 import {
   indexWorkspace,
   isCurrentWorkspaceTarget,
@@ -15,6 +16,8 @@ type QueryFailure = 'stale' | 'not-found' | 'limit-exceeded' | 'unsupported'
 
 interface QueryBase {
   readonly target: WorkspaceTarget
+  /** This slice interprets standard GFM, independent of optional addon flavors. */
+  readonly syntax: 'gfm'
   readonly sequence: number
   readonly stale: boolean
   readonly complete: boolean
@@ -28,6 +31,21 @@ export type WorkspaceReferenceQueryResult = QueryBase &
         readonly path: string
         readonly items: readonly string[]
         readonly hasMore: boolean
+        readonly nextOffset: number
+      }
+    | {
+        readonly kind: 'tag' | 'search-paths' | 'property'
+        readonly items: readonly string[]
+        readonly hasMore: boolean
+        readonly nextOffset: number
+        readonly metadataComplete?: boolean
+      }
+    | {
+        readonly kind: 'headings'
+        readonly path: string
+        readonly items: readonly NoteHeading[]
+        readonly hasMore: boolean
+        readonly nextOffset: number
       }
     | {
         readonly kind: 'resolve'
@@ -93,12 +111,57 @@ export async function queryWorkspaceReferences(
   const target = request.target
   if (!isCurrentWorkspaceTarget(target))
     return failure('stale', 'This workspace is no longer open.')
-  const path = request.path
-  if (typeof path !== 'string' || !path || path.length > 4096)
-    return failure('unsupported', 'Choose a document in this workspace.')
   const kind = request.kind
-  if (kind !== 'links' && kind !== 'backlinks' && kind !== 'resolve')
+  if (
+    kind !== 'links' &&
+    kind !== 'backlinks' &&
+    kind !== 'resolve' &&
+    kind !== 'tag' &&
+    kind !== 'property' &&
+    kind !== 'headings' &&
+    kind !== 'search-paths'
+  )
     return failure('unsupported', 'This workspace query is not supported.')
+  const path = request.path
+  const pathRequired =
+    kind === 'links' ||
+    kind === 'backlinks' ||
+    kind === 'resolve' ||
+    kind === 'headings'
+  if (pathRequired && (typeof path !== 'string' || !path || path.length > 4096))
+    return failure('unsupported', 'Choose a document in this workspace.')
+  if (
+    kind === 'tag' &&
+    (typeof request.tag !== 'string' ||
+      request.tag.length > 128 ||
+      !/^[\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)*$/u.test(request.tag) ||
+      !/[\p{L}_]/u.test(request.tag))
+  )
+    return failure('unsupported', 'Choose a valid tag.')
+  if (
+    kind === 'property' &&
+    (typeof request.key !== 'string' ||
+      !request.key ||
+      request.key.length > 128 ||
+      !(
+        request.value === null ||
+        typeof request.value === 'boolean' ||
+        (typeof request.value === 'number' && Number.isFinite(request.value)) ||
+        (typeof request.value === 'string' &&
+          Buffer.byteLength(request.value) <= 4096)
+      ))
+  )
+    return failure('unsupported', 'Choose a bounded property predicate.')
+  if (
+    kind === 'search-paths' &&
+    (typeof request.query !== 'string' ||
+      !request.query.trim() ||
+      request.query.length > 256)
+  )
+    return failure(
+      'unsupported',
+      'Choose a path search of 1 to 256 characters.',
+    )
   let offset = 0
   let limit = 50
   if (kind === 'resolve') {
@@ -174,10 +237,11 @@ export async function queryWorkspaceReferences(
     indexedRevision = revision
     indexedSourceVersions = sourceVersions
   }
-  if (!references.has(path))
+  if (pathRequired && !references.has(path as string))
     return failure('not-found', 'This document is not in the workspace index.')
   const base: QueryBase = {
     target,
+    syntax: 'gfm',
     sequence: after.sequence,
     stale: after.stale,
     complete: after.complete,
@@ -189,23 +253,80 @@ export async function queryWorkspaceReferences(
       value: {
         ...base,
         kind,
-        from: path,
+        from: path as string,
         resolved: references.resolve(
-          path,
+          path as string,
           request.href as string,
           request.syntax as 'markdown' | 'wiki',
         ),
       },
     }
+  if (kind === 'tag')
+    return {
+      ok: true,
+      value: {
+        ...base,
+        kind,
+        ...references.tagged(
+          (request.tag as string).normalize('NFC').toLowerCase(),
+          offset,
+          limit,
+        ),
+      },
+    }
+  if (kind === 'property') {
+    const result = references.property(
+      request.key as string,
+      request.value as PropertyScalar,
+      offset,
+      limit,
+    )
+    return {
+      ok: true,
+      value: {
+        ...base,
+        kind,
+        items: result.items,
+        hasMore: result.hasMore,
+        nextOffset: result.nextOffset,
+        complete: base.complete && result.complete,
+        metadataComplete: result.complete,
+      },
+    }
+  }
+  if (kind === 'search-paths')
+    return {
+      ok: true,
+      value: {
+        ...base,
+        kind,
+        ...references.searchPaths(request.query as string, offset, limit),
+      },
+    }
+  if (kind === 'headings') {
+    const result = references.headings(path as string, offset, limit)
+    return {
+      ok: true,
+      value: {
+        ...base,
+        kind,
+        path: path as string,
+        items: result.items,
+        hasMore: result.hasMore,
+        nextOffset: result.nextOffset,
+        complete: base.complete && result.complete,
+      },
+    }
+  }
   return {
     ok: true,
     value: {
       ...base,
       kind,
-      path,
+      path: path as string,
       ...(kind === 'links'
-        ? references.links(path, offset, limit)
-        : references.backlinks(path, offset, limit)),
+        ? references.links(path as string, offset, limit)
+        : references.backlinks(path as string, offset, limit)),
     },
   }
 }

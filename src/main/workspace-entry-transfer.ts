@@ -5,12 +5,17 @@ import {
   link,
   lstat,
   mkdir,
-  opendir,
+  open,
   readdir,
   rename,
   unlink,
 } from 'node:fs/promises'
 import { join } from 'node:path'
+
+const noFollowDirectory =
+  constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
+const symbolicLinkCopyError =
+  'Symbolic links cannot be copied. Copy the original file or folder instead.'
 
 function sameInode(left: BigIntStats, right: BigIntStats): boolean {
   return left.dev === right.dev && left.ino === right.ino
@@ -22,37 +27,74 @@ export async function copyEntry(
   destination: string,
   folder: boolean,
   beforeCreate: () => boolean | Promise<boolean>,
+  listFolder: (path: string) => Promise<string[]> = readdir,
 ): Promise<void> {
-  const original = await lstat(source)
-  if (original.isSymbolicLink())
-    throw new Error(
-      'Symbolic links cannot be copied. Copy the original file or folder instead.',
-    )
+  const original = await lstat(source, { bigint: true })
+  if (original.isSymbolicLink()) throw new Error(symbolicLinkCopyError)
   if (!(await beforeCreate()))
     throw new Error('The workspace changed. Review it before copying.')
   if (folder) {
     if (!original.isDirectory()) throw new Error('Choose a folder to copy.')
-    await mkdir(destination)
-    // A later external swap can still replace this reservation. Never clean
-    // the destination on failure because it may then belong to someone else.
-    if ((await lstat(source)).isSymbolicLink())
-      throw new Error(
-        'Symbolic links cannot be copied. Copy the original file or folder instead.',
-      )
-    for (const name of await readdir(source))
-      await cp(join(source, name), join(destination, name), {
-        recursive: true,
-        force: false,
-        errorOnExist: true,
-        mode: constants.COPYFILE_EXCL,
-        filter: async (path) => {
-          if ((await lstat(path)).isSymbolicLink())
+    const currentSource = await lstat(source, { bigint: true })
+    if (currentSource.isSymbolicLink()) throw new Error(symbolicLinkCopyError)
+    if (!currentSource.isDirectory() || !sameInode(currentSource, original))
+      throw new Error('The source folder changed. Review it before copying.')
+    const sourceHandle =
+      process.platform === 'win32' ? null : await open(source, noFollowDirectory)
+    try {
+      const sourceInode = sourceHandle
+        ? await sourceHandle.stat({ bigint: true })
+        : original
+      if (!sourceInode.isDirectory() || !sameInode(sourceInode, original))
+        throw new Error('The source folder changed. Review it before copying.')
+      await mkdir(destination)
+      // A later external swap can still replace this reservation. Never clean
+      // the destination on failure because it may then belong to someone else.
+      const destinationHandle =
+        process.platform === 'win32'
+          ? null
+          : await open(destination, noFollowDirectory)
+      try {
+        const reserved = destinationHandle
+          ? await destinationHandle.stat({ bigint: true })
+          : await lstat(destination, { bigint: true })
+        // ponytail: path-based cp can still race a swap after this check;
+        // closing that gap needs native directory-handle-relative copying.
+        const checkRoots = async () => {
+          const [from, to] = await Promise.all([
+            lstat(source, { bigint: true }),
+            lstat(destination, { bigint: true }),
+          ])
+          if (from.isSymbolicLink()) throw new Error(symbolicLinkCopyError)
+          if (!from.isDirectory() || !sameInode(from, sourceInode))
+            throw new Error('The source folder changed. Review it before copying.')
+          if (!to.isDirectory() || !sameInode(to, reserved))
             throw new Error(
-              'Symbolic links cannot be copied. Copy the original file or folder instead.',
+              'The destination folder changed. Review it before copying.',
             )
-          return true
-        },
-      })
+        }
+        await checkRoots()
+        for (const name of await listFolder(source)) {
+          await checkRoots()
+          await cp(join(source, name), join(destination, name), {
+            recursive: true,
+            force: false,
+            errorOnExist: true,
+            mode: constants.COPYFILE_EXCL,
+            filter: async (path) => {
+              await checkRoots()
+              if ((await lstat(path)).isSymbolicLink())
+                throw new Error(symbolicLinkCopyError)
+              return true
+            },
+          })
+        }
+      } finally {
+        await destinationHandle?.close()
+      }
+    } finally {
+      await sourceHandle?.close()
+    }
   } else {
     if (!original.isFile()) throw new Error('Choose a regular file to copy.')
     await copyFile(source, destination, constants.COPYFILE_EXCL)
@@ -73,11 +115,11 @@ export async function moveEntry(
       return { sourceRemoved: true }
     }
     await mkdir(destination)
-    // Keep the reserved inode open so a removed folder cannot reuse it before
-    // the identity check on filesystems that recycle directory inodes quickly.
-    const reservation = await opendir(destination)
+    // Pin the opened folder so its inode cannot be reused before the identity
+    // check on filesystems that recycle directory inodes quickly.
+    const reservation = await open(destination, noFollowDirectory)
     try {
-      const reserved = await lstat(destination, { bigint: true })
+      const reserved = await reservation.stat({ bigint: true })
       if (!(await beforeRemove()))
         throw new Error('The workspace folder changed. Review it before moving.')
       const current = await lstat(destination, { bigint: true })

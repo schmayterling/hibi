@@ -733,7 +733,7 @@ export async function autosaveDocument(
     !canContinue()
   )
     return { status: 'skipped', document: null }
-  await writeMarkdown(destination, content, false)
+  await writeMarkdown(destination, content, false, canContinue)
   if (id === activeTab) saved = saving
   else {
     const retained = tabs.get(id)

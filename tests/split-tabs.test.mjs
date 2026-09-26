@@ -22,7 +22,8 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
       globalThis.releaseSplitAppend?.()
-      globalThis.releaseSplitSaveDialog?.({ canceled: true })
+      globalThis.releaseSplitAutosave?.()
+      globalThis.restoreSplitAutosaveRename?.()
       dialog.showMessageBox = async () => ({ response: 1 })
     })
     await app.close()
@@ -151,44 +152,6 @@ test('split panes keep both editors mounted, edit both files, and share one docu
     ),
   }))
   assert.equal(splitState.native, bId, JSON.stringify(splitState))
-  await app.evaluate(({ dialog }) => {
-    let started
-    globalThis.splitSaveDialogStarted = new Promise((resolve) => {
-      started = resolve
-    })
-    dialog.showSaveDialog = () =>
-      new Promise((resolve) => {
-        globalThis.releaseSplitSaveDialog = resolve
-        started()
-      })
-  })
-  await page.evaluate(() => {
-    window.splitSave = window.hibi.saveDocument(true)
-  })
-  await app.evaluate(() => globalThis.splitSaveDialogStarted)
-  await left.click()
-  await page.waitForFunction(
-    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'true',
-  )
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).tabId,
-    bId,
-  )
-  await app.evaluate(() =>
-    globalThis.releaseSplitSaveDialog({ canceled: true }),
-  )
-  await page.evaluate(() => window.splitSave)
-  await waitForAsync(
-    page,
-    async (id) => (await window.hibi.getDocument()).tabId === id,
-    aId,
-  )
-  await right.click()
-  await waitForAsync(
-    page,
-    async (id) => (await window.hibi.getDocument()).tabId === id,
-    bId,
-  )
   await page.waitForFunction(
     () =>
       document
@@ -368,7 +331,68 @@ test('split panes keep both editors mounted, edit both files, and share one docu
     'An immediate keypress must be inserted once or visibly blocked during focus.',
   )
   assert.doesNotMatch(await left.innerText(), /Z/)
+  await app.evaluate(
+    async ({ ipcMain }, { path, tabId }) => {
+      const autosave = ipcMain._invokeHandlers.get('document:autosave')
+      if (!autosave) throw new Error('Autosave handler is unavailable.')
+      globalThis.splitAutosaveCalls = 0
+      ipcMain.removeHandler('document:autosave')
+      ipcMain.handle('document:autosave', (...args) => {
+        if (args[1] === tabId) globalThis.splitAutosaveCalls++
+        return autosave(...args)
+      })
+      const { createRequire, syncBuiltinESMExports } = await import(
+        'node:module'
+      )
+      const promises = createRequire(`${process.cwd()}/package.json`)(
+        'node:fs/promises',
+      )
+      const rename = promises.rename
+      let renamed
+      globalThis.splitAutosaveRenamed = new Promise((resolve) => {
+        renamed = resolve
+      })
+      globalThis.restoreSplitAutosaveRename = () => {
+        promises.rename = rename
+        syncBuiltinESMExports()
+      }
+      promises.rename = async (from, to) => {
+        await rename(from, to)
+        if (to !== path) return
+        globalThis.restoreSplitAutosaveRename()
+        renamed()
+        await new Promise((resolve) => {
+          globalThis.releaseSplitAutosave = resolve
+        })
+      }
+      syncBuiltinESMExports()
+    },
+    { path: b, tabId: bId },
+  )
   await right.fill('edited b')
+  await app.evaluate(() => globalThis.splitAutosaveRenamed)
+  assert.ok((await app.evaluate(() => globalThis.splitAutosaveCalls)) > 0)
+  assert.equal(await readFile(b, 'utf8'), 'edited b')
+  await left.click()
+  await page.waitForFunction(
+    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'true',
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabId,
+    bId,
+  )
+  await app.evaluate(() => globalThis.releaseSplitAutosave())
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    aId,
+  )
+  await right.click()
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    bId,
+  )
   const autosaveDeadline = performance.now() + 7000
   while (
     (await readFile(a, 'utf8')) !== 'edited a' &&

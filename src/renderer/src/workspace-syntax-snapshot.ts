@@ -1,4 +1,7 @@
-import { builtInNoteSyntax, type NoteSyntax } from '../../shared/note-syntax.ts'
+import {
+  builtInNoteSyntax,
+  type NoteSyntax,
+} from '../../shared/note-syntax-config.ts'
 import type { WorkspaceSyntaxSnapshot } from '../../shared/workspace-query'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import {

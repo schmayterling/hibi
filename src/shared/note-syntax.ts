@@ -1,36 +1,12 @@
 import { Marked, type Token } from 'marked'
 import { readFrontmatter } from './frontmatter.ts'
+import { defaultNoteSyntax, type NoteSyntax } from './note-syntax-config.ts'
 
-export type NoteSyntax = {
-  readonly gfm: boolean
-  readonly wikilinks: boolean
-  readonly hashtags: boolean
-  readonly frontmatter: boolean
-  readonly disabledFeatures: readonly string[]
-}
-
-export const defaultNoteSyntax: NoteSyntax = {
-  gfm: true,
-  wikilinks: true,
-  hashtags: true,
-  frontmatter: true,
-  disabledFeatures: [],
-}
-
-export function builtInNoteSyntax(
-  selected: ReadonlySet<string>,
-  disabledFeatures: readonly string[],
-  hashtags: boolean,
-  frontmatter: boolean,
-): NoteSyntax {
-  return {
-    gfm: selected.has('markdown.github'),
-    wikilinks: selected.has('markdown.obsidian'),
-    hashtags,
-    frontmatter,
-    disabledFeatures,
-  }
-}
+export {
+  builtInNoteSyntax,
+  defaultNoteSyntax,
+  type NoteSyntax,
+} from './note-syntax-config.ts'
 
 const wiki = /^(!?)\[\[([^\]\r\n]+)\]\]/
 const parsers = new Map<string, Marked>()

@@ -36,6 +36,43 @@ async function titlebarStyle(page) {
   })
 }
 
+async function pauseCssWrite(app, enabled) {
+  await app.evaluate(({ ipcMain }, enabled) => {
+    const channel = 'addon-storage:write'
+    const write = ipcMain._invokeHandlers.get(channel)
+    if (!write) throw new Error('Addon storage write handler is unavailable')
+    globalThis.cssWriteEntered = false
+    globalThis.cssWriteFinished = false
+    globalThis.releaseCssWrite = undefined
+    globalThis.restoreCssWrite = () => {
+      ipcMain.removeHandler(channel)
+      ipcMain.handle(channel, write)
+    }
+    ipcMain.removeHandler(channel)
+    ipcMain.handle(channel, async (event, request) => {
+      if (
+        request?.owner !== 'ui-preview' ||
+        request?.key !== 'custom-css' ||
+        request?.value?.enabled !== enabled
+      )
+        return write(event, request)
+      globalThis.cssWriteEntered = true
+      await new Promise((resolve) => {
+        globalThis.releaseCssWrite = resolve
+      })
+      const result = await write(event, request)
+      globalThis.cssWriteFinished = true
+      return result
+    })
+  }, enabled)
+}
+
+async function releaseCssWrite(app) {
+  await app.evaluate(() => globalThis.releaseCssWrite())
+  await waitForAsync(app, () => globalThis.cssWriteFinished === true)
+  await app.evaluate(() => globalThis.restoreCssWrite())
+}
+
 test('ui preview can be enabled in release, edits samples, and owns persistent global css', {
   timeout: 90000,
 }, async (t) => {
@@ -46,9 +83,7 @@ test('ui preview can be enabled in release, edits samples, and owns persistent g
   let app
   t.after(async () => {
     if (app) {
-      await app
-        .evaluate(() => globalThis.releaseCssDisableWrite?.())
-        .catch(() => {})
+      await app.evaluate(() => globalThis.releaseCssWrite?.()).catch(() => {})
       await app.close()
     }
     await rm(profile, { recursive: true, force: true })
@@ -134,9 +169,28 @@ test('ui preview can be enabled in release, edits samples, and owns persistent g
 
   await cssInput.fill(customCSS)
   await cssEnabled.check()
+  await pauseCssWrite(app, true)
   await panel.getByRole('button', { name: 'Save CSS' }).click()
+  await waitForAsync(app, () => globalThis.cssWriteEntered === true)
+  await clickMenu(app, 'Close tab')
+  await page
+    .getByRole('tab', { name: 'UI preview' })
+    .waitFor({ state: 'detached' })
+  panel = await openPreview(app, page)
+  assert.equal(await app.evaluate(() => globalThis.cssWriteFinished), false)
+  await releaseCssWrite(app)
   await panel.getByText('Custom CSS saved.', { exact: true }).waitFor()
   assert.equal((await titlebarStyle(page)).probe, 'applied')
+  assert.equal(
+    await panel.getByRole('textbox', { name: 'Custom CSS' }).inputValue(),
+    customCSS,
+  )
+  assert.equal(
+    await panel
+      .getByRole('checkbox', { name: 'Enable custom CSS' })
+      .isChecked(),
+    true,
+  )
 
   await app.close()
   app = undefined
@@ -153,30 +207,9 @@ test('ui preview can be enabled in release, edits samples, and owns persistent g
     await panel.getByRole('textbox', { name: 'Custom CSS' }).inputValue(),
     customCSS,
   )
-  await app.evaluate(({ ipcMain }) => {
-    const write = ipcMain._invokeHandlers.get('addon-storage:write')
-    if (!write) throw new Error('Addon storage write handler is unavailable')
-    globalThis.cssDisableWriteEntered = false
-    globalThis.cssDisableWriteFinished = false
-    ipcMain.removeHandler('addon-storage:write')
-    ipcMain.handle('addon-storage:write', async (event, request) => {
-      if (
-        request?.owner !== 'ui-preview' ||
-        request?.key !== 'custom-css' ||
-        request?.value?.enabled !== false
-      )
-        return write(event, request)
-      globalThis.cssDisableWriteEntered = true
-      await new Promise((resolve) => {
-        globalThis.releaseCssDisableWrite = resolve
-      })
-      const result = await write(event, request)
-      globalThis.cssDisableWriteFinished = true
-      return result
-    })
-  })
+  await pauseCssWrite(app, false)
   await clickMenu(app, 'Disable custom CSS')
-  await waitForAsync(app, () => globalThis.cssDisableWriteEntered === true)
+  await waitForAsync(app, () => globalThis.cssWriteEntered === true)
   await clickMenu(app, 'Close tab')
   await page
     .getByRole('tab', { name: 'UI preview' })
@@ -186,8 +219,7 @@ test('ui preview can be enabled in release, edits samples, and owns persistent g
     original.backgroundColor,
   )
   assert.equal((await titlebarStyle(page)).probe, '')
-  await app.evaluate(() => globalThis.releaseCssDisableWrite())
-  await waitForAsync(app, () => globalThis.cssDisableWriteFinished === true)
+  await releaseCssWrite(app)
   assert.equal((await titlebarStyle(page)).probe, '')
   panel = await openPreview(app, page)
   await panel.getByText('Custom CSS disabled.', { exact: true }).waitFor()

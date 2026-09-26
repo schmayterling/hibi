@@ -8,7 +8,7 @@ import {
   rm,
   writeFile,
 } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
@@ -87,7 +87,7 @@ test('packed addon sdk checks external consumers and installs compiled addon', {
       'tar',
       [
         '-xzf',
-        join(scratch, pack.filename),
+        relative(root, join(scratch, pack.filename)).replaceAll('\\', '/'),
         '-C',
         packageDir,
         '--strip-components=1',

@@ -3,6 +3,7 @@ import type {
   DocumentSyntaxFeature,
   MarkdownSyntaxFeature,
 } from '../../shared/markdown-syntax'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 
 const core: MarkdownSyntaxFeature[] = [
   ...Array.from(
@@ -237,6 +238,7 @@ function publish() {
   disabledFeatures = snapshot.filter((feature) => !feature.enabled)
   version++
   for (const listener of listeners) listener()
+  workspaceSyntaxEvents.publish()
 }
 publish()
 function savePreferences() {

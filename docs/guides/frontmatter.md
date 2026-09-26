@@ -24,4 +24,4 @@ Choose whether properties start expanded under **Settings → Addons → Frontma
 
 Editing the body leaves its frontmatter unchanged. Editing properties leaves the body unchanged, though property edits may reformat the YAML. Source view always shows the whole file.
 
-Disabling Frontmatter keeps the file intact. Notes with frontmatter then use source editing to avoid losing metadata.
+Disabling Frontmatter keeps the file intact. Notes with frontmatter then use source editing to avoid losing metadata. Workspace property searches stop treating the leading YAML as page properties until you enable Frontmatter again.

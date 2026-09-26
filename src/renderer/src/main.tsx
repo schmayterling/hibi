@@ -35,6 +35,7 @@ import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes'
 import { isMediaFile } from '../../shared/media'
 import { startupMark } from '../../shared/startup'
 import { exceedsUtf8Limit } from '../../shared/text-size'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { DialogProvider, useDialogs } from '../../ui/DialogProvider'
 import { MenuHost } from '../../ui/MenuHost'
 import { ToastProvider, useToasts } from '../../ui/Sonner'
@@ -359,7 +360,10 @@ function App() {
         previous.revision === next.revision
       ) {
         const choice = localStorage.getItem(`hibi:flavor:${previous.id}`)
-        if (choice) localStorage.setItem(`hibi:flavor:${next.id}`, choice)
+        if (choice) {
+          localStorage.setItem(`hibi:flavor:${next.id}`, choice)
+          workspaceSyntaxEvents.publish()
+        }
       }
       currentDocument.current = active
       shellDocument.current = active
@@ -477,8 +481,10 @@ function App() {
         previous.revision === acknowledged.revision
       ) {
         const choice = localStorage.getItem(`hibi:flavor:${previous.id}`)
-        if (choice)
+        if (choice) {
           localStorage.setItem(`hibi:flavor:${acknowledged.id}`, choice)
+          workspaceSyntaxEvents.publish()
+        }
       }
       if (documentRuntime.get()?.tabId !== saved.tabId) return
       currentDocument.current = acknowledged
@@ -2020,6 +2026,7 @@ function App() {
   function changeFlavor(choice: FlavorChoice) {
     if (!document) return
     localStorage.setItem(`hibi:flavor:${document.id}`, JSON.stringify(choice))
+    workspaceSyntaxEvents.publish()
     setFlavorOverride({ id: document.id, choice })
   }
   function openFlavors() {
@@ -2855,6 +2862,8 @@ function App() {
             resize={documentSidebarResize}
             workspace={workspace}
             revision={document?.contentVersion}
+            hashtags={enabledAddons.has('tags')}
+            projections={addonHost.markdownExtensions}
             onFile={(path) => void openFile(path)}
           />
         </Suspense>
@@ -2903,6 +2912,8 @@ function App() {
               resize={documentRightSidebarResize}
               workspace={workspace}
               revision={document?.contentVersion}
+              hashtags={enabledAddons.has('tags')}
+              projections={addonHost.markdownExtensions}
               onFile={(path) => void openFile(path)}
             />
           </Suspense>

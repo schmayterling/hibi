@@ -134,6 +134,10 @@ Use `menu: { location: 'editor' }` for a command in the source and rich editor c
 
 Use `context.workspace.index()` for note text and drafts. It returns `null` when no workspace is open. Use `snapshot()` when you also need the export data. Pass a workspace-relative path to `openFile()` to open a document.
 
+Use `context.workspace.query()` for bounded links, backlinks, tags, properties, headings, graph pages, and searches. The host captures each file's Markdown flavor, current syntax settings, and active Markdown projections for metadata queries; results report `flavorAware: true`. Check `complete` before treating a missing result as definitive; `unsupportedSyntax` means selected addon syntax cannot be fully interpreted by the built-in metadata parser. Path and text searches read note source directly and remain complete when only syntax support is missing. A graph cursor becomes stale when parser settings change.
+
+For an active-note worker, `context.editor.getMetadataSyntax(document.id, document.markdown)` supplies bounded built-in parser settings, a fingerprint for cache keys, and a completeness flag. Treat an incomplete worker result as a best-effort count.
+
 ## Attach editor behavior
 
 `context.editor.registerRich()` attaches behavior to each visual editor. Its `attach(editor)` callback must return a cleanup function. It can register a ProseMirror plugin, but cannot change the editor schema. `registerSource()` creates a CodeMirror extension for each source editor. See [RichExtension](../addon-api-reference/RichExtension.md) and [SourceExtension](../addon-api-reference/SourceExtension.md).

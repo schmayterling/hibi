@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { noteReferences } from '../src/shared/note-links.ts'
 import { noteHeadings, noteProperties } from '../src/shared/note-metadata.ts'
+import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 import { noteTags } from '../src/shared/note-tags.ts'
 
 test('shared tag parser keeps built-in tag syntax', () => {
@@ -9,6 +11,74 @@ test('shared tag parser keeps built-in tag syntax', () => {
       '---\ntags: [metadata]\n---\n# Heading\n\n#Work #work/project `#code`',
     ),
     ['work', 'work/project'],
+  )
+})
+
+test('built-in parser settings govern GFM, Obsidian, headings, and hashtags', () => {
+  const source =
+    '# [[target|Alias]] #work\n\nwww.example.com [[target]] [local](target.md)'
+  assert.deepEqual(noteReferences(source).wikilinks, ['target', 'target'])
+  assert.deepEqual(
+    noteReferences(source, { ...defaultNoteSyntax, wikilinks: false })
+      .wikilinks,
+    [],
+  )
+  assert.equal(noteReferences(source).links.length, 2)
+  assert.equal(
+    noteReferences(source, { ...defaultNoteSyntax, gfm: false }).links.length,
+    1,
+  )
+  assert.deepEqual(noteHeadings(source).items, [
+    { depth: 1, text: 'Alias #work' },
+  ])
+  assert.deepEqual(
+    noteHeadings(source, {
+      ...defaultNoteSyntax,
+      disabledFeatures: ['core.heading-1'],
+    }).items,
+    [],
+  )
+  assert.deepEqual(
+    noteTags(source, { ...defaultNoteSyntax, hashtags: false }),
+    [],
+  )
+  assert.deepEqual(noteTags('| tag |\n| --- |\n| #table |'), ['table'])
+  const task = '- [ ] [next](target.md) #todo'
+  const bulletsOff = {
+    ...defaultNoteSyntax,
+    disabledFeatures: ['core.bullet-lists'],
+  }
+  assert.deepEqual(noteReferences(task, bulletsOff).links, ['target.md'])
+  assert.deepEqual(noteTags(task, bulletsOff), ['todo'])
+  const tasksOff = {
+    ...defaultNoteSyntax,
+    disabledFeatures: ['markdown.tasks'],
+  }
+  assert.deepEqual(noteReferences(task, tasksOff).links, [])
+  assert.deepEqual(noteTags(task, tasksOff), [])
+  const highlighted = '==[hidden](target.md)== [shown](target.md)'
+  assert.deepEqual(noteReferences(highlighted).links, ['target.md'])
+  assert.deepEqual(
+    noteReferences(highlighted, {
+      ...defaultNoteSyntax,
+      wikilinks: false,
+    }).links,
+    ['target.md', 'target.md'],
+  )
+  const frontmatterOff = { ...defaultNoteSyntax, frontmatter: false }
+  const leadingYaml = '---\nlink: "[hidden](target.md)"\n---\n# Body'
+  assert.deepEqual(noteReferences(leadingYaml).links, [])
+  assert.deepEqual(noteReferences(leadingYaml, frontmatterOff).links, [
+    'target.md',
+  ])
+  const yamlTag = '---\ntag: #yaml\n---\n# Body'
+  assert.deepEqual(noteTags(yamlTag), [])
+  assert.deepEqual(noteTags(yamlTag, frontmatterOff), ['yaml'])
+  assert.deepEqual(
+    Object.keys(
+      noteProperties('---\ntitle: Alpha\n---\n# Body', frontmatterOff).values,
+    ),
+    [],
   )
 })
 

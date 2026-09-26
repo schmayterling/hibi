@@ -1,6 +1,7 @@
 import { Marked } from 'marked'
 import type { MarkdownFlavor, RenderedMarkdown } from '../../addons/api'
 import { validatePreservation } from '../../shared/preservation'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import literalStyles from '../../ui/markdown-literal.css?raw'
 import syntaxStyles from '../../ui/syntax.css?raw'
 import { codeHtml, codeLanguages, escapeCode } from './code-languages'
@@ -28,12 +29,16 @@ export type RegisteredFlavor = MarkdownFlavor & { addonId: string }
 const registry = new Map<string, RegisteredFlavor>()
 const listeners = new Set<() => void>()
 let snapshot: RegisteredFlavor[] = []
+let version = 0
 const publish = () => {
   snapshot = [...registry.values()].sort((a, b) => a.id.localeCompare(b.id))
+  version++
   for (const listener of listeners) listener()
+  workspaceSyntaxEvents.publish()
 }
 export const flavors = {
   snapshot: () => snapshot,
+  version: () => version,
   subscribe(listener: () => void) {
     listeners.add(listener)
     return () => {
@@ -63,12 +68,9 @@ export const flavors = {
     }
   },
 }
-export function loadFlavor(id?: string): FlavorChoice {
-  if (!id) return automaticFlavor
+export function parseFlavorChoice(raw: string | null): FlavorChoice {
   try {
-    const value = JSON.parse(
-      localStorage.getItem(`hibi:flavor:${id}`) ?? 'null',
-    )
+    const value = JSON.parse(raw ?? 'null')
     if (
       value &&
       typeof value.dialect === 'string' &&
@@ -84,9 +86,17 @@ export function loadFlavor(id?: string): FlavorChoice {
             : value.dialect,
       }
   } catch {
-    /* Use automatic detection if preferences cannot be read. */
+    /* Use automatic detection if preferences are invalid. */
   }
   return automaticFlavor
+}
+export function loadFlavor(id?: string): FlavorChoice {
+  if (!id) return automaticFlavor
+  try {
+    return parseFlavorChoice(localStorage.getItem(`hibi:flavor:${id}`))
+  } catch {
+    return automaticFlavor
+  }
 }
 export function selectedFlavors(
   choice: FlavorChoice,

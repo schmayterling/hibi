@@ -1,6 +1,7 @@
-import { Marked, type Token } from 'marked'
+import type { Token } from 'marked'
 import { isMap, parseDocument } from 'yaml'
 import { readFrontmatter } from './frontmatter.ts'
+import { defaultNoteSyntax, type NoteSyntax, noteLexer } from './note-syntax.ts'
 
 export type PropertyScalar = string | number | boolean | null
 export type PropertyValue = PropertyScalar | readonly PropertyScalar[]
@@ -46,11 +47,15 @@ function propertyValue(value: unknown): PropertyValue | undefined {
 }
 
 /** Keep only bounded YAML scalars and flat scalar lists for exact predicates. */
-export function noteProperties(source: string): {
+export function noteProperties(
+  source: string,
+  syntax: NoteSyntax = defaultNoteSyntax,
+): {
   values: Readonly<Record<string, PropertyValue>>
   complete: boolean
 } {
   const values: Record<string, PropertyValue> = Object.create(null)
+  if (!syntax.frontmatter) return { values, complete: true }
   if (!metadataFrontmatterWithinLimit(source))
     return { values, complete: false }
   const frontmatter = readFrontmatter(source)
@@ -99,18 +104,20 @@ function inlineText(tokens: readonly Token[]): string {
     .join('')
 }
 
-const parser = new Marked({ gfm: true })
-/** Standard GFM headings; source navigation coordinates belong to editor view. */
-export function noteHeadings(source: string): {
+/** Built-in Markdown headings; source navigation coordinates belong to editor view. */
+export function noteHeadings(
+  source: string,
+  syntax: NoteSyntax = defaultNoteSyntax,
+): {
   items: readonly NoteHeading[]
   complete: boolean
 } {
   const headings: NoteHeading[] = []
-  if (!metadataFrontmatterWithinLimit(source))
+  if (syntax.frontmatter && !metadataFrontmatterWithinLimit(source))
     return { items: headings, complete: false }
   let complete = true
-  const body = readFrontmatter(source)?.content ?? source
-  parser.walkTokens(parser.lexer(body), (token) => {
+  const { parser, tokens } = noteLexer(source, syntax)
+  parser.walkTokens(tokens, (token) => {
     if (token.type === 'heading') {
       if (headings.length >= 256) complete = false
       else {

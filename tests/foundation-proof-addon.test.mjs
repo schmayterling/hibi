@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:https'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
@@ -299,7 +299,7 @@ test('proof consumer handles unavailable secret storage and drops late work afte
   assert.equal(disposed, 14)
 })
 
-test('installed proof addon migrates state and composes captured edits, queries, providers, and grants', {
+test('proof addon installs and composes captured edits, queries, providers, and grants', {
   timeout: 120000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-foundation-proof-'))
@@ -366,19 +366,6 @@ test('installed proof addon migrates state and composes captured edits, queries,
     }
   })
   const url = `https://127.0.0.1:${server.address().port}/proof`
-  await cp(packagePath, folder, { recursive: true })
-  await writeFile(
-    join(folder, '.hibi-install.json'),
-    JSON.stringify({
-      hash: 'a'.repeat(64),
-      files: ['README.md', 'hibi-addon.json', 'index.js'],
-      source: 'local',
-    }),
-  )
-  await writeFile(
-    join(profile, 'addons.json'),
-    JSON.stringify({ 'foundation-proof': true }),
-  )
   const globalFile = join(
     profile,
     'addon-storage',
@@ -408,6 +395,58 @@ test('installed proof addon migrates state and composes captured edits, queries,
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(10000)
+  await app.evaluate(({ dialog }, source) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [source],
+    })
+    dialog.showMessageBox = async () => ({ response: 1 })
+  }, packagePath)
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await page.evaluate(() => window.hibi.installAddon())
+  const installed = await page.evaluate(() => window.hibi.getInstalledAddons())
+  assert.deepEqual(
+    installed.map(({ manifest }) => manifest.id),
+    ['foundation-proof'],
+  )
+  assert.equal(installed[0].source, 'local')
+  const states = await page.evaluate(() => window.hibi.getAddonStates())
+  assert.equal(
+    states.find(({ id }) => id === 'foundation-proof')?.enabled,
+    false,
+  )
+  assert.equal(
+    JSON.parse(await readFile(join(profile, 'addons.json'), 'utf8'))[
+      'foundation-proof'
+    ],
+    false,
+  )
+  const record = JSON.parse(
+    await readFile(join(folder, '.hibi-install.json'), 'utf8'),
+  )
+  assert.match(record.hash, /^[a-f0-9]{64}$/)
+  assert.equal(record.source, 'local')
+  assert.deepEqual(
+    record.files.toSorted(),
+    ['README.md', 'hibi-addon.json', 'index.js'].toSorted(),
+  )
+  for (const file of record.files)
+    assert.equal(
+      await readFile(join(folder, file), 'utf8'),
+      await readFile(join(packagePath, file), 'utf8'),
+    )
+  await page.reload()
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  const proofEnabled = page.locator('#addon-foundation-proof')
+  await proofEnabled.waitFor()
+  assert.equal(await proofEnabled.isChecked(), false)
+  await proofEnabled.click()
+  await page.waitForFunction(
+    () => document.querySelector('#addon-foundation-proof')?.checked === true,
+  )
+  await page.getByRole('button', { name: 'Back to app', exact: true }).click()
   let migrated
   try {
     migrated = await eventually(

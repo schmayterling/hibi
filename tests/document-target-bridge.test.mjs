@@ -158,6 +158,39 @@ test('installed addon edits inactive documents and guards deferred legacy comman
   await page.waitForFunction(
     async () => (await window.hibi.getDocument()).markdown === '# ONE',
   )
+  await page.waitForFunction(
+    () => document.querySelector('.tiptap')?.isContentEditable,
+  )
+  const richEdit = await page.evaluate((target) => {
+    const read = window.targetProbe.read(target)
+    return window.targetProbe.edit({
+      requestId: 'active-rich',
+      target: read.target,
+      changes: [{ from: 2, to: 5, expectedText: 'ONE', insert: 'One' }],
+    })
+  }, firstTarget)
+  assert.equal(richEdit.status, 'applied')
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    '# One',
+  )
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await page.waitForFunction(
+    () => document.querySelector('.cm-content')?.isContentEditable,
+  )
+  const sourceEdit = await page.evaluate((target) => {
+    const read = window.targetProbe.read(target)
+    return window.targetProbe.edit({
+      requestId: 'active-source',
+      target: read.target,
+      changes: [{ from: 2, to: 5, expectedText: 'One', insert: 'ONE' }],
+    })
+  }, firstTarget)
+  assert.equal(sourceEdit.status, 'applied')
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    '# ONE',
+  )
 
   await page.evaluate(() => window.targetProbe.begin())
   await page.waitForFunction(() => window.targetProbe.started)

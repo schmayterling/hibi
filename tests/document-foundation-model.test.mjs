@@ -32,7 +32,6 @@ for (const seed of seeds)
     const createScope = () =>
       createDocumentTargetEditScope(
         runtime,
-        () => ({ status: 'unsupported-view', message: 'No mounted editor.' }),
         () => false,
         (tabId) =>
           new Promise((resolve) => {

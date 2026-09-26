@@ -1083,15 +1083,15 @@ export function SourceEditor({
           status: 'stale',
           message: 'The document changed. Review the edits again.',
         }
-      if (context.disabled || !context.inputReady)
-        return {
-          status: 'busy',
-          message: 'The editor is not ready for changes.',
-        }
       if (!context.editTarget)
         return {
           status: 'unsupported-view',
           message: 'Open source view to apply these edits.',
+        }
+      if (context.disabled || !context.inputReady)
+        return {
+          status: 'busy',
+          message: 'The editor is not ready for changes.',
         }
       if (editor.composing)
         return {
@@ -1155,11 +1155,20 @@ export function SourceEditor({
       }
     }
     const unregisterEdits = documentEdits.register(applySourceEdits)
+    const documentTarget = documentRuntime.captureDocument(document.tabId)
     const mountedView = documentRuntime.captureView(viewId as ViewId)
-    const unregisterMountedEdits = mountedView
+    const target = documentTarget && {
+      ...documentTarget,
+      viewId: viewId as ViewId,
+      ...(mountedView?.documentId === documentTarget.documentId &&
+      mountedView.documentGeneration === documentTarget.documentGeneration
+        ? { viewGeneration: mountedView.viewGeneration }
+        : {}),
+    }
+    const unregisterMountedEdits = target
       ? mountedDocumentEdits.register(
           document.tabId,
-          mountedView,
+          target,
           'source',
           (target, request) => applySourceEdits(request, target),
         )

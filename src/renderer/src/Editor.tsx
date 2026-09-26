@@ -2006,11 +2006,20 @@ export function MarkdownEditor({
       }
     }
     const removeEdits = documentEdits.register(applyRichEdits, 'rich')
+    const documentTarget = documentRuntime.captureDocument(documentState.tabId)
     const mountedView = documentRuntime.captureView(viewId as ViewId)
-    const removeMountedEdits = mountedView
+    const target = documentTarget && {
+      ...documentTarget,
+      viewId: viewId as ViewId,
+      ...(mountedView?.documentId === documentTarget.documentId &&
+      mountedView.documentGeneration === documentTarget.documentGeneration
+        ? { viewGeneration: mountedView.viewGeneration }
+        : {}),
+    }
+    const removeMountedEdits = target
       ? mountedDocumentEdits.register(
           documentState.tabId,
-          mountedView,
+          target,
           'rich',
           (target, request) => applyRichEdits(request, target),
         )

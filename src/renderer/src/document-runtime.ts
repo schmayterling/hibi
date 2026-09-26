@@ -128,7 +128,11 @@ export class DocumentRuntime {
       ? session
       : null
   }
-  registerView(tabId: string, viewId: ViewId) {
+  registerView(
+    tabId: string,
+    viewId: ViewId,
+    beforeNotify?: (view: ViewTarget) => void,
+  ) {
     const document = this.captureDocument(tabId)
     if (!document || this.#views.has(viewId))
       throw new Error('This editor view is unavailable.')
@@ -139,6 +143,7 @@ export class DocumentRuntime {
     })
     this.#views.set(viewId, target)
     this.#activeView ??= viewId
+    beforeNotify?.(target)
     this.#notifyViews()
     return () => {
       if (this.#views.get(viewId) !== target) return

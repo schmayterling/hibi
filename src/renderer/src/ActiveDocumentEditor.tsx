@@ -1,9 +1,4 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useSyncExternalStore,
-} from 'react'
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import type { AddonManifest, MarkdownFlavor } from '../../addons/api'
 import type { ViewId } from '../../shared/foundation-contracts'
 import { needsOwnedSource } from '../../shared/preservation'
@@ -14,6 +9,7 @@ import type { MarkdownEditor } from './Editor'
 import { type FlavorChoice, flavorMatches } from './flavors'
 import { projectMarkdown } from './markdown-projection'
 import { markdownSyntax } from './markdown-syntax'
+import { mountedDocumentEdits } from './mounted-document-edits'
 
 type EditorProps = Parameters<typeof MarkdownEditor>[0]
 export type DocumentFlavorStatus = { label: string; unsupported: boolean }
@@ -43,14 +39,18 @@ export function ActiveDocumentEditor({
     (props.viewId as ViewId | undefined) ??
     documentRuntime.primaryViewId(props.document.tabId)
   const documentTarget = documentRuntime.captureDocument(props.document.tabId)
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (
       !viewId ||
       !documentTarget ||
       documentRuntime.captureDocument(props.document.tabId) !== documentTarget
     )
       return
-    return documentRuntime.registerView(props.document.tabId, viewId)
+    return documentRuntime.registerView(
+      props.document.tabId,
+      viewId,
+      mountedDocumentEdits.bindView,
+    )
   }, [props.document.tabId, documentTarget, viewId])
   const protectionFlavors = useMemo(
     () =>

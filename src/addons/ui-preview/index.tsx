@@ -75,6 +75,7 @@ export default defineAddon({
     const themeStyle = context.styles.register(
       'custom-css',
       initial.enabled ? initial.css : '',
+      { priority: 'override' },
     )
     let forceOff = false
     let draftRevision = 0
@@ -353,8 +354,9 @@ export default defineAddon({
                     variant="primary"
                     onClick={() => void save()}
                     disabled={!dirty || current.busy || size > maxCssBytes}
+                    aria-busy={current.busy}
                   >
-                    Save CSS
+                    {current.busy ? 'Saving…' : 'Save CSS'}
                   </Button>
                 </ControlRow>
               </div>

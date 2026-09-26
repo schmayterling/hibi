@@ -2,7 +2,7 @@
 
 # DocumentTab
 
-Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/desktop.ts#L54)
+Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/desktop.ts#L55)
 
 <details>
 <summary>Declaration</summary>
@@ -25,7 +25,7 @@ type DocumentTab = { id: string; name: string; dirty: boolean }
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/desktop.ts#L54)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/desktop.ts#L55)
 
 ```typescript
 id: string
@@ -33,7 +33,7 @@ id: string
 
 ### name
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/desktop.ts#L54)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/desktop.ts#L55)
 
 ```typescript
 name: string
@@ -41,7 +41,7 @@ name: string
 
 ### dirty
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/desktop.ts#L54)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/desktop.ts#L55)
 
 ```typescript
 dirty: boolean

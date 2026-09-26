@@ -8,7 +8,7 @@ export const benchmarkDocuments = [
     title: 'Large benchmark',
     source:
       '# Large benchmark\n\n' +
-      'A paragraph for measuring document layout and keyboard input. **Bold** and _italic_.\n\n'.repeat(
+      'A paragraph for measuring document layout and keyboard input. **Bold** and *italic*.\n\n'.repeat(
         180,
       ),
   },

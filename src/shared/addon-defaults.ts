@@ -1,4 +1,4 @@
-/** Saved preferences take precedence; only live development sessions opt into diagnostics. */
+/** Saved preferences take precedence; live development enables built-in inspection tools. */
 export function addonDefaultEnabled(
   id: string,
   defaultEnabled: boolean | undefined,
@@ -6,6 +6,8 @@ export function addonDefaultEnabled(
 ) {
   return (
     id === 'markdown' ||
-    (id === 'diagnostics' ? development : (defaultEnabled ?? false))
+    (id === 'diagnostics' || id === 'ui-preview'
+      ? development
+      : (defaultEnabled ?? false))
   )
 }

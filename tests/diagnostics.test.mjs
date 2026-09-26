@@ -7,9 +7,11 @@ import {
   performanceDiagnostics,
 } from '../src/ui/diagnostics.ts'
 
-test('diagnostics defaults follow the runtime while core formats remain available', () => {
+test('inspection addons default to development while core formats remain available', () => {
   assert.equal(addonDefaultEnabled('diagnostics', false, true), true)
   assert.equal(addonDefaultEnabled('diagnostics', true, false), false)
+  assert.equal(addonDefaultEnabled('ui-preview', false, true), true)
+  assert.equal(addonDefaultEnabled('ui-preview', true, false), false)
   assert.equal(addonDefaultEnabled('markdown', false, false), true)
   assert.equal(addonDefaultEnabled('vim', false, true), false)
 })

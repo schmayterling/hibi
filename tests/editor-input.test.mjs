@@ -93,10 +93,59 @@ test('long documents with HTML and reference syntax stay visually editable throu
   assert.match(opened, /HTML content/)
   assert.match(opened, /reference/)
   assert.ok(opened.length > 1000000)
+  await page
+    .waitForFunction(() => {
+      const editor = document.querySelector('.tiptap')
+      const panel = editor?.closest('.editor-page')
+      return (
+        editor?.isContentEditable &&
+        editor.textContent?.startsWith('Editable document') &&
+        panel?.getAttribute('aria-busy') === 'false' &&
+        !panel.hasAttribute('inert')
+      )
+    })
+    .catch(async (error) => {
+      const state = await page.evaluate(() => {
+        const editor = document.querySelector('.tiptap')
+        const panel = editor?.closest('.editor-page')
+        return {
+          text: editor?.textContent?.slice(0, 80),
+          editable: editor?.isContentEditable,
+          busy: panel?.getAttribute('aria-busy'),
+          inert: panel?.hasAttribute('inert'),
+        }
+      })
+      assert.fail(
+        `long document never became editable: ${error.message}\n${JSON.stringify(state)}`,
+      )
+    })
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    window.setFocusable(true)
+    window.show()
+    window.focus()
+  })
   await page.locator('.tiptap').evaluate((element) => {
     element.editor.commands.setTextSelection(1)
     element.editor.view.focus()
   })
+  await page
+    .waitForFunction(
+      () =>
+        document.hasFocus() &&
+        document.activeElement?.classList.contains('tiptap'),
+      undefined,
+      { timeout: 5000 },
+    )
+    .catch(async (error) => {
+      const state = await page.evaluate(() => ({
+        focused: document.hasFocus(),
+        active: document.activeElement?.outerHTML.slice(0, 160),
+      }))
+      assert.fail(
+        `long document editor never received focus: ${error.message}\n${JSON.stringify(state)}`,
+      )
+    })
   await page.keyboard.insertText('edited ')
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.startsWith('# edited '),

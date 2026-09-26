@@ -301,6 +301,8 @@ dialog.showMessageBox = (...args) => {
     false,
   )
   async function clearDraft(expected) {
+    await page.bringToFront()
+    await page.evaluate(() => window.focus())
     await page
       .waitForFunction((expected) => {
         const editor = document.querySelector(
@@ -326,6 +328,7 @@ dialog.showMessageBox = (...args) => {
             editor: editor?.outerHTML.slice(0, 300),
             busy: panel?.getAttribute('aria-busy'),
             inert: panel?.hasAttribute('inert'),
+            windowFocused: document.hasFocus(),
           }
         })
         assert.fail(
@@ -375,6 +378,8 @@ dialog.showMessageBox = (...args) => {
         return {
           pageEpoch: performance.timeOrigin,
           editorNode: editor && trace?.nodes.get(editor),
+          windowFocused: document.hasFocus(),
+          activeElement: document.activeElement?.getAttribute('aria-label'),
           native: {
             markdown: native.markdown,
             contentVersion: native.contentVersion,
@@ -405,6 +410,20 @@ dialog.showMessageBox = (...args) => {
       name: 'Document editor',
       exact: true,
     })
+    await editor.focus()
+    await page
+      .waitForFunction(
+        () =>
+          document.hasFocus() &&
+          document.activeElement?.closest('[aria-label="Document editor"]'),
+        undefined,
+        { timeout: 5000 },
+      )
+      .catch(async (error) => {
+        assert.fail(
+          `draft editor never received focus: ${error.message}\n${JSON.stringify(await inspect())}`,
+        )
+      })
     await editor.fill('')
     const afterFill = await inspect()
     await page.evaluate(() => window.hibi.flushDocumentChanges())

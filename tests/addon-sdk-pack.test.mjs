@@ -89,7 +89,7 @@ test('packed addon sdk checks external consumers and installs compiled addon', {
         '-xzf',
         relative(root, join(scratch, pack.filename)).replaceAll('\\', '/'),
         '-C',
-        packageDir,
+        relative(root, packageDir).replaceAll('\\', '/'),
         '--strip-components=1',
       ],
       root,

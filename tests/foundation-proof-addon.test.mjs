@@ -108,59 +108,80 @@ test('proof consumer handles unavailable secret storage and drops late work afte
   )
   const target = { workspaceId: 'a'.repeat(64), workspaceGeneration: 1 }
   let command
+  let changeListener
   let releaseNetwork
   let networkCalls = 0
   let edits = 0
   let creates = 0
   let disposed = 0
+  let opened = 0
+  let globalSnapshot = {
+    status: 'version-mismatch',
+    storedVersion: 1,
+    value: {
+      tag: 'proof',
+      endpoint: 'https://example.test/proof',
+      globalShortcut: true,
+    },
+  }
+  let workspaceSnapshot = {
+    status: 'ready',
+    value: { tag: 'workspace-proof', lastRun: { run: 4 } },
+  }
   const writes = []
+  const tagQueries = []
   const addon = createAddon({ React: { createElement: () => null } })
   const context = {
     storage: {
       global: async () => ({
-        snapshot: () => ({
-          status: 'version-mismatch',
-          storedVersion: 1,
-          value: {
-            tag: 'proof',
-            endpoint: 'https://example.test/proof',
-            globalShortcut: true,
-          },
-        }),
+        snapshot: () => globalSnapshot,
         set: async (value, options) => {
           writes.push({ scope: 'global', value, options })
+          globalSnapshot = { status: 'ready', value }
           return { status: 'saved' }
         },
       }),
       workspace: async () => ({
+        snapshot: () => workspaceSnapshot,
         set: async (value) => {
           writes.push({ scope: 'workspace', value })
+          workspaceSnapshot = { status: 'ready', value }
           return { status: 'saved' }
         },
       }),
     },
     views: {
       register: () => ({
-        open() {},
+        open() {
+          opened++
+        },
         dispose() {
           disposed++
         },
       }),
     },
     workspace: {
-      subscribeChanges: async () => ({
-        dispose() {
-          disposed++
-        },
-      }),
+      subscribeChanges: async (listener) => {
+        changeListener = listener
+        return {
+          dispose() {
+            disposed++
+          },
+        }
+      },
       createText: async () => {
         creates++
         return { ok: false, code: 'conflict' }
       },
-      query: async ({ kind }) => ({
-        ok: true,
-        value: { items: kind === 'backlinks' ? ['b.md'] : ['proof-note.md'] },
-      }),
+      query: async ({ kind, tag }) => {
+        if (kind === 'tag') tagQueries.push(tag)
+        return {
+          ok: true,
+          value: {
+            items: kind === 'backlinks' ? ['b.md'] : ['proof-note.md'],
+          },
+        }
+      },
     },
     editor: {
       registerCompletionProvider: async () => () => disposed++,
@@ -190,7 +211,7 @@ test('proof consumer handles unavailable secret storage and drops late work afte
     host: {
       network: {
         getText: async () => {
-          if (++networkCalls === 1)
+          if (++networkCalls !== 2)
             return {
               ok: true,
               value: { status: 200, text: 'foundation-proof-ok' },
@@ -219,12 +240,13 @@ test('proof consumer handles unavailable secret storage and drops late work afte
   }
   await addon.start(context)
   assert.equal(writes[0].options.migrateFromVersion, 1)
+  changeListener({ kind: 'content' })
   await command.run({ workspace: target, document: { documentId: 'a' } })
   assert.deepEqual(writes.at(-1).value, {
-    tag: 'proof',
+    tag: 'workspace-proof',
     lastRun: {
-      run: 1,
-      events: 0,
+      run: 5,
+      events: 1,
       edit: 'applied',
       note: 'conflict',
       backlinks: ['b.md'],
@@ -233,15 +255,30 @@ test('proof consumer handles unavailable secret storage and drops late work afte
       credential: 'unprotected',
     },
   })
+  assert.deepEqual(tagQueries, ['workspace-proof'])
+  const oldCommand = command
+  const oldChangeListener = changeListener
   const late = command.run({ workspace: target, document: { documentId: 'a' } })
   assert.equal(typeof releaseNetwork, 'function')
   addon.stop()
+  assert.equal(disposed, 7)
+  await addon.start(context)
+  assert.notEqual(command, oldCommand)
+  oldChangeListener({ kind: 'content' })
+  changeListener({ kind: 'content' })
   releaseNetwork()
   await late
   assert.equal(edits, 1)
   assert.equal(creates, 1)
   assert.equal(writes.length, 2)
-  assert.equal(disposed, 7)
+  assert.equal(opened, 1)
+  await command.run({ workspace: target, document: { documentId: 'a' } })
+  assert.equal(writes.at(-1).value.lastRun.run, 6)
+  assert.equal(writes.at(-1).value.lastRun.events, 1)
+  assert.deepEqual(tagQueries, ['workspace-proof', 'workspace-proof'])
+  assert.equal(opened, 2)
+  addon.stop()
+  assert.equal(disposed, 14)
 })
 
 test('installed proof addon migrates state and composes captured edits, queries, providers, and grants', {
@@ -587,6 +624,7 @@ test('installed proof addon migrates state and composes captured edits, queries,
     'second proof run did not finish',
   )
   assert.equal(secondRun.value.lastRun.note, 'conflict')
+  assert.ok(secondRun.value.lastRun.events > 0)
   assert.equal(
     await readFile(join(workspace, 'proof-note.md'), 'utf8'),
     '# Foundation proof\n\n#proof\n',
@@ -658,11 +696,17 @@ test('installed proof addon migrates state and composes captured edits, queries,
     (value) => !value,
     'global shortcut survived disable',
   )
-  await app.evaluate(() => globalThis.releaseProofGrant())
-  await delay(100)
-  assert.equal(
-    (await storageValue(workspaceFile, 'preferences')).value.lastRun.run,
-    2,
+  await eventually(
+    () =>
+      app.evaluate(({ Menu }) =>
+        Menu.getApplicationMenu()
+          ?.items.find(({ label }) => label.toLowerCase() === 'addons')
+          ?.submenu?.items.some(
+            ({ label }) => label === 'Capture foundation proof',
+          ),
+      ),
+    (value) => !value,
+    'proof menu contribution survived disable',
   )
   await page
     .getByText('Proof run 2:', { exact: false })
@@ -684,5 +728,34 @@ test('installed proof addon migrates state and composes captured edits, queries,
     Boolean,
     'proof command did not return after enable',
   )
+  await app.evaluate(() => globalThis.releaseProofGrant())
+  await delay(100)
+  assert.equal(
+    (await storageValue(workspaceFile, 'preferences')).value.lastRun.run,
+    2,
+  )
   assert.equal((await storageValue(globalFile, 'preferences')).revision, 2)
+  await page.getByRole('tab', { name: 'b.md' }).click()
+  await source.waitFor()
+  await source.focus()
+  await source.press(
+    process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End',
+  )
+  await page.keyboard.type(' [[pr')
+  await page
+    .locator('.cm-tooltip-autocomplete .cm-completionLabel', {
+      hasText: '[[proof-note]]',
+    })
+    .waitFor()
+  await source.press('Escape')
+  await clickMenu(app, 'Capture foundation proof')
+  const thirdRun = await eventually(
+    () => storageValue(workspaceFile, 'preferences'),
+    (value) => value?.value?.lastRun?.run === 3,
+    'proof command did not recover workspace preferences after enable',
+  )
+  assert.equal(thirdRun.revision, 3)
+  assert.equal(thirdRun.value.tag, 'proof')
+  assert.equal(thirdRun.value.lastRun.note, 'conflict')
+  await page.getByText('Proof run 3:', { exact: false }).waitFor()
 })

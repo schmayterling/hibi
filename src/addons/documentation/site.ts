@@ -10,6 +10,7 @@ import { readFrontmatter } from '../../shared/frontmatter.ts'
 import type { WorkspaceSnapshot } from '../../shared/workspace'
 import {
   homePage,
+  isMermaidImage,
   type LockedSite,
   localPage,
   pageRoute,
@@ -336,7 +337,11 @@ function content(site: SiteData, page: SitePage, prefix: string) {
           tagName: 'img',
           attribs: {
             alt: attrs.alt ?? '',
-            ...(src?.startsWith('data:image/') ? { src } : {}),
+            ...(src?.startsWith('data:image/')
+              ? { src }
+              : isMermaidImage(attrs.src ?? '', attrs.class ?? '')
+                ? { src: attrs.src }
+                : {}),
           },
         }
       },

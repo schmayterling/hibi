@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import katex from 'katex'
+import { marked } from 'marked'
 import {
   exportOptions,
   validateExportOptions,
@@ -15,6 +16,7 @@ import { clickMenu } from './keyboard.mjs'
 
 const pixel =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lZkAAAAASUVORK5CYII='
+const mermaidImage = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="red"/></svg>')}`
 const snapshot = {
   name: 'Notes',
   pages: [
@@ -199,7 +201,13 @@ test('published sites support direct routes, crawlable HTML, branding, locked th
   }
   hostile.pages[0].markdown +=
     '\n<script>window.exportAttack = true</script>\n<img src="x" onerror="window.exportAttack=true">'
+  hostile.pages[0].html = `${marked.parse(hostile.pages[0].markdown)}<img class="mermaid-diagram" alt="Mermaid diagram" src="${mermaidImage}"><img class="mermaid-diagram danger" src="data:text/html,%3Cscript%3Ealert(1)%3C%2Fscript%3E">`
   const files = await siteFiles(template, prepareSite(hostile, options))
+  assert.ok(files.get('README.md/index.html').includes(mermaidImage))
+  assert.doesNotMatch(
+    files.get('README.md/index.html'),
+    /data:text\/html|window\.exportAttack/,
+  )
   const server = createServer((request, response) => {
     let path = decodeURIComponent(
       new URL(request.url, 'http://localhost').pathname,
@@ -273,6 +281,20 @@ test('published sites support direct routes, crawlable HTML, branding, locked th
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('button', { name: /^toggle navigation$/i }).waitFor()
+  await page.waitForFunction(() => {
+    const image = document.querySelector('article img.mermaid-diagram')
+    return image?.complete && image.naturalWidth === 8
+  })
+  assert.equal(
+    await page
+      .locator('article img.mermaid-diagram:not(.danger)')
+      .getAttribute('src'),
+    mermaidImage,
+  )
+  assert.equal(
+    await page.locator('article img.mermaid-diagram.danger').getAttribute('src'),
+    null,
+  )
   assert.equal(
     await page.getByRole('button', { name: /^color scheme$/i }).count(),
     0,

@@ -28,7 +28,7 @@ import { DialogProvider, useDialogs } from '../ui/DialogProvider'
 import { ShortcutKeys } from '../ui/ShortcutKeys'
 import { Sidebar, type SidebarItem } from '../ui/Sidebar'
 import { useSidebarResize } from '../ui/useSidebarResize'
-import { homePage, pageRoute, type SiteData } from './data'
+import { homePage, isMermaidImage, pageRoute, type SiteData } from './data'
 import './site.css'
 
 export function startSite(workspace: SiteData, root: Root) {
@@ -282,10 +282,10 @@ export function startSite(workspace: SiteData, root: Root) {
         continue
       }
       if (typeof embedded === 'string') image.setAttribute('src', embedded)
+      const src = image.getAttribute('src') ?? ''
       if (
-        !/^data:image\/(png|jpeg|gif|webp|avif|svg\+xml);base64,/i.test(
-          image.getAttribute('src') ?? '',
-        )
+        !/^data:image\/(png|jpeg|gif|webp|avif|svg\+xml);base64,/i.test(src) &&
+        !isMermaidImage(src, image.className)
       )
         image.removeAttribute('src')
     }

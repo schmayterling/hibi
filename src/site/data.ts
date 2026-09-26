@@ -26,6 +26,10 @@ export const pageRoute = (path: string) =>
 export const homePage = (pages: readonly WorkspacePage[]) =>
   pages.find((page) => /^(readme|index)\.md$/i.test(page.path)) ?? pages[0]
 
+export const isMermaidImage = (src: string, className: string) =>
+  className.split(/\s+/).includes('mermaid-diagram') &&
+  /^data:image\/svg\+xml,%3Csvg(?:%20|%09|%0A|%0D|%3E)/i.test(src)
+
 export function localPage(
   from: string,
   href: string,

@@ -382,11 +382,29 @@ test('worker restarts are finite and disposal cancels bootstrap, listeners and p
 test('a new document identity gets a fresh worker after a failed generation', async (t) => {
   const workers = []
   let blocked = true
+  let findSent
+  const freshFind = new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('Fresh worker did not receive find')),
+      3000,
+    )
+    findSent = (worker) => {
+      clearTimeout(timer)
+      resolve(worker)
+    }
+  })
   const f = fixture(t, 'one', {
     timeoutMs: 5,
     worker: () => {
       const worker = new TestWorker()
       worker.blocked = blocked
+      if (!blocked) {
+        const postMessage = worker.postMessage.bind(worker)
+        worker.postMessage = (message) => {
+          postMessage(message)
+          if (message.type === 'find') findSent(worker)
+        }
+      }
       workers.push(worker)
       return worker
     },
@@ -395,8 +413,8 @@ test('a new document identity gets a fresh worker after a failed generation', as
   await wait(() => f.errors.length === 1)
   blocked = false
   f.session.reidentify({ tabId: 'a', revision: 1 })
-  await wait(() => f.results.length === 1)
-  assert.equal(f.results[0].location.total, 1)
+  const freshWorker = await freshFind
   assert.equal(workers.length, 3)
-  assert.equal(workers[2].messages[0].document.revision, 1)
+  assert.equal(freshWorker, workers[2])
+  assert.equal(freshWorker.messages[0].document.revision, 1)
 })

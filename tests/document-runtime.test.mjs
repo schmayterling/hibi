@@ -49,6 +49,21 @@ test('first edit opens a tab from the zero-tab start view', () => {
   runtime.dispose()
 })
 
+test('clean reused start tab accepts a newer document revision', () => {
+  const { runtime } = fixture()
+  runtime.activate(document('', { tabs: [], id: 'start-draft', revision: 0 }))
+  assert.equal(
+    runtime.activate(document('opened', { revision: 1 })).markdown,
+    'opened',
+  )
+  assert.throws(
+    () => runtime.activate(document('stale', { revision: 1 })),
+    /local edits waiting to synchronize/,
+  )
+  assert.equal(runtime.get().markdown, 'opened')
+  runtime.dispose()
+})
+
 test('runtime facades capture immutable full snapshots and do not flatten on publication', () => {
   const { runtime, operations } = fixture()
   const original = runtime.activate(document('old source'))

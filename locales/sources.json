@@ -3820,6 +3820,7 @@
   ],
   "23e39291d613": [
     "src/addons/quick-note/CaptureDialog.tsx",
+    "src/addons/ui-preview/index.tsx",
     "src/renderer/src/RecoveryScreen.tsx"
   ],
   "991c3fbf7f31": [

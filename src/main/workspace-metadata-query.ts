@@ -272,6 +272,18 @@ export async function queryWorkspaceReferences(
     (refresh && index?.workspace.id !== target.workspaceId)
   )
     return failure('stale', 'This workspace changed. Try again.')
+  const sourceCurrent = () => {
+    const current = workspaceChangeCursor()
+    return (
+      isCurrentWorkspaceTarget(target) &&
+      current.target?.workspaceId === target.workspaceId &&
+      current.target.workspaceGeneration === target.workspaceGeneration &&
+      current.sequence === after.sequence &&
+      workspaceIndexRevision() === revision &&
+      versionKey(getOpenDocumentVersions()) === sourceVersions &&
+      requestedSyntaxFingerprint === syntax.fingerprint
+    )
+  }
   if (
     index &&
     !hasIndexedSnapshot(
@@ -288,14 +300,32 @@ export async function queryWorkspaceReferences(
       indexedSequence !== after.sequence ||
       indexedRevision !== revision ||
       indexedSourceVersions !== sourceVersions
-    references.apply(target, index.pages, syntax.page)
     if (sourceChanged) searchCursors.clear()
     graphCursors.clear()
+    const applied = await references.applyCooperatively(
+      target,
+      index.pages,
+      syntax.page,
+      sourceCurrent,
+    )
+    if (!applied) return failure('stale', 'This workspace changed. Try again.')
     indexedTarget = target
     indexedSequence = after.sequence
     indexedRevision = revision
     indexedSourceVersions = sourceVersions
     indexedSyntaxFingerprint = syntax.fingerprint
+  }
+  const cacheCurrent = () => {
+    return (
+      sourceCurrent() &&
+      hasIndexedSnapshot(
+        target,
+        after.sequence,
+        revision,
+        sourceVersions,
+        syntax.fingerprint,
+      )
+    )
   }
   if (pathRequired && !references.has(path as string))
     return failure('not-found', 'This document is not in the workspace index.')
@@ -323,27 +353,33 @@ export async function queryWorkspaceReferences(
         ),
       },
     }
-  if (kind === 'tag')
+  if (kind === 'tag') {
+    const result = await references.taggedCooperatively(
+      (request.tag as string).normalize('NFC').toLowerCase(),
+      offset,
+      limit,
+      cacheCurrent,
+    )
+    if (!result) return failure('stale', 'This workspace changed. Try again.')
     return {
       ok: true,
       value: {
         ...base,
         kind,
-        ...references.tagged(
-          (request.tag as string).normalize('NFC').toLowerCase(),
-          offset,
-          limit,
-        ),
+        ...result,
       },
     }
+  }
   if (kind === 'tags' || kind === 'search-tags') {
-    const result = references.tags(
+    const result = await references.tagsCooperatively(
       offset,
       limit,
       kind === 'search-tags'
         ? (request.query as string).normalize('NFC').toLowerCase()
         : undefined,
+      cacheCurrent,
     )
+    if (!result) return failure('stale', 'This workspace changed. Try again.')
     return {
       ok: true,
       value: {
@@ -408,12 +444,14 @@ export async function queryWorkspaceReferences(
     }
   }
   if (kind === 'property') {
-    const result = references.property(
+    const result = await references.propertyCooperatively(
       request.key as string,
       request.value as PropertyScalar,
       offset,
       limit,
+      cacheCurrent,
     )
+    if (!result) return failure('stale', 'This workspace changed. Try again.')
     return {
       ok: true,
       value: {

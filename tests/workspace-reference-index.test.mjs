@@ -185,6 +185,136 @@ test('lazy tag, property, heading and path queries invalidate changed notes', ()
   ])
 })
 
+test('cooperative metadata work yields between batches and publishes whole snapshots', async () => {
+  const index = new WorkspaceReferenceIndex()
+  index.apply(workspace, [page('old.md', '[[target]]'), page('target.md')])
+  const pages = Array.from({ length: 128 }, (_, number) =>
+    page(
+      `notes/${number}.md`,
+      `---\nbucket: ${number % 2}\n---\n#work [[target]]`,
+    ),
+  )
+  let applySettled = false
+  const applying = index
+    .applyCooperatively(workspace, pages)
+    .finally(() => (applySettled = true))
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(applySettled, false)
+  assert.deepEqual(index.backlinks('target.md', 0, 10).items, ['old.md'])
+  assert.deepEqual(await applying, { parsed: 128, resolved: 128 })
+  assert.deepEqual(index.backlinks('target.md', 0, 200).items, [])
+
+  let tagSettled = false
+  const tagged = index
+    .taggedCooperatively('work', 0, 200)
+    .finally(() => (tagSettled = true))
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(tagSettled, false)
+  assert.deepEqual((await tagged)?.items, pages.map((item) => item.path).sort())
+
+  let propertySettled = false
+  const properties = index
+    .propertyCooperatively('bucket', 1, 0, 200)
+    .finally(() => (propertySettled = true))
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(propertySettled, false)
+  assert.deepEqual(
+    (await properties)?.items,
+    pages
+      .filter((_, number) => number % 2 === 1)
+      .map((item) => item.path)
+      .sort(),
+  )
+})
+
+test('cooperative metadata cancels stale caches and cannot overwrite an overlapping apply', async () => {
+  const pages = Array.from({ length: 128 }, (_, number) =>
+    page(`notes/${number}.md`, `---\nbucket: 1\n---\n#new [[target]]`),
+  )
+  const index = new WorkspaceReferenceIndex()
+  index.apply(workspace, [page('old.md', '#old [[target]]'), page('target.md')])
+  assert.deepEqual(index.tagged('old', 0, 10).items, ['old.md'])
+  assert.equal(await index.taggedCooperatively('old', 0, 10, () => false), null)
+  assert.equal(
+    await index.tagsCooperatively(0, 10, undefined, () => false),
+    null,
+  )
+  assert.equal(
+    await index.propertyCooperatively('bucket', 1, 0, 10, () => false),
+    null,
+  )
+
+  const staleTags = new WorkspaceReferenceIndex()
+  staleTags.apply(workspace, pages)
+  let staleSettled = false
+  const stale = staleTags
+    .taggedCooperatively('new', 0, 200)
+    .finally(() => (staleSettled = true))
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(staleSettled, false)
+  staleTags.apply(workspace, [page('replacement.md', '#replacement')])
+  assert.equal(await stale, null)
+  assert.deepEqual(staleTags.tagged('replacement', 0, 10).items, [
+    'replacement.md',
+  ])
+
+  const gates = []
+  const oldPages = Array.from({ length: 128 }, (_, number) =>
+    page(`notes/${number}.md`, '#old [[target]]'),
+  )
+  const overlapping = new WorkspaceReferenceIndex(
+    undefined,
+    () =>
+      new Promise((resolve) => {
+        gates.push({ resolve, released: false })
+      }),
+  )
+  overlapping.apply(workspace, oldPages)
+  let applySettled = false
+  const applying = overlapping
+    .applyCooperatively(workspace, pages)
+    .finally(() => (applySettled = true))
+  let querySettled = false
+  const querying = overlapping
+    .taggedCooperatively('old', 0, 10)
+    .finally(() => (querySettled = true))
+  await Promise.resolve()
+  assert.equal(applySettled, false)
+  assert.equal(querySettled, false)
+  for (let turn = 0; !querySettled; turn++) {
+    assert.ok(turn < 20, 'query must settle after its bounded yields')
+    const gate = gates.find(
+      (candidate, index) => index > 0 && !candidate.released,
+    )
+    if (gate) {
+      gate.released = true
+      gate.resolve()
+    }
+    await Promise.resolve()
+  }
+  assert.deepEqual(
+    (await querying)?.items,
+    oldPages
+      .map((item) => item.path)
+      .sort()
+      .slice(0, 10),
+  )
+  for (let turn = 0; !applySettled; turn++) {
+    assert.ok(turn < 20, 'apply must settle after its bounded yields')
+    const gate = gates.find((candidate) => !candidate.released)
+    if (gate) {
+      gate.released = true
+      gate.resolve()
+    }
+    await Promise.resolve()
+  }
+  assert.deepEqual(await applying, { parsed: 128, resolved: 128 })
+  assert.deepEqual(
+    overlapping.tagged('new', 0, 200).items,
+    pages.map((item) => item.path).sort(),
+  )
+})
+
 test('graph pages contain every node and resolved link without another parse', () => {
   let parses = 0
   const index = new WorkspaceReferenceIndex((source) => {

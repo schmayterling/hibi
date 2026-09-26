@@ -38,6 +38,17 @@ type DocumentLinks = {
   headings?: ReturnType<typeof noteHeadings>
 }
 
+type ApplyResult = {
+  parsed: number
+  resolved: number
+}
+
+type CanCommit = () => boolean
+
+const workSlice = 64
+const yieldToEventLoop = () =>
+  new Promise<void>((resolve) => setImmediate(resolve))
+
 const defaultPageSyntax = (): PageSyntax => ({
   settings: defaultNoteSyntax,
   key: 'gfm+wikilinks+hashtags',
@@ -75,9 +86,11 @@ export class WorkspaceReferenceIndex {
   private tagCapReached = false
   private complete = true
   private readonly parse: typeof noteReferences
+  private readonly yieldTurn: () => Promise<void>
 
-  constructor(parse = noteReferences) {
+  constructor(parse = noteReferences, yieldTurn = yieldToEventLoop) {
     this.parse = parse
+    this.yieldTurn = yieldTurn
   }
 
   clear(): void {
@@ -96,12 +109,34 @@ export class WorkspaceReferenceIndex {
     target: WorkspaceTarget,
     pages: readonly WorkspacePage[],
     pageSyntax: (page: WorkspacePage) => PageSyntax = defaultPageSyntax,
-  ): {
-    parsed: number
-    resolved: number
-  } {
+  ): ApplyResult {
+    const result = this.finish(this.applySteps(target, pages, pageSyntax))
+    if (!result)
+      throw new Error('Workspace metadata index changed during apply.')
+    return result
+  }
+
+  /** Builds from a snapshot, yielding between bounded page batches, then publishes once. */
+  async applyCooperatively(
+    target: WorkspaceTarget,
+    pages: readonly WorkspacePage[],
+    pageSyntax: (page: WorkspacePage) => PageSyntax = defaultPageSyntax,
+    canCommit: CanCommit = () => true,
+  ): Promise<ApplyResult | null> {
+    return this.finishCooperatively(
+      this.applySteps(target, pages, pageSyntax, canCommit),
+    )
+  }
+
+  private *applySteps(
+    target: WorkspaceTarget,
+    pages: readonly WorkspacePage[],
+    pageSyntax: (page: WorkspacePage) => PageSyntax,
+    canCommit: CanCommit = () => true,
+  ): Generator<void, ApplyResult | null> {
     if (pages.length > 2000)
       throw new Error('Workspace metadata exceeds 2,000 documents.')
+    const snapshot = this.documents
     const sameWorkspace =
       this.target?.workspaceId === target.workspaceId &&
       this.target.workspaceGeneration === target.workspaceGeneration
@@ -111,7 +146,9 @@ export class WorkspaceReferenceIndex {
     const next = new Map<string, DocumentLinks>()
     const changed = new Set<string>()
     let parsed = 0
-    for (const page of pages) {
+    for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
+      const page = pages[pageIndex]
+      if (!page) continue
       const cached = previous.get(page.path)
       const syntax = pageSyntax(page)
       const markdownSource = isMarkdownDocument(page.path)
@@ -132,41 +169,43 @@ export class WorkspaceReferenceIndex {
                 unsupportedSyntax,
               },
         )
-        continue
+      } else {
+        const referenceComplete =
+          !markdownSource ||
+          !syntax.settings.frontmatter ||
+          metadataFrontmatterWithinLimit(page.markdown)
+        next.set(page.path, {
+          markdown: page.markdown,
+          syntax: syntax.settings,
+          syntaxKey: syntax.key,
+          syntaxComplete,
+          unsupportedSyntax,
+          references:
+            markdownSource && referenceComplete
+              ? this.parse(page.markdown, syntax.settings)
+              : { links: [], wikilinks: [] },
+          referenceComplete,
+          targets: new Set(),
+        })
+        changed.add(page.path)
+        if (markdownSource && referenceComplete) parsed++
       }
-      const referenceComplete =
-        !markdownSource ||
-        !syntax.settings.frontmatter ||
-        metadataFrontmatterWithinLimit(page.markdown)
-      next.set(page.path, {
-        markdown: page.markdown,
-        syntax: syntax.settings,
-        syntaxKey: syntax.key,
-        syntaxComplete,
-        unsupportedSyntax,
-        references:
-          markdownSource && referenceComplete
-            ? this.parse(page.markdown, syntax.settings)
-            : { links: [], wikilinks: [] },
-        referenceComplete,
-        targets: new Set(),
-      })
-      changed.add(page.path)
-      if (markdownSource && referenceComplete) parsed++
+      if ((pageIndex + 1) % workSlice === 0) yield
     }
     const pathsChanged =
       !sameWorkspace ||
       previous.size !== next.size ||
       [...next.keys()].some((path) => !previous.has(path))
-    if (pathsChanged || changed.size) {
-      this.tagPaths = null
-      this.tagCapReached = false
-    }
+    const tagPaths = pathsChanged || changed.size ? null : this.tagPaths
+    const tagCapReached =
+      pathsChanged || changed.size ? false : this.tagCapReached
     const paths = new Set(next.keys())
     const basenames = pathsChanged ? noteBasenames(paths) : this.basenames
     const toResolve = pathsChanged ? [...next.keys()] : [...changed]
     const resolved = new Map<string, ReadonlySet<string>>()
-    for (const path of toResolve) {
+    for (let pathIndex = 0; pathIndex < toResolve.length; pathIndex++) {
+      const path = toResolve[pathIndex]
+      if (!path) continue
       const document = next.get(path)
       if (!document) continue
       resolved.set(
@@ -181,26 +220,41 @@ export class WorkspaceReferenceIndex {
           ),
         ),
       )
+      if ((pathIndex + 1) % workSlice === 0) yield
     }
+    let reverse: Map<string, Set<string>>
     if (pathsChanged) {
-      this.reverse = new Map()
+      reverse = new Map()
+      let index = 0
       for (const [path, document] of next) {
         const targets = resolved.get(path) ?? new Set<string>()
-        document.targets = targets
-        for (const targetPath of targets) this.addReverse(targetPath, path)
+        next.set(path, { ...document, targets })
+        for (const targetPath of targets)
+          this.addReverse(reverse, targetPath, path)
+        if (++index % workSlice === 0) yield
       }
     } else {
+      reverse = new Map()
+      let index = 0
+      for (const [path, sources] of this.reverse) {
+        reverse.set(path, new Set(sources))
+        if (++index % workSlice === 0) yield
+      }
       for (const path of changed) {
         for (const oldTarget of previous.get(path)?.targets ?? [])
-          this.reverse.get(oldTarget)?.delete(path)
+          reverse.get(oldTarget)?.delete(path)
         const document = next.get(path)
         if (!document) continue
         const targets = resolved.get(path) ?? new Set<string>()
-        document.targets = targets
-        for (const targetPath of targets) this.addReverse(targetPath, path)
+        next.set(path, { ...document, targets })
+        for (const targetPath of targets)
+          this.addReverse(reverse, targetPath, path)
+        if (++index % workSlice === 0) yield
       }
     }
+    if (this.documents !== snapshot || !canCommit()) return null
     this.documents = next
+    this.reverse = reverse
     this.complete = [...next.values()].every(
       (document) => document.referenceComplete && document.syntaxComplete,
     )
@@ -208,6 +262,8 @@ export class WorkspaceReferenceIndex {
     if (pathsChanged)
       this.sortedPaths = [...paths].sort((a, b) => a.localeCompare(b))
     this.basenames = basenames
+    this.tagPaths = tagPaths
+    this.tagCapReached = tagCapReached
     this.target = target
     return { parsed, resolved: toResolve.length }
   }
@@ -246,6 +302,17 @@ export class WorkspaceReferenceIndex {
       offset,
       limit,
     )
+  }
+
+  async taggedCooperatively(
+    tag: string,
+    offset: number,
+    limit: number,
+    canCommit: CanCommit = () => true,
+  ): Promise<ReferencePage | null> {
+    if (!(await this.ensureTagsCooperatively(canCommit))) return null
+    if (!canCommit()) return null
+    return this.tagged(tag, offset, limit)
   }
 
   tags(
@@ -287,6 +354,22 @@ export class WorkspaceReferenceIndex {
       nextOffset,
       capReached: this.tagCapReached,
     }
+  }
+
+  async tagsCooperatively(
+    offset: number,
+    limit: number,
+    prefix?: string,
+    canCommit: CanCommit = () => true,
+  ): Promise<{
+    items: readonly WorkspaceTagSummary[]
+    hasMore: boolean
+    nextOffset: number
+    capReached: boolean
+  } | null> {
+    if (!(await this.ensureTagsCooperatively(canCommit))) return null
+    if (!canCommit()) return null
+    return this.tags(offset, limit, prefix)
   }
 
   /** Resume graph enumeration without rescanning links or returning note source. */
@@ -350,29 +433,53 @@ export class WorkspaceReferenceIndex {
   }
 
   private ensureTags(): void {
-    if (this.tagPaths) return
+    this.finish(this.tagSteps())
+  }
+
+  private async ensureTagsCooperatively(
+    canCommit: CanCommit,
+  ): Promise<boolean> {
+    return this.finishCooperatively(this.tagSteps(canCommit))
+  }
+
+  private *tagSteps(
+    canCommit: CanCommit = () => true,
+  ): Generator<void, boolean> {
+    if (this.tagPaths) return true
+    const snapshot = this.documents
     const next = new Map<string, Set<string>>()
-    for (const [path, document] of this.documents) {
-      if (!isMarkdownDocument(path) || !document.referenceComplete) continue
-      document.tags ??= noteTags(document.markdown, document.syntax)
-      for (const name of document.tags) {
-        if (name.length > 128) {
-          this.tagCapReached = true
-          continue
-        }
-        let paths = next.get(name)
-        if (!paths) {
-          if (next.size >= 2000) {
-            this.tagCapReached = true
+    const parsed = new Map<DocumentLinks, readonly string[]>()
+    let tagCapReached = false
+    let index = 0
+    for (const [path, document] of snapshot) {
+      if (isMarkdownDocument(path) && document.referenceComplete) {
+        const tags =
+          document.tags ?? noteTags(document.markdown, document.syntax)
+        if (!document.tags) parsed.set(document, tags)
+        for (const name of tags) {
+          if (name.length > 128) {
+            tagCapReached = true
             continue
           }
-          paths = new Set()
-          next.set(name, paths)
+          let paths = next.get(name)
+          if (!paths) {
+            if (next.size >= 2000) {
+              tagCapReached = true
+              continue
+            }
+            paths = new Set()
+            next.set(name, paths)
+          }
+          paths.add(path)
         }
-        paths.add(path)
       }
+      if (++index % workSlice === 0) yield
     }
+    if (this.documents !== snapshot || !canCommit()) return false
+    for (const [document, tags] of parsed) document.tags = tags
     this.tagPaths = next
+    this.tagCapReached = tagCapReached
+    return true
   }
 
   property(
@@ -381,21 +488,58 @@ export class WorkspaceReferenceIndex {
     offset: number,
     limit: number,
   ): ReferencePage & { complete: boolean } {
+    const result = this.finish(this.propertySteps(key, value, offset, limit))
+    if (!result)
+      throw new Error('Workspace metadata index changed during query.')
+    return result
+  }
+
+  async propertyCooperatively(
+    key: string,
+    value: PropertyScalar,
+    offset: number,
+    limit: number,
+    canCommit: CanCommit = () => true,
+  ): Promise<(ReferencePage & { complete: boolean }) | null> {
+    return this.finishCooperatively(
+      this.propertySteps(key, value, offset, limit, canCommit),
+    )
+  }
+
+  private *propertySteps(
+    key: string,
+    value: PropertyScalar,
+    offset: number,
+    limit: number,
+    canCommit: CanCommit = () => true,
+  ): Generator<void, (ReferencePage & { complete: boolean }) | null> {
+    const snapshot = this.documents
     const matches: string[] = []
     let complete = true
-    for (const [path, document] of this.documents) {
-      if (!isMarkdownDocument(path)) continue
-      document.properties ??= noteProperties(document.markdown, document.syntax)
-      if (!document.properties.complete) complete = false
-      if (!Object.hasOwn(document.properties.values, key)) continue
-      const found = document.properties.values[key]
-      if (
-        (Array.isArray(found) &&
-          found.some((item) => Object.is(item, value))) ||
-        Object.is(found, value)
-      )
-        matches.push(path)
+    const parsed = new Map<DocumentLinks, ReturnType<typeof noteProperties>>()
+    let index = 0
+    for (const [path, document] of snapshot) {
+      if (isMarkdownDocument(path)) {
+        const properties =
+          document.properties ??
+          noteProperties(document.markdown, document.syntax)
+        if (!document.properties) parsed.set(document, properties)
+        if (!properties.complete) complete = false
+        if (Object.hasOwn(properties.values, key)) {
+          const found = properties.values[key]
+          if (
+            (Array.isArray(found) &&
+              found.some((item) => Object.is(item, value))) ||
+            Object.is(found, value)
+          )
+            matches.push(path)
+        }
+      }
+      if (++index % workSlice === 0) yield
     }
+    if (this.documents !== snapshot || !canCommit()) return null
+    for (const [document, properties] of parsed)
+      document.properties = properties
     return { ...this.page(matches, offset, limit), complete }
   }
 
@@ -508,11 +652,30 @@ export class WorkspaceReferenceIndex {
       : localTarget(from, href, this.paths)
   }
 
-  private addReverse(target: string, source: string): void {
-    let sources = this.reverse.get(target)
+  private finish<T>(work: Generator<void, T>): T {
+    let step = work.next()
+    while (!step.done) step = work.next()
+    return step.value
+  }
+
+  private async finishCooperatively<T>(work: Generator<void, T>): Promise<T> {
+    let step = work.next()
+    while (!step.done) {
+      await this.yieldTurn()
+      step = work.next()
+    }
+    return step.value
+  }
+
+  private addReverse(
+    reverse: Map<string, Set<string>>,
+    target: string,
+    source: string,
+  ): void {
+    let sources = reverse.get(target)
     if (!sources) {
       sources = new Set()
-      this.reverse.set(target, sources)
+      reverse.set(target, sources)
     }
     sources.add(source)
   }

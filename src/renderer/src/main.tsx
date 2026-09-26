@@ -356,6 +356,7 @@ function App() {
       if (previous?.revision !== next.revision) setOutlineTarget(null)
       if (
         previous &&
+        previous.tabId === next.tabId &&
         previous.id !== next.id &&
         previous.revision === next.revision
       ) {

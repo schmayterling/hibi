@@ -195,7 +195,8 @@
     "src/shared/dependencies.ts"
   ],
   "9ade719b95a9": [
-    "src/renderer/src/document-edits.ts"
+    "src/renderer/src/document-edits.ts",
+    "src/renderer/src/mounted-document-edits.ts"
   ],
   "a6d662de7706": [
     "src/renderer/src/rich-source-session.ts"
@@ -4405,6 +4406,9 @@
   "b813945dd20c": [
     "src/renderer/src/SourceEditor.tsx"
   ],
+  "54df2918532a": [
+    "src/renderer/src/mounted-document-edits.ts"
+  ],
   "c9e161d3f3c3": [
     "src/renderer/src/RecoveryScreen.tsx"
   ],
@@ -4428,6 +4432,9 @@
   ],
   "23aa870889ee": [
     "src/main/import-files.ts"
+  ],
+  "93989d9c45f8": [
+    "src/renderer/src/mounted-document-edits.ts"
   ],
   "5b9df36cc43f": [
     "src/shared/document-journal.ts"
@@ -4717,6 +4724,7 @@
     "src/addons/typst/compiler.ts"
   ],
   "e7cdb1b6ae71": [
+    "src/renderer/src/Editor.tsx",
     "src/renderer/src/document-target-edits.ts"
   ],
   "0ac0af8cf48f": [
@@ -4729,6 +4737,9 @@
     "src/renderer/src/main.tsx"
   ],
   "4396b1d0a374": [
+    "src/renderer/src/Editor.tsx"
+  ],
+  "9683e4c7c182": [
     "src/renderer/src/Editor.tsx"
   ],
   "dd81768f0d54": [
@@ -4803,8 +4814,8 @@
   "62a6fbf88b17": [
     "src/main/links.ts"
   ],
-  "4360555eb341": [
-    "src/renderer/src/document-target-edits.ts"
+  "a3a4a9f97dbf": [
+    "src/renderer/src/mounted-document-edits.ts"
   ],
   "557e75befd2a": [
     "src/renderer/src/WorkspacesSidebar.tsx"

@@ -22,6 +22,7 @@ const storageHost = globalThis as {
 }
 storageHost.addEventListener?.('storage', (event) => {
   if (
+    event.key === null ||
     event.key?.startsWith('hibi:flavor:') ||
     event.key === 'hibi:markdown-syntax-disabled'
   )

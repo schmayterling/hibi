@@ -1,6 +1,13 @@
 import { CircleAlert, FileText, Network } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import type { WorkspaceGraphItem } from '../../shared/workspace-query'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events'
 import type { AddonContext } from '../api'
 import { Button, ControlRow, Panel, PanelMessage, TextInput } from '../ui'
 import { useWorkspaceQueryTarget } from '../use-workspace-query'
@@ -25,10 +32,15 @@ export function GraphPanel({
     error: targetError,
   } = useWorkspaceQueryTarget(context)
   const [query, setQuery] = useState(initialQuery)
+  const syntaxRevision = useSyncExternalStore(
+    workspaceSyntaxEvents.subscribe,
+    workspaceSyntaxEvents.snapshot,
+  )
   const previous = useRef<ReturnType<typeof metadataGraph> | null>(null)
   const [result, setResult] = useState<{
     workspaceId: string
     generation: number
+    syntaxRevision: number
     graph: ReturnType<typeof metadataGraph>
     complete: boolean
   } | null>(null)
@@ -86,6 +98,7 @@ export function GraphPanel({
         setResult({
           workspaceId: target.workspaceId,
           generation: target.workspaceGeneration,
+          syntaxRevision,
           graph,
           complete,
         })
@@ -100,10 +113,11 @@ export function GraphPanel({
     return () => {
       active = false
     }
-  }, [context, target])
+  }, [context, target, syntaxRevision])
   const current =
     result?.workspaceId === target?.workspaceId &&
-    result?.generation === target?.workspaceGeneration
+    result?.generation === target?.workspaceGeneration &&
+    result?.syntaxRevision === syntaxRevision
       ? result
       : null
   const full = current?.graph ?? metadataGraph([])

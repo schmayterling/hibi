@@ -1,11 +1,14 @@
 import { FileText } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { WorkspaceState } from '../../shared/workspace'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events'
 import { Sidebar, type SidebarProps } from '../../ui/Sidebar'
+import { captureWorkspaceSyntaxSnapshot } from './workspace-syntax-snapshot'
 
 export function BacklinksSidebar({
   workspace,
   revision,
+  hashtags,
   onFile,
   open,
   overlay,
@@ -15,6 +18,7 @@ export function BacklinksSidebar({
 }: {
   workspace: WorkspaceState | null
   revision: number | undefined
+  hashtags: boolean
   onFile: (path: string) => void
   open: boolean
   overlay: boolean
@@ -23,11 +27,18 @@ export function BacklinksSidebar({
   side?: 'left' | 'right'
 }) {
   const [links, setLinks] = useState<string[]>([])
+  const [incomplete, setIncomplete] = useState(false)
+  const syntaxRevision = useSyncExternalStore(
+    workspaceSyntaxEvents.subscribe,
+    workspaceSyntaxEvents.snapshot,
+  )
   useEffect(() => {
     void revision
+    void syntaxRevision
     const current = workspace?.activePath
     const workspaceId = workspace?.id
     setLinks([])
+    setIncomplete(false)
     if (!open || !current || !workspaceId) return
     let active = true
     const timer = setTimeout(() => {
@@ -37,7 +48,9 @@ export function BacklinksSidebar({
           if (!snapshot.target || snapshot.target.workspaceId !== workspaceId)
             return
           const paths: string[] = []
+          const syntaxSnapshot = captureWorkspaceSyntaxSnapshot(hashtags)
           let offset = 0
+          let complete = true
           while (active) {
             const response = await window.hibi.queryWorkspaceReferences({
               target: snapshot.target,
@@ -45,16 +58,24 @@ export function BacklinksSidebar({
               path: current,
               offset,
               limit: 100,
+              syntaxSnapshot,
             })
-            if (!response.ok || response.value.kind !== 'backlinks') return
+            if (!response.ok || response.value.kind !== 'backlinks') {
+              if (active) setIncomplete(true)
+              return
+            }
+            complete &&= response.value.complete
             paths.push(...response.value.items)
             if (!response.value.hasMore) break
             if (response.value.nextOffset <= offset) return
             offset = response.value.nextOffset
           }
-          if (active) setLinks(paths.filter((path) => path !== current))
+          if (active) {
+            setLinks(paths.filter((path) => path !== current))
+            setIncomplete(!complete)
+          }
         } catch {
-          if (active) setLinks([])
+          if (active) setIncomplete(true)
         }
       }
       void read()
@@ -63,13 +84,18 @@ export function BacklinksSidebar({
       active = false
       clearTimeout(timer)
     }
-  }, [open, workspace, revision])
+  }, [open, workspace, revision, hashtags, syntaxRevision])
   return (
     <Sidebar
       className="document-sidebar backlinks-sidebar"
       side={side}
       label="Backlinks"
       header={side === 'left' ? <span>Backlinks</span> : null}
+      footer={
+        incomplete ? (
+          <span role="status">Backlinks may be incomplete.</span>
+        ) : null
+      }
       items={links.map((path) => ({ id: path, label: path, icon: FileText }))}
       selected={null}
       onSelect={onFile}

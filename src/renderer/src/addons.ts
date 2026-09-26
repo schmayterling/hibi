@@ -69,6 +69,7 @@ import { registrationBatch } from './registration-batch'
 import { settingsPages } from './settings-pages'
 import { toolbar } from './toolbar'
 import { viewNotifications } from './view-notifications'
+import { captureWorkspaceSyntaxSnapshot } from './workspace-syntax-snapshot'
 
 export { addons } from './addon-registry'
 
@@ -1562,7 +1563,14 @@ export function useAddons(
               query: (request) =>
                 disposed
                   ? Promise.reject(new Error('This addon has stopped.'))
-                  : window.hibi.queryWorkspaceReferences(request),
+                  : window.hibi.queryWorkspaceReferences({
+                      ...request,
+                      syntaxSnapshot: captureWorkspaceSyntaxSnapshot(
+                        currentActivation.current.states.some(
+                          (state) => state.id === 'tags' && state.enabled,
+                        ),
+                      ),
+                    }),
               index: () =>
                 disposed
                   ? Promise.reject(

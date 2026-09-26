@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { open, rename, unlink } from 'node:fs/promises'
+import type { BigIntStats } from 'node:fs'
+import { lstat, open, rename, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
-/** Stage replacement bytes before checking the caller's commit precondition. */
+/** Stage bytes before a best-effort disk-version check and atomic rename. */
 export async function replaceExistingText(
   path: string,
   text: string,
@@ -13,16 +14,34 @@ export async function replaceExistingText(
   const temporary = join(directoryPath, `.${randomUUID()}.tmp`)
   const staged = await open(temporary, 'wx', 0o600)
   let committed = false
+  let closed = false
+  let stagedIdentity: BigIntStats | null = null
   try {
-    try {
-      await staged.writeFile(text, 'utf8')
-      await staged.chmod(mode & 0o7777)
-      await staged.sync()
-    } finally {
+    stagedIdentity = await staged.stat({ bigint: true })
+    await staged.writeFile(text, 'utf8')
+    await staged.chmod(mode & 0o7777)
+    await staged.sync()
+    const ready = await staged.stat({ bigint: true })
+    if (process.platform === 'win32') {
       await staged.close()
+      closed = true
     }
     await beforeCommit()
-    // Node rename has no expected-inode condition for an external writer.
+    const current = await lstat(temporary, { bigint: true })
+    if (
+      current.dev !== ready.dev ||
+      current.ino !== ready.ino ||
+      current.size !== ready.size ||
+      current.mtimeNs !== ready.mtimeNs ||
+      current.ctimeNs !== ready.ctimeNs
+    )
+      throw new Error('The staged file changed. Review it before updating.')
+    if (!closed) {
+      await staged.close()
+      closed = true
+    }
+    // Node rename has neither an expected-inode condition for the disk file
+    // nor a handle-relative source. Both pathnames can change after checks.
     await rename(temporary, path)
     committed = true
 
@@ -42,9 +61,21 @@ export async function replaceExistingText(
     }
     return { atomicVisibility: true, directorySynced }
   } finally {
-    if (!committed)
-      await unlink(temporary).catch((error: unknown) =>
-        console.error('workspace update temporary cleanup failed:', error),
-      )
+    try {
+      if (!closed) await staged.close()
+    } finally {
+      if (!committed && stagedIdentity) {
+        const current = await lstat(temporary, { bigint: true }).catch(
+          () => null,
+        )
+        if (
+          current?.dev === stagedIdentity.dev &&
+          current.ino === stagedIdentity.ino
+        )
+          await unlink(temporary).catch((error: unknown) =>
+            console.error('workspace update temporary cleanup failed:', error),
+          )
+      }
+    }
   }
 }

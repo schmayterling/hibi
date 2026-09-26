@@ -10,7 +10,7 @@ Choose **Rename** to change an item's name. Renaming a file or its parent folder
 
 ## Move, copy, and duplicate
 
-Choose **Move to** or **Copy to** and enter a destination relative to the workspace, including the new name. You can also drag an item onto a folder, or onto empty sidebar space to move it to the workspace root. Existing items are never replaced.
+Choose **Move to** or **Copy to** and enter a destination relative to the workspace, including the new name. You can also drag an item onto a folder, or onto empty sidebar space to move it to the workspace root. Hibi checks for an existing item before moving or copying. If another app changes the workspace at the same time, review both locations before retrying.
 
 **Copy to** and **Duplicate** use saved content from disk. Save your edits first to include them.
 

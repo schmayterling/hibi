@@ -62,6 +62,18 @@ Initial source placement focuses the active pane before dispatching its selectio
 
 Use `--quick` only to validate the harness or investigate first-key behavior; it skips the 30-second holds and does not satisfy the sustained-input check. `--mode`, `--size`, `--shape`, `--position` and `--target` select smaller investigations. Run `--help` for the accepted values.
 
+### Two-document split panes
+
+Run one bounded case with two different documents and both editors mounted:
+
+```sh
+node scripts/trace-input-paint.mjs --mode split-tabs --out /tmp/hibi-two-pane-trace
+```
+
+This case opens separate left and right Markdown files, keeps the left pane in source view and the right pane in rich view, then switches focus from the active pane to each inactive mounted editor. It sends one `keyboard.press('x')` to each editor after two seconds of idle. These are synthetic browser key events with keydown, beforeinput and input checks, not hardware keyboard events. It checks exact canonical and saved bytes for both documents, confirms the other file stays unchanged, and verifies that both editor DOM nodes remain mounted across focus changes. The fixed short fixtures isolate pane transition and first-key behavior; this case does not replace the 100,000-character or 100,000-word sustained-input runs.
+
+The result records driver-observed focus transition time, renderer keydown-to-glyph rAF and next-rAF times, and the first sampled CDP surface screenshot whose cropped glyph pixels are closer to the final changed screenshot than the pre-key screenshot. Before, after and first matched capture images are saved for inspection. Sampling adds overhead and can miss earlier changed frames; capture receipt also includes encoding and transport delay. These measurements do not establish physical display scanout. The raw Chromium trace includes split-tabs user timing marks; the standard input-trace analyzer does not summarize this case.
+
 Use `--file /path/to/note.md` to benchmark an existing UTF-8 Markdown document. The harness copies its original bytes into each isolated case, records its size and SHA-256 hash, and skips the synthetic size and shape combinations. It never edits the supplied file. Source input retains exact raw-source save assertions. For visual input, start, middle and end select the first, middle or last editable textblock; the report records the ProseMirror position and leaves the source offset unavailable. Visual checks require every inserted and deleted character in the rich document, saved bytes matching the accepted canonical source, undo restoring the original raw bytes exactly, and redo restoring the captured accepted source. These visual positions are not claimed to correspond to raw Markdown offsets. When Hibi displays its source-preservation notice, the supplied file's visual case is recorded as unavailable, with the notice text and a screenshot; the harness verifies that source and disk remain unchanged and never forces editing. Unavailable cases are not successful measurements and cause a nonzero exit status. An unexpected preservation notice on a generated fixture remains a failure.
 
 Add `--cpu-profile` for a separate attribution run. It records a renderer V8 profile at a 1 ms sampling interval in `CPUprofile.json`; pass that file to the analyzer with `--profile`. These runs also enable top-level task trace events to expose main-thread occupancy outside named JavaScript and rendering events. Each case records its trace categories. Sampling and extra tracing add overhead, so compare runs with matching instrumentation and keep latency and attribution runs distinct.

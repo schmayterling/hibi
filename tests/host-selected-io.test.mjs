@@ -177,8 +177,10 @@ test('owner restart, expiry, replacement, and file limits invalidate imports', a
   handle = await importHandle(service, target)
   const replacement = join(directory, 'replacement.bin')
   await writeFile(replacement, Buffer.from([9]))
-  await rename(replacement, input)
-  expectFailure(await service.readImport(target, 'demo', handle), 'stale')
+  if (process.platform !== 'win32') {
+    await rename(replacement, input)
+    expectFailure(await service.readImport(target, 'demo', handle), 'stale')
+  }
   service.clear()
 
   const oversized = await open(input, 'w')

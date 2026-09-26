@@ -131,7 +131,8 @@ test('persistent secret stays encrypted on disk and status never returns it', as
   assert.equal(files.length, 1)
   const raw = await readFile(files[0], 'utf8')
   assert.equal(raw.includes(secret), false)
-  assert.equal((await lstat(files[0])).mode & 0o077, 0)
+  if (process.platform !== 'win32')
+    assert.equal((await lstat(files[0])).mode & 0o077, 0)
   const restarted = makeHost()
   t.after(() => restarted.dispose())
   assert.equal(
@@ -532,7 +533,8 @@ test('parallel persistent writes leave one readable, private credential file', a
   )
   const files = await filesIn(directory)
   assert.equal(files.length, 1)
-  assert.equal((await lstat(files[0])).mode & 0o077, 0)
+  if (process.platform !== 'win32')
+    assert.equal((await lstat(files[0])).mode & 0o077, 0)
   const raw = await readFile(files[0], 'utf8')
   assert.equal(raw.includes('synthetic-secret'), false)
   const applied = []

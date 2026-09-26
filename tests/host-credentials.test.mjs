@@ -741,7 +741,7 @@ test('revocation during atomic rename waits to report committed outcome', async 
     secret: 'synthetic-secret',
     mode: 'persistent',
   })
-  await entered.promise
+  await within(entered.promise)
   let settled = false
   void pending.then(() => {
     settled = true

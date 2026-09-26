@@ -197,7 +197,6 @@ async function writeEntries(
   beforeCommit: () => Promise<void>,
   commitGuard: () => void,
   onCommitted: () => void,
-  platform: NodeJS.Platform,
   renameFile: typeof rename,
   onCommitPending: (pending: Promise<void>) => void,
 ): Promise<void> {
@@ -208,7 +207,7 @@ async function writeEntries(
   if (
     !folder.isDirectory() ||
     folder.isSymbolicLink() ||
-    (platform !== 'win32' && (folder.mode & 0o077) !== 0)
+    (process.platform !== 'win32' && (folder.mode & 0o077) !== 0)
   )
     return fail('io-error')
   const temp = join(directory, `.${basename(path)}.${randomUUID()}.tmp`)
@@ -574,7 +573,6 @@ export class HostCredentials {
         () => {
           active.committed = true
         },
-        this.#platform,
         this.#options.renameFile ?? rename,
         (pending) => {
           active.commitPending = pending

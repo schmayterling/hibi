@@ -2215,6 +2215,7 @@ function App() {
             workspace={workspace}
             revision={document?.contentVersion}
             hashtags={enabledAddons.has('tags')}
+            projections={addonHost.markdownExtensions}
             onFile={(path) => void openFile(path)}
           />
         </Suspense>
@@ -2264,6 +2265,7 @@ function App() {
               workspace={workspace}
               revision={document?.contentVersion}
               hashtags={enabledAddons.has('tags')}
+              projections={addonHost.markdownExtensions}
               onFile={(path) => void openFile(path)}
             />
           </Suspense>

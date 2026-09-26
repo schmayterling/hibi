@@ -5,6 +5,7 @@ import type { WorkspaceSyntaxSnapshot } from '../shared/workspace-query.ts'
 
 type Flavor = WorkspaceSyntaxSnapshot['flavors'][number]
 type Choice = WorkspaceSyntaxSnapshot['choices'][number]
+type Projection = NonNullable<WorkspaceSyntaxSnapshot['projections']>[number]
 
 const idPattern = /^[a-z][a-z0-9.-]{0,127}$/
 const fileIdPattern = /^[a-f0-9]{64}$/
@@ -57,14 +58,18 @@ export function workspaceSyntax(input: unknown): WorkspaceSyntax | null {
     value.flavors.length > 128 ||
     !Array.isArray(value.features) ||
     value.features.length > 512 ||
+    (value.projections !== undefined &&
+      (!Array.isArray(value.projections) || value.projections.length > 128)) ||
     !Array.isArray(value.choices) ||
     value.choices.length > 4096
   )
     return null
   const flavors: Flavor[] = []
   const features: WorkspaceSyntaxSnapshot['features'][number][] = []
+  const projections: Projection[] = []
   const choices: Choice[] = []
-  const seen: [Set<string>, Set<string>, Set<string>] = [
+  const seen: [Set<string>, Set<string>, Set<string>, Set<string>] = [
+    new Set(),
     new Set(),
     new Set(),
     new Set(),
@@ -102,6 +107,20 @@ export function workspaceSyntax(input: unknown): WorkspaceSyntax | null {
     seen[1].add(item.id)
     features.push({ id: item.id, enabled: item.enabled })
   }
+  for (const raw of (value.projections as unknown[] | undefined) ?? []) {
+    if (!raw || typeof raw !== 'object') return null
+    const item = raw as Record<string, unknown>
+    if (
+      typeof item.id !== 'string' ||
+      !idPattern.test(item.id) ||
+      seen[3].has(item.id) ||
+      typeof item.parserVersion !== 'string' ||
+      item.parserVersion.length > 64
+    )
+      return null
+    seen[3].add(item.id)
+    projections.push({ id: item.id, parserVersion: item.parserVersion })
+  }
   for (const raw of value.choices) {
     if (!raw || typeof raw !== 'object') return null
     const item = raw as Record<string, unknown>
@@ -135,6 +154,7 @@ export function workspaceSyntax(input: unknown): WorkspaceSyntax | null {
   }
   flavors.sort((a, b) => a.id.localeCompare(b.id))
   features.sort((a, b) => a.id.localeCompare(b.id))
+  projections.sort((a, b) => a.id.localeCompare(b.id))
   choices.sort((a, b) => a.id.localeCompare(b.id))
   const fingerprint = createHash('sha256')
     .update(
@@ -145,6 +165,7 @@ export function workspaceSyntax(input: unknown): WorkspaceSyntax | null {
         value.complete,
         flavors,
         features,
+        projections,
         choices,
       ]),
     )
@@ -156,6 +177,12 @@ export function workspaceSyntax(input: unknown): WorkspaceSyntax | null {
   const unknownFeature = features.some(
     (feature) => !knownFeatures.test(feature.id),
   )
+  const unknownProjection = projections.some(
+    (projection) => projection.id !== 'frontmatter.metadata',
+  )
+  const frontmatter =
+    value.projections === undefined ||
+    projections.some((projection) => projection.id === 'frontmatter.metadata')
   return {
     fingerprint,
     flavorAware: true,
@@ -174,11 +201,13 @@ export function workspaceSyntax(input: unknown): WorkspaceSyntax | null {
         gfm: ids.has('markdown.github'),
         wikilinks: ids.has('markdown.obsidian'),
         hashtags: value.hashtags as boolean,
+        frontmatter,
         disabledFeatures,
       }
       const source = page.markdown
       const unsupported =
         unknownFeature ||
+        unknownProjection ||
         selected.some((flavor) => !knownFlavors.has(flavor.id)) ||
         (ids.has('markdown.github') &&
           (/^ {0,3}>[ \t]*\[![a-z][a-z0-9-]*\]/im.test(source) ||
@@ -194,7 +223,10 @@ export function workspaceSyntax(input: unknown): WorkspaceSyntax | null {
           settings,
         ]),
         unsupported,
-        complete: (value.complete as boolean) && !unsupported,
+        complete:
+          (value.complete as boolean) &&
+          value.projections !== undefined &&
+          !unsupported,
       }
     },
   }

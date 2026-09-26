@@ -47,11 +47,15 @@ function propertyValue(value: unknown): PropertyValue | undefined {
 }
 
 /** Keep only bounded YAML scalars and flat scalar lists for exact predicates. */
-export function noteProperties(source: string): {
+export function noteProperties(
+  source: string,
+  syntax: NoteSyntax = defaultNoteSyntax,
+): {
   values: Readonly<Record<string, PropertyValue>>
   complete: boolean
 } {
   const values: Record<string, PropertyValue> = Object.create(null)
+  if (!syntax.frontmatter) return { values, complete: true }
   if (!metadataFrontmatterWithinLimit(source))
     return { values, complete: false }
   const frontmatter = readFrontmatter(source)
@@ -109,7 +113,7 @@ export function noteHeadings(
   complete: boolean
 } {
   const headings: NoteHeading[] = []
-  if (!metadataFrontmatterWithinLimit(source))
+  if (syntax.frontmatter && !metadataFrontmatterWithinLimit(source))
     return { items: headings, complete: false }
   let complete = true
   const { parser, tokens } = noteLexer(source, syntax)

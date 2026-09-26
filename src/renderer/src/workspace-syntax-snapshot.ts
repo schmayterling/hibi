@@ -8,18 +8,24 @@ const MAX_CHOICE_CHARS = 512 * 1024
 const MAX_CHOICE_VALUE_CHARS = 8192
 const MAX_FLAVORS = 128
 const MAX_FEATURES = 512
+const MAX_PROJECTIONS = 128
 const MAX_SYNTAX_IDS = 128
 const choiceKey = /^hibi:flavor:([0-9a-f]{64})$/
 
 export function captureWorkspaceSyntaxSnapshot(
   hashtags: boolean,
+  projections: readonly {
+    id: string
+    preservation?: { version: string }
+  }[] = [],
 ): WorkspaceSyntaxSnapshot {
   let complete = true
   const registeredFlavors = flavors.snapshot()
   const registeredFeatures = markdownSyntax.snapshot()
   if (
     registeredFlavors.length > MAX_FLAVORS ||
-    registeredFeatures.length > MAX_FEATURES
+    registeredFeatures.length > MAX_FEATURES ||
+    projections.length > MAX_PROJECTIONS
   )
     complete = false
   const flavorEntries: WorkspaceSyntaxSnapshot['flavors'][number][] = []
@@ -43,6 +49,18 @@ export function captureWorkspaceSyntaxSnapshot(
     }
     featureEntries.push({ id: feature.id, enabled: feature.enabled })
   }
+  const projectionEntries: NonNullable<
+    WorkspaceSyntaxSnapshot['projections']
+  >[number][] = []
+  for (const projection of projections.slice(0, MAX_PROJECTIONS)) {
+    const parserVersion = projection.preservation?.version ?? '1'
+    if (projection.id.length > 128 || parserVersion.length > 64) {
+      complete = false
+      continue
+    }
+    projectionEntries.push({ id: projection.id, parserVersion })
+  }
+  projectionEntries.sort((left, right) => left.id.localeCompare(right.id))
   const choices: WorkspaceSyntaxSnapshot['choices'][number][] = []
   try {
     const storage = localStorage
@@ -100,6 +118,7 @@ export function captureWorkspaceSyntaxSnapshot(
     featureRevision: markdownSyntax.version(),
     flavors: flavorEntries,
     features: featureEntries,
+    projections: projectionEntries,
     choices,
     hashtags,
     complete,

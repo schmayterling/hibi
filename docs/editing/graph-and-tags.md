@@ -18,7 +18,7 @@ The graph shows up to 500 matching nodes, so filter larger workspaces. Its conne
 
 Write tags such as `#work` or `#project/topic` in Markdown prose. Shift-click a tag or run **Browse tags**, then choose a tag to see matching notes. The current note's tag count also opens the browser.
 
-Matching ignores case. Code, links, frontmatter, and heading markers do not count as tags. Disabling the addon leaves tags as ordinary text and removes them from workspace tag results. The tag browser marks its index incomplete when selected addon syntax cannot be interpreted by the workspace index.
+Matching ignores case. Code, links, and heading markers do not count as tags. When Frontmatter is enabled, its YAML does not count. Disabling Tags leaves tags as ordinary text and removes them from workspace tag results. The tag browser marks its index incomplete when selected addon syntax cannot be interpreted by the workspace index.
 
 ## Workspace limits
 

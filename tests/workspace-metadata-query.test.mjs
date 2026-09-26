@@ -22,6 +22,7 @@ const host = {
       { id: 'markdown.obsidian', kind: 'syntax', parserVersion: '1' },
     ],
     features: [],
+    projections: [{ id: 'frontmatter.metadata', parserVersion: '1' }],
     choices: [],
     hashtags: true,
     complete: true,
@@ -410,6 +411,47 @@ test('flavor changes reindex unchanged source and expire graph cursors', async (
   assert.deepEqual(search.value.items, ['a.md'])
   assert.equal(search.value.complete, true)
   assert.equal(search.value.unsupportedSyntax, false)
+  host.pages = previousPages
+  host.syntaxSnapshot = previousSyntax
+  host.revision++
+})
+
+test('frontmatter projection changes property results without a source edit', async () => {
+  const target = host.target
+  const previousPages = host.pages
+  const previousSyntax = host.syntaxSnapshot
+  host.pages = [
+    {
+      id: 'a'.repeat(64),
+      path: 'a.md',
+      markdown: '---\ntitle: Alpha\n---\n# Body',
+    },
+  ]
+  host.revision++
+  assert.deepEqual(
+    (await query({ target, kind: 'property', key: 'title', value: 'Alpha' }))
+      .value.items,
+    ['a.md'],
+  )
+  const reads = host.indexReads
+  host.syntaxSnapshot = { ...host.syntaxSnapshot, projections: [] }
+  const disabled = await query({
+    target,
+    kind: 'property',
+    key: 'title',
+    value: 'Alpha',
+  })
+  assert.equal(disabled.ok, true)
+  assert.deepEqual(disabled.value.items, [])
+  assert.equal(disabled.value.complete, true)
+  assert.equal(host.indexReads, reads + 1)
+  host.syntaxSnapshot = {
+    ...host.syntaxSnapshot,
+    projections: [{ id: 'third.projected', parserVersion: '1' }],
+  }
+  const unknown = await query({ target, kind: 'links', path: 'a.md' })
+  assert.equal(unknown.value.unsupportedSyntax, true)
+  assert.equal(unknown.value.complete, false)
   host.pages = previousPages
   host.syntaxSnapshot = previousSyntax
   host.revision++

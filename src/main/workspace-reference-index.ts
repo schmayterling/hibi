@@ -135,7 +135,9 @@ export class WorkspaceReferenceIndex {
         continue
       }
       const referenceComplete =
-        !markdownSource || metadataFrontmatterWithinLimit(page.markdown)
+        !markdownSource ||
+        !syntax.settings.frontmatter ||
+        metadataFrontmatterWithinLimit(page.markdown)
       next.set(page.path, {
         markdown: page.markdown,
         syntax: syntax.settings,
@@ -383,7 +385,7 @@ export class WorkspaceReferenceIndex {
     let complete = true
     for (const [path, document] of this.documents) {
       if (!isMarkdownDocument(path)) continue
-      document.properties ??= noteProperties(document.markdown)
+      document.properties ??= noteProperties(document.markdown, document.syntax)
       if (!document.properties.complete) complete = false
       if (!Object.hasOwn(document.properties.values, key)) continue
       const found = document.properties.values[key]

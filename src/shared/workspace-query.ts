@@ -31,6 +31,11 @@ export type WorkspaceSyntaxSnapshot = {
     readonly id: string
     readonly enabled: boolean
   }[]
+  /** Active Markdown projections; omitted by older direct IPC callers. */
+  readonly projections?: readonly {
+    readonly id: string
+    readonly parserVersion: string
+  }[]
   readonly choices: readonly {
     readonly id: string
     readonly dialect: string

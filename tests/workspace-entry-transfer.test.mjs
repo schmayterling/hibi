@@ -2,12 +2,14 @@ import assert from 'node:assert/strict'
 import {
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   rename,
   rm,
   rmdir,
   symlink,
+  truncate,
   unlink,
   writeFile,
 } from 'node:fs/promises'
@@ -15,6 +17,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { copyEntry, moveEntry } from '../src/main/workspace-entry-transfer.ts'
+
+function partialCopyCausedBy(pattern) {
+  return (error) => {
+    assert.equal(error.code, 'EPARTIALCOPY')
+    assert.match(error.message, /destination was created/i)
+    assert.match(error.cause?.message ?? '', pattern)
+    return true
+  }
+}
 
 test('file copy cannot replace a destination created after validation', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-entry-copy-race-'))
@@ -51,6 +62,34 @@ test('file copy rejects a source replaced after validation', async (t) => {
   assert.equal(await readFile(source, 'utf8'), 'replacement')
   assert.equal(await readFile(saved, 'utf8'), 'original')
   await assert.rejects(readFile(destination), { code: 'ENOENT' })
+})
+
+test('file copy reports partial destination when source changes during copy', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-entry-copy-write-race-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const source = join(root, 'source.md')
+  const destination = join(root, 'destination.md')
+  await writeFile(source, Buffer.alloc(128 * 1024, 97))
+  const probe = await open(source, 'r')
+  const fileHandlePrototype = Object.getPrototypeOf(probe)
+  await probe.close()
+  const read = fileHandlePrototype.read
+  let changed = false
+  t.mock.method(fileHandlePrototype, 'read', async function (...args) {
+    const result = await read.apply(this, args)
+    if (!changed && result.bytesRead) {
+      changed = true
+      await truncate(source, 0)
+    }
+    return result
+  })
+
+  await assert.rejects(
+    copyEntry(source, destination, false, () => true),
+    partialCopyCausedBy(/source file changed while copying/i),
+  )
+  assert.equal(changed, true)
+  assert.equal((await readFile(destination)).length, 64 * 1024)
 })
 
 test('folder copy cannot claim a competing destination', async (t) => {
@@ -92,6 +131,27 @@ test('folder copy still copies saved files', async (t) => {
     'nested',
   )
   await rmdir(join(destination, 'empty'))
+})
+
+test('folder copy reports a partial destination after a later child fails', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-folder-copy-partial-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const source = join(root, 'source')
+  const destination = join(root, 'destination')
+  await mkdir(source)
+  await writeFile(join(source, 'note.md'), 'original')
+  await assert.rejects(
+    copyEntry(
+      source,
+      destination,
+      true,
+      () => true,
+      async () => ['note.md', 'missing.md'],
+    ),
+    partialCopyCausedBy(/ENOENT/),
+  )
+  assert.equal(await readFile(join(source, 'note.md'), 'utf8'), 'original')
+  assert.equal(await readFile(join(destination, 'note.md'), 'utf8'), 'original')
 })
 
 test('folder copy rejects a source swapped for a symbolic link', async (t) => {
@@ -143,7 +203,7 @@ test('folder copy rejects a destination swapped for a symbolic link', async (t) 
         return names
       },
     ),
-    /destination folder changed/i,
+    partialCopyCausedBy(/destination folder changed/i),
   )
   assert.equal(await readFile(join(source, 'note.md'), 'utf8'), 'original')
   await assert.rejects(readFile(join(outside, 'note.md')), { code: 'ENOENT' })
@@ -172,7 +232,7 @@ test('folder copy rejects a source swapped after listing', async (t) => {
         return names
       },
     ),
-    /Symbolic links cannot be copied/,
+    partialCopyCausedBy(/Symbolic links cannot be copied/),
   )
   assert.equal(await readFile(join(saved, 'note.md'), 'utf8'), 'original')
   await assert.rejects(readFile(join(destination, 'note.md')), {

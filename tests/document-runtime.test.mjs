@@ -76,6 +76,19 @@ test('runtime facades capture immutable full snapshots and do not flatten on pub
   runtime.dispose()
 })
 
+test('activation publishes an already-dirty document for autosave', () => {
+  const { runtime } = fixture()
+  const notices = []
+  runtime.subscribeDocument((next, changes) =>
+    notices.push({ dirty: next.dirty, canAutosave: next.canAutosave, changes }),
+  )
+  runtime.activate(
+    document('unsaved edit', { savedMarkdown: 'saved', dirty: true }),
+  )
+  assert.deepEqual(notices, [{ dirty: true, canAutosave: true, changes: null }])
+  runtime.dispose()
+})
+
 test('runtime imports saved V while V+1 remains dirty and preserves history across tab revisions', async () => {
   const { runtime, operations, errors } = fixture()
   runtime.activate(document('a'))

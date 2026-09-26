@@ -466,7 +466,9 @@ export class DocumentRuntime {
       this.#updating = false
     }
     for (const listener of [...this.#catalogListeners]) listener()
-    return this.get()!
+    const active = this.get()!
+    for (const listener of [...this.#documentListeners]) listener(active, null)
+    return active
   }
   focus(document: DocumentFocus) {
     const session = this.session(document.tabId)

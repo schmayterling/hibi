@@ -1765,6 +1765,14 @@ async function captureSplitTabsKey({
       side + ' after capture',
     )
   ).data
+  await writeFile(
+    join(directory, side + '-before.png'),
+    Buffer.from(before, 'base64'),
+  )
+  await writeFile(
+    join(directory, side + '-after.png'),
+    Buffer.from(after, 'base64'),
+  )
   const image = await app.evaluate(
     (
       { nativeImage },
@@ -1802,15 +1810,17 @@ async function captureSplitTabsKey({
       const initial = pixels(before),
         final = pixels(after),
         change = distance(initial, final)
-      if (change <= 3) throw new Error('Captured glyph crop did not change.')
-      const first = captures.findIndex((capture) => {
-        if (capture.receivedEpoch < issuedEpoch) return false
-        const sample = pixels(capture.data)
-        return (
-          distance(sample, final) < distance(sample, initial) / 2 &&
-          distance(sample, initial) > change / 2
-        )
-      })
+      const first =
+        change <= 3
+          ? -1
+          : captures.findIndex((capture) => {
+              if (capture.receivedEpoch < issuedEpoch) return false
+              const sample = pixels(capture.data)
+              return (
+                distance(sample, final) < distance(sample, initial) / 2 &&
+                distance(sample, initial) > change / 2
+              )
+            })
       return {
         index: first,
         receivedEpoch: captures[first]?.receivedEpoch ?? null,
@@ -1828,13 +1838,9 @@ async function captureSplitTabsKey({
       issuedEpoch,
     },
   )
-  await writeFile(
-    join(directory, side + '-before.png'),
-    Buffer.from(before, 'base64'),
-  )
-  await writeFile(
-    join(directory, side + '-after.png'),
-    Buffer.from(after, 'base64'),
+  assert.ok(
+    image.imageChange > 3,
+    `${side}: captured glyph crop did not change; change=${image.imageChange}; crop=${JSON.stringify(image.crop)}; probe=${JSON.stringify(probe)}`,
   )
   if (image.index >= 0)
     await writeFile(

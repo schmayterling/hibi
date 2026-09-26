@@ -93,10 +93,9 @@ assert.ok(
     (values.size === 'all' &&
       values.shape === 'all' &&
       values.position === 'middle' &&
-      !values.quick &&
       values['hold-ms'] === '30000' &&
       values.rate === '30'),
-  '--mode split-tabs uses fixed short fixtures; size, shape, position, quick, hold-ms, and rate do not apply.',
+  '--mode split-tabs uses fixed short fixtures; size, shape, position, hold-ms, and rate do not apply.',
 )
 assert.ok(
   bare || !values['bare-markdown'],
@@ -191,17 +190,21 @@ const summary = {
     .digest('hex'),
   cases: [],
   limitations: [
-    'CDP injects browser input, not a physical keyboard or OS autorepeat. Cadence is independent of command acknowledgments and renderer paint.',
-    'Generated epoch timestamps, renderer event timestamps, and handler times expose queue delay; cross-process clock conversion is a proxy and is reported separately.',
-    'A matching glyph DOM range in the viewport at rAF, followed by another rAF, is a presentation opportunity, not physical scanout. Coalesced edits may share a frame.',
-    'Tracing and benchmark-only observer callbacks add overhead. Screenshots are captured after measured settlement; optional trace screenshots add further overhead.',
-    'Source model acceptance is observed after the native CodeMirror view update returns, using the same direct observer for Hibi and the bare engine. The probe registers no editor extension.',
-    'Source and visual updates may include synchronous DOM work. No artificial debounce, input-rate throttling based on paint, or reduced correctness checks are applied.',
     ...(splitTabsMode
       ? [
-          'Split-tabs uses two different mounted documents and Playwright keyboard.press synthetic key events. Its sampled screenshot glyph match timestamps the first observed changed capture at the driver; sampling and transport delay are included, and physical scanout is not measured.',
+          'Playwright keyboard.press sends synthetic browser key events, not physical keyboard input or OS autorepeat.',
+          'Baseline capture and probe setup precede the idle interval. Screenshot sampling starts immediately before each key and adds overhead.',
+          'Glyph and next-rAF timestamps are prepaint opportunities. A matched screenshot is timestamped on driver receipt, including capture, encoding, and transport delay; sampling can miss earlier changed frames and does not measure physical scanout.',
+          'Tracing and benchmark-only observer callbacks add overhead.',
         ]
-      : []),
+      : [
+          'CDP injects browser input, not a physical keyboard or OS autorepeat. Cadence is independent of command acknowledgments and renderer paint.',
+          'Generated epoch timestamps, renderer event timestamps, and handler times expose queue delay; cross-process clock conversion is a proxy and is reported separately.',
+          'A matching glyph DOM range in the viewport at rAF, followed by another rAF, is a presentation opportunity, not physical scanout. Coalesced edits may share a frame.',
+          'Tracing and benchmark-only observer callbacks add overhead. Screenshots are captured after measured settlement; optional trace screenshots add further overhead.',
+          'Source model acceptance is observed after the native CodeMirror view update returns, using the same direct observer for Hibi and the bare engine. The probe registers no editor extension.',
+          'Source and visual updates may include synchronous DOM work. No artificial debounce, input-rate throttling based on paint, or reduced correctness checks are applied.',
+        ]),
     ...(bare
       ? [
           `Engine-only uses CodeMirror ${values['bare-markdown'] ? 'with native Markdown parsing and highlighting' : 'without a language or highlighting extension'} and ProseMirror history with a static, inert split peer. No Hibi runtime, React, addons, canonical journal, or IPC save runs; saved artifacts are engine snapshots written by the benchmark runner.`,
@@ -261,10 +264,12 @@ async function deadline(promise, ms, label) {
     return await Promise.race([
       promise,
       new Promise((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`${label} exceeded ${ms} ms`)),
-          ms,
-        )
+        timer = setTimeout(() => {
+          const error = new Error(`${label} exceeded ${ms} ms`)
+          error.code = 'BENCHMARK_TIMEOUT'
+          error.label = label
+          reject(error)
+        }, ms)
       }),
     ])
   } finally {
@@ -1614,9 +1619,14 @@ async function captureSplitTabsKey({
   side,
   selector,
   expected,
+  idleMs,
 }) {
   const before = (
-    await session.send('Page.captureScreenshot', { format: 'png' })
+    await deadline(
+      session.send('Page.captureScreenshot', { format: 'png' }),
+      5000,
+      side + ' before capture',
+    )
   ).data
   await page.evaluate(
     ({ selector, expected, side }) => {
@@ -1698,11 +1708,17 @@ async function captureSplitTabsKey({
     },
     { selector, expected, side },
   )
+  await sleep(idleMs)
   const captures = []
   let collecting = true,
-    samplerError
+    samplerError,
+    sampleLimitReached = false
   const sampler = (async () => {
-    while (collecting && captures.length < 120) {
+    while (collecting) {
+      if (captures.length === 120) {
+        sampleLimitReached = true
+        break
+      }
       const data = (
         await deadline(
           session.send('Page.captureScreenshot', { format: 'png' }),
@@ -1719,6 +1735,7 @@ async function captureSplitTabsKey({
     samplerError = error
   })
   const issuedEpoch = performance.timeOrigin + performance.now()
+  let inputError
   try {
     await page.keyboard.press('x')
     await page.waitForFunction(
@@ -1727,11 +1744,14 @@ async function captureSplitTabsKey({
       { timeout: settleMs },
     )
     await sleep(100)
+  } catch (error) {
+    inputError = error
   } finally {
     collecting = false
     await deadline(sampler, 5000, side + ' sample drain')
   }
   if (samplerError) throw samplerError
+  if (inputError) throw inputError
   const probe = await page.evaluate(() => window.__twoPaneProbe)
   assert.equal(probe.keydownCount, 1)
   assert.equal(probe.beforeinputCount, 1)
@@ -1739,7 +1759,11 @@ async function captureSplitTabsKey({
   assert.equal(probe.inputType, 'insertText')
   assert.ok(probe.focused && probe.active)
   const after = (
-    await session.send('Page.captureScreenshot', { format: 'png' })
+    await deadline(
+      session.send('Page.captureScreenshot', { format: 'png' }),
+      5000,
+      side + ' after capture',
+    )
   ).data
   const image = await app.evaluate(
     (
@@ -1817,11 +1841,16 @@ async function captureSplitTabsKey({
       join(directory, side + '-first-changed.png'),
       Buffer.from(captures[image.index].data, 'base64'),
     )
-  assert.ok(image.index >= 0, side + ': no image-verified changed frame sample')
+  assert.ok(
+    image.index >= 0,
+    side +
+      ': no image-verified changed frame sample' +
+      (sampleLimitReached ? ' (120-sample cap reached)' : ''),
+  )
   return {
     side,
     probe,
-    image,
+    image: { ...image, sampleLimitReached },
     keydownToGlyphRafMs: probe.firstRafAt - probe.keydownAt,
     keydownToNextRafMs: probe.nextRafAt - probe.keydownAt,
     keyIssueToChangedCaptureReceiptMs: image.receivedEpoch - issuedEpoch,
@@ -1849,6 +1878,7 @@ async function runSplitTabsCase() {
       status: 'running',
       statusScope,
       integrityScope: 'two-hibi-documents-canonical-and-app-save',
+      idleBeforeKeyMs: values.quick ? 100 : 2000,
       edits: [],
     }
   await mkdir(directory)
@@ -2002,7 +2032,6 @@ async function runSplitTabsCase() {
         { selector, source: fixture.source },
       )
       await page.evaluate(() => document.fonts.ready)
-      await sleep(2000)
       const expected = fixture.source + 'x',
         edit = await captureSplitTabsKey({
           app,
@@ -2012,6 +2041,7 @@ async function runSplitTabsCase() {
           side,
           selector,
           expected,
+          idleMs: result.idleBeforeKeyMs,
         })
       edit.target = fixture.target
       edit.focusTransitionDriverMs = focusReady - focusStart
@@ -2071,6 +2101,14 @@ async function runSplitTabsCase() {
   } catch (error) {
     result.status = 'failed'
     result.error = error.stack ?? String(error)
+    if (
+      error.code === 'BENCHMARK_TIMEOUT' &&
+      /capture|sample/.test(error.label)
+    ) {
+      app?.process().kill('SIGKILL')
+      tracing = false
+      result.traceCollection = { error: 'aborted after screenshot timeout' }
+    }
     throw error
   } finally {
     if (tracing)

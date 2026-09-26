@@ -20,6 +20,8 @@ Write tags such as `#work` or `#project/topic` in Markdown prose. Shift-click a 
 
 Matching ignores case. Code, links, and heading markers do not count as tags. When Frontmatter is enabled, its YAML does not count. Disabling Tags leaves tags as ordinary text and removes them from workspace tag results. The tag browser marks its index incomplete when selected addon syntax cannot be interpreted by the workspace index.
 
+The current note's tag count follows its Markdown flavor and syntax settings. A question mark in the status bar means selected addon syntax may make that count incomplete.
+
 ## Workspace limits
 
 Save a new note inside the workspace before expecting it in graph or tag results. Both addons include unsaved edits to the active workspace note. Large workspaces may need a smaller folder to stay within indexing limits.

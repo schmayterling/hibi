@@ -665,6 +665,15 @@ export type AddonContext = {
     getSyntaxFeatures: () => readonly (MarkdownSyntaxFeature & {
       enabled: boolean
     })[]
+    /** Built-in metadata syntax for one file; unsupported addon syntax reports incomplete. */
+    getMetadataSyntax: (
+      documentId: string,
+      source?: string,
+    ) => {
+      settings: import('../shared/note-syntax').NoteSyntax
+      fingerprint: string
+      complete: boolean
+    }
     onSyntaxChange: (listener: () => void) => () => void
     /** Observe editor keydown/keyup without consuming input. Removed on addon stop. */
     onKeyEvent: (listener: (event: EditorKeyEvent) => void) => () => void

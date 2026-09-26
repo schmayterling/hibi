@@ -4105,6 +4105,9 @@
   "16d1c9050a0b": [
     "src/renderer/src/FormattingToolbar.tsx"
   ],
+  "ba4c743a7c81": [
+    "src/addons/tags/index.tsx"
+  ],
   "47a6a75ccb73": [
     "src/addons/tags/Panel.tsx"
   ],
@@ -4123,6 +4126,9 @@
   ],
   "1b4de2674796": [
     "src/addons/tags/Panel.tsx"
+  ],
+  "26e65e1ef80a": [
+    "src/addons/tags/index.tsx"
   ],
   "6e7e4b8b6873": [
     "src/addons/tags/index.tsx"

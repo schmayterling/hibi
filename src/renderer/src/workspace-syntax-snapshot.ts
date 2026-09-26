@@ -1,5 +1,12 @@
+import { builtInNoteSyntax, type NoteSyntax } from '../../shared/note-syntax.ts'
 import type { WorkspaceSyntaxSnapshot } from '../../shared/workspace-query'
-import { flavors, parseFlavorChoice } from './flavors'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
+import {
+  flavors,
+  loadFlavor,
+  parseFlavorChoice,
+  selectedFlavors,
+} from './flavors'
 import { markdownSyntax } from './markdown-syntax'
 
 const MAX_STORAGE_KEYS = 8192
@@ -11,13 +18,77 @@ const MAX_FEATURES = 512
 const MAX_PROJECTIONS = 128
 const MAX_SYNTAX_IDS = 128
 const choiceKey = /^hibi:flavor:([0-9a-f]{64})$/
+const knownFlavors = new Set([
+  'markdown.github',
+  'markdown.obsidian',
+  'math.latex',
+  'text-extras.text-extras',
+])
+const knownFeatures =
+  /^(?:core\.(?:heading-[1-6]|bold|italic|inline-code|escapes|code-blocks|quotes|bullet-lists|numbered-lists|dividers|line-breaks|links|images|html-blocks|inline-html)|markdown\.(?:tables|tasks|strike|alerts)|math\.(?:inline|block)|text-extras\.(?:subscript|subtext))$/
+type Projection = { id: string; preservation?: { version: string } }
+
+/** Current document's built-in parser contract without enumerating other files. */
+export function activeNoteMetadataSyntax(
+  id: string,
+  source: string | undefined,
+  hashtags: boolean,
+  projections: readonly Projection[],
+): { settings: NoteSyntax; fingerprint: string; complete: boolean } {
+  const available = flavors.snapshot()
+  const registeredFeatures = markdownSyntax.snapshot()
+  const selected = selectedFlavors(
+    loadFlavor(id),
+    available.slice(0, MAX_FLAVORS),
+  )
+  const ids = new Set(selected.map((flavor) => flavor.id))
+  const features = registeredFeatures.slice(0, MAX_FEATURES)
+  const activeProjections = projections.slice(0, MAX_PROJECTIONS)
+  const settings = builtInNoteSyntax(
+    ids,
+    features.filter((feature) => !feature.enabled).map((feature) => feature.id),
+    hashtags,
+    activeProjections.some(
+      (projection) => projection.id === 'frontmatter.metadata',
+    ),
+  )
+  const unsupported =
+    available.length > MAX_FLAVORS ||
+    registeredFeatures.length > MAX_FEATURES ||
+    projections.length > MAX_PROJECTIONS ||
+    selected.some((flavor) => !knownFlavors.has(flavor.id)) ||
+    features.some((feature) => !knownFeatures.test(feature.id)) ||
+    activeProjections.some(
+      (projection) => projection.id !== 'frontmatter.metadata',
+    ) ||
+    (source !== undefined &&
+      ((ids.has('markdown.github') &&
+        (/^ {0,3}>[ \t]*\[![a-z][a-z0-9-]*\]/im.test(source) ||
+          /\[\^[^\]\r\n]+\]/.test(source))) ||
+        (ids.has('math.latex') && source.includes('$')) ||
+        (ids.has('text-extras.text-extras') &&
+          (/(?:^|[^~])~(?!~)[^\s~](?:[^~\n]*?[^\s~])?~(?!~)/.test(source) ||
+            /(?:^|\n)-# /.test(source)))))
+  return {
+    settings,
+    fingerprint: JSON.stringify([
+      flavors.version(),
+      markdownSyntax.version(),
+      workspaceSyntaxEvents.snapshot(),
+      selected.map((flavor) => [flavor.id, flavor.preservation?.version]),
+      activeProjections.map((projection) => [
+        projection.id,
+        projection.preservation?.version,
+      ]),
+      settings,
+    ]),
+    complete: !unsupported,
+  }
+}
 
 export function captureWorkspaceSyntaxSnapshot(
   hashtags: boolean,
-  projections: readonly {
-    id: string
-    preservation?: { version: string }
-  }[] = [],
+  projections: readonly Projection[] = [],
 ): WorkspaceSyntaxSnapshot {
   let complete = true
   const registeredFlavors = flavors.snapshot()

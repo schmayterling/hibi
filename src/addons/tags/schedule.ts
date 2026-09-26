@@ -1,13 +1,20 @@
 import type { DocumentState } from '../../shared/desktop'
+import type { NoteSyntax } from '../../shared/note-syntax.ts'
 
-export type TagJob = { key: string; source: string }
+export type TagJob = { key: string; source: string; syntax: NoteSyntax }
 export type TagResult = { key: string; tags: string[] }
 
 /** A tab's content version advances on edits and external reloads; revision also advances on tab selection. */
 export function tagVersion(
   document: Pick<DocumentState, 'tabId' | 'id' | 'contentVersion'>,
+  syntaxFingerprint = '',
 ) {
-  return JSON.stringify([document.tabId, document.id, document.contentVersion])
+  return JSON.stringify([
+    document.tabId,
+    document.id,
+    document.contentVersion,
+    syntaxFingerprint,
+  ])
 }
 
 /** Delay source materialization until input settles and keep one parse in flight. */

@@ -5,6 +5,7 @@ export type NoteSyntax = {
   readonly gfm: boolean
   readonly wikilinks: boolean
   readonly hashtags: boolean
+  readonly frontmatter: boolean
   readonly disabledFeatures: readonly string[]
 }
 
@@ -12,6 +13,7 @@ export const defaultNoteSyntax: NoteSyntax = {
   gfm: true,
   wikilinks: true,
   hashtags: true,
+  frontmatter: true,
   disabledFeatures: [],
 }
 
@@ -124,7 +126,9 @@ export function noteLexer(
       })
     parsers.set(key, parser)
   }
-  const tokens = parser.lexer(readFrontmatter(source)?.content ?? source)
+  const tokens = parser.lexer(
+    syntax.frontmatter ? (readFrontmatter(source)?.content ?? source) : source,
+  )
   const disabled = new Set(syntax.disabledFeatures)
   if (disabled.size)
     parser.walkTokens(tokens, (token) => {

@@ -1,5 +1,6 @@
 import { FileText } from 'lucide-react'
 import { useEffect, useState, useSyncExternalStore } from 'react'
+import type { MarkdownExtension } from '../../addons/api'
 import type { WorkspaceState } from '../../shared/workspace'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events'
 import { Sidebar, type SidebarProps } from '../../ui/Sidebar'
@@ -9,6 +10,7 @@ export function BacklinksSidebar({
   workspace,
   revision,
   hashtags,
+  projections,
   onFile,
   open,
   overlay,
@@ -19,6 +21,7 @@ export function BacklinksSidebar({
   workspace: WorkspaceState | null
   revision: number | undefined
   hashtags: boolean
+  projections: readonly MarkdownExtension[]
   onFile: (path: string) => void
   open: boolean
   overlay: boolean
@@ -48,7 +51,10 @@ export function BacklinksSidebar({
           if (!snapshot.target || snapshot.target.workspaceId !== workspaceId)
             return
           const paths: string[] = []
-          const syntaxSnapshot = captureWorkspaceSyntaxSnapshot(hashtags)
+          const syntaxSnapshot = captureWorkspaceSyntaxSnapshot(
+            hashtags,
+            projections,
+          )
           let offset = 0
           let complete = true
           while (active) {
@@ -84,7 +90,7 @@ export function BacklinksSidebar({
       active = false
       clearTimeout(timer)
     }
-  }, [open, workspace, revision, hashtags, syntaxRevision])
+  }, [open, workspace, revision, hashtags, projections, syntaxRevision])
   return (
     <Sidebar
       className="document-sidebar backlinks-sidebar"

@@ -38,6 +38,7 @@ import {
   validatePreservation,
 } from '../../shared/preservation'
 import { startupSpan } from '../../shared/startup'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events'
 import { useDialogService } from '../../ui/DialogProvider'
 import { performanceDiagnostics } from '../../ui/diagnostics'
 import { menus } from '../../ui/menu-store'
@@ -438,6 +439,7 @@ export function useAddons(
         ? current
         : next
     })
+    workspaceSyntaxEvents.publish()
   }, [extensions])
   const running = useRef(
     new Map<string, { addon: Addon; stop: () => void }>(),
@@ -1569,6 +1571,7 @@ export function useAddons(
                         currentActivation.current.states.some(
                           (state) => state.id === 'tags' && state.enabled,
                         ),
+                        [...extensions.values()],
                       ),
                     }),
               index: () =>

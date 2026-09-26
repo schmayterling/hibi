@@ -65,6 +65,21 @@ test('built-in parser settings govern GFM, Obsidian, headings, and hashtags', ()
     }).links,
     ['target.md', 'target.md'],
   )
+  const frontmatterOff = { ...defaultNoteSyntax, frontmatter: false }
+  const leadingYaml = '---\nlink: "[hidden](target.md)"\n---\n# Body'
+  assert.deepEqual(noteReferences(leadingYaml).links, [])
+  assert.deepEqual(noteReferences(leadingYaml, frontmatterOff).links, [
+    'target.md',
+  ])
+  const yamlTag = '---\ntag: #yaml\n---\n# Body'
+  assert.deepEqual(noteTags(yamlTag), [])
+  assert.deepEqual(noteTags(yamlTag, frontmatterOff), ['yaml'])
+  assert.deepEqual(
+    Object.keys(
+      noteProperties('---\ntitle: Alpha\n---\n# Body', frontmatterOff).values,
+    ),
+    [],
+  )
 })
 
 test('properties keep bounded scalars and reject nested or invalid yaml', () => {

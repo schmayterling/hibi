@@ -77,7 +77,10 @@ test('snapshot captures saved file flavor, disabled syntax, and registry revisio
     JSON.stringify({ dialect: 'probe.wiki', syntax: ['probe.wiki'] }),
   )
   storage.setItem('hibi:flavor:not-a-file-id', '{}')
-  const before = captureWorkspaceSyntaxSnapshot(false)
+  const projections = [
+    { id: 'frontmatter.metadata', preservation: { version: '2' } },
+  ]
+  const before = captureWorkspaceSyntaxSnapshot(false, projections)
   const unregister = flavors.register('probe', {
     id: 'wiki',
     name: 'Wiki',
@@ -89,10 +92,13 @@ test('snapshot captures saved file flavor, disabled syntax, and registry revisio
   const registeredRevision = flavors.version()
   try {
     markdownSyntax.setEnabled('core.bold', false)
-    const current = captureWorkspaceSyntaxSnapshot(true)
+    const current = captureWorkspaceSyntaxSnapshot(true, projections)
     assert.equal(current.version, 1)
     assert.equal(current.complete, true)
     assert.equal(current.hashtags, true)
+    assert.deepEqual(current.projections, [
+      { id: 'frontmatter.metadata', parserVersion: '2' },
+    ])
     assert.deepEqual(current.choices, [
       { id, dialect: 'probe.wiki', syntax: ['probe.wiki'] },
     ])

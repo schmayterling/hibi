@@ -424,8 +424,10 @@ dialog.showMessageBox = (...args) => {
           `draft editor never received focus: ${error.message}\n${JSON.stringify(await inspect())}`,
         )
       })
-    await editor.fill('')
-    const afterFill = await inspect()
+    // Send an editor keystroke: fill('') can skip deletion after a dev reload.
+    await editor.press('ControlOrMeta+A')
+    await editor.press('Backspace')
+    const afterInput = await inspect()
     await page.evaluate(() => window.hibi.flushDocumentChanges())
     const afterFlush = await inspect()
     try {
@@ -440,7 +442,7 @@ dialog.showMessageBox = (...args) => {
     } catch (error) {
       const state = await inspect()
       assert.fail(
-        `draft did not clear: ${error.message}\n${JSON.stringify({ before, afterFill, afterFlush, state })}`,
+        `draft did not clear: ${error.message}\n${JSON.stringify({ before, afterInput, afterFlush, state })}`,
       )
     }
   }

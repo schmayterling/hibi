@@ -128,13 +128,10 @@ test('native file operations preserve drafts and avoid silent overwrites', {
     )
     .waitFor()
   const draft = 'recover this draft'
-  await page
-    .getByRole('textbox', { name: /markdown editor/i })
-    .fill(draft)
+  await page.getByRole('textbox', { name: /markdown editor/i }).fill(draft)
   await waitForAsync(
     page,
-    async (expected) =>
-      (await window.hibi.getDocument()).markdown === expected,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
     draft,
   )
   assert.equal(

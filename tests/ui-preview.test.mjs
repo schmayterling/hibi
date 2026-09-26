@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 const customCSS = `:root { --ui-preview-test-probe: applied; }
 .titlebar { background-color: rgb(12, 34, 56) !important; }`
@@ -44,7 +45,12 @@ test('ui preview can be enabled in release, edits samples, and owns persistent g
   delete env.HIBI_TEST_SHOW_WINDOWS
   let app
   t.after(async () => {
-    if (app) await app.close()
+    if (app) {
+      await app
+        .evaluate(() => globalThis.releaseCssDisableWrite?.())
+        .catch(() => {})
+      await app.close()
+    }
     await rm(profile, { recursive: true, force: true })
   })
   const launch = async () => {
@@ -147,18 +153,60 @@ test('ui preview can be enabled in release, edits samples, and owns persistent g
     await panel.getByRole('textbox', { name: 'Custom CSS' }).inputValue(),
     customCSS,
   )
+  await app.evaluate(({ ipcMain }) => {
+    const write = ipcMain._invokeHandlers.get('addon-storage:write')
+    if (!write) throw new Error('Addon storage write handler is unavailable')
+    globalThis.cssDisableWriteEntered = false
+    globalThis.cssDisableWriteFinished = false
+    ipcMain.removeHandler('addon-storage:write')
+    ipcMain.handle('addon-storage:write', async (event, request) => {
+      if (
+        request?.owner !== 'ui-preview' ||
+        request?.key !== 'custom-css' ||
+        request?.value?.enabled !== false
+      )
+        return write(event, request)
+      globalThis.cssDisableWriteEntered = true
+      await new Promise((resolve) => {
+        globalThis.releaseCssDisableWrite = resolve
+      })
+      const result = await write(event, request)
+      globalThis.cssDisableWriteFinished = true
+      return result
+    })
+  })
   await clickMenu(app, 'Disable custom CSS')
-  await panel.getByText('Custom CSS disabled.', { exact: true }).waitFor()
-  await page.waitForFunction(
-    () =>
-      getComputedStyle(document.querySelector('.titlebar'))
-        .getPropertyValue('--ui-preview-test-probe')
-        .trim() === '',
-  )
+  await waitForAsync(app, () => globalThis.cssDisableWriteEntered === true)
+  await clickMenu(app, 'Close tab')
+  await page
+    .getByRole('tab', { name: 'UI preview' })
+    .waitFor({ state: 'detached' })
   assert.equal(
     (await titlebarStyle(page)).backgroundColor,
     original.backgroundColor,
   )
+  assert.equal((await titlebarStyle(page)).probe, '')
+  await app.evaluate(() => globalThis.releaseCssDisableWrite())
+  await waitForAsync(app, () => globalThis.cssDisableWriteFinished === true)
+  assert.equal((await titlebarStyle(page)).probe, '')
+  panel = await openPreview(app, page)
+  await panel.getByText('Custom CSS disabled.', { exact: true }).waitFor()
+  assert.equal(
+    await panel.getByRole('textbox', { name: 'Custom CSS' }).inputValue(),
+    customCSS,
+  )
+  assert.equal(
+    await panel
+      .getByRole('checkbox', { name: 'Enable custom CSS' })
+      .isChecked(),
+    false,
+  )
+
+  await app.close()
+  app = undefined
+  page = await launch()
+  assert.equal((await titlebarStyle(page)).probe, '')
+  panel = await openPreview(app, page)
 
   await panel.getByRole('checkbox', { name: 'Enable custom CSS' }).check()
   await panel.getByRole('button', { name: 'Save CSS' }).click()

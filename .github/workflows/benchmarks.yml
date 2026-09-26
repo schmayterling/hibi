@@ -9,6 +9,10 @@ on:
         description: Ignore dependency and Electron caches
         type: boolean
         default: false
+      desktop_comparison:
+        description: Compare baseline and selected branch on a hosted Mac desktop
+        type: boolean
+        default: false
 permissions:
   contents: read
   id-token: write
@@ -32,3 +36,80 @@ jobs:
         with:
           mode: simulation
           run: npm run bench
+  desktop-comparison:
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.desktop_comparison }}
+    needs: core
+    timeout-minutes: 60
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: baseline
+          ref: 35ef3fd5df7d8c8e5e1b630f22f51f08cfdf0b94
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: candidate/.nvmrc
+          cache: ${{ inputs.clean != true && 'npm' || '' }}
+          cache-dependency-path: |
+            baseline/package-lock.json
+            candidate/package-lock.json
+      - name: Build baseline
+        working-directory: baseline
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Build candidate
+        working-directory: candidate
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Compare desktop startup and input
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          for file in scripts/benchmark-startup.mjs scripts/benchmark-input.mjs scripts/benchmark-flows.mjs tests/electron.mjs tests/keyboard.mjs; do
+            cp "candidate/$file" "baseline/$file"
+            cmp "candidate/$file" "baseline/$file"
+          done
+          {
+            printf 'baseline=%s\ncandidate=%s\n' "$(git -C baseline rev-parse HEAD)" "$(git -C candidate rev-parse HEAD)"
+            printf 'node=%s\nmacos=%s\nrunner=%s\n' "$(node --version)" "$(sw_vers -productVersion)" "${RUNNER_IMAGE:-unknown}"
+            printf 'sampler_sha256:\n'
+            shasum -a 256 candidate/scripts/benchmark-startup.mjs candidate/scripts/benchmark-input.mjs candidate/scripts/benchmark-flows.mjs candidate/tests/electron.mjs candidate/tests/keyboard.mjs
+            printf 'order=baseline,candidate,candidate,baseline per workload\n'
+            printf 'startup_runs=11 per batch; input_runs=10 per batch\n'
+          } > results/manifest.txt
+          workloads=(startup input-blank input-code)
+          branches=(baseline candidate candidate baseline)
+          for workload in "${workloads[@]}"; do
+            for index in "${!branches[@]}"; do
+              branch="${branches[$index]}"
+              output="$GITHUB_WORKSPACE/results/$workload-$((index + 1))-$branch"
+              echo "::group::$workload batch $((index + 1)) $branch"
+              if [[ "$workload" == startup ]]; then
+                (
+                  cd "$branch"
+                  HIBI_BENCH_RUNS=11 HIBI_BENCH_DOCUMENTS=0 HIBI_BENCH_ADDONS='' HIBI_BENCH_INSERT_TEXT=1 node scripts/benchmark-startup.mjs
+                ) > "$output.json" 2> "$output.stderr" || { tail -n 30 "$output.stderr"; exit 1; }
+              else
+                fixture="${workload#input-}.md"
+                (
+                  cd "$branch"
+                  HIBI_INPUT_RUNS=10 HIBI_INPUT_FIXTURE="$fixture" HIBI_INPUT_ANALYSIS=0 HIBI_BENCH_FOREGROUND=1 HIBI_BENCH_INSERT_TEXT=1 node scripts/benchmark-input.mjs
+                ) > "$output.json" 2> "$output.stderr" || { tail -n 30 "$output.stderr"; exit 1; }
+              fi
+              node -e 'const result = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")); if (!result.samples?.length) process.exit(1); console.log(JSON.stringify(result.summary))' "$output.json"
+              echo '::endgroup::'
+            done
+          done
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ always() }}
+        with:
+          name: desktop-comparison-raw
+          path: results/
+          if-no-files-found: warn
+          retention-days: 14

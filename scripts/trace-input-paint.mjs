@@ -10,7 +10,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { cpus, release, tmpdir, totalmem } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -53,7 +53,7 @@ const { values } = parseArgs({
 })
 if (values.help) {
   console.log(
-    'node scripts/trace-input-paint.mjs --engine hibi|bare [--bare-markdown] --mode source|visual|split|all [--file PATH | --size chars|words|all --shape paragraphs|giant|all] --position start|middle|end|all --target source|visual|both --out NEW_DIRECTORY [--quick] [--hold-ms 30000] [--rate 30] [--fixed-chrome] [--background] [--trace-screenshots] [--cpu-profile] [--continue-on-error]',
+    'node scripts/trace-input-paint.mjs --engine hibi|bare [--bare-markdown] --mode source|visual|split|split-tabs|all [--file PATH | --size chars|words|all --shape paragraphs|giant|all] --position start|middle|end|all --target source|visual|both --out NEW_DIRECTORY [--quick] [--hold-ms 30000] [--rate 30] [--fixed-chrome] [--background] [--trace-screenshots] [--cpu-profile] [--continue-on-error]',
   )
   process.exit(0)
 }
@@ -62,7 +62,10 @@ const choose = (value, choices) => {
   assert.ok(choices.includes(value), `Choose ${choices.join(', ')} or all.`)
   return [value]
 }
-const modes = choose(values.mode, ['source', 'visual', 'split']),
+const splitTabsMode = values.mode === 'split-tabs',
+  modes = splitTabsMode
+    ? ['split-tabs']
+    : choose(values.mode, ['source', 'visual', 'split']),
   sizes = values.file ? ['file'] : choose(values.size, ['chars', 'words']),
   shapes = values.file
     ? ['original']
@@ -73,6 +76,27 @@ const modes = choose(values.mode, ['source', 'visual', 'split']),
   settleMs = Number(values['settle-ms'])
 assert.ok(['hibi', 'bare'].includes(values.engine))
 const bare = values.engine === 'bare'
+assert.ok(
+  !splitTabsMode || (!bare && !values.file && values.target === 'both'),
+  '--mode split-tabs requires Hibi, generated fixtures, and --target both.',
+)
+assert.ok(
+  !splitTabsMode ||
+    (!values.background &&
+      !values['cpu-profile'] &&
+      !values['fixed-chrome'] &&
+      !values['trace-screenshots']),
+  '--mode split-tabs requires a foreground window and does not support --cpu-profile, --fixed-chrome, or --trace-screenshots.',
+)
+assert.ok(
+  !splitTabsMode ||
+    (values.size === 'all' &&
+      values.shape === 'all' &&
+      values.position === 'middle' &&
+      values['hold-ms'] === '30000' &&
+      values.rate === '30'),
+  '--mode split-tabs uses fixed short fixtures; size, shape, position, hold-ms, and rate do not apply.',
+)
 assert.ok(
   bare || !values['bare-markdown'],
   '--bare-markdown requires --engine bare.',
@@ -166,12 +190,21 @@ const summary = {
     .digest('hex'),
   cases: [],
   limitations: [
-    'CDP injects browser input, not a physical keyboard or OS autorepeat. Cadence is independent of command acknowledgments and renderer paint.',
-    'Generated epoch timestamps, renderer event timestamps, and handler times expose queue delay; cross-process clock conversion is a proxy and is reported separately.',
-    'A matching glyph DOM range in the viewport at rAF, followed by another rAF, is a presentation opportunity, not physical scanout. Coalesced edits may share a frame.',
-    'Tracing and benchmark-only observer callbacks add overhead. Screenshots are captured after measured settlement; optional trace screenshots add further overhead.',
-    'Source model acceptance is observed after the native CodeMirror view update returns, using the same direct observer for Hibi and the bare engine. The probe registers no editor extension.',
-    'Source and visual updates may include synchronous DOM work. No artificial debounce, input-rate throttling based on paint, or reduced correctness checks are applied.',
+    ...(splitTabsMode
+      ? [
+          'Playwright keyboard.press sends synthetic browser key events, not physical keyboard input or OS autorepeat.',
+          'Baseline capture and probe setup precede the idle interval. Screenshot sampling starts immediately before each key and adds overhead.',
+          'Glyph and next-rAF timestamps are prepaint opportunities. A matched screenshot is timestamped on driver receipt, including capture, encoding, and transport delay; sampling can miss earlier changed frames and does not measure physical scanout.',
+          'Tracing and benchmark-only observer callbacks add overhead.',
+        ]
+      : [
+          'CDP injects browser input, not a physical keyboard or OS autorepeat. Cadence is independent of command acknowledgments and renderer paint.',
+          'Generated epoch timestamps, renderer event timestamps, and handler times expose queue delay; cross-process clock conversion is a proxy and is reported separately.',
+          'A matching glyph DOM range in the viewport at rAF, followed by another rAF, is a presentation opportunity, not physical scanout. Coalesced edits may share a frame.',
+          'Tracing and benchmark-only observer callbacks add overhead. Screenshots are captured after measured settlement; optional trace screenshots add further overhead.',
+          'Source model acceptance is observed after the native CodeMirror view update returns, using the same direct observer for Hibi and the bare engine. The probe registers no editor extension.',
+          'Source and visual updates may include synchronous DOM work. No artificial debounce, input-rate throttling based on paint, or reduced correctness checks are applied.',
+        ]),
     ...(bare
       ? [
           `Engine-only uses CodeMirror ${values['bare-markdown'] ? 'with native Markdown parsing and highlighting' : 'without a language or highlighting extension'} and ProseMirror history with a static, inert split peer. No Hibi runtime, React, addons, canonical journal, or IPC save runs; saved artifacts are engine snapshots written by the benchmark runner.`,
@@ -231,10 +264,12 @@ async function deadline(promise, ms, label) {
     return await Promise.race([
       promise,
       new Promise((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`${label} exceeded ${ms} ms`)),
-          ms,
-        )
+        timer = setTimeout(() => {
+          const error = new Error(`${label} exceeded ${ms} ms`)
+          error.code = 'BENCHMARK_TIMEOUT'
+          error.label = label
+          reject(error)
+        }, ms)
       }),
     ])
   } finally {
@@ -1576,33 +1611,550 @@ async function runCase(config) {
     )
   }
 }
+async function captureSplitTabsKey({
+  app,
+  page,
+  session,
+  directory,
+  side,
+  selector,
+  expected,
+  idleMs,
+}) {
+  const before = (
+    await deadline(
+      session.send('Page.captureScreenshot', { format: 'png' }),
+      5000,
+      side + ' before capture',
+    )
+  ).data
+  await page.evaluate(
+    ({ selector, expected, side }) => {
+      const element = document.querySelector(selector)
+      if (!element?.isContentEditable)
+        throw new Error('Target editor is not editable.')
+      const probe = {
+        keydownCount: 0,
+        beforeinputCount: 0,
+        inputCount: 0,
+        viewport: { width: innerWidth, height: innerHeight },
+      }
+      window.__twoPaneProbe = probe
+      const frame = () => {
+        if (element.textContent !== expected)
+          return requestAnimationFrame(frame)
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+        let last
+        while (walker.nextNode())
+          if (walker.currentNode.textContent) last = walker.currentNode
+        if (!last?.textContent.endsWith('x'))
+          return requestAnimationFrame(frame)
+        const range = document.createRange()
+        range.setStart(last, last.textContent.length - 1)
+        range.setEnd(last, last.textContent.length)
+        const rect = range.getBoundingClientRect()
+        if (
+          range.toString() !== 'x' ||
+          rect.width <= 2 ||
+          rect.height <= 2 ||
+          rect.left < 0 ||
+          rect.right > innerWidth ||
+          rect.top < 0 ||
+          rect.bottom > innerHeight
+        )
+          return requestAnimationFrame(frame)
+        probe.glyph = {
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          bottom: rect.bottom,
+        }
+        probe.firstRafAt = performance.now()
+        probe.focused = document.activeElement === element
+        probe.active =
+          element.closest('.editor-page')?.getAttribute('data-active') ===
+          'true'
+        performance.mark('input-paint:split-tabs:' + side + ':glyph-raf')
+        requestAnimationFrame(() => {
+          probe.nextRafAt = performance.now()
+        })
+      }
+      element.addEventListener(
+        'keydown',
+        (event) => {
+          if (event.key !== 'x') return
+          probe.keydownCount++
+          probe.keydownAt = performance.now()
+          performance.mark('input-paint:split-tabs:' + side + ':keydown')
+          requestAnimationFrame(frame)
+        },
+        true,
+      )
+      element.addEventListener(
+        'beforeinput',
+        (event) => {
+          probe.beforeinputCount++
+          probe.inputType = event.inputType
+        },
+        true,
+      )
+      element.addEventListener(
+        'input',
+        () => {
+          probe.inputCount++
+        },
+        true,
+      )
+    },
+    { selector, expected, side },
+  )
+  await sleep(idleMs)
+  const captures = []
+  let collecting = true,
+    samplerError,
+    sampleLimitReached = false
+  const sampler = (async () => {
+    while (collecting) {
+      if (captures.length === 120) {
+        sampleLimitReached = true
+        break
+      }
+      const data = (
+        await deadline(
+          session.send('Page.captureScreenshot', { format: 'png' }),
+          5000,
+          side + ' frame sample',
+        )
+      ).data
+      captures.push({
+        data,
+        receivedEpoch: performance.timeOrigin + performance.now(),
+      })
+    }
+  })().catch((error) => {
+    samplerError = error
+  })
+  const issuedEpoch = performance.timeOrigin + performance.now()
+  let inputError
+  try {
+    await page.keyboard.press('x')
+    await page.waitForFunction(
+      () => window.__twoPaneProbe?.nextRafAt,
+      undefined,
+      { timeout: settleMs },
+    )
+    await sleep(100)
+  } catch (error) {
+    inputError = error
+  } finally {
+    collecting = false
+    await deadline(sampler, 5000, side + ' sample drain')
+  }
+  if (samplerError) throw samplerError
+  if (inputError) throw inputError
+  const probe = await page.evaluate(() => window.__twoPaneProbe)
+  assert.equal(probe.keydownCount, 1)
+  assert.equal(probe.beforeinputCount, 1)
+  assert.equal(probe.inputCount, 1)
+  assert.equal(probe.inputType, 'insertText')
+  assert.ok(probe.focused && probe.active)
+  const after = (
+    await deadline(
+      session.send('Page.captureScreenshot', { format: 'png' }),
+      5000,
+      side + ' after capture',
+    )
+  ).data
+  const image = await app.evaluate(
+    (
+      { nativeImage },
+      { before, after, captures, glyph, viewport, issuedEpoch },
+    ) => {
+      const decode = (data) =>
+        nativeImage.createFromBuffer(Buffer.from(data, 'base64'))
+      const size = decode(before).getSize()
+      const crop = {
+        x: Math.ceil(((glyph.left + 1) * size.width) / viewport.width),
+        y: Math.ceil(((glyph.top + 1) * size.height) / viewport.height),
+        width:
+          Math.floor(((glyph.right - 1) * size.width) / viewport.width) -
+          Math.ceil(((glyph.left + 1) * size.width) / viewport.width),
+        height:
+          Math.floor(((glyph.bottom - 1) * size.height) / viewport.height) -
+          Math.ceil(((glyph.top + 1) * size.height) / viewport.height),
+      }
+      if (crop.width < 2 || crop.height < 2)
+        throw new Error('Glyph crop is too small.')
+      const pixels = (data) => {
+        const image = decode(data),
+          current = image.getSize()
+        if (current.width !== size.width || current.height !== size.height)
+          throw new Error('Capture image size changed.')
+        return image.crop(crop).toBitmap()
+      }
+      const distance = (a, b) => {
+        let total = 0
+        for (let offset = 0; offset < a.length; offset += 4)
+          for (let channel = 0; channel < 3; channel++)
+            total += Math.abs(a[offset + channel] - b[offset + channel])
+        return total / ((a.length / 4) * 3)
+      }
+      const initial = pixels(before),
+        final = pixels(after),
+        change = distance(initial, final)
+      if (change <= 3) throw new Error('Captured glyph crop did not change.')
+      const first = captures.findIndex((capture) => {
+        if (capture.receivedEpoch < issuedEpoch) return false
+        const sample = pixels(capture.data)
+        return (
+          distance(sample, final) < distance(sample, initial) / 2 &&
+          distance(sample, initial) > change / 2
+        )
+      })
+      return {
+        index: first,
+        receivedEpoch: captures[first]?.receivedEpoch ?? null,
+        framesSampled: captures.length,
+        imageChange: change,
+        crop,
+      }
+    },
+    {
+      before,
+      after,
+      captures,
+      glyph: probe.glyph,
+      viewport: probe.viewport,
+      issuedEpoch,
+    },
+  )
+  await writeFile(
+    join(directory, side + '-before.png'),
+    Buffer.from(before, 'base64'),
+  )
+  await writeFile(
+    join(directory, side + '-after.png'),
+    Buffer.from(after, 'base64'),
+  )
+  if (image.index >= 0)
+    await writeFile(
+      join(directory, side + '-first-changed.png'),
+      Buffer.from(captures[image.index].data, 'base64'),
+    )
+  assert.ok(
+    image.index >= 0,
+    side +
+      ': no image-verified changed frame sample' +
+      (sampleLimitReached ? ' (120-sample cap reached)' : ''),
+  )
+  return {
+    side,
+    probe,
+    image: { ...image, sampleLimitReached },
+    keydownToGlyphRafMs: probe.firstRafAt - probe.keydownAt,
+    keydownToNextRafMs: probe.nextRafAt - probe.keydownAt,
+    keyIssueToChangedCaptureReceiptMs: image.receivedEpoch - issuedEpoch,
+  }
+}
+
+async function runSplitTabsCase() {
+  const directory = join(output, 'split-tabs-two-documents'),
+    profile = join(directory, 'profile'),
+    fixtures = {
+      left: {
+        file: join(directory, 'left.md'),
+        source: 'left pane baseline',
+        target: 'source',
+      },
+      right: {
+        file: join(directory, 'right.md'),
+        source: 'right pane baseline',
+        target: 'visual',
+      },
+    },
+    result = {
+      mode: 'split-tabs',
+      directory,
+      status: 'running',
+      statusScope,
+      integrityScope: 'two-hibi-documents-canonical-and-app-save',
+      idleBeforeKeyMs: values.quick ? 100 : 2000,
+      edits: [],
+    }
+  await mkdir(directory)
+  await installProbe(profile)
+  for (const fixture of Object.values(fixtures))
+    await writeFile(fixture.file, fixture.source)
+  summary.cases.push(result)
+  let app,
+    session,
+    finishTrace,
+    tracing = false,
+    watchdog
+  try {
+    app = await launchBenchmarkApp(profile)
+    watchdog = setTimeout(() => app.process().kill('SIGKILL'), 180000)
+    const page = await app.firstWindow()
+    page.setDefaultTimeout(30000)
+    await app.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows()[0]
+      win.show()
+      win.focus()
+    })
+    await waitForEditor(page)
+    const openFixture = async (fixture) => {
+      await app.evaluate(({ dialog }, file) => {
+        dialog.showOpenDialog = async () => ({
+          canceled: false,
+          filePaths: [file],
+        })
+      }, fixture.file)
+      await clickMenu(app, 'Open…')
+      await page.waitForFunction(
+        async ({ name, source }) => {
+          const doc = await window.hibi.getDocument()
+          return (
+            doc.name === name &&
+            doc.markdown === source &&
+            document.querySelector('.app')?.getAttribute('aria-busy') ===
+              'false'
+          )
+        },
+        { name: basename(fixture.file), source: fixture.source },
+      )
+      fixture.id = (await page.evaluate(() => window.hibi.getDocument())).tabId
+    }
+    await openFixture(fixtures.left)
+    await openFixture(fixtures.right)
+    await page.getByRole('tab', { name: 'left.md' }).click()
+    await page.waitForFunction(
+      async (id) =>
+        (await window.hibi.getDocument()).tabId === id &&
+        document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+      fixtures.left.id,
+    )
+    await page
+      .locator('[data-tab-key="' + fixtures.right.id + '"] .tab-split')
+      .click()
+    await page.locator('.editor-page[data-side="left"] .tiptap').click()
+    await page.waitForFunction(
+      async (id) =>
+        (await window.hibi.getDocument()).tabId === id &&
+        document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+      fixtures.left.id,
+    )
+    await page.getByRole('button', { name: 'Source view', exact: true }).click()
+    const editors = {
+      left: page.locator('.editor-page[data-side="left"] .cm-content'),
+      right: page.locator('.editor-page[data-side="right"] .tiptap'),
+    }
+    await editors.left.waitFor()
+    await editors.right.waitFor()
+    await editors.right.click()
+    await page.waitForFunction(
+      async (id) =>
+        (await window.hibi.getDocument()).tabId === id &&
+        document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+      fixtures.right.id,
+    )
+    await page.evaluate(() => {
+      window.__twoPaneNodes = {
+        left: document.querySelector(
+          '.editor-page[data-side="left"] .cm-content',
+        ),
+        right: document.querySelector(
+          '.editor-page[data-side="right"] .tiptap',
+        ),
+      }
+    })
+    session = await page.context().newCDPSession(page)
+    await session.send('Page.enable')
+    result.traceCategories = [
+      'input',
+      'latencyInfo',
+      'devtools.timeline',
+      'disabled-by-default-devtools.timeline.frame',
+      'blink.user_timing',
+      'v8',
+      'cc',
+      'viz',
+    ]
+    finishTrace = createTraceFinalizer(session, join(directory, 'trace.json'))
+    await session.send('Tracing.start', {
+      transferMode: 'ReturnAsStream',
+      streamFormat: 'json',
+      categories: result.traceCategories.join(','),
+    })
+    tracing = true
+    for (const side of ['left', 'right']) {
+      const fixture = fixtures[side],
+        other = fixtures[side === 'left' ? 'right' : 'left'],
+        selector =
+          side === 'left'
+            ? '.editor-page[data-side="left"] .cm-content'
+            : '.editor-page[data-side="right"] .tiptap'
+      assert.ok(
+        await page.evaluate(
+          async ({ side, otherId }) =>
+            document
+              .querySelector('.editor-page[data-side="' + side + '"]')
+              ?.getAttribute('data-active') === 'false' &&
+            (await window.hibi.getDocument()).tabId === otherId &&
+            window.__twoPaneNodes.left ===
+              document.querySelector(
+                '.editor-page[data-side="left"] .cm-content',
+              ) &&
+            window.__twoPaneNodes.right ===
+              document.querySelector('.editor-page[data-side="right"] .tiptap'),
+          { side, otherId: other.id },
+        ),
+        side + ': target not mounted and inactive',
+      )
+      const focusStart = performance.timeOrigin + performance.now()
+      await editors[side].click()
+      await page.waitForFunction(
+        async ({ side, id }) =>
+          document
+            .querySelector('.editor-page[data-side="' + side + '"]')
+            ?.getAttribute('data-active') === 'true' &&
+          document.querySelector('.app')?.getAttribute('aria-busy') ===
+            'false' &&
+          (await window.hibi.getDocument()).tabId === id,
+        { side, id: fixture.id },
+      )
+      const focusReady = performance.timeOrigin + performance.now()
+      await editors[side].press('End')
+      await page.waitForFunction(
+        ({ selector, source }) => {
+          const node = document.querySelector(selector)
+          return document.activeElement === node && node?.textContent === source
+        },
+        { selector, source: fixture.source },
+      )
+      await page.evaluate(() => document.fonts.ready)
+      const expected = fixture.source + 'x',
+        edit = await captureSplitTabsKey({
+          app,
+          page,
+          session,
+          directory,
+          side,
+          selector,
+          expected,
+          idleMs: result.idleBeforeKeyMs,
+        })
+      edit.target = fixture.target
+      edit.focusTransitionDriverMs = focusReady - focusStart
+      await page.waitForFunction(
+        async ({ id, expected }) => {
+          const doc = await window.hibi.getDocument()
+          return doc.tabId === id && doc.markdown === expected
+        },
+        { id: fixture.id, expected },
+        { timeout: settleMs },
+      )
+      await clickMenu(app, 'Save')
+      await page.waitForFunction(
+        (side) =>
+          !document
+            .querySelector(
+              '.editor-page[data-side="' + side + '"] .split-tab-heading span',
+            )
+            ?.textContent.includes('•') &&
+          document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+        side,
+        { timeout: settleMs },
+      )
+      assert.equal(await readFile(fixture.file, 'utf8'), expected)
+      assert.equal(
+        await readFile(other.file, 'utf8'),
+        side === 'left' ? other.source : other.source + 'x',
+      )
+      edit.canonicalAndDiskVerified = true
+      result.edits.push(edit)
+    }
+    for (const side of ['left', 'right']) {
+      const fixture = fixtures[side]
+      await editors[side].click()
+      await page.waitForFunction(
+        async ({ id, expected }) => {
+          const doc = await window.hibi.getDocument()
+          return doc.tabId === id && doc.markdown === expected
+        },
+        { id: fixture.id, expected: fixture.source + 'x' },
+      )
+      assert.equal(await readFile(fixture.file, 'utf8'), fixture.source + 'x')
+    }
+    result.mountedAfter = await page.evaluate(
+      () =>
+        window.__twoPaneNodes.left ===
+          document.querySelector(
+            '.editor-page[data-side="left"] .cm-content',
+          ) &&
+        window.__twoPaneNodes.right ===
+          document.querySelector('.editor-page[data-side="right"] .tiptap'),
+    )
+    assert.ok(result.mountedAfter)
+    result.traceCollection = await finishTrace()
+    tracing = false
+    result.status = 'passed'
+  } catch (error) {
+    result.status = 'failed'
+    result.error = error.stack ?? String(error)
+    if (
+      error.code === 'BENCHMARK_TIMEOUT' &&
+      /capture|sample/.test(error.label)
+    ) {
+      app?.process().kill('SIGKILL')
+      tracing = false
+      result.traceCollection = { error: 'aborted after screenshot timeout' }
+    }
+    throw error
+  } finally {
+    if (tracing)
+      result.traceCollection = await finishTrace().catch((error) => ({
+        error: error.message,
+      }))
+    if (app)
+      await deadline(app.close(), 5000, 'benchmark app close').catch(() =>
+        app.process().kill('SIGKILL'),
+      )
+    clearTimeout(watchdog)
+    await writeFile(
+      join(directory, 'result.json'),
+      JSON.stringify(result, null, 2),
+    )
+  }
+}
 try {
-  for (const mode of modes)
-    for (const size of sizes)
-      for (const shape of shapes)
-        for (const position of positions) {
-          const targets =
-            mode === 'split'
-              ? values.target === 'both'
-                ? ['source', 'visual']
-                : [values.target]
-              : [mode]
-          for (const target of targets) {
-            try {
-              await runCase({ mode, target, size, shape, position })
-            } catch (error) {
-              if (!values['continue-on-error']) throw error
-              process.exitCode = 1
-              console.error(
-                `${mode}/${target}/${size}/${shape}/${position}: ${error.message}`,
+  if (splitTabsMode) await runSplitTabsCase()
+  else
+    for (const mode of modes)
+      for (const size of sizes)
+        for (const shape of shapes)
+          for (const position of positions) {
+            const targets =
+              mode === 'split'
+                ? values.target === 'both'
+                  ? ['source', 'visual']
+                  : [values.target]
+                : [mode]
+            for (const target of targets) {
+              try {
+                await runCase({ mode, target, size, shape, position })
+              } catch (error) {
+                if (!values['continue-on-error']) throw error
+                process.exitCode = 1
+                console.error(
+                  `${mode}/${target}/${size}/${shape}/${position}: ${error.message}`,
+                )
+              }
+              await writeFile(
+                join(output, 'summary.json'),
+                JSON.stringify(summary, null, 2),
               )
             }
-            await writeFile(
-              join(output, 'summary.json'),
-              JSON.stringify(summary, null, 2),
-            )
           }
-        }
 } catch (error) {
   process.exitCode = 1
   console.error(error.message)

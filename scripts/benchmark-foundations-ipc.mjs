@@ -20,7 +20,7 @@ const report = {
   }).trim(),
   runtime: null,
   measurement:
-    'Main-process ipcMain.handle invokes and workspace:changed-v2 sends. Byte values are v8.serialize structured-clone payload estimates, not Electron wire bytes. Other ipcMain.on and outgoing channels are excluded.',
+    'Trusted invocations through the main index.ts handle wrapper and workspace:changed-v2 sends. Byte values are v8.serialize structured-clone payload estimates, not Electron wire bytes. Other handlers, rejected senders, and outgoing channels are excluded.',
   operations: [],
 }
 

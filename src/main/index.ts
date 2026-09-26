@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { serialize } from 'node:v8'
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron'
 import {
   app,
@@ -210,6 +211,94 @@ const appIcon = app.isPackaged
   : join(app.getAppPath(), 'build', iconName)
 app.enableSandbox()
 const testing = !app.isPackaged && app.commandLine.hasSwitch('hibi-test')
+const foundationsIpcBenchmark =
+  testing && process.env.HIBI_FOUNDATIONS_IPC_BENCH === '1'
+    ? (() => {
+        const invokes = new Map<
+          string,
+          {
+            calls: number
+            requestBytesEstimate: number
+            responseBytesEstimate: number
+            failedCalls: number
+            unavailableEstimates: number
+          }
+        >()
+        const sends = new Map<
+          string,
+          {
+            calls: number
+            payloadBytesEstimate: number
+            unavailableEstimates: number
+          }
+        >()
+        const estimate = (value: unknown) => {
+          try {
+            return serialize(value).byteLength
+          } catch {
+            return null
+          }
+        }
+        const invoke = (channel: string) => {
+          let count = invokes.get(channel)
+          if (!count) {
+            count = {
+              calls: 0,
+              requestBytesEstimate: 0,
+              responseBytesEstimate: 0,
+              failedCalls: 0,
+              unavailableEstimates: 0,
+            }
+            invokes.set(channel, count)
+          }
+          return count
+        }
+        const snapshot = () => ({
+          invokes: Object.fromEntries(
+            [...invokes].map(([channel, count]) => [channel, { ...count }]),
+          ),
+          sends: Object.fromEntries(
+            [...sends].map(([channel, count]) => [channel, { ...count }]),
+          ),
+        })
+        Object.assign(globalThis, {
+          __hibiFoundationsIpcBenchmark: { snapshot },
+        })
+        return {
+          request(channel: string, payload: unknown[]) {
+            const count = invoke(channel)
+            count.calls++
+            const bytes = estimate(payload)
+            if (bytes === null) count.unavailableEstimates++
+            else count.requestBytesEstimate += bytes
+          },
+          response(channel: string, payload: unknown) {
+            const count = invoke(channel)
+            const bytes = estimate(payload)
+            if (bytes === null) count.unavailableEstimates++
+            else count.responseBytesEstimate += bytes
+          },
+          failed(channel: string) {
+            invoke(channel).failedCalls++
+          },
+          send(channel: string, payload: unknown) {
+            let count = sends.get(channel)
+            if (!count) {
+              count = {
+                calls: 0,
+                payloadBytesEstimate: 0,
+                unavailableEstimates: 0,
+              }
+              sends.set(channel, count)
+            }
+            count.calls++
+            const bytes = estimate([payload])
+            if (bytes === null) count.unavailableEstimates++
+            else count.payloadBytesEstimate += bytes
+          },
+        }
+      })()
+    : null
 if (testing)
   app.on('web-contents-created', (_event, contents) =>
     contents.setAudioMuted(true),
@@ -1007,8 +1096,20 @@ if (!app.requestSingleInstanceLock()) {
       ) =>
         ipcMain.handle(channel, async (...args) => {
           trustedWindow(args[0])
-          await ready
-          return listener(...args)
+          if (!foundationsIpcBenchmark) {
+            await ready
+            return listener(...args)
+          }
+          foundationsIpcBenchmark.request(channel, args.slice(1))
+          try {
+            await ready
+            const result = await listener(...args)
+            foundationsIpcBenchmark.response(channel, result)
+            return result
+          } catch (error) {
+            foundationsIpcBenchmark.failed(channel)
+            throw error
+          }
         })
       handle(UPDATE_CHANNELS.get, getUpdateState, updatesReady)
       handle(
@@ -1738,9 +1839,12 @@ if (!app.requestSingleInstanceLock()) {
           change,
         ),
       )
-      subscribeWorkspaceChanges((change) =>
-        mainWindow?.webContents.send(WORKSPACE_CHANNELS.changedV2, change),
-      )
+      subscribeWorkspaceChanges((change) => {
+        const contents = mainWindow?.webContents
+        if (!contents) return
+        contents.send(WORKSPACE_CHANNELS.changedV2, change)
+        foundationsIpcBenchmark?.send(WORKSPACE_CHANNELS.changedV2, change)
+      })
       observeKnownWorkspaces((known) =>
         mainWindow?.webContents.send(WORKSPACE_CHANNELS.listChanged, known),
       )

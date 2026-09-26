@@ -1884,6 +1884,7 @@ async function runSplitTabsCase() {
       status: 'running',
       statusScope,
       integrityScope: 'two-hibi-documents-canonical-and-app-save',
+      fixedChrome: true,
       idleBeforeKeyMs: values.quick ? 100 : 2000,
       edits: [],
     }
@@ -1902,6 +1903,17 @@ async function runSplitTabsCase() {
     watchdog = setTimeout(() => app.process().kill('SIGKILL'), 180000)
     const page = await app.firstWindow()
     page.setDefaultTimeout(30000)
+    await page.evaluate(() => {
+      localStorage.setItem('hide-titlebar', 'false')
+      localStorage.setItem(
+        'hibi:toolbar',
+        JSON.stringify({
+          ...JSON.parse(localStorage.getItem('hibi:toolbar') ?? '{}'),
+          autoHide: false,
+        }),
+      )
+    })
+    await page.reload()
     await app.evaluate(({ BrowserWindow }) => {
       const win = BrowserWindow.getAllWindows()[0]
       win.show()

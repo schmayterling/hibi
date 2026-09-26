@@ -4,6 +4,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  rename,
   rm,
   stat,
   writeFile,
@@ -33,6 +34,31 @@ test('failed precondition leaves existing bytes and removes staged file', async 
   )
   assert.equal(await readFile(file, 'utf8'), 'saved')
   assert.deepEqual(await readdir(root), ['note.md'])
+})
+
+test('staged pathname replacement cannot commit different bytes', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-workspace-stage-swap-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const file = join(root, 'note.md')
+  const savedStage = join(root, 'saved-stage')
+  await writeFile(file, 'saved')
+
+  await assert.rejects(
+    replaceExistingText(file, 'replacement', 0o600, async () => {
+      const staged = (await readdir(root)).find((name) => name.endsWith('.tmp'))
+      assert.ok(staged)
+      const temporary = join(root, staged)
+      await rename(temporary, savedStage)
+      await writeFile(temporary, 'different', { flag: 'wx' })
+    }),
+    /staged file changed/i,
+  )
+  assert.equal(await readFile(file, 'utf8'), 'saved')
+  assert.equal(await readFile(savedStage, 'utf8'), 'replacement')
+  assert.equal(
+    (await readdir(root)).filter((name) => name.endsWith('.tmp')).length,
+    1,
+  )
 })
 
 test('successful replacement keeps requested mode and reports directory sync', async (t) => {

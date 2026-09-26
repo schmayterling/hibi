@@ -33,6 +33,26 @@ test('file copy cannot replace a destination created after validation', async (t
   assert.equal(await readFile(destination, 'utf8'), 'competitor')
 })
 
+test('file copy rejects a source replaced after validation', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-entry-copy-source-swap-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const source = join(root, 'source.md')
+  const saved = join(root, 'saved.md')
+  const destination = join(root, 'destination.md')
+  await writeFile(source, 'original')
+  await assert.rejects(
+    copyEntry(source, destination, false, async () => {
+      await rename(source, saved)
+      await writeFile(source, 'replacement', { flag: 'wx' })
+      return true
+    }),
+    /source file changed/i,
+  )
+  assert.equal(await readFile(source, 'utf8'), 'replacement')
+  assert.equal(await readFile(saved, 'utf8'), 'original')
+  await assert.rejects(readFile(destination), { code: 'ENOENT' })
+})
+
 test('folder copy cannot claim a competing destination', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-folder-copy-race-'))
   t.after(() => rm(root, { recursive: true, force: true }))
@@ -183,15 +203,32 @@ test('file move creates its destination exclusively', async (t) => {
   assert.equal(await readFile(destination, 'utf8'), 'original')
 })
 
+test('file move checks its workspace before creating a destination', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-entry-move-check-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const source = join(root, 'source.md')
+  const destination = join(root, 'destination.md')
+  await writeFile(source, 'original')
+  await assert.rejects(
+    moveEntry(source, destination, false, () => false),
+    /workspace changed/i,
+  )
+  assert.equal(await readFile(source, 'utf8'), 'original')
+  await assert.rejects(readFile(destination), { code: 'ENOENT' })
+})
+
 test('destination swap after link retains source and competing file', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-entry-swap-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const source = join(root, 'source.md')
   const destination = join(root, 'destination.md')
   await writeFile(source, 'original')
+  let checks = 0
   const result = await moveEntry(source, destination, false, async () => {
-    await unlink(destination)
-    await writeFile(destination, 'competitor', { flag: 'wx' })
+    if (++checks === 2) {
+      await unlink(destination)
+      await writeFile(destination, 'competitor', { flag: 'wx' })
+    }
     return true
   })
   assert.equal(result.sourceRemoved, false)
@@ -205,9 +242,12 @@ test('source replacement after link is never removed', async (t) => {
   const source = join(root, 'source.md')
   const destination = join(root, 'destination.md')
   await writeFile(source, 'original')
+  let checks = 0
   const result = await moveEntry(source, destination, false, async () => {
-    await rename(source, join(root, 'old.md'))
-    await writeFile(source, 'replacement', { flag: 'wx' })
+    if (++checks === 2) {
+      await rename(source, join(root, 'old.md'))
+      await writeFile(source, 'replacement', { flag: 'wx' })
+    }
     return true
   })
   assert.equal(result.sourceRemoved, false)
@@ -225,13 +265,16 @@ test('copy fallback does not remove source after same-size destination swap', as
   const crossDeviceLink = async () => {
     throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' })
   }
+  let checks = 0
   const result = await moveEntry(
     source,
     destination,
     false,
     async () => {
-      await rename(destination, join(root, 'owned.md'))
-      await writeFile(destination, 'compete!', { flag: 'wx' })
+      if (++checks === 2) {
+        await rename(destination, join(root, 'owned.md'))
+        await writeFile(destination, 'compete!', { flag: 'wx' })
+      }
       return true
     },
     crossDeviceLink,
@@ -254,6 +297,32 @@ test('copy fallback does not remove source after same-size destination swap', as
   assert.equal(await readFile(join(root, 'moved.md'), 'utf8'), 'original')
 })
 
+test('copy fallback rejects a source replaced before it opens', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-entry-fallback-source-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const source = join(root, 'source.md')
+  const saved = join(root, 'saved.md')
+  const destination = join(root, 'destination.md')
+  await writeFile(source, 'original')
+  await assert.rejects(
+    moveEntry(
+      source,
+      destination,
+      false,
+      () => true,
+      async () => {
+        await rename(source, saved)
+        await writeFile(source, 'replacement', { flag: 'wx' })
+        throw Object.assign(new Error('cross-device link'), { code: 'EXDEV' })
+      },
+    ),
+    /source file changed/i,
+  )
+  assert.equal(await readFile(source, 'utf8'), 'replacement')
+  assert.equal(await readFile(saved, 'utf8'), 'original')
+  await assert.rejects(readFile(destination), { code: 'ENOENT' })
+})
+
 test('folder move preserves the existing rename workflow', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-folder-move-'))
   t.after(() => rm(root, { recursive: true, force: true }))
@@ -268,6 +337,41 @@ test('folder move preserves the existing rename workflow', async (t) => {
   await assert.rejects(readFile(join(source, 'note.md')), { code: 'ENOENT' })
 })
 
+test('folder move checks its workspace before creating a destination', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-folder-move-check-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const source = join(root, 'source')
+  const destination = join(root, 'destination')
+  await mkdir(source)
+  await assert.rejects(
+    moveEntry(source, destination, true, () => false),
+    /workspace folder changed/i,
+  )
+  assert.deepEqual(await readdir(root), ['source'])
+})
+
+test('folder move rejects source replacement during precondition', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-folder-move-source-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const source = join(root, 'source')
+  const saved = join(root, 'saved')
+  const destination = join(root, 'destination')
+  await mkdir(source)
+  await writeFile(join(source, 'note.md'), 'original')
+  await assert.rejects(
+    moveEntry(source, destination, true, async () => {
+      await rename(source, saved)
+      await mkdir(source)
+      return true
+    }),
+    /source folder changed/i,
+  )
+  assert.equal(await readFile(join(saved, 'note.md'), 'utf8'), 'original')
+  await assert.rejects(readFile(join(destination, 'note.md')), {
+    code: 'ENOENT',
+  })
+})
+
 test('folder reservation swap is detected before rename', async (t) => {
   if (process.platform === 'win32')
     return t.skip('Windows does not reserve folders')
@@ -277,11 +381,14 @@ test('folder reservation swap is detected before rename', async (t) => {
   const destination = join(root, 'destination')
   await mkdir(source)
   await writeFile(join(source, 'note.md'), 'original')
+  let checks = 0
   await assert.rejects(
     moveEntry(source, destination, true, async () => {
-      await rmdir(destination)
-      await mkdir(destination)
-      await writeFile(join(destination, 'competitor.md'), 'competitor')
+      if (++checks === 2) {
+        await rmdir(destination)
+        await mkdir(destination)
+        await writeFile(join(destination, 'competitor.md'), 'competitor')
+      }
       return true
     }),
     /destination folder changed/i,

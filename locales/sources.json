@@ -561,6 +561,9 @@
   "3e7054593349": [
     "src/main/workspace-entry-transfer.ts"
   ],
+  "fa5baa0440ec": [
+    "src/main/workspace-entry-transfer.ts"
+  ],
   "dbdbacffd9f6": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
@@ -1199,6 +1202,9 @@
   ],
   "b7c2fd280c22": [
     "src/renderer/src/workspace-menu.ts"
+  ],
+  "9518a34cf9c5": [
+    "src/main/workspace-entry-transfer.ts"
   ],
   "8f70f6e47c2b": [
     "src/main/workspace-actions.ts"
@@ -4264,6 +4270,9 @@
   "32c1f3399caa": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
+  "35aa67de3cc1": [
+    "src/main/workspace-entry-transfer.ts"
+  ],
   "de77fbc70fe9": [
     "src/main/workspace-entry-transfer.ts"
   ],
@@ -4380,6 +4389,9 @@
   "60dbdf909175": [
     "src/main/files.ts"
   ],
+  "d84f02a8b4bc": [
+    "src/main/workspace-actions.ts"
+  ],
   "d60d1c552b62": [
     "src/main/import-files.ts"
   ],
@@ -4416,11 +4428,23 @@
   "75f8344e99c3": [
     "src/renderer/src/source-session.ts"
   ],
+  "c40ab7789e40": [
+    "src/main/workspace-entry-transfer.ts"
+  ],
+  "9052fbe1fae3": [
+    "src/main/workspace-entry-transfer.ts"
+  ],
   "5bf197e47fc6": [
+    "src/main/workspace-entry-transfer.ts"
+  ],
+  "235d4d306bec": [
     "src/main/workspace-entry-transfer.ts"
   ],
   "995a14b50dbc": [
     "src/renderer/src/source-session.ts"
+  ],
+  "bd0d4d522e2d": [
+    "src/main/workspace-atomic-update.ts"
   ],
   "bee50784d023": [
     "src/renderer/src/document-target-edits.ts",
@@ -4451,6 +4475,9 @@
     "src/addons/git/Panel.tsx"
   ],
   "5323945db89a": [
+    "src/main/workspace-entry-transfer.ts"
+  ],
+  "887f13fbc6f3": [
     "src/main/workspace-entry-transfer.ts"
   ],
   "a83fa5eca26c": [

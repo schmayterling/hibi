@@ -60,6 +60,30 @@ async function unique(parent: string, name: string) {
   }
   throw new Error('Choose a different name.')
 }
+
+async function rethrowPartialCopy(
+  error: unknown,
+  base: string,
+  source: string,
+  destination: string,
+): Promise<never> {
+  if ((error as NodeJS.ErrnoException).code === 'EPARTIALCOPY') {
+    try {
+      await refreshWorkspace(
+        [source, destination].map((path) =>
+          relative(base, path).split(sep).join('/'),
+        ),
+      )
+    } catch (refreshError) {
+      console.error(
+        'workspace refresh after partial copy failed:',
+        refreshError,
+      )
+    }
+  }
+  throw error
+}
+
 export async function workspaceAction(
   window: BrowserWindow,
   input: unknown,
@@ -161,16 +185,21 @@ export async function workspaceAction(
             true,
           )
           return !getOpenDocuments().some((draft) => draft.file === resultPath)
-        })
+        }).catch((error: unknown) =>
+          rethrowPartialCopy(error, base, source, resultPath),
+        )
       } else {
         const moved = await moveEntry(source, resultPath, folder, async () => {
           await resolveWorkspaceEntry(base, path)
           await resolveWorkspaceEntry(
             base,
             relative(base, resultPath).split(sep).join('/'),
+            true,
           )
           return !getOpenDocuments().some((draft) => draft.file === resultPath)
-        })
+        }).catch((error: unknown) =>
+          rethrowPartialCopy(error, base, source, resultPath),
+        )
         if (!moved.sourceRemoved) {
           try {
             await refreshWorkspace([
@@ -192,10 +221,20 @@ export async function workspaceAction(
   const paths = [sourcePath, resultPath]
     .filter((path): path is string => path !== null)
     .map((path) => relative(base, path).split(sep).join('/'))
-  return {
-    workspace: treeChanged
+  let workspace: WorkspaceActionResult['workspace']
+  try {
+    workspace = treeChanged
       ? await refreshWorkspace(paths)
-      : await notifyWorkspaceContent(paths),
+      : await notifyWorkspaceContent(paths)
+  } catch (error) {
+    if (!treeChanged) throw error
+    throw new Error(
+      'The file operation completed, but the workspace could not refresh. Use Refresh workspace files before trying again.',
+      { cause: error },
+    )
+  }
+  return {
+    workspace,
     document: getDocument(),
     path: relative(base, resultPath).split(sep).join('/'),
   }

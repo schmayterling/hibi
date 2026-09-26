@@ -1,6 +1,5 @@
 import { type BigIntStats, constants } from 'node:fs'
 import {
-  copyFile,
   cp,
   link,
   lstat,
@@ -19,6 +18,82 @@ const symbolicLinkCopyError =
 
 function sameInode(left: BigIntStats, right: BigIntStats): boolean {
   return left.dev === right.dev && left.ino === right.ino
+}
+
+async function copyPinnedFile(
+  source: string,
+  destination: string,
+  original: BigIntStats,
+): Promise<void> {
+  const sourceHandle = await open(
+    source,
+    constants.O_RDONLY |
+      (process.platform === 'win32' ? 0 : constants.O_NOFOLLOW),
+  )
+  try {
+    const [opened, current] = await Promise.all([
+      sourceHandle.stat({ bigint: true }),
+      lstat(source, { bigint: true }),
+    ])
+    if (
+      !opened.isFile() ||
+      !sameInode(opened, original) ||
+      current.isSymbolicLink() ||
+      !sameInode(current, original)
+    )
+      throw new Error('The source file changed. Review it before copying.')
+    const destinationHandle = await open(
+      destination,
+      'wx',
+      Number(opened.mode & 0o777n),
+    )
+    try {
+      try {
+        const chunk = Buffer.allocUnsafe(64 * 1024)
+        let position = 0
+        for (;;) {
+          const { bytesRead } = await sourceHandle.read(
+            chunk,
+            0,
+            chunk.length,
+            position,
+          )
+          if (!bytesRead) break
+          let written = 0
+          while (written < bytesRead) {
+            const result = await destinationHandle.write(
+              chunk,
+              written,
+              bytesRead - written,
+            )
+            written += result.bytesWritten
+          }
+          position += bytesRead
+        }
+        await destinationHandle.chmod(Number(opened.mode & 0o7777n))
+      } finally {
+        await destinationHandle.close()
+      }
+    } catch (error) {
+      // The destination may contain incomplete bytes. A pathname unlink could
+      // remove someone else's replacement, so leave it for explicit review.
+      throw Object.assign(
+        new Error(
+          'Destination was created, but copying did not finish. Review it before retrying.',
+          { cause: error },
+        ),
+        { code: 'EPARTIALCOPY' },
+      )
+    }
+    // The handle pins the file, not an immutable byte snapshot. A writer can
+    // still change the file while it is being copied.
+  } finally {
+    await sourceHandle
+      .close()
+      .catch((error: unknown) =>
+        console.error('workspace copy source close failed:', error),
+      )
+  }
 }
 
 /** Claim the destination exclusively after the caller rechecks its workspace. */
@@ -101,7 +176,7 @@ export async function copyEntry(
     }
   } else {
     if (!original.isFile()) throw new Error('Choose a regular file to copy.')
-    await copyFile(source, destination, constants.COPYFILE_EXCL)
+    await copyPinnedFile(source, destination, original)
   }
 }
 
@@ -114,36 +189,83 @@ export async function moveEntry(
   linkFile: typeof link = link,
 ): Promise<{ sourceRemoved: boolean }> {
   if (folder) {
-    if (process.platform === 'win32') {
-      await rename(source, destination)
-      return { sourceRemoved: true }
-    }
-    await mkdir(destination)
-    // Pin the opened folder so its inode cannot be reused before the identity
-    // check on filesystems that recycle directory inodes quickly.
-    const reservation = await open(destination, noFollowDirectory)
+    const original = await lstat(source, { bigint: true })
+    if (!original.isDirectory()) throw new Error('Choose a folder to move.')
+    const sourceHandle =
+      process.platform === 'win32'
+        ? null
+        : await open(source, noFollowDirectory)
     try {
-      const reserved = await reservation.stat({ bigint: true })
+      const pinned = sourceHandle
+        ? await sourceHandle.stat({ bigint: true })
+        : original
+      if (!pinned.isDirectory() || !sameInode(pinned, original))
+        throw new Error('The source folder changed. Review it before moving.')
       if (!(await beforeRemove()))
         throw new Error(
           'The workspace folder changed. Review it before moving.',
         )
-      const current = await lstat(destination, { bigint: true })
-      if (!current.isDirectory() || !sameInode(current, reserved))
-        throw new Error(
-          'The destination folder changed. Review it before moving.',
-        )
-      // ponytail: node has no portable no-replace directory rename; a swap
-      // after this check can still replace a competing empty folder.
-      // Failed moves retain the reservation because cleanup could erase a swap.
-      await rename(source, destination)
-      return { sourceRemoved: true }
+      const currentSource = await lstat(source, { bigint: true })
+      if (!currentSource.isDirectory() || !sameInode(currentSource, pinned))
+        throw new Error('The source folder changed. Review it before moving.')
+      if (process.platform === 'win32') {
+        // Windows cannot use the POSIX directory reservation below. This
+        // absence check is best effort until a portable no-replace rename exists.
+        try {
+          await lstat(destination)
+          throw Object.assign(new Error('The destination already exists.'), {
+            code: 'EEXIST',
+          })
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
+        await rename(source, destination)
+        return { sourceRemoved: true }
+      }
+      await mkdir(destination)
+      // Pin the reservation so its inode cannot be reused before comparison.
+      const reservation = await open(destination, noFollowDirectory)
+      try {
+        const reserved = await reservation.stat({ bigint: true })
+        if (!(await beforeRemove()))
+          throw new Error(
+            'The workspace folder changed. Review it before moving.',
+          )
+        const [from, to] = await Promise.all([
+          lstat(source, { bigint: true }),
+          lstat(destination, { bigint: true }),
+        ])
+        if (!from.isDirectory() || !sameInode(from, pinned))
+          throw new Error('The source folder changed. Review it before moving.')
+        if (!to.isDirectory() || !sameInode(to, reserved))
+          throw new Error(
+            'The destination folder changed. Review it before moving.',
+          )
+        // ponytail: node has no portable no-replace directory rename; a swap
+        // after this check can still replace a competing empty folder.
+        // Failed moves retain the reservation because cleanup could erase a swap.
+        await rename(source, destination)
+        return { sourceRemoved: true }
+      } finally {
+        await reservation.close()
+      }
     } finally {
-      await reservation.close()
+      await sourceHandle?.close()
     }
   }
   const original = await lstat(source, { bigint: true })
   if (!original.isFile()) throw new Error('Choose a regular file to move.')
+  if (!(await beforeRemove()))
+    throw new Error('The workspace changed. Review it before moving.')
+  const beforeCreate = await lstat(source, { bigint: true })
+  if (
+    !beforeCreate.isFile() ||
+    !sameInode(beforeCreate, original) ||
+    beforeCreate.size !== original.size ||
+    beforeCreate.mtimeNs !== original.mtimeNs ||
+    beforeCreate.ctimeNs !== original.ctimeNs
+  )
+    throw new Error('The source file changed. Review it before moving.')
   let linked = true
   try {
     await linkFile(source, destination)
@@ -155,10 +277,9 @@ export async function moveEntry(
     )
       throw error
     linked = false
-    await copyFile(source, destination, constants.COPYFILE_EXCL)
+    await copyPinnedFile(source, destination, original)
   }
-  // ponytail: copyFile cannot return a destination handle, so an external
-  // replacement before this first stat can still evade this identity check.
+  // A path swap after closing the copied destination can still race this stat.
   const reserved = await lstat(destination, { bigint: true }).catch(() => null)
   if (!reserved) return { sourceRemoved: false }
   try {

@@ -7,7 +7,7 @@ import { electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 test('installed addon edits inactive documents and guards deferred legacy commands', {
-  timeout: 45000,
+  timeout: 60000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-target-bridge-'))
   const folder = join(profile, 'installed-addons', 'target-probe')
@@ -235,5 +235,87 @@ test('installed addon edits inactive documents and guards deferred legacy comman
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     '# two\nfrom command\nfrom sync command\nfrom background',
+  )
+
+  await page.getByRole('tab', { name: 'first.md' }).click()
+  await page.getByRole('button', { name: 'normal', exact: true }).click()
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.editor-panes.mode-normal .tiptap')
+        ?.isContentEditable,
+  )
+  const secondId = await page
+    .getByRole('tab', { name: 'second.md' })
+    .evaluate((tab) => tab.closest('[data-tab-key]').dataset.tabKey)
+  await page.locator(`[data-tab-key="${secondId}"] .tab-split`).click()
+  const left = page.locator('.editor-page[data-side="left"]')
+  const right = page.locator('.editor-page[data-side="right"]')
+  const leftRich = left.locator('.rich-pane .tiptap')
+  await leftRich.waitFor()
+  await right.locator('.rich-pane .tiptap').waitFor()
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('.editor-page[data-side="right"]')
+        ?.getAttribute('data-active') === 'true',
+  )
+  assert.equal(await left.locator('.source-pane[inert] .cm-content').count(), 1)
+  assert.equal(await leftRich.getAttribute('contenteditable'), 'true')
+  const inactiveRichEdit = await page.evaluate((target) => {
+    const read = window.targetProbe.read(target)
+    return window.targetProbe.edit({
+      requestId: 'inactive-mounted-rich',
+      target: read.target,
+      changes: [{ from: 2, to: 5, expectedText: 'ONE', insert: 'Uno' }],
+    })
+  }, firstTarget)
+  assert.equal(inactiveRichEdit.status, 'applied')
+  assert.match(await leftRich.innerText(), /Uno/)
+  assert.equal(await right.getAttribute('data-active'), 'true')
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).name,
+    'second.md',
+  )
+
+  await leftRich.click()
+  await page.waitForFunction(
+    async () =>
+      document
+        .querySelector('.editor-page[data-side="left"]')
+        ?.getAttribute('data-active') === 'true' &&
+      (await window.hibi.getDocument()).name === 'first.md',
+  )
+  await page.getByRole('button', { name: 'side-by-side', exact: true }).click()
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector(
+          '.editor-page[data-side="left"] .editor-panes.mode-side-by-side',
+        )
+        ?.getAttribute('data-source-ready') === 'true',
+  )
+  assert.equal(await left.locator('.source-pane[inert]').count(), 0)
+  assert.equal(await leftRich.getAttribute('contenteditable'), 'false')
+  await leftRich.focus()
+  assert.equal(
+    await leftRich.evaluate((element) => element === document.activeElement),
+    true,
+  )
+  const previewFocusedSourceEdit = await page.evaluate((target) => {
+    const read = window.targetProbe.read(target)
+    return window.targetProbe.edit({
+      requestId: 'preview-focused-mounted-source',
+      target: read.target,
+      changes: [{ from: 2, to: 5, expectedText: 'Uno', insert: 'ONE' }],
+    })
+  }, firstTarget)
+  assert.equal(previewFocusedSourceEdit.status, 'applied')
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    '# ONE',
+  )
+  assert.equal(
+    await leftRich.evaluate((element) => element === document.activeElement),
+    true,
   )
 })

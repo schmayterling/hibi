@@ -141,6 +141,7 @@ export function SourceEditor({
   viewId = 'default',
   focused = true,
   editTarget,
+  sourceVisible = editTarget,
   markdownMode,
   markdownLanguage,
   referenceSyntax,
@@ -166,6 +167,7 @@ export function SourceEditor({
   viewId?: string
   focused?: boolean
   editTarget: boolean
+  sourceVisible?: boolean
   markdownMode: boolean
   markdownLanguage?: typeof import('@codemirror/lang-markdown').markdown
   referenceSyntax?:
@@ -251,11 +253,19 @@ export function SourceEditor({
   const editContext = useRef({
     document,
     editTarget,
+    sourceVisible,
     focused,
     disabled,
     inputReady,
   })
-  editContext.current = { document, editTarget, focused, disabled, inputReady }
+  editContext.current = {
+    document,
+    editTarget,
+    sourceVisible,
+    focused,
+    disabled,
+    inputReady,
+  }
   const exactChanges = useRef<readonly RawEdit[] | undefined>(undefined)
   const editable = useRef(new Compartment())
   const numbers = useRef(new Compartment())
@@ -1079,7 +1089,7 @@ export function SourceEditor({
           status: 'stale',
           message: 'The document changed. Review the edits again.',
         }
-      if (!context.editTarget)
+      if (mountedView ? !context.sourceVisible : !context.editTarget)
         return {
           status: 'unsupported-view',
           message: 'Open source view to apply these edits.',

@@ -227,6 +227,7 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
   await page.waitForFunction(() =>
     document.querySelector('.source-pane .editor-cursor'),
   )
+  await page.locator('.source-pane .cm-placeholder').waitFor()
   const sourceGeometry = await page.evaluate(() => {
     const caret = document
       .querySelector('.source-pane .editor-cursor')

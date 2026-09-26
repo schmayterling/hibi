@@ -9,6 +9,7 @@ import { noteReferences } from '../src/shared/note-links.ts'
 // Core metadata index only: no workspace scan, IPC, renderer, or disk I/O.
 // Run alone with Node 24: node --expose-gc scripts/benchmark-foundations-metadata.mjs
 const seed = 20260925
+const cooperative = process.argv.includes('--cooperative')
 const runs = Number(
   process.argv.find((arg) => arg.startsWith('--runs='))?.slice(7) ?? 30,
 )
@@ -65,6 +66,136 @@ const memory = () => {
   return { rss, heapUsed, heapTotal, external }
 }
 
+const measureCooperative = async (
+  count,
+  pages,
+  changedPages,
+  changedPath,
+  fixtureSha256,
+) => {
+  const names = ['coldApply', 'oneNoteApply', 'firstTags', 'firstProperty']
+  const samples = Object.fromEntries(
+    names.map((name) => [
+      name,
+      { endToEnd: [], workSpans: [], timerBeforeCompletion: 0 },
+    ]),
+  )
+  global.gc?.()
+  const memoryBefore = memory()
+  let finalIndex
+  let parseCounts
+  let resultShapes
+  for (let run = 0; run < runs; run++) {
+    let parserCalls = 0
+    let activeSpans
+    let resumeTime = 0
+    const index = new WorkspaceReferenceIndex(
+      (markdown) => {
+        parserCalls++
+        return noteReferences(markdown)
+      },
+      () => {
+        activeSpans.push(performance.now() - resumeTime)
+        return new Promise((resolve) =>
+          setImmediate(() => {
+            resumeTime = performance.now()
+            resolve()
+          }),
+        )
+      },
+    )
+    const timed = async (name, call) => {
+      const sample = samples[name]
+      const spans = []
+      activeSpans = spans
+      resumeTime = performance.now()
+      const start = resumeTime
+      let timerRan = false
+      const timer = setTimeout(() => {
+        timerRan = true
+      }, 0)
+      try {
+        const result = await call()
+        const end = performance.now()
+        spans.push(end - resumeTime)
+        sample.endToEnd.push(end - start)
+        sample.workSpans.push(...spans)
+        sample.timerBeforeCompletion += Number(timerRan)
+        return result
+      } finally {
+        clearTimeout(timer)
+        activeSpans = undefined
+      }
+    }
+    const cold = await timed('coldApply', () =>
+      index.applyCooperatively(workspace, pages),
+    )
+    assert.deepEqual(cold, { parsed: count, resolved: count })
+    assert.ok(index.backlinks(path(0), 0, 100).items.includes(changedPath))
+    const changed = await timed('oneNoteApply', () =>
+      index.applyCooperatively(workspace, changedPages),
+    )
+    assert.deepEqual(changed, { parsed: 1, resolved: 1 })
+    assert.equal(parserCalls, count + 1)
+    const tags = await timed('firstTags', () =>
+      index.tagsCooperatively(0, 100, 'group'),
+    )
+    assert.equal(
+      tags.items.find(({ tag }) => tag === 'group0')?.count,
+      Math.ceil(count / 16) - 1,
+    )
+    const property = await timed('firstProperty', () =>
+      index.propertyCooperatively('bucket', 0, 0, 100),
+    )
+    assert.equal(property.complete, true)
+    assert.equal(property.items.includes(changedPath), false)
+    assert.equal(property.items.length, Math.min(100, Math.ceil(count / 8) - 1))
+    parseCounts = {
+      cold: cold.parsed,
+      oneNoteUpdate: changed.parsed,
+      parserCalls,
+    }
+    resultShapes = {
+      tags: { resultBytes: bytes(tags), returned: tags.items.length },
+      property: {
+        resultBytes: bytes(property),
+        returned: property.items.length,
+        hasMore: property.hasMore,
+      },
+    }
+    finalIndex = index
+  }
+  for (const name of ['coldApply', 'firstTags', 'firstProperty'])
+    if (count === 2000) assert.equal(samples[name].timerBeforeCompletion, runs)
+  global.gc?.()
+  const memoryWithIndex = memory()
+  assert.ok(finalIndex.has(changedPath))
+  return {
+    noteCount: count,
+    fixtureSha256,
+    inputBytes: pages.reduce(
+      (total, page) => total + Buffer.byteLength(page.markdown),
+      0,
+    ),
+    changedPages: 1,
+    parseCounts,
+    resolvedCounts: { cold: count, oneNoteUpdate: 1 },
+    timings: Object.fromEntries(
+      names.map((name) => [
+        name,
+        {
+          endToEnd: distribution(samples[name].endToEnd),
+          workSpan: distribution(samples[name].workSpans),
+          timerBeforeCompletion: samples[name].timerBeforeCompletion,
+        },
+      ]),
+    ),
+    observations: samples,
+    resultShapes,
+    memory: { beforeIndex: memoryBefore, withIndex: memoryWithIndex },
+  }
+}
+
 const results = []
 for (const count of [100, 2000]) {
   const pages = Array.from({ length: count }, (_, number) => ({
@@ -80,6 +211,18 @@ for (const count of [100, 2000]) {
   const fixtureSha256 = createHash('sha256')
     .update(pages.map((page) => `${page.path}\0${page.markdown}\0`).join(''))
     .digest('hex')
+  if (cooperative) {
+    results.push(
+      await measureCooperative(
+        count,
+        pages,
+        changedPages,
+        changedPath,
+        fixtureSha256,
+      ),
+    )
+    continue
+  }
   const samples = {
     coldApply: [],
     oneNoteApply: [],
@@ -231,21 +374,40 @@ const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim()
 console.log(
   JSON.stringify(
     {
-      kind: 'in-process workspace metadata core',
-      endpoints: {
-        coldApply:
-          'WorkspaceReferenceIndex.apply on new index and retained pages',
-        oneNoteApply:
-          'WorkspaceReferenceIndex.apply after one page source changed',
-        queries:
-          'direct index methods after update, in listed order; first and repeat call',
-        resultBytes:
-          'UTF-8 JSON bytes of direct method result, without IPC envelope',
-        memory:
-          'process.memoryUsage after fixture allocation and with final index held; process level, not index retained size',
-        excluded:
-          'filesystem scan, dirty overlay, IPC, renderer, paint, and addon execution',
-      },
+      kind: cooperative
+        ? 'in-process workspace metadata core, cooperative'
+        : 'in-process workspace metadata core',
+      endpoints: cooperative
+        ? {
+            coldApply:
+              'WorkspaceReferenceIndex.applyCooperatively, with setImmediate between bounded work slices',
+            oneNoteApply:
+              'WorkspaceReferenceIndex.applyCooperatively after one page source changed',
+            firstTags:
+              'first tagsCooperatively query after update, including tag index build',
+            firstProperty:
+              'first propertyCooperatively query after update, including property parse',
+            workSpan:
+              'approximate synchronous work between setImmediate resumes and yield or completion; includes caller continuation overhead',
+            timerBeforeCompletion:
+              'number of runs where a zero-delay timer fired before operation completed',
+            excluded:
+              'filesystem scan, dirty overlay, IPC, renderer, paint, and addon execution',
+          }
+        : {
+            coldApply:
+              'WorkspaceReferenceIndex.apply on new index and retained pages',
+            oneNoteApply:
+              'WorkspaceReferenceIndex.apply after one page source changed',
+            queries:
+              'direct index methods after update, in listed order; first and repeat call',
+            resultBytes:
+              'UTF-8 JSON bytes of direct method result, without IPC envelope',
+            memory:
+              'process.memoryUsage after fixture allocation and with final index held; process level, not index retained size',
+            excluded:
+              'filesystem scan, dirty overlay, IPC, renderer, paint, and addon execution',
+          },
       head: git('rev-parse', 'HEAD'),
       dirty: git('status', '--short'),
       environment: {

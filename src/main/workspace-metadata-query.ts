@@ -308,12 +308,25 @@ export async function queryWorkspaceReferences(
       syntax.page,
       sourceCurrent,
     )
-    if (!applied) return failure('stale', 'This workspace changed. Try again.')
-    indexedTarget = target
-    indexedSequence = after.sequence
-    indexedRevision = revision
-    indexedSourceVersions = sourceVersions
-    indexedSyntaxFingerprint = syntax.fingerprint
+    if (!applied) {
+      if (
+        !sourceCurrent() ||
+        !hasIndexedSnapshot(
+          target,
+          after.sequence,
+          revision,
+          sourceVersions,
+          syntax.fingerprint,
+        )
+      )
+        return failure('stale', 'This workspace changed. Try again.')
+    } else {
+      indexedTarget = target
+      indexedSequence = after.sequence
+      indexedRevision = revision
+      indexedSourceVersions = sourceVersions
+      indexedSyntaxFingerprint = syntax.fingerprint
+    }
   }
   const cacheCurrent = () => {
     return (

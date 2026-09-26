@@ -326,6 +326,27 @@ test("concurrent initial queries preserve each other's graph and text cursors", 
   )
 })
 
+test('concurrent 500-note graph reads reuse the winning cooperative snapshot', async () => {
+  const target = host.target
+  const originalPages = host.pages
+  host.pages = Array.from({ length: 500 }, (_, number) => ({
+    path: `notes/${number}.md`,
+    markdown: `[Next](notes/${(number + 1) % 500}.md)`,
+  }))
+  host.revision++
+  host.listener({ kind: 'resync' })
+  const [first, second] = await Promise.all([
+    query({ target, kind: 'graph', limit: 100 }),
+    query({ target, kind: 'graph', limit: 100 }),
+  ])
+  assert.equal(first.ok, true)
+  assert.equal(second.ok, true)
+  assert.equal(first.value.items.length, 100)
+  assert.equal(second.value.items.length, 100)
+  host.pages = originalPages
+  host.revision++
+})
+
 test('metadata query rejects a workspace change during its index read', async () => {
   const target = host.target
   host.changeDuringRead = true

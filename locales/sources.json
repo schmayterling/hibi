@@ -4428,6 +4428,9 @@
   "75f8344e99c3": [
     "src/renderer/src/source-session.ts"
   ],
+  "28aea8262823": [
+    "src/main/workspace-entry-transfer.ts"
+  ],
   "c40ab7789e40": [
     "src/main/workspace-entry-transfer.ts"
   ],

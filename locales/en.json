@@ -1422,6 +1422,7 @@
   "1a9c37310c3f": "The save request is no longer current.",
   "e16af0263168": "The serialized edit request is too large.",
   "75f8344e99c3": "The source editor is synchronizing.",
+  "28aea8262823": "The source file changed while copying.",
   "c40ab7789e40": "The source file changed. Review it before copying.",
   "9052fbe1fae3": "The source file changed. Review it before moving.",
   "5bf197e47fc6": "The source folder changed. Review it before copying.",

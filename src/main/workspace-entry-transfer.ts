@@ -20,6 +20,16 @@ function sameInode(left: BigIntStats, right: BigIntStats): boolean {
   return left.dev === right.dev && left.ino === right.ino
 }
 
+function partialCopyError(error: unknown): Error & { code: string } {
+  return Object.assign(
+    new Error(
+      'Destination was created, but copying did not finish. Review it before retrying.',
+      { cause: error },
+    ),
+    { code: 'EPARTIALCOPY' },
+  )
+}
+
 async function copyPinnedFile(
   source: string,
   destination: string,
@@ -50,13 +60,13 @@ async function copyPinnedFile(
     try {
       try {
         const chunk = Buffer.allocUnsafe(64 * 1024)
-        let position = 0
+        let copiedBytes = 0n
         for (;;) {
           const { bytesRead } = await sourceHandle.read(
             chunk,
             0,
             chunk.length,
-            position,
+            null,
           )
           if (!bytesRead) break
           let written = 0
@@ -68,8 +78,17 @@ async function copyPinnedFile(
             )
             written += result.bytesWritten
           }
-          position += bytesRead
+          copiedBytes += BigInt(bytesRead)
         }
+        const finished = await sourceHandle.stat({ bigint: true })
+        if (
+          copiedBytes !== opened.size ||
+          !sameInode(finished, opened) ||
+          finished.size !== opened.size ||
+          finished.mtimeNs !== opened.mtimeNs ||
+          finished.ctimeNs !== opened.ctimeNs
+        )
+          throw new Error('The source file changed while copying.')
         await destinationHandle.chmod(Number(opened.mode & 0o7777n))
       } finally {
         await destinationHandle.close()
@@ -77,16 +96,10 @@ async function copyPinnedFile(
     } catch (error) {
       // The destination may contain incomplete bytes. A pathname unlink could
       // remove someone else's replacement, so leave it for explicit review.
-      throw Object.assign(
-        new Error(
-          'Destination was created, but copying did not finish. Review it before retrying.',
-          { cause: error },
-        ),
-        { code: 'EPARTIALCOPY' },
-      )
+      throw partialCopyError(error)
     }
-    // The handle pins the file, not an immutable byte snapshot. A writer can
-    // still change the file while it is being copied.
+    // This detects ordinary concurrent writes, but the handle does not make
+    // its bytes an immutable snapshot after the final check.
   } finally {
     await sourceHandle
       .close()
@@ -118,6 +131,7 @@ export async function copyEntry(
       process.platform === 'win32'
         ? null
         : await open(source, noFollowDirectory)
+    let destinationCreated = false
     try {
       const sourceInode = sourceHandle
         ? await sourceHandle.stat({ bigint: true })
@@ -125,6 +139,7 @@ export async function copyEntry(
       if (!sourceInode.isDirectory() || !sameInode(sourceInode, original))
         throw new Error('The source folder changed. Review it before copying.')
       await mkdir(destination)
+      destinationCreated = true
       // A later external swap can still replace this reservation. Never clean
       // the destination on failure because it may then belong to someone else.
       const destinationHandle =
@@ -171,8 +186,16 @@ export async function copyEntry(
       } finally {
         await destinationHandle?.close()
       }
+    } catch (error) {
+      if (destinationCreated) throw partialCopyError(error)
+      throw error
     } finally {
-      await sourceHandle?.close()
+      if (sourceHandle)
+        await sourceHandle
+          .close()
+          .catch((error: unknown) =>
+            console.error('workspace copy source close failed:', error),
+          )
     }
   } else {
     if (!original.isFile()) throw new Error('Choose a regular file to copy.')

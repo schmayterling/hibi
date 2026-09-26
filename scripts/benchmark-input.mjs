@@ -210,7 +210,9 @@ try {
         analysisLoad,
         endpoints: {
           driver:
-            'locator.press through changed editor DOM text; identical endpoint for first and subsequent keys',
+            process.env.HIBI_BENCH_INSERT_TEXT === '1'
+              ? 'editor.focus plus keyboard.insertText through changed editor DOM text; identical endpoint for first and subsequent inserts'
+              : 'locator.press through changed editor DOM text; identical endpoint for first and subsequent keys',
           cpu: 'ProseMirror dispatchTransaction, including synchronous host/addon listeners and instrumentation overhead',
           inputToModel:
             'beforeinput capture through completed document-changing dispatch; not physical presentation',

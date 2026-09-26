@@ -14,16 +14,22 @@ import {
   noteProperties,
   type PropertyScalar,
 } from '../shared/note-metadata.ts'
+import { defaultNoteSyntax } from '../shared/note-syntax.ts'
 import { noteTags } from '../shared/note-tags.ts'
 import type { WorkspacePage } from '../shared/workspace'
 import type {
   WorkspaceGraphItem,
   WorkspaceTagSummary,
 } from '../shared/workspace-query.ts'
+import type { PageSyntax } from './workspace-syntax.ts'
 
 type References = ReturnType<typeof noteReferences>
 type DocumentLinks = {
   markdown: string
+  syntax: PageSyntax['settings']
+  syntaxKey: string
+  syntaxComplete: boolean
+  unsupportedSyntax: boolean
   references: References
   referenceComplete: boolean
   targets: ReadonlySet<string>
@@ -31,6 +37,13 @@ type DocumentLinks = {
   properties?: ReturnType<typeof noteProperties>
   headings?: ReturnType<typeof noteHeadings>
 }
+
+const defaultPageSyntax = (): PageSyntax => ({
+  settings: defaultNoteSyntax,
+  key: 'gfm+wikilinks+hashtags',
+  unsupported: false,
+  complete: true,
+})
 
 export interface ReferencePage {
   readonly items: readonly string[]
@@ -82,6 +95,7 @@ export class WorkspaceReferenceIndex {
   apply(
     target: WorkspaceTarget,
     pages: readonly WorkspacePage[],
+    pageSyntax: (page: WorkspacePage) => PageSyntax = defaultPageSyntax,
   ): {
     parsed: number
     resolved: number
@@ -99,18 +113,38 @@ export class WorkspaceReferenceIndex {
     let parsed = 0
     for (const page of pages) {
       const cached = previous.get(page.path)
-      if (cached?.markdown === page.markdown) {
-        next.set(page.path, cached)
+      const syntax = pageSyntax(page)
+      const markdownSource = isMarkdownDocument(page.path)
+      const syntaxComplete = !markdownSource || syntax.complete
+      const unsupportedSyntax = markdownSource && syntax.unsupported
+      if (
+        cached?.markdown === page.markdown &&
+        cached.syntaxKey === syntax.key
+      ) {
+        next.set(
+          page.path,
+          cached.syntaxComplete === syntaxComplete &&
+            cached.unsupportedSyntax === unsupportedSyntax
+            ? cached
+            : {
+                ...cached,
+                syntaxComplete,
+                unsupportedSyntax,
+              },
+        )
         continue
       }
-      const markdownSource = isMarkdownDocument(page.path)
       const referenceComplete =
         !markdownSource || metadataFrontmatterWithinLimit(page.markdown)
       next.set(page.path, {
         markdown: page.markdown,
+        syntax: syntax.settings,
+        syntaxKey: syntax.key,
+        syntaxComplete,
+        unsupportedSyntax,
         references:
           markdownSource && referenceComplete
-            ? this.parse(page.markdown)
+            ? this.parse(page.markdown, syntax.settings)
             : { links: [], wikilinks: [] },
         referenceComplete,
         targets: new Set(),
@@ -166,7 +200,7 @@ export class WorkspaceReferenceIndex {
     }
     this.documents = next
     this.complete = [...next.values()].every(
-      (document) => document.referenceComplete,
+      (document) => document.referenceComplete && document.syntaxComplete,
     )
     this.paths = paths
     if (pathsChanged)
@@ -182,6 +216,12 @@ export class WorkspaceReferenceIndex {
 
   isComplete(): boolean {
     return this.complete
+  }
+
+  hasUnsupportedSyntax(): boolean {
+    return [...this.documents.values()].some(
+      (document) => document.unsupportedSyntax,
+    )
   }
 
   links(path: string, offset: number, limit: number): ReferencePage {
@@ -312,7 +352,7 @@ export class WorkspaceReferenceIndex {
     const next = new Map<string, Set<string>>()
     for (const [path, document] of this.documents) {
       if (!isMarkdownDocument(path) || !document.referenceComplete) continue
-      document.tags ??= noteTags(document.markdown)
+      document.tags ??= noteTags(document.markdown, document.syntax)
       for (const name of document.tags) {
         if (name.length > 128) {
           this.tagCapReached = true
@@ -370,7 +410,7 @@ export class WorkspaceReferenceIndex {
     const document = this.documents.get(path)
     if (!document || !isMarkdownDocument(path))
       return { items: [], hasMore: false, nextOffset: offset, complete: true }
-    document.headings ??= noteHeadings(document.markdown)
+    document.headings ??= noteHeadings(document.markdown, document.syntax)
     const items: NoteHeading[] = []
     let bytes = 0
     for (
@@ -390,7 +430,7 @@ export class WorkspaceReferenceIndex {
       items,
       hasMore: nextOffset < document.headings.items.length,
       nextOffset,
-      complete: document.headings.complete,
+      complete: document.headings.complete && document.syntaxComplete,
     }
   }
 

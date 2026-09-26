@@ -1,8 +1,4 @@
-import { Marked } from 'marked'
-import { readFrontmatter } from './frontmatter.ts'
-
-const parser = new Marked({ gfm: true })
-const wiki = /!?\[\[([^\]\r\n]+)\]\]/g
+import { defaultNoteSyntax, type NoteSyntax, noteLexer } from './note-syntax.ts'
 
 export function wikiHref(target: string) {
   if (target.startsWith('#') && !target.startsWith('#^'))
@@ -79,15 +75,17 @@ export function noteBasenames(paths: ReadonlySet<string>) {
   return basenames
 }
 
-export function noteReferences(source: string) {
+export function noteReferences(
+  source: string,
+  syntax: NoteSyntax = defaultNoteSyntax,
+) {
   const links: string[] = []
   const wikilinks: string[] = []
-  const body = readFrontmatter(source)?.content ?? source
-  parser.walkTokens(parser.lexer(body), (token) => {
+  const { parser, tokens } = noteLexer(source, syntax)
+  parser.walkTokens(tokens, (token) => {
     if (token.type === 'link') links.push(token.href)
-    if (token.type === 'text')
-      for (const match of token.raw.matchAll(wiki))
-        wikilinks.push((match[1] ?? '').split('|')[0] ?? '')
+    if (token.type === 'obsidianWikiLink' || token.type === 'obsidianEmbed')
+      wikilinks.push(String(token.target ?? ''))
     return []
   })
   return { links, wikilinks }

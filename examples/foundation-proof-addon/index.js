@@ -137,136 +137,144 @@ export default ({ React }) => {
         disposers.push(dispose)
       }
 
+      let pendingCapture = Promise.resolve()
       disposers.push(
         context.commands.register({
           id: 'capture',
           label: 'Capture foundation proof',
           defaultShortcut: 'mod+alt+shift+f11',
           menu: { location: 'app', group: 'foundation-proof' },
-          async run(invocation) {
-            const source = invocation.document
-              ? context.documents.readSource(invocation.document)
-              : null
-            const target =
-              invocation.workspace ??
-              (await context.workspace.changeSnapshot()).target
-            if (!target || !isActive()) return
+          run(invocation) {
+            const capture = pendingCapture.then(async () => {
+              if (!isActive()) return
+              const source = invocation.document
+                ? context.documents.readSource(invocation.document)
+                : null
+              const target =
+                invocation.workspace ??
+                (await context.workspace.changeSnapshot()).target
+              if (!target || !isActive()) return
 
-            const network = preferences.networkUrl
-              ? await context.host.network.getText({
-                  url: preferences.networkUrl,
-                })
-              : null
-            if (!isActive()) return
-
-            const edit =
-              source?.status === 'read'
-                ? context.documents.applyEdits({
-                    requestId: crypto.randomUUID(),
-                    target: source.target,
-                    changes: [
-                      {
-                        from: source.source.length,
-                        to: source.source.length,
-                        expectedText: '',
-                        insert: '\n#proof',
-                      },
-                    ],
-                  })
-                : { status: source?.status ?? 'no-document' }
-            if (!isActive()) return
-
-            const note = await context.workspace.createText(
-              target,
-              'proof-note.md',
-              '# Foundation proof\n\n#proof\n',
-            )
-            if (!isActive()) return
-
-            const backlinks = await context.workspace.query({
-              target,
-              kind: 'backlinks',
-              path: 'a.md',
-            })
-            if (!isActive()) return
-            const workspace = await context.storage.workspace(
-              {
-                id: target.workspaceId,
-                workspaceGeneration: target.workspaceGeneration,
-              },
-              'preferences',
-              1,
-            )
-            if (!isActive()) return
-            const previous = workspace.snapshot()
-            if (previous.status !== 'missing' && previous.status !== 'ready')
-              throw new Error(
-                'Foundation proof workspace preferences are unavailable.',
-              )
-            const workspaceTag =
-              previous.status === 'ready' &&
-              typeof previous.value?.tag === 'string'
-                ? previous.value.tag
-                : preferences.tag
-            const previousRun =
-              previous.status === 'ready' ? previous.value?.lastRun?.run : null
-            const run =
-              Number.isSafeInteger(previousRun) &&
-              previousRun >= 0 &&
-              Number.isSafeInteger(previousRun + 1)
-                ? previousRun + 1
-                : 1
-            const tags = await context.workspace.query({
-              target,
-              kind: 'tag',
-              tag: workspaceTag,
-            })
-            if (!isActive()) return
-            const credentialStatus = await context.host.credentials.status({
-              key: 'synthetic-probe',
-            })
-            if (!isActive()) return
-            const credential =
-              credentialStatus.ok &&
-              credentialStatus.value.persistence !== 'protected'
-                ? await context.host.credentials.store({
-                    key: 'synthetic-probe',
-                    secret: 'fixture-only-not-a-credential',
-                    mode: 'persistent',
+              const network = preferences.networkUrl
+                ? await context.host.network.getText({
+                    url: preferences.networkUrl,
                   })
                 : null
-            if (!isActive()) return
-            const result = {
-              run,
-              events: eventCount,
-              edit: edit.status,
-              note: note.ok ? 'created' : note.code,
-              backlinks: backlinks.ok ? backlinks.value.items : [],
-              tags: tags.ok ? tags.value.items : [],
-              network: network
-                ? network.ok
-                  ? {
-                      status: network.value.status,
-                      matchesFixture:
-                        network.value.text === 'foundation-proof-ok',
-                    }
-                  : { code: network.code }
-                : null,
-              credential: credential
-                ? credential.ok
-                  ? 'unexpectedly-stored'
-                  : credential.code
-                : credentialStatus.ok
-                  ? credentialStatus.value.persistence
-                  : credentialStatus.code,
-            }
-            const saved = await workspace.set({
-              tag: workspaceTag,
-              lastRun: result,
+              if (!isActive()) return
+
+              const edit =
+                source?.status === 'read'
+                  ? context.documents.applyEdits({
+                      requestId: crypto.randomUUID(),
+                      target: source.target,
+                      changes: [
+                        {
+                          from: source.source.length,
+                          to: source.source.length,
+                          expectedText: '',
+                          insert: '\n#proof',
+                        },
+                      ],
+                    })
+                  : { status: source?.status ?? 'no-document' }
+              if (!isActive()) return
+
+              const note = await context.workspace.createText(
+                target,
+                'proof-note.md',
+                '# Foundation proof\n\n#proof\n',
+              )
+              if (!isActive()) return
+
+              const backlinks = await context.workspace.query({
+                target,
+                kind: 'backlinks',
+                path: 'a.md',
+              })
+              if (!isActive()) return
+              const workspace = await context.storage.workspace(
+                {
+                  id: target.workspaceId,
+                  workspaceGeneration: target.workspaceGeneration,
+                },
+                'preferences',
+                1,
+              )
+              if (!isActive()) return
+              const previous = workspace.snapshot()
+              if (previous.status !== 'missing' && previous.status !== 'ready')
+                throw new Error(
+                  'Foundation proof workspace preferences are unavailable.',
+                )
+              const workspaceTag =
+                previous.status === 'ready' &&
+                typeof previous.value?.tag === 'string'
+                  ? previous.value.tag
+                  : preferences.tag
+              const previousRun =
+                previous.status === 'ready'
+                  ? previous.value?.lastRun?.run
+                  : null
+              const run =
+                Number.isSafeInteger(previousRun) &&
+                previousRun >= 0 &&
+                Number.isSafeInteger(previousRun + 1)
+                  ? previousRun + 1
+                  : 1
+              const tags = await context.workspace.query({
+                target,
+                kind: 'tag',
+                tag: workspaceTag,
+              })
+              if (!isActive()) return
+              const credentialStatus = await context.host.credentials.status({
+                key: 'synthetic-probe',
+              })
+              if (!isActive()) return
+              const credential =
+                credentialStatus.ok &&
+                credentialStatus.value.persistence !== 'protected'
+                  ? await context.host.credentials.store({
+                      key: 'synthetic-probe',
+                      secret: 'fixture-only-not-a-credential',
+                      mode: 'persistent',
+                    })
+                  : null
+              if (!isActive()) return
+              const result = {
+                run,
+                events: eventCount,
+                edit: edit.status,
+                note: note.ok ? 'created' : note.code,
+                backlinks: backlinks.ok ? backlinks.value.items : [],
+                tags: tags.ok ? tags.value.items : [],
+                network: network
+                  ? network.ok
+                    ? {
+                        status: network.value.status,
+                        matchesFixture:
+                          network.value.text === 'foundation-proof-ok',
+                      }
+                    : { code: network.code }
+                  : null,
+                credential: credential
+                  ? credential.ok
+                    ? 'unexpectedly-stored'
+                    : credential.code
+                  : credentialStatus.ok
+                    ? credentialStatus.value.persistence
+                    : credentialStatus.code,
+              }
+              const saved = await workspace.set({
+                tag: workspaceTag,
+                lastRun: result,
+              })
+              if (!isActive() || saved.status !== 'saved') return
+              lastResult = `Proof run ${result.run}: ${result.edit}; ${result.note}.`
+              panel.open({ id: 'results', focus: false })
             })
-            if (!isActive() || saved.status !== 'saved') return
-            lastResult = `Proof run ${result.run}: ${result.edit}; ${result.note}.`
-            panel.open({ id: 'results', focus: false })
+            pendingCapture = capture.catch(() => {})
+            return capture
           },
         }),
       )

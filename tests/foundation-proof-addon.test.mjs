@@ -259,7 +259,15 @@ test('proof consumer handles unavailable secret storage and drops late work afte
   const oldCommand = command
   const oldChangeListener = changeListener
   const late = command.run({ workspace: target, document: { documentId: 'a' } })
-  assert.equal(typeof releaseNetwork, 'function')
+  await eventually(
+    () => typeof releaseNetwork,
+    (value) => value === 'function',
+    'second capture did not reach network',
+  )
+  const queued = command.run({
+    workspace: target,
+    document: { documentId: 'a' },
+  })
   addon.stop()
   assert.equal(disposed, 7)
   await addon.start(context)
@@ -267,16 +275,26 @@ test('proof consumer handles unavailable secret storage and drops late work afte
   oldChangeListener({ kind: 'content' })
   changeListener({ kind: 'content' })
   releaseNetwork()
-  await late
+  await Promise.all([late, queued])
   assert.equal(edits, 1)
   assert.equal(creates, 1)
   assert.equal(writes.length, 2)
   assert.equal(opened, 1)
-  await command.run({ workspace: target, document: { documentId: 'a' } })
-  assert.equal(writes.at(-1).value.lastRun.run, 6)
+  await Promise.all([
+    command.run({ workspace: target, document: { documentId: 'a' } }),
+    command.run({ workspace: target, document: { documentId: 'a' } }),
+  ])
+  assert.deepEqual(
+    writes.slice(-2).map(({ value }) => value.lastRun.run),
+    [6, 7],
+  )
   assert.equal(writes.at(-1).value.lastRun.events, 1)
-  assert.deepEqual(tagQueries, ['workspace-proof', 'workspace-proof'])
-  assert.equal(opened, 2)
+  assert.deepEqual(tagQueries, [
+    'workspace-proof',
+    'workspace-proof',
+    'workspace-proof',
+  ])
+  assert.equal(opened, 3)
   addon.stop()
   assert.equal(disposed, 14)
 })
@@ -472,6 +490,31 @@ test('installed proof addon migrates state and composes captured edits, queries,
     'foundation-proof.json',
   )
 
+  async function createChange(path) {
+    await page.evaluate(async (expected) => {
+      globalThis.proofEventSeen = false
+      globalThis.proofChangeSubscription?.dispose()
+      globalThis.proofChangeSubscription =
+        await window.hibi.subscribeWorkspaceChanges((event) => {
+          if (!event.paths?.includes(expected)) return
+          globalThis.proofEventSeen = true
+          globalThis.proofChangeSubscription?.dispose()
+        })
+    }, path)
+    const created = await page.evaluate(
+      ({ target, path }) =>
+        window.hibi.createWorkspaceText(
+          'foundation-proof',
+          target,
+          path,
+          '# change\n',
+        ),
+      { target: workspaceTarget, path },
+    )
+    assert.equal(created.ok, true)
+    await page.waitForFunction(() => globalThis.proofEventSeen)
+  }
+
   async function open(path) {
     await app.evaluate(({ dialog }, selected) => {
       dialog.showOpenDialog = async () => ({
@@ -617,6 +660,7 @@ test('installed proof addon migrates state and composes captured edits, queries,
     (await window.hibi.getDocument())?.markdown.includes('[[proof-note]]'),
   )
 
+  await createChange('change-before-second.md')
   await clickMenu(app, 'Capture foundation proof')
   const secondRun = await eventually(
     () => storageValue(workspaceFile, 'preferences'),
@@ -624,7 +668,7 @@ test('installed proof addon migrates state and composes captured edits, queries,
     'second proof run did not finish',
   )
   assert.equal(secondRun.value.lastRun.note, 'conflict')
-  assert.ok(secondRun.value.lastRun.events > 0)
+  assert.ok(secondRun.value.lastRun.events > firstRun.value.lastRun.events)
   assert.equal(
     await readFile(join(workspace, 'proof-note.md'), 'utf8'),
     '# Foundation proof\n\n#proof\n',
@@ -728,13 +772,17 @@ test('installed proof addon migrates state and composes captured edits, queries,
     Boolean,
     'proof command did not return after enable',
   )
+  await createChange('change-after-enable.md')
   await app.evaluate(() => globalThis.releaseProofGrant())
-  await delay(100)
-  assert.equal(
-    (await storageValue(workspaceFile, 'preferences')).value.lastRun.run,
-    2,
-  )
+  for (let sample = 0; sample < 20; sample++) {
+    const stored = await storageValue(workspaceFile, 'preferences')
+    assert.equal(stored.revision, 2)
+    assert.equal(stored.value.lastRun.run, 2)
+    await delay(50)
+  }
   assert.equal((await storageValue(globalFile, 'preferences')).revision, 2)
+  await page.getByRole('button', { name: 'Back to app', exact: true }).click()
+  await page.locator('.settings-screen').waitFor({ state: 'hidden' })
   await page.getByRole('tab', { name: 'b.md' }).click()
   await source.waitFor()
   await source.focus()
@@ -757,5 +805,6 @@ test('installed proof addon migrates state and composes captured edits, queries,
   assert.equal(thirdRun.revision, 3)
   assert.equal(thirdRun.value.tag, 'proof')
   assert.equal(thirdRun.value.lastRun.note, 'conflict')
+  assert.ok(thirdRun.value.lastRun.events > 0)
   await page.getByText('Proof run 3:', { exact: false }).waitFor()
 })

@@ -76,17 +76,19 @@ export function contextActions(request) {
 
 export default ({ React }) => {
   let active = false
+  let activation = 0
   let eventCount = 0
-  let runCount = 0
   let lastResult = 'Run Capture foundation proof to check this workspace.'
   const disposers = []
 
   return {
     async start(context) {
       active = true
+      const current = ++activation
+      const isActive = () => active && activation === current
       eventCount = 0
       const global = await context.storage.global('preferences', 2)
-      if (!active) return
+      if (!isActive()) return
       const snapshot = global.snapshot()
       const preferences = preferencesFrom(snapshot)
       if (!preferences)
@@ -103,7 +105,7 @@ export default ({ React }) => {
         if (saved.status !== 'saved')
           throw new Error('Foundation proof preferences could not be saved.')
       }
-      if (!active) return
+      if (!isActive()) return
 
       const panel = context.views.register({
         id: 'results',
@@ -114,9 +116,9 @@ export default ({ React }) => {
       disposers.push(() => panel.dispose())
 
       const changes = await context.workspace.subscribeChanges(() => {
-        if (active) eventCount++
+        if (isActive()) eventCount++
       })
-      if (!active) {
+      if (!isActive()) {
         changes.dispose()
         return
       }
@@ -128,7 +130,7 @@ export default ({ React }) => {
         () => context.editor.registerContextActionProvider(contextActions),
       ]) {
         const dispose = await register()
-        if (!active) {
+        if (!isActive()) {
           dispose()
           return
         }
@@ -148,14 +150,14 @@ export default ({ React }) => {
             const target =
               invocation.workspace ??
               (await context.workspace.changeSnapshot()).target
-            if (!target || !active) return
+            if (!target || !isActive()) return
 
             const network = preferences.networkUrl
               ? await context.host.network.getText({
                   url: preferences.networkUrl,
                 })
               : null
-            if (!active) return
+            if (!isActive()) return
 
             const edit =
               source?.status === 'read'
@@ -172,31 +174,58 @@ export default ({ React }) => {
                     ],
                   })
                 : { status: source?.status ?? 'no-document' }
-            if (!active) return
+            if (!isActive()) return
 
             const note = await context.workspace.createText(
               target,
               'proof-note.md',
               '# Foundation proof\n\n#proof\n',
             )
-            if (!active) return
+            if (!isActive()) return
 
             const backlinks = await context.workspace.query({
               target,
               kind: 'backlinks',
               path: 'a.md',
             })
-            if (!active) return
+            if (!isActive()) return
+            const workspace = await context.storage.workspace(
+              {
+                id: target.workspaceId,
+                workspaceGeneration: target.workspaceGeneration,
+              },
+              'preferences',
+              1,
+            )
+            if (!isActive()) return
+            const previous = workspace.snapshot()
+            if (previous.status !== 'missing' && previous.status !== 'ready')
+              throw new Error(
+                'Foundation proof workspace preferences are unavailable.',
+              )
+            const workspaceTag =
+              previous.status === 'ready' &&
+              typeof previous.value?.tag === 'string'
+                ? previous.value.tag
+                : preferences.tag
+            const previousRun =
+              previous.status === 'ready' ? previous.value?.lastRun?.run : null
+            const run =
+              Number.isSafeInteger(previousRun) &&
+              previousRun >= 0 &&
+              Number.isSafeInteger(previousRun + 1)
+                ? previousRun + 1
+                : 1
             const tags = await context.workspace.query({
               target,
               kind: 'tag',
-              tag: preferences.tag,
+              tag: workspaceTag,
             })
-            if (!active) return
+            if (!isActive()) return
             const credentialStatus = await context.host.credentials.status({
               key: 'synthetic-probe',
             })
-            if (!active) return
+            if (!isActive()) return
             const credential =
               credentialStatus.ok &&
               credentialStatus.value.persistence !== 'protected'
@@ -206,19 +235,9 @@ export default ({ React }) => {
                     mode: 'persistent',
                   })
                 : null
-            if (!active) return
-
-            const workspace = await context.storage.workspace(
-              {
-                id: target.workspaceId,
-                workspaceGeneration: target.workspaceGeneration,
-              },
-              'preferences',
-              1,
-            )
-            if (!active) return
+            if (!isActive()) return
             const result = {
-              run: ++runCount,
+              run,
               events: eventCount,
               edit: edit.status,
               note: note.ok ? 'created' : note.code,
@@ -242,10 +261,10 @@ export default ({ React }) => {
                   : credentialStatus.code,
             }
             const saved = await workspace.set({
-              tag: preferences.tag,
+              tag: workspaceTag,
               lastRun: result,
             })
-            if (!active || saved.status !== 'saved') return
+            if (!isActive() || saved.status !== 'saved') return
             lastResult = `Proof run ${result.run}: ${result.edit}; ${result.note}.`
             panel.open({ id: 'results', focus: false })
           },
@@ -259,16 +278,17 @@ export default ({ React }) => {
             SHORTCUT,
             'capture',
           )
-          if (active) disposers.push(dispose)
+          if (isActive()) disposers.push(dispose)
           else dispose()
         } catch {
-          if (active)
+          if (isActive())
             context.notify('Foundation proof global shortcut is unavailable.')
         }
       }
     },
     stop() {
       active = false
+      activation++
       for (const dispose of disposers.splice(0).reverse()) dispose()
     },
   }

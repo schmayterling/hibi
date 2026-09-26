@@ -387,6 +387,126 @@ test('J09: a lost receipt beyond the horizon is retired only by exact checkpoint
   assert.equal(state.contentVersion, 140)
 })
 
+test('lost acknowledgement for an inactive tab uses that tab for recovery', async () => {
+  const stores = new Map(
+    ['a', 'b'].map((tabId) => [
+      tabId,
+      new SourceStore('', { tabId, revision: 0 }, 0),
+    ]),
+  )
+  const storeFor = (tabId) => {
+    const store = stores.get(tabId)
+    if (!store) throw new Error('This tab is no longer open.')
+    return store
+  }
+  const receive = createJournalReceiver(storeFor)
+  const requested = []
+  const journal = createDocumentJournal(
+    async (change) => {
+      receive(change)
+      throw new Error('lost acknowledgement')
+    },
+    {
+      checkpoint: (tabId) => {
+        requested.push(tabId)
+        const store = storeFor(tabId)
+        return { ...journalHead(store), source: store.snapshot().materialize() }
+      },
+      head: async (tabId) => journalHead(storeFor(tabId)),
+      verify: (checkpoint) =>
+        verifyJournalCheckpoint(
+          () => storeFor(checkpoint.tabId),
+          checkpoint,
+          1024,
+        ),
+    },
+  )
+  await assert.rejects(
+    journal.append({
+      tabId: 'b',
+      revision: 0,
+      baseVersion: 0,
+      contentVersion: 1,
+      from: 0,
+      to: 0,
+      insert: 'b',
+    }),
+    /lost acknowledgement/,
+  )
+  await journal.flush()
+  assert.deepEqual(requested, ['b'])
+  assert.equal(storeFor('a').snapshot().materialize(), '')
+  assert.equal(storeFor('b').snapshot().materialize(), 'b')
+  assert.equal(storeFor('b').snapshot().version, 1)
+  assert.equal(journal.pendingBytes(), 0)
+})
+
+test('mixed pending tabs retire only groups with retained, verified checkpoints', async () => {
+  const stores = new Map([
+    ['a', new SourceStore('', { tabId: 'a', revision: 0 }, 0)],
+    ['b', new SourceStore('', { tabId: 'b', revision: 1 }, 0)],
+  ])
+  const storeFor = (tabId) => {
+    const store = stores.get(tabId)
+    if (!store) throw new Error('This tab is no longer open.')
+    return store
+  }
+  const receive = createJournalReceiver(storeFor)
+  const verified = []
+  let retainedB = false
+  const journal = createDocumentJournal(
+    async (change) => {
+      receive(change)
+      throw new Error('lost acknowledgement')
+    },
+    {
+      checkpoint: (tabId) => {
+        if (tabId === 'b' && !retainedB)
+          throw new Error('No retained document recovery checkpoint.')
+        const store = storeFor(tabId)
+        return { ...journalHead(store), source: store.snapshot().materialize() }
+      },
+      head: async (tabId) => journalHead(storeFor(tabId)),
+      verify: async (checkpoint) => {
+        const head = await verifyJournalCheckpoint(
+          () => storeFor(checkpoint.tabId),
+          checkpoint,
+          1024,
+        )
+        verified.push(`${head.tabId}:${head.revision}`)
+        return head
+      },
+    },
+  )
+  for (const [tabId, revision] of [
+    ['a', 0],
+    ['b', 1],
+  ])
+    await assert.rejects(
+      journal.append({
+        tabId,
+        revision,
+        baseVersion: 0,
+        contentVersion: 1,
+        from: 0,
+        to: 0,
+        insert: tabId,
+      }),
+      /lost acknowledgement/,
+    )
+  await assert.rejects(journal.flush(), /No retained/)
+  assert.deepEqual(verified, ['a:0'])
+  assert.equal(journal.state().pendingCount, 1)
+  assert.equal(storeFor('a').snapshot().materialize(), 'a')
+  assert.equal(storeFor('b').snapshot().materialize(), 'b')
+  retainedB = true
+  await journal.flush()
+  assert.deepEqual(verified, ['a:0', 'b:1'])
+  assert.equal(storeFor('a').snapshot().version, 1)
+  assert.equal(storeFor('b').snapshot().version, 1)
+  assert.equal(journal.pendingBytes(), 0)
+})
+
 test('J06/J09: restarted receipt cache replays a contiguous suffix and preserves edits during verification', async () => {
   const { store, change, state } = fixture()
   let receive = createJournalReceiver(() => store),

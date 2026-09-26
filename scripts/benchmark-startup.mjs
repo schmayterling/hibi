@@ -59,7 +59,9 @@ async function measure(page, start, app, scenario) {
   const typing = []
   for (let i = 0; i < 8; i++) {
     const before = performance.now()
-    await editor.press('a')
+    if (process.env.HIBI_BENCH_INSERT_TEXT === '1')
+      await page.keyboard.insertText('a')
+    else await editor.press('a')
     typing.push(performance.now() - before)
     await new Promise((done) => setTimeout(done, 50))
   }

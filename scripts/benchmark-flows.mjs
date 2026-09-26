@@ -115,9 +115,14 @@ export async function waitForWorkspaces(page, paths) {
 }
 
 export async function typeCharacter(page, previousText, character = 'x') {
-  await page
-    .getByRole('textbox', { name: 'Document editor', exact: true })
-    .press(character)
+  const editor = page.getByRole('textbox', {
+    name: 'Document editor',
+    exact: true,
+  })
+  if (process.env.HIBI_BENCH_INSERT_TEXT === '1') {
+    await editor.focus()
+    await page.keyboard.insertText(character)
+  } else await editor.press(character)
   try {
     await page.waitForFunction(
       (previous) =>

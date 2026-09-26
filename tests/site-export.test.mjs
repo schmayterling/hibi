@@ -292,7 +292,9 @@ test('published sites support direct routes, crawlable HTML, branding, locked th
     mermaidImage,
   )
   assert.equal(
-    await page.locator('article img.mermaid-diagram.danger').getAttribute('src'),
+    await page
+      .locator('article img.mermaid-diagram.danger')
+      .getAttribute('src'),
     null,
   )
   assert.equal(
@@ -404,8 +406,16 @@ test('command-palette export opens options and writes a configured static folder
     profile = join(folder, 'profile')
   await mkdir(workspace)
   await mkdir(output)
-  await writeFile(join(workspace, 'README.md'), '# Garden\n\n[More](more.md)')
+  await writeFile(
+    join(workspace, 'README.md'),
+    '# Garden\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n[More](more.md)',
+  )
   await writeFile(join(workspace, 'more.md'), '# More\n\nMore notes.')
+  await mkdir(profile)
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ mermaid: true }),
+  )
   await mkdir(join(output, 'notes-site'))
   await writeFile(join(output, 'notes-site', 'keep.txt'), 'keep me')
   const app = await electron.launch({
@@ -528,10 +538,34 @@ test('command-palette export opens options and writes a configured static folder
     await readFile(join(output, 'notes-site', 'keep.txt'), 'utf8'),
     'keep me',
   )
+  const exportedIndex = join(output, 'notes-site-2', 'index.html')
+  const exportedHtml = await readFile(exportedIndex, 'utf8')
+  assert.match(exportedHtml, /My published garden/)
   assert.match(
-    await readFile(join(output, 'notes-site-2', 'index.html'), 'utf8'),
-    /My published garden/,
+    exportedHtml.match(/<article class="tiptap">([\s\S]*?)<\/article>/)?.[1],
+    /data:image\/svg\+xml,%3Csvg/,
   )
+  const nextViewer = app.waitForEvent('window')
+  await app.evaluate(({ BrowserWindow }, filePath) => {
+    const viewer = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        backgroundThrottling: false,
+      },
+    })
+    void viewer.loadFile(filePath)
+  }, exportedIndex)
+  const exportedPage = await nextViewer
+  await exportedPage
+    .getByRole('button', { name: /^toggle navigation$/i })
+    .waitFor()
+  await exportedPage.waitForFunction(() => {
+    const image = document.querySelector('article img.mermaid-diagram')
+    return image?.complete && image.naturalWidth > 0
+  })
   assert.match(
     await readFile(
       join(output, 'notes-site-2', 'more.md', 'index.html'),

@@ -35,6 +35,8 @@ export default () => ({
 
 Add a readme that explains how to use the command. This example is already JavaScript and needs no build step. For TypeScript or JSX, compile your package before sharing it. Hibi does not run package installation or build scripts.
 
+For TypeScript checking, Hibi's local `@hibi/addon-sdk` tarball supplies addon contracts without runtime code. Run `npm run sdk:pack` in a Hibi source checkout, install the resulting `.tgz` in your addon development project, and use `import type` from `@hibi/addon-sdk/api`, `@hibi/addon-sdk/sdk-loader`, or `@hibi/addon-sdk/sdk`. Use `CapabilityFactory` for a package declaring `capabilities`, or `SideloadFactory` for a legacy package. Set `apiVersion` to `2` for new packages. Strict type checking requires the package's React, CodeMirror, Tiptap, and Marked peers; use Hibi's shared SDK values in installed code.
+
 Use the factory's `React`, `ui`, `tiptap`, `codeMirror`, and `markdown` values instead of bundling second copies of those libraries. Relative imports may load other compiled files in your package. Do not import from Hibi's source tree in an installed package.
 
 ## Load only the SDK you need

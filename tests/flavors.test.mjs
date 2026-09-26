@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import test from 'node:test'
 import { mathFlavor } from '../src/addons/math/syntax.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('math detection respects code, escaped delimiters, and currency spacing', () => {
@@ -236,4 +236,90 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
       },
     )
   }
+})
+
+test('split focus preserves each file flavor when tab revisions match', {
+  timeout: 45000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-split-flavors-'))
+  const files = ['a.md', 'b.md', 'c.md'].map((name) => join(root, name))
+  for (const file of files) await writeFile(file, '> [!NOTE]\n> own flavor\n')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  await waitForDocumentEditor(app, page)
+  const open = async (file) => {
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, file)
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      basename(file),
+    )
+    await page.waitForFunction(
+      () =>
+        document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+    )
+    return page.evaluate(() => window.hibi.getDocument())
+  }
+  const selectDialect = async (dialect) => {
+    await page.locator('[data-status-id="flavor"]').click()
+    const picker = page.getByRole('dialog', {
+      name: /^markdown flavor$/i,
+      exact: true,
+    })
+    await picker.getByLabel(/^markdown dialect$/i).selectOption(dialect)
+    await page.keyboard.press('Escape')
+    await picker.waitFor({ state: 'hidden' })
+  }
+
+  const a = await open(files[0])
+  const b = await open(files[1])
+  await selectDialect('markdown')
+  await page.locator(`[data-tab-key="${a.tabId}"] .tab-split`).click()
+  await page.locator('.editor-page[data-side="right"]').waitFor()
+  const c = await open(files[2])
+  assert.equal(c.revision, b.revision)
+  await selectDialect('markdown.github')
+  await page.locator('.editor-page[data-side="right"] .github-alert').waitFor()
+  await page
+    .locator('.editor-page[data-side="left"] .split-tab-heading')
+    .click()
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    b.tabId,
+  )
+  await page.waitForFunction(
+    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+  )
+  assert.deepEqual(
+    await page.evaluate(
+      ({ bId, cId }) => [
+        JSON.parse(localStorage.getItem(`hibi:flavor:${bId}`)),
+        JSON.parse(localStorage.getItem(`hibi:flavor:${cId}`)),
+      ],
+      { bId: b.id, cId: c.id },
+    ),
+    [
+      { dialect: 'markdown', syntax: 'auto' },
+      { dialect: 'markdown.github', syntax: 'auto' },
+    ],
+  )
+  await page.getByRole('button', { name: 'Close split' }).click()
+  await page.waitForFunction(
+    () => document.querySelectorAll('.editor-page[data-side]').length === 0,
+  )
+  assert.equal(await page.locator('.tiptap .github-alert').count(), 0)
 })

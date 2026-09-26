@@ -1068,16 +1068,12 @@ export function SourceEditor({
         ? documentRuntime.captureDocument(context.document.tabId)
         : null
       if (
-        (mountedView &&
-          (!documentRuntime.isLiveView(mountedView) ||
-            mountedView.viewId !== viewId ||
-            !identity ||
-            identity.documentId !== mountedView.documentId ||
-            identity.documentGeneration !== mountedView.documentGeneration)) ||
-        !current ||
-        !sourceEditMatches(request, current) ||
-        current.tabId !== context.document.tabId ||
-        current.revision !== context.document.revision
+        mountedView &&
+        (!documentRuntime.isLiveView(mountedView) ||
+          mountedView.viewId !== viewId ||
+          !identity ||
+          identity.documentId !== mountedView.documentId ||
+          identity.documentGeneration !== mountedView.documentGeneration)
       )
         return {
           status: 'stale',
@@ -1087,6 +1083,16 @@ export function SourceEditor({
         return {
           status: 'unsupported-view',
           message: 'Open source view to apply these edits.',
+        }
+      if (
+        !current ||
+        !sourceEditMatches(request, current) ||
+        current.tabId !== context.document.tabId ||
+        current.revision !== context.document.revision
+      )
+        return {
+          status: 'stale',
+          message: 'The document changed. Review the edits again.',
         }
       if (context.disabled || !context.inputReady)
         return {

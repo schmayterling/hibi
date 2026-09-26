@@ -1,7 +1,7 @@
 import { Marked } from 'marked'
 import type { MarkdownFlavor, RenderedMarkdown } from '../../addons/api'
 import { validatePreservation } from '../../shared/preservation'
-import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import literalStyles from '../../ui/markdown-literal.css?raw'
 import syntaxStyles from '../../ui/syntax.css?raw'
 import { codeHtml, codeLanguages, escapeCode } from './code-languages'

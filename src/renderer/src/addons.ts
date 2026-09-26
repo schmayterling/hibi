@@ -38,7 +38,7 @@ import {
   validatePreservation,
 } from '../../shared/preservation'
 import { startupSpan } from '../../shared/startup'
-import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { useDialogService } from '../../ui/DialogProvider'
 import { performanceDiagnostics } from '../../ui/diagnostics'
 import { menus } from '../../ui/menu-store'

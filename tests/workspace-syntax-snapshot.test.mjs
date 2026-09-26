@@ -41,6 +41,7 @@ const bundle = await build({
   platform: 'node',
   format: 'cjs',
   write: false,
+  metafile: true,
   plugins: [
     {
       name: 'style-stub',
@@ -56,6 +57,16 @@ const bundle = await build({
       },
     },
   ],
+})
+test('snapshot bundle omits note parser and yaml', () => {
+  assert.equal(
+    Object.keys(bundle.metafile.inputs).some((path) =>
+      /[\\/]note-syntax\.ts$|[\\/]frontmatter\.ts$|[\\/]node_modules[\\/]yaml[\\/]/.test(
+        path,
+      ),
+    ),
+    false,
+  )
 })
 const module = { exports: {} }
 new Function('module', 'exports', 'require', bundle.outputFiles[0].text)(

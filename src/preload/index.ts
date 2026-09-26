@@ -67,19 +67,19 @@ if (process.isMainFrame) {
   } catch {
     /* Diagnostics cannot prevent the document bridge from starting. */
   }
-  let checkpoint: (() => JournalCheckpoint) | undefined
+  let checkpoint: ((tabId: string) => JournalCheckpoint) | undefined
   const journal = createDocumentJournal(
     (change) => transport.invoke(DOCUMENT_CHANNELS.append, change),
     {
       timeoutMs: 5000,
       retryDelays: [100, 500, 2000],
       maximumCheckpointUnits: MAX_DOCUMENT_BYTES,
-      checkpoint: () => {
+      checkpoint: (tabId) => {
         if (!checkpoint)
           throw new Error('Document recovery is not ready. Retry saving.')
-        return checkpoint()
+        return checkpoint(tabId)
       },
-      head: () => transport.invoke(DOCUMENT_CHANNELS.recoveryHead),
+      head: (tabId) => transport.invoke(DOCUMENT_CHANNELS.recoveryHead, tabId),
       verify: (snapshot) =>
         transport.invoke(DOCUMENT_CHANNELS.verifyCheckpoint, snapshot),
     },
@@ -466,6 +466,8 @@ if (process.isMainFrame) {
     getDocument: () => ipcRenderer.invoke(DOCUMENT_CHANNELS.get),
     selectDocumentTab: (id) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.selectTab, id),
+    focusDocumentTab: (id, expected) =>
+      ipcRenderer.invoke(DOCUMENT_CHANNELS.focusTab, id, expected),
     closeDocumentTab: (id) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.closeTab, id),
     moveDocumentTab: (id, beforeId) =>

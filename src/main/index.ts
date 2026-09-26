@@ -37,6 +37,7 @@ import {
 } from '../shared/desktop'
 import {
   journalHead,
+  parseJournalCheckpoint,
   verifyJournalCheckpoint,
 } from '../shared/document-checkpoint'
 import { createJournalReceiver } from '../shared/document-journal'
@@ -91,10 +92,10 @@ import {
   confirmDiscard,
   confirmDiscardAll,
   discardChanges,
+  focusDocumentTab,
   getDocument,
   getDocumentPath,
   getDocumentPathForTab,
-  getDocumentSource,
   getDocumentSourceFor,
   getOpenDocumentVersions,
   hasOpenDocumentPath,
@@ -1422,6 +1423,13 @@ if (!app.requestSingleInstanceLock()) {
       handle(DOCUMENT_CHANNELS.selectTab, (event, id: unknown) =>
         runFileOperation(event, (window) => selectDocumentTab(window, id)),
       )
+      handle(
+        DOCUMENT_CHANNELS.focusTab,
+        (event, id: unknown, expected: unknown) =>
+          runFileOperation(event, (window) =>
+            focusDocumentTab(window, id, expected),
+          ),
+      )
       handle(DOCUMENT_CHANNELS.closeTab, (event, id: unknown) =>
         runFileOperation(event, (window) => closeDocumentTab(window, id)),
       )
@@ -1747,17 +1755,20 @@ if (!app.requestSingleInstanceLock()) {
         updateDocumentEdited(window)
         return ack
       })
-      handle(DOCUMENT_CHANNELS.recoveryHead, (event) => {
+      handle(DOCUMENT_CHANNELS.recoveryHead, (event, tabId: unknown) => {
         trustedWindow(event)
-        return journalHead(getDocumentSource())
+        if (typeof tabId !== 'string' || !tabId || tabId.length > 128)
+          throw new Error('Invalid document recovery identity.')
+        return journalHead(getDocumentSourceFor(tabId))
       })
       handle(
         DOCUMENT_CHANNELS.verifyCheckpoint,
         (event, checkpoint: unknown) => {
           trustedWindow(event)
+          const parsed = parseJournalCheckpoint(checkpoint, MAX_DOCUMENT_BYTES)
           return verifyJournalCheckpoint(
-            getDocumentSource,
-            checkpoint,
+            () => getDocumentSourceFor(parsed.tabId),
+            parsed,
             MAX_DOCUMENT_BYTES,
           )
         },

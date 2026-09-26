@@ -78,10 +78,9 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  const editor = page.getByRole('textbox', {
-    name: 'Document editor',
-    exact: true,
-  })
+  const editor = page
+    .locator('#document-editor-panel')
+    .getByRole('textbox', { name: 'Document editor', exact: true })
   await page.waitForFunction(() => window.viewsFixture)
   const start = page.getByRole('region', { name: 'Start writing' })
   await page.evaluate(() => window.viewsFixture.alternateStart.open())
@@ -186,6 +185,9 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
     first,
   )
   await replaceRichText(page, editor, 'second document')
+  const second = await page.evaluate(
+    () => window.viewsFixture.context.editor.getDocument().tabId,
+  )
   assert.equal(
     await panel.locator('.bound-text').textContent(),
     'first document',
@@ -205,6 +207,47 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
     first,
   )
   assert.equal(await editor.textContent(), 'first document')
+  const firstRevision = (await page.evaluate(() => window.hibi.getDocument()))
+    .revision
+  await page.locator(`[data-tab-key="${second}"] .tab-split`).click()
+  const leftEditor = page.locator('.editor-page[data-side="left"] .tiptap')
+  const leftNode = await leftEditor.elementHandle()
+  await page.waitForFunction(
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    second,
+  )
+  assert.equal(
+    await page.evaluate(() =>
+      window.viewProps['view-fixture.panel:first'].focusDocument(),
+    ),
+    true,
+  )
+  await page.waitForFunction(
+    async (id) =>
+      (await window.hibi.getDocument()).tabId === id &&
+      document
+        .querySelector('.editor-page[data-side="left"]')
+        ?.getAttribute('data-active') === 'true' &&
+      document.activeElement
+        ?.closest('.editor-page')
+        ?.getAttribute('data-side') === 'left',
+    first,
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).revision,
+    firstRevision,
+  )
+  assert.equal(
+    await page.evaluate(
+      (node) =>
+        node ===
+        document.querySelector('.editor-page[data-side="left"] .tiptap'),
+      leftNode,
+    ),
+    true,
+  )
+  await page.getByRole('button', { name: 'Close split' }).click()
+  await page.locator('.editor-page[data-side]').waitFor({ state: 'detached' })
   await page.evaluate(() => {
     window.viewsFixture.handles.slow = window.viewsFixture.slow.open()
   })
@@ -245,6 +288,12 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   await right.waitFor({ state: 'hidden' })
   await page.evaluate(() => window.viewsFixture.queuedRight.show())
   await right.getByRole('button', { name: 'Count 1' }).waitFor()
+  const other = (
+    await page.evaluate(() => window.hibi.getDocument())
+  ).tabs.find((tab) => tab.id !== first).id
+  await page.locator(`[data-tab-key="${other}"] .tab-split`).click()
+  const splitRight = page.locator('.editor-page[data-side="right"]')
+  await splitRight.waitFor()
   await page.evaluate(() => {
     window.viewsFixture.handles.rightFollow = window.viewsFixture.follow.open({
       side: 'right',
@@ -276,9 +325,11 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   await notice.waitFor({ state: 'detached' })
   assert.equal(await addonTab.getAttribute('aria-selected'), 'true')
   assert.equal(await editor.isVisible(), false)
+  assert.equal(await splitRight.isVisible(), false)
   await page.locator(`#document-tab-${first}`).click()
   assert.equal(await editor.isVisible(), true)
   await notice.waitFor()
+  assert.equal(await splitRight.isVisible(), true)
   await addonTab.click()
   await tabContent.getByRole('button', { name: 'Count 1' }).waitFor()
   await addonTab.focus()

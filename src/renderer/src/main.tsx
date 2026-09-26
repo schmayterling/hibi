@@ -41,7 +41,7 @@ import { ToastProvider, useToasts } from '../../ui/Sonner'
 import type { ToastHandle } from '../../ui/toasts'
 import './styles.css'
 import '../../ui/ui-case'
-import { Minimize2 } from 'lucide-react'
+import { Minimize2, X } from 'lucide-react'
 import { documentExtension, isDocumentView } from '../../shared/document-types'
 import {
   type KnownWorkspace,
@@ -131,6 +131,15 @@ const BacklinksSidebar = lazy(() =>
     default: module.BacklinksSidebar,
   })),
 )
+type PaneSide = 'left' | 'right'
+type SplitTabs = {
+  left: string
+  right: string
+  active: PaneSide
+  leftMode: ViewMode
+  rightMode: ViewMode
+}
+
 function App() {
   startupMark('app-render')
   const addonViewState = useSyncExternalStore(
@@ -221,6 +230,27 @@ function App() {
     [toasts],
   )
   const [document, setDocument] = useState<DocumentState | null>(null)
+  const [splitTabs, setSplitTabs] = useState<SplitTabs | null>(null)
+  const splitTabsRef = useRef(splitTabs)
+  splitTabsRef.current = splitTabs
+  const splitLeftId = splitTabs?.left
+  const splitRightId = splitTabs?.right
+  const focusSplitSide = useRef<PaneSide | null>(null)
+  const focusQueue = useRef<Promise<void>>(Promise.resolve())
+  const focusPending = useRef(false)
+  const focusUnsafe = useRef(false)
+  const [focusRecoveryNeeded, setFocusRecoveryNeeded] = useState(false)
+  const setFocusUnsafe = (unsafe: boolean) => {
+    focusUnsafe.current = unsafe
+    setFocusRecoveryNeeded(unsafe)
+  }
+  useEffect(() => {
+    if (!splitLeftId || !splitRightId) return
+    return () => {
+      documentRuntime.session(splitLeftId)?.releaseView('left')
+      documentRuntime.session(splitRightId)?.releaseView('right')
+    }
+  }, [splitLeftId, splitRightId])
   useSyncExternalStore(documentFormats.subscribe, documentFormats.snapshot)
   const documentFormat = document
     ? documentFormats.get(document.name)
@@ -231,7 +261,16 @@ function App() {
     Component?: typeof import('./Editor').MarkdownEditor
     error?: Error
   }>({})
-  const needsRichEditor = document !== null && markdownDocument
+  const needsRichEditor =
+    document !== null &&
+    (markdownDocument ||
+      !!(
+        splitTabs &&
+        [splitTabs.left, splitTabs.right].some((id) => {
+          const pane = documentRuntime.get(id)
+          return pane && documentFormats.isMarkdown(pane.name)
+        })
+      ))
   useEffect(() => {
     if (!needsRichEditor || richEditor.Component || richEditor.error) return
     let active = true
@@ -260,9 +299,10 @@ function App() {
   currentDocument.current = documentRuntime.get() ?? document
   useLayoutEffect(
     () =>
-      window.hibi.onDocumentCheckpoint(() => {
-        const source = documentRuntime.session()?.snapshot()
-        if (!source) throw new Error('No active document recovery checkpoint.')
+      window.hibi.onDocumentCheckpoint((tabId) => {
+        const source = documentRuntime.session(tabId)?.snapshot()
+        if (!source)
+          throw new Error('No retained document recovery checkpoint.')
         return {
           tabId: source.document.tabId,
           revision: source.document.revision,
@@ -290,22 +330,64 @@ function App() {
       ),
     [setError],
   )
-  const acceptDocument = useCallback((next: DocumentState) => {
+  const acceptDocument = useCallback(
+    (next: DocumentState, focus = false, replaceLocal = false) => {
+      const previous = currentDocument.current
+      const active = focus
+        ? documentRuntime.focus(next)
+        : documentRuntime.activate(next, replaceLocal)
+      if (!active)
+        throw new Error('This pane changed while synchronizing. Try again.')
+      setSplitTabs((current) => {
+        if (!current) return null
+        const ids = new Set(next.tabs.map((tab) => tab.id))
+        if (
+          !next.tabsEnabled ||
+          !ids.has(current.left) ||
+          !ids.has(current.right)
+        )
+          return null
+        if (next.tabId === current[current.active]) return current
+        if (next.tabId === current.left) return { ...current, active: 'left' }
+        if (next.tabId === current.right) return { ...current, active: 'right' }
+        return { ...current, [current.active]: next.tabId }
+      })
+      if (previous?.revision !== next.revision) setOutlineTarget(null)
+      if (
+        previous &&
+        previous.id !== next.id &&
+        previous.revision === next.revision
+      ) {
+        const choice = localStorage.getItem(`hibi:flavor:${previous.id}`)
+        if (choice) localStorage.setItem(`hibi:flavor:${next.id}`, choice)
+      }
+      currentDocument.current = active
+      shellDocument.current = active
+      setDocument(active)
+    },
+    [],
+  )
+  async function acceptOperationDocument(
+    next: DocumentState,
+    replaceLocal = false,
+  ) {
     const previous = currentDocument.current
-    if (previous?.revision !== next.revision) setOutlineTarget(null)
-    if (
-      previous &&
-      previous.id !== next.id &&
-      previous.revision === next.revision
-    ) {
-      const choice = localStorage.getItem(`hibi:flavor:${previous.id}`)
-      if (choice) localStorage.setItem(`hibi:flavor:${next.id}`, choice)
+    try {
+      acceptDocument(next, false, replaceLocal)
+    } catch (error) {
+      if (previous && previous.tabId !== next.tabId) {
+        setFocusUnsafe(true)
+        try {
+          await focusRetainedTab(previous.tabId)
+        } catch {
+          throw new Error(
+            'Could not restore document focus. Editing is paused to protect unsent changes.',
+          )
+        }
+      }
+      throw error
     }
-    const active = documentRuntime.activate(next)
-    currentDocument.current = active
-    shellDocument.current = active
-    setDocument(active)
-  }, [])
+  }
   const availableFlavors = useSyncExternalStore(
     flavors.subscribe,
     flavors.snapshot,
@@ -331,9 +413,55 @@ function App() {
       ),
     [flavorIds, availableFlavors],
   )
+  const splitFlavors = useMemo(() => {
+    if (!splitLeftId || !splitRightId) return null
+    const forTab = (id: string) => {
+      const pane = documentRuntime.get(id)
+      const choice =
+        flavorOverride && flavorOverride.id === pane?.id
+          ? flavorOverride.choice
+          : loadFlavor(pane?.id)
+      const selected = selectedFlavors(choice, availableFlavors)
+      return { choice, selected }
+    }
+    return { left: forTab(splitLeftId), right: forTab(splitRightId) }
+  }, [splitLeftId, splitRightId, availableFlavors, flavorOverride])
   const [resetEditor, setResetEditor] = useState(0)
   const busyRef = useRef(false)
   const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    const side = focusSplitSide.current
+    if (busy || !DocumentEditor || !side || splitTabs?.active !== side) return
+    const reveal = () => {
+      if (
+        window.document.activeElement?.matches('.document-tabs [role="tab"]')
+      ) {
+        focusSplitSide.current = null
+        observer.disconnect()
+        return
+      }
+      const target = Array.from(
+        window.document.querySelectorAll<HTMLElement>(
+          `.editor-page[data-side="${side}"] [contenteditable="true"]`,
+        ),
+      ).find(
+        (element) =>
+          !element.closest('[inert]') && element.getClientRects().length,
+      )
+      if (target) {
+        target.focus({ preventScroll: true })
+        focusSplitSide.current = null
+        observer.disconnect()
+      }
+    }
+    const observer = new MutationObserver(reveal)
+    observer.observe(window.document.body, { childList: true, subtree: true })
+    const frame = requestAnimationFrame(reveal)
+    return () => {
+      observer.disconnect()
+      cancelAnimationFrame(frame)
+    }
+  }, [busy, DocumentEditor, splitTabs?.active])
   const acknowledgeSave = useCallback(
     (saved: DocumentState, token: DocumentSaveToken, expectedId?: string) => {
       const previous = documentRuntime.get(saved.tabId)
@@ -364,7 +492,17 @@ function App() {
     const saved = localStorage.getItem('default-view')
     return saved && isDocumentView(saved) ? saved : 'normal'
   })
-  const [selectedMode, setMode] = useState<ViewMode>(defaultView)
+  const [selectedMode, setSelectedMode] = useState<ViewMode>(defaultView)
+  const setMode = useCallback((view: ViewMode) => {
+    setSelectedMode(view)
+    setSplitTabs((current) =>
+      current
+        ? current.active === 'left'
+          ? { ...current, leftMode: view }
+          : { ...current, rightMode: view }
+        : null,
+    )
+  }, [])
   useEffect(() => {
     localStorage.setItem('default-view', defaultView)
   }, [defaultView])
@@ -694,20 +832,42 @@ function App() {
       async focusDocument(tabId) {
         if (!currentDocument.current?.tabs.some((tab) => tab.id === tabId))
           return false
-        if (currentDocument.current.tabId !== tabId)
+        const split = splitTabsRef.current
+        const side = split
+          ? split.left === tabId && split.right === tabId
+            ? split.active
+            : split.left === tabId
+              ? 'left'
+              : split.right === tabId
+                ? 'right'
+                : null
+          : null
+        if (side) await focusSplitTab(side)
+        else if (currentDocument.current.tabId !== tabId)
           await applyDocumentOperation(() =>
             window.hibi.selectDocumentTab(tabId),
           )
         if (currentDocument.current?.tabId !== tabId) return false
         addonViews.selectDocument()
         setSettingsOpen(false)
-        requestAnimationFrame(() =>
-          window.document
-            .querySelector<HTMLElement>(
-              mode === 'normal' ? '.tiptap' : '.cm-content',
+        requestAnimationFrame(() => {
+          if (currentDocument.current?.tabId !== tabId) return
+          const current = splitTabsRef.current
+          const pane = window.document.querySelector<HTMLElement>(
+            current
+              ? `.editor-page[data-side="${current.active}"]`
+              : '#document-editor-panel',
+          )
+          Array.from(
+            pane?.querySelectorAll<HTMLElement>('[contenteditable="true"]') ??
+              [],
+          )
+            .find(
+              (element) =>
+                !element.closest('[inert]') && element.getClientRects().length,
             )
-            ?.focus({ preventScroll: true }),
-        )
+            ?.focus({ preventScroll: true })
+        })
         return true
       },
       isBusy: () => busyRef.current,
@@ -747,13 +907,13 @@ function App() {
           const result = await window.hibi.invokeAddon(id, method, input)
           const next = await window.hibi.getDocument()
           if (next.revision !== document?.revision) {
-            acceptDocument(next)
+            await acceptOperationDocument(next)
           }
           setWorkspace(await window.hibi.getWorkspace())
           return result
         } finally {
-          busyRef.current = false
-          setBusy(false)
+          busyRef.current = focusUnsafe.current
+          setBusy(focusUnsafe.current)
         }
       },
       error: (error) =>
@@ -1070,6 +1230,7 @@ function App() {
   }, [acceptDocument])
 
   const documentLoaded = document !== null
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recovery uses live document refs; resubscribing on every render would restart the external-file drain.
   useEffect(() => {
     if (!documentLoaded) return
     let stopped = false
@@ -1089,7 +1250,7 @@ function App() {
       try {
         const result = await window.hibi.openExternalDocuments()
         if (result.document) {
-          acceptDocument(result.document)
+          await acceptOperationDocument(result.document, true)
           setSettingsOpen(false)
           setWorkspace(await window.hibi.getWorkspace())
         }
@@ -1100,8 +1261,8 @@ function App() {
         )
       } finally {
         running = false
-        busyRef.current = false
-        setBusy(false)
+        busyRef.current = focusUnsafe.current
+        setBusy(focusUnsafe.current)
         void drain()
       }
     }
@@ -1115,8 +1276,9 @@ function App() {
       clearTimeout(timer)
       unsubscribe()
     }
-  }, [documentLoaded, acceptDocument, dialogs, setError])
+  }, [documentLoaded, dialogs, setError])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: recovery reads live refs while this command handler must stay stable across renders.
   const runCommand = useCallback(
     async (command: DocumentCommand) => {
       if (busyRef.current || dialogs.isOpen()) return false
@@ -1141,7 +1303,11 @@ function App() {
             : window.hibi.saveDocument(command === 'saveAs'))
         if (next) {
           if (saving && token) acknowledgeSave(next, token, expectedId)
-          else acceptDocument(next)
+          else
+            await acceptOperationDocument(
+              next,
+              command === 'new' || command === 'open',
+            )
           if (command === 'new' || command === 'open') setSettingsOpen(false)
           setWorkspace(await window.hibi.getWorkspace())
         }
@@ -1154,9 +1320,9 @@ function App() {
         )
         return false
       } finally {
-        busyRef.current = false
-        if (source) flushSync(() => setBusy(false))
-        else setBusy(false)
+        busyRef.current = focusUnsafe.current
+        if (source) flushSync(() => setBusy(focusUnsafe.current))
+        else setBusy(focusUnsafe.current)
         if (source)
           requestAnimationFrame(() => {
             const active = window.document.activeElement
@@ -1170,7 +1336,7 @@ function App() {
           })
       }
     },
-    [dialogs, acceptDocument, acknowledgeSave, setError],
+    [dialogs, acknowledgeSave, setError],
   )
 
   async function openFolder(recentId?: string): Promise<WorkspaceState | null> {
@@ -1198,8 +1364,8 @@ function App() {
       )
       return null
     } finally {
-      busyRef.current = false
-      setBusy(false)
+      busyRef.current = focusUnsafe.current
+      setBusy(focusUnsafe.current)
     }
   }
 
@@ -1211,7 +1377,7 @@ function App() {
     try {
       const next = await window.hibi.openWorkspaceFile(path)
       if (next) {
-        acceptDocument(next)
+        await acceptOperationDocument(next)
         setSettingsOpen(false)
         setWorkspace(await window.hibi.getWorkspace())
         if (sidebarResize.overlay) setSidebarOpen(false)
@@ -1221,8 +1387,8 @@ function App() {
         error instanceof Error ? error.message : 'Could not open this file.',
       )
     } finally {
-      busyRef.current = false
-      setBusy(false)
+      busyRef.current = focusUnsafe.current
+      setBusy(focusUnsafe.current)
     }
   }
 
@@ -1244,15 +1410,15 @@ function App() {
     setBusy(true)
     setError('')
     try {
-      acceptDocument(await window.hibi.renameDocument(name))
+      await acceptOperationDocument(await window.hibi.renameDocument(name))
       setWorkspace(await window.hibi.getWorkspace())
     } catch (error) {
       setError(
         error instanceof Error ? error.message : 'Could not rename this file.',
       )
     } finally {
-      busyRef.current = false
-      setBusy(false)
+      busyRef.current = focusUnsafe.current
+      setBusy(focusUnsafe.current)
     }
   }
 
@@ -1267,7 +1433,12 @@ function App() {
 
   useEffect(() => window.hibi.onNotice(setNotice), [setNotice])
 
-  function updateMarkdown(markdown: string, historyGroup?: string) {
+  function updateMarkdown(
+    markdown: string,
+    historyGroup?: string,
+    tabId?: string,
+    viewId?: string,
+  ) {
     if (exceedsUtf8Limit(markdown, MAX_DOCUMENT_BYTES)) {
       setError(
         'This edit would exceed the 2 MiB document limit, so it was not applied.',
@@ -1276,7 +1447,7 @@ function App() {
       return
     }
     try {
-      documentRuntime.replace(markdown, 'visual', historyGroup)
+      documentRuntime.replace(markdown, 'visual', historyGroup, tabId, viewId)
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error))
       setResetEditor((value) => value + 1)
@@ -1295,8 +1466,11 @@ function App() {
     try {
       const result = await window.hibi.workspaceAction(action)
       if (result) {
+        await acceptOperationDocument(
+          result.document,
+          action.action === 'new-file',
+        )
         setWorkspace(result.workspace)
-        acceptDocument(result.document)
         if (action.action === 'new-file') setSettingsOpen(false)
         if (action.action === 'new-file' || action.action === 'new-folder') {
           selectSidebarView('workspace')
@@ -1310,25 +1484,38 @@ function App() {
       }
       return result
     } finally {
-      busyRef.current = false
-      setBusy(false)
+      busyRef.current = focusUnsafe.current
+      setBusy(focusUnsafe.current)
     }
   }
 
-  async function attachMedia(files: File[] | null) {
-    if (busyRef.current || !document) return null
+  async function attachMedia(
+    files: File[] | null,
+    tabId: string,
+    side: PaneSide,
+  ) {
+    const target = currentDocument.current
+    const split = splitTabsRef.current
+    if (
+      busyRef.current ||
+      focusPending.current ||
+      !target ||
+      target.tabId !== tabId ||
+      (split ? split[side] !== tabId || split.active !== side : side !== 'left')
+    )
+      return null
     busyRef.current = true
     setBusy(true)
     try {
-      const result = await window.hibi.attachMedia(files, document.revision)
+      const result = await window.hibi.attachMedia(files, target.revision)
       if (!result) return null
-      acceptDocument(result.document)
+      await acceptOperationDocument(result.document)
       setWorkspace(await window.hibi.getWorkspace())
       return result.attachments
     } finally {
-      busyRef.current = false
+      busyRef.current = focusUnsafe.current
       // Restore editor editability before the caller inserts its captured selection.
-      flushSync(() => setBusy(false))
+      flushSync(() => setBusy(focusUnsafe.current))
     }
   }
 
@@ -1339,7 +1526,7 @@ function App() {
     try {
       const result = await window.hibi.openDroppedFile(file)
       if (result?.document) {
-        acceptDocument(result.document)
+        await acceptOperationDocument(result.document, true)
         setWorkspace(await window.hibi.getWorkspace())
         if ('workspace' in result) selectSidebarView('workspace')
         setSettingsOpen(false)
@@ -1351,14 +1538,15 @@ function App() {
           : 'Could not open the dropped file.',
       )
     } finally {
-      busyRef.current = false
-      setBusy(false)
+      busyRef.current = focusUnsafe.current
+      setBusy(focusUnsafe.current)
     }
   }
 
   async function applyDocumentOperation(
     operation: () => Promise<DocumentState | null>,
     revealDocument = true,
+    replaceLocal = false,
   ) {
     if (busyRef.current || dialogs.isOpen()) return
     busyRef.current = true
@@ -1366,7 +1554,7 @@ function App() {
     try {
       const next = await operation()
       if (!next) return
-      acceptDocument(next)
+      await acceptOperationDocument(next, replaceLocal)
       setWorkspace(await window.hibi.getWorkspace())
       if (revealDocument) {
         setSettingsOpen(false)
@@ -1387,9 +1575,191 @@ function App() {
           : 'Could not open this document.',
       )
     } finally {
-      busyRef.current = false
-      setBusy(false)
+      busyRef.current = focusUnsafe.current
+      setBusy(focusUnsafe.current)
     }
+  }
+
+  async function splitDocumentTab(id: string) {
+    if (busyRef.current) return
+    const left = currentDocument.current?.tabId
+    if (!left || !currentDocument.current?.tabs.some((tab) => tab.id === id))
+      return
+    if (left !== id) {
+      busyRef.current = true
+      setBusy(true)
+      try {
+        await focusRetainedTab(id)
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error))
+        return
+      } finally {
+        busyRef.current = focusUnsafe.current
+        setBusy(focusUnsafe.current)
+      }
+    }
+    if (currentDocument.current?.tabId === id) {
+      setSplitTabs({
+        left,
+        right: id,
+        active: 'right',
+        leftMode: mode,
+        rightMode: mode,
+      })
+      focusSplitSide.current = 'right'
+    }
+  }
+
+  async function focusRetainedTab(id: string) {
+    const previous = currentDocument.current
+    const expected = documentRuntime.get(id)
+    if (!expected) throw new Error('This tab is no longer open.')
+    // Never replace a retained source with an older main-process snapshot.
+    const metadata = await window.hibi.focusDocumentTab(id, {
+      contentVersion: expected.contentVersion,
+      revision: expected.revision,
+    })
+    setFocusUnsafe(true)
+    try {
+      const retained = documentRuntime.focus(metadata)
+      if (!retained)
+        throw new Error('This pane changed while synchronizing. Try again.')
+      acceptDocument(retained, true)
+      setFocusUnsafe(false)
+    } catch (error) {
+      if (previous && previous.tabId !== id) {
+        const restore = documentRuntime.get(previous.tabId)
+        try {
+          if (!restore) throw new Error('The previous tab closed.')
+          await window.hibi.focusDocumentTab(previous.tabId, {
+            contentVersion: restore.contentVersion,
+            revision: restore.revision,
+          })
+          if (!documentRuntime.focus(restore))
+            throw new Error('The previous pane changed during recovery.')
+          setFocusUnsafe(false)
+        } catch {
+          throw new Error(
+            'Could not restore document focus. Editing is paused to protect unsent changes.',
+          )
+        }
+      }
+      throw error
+    }
+  }
+
+  async function retryDocumentFocus() {
+    const id = currentDocument.current?.tabId
+    if (!id) return false
+    try {
+      await focusRetainedTab(id)
+      setError('')
+      return true
+    } catch {
+      try {
+        // The previous tab may have closed; preload flushes its journal first.
+        acceptDocument(await window.hibi.getDocument())
+        setFocusUnsafe(false)
+        setError('')
+        return true
+      } catch (recoveryError) {
+        setError(
+          recoveryError instanceof Error
+            ? recoveryError.message
+            : String(recoveryError),
+        )
+        return false
+      }
+    } finally {
+      busyRef.current = focusUnsafe.current
+      setBusy(focusUnsafe.current)
+    }
+  }
+
+  async function focusSplitTab(side: PaneSide) {
+    const current = splitTabsRef.current
+    if (
+      !current ||
+      (current.active === side &&
+        !focusPending.current &&
+        currentDocument.current?.tabId === current[side])
+    )
+      return
+    if (busyRef.current && !focusPending.current) return
+    const id = current[side]
+    focusSplitSide.current = side
+    splitTabsRef.current = { ...current, active: side }
+    setSplitTabs(splitTabsRef.current)
+    setSelectedMode(side === 'left' ? current.leftMode : current.rightMode)
+    updateFlavorStatus(
+      paneFlavorStatus.current[side] ?? {
+        label: 'markdown',
+        unsupported: false,
+      },
+    )
+    if (currentDocument.current?.tabId === id && !focusPending.current) return
+    focusPending.current = true
+    busyRef.current = true
+    setBusy(true)
+    const task = focusQueue.current.then(async () => {
+      if (currentDocument.current?.tabId === id) return
+      try {
+        await focusRetainedTab(id)
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error))
+      }
+    })
+    focusQueue.current = task
+    await task
+    if (focusQueue.current === task) {
+      focusPending.current = false
+      busyRef.current = focusUnsafe.current
+      setBusy(focusUnsafe.current)
+      const latest = splitTabsRef.current
+      const actual = currentDocument.current?.tabId
+      if (
+        latest &&
+        actual &&
+        (actual === latest.left || actual === latest.right) &&
+        latest[latest.active] !== actual
+      ) {
+        const restored = actual === latest.left ? 'left' : 'right'
+        splitTabsRef.current = { ...latest, active: restored }
+        setSplitTabs(splitTabsRef.current)
+        setSelectedMode(
+          restored === 'left' ? latest.leftMode : latest.rightMode,
+        )
+        focusSplitSide.current = null
+      }
+    }
+  }
+
+  async function closeSplit() {
+    await focusQueue.current
+    const current = splitTabsRef.current
+    if (!current) return
+    if (focusUnsafe.current && !(await retryDocumentFocus())) return
+    const active =
+      current.left !== current.right &&
+      currentDocument.current?.tabId === current.right
+        ? 'right'
+        : current.active
+    if (active === 'right' && current.left !== current.right) {
+      busyRef.current = true
+      setBusy(true)
+      try {
+        await focusRetainedTab(current.left)
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error))
+        return
+      } finally {
+        busyRef.current = focusUnsafe.current
+        setBusy(focusUnsafe.current)
+      }
+    }
+    setSelectedMode(current.leftMode)
+    splitTabsRef.current = null
+    setSplitTabs(null)
   }
 
   async function openRemote() {
@@ -1403,10 +1773,29 @@ function App() {
       confirmLabel: 'Open',
     })
     if (url)
-      await applyDocumentOperation(() => window.hibi.openRemoteDocument(url))
+      await applyDocumentOperation(
+        () => window.hibi.openRemoteDocument(url),
+        true,
+        true,
+      )
   }
 
-  function openLink(href: string) {
+  async function openLink(href: string, tabId: string, side: PaneSide) {
+    const split = splitTabsRef.current
+    if (split) {
+      if (split[side] !== tabId) return
+      await focusSplitTab(side)
+      const current = splitTabsRef.current
+      if (
+        !current ||
+        current[side] !== tabId ||
+        current.active !== side ||
+        focusPending.current
+      )
+        return
+    } else if (side !== 'left') return
+    const target = currentDocument.current
+    if (!target || target.tabId !== tabId || busyRef.current) return
     if (href.startsWith('#')) {
       let anchor: string
       try {
@@ -1414,10 +1803,12 @@ function App() {
       } catch {
         return
       }
+      const pane = window.document.querySelector<HTMLElement>(
+        split ? `.editor-page[data-side="${side}"]` : '#document-editor-panel',
+      )
       const heading = Array.from(
-        window.document.querySelectorAll<HTMLElement>(
-          '.tiptap :is(h1,h2,h3,h4,h5,h6)',
-        ),
+        pane?.querySelectorAll<HTMLElement>('.tiptap :is(h1,h2,h3,h4,h5,h6)') ??
+          [],
       ).find(
         (element) =>
           (element.textContent ?? '')
@@ -1429,10 +1820,9 @@ function App() {
       heading?.scrollIntoView({ block: 'start' })
       return
     }
-    if (document)
-      void applyDocumentOperation(() =>
-        window.hibi.openDocumentLink(href, document.revision),
-      )
+    void applyDocumentOperation(() =>
+      window.hibi.openDocumentLink(href, target.revision),
+    )
   }
 
   function navigate(direction: 'back' | 'forward') {
@@ -1490,13 +1880,13 @@ function App() {
             try {
               const next = await window.hibi.restoreVersion(id)
               if (!next) return
-              acceptDocument(next)
+              await acceptOperationDocument(next, true)
               setSettingsOpen(false)
             } catch (error) {
               setError(String(error))
             } finally {
-              busyRef.current = false
-              setBusy(false)
+              busyRef.current = focusUnsafe.current
+              setBusy(focusUnsafe.current)
             }
           })
         break
@@ -1556,14 +1946,6 @@ function App() {
     }
   }
 
-  const sourceName =
-    documentFormat?.name ??
-    addonHost.catalog.find((addon) =>
-      addon.manifest.fileExtensions?.includes(
-        documentExtension(document?.name ?? ''),
-      ),
-    )?.manifest.name ??
-    'source'
   const knownFlavors = useMemo(
     () => [
       ...addonHost.catalog.flatMap((addon) =>
@@ -1608,6 +1990,33 @@ function App() {
         : next,
     )
   }, [])
+  const paneFlavorStatus = useRef<
+    Partial<Record<PaneSide, DocumentFlavorStatus>>
+  >({})
+  useEffect(() => {
+    if (!splitLeftId || !splitRightId) return
+    paneFlavorStatus.current = {}
+  }, [splitLeftId, splitRightId])
+  const activePane = useRef<PaneSide>('left')
+  activePane.current = splitTabs?.active ?? 'left'
+  const paneReports = useMemo(() => {
+    const forSide = (side: PaneSide) => ({
+      flavor: (status: DocumentFlavorStatus) => {
+        paneFlavorStatus.current[side] = status
+        if (activePane.current === side) updateFlavorStatus(status)
+      },
+      outline: (headings: OutlineHeading[]) => {
+        if (activePane.current === side) setOutline(headings)
+      },
+      unavailable: (reason: string | null) => {
+        if (activePane.current === side) setOutlineUnavailable(reason)
+      },
+      activeOutline: (id: string | null) => {
+        if (activePane.current === side) setActiveOutline(id)
+      },
+    })
+    return { left: forSide('left'), right: forSide('right') }
+  }, [updateFlavorStatus])
   function changeFlavor(choice: FlavorChoice) {
     if (!document) return
     localStorage.setItem(`hibi:flavor:${document.id}`, JSON.stringify(choice))
@@ -1975,6 +2384,228 @@ function App() {
         },
       })
   }
+  const renderPane = (side: PaneSide) => {
+    const paneDocument = splitTabs
+      ? documentRuntime.get(splitTabs[side])
+      : document
+    const active = !splitTabs || splitTabs.active === side
+    const paneFormat = paneDocument
+      ? documentFormats.get(paneDocument.name)
+      : undefined
+    const paneMarkdown =
+      !paneDocument || documentFormats.isMarkdown(paneDocument.name)
+    const paneFootnoteDocument =
+      paneMarkdown && hasFootnoteDefinitions(paneDocument?.markdown ?? '')
+    const PaneEditor = paneMarkdown ? richEditor.Component : FormatEditor
+    const requestedMode = splitTabs
+      ? side === 'left'
+        ? splitTabs.leftMode
+        : splitTabs.rightMode
+      : mode
+    const paneViews: readonly ViewMode[] = addonHost.sourceOnly
+      ? ['markdown']
+      : documentFormats
+          .views(paneDocument?.name ?? 'untitled.md')
+          .filter((view) => !paneFootnoteDocument || view !== 'normal')
+    const paneMode: ViewMode = paneViews.includes(requestedMode)
+      ? requestedMode
+      : paneViews.includes('side-by-side')
+        ? 'side-by-side'
+        : 'markdown'
+    const paneChoice = splitFlavors?.[side].choice ?? flavorChoice
+    const paneChosen = splitFlavors?.[side].selected ?? chosenFlavors
+    const paneSourceName =
+      paneFormat?.name ??
+      addonHost.catalog.find((addon) =>
+        addon.manifest.fileExtensions?.includes(
+          documentExtension(paneDocument?.name ?? ''),
+        ),
+      )?.manifest.name ??
+      'source'
+    return (
+      // biome-ignore lint/a11y/useAriaPropsSupportedByRole: tabpanel and region both support accessible names.
+      <div
+        className="editor-page"
+        key={side}
+        data-side={splitTabs ? side : undefined}
+        data-active={active}
+        id={active ? 'document-editor-panel' : 'split-document-editor-panel'}
+        hidden={!!activeAddonTab}
+        role={
+          splitTabs
+            ? 'region'
+            : paneDocument?.tabsEnabled === false && addonTabs.length === 0
+              ? 'region'
+              : 'tabpanel'
+        }
+        aria-label={
+          splitTabs
+            ? `Editing ${paneDocument?.name ?? 'document'}`
+            : paneDocument?.tabsEnabled === false && addonTabs.length === 0
+              ? paneDocument.name
+              : undefined
+        }
+        aria-labelledby={
+          !splitTabs &&
+          paneDocument &&
+          (paneDocument.tabsEnabled || addonTabs.length > 0) &&
+          !activeAddonTab
+            ? `document-tab-${paneDocument.tabId}`
+            : undefined
+        }
+        data-startup={!splitTabs && showWelcome}
+        inert={!addonHost.ready}
+        aria-busy={!addonHost.ready}
+        onPointerDown={(event) => {
+          if ((event.target as Element).closest('[aria-label="Close split"]'))
+            return
+          if (splitTabs && !active) void focusSplitTab(side)
+        }}
+        onFocusCapture={(event) => {
+          if ((event.target as Element).closest('[aria-label="Close split"]'))
+            return
+          if (splitTabs && !active) void focusSplitTab(side)
+        }}
+      >
+        {splitTabs && paneDocument && (
+          <header className="split-tab-heading">
+            <span>
+              {paneDocument.name}
+              {paneDocument.dirty ? ' •' : ''}
+            </span>
+            {side === 'right' && (
+              <IconButton
+                aria-label="Close split"
+                title="Close split"
+                onClick={() => void closeSplit()}
+              >
+                <X size={14} />
+              </IconButton>
+            )}
+          </header>
+        )}
+        {(!editorStarted.current || !PaneEditor) && <LoadingScreen />}
+        {paneDocument && editorStarted.current && PaneEditor && (
+          <Suspense fallback={<LoadingScreen />}>
+            <ActiveDocumentEditor
+              Component={PaneEditor}
+              {...(splitTabs ? { viewId: side } : {})}
+              focused={active}
+              autoFocus={!splitTabs}
+              markdown={paneMarkdown}
+              knownFlavors={knownFlavors}
+              chosenFlavors={paneChosen}
+              flavorChoice={paneChoice}
+              manifests={manifests}
+              enabledAddons={enabledAddons}
+              onFlavorStatus={paneReports[side].flavor}
+              onOutline={paneReports[side].outline}
+              onOutlineUnavailable={paneReports[side].unavailable}
+              outlineActive={
+                active &&
+                !settingsOpen &&
+                !zen &&
+                ((sidebarOpen && sidebarView === 'outline') ||
+                  (rightSidebarOpen && rightSidebarView === 'outline'))
+              }
+              onActiveOutline={paneReports[side].activeOutline}
+              outlineTarget={active ? outlineTarget : null}
+              document={paneDocument}
+              format={paneFormat}
+              formatName={paneSourceName}
+              onAttach={(files) => attachMedia(files, paneDocument.tabId, side)}
+              onLink={(href) => void openLink(href, paneDocument.tabId, side)}
+              flavors={paneChosen}
+              footnoteDocument={paneFootnoteDocument}
+              sourceExtensions={addonHost.sourceExtensions}
+              richExtensions={addonHost.richExtensions}
+              documentRevision={paneDocument.revision}
+              showLineNumbers={showLineNumbers}
+              spellCheck={spellCheck}
+              showMarkdownMarkers={showMarkdownMarkers}
+              cursorSettings={cursorSettings}
+              markdownExtensions={editorConfiguration.current.projections}
+              key={`${paneDocument.tabId}-${paneDocument.revision}-${resetEditor}-${paneMarkdown ? 'markdown' : documentExtension(paneDocument.name)}`}
+              onChange={(value, group) =>
+                updateMarkdown(
+                  value,
+                  group,
+                  paneDocument.tabId,
+                  splitTabs ? side : undefined,
+                )
+              }
+              mode={paneMode}
+              disabled={busy || !addonHost.ready}
+              findOpen={findOpen && active && !settingsOpen}
+              onCloseFind={() => setFindOpen(false)}
+            />
+          </Suspense>
+        )}
+        {!splitTabs &&
+          showWelcome &&
+          addonHost.ready &&
+          (activeStartView ? (
+            <section
+              className="startup-placeholder addon-start-view"
+              aria-label="Start writing"
+            >
+              <AddonViewContent entry={activeStartView} visible />
+            </section>
+          ) : (
+            <StartupPlaceholder
+              recent={recentWorkspaces}
+              mode={mode}
+              busy={busy}
+              onOpen={(id) => void openFolder(id)}
+              onOpenFile={() => void runCommand('open')}
+              onDismiss={() => {
+                void applyDocumentOperation(
+                  () => window.hibi.newDocument(),
+                  true,
+                  true,
+                ).then(() =>
+                  window.document
+                    .querySelector<HTMLElement>(
+                      mode === 'normal' ? '.tiptap' : '.cm-content',
+                    )
+                    ?.focus(),
+                )
+              }}
+            />
+          ))}
+        {!settingsOpen && active && (
+          <StatusBar
+            visibility={zen ? 'hidden' : statusBar}
+            items={[
+              {
+                id: 'flavor',
+                label: paneMarkdown ? flavorStatus.label : paneSourceName,
+                tooltip: !paneMarkdown
+                  ? `${paneSourceName} document · click for format settings`
+                  : paneFootnoteDocument
+                    ? 'Edit footnotes in Source view. Side-by-side shows their preview.'
+                    : flavorStatus.unsupported
+                      ? 'Some Markdown features are disabled. Choose a flavor or enable the addon.'
+                      : `${paneChoice.dialect === 'auto' ? 'Detected' : 'Selected'} Markdown flavor · click to change`,
+                onClick: openFlavors,
+              },
+              {
+                id: 'autosave',
+                ...autosaveStatus,
+                onClick: () => openSetting('editor', 'autosave-enabled'),
+              },
+              ...addonHost.statusItems.filter(
+                (item) =>
+                  item.label &&
+                  (item.when !== 'source' || mode !== 'normal') &&
+                  (item.when !== 'normal' || mode === 'normal'),
+              ),
+            ]}
+          />
+        )}
+      </div>
+    )
+  }
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: OS file drops supplement the keyboard-accessible file menu.
     <div
@@ -2109,8 +2740,20 @@ function App() {
           selectSidebarView(view, undefined, 'right')
         }
         onSelectTab={(id) => {
+          if (focusUnsafe.current) {
+            if (id === currentDocument.current?.tabId) void retryDocumentFocus()
+            return
+          }
           addonViews.selectDocument()
-          if (id !== document?.tabId)
+          if (splitTabs && (id === splitTabs.left || id === splitTabs.right)) {
+            const side =
+              id === splitTabs.left && id === splitTabs.right
+                ? splitTabs.active
+                : id === splitTabs.left
+                  ? 'left'
+                  : 'right'
+            void focusSplitTab(side)
+          } else if (id !== document?.tabId)
             void applyDocumentOperation(() => window.hibi.selectDocumentTab(id))
         }}
         onCloseTab={(id) =>
@@ -2129,6 +2772,11 @@ function App() {
         onCloseAddonTab={(id) =>
           addonTabs.find((tab) => tab.id === id)?.handle.close()
         }
+        onSplitTab={(id) => {
+          addonViews.selectDocument()
+          void splitDocumentTab(id)
+        }}
+        splitTabs={splitTabs}
         sidebarOpen={settingsOpen ? settingsSidebarOpen : sidebarOpen}
         onSidebar={toggleSidebar}
         onSettings={toggleSettings}
@@ -2287,7 +2935,11 @@ function App() {
             onCategory={setSettingsCategory}
             onSetting={openSetting}
             onWorkspaceChanged={() =>
-              applyDocumentOperation(() => window.hibi.getDocument(), false)
+              applyDocumentOperation(
+                () => window.hibi.getDocument(),
+                false,
+                true,
+              )
             }
             showLineNumbers={showLineNumbers}
             onShowLineNumbers={setShowLineNumbers}
@@ -2338,143 +2990,31 @@ function App() {
         }
       >
         {!activeAddonTab && <EditorToolbar mode={mode} typing={typing} />}
-        {!activeAddonTab && notifications.length > 0 && (
-          <div className="view-notifications">
-            {notifications.map(({ id, notification }) => (
-              <DocumentNotice key={id} {...notification} />
-            ))}
-          </div>
-        )}
-        {/* biome-ignore lint/a11y/useAriaPropsSupportedByRole: tabpanel and region both support accessible names. */}
-        <div
-          className="editor-page"
-          id="document-editor-panel"
-          hidden={!!activeAddonTab}
-          role={
-            document?.tabsEnabled === false && addonTabs.length === 0
-              ? 'region'
-              : 'tabpanel'
-          }
-          aria-label={
-            document?.tabsEnabled === false && addonTabs.length === 0
-              ? document.name
-              : undefined
-          }
-          aria-labelledby={
-            document &&
-            (document.tabsEnabled || addonTabs.length > 0) &&
-            !activeAddonTab
-              ? `document-tab-${document.tabId}`
-              : undefined
-          }
-          data-startup={showWelcome}
-          inert={!addonHost.ready}
-          aria-busy={!addonHost.ready}
-        >
-          {(!editorStarted.current || !DocumentEditor) && <LoadingScreen />}
-          {document && editorStarted.current && DocumentEditor && (
-            <Suspense fallback={<LoadingScreen />}>
-              <ActiveDocumentEditor
-                Component={DocumentEditor}
-                markdown={markdownDocument}
-                knownFlavors={knownFlavors}
-                chosenFlavors={chosenFlavors}
-                flavorChoice={flavorChoice}
-                manifests={manifests}
-                enabledAddons={enabledAddons}
-                onFlavorStatus={updateFlavorStatus}
-                onOutline={setOutline}
-                onOutlineUnavailable={setOutlineUnavailable}
-                outlineActive={
-                  !settingsOpen &&
-                  !zen &&
-                  ((sidebarOpen && sidebarView === 'outline') ||
-                    (rightSidebarOpen && rightSidebarView === 'outline'))
-                }
-                onActiveOutline={setActiveOutline}
-                outlineTarget={outlineTarget}
-                document={document}
-                format={documentFormat}
-                formatName={sourceName}
-                onAttach={attachMedia}
-                onLink={openLink}
-                flavors={editorConfiguration.current.flavors}
-                footnoteDocument={footnoteDocument}
-                sourceExtensions={addonHost.sourceExtensions}
-                richExtensions={addonHost.richExtensions}
-                documentRevision={document.revision}
-                showLineNumbers={showLineNumbers}
-                spellCheck={spellCheck}
-                showMarkdownMarkers={showMarkdownMarkers}
-                cursorSettings={cursorSettings}
-                markdownExtensions={editorConfiguration.current.projections}
-                key={`${document.revision}-${resetEditor}-${markdownDocument ? 'markdown' : documentExtension(document.name)}`}
-                onChange={updateMarkdown}
-                mode={mode}
-                disabled={busy || !addonHost.ready}
-                findOpen={findOpen && !settingsOpen}
-                onCloseFind={() => setFindOpen(false)}
-              />
-            </Suspense>
+        {!activeAddonTab &&
+          (focusRecoveryNeeded || notifications.length > 0) && (
+            <div className="view-notifications">
+              {focusRecoveryNeeded && (
+                <DocumentNotice
+                  title="Could not restore document focus"
+                  message="Editing is paused to protect unsent changes."
+                  variant="warning"
+                >
+                  <Button onClick={() => void retryDocumentFocus()}>
+                    Retry document focus
+                  </Button>
+                </DocumentNotice>
+              )}
+              {notifications.map(({ id, notification }) => (
+                <DocumentNotice key={id} {...notification} />
+              ))}
+            </div>
           )}
-          {showWelcome &&
-            addonHost.ready &&
-            (activeStartView ? (
-              <section
-                className="startup-placeholder addon-start-view"
-                aria-label="Start writing"
-              >
-                <AddonViewContent entry={activeStartView} visible />
-              </section>
-            ) : (
-              <StartupPlaceholder
-                recent={recentWorkspaces}
-                mode={mode}
-                busy={busy}
-                onOpen={(id) => void openFolder(id)}
-                onOpenFile={() => void runCommand('open')}
-                onDismiss={() => {
-                  void applyDocumentOperation(() =>
-                    window.hibi.newDocument(),
-                  ).then(() =>
-                    window.document
-                      .querySelector<HTMLElement>(
-                        mode === 'normal' ? '.tiptap' : '.cm-content',
-                      )
-                      ?.focus(),
-                  )
-                }}
-              />
-            ))}
-          {!settingsOpen && (
-            <StatusBar
-              visibility={zen ? 'hidden' : statusBar}
-              items={[
-                {
-                  id: 'flavor',
-                  label: markdownDocument ? flavorStatus.label : sourceName,
-                  tooltip: !markdownDocument
-                    ? `${sourceName} document · click for format settings`
-                    : footnoteDocument
-                      ? 'Edit footnotes in Source view. Side-by-side shows their preview.'
-                      : flavorStatus.unsupported
-                        ? 'Some Markdown features are disabled. Choose a flavor or enable the addon.'
-                        : `${flavorChoice.dialect === 'auto' ? 'Detected' : 'Selected'} Markdown flavor · click to change`,
-                  onClick: openFlavors,
-                },
-                {
-                  id: 'autosave',
-                  ...autosaveStatus,
-                  onClick: () => openSetting('editor', 'autosave-enabled'),
-                },
-                ...addonHost.statusItems.filter(
-                  (item) =>
-                    item.label &&
-                    (item.when !== 'source' || mode !== 'normal') &&
-                    (item.when !== 'normal' || mode === 'normal'),
-                ),
-              ]}
-            />
+        <div
+          className="split-tab-pages"
+          data-split={!!splitTabs && !activeAddonTab}
+        >
+          {(splitTabs ? (['left', 'right'] as const) : (['left'] as const)).map(
+            renderPane,
           )}
         </div>
         <AddonTab hidden={settingsOpen} />

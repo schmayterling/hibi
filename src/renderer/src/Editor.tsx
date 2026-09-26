@@ -141,6 +141,8 @@ export type ViewMode = DocumentView
 export function MarkdownEditor({
   document: documentState,
   viewId = 'default',
+  focused = true,
+  autoFocus = true,
   format,
   formatName,
   value,
@@ -169,6 +171,8 @@ export function MarkdownEditor({
 }: {
   document: DocumentState
   viewId?: string
+  focused?: boolean
+  autoFocus?: boolean
   format: DocumentFormat | undefined
   formatName: string
   value: string
@@ -1797,6 +1801,7 @@ export function MarkdownEditor({
   ])
   const richEditContext = useRef({
     document: documentState,
+    focused,
     mode,
     findTarget,
     disabled,
@@ -1805,6 +1810,7 @@ export function MarkdownEditor({
   })
   richEditContext.current = {
     document: documentState,
+    focused,
     mode,
     findTarget,
     disabled,
@@ -1818,6 +1824,7 @@ export function MarkdownEditor({
       const current = editorDocument.get()
       if (
         editor.isDestroyed ||
+        !context.focused ||
         context.findTarget !== 'rich' ||
         context.mode === 'markdown' ||
         context.disabled ||
@@ -1970,13 +1977,14 @@ export function MarkdownEditor({
   }, [editor, markdownDocument])
   // biome-ignore lint/correctness/useExhaustiveDependencies: initial focus belongs to this editor instance, never subsequent mode or document updates.
   useLayoutEffect(() => {
-    if (!editor || !markdownDocument || paneMode === 'markdown') return
+    if (!autoFocus || !editor || !markdownDocument || paneMode === 'markdown')
+      return
     const focus = () => {
       if (editor.isDestroyed || !editor.view.dom.isConnected) return
       const active = window.document.activeElement
       if (
         active?.closest(
-          '.settings-screen, [role="dialog"], .source-pane, input, textarea, select',
+          '.settings-screen, [role="dialog"], .source-pane, .document-tabs, input, textarea, select',
         )
       )
         return
@@ -1992,7 +2000,7 @@ export function MarkdownEditor({
     return () => {
       editor.off('mount', focus)
     }
-  }, [editor])
+  }, [editor, autoFocus])
   // biome-ignore lint/correctness/useExhaustiveDependencies: parser ownership and syntax preferences change independently of its source snapshot.
   useEffect(() => {
     if (
@@ -2404,7 +2412,7 @@ export function MarkdownEditor({
   // biome-ignore lint/correctness/useExhaustiveDependencies: these transitions invalidate the exact projection even when text is unchanged.
   useEffect(() => {
     documentProjections.invalidate()
-  }, [mode, findTarget, sourceReady, syntaxVersion, flavors])
+  }, [mode, findTarget, sourceReady, syntaxVersion, flavors, focused])
   useEffect(() => {
     if (!editor || !outlineTarget || handledOutline.current === outlineTarget)
       return
@@ -2509,6 +2517,7 @@ export function MarkdownEditor({
       focusOwnedByEditor,
       markdownDocument,
       format,
+      focused,
     )
 
   useLayoutEffect(() => {
@@ -2779,6 +2788,7 @@ export function MarkdownEditor({
                 <SourceEditor
                   document={documentState}
                   viewId={viewId}
+                  focused={focused}
                   editTarget={findTarget === 'source'}
                   markdownMode={markdownDocument}
                   referenceSyntax={referenceSyntax}

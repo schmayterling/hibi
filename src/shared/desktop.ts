@@ -19,6 +19,7 @@ export const DOCUMENT_CHANNELS = {
   saveTarget: 'document:save-target',
   autosave: 'document:autosave',
   selectTab: 'document:select-tab',
+  focusTab: 'document:focus-tab',
   closeTab: 'document:close-tab',
   moveTab: 'document:move-tab',
   tabsEnabled: 'document:tabs-enabled',
@@ -52,6 +53,7 @@ export type DocumentState = {
   canAutosave: boolean
 }
 export type DocumentTab = { id: string; name: string; dirty: boolean }
+export type DocumentFocus = Omit<DocumentState, 'markdown' | 'savedMarkdown'>
 export type AutosaveResult = {
   status: 'saved' | 'skipped' | 'conflict'
   document: DocumentState | null
@@ -400,6 +402,10 @@ export type DesktopApi = {
   setUiCase: (value: import('./ui-case').UiCase) => Promise<void>
   getDocument: () => Promise<DocumentState>
   selectDocumentTab: (id: string) => Promise<DocumentState>
+  focusDocumentTab: (
+    id: string,
+    expected: Pick<DocumentFocus, 'contentVersion' | 'revision'>,
+  ) => Promise<DocumentFocus>
   closeDocumentTab: (id: string) => Promise<DocumentState | null>
   moveDocumentTab: (
     id: string,
@@ -417,7 +423,9 @@ export type DesktopApi = {
     operation: import('./source-operations').SourceOperation,
   ) => void
   onDocumentCheckpoint: (
-    callback: () => import('./document-checkpoint').JournalCheckpoint,
+    callback: (
+      tabId: string,
+    ) => import('./document-checkpoint').JournalCheckpoint,
   ) => () => void
   getDocumentRecoveryState: () => ReturnType<
     ReturnType<

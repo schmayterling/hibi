@@ -1,4 +1,8 @@
-import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop.ts'
+import {
+  type DocumentFocus,
+  type DocumentState,
+  MAX_DOCUMENT_BYTES,
+} from '../../shared/desktop.ts'
 import { sourceChange } from '../../shared/document-journal.ts'
 import { DocumentSession } from '../../shared/document-session.ts'
 import type {
@@ -30,6 +34,14 @@ export type DocumentSaveToken = Readonly<{
   sequence: number
   epoch: number
 }>
+const sameTabs = (a: DocumentState['tabs'], b: DocumentState['tabs']) =>
+  a.length === b.length &&
+  a.every(
+    (tab, index) =>
+      tab.id === b[index]?.id &&
+      tab.name === b[index].name &&
+      tab.dirty === b[index].dirty,
+  )
 
 /** Per-tab source/history ownership. React and legacy addons receive immutable read facades. */
 export class DocumentRuntime {
@@ -364,16 +376,25 @@ export class DocumentRuntime {
         for (const listener of [...this.#listeners]) listener(active, null)
     }
   }
-  activate(document: DocumentState) {
+  activate(document: DocumentState, replaceLocal = false) {
     this.#updating = true
     try {
       const { markdown, savedMarkdown, ...metadata } = document
       let session = this.#sessions.get(document.tabId)
+      const local = session?.snapshot()
       if (
         session &&
-        (session.snapshot().version !== document.contentVersion ||
-          session.snapshot().materialize() !== markdown)
+        local &&
+        (local.version !== document.contentVersion ||
+          local.materialize() !== markdown)
       ) {
+        if (
+          !replaceLocal &&
+          (session.state().dirty || local.version >= document.contentVersion)
+        )
+          throw new Error(
+            'This tab has local edits waiting to synchronize. Try again.',
+          )
         this.#discardSession(document.tabId, session)
         session = undefined
       }
@@ -445,6 +466,33 @@ export class DocumentRuntime {
       this.#updating = false
     }
     for (const listener of [...this.#catalogListeners]) listener()
+    const active = this.get()!
+    for (const listener of [...this.#documentListeners]) listener(active, null)
+    return active
+  }
+  focus(document: DocumentFocus) {
+    const session = this.session(document.tabId)
+    if (
+      !session ||
+      session.snapshot().version !== document.contentVersion ||
+      session.snapshot().document.revision !== document.revision
+    )
+      return null
+    const previous = this.#metadata.get(document.tabId)
+    const unchanged =
+      previous &&
+      previous.id === document.id &&
+      previous.name === document.name &&
+      previous.ephemeral === document.ephemeral &&
+      previous.canAutosave === document.canAutosave &&
+      previous.tabsEnabled === document.tabsEnabled &&
+      sameTabs(previous.tabs, document.tabs)
+    this.#active = session
+    this.#activeId = document.tabId
+    if (!unchanged) {
+      this.#metadata.set(document.tabId, document)
+      this.#cached.delete(document.tabId)
+    }
     return this.get()!
   }
   acknowledgeSave(
@@ -509,9 +557,20 @@ export class DocumentRuntime {
     source: string,
     origin: SourceOperation['origin'] = 'addon',
     group: string = crypto.randomUUID(),
+    id?: string,
+    viewId = 'default',
   ) {
-    const edit = this.#replacement(source)
-    return edit?.session.edit(edit.changes, origin, group) ?? null
+    const edit = this.#replacement(source, id)
+    return (
+      edit?.session.edit(
+        edit.changes,
+        origin,
+        group,
+        undefined,
+        undefined,
+        viewId,
+      ) ?? null
+    )
   }
   beginReplace(source: string, group: string, id?: string, viewId = 'default') {
     const edit = this.#replacement(source, id)

@@ -21,6 +21,7 @@ const SourceEditor = lazy(() =>
 export function FormatEditor({
   document,
   viewId = 'default',
+  focused = true,
   format,
   formatName,
   mode,
@@ -73,6 +74,7 @@ export function FormatEditor({
     focusOwnedByEditor,
     false,
     format,
+    focused,
   )
   useEffect(() => {
     onOutline([])
@@ -82,7 +84,7 @@ export function FormatEditor({
   // biome-ignore lint/correctness/useExhaustiveDependencies: pane transitions invalidate captured source projections.
   useEffect(() => {
     documentProjections.invalidate()
-  }, [mode, sourceReady])
+  }, [mode, sourceReady, focused])
   useEffect(() => {
     if (paneMode !== 'side-by-side' || !sourceReady) return
     const rich = content.current?.querySelector<HTMLElement>('.rich-pane'),
@@ -191,6 +193,7 @@ export function FormatEditor({
                 <SourceEditor
                   document={document}
                   viewId={viewId}
+                  focused={focused}
                   editTarget={true}
                   markdownMode={false}
                   sourceLanguage={format?.language}

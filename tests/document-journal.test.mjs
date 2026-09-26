@@ -68,6 +68,36 @@ test('source deltas round trip Unicode boundaries, insertions, replacements, and
     }
 })
 
+test('receiver routes interleaved edits to their owning tab', () => {
+  const stores = new Map(
+    ['a', 'b'].map((id) => [
+      id,
+      new SourceStore('', { tabId: id, revision: 1 }, 0),
+    ]),
+  )
+  const receive = createJournalReceiver((id) => {
+    const store = stores.get(id)
+    if (!store) throw new Error('closed tab')
+    return store
+  })
+  const edit = (tabId, baseVersion, from, insert) =>
+    receive({
+      tabId,
+      revision: 1,
+      baseVersion,
+      contentVersion: baseVersion + 1,
+      from,
+      to: from,
+      insert,
+    })
+  edit('a', 0, 0, 'a')
+  edit('b', 0, 0, 'b')
+  edit('a', 1, 1, '2')
+  assert.equal(stores.get('a').snapshot().materialize(), 'a2')
+  assert.equal(stores.get('b').snapshot().materialize(), 'b')
+  assert.throws(() => edit('closed', 0, 0, 'x'), /closed tab/)
+})
+
 test('receiver enforces order and identity and deduplicates accepted retries', () => {
   const { state, receive, change } = fixture()
   const first = change('', 'hello', 0)
@@ -355,6 +385,126 @@ test('J09: a lost receipt beyond the horizon is retired only by exact checkpoint
   assert.equal(journal.hasPending(), false)
   assert.equal(journal.state().lastMemoryAck.contentVersion, 140)
   assert.equal(state.contentVersion, 140)
+})
+
+test('lost acknowledgement for an inactive tab uses that tab for recovery', async () => {
+  const stores = new Map(
+    ['a', 'b'].map((tabId) => [
+      tabId,
+      new SourceStore('', { tabId, revision: 0 }, 0),
+    ]),
+  )
+  const storeFor = (tabId) => {
+    const store = stores.get(tabId)
+    if (!store) throw new Error('This tab is no longer open.')
+    return store
+  }
+  const receive = createJournalReceiver(storeFor)
+  const requested = []
+  const journal = createDocumentJournal(
+    async (change) => {
+      receive(change)
+      throw new Error('lost acknowledgement')
+    },
+    {
+      checkpoint: (tabId) => {
+        requested.push(tabId)
+        const store = storeFor(tabId)
+        return { ...journalHead(store), source: store.snapshot().materialize() }
+      },
+      head: async (tabId) => journalHead(storeFor(tabId)),
+      verify: (checkpoint) =>
+        verifyJournalCheckpoint(
+          () => storeFor(checkpoint.tabId),
+          checkpoint,
+          1024,
+        ),
+    },
+  )
+  await assert.rejects(
+    journal.append({
+      tabId: 'b',
+      revision: 0,
+      baseVersion: 0,
+      contentVersion: 1,
+      from: 0,
+      to: 0,
+      insert: 'b',
+    }),
+    /lost acknowledgement/,
+  )
+  await journal.flush()
+  assert.deepEqual(requested, ['b'])
+  assert.equal(storeFor('a').snapshot().materialize(), '')
+  assert.equal(storeFor('b').snapshot().materialize(), 'b')
+  assert.equal(storeFor('b').snapshot().version, 1)
+  assert.equal(journal.pendingBytes(), 0)
+})
+
+test('mixed pending tabs retire only groups with retained, verified checkpoints', async () => {
+  const stores = new Map([
+    ['a', new SourceStore('', { tabId: 'a', revision: 0 }, 0)],
+    ['b', new SourceStore('', { tabId: 'b', revision: 1 }, 0)],
+  ])
+  const storeFor = (tabId) => {
+    const store = stores.get(tabId)
+    if (!store) throw new Error('This tab is no longer open.')
+    return store
+  }
+  const receive = createJournalReceiver(storeFor)
+  const verified = []
+  let retainedB = false
+  const journal = createDocumentJournal(
+    async (change) => {
+      receive(change)
+      throw new Error('lost acknowledgement')
+    },
+    {
+      checkpoint: (tabId) => {
+        if (tabId === 'b' && !retainedB)
+          throw new Error('No retained document recovery checkpoint.')
+        const store = storeFor(tabId)
+        return { ...journalHead(store), source: store.snapshot().materialize() }
+      },
+      head: async (tabId) => journalHead(storeFor(tabId)),
+      verify: async (checkpoint) => {
+        const head = await verifyJournalCheckpoint(
+          () => storeFor(checkpoint.tabId),
+          checkpoint,
+          1024,
+        )
+        verified.push(`${head.tabId}:${head.revision}`)
+        return head
+      },
+    },
+  )
+  for (const [tabId, revision] of [
+    ['a', 0],
+    ['b', 1],
+  ])
+    await assert.rejects(
+      journal.append({
+        tabId,
+        revision,
+        baseVersion: 0,
+        contentVersion: 1,
+        from: 0,
+        to: 0,
+        insert: tabId,
+      }),
+      /lost acknowledgement/,
+    )
+  await assert.rejects(journal.flush(), /No retained/)
+  assert.deepEqual(verified, ['a:0'])
+  assert.equal(journal.state().pendingCount, 1)
+  assert.equal(storeFor('a').snapshot().materialize(), 'a')
+  assert.equal(storeFor('b').snapshot().materialize(), 'b')
+  retainedB = true
+  await journal.flush()
+  assert.deepEqual(verified, ['a:0', 'b:1'])
+  assert.equal(storeFor('a').snapshot().version, 1)
+  assert.equal(storeFor('b').snapshot().version, 1)
+  assert.equal(journal.pendingBytes(), 0)
 })
 
 test('J06/J09: restarted receipt cache replays a contiguous suffix and preserves edits during verification', async () => {

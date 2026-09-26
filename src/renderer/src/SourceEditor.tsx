@@ -133,6 +133,7 @@ const sameCompletionContext = (
 export function SourceEditor({
   document,
   viewId = 'default',
+  focused = true,
   editTarget,
   markdownMode,
   markdownLanguage,
@@ -157,6 +158,7 @@ export function SourceEditor({
 }: {
   document: DocumentState
   viewId?: string
+  focused?: boolean
   editTarget: boolean
   markdownMode: boolean
   markdownLanguage?: typeof import('@codemirror/lang-markdown').markdown
@@ -240,8 +242,14 @@ export function SourceEditor({
     installedExtensions?.bridge === bridge &&
     installedExtensions.extensions === sourceExtensions &&
     languageReady
-  const editContext = useRef({ document, editTarget, disabled, inputReady })
-  editContext.current = { document, editTarget, disabled, inputReady }
+  const editContext = useRef({
+    document,
+    editTarget,
+    focused,
+    disabled,
+    inputReady,
+  })
+  editContext.current = { document, editTarget, focused, disabled, inputReady }
   const exactChanges = useRef<readonly RawEdit[] | undefined>(undefined)
   const editable = useRef(new Compartment())
   const numbers = useRef(new Compartment())
@@ -1021,6 +1029,7 @@ export function SourceEditor({
         const context = editContext.current
         const current = editorDocument.get()
         if (
+          !context.focused ||
           !context.editTarget ||
           context.disabled ||
           !context.inputReady ||
@@ -1038,6 +1047,11 @@ export function SourceEditor({
     )
     const unregisterEdits = documentEdits.register((request) => {
       const context = editContext.current
+      if (!context.focused)
+        return {
+          status: 'unsupported-view',
+          message: 'Choose this pane before applying the edit.',
+        }
       const current = editorDocument.get()
       if (
         !current ||

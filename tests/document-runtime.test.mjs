@@ -76,6 +76,19 @@ test('runtime facades capture immutable full snapshots and do not flatten on pub
   runtime.dispose()
 })
 
+test('activation publishes an already-dirty document for autosave', () => {
+  const { runtime } = fixture()
+  const notices = []
+  runtime.subscribeDocument((next, changes) =>
+    notices.push({ dirty: next.dirty, canAutosave: next.canAutosave, changes }),
+  )
+  runtime.activate(
+    document('unsaved edit', { savedMarkdown: 'saved', dirty: true }),
+  )
+  assert.deepEqual(notices, [{ dirty: true, canAutosave: true, changes: null }])
+  runtime.dispose()
+})
+
 test('runtime imports saved V while V+1 remains dirty and preserves history across tab revisions', async () => {
   const { runtime, operations, errors } = fixture()
   runtime.activate(document('a'))
@@ -251,6 +264,67 @@ test('document and editor-view targets survive focus and expire on close or unmo
   runtime.dispose()
 })
 
+test('focus changes active session without materializing or reidentifying its source', () => {
+  const { runtime } = fixture()
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('first', { tabs }))
+  const first = runtime.session()
+  const snapshot = first.snapshot()
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  const firstDocument = runtime.get('one')
+  assert.equal(firstDocument.markdown, 'first')
+  first.counters(true)
+  const {
+    markdown: _markdown,
+    savedMarkdown: _savedMarkdown,
+    ...metadata
+  } = document('first', { tabs })
+  assert.equal(runtime.focus(metadata)?.tabId, 'one')
+  assert.equal(runtime.session(), first)
+  assert.equal(first.snapshot(), snapshot)
+  assert.equal(runtime.get(), firstDocument)
+  assert.equal(runtime.get().markdown, 'first')
+  assert.equal(first.counters().materializations, 0)
+  assert.equal(runtime.focus({ ...metadata, contentVersion: 99 }), null)
+  first.edit([{ from: 5, to: 5, insert: ' local' }], 'source', 'typing')
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  assert.equal(runtime.focus(metadata), null)
+  assert.equal(runtime.get().tabId, 'two')
+  assert.equal(runtime.get('one').markdown, 'first local')
+  runtime.dispose()
+})
+
+test('full activation leaves newer retained edits intact', () => {
+  const { runtime } = fixture()
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('first', { tabs }))
+  const first = runtime.session()
+  first.edit([{ from: 5, to: 5, insert: ' local' }], 'source', 'typing')
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  assert.throws(
+    () => runtime.activate(document('first', { revision: 3, tabs })),
+    /local edits waiting to synchronize/,
+  )
+  assert.equal(runtime.session('one'), first)
+  assert.equal(runtime.get('one').markdown, 'first local')
+  assert.equal(runtime.get().tabId, 'two')
+  runtime.dispose()
+})
+
 test('runtime treats whole-source line-ending transforms as explicit atomic compatibility edits', () => {
   const { runtime, operations } = fixture()
   runtime.activate(document('a\r\nb\n'))
@@ -308,7 +382,7 @@ test('combined history limits trim older tabs without changing their source or s
     () => second.edit([{ from: 0, to: 0, insert: 'x' }], 'source', 'closed'),
     /disposed/,
   )
-  runtime.activate(document('replacement', { revision: 5 }))
+  runtime.activate(document('replacement', { revision: 5 }), true)
   assert.deepEqual(runtime.retainedHistory(), {
     bytes: 0,
     groups: 0,

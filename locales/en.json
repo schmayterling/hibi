@@ -1713,6 +1713,8 @@
   "919644e3d358": "Workspace icon",
   "8ebd7fbef943": "Workspace manifest",
   "cfac7c431f69": "Workspace metadata exceeds 2,000 documents.",
+  "80298932a272": "Workspace metadata index changed during apply.",
+  "03efeb5aa9aa": "Workspace metadata index changed during query.",
   "9619649d8dc1": "Workspace name",
   "73dff0b88724": "Workspace or addon changed. Open export again.",
   "9c69a1ee211a": "Workspace root",

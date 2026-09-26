@@ -1983,7 +1983,7 @@ export function MarkdownEditor({
       const active = window.document.activeElement
       if (
         active?.closest(
-          '.settings-screen, [role="dialog"], .source-pane, input, textarea, select',
+          '.settings-screen, [role="dialog"], .source-pane, .document-tabs, input, textarea, select',
         )
       )
         return

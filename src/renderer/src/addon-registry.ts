@@ -166,6 +166,10 @@ function installedAddon(item: InstalledAddon): Addon {
       generation++
       const previous = instance
       instance = null
+      if (addon.Settings) {
+        delete addon.Settings
+        publish()
+      }
       previous?.stop?.()
     },
   }

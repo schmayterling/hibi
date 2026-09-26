@@ -13,6 +13,13 @@ on:
         description: Compare baseline and selected branch on a hosted Mac desktop
         type: boolean
         default: false
+      baseline_ref:
+        description: Baseline revision for the optional desktop comparison
+        type: choice
+        options:
+          - 35ef3fd5df7d8c8e5e1b630f22f51f08cfdf0b94
+          - 625b2c54004efee73cd8612e87e7c68ae7eda796
+        default: 35ef3fd5df7d8c8e5e1b630f22f51f08cfdf0b94
 permissions:
   contents: read
   id-token: write
@@ -44,10 +51,19 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Validate baseline revision
+        shell: bash
+        env:
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+        run: |
+          case "$BASELINE_REF" in
+            35ef3fd5df7d8c8e5e1b630f22f51f08cfdf0b94|625b2c54004efee73cd8612e87e7c68ae7eda796) ;;
+            *) echo 'Unsupported baseline revision' >&2; exit 1 ;;
+          esac
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           path: baseline
-          ref: 35ef3fd5df7d8c8e5e1b630f22f51f08cfdf0b94
+          ref: ${{ inputs.baseline_ref }}
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -68,6 +84,8 @@ jobs:
         run: npm ci --no-audit --no-fund && npm run build
       - name: Compare desktop startup and input
         shell: bash
+        env:
+          BASELINE_REF: ${{ inputs.baseline_ref }}
         run: |
           set -euo pipefail
           mkdir -p results
@@ -76,6 +94,7 @@ jobs:
             cmp "candidate/$file" "baseline/$file"
           done
           {
+            printf 'baseline_ref=%s\n' "$BASELINE_REF"
             printf 'baseline=%s\ncandidate=%s\n' "$(git -C baseline rev-parse HEAD)" "$(git -C candidate rev-parse HEAD)"
             printf 'node=%s\nmacos=%s\nrunner=%s\n' "$(node --version)" "$(sw_vers -productVersion)" "${RUNNER_IMAGE:-unknown}"
             printf 'sampler_sha256:\n'

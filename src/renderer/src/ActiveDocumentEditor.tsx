@@ -1,4 +1,9 @@
-import { useEffect, useMemo, useSyncExternalStore } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useSyncExternalStore,
+} from 'react'
 import type { AddonManifest, MarkdownFlavor } from '../../addons/api'
 import type { ViewId } from '../../shared/foundation-contracts'
 import { needsOwnedSource } from '../../shared/preservation'
@@ -38,7 +43,7 @@ export function ActiveDocumentEditor({
     (props.viewId as ViewId | undefined) ??
     documentRuntime.primaryViewId(props.document.tabId)
   const documentTarget = documentRuntime.captureDocument(props.document.tabId)
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (
       !viewId ||
       !documentTarget ||

@@ -1,16 +1,19 @@
 import type { TextProjection } from '../../shared/document-projection'
 import { editorDocument } from './document-formats'
+import {
+  invalidateProjectionIdentity,
+  projectionIdentity,
+} from './document-projection-identity'
 
 type ProjectionBody = Pick<TextProjection, 'text' | 'spans'>
 const providers = new Map<
   string,
   Set<(cached: ProjectionBody | null) => ProjectionBody | null>
 >()
-let generation = 0
 let cached: TextProjection | null = null
 const listeners = new Set<() => void>()
 const invalidate = () => {
-  generation++
+  invalidateProjectionIdentity()
   cached = null
   for (const listener of listeners) listener()
 }
@@ -43,7 +46,7 @@ export const documentProjections = {
     const document = editorDocument.get()
     if (!document) return null
     for (const [kind, registered] of providers) {
-      const id = `${generation}:${kind}:${document.tabId}:${document.revision}:${document.contentVersion}`
+      const id = projectionIdentity(kind, document)
       // Providers check visibility/readiness even when their document version is cached.
       let body: ProjectionBody | null = null
       for (const provide of registered) {

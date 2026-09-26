@@ -423,7 +423,9 @@ export type DesktopApi = {
     operation: import('./source-operations').SourceOperation,
   ) => void
   onDocumentCheckpoint: (
-    callback: () => import('./document-checkpoint').JournalCheckpoint,
+    callback: (
+      tabId: string,
+    ) => import('./document-checkpoint').JournalCheckpoint,
   ) => () => void
   getDocumentRecoveryState: () => ReturnType<
     ReturnType<

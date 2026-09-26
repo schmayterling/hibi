@@ -210,8 +210,8 @@ type JournalOptions = {
   maximumBulkBytes?: number
   timeoutMs?: number
   retryDelays?: readonly number[]
-  checkpoint?: () => JournalCheckpoint | Promise<JournalCheckpoint>
-  head?: () => Promise<JournalHead>
+  checkpoint?: (tabId: string) => JournalCheckpoint | Promise<JournalCheckpoint>
+  head?: (tabId: string) => Promise<JournalHead>
   verify?: (checkpoint: JournalCheckpoint) => Promise<JournalHead>
   maximumCheckpointUnits?: number
 }
@@ -407,7 +407,8 @@ export function createDocumentJournal(
     return withinDeadline(() => request)
   }
   const reconcile = async () => {
-    if (!options.checkpoint || !options.head || !options.verify)
+    const { checkpoint: checkpointFor, head: headFor, verify } = options
+    if (!checkpointFor || !headFor || !verify)
       throw new Error('Document recovery checkpoint is unavailable.')
     paused = true
     try {
@@ -416,23 +417,22 @@ export function createDocumentJournal(
           .filter((entry) => entry.started)
           .map((entry) => entry.promise),
       )
-      const checkpoint = parseJournalCheckpoint(
-        await control(async () => options.checkpoint!()),
-        options.maximumCheckpointUnits ?? 16 * 1024 * 1024,
-      )
-      const head = parseJournalHead(await control(options.head))
-      if (
-        head.tabId !== checkpoint.tabId ||
-        head.revision !== checkpoint.revision ||
-        head.contentVersion > checkpoint.contentVersion
-      )
-        throw new Error(
-          'The native document changed before recovery could be verified.',
-        )
-      let version = head.contentVersion
-      const entries = [...pending.values()]
-      for (const entry of entries) {
+      const groups = new Map<
+        string,
+        { document: ReturnType<typeof identity>; entries: PendingChange[] }
+      >()
+      for (const entry of pending.values()) {
         const document = identity(entry.change)
+        const id = JSON.stringify([document.tabId, document.revision])
+        const group = groups.get(id)
+        if (group) group.entries.push(entry)
+        else groups.set(id, { document, entries: [entry] })
+      }
+      for (const { document, entries } of groups.values()) {
+        const checkpoint = parseJournalCheckpoint(
+          await control(async () => checkpointFor(document.tabId)),
+          options.maximumCheckpointUnits ?? 16 * 1024 * 1024,
+        )
         if (
           document.tabId !== checkpoint.tabId ||
           document.revision !== checkpoint.revision
@@ -440,43 +440,55 @@ export function createDocumentJournal(
           throw new Error(
             'Pending edits belong to another document. Recovery stopped.',
           )
-      }
-      for (const entry of entries.sort(
-        (a, b) => a.change.contentVersion - b.change.contentVersion,
-      )) {
-        const change = entry.change
-        if (change.contentVersion > checkpoint.contentVersion) continue
-        if (change.contentVersion <= version) {
-          if (!entry.started)
+        const head = parseJournalHead(
+          await control(() => headFor(document.tabId)),
+        )
+        if (
+          head.tabId !== checkpoint.tabId ||
+          head.revision !== checkpoint.revision ||
+          head.contentVersion > checkpoint.contentVersion
+        )
+          throw new Error(
+            'The native document changed before recovery could be verified.',
+          )
+        let version = head.contentVersion
+        for (const entry of entries.sort(
+          (a, b) => a.change.contentVersion - b.change.contentVersion,
+        )) {
+          const change = entry.change
+          if (change.contentVersion > checkpoint.contentVersion) continue
+          if (change.contentVersion <= version) {
+            if (!entry.started)
+              throw new Error(
+                'Native recovery contains an unsent change. Recovery stopped.',
+              )
+            continue
+          }
+          if (change.baseVersion !== version)
             throw new Error(
-              'Native recovery contains an unsent change. Recovery stopped.',
+              'Document recovery is missing an operation. Your pending edits are kept.',
             )
-          continue
+          await deliver(entry)
+          version = change.contentVersion
         }
-        if (change.baseVersion !== version)
+        if (version !== checkpoint.contentVersion)
           throw new Error(
             'Document recovery is missing an operation. Your pending edits are kept.',
           )
-        await deliver(entry)
-        version = change.contentVersion
-      }
-      if (version !== checkpoint.contentVersion)
-        throw new Error(
-          'Document recovery is missing an operation. Your pending edits are kept.',
+        const verified = parseJournalHead(
+          await control(() => verify(checkpoint)),
         )
-      const verified = parseJournalHead(
-        await control(() => options.verify!(checkpoint)),
-      )
-      if (
-        verified.tabId !== checkpoint.tabId ||
-        verified.revision !== checkpoint.revision ||
-        verified.contentVersion !== checkpoint.contentVersion
-      )
-        throw new Error('Could not verify the document recovery checkpoint.')
-      lastMemoryAck = verified
-      for (const entry of entries)
-        if (entry.change.contentVersion <= checkpoint.contentVersion)
-          forget(key(entry.change), entry)
+        if (
+          verified.tabId !== checkpoint.tabId ||
+          verified.revision !== checkpoint.revision ||
+          verified.contentVersion !== checkpoint.contentVersion
+        )
+          throw new Error('Could not verify the document recovery checkpoint.')
+        lastMemoryAck = verified
+        for (const entry of entries)
+          if (entry.change.contentVersion <= checkpoint.contentVersion)
+            forget(key(entry.change), entry)
+      }
     } finally {
       paused = false
       for (const entry of pending.values()) if (!entry.started) deliver(entry)

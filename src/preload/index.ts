@@ -67,19 +67,19 @@ if (process.isMainFrame) {
   } catch {
     /* Diagnostics cannot prevent the document bridge from starting. */
   }
-  let checkpoint: (() => JournalCheckpoint) | undefined
+  let checkpoint: ((tabId: string) => JournalCheckpoint) | undefined
   const journal = createDocumentJournal(
     (change) => transport.invoke(DOCUMENT_CHANNELS.append, change),
     {
       timeoutMs: 5000,
       retryDelays: [100, 500, 2000],
       maximumCheckpointUnits: MAX_DOCUMENT_BYTES,
-      checkpoint: () => {
+      checkpoint: (tabId) => {
         if (!checkpoint)
           throw new Error('Document recovery is not ready. Retry saving.')
-        return checkpoint()
+        return checkpoint(tabId)
       },
-      head: () => transport.invoke(DOCUMENT_CHANNELS.recoveryHead),
+      head: (tabId) => transport.invoke(DOCUMENT_CHANNELS.recoveryHead, tabId),
       verify: (snapshot) =>
         transport.invoke(DOCUMENT_CHANNELS.verifyCheckpoint, snapshot),
     },

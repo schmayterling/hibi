@@ -37,6 +37,7 @@ import {
 } from '../shared/desktop'
 import {
   journalHead,
+  parseJournalCheckpoint,
   verifyJournalCheckpoint,
 } from '../shared/document-checkpoint'
 import { createJournalReceiver } from '../shared/document-journal'
@@ -95,7 +96,6 @@ import {
   getDocument,
   getDocumentPath,
   getDocumentPathForTab,
-  getDocumentSource,
   getDocumentSourceFor,
   getOpenDocumentVersions,
   hasOpenDocumentPath,
@@ -1755,17 +1755,20 @@ if (!app.requestSingleInstanceLock()) {
         updateDocumentEdited(window)
         return ack
       })
-      handle(DOCUMENT_CHANNELS.recoveryHead, (event) => {
+      handle(DOCUMENT_CHANNELS.recoveryHead, (event, tabId: unknown) => {
         trustedWindow(event)
-        return journalHead(getDocumentSource())
+        if (typeof tabId !== 'string' || !tabId || tabId.length > 128)
+          throw new Error('Invalid document recovery identity.')
+        return journalHead(getDocumentSourceFor(tabId))
       })
       handle(
         DOCUMENT_CHANNELS.verifyCheckpoint,
         (event, checkpoint: unknown) => {
           trustedWindow(event)
+          const parsed = parseJournalCheckpoint(checkpoint, MAX_DOCUMENT_BYTES)
           return verifyJournalCheckpoint(
-            getDocumentSource,
-            checkpoint,
+            () => getDocumentSourceFor(parsed.tabId),
+            parsed,
             MAX_DOCUMENT_BYTES,
           )
         },

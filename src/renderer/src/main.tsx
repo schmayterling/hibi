@@ -294,9 +294,10 @@ function App() {
   currentDocument.current = documentRuntime.get() ?? document
   useLayoutEffect(
     () =>
-      window.hibi.onDocumentCheckpoint(() => {
-        const source = documentRuntime.session()?.snapshot()
-        if (!source) throw new Error('No active document recovery checkpoint.')
+      window.hibi.onDocumentCheckpoint((tabId) => {
+        const source = documentRuntime.session(tabId)?.snapshot()
+        if (!source)
+          throw new Error('No retained document recovery checkpoint.')
         return {
           tabId: source.document.tabId,
           revision: source.document.revision,

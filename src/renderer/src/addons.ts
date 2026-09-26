@@ -38,6 +38,7 @@ import {
   validatePreservation,
 } from '../../shared/preservation'
 import { startupSpan } from '../../shared/startup'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { useDialogService } from '../../ui/DialogProvider'
 import { performanceDiagnostics } from '../../ui/diagnostics'
 import { menus } from '../../ui/menu-store'
@@ -69,6 +70,10 @@ import { registrationBatch } from './registration-batch'
 import { settingsPages } from './settings-pages'
 import { toolbar } from './toolbar'
 import { viewNotifications } from './view-notifications'
+import {
+  activeNoteMetadataSyntax,
+  captureWorkspaceSyntaxSnapshot,
+} from './workspace-syntax-snapshot'
 
 export { addons } from './addon-registry'
 
@@ -437,6 +442,7 @@ export function useAddons(
         ? current
         : next
     })
+    workspaceSyntaxEvents.publish()
   }, [extensions])
   const running = useRef(
     new Map<string, { addon: Addon; stop: () => void }>(),
@@ -1025,6 +1031,15 @@ export function useAddons(
                 markdownSyntax
                   .snapshot()
                   .filter((feature) => feature.scope !== 'document'),
+              getMetadataSyntax: (documentId, source) =>
+                activeNoteMetadataSyntax(
+                  documentId,
+                  source,
+                  currentActivation.current.states.some(
+                    (state) => state.id === 'tags' && state.enabled,
+                  ),
+                  [...extensions.values()],
+                ),
               onSyntaxChange: (listener) =>
                 observe(markdownSyntax.subscribe, listener),
               onCodeHighlightingChange: (listener) =>
@@ -1561,7 +1576,15 @@ export function useAddons(
               query: (request) =>
                 disposed
                   ? Promise.reject(new Error('This addon has stopped.'))
-                  : window.hibi.queryWorkspaceReferences(request),
+                  : window.hibi.queryWorkspaceReferences({
+                      ...request,
+                      syntaxSnapshot: captureWorkspaceSyntaxSnapshot(
+                        currentActivation.current.states.some(
+                          (state) => state.id === 'tags' && state.enabled,
+                        ),
+                        [...extensions.values()],
+                      ),
+                    }),
               index: () =>
                 disposed
                   ? Promise.reject(

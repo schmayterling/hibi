@@ -14,6 +14,7 @@ let links = new Map<
   { markdown: string; references: ReturnType<typeof noteReferences> }
 >()
 
+/** Source-only compatibility helper with default GFM/wiki syntax. */
 export function noteGraph(pages: readonly WorkspacePage[]) {
   const paths = new Set(pages.map((page) => page.path))
   const edges = new Map<string, { source: string; target: string }>()
@@ -60,7 +61,7 @@ export function noteGraph(pages: readonly WorkspacePage[]) {
   }
 }
 
-/** Graph UI consumes shared metadata records; export still uses noteGraph. */
+/** Graph UI consumes flavor-aware workspace metadata records. */
 export function metadataGraph(items: readonly WorkspaceGraphItem[]) {
   const paths = items
     .filter(

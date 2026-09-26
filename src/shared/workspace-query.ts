@@ -14,6 +14,36 @@ interface QueryPage {
 
 interface QueryTarget {
   readonly target: WorkspaceTarget
+  readonly syntaxSnapshot?: WorkspaceSyntaxSnapshot
+}
+
+/** Renderer-owned Markdown settings captured with each workspace query. */
+export type WorkspaceSyntaxSnapshot = {
+  readonly version: 1
+  readonly flavorRevision: number
+  readonly featureRevision: number
+  readonly flavors: readonly {
+    readonly id: string
+    readonly kind: 'dialect' | 'syntax'
+    readonly parserVersion: string
+  }[]
+  readonly features: readonly {
+    readonly id: string
+    readonly enabled: boolean
+  }[]
+  /** Active Markdown projections; omitted by older direct IPC callers. */
+  readonly projections?: readonly {
+    readonly id: string
+    readonly parserVersion: string
+  }[]
+  readonly choices: readonly {
+    readonly id: string
+    readonly dialect: string
+    readonly syntax: 'auto' | readonly string[]
+  }[]
+  readonly hashtags: boolean
+  /** False when renderer could not read every saved file choice. */
+  readonly complete: boolean
 }
 
 export type WorkspaceReferenceQueryRequest =
@@ -54,8 +84,12 @@ export type WorkspaceReferenceQueryRequest =
 
 export interface WorkspaceReferenceQueryBase {
   readonly target: WorkspaceTarget
-  /** Source index includes wiki links and hashtags regardless of preview flavor choice. */
+  /** Built-in syntax understood by the index; file settings may disable parts. */
   readonly syntax: 'gfm+wikilinks+hashtags'
+  /** True when the host captured each file's active flavor and syntax settings. */
+  readonly flavorAware: boolean
+  /** Selected addon syntax outside the main-process parser needs a richer parser. */
+  readonly unsupportedSyntax: boolean
   readonly sequence: number
   readonly stale: boolean
   readonly complete: boolean

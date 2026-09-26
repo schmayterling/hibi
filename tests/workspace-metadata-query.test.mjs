@@ -13,6 +13,20 @@ const host = {
   changeDuringRead: false,
   editDuringRead: false,
   versions: [{ file: '/notes/a.md', tabId: 'tab-a', contentVersion: 1 }],
+  syntaxSnapshot: {
+    version: 1,
+    flavorRevision: 1,
+    featureRevision: 1,
+    flavors: [
+      { id: 'markdown.github', kind: 'dialect', parserVersion: '1' },
+      { id: 'markdown.obsidian', kind: 'syntax', parserVersion: '1' },
+    ],
+    features: [],
+    projections: [{ id: 'frontmatter.metadata', parserVersion: '1' }],
+    choices: [],
+    hashtags: true,
+    complete: true,
+  },
   pages: [
     {
       path: 'a.md',
@@ -73,7 +87,10 @@ new Function('module', 'exports', 'require', bundle.outputFiles[0].text)(
 )
 const { queryWorkspaceReferences } = module.exports
 const query = (request) =>
-  queryWorkspaceReferences(request, () => host.versions)
+  queryWorkspaceReferences(
+    { syntaxSnapshot: host.syntaxSnapshot, ...request },
+    () => host.versions,
+  )
 
 test('metadata queries return bounded links and backlinks from shared pages', async () => {
   const target = host.target
@@ -88,6 +105,8 @@ test('metadata queries return bounded links and backlinks from shared pages', as
   assert.equal(links.value.hasMore, false)
   assert.equal(links.value.sequence, 1)
   assert.equal(links.value.syntax, 'gfm+wikilinks+hashtags')
+  assert.equal(links.value.flavorAware, true)
+  assert.equal(links.value.unsupportedSyntax, false)
   const backlinks = await query({
     target,
     kind: 'backlinks',
@@ -184,6 +203,7 @@ test('metadata queries return bounded links and backlinks from shared pages', as
 
 test('text search cursors resume bounded scans and expire after edits', async () => {
   const originalPages = host.pages
+  const originalSyntax = host.syntaxSnapshot
   const target = host.target
   host.pages = [
     { path: 'a.md', markdown: `${'x'.repeat(1_100_000)}needle` },
@@ -200,6 +220,7 @@ test('text search cursors resume bounded scans and expire after edits', async ()
   assert.deepEqual(first.value.items, [])
   assert.equal(first.value.complete, false)
   assert.equal(first.value.hasMore, true)
+  host.syntaxSnapshot = { ...host.syntaxSnapshot, hashtags: false }
   const second = await query({
     target,
     kind: 'search-text',
@@ -244,6 +265,7 @@ test('text search cursors resume bounded scans and expire after edits', async ()
     'stale',
   )
   host.pages = originalPages
+  host.syntaxSnapshot = originalSyntax
   host.revision++
 })
 
@@ -325,4 +347,112 @@ test('metadata query rejects a workspace change during its index read', async ()
     (await query({ target, kind: 'links', path: 'a.md' })).code,
     'stale',
   )
+})
+
+test('flavor changes reindex unchanged source and expire graph cursors', async () => {
+  const target = host.target
+  const previousPages = host.pages
+  const previousSyntax = host.syntaxSnapshot
+  host.pages = [
+    {
+      id: 'a'.repeat(64),
+      path: 'a.md',
+      markdown: '[[c]] [B](b.md) #work',
+    },
+    { id: 'b'.repeat(64), path: 'b.md', markdown: '' },
+    { id: 'c'.repeat(64), path: 'c.md', markdown: '' },
+  ]
+  host.syntaxSnapshot = { ...previousSyntax, choices: [] }
+  host.revision++
+  const graph = await query({ target, kind: 'graph', limit: 1 })
+  assert.ok(graph.value.nextCursor)
+  assert.deepEqual(
+    (await query({ target, kind: 'links', path: 'a.md' })).value.items,
+    ['b.md', 'c.md'],
+  )
+  const reads = host.indexReads
+  host.syntaxSnapshot = {
+    ...host.syntaxSnapshot,
+    choices: [{ id: 'a'.repeat(64), dialect: 'auto', syntax: [] }],
+  }
+  const links = await query({ target, kind: 'links', path: 'a.md' })
+  assert.equal(links.ok, true)
+  assert.deepEqual(links.value.items, ['b.md'])
+  assert.equal(host.indexReads, reads + 1)
+  assert.equal(
+    (await query({ target, kind: 'graph', cursor: graph.value.nextCursor }))
+      .code,
+    'stale',
+  )
+  host.syntaxSnapshot = { ...host.syntaxSnapshot, hashtags: false }
+  assert.deepEqual(
+    (await query({ target, kind: 'tag', tag: 'work' })).value.items,
+    [],
+  )
+  host.syntaxSnapshot = {
+    ...host.syntaxSnapshot,
+    flavors: [
+      ...host.syntaxSnapshot.flavors,
+      { id: 'third.note', kind: 'syntax', parserVersion: '1' },
+    ],
+  }
+  const unsupported = await query({ target, kind: 'links', path: 'a.md' })
+  assert.equal(unsupported.value.complete, false)
+  assert.equal(unsupported.value.unsupportedSyntax, true)
+  host.syntaxSnapshot = {
+    ...host.syntaxSnapshot,
+    flavors: previousSyntax.flavors,
+    features: [{ id: 'third.link', enabled: false }],
+  }
+  const disabledUnknown = await query({ target, kind: 'links', path: 'a.md' })
+  assert.equal(disabledUnknown.value.complete, false)
+  assert.equal(disabledUnknown.value.unsupportedSyntax, true)
+  const search = await query({ target, kind: 'search-text', query: 'work' })
+  assert.deepEqual(search.value.items, ['a.md'])
+  assert.equal(search.value.complete, true)
+  assert.equal(search.value.unsupportedSyntax, false)
+  host.pages = previousPages
+  host.syntaxSnapshot = previousSyntax
+  host.revision++
+})
+
+test('frontmatter projection changes property results without a source edit', async () => {
+  const target = host.target
+  const previousPages = host.pages
+  const previousSyntax = host.syntaxSnapshot
+  host.pages = [
+    {
+      id: 'a'.repeat(64),
+      path: 'a.md',
+      markdown: '---\ntitle: Alpha\n---\n# Body',
+    },
+  ]
+  host.revision++
+  assert.deepEqual(
+    (await query({ target, kind: 'property', key: 'title', value: 'Alpha' }))
+      .value.items,
+    ['a.md'],
+  )
+  const reads = host.indexReads
+  host.syntaxSnapshot = { ...host.syntaxSnapshot, projections: [] }
+  const disabled = await query({
+    target,
+    kind: 'property',
+    key: 'title',
+    value: 'Alpha',
+  })
+  assert.equal(disabled.ok, true)
+  assert.deepEqual(disabled.value.items, [])
+  assert.equal(disabled.value.complete, true)
+  assert.equal(host.indexReads, reads + 1)
+  host.syntaxSnapshot = {
+    ...host.syntaxSnapshot,
+    projections: [{ id: 'third.projected', parserVersion: '1' }],
+  }
+  const unknown = await query({ target, kind: 'links', path: 'a.md' })
+  assert.equal(unknown.value.unsupportedSyntax, true)
+  assert.equal(unknown.value.complete, false)
+  host.pages = previousPages
+  host.syntaxSnapshot = previousSyntax
+  host.revision++
 })

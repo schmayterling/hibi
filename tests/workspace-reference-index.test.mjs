@@ -6,6 +6,7 @@ import {
   noteReferences,
   wikiTarget,
 } from '../src/shared/note-links.ts'
+import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 
 const workspace = { workspaceId: 'notes', workspaceGeneration: 1 }
 const page = (path, markdown = '') => ({ path, markdown })
@@ -27,6 +28,45 @@ test('reference index parses only changed content and updates reverse links', ()
   assert.deepEqual(index.backlinks('b.md', 0, 10).items, [])
   assert.deepEqual(index.backlinks('c.md', 0, 10).items, ['a.md'])
   assert.equal(parses, 4)
+})
+
+test('unchanged source reparses when built-in file syntax changes', () => {
+  let parses = 0
+  const index = new WorkspaceReferenceIndex((source, syntax) => {
+    parses++
+    return noteReferences(source, syntax)
+  })
+  const pages = [
+    page('a.md', '[B](b.md) [[c]] #work'),
+    page('b.md'),
+    page('c.md'),
+  ]
+  const profile = (key, settings) => (page) => ({
+    key: page.path === 'a.md' ? key : 'default',
+    settings: page.path === 'a.md' ? settings : defaultNoteSyntax,
+    complete: true,
+    unsupported: false,
+  })
+  index.apply(workspace, pages, profile('default', defaultNoteSyntax))
+  assert.deepEqual(index.links('a.md', 0, 10).items, ['b.md', 'c.md'])
+  assert.deepEqual(index.tagged('work', 0, 10).items, ['a.md'])
+  assert.equal(parses, 3)
+  const noWiki = { ...defaultNoteSyntax, wikilinks: false }
+  index.apply(workspace, pages, profile('no-wiki', noWiki))
+  assert.deepEqual(index.links('a.md', 0, 10).items, ['b.md'])
+  assert.deepEqual(index.backlinks('c.md', 0, 10).items, [])
+  assert.equal(parses, 4)
+  const noLinksOrTags = {
+    ...noWiki,
+    hashtags: false,
+    disabledFeatures: ['core.links'],
+  }
+  index.apply(workspace, pages, profile('no-links-or-tags', noLinksOrTags))
+  assert.deepEqual(index.links('a.md', 0, 10).items, [])
+  assert.deepEqual(index.tagged('work', 0, 10).items, [])
+  assert.equal(parses, 5)
+  index.apply(workspace, pages, profile('no-links-or-tags', noLinksOrTags))
+  assert.equal(parses, 5)
 })
 
 test('path changes re-resolve cached references and ambiguity without reparsing', () => {

@@ -43,6 +43,7 @@ test('packed addon sdk checks external consumers and installs compiled addon', {
     )[0]
     const files = pack.files.map((file) => file.path)
     assert(files.includes('types/index.d.ts'))
+    assert(files.includes('LICENSE.md'))
     for (const entry of ['api', 'sdk', 'sdk-loader'])
       assert(files.includes(`dist/src/addons/${entry}.d.ts`))
     assert(files.some((file) => file.startsWith('dist/src/shared/')))
@@ -50,7 +51,7 @@ test('packed addon sdk checks external consumers and installs compiled addon', {
       files.every(
         (file) =>
           file.endsWith('.d.ts') ||
-          ['package.json', 'README.md'].includes(file),
+          ['package.json', 'README.md', 'LICENSE.md'].includes(file),
       ),
     )
 
@@ -70,6 +71,10 @@ test('packed addon sdk checks external consumers and installs compiled addon', {
     )
     const metadata = JSON.parse(
       await readFile(join(packageDir, 'package.json'), 'utf8'),
+    )
+    assert.deepEqual(
+      await readFile(join(packageDir, 'LICENSE.md')),
+      await readFile(join(root, 'LICENSE.md')),
     )
     assert.equal(metadata.hibiAddonApiVersion, 2)
     assert(

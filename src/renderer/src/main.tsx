@@ -375,7 +375,7 @@ function App() {
           await focusRetainedTab(previous.tabId)
         } catch {
           throw new Error(
-            'Could not restore document focus. Editing is paused to protect unsent changes. Click the current tab to retry.',
+            'Could not restore document focus. Editing is paused to protect unsent changes.',
           )
         }
       }
@@ -1627,7 +1627,7 @@ function App() {
           focusUnsafe.current = false
         } catch {
           throw new Error(
-            'Could not restore document focus. Editing is paused to protect unsent changes. Click the current tab to retry.',
+            'Could not restore document focus. Editing is paused to protect unsent changes.',
           )
         }
       }
@@ -1640,12 +1640,14 @@ function App() {
     if (!id) return false
     try {
       await focusRetainedTab(id)
+      setError('')
       return true
-    } catch (error) {
+    } catch {
       try {
         // The previous tab may have closed; preload flushes its journal first.
         acceptDocument(await window.hibi.getDocument())
         focusUnsafe.current = false
+        setError('')
         return true
       } catch (recoveryError) {
         setError(
@@ -2975,13 +2977,25 @@ function App() {
         }
       >
         {!activeAddonTab && <EditorToolbar mode={mode} typing={typing} />}
-        {!activeAddonTab && notifications.length > 0 && (
-          <div className="view-notifications">
-            {notifications.map(({ id, notification }) => (
-              <DocumentNotice key={id} {...notification} />
-            ))}
-          </div>
-        )}
+        {!activeAddonTab &&
+          (focusUnsafe.current || notifications.length > 0) && (
+            <div className="view-notifications">
+              {focusUnsafe.current && (
+                <DocumentNotice
+                  title="Could not restore document focus"
+                  message="Editing is paused to protect unsent changes."
+                  variant="warning"
+                >
+                  <Button onClick={() => void retryDocumentFocus()}>
+                    Retry document focus
+                  </Button>
+                </DocumentNotice>
+              )}
+              {notifications.map(({ id, notification }) => (
+                <DocumentNotice key={id} {...notification} />
+              ))}
+            </div>
+          )}
         <div
           className="split-tab-pages"
           data-split={!!splitTabs && !activeAddonTab}

@@ -67,25 +67,42 @@ test('split panes keep both editors mounted, edit both files, and share one docu
         ?.getAttribute('aria-selected') === 'true',
     aId,
   )
-  await app.evaluate(({ ipcMain }, id) => {
-    const focus = ipcMain._invokeHandlers.get('document:focus-tab')
-    if (!focus) throw new Error('Document focus handler is unavailable.')
-    let stale = true
-    ipcMain.removeHandler('document:focus-tab')
-    ipcMain.handle('document:focus-tab', async (...args) => {
-      const metadata = await focus(...args)
-      if (stale && args[1] === id) {
-        stale = false
-        return { ...metadata, contentVersion: metadata.contentVersion + 1 }
-      }
-      return metadata
-    })
-  }, bId)
+  await app.evaluate(
+    ({ ipcMain }, ids) => {
+      const focus = ipcMain._invokeHandlers.get('document:focus-tab')
+      if (!focus) throw new Error('Document focus handler is unavailable.')
+      let phase = 0
+      ipcMain.removeHandler('document:focus-tab')
+      ipcMain.handle('document:focus-tab', async (...args) => {
+        if (phase === 1 && args[1] === ids.left) {
+          phase = 2
+          throw new Error('Simulated focus rollback failure.')
+        }
+        const metadata = await focus(...args)
+        if (phase === 0 && args[1] === ids.right) {
+          phase = 1
+          return { ...metadata, contentVersion: metadata.contentVersion + 1 }
+        }
+        return metadata
+      })
+    },
+    { left: aId, right: bId },
+  )
   await page.locator(`[data-tab-key="${bId}"] .tab-split`).click()
-  await page
-    .getByText('This pane changed while synchronizing. Try again.')
-    .waitFor()
+  await page.getByRole('button', { name: 'Retry document focus' }).waitFor()
+  assert.equal(await page.locator('.app').getAttribute('aria-busy'), 'true')
   assert.equal(await page.locator('.editor-page[data-side]').count(), 0)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabId,
+    bId,
+  )
+  await page.getByRole('button', { name: 'Retry document focus' }).click()
+  await page.waitForFunction(
+    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+  )
+  await page.getByRole('button', { name: 'Retry document focus' }).waitFor({
+    state: 'hidden',
+  })
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).tabId,
     aId,

@@ -118,12 +118,32 @@ export async function typeCharacter(page, previousText, character = 'x') {
   await page
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .press(character)
-  await page.waitForFunction(
-    (previous) =>
-      document.querySelector('[role="textbox"][aria-label="Document editor"]')
-        ?.textContent !== previous,
-    previousText,
-  )
+  try {
+    await page.waitForFunction(
+      (previous) =>
+        document.querySelector('[role="textbox"][aria-label="Document editor"]')
+          ?.textContent !== previous,
+      previousText,
+    )
+  } catch (error) {
+    const state = await page.evaluate(async () => {
+      const editor = document.querySelector('[aria-label="Document editor"]')
+      return {
+        text: editor?.textContent?.slice(0, 120),
+        editable: editor?.getAttribute('contenteditable'),
+        editorEditable: editor?.editor?.isEditable,
+        active: document.activeElement === editor,
+        windowFocused: document.hasFocus(),
+        busy: document.querySelector('.editor-page')?.getAttribute('aria-busy'),
+        sourceReady:
+          document.querySelector('.editor-panes')?.dataset.sourceReady,
+        native: (await window.hibi?.getDocument?.())?.markdown?.slice(0, 120),
+      }
+    })
+    throw new Error(`Benchmark input did not land: ${JSON.stringify(state)}`, {
+      cause: error,
+    })
+  }
 }
 
 export function selectBenchmarkFile(app, file) {

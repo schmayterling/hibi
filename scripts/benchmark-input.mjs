@@ -17,10 +17,14 @@ if (!Number.isInteger(runs) || runs < 1 || runs > 50)
 const foreground = process.env.HIBI_BENCH_FOREGROUND === '1'
 const analysisLoad = process.env.HIBI_INPUT_ANALYSIS === '1'
 const directory = await mkdtemp(join(tmpdir(), 'hibi-input-bench-'))
-const fixtures = [
+const allFixtures = [
   { name: 'blank.md', title: '', source: '' },
   ...benchmarkDocuments,
 ]
+const fixtures = process.env.HIBI_INPUT_FIXTURE
+  ? allFixtures.filter(({ name }) => name === process.env.HIBI_INPUT_FIXTURE)
+  : allFixtures
+if (!fixtures.length) throw new Error('Unknown input benchmark fixture.')
 const samples = []
 const percentile = (values, p) =>
   [...values].sort((a, b) => a - b)[

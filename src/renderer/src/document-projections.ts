@@ -7,7 +7,7 @@ import {
 
 type ProjectionBody = Pick<TextProjection, 'text' | 'spans'>
 const providers = new Map<
-  string,
+  'rich' | 'source',
   Set<(cached: ProjectionBody | null) => ProjectionBody | null>
 >()
 let cached: TextProjection | null = null

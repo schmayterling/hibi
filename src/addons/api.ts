@@ -606,7 +606,13 @@ export type AddonContext = {
   toolbar: ToolbarApi
   tooltips: TooltipApi
   app: AddonApp
-  styles: { register: (id: string, css: string) => StyleHandle }
+  styles: {
+    register: (
+      id: string,
+      css: string,
+      options?: { priority?: 'override' },
+    ) => StyleHandle
+  }
   patches: PatchApi
   statusBar: { register: (item: StatusItem) => StatusHandle }
   editor: {

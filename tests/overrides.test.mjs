@@ -98,7 +98,7 @@ test('removing a patch inside its callback keeps the current invocation intact',
   addon.dispose()
 })
 
-test('css overrides apply, update, and clean up in a real renderer', async (t) => {
+test('css overrides apply, update, keep priority, and clean up in a real renderer', async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-overrides-'))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
@@ -139,6 +139,29 @@ test('css overrides apply, update, and clean up in a real renderer', async (t) =
     const remaining = document.querySelectorAll(
       'style[data-addon-style^="fixture."]',
     ).length
+
+    const theme = exports.createAddonOverrides('theme')
+    const later = exports.createAddonOverrides('later')
+    theme.styles.register(
+      'override',
+      '.override-fixture { color: rgb(70, 80, 90); }',
+      { priority: 'override' },
+    )
+    later.styles.register(
+      'normal',
+      '.override-fixture { color: rgb(90, 80, 70); }',
+    )
+    const prioritized = getComputedStyle(element).color
+    const sheets = [
+      ...document.head.querySelectorAll('style[data-addon-style]'),
+    ]
+    const normalBeforeOverride =
+      sheets.findIndex((sheet) => sheet.dataset.addonStyle === 'later.normal') <
+      sheets.findIndex((sheet) => sheet.dataset.addonStyle === 'theme.override')
+    theme.dispose()
+    const normalAfterDispose = getComputedStyle(element).color
+    later.dispose()
+    const priorityRestored = getComputedStyle(element).color
     element.remove()
     return {
       baseline,
@@ -147,6 +170,10 @@ test('css overrides apply, update, and clean up in a real renderer', async (t) =
       restored,
       staleHandleIgnored,
       remaining,
+      prioritized,
+      normalBeforeOverride,
+      normalAfterDispose,
+      priorityRestored,
     }
   }, code)
   assert.equal(result.initial, 'rgb(10, 20, 30)')
@@ -154,4 +181,8 @@ test('css overrides apply, update, and clean up in a real renderer', async (t) =
   assert.equal(result.restored, result.baseline)
   assert.equal(result.staleHandleIgnored, 'rgb(255, 0, 0)')
   assert.equal(result.remaining, 0)
+  assert.equal(result.prioritized, 'rgb(70, 80, 90)')
+  assert.equal(result.normalBeforeOverride, true)
+  assert.equal(result.normalAfterDispose, 'rgb(90, 80, 70)')
+  assert.equal(result.priorityRestored, result.baseline)
 })

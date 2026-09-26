@@ -1832,7 +1832,7 @@ export function MarkdownEditor({
         : editorDocument.get()
       if (
         editor.isDestroyed ||
-        !context.focused ||
+        (!mountedView && !context.focused) ||
         context.findTarget !== 'rich' ||
         context.mode === 'markdown' ||
         context.disabled ||
@@ -2846,6 +2846,7 @@ export function MarkdownEditor({
                   viewId={viewId}
                   focused={focused}
                   editTarget={findTarget === 'source'}
+                  sourceVisible={paneMode !== 'normal'}
                   markdownMode={markdownDocument}
                   referenceSyntax={referenceSyntax}
                   linksEnabled={markdownSyntax.enabled('core.links')}

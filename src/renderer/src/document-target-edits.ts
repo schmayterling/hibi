@@ -18,6 +18,7 @@ import type {
   VersionedDocumentTarget,
 } from '../../shared/foundation-contracts'
 import type { DocumentRuntime } from './document-runtime'
+import { mountedDocumentEdits } from './mounted-document-edits.ts'
 
 const unavailable = {
   status: 'stale' as const,
@@ -396,23 +397,32 @@ export function createDocumentTargetEditScope(
       try {
         let result: TargetSourceEditResult
         if (runtime.hasMountedView(target)) {
+          const mountedDocument = runtime.get(snapshot.document.tabId)
+          if (!mountedDocument)
+            return remember(parsed.requestId, fingerprint, unavailable)
           const active = runtime.captureActiveView()
-          // ponytail: background mounted views need a target-aware proof adapter.
+          const request = {
+            ...parsed,
+            requestId: crypto.randomUUID(),
+            tabId: snapshot.document.tabId,
+            revision: snapshot.document.revision,
+          }
           result =
             active?.documentId === target.documentId &&
             active.documentGeneration === target.documentGeneration &&
             runtime.get()?.tabId === snapshot.document.tabId
-              ? activeApply({
-                  ...parsed,
-                  requestId: crypto.randomUUID(),
-                  tabId: snapshot.document.tabId,
-                  revision: snapshot.document.revision,
-                })
-              : {
-                  status: 'unsupported-view',
-                  message:
-                    'This mounted editor cannot apply the edit without changing focus.',
-                }
+              ? activeApply(request)
+              : mountedDocumentEdits.apply(
+                  mountedDocument,
+                  runtime
+                    .listViews()
+                    .filter(
+                      (view) =>
+                        view.documentId === target.documentId &&
+                        view.documentGeneration === target.documentGeneration,
+                    ),
+                  request,
+                )
           const after = session.snapshot()
           if (result.status === 'applied')
             result =

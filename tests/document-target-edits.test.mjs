@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { projectionIdentity } from '../src/renderer/src/document-projection-identity.ts'
 import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
 import { createDocumentTargetEditScope } from '../src/renderer/src/document-target-edits.ts'
+import { mountedDocumentEdits } from '../src/renderer/src/mounted-document-edits.ts'
 
 const document = (source, overrides = {}) => ({
   tabId: 'one',
@@ -353,7 +355,7 @@ test('accepted source edit keeps its receipt if recovery reporting throws', () =
   runtime.dispose()
 })
 
-test('mounted views use their adapter and cannot be edited behind another focused view', () => {
+test('mounted views require an adapter before editing behind another focused view', () => {
   const { runtime, scope, setMounted } = fixture()
   const tabs = ['one', 'two'].map((id) => ({
     id,
@@ -445,6 +447,106 @@ test('mounted views use their adapter and cannot be edited behind another focuse
     ).status,
     'applied',
   )
+  unmountSecond()
+  scope.dispose()
+  runtime.dispose()
+})
+
+test('inactive mounted target routes through live view adapter without changing focus', () => {
+  const { runtime, scope, operations } = fixture()
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('first', { tabs }))
+  const firstViewId = runtime.primaryViewId('one')
+  const unmountFirst = runtime.registerView('one', firstViewId)
+  const firstView = runtime.captureView(firstViewId)
+  const calls = []
+  const apply = (kind) => (view, input) => {
+    calls.push({ kind, view, input })
+    const operation = runtime.session('one').edit(
+      input.changes.map(({ from, to, insert }) => ({ from, to, insert })),
+      'addon',
+      kind,
+    )
+    return { status: 'applied', contentVersion: operation.after.version }
+  }
+  const removeSource = mountedDocumentEdits.register(
+    'one',
+    firstView,
+    'source',
+    apply('source'),
+  )
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  const secondViewId = runtime.primaryViewId('two')
+  const unmountSecond = runtime.registerView('two', secondViewId)
+  runtime.focusView(secondViewId)
+  const target = scope.listOpen().find(({ name }) => name === 'one.md').target
+  const firstEdit = {
+    ...request(target, 'inactive-source', [
+      { from: 0, to: 5, expectedText: 'first', insert: 'FIRST' },
+    ]),
+    projectionId: projectionIdentity('source', runtime.get('one')),
+  }
+  assert.equal(
+    scope.applyEdits({
+      ...firstEdit,
+      requestId: 'wrong-proof',
+      projectionId: 'old',
+    }).status,
+    'stale',
+  )
+  assert.deepEqual(scope.applyEdits(firstEdit), {
+    status: 'applied',
+    contentVersion: 1,
+  })
+  assert.deepEqual(scope.applyEdits(firstEdit), {
+    status: 'applied',
+    contentVersion: 1,
+  })
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].view, firstView)
+  assert.notEqual(calls[0].input.requestId, firstEdit.requestId)
+  assert.equal(runtime.captureActiveView().viewId, secondViewId)
+  assert.equal(runtime.get().markdown, 'second')
+  assert.equal(runtime.get('one').markdown, 'FIRST')
+  assert.equal(operations.at(-1).document.tabId, 'one')
+
+  unmountFirst()
+  const unmountReplacement = runtime.registerView('one', firstViewId)
+  const replacement = runtime.captureView(firstViewId)
+  assert.notEqual(replacement.viewGeneration, firstView.viewGeneration)
+  const nextTarget = scope
+    .listOpen()
+    .find(({ name }) => name === 'one.md').target
+  const nextEdit = request(nextTarget, 'replacement-rich', [
+    { from: 0, to: 5, expectedText: 'FIRST', insert: 'First' },
+  ])
+  assert.equal(scope.applyEdits(nextEdit).status, 'unsupported-view')
+  assert.equal(calls.length, 1)
+  assert.equal(runtime.get('one').markdown, 'FIRST')
+  const removeRich = mountedDocumentEdits.register(
+    'one',
+    replacement,
+    'rich',
+    apply('rich'),
+  )
+  assert.deepEqual(scope.applyEdits(nextEdit), {
+    status: 'applied',
+    contentVersion: 2,
+  })
+  assert.equal(calls[1].kind, 'rich')
+  assert.equal(calls[1].view, replacement)
+  assert.equal(runtime.captureActiveView().viewId, secondViewId)
+  assert.equal(runtime.get().markdown, 'second')
+  assert.equal(runtime.get('one').markdown, 'First')
+  removeRich()
+  removeSource()
+  unmountReplacement()
   unmountSecond()
   scope.dispose()
   runtime.dispose()

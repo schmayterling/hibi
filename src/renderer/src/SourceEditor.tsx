@@ -38,14 +38,19 @@ import type {
   CompletionRequest,
 } from '../../shared/completions'
 import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop'
-import { editedSource, sourceEditMatches } from '../../shared/document-edits'
+import {
+  editedSource,
+  type SourceEditRequest,
+  type SourceEditResult,
+  sourceEditMatches,
+} from '../../shared/document-edits'
 import type { MarkdownReferenceSyntax } from '../../shared/document-worker-protocol'
 import {
   type EditorContextAction,
   type EditorInteractionRequest,
   sameInteraction,
 } from '../../shared/editor-interactions'
-import type { ViewId } from '../../shared/foundation-contracts'
+import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
 import { markdownLink } from '../../shared/markdown-link'
 import { wikiHref } from '../../shared/note-links'
 import type { RawEdit } from '../../shared/source-operations'
@@ -69,6 +74,7 @@ import {
 } from './editor-interaction-presence'
 import { editorViewRegistry } from './editor-view-api'
 import type { FindMove, FindStatus } from './FindBar'
+import { mountedDocumentEdits } from './mounted-document-edits'
 import {
   observeSourceAnnotations,
   sourceAnnotationExtension,
@@ -1045,15 +1051,29 @@ export function SourceEditor({
         )
       },
     )
-    const unregisterEdits = documentEdits.register((request) => {
+    const applySourceEdits = (
+      request: SourceEditRequest,
+      mountedView?: ViewTarget,
+    ): SourceEditResult => {
       const context = editContext.current
-      if (!context.focused)
+      if (!mountedView && !context.focused)
         return {
           status: 'unsupported-view',
           message: 'Choose this pane before applying the edit.',
         }
-      const current = editorDocument.get()
+      const current = mountedView
+        ? documentRuntime.get(context.document.tabId)
+        : editorDocument.get()
+      const identity = mountedView
+        ? documentRuntime.captureDocument(context.document.tabId)
+        : null
       if (
+        (mountedView &&
+          (!documentRuntime.isLiveView(mountedView) ||
+            mountedView.viewId !== viewId ||
+            !identity ||
+            identity.documentId !== mountedView.documentId ||
+            identity.documentGeneration !== mountedView.documentGeneration)) ||
         !current ||
         !sourceEditMatches(request, current) ||
         current.tabId !== context.document.tabId ||
@@ -1131,9 +1151,19 @@ export function SourceEditor({
         }
       return {
         status: 'applied',
-        contentVersion: editorDocument.get()!.contentVersion,
+        contentVersion: bridge.snapshot().version,
       }
-    })
+    }
+    const unregisterEdits = documentEdits.register(applySourceEdits)
+    const mountedView = documentRuntime.captureView(viewId as ViewId)
+    const unregisterMountedEdits = mountedView
+      ? mountedDocumentEdits.register(
+          document.tabId,
+          mountedView,
+          'source',
+          (target, request) => applySourceEdits(request, target),
+        )
+      : () => {}
     const actionScope = documentEdits.scope(() => false)
     const applyInteraction = (
       action: EditorContextAction,
@@ -1325,6 +1355,7 @@ export function SourceEditor({
       )
       actionScope.dispose()
       unregisterEdits()
+      unregisterMountedEdits()
       unregisterProjection()
       removeAnnotations()
       detachSession()

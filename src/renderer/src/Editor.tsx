@@ -38,7 +38,12 @@ import type {
 } from '../../shared/completions'
 import type { DocumentState } from '../../shared/desktop'
 import { MAX_DOCUMENT_BYTES } from '../../shared/desktop'
-import { editedSource, sourceEditMatches } from '../../shared/document-edits'
+import {
+  editedSource,
+  type SourceEditRequest,
+  type SourceEditResult,
+  sourceEditMatches,
+} from '../../shared/document-edits'
 import type {
   AcceptedSourceEdit,
   DocumentSession,
@@ -49,7 +54,7 @@ import {
   type EditorInteractionRequest,
   sameInteraction,
 } from '../../shared/editor-interactions'
-import type { ViewId } from '../../shared/foundation-contracts'
+import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import type { SourceSnapshot } from '../../shared/source-buffer'
 import {
@@ -89,6 +94,7 @@ import {
   createMarkdownPositionCache,
   type MarkdownPositionLookup,
 } from './markdown-positions'
+import { mountedDocumentEdits } from './mounted-document-edits'
 import './markdown-markers.css'
 import type { ReferenceValue } from '../../shared/source-references'
 import { createMarkdownSemantics } from './markdown-semantics'
@@ -1819,9 +1825,11 @@ export function MarkdownEditor({
   }
   useEffect(() => {
     if (!editor?.markdown || !markdownDocument) return
-    const body = () => {
+    const body = (mountedView?: ViewTarget) => {
       const context = richEditContext.current
-      const current = editorDocument.get()
+      const current = mountedView
+        ? documentRuntime.get(context.document.tabId)
+        : editorDocument.get()
       if (
         editor.isDestroyed ||
         !context.focused ||
@@ -1863,8 +1871,27 @@ export function MarkdownEditor({
             ))
         : null
     })
-    const removeEdits = documentEdits.register((request) => {
-      const value = body()
+    const applyRichEdits = (
+      request: SourceEditRequest,
+      mountedView?: ViewTarget,
+    ): SourceEditResult => {
+      const context = richEditContext.current
+      const identity = mountedView
+        ? documentRuntime.captureDocument(context.document.tabId)
+        : null
+      if (
+        mountedView &&
+        (!documentRuntime.isLiveView(mountedView) ||
+          mountedView.viewId !== (viewId as ViewId) ||
+          !identity ||
+          identity.documentId !== mountedView.documentId ||
+          identity.documentGeneration !== mountedView.documentGeneration)
+      )
+        return {
+          status: 'stale',
+          message: 'This editor view is no longer available. Read it again.',
+        }
+      const value = body(mountedView)
       const unsupported = {
         status: 'unsupported-view' as const,
         message: 'This range needs source view.',
@@ -1959,22 +1986,42 @@ export function MarkdownEditor({
             message:
               'An editor extension changed this edit. Review the document before continuing.',
           }
+        const after = documentRuntime
+          .session(context.document.tabId)
+          ?.snapshot()
+        if (!after)
+          return {
+            status: 'stale',
+            message:
+              'This document session is no longer available. Read it again.',
+          }
         return {
           status: 'applied',
-          contentVersion: editorDocument.get()!.contentVersion,
+          contentVersion: after.version,
         }
       } catch (error) {
         return { status: 'invalid', message: String(error) }
       } finally {
         exactSource.current = null
       }
-    }, 'rich')
+    }
+    const removeEdits = documentEdits.register(applyRichEdits, 'rich')
+    const mountedView = documentRuntime.captureView(viewId as ViewId)
+    const removeMountedEdits = mountedView
+      ? mountedDocumentEdits.register(
+          documentState.tabId,
+          mountedView,
+          'rich',
+          (target, request) => applyRichEdits(request, target),
+        )
+      : () => {}
     return () => {
       removeEdits()
+      removeMountedEdits()
       removeProjection()
       removeAnnotations()
     }
-  }, [editor, markdownDocument])
+  }, [editor, markdownDocument, documentState.tabId, viewId])
   // biome-ignore lint/correctness/useExhaustiveDependencies: initial focus belongs to this editor instance, never subsequent mode or document updates.
   useLayoutEffect(() => {
     if (!autoFocus || !editor || !markdownDocument || paneMode === 'markdown')

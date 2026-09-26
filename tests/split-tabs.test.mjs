@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import test from 'node:test'
@@ -16,6 +16,7 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   const b = join(root, 'b.md')
   await writeFile(a, 'original a')
   await writeFile(b, 'original b')
+  const bPath = await realpath(b)
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
   })
@@ -332,45 +333,61 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   )
   assert.doesNotMatch(await left.innerText(), /Z/)
   await app.evaluate(
-    async ({ ipcMain }, { path, tabId }) => {
+    ({ ipcMain }, { path, tabId }) => {
       const autosave = ipcMain._invokeHandlers.get('document:autosave')
       if (!autosave) throw new Error('Autosave handler is unavailable.')
       globalThis.splitAutosaveCalls = 0
+      globalThis.splitAutosaveStatuses = []
+      globalThis.splitAutosaveRenames = []
+      globalThis.splitAutosaveRenamed = false
       ipcMain.removeHandler('document:autosave')
       ipcMain.handle('document:autosave', (...args) => {
-        if (args[1] === tabId) globalThis.splitAutosaveCalls++
-        return autosave(...args)
+        if (args[1] !== tabId) return autosave(...args)
+        globalThis.splitAutosaveCalls++
+        return Promise.resolve(autosave(...args)).then((result) => {
+          globalThis.splitAutosaveStatuses.push(result.status)
+          return result
+        })
       })
-      const { createRequire, syncBuiltinESMExports } = await import(
-        'node:module'
-      )
-      const promises = createRequire(`${process.cwd()}/package.json`)(
-        'node:fs/promises',
-      )
+      const { syncBuiltinESMExports } = process.getBuiltinModule('node:module')
+      const promises = process.getBuiltinModule('node:fs/promises')
       const rename = promises.rename
-      let renamed
-      globalThis.splitAutosaveRenamed = new Promise((resolve) => {
-        renamed = resolve
-      })
       globalThis.restoreSplitAutosaveRename = () => {
         promises.rename = rename
         syncBuiltinESMExports()
       }
       promises.rename = async (from, to) => {
+        if (globalThis.splitAutosaveRenames.length < 12)
+          globalThis.splitAutosaveRenames.push(to)
         await rename(from, to)
         if (to !== path) return
         globalThis.restoreSplitAutosaveRename()
-        renamed()
+        globalThis.splitAutosaveRenamed = true
         await new Promise((resolve) => {
           globalThis.releaseSplitAutosave = resolve
         })
       }
       syncBuiltinESMExports()
     },
-    { path: b, tabId: bId },
+    { path: bPath, tabId: bId },
   )
   await right.fill('edited b')
-  await app.evaluate(() => globalThis.splitAutosaveRenamed)
+  const autosaveDeadline = performance.now() + 7000
+  let autosaveState
+  do {
+    autosaveState = await app.evaluate(() => ({
+      renamed: globalThis.splitAutosaveRenamed,
+      calls: globalThis.splitAutosaveCalls,
+      statuses: globalThis.splitAutosaveStatuses,
+      renames: globalThis.splitAutosaveRenames,
+    }))
+    if (autosaveState.renamed) break
+    await delay(30)
+  } while (performance.now() < autosaveDeadline)
+  assert.ok(
+    autosaveState.renamed,
+    JSON.stringify({ expected: bPath, autosaveState }),
+  )
   assert.ok((await app.evaluate(() => globalThis.splitAutosaveCalls)) > 0)
   assert.equal(await readFile(b, 'utf8'), 'edited b')
   await left.click()
@@ -393,10 +410,10 @@ test('split panes keep both editors mounted, edit both files, and share one docu
     async (id) => (await window.hibi.getDocument()).tabId === id,
     bId,
   )
-  const autosaveDeadline = performance.now() + 7000
+  const aAutosaveDeadline = performance.now() + 7000
   while (
     (await readFile(a, 'utf8')) !== 'edited a' &&
-    performance.now() < autosaveDeadline
+    performance.now() < aAutosaveDeadline
   )
     await delay(30)
   assert.equal(await readFile(a, 'utf8'), 'edited a')

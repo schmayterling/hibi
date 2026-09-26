@@ -256,7 +256,10 @@ test('target edits validate source boundaries, expected text, version and genera
     ).status,
     'stale',
   )
-  runtime.activate(document('reopened', { revision: 3 }))
+  const reopened = document('reopened', { revision: 3 })
+  assert.throws(() => runtime.activate(reopened), /local edits waiting/)
+  assert.equal(runtime.get().markdown, 'changed')
+  runtime.activate(reopened, true)
   assert.equal(scope.readSource(target).status, 'stale')
   assert.equal(
     scope.applyEdits(

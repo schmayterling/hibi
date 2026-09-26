@@ -4,6 +4,8 @@ Open **UI preview** from the command palette to inspect Hibi's buttons, fields, 
 
 Enter CSS in **Custom CSS** and turn on **Enable custom CSS** to preview it across Hibi. Changes take effect as you type. Choose **Save CSS** to keep the CSS and its enabled state after restarting Hibi. Choose **Revert** or close the preview tab to discard unsaved changes. Saved CSS can be up to 64 KiB.
 
+Custom CSS loads after the addon starts, so the startup loading screen uses Hibi's standard appearance.
+
 If saved CSS makes the interface hard to use, choose **Disable custom CSS** from the native Addons menu. This turns off the saved stylesheet without deleting its text. You can reopen UI preview to edit and enable it again.
 
 UI preview is enabled by default in development builds. In release builds, turn it on under **Settings → Addons**.

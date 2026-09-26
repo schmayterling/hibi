@@ -76,9 +76,13 @@ export default defineAddon({
       'custom-css',
       initial.enabled ? initial.css : '',
     )
+    let forceOff = false
     const apply = ({ css, enabled }: Theme) =>
-      themeStyle.update(enabled && cssBytes(css) <= maxCssBytes ? css : '')
+      themeStyle.update(
+        !forceOff && enabled && cssBytes(css) <= maxCssBytes ? css : '',
+      )
     const updateDraft = (draft: Theme) => {
+      if (draft.enabled) forceOff = false
       apply(draft)
       publish({
         draft,
@@ -90,8 +94,14 @@ export default defineAddon({
       })
     }
     const revert = () => {
+      forceOff = false
       apply(state.saved)
       publish({ draft: state.saved, error: '', notice: '' })
+    }
+    const discardDraft = () => {
+      const draft = forceOff ? { ...state.saved, enabled: false } : state.saved
+      apply(draft)
+      publish({ draft, error: '', notice: '' })
     }
     let previewOpen = false
     let writes: Promise<unknown> = Promise.resolve()
@@ -115,10 +125,15 @@ export default defineAddon({
             publish({ error: saveError(result.status) })
             return
           }
-          if (!previewOpen) apply(next)
+          const draft = previewOpen
+            ? state.draft
+            : forceOff
+              ? { ...next, enabled: false }
+              : next
+          if (!previewOpen) apply(draft)
           publish({
             saved: next,
-            draft: previewOpen ? state.draft : next,
+            draft,
             notice: 'Custom CSS saved.',
           })
         } catch {
@@ -129,6 +144,7 @@ export default defineAddon({
       })
     }
     const disable = () => {
+      forceOff = true
       updateDraft({ ...state.draft, enabled: false })
       void queueWrite(async () => {
         const next = { css: state.saved.css, enabled: false }
@@ -140,7 +156,13 @@ export default defineAddon({
             context.notify(message)
             return
           }
-          publish({ saved: next, notice: 'Custom CSS disabled.' })
+          forceOff = false
+          apply(previewOpen ? state.draft : next)
+          publish({
+            saved: next,
+            draft: previewOpen ? state.draft : next,
+            notice: 'Custom CSS disabled.',
+          })
           context.notify('Custom CSS disabled.')
         } catch {
           const message = saveError('unavailable')
@@ -161,7 +183,7 @@ export default defineAddon({
         previewOpen = true
         return () => {
           previewOpen = false
-          revert()
+          discardDraft()
         }
       }, [])
       const dirty =

@@ -70,7 +70,9 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   await app.evaluate(
     ({ ipcMain }, ids) => {
       const focus = ipcMain._invokeHandlers.get('document:focus-tab')
+      const get = ipcMain._invokeHandlers.get('document:get')
       if (!focus) throw new Error('Document focus handler is unavailable.')
+      if (!get) throw new Error('Document get handler is unavailable.')
       let phase = 0
       ipcMain.removeHandler('document:focus-tab')
       ipcMain.handle('document:focus-tab', async (...args) => {
@@ -83,7 +85,20 @@ test('split panes keep both editors mounted, edit both files, and share one docu
           phase = 1
           return { ...metadata, contentVersion: metadata.contentVersion + 1 }
         }
+        if (phase === 2 && args[1] === ids.left) {
+          phase = 3
+          return { ...metadata, contentVersion: metadata.contentVersion + 1 }
+        }
         return metadata
+      })
+      ipcMain.removeHandler('document:get')
+      ipcMain.handle('document:get', async (...args) => {
+        const document = await get(...args)
+        if (phase === 3) {
+          phase = 4
+          return { ...document, markdown: `${document.markdown}mismatch` }
+        }
+        return document
       })
     },
     { left: aId, right: bId },
@@ -95,6 +110,16 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).tabId,
     bId,
+  )
+  await page.getByRole('button', { name: 'Retry document focus' }).click()
+  await page
+    .getByText('This tab has local edits waiting to synchronize. Try again.')
+    .waitFor()
+  assert.equal(await page.locator('.app').getAttribute('aria-busy'), 'true')
+  await page.getByRole('button', { name: 'Retry document focus' }).waitFor()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabId,
+    aId,
   )
   await page.getByRole('button', { name: 'Retry document focus' }).click()
   await page.waitForFunction(

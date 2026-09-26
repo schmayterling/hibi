@@ -22,7 +22,29 @@ test('find in document searches rich text and offscreen markdown without editing
         checkboxChecked: false,
       })
     })
-    await app.close()
+    const slowClose = setTimeout(() => {
+      void Promise.race([
+        app.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows().map((window) => ({
+            destroyed: window.isDestroyed(),
+            loading: window.webContents.isLoading(),
+            url: window.webContents.getURL(),
+          })),
+        ),
+        new Promise((resolve) =>
+          setTimeout(() => resolve('main did not reply'), 1000),
+        ),
+      ]).then(
+        (windows) =>
+          t.diagnostic(`slow Electron close: ${JSON.stringify(windows)}`),
+        (error) => t.diagnostic(`slow Electron close: ${String(error)}`),
+      )
+    }, 10000)
+    try {
+      await app.close()
+    } finally {
+      clearTimeout(slowClose)
+    }
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()

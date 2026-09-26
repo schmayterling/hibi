@@ -7,7 +7,6 @@ import {
   type OpenDocumentMetadata,
   parseSourceEditRequest,
   type SourceEditRequest,
-  type SourceEditResult,
   type TargetDocumentSaveResult,
   type TargetSourceEditRequest,
   type TargetSourceEditResult,
@@ -60,7 +59,6 @@ function parseVersionedTarget(value: unknown): VersionedDocumentTarget | null {
 /** Per-addon activation scope; no receipt survives disable, eviction or process exit. */
 export function createDocumentTargetEditScope(
   runtime: DocumentRuntime,
-  activeApply: (request: SourceEditRequest) => SourceEditResult,
   isBusy: () => boolean,
   saveTarget?: (
     tabId: string,
@@ -400,29 +398,23 @@ export function createDocumentTargetEditScope(
           const mountedDocument = runtime.get(snapshot.document.tabId)
           if (!mountedDocument)
             return remember(parsed.requestId, fingerprint, unavailable)
-          const active = runtime.captureActiveView()
           const request = {
             ...parsed,
             requestId: crypto.randomUUID(),
             tabId: snapshot.document.tabId,
             revision: snapshot.document.revision,
           }
-          result =
-            active?.documentId === target.documentId &&
-            active.documentGeneration === target.documentGeneration &&
-            runtime.get()?.tabId === snapshot.document.tabId
-              ? activeApply(request)
-              : mountedDocumentEdits.apply(
-                  mountedDocument,
-                  runtime
-                    .listViews()
-                    .filter(
-                      (view) =>
-                        view.documentId === target.documentId &&
-                        view.documentGeneration === target.documentGeneration,
-                    ),
-                  request,
-                )
+          result = mountedDocumentEdits.apply(
+            mountedDocument,
+            runtime
+              .listViews()
+              .filter(
+                (view) =>
+                  view.documentId === target.documentId &&
+                  view.documentGeneration === target.documentGeneration,
+              ),
+            request,
+          )
           const after = session.snapshot()
           if (result.status === 'applied')
             result =

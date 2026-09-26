@@ -27,13 +27,8 @@ const fixture = () => {
     enqueue: (operation) => operations.push(operation),
     onError: (error) => errors.push(error),
   })
-  let busy = false,
-    mounted = () => ({ status: 'unsupported-view', message: 'No adapter.' })
-  const scope = createDocumentTargetEditScope(
-    runtime,
-    (request) => mounted(request),
-    () => busy,
-  )
+  let busy = false
+  const scope = createDocumentTargetEditScope(runtime, () => busy)
   return {
     runtime,
     scope,
@@ -41,9 +36,6 @@ const fixture = () => {
     errors,
     setBusy: (value) => {
       busy = value
-    },
-    setMounted: (handler) => {
-      mounted = handler
     },
   }
 }
@@ -182,7 +174,6 @@ test('targeted save acknowledges one snapshot while focus and source advance', a
   const calls = []
   const scope = createDocumentTargetEditScope(
     runtime,
-    () => ({ status: 'unsupported-view', message: 'No view.' }),
     () => false,
     (...args) => {
       calls.push(args)
@@ -334,11 +325,7 @@ test('accepted source edit keeps its receipt if recovery reporting throws', () =
     },
   })
   runtime.activate(document('a'))
-  const scope = createDocumentTargetEditScope(
-    runtime,
-    () => ({ status: 'unsupported-view', message: 'No view.' }),
-    () => false,
-  )
+  const scope = createDocumentTargetEditScope(runtime, () => false)
   const edit = request(scope.listOpen()[0].target, 'accepted-with-error', [
     { from: 0, to: 1, expectedText: 'a', insert: 'A' },
   ])
@@ -355,8 +342,8 @@ test('accepted source edit keeps its receipt if recovery reporting throws', () =
   runtime.dispose()
 })
 
-test('mounted views require an adapter before editing behind another focused view', () => {
-  const { runtime, scope, setMounted } = fixture()
+test('mounted views wait for an adapter before editing behind another focused view', () => {
+  const { runtime, scope } = fixture()
   const tabs = ['one', 'two'].map((id) => ({
     id,
     name: `${id}.md`,
@@ -365,13 +352,24 @@ test('mounted views require an adapter before editing behind another focused vie
   runtime.activate(document('first', { tabs }))
   const firstTarget = scope.listOpen()[0].target
   const unmountFirst = runtime.registerView('one', runtime.primaryViewId('one'))
+  const firstView = runtime.captureView(runtime.primaryViewId('one'))
+  let mounted = () => ({ status: 'unsupported-view', message: 'No adapter.' })
+  const setMounted = (handler) => {
+    mounted = handler
+  }
+  const removeAdapter = mountedDocumentEdits.register(
+    'one',
+    firstView,
+    'source',
+    (_view, input) => mounted(input),
+  )
   setMounted(() => ({ status: 'applied', contentVersion: 0 }))
   assert.equal(
     scope.applyEdits({
       ...request(firstTarget, 'projection-noop', [
         { from: 0, to: 5, expectedText: 'first', insert: 'first' },
       ]),
-      projectionId: 'current-proof',
+      projectionId: projectionIdentity('source', runtime.get('one')),
     }).status,
     'applied',
   )
@@ -401,6 +399,7 @@ test('mounted views require an adapter before editing behind another focused vie
   assert.equal(scope.applyEdits(firstEdit).status, 'applied')
   assert.equal(received, 1)
   assert.notEqual(forwardedIds[0], forwardedIds[1])
+  removeAdapter()
   runtime.activate(
     document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
   )
@@ -408,6 +407,7 @@ test('mounted views require an adapter before editing behind another focused vie
     'two',
     runtime.primaryViewId('two'),
   )
+  runtime.focusView(runtime.primaryViewId('two'))
   const current = scope.listOpen().find((entry) => entry.name === 'one.md')
   assert.equal(
     scope.applyEdits(
@@ -415,7 +415,7 @@ test('mounted views require an adapter before editing behind another focused vie
         { from: 0, to: 5, expectedText: 'FIRST', insert: 'First' },
       ]),
     ).status,
-    'unsupported-view',
+    'busy',
   )
   assert.equal(runtime.get('one').markdown, 'FIRST')
   assert.equal(received, 1)
@@ -448,6 +448,115 @@ test('mounted views require an adapter before editing behind another focused vie
     'applied',
   )
   unmountSecond()
+  scope.dispose()
+  runtime.dispose()
+})
+
+test('focused rich target keeps its own adapter after another view registers', () => {
+  const { runtime, scope } = fixture()
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('first', { tabs }))
+  const firstViewId = runtime.primaryViewId('one')
+  const unmountFirst = runtime.registerView('one', firstViewId)
+  const firstView = runtime.captureView(firstViewId)
+  const removeInactiveSource = mountedDocumentEdits.register(
+    'one',
+    firstView,
+    'source',
+    () => ({ status: 'unsupported-view', message: 'Source pane is inactive.' }),
+  )
+  let firstCalls = 0
+  const removeFirst = mountedDocumentEdits.register(
+    'one',
+    firstView,
+    'rich',
+    (_view, input) => {
+      firstCalls++
+      const operation = runtime.session('one').edit(
+        input.changes.map(({ from, to, insert }) => ({ from, to, insert })),
+        'addon',
+        'first-view',
+      )
+      return { status: 'applied', contentVersion: operation.after.version }
+    },
+  )
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  const secondViewId = runtime.primaryViewId('two')
+  const unmountSecond = runtime.registerView('two', secondViewId)
+  const removeSecond = mountedDocumentEdits.register(
+    'two',
+    runtime.captureView(secondViewId),
+    'source',
+    () => {
+      throw new Error('The other editor received this edit.')
+    },
+  )
+  runtime.activate(runtime.get('one'))
+  runtime.focusView(firstViewId)
+  const target = scope.listOpen().find(({ name }) => name === 'one.md').target
+  assert.deepEqual(
+    scope.applyEdits(
+      request(target, 'focused-owner', [
+        { from: 0, to: 5, expectedText: 'first', insert: 'FIRST' },
+      ]),
+    ),
+    { status: 'applied', contentVersion: 1 },
+  )
+  assert.equal(firstCalls, 1)
+  assert.equal(runtime.get().markdown, 'FIRST')
+  assert.equal(runtime.captureActiveView().viewId, firstViewId)
+  removeSecond()
+  removeFirst()
+  removeInactiveSource()
+  unmountSecond()
+  unmountFirst()
+  scope.dispose()
+  runtime.dispose()
+})
+
+test('view registration binds pending adapter before notifying addons', () => {
+  const { runtime, scope } = fixture()
+  runtime.activate(document('first'))
+  const viewId = runtime.primaryViewId('one')
+  const target = { ...runtime.captureDocument('one'), viewId }
+  const removeAdapter = mountedDocumentEdits.register(
+    'one',
+    target,
+    'source',
+    (_view, input) => {
+      const operation = runtime.session('one').edit(
+        input.changes.map(({ from, to, insert }) => ({ from, to, insert })),
+        'addon',
+        'view-opened',
+      )
+      return { status: 'applied', contentVersion: operation.after.version }
+    },
+  )
+  let result
+  const stop = runtime.subscribeViews(() => {
+    if (result) return
+    result = scope.applyEdits(
+      request(scope.listOpen()[0].target, 'on-view-opened', [
+        { from: 0, to: 5, expectedText: 'first', insert: 'FIRST' },
+      ]),
+    )
+  })
+  const unmount = runtime.registerView(
+    'one',
+    viewId,
+    mountedDocumentEdits.bindView,
+  )
+  assert.deepEqual(result, { status: 'applied', contentVersion: 1 })
+  assert.equal(runtime.get('one').markdown, 'FIRST')
+  stop()
+  removeAdapter()
+  unmount()
   scope.dispose()
   runtime.dispose()
 })
@@ -526,7 +635,7 @@ test('inactive mounted target routes through live view adapter without changing 
   const nextEdit = request(nextTarget, 'replacement-rich', [
     { from: 0, to: 5, expectedText: 'FIRST', insert: 'First' },
   ])
-  assert.equal(scope.applyEdits(nextEdit).status, 'unsupported-view')
+  assert.equal(scope.applyEdits(nextEdit).status, 'busy')
   assert.equal(calls.length, 1)
   assert.equal(runtime.get('one').markdown, 'FIRST')
   const removeRich = mountedDocumentEdits.register(

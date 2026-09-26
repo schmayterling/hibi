@@ -536,7 +536,6 @@ export function useAddons(
       const editScope = documentEdits.scope(() => latest.current.isBusy())
       const targetEditScope = createDocumentTargetEditScope(
         documentRuntime,
-        (request) => editScope.apply(request),
         () => latest.current.isBusy(),
         async (tabId, revision, contentVersion) => {
           if (disposed) return { status: 'stale', document: null }

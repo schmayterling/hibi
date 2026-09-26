@@ -1,6 +1,7 @@
 import { Tags } from 'lucide-react'
 import { isMarkdownDocument } from '../../shared/document-types'
 import { reportDiagnosticFailure } from '../../shared/local-diagnostics-observer'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { defineAddon } from '../api'
 import { createTagAnalysis } from './analysis'
 import manifest from './manifest'
@@ -45,6 +46,29 @@ export default defineAddon({
       tooltip: 'Browse workspace tags',
       onClick: () => browse(),
     })
+    let syntaxIdentity: {
+      id: string
+      revision: number
+      fingerprint: string
+    } | null = null
+    const keyFor = (document: {
+      tabId: string
+      id: string
+      contentVersion: number
+    }) => {
+      const revision = workspaceSyntaxEvents.snapshot()
+      if (
+        syntaxIdentity?.id !== document.id ||
+        syntaxIdentity?.revision !== revision
+      )
+        syntaxIdentity = {
+          id: document.id,
+          revision,
+          fingerprint: context.editor.getMetadataSyntax(document.id)
+            .fingerprint,
+        }
+      return tagVersion(document, syntaxIdentity.fingerprint)
+    }
     let sent: TagJob | null = null
     const failed = (event: Event) => {
       const old = worker
@@ -74,9 +98,9 @@ export default defineAddon({
         if (
           sent?.key === event.data.key &&
           document &&
-          tagVersion(document) === sent.key
+          keyFor(document) === sent.key
         )
-          analysis.remember(sent.source, event.data.tags)
+          analysis.remember(sent.key, event.data.tags)
         sent = null
         counter.receive(event.data)
       }
@@ -86,27 +110,52 @@ export default defineAddon({
     const counter = scheduleTagCounts(
       () => {
         const document = context.editor.getDocument()
-        return document && isMarkdownDocument(document.name)
-          ? { key: tagVersion(document), source: document.markdown }
-          : null
+        if (!document || !isMarkdownDocument(document.name)) return null
+        const profile = context.editor.getMetadataSyntax(
+          document.id,
+          document.markdown,
+        )
+        return {
+          key: keyFor(document),
+          source: document.markdown,
+          syntax: profile.settings,
+        }
       },
       (job: TagJob) => {
-        const tags = analysis.get(job.source)
+        const tags = analysis.get(job.key)
         if (tags) counter.receive({ key: job.key, tags })
         else if (worker) {
           sent = job
           worker.postMessage(job)
         } else counter.receive({ key: job.key, tags: [] })
       },
-      (tags) =>
+      (tags) => {
+        const document = context.editor.getDocument()
+        const complete =
+          !document ||
+          context.editor.getMetadataSyntax(document.id, document.markdown)
+            .complete
         status.update({
-          label: tags.length ? `Tags · ${tags.length}` : '',
-          tooltip: tags.map((tag) => `#${tag}`).join(' · '),
-        }),
+          label: complete
+            ? tags.length
+              ? `Tags · ${tags.length}`
+              : ''
+            : 'Tags · ?',
+          tooltip: complete
+            ? tags.map((tag) => `#${tag}`).join(' · ')
+            : 'Tag count may be incomplete.',
+        })
+      },
     )
-    context.editor.onDocumentChange((document) => {
+    const removeDocument = context.editor.onDocumentChange((document) => {
       counter.refresh(
-        isMarkdownDocument(document.name) ? tagVersion(document) : null,
+        isMarkdownDocument(document.name) ? keyFor(document) : null,
+      )
+    })
+    const removeSyntax = workspaceSyntaxEvents.subscribe(() => {
+      const document = context.editor.getDocument()
+      counter.refresh(
+        document && isMarkdownDocument(document.name) ? keyFor(document) : null,
       )
     })
     context.editor.registerRich(richTags(browse))
@@ -121,6 +170,8 @@ export default defineAddon({
     })
     stop = () => {
       counter.stop()
+      removeDocument()
+      removeSyntax()
       worker?.removeEventListener('error', failed)
       worker?.removeEventListener('messageerror', failed)
       worker?.terminate()

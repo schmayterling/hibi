@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto'
-import { defaultNoteSyntax, type NoteSyntax } from '../shared/note-syntax.ts'
+import {
+  builtInNoteSyntax,
+  defaultNoteSyntax,
+  type NoteSyntax,
+} from '../shared/note-syntax.ts'
 import type { WorkspacePage } from '../shared/workspace.ts'
 import type { WorkspaceSyntaxSnapshot } from '../shared/workspace-query.ts'
 
@@ -197,13 +201,12 @@ export function workspaceSyntax(input: unknown): WorkspaceSyntax | null {
           : choice.syntax === 'auto' || choice.syntax.includes(flavor.id),
       )
       const ids = new Set(selected.map((flavor) => flavor.id))
-      const settings: NoteSyntax = {
-        gfm: ids.has('markdown.github'),
-        wikilinks: ids.has('markdown.obsidian'),
-        hashtags: value.hashtags as boolean,
-        frontmatter,
+      const settings = builtInNoteSyntax(
+        ids,
         disabledFeatures,
-      }
+        value.hashtags as boolean,
+        frontmatter,
+      )
       const source = page.markdown
       const unsupported =
         unknownFeature ||

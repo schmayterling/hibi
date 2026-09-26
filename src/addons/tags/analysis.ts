@@ -1,12 +1,12 @@
 /** Keep only the current note's tag count worker result. */
 export function createTagAnalysis() {
-  let current: { source: string; tags: string[] } | null = null
+  let current: { key: string; tags: string[] } | null = null
   return {
-    get(source: string) {
-      return current?.source === source ? current.tags : null
+    get(key: string) {
+      return current?.key === key ? current.tags : null
     },
-    remember(source: string, tags: string[]) {
-      current = { source, tags }
+    remember(key: string, tags: string[]) {
+      current = { key, tags }
     },
   }
 }

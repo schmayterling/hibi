@@ -70,7 +70,10 @@ import { registrationBatch } from './registration-batch'
 import { settingsPages } from './settings-pages'
 import { toolbar } from './toolbar'
 import { viewNotifications } from './view-notifications'
-import { captureWorkspaceSyntaxSnapshot } from './workspace-syntax-snapshot'
+import {
+  activeNoteMetadataSyntax,
+  captureWorkspaceSyntaxSnapshot,
+} from './workspace-syntax-snapshot'
 
 export { addons } from './addon-registry'
 
@@ -1029,6 +1032,15 @@ export function useAddons(
                 markdownSyntax
                   .snapshot()
                   .filter((feature) => feature.scope !== 'document'),
+              getMetadataSyntax: (documentId, source) =>
+                activeNoteMetadataSyntax(
+                  documentId,
+                  source,
+                  currentActivation.current.states.some(
+                    (state) => state.id === 'tags' && state.enabled,
+                  ),
+                  [...extensions.values()],
+                ),
               onSyntaxChange: (listener) =>
                 observe(markdownSyntax.subscribe, listener),
               onCodeHighlightingChange: (listener) =>

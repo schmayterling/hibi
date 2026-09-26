@@ -30,7 +30,7 @@ after(() => {
 const bundle = await build({
   stdin: {
     contents: `
-      export { captureWorkspaceSyntaxSnapshot } from './src/renderer/src/workspace-syntax-snapshot.ts'
+      export { activeNoteMetadataSyntax, captureWorkspaceSyntaxSnapshot } from './src/renderer/src/workspace-syntax-snapshot.ts'
       export { flavors } from './src/renderer/src/flavors.ts'
       export { markdownSyntax } from './src/renderer/src/markdown-syntax.ts'
       export { workspaceSyntaxEvents } from './src/shared/workspace-syntax-events.ts'
@@ -64,6 +64,7 @@ new Function('module', 'exports', 'require', bundle.outputFiles[0].text)(
   createRequire(import.meta.url),
 )
 const {
+  activeNoteMetadataSyntax,
   captureWorkspaceSyntaxSnapshot,
   flavors,
   markdownSyntax,
@@ -167,4 +168,18 @@ test('visible metadata consumers receive flavor and syntax invalidations', () =>
     unregister()
     remove()
   }
+})
+
+test('active-note syntax changes count key when Frontmatter is disabled', () => {
+  values.clear()
+  const source = '---\ntag: #yaml\n---\n# Body'
+  const enabled = activeNoteMetadataSyntax('a'.repeat(64), source, true, [
+    { id: 'frontmatter.metadata', preservation: { version: '1' } },
+  ])
+  const disabled = activeNoteMetadataSyntax('a'.repeat(64), source, true, [])
+  assert.equal(enabled.settings.frontmatter, true)
+  assert.equal(disabled.settings.frontmatter, false)
+  assert.notEqual(enabled.fingerprint, disabled.fingerprint)
+  assert.equal(enabled.complete, true)
+  assert.equal(disabled.complete, true)
 })

@@ -17,6 +17,21 @@ export const defaultNoteSyntax: NoteSyntax = {
   disabledFeatures: [],
 }
 
+export function builtInNoteSyntax(
+  selected: ReadonlySet<string>,
+  disabledFeatures: readonly string[],
+  hashtags: boolean,
+  frontmatter: boolean,
+): NoteSyntax {
+  return {
+    gfm: selected.has('markdown.github'),
+    wikilinks: selected.has('markdown.obsidian'),
+    hashtags,
+    frontmatter,
+    disabledFeatures,
+  }
+}
+
 const wiki = /^(!?)\[\[([^\]\r\n]+)\]\]/
 const parsers = new Map<string, Marked>()
 

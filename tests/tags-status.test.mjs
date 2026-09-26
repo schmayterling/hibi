@@ -1,14 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { build } from 'esbuild'
 import { createTagAnalysis } from '../src/addons/tags/analysis.ts'
 import { scheduleTagCounts, tagVersion } from '../src/addons/tags/schedule.ts'
+import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 300))
 
-test('status cache keeps only the current source result', () => {
+test('status cache keeps only the current source and syntax result', () => {
   const analysis = createTagAnalysis()
-  analysis.remember('#one', ['one'])
-  assert.deepEqual(analysis.get('#one'), ['one'])
+  analysis.remember('#one:frontmatter-on', ['one'])
+  assert.deepEqual(analysis.get('#one:frontmatter-on'), ['one'])
+  assert.equal(analysis.get('#one:frontmatter-off'), null)
   assert.equal(analysis.get('#other'), null)
   analysis.remember('#two', ['two'])
   assert.deepEqual(analysis.get('#two'), ['two'])
@@ -24,6 +27,38 @@ test('tag count key survives tab switches but advances with content', () => {
   )
   assert.notEqual(tagVersion(first), tagVersion({ ...first, tabId: 'b' }))
   assert.notEqual(tagVersion(first), tagVersion({ ...first, id: 'note-b' }))
+  assert.notEqual(
+    tagVersion(first, 'frontmatter-on'),
+    tagVersion(first, 'frontmatter-off'),
+  )
+})
+
+test('tag count worker uses active Frontmatter syntax', async () => {
+  const bundle = await build({
+    entryPoints: ['src/addons/tags/count.worker.ts'],
+    bundle: true,
+    platform: 'browser',
+    format: 'iife',
+    write: false,
+  })
+  const replies = []
+  const worker = { postMessage: (reply) => replies.push(reply) }
+  new Function('self', bundle.outputFiles[0].text)(worker)
+  const source = '---\ntag: #yaml\n---\n# Body'
+  worker.onmessage({
+    data: { key: 'on', source, syntax: defaultNoteSyntax },
+  })
+  worker.onmessage({
+    data: {
+      key: 'off',
+      source,
+      syntax: { ...defaultNoteSyntax, frontmatter: false },
+    },
+  })
+  assert.deepEqual(replies, [
+    { key: 'on', tags: [] },
+    { key: 'off', tags: ['yaml'] },
+  ])
 })
 
 test('returning to a cached tab does not read or reparse its source', async () => {

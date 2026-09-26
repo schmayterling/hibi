@@ -1,7 +1,7 @@
 import { CircleAlert, FileText, Tags } from 'lucide-react'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { WorkspaceTagSummary } from '../../shared/workspace-query'
-import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import type { AddonContext } from '../api'
 import { Button, ControlRow, Panel, PanelMessage, TextInput } from '../ui'
 import { useWorkspaceQueryTarget } from '../use-workspace-query'

@@ -3,7 +3,7 @@ import type {
   DocumentSyntaxFeature,
   MarkdownSyntaxFeature,
 } from '../../shared/markdown-syntax'
-import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 
 const core: MarkdownSyntaxFeature[] = [
   ...Array.from(

@@ -2,7 +2,7 @@ import { FileText } from 'lucide-react'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { MarkdownExtension } from '../../addons/api'
 import type { WorkspaceState } from '../../shared/workspace'
-import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { Sidebar, type SidebarProps } from '../../ui/Sidebar'
 import { captureWorkspaceSyntaxSnapshot } from './workspace-syntax-snapshot'
 

@@ -216,7 +216,24 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
   )
   assert.equal(await page.locator('.tiptap .katex').count(), 0)
   await choose('automatically detect markdown flavor')
-  await page.waitForFunction(
-    () => document.querySelectorAll('.tiptap .katex').length === 2,
-  )
+  try {
+    await page.waitForFunction(
+      () => document.querySelectorAll('.tiptap .katex').length === 2,
+    )
+  } catch (error) {
+    const state = await page.evaluate(async () => ({
+      flavor: document.querySelector('[data-status-id="flavor"]')?.textContent,
+      mathBlocks: document.querySelectorAll('.tiptap .katex').length,
+      editorReady: document
+        .querySelector('.tiptap')
+        ?.getAttribute('contenteditable'),
+      source: (await window.hibi.getDocument()).markdown,
+    }))
+    throw new Error(
+      `Automatic flavor did not render math: ${JSON.stringify(state)}`,
+      {
+        cause: error,
+      },
+    )
+  }
 })

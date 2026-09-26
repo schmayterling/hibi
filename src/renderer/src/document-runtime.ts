@@ -393,9 +393,13 @@ export class DocumentRuntime {
         (local.version !== document.contentVersion ||
           local.materialize() !== markdown)
       ) {
+        const retained = session.state()
         if (
           !replaceLocal &&
-          (session.state().dirty || local.version >= document.contentVersion)
+          (retained.dirty ||
+            retained.document.revision > document.revision ||
+            (retained.document.revision === document.revision &&
+              local.version >= document.contentVersion))
         )
           throw new Error(
             'This tab has local edits waiting to synchronize. Try again.',

@@ -376,16 +376,25 @@ export class DocumentRuntime {
         for (const listener of [...this.#listeners]) listener(active, null)
     }
   }
-  activate(document: DocumentState) {
+  activate(document: DocumentState, replaceLocal = false) {
     this.#updating = true
     try {
       const { markdown, savedMarkdown, ...metadata } = document
       let session = this.#sessions.get(document.tabId)
+      const local = session?.snapshot()
       if (
         session &&
-        (session.snapshot().version !== document.contentVersion ||
-          session.snapshot().materialize() !== markdown)
+        local &&
+        (local.version !== document.contentVersion ||
+          local.materialize() !== markdown)
       ) {
+        if (
+          !replaceLocal &&
+          (session.state().dirty || local.version >= document.contentVersion)
+        )
+          throw new Error(
+            'This tab has local edits waiting to synchronize. Try again.',
+          )
         this.#discardSession(document.tabId, session)
         session = undefined
       }

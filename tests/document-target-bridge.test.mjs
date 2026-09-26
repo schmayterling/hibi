@@ -176,7 +176,10 @@ test('installed addon edits inactive documents and guards deferred legacy comman
   )
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await page.waitForFunction(
-    () => document.querySelector('.cm-content')?.isContentEditable,
+    () =>
+      document.querySelector(
+        '.editor-panes.mode-markdown[data-source-ready="true"] .source-pane:not([inert]) .cm-content',
+      )?.isContentEditable,
   )
   const sourceEdit = await page.evaluate((target) => {
     const read = window.targetProbe.read(target)

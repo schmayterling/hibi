@@ -242,8 +242,7 @@ try {
         platform: process.platform,
         arch: process.arch,
         enabledAddons,
-        conditions:
-          'Production assets in test Electron; fresh profile is not OS cold-cache; hidden windows; automation latency included.',
+        conditions: `Production assets in test Electron; fresh profile is not OS cold-cache; ${process.env.GITHUB_ACTIONS === 'true' ? 'visible focused windows' : 'hidden windows'}; automation latency included.`,
         initialBytes: initial.reduce((sum, chunk) => sum + chunk.bytes, 0),
         initialModules: initial.flatMap((chunk) => chunk.modules),
         summary,

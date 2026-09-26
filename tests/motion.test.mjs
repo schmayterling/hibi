@@ -431,6 +431,7 @@ test('workspace sidebar remains above editor content during motion and preserves
   })
   const page = await app.firstWindow()
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await page.emulateMedia({ reducedMotion: 'no-preference' })
   await page.getByRole('button', { name: /toggle workspace sidebar/i }).click()
   await page.waitForFunction(
     () =>
@@ -444,12 +445,10 @@ test('workspace sidebar remains above editor content during motion and preserves
   ]) {
     const samples = await page.evaluate(async (reverse) => {
       const sidebar = document.querySelector('.workspace-sidebar > .sidebar')
-      document
-        .querySelector('[aria-label="toggle workspace sidebar" i]')
-        .click()
+      const toggle = document.querySelector(
+        '[aria-label="toggle workspace sidebar" i]',
+      )
       const samples = []
-      let reversed = false
-      const start = performance.now()
       const sample = () => {
         // Allow hit testing during dismissal to catch panes painting over the sidebar.
         const slot = sidebar.parentElement
@@ -469,16 +468,35 @@ test('workspace sidebar remains above editor content during motion and preserves
           onTop,
         })
       }
-      while (performance.now() - start < 320) {
-        await new Promise(requestAnimationFrame)
-        if (reverse && !reversed && performance.now() - start > 64) {
-          document
-            .querySelector('[aria-label="toggle workspace sidebar" i]')
-            .click()
-          reversed = true
-        }
-        sample()
+      const halfway = async () => {
+        const started = new Promise((resolve) => {
+          const onRun = (event) => {
+            if (event.propertyName !== 'transform') return
+            sidebar.removeEventListener('transitionrun', onRun)
+            const transition = sidebar
+              .getAnimations()
+              .find((animation) => animation.transitionProperty === 'transform')
+            transition?.pause()
+            if (transition)
+              transition.currentTime =
+                Number(transition.effect.getTiming().duration) / 2
+            resolve(transition)
+          }
+          sidebar.addEventListener('transitionrun', onRun)
+        })
+        toggle.click()
+        return started
       }
+      const first = await halfway()
+      if (!first) return null
+      sample()
+      if (reverse) {
+        first.play()
+        const reversed = await halfway()
+        if (!reversed) return null
+        sample()
+        reversed.finish()
+      } else first.finish()
       await Promise.all(
         document
           .getAnimations()
@@ -491,6 +509,7 @@ test('workspace sidebar remains above editor content during motion and preserves
       sample()
       return samples
     }, reverse)
+    assert.ok(samples)
     assert.ok(samples.some(({ x }) => x > -255 && x < -1))
     assert.ok(
       samples

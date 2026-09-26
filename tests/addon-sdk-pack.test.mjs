@@ -15,6 +15,13 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const sdk = join(root, 'packages/addon-sdk')
 const tsc = join(root, 'node_modules/typescript/bin/tsc')
+const npmCli =
+  process.env.npm_execpath ??
+  resolve(
+    dirname(process.execPath),
+    process.platform === 'win32' ? 'node_modules' : '../lib/node_modules',
+    'npm/bin/npm-cli.js',
+  )
 
 function run(command, args, cwd) {
   const result = spawnSync(command, args, {
@@ -25,10 +32,24 @@ function run(command, args, cwd) {
   assert.equal(
     result.status,
     0,
-    `${command} ${args.join(' ')}\n${result.stdout ?? ''}${result.stderr ?? ''}`,
+    [
+      `${command} ${args.join(' ')}`,
+      result.error?.message,
+      result.stdout,
+      result.stderr,
+    ]
+      .filter(Boolean)
+      .join('\n'),
   )
   return result.stdout
 }
+
+test('command failures report spawn errors', () => {
+  assert.throws(
+    () => run(join(root, 'missing-sdk-pack-command'), [], root),
+    /ENOENT/,
+  )
+})
 
 test('packed addon sdk checks external consumers and installs compiled addon', {
   timeout: 60000,
@@ -39,7 +60,11 @@ test('packed addon sdk checks external consumers and installs compiled addon', {
   let app
   try {
     const pack = JSON.parse(
-      run('npm', ['pack', '--json', '--pack-destination', scratch, sdk], root),
+      run(
+        process.execPath,
+        [npmCli, 'pack', '--json', '--pack-destination', scratch, sdk],
+        root,
+      ),
     )[0]
     const files = pack.files.map((file) => file.path)
     assert(files.includes('types/index.d.ts'))

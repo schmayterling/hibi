@@ -295,12 +295,41 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   )
   const aRevision = (await page.evaluate(() => window.hibi.getDocument()))
     .revision
-  await right.fill('edited b')
+  await page.waitForFunction(
+    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+  )
+  await page.evaluate(() => {
+    window.splitKeyBusy = null
+    document.addEventListener(
+      'keydown',
+      (event) => {
+        if (event.key === 'Z')
+          window.splitKeyBusy = document
+            .querySelector('.app')
+            ?.getAttribute('aria-busy')
+      },
+      true,
+    )
+  })
+  await right.click()
+  await page.keyboard.type('Z')
   await waitForAsync(
     page,
     async (id) => (await window.hibi.getDocument()).tabId === id,
     bId,
   )
+  await page.waitForFunction(
+    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+  )
+  const typed = (await right.innerText()).split('Z').length - 1
+  assert.ok(
+    typed === 1 ||
+      (typed === 0 &&
+        (await page.evaluate(() => window.splitKeyBusy)) === 'true'),
+    'An immediate keypress must be inserted once or visibly blocked during focus.',
+  )
+  assert.doesNotMatch(await left.innerText(), /Z/)
+  await right.fill('edited b')
   const autosaveDeadline = performance.now() + 7000
   while (
     (await readFile(a, 'utf8')) !== 'edited a' &&
@@ -422,6 +451,21 @@ test('split panes keep both editors mounted, edit both files, and share one docu
     () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
   )
   assert.equal(await page.locator('.editor-page[data-side]').count(), 2)
+  await page.getByRole('button', { name: 'Close split' }).click()
+  await page.waitForFunction(
+    () => !document.querySelector('.editor-page[data-side]'),
+  )
+  await page.locator(`[data-tab-key="${bId}"] .tab-split`).click()
+  await rightSource.waitFor()
+  await leftSource.click()
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    aId,
+  )
+  await page.waitForFunction(
+    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+  )
   await app.evaluate(
     ({ ipcMain }, ids) => {
       const focus = ipcMain._invokeHandlers.get('document:focus-tab')

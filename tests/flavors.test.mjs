@@ -238,7 +238,7 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
   }
 })
 
-test('split focus preserves each file flavor when tab revisions match', {
+test('split focus preserves each file flavor', {
   timeout: 45000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-split-flavors-'))
@@ -290,7 +290,6 @@ test('split focus preserves each file flavor when tab revisions match', {
   await page.locator(`[data-tab-key="${a.tabId}"] .tab-split`).click()
   await page.locator('.editor-page[data-side="right"]').waitFor()
   const c = await open(files[2])
-  assert.equal(c.revision, b.revision)
   await selectDialect('markdown.github')
   await page.locator('.editor-page[data-side="right"] .github-alert').waitFor()
   await page

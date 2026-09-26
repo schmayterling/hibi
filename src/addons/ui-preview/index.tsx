@@ -77,11 +77,13 @@ export default defineAddon({
       initial.enabled ? initial.css : '',
     )
     let forceOff = false
+    let draftRevision = 0
     const apply = ({ css, enabled }: Theme) =>
       themeStyle.update(
         !forceOff && enabled && cssBytes(css) <= maxCssBytes ? css : '',
       )
     const updateDraft = (draft: Theme) => {
+      draftRevision++
       if (draft.enabled) forceOff = false
       apply(draft)
       publish({
@@ -94,6 +96,7 @@ export default defineAddon({
       })
     }
     const revert = () => {
+      draftRevision++
       forceOff = false
       apply(state.saved)
       publish({ draft: state.saved, error: '', notice: '' })
@@ -113,6 +116,7 @@ export default defineAddon({
     const save = async () => {
       if (state.busy) return
       const next = state.draft
+      const revision = draftRevision
       if (cssBytes(next.css) > maxCssBytes) {
         publish({ error: 'Custom CSS must be 64 KiB or smaller.' })
         return
@@ -125,12 +129,13 @@ export default defineAddon({
             publish({ error: saveError(result.status) })
             return
           }
-          const draft = previewOpen
-            ? state.draft
-            : forceOff
+          const useSaved = !previewOpen || draftRevision === revision
+          const draft = useSaved
+            ? forceOff
               ? { ...next, enabled: false }
               : next
-          if (!previewOpen) apply(draft)
+            : state.draft
+          if (useSaved) apply(draft)
           publish({
             saved: next,
             draft,

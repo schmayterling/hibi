@@ -96,11 +96,14 @@ export function stopElectronTree(child) {
 
 // Local tests never take desktop focus. Hosted runners use their isolated desktop
 // so Linux compositors keep painting frames and delivering native keyboard input.
+export const showTestWindows =
+  (process.env.GITHUB_ACTIONS === 'true' && !!process.env.GITHUB_RUN_ID) ||
+  process.env.HIBI_TEST_SHOW_WINDOWS === '1'
 export const electron = {
   async launch(options) {
     // Cold Xvfb runners can lose the default GPU process before first paint.
     const gpuArgs =
-      process.env.GITHUB_ACTIONS === 'true' && process.platform === 'linux'
+      showTestWindows && process.platform === 'linux'
         ? ['--use-gl=angle', '--use-angle=swiftshader']
         : []
     const application = await _electron.launch({
@@ -138,7 +141,7 @@ export const electron = {
         clearTimeout(timer)
       }
     }
-    if (process.env.GITHUB_ACTIONS === 'true') {
+    if (showTestWindows) {
       const page = await application.firstWindow()
       await application.evaluate(({ app, BrowserWindow }) => {
         const show = (window) => {

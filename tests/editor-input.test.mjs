@@ -7,7 +7,7 @@ import {
   launchBenchmarkApp,
   waitForEditor,
 } from '../scripts/benchmark-flows.mjs'
-import { electron } from './electron.mjs'
+import { electron, showTestWindows } from './electron.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('typing coalesces formatting checks without delaying document changes or undo', {
@@ -119,22 +119,23 @@ test('long documents with HTML and reference syntax stay visually editable throu
         `long document never became editable: ${error.message}\n${JSON.stringify(state)}`,
       )
     })
-  await app.evaluate(({ BrowserWindow }) => {
-    const window = BrowserWindow.getAllWindows()[0]
-    window.setFocusable(true)
-    window.show()
-    window.focus()
-  })
+  if (showTestWindows)
+    await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      window.setFocusable(true)
+      window.show()
+      window.focus()
+    })
   await page.locator('.tiptap').evaluate((element) => {
     element.editor.commands.setTextSelection(1)
     element.editor.view.focus()
   })
   await page
     .waitForFunction(
-      () =>
-        document.hasFocus() &&
+      (needsWindowFocus) =>
+        (!needsWindowFocus || document.hasFocus()) &&
         document.activeElement?.classList.contains('tiptap'),
-      undefined,
+      showTestWindows,
       { timeout: 5000 },
     )
     .catch(async (error) => {

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { crashAndReload, electron } from './electron.mjs'
+import { crashAndReload, electron, showTestWindows } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 test('desktop launch, isolation, offline reload, and recovery', {
@@ -40,9 +40,8 @@ test('desktop launch, isolation, offline reload, and recovery', {
   })
   assert.equal(windowState.maximized, false)
   assert.equal(windowState.fullscreen, false)
-  assert.equal(windowState.visible, process.env.GITHUB_ACTIONS === 'true')
-  if (process.env.GITHUB_ACTIONS !== 'true')
-    assert.equal(windowState.focused, false)
+  assert.equal(windowState.visible, showTestWindows)
+  if (!showTestWindows) assert.equal(windowState.focused, false)
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^about$/i, exact: true }).click()
   await page

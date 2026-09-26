@@ -16,6 +16,7 @@ import { join, resolve, sep } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { chromium } from 'playwright'
+import { showTestWindows } from './electron.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('development watches main, renderer, preload, addons, and documentation generation', {
@@ -112,7 +113,7 @@ dialog.showMessageBox = (...args) => {
       '--',
       ...(process.platform === 'linux' ? ['--no-sandbox'] : []),
       `--user-data-dir=${profile}`,
-      ...(process.env.GITHUB_ACTIONS ? [] : ['--hibi-test']),
+      ...(showTestWindows ? [] : ['--hibi-test']),
     ],
     {
       cwd: root,
@@ -301,8 +302,10 @@ dialog.showMessageBox = (...args) => {
     false,
   )
   async function clearDraft(expected) {
-    await page.bringToFront()
-    await page.evaluate(() => window.focus())
+    if (showTestWindows) {
+      await page.bringToFront()
+      await page.evaluate(() => window.focus())
+    }
     await page
       .waitForFunction((expected) => {
         const editor = document.querySelector(
@@ -413,10 +416,10 @@ dialog.showMessageBox = (...args) => {
     await editor.focus()
     await page
       .waitForFunction(
-        () =>
-          document.hasFocus() &&
+        (needsWindowFocus) =>
+          (!needsWindowFocus || document.hasFocus()) &&
           document.activeElement?.closest('[aria-label="Document editor"]'),
-        undefined,
+        showTestWindows,
         { timeout: 5000 },
       )
       .catch(async (error) => {

@@ -1426,7 +1426,7 @@ if (!app.requestSingleInstanceLock()) {
       handle(
         DOCUMENT_CHANNELS.focusTab,
         (event, id: unknown, expected: unknown) =>
-          runFileOperation(event, (window) =>
+          readAfterFileOperation(event, (window) =>
             focusDocumentTab(window, id, expected),
           ),
       )

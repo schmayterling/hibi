@@ -22,6 +22,7 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
       globalThis.releaseSplitAppend?.()
+      globalThis.releaseSplitSaveDialog?.({ canceled: true })
       dialog.showMessageBox = async () => ({ response: 1 })
     })
     await app.close()
@@ -150,6 +151,44 @@ test('split panes keep both editors mounted, edit both files, and share one docu
     ),
   }))
   assert.equal(splitState.native, bId, JSON.stringify(splitState))
+  await app.evaluate(({ dialog }) => {
+    let started
+    globalThis.splitSaveDialogStarted = new Promise((resolve) => {
+      started = resolve
+    })
+    dialog.showSaveDialog = () =>
+      new Promise((resolve) => {
+        globalThis.releaseSplitSaveDialog = resolve
+        started()
+      })
+  })
+  await page.evaluate(() => {
+    window.splitSave = window.hibi.saveDocument(true)
+  })
+  await app.evaluate(() => globalThis.splitSaveDialogStarted)
+  await left.click()
+  await page.waitForFunction(
+    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'true',
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabId,
+    bId,
+  )
+  await app.evaluate(() =>
+    globalThis.releaseSplitSaveDialog({ canceled: true }),
+  )
+  await page.evaluate(() => window.splitSave)
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    aId,
+  )
+  await right.click()
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    bId,
+  )
   await page.waitForFunction(
     () =>
       document

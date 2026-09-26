@@ -289,6 +289,29 @@ test('focus changes active session without materializing or reidentifying its so
   runtime.dispose()
 })
 
+test('full activation leaves newer retained edits intact', () => {
+  const { runtime } = fixture()
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('first', { tabs }))
+  const first = runtime.session()
+  first.edit([{ from: 5, to: 5, insert: ' local' }], 'source', 'typing')
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  assert.throws(
+    () => runtime.activate(document('first', { revision: 3, tabs })),
+    /local edits waiting to synchronize/,
+  )
+  assert.equal(runtime.session('one'), first)
+  assert.equal(runtime.get('one').markdown, 'first local')
+  assert.equal(runtime.get().tabId, 'two')
+  runtime.dispose()
+})
+
 test('runtime treats whole-source line-ending transforms as explicit atomic compatibility edits', () => {
   const { runtime, operations } = fixture()
   runtime.activate(document('a\r\nb\n'))
@@ -346,7 +369,7 @@ test('combined history limits trim older tabs without changing their source or s
     () => second.edit([{ from: 0, to: 0, insert: 'x' }], 'source', 'closed'),
     /disposed/,
   )
-  runtime.activate(document('replacement', { revision: 5 }))
+  runtime.activate(document('replacement', { revision: 5 }), true)
   assert.deepEqual(runtime.retainedHistory(), {
     bytes: 0,
     groups: 0,

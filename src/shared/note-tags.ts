@@ -1,5 +1,5 @@
-import { Marked, type Token } from 'marked'
-import { readFrontmatter } from './frontmatter.ts'
+import type { Token } from 'marked'
+import { defaultNoteSyntax, type NoteSyntax, noteLexer } from './note-syntax.ts'
 
 export function tagMatches(text: string) {
   const matches: { from: number; to: number; tag: string }[] = []
@@ -18,15 +18,26 @@ export function tagMatches(text: string) {
   return matches
 }
 
-const parser = new Marked({ gfm: true })
-export function noteTags(source: string): string[] {
+export function noteTags(
+  source: string,
+  syntax: NoteSyntax = defaultNoteSyntax,
+): string[] {
+  if (!syntax.hashtags) return []
   const found = new Set<string>()
   function visit(tokens: Token[]) {
     for (const token of tokens) {
       if (
-        ['code', 'codespan', 'html', 'link', 'image', 'escape'].includes(
-          token.type,
-        )
+        [
+          'code',
+          'codespan',
+          'html',
+          'link',
+          'image',
+          'escape',
+          'hibiLiteral',
+          'obsidianWikiLink',
+          'obsidianEmbed',
+        ].includes(token.type)
       )
         continue
       if ('tokens' in token && token.tokens) visit(token.tokens)
@@ -34,8 +45,11 @@ export function noteTags(source: string): string[] {
         for (const match of tagMatches(token.text)) found.add(match.tag)
       if (token.type === 'list')
         for (const item of token.items) visit(item.tokens)
+      if (token.type === 'table')
+        for (const cell of [...token.header, ...token.rows.flat()])
+          visit(cell.tokens)
     }
   }
-  visit(parser.lexer(readFrontmatter(source)?.content ?? source))
+  visit(noteLexer(source, syntax).tokens)
   return [...found].sort()
 }

@@ -21,6 +21,7 @@ import {
   type TextSearchPosition,
   WorkspaceReferenceIndex,
 } from './workspace-reference-index'
+import { workspaceSyntax } from './workspace-syntax'
 
 const references = new WorkspaceReferenceIndex()
 type SearchCursorState = {
@@ -33,6 +34,7 @@ type SearchCursorState = {
 }
 const searchCursors = new Map<string, SearchCursorState>()
 type GraphCursorState = Omit<SearchCursorState, 'query' | 'position'> & {
+  syntaxFingerprint: string
   position: GraphPosition
 }
 const graphCursors = new Map<string, GraphCursorState>()
@@ -40,19 +42,23 @@ let indexedTarget: WorkspaceTarget | null = null
 let indexedSequence = -1
 let indexedRevision = -1
 let indexedSourceVersions = ''
+let indexedSyntaxFingerprint = ''
+let requestedSyntaxFingerprint = ''
 
 function hasIndexedSnapshot(
   target: WorkspaceTarget,
   sequence: number,
   revision: number,
   sourceVersions: string,
+  syntaxFingerprint: string,
 ): boolean {
   return (
     indexedTarget?.workspaceId === target.workspaceId &&
     indexedTarget.workspaceGeneration === target.workspaceGeneration &&
     indexedSequence === sequence &&
     indexedRevision === revision &&
-    indexedSourceVersions === sourceVersions
+    indexedSourceVersions === sourceVersions &&
+    indexedSyntaxFingerprint === syntaxFingerprint
   )
 }
 
@@ -64,6 +70,8 @@ function clearCache(): void {
   indexedSequence = -1
   indexedRevision = -1
   indexedSourceVersions = ''
+  indexedSyntaxFingerprint = ''
+  requestedSyntaxFingerprint = ''
 }
 
 const subscription = subscribeWorkspaceChanges((event) => {
@@ -186,6 +194,9 @@ export async function queryWorkspaceReferences(
         (typeof request.cursor !== 'string' || request.cursor.length > 64)))
   )
     return failure('unsupported', 'Use a valid graph cursor.')
+  const syntax = workspaceSyntax(request.syntaxSnapshot)
+  if (!syntax)
+    return failure('unsupported', 'Use a bounded Markdown syntax snapshot.')
   let offset = 0
   let limit = 50
   if (kind === 'resolve') {
@@ -229,11 +240,13 @@ export async function queryWorkspaceReferences(
     before.target.workspaceGeneration !== target.workspaceGeneration
   )
     return failure('stale', 'This workspace changed. Try again.')
+  requestedSyntaxFingerprint = syntax.fingerprint
   const refresh = !hasIndexedSnapshot(
     target,
     before.sequence,
     revision,
     sourceVersions,
+    syntax.fingerprint,
   )
   let index: Awaited<ReturnType<typeof indexWorkspace>> = null
   if (refresh)
@@ -255,26 +268,42 @@ export async function queryWorkspaceReferences(
     before.sequence !== after.sequence ||
     revision !== workspaceIndexRevision() ||
     sourceVersions !== versionKey(getOpenDocumentVersions()) ||
+    requestedSyntaxFingerprint !== syntax.fingerprint ||
     (refresh && index?.workspace.id !== target.workspaceId)
   )
     return failure('stale', 'This workspace changed. Try again.')
   if (
     index &&
-    !hasIndexedSnapshot(target, after.sequence, revision, sourceVersions)
+    !hasIndexedSnapshot(
+      target,
+      after.sequence,
+      revision,
+      sourceVersions,
+      syntax.fingerprint,
+    )
   ) {
-    references.apply(target, index.pages)
-    searchCursors.clear()
+    const sourceChanged =
+      indexedTarget?.workspaceId !== target.workspaceId ||
+      indexedTarget.workspaceGeneration !== target.workspaceGeneration ||
+      indexedSequence !== after.sequence ||
+      indexedRevision !== revision ||
+      indexedSourceVersions !== sourceVersions
+    references.apply(target, index.pages, syntax.page)
+    if (sourceChanged) searchCursors.clear()
     graphCursors.clear()
     indexedTarget = target
     indexedSequence = after.sequence
     indexedRevision = revision
     indexedSourceVersions = sourceVersions
+    indexedSyntaxFingerprint = syntax.fingerprint
   }
   if (pathRequired && !references.has(path as string))
     return failure('not-found', 'This document is not in the workspace index.')
   const base: WorkspaceReferenceQueryBase = {
     target,
     syntax: 'gfm+wikilinks+hashtags',
+    flavorAware: syntax.flavorAware,
+    unsupportedSyntax: references.hasUnsupportedSyntax(),
     sequence: after.sequence,
     stale: after.stale,
     complete: after.complete && references.isComplete(),
@@ -343,7 +372,8 @@ export async function queryWorkspaceReferences(
         old.target.workspaceGeneration !== target.workspaceGeneration ||
         old.sequence !== after.sequence ||
         old.revision !== revision ||
-        old.sourceVersions !== sourceVersions
+        old.sourceVersions !== sourceVersions ||
+        old.syntaxFingerprint !== syntax.fingerprint
       )
         return failure('stale', 'This graph changed. Start again.')
       graphCursors.delete(request.cursor as string)
@@ -360,6 +390,7 @@ export async function queryWorkspaceReferences(
         sequence: after.sequence,
         revision,
         sourceVersions,
+        syntaxFingerprint: syntax.fingerprint,
         position: result.position,
       })
     }
@@ -401,6 +432,8 @@ export async function queryWorkspaceReferences(
       ok: true,
       value: {
         ...base,
+        complete: after.complete,
+        unsupportedSyntax: false,
         kind,
         ...references.searchPaths(request.query as string, offset, limit),
       },
@@ -445,11 +478,12 @@ export async function queryWorkspaceReferences(
       ok: true,
       value: {
         ...base,
+        unsupportedSyntax: false,
         kind,
         items: result.items,
         hasMore: result.hasMore,
         nextCursor,
-        complete: base.complete && !result.hasMore,
+        complete: after.complete && !result.hasMore,
       },
     }
   }

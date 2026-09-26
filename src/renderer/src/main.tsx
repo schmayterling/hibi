@@ -239,6 +239,11 @@ function App() {
   const focusQueue = useRef<Promise<void>>(Promise.resolve())
   const focusPending = useRef(false)
   const focusUnsafe = useRef(false)
+  const [focusRecoveryNeeded, setFocusRecoveryNeeded] = useState(false)
+  const setFocusUnsafe = (unsafe: boolean) => {
+    focusUnsafe.current = unsafe
+    setFocusRecoveryNeeded(unsafe)
+  }
   useEffect(() => {
     if (!splitLeftId || !splitRightId) return
     return () => {
@@ -371,7 +376,7 @@ function App() {
       acceptDocument(next, false, replaceLocal)
     } catch (error) {
       if (previous && previous.tabId !== next.tabId) {
-        focusUnsafe.current = true
+        setFocusUnsafe(true)
         try {
           await focusRetainedTab(previous.tabId)
         } catch {
@@ -1607,13 +1612,13 @@ function App() {
       contentVersion: expected.contentVersion,
       revision: expected.revision,
     })
-    focusUnsafe.current = previous?.tabId !== id
+    setFocusUnsafe(true)
     try {
       const retained = documentRuntime.focus(metadata)
       if (!retained)
         throw new Error('This pane changed while synchronizing. Try again.')
       acceptDocument(retained, true)
-      focusUnsafe.current = false
+      setFocusUnsafe(false)
     } catch (error) {
       if (previous && previous.tabId !== id) {
         const restore = documentRuntime.get(previous.tabId)
@@ -1625,7 +1630,7 @@ function App() {
           })
           if (!documentRuntime.focus(restore))
             throw new Error('The previous pane changed during recovery.')
-          focusUnsafe.current = false
+          setFocusUnsafe(false)
         } catch {
           throw new Error(
             'Could not restore document focus. Editing is paused to protect unsent changes.',
@@ -1647,7 +1652,7 @@ function App() {
       try {
         // The previous tab may have closed; preload flushes its journal first.
         acceptDocument(await window.hibi.getDocument())
-        focusUnsafe.current = false
+        setFocusUnsafe(false)
         setError('')
         return true
       } catch (recoveryError) {
@@ -2979,9 +2984,9 @@ function App() {
       >
         {!activeAddonTab && <EditorToolbar mode={mode} typing={typing} />}
         {!activeAddonTab &&
-          (focusUnsafe.current || notifications.length > 0) && (
+          (focusRecoveryNeeded || notifications.length > 0) && (
             <div className="view-notifications">
-              {focusUnsafe.current && (
+              {focusRecoveryNeeded && (
                 <DocumentNotice
                   title="Could not restore document focus"
                   message="Editing is paused to protect unsent changes."

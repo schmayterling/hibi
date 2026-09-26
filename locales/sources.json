@@ -340,6 +340,9 @@
     "src/renderer/src/AddonSidebar.tsx",
     "src/renderer/src/BacklinksSidebar.tsx"
   ],
+  "e13c426c14c5": [
+    "src/renderer/src/BacklinksSidebar.tsx"
+  ],
   "b4276963bf99": [
     "src/addons/block-drag/index.ts"
   ],
@@ -5353,6 +5356,9 @@
   "0d38e23a44a2": [
     "src/ui/colorschemes.ts"
   ],
+  "201582247500": [
+    "src/main/workspace-syntax.ts"
+  ],
   "b38d9d168c3a": [
     "src/addons/graph/Panel.tsx"
   ],
@@ -5388,6 +5394,9 @@
   ],
   "f82899b0167f": [
     "src/renderer/src/ImportDialog.tsx"
+  ],
+  "a144531fd72e": [
+    "src/main/workspace-syntax.ts"
   ],
   "8d0efe4395b4": [
     "src/main/sideload.ts"

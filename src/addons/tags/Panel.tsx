@@ -1,6 +1,7 @@
 import { CircleAlert, FileText, Tags } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { WorkspaceTagSummary } from '../../shared/workspace-query'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events'
 import type { AddonContext } from '../api'
 import { Button, ControlRow, Panel, PanelMessage, TextInput } from '../ui'
 import { useWorkspaceQueryTarget } from '../use-workspace-query'
@@ -20,15 +21,21 @@ export function TagsPanel({
   } = useWorkspaceQueryTarget(context)
   const [query, setQuery] = useState('')
   const [selected, select] = useState('')
+  const syntaxRevision = useSyncExternalStore(
+    workspaceSyntaxEvents.subscribe,
+    workspaceSyntaxEvents.snapshot,
+  )
   const [summary, setSummary] = useState<{
     workspaceId: string
     generation: number
+    syntaxRevision: number
     tags: readonly WorkspaceTagSummary[]
     complete: boolean
   } | null>(null)
   const [selectedFiles, setSelectedFiles] = useState<{
     workspaceId: string
     generation: number
+    syntaxRevision: number
     tag: string
     files: readonly string[]
   } | null>(null)
@@ -79,6 +86,7 @@ export function TagsPanel({
           setSummary({
             workspaceId: target.workspaceId,
             generation: target.workspaceGeneration,
+            syntaxRevision,
             tags,
             complete,
           })
@@ -93,7 +101,7 @@ export function TagsPanel({
     return () => {
       active = false
     }
-  }, [context, target])
+  }, [context, target, syntaxRevision])
   useEffect(() => {
     if (!target || !selected) {
       setSelectedFiles(null)
@@ -125,6 +133,7 @@ export function TagsPanel({
           setSelectedFiles({
             workspaceId: target.workspaceId,
             generation: target.workspaceGeneration,
+            syntaxRevision,
             tag: selected,
             files,
           })
@@ -137,10 +146,11 @@ export function TagsPanel({
     return () => {
       active = false
     }
-  }, [context, target, selected])
+  }, [context, target, selected, syntaxRevision])
   const current =
     summary?.workspaceId === target?.workspaceId &&
-    summary?.generation === target?.workspaceGeneration
+    summary?.generation === target?.workspaceGeneration &&
+    summary?.syntaxRevision === syntaxRevision
       ? summary
       : null
   const index = current?.tags ?? []
@@ -150,6 +160,7 @@ export function TagsPanel({
   const files =
     selectedFiles?.workspaceId === target?.workspaceId &&
     selectedFiles?.generation === target?.workspaceGeneration &&
+    selectedFiles?.syntaxRevision === syntaxRevision &&
     selectedFiles?.tag === selected
       ? selectedFiles.files
       : []
@@ -184,6 +195,9 @@ export function TagsPanel({
           icon={<Tags size={24} />}
           title={index.length ? 'No matching tags' : 'No tags yet'}
         >
+          {current && !current.complete && (
+            <span role="status">Tag index incomplete. </span>
+          )}
           {index.length
             ? 'Try another filter.'
             : 'Write #tag in a note to organize it here.'}

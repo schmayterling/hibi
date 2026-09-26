@@ -2,7 +2,7 @@
 
 Tags are enabled by default. Enable **Graph** under **Settings → Addons** if you want a visual map. Both work locally and update as your notes change.
 
-Choose **Backlinks** from either sidebar's view menu to see notes that link to the current note. Backlinks work without the Graph addon and include relative Markdown links and Obsidian `[[wikilinks]]`.
+Choose **Backlinks** from either sidebar's view menu to see notes that link to the current note. Backlinks work without the Graph addon. They follow each note's Markdown flavor: relative Markdown links are supported, and Obsidian `[[wikilinks]]` count when Obsidian Markdown is enabled for that note. The sidebar warns when unsupported addon syntax may leave results incomplete.
 
 ## Graph
 
@@ -12,13 +12,13 @@ The graph opens close to the current note. Set **Default zoom** in Graph's addon
 
 Filter by filename or path, and use **Connections** to see links to and from the current note. Moving nodes changes only the graph layout, not your files. Keyboard users can Tab to a node and press Enter or Space; arrow keys pan when the background has focus.
 
-The graph shows up to 500 matching nodes, so filter larger workspaces. It uses relative Markdown links and Obsidian `[[wikilinks]]` to existing notes.
+The graph shows up to 500 matching nodes, so filter larger workspaces. Its connections follow each note's Markdown flavor and syntax settings. The graph marks its index incomplete when selected addon syntax cannot be interpreted by the workspace index.
 
 ## Tags
 
 Write tags such as `#work` or `#project/topic` in Markdown prose. Shift-click a tag or run **Browse tags**, then choose a tag to see matching notes. The current note's tag count also opens the browser.
 
-Matching ignores case. Code, links, frontmatter, and heading markers do not count as tags. Disabling the addon leaves tags as ordinary text.
+Matching ignores case. Code, links, frontmatter, and heading markers do not count as tags. Disabling the addon leaves tags as ordinary text and removes them from workspace tag results. The tag browser marks its index incomplete when selected addon syntax cannot be interpreted by the workspace index.
 
 ## Workspace limits
 

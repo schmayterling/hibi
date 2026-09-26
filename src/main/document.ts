@@ -42,6 +42,10 @@ import { recordVersion } from './history'
 let path: string | null = null
 let pendingPath: string | null = null
 let revision = 0
+let highestRevision = 0
+function advanceRevision() {
+  revision = ++highestRevision
+}
 let untitledName = 'untitled.md'
 let draftId = randomUUID()
 let back: string[] = []
@@ -383,7 +387,7 @@ export async function selectDocumentTab(
   }
   if (remember && id !== activeTab) rememberLocation()
   activateTab(id)
-  revision++
+  advanceRevision()
   refreshDirtyIndicator(window)
   return getDocument()
 }
@@ -478,7 +482,7 @@ function removeTabs(window: BrowserWindow, ids: Set<string>) {
       [...tabs.keys()].at(-1)
     if (next) {
       activateTab(next)
-      revision++
+      advanceRevision()
     } else {
       activeTab = randomUUID()
       activeTabOpen = false
@@ -632,7 +636,7 @@ export function discardChanges(): void {
   }
   dirtyTabs.clear()
   activateTab(activeTab)
-  revision += 1
+  advanceRevision()
 }
 
 export function updateDocument(value: unknown): void {
@@ -844,7 +848,7 @@ export function restoreDocument(
 ): DocumentState {
   validateMarkdown(content)
   updateDocument(content)
-  revision += 1
+  advanceRevision()
   refreshDirtyIndicator(window)
   return getDocument()
 }
@@ -886,7 +890,7 @@ export function clearDocument(
   path = null
   pendingPath = null
   untitledName = 'untitled.md'
-  revision += 1
+  advanceRevision()
   refreshDirtyIndicator(window)
   return getDocument()
 }
@@ -1048,7 +1052,7 @@ export async function loadDocument(
   pendingPath = null
   source = makeSource(content)
   saved = source.snapshot()
-  revision += 1
+  advanceRevision()
   refreshDirtyIndicator(window)
   return getDocument()
 }

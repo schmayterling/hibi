@@ -8,6 +8,55 @@ import { electron } from './electron.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
+test('disk refresh after focusing an older tab advances its revision', {
+  timeout: 30000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-tab-revision-'))
+  const a = join(root, 'a.md'),
+    b = join(root, 'b.md')
+  await writeFile(a, 'original a')
+  await writeFile(b, 'original b')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  const open = async (file) => {
+    await app.evaluate(({ dialog }, selected) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [selected],
+      })
+    }, file)
+    return page.evaluate(() => window.hibi.openDocument())
+  }
+  const first = await open(a)
+  const second = await open(b)
+  const retained = await page.evaluate(
+    (id) => window.hibi.selectDocumentTab(id),
+    first.tabId,
+  )
+  assert.ok(retained.revision > second.revision)
+  const focused = await page.evaluate(
+    ({ tabId, revision, contentVersion }) =>
+      window.hibi.focusDocumentTab(tabId, { revision, contentVersion }),
+    second,
+  )
+  assert.equal(focused.revision, second.revision)
+  await writeFile(a, 'updated a')
+  const refreshed = await page.evaluate(
+    (id) => window.hibi.selectDocumentTab(id),
+    first.tabId,
+  )
+  assert.equal(refreshed.markdown, 'updated a')
+  assert.ok(refreshed.contentVersion > retained.contentVersion)
+  assert.ok(refreshed.revision > retained.revision)
+})
+
 test('an inactive journal edit survives a pending disk refresh', {
   timeout: 30000,
 }, async (t) => {

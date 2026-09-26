@@ -25,7 +25,8 @@
   "files": [
     "dist/",
     "types/",
-    "README.md"
+    "README.md",
+    "LICENSE.md"
   ],
   "scripts": {
     "prepack": "node ../../scripts/build-addon-sdk.mjs"

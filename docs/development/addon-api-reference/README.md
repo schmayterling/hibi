@@ -22,15 +22,20 @@ For installed packages, use the [SideloadFactory](SideloadFactory.md) and the [s
 - [AddonSyntaxDescriptor](AddonSyntaxDescriptor.md)
 - [AddonView](AddonView.md)
 - [AddonViewProps](AddonViewProps.md)
+- [CommandMenuContribution](CommandMenuContribution.md)
 - [compatibleAddonManifest](compatibleAddonManifest.md)
 - [defineAddon](defineAddon.md)
 - [DocumentEdit](DocumentEdit.md)
 - [DocumentFormat](DocumentFormat.md)
 - [DocumentFormatting](DocumentFormatting.md)
 - [DocumentPreviewProps](DocumentPreviewProps.md)
+- [DocumentsApi](DocumentsApi.md)
 - [DocumentSelection](DocumentSelection.md)
 - [EditorInputEvent](EditorInputEvent.md)
 - [EditorKeyEvent](EditorKeyEvent.md)
+- [EditorViewPosition](EditorViewPosition.md)
+- [EditorViewsApi](EditorViewsApi.md)
+- [EditorViewSelection](EditorViewSelection.md)
 - [ExportResult](ExportResult.md)
 - [MarkdownEditorProps](MarkdownEditorProps.md)
 - [MarkdownExtension](MarkdownExtension.md)
@@ -61,6 +66,27 @@ For installed packages, use the [SideloadFactory](SideloadFactory.md) and the [s
 - [ViewNotificationHandle](ViewNotificationHandle.md)
 - [ViewRegistration](ViewRegistration.md)
 
+## Foundations
+
+- [AddonId](AddonId.md)
+- [AddonOwner](AddonOwner.md)
+- [CommandExecutionContext](CommandExecutionContext.md)
+- [Dispose](Dispose.md)
+- [DocumentId](DocumentId.md)
+- [DocumentTarget](DocumentTarget.md)
+- [FailureCode](FailureCode.md)
+- [FileId](FileId.md)
+- [FileTarget](FileTarget.md)
+- [OperationResult](OperationResult.md)
+- [OwnerScope](OwnerScope.md)
+- [RequestId](RequestId.md)
+- [VersionedDocumentTarget](VersionedDocumentTarget.md)
+- [ViewId](ViewId.md)
+- [ViewTarget](ViewTarget.md)
+- [WorkspaceChangeEvent](WorkspaceChangeEvent.md)
+- [WorkspaceId](WorkspaceId.md)
+- [WorkspaceTarget](WorkspaceTarget.md)
+
 ## Sideloading
 
 - [CapabilityFactory](CapabilityFactory.md)
@@ -87,12 +113,29 @@ For installed packages, use the [SideloadFactory](SideloadFactory.md) and the [s
 - [toRecentWorkspaces](toRecentWorkspaces.md)
 - [WorkspaceAction](WorkspaceAction.md)
 - [WorkspaceActionResult](WorkspaceActionResult.md)
+- [WorkspaceBinaryCreation](WorkspaceBinaryCreation.md)
+- [WorkspaceBinaryRead](WorkspaceBinaryRead.md)
 - [WorkspaceChange](WorkspaceChange.md)
+- [WorkspaceChangeListener](WorkspaceChangeListener.md)
+- [WorkspaceChangeSubscription](WorkspaceChangeSubscription.md)
 - [WorkspaceEntry](WorkspaceEntry.md)
+- [WorkspaceEntryPage](WorkspaceEntryPage.md)
+- [WorkspaceEntryPageRequest](WorkspaceEntryPageRequest.md)
+- [WorkspaceEntryPageResult](WorkspaceEntryPageResult.md)
+- [WorkspaceFileRename](WorkspaceFileRename.md)
+- [WorkspaceFileResult](WorkspaceFileResult.md)
+- [WorkspaceFileTrash](WorkspaceFileTrash.md)
+- [WorkspaceFileVersion](WorkspaceFileVersion.md)
 - [WorkspaceIndex](WorkspaceIndex.md)
+- [WorkspaceListedEntry](WorkspaceListedEntry.md)
 - [WorkspacePage](WorkspacePage.md)
 - [WorkspaceSnapshot](WorkspaceSnapshot.md)
 - [WorkspaceState](WorkspaceState.md)
+- [WorkspaceStreamSnapshot](WorkspaceStreamSnapshot.md)
+- [WorkspaceTextCreation](WorkspaceTextCreation.md)
+- [WorkspaceTextRead](WorkspaceTextRead.md)
+- [WorkspaceTextUpdate](WorkspaceTextUpdate.md)
+- [WorkspaceTextUpdateOptions](WorkspaceTextUpdateOptions.md)
 
 ## Workspace settings
 
@@ -217,9 +260,16 @@ For installed packages, use the [SideloadFactory](SideloadFactory.md) and the [s
 
 ## Document edits
 
+- [DocumentLifecycleEvent](DocumentLifecycleEvent.md)
+- [DocumentMetadataResult](DocumentMetadataResult.md)
+- [DocumentSourceReadResult](DocumentSourceReadResult.md)
+- [OpenDocumentMetadata](OpenDocumentMetadata.md)
 - [SourceEdit](SourceEdit.md)
 - [SourceEditRequest](SourceEditRequest.md)
 - [SourceEditResult](SourceEditResult.md)
+- [TargetDocumentSaveResult](TargetDocumentSaveResult.md)
+- [TargetSourceEditRequest](TargetSourceEditRequest.md)
+- [TargetSourceEditResult](TargetSourceEditResult.md)
 
 ## Commands
 

@@ -21,6 +21,13 @@ export type {
   DependencyState,
 } from '../shared/dependencies'
 export type {
+  EditorContextAction,
+  EditorContextActionProvider,
+  EditorHover,
+  EditorHoverProvider,
+  EditorInteractionRequest,
+} from '../shared/editor-interactions'
+export type {
   DocumentSyntaxFeature,
   MarkdownSyntaxFeature,
 } from '../shared/markdown-syntax'
@@ -100,7 +107,15 @@ export type AddonCommandDescriptor = {
   id: string
   label: string
   keywords?: string
+  /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. */
+  defaultShortcut?: string
+  /** Show this command in a built-in menu. */
+  menu?: CommandMenuContribution
 }
+export type CommandMenuContribution =
+  | { location: 'app'; group?: string; order?: number }
+  | { location: 'explorer'; group?: string; order?: number }
+  | { location: 'editor'; group?: string; order?: number }
 export type AddonSyntaxDescriptor = {
   id: string
   kind: 'flavor' | 'projection'
@@ -260,9 +275,19 @@ export type AddonCommand = {
   keywords?: string
   /** Also show this command below the workspace tree. */
   workspace?: boolean
+  /** Hibi in-app shortcut syntax; mod maps to Command on macOS and Control elsewhere. */
+  defaultShortcut?: string
+  /** Show this command in a built-in menu. */
+  menu?: CommandMenuContribution
+  /** Cheap synchronous check against the context captured when invoked. */
+  when?: (
+    context: import('../shared/foundation-contracts').CommandExecutionContext,
+  ) => boolean
   /** Optional whole-note action exposed by the slash-commands addon. */
   slash?: AddonSlashCommand
-  run: () => void | Promise<void>
+  run: (
+    context: import('../shared/foundation-contracts').CommandExecutionContext,
+  ) => void | Promise<void>
 }
 
 export type AddonSlashCommand = {
@@ -339,6 +364,70 @@ export type DocumentEdit = {
   insert: string
   /** Selection offsets within the inserted text; defaults to its end. */
   selection?: { from: number; to: number }
+}
+/** Live source sessions, addressable without changing the focused editor. */
+export type DocumentsApi = {
+  /** Lightweight metadata; source text is read only through readSource. */
+  listOpen: () => readonly import('../shared/document-edits').OpenDocumentMetadata[]
+  getMetadata: (
+    target: import('../shared/foundation-contracts').DocumentTarget,
+  ) => import('../shared/document-edits').DocumentMetadataResult
+  /** Open, change, and close events belong to this addon activation. */
+  subscribe: (
+    listener: (
+      event: import('../shared/document-edits').DocumentLifecycleEvent,
+    ) => void,
+  ) => () => void
+  readSource: (
+    target: import('../shared/foundation-contracts').DocumentTarget,
+  ) => import('../shared/document-edits').DocumentSourceReadResult
+  /** One version-checked, atomic UTF-16 edit batch. Mounted views require a compatible editor adapter. */
+  applyEdits: (
+    request: import('../shared/document-edits').TargetSourceEditRequest,
+  ) => import('../shared/document-edits').TargetSourceEditResult
+  /** Save an existing file from the captured document version without focusing it. */
+  save: (
+    target: import('../shared/foundation-contracts').VersionedDocumentTarget,
+  ) => Promise<import('../shared/document-edits').TargetDocumentSaveResult>
+}
+/** Positions are UTF-16 offsets in the named editor, not Markdown source offsets. */
+export type EditorViewSelection = {
+  view: import('../shared/foundation-contracts').ViewTarget
+  editor: 'source' | 'rich'
+  /** Changes when this pane's editor instance is replaced, even if source does not. */
+  editorGeneration: number
+  contentVersion: number
+  /** Primary selection only; anchor and head preserve its direction. */
+  anchor: number
+  head: number
+}
+export type EditorViewPosition = Pick<
+  EditorViewSelection,
+  'view' | 'editor' | 'editorGeneration' | 'contentVersion'
+> & { position: number }
+export type EditorViewsApi = {
+  /** Mounted editor instances; one instance is available in the current layout. */
+  list: () => readonly import('../shared/foundation-contracts').ViewTarget[]
+  getActive: () => import('../shared/foundation-contracts').ViewTarget | null
+  getSelection: (
+    view: import('../shared/foundation-contracts').ViewTarget,
+  ) => import('../shared/foundation-contracts').OperationResult<EditorViewSelection>
+  /** Does not focus the editor. Requires its current view generation and content version. */
+  setSelection: (
+    selection: EditorViewSelection,
+  ) => import('../shared/foundation-contracts').OperationResult<void>
+  reveal: (
+    position: EditorViewPosition,
+  ) => import('../shared/foundation-contracts').OperationResult<void>
+  onDidChangeActive: (
+    listener: (
+      view: import('../shared/foundation-contracts').ViewTarget | null,
+    ) => void,
+  ) => () => void
+  onDidChangeSelection: (
+    /** Active editor selection, or null when its pane becomes unavailable. */
+    listener: (selection: EditorViewSelection | null) => void,
+  ) => () => void
 }
 export type DocumentFormatting = {
   actions: readonly string[]
@@ -483,7 +572,19 @@ export type SettingsApi = {
 
 /** APIs available while your renderer addon is enabled. Registrations are removed when it stops. */
 export type AddonContext = {
+  /** OS-wide shortcuts work while Hibi runs, even when another app has focus. */
+  globalShortcuts: {
+    /** Electron accelerator, such as CommandOrControl+Alt+N. Registration can fail if another app owns it. */
+    register: (
+      id: string,
+      accelerator: string,
+      /** Local command id. Callbacks remain supported for existing addons. */
+      command: string | (() => void | Promise<void>),
+    ) => Promise<() => void>
+  }
   dependencies: import('../shared/dependencies').DependencyApi
+  /** Namespaced JSON state retained across disablement. Session values expire on stop. */
+  storage: import('../shared/addon-storage').AddonStorageApi
   /** Enabled addon settings. Registrations are removed when the addon stops. */
   settings: SettingsApi
   colorschemes: {
@@ -505,7 +606,13 @@ export type AddonContext = {
   toolbar: ToolbarApi
   tooltips: TooltipApi
   app: AddonApp
-  styles: { register: (id: string, css: string) => StyleHandle }
+  styles: {
+    register: (
+      id: string,
+      css: string,
+      options?: { priority?: 'override' },
+    ) => StyleHandle
+  }
   patches: PatchApi
   statusBar: { register: (item: StatusItem) => StatusHandle }
   editor: {
@@ -564,11 +671,32 @@ export type AddonContext = {
     getSyntaxFeatures: () => readonly (MarkdownSyntaxFeature & {
       enabled: boolean
     })[]
+    /** Built-in metadata syntax for one file; unsupported addon syntax reports incomplete. */
+    getMetadataSyntax: (
+      documentId: string,
+      source?: string,
+    ) => {
+      settings: import('../shared/note-syntax').NoteSyntax
+      fingerprint: string
+      complete: boolean
+    }
     onSyntaxChange: (listener: () => void) => () => void
     /** Observe editor keydown/keyup without consuming input. Removed on addon stop. */
     onKeyEvent: (listener: (event: EditorKeyEvent) => void) => () => void
     /** Observe committed typing, including IME composition. Removed on addon stop. */
     onInput: (listener: (event: EditorInputEvent) => void) => () => void
+    /** Data-only suggestions; provider work is bounded and stopped with this addon. */
+    registerCompletionProvider: (
+      provider: import('../shared/completions').CompletionProvider,
+    ) => Promise<() => void>
+    /** Plain-text hover content. Work is cancelled when the hovered target changes. */
+    registerHoverProvider: (
+      provider: import('../shared/editor-interactions').EditorHoverProvider,
+    ) => Promise<() => void>
+    /** Data-only actions whose edits are checked against the captured document. */
+    registerContextActionProvider: (
+      provider: import('../shared/editor-interactions').EditorContextActionProvider,
+    ) => Promise<() => void>
     registerRich: (extension: RichExtension) => () => void
     registerMarkdown: (extension: MarkdownExtension) => () => void
     registerSource: (extension: SourceExtension) => () => void
@@ -584,6 +712,20 @@ export type AddonContext = {
       options?: { body: string },
     ) => void
   }
+  documents: DocumentsApi
+  editorViews: EditorViewsApi
+  host: {
+    selectedText: import('../shared/selected-text').SelectedTextHostApi
+    selectedIo: import('../shared/host-selected-io').HostSelectedIoHostApi
+    network: {
+      /** Ask the user for each HTTPS GET destination and return bounded UTF-8 text. */
+      getText: (
+        request: import('../shared/host-network').HostTextRequest,
+      ) => Promise<import('../shared/host-network').HostTextResult>
+    }
+    /** Store and inspect host-owned secrets without returning stored plaintext. */
+    credentials: import('../shared/host-credentials').CredentialHostApi
+  }
   commands: {
     /** Invoke this addon's registered command through the same guarded dispatcher as the palette. */
     execute: (id: string) => Promise<void>
@@ -597,6 +739,97 @@ export type AddonContext = {
     /** Read note text and workspace drafts without embedding media or blocking writes. */
     index: () => Promise<WorkspaceIndex | null>
     snapshot: () => Promise<WorkspaceSnapshot>
+    /** Snapshot and sequenced changes for this workspace generation. */
+    changeSnapshot: () => Promise<
+      import('../shared/workspace').WorkspaceStreamSnapshot
+    >
+    /** Bounded flat entries tied to one workspace change sequence. */
+    listPage: (
+      request: import('../shared/workspace').WorkspaceEntryPageRequest,
+    ) => Promise<import('../shared/workspace').WorkspaceEntryPageResult>
+    subscribeChanges: (
+      listener: import('../shared/workspace').WorkspaceChangeListener,
+    ) => Promise<import('../shared/workspace').WorkspaceChangeSubscription>
+    /** Read persisted UTF-8 text at a captured workspace target. */
+    readText: (
+      target: import('../shared/foundation-contracts').WorkspaceTarget,
+      path: string,
+    ) => Promise<
+      import('../shared/workspace').WorkspaceFileResult<
+        import('../shared/workspace').WorkspaceTextRead
+      >
+    >
+    /** Read bounded persisted attachment bytes at a captured workspace target. */
+    readBinary: (
+      target: import('../shared/foundation-contracts').WorkspaceTarget,
+      path: string,
+    ) => Promise<
+      import('../shared/workspace').WorkspaceFileResult<
+        import('../shared/workspace').WorkspaceBinaryRead
+      >
+    >
+    /** Create new text with exclusive commit at a captured workspace target. */
+    createText: (
+      target: import('../shared/foundation-contracts').WorkspaceTarget,
+      path: string,
+      markdown: string,
+    ) => Promise<
+      import('../shared/workspace').WorkspaceFileResult<
+        import('../shared/workspace').WorkspaceTextCreation
+      >
+    >
+    /** Create a new binary attachment without replacing another file. */
+    createBinary: (
+      target: import('../shared/foundation-contracts').WorkspaceTarget,
+      path: string,
+      bytes: Uint8Array,
+    ) => Promise<
+      import('../shared/workspace').WorkspaceFileResult<
+        import('../shared/workspace').WorkspaceBinaryCreation
+      >
+    >
+    /** Replace a closed file using its disk version and an explicit metadata reset. */
+    updateText: (
+      target: import('../shared/foundation-contracts').WorkspaceTarget,
+      path: string,
+      expectedVersion: string,
+      markdown: string,
+      options: import('../shared/workspace').WorkspaceTextUpdateOptions,
+    ) => Promise<
+      import('../shared/workspace').WorkspaceFileResult<
+        import('../shared/workspace').WorkspaceTextUpdate
+      >
+    >
+    /** Move a closed file to a new path using its last-read disk version. */
+    renameFile: (
+      target: import('../shared/foundation-contracts').WorkspaceTarget,
+      sourcePath: string,
+      destinationPath: string,
+      expectedVersion: import('../shared/workspace').WorkspaceFileVersion,
+    ) => Promise<
+      import('../shared/workspace').WorkspaceFileResult<
+        import('../shared/workspace').WorkspaceFileRename
+      >
+    >
+    /** Send a closed file to the OS trash using its last-read disk version. */
+    trashFile: (
+      target: import('../shared/foundation-contracts').WorkspaceTarget,
+      path: string,
+      expectedVersion: import('../shared/workspace').WorkspaceFileVersion,
+    ) => Promise<
+      import('../shared/workspace').WorkspaceFileResult<
+        import('../shared/workspace').WorkspaceFileTrash
+      >
+    >
+    /** Bounded metadata and text queries over one captured workspace generation. */
+    query: (
+      request: import('../shared/workspace-query').WorkspaceReferenceQueryRequest,
+    ) => Promise<
+      import('../shared/foundation-contracts').OperationResult<
+        import('../shared/workspace-query').WorkspaceReferenceQueryResult,
+        import('../shared/workspace-query').QueryFailure
+      >
+    >
     get: () => Promise<WorkspaceState | null>
     open: () => Promise<WorkspaceState | null>
     openFile: (path: string) => Promise<void>
@@ -689,3 +922,24 @@ export const ADDON_CHANNELS = {
   invoke: 'addons:invoke',
   query: 'addons:query',
 } as const
+
+export type {
+  AddonId,
+  AddonOwner,
+  CommandExecutionContext,
+  Dispose,
+  DocumentId,
+  DocumentTarget,
+  FailureCode,
+  FileId,
+  FileTarget,
+  OperationResult,
+  OwnerScope,
+  RequestId,
+  VersionedDocumentTarget,
+  ViewId,
+  ViewTarget,
+  WorkspaceChangeEvent,
+  WorkspaceId,
+  WorkspaceTarget,
+} from '../shared/foundation-contracts'

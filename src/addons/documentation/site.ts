@@ -10,6 +10,7 @@ import { readFrontmatter } from '../../shared/frontmatter.ts'
 import type { WorkspaceSnapshot } from '../../shared/workspace'
 import {
   homePage,
+  isMermaidImage,
   type LockedSite,
   localPage,
   pageRoute,
@@ -18,7 +19,7 @@ import {
   siteJson,
 } from '../../site/data.ts'
 import { noteGraph } from '../graph/model.ts'
-import type { ExportOptions } from './options'
+import { type ExportOptions, exportOptions } from './options.ts'
 
 const escapeHtml = (value: string) =>
   value
@@ -36,11 +37,121 @@ const plain = (value: string) =>
   )
     .replace(/\s+/g, ' ')
     .trim()
+const alertAttributes = ({
+  'data-alert': type,
+  'data-fold': fold,
+  ...attrs
+}: Record<string, string>) => ({
+  ...attrs,
+  ...(/(?:^|\s)github-alert(?:\s|$)/.test(attrs.class ?? '') &&
+  /^[a-z][a-z0-9-]{0,39}$/.test(type ?? '')
+    ? {
+        'data-alert': type,
+        ...(fold === '' || fold === '+' || fold === '-'
+          ? { 'data-fold': fold }
+          : {}),
+      }
+    : {}),
+})
+const renderedHtml = (html: string) =>
+  sanitizeHtml(html, {
+    allowedTags: [
+      ...sanitizeHtml.defaults.allowedTags,
+      'img',
+      'details',
+      'summary',
+      'input',
+      'del',
+      's',
+      'svg',
+      'g',
+      'path',
+      'rect',
+      'circle',
+      'line',
+      'polyline',
+      'polygon',
+      'text',
+      'tspan',
+      'math',
+      'semantics',
+      'mrow',
+      'mi',
+      'mn',
+      'mo',
+      'mfrac',
+      'msup',
+      'msub',
+      'msubsup',
+      'msqrt',
+      'mroot',
+      'mtext',
+      'annotation',
+    ],
+    allowedAttributes: {
+      '*': ['class', 'style', 'title', 'role', 'aria-*'],
+      a: ['href', 'rel', 'id', 'data-footnote-ref', 'data-footnote-backref'],
+      blockquote: ['data-alert', 'data-fold'],
+      h2: ['id'],
+      li: ['id'],
+      section: ['data-footnotes'],
+      img: ['src', 'alt', 'width', 'height'],
+      input: ['type', 'checked', 'disabled'],
+      svg: ['viewBox', 'width', 'height'],
+      path: ['d', 'fill', 'stroke', 'stroke-width', 'transform'],
+      math: ['display'],
+      annotation: ['encoding'],
+    },
+    allowedSchemes: ['http', 'https', 'mailto'],
+    allowedSchemesByTag: { img: ['data'] },
+    allowProtocolRelative: false,
+    transformTags: {
+      blockquote: (_tag, attrs) => ({
+        tagName: 'blockquote',
+        attribs: alertAttributes(attrs),
+      }),
+      a: (
+        _tag,
+        {
+          id,
+          'data-footnote-ref': ref,
+          'data-footnote-backref': backref,
+          ...attrs
+        },
+      ) => ({
+        tagName: 'a',
+        attribs: {
+          ...attrs,
+          ...(ref !== undefined && /^fnref-[\w%.~-]+$/.test(id ?? '')
+            ? { id, 'data-footnote-ref': '' }
+            : {}),
+          ...(backref !== undefined ? { 'data-footnote-backref': '' } : {}),
+        },
+      }),
+      h2: (_tag, { id, ...attrs }) => ({
+        tagName: 'h2',
+        attribs: {
+          ...attrs,
+          ...(attrs.class === 'sr-only' && id === 'footnote-label'
+            ? { id }
+            : {}),
+        },
+      }),
+      li: (_tag, { id, ...attrs }) => ({
+        tagName: 'li',
+        attribs: {
+          ...attrs,
+          ...(/^fn-[\w%.~-]+$/.test(id ?? '') ? { id } : {}),
+        },
+      }),
+    },
+  })
 
 export function prepareSite(
   snapshot: WorkspaceSnapshot,
   options: ExportOptions,
 ): SiteData {
+  options = exportOptions(options)
   const seen = new Set<string>()
   const pages = snapshot.pages.map((page) => {
     if (
@@ -79,6 +190,18 @@ export function prepareSite(
     }
     const source = frontmatter?.content ?? page.markdown
     const tokens = marked.lexer(source)
+    const images: Record<string, string> = Object.create(null)
+    marked.walkTokens(tokens, (token) => {
+      if (token.type !== 'image') return
+      const data = page.images?.[token.href]
+      if (
+        typeof data === 'string' &&
+        /^data:(?:image\/(?:png|jpeg|gif|webp|avif|svg\+xml)|video\/(?:mp4|webm|ogg));base64,[a-z\d+/]+={0,2}$/i.test(
+          data,
+        )
+      )
+        images[token.href] = data
+    })
     const heading = tokens.find((token) => token.type === 'heading')
     const paragraph = tokens.find((token) => token.type === 'paragraph')
     const title =
@@ -96,19 +219,21 @@ export function prepareSite(
         : '') ||
       options.description
     return {
-      ...page,
+      path: page.path,
+      markdown: page.markdown,
       title: title.slice(0, 200),
       description: description.slice(0, 500),
-      html: page.html ?? marked.parse(source, { async: false }),
+      html: renderedHtml(page.html ?? marked.parse(source, { async: false })),
+      ...(Object.keys(images).length ? { images } : {}),
     }
   })
   return {
-    ...snapshot,
     name: options.title || snapshot.name,
     pages,
     options,
     appearance: options.theme,
     routing: options.singleFile ? 'hash' : 'paths',
+    ...(typeof snapshot.css === 'string' ? { css: snapshot.css } : {}),
     ...(options.graph ? { graph: noteGraph(pages) } : {}),
   }
 }
@@ -137,6 +262,7 @@ function content(site: SiteData, page: SitePage, prefix: string) {
         'aria-describedby',
         'aria-label',
       ],
+      blockquote: ['data-alert', 'data-fold'],
       h2: ['id'],
       li: ['id'],
       section: ['data-footnotes', 'role'],
@@ -145,6 +271,10 @@ function content(site: SiteData, page: SitePage, prefix: string) {
     },
     allowedSchemes: ['http', 'https', 'mailto', 'data'],
     transformTags: {
+      blockquote: (_tag, attrs) => ({
+        tagName: 'blockquote',
+        attribs: alertAttributes(attrs),
+      }),
       a: (_tag, attrs) => {
         const target = localPage(page.path, attrs.href ?? '', paths)
         const href = target
@@ -207,7 +337,11 @@ function content(site: SiteData, page: SitePage, prefix: string) {
           tagName: 'img',
           attribs: {
             alt: attrs.alt ?? '',
-            ...(src?.startsWith('data:image/') ? { src } : {}),
+            ...(src?.startsWith('data:image/')
+              ? { src }
+              : isMermaidImage(attrs.src ?? '', attrs.class ?? '')
+                ? { src: attrs.src }
+                : {}),
           },
         }
       },

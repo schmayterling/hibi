@@ -44,6 +44,33 @@ Source offsets include the original line endings. CodeMirror uses normalized pos
 
 Rich corrections also keep a per-editor source-preservation cache of up to 32 entries and 8 Mi UTF-16 units for matching subsequent serialization results. That cache is separate from authoritative operation history; its eviction does not make retained host undo normalize Markdown. A schema change creates a new rich editor and follows the syntax transition policy. Source editor recreation restores the session's source selection.
 
+## Work with mounted editor views
+
+`context.editorViews` lists mounted editor instances and returns the active view. A view target includes document and view generations, so closing and reopening a note invalidates old targets. The current layout mounts one editor view at a time; rich and source panes share that view target.
+
+```typescript
+const view = context.editorViews.getActive()
+if (view) {
+  const result = context.editorViews.getSelection(view)
+  if (result.ok) {
+    const selection = result.value
+    context.editorViews.reveal({
+      view,
+      editor: selection.editor,
+      editorGeneration: selection.editorGeneration,
+      contentVersion: selection.contentVersion,
+      position: selection.head,
+    })
+  }
+}
+```
+
+Selection positions are UTF-16 offsets in the named editor: CodeMirror positions in Source view and ProseMirror positions in rich view. They are not Markdown source offsets. `getSelection()` returns the primary selection with its anchor and head. Pass the captured view, editor kind, editor generation, and content version to `setSelection()` or `reveal()`; these methods reject stale or unavailable panes and do not focus the editor. Editor generation changes when a pane is rebuilt without changing source. Use `documents.applyEdits()` for source changes instead of treating navigation positions as source edit ranges.
+
+To edit a specific open document, call `context.documents.readSource(target)` and pass its versioned target to `context.documents.applyEdits()` with exact `expectedText` for each source range. The edit applies to that document without changing focus, including when its editor is mounted. A mounted editor returns `busy` while starting and may return `unsupported-view` for ranges it cannot preserve. If the session, content version, or projection ID is stale, read the document or projection again before retrying.
+
+`onDidChangeActive()` reports a new active view or `null`. `onDidChangeSelection()` reports the active pane's primary selection or `null` when that pane is unavailable. Both subscriptions are removed when the addon stops.
+
 ## Analyze and mark text
 
 `getTextProjection()` lazily returns literal text with exact spans back to the source. It excludes Markdown code, metadata, destinations, and text that cannot be mapped safely. A projection has its own `id` as well as the document identity and content version. Include that ID as `projectionId` in edit requests so a view or schema change also invalidates stale results.
@@ -66,22 +93,50 @@ The host allows four analyzer processes, up to 10,000 projection spans, and 256 
 
 ## Add a toolbar action
 
-Commands and toolbar buttons are separate registrations. Route the toolbar action through `commands.execute()` to use the command's lifecycle checks and diagnostics.
+Commands and toolbar buttons are separate registrations. Set `commandId` to the local command ID to use the command's lifecycle checks and captured document, view, and selection. The command receives `source: 'toolbar'` when the button is clicked. Existing `onClick` toolbar actions continue to work.
 
 ```typescript
 const greet = () => context.notify('Hello.')
 
-context.commands.register({ id: 'greet', label: 'Say hello', run: greet })
-context.toolbar.register({ id: 'greet', label: 'Say hello', onClick: () => context.commands.execute('greet') })
+context.commands.register({
+  id: 'greet',
+  label: 'Say hello',
+  defaultShortcut: 'mod+alt+shift+g',
+  menu: { location: 'app' },
+  run: greet,
+})
+context.toolbar.register({ id: 'greet', label: 'Say hello', commandId: 'greet' })
 ```
 
-Toolbar and status-bar registrations return handles with `update` and `dispose` methods. Update an existing item when its value changes. Status-bar items should show useful state, such as a count, rather than repeat the addon name.
+The command appears in Hibi's Addons menu. Its in-app shortcut can be changed under **Settings → Hotkeys**; `mod` means Command on macOS and Control on Windows and Linux. Toolbar and status-bar registrations return handles with `update` and `dispose` methods. Update an existing item when its value changes. Status-bar items should show useful state, such as a count, rather than repeat the addon name.
 
 Users control toolbar order and each action's placement in Appearance settings. Actions can appear in the toolbar, stay in its dropdown, or be hidden. These choices persist across addon reloads. The shared [ToolbarPreferences](../addon-api-reference/ToolbarPreferences.md) API exposes them as `order` and `placements`; preserve other entries when changing one action. Context-specific `hidden` and `when` rules still apply.
+
+For an action on a right-clicked workspace entry, register the command with `menu: { location: 'explorer' }`. The captured `file.path` is relative to the workspace; `file.fileId` is opaque. Use `when` to disable actions that do not apply to folders or files.
+
+```typescript
+context.commands.register({
+  id: 'inspect-file',
+  label: 'Inspect file',
+  menu: { location: 'explorer' },
+  when: ({ file }) => file?.kind === 'file',
+  run: ({ file }) => {
+    if (file) context.notify(file.path)
+  },
+})
+```
+
+The command receives the clicked entry even when another note is active. Hibi rejects it if the workspace tree changes before execution, so handle a stale target by asking the user to open the menu again. For command-activated addons, a menu declaration in the manifest shows the item before startup; `when` takes effect once the addon registers its command.
+
+Use `menu: { location: 'editor' }` for a command in the source and rich editor context menus. Its invocation includes the captured document, view, and `selection` with editor-specific offsets, content version, and up to 256 characters of selected text. Hibi checks that target again after command activation. Existing context-action providers appear in the same menu and continue to apply version-checked edits.
 
 ## Read the workspace
 
 Use `context.workspace.index()` for note text and drafts. It returns `null` when no workspace is open. Use `snapshot()` when you also need the export data. Pass a workspace-relative path to `openFile()` to open a document.
+
+Use `context.workspace.query()` for bounded links, backlinks, tags, properties, headings, graph pages, and searches. The host captures each file's Markdown flavor, current syntax settings, and active Markdown projections for metadata queries; results report `flavorAware: true`. Check `complete` before treating a missing result as definitive; `unsupportedSyntax` means selected addon syntax cannot be fully interpreted by the built-in metadata parser. Path and text searches read note source directly and remain complete when only syntax support is missing. A graph cursor becomes stale when parser settings change.
+
+For an active-note worker, `context.editor.getMetadataSyntax(document.id, document.markdown)` supplies bounded built-in parser settings, a fingerprint for cache keys, and a completeness flag. Treat an incomplete worker result as a best-effort count.
 
 ## Attach editor behavior
 
@@ -90,6 +145,41 @@ Use `context.workspace.index()` for note text and drafts. It returns `null` when
 Throw when an attachment cannot be installed. Hibi displays the failure and keeps that editor read-only until the failing addon is disabled or successfully installed. Already attached rich-editor features are detached if a later attachment fails.
 
 Use `onInput()` to observe typed characters, or `onKeyEvent()` to observe editor key events. These hooks do not receive input from settings, search fields, or dialogs.
+
+### Show hover information and context actions
+
+Register providers with `registerHoverProvider()` and `registerContextActionProvider()`. Hibi calls them for the relevant editor position, displays plain-text results, and cancels work when the target changes. The request includes the document and view identity, content version, editor-local positions, and at most 256 characters of nearby or selected text. Check the abort signal before returning from slow work.
+
+```typescript
+await context.editor.registerHoverProvider((request) =>
+  request.selectedText ? { label: request.selectedText } : null,
+)
+await context.editor.registerContextActionProvider((request) => {
+  const from = Math.min(request.selection.anchor, request.selection.head)
+  const to = Math.max(request.selection.anchor, request.selection.head)
+  return from === to
+    ? []
+    : [{ label: 'Uppercase selection', edit: {
+        from, to, insertText: request.selectedText.toUpperCase(),
+      } }]
+})
+```
+
+Hibi owns the menus and applies accepted edits through its version-checked document edit path as one undo operation. Rich view accepts only exact plain-text ranges that preserve the surrounding Markdown. Invalid ranges and edits from a changed document are rejected. The returned removal functions and addon shutdown cancel pending work and remove visible results.
+
+## Add a system-wide shortcut
+
+Register a command, then assign it an Electron accelerator to run it while Hibi is open, even when another application has focus. The registration returns a removal function. Hibi also removes it when the addon stops. Registration rejects a shortcut already owned by another application.
+
+```typescript
+const remove = await context.globalShortcuts.register(
+  'capture',
+  'CommandOrControl+Alt+N',
+  'capture',
+)
+```
+
+The command receives a context captured when the shortcut is pressed. Existing addons may still pass a callback as the third argument. Choose a shortcut that does not overlap with a Hibi editing command. System-wide shortcuts are active only while Hibi is running and this addon is enabled. The operating system may reserve some combinations.
 
 ## Clean up
 

@@ -35,6 +35,12 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
       startup: 'background',
       code: `export default () => ({ start(context) { context.styles.register('probe', 'body { --failed-addon: leaked; }'); context.commands.register({ id: 'ghost', label: 'Failed ghost', run() {} }); context.editor.registerCodeLanguage({ id: 'unsafe', label: 'Unsafe', load() { throw new Error('must not publish'); } }); throw new Error('Expected staged failure'); } });`,
     },
+    {
+      id: 'disabled-background',
+      capabilities: [],
+      startup: 'background',
+      code: `window.disabledBackgroundEvaluations = (window.disabledBackgroundEvaluations || 0) + 1; export default () => ({ start() { window.disabledBackgroundStarts = (window.disabledBackgroundStarts || 0) + 1; } });`,
+    },
   ]
   for (const { code, ...manifest } of fixtures) {
     const folder = join(profile, 'installed-addons', manifest.id)
@@ -64,7 +70,11 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
   }
   await writeFile(
     join(profile, 'addons.json'),
-    JSON.stringify(Object.fromEntries(fixtures.map(({ id }) => [id, true]))),
+    JSON.stringify(
+      Object.fromEntries(
+        fixtures.map(({ id }) => [id, id !== 'disabled-background']),
+      ),
+    ),
   )
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
@@ -101,6 +111,19 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
   ])
   assert.equal(await page.evaluate(() => window.commandEvaluations), undefined)
   assert.equal(await page.evaluate(() => window.sourceEvaluations), undefined)
+  assert.equal(
+    await page.evaluate(() => window.disabledBackgroundEvaluations),
+    undefined,
+  )
+  assert.equal(
+    await page.evaluate(
+      async () =>
+        (await window.hibi.getAddonStates()).find(
+          ({ id }) => id === 'disabled-background',
+        )?.enabled,
+    ),
+    false,
+  )
   await page.getByText('Expected staged failure', { exact: true }).waitFor()
   assert.equal(
     await page.evaluate(() =>
@@ -117,6 +140,12 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
     if (url.startsWith('app://hibi/')) files.add(new URL(url).pathname.slice(1))
   })
   await session.send('Debugger.enable')
+  const disabledScript =
+    /^installed-addons\/disabled-background\/[^/]+\/index\.js$/
+  assert.equal(
+    [...files].some((file) => disabledScript.test(file)),
+    false,
+  )
   const loaded = () =>
     chunks
       .filter((chunk) => files.has(chunk.file))
@@ -219,4 +248,16 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
     'alpha',
     'zeta',
   ])
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  await page.locator('#addon-disabled-background').click()
+  await page.waitForFunction(() => window.disabledBackgroundStarts === 1)
+  assert.equal(
+    await page.evaluate(() => window.disabledBackgroundEvaluations),
+    1,
+  )
+  assert.equal(
+    [...files].some((file) => disabledScript.test(file)),
+    true,
+  )
 })

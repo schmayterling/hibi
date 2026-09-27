@@ -11,6 +11,7 @@ import {
 import { addonDefaultEnabled } from '../shared/addon-defaults'
 import { parseDependencies } from '../shared/dependencies'
 import { validDocumentExtensions } from '../shared/document-types'
+import type { AddonId, AddonOwner } from '../shared/foundation-contracts'
 import { exportedAppearance } from './appearance'
 import {
   clearDocument,
@@ -57,6 +58,16 @@ const nativeLoaders = new Map(
 const natives = new Map<string, NativeAddon>()
 const pendingNatives = new Map<string, Promise<NativeAddon>>()
 const generations = new Map<string, number>()
+let onAddonDeactivated: (id: string, generation: number) => Promise<void> =
+  async () => {}
+
+/** Register host cleanup before addon state changes are accepted. */
+export function setAddonDeactivationHandler(
+  handler: (id: string, generation: number) => Promise<void>,
+): void {
+  onAddonDeactivated = handler
+}
+
 async function nativeAddon(id: string) {
   if (natives.has(id)) return natives.get(id)
   const load = nativeLoaders.get(id)
@@ -183,6 +194,39 @@ export function getAddonStates(): AddonState[] {
         )),
   }))
 }
+
+/** Main-owned token for requests admitted during one addon activation. */
+export function getAddonActivationGeneration(id: string): number | null {
+  return getAddonStates().some((state) => state.id === id && state.enabled)
+    ? (generations.get(id) ?? 0)
+    : null
+}
+
+export function currentAddonOwner(id: string): AddonOwner | null {
+  const activationGeneration = getAddonActivationGeneration(id)
+  return activationGeneration === null
+    ? null
+    : { addonId: id as AddonId, activationGeneration }
+}
+
+export function isAddonActivationCurrent(
+  id: string,
+  generation: number,
+): boolean {
+  return (
+    Number.isSafeInteger(generation) &&
+    generation >= 0 &&
+    getAddonActivationGeneration(id) === generation
+  )
+}
+
+/** Invalidate pending renderer requests before clearing sessions on renderer restart. */
+export function invalidateAddonActivations(): void {
+  for (const state of getAddonStates())
+    if (state.enabled)
+      generations.set(state.id, (generations.get(state.id) ?? 0) + 1)
+}
+
 export function getImporters(): import('../shared/imports').Importer[] {
   const enabled = new Set(
     getAddonStates()
@@ -227,6 +271,11 @@ export async function enableAddon(
 }
 
 async function saveEnabled(id: string, value: boolean): Promise<AddonState[]> {
+  const previouslyEnabled = new Set(
+    getAddonStates()
+      .filter((state) => state.enabled)
+      .map((state) => state.id),
+  )
   const next = { ...enabled, [id]: value }
   const manifest = manifests().find((entry) => entry.id === id)
   if (value && manifest?.capabilities?.includes('modalEditing'))
@@ -241,8 +290,18 @@ async function saveEnabled(id: string, value: boolean): Promise<AddonState[]> {
   await writeFile(`${path}.tmp`, JSON.stringify(next), { mode: 0o600 })
   await rename(`${path}.tmp`, path)
   enabled = next
-  generations.set(id, (generations.get(id) ?? 0) + 1)
-  if (!value) natives.get(id)?.stop?.()
+  const previousGeneration = generations.get(id) ?? 0
+  generations.set(id, previousGeneration + 1)
+  for (const state of getAddonStates())
+    if (previouslyEnabled.has(state.id) && !state.enabled) {
+      let generation = previousGeneration
+      if (state.id !== id) {
+        generation = generations.get(state.id) ?? 0
+        generations.set(state.id, generation + 1)
+      }
+      natives.get(state.id)?.stop?.()
+      await onAddonDeactivated(state.id, generation)
+    }
   return getAddonStates()
 }
 

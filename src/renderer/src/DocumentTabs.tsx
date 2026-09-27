@@ -1,4 +1,4 @@
-import { X } from 'lucide-react'
+import { PanelRightOpen, X } from 'lucide-react'
 import {
   useCallback,
   useEffect,
@@ -20,6 +20,8 @@ export function DocumentTabs({
   activeAddonTab,
   onSelectAddon,
   onCloseAddon,
+  onSplit,
+  splitTabs,
 }: {
   document: DocumentState
   busy: boolean
@@ -30,6 +32,8 @@ export function DocumentTabs({
   activeAddonTab: string | null
   onSelectAddon: (id: string) => void
   onCloseAddon: (id: string) => void
+  onSplit: (id: string) => void
+  splitTabs: { left: string; right: string } | null
 }) {
   const strip = useRef<HTMLDivElement>(null)
   const active = useRef<HTMLDivElement>(null)
@@ -232,7 +236,6 @@ export function DocumentTabs({
         const name = selected ? document.name : tab.name
         const dirty = selected ? document.dirty : tab.dirty
         return (
-          // biome-ignore lint/a11y/noStaticElementInteractions: tab dragging has equivalent keyboard shortcuts.
           <div
             className="document-tab"
             key={tab.id}
@@ -299,7 +302,13 @@ export function DocumentTabs({
               type="button"
               role="tab"
               id={`document-tab-${tab.id}`}
-              aria-controls="document-editor-panel"
+              aria-controls={
+                splitTabs &&
+                tab.id !== document.tabId &&
+                (tab.id === splitTabs.left || tab.id === splitTabs.right)
+                  ? 'split-document-editor-panel'
+                  : 'document-editor-panel'
+              }
               className="document-name"
               data-tab-id={tab.id}
               aria-label={name}
@@ -330,6 +339,15 @@ export function DocumentTabs({
                 </span>
               )}
             </button>
+            <IconButton
+              className="tab-split"
+              aria-label={`Open ${name} in right pane`}
+              title="Split right"
+              disabled={busy}
+              onClick={() => onSplit(tab.id)}
+            >
+              <PanelRightOpen size={12} />
+            </IconButton>
             <IconButton
               className="tab-close"
               aria-label={`Close ${name}`}

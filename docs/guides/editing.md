@@ -18,6 +18,8 @@ When you use an input method, choosing and revising candidates remains one undo 
 
 Opening or creating a note adds a tab. Select one to return to its document, drag it to change its position, or press `Cmd/Ctrl+W` to close it. Closing the last document tab returns to the welcome screen. A dot marks unsaved changes. Hibi asks before discarding unsaved work.
 
+Use **Split right** on any tab to open two editor panes side by side. You can show the same document twice with separate selections and scroll positions, or edit two documents at once. Click a pane to direct toolbar and keyboard commands to it. Each pane keeps its own view mode. Use **Close split** to return to one pane without closing either tab. On a narrow window, only the active pane is visible.
+
 With a tab focused, arrow keys and Home/End move between tabs. Use `Alt+Shift+Left/Right` to reorder them with the keyboard.
 
 Addons can also open their own tabs. Select an addon tab to show its view, or close it with its close button or `Cmd/Ctrl+W`. Returning to a document tab keeps the addon tab available until you close it or turn off the addon.
@@ -63,5 +65,7 @@ Files must use UTF-8 and be no larger than 2 MiB. Save your work regularly: unsa
 Enable **Mermaid** to edit `.mmd` diagrams and render Mermaid code blocks in Markdown. **BBCode** adds `.bbcode` and `.bbc` files with a preview and formatting toolbar. Both addons offer HTML export from side-by-side view.
 
 Under **Settings → Addons**, enable **Word count** for word and character totals, or **Block dragging** to rearrange formatted text using a grip beside each block. The grip also offers **Move block up/down**, and moves support undo.
+
+Enable **Writing suggestions** for workspace tag completions after `#`, note-path completions after `[[` in Source view, and a `;todo` text snippet in either editing view. Choose a suggestion with Enter or Tab; Escape leaves the text unchanged.
 
 The **Frontmatter** addon adds editable [page properties](frontmatter.md). **Settings → Editor → Writing → Spell check** controls spelling underlines in formatted text. See [settings](settings.md) for other preferences.

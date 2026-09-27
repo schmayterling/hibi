@@ -11,6 +11,7 @@ import {
   type Addon,
   type AddonApp,
   type AddonCommand,
+  type AddonCommandDescriptor,
   type AddonContext,
   type AddonManifest,
   type AddonState,
@@ -23,22 +24,30 @@ import {
   type ViewInstance,
   type ViewRegistration,
 } from '../../addons/api'
+import type { AddonHotkeyRegistration } from '../../shared/addon-hotkeys'
 import {
   documentExtension,
   isMarkdownDocument,
 } from '../../shared/document-types'
+import type {
+  AddonId,
+  CommandExecutionContext,
+} from '../../shared/foundation-contracts'
 import {
   parseSyntaxDescriptors,
   validatePreservation,
 } from '../../shared/preservation'
 import { startupSpan } from '../../shared/startup'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { useDialogService } from '../../ui/DialogProvider'
 import { performanceDiagnostics } from '../../ui/diagnostics'
 import { menus } from '../../ui/menu-store'
 import { useToastService } from '../../ui/Sonner'
 import { createTooltipScope } from '../../ui/tooltip-store'
+import { createAddonGlobalShortcuts } from './addon-global-shortcuts'
 import { createAddonOverrides } from './addon-overrides'
 import { addonRegistry } from './addon-registry'
+import { createAddonStorageScope } from './addon-storage'
 import { addonViews } from './addon-views'
 import { codeHtml, codeLanguages } from './code-languages'
 import { colorschemes } from './colorschemes'
@@ -46,8 +55,13 @@ import { disposeAll } from './dispose'
 import { documentEdits } from './document-edits'
 import { documentFormats, editorDocument } from './document-formats'
 import { documentProjections } from './document-projections'
+import { documentRuntime } from './document-runtime'
+import { createDocumentTargetEditScope } from './document-target-edits'
 import { editorAnnotations } from './editor-annotations'
+import { captureEditorSelectionCommandTarget } from './editor-command-targets'
 import { onEditorInput, onEditorKeyEvent } from './editor-events'
+import { countEditorInteractionProvider } from './editor-interaction-presence'
+import { createEditorViewScope, editorViewRegistry } from './editor-view-api'
 import { explorerDecorations } from './explorer-decorations'
 import { flavors, renderMarkdown, renderMarkdownAsync } from './flavors'
 import { projectMarkdown } from './markdown-projection'
@@ -56,17 +70,65 @@ import { registrationBatch } from './registration-batch'
 import { settingsPages } from './settings-pages'
 import { toolbar } from './toolbar'
 import { viewNotifications } from './view-notifications'
+import {
+  activeNoteMetadataSyntax,
+  captureWorkspaceSyntaxSnapshot,
+} from './workspace-syntax-snapshot'
 
 export { addons } from './addon-registry'
 
 const ADDON_ISSUE_URL = 'https://github.com/schmayterling/hibi/issues/new'
+const completionActivations = new Map<string, number>()
+let completionBrokerModule: Promise<
+  typeof import('./completion-broker')
+> | null = null
+function loadCompletionBroker() {
+  if (!completionBrokerModule)
+    completionBrokerModule = import('./completion-broker').catch((error) => {
+      completionBrokerModule = null
+      throw error
+    })
+  return completionBrokerModule
+}
+let interactionBrokerModule: Promise<
+  typeof import('./editor-interaction-broker')
+> | null = null
+function loadInteractionBroker() {
+  if (!interactionBrokerModule)
+    interactionBrokerModule = import('./editor-interaction-broker').catch(
+      (error) => {
+        interactionBrokerModule = null
+        throw error
+      },
+    )
+  return interactionBrokerModule
+}
 
-export type RegisteredCommand = AddonCommand & { addonId: string }
+export type RegisteredCommand = Omit<AddonCommand, 'run'> & {
+  addonId: string
+  canRun: (context: CommandExecutionContext) => boolean
+  run: (context?: CommandExecutionContext) => Promise<void>
+}
+type HotkeyDescriptor = Omit<AddonHotkeyRegistration, 'token'>
+type ActiveHotkey = { descriptor: HotkeyDescriptor; token: string }
+
+function sameHotkey(left: HotkeyDescriptor, right: HotkeyDescriptor): boolean {
+  return (
+    left.label === right.label &&
+    left.defaultShortcut === right.defaultShortcut &&
+    left.menu?.location === right.menu?.location &&
+    left.menu?.group === right.menu?.group &&
+    left.menu?.order === right.menu?.order
+  )
+}
 type Environment = Omit<
   AddonContext,
   | 'commands'
   | 'native'
   | 'editor'
+  | 'documents'
+  | 'editorViews'
+  | 'host'
   | 'statusBar'
   | 'app'
   | 'styles'
@@ -83,10 +145,15 @@ type Environment = Omit<
   | 'toolbar'
   | 'tooltips'
   | 'settings'
+  | 'storage'
   | 'dependencies'
+  | 'globalShortcuts'
 > & {
   openDependencySettings: () => void
-  workspace: Omit<AddonContext['workspace'], 'registerDecorations'>
+  workspace: Pick<
+    AddonContext['workspace'],
+    'index' | 'snapshot' | 'get' | 'open' | 'openFile'
+  >
   invoke: (id: string, method: string, input?: unknown) => Promise<unknown>
   error: (error: unknown) => void
   isBusy: () => boolean
@@ -98,6 +165,10 @@ type Environment = Omit<
   closeSidebar: (side: 'left' | 'right') => void
   openTab: () => void
   focusDocument: (tabId: string) => Promise<boolean>
+  captureCommandContext?: (
+    source: CommandExecutionContext['source'],
+  ) => CommandExecutionContext
+  isCommandContextCurrent?: (context: CommandExecutionContext) => boolean
 }
 
 export function useAddons(
@@ -113,6 +184,11 @@ export function useAddons(
   const toastService = useToastService()
   const latest = useRef(environment)
   latest.current = environment
+  const captureCommandContext = useCallback(
+    (source: CommandExecutionContext['source']): CommandExecutionContext =>
+      latest.current.captureCommandContext?.(source) ?? { source },
+    [],
+  )
   const app = useRef<AddonApp>({
     runCommand: (command) => latest.current.runCommand(command),
     runAction: (command) => latest.current.runAction(command),
@@ -210,6 +286,24 @@ export function useAddons(
     [viewState.definitions],
   )
   const registered = useRef(new Map<string, RegisteredCommand>()).current
+  const hotkeyTokens = useRef(new Map<string, string>()).current
+  const hotkeyRegistrations = useRef(new Map<string, ActiveHotkey>()).current
+  const hotkeyQueue = useRef(new Map<string, Promise<unknown>>()).current
+  const queueHotkey = useCallback(
+    (id: string, operation: () => Promise<unknown>) => {
+      const pending = (hotkeyQueue.get(id) ?? Promise.resolve())
+        .catch(() => {})
+        .then(operation)
+      hotkeyQueue.set(id, pending)
+      void pending
+        .finally(() => {
+          if (hotkeyQueue.get(id) === pending) hotkeyQueue.delete(id)
+        })
+        .catch(() => {})
+      return pending
+    },
+    [hotkeyQueue],
+  )
   const started = useRef(new Set<string>()).current
   const activation = useRef(
     new Map<
@@ -224,7 +318,11 @@ export function useAddons(
   const currentActivation = useRef({ states, settled, catalog })
   currentActivation.current = { states, settled, catalog }
   const executeCommand = useCallback(
-    async (owner: string, commandId: string) => {
+    async (
+      owner: string,
+      commandId: string,
+      context: CommandExecutionContext = captureCommandContext('api'),
+    ) => {
       if (
         !currentActivation.current.states.some(
           (state) => state.id === owner && state.enabled,
@@ -274,9 +372,28 @@ export function useAddons(
         )
       )
         throw new Error('This command is no longer available.')
-      await command.run()
+      if (
+        latest.current.isCommandContextCurrent &&
+        !latest.current.isCommandContextCurrent(context)
+      )
+        throw new Error('The command target is no longer available.')
+      await command.run(context)
     },
-    [activation, registered, started],
+    [activation, captureCommandContext, registered, started],
+  )
+  useEffect(
+    () =>
+      window.hibi.onAddonCommand(({ id, token, source }) => {
+        if (hotkeyTokens.get(id) !== token) return
+        const separator = id.indexOf('.')
+        if (separator < 1) return
+        void executeCommand(
+          id.slice(0, separator),
+          id.slice(separator + 1),
+          captureCommandContext(source),
+        ).catch((error) => latest.current.error(error))
+      }),
+    [captureCommandContext, executeCommand, hotkeyTokens],
   )
   const extensions = useRef(
     new Map<string, MarkdownExtension & { addonId: string }>(),
@@ -325,6 +442,7 @@ export function useAddons(
         ? current
         : next
     })
+    workspaceSyntaxEvents.publish()
   }, [extensions])
   const running = useRef(
     new Map<string, { addon: Addon; stop: () => void }>(),
@@ -377,17 +495,71 @@ export function useAddons(
       )
         continue
       let disposed = false
+      const storageScope = createAddonStorageScope(
+        id,
+        () => !disposed,
+        window.hibi,
+      )
       const overrides = createAddonOverrides(id)
       const dialogScope = dialogService.scope()
       const toastScope = toastService.scope()
       const menuScope = menus.scope((error) => latest.current.error(error))
-      const toolbarScope = toolbar.scope(id, (error) =>
-        latest.current.error(error),
+      const toolbarScope = toolbar.scope(
+        id,
+        (error) => latest.current.error(error),
+        async (commandId, context) => {
+          const base = context ?? captureCommandContext('toolbar')
+          const selection = context
+            ? null
+            : captureEditorSelectionCommandTarget(base)
+          try {
+            await executeCommand(id, commandId, selection?.context ?? base)
+          } finally {
+            selection?.release()
+          }
+        },
       )
       const notificationScope = viewNotifications.scope()
       const tooltipScope = createTooltipScope()
       const cleanups = new Set<() => void>()
+      const completionOwner = {
+        addonId: id as AddonId,
+        activationGeneration: (completionActivations.get(id) ?? 0) + 1,
+      }
+      completionActivations.set(id, completionOwner.activationGeneration)
+      const shortcutScope = createAddonGlobalShortcuts(
+        id,
+        window.hibi,
+        (command) => {
+          const context = captureCommandContext('global-shortcut')
+          return typeof command === 'string'
+            ? executeCommand(id, command, context)
+            : command()
+        },
+        (error) => latest.current.error(error),
+      )
+      cleanups.add(shortcutScope.dispose)
       const editScope = documentEdits.scope(() => latest.current.isBusy())
+      const targetEditScope = createDocumentTargetEditScope(
+        documentRuntime,
+        () => latest.current.isBusy(),
+        async (tabId, revision, contentVersion) => {
+          if (disposed) return { status: 'stale', document: null }
+          await window.hibi.flushDocumentChanges()
+          if (disposed) return { status: 'stale', document: null }
+          return window.hibi.saveTargetDocument(
+            id,
+            tabId,
+            revision,
+            contentVersion,
+          )
+        },
+      )
+      const editorViewScope = createEditorViewScope(
+        documentRuntime,
+        editorViewRegistry,
+      )
+      const pendingCommandTargets = new Set<CommandExecutionContext>()
       const annotationScope = editorAnnotations.scope(id)
       const batch = registrationBatch(addon.manifest.capabilities !== undefined)
       const registerView: ViewApi['register'] = (view) => {
@@ -506,11 +678,25 @@ export function useAddons(
       const stop = () => {
         if (disposed) return
         disposed = true
+        void completionBrokerModule
+          ?.then(({ completionBroker }) =>
+            completionBroker.stopOwner(completionOwner),
+          )
+          .catch((error) => latest.current.error(error))
+        void interactionBrokerModule
+          ?.then(({ hoverBroker, contextActionBroker }) => {
+            hoverBroker.stopOwner(completionOwner)
+            contextActionBroker.stopOwner(completionOwner)
+          })
+          .catch((error) => latest.current.error(error))
+        storageScope.dispose()
         started.delete(id)
         activation
           .get(id)
           ?.reject(new Error('The addon stopped before its command could run.'))
         editScope.dispose()
+        targetEditScope.dispose()
+        editorViewScope.dispose()
         annotationScope.dispose()
         void window.hibi.cancelAnalysis(id).catch(() => {})
         running.delete(id)
@@ -570,6 +756,70 @@ export function useAddons(
         running.set(id, { addon, stop })
         const start = () =>
           addon.start({
+            storage: storageScope.api,
+            documents: {
+              listOpen: targetEditScope.listOpen,
+              getMetadata: targetEditScope.getMetadata,
+              subscribe: targetEditScope.subscribe,
+              readSource: targetEditScope.readSource,
+              applyEdits: targetEditScope.applyEdits,
+              save: targetEditScope.save,
+            },
+            editorViews: editorViewScope,
+            host: {
+              selectedText: {
+                select: () =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.selectUserText(id),
+                read: (handle) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.readSelectedText(id, handle),
+              },
+              selectedIo: {
+                selectImport: (choice) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.selectHostImport(id, choice),
+                readImport: (handle) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.readHostImport(id, handle),
+                selectExport: (choice) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.selectHostExport(id, choice),
+                writeExport: (handle, bytes) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.writeHostExport(id, handle, bytes),
+                cancel: (handle) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.cancelHostSelectedIo(id, handle),
+              },
+              network: {
+                getText: (request) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.getHostText(id, request),
+              },
+              credentials: {
+                store: (request) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.storeHostCredential(id, request),
+                remove: (request) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.removeHostCredential(id, request),
+                status: (request) =>
+                  disposed
+                    ? Promise.reject(new Error('This addon has stopped.'))
+                    : window.hibi.getHostCredentialStatus(id, request),
+              },
+            },
             dependencies: {
               list: () =>
                 disposed
@@ -628,12 +878,14 @@ export function useAddons(
                 ...colorschemes.snapshot().preferences,
               }),
               getActive: () => colorschemes.snapshot().active,
-              subscribe: colorschemes.subscribe,
+              subscribe: (listener) =>
+                observe(colorschemes.subscribe, listener),
               setPreferences: (preferences) => {
                 if (!disposed) colorschemes.set(preferences)
               },
             },
             dialogs: dialogScope.api,
+            globalShortcuts: { register: shortcutScope.register },
             views: { register: registerView, notify: notificationScope.notify },
             analysis: {
               async run(projection) {
@@ -779,6 +1031,15 @@ export function useAddons(
                 markdownSyntax
                   .snapshot()
                   .filter((feature) => feature.scope !== 'document'),
+              getMetadataSyntax: (documentId, source) =>
+                activeNoteMetadataSyntax(
+                  documentId,
+                  source,
+                  currentActivation.current.states.some(
+                    (state) => state.id === 'tags' && state.enabled,
+                  ),
+                  [...extensions.values()],
+                ),
               onSyntaxChange: (listener) =>
                 observe(markdownSyntax.subscribe, listener),
               onCodeHighlightingChange: (listener) =>
@@ -884,6 +1145,59 @@ export function useAddons(
                 })
                 const cleanup = () => {
                   remove()
+                  cleanups.delete(cleanup)
+                }
+                cleanups.add(cleanup)
+                return cleanup
+              },
+              async registerCompletionProvider(provider) {
+                if (disposed) throw new Error('This addon has stopped.')
+                if (typeof provider !== 'function')
+                  throw new Error('Choose a completion provider function.')
+                const { completionBroker } = await loadCompletionBroker()
+                if (disposed) throw new Error('This addon has stopped.')
+                const remove = completionBroker.register(
+                  completionOwner,
+                  provider,
+                )
+                const cleanup = () => {
+                  remove()
+                  cleanups.delete(cleanup)
+                }
+                cleanups.add(cleanup)
+                return cleanup
+              },
+              async registerHoverProvider(provider) {
+                if (disposed) throw new Error('This addon has stopped.')
+                if (typeof provider !== 'function')
+                  throw new Error('Choose a hover provider function.')
+                const { registerHoverProvider } = await loadInteractionBroker()
+                if (disposed) throw new Error('This addon has stopped.')
+                const remove = registerHoverProvider(completionOwner, provider)
+                const stopPresence = countEditorInteractionProvider()
+                const cleanup = () => {
+                  remove()
+                  stopPresence()
+                  cleanups.delete(cleanup)
+                }
+                cleanups.add(cleanup)
+                return cleanup
+              },
+              async registerContextActionProvider(provider) {
+                if (disposed) throw new Error('This addon has stopped.')
+                if (typeof provider !== 'function')
+                  throw new Error('Choose a context action provider function.')
+                const { registerContextActionProvider } =
+                  await loadInteractionBroker()
+                if (disposed) throw new Error('This addon has stopped.')
+                const remove = registerContextActionProvider(
+                  completionOwner,
+                  provider,
+                )
+                const stopPresence = countEditorInteractionProvider()
+                const cleanup = () => {
+                  remove()
+                  stopPresence()
                   cleanups.delete(cleanup)
                 }
                 cleanups.add(cleanup)
@@ -995,7 +1309,14 @@ export function useAddons(
                 })
               },
               updateMarkdown(transform, options) {
-                if (!disposed) latest.current.updateMarkdown(transform, options)
+                if (disposed) return
+                const isCurrent = latest.current.isCommandContextCurrent
+                for (const target of pendingCommandTargets)
+                  if (isCurrent && !isCurrent(target))
+                    throw new Error(
+                      'The command target is no longer available.',
+                    )
+                latest.current.updateMarkdown(transform, options)
               },
               registerMarkdown(extension) {
                 if (disposed) return () => {}
@@ -1077,10 +1398,25 @@ export function useAddons(
                     `This addon supplied a duplicate or invalid command: ${key}.`,
                   )
                 let active = true
+                const canRun = (context: CommandExecutionContext) => {
+                  if (!active || disposed) return false
+                  if (
+                    latest.current.isCommandContextCurrent &&
+                    !latest.current.isCommandContextCurrent(context)
+                  )
+                    return false
+                  try {
+                    return command.when?.(context) ?? true
+                  } catch (error) {
+                    latest.current.error(error)
+                    return false
+                  }
+                }
                 const entry: RegisteredCommand = {
                   ...command,
                   id: key,
                   addonId: id,
+                  canRun,
                   ...(command.slash
                     ? {
                         slash: {
@@ -1106,16 +1442,20 @@ export function useAddons(
                         },
                       }
                     : {}),
-                  run: async () => {
-                    if (!active || disposed) return
+                  run: async (context = captureCommandContext('api')) => {
+                    const target = structuredClone(context)
+                    if (!canRun(context)) return
+                    pendingCommandTargets.add(target)
                     try {
                       await performanceDiagnostics.measure(
                         id,
                         `command:${command.id}`,
-                        () => command.run(),
+                        () => command.run(context),
                       )
                     } catch (error) {
                       latest.current.error(error)
+                    } finally {
+                      pendingCommandTargets.delete(target)
                     }
                   },
                 }
@@ -1157,6 +1497,94 @@ export function useAddons(
                       ),
                     )
                   : latest.current.workspace.snapshot(),
+              changeSnapshot: () =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.getWorkspaceChangeSnapshot(),
+              listPage: (request) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.listWorkspaceEntryPage(id, request),
+              async subscribeChanges(listener) {
+                if (disposed) throw new Error('This addon has stopped.')
+                const subscription =
+                  await window.hibi.subscribeWorkspaceChanges((event) => {
+                    if (!disposed) listener(event)
+                  })
+                if (disposed) {
+                  subscription.dispose()
+                  throw new Error('This addon has stopped.')
+                }
+                const dispose = () => {
+                  subscription.dispose()
+                  cleanups.delete(dispose)
+                }
+                cleanups.add(dispose)
+                return { snapshot: subscription.snapshot, dispose }
+              },
+              readText: (target, path) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.readWorkspaceText(id, target, path),
+              readBinary: (target, path) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.readWorkspaceBinary(id, target, path),
+              createText: (target, path, markdown) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.createWorkspaceText(id, target, path, markdown),
+              createBinary: (target, path, bytes) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.createWorkspaceBinary(id, target, path, bytes),
+              updateText: (target, path, expectedVersion, markdown, options) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.updateWorkspaceText(
+                      id,
+                      target,
+                      path,
+                      expectedVersion,
+                      markdown,
+                      options,
+                    ),
+              renameFile: (
+                target,
+                sourcePath,
+                destinationPath,
+                expectedVersion,
+              ) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.renameWorkspaceFile(
+                      id,
+                      target,
+                      sourcePath,
+                      destinationPath,
+                      expectedVersion,
+                    ),
+              trashFile: (target, path, expectedVersion) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.trashWorkspaceFile(
+                      id,
+                      target,
+                      path,
+                      expectedVersion,
+                    ),
+              query: (request) =>
+                disposed
+                  ? Promise.reject(new Error('This addon has stopped.'))
+                  : window.hibi.queryWorkspaceReferences({
+                      ...request,
+                      syntaxSnapshot: captureWorkspaceSyntaxSnapshot(
+                        currentActivation.current.states.some(
+                          (state) => state.id === 'tags' && state.enabled,
+                        ),
+                        [...extensions.values()],
+                      ),
+                    }),
               index: () =>
                 disposed
                   ? Promise.reject(
@@ -1330,6 +1758,7 @@ export function useAddons(
     activation,
     started,
     executeCommand,
+    captureCommandContext,
     loaded,
     documentName,
     states,
@@ -1457,9 +1886,25 @@ export function useAddons(
       latest.current.error(error)
     }
   }
-  const visibleCommands = useMemo(
-    () => [
-      ...commands,
+  const visibleCommands = useMemo<RegisteredCommand[]>(() => {
+    const descriptors = new Map<string, AddonCommandDescriptor>(
+      catalog.flatMap((addon) =>
+        (addon.manifest.commands ?? []).map(
+          (command) => [`${addon.manifest.id}.${command.id}`, command] as const,
+        ),
+      ),
+    )
+    return [
+      ...commands.map((command) => ({
+        ...descriptors.get(command.id),
+        ...command,
+        run: (context?: CommandExecutionContext) =>
+          executeCommand(
+            command.addonId,
+            command.id.slice(command.addonId.length + 1),
+            context ?? captureCommandContext('api'),
+          ),
+      })),
       ...catalog
         .filter((addon) =>
           states.some(
@@ -1476,11 +1921,73 @@ export function useAddons(
               ...command,
               id: `${addon.manifest.id}.${command.id}`,
               addonId: addon.manifest.id,
-              run: () => executeCommand(addon.manifest.id, command.id),
+              canRun: () => true,
+              run: (context?: CommandExecutionContext) =>
+                executeCommand(
+                  addon.manifest.id,
+                  command.id,
+                  context ?? captureCommandContext('api'),
+                ),
             })),
         ),
-    ],
-    [commands, catalog, states, registered, executeCommand],
+    ]
+  }, [
+    commands,
+    catalog,
+    states,
+    registered,
+    executeCommand,
+    captureCommandContext,
+  ])
+  useEffect(() => {
+    const desired = new Map<string, HotkeyDescriptor>(
+      visibleCommands
+        .filter(
+          (command) =>
+            command.defaultShortcut || command.menu?.location === 'app',
+        )
+        .map((command) => [
+          command.id,
+          {
+            id: command.id,
+            label: command.label,
+            ...(command.defaultShortcut
+              ? { defaultShortcut: command.defaultShortcut }
+              : {}),
+            ...(command.menu?.location === 'app' ? { menu: command.menu } : {}),
+          },
+        ]),
+    )
+    for (const [id, current] of hotkeyRegistrations) {
+      const next = desired.get(id)
+      if (next && sameHotkey(current.descriptor, next)) continue
+      hotkeyRegistrations.delete(id)
+      if (hotkeyTokens.get(id) === current.token) hotkeyTokens.delete(id)
+      void queueHotkey(id, () =>
+        window.hibi.unregisterAddonHotkey(id, current.token),
+      ).catch((error) => latest.current.error(error))
+    }
+    for (const [id, descriptor] of desired) {
+      if (hotkeyRegistrations.has(id)) continue
+      const token = crypto.randomUUID()
+      hotkeyRegistrations.set(id, { descriptor, token })
+      hotkeyTokens.set(id, token)
+      void queueHotkey(id, () =>
+        window.hibi.registerAddonHotkey({ ...descriptor, token }),
+      ).catch((error) => latest.current.error(error))
+    }
+  }, [hotkeyRegistrations, hotkeyTokens, queueHotkey, visibleCommands])
+  useEffect(
+    () => () => {
+      for (const [id, current] of hotkeyRegistrations) {
+        if (hotkeyTokens.get(id) === current.token) hotkeyTokens.delete(id)
+        void queueHotkey(id, () =>
+          window.hibi.unregisterAddonHotkey(id, current.token),
+        ).catch((error) => latest.current.error(error))
+      }
+      hotkeyRegistrations.clear()
+    },
+    [hotkeyRegistrations, hotkeyTokens, queueHotkey],
   )
   return {
     catalog,
@@ -1490,6 +1997,7 @@ export function useAddons(
     app,
     states,
     commands: visibleCommands,
+    captureCommandContext,
     markdownExtensions,
     richExtensions,
     sourceExtensions,

@@ -5,6 +5,7 @@ import {
   noteTargets,
 } from '../../shared/note-links.ts'
 import type { WorkspacePage } from '../../shared/workspace'
+import type { WorkspaceGraphItem } from '../../shared/workspace-query'
 
 export { localTarget }
 
@@ -13,6 +14,7 @@ let links = new Map<
   { markdown: string; references: ReturnType<typeof noteReferences> }
 >()
 
+/** Source-only compatibility helper with default GFM/wiki syntax. */
 export function noteGraph(pages: readonly WorkspacePage[]) {
   const paths = new Set(pages.map((page) => page.path))
   const edges = new Map<string, { source: string; target: string }>()
@@ -54,6 +56,41 @@ export function noteGraph(pages: readonly WorkspacePage[]) {
       id: page.path,
       label: (page.path.split('/').at(-1) ?? page.path).replace(/\.[^.]+$/, ''),
       degree: degree.get(page.path) ?? 0,
+    })),
+    edges: [...edges.values()],
+  }
+}
+
+/** Graph UI consumes flavor-aware workspace metadata records. */
+export function metadataGraph(items: readonly WorkspaceGraphItem[]) {
+  const paths = items
+    .filter(
+      (item): item is Extract<WorkspaceGraphItem, { kind: 'node' }> =>
+        item.kind === 'node',
+    )
+    .map((item) => item.path)
+  const known = new Set(paths)
+  const edges = new Map<string, { source: string; target: string }>()
+  for (const item of items) {
+    if (
+      item.kind !== 'edge' ||
+      !known.has(item.source) ||
+      !known.has(item.target)
+    )
+      continue
+    const source = item.source < item.target ? item.source : item.target
+    const target = item.source < item.target ? item.target : item.source
+    edges.set(JSON.stringify([source, target]), { source, target })
+  }
+  const degree = new Map<string, number>()
+  for (const edge of edges.values())
+    for (const path of [edge.source, edge.target])
+      degree.set(path, (degree.get(path) ?? 0) + 1)
+  return {
+    nodes: paths.map((path) => ({
+      id: path,
+      label: (path.split('/').at(-1) ?? path).replace(/\.[^.]+$/, ''),
+      degree: degree.get(path) ?? 0,
     })),
     edges: [...edges.values()],
   }

@@ -1,8 +1,4 @@
-import { Marked } from 'marked'
-import { readFrontmatter } from './frontmatter.ts'
-
-const parser = new Marked({ gfm: true })
-const wiki = /!?\[\[([^\]\r\n]+)\]\]/g
+import { defaultNoteSyntax, type NoteSyntax, noteLexer } from './note-syntax.ts'
 
 export function wikiHref(target: string) {
   if (target.startsWith('#') && !target.startsWith('#^'))
@@ -41,6 +37,7 @@ export function wikiTarget(
   from: string,
   target: string,
   paths: ReadonlySet<string>,
+  basenames?: ReadonlyMap<string, readonly string[]>,
 ) {
   const file = target.split('#')[0]?.trim() ?? ''
   if (!file) return from
@@ -59,21 +56,36 @@ export function wikiTarget(
     if (paths.has(beside)) return beside
   }
   if (name.includes('/')) return null
-  const matches = [...paths].filter((path) =>
-    candidates.some((candidate) => path.split('/').at(-1) === candidate),
-  )
+  const matches = basenames
+    ? candidates.flatMap((candidate) => basenames.get(candidate) ?? [])
+    : [...paths].filter((path) =>
+        candidates.some((candidate) => path.split('/').at(-1) === candidate),
+      )
   return matches.length === 1 ? (matches[0] ?? null) : null
 }
 
-export function noteReferences(source: string) {
+export function noteBasenames(paths: ReadonlySet<string>) {
+  const basenames = new Map<string, string[]>()
+  for (const path of paths) {
+    const name = path.split('/').at(-1) ?? path
+    const matches = basenames.get(name)
+    if (matches) matches.push(path)
+    else basenames.set(name, [path])
+  }
+  return basenames
+}
+
+export function noteReferences(
+  source: string,
+  syntax: NoteSyntax = defaultNoteSyntax,
+) {
   const links: string[] = []
   const wikilinks: string[] = []
-  const body = readFrontmatter(source)?.content ?? source
-  parser.walkTokens(parser.lexer(body), (token) => {
+  const { parser, tokens } = noteLexer(source, syntax)
+  parser.walkTokens(tokens, (token) => {
     if (token.type === 'link') links.push(token.href)
-    if (token.type === 'text')
-      for (const match of token.raw.matchAll(wiki))
-        wikilinks.push((match[1] ?? '').split('|')[0] ?? '')
+    if (token.type === 'obsidianWikiLink' || token.type === 'obsidianEmbed')
+      wikilinks.push(String(token.target ?? ''))
     return []
   })
   return { links, wikilinks }
@@ -84,6 +96,7 @@ export function noteTargets(
   from: string,
   paths: ReadonlySet<string>,
   references = noteReferences(source),
+  basenames?: ReadonlyMap<string, readonly string[]>,
 ) {
   const targets = new Set<string>()
   for (const href of references.links) {
@@ -91,7 +104,7 @@ export function noteTargets(
     if (target) targets.add(target)
   }
   for (const href of references.wikilinks) {
-    const target = wikiTarget(from, href, paths)
+    const target = wikiTarget(from, href, paths, basenames)
     if (target) targets.add(target)
   }
   targets.delete(from)

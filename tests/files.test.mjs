@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { crashAndReload, electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('native file operations preserve drafts and avoid silent overwrites', {
   timeout: 30000,
@@ -121,14 +122,22 @@ test('native file operations preserve drafts and avoid silent overwrites', {
     true,
   )
 
-  await page.waitForFunction(
-    () =>
-      document.querySelector('.cm-content')?.getAttribute('contenteditable') ===
-      'true',
-  )
   await page
-    .getByRole('textbox', { name: /markdown editor/i })
-    .fill('recover this draft')
+    .locator(
+      '.editor-panes.mode-markdown[data-source-ready="true"] .source-pane:not([inert]) .cm-content[contenteditable="true"]',
+    )
+    .waitFor()
+  const draft = 'recover this draft'
+  await page.getByRole('textbox', { name: /markdown editor/i }).fill(draft)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    draft,
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    draft,
+  )
   await app.evaluate(({ dialog }) => {
     dialog.showMessageBox = async () => ({
       response: 2,
@@ -149,6 +158,6 @@ test('native file operations preserve drafts and avoid silent overwrites', {
     const contents = BrowserWindow.getAllWindows()[0].webContents
     return contents.executeJavaScript('window.hibi.getDocument()')
   })
-  assert.equal(recovered.markdown, 'recover this draft')
+  assert.equal(recovered.markdown, draft)
   assert.equal(recovered.dirty, true)
 })

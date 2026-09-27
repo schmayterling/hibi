@@ -1,28 +1,46 @@
 import { CircleAlert, FileText, Tags } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
+import type { WorkspaceTagSummary } from '../../shared/workspace-query'
+import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import type { AddonContext } from '../api'
 import { Button, ControlRow, Panel, PanelMessage, TextInput } from '../ui'
-import { useWorkspaceSnapshot } from '../workspace-snapshot'
-import type { TagAnalysis } from './analysis'
-import { type TagIndexCache, tagIndex } from './model'
+import { useWorkspaceQueryTarget } from '../use-workspace-query'
 
 export function TagsPanel({
   context,
   selection,
-  analysis,
 }: {
   context: AddonContext
   selection: unknown
-  analysis: TagAnalysis
 }) {
-  const { snapshot, document, workspace, loading, error } =
-    useWorkspaceSnapshot(context)
+  const {
+    target,
+    workspace,
+    loading: targetLoading,
+    error: targetError,
+  } = useWorkspaceQueryTarget(context)
   const [query, setQuery] = useState('')
   const [selected, select] = useState('')
-  const parsed = useRef<TagIndexCache>({
-    workspaceId: undefined,
-    pages: new Map(),
-  }).current
+  const syntaxRevision = useSyncExternalStore(
+    workspaceSyntaxEvents.subscribe,
+    workspaceSyntaxEvents.snapshot,
+  )
+  const [summary, setSummary] = useState<{
+    workspaceId: string
+    generation: number
+    syntaxRevision: number
+    tags: readonly WorkspaceTagSummary[]
+    complete: boolean
+  } | null>(null)
+  const [selectedFiles, setSelectedFiles] = useState<{
+    workspaceId: string
+    generation: number
+    syntaxRevision: number
+    tag: string
+    files: readonly string[]
+  } | null>(null)
+  const [queryError, setQueryError] = useState('')
+  const [loading, setLoading] = useState(true)
   useEffect(() => {
     const tag =
       selection && typeof selection === 'object' && 'tag' in selection
@@ -33,18 +51,120 @@ export function TagsPanel({
       setQuery('')
     }
   }, [selection])
-  const index = useMemo(() => {
-    const activeSource = snapshot?.pages.find(
-      (page) => page.id === document?.id,
-    )?.markdown
-    return tagIndex(workspace?.id, snapshot?.pages ?? [], parsed, (source) =>
-      analysis.parsePage(source, activeSource),
-    )
-  }, [workspace?.id, snapshot, document?.id, parsed, analysis])
-  const matches = index.filter(([tag]) =>
+  useEffect(() => {
+    if (!target) {
+      setSummary(null)
+      setLoading(false)
+      return
+    }
+    let active = true
+    setLoading(true)
+    setQueryError('')
+    const load = async () => {
+      try {
+        const tags: WorkspaceTagSummary[] = []
+        let offset = 0
+        let complete = false
+        do {
+          const response = await context.workspace.query({
+            target,
+            kind: 'tags',
+            offset,
+            limit: 100,
+          })
+          if (!response.ok) throw new Error(response.message)
+          if (response.value.kind !== 'tags')
+            throw new Error('Invalid tags query.')
+          tags.push(...response.value.items)
+          complete = response.value.complete
+          if (!response.value.hasMore) break
+          if (response.value.nextOffset <= offset)
+            throw new Error('Tags query stopped early.')
+          offset = response.value.nextOffset
+        } while (active)
+        if (active)
+          setSummary({
+            workspaceId: target.workspaceId,
+            generation: target.workspaceGeneration,
+            syntaxRevision,
+            tags,
+            complete,
+          })
+      } catch (error) {
+        if (active)
+          setQueryError(error instanceof Error ? error.message : String(error))
+      } finally {
+        if (active) setLoading(false)
+      }
+    }
+    void load()
+    return () => {
+      active = false
+    }
+  }, [context, target, syntaxRevision])
+  useEffect(() => {
+    if (!target || !selected) {
+      setSelectedFiles(null)
+      return
+    }
+    let active = true
+    const load = async () => {
+      try {
+        const files: string[] = []
+        let offset = 0
+        do {
+          const response = await context.workspace.query({
+            target,
+            kind: 'tag',
+            tag: selected,
+            offset,
+            limit: 100,
+          })
+          if (!response.ok) throw new Error(response.message)
+          if (response.value.kind !== 'tag')
+            throw new Error('Invalid tag query.')
+          files.push(...response.value.items)
+          if (!response.value.hasMore) break
+          if (response.value.nextOffset <= offset)
+            throw new Error('Tag query stopped early.')
+          offset = response.value.nextOffset
+        } while (active)
+        if (active)
+          setSelectedFiles({
+            workspaceId: target.workspaceId,
+            generation: target.workspaceGeneration,
+            syntaxRevision,
+            tag: selected,
+            files,
+          })
+      } catch (error) {
+        if (active)
+          setQueryError(error instanceof Error ? error.message : String(error))
+      }
+    }
+    void load()
+    return () => {
+      active = false
+    }
+  }, [context, target, selected, syntaxRevision])
+  const current =
+    summary?.workspaceId === target?.workspaceId &&
+    summary?.generation === target?.workspaceGeneration &&
+    summary?.syntaxRevision === syntaxRevision
+      ? summary
+      : null
+  const index = current?.tags ?? []
+  const matches = index.filter(({ tag }) =>
     tag.includes(query.trim().replace(/^#/, '').toLowerCase()),
   )
-  const files = index.find(([tag]) => tag === selected)?.[1] ?? []
+  const files =
+    selectedFiles?.workspaceId === target?.workspaceId &&
+    selectedFiles?.generation === target?.workspaceGeneration &&
+    selectedFiles?.syntaxRevision === syntaxRevision &&
+    selectedFiles?.tag === selected
+      ? selectedFiles.files
+      : []
+  const error = targetError || queryError
   return (
     <Panel className="tags-panel">
       <ControlRow className="tags-controls">
@@ -64,7 +184,7 @@ export function TagsPanel({
         >
           {error}
         </PanelMessage>
-      ) : loading && !snapshot ? (
+      ) : (targetLoading || loading) && !current ? (
         <PanelMessage icon={<Tags size={24} />} title="Reading tags…" loading />
       ) : !workspace ? (
         <PanelMessage icon={<Tags size={24} />} title="No workspace open">
@@ -75,6 +195,9 @@ export function TagsPanel({
           icon={<Tags size={24} />}
           title={index.length ? 'No matching tags' : 'No tags yet'}
         >
+          {current && !current.complete && (
+            <span role="status">Tag index incomplete. </span>
+          )}
           {index.length
             ? 'Try another filter.'
             : 'Write #tag in a note to organize it here.'}
@@ -82,7 +205,8 @@ export function TagsPanel({
       ) : (
         <div className="tags-browser">
           <section className="tags-list" aria-label="Workspace tags">
-            {matches.map(([tag, paths]) => (
+            {!current?.complete && <p role="status">Tag index incomplete.</p>}
+            {matches.map(({ tag, count }) => (
               <Button
                 variant="row"
                 key={tag}
@@ -90,7 +214,7 @@ export function TagsPanel({
                 onClick={() => select(tag)}
               >
                 <span>#{tag}</span>
-                <span>{paths.length}</span>
+                <span>{count}</span>
               </Button>
             ))}
           </section>

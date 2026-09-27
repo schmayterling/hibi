@@ -59,7 +59,9 @@ async function measure(page, start, app, scenario) {
   const typing = []
   for (let i = 0; i < 8; i++) {
     const before = performance.now()
-    await editor.press('a')
+    if (process.env.HIBI_BENCH_INSERT_TEXT === '1')
+      await page.keyboard.insertText('a')
+    else await editor.press('a')
     typing.push(performance.now() - before)
     await new Promise((done) => setTimeout(done, 50))
   }
@@ -242,8 +244,7 @@ try {
         platform: process.platform,
         arch: process.arch,
         enabledAddons,
-        conditions:
-          'Production assets in test Electron; fresh profile is not OS cold-cache; hidden windows; automation latency included.',
+        conditions: `Production assets in test Electron; fresh profile is not OS cold-cache; ${process.env.GITHUB_ACTIONS === 'true' ? 'visible focused windows' : 'hidden windows'}; automation latency included.`,
         initialBytes: initial.reduce((sum, chunk) => sum + chunk.bytes, 0),
         initialModules: initial.flatMap((chunk) => chunk.modules),
         summary,

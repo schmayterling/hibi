@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import type { AddonManifest, MarkdownFlavor } from '../../addons/api'
+import type { ViewId } from '../../shared/foundation-contracts'
 import { needsOwnedSource } from '../../shared/preservation'
 import { addonRegistry } from './addon-registry'
 import { documentRuntime } from './document-runtime'
@@ -8,6 +9,7 @@ import type { MarkdownEditor } from './Editor'
 import { type FlavorChoice, flavorMatches } from './flavors'
 import { projectMarkdown } from './markdown-projection'
 import { markdownSyntax } from './markdown-syntax'
+import { mountedDocumentEdits } from './mounted-document-edits'
 
 type EditorProps = Parameters<typeof MarkdownEditor>[0]
 export type DocumentFlavorStatus = { label: string; unsupported: boolean }
@@ -33,6 +35,23 @@ export function ActiveDocumentEditor({
   enabledAddons: ReadonlySet<string>
   onFlavorStatus: (status: DocumentFlavorStatus) => void
 }) {
+  const viewId =
+    (props.viewId as ViewId | undefined) ??
+    documentRuntime.primaryViewId(props.document.tabId)
+  const documentTarget = documentRuntime.captureDocument(props.document.tabId)
+  useEffect(() => {
+    if (
+      !viewId ||
+      !documentTarget ||
+      documentRuntime.captureDocument(props.document.tabId) !== documentTarget
+    )
+      return
+    return documentRuntime.registerView(
+      props.document.tabId,
+      viewId,
+      mountedDocumentEdits.bindView,
+    )
+  }, [props.document.tabId, documentTarget, viewId])
   const protectionFlavors = useMemo(
     () =>
       knownFlavors.filter(
@@ -71,6 +90,7 @@ export function ActiveDocumentEditor({
         documentRuntime,
         props.mode === 'markdown',
         certifiedVisual,
+        props.document.tabId,
       ),
     [
       props.mode,
@@ -114,22 +134,27 @@ export function ActiveDocumentEditor({
   useEffect(() => {
     if (!markdown) return
     // Display-only flavor detection can wait for typing to pause.
-    return afterDocumentQuiet(documentRuntime, document, () => {
-      const body = projectMarkdown(source, props.markdownExtensions).content
-      const detected = knownFlavors.filter((flavor) =>
-        flavorMatches(flavor, body),
-      )
-      const label = [
-        (flavorChoice.dialect === 'auto'
-          ? detected.find((flavor) => flavor.kind === 'dialect')?.name
-          : chosenFlavors.find((flavor) => flavor.kind === 'dialect')?.name) ??
-          'markdown',
-        ...detected
-          .filter((flavor) => flavor.kind === 'syntax')
-          .map((flavor) => flavor.name),
-      ].join(' + ')
-      onFlavorStatus({ label, unsupported })
-    })
+    return afterDocumentQuiet(
+      documentRuntime,
+      document,
+      () => {
+        const body = projectMarkdown(source, props.markdownExtensions).content
+        const detected = knownFlavors.filter((flavor) =>
+          flavorMatches(flavor, body),
+        )
+        const label = [
+          (flavorChoice.dialect === 'auto'
+            ? detected.find((flavor) => flavor.kind === 'dialect')?.name
+            : chosenFlavors.find((flavor) => flavor.kind === 'dialect')
+                ?.name) ?? 'markdown',
+          ...detected
+            .filter((flavor) => flavor.kind === 'syntax')
+            .map((flavor) => flavor.name),
+        ].join(' + ')
+        onFlavorStatus({ label, unsupported })
+      },
+      document.tabId,
+    )
   }, [
     markdown,
     document,
@@ -141,5 +166,12 @@ export function ActiveDocumentEditor({
     unsupported,
     onFlavorStatus,
   ])
-  return <Component {...props} document={document} value={source} />
+  return (
+    <Component
+      {...props}
+      {...(viewId ? { viewId } : {})}
+      document={document}
+      value={source}
+    />
+  )
 }

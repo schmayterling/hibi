@@ -16,8 +16,10 @@ export const DOCUMENT_CHANNELS = {
   externalPending: 'document:external-pending',
   new: 'document:new',
   save: 'document:save',
+  saveTarget: 'document:save-target',
   autosave: 'document:autosave',
   selectTab: 'document:select-tab',
+  focusTab: 'document:focus-tab',
   closeTab: 'document:close-tab',
   moveTab: 'document:move-tab',
   tabsEnabled: 'document:tabs-enabled',
@@ -51,6 +53,7 @@ export type DocumentState = {
   canAutosave: boolean
 }
 export type DocumentTab = { id: string; name: string; dirty: boolean }
+export type DocumentFocus = Omit<DocumentState, 'markdown' | 'savedMarkdown'>
 export type AutosaveResult = {
   status: 'saved' | 'skipped' | 'conflict'
   document: DocumentState | null
@@ -70,6 +73,39 @@ export type AppInfo = {
 }
 
 export type DesktopApi = {
+  getAddonHotkeys: () => Promise<import('./addon-hotkeys').AddonHotkeyBinding[]>
+  registerAddonHotkey: (
+    registration: import('./addon-hotkeys').AddonHotkeyRegistration,
+  ) => Promise<import('./addon-hotkeys').AddonHotkeyBinding[]>
+  unregisterAddonHotkey: (id: string, token: string) => Promise<void>
+  saveAddonHotkey: (
+    id: string,
+    shortcut: string,
+  ) => Promise<import('./addon-hotkeys').AddonHotkeyBinding[]>
+  resetAddonHotkey: (
+    id: string,
+  ) => Promise<import('./addon-hotkeys').AddonHotkeyBinding[]>
+  onAddonHotkeysChanged: (
+    callback: (
+      bindings: import('./addon-hotkeys').AddonHotkeyBinding[],
+    ) => void,
+  ) => () => void
+  onAddonCommand: (
+    callback: (
+      invocation: import('./addon-hotkeys').AddonCommandInvocation,
+    ) => void,
+  ) => () => void
+  registerGlobalShortcut: (
+    id: string,
+    accelerator: string,
+    token: string,
+  ) => Promise<void>
+  unregisterGlobalShortcut: (id: string, token: string) => Promise<void>
+  onGlobalShortcut: (
+    callback: (
+      invocation: import('./global-shortcuts').GlobalShortcutInvocation,
+    ) => void,
+  ) => () => void
   getUpdateState: () => Promise<import('./updates').UpdateState>
   setUpdateChannel: (
     channel: import('./updates').UpdateChannel,
@@ -173,9 +209,161 @@ export type DesktopApi = {
   ) => Promise<void>
   getAddonStates: () => Promise<AddonState[]>
   setAddonEnabled: (id: string, enabled: boolean) => Promise<AddonState[]>
+  readAddonStorage: (
+    request: import('./addon-storage').AddonStorageReadRequest,
+  ) => Promise<import('./addon-storage').AddonStorageReadResult>
+  writeAddonStorage: (
+    request: import('./addon-storage').AddonStorageWriteRequest,
+  ) => Promise<import('./addon-storage').AddonStorageWriteResult>
+  onAddonStorageChanged: (
+    callback: (change: import('./addon-storage').AddonStorageChange) => void,
+  ) => () => void
+  selectUserText: (
+    owner: string,
+  ) => Promise<import('./selected-text').SelectedTextSelection>
+  readSelectedText: (
+    owner: string,
+    handle: string,
+  ) => Promise<import('./selected-text').SelectedTextRead>
+  selectHostImport: (
+    owner: string,
+    choice?: import('./host-selected-io').HostImportChoice,
+  ) => Promise<import('./host-selected-io').HostSelectedIoSelection>
+  readHostImport: (
+    owner: string,
+    handle: string,
+  ) => Promise<import('./host-selected-io').HostSelectedIoRead>
+  selectHostExport: (
+    owner: string,
+    choice: import('./host-selected-io').HostExportChoice,
+  ) => Promise<import('./host-selected-io').HostSelectedIoSelection>
+  writeHostExport: (
+    owner: string,
+    handle: string,
+    bytes: Uint8Array,
+  ) => Promise<import('./host-selected-io').HostSelectedIoWrite>
+  cancelHostSelectedIo: (
+    owner: string,
+    handle: string,
+  ) => Promise<import('./host-selected-io').HostSelectedIoCancel>
+  getHostText: (
+    owner: string,
+    request: import('./host-network').HostTextRequest,
+  ) => Promise<import('./host-network').HostTextResult>
+  storeHostCredential: (
+    owner: string,
+    request: import('./host-credentials').StoreCredentialRequest,
+  ) => Promise<
+    import('./host-credentials').CredentialResult<{
+      mode: import('./host-credentials').CredentialMode
+    }>
+  >
+  removeHostCredential: (
+    owner: string,
+    request: import('./host-credentials').CredentialKeyRequest,
+  ) => Promise<
+    import('./host-credentials').CredentialResult<{ removed: boolean }>
+  >
+  getHostCredentialStatus: (
+    owner: string,
+    request: import('./host-credentials').CredentialKeyRequest,
+  ) => Promise<
+    import('./host-credentials').CredentialResult<
+      import('./host-credentials').CredentialStatus
+    >
+  >
   invokeAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   queryAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   getWorkspace: () => Promise<WorkspaceState | null>
+  getWorkspaceChangeSnapshot: () => Promise<
+    import('./workspace').WorkspaceStreamSnapshot
+  >
+  listWorkspaceEntryPage: (
+    owner: string,
+    request: import('./workspace').WorkspaceEntryPageRequest,
+  ) => Promise<import('./workspace').WorkspaceEntryPageResult>
+  subscribeWorkspaceChanges: (
+    callback: import('./workspace').WorkspaceChangeListener,
+  ) => Promise<import('./workspace').WorkspaceChangeSubscription>
+  readWorkspaceText: (
+    owner: string,
+    target: import('./foundation-contracts').WorkspaceTarget,
+    path: string,
+  ) => Promise<
+    import('./workspace').WorkspaceFileResult<
+      import('./workspace').WorkspaceTextRead
+    >
+  >
+  readWorkspaceBinary: (
+    owner: string,
+    target: import('./foundation-contracts').WorkspaceTarget,
+    path: string,
+  ) => Promise<
+    import('./workspace').WorkspaceFileResult<
+      import('./workspace').WorkspaceBinaryRead
+    >
+  >
+  createWorkspaceText: (
+    owner: string,
+    target: import('./foundation-contracts').WorkspaceTarget,
+    path: string,
+    markdown: string,
+  ) => Promise<
+    import('./workspace').WorkspaceFileResult<
+      import('./workspace').WorkspaceTextCreation
+    >
+  >
+  createWorkspaceBinary: (
+    owner: string,
+    target: import('./foundation-contracts').WorkspaceTarget,
+    path: string,
+    bytes: Uint8Array,
+  ) => Promise<
+    import('./workspace').WorkspaceFileResult<
+      import('./workspace').WorkspaceBinaryCreation
+    >
+  >
+  updateWorkspaceText: (
+    owner: string,
+    target: import('./foundation-contracts').WorkspaceTarget,
+    path: string,
+    expectedVersion: string,
+    markdown: string,
+    options: import('./workspace').WorkspaceTextUpdateOptions,
+  ) => Promise<
+    import('./workspace').WorkspaceFileResult<
+      import('./workspace').WorkspaceTextUpdate
+    >
+  >
+  renameWorkspaceFile: (
+    owner: string,
+    target: import('./foundation-contracts').WorkspaceTarget,
+    sourcePath: string,
+    destinationPath: string,
+    expectedVersion: import('./workspace').WorkspaceFileVersion,
+  ) => Promise<
+    import('./workspace').WorkspaceFileResult<
+      import('./workspace').WorkspaceFileRename
+    >
+  >
+  trashWorkspaceFile: (
+    owner: string,
+    target: import('./foundation-contracts').WorkspaceTarget,
+    path: string,
+    expectedVersion: import('./workspace').WorkspaceFileVersion,
+  ) => Promise<
+    import('./workspace').WorkspaceFileResult<
+      import('./workspace').WorkspaceFileTrash
+    >
+  >
+  queryWorkspaceReferences: (
+    request: import('./workspace-query').WorkspaceReferenceQueryRequest,
+  ) => Promise<
+    import('./foundation-contracts').OperationResult<
+      import('./workspace-query').WorkspaceReferenceQueryResult,
+      import('./workspace-query').QueryFailure
+    >
+  >
   getWorkspaceSettings: () => Promise<
     import('./workspace-settings').WorkspaceSettings
   >
@@ -214,6 +402,10 @@ export type DesktopApi = {
   setUiCase: (value: import('./ui-case').UiCase) => Promise<void>
   getDocument: () => Promise<DocumentState>
   selectDocumentTab: (id: string) => Promise<DocumentState>
+  focusDocumentTab: (
+    id: string,
+    expected: Pick<DocumentFocus, 'contentVersion' | 'revision'>,
+  ) => Promise<DocumentFocus>
   closeDocumentTab: (id: string) => Promise<DocumentState | null>
   moveDocumentTab: (
     id: string,
@@ -231,7 +423,9 @@ export type DesktopApi = {
     operation: import('./source-operations').SourceOperation,
   ) => void
   onDocumentCheckpoint: (
-    callback: () => import('./document-checkpoint').JournalCheckpoint,
+    callback: (
+      tabId: string,
+    ) => import('./document-checkpoint').JournalCheckpoint,
   ) => () => void
   getDocumentRecoveryState: () => ReturnType<
     ReturnType<
@@ -247,7 +441,13 @@ export type DesktopApi = {
   onExternalDocuments: (callback: () => void) => () => void
   newDocument: () => Promise<DocumentState | null>
   saveDocument: (saveAs: boolean) => Promise<DocumentState | null>
-  autosaveDocument: (revision: number) => Promise<AutosaveResult>
+  saveTargetDocument: (
+    owner: string,
+    tabId: string,
+    revision: number,
+    contentVersion: number,
+  ) => Promise<import('./document-edits').DocumentSaveResult>
+  autosaveDocument: (tabId: string, revision: number) => Promise<AutosaveResult>
   renameDocument: (name: string) => Promise<DocumentState>
   readDocumentImage: (
     source: string,

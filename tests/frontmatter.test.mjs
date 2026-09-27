@@ -374,6 +374,12 @@ test('typing a leading divider never activates frontmatter or disables editing',
       .getByRole('button', { name: /^source view$/i, exact: true })
       .click()
     await page.getByRole('textbox', { name: /markdown editor/i }).fill(source)
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      source,
+    )
     await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
     assert.equal(await rich.getAttribute('contenteditable'), 'true')
     assert.equal(await page.locator('.frontmatter').count(), 0)

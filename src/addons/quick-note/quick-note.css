@@ -1,0 +1,37 @@
+.quick-note-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.quick-note-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.quick-note-form textarea {
+  min-height: 12rem;
+  resize: vertical;
+}
+
+.quick-note-form [role="alert"] {
+  margin: 0;
+  color: var(--status-danger);
+}
+
+.quick-note-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.quick-note-target {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.quick-note-target .select-control {
+  min-width: min(100%, 18rem);
+}

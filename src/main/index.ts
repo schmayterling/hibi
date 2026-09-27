@@ -1,23 +1,31 @@
 import { randomUUID } from 'node:crypto'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { serialize } from 'node:v8'
 import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron'
 import {
   app,
   BrowserWindow,
   dialog,
+  globalShortcut,
   ipcMain,
   Menu,
   nativeImage,
   nativeTheme,
   net,
   protocol,
+  safeStorage,
   session,
   shell,
   systemPreferences,
 } from 'electron'
 import { ADDON_CHANNELS } from '../addons/api'
 import { ABOUT_CHANNELS, SPONSOR_URL } from '../shared/about'
+import {
+  ADDON_HOTKEY_CHANNELS,
+  type AddonHotkeyRegistration,
+} from '../shared/addon-hotkeys'
+import { ADDON_STORAGE_CHANNELS } from '../shared/addon-storage'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
 import { DEPENDENCY_CHANNELS } from '../shared/dependencies'
@@ -30,11 +38,20 @@ import {
 } from '../shared/desktop'
 import {
   journalHead,
+  parseJournalCheckpoint,
   verifyJournalCheckpoint,
 } from '../shared/document-checkpoint'
 import { createJournalReceiver } from '../shared/document-journal'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
+import type { AddonId, WorkspaceTarget } from '../shared/foundation-contracts'
+import {
+  GLOBAL_SHORTCUT_CHANNELS,
+  type GlobalShortcutInvocation,
+} from '../shared/global-shortcuts'
 import { HISTORY_CHANNELS } from '../shared/history'
+import { HOST_CREDENTIAL_CHANNELS } from '../shared/host-credentials'
+import { HOST_NETWORK_CHANNELS } from '../shared/host-network'
+import { HOST_SELECTED_IO_CHANNELS } from '../shared/host-selected-io'
 import {
   type AppCommand,
   accelerator,
@@ -44,21 +61,29 @@ import {
 } from '../shared/hotkeys'
 import { IMPORT_CHANNELS } from '../shared/imports'
 import { MEDIA_CHANNELS } from '../shared/media'
+import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
 import { startupMark, startupSpan } from '../shared/startup'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
 import { UPDATE_CHANNELS } from '../shared/updates'
 import { WORKSPACE_CHANNELS } from '../shared/workspace'
 import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
+import { AddonHotkeys } from './addon-hotkeys'
+import { createAddonStorage } from './addon-storage'
 import {
+  currentAddonOwner,
   enableAddon,
+  getAddonActivationGeneration,
   getAddonStartupNotices,
   getAddonStates,
   installAddon,
+  invalidateAddonActivations,
   invokeAddon,
+  isAddonActivationCurrent,
   loadAddons,
   readAddonDocumentation,
   removeAddon,
+  setAddonDeactivationHandler,
 } from './addons'
 import { analysisService } from './analysis'
 import { appearanceColors, loadAppearance, saveAppearance } from './appearance'
@@ -68,9 +93,13 @@ import {
   confirmDiscard,
   confirmDiscardAll,
   discardChanges,
+  focusDocumentTab,
   getDocument,
   getDocumentPath,
-  getDocumentSource,
+  getDocumentPathForTab,
+  getDocumentSourceFor,
+  getOpenDocumentVersions,
+  hasOpenDocumentPath,
   loadDocument,
   loadDocumentPreferences,
   moveDocumentTab,
@@ -80,6 +109,7 @@ import {
   renameDocument,
   restoreDocument,
   saveDocument,
+  saveTargetDocument,
   selectDocumentTab,
   setTabsEnabled,
   updateDocument,
@@ -87,7 +117,11 @@ import {
 } from './document'
 import { isDocumentName } from './document-types'
 import { externalFileArguments } from './external-files'
+import { GlobalShortcuts } from './global-shortcuts'
 import { listVersions, previewVersion } from './history'
+import { HostCredentials } from './host-credentials'
+import { HostNetwork } from './host-network'
+import { HostSelectedIoService } from './host-selected-io'
 import { hotkeys, loadHotkeys, saveHotkeys } from './hotkeys'
 import { readDocumentImage } from './images'
 import { listLicenses, readLicense } from './licenses'
@@ -114,6 +148,7 @@ import {
   isTrustedRendererUrl,
   resolveAssetPath,
 } from './security'
+import { SelectedTextService } from './selected-text'
 import { installedAddons, installedAsset, openAddonsFolder } from './sideload'
 import { getUiCase, loadUiCase, saveUiCase } from './ui-case'
 import {
@@ -135,15 +170,28 @@ import {
   documentFileChanged,
   getWorkspace,
   indexWorkspace,
+  isCurrentWorkspaceTarget,
+  listWorkspaceEntryPage,
   observeWorkspace,
   openRecentWorkspace,
   openWorkspace,
   openWorkspaceFile,
   refreshWorkspace,
   snapshotWorkspace,
+  subscribeWorkspaceChanges,
+  workspaceChangeSnapshot,
   workspaceRoot,
 } from './workspace'
 import { workspaceAction } from './workspace-actions'
+import {
+  createWorkspaceBinary,
+  createWorkspaceText,
+  readWorkspaceBinary,
+  readWorkspaceText,
+  renameWorkspaceFile,
+  trashWorkspaceFile,
+  updateWorkspaceText,
+} from './workspace-files'
 import {
   getWorkspaceSettings,
   openStartupWorkspace,
@@ -163,6 +211,94 @@ const appIcon = app.isPackaged
   : join(app.getAppPath(), 'build', iconName)
 app.enableSandbox()
 const testing = !app.isPackaged && app.commandLine.hasSwitch('hibi-test')
+const foundationsIpcBenchmark =
+  testing && process.env.HIBI_FOUNDATIONS_IPC_BENCH === '1'
+    ? (() => {
+        const invokes = new Map<
+          string,
+          {
+            calls: number
+            requestBytesEstimate: number
+            responseBytesEstimate: number
+            failedCalls: number
+            unavailableEstimates: number
+          }
+        >()
+        const sends = new Map<
+          string,
+          {
+            calls: number
+            payloadBytesEstimate: number
+            unavailableEstimates: number
+          }
+        >()
+        const estimate = (value: unknown) => {
+          try {
+            return serialize(value).byteLength
+          } catch {
+            return null
+          }
+        }
+        const invoke = (channel: string) => {
+          let count = invokes.get(channel)
+          if (!count) {
+            count = {
+              calls: 0,
+              requestBytesEstimate: 0,
+              responseBytesEstimate: 0,
+              failedCalls: 0,
+              unavailableEstimates: 0,
+            }
+            invokes.set(channel, count)
+          }
+          return count
+        }
+        const snapshot = () => ({
+          invokes: Object.fromEntries(
+            [...invokes].map(([channel, count]) => [channel, { ...count }]),
+          ),
+          sends: Object.fromEntries(
+            [...sends].map(([channel, count]) => [channel, { ...count }]),
+          ),
+        })
+        Object.assign(globalThis, {
+          __hibiFoundationsIpcBenchmark: { snapshot },
+        })
+        return {
+          request(channel: string, payload: unknown[]) {
+            const count = invoke(channel)
+            count.calls++
+            const bytes = estimate(payload)
+            if (bytes === null) count.unavailableEstimates++
+            else count.requestBytesEstimate += bytes
+          },
+          response(channel: string, payload: unknown) {
+            const count = invoke(channel)
+            const bytes = estimate(payload)
+            if (bytes === null) count.unavailableEstimates++
+            else count.responseBytesEstimate += bytes
+          },
+          failed(channel: string) {
+            invoke(channel).failedCalls++
+          },
+          send(channel: string, payload: unknown) {
+            let count = sends.get(channel)
+            if (!count) {
+              count = {
+                calls: 0,
+                payloadBytesEstimate: 0,
+                unavailableEstimates: 0,
+              }
+              sends.set(channel, count)
+            }
+            count.calls++
+            const bytes = estimate([payload])
+            if (bytes === null) count.unavailableEstimates++
+            else count.payloadBytesEstimate += bytes
+          },
+        }
+      })()
+    : null
 if (testing)
   app.on('web-contents-created', (_event, contents) =>
     contents.setAudioMuted(true),
@@ -202,9 +338,132 @@ const devUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
 const rendererUrl = devUrl ? new URL(devUrl).href : 'app://hibi/'
 const rendererRoot = join(import.meta.dirname, '../renderer')
 let mainWindow: BrowserWindow | null = null
+let networkWindowKey: object = {}
+const addonStorage = createAddonStorage(
+  join(app.getPath('userData'), 'addon-storage'),
+  isCurrentWorkspaceTarget,
+  isAddonActivationCurrent,
+)
+const selectedText = new SelectedTextService(currentAddonOwner)
+const selectedIo = new HostSelectedIoService(currentAddonOwner, {
+  isOpenDocument: hasOpenDocumentPath,
+})
+async function askNetworkGrant(
+  windowKey: object,
+  signal: AbortSignal,
+  message: string,
+  detail: string,
+) {
+  const window = mainWindow
+  if (
+    !window ||
+    window.isDestroyed() ||
+    windowKey !== networkWindowKey ||
+    signal.aborted
+  )
+    return false
+  try {
+    const { response } = await dialog.showMessageBox(window, {
+      type: 'question',
+      buttons: ['Cancel', 'Allow once'],
+      defaultId: 0,
+      cancelId: 0,
+      message,
+      detail,
+    })
+    return (
+      response === 1 &&
+      !signal.aborted &&
+      windowKey === networkWindowKey &&
+      !window.isDestroyed()
+    )
+  } catch {
+    return false
+  }
+}
+const hostNetwork = new HostNetwork({
+  currentOwner: currentAddonOwner,
+  isWindowLive: (key) =>
+    key === networkWindowKey &&
+    !!mainWindow &&
+    !mainWindow.isDestroyed() &&
+    !mainWindow.webContents.isDestroyed(),
+  grantDestination: (grant, signal) =>
+    askNetworkGrant(
+      grant.windowKey,
+      signal,
+      grant.credentialKey
+        ? `Allow ${grant.addonId} to use a stored credential for this HTTPS URL?`
+        : `Allow ${grant.addonId} to read this HTTPS URL?`,
+      grant.credentialKey
+        ? `${grant.url}\nCredential: ${grant.credentialKey} (bearer token)\n\nOnly this GET request is allowed. Credentials are not sent to redirects.`
+        : `${grant.url}\n\nOnly this GET request is allowed. Redirects ask again.`,
+    ),
+  grantPrivateAddress: (grant, signal) =>
+    askNetworkGrant(
+      grant.windowKey,
+      signal,
+      `Allow ${grant.addonId} to contact a local or private address?`,
+      `${grant.url}\nAddress: ${grant.address}${grant.credentialKey ? `\nCredential: ${grant.credentialKey} (bearer token)` : ''}\n\nOnly this GET request is allowed.`,
+    ),
+  applyCredential: (owner, windowKey, key, apply) =>
+    hostCredentials.applyForApprovedRequest(owner, windowKey, key, apply),
+})
+const hostCredentials = new HostCredentials({
+  directory: join(app.getPath('userData'), 'addon-credentials'),
+  storage: safeStorage,
+  currentOwner: currentAddonOwner,
+  isWindowLive: (key) =>
+    key === networkWindowKey &&
+    !!mainWindow &&
+    !mainWindow.isDestroyed() &&
+    !mainWindow.webContents.isDestroyed(),
+})
+setAddonDeactivationHandler(async (id, generation) => {
+  const owner = {
+    addonId: id as AddonId,
+    activationGeneration: generation,
+  }
+  hostNetwork.stopOwner(owner)
+  hostCredentials.stopOwner(owner)
+  selectedText.revokeAddon(id)
+  selectedIo.revokeAddon(id)
+  await addonStorage.clearSession(id)
+})
+addonStorage.subscribe((change) => {
+  if (mainWindow && !mainWindow.isDestroyed())
+    mainWindow.webContents.send(ADDON_STORAGE_CHANNELS.changed, change)
+})
+function resetAddonSessions(): void {
+  invalidateAddonActivations()
+  hostNetwork.stopWindow(networkWindowKey)
+  hostCredentials.stopWindow(networkWindowKey)
+  networkWindowKey = {}
+  selectedText.clear()
+  selectedIo.clear()
+  void addonStorage.clearAllSessions().catch((error: unknown) => {
+    console.error('Could not clear addon sessions:', error)
+  })
+}
+
 let fileOperation: Promise<unknown> | null = null
 let quitting = false
 let recordingHotkey = false
+const globalShortcuts = new GlobalShortcuts(globalShortcut)
+const addonHotkeys = new AddonHotkeys(
+  join(app.getPath('userData'), 'addon-hotkeys.json'),
+  process.platform,
+  hotkeys,
+)
+let addonHotkeysLoading: Promise<void> | null = null
+const loadAddonHotkeys = () => {
+  if (!addonHotkeysLoading) {
+    addonHotkeys.setCoreHotkeys(hotkeys)
+    addonHotkeysLoading = addonHotkeys.load()
+  }
+  return addonHotkeysLoading
+}
+let pendingGlobalShortcut: { id: string; accelerator: string } | null = null
 const externalFiles: string[] = []
 function queueExternalFiles(paths: string[]) {
   for (const path of paths) {
@@ -240,6 +499,28 @@ if (process.env.NODE_ENV_ELECTRON_VITE === 'development')
       app.quit()
     }
   })
+app.on('will-quit', () => globalShortcuts.clear())
+
+function invokeGlobalShortcut(invocation: GlobalShortcutInvocation) {
+  const { id, token } = invocation
+  const openingWindow = !mainWindow
+  if (openingWindow) {
+    const registration = globalShortcuts.get(id)
+    if (registration?.token !== token) return
+    pendingGlobalShortcut = { id, accelerator: registration.accelerator }
+    createWindow()
+  }
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+  if (
+    !openingWindow &&
+    pendingGlobalShortcut?.id !== id &&
+    !mainWindow.webContents.isLoadingMainFrame()
+  )
+    mainWindow.webContents.send(GLOBAL_SHORTCUT_CHANNELS.invoked, invocation)
+}
 
 function trustedWindow(
   event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>,
@@ -253,6 +534,28 @@ function trustedWindow(
     throw new Error('untrusted ipc sender')
   }
   return mainWindow
+}
+
+const addonFileUnavailable = () =>
+  ({
+    ok: false,
+    code: 'disposed',
+    message: 'This addon is no longer active.',
+  }) as const
+function fileOwner(owner: unknown) {
+  if (typeof owner !== 'string') return null
+  const generation = getAddonActivationGeneration(owner)
+  return generation === null ? null : { id: owner, generation }
+}
+function storageGeneration(request: unknown): number {
+  if (!request || typeof request !== 'object' || Array.isArray(request))
+    throw new Error('Invalid addon storage request.')
+  const owner = (request as { owner?: unknown }).owner
+  if (typeof owner !== 'string') throw new Error('Invalid addon storage owner.')
+  const generation = getAddonActivationGeneration(owner)
+  if (generation === null)
+    throw new Error('Enable this addon in Settings → Addons first.')
+  return generation
 }
 
 function runFileOperation<T>(
@@ -329,7 +632,7 @@ async function serveAsset(request: Request): Promise<Response> {
 }
 
 let windowSetupReady = false
-const appendDocumentChange = createJournalReceiver(getDocumentSource)
+const appendDocumentChange = createJournalReceiver(getDocumentSourceFor)
 function createWindow(): void {
   if (!windowSetupReady) return
   startupMark('window-start')
@@ -362,13 +665,30 @@ function createWindow(): void {
   mainWindow = window
   const stopRecording = () => {
     recordingHotkey = false
-    window.webContents.setIgnoreMenuShortcuts(false)
+    if (!window.isDestroyed()) window.webContents.setIgnoreMenuShortcuts(false)
   }
   window.on('blur', stopRecording)
   window.webContents.on('did-start-loading', stopRecording)
+  window.webContents.on('did-start-loading', () => {
+    globalShortcuts.clear()
+    addonHotkeys.clearRegistrations()
+    installMenu()
+  })
   window.webContents.on('did-start-loading', () => analysisService.cancel())
-  window.webContents.on('render-process-gone', () => analysisService.cancel())
-  window.on('closed', () => analysisService.cancel())
+  window.webContents.on('render-process-gone', () => {
+    stopRecording()
+    globalShortcuts.clear()
+    addonHotkeys.clearRegistrations()
+    installMenu()
+    pendingGlobalShortcut = null
+    analysisService.cancel()
+  })
+  window.on('closed', () => {
+    recordingHotkey = false
+    addonHotkeys.clearRegistrations()
+    installMenu()
+    analysisService.cancel()
+  })
   window.webContents.on('before-input-event', (event, input) => {
     if (recordingHotkey || input.type !== 'keyDown' || input.isComposing) return
     const shortcut = shortcutFromEvent({
@@ -385,6 +705,13 @@ function createWindow(): void {
       event.preventDefault()
       if (!input.isAutoRepeat)
         window.webContents.send(HOTKEY_CHANNELS.command, action.id)
+      return
+    }
+    const addon = shortcut ? addonHotkeys.resolve(shortcut) : undefined
+    if (addon) {
+      event.preventDefault()
+      if (!input.isAutoRepeat)
+        window.webContents.send(ADDON_HOTKEY_CHANNELS.invoke, addon)
     }
   })
   let allowClose = false
@@ -394,11 +721,17 @@ function createWindow(): void {
   })
   let confirmingClose = false
   let rendererGone = false
+  let navigationStarted = false
   let journalReady = false
   window.webContents.on(
     'did-start-navigation',
     (_event, _url, _inPlace, isMainFrame) => {
-      if (isMainFrame) journalReady = false
+      if (isMainFrame) {
+        journalReady = false
+        // A Vite or recovery reload can replace a frame before its first finish.
+        if (navigationStarted) resetAddonSessions()
+        navigationStarted = true
+      }
     },
   )
   let flushRequest:
@@ -499,12 +832,14 @@ function createWindow(): void {
     else window.show()
   })
   window.on('closed', () => {
+    resetAddonSessions()
     onUpdateInstallFailure()
     ipcMain.removeListener(DOCUMENT_CHANNELS.flushed, flushed)
     flushRequest?.reject(
       new Error('The editor closed before confirming its changes.'),
     )
     mainWindow = null
+    if (process.platform !== 'darwin' || quitting) globalShortcuts.clear()
   })
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-frame-navigate', (event) => {
@@ -517,6 +852,7 @@ function createWindow(): void {
     event.preventDefault(),
   )
   window.webContents.on('render-process-gone', (_event, details) => {
+    resetAddonSessions()
     rendererGone = true
     flushRequest?.resolve()
     console.error('renderer exited:', details.reason, details.exitCode)
@@ -564,6 +900,23 @@ function createWindow(): void {
 function installMenu(): void {
   const command = (action: AppCommand) => () =>
     mainWindow?.webContents.send(HOTKEY_CHANNELS.command, action)
+  const addonItems: MenuItemConstructorOptions[] = []
+  let group: string | null = null
+  for (const item of addonHotkeys.menuContributions()) {
+    const nextGroup = item.menu.group ?? ''
+    if (group !== null && group !== nextGroup)
+      addonItems.push({ type: 'separator' })
+    addonItems.push({
+      label: item.label,
+      click: () =>
+        mainWindow?.webContents.send(ADDON_HOTKEY_CHANNELS.invoke, {
+          id: item.id,
+          token: item.token,
+          source: 'menu',
+        }),
+    })
+    group = nextGroup
+  }
   const menu: MenuItemConstructorOptions[] = [
     ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
     {
@@ -653,6 +1006,7 @@ function installMenu(): void {
         { role: 'togglefullscreen' },
       ],
     },
+    ...(addonItems.length ? [{ label: 'Addons', submenu: addonItems }] : []),
     { role: 'windowMenu' },
     { role: 'help', submenu: localDiagnostics.menuItems() },
   ]
@@ -742,8 +1096,20 @@ if (!app.requestSingleInstanceLock()) {
       ) =>
         ipcMain.handle(channel, async (...args) => {
           trustedWindow(args[0])
-          await ready
-          return listener(...args)
+          if (!foundationsIpcBenchmark) {
+            await ready
+            return listener(...args)
+          }
+          foundationsIpcBenchmark.request(channel, args.slice(1))
+          try {
+            await ready
+            const result = await listener(...args)
+            foundationsIpcBenchmark.response(channel, result)
+            return result
+          } catch (error) {
+            foundationsIpcBenchmark.failed(channel)
+            throw error
+          }
         })
       handle(UPDATE_CHANNELS.get, getUpdateState, updatesReady)
       handle(
@@ -909,6 +1275,108 @@ if (!app.requestSingleInstanceLock()) {
         return getAddonStates()
       })
       handle(
+        ADDON_STORAGE_CHANNELS.read,
+        (_event, request: unknown) =>
+          addonStorage.read(request, storageGeneration(request)),
+        addonsReady,
+      )
+      handle(
+        ADDON_STORAGE_CHANNELS.write,
+        (_event, request: unknown) =>
+          addonStorage.write(request, storageGeneration(request)),
+        addonsReady,
+      )
+      handle(
+        SELECTED_TEXT_CHANNELS.select,
+        (event, owner: unknown) =>
+          runFileOperation(event, (window) =>
+            selectedText.select(window, owner),
+          ),
+        addonsReady,
+      )
+      handle(
+        SELECTED_TEXT_CHANNELS.read,
+        (event, owner: unknown, handle: unknown) =>
+          selectedText.read(trustedWindow(event), owner, handle),
+        addonsReady,
+      )
+      handle(
+        HOST_SELECTED_IO_CHANNELS.selectImport,
+        (event, owner: unknown, choice: unknown) =>
+          runFileOperation(event, (window) =>
+            selectedIo.selectImport(window, owner, choice),
+          ),
+        addonsReady,
+      )
+      handle(
+        HOST_SELECTED_IO_CHANNELS.readImport,
+        (event, owner: unknown, handle: unknown) =>
+          selectedIo.readImport(trustedWindow(event), owner, handle),
+        addonsReady,
+      )
+      handle(
+        HOST_SELECTED_IO_CHANNELS.selectExport,
+        (event, owner: unknown, choice: unknown) =>
+          runFileOperation(event, (window) =>
+            selectedIo.selectExport(window, owner, choice),
+          ),
+        addonsReady,
+      )
+      handle(
+        HOST_SELECTED_IO_CHANNELS.writeExport,
+        (event, owner: unknown, handle: unknown, bytes: unknown) =>
+          runFileOperation(event, (window) =>
+            selectedIo.writeExport(window, owner, handle, bytes),
+          ),
+        addonsReady,
+      )
+      handle(
+        HOST_SELECTED_IO_CHANNELS.cancel,
+        (event, owner: unknown, handle: unknown) =>
+          selectedIo.cancel(trustedWindow(event), owner, handle),
+        addonsReady,
+      )
+      handle(
+        HOST_NETWORK_CHANNELS.getText,
+        (event, owner: unknown, request: unknown) => {
+          trustedWindow(event)
+          return typeof owner === 'string'
+            ? hostNetwork.request(owner, networkWindowKey, request)
+            : { ok: false, code: 'invalid-request' }
+        },
+        addonsReady,
+      )
+      handle(
+        HOST_CREDENTIAL_CHANNELS.store,
+        (event, owner: unknown, request: unknown) => {
+          trustedWindow(event)
+          return typeof owner === 'string'
+            ? hostCredentials.store(owner, networkWindowKey, request)
+            : { ok: false, code: 'invalid-request' }
+        },
+        addonsReady,
+      )
+      handle(
+        HOST_CREDENTIAL_CHANNELS.remove,
+        (event, owner: unknown, request: unknown) => {
+          trustedWindow(event)
+          return typeof owner === 'string'
+            ? hostCredentials.remove(owner, networkWindowKey, request)
+            : { ok: false, code: 'invalid-request' }
+        },
+        addonsReady,
+      )
+      handle(
+        HOST_CREDENTIAL_CHANNELS.status,
+        (event, owner: unknown, request: unknown) => {
+          trustedWindow(event)
+          return typeof owner === 'string'
+            ? hostCredentials.status(owner, networkWindowKey, request)
+            : { ok: false, code: 'invalid-request' }
+        },
+        addonsReady,
+      )
+      handle(
         ANALYSIS_CHANNELS.run,
         (event, owner: unknown, projection: unknown) =>
           analysisService.run(event.sender, owner, projection),
@@ -967,10 +1435,79 @@ if (!app.requestSingleInstanceLock()) {
         trustedWindow(event)
         return hotkeys
       })
+      handle(ADDON_HOTKEY_CHANNELS.get, async () => {
+        await loadAddonHotkeys()
+        return addonHotkeys.bindings()
+      })
+      handle(ADDON_HOTKEY_CHANNELS.register, async (event, value: unknown) => {
+        await loadAddonHotkeys()
+        addonHotkeys.register(value as AddonHotkeyRegistration)
+        installMenu()
+        const bindings = addonHotkeys.bindings()
+        event.sender.send(ADDON_HOTKEY_CHANNELS.changed, bindings)
+        return bindings
+      })
+      handle(
+        ADDON_HOTKEY_CHANNELS.unregister,
+        (event, id: unknown, token: unknown) => {
+          if (typeof id !== 'string' || typeof token !== 'string') return
+          if (!addonHotkeys.unregister(id, token)) return
+          installMenu()
+          event.sender.send(
+            ADDON_HOTKEY_CHANNELS.changed,
+            addonHotkeys.bindings(),
+          )
+        },
+      )
+      handle(
+        ADDON_HOTKEY_CHANNELS.save,
+        async (event, id: unknown, shortcut: unknown) => {
+          await loadAddonHotkeys()
+          if (typeof id !== 'string' || typeof shortcut !== 'string')
+            throw new Error('Choose a supported key combination.')
+          const bindings = await addonHotkeys.setOverride(id, shortcut)
+          event.sender.send(ADDON_HOTKEY_CHANNELS.changed, bindings)
+          return bindings
+        },
+      )
+      handle(ADDON_HOTKEY_CHANNELS.reset, async (event, id: unknown) => {
+        await loadAddonHotkeys()
+        if (typeof id !== 'string')
+          throw new Error('This addon command is not available.')
+        const bindings = await addonHotkeys.resetOverride(id)
+        event.sender.send(ADDON_HOTKEY_CHANNELS.changed, bindings)
+        return bindings
+      })
+      handle(
+        GLOBAL_SHORTCUT_CHANNELS.register,
+        (event, id: unknown, accelerator: unknown, token: unknown) => {
+          globalShortcuts.register(id, accelerator, token, invokeGlobalShortcut)
+          const pending = pendingGlobalShortcut
+          if (
+            pending &&
+            pending.id === id &&
+            pending.accelerator === accelerator
+          ) {
+            pendingGlobalShortcut = null
+            event.sender.send(GLOBAL_SHORTCUT_CHANNELS.invoked, { id, token })
+          }
+        },
+      )
+      handle(
+        GLOBAL_SHORTCUT_CHANNELS.unregister,
+        (_event, id: unknown, token: unknown) => {
+          globalShortcuts.unregister(id, token)
+        },
+      )
       handle(HOTKEY_CHANNELS.save, async (event, value: unknown) => {
         trustedWindow(event)
         const next = await saveHotkeys(value)
+        addonHotkeys.setCoreHotkeys(next)
         installMenu()
+        event.sender.send(
+          ADDON_HOTKEY_CHANNELS.changed,
+          addonHotkeys.bindings(),
+        )
         return next
       })
       handle(HOTKEY_CHANNELS.record, (event, value: unknown) => {
@@ -986,6 +1523,13 @@ if (!app.requestSingleInstanceLock()) {
       })
       handle(DOCUMENT_CHANNELS.selectTab, (event, id: unknown) =>
         runFileOperation(event, (window) => selectDocumentTab(window, id)),
+      )
+      handle(
+        DOCUMENT_CHANNELS.focusTab,
+        (event, id: unknown, expected: unknown) =>
+          readAfterFileOperation(event, (window) =>
+            focusDocumentTab(window, id, expected),
+          ),
       )
       handle(DOCUMENT_CHANNELS.closeTab, (event, id: unknown) =>
         runFileOperation(event, (window) => closeDocumentTab(window, id)),
@@ -1053,8 +1597,183 @@ if (!app.requestSingleInstanceLock()) {
       handle(WORKSPACE_CHANNELS.snapshot, (event) =>
         readAfterFileOperation(event, snapshotWorkspace),
       )
+      handle(WORKSPACE_CHANNELS.changeSnapshot, (event) =>
+        readAfterFileOperation(event, async () => workspaceChangeSnapshot()),
+      )
+      handle(
+        WORKSPACE_CHANNELS.listPage,
+        (event, owner: unknown, request: unknown) => {
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
+          return readAfterFileOperation(event, async () => {
+            const result = listWorkspaceEntryPage(
+              request as import('../shared/workspace').WorkspaceEntryPageRequest,
+            )
+            return isAddonActivationCurrent(
+              activation.id,
+              activation.generation,
+            )
+              ? result
+              : addonFileUnavailable()
+          })
+        },
+      )
+      handle(
+        WORKSPACE_CHANNELS.readText,
+        (event, owner: unknown, target: unknown, path: unknown) => {
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
+          return readAfterFileOperation(event, async () => {
+            const result = await readWorkspaceText(
+              target as WorkspaceTarget,
+              path,
+            )
+            return isAddonActivationCurrent(
+              activation.id,
+              activation.generation,
+            )
+              ? result
+              : addonFileUnavailable()
+          })
+        },
+      )
+      handle(
+        WORKSPACE_CHANNELS.readBinary,
+        (event, owner: unknown, target: unknown, path: unknown) => {
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
+          return readAfterFileOperation(event, async () => {
+            const result = await readWorkspaceBinary(
+              target as WorkspaceTarget,
+              path,
+            )
+            return isAddonActivationCurrent(
+              activation.id,
+              activation.generation,
+            )
+              ? result
+              : addonFileUnavailable()
+          })
+        },
+      )
+      handle(
+        WORKSPACE_CHANNELS.createText,
+        (
+          event,
+          owner: unknown,
+          target: unknown,
+          path: unknown,
+          markdown: unknown,
+        ) => {
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
+          return runFileOperation(event, () =>
+            createWorkspaceText(target as WorkspaceTarget, path, markdown, () =>
+              isAddonActivationCurrent(activation.id, activation.generation),
+            ),
+          )
+        },
+      )
+      handle(
+        WORKSPACE_CHANNELS.createBinary,
+        (
+          event,
+          owner: unknown,
+          target: unknown,
+          path: unknown,
+          bytes: unknown,
+        ) => {
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
+          return runFileOperation(event, () =>
+            createWorkspaceBinary(target as WorkspaceTarget, path, bytes, () =>
+              isAddonActivationCurrent(activation.id, activation.generation),
+            ),
+          )
+        },
+      )
+      handle(
+        WORKSPACE_CHANNELS.updateText,
+        (
+          event,
+          owner: unknown,
+          target: unknown,
+          path: unknown,
+          expectedVersion: unknown,
+          markdown: unknown,
+          options: unknown,
+        ) => {
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
+          return runFileOperation(event, () =>
+            updateWorkspaceText(
+              target as WorkspaceTarget,
+              path,
+              expectedVersion,
+              markdown,
+              options,
+              () =>
+                isAddonActivationCurrent(activation.id, activation.generation),
+            ),
+          )
+        },
+      )
+      handle(
+        WORKSPACE_CHANNELS.renameFile,
+        (
+          event,
+          owner: unknown,
+          target: unknown,
+          sourcePath: unknown,
+          destinationPath: unknown,
+          expectedVersion: unknown,
+        ) => {
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
+          return runFileOperation(event, () =>
+            renameWorkspaceFile(
+              target as WorkspaceTarget,
+              sourcePath,
+              destinationPath,
+              expectedVersion,
+              () =>
+                isAddonActivationCurrent(activation.id, activation.generation),
+            ),
+          )
+        },
+      )
+      handle(
+        WORKSPACE_CHANNELS.trashFile,
+        (
+          event,
+          owner: unknown,
+          target: unknown,
+          path: unknown,
+          expectedVersion: unknown,
+        ) => {
+          const activation = fileOwner(owner)
+          if (!activation) return addonFileUnavailable()
+          return runFileOperation(event, () =>
+            trashWorkspaceFile(
+              target as WorkspaceTarget,
+              path,
+              expectedVersion,
+              (file) => shell.trashItem(file),
+              () =>
+                isAddonActivationCurrent(activation.id, activation.generation),
+            ),
+          )
+        },
+      )
       handle(WORKSPACE_CHANNELS.index, (event, verifyAll: unknown) =>
         readAfterFileOperation(event, () => indexWorkspace(verifyAll === true)),
+      )
+      handle(WORKSPACE_CHANNELS.queryReferences, (event, request: unknown) =>
+        readAfterFileOperation(event, () =>
+          import('./workspace-metadata-query').then((module) =>
+            module.queryWorkspaceReferences(request, getOpenDocumentVersions),
+          ),
+        ),
       )
       handle(WORKSPACE_CHANNELS.action, (event, input: unknown) =>
         runFileOperation(event, (window) => workspaceAction(window, input)),
@@ -1120,6 +1839,12 @@ if (!app.requestSingleInstanceLock()) {
           change,
         ),
       )
+      subscribeWorkspaceChanges((change) => {
+        const contents = mainWindow?.webContents
+        if (!contents) return
+        contents.send(WORKSPACE_CHANNELS.changedV2, change)
+        foundationsIpcBenchmark?.send(WORKSPACE_CHANNELS.changedV2, change)
+      })
       observeKnownWorkspaces((known) =>
         mainWindow?.webContents.send(WORKSPACE_CHANNELS.listChanged, known),
       )
@@ -1134,17 +1859,20 @@ if (!app.requestSingleInstanceLock()) {
         updateDocumentEdited(window)
         return ack
       })
-      handle(DOCUMENT_CHANNELS.recoveryHead, (event) => {
+      handle(DOCUMENT_CHANNELS.recoveryHead, (event, tabId: unknown) => {
         trustedWindow(event)
-        return journalHead(getDocumentSource())
+        if (typeof tabId !== 'string' || !tabId || tabId.length > 128)
+          throw new Error('Invalid document recovery identity.')
+        return journalHead(getDocumentSourceFor(tabId))
       })
       handle(
         DOCUMENT_CHANNELS.verifyCheckpoint,
         (event, checkpoint: unknown) => {
           trustedWindow(event)
+          const parsed = parseJournalCheckpoint(checkpoint, MAX_DOCUMENT_BYTES)
           return verifyJournalCheckpoint(
-            getDocumentSource,
-            checkpoint,
+            () => getDocumentSourceFor(parsed.tabId),
+            parsed,
             MAX_DOCUMENT_BYTES,
           )
         },
@@ -1222,17 +1950,49 @@ if (!app.requestSingleInstanceLock()) {
           return saved
         })
       })
-      handle(DOCUMENT_CHANNELS.autosave, (event, revision: unknown) => {
-        trustedWindow(event)
-        if (fileOperation) return { status: 'skipped', document: null }
-        return runFileOperation(event, async (window) => {
-          const previous = getDocumentPath()
-          const result = await autosaveDocument(window, revision)
-          if (result.status === 'saved')
-            await documentFileChanged(previous, getDocumentPath(), false)
-          return result
-        })
-      })
+      handle(
+        DOCUMENT_CHANNELS.saveTarget,
+        (
+          event,
+          owner: unknown,
+          tabId: unknown,
+          revision: unknown,
+          contentVersion: unknown,
+        ) => {
+          const activation = fileOwner(owner)
+          if (!activation) return { status: 'stale', document: null }
+          return runFileOperation(event, async (window) => {
+            const path =
+              typeof tabId === 'string' ? getDocumentPathForTab(tabId) : null
+            const result = await saveTargetDocument(
+              window,
+              tabId,
+              revision,
+              contentVersion,
+              () =>
+                isAddonActivationCurrent(activation.id, activation.generation),
+            )
+            if (result.status === 'saved' && path)
+              await documentFileChanged(path, path, false)
+            return result
+          })
+        },
+      )
+      handle(
+        DOCUMENT_CHANNELS.autosave,
+        (event, tabId: unknown, revision: unknown) => {
+          trustedWindow(event)
+          if (fileOperation) return { status: 'skipped', document: null }
+          return runFileOperation(event, async (window) => {
+            const target =
+              typeof tabId === 'string' ? getDocumentPathForTab(tabId) : null
+            const result = await autosaveDocument(window, tabId, revision)
+            if (result.status === 'saved')
+              await documentFileChanged(target, target, false)
+            return result
+          })
+        },
+      )
       handle(DOCUMENT_CHANNELS.rename, (event, name: unknown) =>
         runFileOperation(event, async () => {
           const previous = getDocumentPath()

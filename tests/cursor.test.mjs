@@ -105,6 +105,10 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     .getByLabel(/^cursor animation$/i, { exact: true })
     .selectOption('smooth')
   await page.getByRole('button', { name: /^back to app$/i }).click()
+  await page
+    .getByRole('main', { name: /^settings$/i })
+    .waitFor({ state: 'hidden' })
+  await page.locator('.editor-surface:not([inert])').waitFor()
   await cursor.waitFor()
   await page.evaluate(
     () =>
@@ -200,6 +204,10 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
       .getByLabel(/^cursor animation$/i, { exact: true })
       .selectOption('blink')
     await page.getByRole('button', { name: /^back to app$/i }).click()
+    await page
+      .getByRole('main', { name: /^settings$/i })
+      .waitFor({ state: 'hidden' })
+    await page.locator('.editor-surface:not([inert])').waitFor()
     await cursor.waitFor()
     assert.equal(await cursor.getAttribute('data-style'), shape)
     assert.equal(
@@ -219,6 +227,7 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
   await page.waitForFunction(() =>
     document.querySelector('.source-pane .editor-cursor'),
   )
+  await page.locator('.source-pane .cm-placeholder').waitFor()
   const sourceGeometry = await page.evaluate(() => {
     const caret = document
       .querySelector('.source-pane .editor-cursor')

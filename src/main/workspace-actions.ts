@@ -1,13 +1,4 @@
-import { constants } from 'node:fs'
-import {
-  copyFile,
-  cp,
-  link,
-  lstat,
-  mkdir,
-  rename,
-  unlink,
-} from 'node:fs/promises'
+import { lstat, mkdir } from 'node:fs/promises'
 import {
   basename,
   dirname,
@@ -36,57 +27,14 @@ import {
   refreshWorkspace,
   workspaceRoot,
 } from './workspace'
+import { copyEntry, moveEntry } from './workspace-entry-transfer'
+import { resolveWorkspaceEntry, validateWorkspaceName } from './workspace-paths'
+
+export { validateWorkspaceName } from './workspace-paths'
 
 const missing = (error: NodeJS.ErrnoException) => {
   if (error.code !== 'ENOENT') throw error
   return null
-}
-export function validateWorkspaceName(name: unknown): asserts name is string {
-  if (
-    typeof name !== 'string' ||
-    !name ||
-    name.startsWith('.') ||
-    name === 'node_modules' ||
-    /[\\/<>:"|?*]|\p{Cc}/u.test(name) ||
-    /[. ]$/.test(name) ||
-    Buffer.byteLength(name) > 255 ||
-    /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)
-  )
-    throw new Error(
-      'Choose a file or folder name without slashes or reserved characters.',
-    )
-}
-async function resolveEntry(
-  base: string,
-  value: unknown,
-  allowMissing = false,
-  allowRoot = false,
-): Promise<string> {
-  if (allowRoot && value === '') return base
-  if (
-    typeof value !== 'string' ||
-    !value ||
-    value.length > 4096 ||
-    isAbsolute(value)
-  )
-    throw new Error('Choose a file or folder inside this workspace.')
-  const parts = value.split('/')
-  let path = base
-  for (const [index, part] of parts.entries()) {
-    validateWorkspaceName(part)
-    path = join(path, part)
-    const stat = await lstat(path).catch(missing)
-    if (!stat && allowMissing && index === parts.length - 1) return path
-    if (
-      !stat ||
-      stat.isSymbolicLink() ||
-      (index < parts.length - 1 && !stat.isDirectory())
-    )
-      throw new Error(
-        'This path is missing or contains a symbolic link. Choose the original file or folder.',
-      )
-  }
-  return path
 }
 function contains(parent: string, child: string | null) {
   if (!child) return false
@@ -112,44 +60,30 @@ async function unique(parent: string, name: string) {
   }
   throw new Error('Choose a different name.')
 }
-async function moveEntry(source: string, destination: string, folder: boolean) {
-  if (folder) {
-    // Windows refuses to replace even an empty directory, so rename itself
-    // reserves the destination there without overwriting an existing folder.
-    if (process.platform === 'win32') {
-      await rename(source, destination)
-      return
-    }
-    // Reserve the destination first: never replace a pre-existing directory.
-    await mkdir(destination)
+
+async function rethrowPartialCopy(
+  error: unknown,
+  base: string,
+  source: string,
+  destination: string,
+): Promise<never> {
+  if ((error as NodeJS.ErrnoException).code === 'EPARTIALCOPY') {
     try {
-      await rename(source, destination)
-    } catch (error) {
-      await import('node:fs/promises')
-        .then(({ rmdir }) => rmdir(destination))
-        .catch(() => {})
-      throw error
-    }
-  } else {
-    try {
-      await link(source, destination)
-    } catch (error) {
-      if (
-        !['ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'EPERM'].includes(
-          (error as NodeJS.ErrnoException).code ?? '',
-        )
+      await refreshWorkspace(
+        [source, destination].map((path) =>
+          relative(base, path).split(sep).join('/'),
+        ),
       )
-        throw error
-      await copyFile(source, destination, constants.COPYFILE_EXCL)
-    }
-    try {
-      await unlink(source)
-    } catch (error) {
-      await unlink(destination)
-      throw error
+    } catch (refreshError) {
+      console.error(
+        'workspace refresh after partial copy failed:',
+        refreshError,
+      )
     }
   }
+  throw error
 }
+
 export async function workspaceAction(
   window: BrowserWindow,
   input: unknown,
@@ -175,7 +109,7 @@ export async function workspaceAction(
   let sourcePath: string | null = null
   let treeChanged = false
   if (action === 'new-file' || action === 'new-folder') {
-    const parent = await resolveEntry(base, path, false, true)
+    const parent = await resolveWorkspaceEntry(base, path, false, true)
     if (!(await lstat(parent)).isDirectory())
       throw new Error('Choose a folder for the new item.')
     resultPath = await unique(
@@ -192,7 +126,7 @@ export async function workspaceAction(
     const draft =
       typeof path === 'string' &&
       getOpenDocuments().find((draft) => draft.pendingPath === join(base, path))
-    const source = await resolveEntry(base, path, Boolean(draft))
+    const source = await resolveWorkspaceEntry(base, path, Boolean(draft))
     sourcePath = source
     if (draft && draft.tabId !== getDocument().tabId)
       await selectDocumentTab(window, draft.tabId)
@@ -217,7 +151,7 @@ export async function workspaceAction(
         const extension = folder ? '' : extname(source)
         const name = basename(source, extension)
         resultPath = await unique(dirname(source), `${name} copy${extension}`)
-      } else resultPath = await resolveEntry(base, destination, true)
+      } else resultPath = await resolveWorkspaceEntry(base, destination, true)
       if (!folder && !isDocumentName(resultPath, true))
         throw new Error('Use a supported file extension.')
       if (source === resultPath)
@@ -243,20 +177,42 @@ export async function workspaceAction(
         else if (action === 'move') relocateDocument(source, resultPath)
         else throw new Error('Save this draft before copying it.')
       } else if (action === 'copy' || action === 'duplicate') {
-        await cp(source, resultPath, {
-          recursive: folder,
-          force: false,
-          errorOnExist: true,
-          filter: async (path) => {
-            if ((await lstat(path)).isSymbolicLink())
-              throw new Error(
-                'Symbolic links cannot be copied. Copy the original file or folder instead.',
-              )
-            return true
-          },
-        })
+        await copyEntry(source, resultPath, folder, async () => {
+          await resolveWorkspaceEntry(base, path)
+          await resolveWorkspaceEntry(
+            base,
+            relative(base, resultPath).split(sep).join('/'),
+            true,
+          )
+          return !getOpenDocuments().some((draft) => draft.file === resultPath)
+        }).catch((error: unknown) =>
+          rethrowPartialCopy(error, base, source, resultPath),
+        )
       } else {
-        await moveEntry(source, resultPath, folder)
+        const moved = await moveEntry(source, resultPath, folder, async () => {
+          await resolveWorkspaceEntry(base, path)
+          await resolveWorkspaceEntry(
+            base,
+            relative(base, resultPath).split(sep).join('/'),
+            true,
+          )
+          return !getOpenDocuments().some((draft) => draft.file === resultPath)
+        }).catch((error: unknown) =>
+          rethrowPartialCopy(error, base, source, resultPath),
+        )
+        if (!moved.sourceRemoved) {
+          try {
+            await refreshWorkspace([
+              relative(base, source).split(sep).join('/'),
+              relative(base, resultPath).split(sep).join('/'),
+            ])
+          } catch (error) {
+            console.error('workspace refresh after partial move failed:', error)
+          }
+          throw new Error(
+            'Destination was created, but the original could not be removed. Both files may exist.',
+          )
+        }
         relocateDocument(source, resultPath)
       }
       treeChanged = !draft
@@ -265,10 +221,20 @@ export async function workspaceAction(
   const paths = [sourcePath, resultPath]
     .filter((path): path is string => path !== null)
     .map((path) => relative(base, path).split(sep).join('/'))
-  return {
-    workspace: treeChanged
+  let workspace: WorkspaceActionResult['workspace']
+  try {
+    workspace = treeChanged
       ? await refreshWorkspace(paths)
-      : await notifyWorkspaceContent(paths),
+      : await notifyWorkspaceContent(paths)
+  } catch (error) {
+    if (!treeChanged) throw error
+    throw new Error(
+      'The file operation completed, but the workspace could not refresh. Use Refresh workspace files before trying again.',
+      { cause: error },
+    )
+  }
+  return {
+    workspace,
     document: getDocument(),
     path: relative(base, resultPath).split(sep).join('/'),
   }

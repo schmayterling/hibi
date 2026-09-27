@@ -17,10 +17,14 @@ if (!Number.isInteger(runs) || runs < 1 || runs > 50)
 const foreground = process.env.HIBI_BENCH_FOREGROUND === '1'
 const analysisLoad = process.env.HIBI_INPUT_ANALYSIS === '1'
 const directory = await mkdtemp(join(tmpdir(), 'hibi-input-bench-'))
-const fixtures = [
+const allFixtures = [
   { name: 'blank.md', title: '', source: '' },
   ...benchmarkDocuments,
 ]
+const fixtures = process.env.HIBI_INPUT_FIXTURE
+  ? allFixtures.filter(({ name }) => name === process.env.HIBI_INPUT_FIXTURE)
+  : allFixtures
+if (!fixtures.length) throw new Error('Unknown input benchmark fixture.')
 const samples = []
 const percentile = (values, p) =>
   [...values].sort((a, b) => a - b)[
@@ -206,7 +210,9 @@ try {
         analysisLoad,
         endpoints: {
           driver:
-            'locator.press through changed editor DOM text; identical endpoint for first and subsequent keys',
+            process.env.HIBI_BENCH_INSERT_TEXT === '1'
+              ? 'editor.focus plus keyboard.insertText through changed editor DOM text; identical endpoint for first and subsequent inserts'
+              : 'locator.press through changed editor DOM text; identical endpoint for first and subsequent keys',
           cpu: 'ProseMirror dispatchTransaction, including synchronous host/addon listeners and instrumentation overhead',
           inputToModel:
             'beforeinput capture through completed document-changing dispatch; not physical presentation',

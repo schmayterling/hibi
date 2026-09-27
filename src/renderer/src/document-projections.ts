@@ -1,16 +1,19 @@
 import type { TextProjection } from '../../shared/document-projection'
 import { editorDocument } from './document-formats'
+import {
+  invalidateProjectionIdentity,
+  projectionIdentity,
+} from './document-projection-identity'
 
 type ProjectionBody = Pick<TextProjection, 'text' | 'spans'>
 const providers = new Map<
-  string,
-  (cached: ProjectionBody | null) => ProjectionBody | null
+  'rich' | 'source',
+  Set<(cached: ProjectionBody | null) => ProjectionBody | null>
 >()
-let generation = 0
 let cached: TextProjection | null = null
 const listeners = new Set<() => void>()
 const invalidate = () => {
-  generation++
+  invalidateProjectionIdentity()
   cached = null
   for (const listener of listeners) listener()
 }
@@ -26,21 +29,30 @@ export const documentProjections = {
     kind: 'rich' | 'source',
     provide: (cached: ProjectionBody | null) => ProjectionBody | null,
   ) {
-    providers.set(kind, provide)
+    let registered = providers.get(kind)
+    if (!registered) {
+      registered = new Set()
+      providers.set(kind, registered)
+    }
+    registered.add(provide)
     invalidate()
     return () => {
-      if (providers.get(kind) !== provide) return
-      providers.delete(kind)
+      if (!registered.delete(provide)) return
+      if (!registered.size) providers.delete(kind)
       invalidate()
     }
   },
   get(): TextProjection | null {
     const document = editorDocument.get()
     if (!document) return null
-    for (const [kind, provide] of providers) {
-      const id = `${generation}:${kind}:${document.tabId}:${document.revision}:${document.contentVersion}`
+    for (const [kind, registered] of providers) {
+      const id = projectionIdentity(kind, document)
       // Providers check visibility/readiness even when their document version is cached.
-      const body = provide(cached?.id === id ? cached : null)
+      let body: ProjectionBody | null = null
+      for (const provide of registered) {
+        body = provide(cached?.id === id ? cached : null)
+        if (body) break
+      }
       if (!body) continue
       if (cached?.id !== id)
         cached = Object.freeze({

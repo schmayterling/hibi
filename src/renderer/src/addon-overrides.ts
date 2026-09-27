@@ -87,14 +87,28 @@ export function createAddonOverrides(owner: string) {
       instead: registerPatch('instead'),
     } as PatchApi,
     styles: {
-      register(id: string, css: string): StyleHandle {
+      register(
+        id: string,
+        css: string,
+        options?: { priority?: 'override' },
+      ): StyleHandle {
         if (disposed) return { update() {}, dispose() {} }
         if (!/^[a-z][a-z0-9-]*$/.test(id) || styles.has(id))
           throw new Error(`duplicate or invalid addon style: ${owner}.${id}`)
         const element = document.createElement('style')
         element.dataset.addonStyle = `${owner}.${id}`
         element.textContent = css
-        document.head.append(element)
+        if (options?.priority === 'override') {
+          element.dataset.addonStylePriority = 'override'
+          document.head.append(element)
+        } else {
+          document.head.insertBefore(
+            element,
+            document.head.querySelector(
+              'style[data-addon-style-priority="override"]',
+            ),
+          )
+        }
         styles.set(id, element)
         let active = true
         return {

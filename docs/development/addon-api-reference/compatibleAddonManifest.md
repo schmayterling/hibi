@@ -2,7 +2,7 @@
 
 # compatibleAddonManifest
 
-Function · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L79)
+Function · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L86)
 
 Versioned API v1 packages retain the same runtime contract.
 

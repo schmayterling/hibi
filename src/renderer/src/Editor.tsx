@@ -31,14 +31,30 @@ import type {
   RichExtension,
   SourceExtension,
 } from '../../addons/api'
+import type {
+  CompletionItem,
+  CompletionRequest,
+  CompletionUpdate,
+} from '../../shared/completions'
 import type { DocumentState } from '../../shared/desktop'
 import { MAX_DOCUMENT_BYTES } from '../../shared/desktop'
-import { editedSource, sourceEditMatches } from '../../shared/document-edits'
+import {
+  editedSource,
+  type SourceEditRequest,
+  type SourceEditResult,
+  sourceEditMatches,
+} from '../../shared/document-edits'
 import type {
   AcceptedSourceEdit,
   DocumentSession,
 } from '../../shared/document-session'
 import type { DocumentView } from '../../shared/document-types'
+import {
+  type EditorContextAction,
+  type EditorInteractionRequest,
+  sameInteraction,
+} from '../../shared/editor-interactions'
+import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import type { SourceSnapshot } from '../../shared/source-buffer'
 import {
@@ -49,6 +65,7 @@ import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
 import { performanceDiagnostics } from '../../ui/diagnostics'
 import { addonRegistry } from './addon-registry'
+import { completionBroker } from './completion-broker'
 import { documentImage } from './DocumentImage'
 import { documentEdits } from './document-edits'
 import { editorDocument } from './document-formats'
@@ -57,7 +74,13 @@ import { documentProjections } from './document-projections'
 import { documentRuntime } from './document-runtime'
 import { certifyVisualEcho } from './document-shell'
 import { type CursorSettings, EditorCursor } from './EditorCursor'
+import { registerEditorSelectionCapture } from './editor-command-targets'
 import { emitEditorKeyEvent } from './editor-events'
+import {
+  hasEditorInteractionProviders,
+  onEditorInteractionProvidersChanged,
+} from './editor-interaction-presence'
+import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
 import { flavors as flavorRegistry } from './flavors'
@@ -71,6 +94,7 @@ import {
   createMarkdownPositionCache,
   type MarkdownPositionLookup,
 } from './markdown-positions'
+import { mountedDocumentEdits } from './mounted-document-edits'
 import './markdown-markers.css'
 import type { ReferenceValue } from '../../shared/source-references'
 import { createMarkdownSemantics } from './markdown-semantics'
@@ -122,6 +146,9 @@ export type ViewMode = DocumentView
 
 export function MarkdownEditor({
   document: documentState,
+  viewId = 'default',
+  focused = true,
+  autoFocus = true,
   format,
   formatName,
   value,
@@ -149,6 +176,9 @@ export function MarkdownEditor({
   outlineActive,
 }: {
   document: DocumentState
+  viewId?: string
+  focused?: boolean
+  autoFocus?: boolean
   format: DocumentFormat | undefined
   formatName: string
   value: string
@@ -361,6 +391,8 @@ export function MarkdownEditor({
     composition: undefined as number | undefined,
   })
   const [richInputError, setRichInputError] = useState('')
+  const viewIdRef = useRef(viewId)
+  viewIdRef.current = viewId
   const retryRich = useRef(() => {})
   const prepareRichRef = useRef(prepareRich)
   prepareRichRef.current = prepareRich
@@ -397,6 +429,13 @@ export function MarkdownEditor({
         : mode === 'markdown'
           ? 'source'
           : focusedPane
+  useEffect(() => {
+    editorViewRegistry.setActive(viewId as ViewId, findTarget)
+  }, [viewId, findTarget])
+  useEffect(
+    () => () => editorViewRegistry.clearActive(viewId as ViewId),
+    [viewId],
+  )
   const scrollContent = useRef({
     source: value,
     body: projection.content,
@@ -436,6 +475,7 @@ export function MarkdownEditor({
               certifyVisualEcho(source)
           }
           setRichInputError('')
+          editorViewRegistry.changed(viewIdRef.current as ViewId, 'rich')
         },
       }),
       ...(markdownSyntax.enabled('core.images')
@@ -449,6 +489,7 @@ export function MarkdownEditor({
       extensions,
       content: '',
       contentType: 'markdown',
+      editable: false,
       autofocus: false,
       injectCSS: false,
       shouldRerenderOnTransaction: false,
@@ -488,10 +529,69 @@ export function MarkdownEditor({
           transaction.getMeta('composition') == null
         )
           richHistoryGroup.current.id = ''
+        if (!transaction.docChanged)
+          editorViewRegistry.changed(viewIdRef.current as ViewId, 'rich')
       },
     },
     [markdownExtensions, flavors, syntaxVersion],
   )
+  useEffect(() => {
+    if (!editor) return
+    return editorViewRegistry.register(
+      documentState.tabId,
+      viewId as ViewId,
+      'rich',
+      {
+        read: () => {
+          const source = richSourceSnapshot(editor)
+          if (!source || !richSourceCurrent(editor)) return null
+          const selection = editor.state.selection
+          return {
+            contentVersion: source.version,
+            anchor: selection.anchor,
+            head: selection.head,
+            length: editor.state.doc.content.size,
+          }
+        },
+        setSelection: (anchor, head) => {
+          try {
+            const state = editor.view.state
+            const selection = TextSelection.create(state.doc, anchor, head)
+            if (selection.anchor !== anchor || selection.head !== head)
+              return false
+            editor.view.dispatch(state.tr.setSelection(selection))
+            return (
+              editor.state.selection.anchor === anchor &&
+              editor.state.selection.head === head
+            )
+          } catch {
+            return false
+          }
+        },
+        reveal: (position) => {
+          try {
+            const pane = editor.view.dom.closest<HTMLElement>('.rich-pane')
+            if (!pane) return false
+            const bounds = pane.getBoundingClientRect()
+            if (!bounds.width || !bounds.height) return false
+            const cursor = editor.view.coordsAtPos(position)
+            const margin = 24
+            if (cursor.top < bounds.top + margin)
+              pane.scrollTop += cursor.top - bounds.top - margin
+            else if (cursor.bottom > bounds.bottom - margin)
+              pane.scrollTop += cursor.bottom - bounds.bottom + margin
+            if (cursor.left < bounds.left + margin)
+              pane.scrollLeft += cursor.left - bounds.left - margin
+            else if (cursor.right > bounds.right - margin)
+              pane.scrollLeft += cursor.right - bounds.right + margin
+            return true
+          } catch {
+            return false
+          }
+        },
+      },
+    )
+  }, [editor, documentState.tabId, viewId])
   const updateRichEditable = useCallback(() => {
     if (!editor || editor.isDestroyed) return
     editor.setEditable(
@@ -514,11 +614,665 @@ export function MarkdownEditor({
     disabled,
     richExtensionError,
   ])
+  const completionContext = useRef({
+    tabId: documentState.tabId,
+    viewId,
+    paneMode,
+    disabled,
+    splitReadOnly,
+    projectionReadOnly,
+    plainSyncEligible,
+    syntaxVersion,
+    markdownExtensions,
+  })
+  completionContext.current = {
+    tabId: documentState.tabId,
+    viewId,
+    paneMode,
+    disabled,
+    splitReadOnly,
+    projectionReadOnly,
+    plainSyncEligible,
+    syntaxVersion,
+    markdownExtensions,
+  }
+  useEffect(() => {
+    const manager = editor?.markdown
+    if (!editor || !manager || !markdownDocument) return
+    const serializeCompletionSource = markdownSerializer(manager, true)
+    const view = editor.view
+    const menu = document.createElement('div')
+    menu.id = `rich-completions-${crypto.randomUUID()}`
+    menu.className = 'command-results'
+    menu.popover = 'manual'
+    menu.setAttribute('role', 'listbox')
+    menu.setAttribute('aria-label', 'Completions')
+    menu.setAttribute('aria-hidden', 'true')
+    menu.inert = true
+    Object.assign(menu.style, {
+      position: 'fixed',
+      inset: 'auto',
+      margin: '0',
+      width: 'min(320px, calc(100vw - 16px))',
+      maxHeight: 'min(308px, calc(100vh - 16px))',
+      overflowY: 'auto',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-popover)',
+      background: 'var(--background)',
+      color: 'var(--ink)',
+      fontFamily: 'var(--font-ui)',
+      fontSize: 'var(--text-ui)',
+    })
+    document.body.append(menu)
+    const attributes = [
+      'aria-controls',
+      'aria-activedescendant',
+      'aria-autocomplete',
+      'aria-haspopup',
+    ]
+    let previous = new Map<string, string | null>()
+    let visible: {
+      request: CompletionRequest
+      items: readonly CompletionItem[]
+    } | null = null
+    let selected = 0
+    let cancel: (() => void) | null = null
+    let pending = false
+    let frame = 0
+    let typed: string | null = null
+    let disposed = false
+    const open = () => menu.matches(':popover-open')
+    const hide = () => {
+      visible = null
+      menu.inert = true
+      menu.setAttribute('aria-hidden', 'true')
+      if (open()) menu.hidePopover()
+      for (const [name, value] of previous) {
+        if (value === null) view.dom.removeAttribute(name)
+        else view.dom.setAttribute(name, value)
+      }
+      previous = new Map()
+    }
+    const dismiss = () => {
+      cancel?.()
+      cancel = null
+      pending = false
+      cancelAnimationFrame(frame)
+      frame = 0
+      hide()
+    }
+    const capture = (
+      trigger: CompletionRequest['trigger'],
+    ): CompletionRequest | null => {
+      const context = completionContext.current
+      if (
+        disposed ||
+        !completionBroker.hasProviders() ||
+        editor.isDestroyed ||
+        context.paneMode === 'markdown' ||
+        context.disabled ||
+        context.splitReadOnly ||
+        context.projectionReadOnly ||
+        !context.plainSyncEligible ||
+        markdownSyntax.version() !== context.syntaxVersion ||
+        !editor.isEditable ||
+        view.composing ||
+        !view.hasFocus()
+      )
+        return null
+      const target = documentRuntime.captureActiveView()
+      if (
+        !target ||
+        target.viewId !== context.viewId ||
+        !documentRuntime.isLiveView(target) ||
+        !flushRich(editor)
+      )
+        return null
+      const current = documentRuntime.get(context.tabId)
+      const source = documentRuntime.session(context.tabId)?.snapshot()
+      const selection = view.state.selection
+      if (
+        !current ||
+        !source ||
+        current.contentVersion !== source.version ||
+        !(selection instanceof TextSelection) ||
+        !selection.empty ||
+        !selection.$head.parent.isTextblock ||
+        selection.$head.parent.type.spec.code ||
+        selection.$head.marks().some((mark) => mark.type.spec.code)
+      )
+        return null
+      if (!plainSync.current)
+        plainSync.current = createPlainSourceSync(
+          source,
+          view.state.doc,
+          serializeCompletionSource(view.state.doc),
+        )
+      if (
+        plainSync.current?.map(
+          source,
+          view.state.doc,
+          selection.head,
+          'rich',
+        ) == null
+      )
+        return null
+      const parent = selection.$head.parent
+      const offset = selection.$head.parentOffset
+      return {
+        view: target,
+        contentVersion: current.contentVersion,
+        editor: 'rich',
+        documentLength: view.state.doc.content.size,
+        selection: { anchor: selection.anchor, head: selection.head },
+        before: parent.textBetween(Math.max(0, offset - 128), offset),
+        after: parent.textBetween(
+          offset,
+          Math.min(parent.content.size, offset + 128),
+        ),
+        trigger,
+      }
+    }
+    const same = (left: CompletionRequest, right: CompletionRequest | null) =>
+      !!right &&
+      left.view.documentId === right.view.documentId &&
+      left.view.documentGeneration === right.view.documentGeneration &&
+      left.view.viewId === right.view.viewId &&
+      left.view.viewGeneration === right.view.viewGeneration &&
+      left.contentVersion === right.contentVersion &&
+      left.documentLength === right.documentLength &&
+      left.selection.anchor === right.selection.anchor &&
+      left.selection.head === right.selection.head
+    const range = (item: CompletionItem, request: CompletionRequest) => {
+      if (
+        item.to !== request.selection.head ||
+        item.from > item.to ||
+        /[\r\n]/.test(item.insertText)
+      )
+        return null
+      const document = view.state.doc
+      const from = document.resolve(item.from)
+      const to = document.resolve(item.to)
+      if (
+        !from.sameParent(to) ||
+        from.depth !== 1 ||
+        !from.parent.isTextblock ||
+        from.parent.type.spec.code
+      )
+        return null
+      const source = documentRuntime
+        .session(completionContext.current.tabId)
+        ?.snapshot()
+      if (!source || source.version !== request.contentVersion) return null
+      const rawFrom = plainSync.current?.map(
+        source,
+        document,
+        item.from,
+        'rich',
+      )
+      const rawTo = plainSync.current?.map(source, document, item.to, 'rich')
+      if (
+        rawFrom == null ||
+        rawTo == null ||
+        rawFrom > rawTo ||
+        source.sliceRaw(rawFrom, rawTo) !==
+          document.textBetween(item.from, item.to)
+      )
+        return null
+      return { source, rawFrom, rawTo }
+    }
+    const reposition = () => {
+      if (!visible || !open() || view.isDestroyed) return
+      const rect = view.coordsAtPos(visible.request.selection.head)
+      const bounds = menu.getBoundingClientRect()
+      const left = Math.max(
+        8,
+        Math.min(rect.left, innerWidth - bounds.width - 8),
+      )
+      const below = rect.bottom + 6
+      const top =
+        below + bounds.height <= innerHeight - 8
+          ? below
+          : rect.top - bounds.height - 6
+      menu.style.left = `${left}px`
+      menu.style.top = `${Math.max(8, top)}px`
+    }
+    const select = (index: number) => {
+      if (!visible?.items.length) return
+      selected = (index + visible.items.length) % visible.items.length
+      for (const [position, option] of [...menu.children].entries()) {
+        const active = position === selected
+        option.setAttribute('aria-selected', String(active))
+        const element = option as HTMLElement
+        element.style.background = active ? 'var(--active)' : ''
+      }
+      const option = menu.children[selected]
+      if (option) {
+        view.dom.setAttribute('aria-activedescendant', option.id)
+        option.scrollIntoView({ block: 'nearest' })
+      }
+    }
+    const accept = (index: number) => {
+      const shown = visible
+      const item = shown?.items[index]
+      if (
+        !shown ||
+        !item ||
+        !same(shown.request, capture(shown.request.trigger))
+      ) {
+        dismiss()
+        return
+      }
+      const mapped = range(item, shown.request)
+      if (!mapped) {
+        dismiss()
+        return
+      }
+      try {
+        const proposed =
+          mapped.source.sliceRaw(0, mapped.rawFrom) +
+          item.insertText +
+          mapped.source.sliceRaw(mapped.rawTo, mapped.source.utf16Length)
+        const projection = projectMarkdown(
+          proposed,
+          completionContext.current.markdownExtensions,
+        )
+        const transaction = closeHistory(view.state.tr)
+        let markedLink = false
+        if (
+          item.insertText.startsWith('[[') &&
+          item.insertText.endsWith(']]')
+        ) {
+          const parsed = editor.schema.nodeFromJSON(
+            manager.parse(item.insertText),
+          )
+          const paragraph = parsed.firstChild
+          const link = paragraph?.firstChild
+          if (
+            parsed.childCount !== 1 ||
+            paragraph?.type.name !== 'paragraph' ||
+            paragraph.childCount !== 1 ||
+            !link?.isText ||
+            link.marks.length !== 1 ||
+            link.marks[0]?.type.name !== 'obsidianWikiLink'
+          )
+            throw new Error('This completion needs Source view.')
+          transaction.replaceWith(item.from, item.to, link)
+          markedLink = true
+        } else transaction.insertText(item.insertText, item.from, item.to)
+        if (
+          projection.readOnly ||
+          projection.serialize(projection.content) !== proposed ||
+          !editor.schema
+            .nodeFromJSON(manager.parse(projection.content))
+            .eq(transaction.doc)
+        )
+          throw new Error('This completion needs Source view.')
+        dismiss()
+        richHistoryGroup.current.id = ''
+        if (markedLink) {
+          // Mark serialization expands unaliased links; keep proven source bytes.
+          exactSource.current = { source: proposed, document: transaction.doc }
+        }
+        try {
+          view.dispatch(transaction)
+        } finally {
+          if (markedLink) exactSource.current = null
+        }
+        if (!view.state.doc.eq(transaction.doc))
+          throw new Error('This completion needs Source view.')
+        richHistoryGroup.current.id = ''
+        view.dispatch(closeHistory(view.state.tr))
+        view.focus()
+      } catch {
+        dismiss()
+        setRichInputError('This completion needs Source view.')
+      }
+    }
+    const publish = (update: CompletionUpdate) => {
+      if (update.done) pending = false
+      if (disposed || !same(update.request, capture(update.request.trigger))) {
+        hide()
+        return
+      }
+      const items = update.items.filter((item) => range(item, update.request))
+      if (!items.length) {
+        hide()
+        return
+      }
+      visible = { request: update.request, items }
+      selected = Math.min(selected, items.length - 1)
+      menu.replaceChildren(
+        ...items.map((item, index) => {
+          const option = document.createElement('div')
+          option.id = `${menu.id}-${index}`
+          option.setAttribute('role', 'option')
+          option.className = 'command-copy'
+          const label = document.createElement('span')
+          label.className = 'command-label'
+          label.textContent = item.label
+          option.append(label)
+          if (item.detail) {
+            const detail = document.createElement('span')
+            detail.className = 'command-detail'
+            detail.textContent = item.detail
+            option.append(detail)
+          }
+          option.addEventListener('pointermove', () => select(index))
+          option.addEventListener('click', () => accept(index))
+          return option
+        }),
+      )
+      if (!open()) {
+        previous = new Map(
+          attributes.map((name) => [name, view.dom.getAttribute(name)]),
+        )
+        view.dom.setAttribute('aria-controls', menu.id)
+        view.dom.setAttribute('aria-autocomplete', 'list')
+        view.dom.setAttribute('aria-haspopup', 'listbox')
+        menu.inert = false
+        menu.removeAttribute('aria-hidden')
+        menu.showPopover()
+      }
+      select(selected)
+      reposition()
+    }
+    const request = (trigger: CompletionRequest['trigger']) => {
+      if (!completionBroker.hasProviders()) return false
+      dismiss()
+      cancel = completionBroker.request(
+        () => capture(trigger),
+        () => capture(trigger),
+        publish,
+      )
+      pending = !!cancel
+      return !!cancel
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!completionBroker.hasProviders()) return
+      if (event.isComposing || view.composing) {
+        dismiss()
+        return
+      }
+      if (
+        event.key === ' ' &&
+        event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey
+      ) {
+        if (request({ kind: 'explicit' })) {
+          event.preventDefault()
+          event.stopPropagation()
+        }
+        return
+      }
+      if (event.key === 'Escape' && (visible || pending)) {
+        dismiss()
+        event.preventDefault()
+        event.stopPropagation()
+        return
+      }
+      if (visible && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          select(selected + (event.key === 'ArrowDown' ? 1 : -1))
+          event.preventDefault()
+          event.stopPropagation()
+          return
+        }
+        if (event.key === 'Enter' || event.key === 'Tab') {
+          accept(selected)
+          event.preventDefault()
+          event.stopPropagation()
+          return
+        }
+      }
+      if (
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        [...event.key].length === 1
+      ) {
+        typed = event.key
+        const character = typed
+        setTimeout(() => {
+          if (typed === character) typed = null
+        }, 0)
+      } else typed = null
+    }
+    const onTransaction = ({ transaction }: EditorEvents['transaction']) => {
+      if (!completionBroker.hasProviders()) return
+      if (!transaction.docChanged && !transaction.selectionSet) return
+      const character = transaction.docChanged ? typed : null
+      typed = null
+      dismiss()
+      if (!character) return
+      const head = view.state.selection.head
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        if (view.state.selection.head === head)
+          request({ kind: 'input', character })
+      })
+    }
+    const onOutside = (event: PointerEvent) => {
+      if (!menu.contains(event.target as Node)) dismiss()
+    }
+    const onScroll = () => reposition()
+    menu.addEventListener('pointerdown', (event) => event.preventDefault())
+    view.dom.addEventListener('keydown', onKeyDown, true)
+    view.dom.addEventListener('blur', dismiss)
+    view.dom.addEventListener('hibi:editor-actions-open', dismiss)
+    document.addEventListener('pointerdown', onOutside, true)
+    document.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', reposition)
+    window.addEventListener('blur', dismiss)
+    editor.on('transaction', onTransaction)
+    return () => {
+      disposed = true
+      dismiss()
+      editor.off('transaction', onTransaction)
+      view.dom.removeEventListener('keydown', onKeyDown, true)
+      view.dom.removeEventListener('blur', dismiss)
+      view.dom.removeEventListener('hibi:editor-actions-open', dismiss)
+      document.removeEventListener('pointerdown', onOutside, true)
+      document.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', reposition)
+      window.removeEventListener('blur', dismiss)
+      menu.remove()
+    }
+  }, [editor, markdownDocument])
+  useEffect(() => {
+    const manager = editor?.markdown
+    if (!editor || !manager || !markdownDocument) return
+    const view = editor.view
+    const serialize = markdownSerializer(manager, true)
+    const scope = documentEdits.scope(() => false)
+    const capture = (
+      position: number,
+      allowBlurred = false,
+      toolbarSelection = false,
+    ): EditorInteractionRequest | null => {
+      const context = completionContext.current
+      if (
+        editor.isDestroyed ||
+        context.paneMode === 'markdown' ||
+        (!toolbarSelection &&
+          (context.disabled ||
+            context.splitReadOnly ||
+            context.projectionReadOnly ||
+            !context.plainSyncEligible ||
+            markdownSyntax.version() !== context.syntaxVersion ||
+            !editor.isEditable)) ||
+        view.composing ||
+        (!view.hasFocus() && !allowBlurred) ||
+        !richSourceCurrent(editor) ||
+        !Number.isSafeInteger(position) ||
+        position < 0 ||
+        position > view.state.doc.content.size
+      )
+        return null
+      const target = documentRuntime.captureActiveView()
+      const current = documentRuntime.get(context.tabId)
+      const source = documentRuntime.session(context.tabId)?.snapshot()
+      const selection = view.state.selection
+      if (
+        !target ||
+        target.viewId !== context.viewId ||
+        !documentRuntime.isLiveView(target) ||
+        !current ||
+        !source ||
+        current.contentVersion !== source.version ||
+        !(selection instanceof TextSelection) ||
+        (!toolbarSelection &&
+          (!selection.$from.sameParent(selection.$to) ||
+            !selection.$from.parent.isTextblock ||
+            selection.$from.parent.type.spec.code ||
+            selection.$from.marks().some((mark) => mark.type.spec.code)))
+      )
+        return null
+      const at = view.state.doc.resolve(position)
+      if (!toolbarSelection) {
+        if (!at.parent.isTextblock || at.parent.type.spec.code) return null
+        if (!plainSync.current)
+          plainSync.current = createPlainSourceSync(
+            source,
+            view.state.doc,
+            serialize(view.state.doc),
+          )
+        if (
+          plainSync.current?.map(source, view.state.doc, position, 'rich') ==
+          null
+        )
+          return null
+      }
+      const offset = at.parentOffset
+      return {
+        view: target,
+        contentVersion: current.contentVersion,
+        editor: 'rich',
+        documentLength: view.state.doc.content.size,
+        position,
+        selection: { anchor: selection.anchor, head: selection.head },
+        before: toolbarSelection
+          ? ''
+          : at.parent.textBetween(Math.max(0, offset - 128), offset),
+        after: toolbarSelection
+          ? ''
+          : at.parent.textBetween(
+              offset,
+              Math.min(at.parent.content.size, offset + 128),
+            ),
+        selectedText: view.state.doc.textBetween(
+          selection.from,
+          toolbarSelection
+            ? Math.min(selection.to, selection.from + 256)
+            : selection.to,
+          toolbarSelection ? '\n' : undefined,
+        ),
+      }
+    }
+    const apply = (
+      action: EditorContextAction,
+      request: EditorInteractionRequest,
+    ) => {
+      if (!sameInteraction(request, capture(request.position))) return false
+      const source = documentRuntime
+        .session(completionContext.current.tabId)
+        ?.snapshot()
+      if (!source || source.version !== request.contentVersion) return false
+      const { from, to, insertText } = action.edit
+      if (/[\r\n]/.test(insertText)) return false
+      const start = view.state.doc.resolve(from)
+      const end = view.state.doc.resolve(to)
+      if (!start.sameParent(end) || !start.parent.isTextblock) return false
+      const rawFrom = plainSync.current?.map(
+        source,
+        view.state.doc,
+        from,
+        'rich',
+      )
+      const rawTo = plainSync.current?.map(source, view.state.doc, to, 'rich')
+      if (
+        rawFrom == null ||
+        rawTo == null ||
+        rawFrom > rawTo ||
+        source.sliceRaw(rawFrom, rawTo) !== view.state.doc.textBetween(from, to)
+      )
+        return false
+      const current = documentRuntime.get(completionContext.current.tabId)
+      if (!current) return false
+      const result = scope.apply({
+        requestId: crypto.randomUUID(),
+        tabId: current.tabId,
+        revision: current.revision,
+        contentVersion: source.version,
+        changes: [
+          {
+            from: rawFrom,
+            to: rawTo,
+            expectedText: source.sliceRaw(rawFrom, rawTo),
+            insert: insertText,
+          },
+        ],
+      })
+      if (result.status !== 'applied') setRichInputError(result.message)
+      return result.status === 'applied'
+    }
+    let detach = () => {}
+    let generation = 0
+    let disposed = false
+    const refresh = () => {
+      const current = ++generation
+      detach()
+      detach = () => {}
+      if (!hasEditorInteractionProviders()) return
+      void import('./editor-interactions')
+        .then(({ attachEditorInteractions }) => {
+          if (
+            disposed ||
+            current !== generation ||
+            !hasEditorInteractionProviders()
+          )
+            return
+          detach = attachEditorInteractions({
+            element: view.dom,
+            positionAt: (x, y) => {
+              const result = view.posAtCoords({ left: x, top: y })
+              return result && result.inside >= 0 ? result.pos : null
+            },
+            anchorAt: (position) => view.coordsAtPos(position),
+            selectionPosition: () => view.state.selection.head,
+            capture,
+            apply,
+            focus: () => view.focus(),
+            error: (error) => setRichInputError(String(error)),
+          })
+        })
+        .catch((error) => setRichInputError(String(error)))
+    }
+    const unsubscribe = onEditorInteractionProvidersChanged(refresh)
+    refresh()
+    const unregisterSelection = registerEditorSelectionCapture(
+      () => capture(view.state.selection.head, true, true),
+      (position) => capture(position, true, true),
+    )
+    const invalidate = () =>
+      view.dom.dispatchEvent(new Event('hibi:editor-interactions-invalidate'))
+    editor.on('transaction', invalidate)
+    return () => {
+      disposed = true
+      unsubscribe()
+      unregisterSelection()
+      editor.off('transaction', invalidate)
+      detach()
+      scope.dispose()
+    }
+  }, [editor, markdownDocument])
   // biome-ignore lint/correctness/useExhaustiveDependencies: maps belong to this rich editor and syntax generation.
   const positions = useMemo<MarkdownPositionLookup>(() => {
     const fallback = createMarkdownPositionCache()
     return (source, document) => (position, from) => {
-      const snapshot = documentRuntime.session()?.snapshot()
+      const snapshot = documentRuntime.session(documentState.tabId)?.snapshot()
       const exact =
         snapshot && markdownSyntax.version() === syntaxVersion
           ? plainSync.current?.map(snapshot, document, position, from)
@@ -529,7 +1283,7 @@ export function MarkdownEditor({
   const geometryContent = useMemo(
     () => () => {
       if (!editor || !richSourceCurrent(editor)) return null
-      const current = documentRuntime.get()
+      const current = documentRuntime.get(documentState.tabId)
       const text = scrollContent.current
       return current &&
         text.document.contentVersion === current.contentVersion &&
@@ -538,7 +1292,7 @@ export function MarkdownEditor({
         ? text
         : null
     },
-    [editor],
+    [editor, documentState.tabId],
   )
   // biome-ignore lint/correctness/useExhaustiveDependencies: delayed document props publish fresh geometry independently of rich transactions.
   useLayoutEffect(() => {
@@ -558,7 +1312,7 @@ export function MarkdownEditor({
     pendingPlainSync.current = null
     if (!markdownDocument) return null
     const known = richSourceSnapshot(editor),
-      session = documentRuntime.session(),
+      session = documentRuntime.session(documentState.tabId),
       current = session?.snapshot()
     if (
       !known ||
@@ -620,7 +1374,14 @@ export function MarkdownEditor({
       const accepted = performanceDiagnostics.measure(
         'core',
         'document update',
-        () => session.beginEdit([direct.change], 'visual', previous.id),
+        () =>
+          session.beginEdit(
+            [direct.change],
+            'visual',
+            previous.id,
+            undefined,
+            viewId,
+          ),
       )
       try {
         const certificate = direct.certify(accepted.prepared)
@@ -656,7 +1417,8 @@ export function MarkdownEditor({
     const preserved =
       exactSource.current ??
       exactHistory.current.get(editor)?.get(serialized.source)
-    const currentSource = documentRuntime.get()?.markdown ?? value
+    const currentSource =
+      documentRuntime.get(documentState.tabId)?.markdown ?? value
     const projection = projectMarkdown(currentSource, markdownExtensions)
     const original = projection.content
     let body = serialized.source
@@ -698,7 +1460,13 @@ export function MarkdownEditor({
     const accepted = performanceDiagnostics.measure(
       'core',
       'document update',
-      () => documentRuntime.beginReplace(source, previous.id),
+      () =>
+        documentRuntime.beginReplace(
+          source,
+          previous.id,
+          documentState.tabId,
+          viewId,
+        ),
     )
     // Regional proof is optional. Its failure must not strand an accepted source edit.
     try {
@@ -751,9 +1519,8 @@ export function MarkdownEditor({
     richSyntaxCompatible,
     richExtensions,
   ])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: replacing rich attachments invalidates certificates even when both sets are audited.
   useLayoutEffect(() => {
-    const session = documentRuntime.session()
+    const session = documentRuntime.session(documentState.tabId)
     const retained = retainedPreview.current
     retainedPreview.current = null
     if (!editor || !markdownDocument || !session) return
@@ -1040,6 +1807,7 @@ export function MarkdownEditor({
   ])
   const richEditContext = useRef({
     document: documentState,
+    focused,
     mode,
     findTarget,
     disabled,
@@ -1048,6 +1816,7 @@ export function MarkdownEditor({
   })
   richEditContext.current = {
     document: documentState,
+    focused,
     mode,
     findTarget,
     disabled,
@@ -1056,11 +1825,14 @@ export function MarkdownEditor({
   }
   useEffect(() => {
     if (!editor?.markdown || !markdownDocument) return
-    const body = () => {
+    const body = (mountedView?: ViewTarget) => {
       const context = richEditContext.current
-      const current = editorDocument.get()
+      const current = mountedView
+        ? documentRuntime.get(context.document.tabId)
+        : editorDocument.get()
       if (
         editor.isDestroyed ||
+        (!mountedView && !context.focused) ||
         context.findTarget !== 'rich' ||
         context.mode === 'markdown' ||
         context.disabled ||
@@ -1099,8 +1871,27 @@ export function MarkdownEditor({
             ))
         : null
     })
-    const removeEdits = documentEdits.register((request) => {
-      const value = body()
+    const applyRichEdits = (
+      request: SourceEditRequest,
+      mountedView?: ViewTarget,
+    ): SourceEditResult => {
+      const context = richEditContext.current
+      const identity = mountedView
+        ? documentRuntime.captureDocument(context.document.tabId)
+        : null
+      if (
+        mountedView &&
+        (!documentRuntime.isLiveView(mountedView) ||
+          mountedView.viewId !== (viewId as ViewId) ||
+          !identity ||
+          identity.documentId !== mountedView.documentId ||
+          identity.documentGeneration !== mountedView.documentGeneration)
+      )
+        return {
+          status: 'stale',
+          message: 'This editor view is no longer available. Read it again.',
+        }
+      const value = body(mountedView)
       const unsupported = {
         status: 'unsupported-view' as const,
         message: 'This range needs source view.',
@@ -1195,31 +1986,61 @@ export function MarkdownEditor({
             message:
               'An editor extension changed this edit. Review the document before continuing.',
           }
+        const after = documentRuntime
+          .session(context.document.tabId)
+          ?.snapshot()
+        if (!after)
+          return {
+            status: 'stale',
+            message:
+              'This document session is no longer available. Read it again.',
+          }
         return {
           status: 'applied',
-          contentVersion: editorDocument.get()!.contentVersion,
+          contentVersion: after.version,
         }
       } catch (error) {
         return { status: 'invalid', message: String(error) }
       } finally {
         exactSource.current = null
       }
-    }, 'rich')
+    }
+    const removeEdits = documentEdits.register(applyRichEdits, 'rich')
+    const documentTarget = documentRuntime.captureDocument(documentState.tabId)
+    const mountedView = documentRuntime.captureView(viewId as ViewId)
+    const target = documentTarget && {
+      ...documentTarget,
+      viewId: viewId as ViewId,
+      ...(mountedView?.documentId === documentTarget.documentId &&
+      mountedView.documentGeneration === documentTarget.documentGeneration
+        ? { viewGeneration: mountedView.viewGeneration }
+        : {}),
+    }
+    const removeMountedEdits = target
+      ? mountedDocumentEdits.register(
+          documentState.tabId,
+          target,
+          'rich',
+          (target, request) => applyRichEdits(request, target),
+        )
+      : () => {}
     return () => {
       removeEdits()
+      removeMountedEdits()
       removeProjection()
       removeAnnotations()
     }
-  }, [editor, markdownDocument])
+  }, [editor, markdownDocument, documentState.tabId, viewId])
   // biome-ignore lint/correctness/useExhaustiveDependencies: initial focus belongs to this editor instance, never subsequent mode or document updates.
   useLayoutEffect(() => {
-    if (!editor || !markdownDocument || paneMode === 'markdown') return
+    if (!autoFocus || !editor || !markdownDocument || paneMode === 'markdown')
+      return
     const focus = () => {
       if (editor.isDestroyed || !editor.view.dom.isConnected) return
       const active = window.document.activeElement
       if (
         active?.closest(
-          '.settings-screen, [role="dialog"], .source-pane, input, textarea, select',
+          '.settings-screen, [role="dialog"], .source-pane, .document-tabs, input, textarea, select',
         )
       )
         return
@@ -1235,7 +2056,7 @@ export function MarkdownEditor({
     return () => {
       editor.off('mount', focus)
     }
-  }, [editor])
+  }, [editor, autoFocus])
   // biome-ignore lint/correctness/useExhaustiveDependencies: parser ownership and syntax preferences change independently of its source snapshot.
   useEffect(() => {
     if (
@@ -1245,7 +2066,7 @@ export function MarkdownEditor({
       !sourceReady
     )
       return
-    const session = documentRuntime.session()
+    const session = documentRuntime.session(documentState.tabId)
     if (!session) return
     const semantics =
       outlineSyntax && createMarkdownSemantics(flavors, documentState.revision)
@@ -1465,7 +2286,7 @@ export function MarkdownEditor({
       disposed = false
     const current = () => {
       const cached = visualOutline.current,
-        source = documentRuntime.session()?.snapshot()
+        source = documentRuntime.session(documentState.tabId)?.snapshot()
       return cached &&
         source &&
         cached.document === editor.state.doc &&
@@ -1515,7 +2336,7 @@ export function MarkdownEditor({
       timer = idle = undefined
       if (disposed || editor.isDestroyed) return
       const document = editor.state.doc,
-        source = documentRuntime.session()?.snapshot(),
+        source = documentRuntime.session(documentState.tabId)?.snapshot(),
         known = richSourceSnapshot(editor)
       if (
         !source ||
@@ -1577,7 +2398,7 @@ export function MarkdownEditor({
               })
           }
       }
-      const latest = documentRuntime.session()?.snapshot()
+      const latest = documentRuntime.session(documentState.tabId)?.snapshot()
       if (
         disposed ||
         editor.state.doc !== document ||
@@ -1639,6 +2460,7 @@ export function MarkdownEditor({
     positions,
     paneMode,
     markdownExtensions,
+    documentState.tabId,
   ])
   // biome-ignore lint/correctness/useExhaustiveDependencies: pane focus/readiness changes refresh selection through the current context ref without rebuilding the outline.
   useEffect(() => reportVisualCaret.current(), [findTarget, sourceReady])
@@ -1646,14 +2468,14 @@ export function MarkdownEditor({
   // biome-ignore lint/correctness/useExhaustiveDependencies: these transitions invalidate the exact projection even when text is unchanged.
   useEffect(() => {
     documentProjections.invalidate()
-  }, [mode, findTarget, sourceReady, syntaxVersion, flavors])
+  }, [mode, findTarget, sourceReady, syntaxVersion, flavors, focused])
   useEffect(() => {
     if (!editor || !outlineTarget || handledOutline.current === outlineTarget)
       return
     if (mode !== 'normal' && !sourceReady) return
     if (paneMode === 'markdown') {
       const current = sourceOutline.current,
-        session = documentRuntime.session(),
+        session = documentRuntime.session(documentState.tabId),
         heading = current?.headings.find(
           (item) => item.id === outlineTarget.id,
         ),
@@ -1673,7 +2495,7 @@ export function MarkdownEditor({
     }
     handledOutline.current = outlineTarget
     const cached = visualOutline.current,
-      source = documentRuntime.session()?.snapshot(),
+      source = documentRuntime.session(documentState.tabId)?.snapshot(),
       heading = cached?.headings.find((item) => item.id === outlineTarget.id)
     const position = heading?.position
     if (
@@ -1706,7 +2528,15 @@ export function MarkdownEditor({
       revealSourcePosition(view, heading.raw)
       view.focus()
     }
-  }, [content, editor, outlineTarget, mode, sourceReady, paneMode])
+  }, [
+    content,
+    editor,
+    outlineTarget,
+    mode,
+    sourceReady,
+    paneMode,
+    documentState.tabId,
+  ])
   useEffect(() => {
     if (paneMode !== 'side-by-side' || !sourceReady || !editor) return
     const rich = content.current?.querySelector<HTMLElement>('.rich-pane')
@@ -1743,6 +2573,7 @@ export function MarkdownEditor({
       focusOwnedByEditor,
       markdownDocument,
       format,
+      focused,
     )
 
   useLayoutEffect(() => {
@@ -1934,7 +2765,11 @@ export function MarkdownEditor({
           />
           <section
             className="rich-pane"
-            onFocusCapture={() => setFocusedPane('rich')}
+            onFocusCapture={() => {
+              setFocusedPane('rich')
+              editorViewRegistry.setActive(viewId as ViewId, 'rich')
+              documentRuntime.focusView(viewId as ViewId)
+            }}
             aria-label="Formatted document"
             aria-hidden={paneMode === 'markdown'}
             inert={paneMode === 'markdown'}
@@ -1991,7 +2826,11 @@ export function MarkdownEditor({
           </section>
           <section
             className="source-pane"
-            onFocusCapture={() => setFocusedPane('source')}
+            onFocusCapture={() => {
+              setFocusedPane('source')
+              editorViewRegistry.setActive(viewId as ViewId, 'source')
+              documentRuntime.focusView(viewId as ViewId)
+            }}
             aria-label="Document source"
             aria-hidden={paneMode === 'normal'}
             inert={paneMode === 'normal'}
@@ -2004,7 +2843,10 @@ export function MarkdownEditor({
               >
                 <SourceEditor
                   document={documentState}
+                  viewId={viewId}
+                  focused={focused}
                   editTarget={findTarget === 'source'}
+                  sourceVisible={paneMode !== 'normal'}
                   markdownMode={markdownDocument}
                   referenceSyntax={referenceSyntax}
                   linksEnabled={markdownSyntax.enabled('core.links')}

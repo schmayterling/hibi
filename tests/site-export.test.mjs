@@ -4,6 +4,8 @@ import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import katex from 'katex'
+import { marked } from 'marked'
 import {
   exportOptions,
   validateExportOptions,
@@ -14,6 +16,7 @@ import { clickMenu } from './keyboard.mjs'
 
 const pixel =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lZkAAAAASUVORK5CYII='
+const mermaidImage = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="red"/></svg>')}`
 const snapshot = {
   name: 'Notes',
   pages: [
@@ -109,6 +112,73 @@ test('export options validate URLs, images and portable paths; protected files c
   }
 })
 
+test('site export keeps supported static content and omits addon runtime state', async () => {
+  const template = await readFile('out/site/template.html', 'utf8')
+  const math = katex.renderToString('x^2')
+  const installedAddonCode = await readFile(
+    'examples/foundation-proof-addon/index.js',
+    'utf8',
+  )
+  const attachment = 'data:image/png;base64,aGVsbG8='
+  const unusedAttachment = 'data:image/png;base64,cHJpdmF0ZQ=='
+  const snapshot = {
+    name: 'Public notes',
+    pages: [
+      {
+        id: 'private-document-id',
+        path: 'README.md',
+        markdown: '# Public\n\n![preview](images/preview.png)',
+        html: `<h1>Public</h1><p><strong>Supported flavor</strong>${math}<img src="images/preview.png" onerror="window.exportAttack=true"></p><script>window.exportAttack=true</script>`,
+        images: {
+          'images/preview.png': attachment,
+          'unused.png': unusedAttachment,
+        },
+        addonContext: {
+          host: { credentials: 'credential-value-sentinel' },
+          workspace: { grant: 'workspace-grant-sentinel' },
+          code: installedAddonCode,
+        },
+      },
+      {
+        path: 'fallback.md',
+        markdown: '## Plain fallback **works**\n\n:::unsupported',
+      },
+    ],
+    addonRuntime: { bridge: 'privileged-bridge-sentinel' },
+  }
+  for (const singleFile of [true, false]) {
+    const options = {
+      ...exportOptions({ singleFile, graph: false }),
+      credential: 'option-secret-sentinel',
+    }
+    const site = prepareSite(snapshot, options)
+    assert.match(site.pages[1].html, /<strong>works<\/strong>/)
+    assert.match(site.pages[1].html, /:::unsupported/)
+    const files = await siteFiles(template, site)
+    const output = [...files.values()].join('\n')
+    for (const secret of [
+      'private-document-id',
+      'credential-value-sentinel',
+      'workspace-grant-sentinel',
+      'privileged-bridge-sentinel',
+      'option-secret-sentinel',
+      'Foundation proof preferences need a supported version.',
+      unusedAttachment,
+      'window.hibi',
+      'ipcRenderer',
+      'window.exportAttack',
+    ])
+      assert.ok(!output.includes(secret), secret)
+    assert.ok(output.includes(attachment))
+    const article = (
+      singleFile ? files.get('index.html') : files.get('README.md/index.html')
+    ).match(/<article class="tiptap">([\s\S]*?)<\/article>/)?.[1]
+    assert.match(article, /<strong>Supported flavor<\/strong>/)
+    assert.match(article, /class="katex"/)
+    assert.doesNotMatch(article, /<script|onerror|window\.exportAttack/i)
+  }
+})
+
 test('published sites support direct routes, crawlable HTML, branding, locked themes, graph and encrypted unlock', {
   timeout: 60000,
 }, async (t) => {
@@ -131,7 +201,13 @@ test('published sites support direct routes, crawlable HTML, branding, locked th
   }
   hostile.pages[0].markdown +=
     '\n<script>window.exportAttack = true</script>\n<img src="x" onerror="window.exportAttack=true">'
+  hostile.pages[0].html = `${marked.parse(hostile.pages[0].markdown)}<img class="mermaid-diagram" alt="Mermaid diagram" src="${mermaidImage}"><img class="mermaid-diagram danger" src="data:text/html,%3Cscript%3Ealert(1)%3C%2Fscript%3E">`
   const files = await siteFiles(template, prepareSite(hostile, options))
+  assert.ok(files.get('README.md/index.html').includes(mermaidImage))
+  assert.doesNotMatch(
+    files.get('README.md/index.html'),
+    /data:text\/html|window\.exportAttack/,
+  )
   const server = createServer((request, response) => {
     let path = decodeURIComponent(
       new URL(request.url, 'http://localhost').pathname,
@@ -205,6 +281,22 @@ test('published sites support direct routes, crawlable HTML, branding, locked th
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('button', { name: /^toggle navigation$/i }).waitFor()
+  await page.waitForFunction(() => {
+    const image = document.querySelector('article img.mermaid-diagram')
+    return image?.complete && image.naturalWidth === 8
+  })
+  assert.equal(
+    await page
+      .locator('article img.mermaid-diagram:not(.danger)')
+      .getAttribute('src'),
+    mermaidImage,
+  )
+  assert.equal(
+    await page
+      .locator('article img.mermaid-diagram.danger')
+      .getAttribute('src'),
+    null,
+  )
   assert.equal(
     await page.getByRole('button', { name: /^color scheme$/i }).count(),
     0,
@@ -310,15 +402,24 @@ test('command-palette export opens options and writes a configured static folder
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-export-options-'))
   const workspace = join(folder, 'notes'),
-    output = join(folder, 'output')
+    output = join(folder, 'output'),
+    profile = join(folder, 'profile')
   await mkdir(workspace)
   await mkdir(output)
-  await writeFile(join(workspace, 'README.md'), '# Garden\n\n[More](more.md)')
+  await writeFile(
+    join(workspace, 'README.md'),
+    '# Garden\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n[More](more.md)',
+  )
   await writeFile(join(workspace, 'more.md'), '# More\n\nMore notes.')
+  await mkdir(profile)
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ mermaid: true }),
+  )
   await mkdir(join(output, 'notes-site'))
   await writeFile(join(output, 'notes-site', 'keep.txt'), 'keep me')
   const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+    args: [resolve('.'), `--user-data-dir=${profile}`],
   })
   t.after(async () => {
     await app.close()
@@ -339,6 +440,16 @@ test('command-palette export opens options and writes a configured static folder
       .querySelector('.workspace-sidebar')
       ?.textContent.includes('README.md'),
   )
+  const workspaceId = await page.evaluate(
+    async () => (await window.hibi.getWorkspace()).id,
+  )
+  const legacy = JSON.stringify(
+    exportOptions({ title: 'Legacy garden' }, 'notes'),
+  )
+  await page.evaluate(
+    ({ id, value }) => localStorage.setItem(`hibi:export:${id}`, value),
+    { id: workspaceId, value: legacy },
+  )
   await clickMenu(app, 'Command palette')
   await page
     .getByRole('combobox', { name: /search commands/i })
@@ -355,6 +466,29 @@ test('command-palette export opens options and writes a configured static folder
   await modal.waitFor()
   const footer = modal.locator('.dialog-footer')
   await footer.getByRole('button', { name: /^export$/i }).waitFor()
+  assert.equal(
+    await modal.getByLabel('Site title', { exact: true }).inputValue(),
+    'Legacy garden',
+  )
+  const storedOptions = join(
+    profile,
+    'addon-storage',
+    'workspace',
+    workspaceId,
+    'documentation.json',
+  )
+  assert.equal(
+    JSON.parse(await readFile(storedOptions, 'utf8')).entries['export-options']
+      .value.title,
+    'Legacy garden',
+  )
+  assert.equal(
+    await page.evaluate(
+      (id) => localStorage.getItem(`hibi:export:${id}`),
+      workspaceId,
+    ),
+    legacy,
+  )
   await modal.evaluate((dialog) =>
     Promise.all(dialog.getAnimations().map((animation) => animation.finished)),
   )
@@ -396,13 +530,42 @@ test('command-palette export opens options and writes a configured static folder
   await modal.getByRole('button', { name: /^export$/i, exact: true }).click()
   await modal.waitFor({ state: 'hidden' })
   assert.equal(
+    JSON.parse(await readFile(storedOptions, 'utf8')).entries['export-options']
+      .value.title,
+    'My published garden',
+  )
+  assert.equal(
     await readFile(join(output, 'notes-site', 'keep.txt'), 'utf8'),
     'keep me',
   )
+  const exportedIndex = join(output, 'notes-site-2', 'index.html')
+  const exportedHtml = await readFile(exportedIndex, 'utf8')
+  assert.match(exportedHtml, /My published garden/)
   assert.match(
-    await readFile(join(output, 'notes-site-2', 'index.html'), 'utf8'),
-    /My published garden/,
+    exportedHtml.match(/<article class="tiptap">([\s\S]*?)<\/article>/)?.[1],
+    /data:image\/svg\+xml,%3Csvg/,
   )
+  const nextViewer = app.waitForEvent('window')
+  await app.evaluate(({ BrowserWindow }, filePath) => {
+    const viewer = new BrowserWindow({
+      show: false,
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        backgroundThrottling: false,
+      },
+    })
+    void viewer.loadFile(filePath)
+  }, exportedIndex)
+  const exportedPage = await nextViewer
+  await exportedPage
+    .getByRole('button', { name: /^toggle navigation$/i })
+    .waitFor()
+  await exportedPage.waitForFunction(() => {
+    const image = document.querySelector('article img.mermaid-diagram')
+    return image?.complete && image.naturalWidth > 0
+  })
   assert.match(
     await readFile(
       join(output, 'notes-site-2', 'more.md', 'index.html'),

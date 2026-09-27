@@ -1,3 +1,14 @@
+import {
+  acceptCompletion,
+  autocompletion,
+  type Completion,
+  type CompletionContext,
+  type CompletionResult,
+  closeCompletion,
+  completionStatus,
+  pickedCompletion,
+  startCompletion,
+} from '@codemirror/autocomplete'
 import { defaultKeymap, isolateHistory, selectAll } from '@codemirror/commands'
 import {
   HighlightStyle,
@@ -22,9 +33,24 @@ import { EditorView, keymap, lineNumbers, placeholder } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { DocumentFormat, SourceExtension } from '../../addons/api'
+import type {
+  CompletionItem,
+  CompletionRequest,
+} from '../../shared/completions'
 import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop'
-import { editedSource, sourceEditMatches } from '../../shared/document-edits'
+import {
+  editedSource,
+  type SourceEditRequest,
+  type SourceEditResult,
+  sourceEditMatches,
+} from '../../shared/document-edits'
 import type { MarkdownReferenceSyntax } from '../../shared/document-worker-protocol'
+import {
+  type EditorContextAction,
+  type EditorInteractionRequest,
+  sameInteraction,
+} from '../../shared/editor-interactions'
+import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
 import { markdownLink } from '../../shared/markdown-link'
 import { wikiHref } from '../../shared/note-links'
 import type { RawEdit } from '../../shared/source-operations'
@@ -35,12 +61,20 @@ import {
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
 import { codeHighlighter, codeLanguages } from './code-languages'
+import { completionBroker } from './completion-broker'
 import { documentEdits } from './document-edits'
 import { editorDocument } from './document-formats'
 import { documentProjections } from './document-projections'
 import { documentRuntime } from './document-runtime'
 import { DocumentWorkerClient, type FindAction } from './document-worker-client'
+import { registerEditorSelectionCapture } from './editor-command-targets'
+import {
+  hasEditorInteractionProviders,
+  onEditorInteractionProvidersChanged,
+} from './editor-interaction-presence'
+import { editorViewRegistry } from './editor-view-api'
 import type { FindMove, FindStatus } from './FindBar'
+import { mountedDocumentEdits } from './mounted-document-edits'
 import {
   observeSourceAnnotations,
   sourceAnnotationExtension,
@@ -88,9 +122,26 @@ const sameReferenceSyntax = (
   !!a.math === !!b.math &&
   a.frontmatter === b.frontmatter
 
+const sameCompletionContext = (
+  a: CompletionRequest,
+  b: CompletionRequest | null,
+) =>
+  !!b &&
+  a.view.documentId === b.view.documentId &&
+  a.view.documentGeneration === b.view.documentGeneration &&
+  a.view.viewId === b.view.viewId &&
+  a.view.viewGeneration === b.view.viewGeneration &&
+  a.contentVersion === b.contentVersion &&
+  a.documentLength === b.documentLength &&
+  a.selection.anchor === b.selection.anchor &&
+  a.selection.head === b.selection.head
+
 export function SourceEditor({
   document,
+  viewId = 'default',
+  focused = true,
   editTarget,
+  sourceVisible = editTarget,
   markdownMode,
   markdownLanguage,
   referenceSyntax,
@@ -113,7 +164,10 @@ export function SourceEditor({
   onLink,
 }: {
   document: DocumentState
+  viewId?: string
+  focused?: boolean
   editTarget: boolean
+  sourceVisible?: boolean
   markdownMode: boolean
   markdownLanguage?: typeof import('@codemirror/lang-markdown').markdown
   referenceSyntax?:
@@ -183,11 +237,11 @@ export function SourceEditor({
   const [languageReady, setLanguageReady] = useState(!codeLanguage)
   const [inputError, setInputError] = useState('')
   const [bridgeRetry, retryBridge] = useState(0)
-  const session = documentRuntime.session()!
+  const session = documentRuntime.session(document.tabId)!
   // biome-ignore lint/correctness/useExhaustiveDependencies: retry refreshes a bridge whose snapshot went stale before attachment.
   const bridge = useMemo(
-    () => createSourceSession(session),
-    [session, bridgeRetry],
+    () => createSourceSession(session, viewId),
+    [session, viewId, bridgeRetry],
   )
   const [fontReadyBridge, setFontReadyBridge] = useState<ReturnType<
     typeof createSourceSession
@@ -196,8 +250,22 @@ export function SourceEditor({
     installedExtensions?.bridge === bridge &&
     installedExtensions.extensions === sourceExtensions &&
     languageReady
-  const editContext = useRef({ document, editTarget, disabled, inputReady })
-  editContext.current = { document, editTarget, disabled, inputReady }
+  const editContext = useRef({
+    document,
+    editTarget,
+    sourceVisible,
+    focused,
+    disabled,
+    inputReady,
+  })
+  editContext.current = {
+    document,
+    editTarget,
+    sourceVisible,
+    focused,
+    disabled,
+    inputReady,
+  }
   const exactChanges = useRef<readonly RawEdit[] | undefined>(undefined)
   const editable = useRef(new Compartment())
   const numbers = useRef(new Compartment())
@@ -431,7 +499,7 @@ export function SourceEditor({
 
   useEffect(() => {
     if (!host.current) return
-    const active = documentRuntime.get()
+    const active = documentRuntime.get(document.tabId)
     if (
       !active ||
       active.tabId !== document.tabId ||
@@ -439,7 +507,7 @@ export function SourceEditor({
     )
       return
     if (
-      documentRuntime.session() !== session ||
+      documentRuntime.session(document.tabId) !== session ||
       !session.ownsCurrentSnapshot(bridge.snapshot())
     ) {
       retryBridge((retry) => retry + 1)
@@ -472,6 +540,279 @@ export function SourceEditor({
       ]
     }
     const selection = bridge.selection()
+    type PendingCompletion = {
+      request: CompletionRequest
+      items: readonly CompletionItem[]
+      done: boolean
+      cancel: (() => void) | null
+      waiting: ((result: CompletionResult | null) => void)[]
+      refresh: ReturnType<typeof setTimeout> | null
+      options: Map<CompletionItem, Completion>
+    }
+    let completion: PendingCompletion | null = null
+    let typed: {
+      doc: EditorState['doc']
+      pos: number
+      character: string
+    } | null = null
+    let closingCompletion = false
+    const captureCompletion = (
+      trigger: CompletionRequest['trigger'],
+    ): CompletionRequest | null => {
+      const context = editContext.current
+      const active = documentRuntime.get(document.tabId)
+      const target = documentRuntime.captureActiveView()
+      const owner = documentRuntime.captureDocument(document.tabId)
+      const selected = editor.state.selection
+      if (
+        view.current !== editor ||
+        !editor.hasFocus ||
+        editor.composing ||
+        !context.editTarget ||
+        context.disabled ||
+        !context.inputReady ||
+        !active ||
+        active.revision !== context.document.revision ||
+        documentRuntime.session(document.tabId) !== session ||
+        !target ||
+        !owner ||
+        target.documentId !== owner.documentId ||
+        target.documentGeneration !== owner.documentGeneration ||
+        target.viewId !== viewId ||
+        !documentRuntime.isLiveView(target) ||
+        selected.ranges.length !== 1 ||
+        !selected.main.empty
+      )
+        return null
+      const snapshot = bridge.snapshot()
+      if (snapshot.version !== active.contentVersion) return null
+      const pos = selected.main.head
+      return {
+        view: target,
+        contentVersion: snapshot.version,
+        editor: 'source',
+        documentLength: editor.state.doc.length,
+        selection: { anchor: selected.main.anchor, head: pos },
+        before: editor.state.sliceDoc(Math.max(0, pos - 256), pos),
+        after: editor.state.sliceDoc(
+          pos,
+          Math.min(editor.state.doc.length, pos + 256),
+        ),
+        trigger,
+      }
+    }
+    const captureInteraction = (
+      position: number,
+      allowBlurred = false,
+      toolbarSelection = false,
+    ): EditorInteractionRequest | null => {
+      const context = editContext.current
+      const active = documentRuntime.get(document.tabId)
+      const target = documentRuntime.captureActiveView()
+      const owner = documentRuntime.captureDocument(document.tabId)
+      const selected = editor.state.selection
+      if (
+        view.current !== editor ||
+        (!editor.hasFocus && !allowBlurred) ||
+        editor.composing ||
+        !context.editTarget ||
+        context.disabled ||
+        !context.inputReady ||
+        !active ||
+        active.revision !== context.document.revision ||
+        documentRuntime.session(document.tabId) !== session ||
+        !target ||
+        !owner ||
+        target.documentId !== owner.documentId ||
+        target.documentGeneration !== owner.documentGeneration ||
+        target.viewId !== viewId ||
+        !documentRuntime.isLiveView(target) ||
+        selected.ranges.length !== 1 ||
+        !Number.isSafeInteger(position) ||
+        position < 0 ||
+        position > editor.state.doc.length
+      )
+        return null
+      const snapshot = bridge.snapshot()
+      if (snapshot.version !== active.contentVersion) return null
+      return {
+        view: target,
+        contentVersion: snapshot.version,
+        editor: 'source',
+        documentLength: editor.state.doc.length,
+        position,
+        selection: {
+          anchor: selected.main.anchor,
+          head: selected.main.head,
+        },
+        before: editor.state.sliceDoc(Math.max(0, position - 256), position),
+        after: editor.state.sliceDoc(
+          position,
+          Math.min(editor.state.doc.length, position + 256),
+        ),
+        selectedText: editor.state.sliceDoc(
+          selected.main.from,
+          toolbarSelection
+            ? Math.min(selected.main.to, selected.main.from + 256)
+            : selected.main.to,
+        ),
+      }
+    }
+    const cancelCompletion = () => {
+      const pending = completion
+      completion = null
+      if (!pending) return
+      if (pending.refresh) clearTimeout(pending.refresh)
+      pending.cancel?.()
+      for (const resolve of pending.waiting.splice(0)) resolve(null)
+    }
+    const resultFor = (pending: PendingCompletion): CompletionResult => ({
+      from: pending.request.selection.head,
+      to: pending.request.selection.head,
+      filter: false,
+      update: (_result, _from, _to, context) =>
+        context.state.doc === editor.state.doc &&
+        completion === pending &&
+        pending.items.length &&
+        sameCompletionContext(
+          pending.request,
+          captureCompletion(pending.request.trigger),
+        )
+          ? resultFor(pending)
+          : null,
+      options: pending.items.map((item): Completion => {
+        const previous = pending.options.get(item)
+        if (previous) return previous
+        const option: Completion = {
+          label: item.label,
+          ...(item.detail === undefined ? {} : { detail: item.detail }),
+          apply: (view, picked) => {
+            const current = captureCompletion(pending.request.trigger)
+            const pos = pending.request.selection.head
+            if (
+              view !== editor ||
+              completion !== pending ||
+              !sameCompletionContext(pending.request, current) ||
+              item.from > pos ||
+              item.to < pos ||
+              item.from > item.to ||
+              item.to > view.state.doc.length
+            ) {
+              closeCompletion(view)
+              return
+            }
+            view.dispatch({
+              changes: {
+                from: item.from,
+                to: item.to,
+                insert: item.insertText,
+              },
+              selection: { anchor: item.from + item.insertText.length },
+              annotations: [
+                isolateHistory.of('full'),
+                pickedCompletion.of(picked),
+                Transaction.userEvent.of('input.complete'),
+              ],
+            })
+          },
+        }
+        pending.options.set(item, option)
+        return option
+      }),
+    })
+    const refreshCompletion = (pending: PendingCompletion) => {
+      if (pending.refresh) return
+      pending.refresh = setTimeout(() => {
+        pending.refresh = null
+        if (completion !== pending) return
+        if (
+          !sameCompletionContext(
+            pending.request,
+            captureCompletion(pending.request.trigger),
+          )
+        ) {
+          cancelCompletion()
+          return
+        }
+        if (pending.items.length) {
+          if (completionStatus(editor.state) === 'active')
+            // Ask CodeMirror to refresh result.update without closing the menu.
+            editor.dispatch({
+              annotations: Transaction.userEvent.of(
+                'input.type.completion-refresh',
+              ),
+            })
+          else if (completionStatus(editor.state) === 'pending') {
+            pending.refresh = setTimeout(() => {
+              pending.refresh = null
+              refreshCompletion(pending)
+            }, 10)
+          } else startCompletion(editor)
+        } else {
+          closingCompletion = true
+          closeCompletion(editor)
+          closingCompletion = false
+          if (pending.done) cancelCompletion()
+        }
+      }, 0)
+    }
+    const sourceCompletions = (context: CompletionContext) => {
+      if (!completionBroker.hasProviders()) return null
+      const trigger: CompletionRequest['trigger'] | null = context.explicit
+        ? { kind: 'explicit' }
+        : typed?.doc === context.state.doc && typed.pos === context.pos
+          ? { kind: 'input', character: typed.character }
+          : null
+      if (!trigger) return null
+      const request = captureCompletion(trigger)
+      if (!request) return null
+      const current = completion
+      if (current && sameCompletionContext(current.request, request))
+        return current.items.length
+          ? resultFor(current)
+          : current.done
+            ? null
+            : new Promise<CompletionResult | null>((resolve) =>
+                current.waiting.push(resolve),
+              )
+      cancelCompletion()
+      const pending: PendingCompletion = {
+        request,
+        items: [],
+        done: false,
+        cancel: null,
+        waiting: [],
+        refresh: null,
+        options: new Map(),
+      }
+      completion = pending
+      pending.cancel = completionBroker.request(
+        () => request,
+        () => captureCompletion(trigger),
+        (update) => {
+          if (completion !== pending) return
+          pending.items = update.items.filter(
+            (item) =>
+              item.from <= request.selection.head &&
+              item.to >= request.selection.head,
+          )
+          pending.done = update.done
+          if (pending.waiting.length) {
+            if (pending.items.length || pending.done) {
+              const result = pending.items.length ? resultFor(pending) : null
+              for (const resolve of pending.waiting.splice(0)) resolve(result)
+            }
+          } else refreshCompletion(pending)
+        },
+      )
+      if (!pending.cancel) {
+        cancelCompletion()
+        return null
+      }
+      return new Promise<CompletionResult | null>((resolve) =>
+        pending.waiting.push(resolve),
+      )
+    }
     const editor = new EditorView({
       parent: host.current,
       dispatchTransactions(transactions, editor) {
@@ -502,6 +843,8 @@ export function SourceEditor({
           numbers.current.of([]),
           language.of(markdown()),
           sourceAnnotationExtension,
+          autocompletion({ override: [sourceCompletions] }),
+          keymap.of([{ key: 'Tab', run: acceptCompletion }]),
           EditorView.domEventHandlers({
             beforeinput(event) {
               if (
@@ -622,9 +965,55 @@ export function SourceEditor({
             spellcheck: 'false',
           }),
           EditorView.updateListener.of((update) => {
+            if (update.selectionSet || update.docChanged)
+              editorViewRegistry.changed(viewId as ViewId, 'source')
+            if (
+              update.docChanged ||
+              update.selectionSet ||
+              (update.focusChanged && !update.view.hasFocus)
+            ) {
+              cancelCompletion()
+              typed = null
+              const transaction =
+                update.transactions.length === 1 ? update.transactions[0] : null
+              if (
+                update.docChanged &&
+                transaction?.isUserEvent('input.type') &&
+                !transaction.isUserEvent('input.type.compose') &&
+                !update.view.composing &&
+                update.state.selection.ranges.length === 1 &&
+                update.state.selection.main.empty
+              ) {
+                let changes = 0
+                transaction.changes.iterChanges(
+                  (fromA, toA, fromB, toB, inserted) => {
+                    const character = inserted.toString()
+                    changes++
+                    if (
+                      changes === 1 &&
+                      fromA === toA &&
+                      toB === fromB + character.length &&
+                      Array.from(character).length === 1 &&
+                      update.state.selection.main.head === toB
+                    )
+                      typed = { doc: update.state.doc, pos: toB, character }
+                  },
+                )
+                if (changes !== 1) typed = null
+              }
+            } else if (
+              !closingCompletion &&
+              completionStatus(update.startState) !== null &&
+              completionStatus(update.state) === null
+            )
+              cancelCompletion()
             if (update.docChanged || update.selectionSet || update.focusChanged)
               update.view.contentDOM.dispatchEvent(
                 new Event('hibi:source-caret', { bubbles: true }),
+              )
+            if (update.docChanged || update.selectionSet || update.focusChanged)
+              update.view.contentDOM.dispatchEvent(
+                new Event('hibi:editor-interactions-invalidate'),
               )
             if (
               update.docChanged ||
@@ -656,6 +1045,7 @@ export function SourceEditor({
         const context = editContext.current
         const current = editorDocument.get()
         if (
+          !context.focused ||
           !context.editTarget ||
           context.disabled ||
           !context.inputReady ||
@@ -671,9 +1061,39 @@ export function SourceEditor({
         )
       },
     )
-    const unregisterEdits = documentEdits.register((request) => {
+    const applySourceEdits = (
+      request: SourceEditRequest,
+      mountedView?: ViewTarget,
+    ): SourceEditResult => {
       const context = editContext.current
-      const current = editorDocument.get()
+      if (!mountedView && !context.focused)
+        return {
+          status: 'unsupported-view',
+          message: 'Choose this pane before applying the edit.',
+        }
+      const current = mountedView
+        ? documentRuntime.get(context.document.tabId)
+        : editorDocument.get()
+      const identity = mountedView
+        ? documentRuntime.captureDocument(context.document.tabId)
+        : null
+      if (
+        mountedView &&
+        (!documentRuntime.isLiveView(mountedView) ||
+          mountedView.viewId !== viewId ||
+          !identity ||
+          identity.documentId !== mountedView.documentId ||
+          identity.documentGeneration !== mountedView.documentGeneration)
+      )
+        return {
+          status: 'stale',
+          message: 'The document changed. Review the edits again.',
+        }
+      if (mountedView ? !context.sourceVisible : !context.editTarget)
+        return {
+          status: 'unsupported-view',
+          message: 'Open source view to apply these edits.',
+        }
       if (
         !current ||
         !sourceEditMatches(request, current) ||
@@ -688,11 +1108,6 @@ export function SourceEditor({
         return {
           status: 'busy',
           message: 'The editor is not ready for changes.',
-        }
-      if (!context.editTarget)
-        return {
-          status: 'unsupported-view',
-          message: 'Open source view to apply these edits.',
         }
       if (editor.composing)
         return {
@@ -752,10 +1167,97 @@ export function SourceEditor({
         }
       return {
         status: 'applied',
-        contentVersion: editorDocument.get()!.contentVersion,
+        contentVersion: bridge.snapshot().version,
       }
-    })
+    }
+    const unregisterEdits = documentEdits.register(applySourceEdits)
+    const documentTarget = documentRuntime.captureDocument(document.tabId)
+    const mountedView = documentRuntime.captureView(viewId as ViewId)
+    const target = documentTarget && {
+      ...documentTarget,
+      viewId: viewId as ViewId,
+      ...(mountedView?.documentId === documentTarget.documentId &&
+      mountedView.documentGeneration === documentTarget.documentGeneration
+        ? { viewGeneration: mountedView.viewGeneration }
+        : {}),
+    }
+    const unregisterMountedEdits = target
+      ? mountedDocumentEdits.register(
+          document.tabId,
+          target,
+          'source',
+          (target, request) => applySourceEdits(request, target),
+        )
+      : () => {}
+    const actionScope = documentEdits.scope(() => false)
+    const applyInteraction = (
+      action: EditorContextAction,
+      request: EditorInteractionRequest,
+    ) => {
+      if (!sameInteraction(request, captureInteraction(request.position)))
+        return false
+      const snapshot = bridge.snapshot()
+      const from = snapshot.editorToRaw(action.edit.from)
+      const to = snapshot.editorToRaw(action.edit.to)
+      if (from === null || to === null) return false
+      const result = actionScope.apply({
+        requestId: crypto.randomUUID(),
+        tabId: document.tabId,
+        revision: document.revision,
+        contentVersion: snapshot.version,
+        changes: [
+          {
+            from,
+            to,
+            expectedText: snapshot.sliceRaw(from, to),
+            insert: action.edit.insertText,
+          },
+        ],
+      })
+      if (result.status !== 'applied') setInputError(result.message)
+      return result.status === 'applied'
+    }
+    const closeForActions = () => closeCompletion(editor)
+    editor.contentDOM.addEventListener(
+      'hibi:editor-actions-open',
+      closeForActions,
+    )
     let disposed = false
+    let detachInteractions = () => {}
+    let interactionGeneration = 0
+    const refreshInteractions = () => {
+      const current = ++interactionGeneration
+      detachInteractions()
+      detachInteractions = () => {}
+      if (!hasEditorInteractionProviders()) return
+      void import('./editor-interactions')
+        .then(({ attachEditorInteractions }) => {
+          if (
+            disposed ||
+            current !== interactionGeneration ||
+            !hasEditorInteractionProviders()
+          )
+            return
+          detachInteractions = attachEditorInteractions({
+            element: editor.contentDOM,
+            positionAt: (x, y) => editor.posAtCoords({ x, y }, false),
+            anchorAt: (position) => editor.coordsAtPos(position),
+            selectionPosition: () => editor.state.selection.main.head,
+            capture: captureInteraction,
+            apply: applyInteraction,
+            focus: () => editor.focus(),
+            error: (error) => setInputError(String(error)),
+          })
+        })
+        .catch((error) => setInputError(String(error)))
+    }
+    const unsubscribeInteractions =
+      onEditorInteractionProvidersChanged(refreshInteractions)
+    refreshInteractions()
+    const unregisterSelection = registerEditorSelectionCapture(
+      () => captureInteraction(editor.state.selection.main.head, true, true),
+      (position) => captureInteraction(position, true, true),
+    )
     const unregister = registerSourceView(
       editor,
       (raw) => {
@@ -775,6 +1277,34 @@ export function SourceEditor({
         toEditor: (position) => bridge.snapshot().rawToEditor(position),
       },
       resolveReference,
+    )
+    const unregisterViewApi = editorViewRegistry.register(
+      document.tabId,
+      viewId as ViewId,
+      'source',
+      {
+        read: () => {
+          const source = bridge.snapshot()
+          if (view.current !== editor || !session.ownsCurrentSnapshot(source))
+            return null
+          const selection = editor.state.selection.main
+          return {
+            contentVersion: source.version,
+            anchor: selection.anchor,
+            head: selection.head,
+            length: editor.state.doc.length,
+          }
+        },
+        setSelection: (anchor, head) => {
+          editor.dispatch({ selection: { anchor, head } })
+          const selection = editor.state.selection.main
+          return selection.anchor === anchor && selection.head === head
+        },
+        reveal: (position) => {
+          editor.dispatch({ effects: EditorView.scrollIntoView(position) })
+          return true
+        },
+      },
     )
     configureParser.current = () => {
       const id = parserOptions.current.codeLanguage
@@ -828,6 +1358,7 @@ export function SourceEditor({
       .load('13px "Geist Mono"')
       .then(finishFont, finishFont)
     return () => {
+      cancelCompletion()
       clearReferences('unavailable', false)
       sourceFind.current?.dispose()
       sourceFind.current = null
@@ -836,10 +1367,20 @@ export function SourceEditor({
       unsubscribe()
       configureParser.current = () => {}
       disposed = true
+      unsubscribeInteractions()
+      unregisterSelection()
       formatting.current = null
       reportFormatting.current(null)
       unregister()
+      unregisterViewApi()
+      detachInteractions()
+      editor.contentDOM.removeEventListener(
+        'hibi:editor-actions-open',
+        closeForActions,
+      )
+      actionScope.dispose()
       unregisterEdits()
+      unregisterMountedEdits()
       unregisterProjection()
       removeAnnotations()
       detachSession()
@@ -855,7 +1396,15 @@ export function SourceEditor({
     requestReference,
     resolveReference,
     clearReferences,
+    viewId,
   ])
+
+  useEffect(() => {
+    if (disabled || !editTarget || !inputReady) {
+      const editor = view.current
+      if (editor) closeCompletion(editor)
+    }
+  }, [disabled, editTarget, inputReady])
 
   useEffect(() => {
     const editor = view.current

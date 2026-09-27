@@ -1,6 +1,15 @@
 import { contextBridge, ipcRenderer as transport, webUtils } from 'electron'
 import { ADDON_CHANNELS } from '../addons/api'
 import { ABOUT_CHANNELS } from '../shared/about'
+import {
+  ADDON_HOTKEY_CHANNELS,
+  type AddonCommandInvocation,
+  type AddonHotkeyBinding,
+} from '../shared/addon-hotkeys'
+import {
+  ADDON_STORAGE_CHANNELS,
+  type AddonStorageChange,
+} from '../shared/addon-storage'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
 import { DEPENDENCY_CHANNELS } from '../shared/dependencies'
@@ -14,11 +23,23 @@ import {
 import type { JournalCheckpoint } from '../shared/document-checkpoint'
 import { createDocumentJournal } from '../shared/document-journal'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
+import type {
+  WorkspaceChangeEvent,
+  WorkspaceTarget,
+} from '../shared/foundation-contracts'
+import {
+  GLOBAL_SHORTCUT_CHANNELS,
+  type GlobalShortcutInvocation,
+} from '../shared/global-shortcuts'
 import { HISTORY_CHANNELS } from '../shared/history'
+import { HOST_CREDENTIAL_CHANNELS } from '../shared/host-credentials'
+import { HOST_NETWORK_CHANNELS } from '../shared/host-network'
+import { HOST_SELECTED_IO_CHANNELS } from '../shared/host-selected-io'
 import { type AppCommand, HOTKEY_CHANNELS } from '../shared/hotkeys'
 import { IMPORT_CHANNELS } from '../shared/imports'
 import { DIAGNOSTIC_CHANNEL } from '../shared/local-diagnostics'
 import { MEDIA_CHANNELS } from '../shared/media'
+import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
 import { UPDATE_CHANNELS, type UpdateState } from '../shared/updates'
@@ -27,7 +48,9 @@ import {
   toRecentWorkspaces,
   WORKSPACE_CHANNELS,
   type WorkspaceChange,
+  type WorkspaceChangeListener,
   type WorkspaceState,
+  type WorkspaceStreamSnapshot,
 } from '../shared/workspace'
 import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
 import { DiagnosticProducer } from './local-diagnostics'
@@ -44,19 +67,19 @@ if (process.isMainFrame) {
   } catch {
     /* Diagnostics cannot prevent the document bridge from starting. */
   }
-  let checkpoint: (() => JournalCheckpoint) | undefined
+  let checkpoint: ((tabId: string) => JournalCheckpoint) | undefined
   const journal = createDocumentJournal(
     (change) => transport.invoke(DOCUMENT_CHANNELS.append, change),
     {
       timeoutMs: 5000,
       retryDelays: [100, 500, 2000],
       maximumCheckpointUnits: MAX_DOCUMENT_BYTES,
-      checkpoint: () => {
+      checkpoint: (tabId) => {
         if (!checkpoint)
           throw new Error('Document recovery is not ready. Retry saving.')
-        return checkpoint()
+        return checkpoint(tabId)
       },
-      head: () => transport.invoke(DOCUMENT_CHANNELS.recoveryHead),
+      head: (tabId) => transport.invoke(DOCUMENT_CHANNELS.recoveryHead, tabId),
       verify: (snapshot) =>
         transport.invoke(DOCUMENT_CHANNELS.verifyCheckpoint, snapshot),
     },
@@ -87,9 +110,93 @@ if (process.isMainFrame) {
   const startupKnown: Promise<KnownWorkspace[]> = ipcRenderer.invoke(
     WORKSPACE_CHANNELS.known,
   )
+  async function subscribeWorkspaceChanges(callback: WorkspaceChangeListener) {
+    let pending: WorkspaceChangeEvent[] = []
+    let latest: WorkspaceChangeEvent | null = null
+    let overflow = false
+    let ready = false
+    let disposed = false
+    let target: WorkspaceTarget | null = null
+    let sequence = 0
+    const sameTarget = (change: WorkspaceChangeEvent) =>
+      target?.workspaceId === change.workspaceId &&
+      target.workspaceGeneration === change.workspaceGeneration
+    const deliver = (change: WorkspaceChangeEvent, forceResync = false) => {
+      if (disposed || (sameTarget(change) && change.sequence <= sequence))
+        return
+      const gap = !sameTarget(change) || change.sequence !== sequence + 1
+      target = {
+        workspaceId: change.workspaceId,
+        workspaceGeneration: change.workspaceGeneration,
+      }
+      sequence = change.sequence
+      try {
+        callback(
+          forceResync || gap
+            ? { ...change, kind: 'resync', paths: null }
+            : change,
+        )
+      } catch (error) {
+        console.error('Could not notify workspace change subscriber:', error)
+      }
+    }
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      change: WorkspaceChangeEvent,
+    ) => {
+      if (!ready) {
+        latest = change
+        if (pending.length < 256) pending.push(change)
+        else overflow = true
+      } else deliver(change)
+    }
+    ipcRenderer.on(WORKSPACE_CHANNELS.changedV2, listener)
+    try {
+      const snapshot: WorkspaceStreamSnapshot = await ipcRenderer.invoke(
+        WORKSPACE_CHANNELS.changeSnapshot,
+      )
+      if (disposed) return { snapshot, dispose: () => {} }
+      target = snapshot.target
+      sequence = snapshot.sequence
+      ready = true
+      if (overflow) {
+        if (latest) deliver(latest, true)
+      } else for (const change of pending) deliver(change)
+      pending = []
+      return {
+        snapshot,
+        dispose() {
+          disposed = true
+          ipcRenderer.removeListener(WORKSPACE_CHANNELS.changedV2, listener)
+        },
+      }
+    } catch (error) {
+      disposed = true
+      ipcRenderer.removeListener(WORKSPACE_CHANNELS.changedV2, listener)
+      throw error
+    }
+  }
   for (const pending of [startupDocument, startupAddons, startupKnown])
     void pending.catch(() => {})
   contextBridge.exposeInMainWorld('hibi', {
+    registerGlobalShortcut: (id, accelerator, token) =>
+      ipcRenderer.invoke(
+        GLOBAL_SHORTCUT_CHANNELS.register,
+        id,
+        accelerator,
+        token,
+      ),
+    unregisterGlobalShortcut: (id, token) =>
+      ipcRenderer.invoke(GLOBAL_SHORTCUT_CHANNELS.unregister, id, token),
+    onGlobalShortcut: (callback) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        invocation: GlobalShortcutInvocation,
+      ) => callback(invocation)
+      ipcRenderer.on(GLOBAL_SHORTCUT_CHANNELS.invoked, listener)
+      return () =>
+        ipcRenderer.removeListener(GLOBAL_SHORTCUT_CHANNELS.invoked, listener)
+    },
     getUpdateState: () => transport.invoke(UPDATE_CHANNELS.get),
     setUpdateChannel: (channel) =>
       transport.invoke(UPDATE_CHANNELS.channel, channel),
@@ -197,11 +304,118 @@ if (process.isMainFrame) {
     getAddonStates: () => ipcRenderer.invoke(ADDON_CHANNELS.states),
     setAddonEnabled: (id, enabled) =>
       ipcRenderer.invoke(ADDON_CHANNELS.enable, id, enabled),
+    readAddonStorage: (request) =>
+      transport.invoke(ADDON_STORAGE_CHANNELS.read, request),
+    writeAddonStorage: (request) =>
+      transport.invoke(ADDON_STORAGE_CHANNELS.write, request),
+    onAddonStorageChanged: (callback) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        change: AddonStorageChange,
+      ) => callback(change)
+      transport.on(ADDON_STORAGE_CHANNELS.changed, listener)
+      return () =>
+        transport.removeListener(ADDON_STORAGE_CHANNELS.changed, listener)
+    },
+    selectUserText: (owner) =>
+      transport.invoke(SELECTED_TEXT_CHANNELS.select, owner),
+    readSelectedText: (owner, handle) =>
+      transport.invoke(SELECTED_TEXT_CHANNELS.read, owner, handle),
+    selectHostImport: (owner, choice) =>
+      transport.invoke(HOST_SELECTED_IO_CHANNELS.selectImport, owner, choice),
+    readHostImport: (owner, handle) =>
+      transport.invoke(HOST_SELECTED_IO_CHANNELS.readImport, owner, handle),
+    selectHostExport: (owner, choice) =>
+      transport.invoke(HOST_SELECTED_IO_CHANNELS.selectExport, owner, choice),
+    writeHostExport: (owner, handle, bytes) =>
+      transport.invoke(
+        HOST_SELECTED_IO_CHANNELS.writeExport,
+        owner,
+        handle,
+        bytes,
+      ),
+    cancelHostSelectedIo: (owner, handle) =>
+      transport.invoke(HOST_SELECTED_IO_CHANNELS.cancel, owner, handle),
+    getHostText: (owner, request) =>
+      transport.invoke(HOST_NETWORK_CHANNELS.getText, owner, request),
+    storeHostCredential: (owner, request) =>
+      transport.invoke(HOST_CREDENTIAL_CHANNELS.store, owner, request),
+    removeHostCredential: (owner, request) =>
+      transport.invoke(HOST_CREDENTIAL_CHANNELS.remove, owner, request),
+    getHostCredentialStatus: (owner, request) =>
+      transport.invoke(HOST_CREDENTIAL_CHANNELS.status, owner, request),
     invokeAddon: (id, method, input) =>
       ipcRenderer.invoke(ADDON_CHANNELS.invoke, id, method, input),
     queryAddon: (id, method, input) =>
       ipcRenderer.invoke(ADDON_CHANNELS.query, id, method, input),
     getWorkspace: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.get),
+    getWorkspaceChangeSnapshot: () =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.changeSnapshot),
+    listWorkspaceEntryPage: (owner, request) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.listPage, owner, request),
+    subscribeWorkspaceChanges,
+    readWorkspaceText: (owner, target, path) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.readText, owner, target, path),
+    readWorkspaceBinary: (owner, target, path) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.readBinary, owner, target, path),
+    createWorkspaceText: (owner, target, path, markdown) =>
+      ipcRenderer.invoke(
+        WORKSPACE_CHANNELS.createText,
+        owner,
+        target,
+        path,
+        markdown,
+      ),
+    createWorkspaceBinary: (owner, target, path, bytes) =>
+      ipcRenderer.invoke(
+        WORKSPACE_CHANNELS.createBinary,
+        owner,
+        target,
+        path,
+        bytes,
+      ),
+    updateWorkspaceText: (
+      owner,
+      target,
+      path,
+      expectedVersion,
+      markdown,
+      options,
+    ) =>
+      ipcRenderer.invoke(
+        WORKSPACE_CHANNELS.updateText,
+        owner,
+        target,
+        path,
+        expectedVersion,
+        markdown,
+        options,
+      ),
+    renameWorkspaceFile: (
+      owner,
+      target,
+      sourcePath,
+      destinationPath,
+      expectedVersion,
+    ) =>
+      ipcRenderer.invoke(
+        WORKSPACE_CHANNELS.renameFile,
+        owner,
+        target,
+        sourcePath,
+        destinationPath,
+        expectedVersion,
+      ),
+    trashWorkspaceFile: (owner, target, path, expectedVersion) =>
+      ipcRenderer.invoke(
+        WORKSPACE_CHANNELS.trashFile,
+        owner,
+        target,
+        path,
+        expectedVersion,
+      ),
+    queryWorkspaceReferences: (request) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.queryReferences, request),
     listImporters: () => ipcRenderer.invoke(IMPORT_CHANNELS.list),
     importIntoWorkspace: (request) =>
       ipcRenderer.invoke(IMPORT_CHANNELS.run, request),
@@ -252,6 +466,8 @@ if (process.isMainFrame) {
     getDocument: () => ipcRenderer.invoke(DOCUMENT_CHANNELS.get),
     selectDocumentTab: (id) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.selectTab, id),
+    focusDocumentTab: (id, expected) =>
+      ipcRenderer.invoke(DOCUMENT_CHANNELS.focusTab, id, expected),
     closeDocumentTab: (id) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.closeTab, id),
     moveDocumentTab: (id, beforeId) =>
@@ -275,13 +491,48 @@ if (process.isMainFrame) {
     newDocument: () => ipcRenderer.invoke(DOCUMENT_CHANNELS.new),
     saveDocument: (saveAs) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.save, saveAs),
-    autosaveDocument: (revision) =>
-      ipcRenderer.invoke(DOCUMENT_CHANNELS.autosave, revision),
+    saveTargetDocument: (owner, tabId, revision, contentVersion) =>
+      ipcRenderer.invoke(
+        DOCUMENT_CHANNELS.saveTarget,
+        owner,
+        tabId,
+        revision,
+        contentVersion,
+      ),
+    autosaveDocument: (tabId, revision) =>
+      ipcRenderer.invoke(DOCUMENT_CHANNELS.autosave, tabId, revision),
     renameDocument: (name) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.rename, name),
     readDocumentImage: (source, revision) =>
       ipcRenderer.invoke(DOCUMENT_CHANNELS.image, source, revision),
     getHotkeys: () => ipcRenderer.invoke(HOTKEY_CHANNELS.get),
+    getAddonHotkeys: () => ipcRenderer.invoke(ADDON_HOTKEY_CHANNELS.get),
+    registerAddonHotkey: (registration) =>
+      ipcRenderer.invoke(ADDON_HOTKEY_CHANNELS.register, registration),
+    unregisterAddonHotkey: (id, token) =>
+      ipcRenderer.invoke(ADDON_HOTKEY_CHANNELS.unregister, id, token),
+    saveAddonHotkey: (id, shortcut) =>
+      ipcRenderer.invoke(ADDON_HOTKEY_CHANNELS.save, id, shortcut),
+    resetAddonHotkey: (id) =>
+      ipcRenderer.invoke(ADDON_HOTKEY_CHANNELS.reset, id),
+    onAddonHotkeysChanged: (callback) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        bindings: AddonHotkeyBinding[],
+      ) => callback(bindings)
+      ipcRenderer.on(ADDON_HOTKEY_CHANNELS.changed, listener)
+      return () =>
+        ipcRenderer.removeListener(ADDON_HOTKEY_CHANNELS.changed, listener)
+    },
+    onAddonCommand: (callback) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        invocation: AddonCommandInvocation,
+      ) => callback(invocation)
+      ipcRenderer.on(ADDON_HOTKEY_CHANNELS.invoke, listener)
+      return () =>
+        ipcRenderer.removeListener(ADDON_HOTKEY_CHANNELS.invoke, listener)
+    },
     saveHotkeys: (hotkeys) => ipcRenderer.invoke(HOTKEY_CHANNELS.save, hotkeys),
     setHotkeyRecording: (recording) =>
       ipcRenderer.invoke(HOTKEY_CHANNELS.record, recording),

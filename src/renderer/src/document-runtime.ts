@@ -1,6 +1,16 @@
-import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop.ts'
+import {
+  type DocumentFocus,
+  type DocumentState,
+  MAX_DOCUMENT_BYTES,
+} from '../../shared/desktop.ts'
 import { sourceChange } from '../../shared/document-journal.ts'
 import { DocumentSession } from '../../shared/document-session.ts'
+import type {
+  DocumentId,
+  DocumentTarget,
+  ViewId,
+  ViewTarget,
+} from '../../shared/foundation-contracts.ts'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import type {
   RawEdit,
@@ -19,12 +29,38 @@ type Listener = (
   document: DocumentState,
   changes: readonly RawEdit[] | null,
 ) => void
+export type DocumentSaveToken = Readonly<{
+  target: DocumentTarget
+  sequence: number
+  epoch: number
+}>
+const sameTabs = (a: DocumentState['tabs'], b: DocumentState['tabs']) =>
+  a.length === b.length &&
+  a.every(
+    (tab, index) =>
+      tab.id === b[index]?.id &&
+      tab.name === b[index].name &&
+      tab.dirty === b[index].dirty,
+  )
 
 /** Per-tab source/history ownership. React and legacy addons receive immutable read facades. */
 export class DocumentRuntime {
   readonly #sessions = new Map<string, DocumentSession>()
+  readonly #documentTargets = new Map<string, DocumentTarget>()
+  readonly #targetSessions = new Map<DocumentId, DocumentSession>()
+  readonly #primaryViewIds = new Map<string, ViewId>()
+  readonly #saves = new Map<
+    string,
+    { next: number; acknowledged: number; epoch: number }
+  >()
+  readonly #views = new Map<ViewId, ViewTarget>()
+  #generation = 0
+  #activeView: ViewId | null = null
   readonly #sources = new WeakMap<DocumentState, SourceSnapshot>()
   readonly #listeners = new Set<Listener>()
+  readonly #documentListeners = new Set<Listener>()
+  readonly #catalogListeners = new Set<() => void>()
+  readonly #viewListeners = new Set<() => void>()
   readonly #options: RuntimeOptions
   readonly #history = new Map<
     DocumentSession,
@@ -34,12 +70,22 @@ export class DocumentRuntime {
   readonly #historyLimits: { bytes: number; groups: number }
   #historySize = { bytes: 0, groups: 0 }
   #active: DocumentSession | null = null
-  #metadata: Omit<DocumentState, 'markdown' | 'savedMarkdown'> | null = null
-  #cached: DocumentState | null = null
-  #cachedState: ReturnType<DocumentSession['state']> | null = null
-  #savedText: { snapshot: SourceSnapshot; value?: string } | null = null
-  #changes: readonly RawEdit[] | null = null
-  #detach: (() => void)[] = []
+  #activeId: string | null = null
+  readonly #metadata = new Map<
+    string,
+    Omit<DocumentState, 'markdown' | 'savedMarkdown'>
+  >()
+  readonly #cached = new Map<string, DocumentState>()
+  readonly #cachedState = new Map<
+    string,
+    ReturnType<DocumentSession['state']>
+  >()
+  readonly #savedText = new Map<
+    string,
+    { snapshot: SourceSnapshot; value?: string }
+  >()
+  readonly #changes = new Map<string, readonly RawEdit[] | null>()
+  readonly #detach = new Map<string, (() => void)[]>()
   #updating = false
 
   constructor(options: RuntimeOptions) {
@@ -55,7 +101,109 @@ export class DocumentRuntime {
       throw new Error('Invalid combined document history limits.')
     this.#options = options
   }
-  session = () => this.#active
+  session = (id: string | null = this.#activeId) =>
+    id ? (this.#sessions.get(id) ?? null) : null
+  captureDocument = (id: string | null = this.#activeId) =>
+    id && this.#sessions.has(id)
+      ? (this.#documentTargets.get(id) ?? null)
+      : null
+  primaryViewId = (tabId: string) => this.#primaryViewIds.get(tabId) ?? null
+  beginSave(id: string | null = this.#activeId): DocumentSaveToken | null {
+    const target = this.captureDocument(id),
+      progress = id ? this.#saves.get(id) : null
+    if (!target || !progress) return null
+    return Object.freeze({
+      target,
+      sequence: ++progress.next,
+      epoch: progress.epoch,
+    })
+  }
+  resolveDocument = (target: DocumentTarget) => {
+    const session = this.#targetSessions.get(target.documentId)
+    if (!session) return null
+    const id = session.state().document.tabId
+    return this.#sessions.get(id) === session &&
+      this.#documentTargets.get(id)?.documentGeneration ===
+        target.documentGeneration
+      ? session
+      : null
+  }
+  registerView(
+    tabId: string,
+    viewId: ViewId,
+    beforeNotify?: (view: ViewTarget) => void,
+  ) {
+    const document = this.captureDocument(tabId)
+    if (!document || this.#views.has(viewId))
+      throw new Error('This editor view is unavailable.')
+    const target = Object.freeze({
+      ...document,
+      viewId,
+      viewGeneration: ++this.#generation,
+    })
+    this.#views.set(viewId, target)
+    this.#activeView ??= viewId
+    beforeNotify?.(target)
+    this.#notifyViews()
+    return () => {
+      if (this.#views.get(viewId) !== target) return
+      this.#views.delete(viewId)
+      if (this.#activeView === viewId) this.#activeView = null
+      this.#notifyViews()
+    }
+  }
+  focusView(viewId: ViewId) {
+    if (this.#views.has(viewId) && this.#activeView !== viewId) {
+      this.#activeView = viewId
+      this.#notifyViews()
+    }
+  }
+  captureView = (viewId: ViewId) => {
+    const target = this.#views.get(viewId)
+    return target && this.resolveDocument(target) ? target : null
+  }
+  captureActiveView = () =>
+    this.#activeView ? this.captureView(this.#activeView) : null
+  listViews = () =>
+    Object.freeze(
+      [...this.#views.keys()].flatMap(
+        (viewId) => this.captureView(viewId) ?? [],
+      ),
+    )
+  subscribeViews = (listener: () => void) => {
+    this.#viewListeners.add(listener)
+    return () => {
+      this.#viewListeners.delete(listener)
+    }
+  }
+  #notifyViews() {
+    for (const listener of [...this.#viewListeners]) {
+      try {
+        listener()
+      } catch (error) {
+        this.#options.onError(error)
+      }
+    }
+  }
+  isLiveView = (target: ViewTarget) => {
+    const registered = this.#views.get(target.viewId)
+    return (
+      !!registered &&
+      registered.viewGeneration === target.viewGeneration &&
+      registered.documentId === target.documentId &&
+      registered.documentGeneration === target.documentGeneration &&
+      this.resolveDocument(registered) !== null
+    )
+  }
+  hasMountedView(target: DocumentTarget) {
+    for (const view of this.#views.values())
+      if (
+        view.documentId === target.documentId &&
+        view.documentGeneration === target.documentGeneration
+      )
+        return true
+    return false
+  }
   retainedHistory = () => ({
     ...this.#historySize,
     sessions: this.#history.size,
@@ -67,7 +215,29 @@ export class DocumentRuntime {
     this.#historySize.groups -= previous.groups
     this.#history.delete(session)
   }
-  #discardSession(session: DocumentSession) {
+  #discardSession(id: string, session: DocumentSession) {
+    const target = this.#documentTargets.get(id)
+    let removedView = false
+    if (target) {
+      this.#targetSessions.delete(target.documentId)
+      for (const [viewId, view] of this.#views)
+        if (view.documentId === target.documentId) {
+          this.#views.delete(viewId)
+          removedView = true
+          if (this.#activeView === viewId) this.#activeView = null
+        }
+    }
+    if (removedView) this.#notifyViews()
+    this.#documentTargets.delete(id)
+    this.#primaryViewIds.delete(id)
+    this.#saves.delete(id)
+    for (const detach of this.#detach.get(id) ?? []) detach()
+    this.#detach.delete(id)
+    this.#metadata.delete(id)
+    this.#cached.delete(id)
+    this.#cachedState.delete(id)
+    this.#savedText.delete(id)
+    this.#changes.delete(id)
     this.#historySubscriptions.get(session)?.()
     this.#historySubscriptions.delete(session)
     this.#forgetHistory(session)
@@ -115,19 +285,34 @@ export class DocumentRuntime {
       this.#listeners.delete(listener)
     }
   }
-  get = (): DocumentState | null => {
-    const session = this.#active,
-      metadata = this.#metadata
+  subscribeDocument = (listener: Listener) => {
+    this.#documentListeners.add(listener)
+    return () => {
+      this.#documentListeners.delete(listener)
+    }
+  }
+  subscribeCatalog = (listener: () => void) => {
+    this.#catalogListeners.add(listener)
+    return () => {
+      this.#catalogListeners.delete(listener)
+    }
+  }
+  documents = () =>
+    [...this.#sessions.keys()].flatMap((id) => this.get(id) ?? [])
+  get = (id: string | null = this.#activeId): DocumentState | null => {
+    const session = this.session(id),
+      metadata = id ? this.#metadata.get(id) : null
     if (!session || !metadata) return null
     const state = session.state()
-    if (this.#cached && this.#cachedState === state) return this.#cached
+    const cached = this.#cached.get(id!)
+    if (cached && this.#cachedState.get(id!) === state) return cached
     const snapshot = session.snapshot(),
       saved = session.savedSnapshot()
-    if (this.#savedText?.snapshot !== saved)
-      this.#savedText = { snapshot: saved }
-    const savedText = this.#savedText
+    if (this.#savedText.get(id!)?.snapshot !== saved)
+      this.#savedText.set(id!, { snapshot: saved })
+    const savedText = this.#savedText.get(id!)!
     let text: string | undefined
-    this.#cached = Object.freeze({
+    const document = Object.freeze({
       ...metadata,
       revision: snapshot.document.revision,
       contentVersion: snapshot.version,
@@ -141,43 +326,85 @@ export class DocumentRuntime {
         return savedText.value
       },
     })
-    this.#cachedState = state
-    this.#sources.set(this.#cached, snapshot)
-    return this.#cached
+    this.#cached.set(id!, document)
+    this.#cachedState.set(id!, state)
+    this.#sources.set(document, snapshot)
+    return document
   }
-  #publish = () => {
+  #publish = (id: string) => {
     if (this.#updating) return
+    const previousActive = id === this.#activeId ? null : this.get()
+    const metadata = this.#metadata.get(id)
+    const session = this.session(id)
     if (
-      this.#changes &&
-      this.#metadata?.tabs.length === 0 &&
-      this.#active?.snapshot().utf16Length
+      this.#changes.get(id) &&
+      metadata?.tabs.length === 0 &&
+      session?.snapshot().utf16Length
     ) {
-      const { tabId, name } = this.#metadata
-      this.#metadata = {
-        ...this.#metadata,
+      const { tabId, name } = metadata
+      this.#metadata.set(id, {
+        ...metadata,
         tabs: [{ id: tabId, name, dirty: true }],
-      }
-      this.#cached = null
+      })
+      this.#cached.delete(id)
     }
-    const document = this.get(),
-      changes = this.#changes
-    this.#changes = null
-    if (document)
+    const activeMetadata = this.#activeId
+      ? this.#metadata.get(this.#activeId)
+      : null
+    if (activeMetadata?.tabs.length) {
+      const tabs = activeMetadata.tabs.map((tab) => {
+        const retained = this.session(tab.id)
+        const info = this.#metadata.get(tab.id)
+        const dirty = retained
+          ? retained.state().dirty || !!info?.ephemeral
+          : tab.dirty
+        return dirty === tab.dirty ? tab : { ...tab, dirty }
+      })
+      if (tabs.some((tab, index) => tab !== activeMetadata.tabs[index])) {
+        for (const [tabId, info] of this.#metadata) {
+          this.#metadata.set(tabId, { ...info, tabs })
+          this.#cached.delete(tabId)
+        }
+      }
+    }
+    const document = this.get(id),
+      changes = this.#changes.get(id) ?? null
+    this.#changes.delete(id)
+    if (!document) return
+    for (const listener of [...this.#documentListeners])
+      listener(document, changes)
+    if (id === this.#activeId)
       for (const listener of [...this.#listeners]) listener(document, changes)
+    else {
+      const active = this.get()
+      if (active && active !== previousActive)
+        for (const listener of [...this.#listeners]) listener(active, null)
+    }
   }
-  activate(document: DocumentState) {
+  activate(document: DocumentState, replaceLocal = false) {
     this.#updating = true
     try {
-      for (const detach of this.#detach) detach()
-      this.#detach = []
       const { markdown, savedMarkdown, ...metadata } = document
       let session = this.#sessions.get(document.tabId)
+      const local = session?.snapshot()
       if (
         session &&
-        (session.snapshot().version !== document.contentVersion ||
-          session.snapshot().materialize() !== markdown)
+        local &&
+        (local.version !== document.contentVersion ||
+          local.materialize() !== markdown)
       ) {
-        this.#discardSession(session)
+        const retained = session.state()
+        if (
+          !replaceLocal &&
+          (retained.dirty ||
+            retained.document.revision > document.revision ||
+            (retained.document.revision === document.revision &&
+              local.version >= document.contentVersion))
+        )
+          throw new Error(
+            'This tab has local edits waiting to synchronize. Try again.',
+          )
+        this.#discardSession(document.tabId, session)
         session = undefined
       }
       if (!session) {
@@ -193,67 +420,134 @@ export class DocumentRuntime {
           },
         )
         this.#sessions.set(document.tabId, session)
+        const target = Object.freeze({
+          documentId: crypto.randomUUID() as DocumentId,
+          documentGeneration: ++this.#generation,
+        })
+        this.#documentTargets.set(document.tabId, target)
+        this.#targetSessions.set(target.documentId, session)
+        this.#primaryViewIds.set(document.tabId, crypto.randomUUID() as ViewId)
+        this.#saves.set(document.tabId, {
+          next: 0,
+          acknowledged: 0,
+          epoch: 0,
+        })
         const retained = session
         this.#historySubscriptions.set(
           session,
           session.subscribeOperations(() => this.#retainHistory(retained)),
         )
-      } else session.reidentify(document)
+        const id = document.tabId
+        this.#detach.set(id, [
+          session.subscribeOperations((prepared) => {
+            this.#changes.set(id, prepared.operation.changes)
+          }),
+          session.subscribe(() => this.#publish(id)),
+          session.subscribeStorage(() => {
+            this.#cached.delete(id)
+            this.#cachedState.delete(id)
+            this.#savedText.delete(id)
+          }),
+        ])
+      } else {
+        session.reidentify(document)
+        const progress = this.#saves.get(document.tabId)
+        if (progress) progress.epoch++
+      }
       session.importSaved(savedMarkdown)
       this.#active = session
-      this.#metadata = metadata
-      this.#cached = null
-      this.#changes = null
-      this.#detach = [
-        session.subscribeOperations((prepared) => {
-          this.#changes = prepared.operation.changes
-        }),
-        session.subscribe(this.#publish),
-        session.subscribeStorage(() => {
-          this.#cached = null
-          this.#cachedState = null
-          this.#savedText = null
-        }),
-      ]
+      this.#activeId = document.tabId
+      this.#metadata.set(document.tabId, metadata)
+      this.#cached.delete(document.tabId)
+      this.#cachedState.delete(document.tabId)
+      this.#changes.delete(document.tabId)
       const open = new Set([
         document.tabId,
         ...document.tabs.map((tab) => tab.id),
       ])
       for (const [id, retained] of this.#sessions)
         if (!open.has(id)) {
-          this.#discardSession(retained)
+          this.#discardSession(id, retained)
           this.#sessions.delete(id)
         }
       this.#retainHistory()
     } finally {
       this.#updating = false
     }
+    for (const listener of [...this.#catalogListeners]) listener()
+    const active = this.get()!
+    for (const listener of [...this.#documentListeners]) listener(active, null)
+    return active
+  }
+  focus(document: DocumentFocus) {
+    const session = this.session(document.tabId)
+    if (
+      !session ||
+      session.snapshot().version !== document.contentVersion ||
+      session.snapshot().document.revision !== document.revision
+    )
+      return null
+    const previous = this.#metadata.get(document.tabId)
+    const unchanged =
+      previous &&
+      previous.id === document.id &&
+      previous.name === document.name &&
+      previous.ephemeral === document.ephemeral &&
+      previous.canAutosave === document.canAutosave &&
+      previous.tabsEnabled === document.tabsEnabled &&
+      sameTabs(previous.tabs, document.tabs)
+    this.#active = session
+    this.#activeId = document.tabId
+    if (!unchanged) {
+      this.#metadata.set(document.tabId, document)
+      this.#cached.delete(document.tabId)
+    }
     return this.get()!
   }
-  acknowledgeSave(document: DocumentState) {
-    const current = this.get(),
-      session = this.#active
+  acknowledgeSave(
+    document: DocumentState,
+    token?: DocumentSaveToken,
+    expectedId?: string,
+  ) {
+    const current = this.get(document.tabId),
+      session = this.session(document.tabId),
+      progress = this.#saves.get(document.tabId)
     if (
       !current ||
       !session ||
+      !progress ||
+      !token ||
+      this.resolveDocument(token.target) !== session ||
+      token.epoch !== progress.epoch ||
+      token.sequence <= progress.acknowledged ||
       current.tabId !== document.tabId ||
       current.revision !== document.revision
     )
-      return
+      return null
     this.#updating = true
     try {
       session.importSaved(document.savedMarkdown)
-      this.#cached = null
+      progress.acknowledged = token.sequence
+      if (expectedId !== undefined && current.id === expectedId)
+        this.#metadata.set(document.tabId, {
+          ...this.#metadata.get(document.tabId)!,
+          id: document.id,
+          name: document.name,
+          ephemeral: document.ephemeral,
+          canAutosave: document.canAutosave,
+        })
+      this.#cached.delete(document.tabId)
     } finally {
       this.#updating = false
     }
-    this.#publish()
+    this.#publish(document.tabId)
+    return this.get(document.tabId)
   }
-  #replacement(source: string) {
-    const session = this.#active
+  #replacement(source: string, id: string | null = this.#activeId) {
+    const session = this.session(id)
     if (!session) return null
     const snapshot = session.snapshot(),
-      change = sourceChange(this.get()!.markdown, source)
+      change = sourceChange(this.get(id)!.markdown, source)
     if (!change) return null
     // Whole-source compatibility can change CRLF spelling. Own complete pairs.
     let { from, to, insert } = change
@@ -272,25 +566,49 @@ export class DocumentRuntime {
     source: string,
     origin: SourceOperation['origin'] = 'addon',
     group: string = crypto.randomUUID(),
+    id?: string,
+    viewId = 'default',
   ) {
-    const edit = this.#replacement(source)
-    return edit?.session.edit(edit.changes, origin, group) ?? null
+    const edit = this.#replacement(source, id)
+    return (
+      edit?.session.edit(
+        edit.changes,
+        origin,
+        group,
+        undefined,
+        undefined,
+        viewId,
+      ) ?? null
+    )
   }
-  beginReplace(source: string, group: string) {
-    const edit = this.#replacement(source)
-    return edit?.session.beginEdit(edit.changes, 'visual', group) ?? null
+  beginReplace(source: string, group: string, id?: string, viewId = 'default') {
+    const edit = this.#replacement(source, id)
+    return (
+      edit?.session.beginEdit(
+        edit.changes,
+        'visual',
+        group,
+        undefined,
+        viewId,
+      ) ?? null
+    )
   }
   dispose() {
-    for (const detach of this.#detach) detach()
-    for (const session of this.#sessions.values()) this.#discardSession(session)
+    for (const [id, session] of this.#sessions)
+      this.#discardSession(id, session)
     this.#sessions.clear()
+    this.#views.clear()
+    this.#activeView = null
+    this.#notifyViews()
+    this.#viewListeners.clear()
     this.#history.clear()
     this.#historySize = { bytes: 0, groups: 0 }
     this.#listeners.clear()
+    this.#documentListeners.clear()
     this.#active = null
-    this.#metadata = null
-    this.#cached = null
-    this.#savedText = null
+    this.#activeId = null
+    for (const listener of [...this.#catalogListeners]) listener()
+    this.#catalogListeners.clear()
   }
 }
 

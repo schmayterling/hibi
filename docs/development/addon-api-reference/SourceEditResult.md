@@ -2,7 +2,7 @@
 
 # SourceEditResult
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L20)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L24)
 
 ```typescript
 type SourceEditResult =

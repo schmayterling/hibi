@@ -1,67 +1,21 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { build } from 'esbuild'
 import { createTagAnalysis } from '../src/addons/tags/analysis.ts'
-import { tagIndex } from '../src/addons/tags/model.ts'
 import { scheduleTagCounts, tagVersion } from '../src/addons/tags/schedule.ts'
+import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 300))
 
-test('panel and status reuse the active note result', () => {
-  const parsed = []
-  const analysis = createTagAnalysis((source) => {
-    parsed.push(source)
-    return [source.slice(1)]
-  })
-  analysis.remember('#one', ['one'])
-  assert.deepEqual(analysis.parsePage('#one', '#one'), ['one'])
-  assert.deepEqual(analysis.parsePage('#other', '#one'), ['other'])
-  assert.deepEqual(analysis.get('#one'), ['one'])
-  assert.deepEqual(analysis.parsePage('#two', '#two'), ['two'])
+test('status cache keeps only the current source and syntax result', () => {
+  const analysis = createTagAnalysis()
+  analysis.remember('#one:frontmatter-on', ['one'])
+  assert.deepEqual(analysis.get('#one:frontmatter-on'), ['one'])
+  assert.equal(analysis.get('#one:frontmatter-off'), null)
+  assert.equal(analysis.get('#other'), null)
+  analysis.remember('#two', ['two'])
   assert.deepEqual(analysis.get('#two'), ['two'])
-  assert.deepEqual(parsed, ['#other', '#two'])
-})
-
-test('open panel and status count parse an edited active note once', async () => {
-  let parses = 0
-  const analysis = createTagAnalysis((source) => {
-    parses++
-    return [source.slice(1)]
-  })
-  const cache = { workspaceId: undefined, pages: new Map() }
-  let source = '#one'
-  let page = { id: 'active', path: 'active.md', markdown: source }
-  const index = () =>
-    tagIndex('workspace', [page], cache, (markdown) =>
-      analysis.parsePage(markdown, source),
-    )
-  const sent = []
-  const published = []
-  let key = 'active:1'
-  const counter = scheduleTagCounts(
-    () => ({ key, source }),
-    (job) => {
-      const tags = analysis.get(job.source)
-      if (tags) counter.receive({ key: job.key, tags })
-      else sent.push(job)
-    },
-    (tags) => published.push(tags),
-  )
-  try {
-    index()
-    counter.refresh(key)
-    await settle()
-    source = '#two'
-    page = { ...page, markdown: source }
-    key = 'active:2'
-    index()
-    counter.refresh(key)
-    await settle()
-    assert.equal(parses, 2)
-    assert.deepEqual(sent, [])
-    assert.deepEqual(published, [['one'], ['two']])
-  } finally {
-    counter.stop()
-  }
+  assert.equal(analysis.get('#one'), null)
 })
 
 test('tag count key survives tab switches but advances with content', () => {
@@ -73,6 +27,38 @@ test('tag count key survives tab switches but advances with content', () => {
   )
   assert.notEqual(tagVersion(first), tagVersion({ ...first, tabId: 'b' }))
   assert.notEqual(tagVersion(first), tagVersion({ ...first, id: 'note-b' }))
+  assert.notEqual(
+    tagVersion(first, 'frontmatter-on'),
+    tagVersion(first, 'frontmatter-off'),
+  )
+})
+
+test('tag count worker uses active Frontmatter syntax', async () => {
+  const bundle = await build({
+    entryPoints: ['src/addons/tags/count.worker.ts'],
+    bundle: true,
+    platform: 'browser',
+    format: 'iife',
+    write: false,
+  })
+  const replies = []
+  const worker = { postMessage: (reply) => replies.push(reply) }
+  new Function('self', bundle.outputFiles[0].text)(worker)
+  const source = '---\ntag: #yaml\n---\n# Body'
+  worker.onmessage({
+    data: { key: 'on', source, syntax: defaultNoteSyntax },
+  })
+  worker.onmessage({
+    data: {
+      key: 'off',
+      source,
+      syntax: { ...defaultNoteSyntax, frontmatter: false },
+    },
+  })
+  assert.deepEqual(replies, [
+    { key: 'on', tags: [] },
+    { key: 'off', tags: ['yaml'] },
+  ])
 })
 
 test('returning to a cached tab does not read or reparse its source', async () => {

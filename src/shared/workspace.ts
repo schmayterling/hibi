@@ -1,9 +1,26 @@
+import type {
+  OperationResult,
+  WorkspaceChangeEvent,
+  WorkspaceTarget,
+} from './foundation-contracts'
+
 export const WORKSPACE_CHANNELS = {
   get: 'workspace:get',
   open: 'workspace:open',
   refresh: 'workspace:refresh',
   openFile: 'workspace:open-file',
   changed: 'workspace:changed',
+  changedV2: 'workspace:changed-v2',
+  changeSnapshot: 'workspace:change-snapshot',
+  listPage: 'workspace:list-page',
+  readText: 'workspace:read-text',
+  createText: 'workspace:create-text',
+  updateText: 'workspace:update-text',
+  readBinary: 'workspace:read-binary',
+  createBinary: 'workspace:create-binary',
+  renameFile: 'workspace:rename-file',
+  trashFile: 'workspace:trash-file',
+  queryReferences: 'workspace:query-references',
   listChanged: 'workspace:list-changed',
   action: 'workspace:action',
   snapshot: 'workspace:snapshot',
@@ -34,6 +51,8 @@ export type WorkspaceState = {
   manifest?: import('./workspace-settings').WorkspaceManifest | null
   /** Opaque identity; changes when a different folder is opened. */
   id?: string
+  /** Changes when this workspace session is replaced; capture with id for scoped work. */
+  workspaceGeneration?: number
   name: string
   entries: WorkspaceEntry[]
   activePath: string | null
@@ -46,6 +65,148 @@ export type WorkspaceChange = {
   kind: 'content' | 'tree'
   paths: string[] | null
 }
+
+export interface WorkspaceStreamSnapshot {
+  readonly target: WorkspaceTarget | null
+  readonly sequence: number
+  readonly entries: readonly WorkspaceEntry[]
+  /** A failed watcher makes this snapshot a point-in-time view only. */
+  readonly stale: boolean
+  /** A failed size-capped scan leaves the retained tree incomplete. */
+  readonly complete: boolean
+  readonly capReached: boolean
+}
+
+export interface WorkspaceChangeSubscription {
+  readonly snapshot: WorkspaceStreamSnapshot
+  dispose(): void
+}
+
+/** Flat pages of the retained workspace tree. Each cursor is valid for one tree sequence. */
+export interface WorkspaceEntryPageRequest {
+  readonly target: WorkspaceTarget
+  readonly cursor?: string
+  /** Match a subscription snapshot when starting a paged traversal. */
+  readonly sequence?: number
+  /** Defaults to 100; at most 200 entries or 64 KiB are returned. */
+  readonly limit?: number
+}
+
+export interface WorkspaceListedEntry {
+  readonly path: string
+  readonly name: string
+  readonly kind: WorkspaceEntry['kind']
+}
+
+export interface WorkspaceEntryPage
+  extends Omit<WorkspaceStreamSnapshot, 'entries'> {
+  readonly target: WorkspaceTarget
+  readonly entries: readonly WorkspaceListedEntry[]
+  readonly nextCursor: string | null
+}
+
+export type WorkspaceEntryPageResult = OperationResult<
+  WorkspaceEntryPage,
+  'stale' | 'resync-needed' | 'limit-exceeded'
+>
+
+export interface WorkspaceTextRead {
+  readonly target: WorkspaceTarget
+  readonly path: string
+  readonly markdown: string
+  /** Opaque disk precondition. Supply this value when replacing closed-file text. */
+  readonly version: WorkspaceFileVersion
+  /** Persisted bytes; unsaved document content is separate. */
+  readonly source: 'disk'
+}
+
+/** Opaque disk precondition; metadata and bytes both affect this value. */
+export type WorkspaceFileVersion = string
+
+/** Explicit disk read capped at 16 MiB; binary bytes never enter text events. */
+export interface WorkspaceBinaryRead {
+  readonly target: WorkspaceTarget
+  readonly path: string
+  readonly bytes: Uint8Array
+  readonly version: WorkspaceFileVersion
+  readonly source: 'disk'
+}
+
+export interface WorkspaceBinaryCreation extends WorkspaceTextCreation {}
+
+/** A move may have created the destination while retaining the source. */
+export interface WorkspaceFileRename {
+  readonly target: WorkspaceTarget
+  readonly path: string
+  readonly destinationPath: string
+  readonly previousVersion: WorkspaceFileVersion
+  readonly persisted: true
+  readonly sourceRemoved: boolean
+  readonly indexed: boolean
+  readonly directorySynced: boolean
+  /** Hard-link and unlink provide exclusive destination creation, not one-step visibility. */
+  readonly atomicVisibility: false
+  readonly scopeVerifiedAfterCommit: boolean
+  readonly ownerActiveAfterCommit: boolean
+}
+
+export interface WorkspaceFileTrash {
+  readonly target: WorkspaceTarget
+  readonly path: string
+  readonly previousVersion: WorkspaceFileVersion
+  readonly persisted: true
+  readonly indexed: boolean
+  readonly scopeVerifiedAfterCommit: boolean
+  readonly ownerActiveAfterCommit: boolean
+}
+
+export interface WorkspaceTextCreation {
+  readonly target: WorkspaceTarget
+  readonly path: string
+  /** The file may have committed even if workspace changed before indexing. */
+  readonly persisted: true
+  readonly indexed: boolean
+  readonly directorySynced: boolean
+  readonly atomicVisibility: boolean
+  readonly scopeVerifiedAfterCommit: boolean
+  readonly ownerActiveAfterCommit: boolean
+}
+
+/** Updates serialize in Hibi, but external writers can race the final check and rename. */
+export interface WorkspaceTextUpdate {
+  readonly target: WorkspaceTarget
+  readonly path: string
+  readonly previousVersion: string
+  /** Null if the committed file could not be read again; re-read before retrying. */
+  readonly version: string | null
+  /** A committed replacement remains successful if scope or owner ends afterward. */
+  readonly persisted: true
+  readonly indexed: boolean
+  readonly directorySynced: boolean
+  readonly atomicVisibility: true
+  /** Replacement deliberately resets file metadata with a private mode. */
+  readonly metadataPreserved: false
+  readonly scopeVerifiedAfterCommit: boolean
+  readonly ownerActiveAfterCommit: boolean
+}
+
+export interface WorkspaceTextUpdateOptions {
+  /** Required: replacement discards ACLs, extended attributes, and ownership. */
+  readonly allowMetadataReset: true
+}
+
+export type WorkspaceFileResult<T> = OperationResult<
+  T,
+  | 'stale'
+  | 'disposed'
+  | 'not-found'
+  | 'conflict'
+  | 'permission-denied'
+  | 'limit-exceeded'
+  | 'unsupported'
+>
+
+export type WorkspaceChangeListener = (event: WorkspaceChangeEvent) => void
 
 export type ExplorerDecoration = {
   /** Workspace-relative file or folder path. Empty string decorates the workspace heading. */

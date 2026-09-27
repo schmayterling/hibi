@@ -49,6 +49,21 @@ test('first edit opens a tab from the zero-tab start view', () => {
   runtime.dispose()
 })
 
+test('clean reused start tab accepts a newer document revision', () => {
+  const { runtime } = fixture()
+  runtime.activate(document('', { tabs: [], id: 'start-draft', revision: 0 }))
+  assert.equal(
+    runtime.activate(document('opened', { revision: 1 })).markdown,
+    'opened',
+  )
+  assert.throws(
+    () => runtime.activate(document('stale', { revision: 1 })),
+    /local edits waiting to synchronize/,
+  )
+  assert.equal(runtime.get().markdown, 'opened')
+  runtime.dispose()
+})
+
 test('runtime facades capture immutable full snapshots and do not flatten on publication', () => {
   const { runtime, operations } = fixture()
   const original = runtime.activate(document('old source'))
@@ -76,13 +91,36 @@ test('runtime facades capture immutable full snapshots and do not flatten on pub
   runtime.dispose()
 })
 
+test('activation publishes an already-dirty document for autosave', () => {
+  const { runtime } = fixture()
+  const notices = []
+  runtime.subscribeDocument((next, changes) =>
+    notices.push({ dirty: next.dirty, canAutosave: next.canAutosave, changes }),
+  )
+  runtime.activate(
+    document('unsaved edit', { savedMarkdown: 'saved', dirty: true }),
+  )
+  assert.deepEqual(notices, [{ dirty: true, canAutosave: true, changes: null }])
+  runtime.dispose()
+})
+
 test('runtime imports saved V while V+1 remains dirty and preserves history across tab revisions', async () => {
   const { runtime, operations, errors } = fixture()
   runtime.activate(document('a'))
   runtime.replace('ab')
-  const saving = { ...runtime.get(), savedMarkdown: 'ab', dirty: false }
+  const saving = {
+    ...runtime.get(),
+    id: 'file-renamed',
+    name: 'renamed.md',
+    savedMarkdown: 'ab',
+    dirty: false,
+  }
+  const token = runtime.beginSave()
   runtime.replace('abc')
-  runtime.acknowledgeSave(saving)
+  const acknowledged = runtime.acknowledgeSave(saving, token, 'file-one')
+  assert.equal(acknowledged.markdown, 'abc')
+  assert.equal(acknowledged.id, 'file-renamed')
+  assert.equal(acknowledged.name, 'renamed.md')
   assert.equal(runtime.get().dirty, true)
   assert.equal(runtime.get().savedMarkdown, 'ab')
   const first = { ...runtime.get() },
@@ -102,6 +140,203 @@ test('runtime imports saved V while V+1 remains dirty and preserves history acro
   assert.equal(runtime.get().dirty, false)
   assert.equal(operations.at(-1).document.revision, 3)
   assert.deepEqual(errors, [])
+  runtime.dispose()
+})
+
+test('inactive sessions stay addressable and accept their own save acknowledgment', () => {
+  const { runtime, operations } = fixture()
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('first', { tabs }))
+  const first = runtime.session()
+  const token = runtime.beginSave('one')
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  const notices = []
+  runtime.subscribeDocument((next) => notices.push(next.tabId))
+  first.edit([{ from: 5, to: 5, insert: ' edit' }], 'source', 'typing')
+  assert.equal(runtime.get().markdown, 'second')
+  assert.equal(runtime.get('one').markdown, 'first edit')
+  assert.equal(runtime.get().tabs.find((tab) => tab.id === 'one').dirty, true)
+  assert.equal(operations.at(-1).document.tabId, 'one')
+  runtime.acknowledgeSave(
+    {
+      ...runtime.get('one'),
+      savedMarkdown: 'first edit',
+    },
+    token,
+  )
+  assert.equal(runtime.get('one').dirty, false)
+  assert.equal(runtime.get().tabs.find((tab) => tab.id === 'one').dirty, false)
+  assert.deepEqual(notices, ['one', 'one'])
+  runtime.dispose()
+})
+
+test('late save acknowledgments leave newer file identity and live text intact', () => {
+  const { runtime } = fixture()
+  runtime.activate(document('saved'))
+  const older = { ...runtime.get() }
+  const oldToken = runtime.beginSave()
+  runtime.activate({ ...older, id: 'renamed-file', name: 'renamed.md' })
+  runtime.replace('newer edit')
+  assert.equal(runtime.acknowledgeSave(older, oldToken), null)
+  const laterToken = runtime.beginSave()
+  runtime.acknowledgeSave(
+    { ...older, id: 'late-save-as', name: 'late.md' },
+    laterToken,
+    'file-one',
+  )
+  assert.equal(runtime.get().id, 'renamed-file')
+  assert.equal(runtime.get().name, 'renamed.md')
+  assert.equal(runtime.get().markdown, 'newer edit')
+  assert.equal(runtime.get().savedMarkdown, 'saved')
+  assert.equal(runtime.get().dirty, true)
+  runtime.dispose()
+})
+
+test('older save replies cannot roll back a newer saved baseline', () => {
+  const { runtime } = fixture()
+  runtime.activate(document('base'))
+  runtime.replace('first save')
+  const first = { ...runtime.get(), savedMarkdown: 'first save' }
+  const firstToken = runtime.beginSave()
+  runtime.replace('second save')
+  const second = { ...runtime.get(), savedMarkdown: 'second save' }
+  const secondToken = runtime.beginSave()
+  runtime.acknowledgeSave(second, secondToken)
+  assert.equal(runtime.acknowledgeSave(first, firstToken), null)
+  assert.equal(runtime.get().savedMarkdown, 'second save')
+  assert.equal(runtime.get().dirty, false)
+  runtime.dispose()
+})
+
+test('document and editor-view targets survive focus and expire on close or unmount', () => {
+  const { runtime } = fixture()
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('first', { tabs }))
+  const firstDocument = { ...runtime.get() }
+  const target = runtime.captureDocument()
+  const primaryView = runtime.primaryViewId('one')
+  const firstSession = runtime.session()
+  const unmount = runtime.registerView('one', 'editor-one')
+  const view = runtime.captureActiveView()
+  firstSession.select(
+    { ranges: [{ anchor: 1, head: 1, association: 1 }], mainIndex: 0 },
+    firstSession.snapshot().version,
+    'editor-one',
+  )
+  assert.equal(view.documentId, target.documentId)
+  assert.equal(runtime.resolveDocument(target), firstSession)
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  const secondTarget = runtime.captureDocument()
+  assert.equal(runtime.isLiveView({ ...view, ...secondTarget }), false)
+  const unmountSecond = runtime.registerView('two', 'editor-two')
+  assert.equal(runtime.captureActiveView().viewId, 'editor-one')
+  runtime.focusView('editor-two')
+  assert.equal(runtime.captureActiveView().viewId, 'editor-two')
+  unmountSecond()
+  assert.equal(runtime.captureDocument('one'), target)
+  runtime.activate({ ...firstDocument, revision: 3, tabs })
+  assert.equal(runtime.captureDocument(), target)
+  assert.equal(runtime.primaryViewId('one'), primaryView)
+  assert.equal(runtime.resolveDocument(target), firstSession)
+  assert.equal(runtime.isLiveView(view), true)
+  unmount()
+  assert.equal(runtime.isLiveView(view), false)
+  assert.equal(firstSession.selection('editor-one').ranges[0].head, 1)
+  const unmountAgain = runtime.registerView('one', 'editor-one')
+  assert.notEqual(
+    runtime.captureActiveView().viewGeneration,
+    view.viewGeneration,
+  )
+  unmountAgain()
+  runtime.activate(
+    document('second', {
+      tabId: 'two',
+      id: 'file-two',
+      revision: 4,
+      tabs: [tabs[1]],
+    }),
+  )
+  assert.equal(runtime.resolveDocument(target), null)
+  assert.equal(firstSession.selection('editor-one'), null)
+  runtime.activate(document('reopened', { revision: 5, tabs }))
+  const reopened = runtime.captureDocument()
+  assert.notEqual(reopened.documentId, target.documentId)
+  assert.notEqual(reopened.documentGeneration, target.documentGeneration)
+  assert.notEqual(runtime.primaryViewId('one'), primaryView)
+  assert.equal(runtime.resolveDocument(target), null)
+  runtime.dispose()
+})
+
+test('focus changes active session without materializing or reidentifying its source', () => {
+  const { runtime } = fixture()
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('first', { tabs }))
+  const first = runtime.session()
+  const snapshot = first.snapshot()
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  const firstDocument = runtime.get('one')
+  assert.equal(firstDocument.markdown, 'first')
+  first.counters(true)
+  const {
+    markdown: _markdown,
+    savedMarkdown: _savedMarkdown,
+    ...metadata
+  } = document('first', { tabs })
+  assert.equal(runtime.focus(metadata)?.tabId, 'one')
+  assert.equal(runtime.session(), first)
+  assert.equal(first.snapshot(), snapshot)
+  assert.equal(runtime.get(), firstDocument)
+  assert.equal(runtime.get().markdown, 'first')
+  assert.equal(first.counters().materializations, 0)
+  assert.equal(runtime.focus({ ...metadata, contentVersion: 99 }), null)
+  first.edit([{ from: 5, to: 5, insert: ' local' }], 'source', 'typing')
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  assert.equal(runtime.focus(metadata), null)
+  assert.equal(runtime.get().tabId, 'two')
+  assert.equal(runtime.get('one').markdown, 'first local')
+  runtime.dispose()
+})
+
+test('full activation leaves newer retained edits intact', () => {
+  const { runtime } = fixture()
+  const tabs = ['one', 'two'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  runtime.activate(document('first', { tabs }))
+  const first = runtime.session()
+  first.edit([{ from: 5, to: 5, insert: ' local' }], 'source', 'typing')
+  runtime.activate(
+    document('second', { tabId: 'two', id: 'file-two', revision: 2, tabs }),
+  )
+  assert.throws(
+    () => runtime.activate(document('first', { revision: 3, tabs })),
+    /local edits waiting to synchronize/,
+  )
+  assert.equal(runtime.session('one'), first)
+  assert.equal(runtime.get('one').markdown, 'first local')
+  assert.equal(runtime.get().tabId, 'two')
   runtime.dispose()
 })
 
@@ -162,7 +397,7 @@ test('combined history limits trim older tabs without changing their source or s
     () => second.edit([{ from: 0, to: 0, insert: 'x' }], 'source', 'closed'),
     /disposed/,
   )
-  runtime.activate(document('replacement', { revision: 5 }))
+  runtime.activate(document('replacement', { revision: 5 }), true)
   assert.deepEqual(runtime.retainedHistory(), {
     bytes: 0,
     groups: 0,

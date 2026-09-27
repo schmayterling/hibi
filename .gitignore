@@ -5,6 +5,7 @@ src/useraddons/
 out/
 /release/
 test-results/
+/docs/ai-agents/foundations/
 *.log
 .DS_Store
 .env

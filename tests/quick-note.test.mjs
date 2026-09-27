@@ -1,0 +1,338 @@
+import assert from 'node:assert/strict'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import test from 'node:test'
+import { electron } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
+
+test('quick note captures to a chosen folder without replacing files', {
+  timeout: 45000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-quick-note-'))
+  const workspace = join(root, 'workspace')
+  const folder = join(workspace, 'Notes')
+  const profile = join(root, 'profile')
+  await mkdir(folder, { recursive: true })
+  await mkdir(profile)
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'quick-note': true }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }, destination) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [destination],
+    })
+  }, workspace)
+  const page = await app.firstWindow()
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await page.evaluate(() => window.hibi.openWorkspace())
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note: capture')
+  await page.getByRole('option', { name: /Quick note: capture/i }).click()
+  const defaultDialog = page.getByRole('dialog', { name: 'Quick note' })
+  assert.equal(
+    await defaultDialog.getByRole('textbox', { name: 'Title' }).count(),
+    0,
+  )
+  await defaultDialog
+    .getByRole('textbox', { name: 'Note' })
+    .fill('Default thought')
+  await defaultDialog.getByRole('button', { name: 'Save note' }).click()
+  await defaultDialog.waitFor({ state: 'hidden' })
+  assert.equal(
+    await readFile(join(workspace, 'Quick note.md'), 'utf8'),
+    'Default thought',
+  )
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note settings')
+  await page.getByRole('option', { name: /Quick note settings/i }).click()
+  await page.getByLabel('Folder', { exact: true }).selectOption('Notes')
+  await page.getByLabel('Ask for a title').check()
+  await page.getByLabel('Default title').fill('Draft')
+  await page.getByLabel('Global shortcut').fill('')
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await page
+    .getByRole('status')
+    .getByText('Quick note settings saved.')
+    .waitFor()
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note: capture')
+  await page.getByRole('option', { name: /Quick note: capture/i }).click()
+  const dialog = page.getByRole('dialog', { name: 'Quick note' })
+  await dialog.getByRole('textbox', { name: 'Title' }).fill('Daily')
+  await dialog.getByRole('textbox', { name: 'Note' }).fill('First thought')
+  await dialog.getByRole('button', { name: 'Save note' }).click()
+  await dialog.waitFor({ state: 'hidden' })
+  assert.equal(
+    await readFile(join(folder, 'Daily.md'), 'utf8'),
+    'First thought',
+  )
+
+  const request = {
+    workspaceId: '',
+    folder: 'Notes',
+    title: 'Daily',
+    markdown: 'Second thought',
+  }
+  const second = await page.evaluate(
+    (input) => window.hibi.invokeAddon('quick-note', 'save', input),
+    request,
+  )
+  assert.equal(second.name, 'Daily 2.md')
+  assert.equal(
+    await readFile(join(folder, 'Daily.md'), 'utf8'),
+    'First thought',
+  )
+  assert.equal(
+    await readFile(join(folder, 'Daily 2.md'), 'utf8'),
+    'Second thought',
+  )
+  await assert.rejects(
+    page.evaluate(
+      (input) =>
+        window.hibi.invokeAddon('quick-note', 'save', {
+          ...input,
+          folder: '../outside',
+        }),
+      request,
+    ),
+    /file or folder name|folder inside/,
+  )
+
+  const other = join(root, 'other')
+  await mkdir(join(other, 'Inbox'), { recursive: true })
+  await app.evaluate(({ dialog }, destination) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [destination],
+    })
+  }, other)
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note settings')
+  await page.getByRole('option', { name: /Quick note settings/i }).click()
+  const settings = page.getByRole('tabpanel', { name: 'Quick note' })
+  await settings.getByRole('button', { name: 'Choose workspace…' }).click()
+  const recent = await page.evaluate(() => window.hibi.getRecentWorkspaces())
+  const otherPath = await realpath(other)
+  const otherId = recent.find((entry) => entry.path === otherPath)?.id
+  assert.ok(otherId)
+  await page.waitForFunction(
+    (id) => document.querySelector('#quick-note-workspace')?.value === id,
+    otherId,
+  )
+  assert.equal(
+    await settings.getByLabel('Workspace', { exact: true }).inputValue(),
+    otherId,
+  )
+  await settings.getByLabel('Folder', { exact: true }).selectOption('Inbox')
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note: capture')
+  await page.getByRole('option', { name: /Quick note: capture/i }).click()
+  const secondDialog = page.getByRole('dialog', { name: 'Quick note' })
+  await secondDialog.getByRole('textbox', { name: 'Title' }).fill('Elsewhere')
+  await secondDialog
+    .getByRole('textbox', { name: 'Note' })
+    .fill('Another workspace')
+  await secondDialog.getByRole('button', { name: 'Save note' }).click()
+  await secondDialog.waitFor({ state: 'hidden' })
+  assert.equal(
+    await readFile(join(other, 'Inbox', 'Elsewhere.md'), 'utf8'),
+    'Another workspace',
+  )
+
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note settings')
+  await page.getByRole('option', { name: /Quick note settings/i }).click()
+  await page
+    .getByRole('tabpanel', { name: 'Quick note' })
+    .getByLabel('Workspace', { exact: true })
+    .selectOption('')
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note: capture')
+  await page.getByRole('option', { name: /Quick note: capture/i }).click()
+  const pinnedDialog = page.getByRole('dialog', { name: 'Quick note' })
+  await pinnedDialog.getByRole('textbox', { name: 'Title' }).fill('Pinned')
+  await pinnedDialog
+    .getByRole('textbox', { name: 'Note' })
+    .fill('Pinned to original workspace')
+  await app.evaluate(({ dialog }, destination) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [destination],
+    })
+  }, other)
+  const switched = await page.evaluate(() => window.hibi.openWorkspace())
+  assert.equal(switched?.id, otherId)
+  await pinnedDialog.getByRole('button', { name: 'Save note' }).click()
+  await pinnedDialog.waitFor({ state: 'hidden' })
+  assert.equal(
+    await readFile(join(workspace, 'Pinned.md'), 'utf8'),
+    'Pinned to original workspace',
+  )
+  await assert.rejects(readFile(join(other, 'Pinned.md'), 'utf8'), {
+    code: 'ENOENT',
+  })
+
+  const originalPath = await realpath(workspace)
+  const originalId = (
+    await page.evaluate(() => window.hibi.getRecentWorkspaces())
+  ).find((item) => item.path === originalPath)?.id
+  assert.ok(originalId)
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note settings')
+  await page.getByRole('option', { name: /Quick note settings/i }).click()
+  await page
+    .getByRole('tabpanel', { name: 'Quick note' })
+    .getByLabel('Workspace', { exact: true })
+    .selectOption(originalId)
+  await page.getByRole('button', { name: 'Save settings' }).click()
+  await page.getByRole('button', { name: 'Back to app' }).click()
+  let lastChosen
+  for (let number = 0; number < 6; number++) {
+    const destination = join(root, `later-${number}`)
+    await mkdir(destination)
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, destination)
+    lastChosen = await page.evaluate(() =>
+      window.hibi.invokeAddon('quick-note', 'chooseWorkspace'),
+    )
+  }
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getRecentWorkspaces())).some(
+      (item) => item.id === originalId,
+    ),
+    false,
+  )
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note settings')
+  await page.getByRole('option', { name: /Quick note settings/i }).click()
+  const oldSettings = page.getByRole('tabpanel', { name: 'Quick note' })
+  await page.waitForFunction(
+    (id) => document.querySelector('#quick-note-workspace')?.value === id,
+    originalId,
+  )
+  assert.equal(
+    await oldSettings.getByLabel('Workspace', { exact: true }).inputValue(),
+    originalId,
+  )
+  assert.equal(
+    await oldSettings.locator(`option[value="${originalId}"]`).innerText(),
+    originalPath,
+  )
+  await page.getByRole('button', { name: 'Back to app' }).click()
+  await clickMenu(app, 'Command palette')
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Quick note: capture')
+  await page.getByRole('option', { name: /Quick note: capture/i }).click()
+  const oldDialog = page.getByRole('dialog', { name: 'Quick note' })
+  assert.ok((await oldDialog.innerText()).includes(originalPath))
+  await oldDialog.getByRole('textbox', { name: 'Title' }).fill('Older')
+  await oldDialog.getByRole('textbox', { name: 'Note' }).fill('Still selected')
+  await oldDialog.getByRole('button', { name: 'Save note' }).click()
+  await oldDialog.waitFor({ state: 'hidden' })
+  assert.equal(
+    await readFile(join(workspace, 'Older.md'), 'utf8'),
+    'Still selected',
+  )
+
+  assert.ok(lastChosen)
+  const selected = join(root, 'later-5')
+  const moved = join(root, 'moved-later-5')
+  const outside = join(root, 'outside')
+  await mkdir(outside)
+  await rename(selected, moved)
+  await symlink(outside, selected, 'junction')
+  await assert.rejects(
+    page.evaluate(
+      (workspaceId) =>
+        window.hibi.invokeAddon('quick-note', 'save', {
+          workspaceId,
+          folder: '',
+          title: 'Escape',
+          markdown: 'Must stay inside',
+        }),
+      lastChosen.id,
+    ),
+    /workspace location changed/i,
+  )
+  await assert.rejects(readFile(join(outside, 'Escape.md'), 'utf8'), {
+    code: 'ENOENT',
+  })
+
+  const parent = join(root, 'chosen-parent')
+  const nested = join(parent, 'Notes')
+  const replacement = join(root, 'replacement-parent')
+  await mkdir(nested, { recursive: true })
+  await mkdir(join(replacement, 'Notes'), { recursive: true })
+  await app.evaluate(({ dialog }, destination) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [destination],
+    })
+  }, nested)
+  const nestedChosen = await page.evaluate(() =>
+    window.hibi.invokeAddon('quick-note', 'chooseWorkspace'),
+  )
+  await rename(parent, join(root, 'moved-chosen-parent'))
+  await symlink(replacement, parent, 'junction')
+  await assert.rejects(
+    page.evaluate(
+      (workspaceId) =>
+        window.hibi.invokeAddon('quick-note', 'save', {
+          workspaceId,
+          folder: '',
+          title: 'Ancestor escape',
+          markdown: 'Must stay inside',
+        }),
+      nestedChosen.id,
+    ),
+    /workspace location changed/i,
+  )
+  await assert.rejects(
+    readFile(join(replacement, 'Notes', 'Ancestor escape.md'), 'utf8'),
+    { code: 'ENOENT' },
+  )
+})

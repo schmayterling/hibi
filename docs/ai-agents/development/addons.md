@@ -135,7 +135,9 @@ Base colors use CSS layer `hibi-base`, palettes use `hibi-theme`, and unlayered 
 
 ## Styles and method patches
 
-`context.styles.register(id, css)` appends a stylesheet and returns `update(css)` and `dispose()`. IDs are local and unique while registered. Use shared tokens and targeted selectors. Import CSS with `?inline` to pass it here. Unlike a plain CSS import, an owned stylesheet is removed on shutdown, failed startup, and reload. Vim uses this for editor styles.
+`context.styles.register(id, css)` adds a stylesheet and returns `update(css)` and `dispose()`. IDs are local and unique while registered. Use shared tokens and targeted selectors. Import CSS with `?inline` to pass it here. Unlike a plain CSS import, an owned stylesheet is removed on shutdown, failed startup, and reload. Vim uses this for editor styles.
+
+Pass `{ priority: 'override' }` as the third argument to place a stylesheet after ordinary `context.styles` sheets, including those registered later by another addon. This source order wins for equal-specificity rules in the same cascade layer. It does not beat more specific selectors, `!important`, inline styles, cascade layers, or unrelated stylesheets added outside `context.styles`.
 
 ```typescript
 const style = context.styles.register('appearance', `

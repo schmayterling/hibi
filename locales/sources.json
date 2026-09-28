@@ -3175,9 +3175,6 @@
   "656d97eb82c8": [
     "src/renderer/src/main.tsx"
   ],
-  "5e30537bee2e": [
-    "src/renderer/src/DocumentTabs.tsx"
-  ],
   "f5cc17a5ad18": [
     "src/addons/graph/Canvas.tsx"
   ],
@@ -4147,7 +4144,7 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "aa9997bb1d8c": [
-    "src/renderer/src/DocumentTabs.tsx"
+    "src/renderer/src/main.tsx"
   ],
   "de838855e4a6": [
     "src/addons/git/Panel.tsx"

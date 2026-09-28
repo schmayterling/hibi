@@ -2104,7 +2104,7 @@ function App() {
           run: () => void openFolder(id),
         })),
       })
-    if (document && !busy)
+    if (document?.tabs.length && !busy && !settingsOpen)
       paletteCommands.push({
         id: 'document.split-right',
         category: 'view',

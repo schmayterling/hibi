@@ -5,7 +5,7 @@ import { basename, join, resolve } from 'node:path'
 import test from 'node:test'
 import { mathFlavor } from '../src/addons/math/syntax.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
-import { clickMenu, pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('math detection respects code, escaped delimiters, and currency spacing', () => {
@@ -287,7 +287,7 @@ test('split focus preserves each file flavor', {
   const a = await open(files[0])
   const b = await open(files[1])
   await selectDialect('markdown')
-  await page.locator(`[data-tab-key="${a.tabId}"] .tab-split`).click()
+  await splitTab(app, page, a.tabId)
   await page.locator('.editor-page[data-side="right"]').waitFor()
   const c = await open(files[2])
   await selectDialect('markdown.github')

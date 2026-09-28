@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { clickMenu } from './keyboard.mjs'
+import { clickMenu, splitTab } from './keyboard.mjs'
 
 test('installed addon edits inactive documents and guards deferred legacy commands', {
   timeout: 60000,
@@ -250,7 +250,7 @@ test('installed addon edits inactive documents and guards deferred legacy comman
   const secondId = await page
     .getByRole('tab', { name: 'second.md' })
     .evaluate((tab) => tab.closest('[data-tab-key]').dataset.tabKey)
-  await page.locator(`[data-tab-key="${secondId}"] .tab-split`).click()
+  await splitTab(app, page, secondId)
   const left = page.locator('.editor-page[data-side="left"]')
   const right = page.locator('.editor-page[data-side="right"]')
   const leftRich = left.locator('.rich-pane .tiptap')

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { clickMenu, replaceRichText } from './keyboard.mjs'
+import { clickMenu, replaceRichText, splitTab } from './keyboard.mjs'
 
 test('scoped views preserve sessions, pin documents, contain lazy failures, and revoke handles', {
   timeout: 40000,
@@ -209,7 +209,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   assert.equal(await editor.textContent(), 'first document')
   const firstRevision = (await page.evaluate(() => window.hibi.getDocument()))
     .revision
-  await page.locator(`[data-tab-key="${second}"] .tab-split`).click()
+  await splitTab(app, page, second)
   const leftEditor = page.locator('.editor-page[data-side="left"] .tiptap')
   const leftNode = await leftEditor.elementHandle()
   await page.waitForFunction(
@@ -291,7 +291,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   const other = (
     await page.evaluate(() => window.hibi.getDocument())
   ).tabs.find((tab) => tab.id !== first).id
-  await page.locator(`[data-tab-key="${other}"] .tab-split`).click()
+  await splitTab(app, page, other)
   const splitRight = page.locator('.editor-page[data-side="right"]')
   await splitRight.waitFor()
   await page.evaluate(() => {

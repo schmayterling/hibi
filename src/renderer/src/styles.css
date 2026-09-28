@@ -466,8 +466,7 @@ button:disabled {
 .titlebar .document-tab .document-name:hover {
   background: transparent;
 }
-.titlebar .document-tab .tab-close,
-.titlebar .document-tab .tab-split {
+.titlebar .document-tab .tab-close {
   flex-shrink: 0;
   width: 20px;
   min-width: 20px;
@@ -478,11 +477,7 @@ button:disabled {
 .titlebar .document-tab .tab-close {
   opacity: 0;
 }
-.titlebar .document-tab .tab-split {
-  opacity: 0.65;
-}
-.document-tab:is(:hover, :focus-within, [data-active="true"])
-  :is(.tab-close, .tab-split) {
+.document-tab:is(:hover, :focus-within, [data-active="true"]) .tab-close {
   opacity: 1;
 }
 .document-tab[data-drop-side]::after {

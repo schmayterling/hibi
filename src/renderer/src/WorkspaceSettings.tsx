@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { errorMessage } from '../../shared/errors'
 import type {
   WorkspaceSettings as State,
-  WorkspaceManifest,
   WorkspaceEntryLimit,
+  WorkspaceManifest,
   WorkspaceSettingsAction,
 } from '../../shared/workspace-settings'
 import { WORKSPACE_ENTRY_LIMITS } from '../../shared/workspace-settings'

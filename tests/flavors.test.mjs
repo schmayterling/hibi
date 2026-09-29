@@ -97,6 +97,11 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
   await page.waitForFunction(
     () => document.querySelectorAll('.tiptap .katex').length === 2,
   )
+  assert.equal(await page.locator('.tiptap .katex-display').count(), 1)
+  assert.equal(
+    await page.locator('[data-type="inline-math"] .katex-display').count(),
+    0,
+  )
   const fonts = await page.evaluate(async () => {
     const main = await document.fonts.load('16px KaTeX_Main')
     const math = await document.fonts.load('italic 16px KaTeX_Math')

@@ -26,6 +26,17 @@ test('workspace can show all files and opens unsupported text in source only', {
   await writeFile(join(folder, 'node_modules', 'package.json'), '{}')
   await writeFile(join(root, 'outside.json'), '{}')
   await symlink(join(root, 'outside.json'), join(folder, 'linked.json'))
+  await mkdir(join(root, 'profile'))
+  await writeFile(
+    join(root, 'profile', 'workspace-settings.json'),
+    JSON.stringify({
+      enabled: false,
+      showAllFiles: false,
+      path: null,
+      startup: 'empty',
+      startupFolder: null,
+    }),
+  )
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
   })
@@ -56,6 +67,8 @@ test('workspace can show all files and opens unsupported text in source only', {
   await page
     .getByRole('tab', { name: 'Workspace settings', exact: true })
     .click()
+  const limit = page.getByRole('combobox', { name: 'Workspace item limit' })
+  assert.equal(await limit.inputValue(), '20000')
   const toggle = page.getByRole('checkbox', {
     name: 'Show all files in sidebar',
   })
@@ -69,6 +82,26 @@ test('workspace can show all files and opens unsupported text in source only', {
   assert.ok(!shown.some((entry) => entry.name === '.hidden'))
   assert.ok(!shown.some((entry) => entry.name === 'node_modules'))
   assert.ok(!shown.some((entry) => entry.name === 'linked.json'))
+  await limit.selectOption('50000')
+  await waitForAppState(page, () =>
+    window.hibi
+      .getWorkspaceSettings()
+      .then((state) => state.entryLimit === 50000),
+  )
+  for (const invalid of [20001, '50000', null])
+    await assert.rejects(
+      page.evaluate(
+        (limit) =>
+          window.hibi.updateWorkspaceSettings({ action: 'entry-limit', limit }),
+        invalid,
+      ),
+      /Choose a workspace item limit/,
+    )
+  const preferences = JSON.parse(
+    await readFile(join(root, 'profile', 'workspace-settings.json'), 'utf8'),
+  )
+  assert.equal(preferences.entryLimit, 50000)
+  assert.equal(preferences.showAllFiles, true)
   const index = await page.evaluate(() => window.hibi.getWorkspaceIndex())
   assert.deepEqual(
     index.pages.map((page) => page.path),

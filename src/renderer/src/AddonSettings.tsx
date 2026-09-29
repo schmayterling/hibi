@@ -154,8 +154,7 @@ export function AddonSettings({
   // Removing the last addon in a category falls back to the full list.
   const active = category && present.includes(category) ? category : null
   const shown = (manifest: AddonManifest) =>
-    (!active || addonCategory(manifest) === active) &&
-    matches(manifest, query)
+    (!active || addonCategory(manifest) === active) && matches(manifest, query)
   const matching = ordered.filter(({ manifest }) => shown(manifest))
   async function run(action: () => Promise<void>) {
     if (busy) return

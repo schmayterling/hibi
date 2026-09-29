@@ -170,6 +170,27 @@ test('licenses open on their own settings page and dialogs stay readable', {
     catalog.length,
   )
   assert.ok(catalog.every((entry) => !('text' in entry)))
+  const licenseFilter = licensesPanel.getByRole('searchbox', {
+    name: /filter licenses/i,
+  })
+  await licenseFilter.fill('REACT')
+  await react.waitFor()
+  const dompurify = licensesPanel
+    .getByRole('button')
+    .filter({ has: page.locator('.license-name', { hasText: /^dompurify/ }) })
+  assert.equal(await dompurify.isVisible(), false)
+  await licenseFilter.fill(catalog.find((entry) => entry.name === 'react').version)
+  await react.waitFor()
+  assert.equal(await dompurify.isVisible(), false)
+  await licenseFilter.fill('MPL')
+  await dompurify.waitFor()
+  assert.equal(await react.isVisible(), false)
+  await licenseFilter.fill('no-such-license-130')
+  await licensesPanel.getByText('No matching licenses', { exact: true }).waitFor()
+  assert.equal(await licensesPanel.locator('.license-row:visible').count(), 0)
+  await licenseFilter.fill('')
+  await react.waitFor()
+  assert.equal(await licensesPanel.locator('.license-row').count(), catalog.length)
   await assert.rejects(
     page.evaluate(() => window.hibi.getLicense('../package.json')),
     /This license is no longer available\./,

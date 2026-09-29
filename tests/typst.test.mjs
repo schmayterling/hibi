@@ -401,9 +401,10 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     () => {
       const form = document.querySelector('.export-options')
       if (!form) return { done: true }
-      const notice = form.querySelector('.document-notice')
-      if (notice?.textContent?.includes('Could not export'))
-        return { error: notice.textContent }
+      const error = [...form.querySelectorAll('.document-notice')].find(
+        (notice) => notice.textContent?.includes('Could not export'),
+      )
+      if (error) return { error: error.textContent }
       return false
     },
     undefined,
@@ -411,7 +412,6 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   )
   const outcome = await completion.jsonValue()
   assert.equal(outcome.error, undefined, outcome.error)
-  await page.getByText(/exported 3 pages/i).waitFor()
   const html = await readFile(output, 'utf8')
   assert.match(html, /data:image\/svg\+xml;base64,/)
   const nextWindow = app.waitForEvent('window')
@@ -430,6 +430,17 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   }, output)
   const site = await nextWindow
   await site.getByAltText('Typst block preview', { exact: true }).waitFor()
+  assert.equal(
+    await site.evaluate(() => {
+      const data =
+        window.__HIBI_WORKSPACE__ ??
+        JSON.parse(
+          document.getElementById('workspace-data')?.textContent ?? '{}',
+        )
+      return data.pages?.length
+    }),
+    3,
+  )
   await site.getByRole('treeitem', { name: /^report$/i, exact: true }).click()
   await site.getByAltText('Typst document preview', { exact: true }).waitFor()
   assert.equal(

@@ -3,8 +3,10 @@ import { errorMessage } from '../../shared/errors'
 import type {
   WorkspaceSettings as State,
   WorkspaceManifest,
+  WorkspaceEntryLimit,
   WorkspaceSettingsAction,
 } from '../../shared/workspace-settings'
+import { WORKSPACE_ENTRY_LIMITS } from '../../shared/workspace-settings'
 import {
   Button,
   Select,
@@ -96,6 +98,29 @@ export function WorkspaceSettings({
               })
             }
           />
+        </SettingRow>
+        <SettingRow
+          id="workspace-entry-limit"
+          label="Workspace item limit"
+          description="Larger limits use more memory. Reopen the folder to apply a new limit immediately."
+        >
+          <Select
+            aria-label="Workspace item limit"
+            disabled={busy || !state}
+            value={state?.entryLimit ?? WORKSPACE_ENTRY_LIMITS[0]}
+            onChange={(event) =>
+              void update({
+                action: 'entry-limit',
+                limit: Number(event.target.value) as WorkspaceEntryLimit,
+              })
+            }
+          >
+            {WORKSPACE_ENTRY_LIMITS.map((limit) => (
+              <option key={limit} value={limit}>
+                {limit.toLocaleString()}
+              </option>
+            ))}
+          </Select>
         </SettingRow>
         <SettingRow
           id="managed-workspace"

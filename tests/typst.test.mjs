@@ -397,6 +397,20 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     .getByRole('dialog', { name: /^export workspace$/i })
     .getByRole('button', { name: /^export$/i })
     .click()
+  const completion = await page.waitForFunction(
+    () => {
+      const form = document.querySelector('.export-options')
+      if (!form) return { done: true }
+      const notice = form.querySelector('.document-notice')
+      if (notice?.textContent?.includes('Could not export'))
+        return { error: notice.textContent }
+      return false
+    },
+    undefined,
+    { timeout: 60_000 },
+  )
+  const outcome = await completion.jsonValue()
+  assert.equal(outcome.error, undefined, outcome.error)
   await page.getByText(/exported 3 pages/i).waitFor()
   const html = await readFile(output, 'utf8')
   assert.match(html, /data:image\/svg\+xml;base64,/)

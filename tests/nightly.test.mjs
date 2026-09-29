@@ -324,7 +324,7 @@ test('nightly webhook confirms delivery and keeps secrets out of failures', asyn
     })
 })
 
-test('release workflow always builds nightlies and gates stable publication on the full suite', () => {
+test('release workflow always builds nightlies and gates stable publication on release checks', () => {
   const workflow = parse(readFileSync('.github/workflows/nightly.yml', 'utf8'))
   assert.deepEqual(workflow.on.push.tags, ['v*'])
   assert.ok(workflow.on.schedule.length)
@@ -356,9 +356,16 @@ test('release workflow always builds nightlies and gates stable publication on t
     checks['continue-on-error'],
     `\${{ needs.prepare.outputs.channel == 'nightly' }}`,
   )
+  assert.match(checks.run, /for test_file in tests\/\*\.test\.mjs/)
   assert.match(
     checks.run,
-    /node --test --test-concurrency=1 tests\/\*\.test\.mjs/,
+    /\[\[ "\$test_file" == tests\/dev-reload\.test\.mjs \]\]/,
+  )
+  assert.equal(
+    checks.run.match(
+      /node --test --test-concurrency=1 "\$\{test_files\[@\]\}"/g,
+    )?.length,
+    2,
   )
   for (const command of ['lint', 'docs:check', 'copy:check'])
     assert.ok(checks.run.includes(`npm run ${command}`))

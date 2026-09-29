@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -158,7 +159,9 @@ test('workspace can show all files and opens unsupported text in source only', {
 test('workspace scan budgets count unsupported entries and close on cap failures', {
   timeout: 30000,
 }, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'hibi-workspace-limit-'))
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), 'hibi-workspace-limit-')),
+  )
   const folder = join(root, 'workspace')
   await mkdir(folder)
   const app = await electron.launch({

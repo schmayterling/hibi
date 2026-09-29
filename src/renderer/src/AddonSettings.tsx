@@ -83,6 +83,16 @@ function matches(manifest: AddonManifest, query: string) {
     .includes(query.trim().toLowerCase())
 }
 
+const categories = ['Features', 'Formats', 'Themes', 'Importers'] as const
+type Category = (typeof categories)[number]
+
+function addonCategory(manifest: AddonManifest): Category {
+  if (manifest.kind === 'theme') return 'Themes'
+  if (manifest.fileExtensions?.length) return 'Formats'
+  if (manifest.importer) return 'Importers'
+  return 'Features'
+}
+
 export function AddonSettings({
   addons,
   states,
@@ -97,8 +107,16 @@ export function AddonSettings({
   remove: (id: string) => Promise<void>
 }) {
   const [query, setQuery] = useState('')
+  const [category, setCategory] = useState<Category | null>(null)
   const [busy, setBusy] = useState(false)
   const restoreFocus = useRef<string | null>(null)
+  const categoryRow = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const panel = categoryRow.current?.closest('[role="tabpanel"]')
+    const reveal = () => setCategory(null)
+    panel?.addEventListener('hibi:reveal-setting', reveal)
+    return () => panel?.removeEventListener('hibi:reveal-setting', reveal)
+  }, [])
   useEffect(() => {
     if (!busy && restoreFocus.current) {
       const control = document.getElementById(restoreFocus.current)
@@ -130,7 +148,15 @@ export function AddonSettings({
         sensitivity: 'base',
       }) || a.manifest.id.localeCompare(b.manifest.id),
   )
-  const matching = ordered.filter(({ manifest }) => matches(manifest, query))
+  const present = categories.filter((option) =>
+    addons.some(({ manifest }) => addonCategory(manifest) === option),
+  )
+  // Removing the last addon in a category falls back to the full list.
+  const active = category && present.includes(category) ? category : null
+  const shown = (manifest: AddonManifest) =>
+    (!active || addonCategory(manifest) === active) &&
+    matches(manifest, query)
+  const matching = ordered.filter(({ manifest }) => shown(manifest))
   async function run(action: () => Promise<void>) {
     if (busy) return
     setBusy(true)
@@ -200,6 +226,22 @@ export function AddonSettings({
           })
         }
       />
+      <ControlRow
+        ref={categoryRow}
+        className="addon-categories"
+        role="group"
+        aria-label="Addon categories"
+      >
+        {[null, ...present].map((option) => (
+          <Button
+            key={option ?? 'all'}
+            aria-pressed={active === option}
+            onClick={() => setCategory(option)}
+          >
+            {option ?? 'All'}
+          </Button>
+        ))}
+      </ControlRow>
       <div className="settings-group addon-list" hidden={!matching.length}>
         {ordered.map(({ manifest }) => (
           <SettingRow
@@ -212,7 +254,7 @@ export function AddonSettings({
                 openReadme(manifest)
               },
             }}
-            hidden={!matches(manifest, query)}
+            hidden={!shown(manifest)}
             description={
               <>
                 {manifest.description}

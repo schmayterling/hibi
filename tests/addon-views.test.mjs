@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { clickMenu, replaceRichText } from './keyboard.mjs'
+import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 
 test('scoped views preserve sessions, pin documents, contain lazy failures, and revoke handles', {
   timeout: 40000,
@@ -315,6 +315,10 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   )
   await page.evaluate(() => window.viewsFixture.queuedRight.show())
   await right.getByRole('button', { name: 'Count 1' }).waitFor()
+  const lastDocument = await page.evaluate(() =>
+    window.hibi.getDocument().then((state) => state.tabs.at(-1).id),
+  )
+  await page.locator(`#document-tab-${lastDocument}`).click()
   await page.evaluate(() => {
     const f = window.viewsFixture
     f.handles.tab = f.tab.open({ id: 'dashboard' })
@@ -326,6 +330,20 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   assert.equal(await addonTab.getAttribute('aria-selected'), 'true')
   assert.equal(await editor.isVisible(), false)
   assert.equal(await splitRight.isVisible(), false)
+  const modifier = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await pressShortcut(app, `${modifier}+Alt+Left`)
+  await page
+    .getByRole('tab', { name: 'Fixture tab', selected: false })
+    .waitFor()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabId,
+    lastDocument,
+  )
+  await page.waitForFunction(() =>
+    document.activeElement?.matches('.tiptap, .cm-content'),
+  )
+  await pressShortcut(app, `${modifier}+Alt+Right`)
+  await page.getByRole('tab', { name: 'Fixture tab', selected: true }).waitFor()
   await page.locator(`#document-tab-${first}`).click()
   assert.equal(await editor.isVisible(), true)
   await notice.waitFor()

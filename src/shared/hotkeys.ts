@@ -22,6 +22,18 @@ export const actions = [
   { id: 'history', label: 'Version history', category: 'file', key: '' },
   { id: 'find', label: 'Find in document', category: 'edit', key: 'f' },
   { id: 'settings', label: 'Open settings', category: 'preferences', key: ',' },
+  {
+    id: 'previous-tab',
+    label: 'Previous tab',
+    category: 'view',
+    key: 'alt+arrowleft',
+  },
+  {
+    id: 'next-tab',
+    label: 'Next tab',
+    category: 'view',
+    key: 'alt+arrowright',
+  },
   { id: 'back', label: 'Go back', category: 'view', key: '[' },
   { id: 'forward', label: 'Go forward', category: 'view', key: ']' },
   {
@@ -85,7 +97,7 @@ export function restoreHotkeys(
   }
   // New navigation defaults yield to an existing user binding.
   const defaults = defaultHotkeys(platform)
-  for (const id of ['back', 'forward'] as const) {
+  for (const id of ['back', 'forward', 'previous-tab', 'next-tab'] as const) {
     const occupied = Object.entries(next).some(
       ([other, value]) => other !== id && value === defaults[id],
     )

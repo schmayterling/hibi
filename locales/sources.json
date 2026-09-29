@@ -2867,6 +2867,10 @@
   "115967f77ac6": [
     "src/renderer/src/FindBar.tsx"
   ],
+  "1ef9522a9a8a": [
+    "src/main/index.ts",
+    "src/shared/hotkeys.ts"
+  ],
   "ab6b5a4d586b": [
     "src/renderer/src/UpdateSettings.tsx"
   ],
@@ -3366,6 +3370,10 @@
   ],
   "a1ac3c3a93fa": [
     "src/renderer/src/FindBar.tsx"
+  ],
+  "c88d5e7ec3a8": [
+    "src/main/index.ts",
+    "src/shared/hotkeys.ts"
   ],
   "da2eb576b5f6": [
     "src/addons/ui-preview/index.tsx"

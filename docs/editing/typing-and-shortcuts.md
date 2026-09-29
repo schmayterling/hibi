@@ -16,6 +16,7 @@ Use `Cmd` on macOS and `Ctrl` on Windows and Linux where a shortcut says `Cmd/Ct
 | `Cmd/Ctrl+Shift+Z` | Redo |
 | `Cmd/Ctrl+Shift+S` | Save as |
 | `Cmd/Ctrl+W` | Close the current tab |
+| `Cmd/Ctrl+Alt+Left` / `Right` | Previous / next tab |
 | `Cmd/Ctrl+[` / `]` | Go back / forward |
 | `Cmd/Ctrl+Shift+[` / `]` | Normal / Source view |
 | `Cmd/Ctrl+Shift+\` | Side-by-side view |
@@ -44,6 +45,8 @@ These shortcuts work in source panes as well as the formatted editor. The toolba
 | `Cmd/Ctrl+Enter` | Continue after a final formatted block |
 
 Custom app bindings take precedence over formatting shortcuts. [Vim](../guides/vim.md) handles its own keys first in source mode.
+
+Previous and next tab shortcuts wrap at either end of the tab strip and include addon tabs. Some Linux desktops reserve `Ctrl+Alt+Left/Right` for switching workspaces; choose another binding under **Settings → Hotkeys** if those keys do not reach Hibi.
 
 ## Typing speed
 

@@ -991,6 +991,16 @@ function installMenu(): void {
           accelerator: accelerator(hotkeys.forward),
           click: command('forward'),
         },
+        {
+          label: 'Previous tab',
+          accelerator: accelerator(hotkeys['previous-tab']),
+          click: command('previous-tab'),
+        },
+        {
+          label: 'Next tab',
+          accelerator: accelerator(hotkeys['next-tab']),
+          click: command('next-tab'),
+        },
         { type: 'separator' },
         ...(!app.isPackaged
           ? [

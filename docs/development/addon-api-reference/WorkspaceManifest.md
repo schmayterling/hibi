@@ -2,7 +2,7 @@
 
 # WorkspaceManifest
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L5)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L8)
 
 <details>
 <summary>Declaration</summary>
@@ -33,7 +33,7 @@ type WorkspaceManifest = {
 
 ### version
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L6)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L9)
 
 ```typescript
 version: 1
@@ -41,7 +41,7 @@ version: 1
 
 ### name
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L7)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L10)
 
 ```typescript
 name: string
@@ -49,7 +49,7 @@ name: string
 
 ### description
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L8)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L11)
 
 ```typescript
 description: string
@@ -57,7 +57,7 @@ description: string
 
 ### icon
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L9)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L12)
 
 ```typescript
 icon: string
@@ -65,7 +65,7 @@ icon: string
 
 ### defaultFile
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L10)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L13)
 
 ```typescript
 defaultFile: string

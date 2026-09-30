@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { type FSWatcher, type Stats, watch } from 'node:fs'
-import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises'
+import { lstat, opendir, readFile, realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute, join, parse, relative, sep } from 'node:path'
 import { app, type BrowserWindow, dialog, shell } from 'electron'
 import ignore from 'ignore'
@@ -19,7 +19,10 @@ import type {
   WorkspaceState,
   WorkspaceStreamSnapshot,
 } from '../shared/workspace'
-import type { WorkspaceManifest } from '../shared/workspace-settings'
+import {
+  WORKSPACE_ENTRY_LIMITS,
+  type WorkspaceManifest,
+} from '../shared/workspace-settings'
 import {
   closeDeletedDocuments,
   confirmDiscardAll,
@@ -50,7 +53,10 @@ import {
 import { LatestIndexJob } from './workspace-index-job'
 import { workspaceIgnore, workspaceMetadata } from './workspace-metadata'
 import { createScanCoordinator, watchNeedsScan } from './workspace-refresh'
-import { showAllWorkspaceFiles } from './workspace-settings'
+import {
+  showAllWorkspaceFiles,
+  workspaceEntryLimit,
+} from './workspace-settings'
 
 type ScanResult = {
   entries: WorkspaceEntry[]
@@ -237,12 +243,14 @@ export async function scanWorkspace(
   base: string,
   showAllFiles = false,
 ): Promise<WorkspaceEntry[]> {
-  const ignored = await workspaceIgnore(base)
+  const [ignored, limit] = await Promise.all([
+    workspaceIgnore(base),
+    workspaceEntryLimit(),
+  ])
   let count = 0
   async function walk(directory: string): Promise<WorkspaceEntry[]> {
     const result: WorkspaceEntry[] = []
-    const children = await readdir(directory, { withFileTypes: true })
-    for (const child of children) {
+    for await (const child of await opendir(directory)) {
       if (
         (child.name.startsWith('.') &&
           (child.isDirectory() || !showAllFiles)) ||
@@ -250,20 +258,26 @@ export async function scanWorkspace(
         child.isSymbolicLink()
       )
         continue
-      if (++count > 20000)
-        throw new Error(
-          'This folder has more than 20,000 items. Open a smaller folder.',
+      if (++count > limit) {
+        const advice =
+          limit === WORKSPACE_ENTRY_LIMITS[WORKSPACE_ENTRY_LIMITS.length - 1]
+            ? 'Open a smaller folder.'
+            : 'Increase the workspace item limit in Settings → Workspace, or open a smaller folder.'
+        throw Object.assign(
+          new Error(
+            `This folder has more than ${limit.toLocaleString('en-US')} items. ${advice}`,
+          ),
+          { code: 'WORKSPACE_ENTRY_LIMIT' },
         )
+      }
       const full = join(directory, child.name)
       const path = relative(base, full).split(sep).join('/')
       if (ignored.ignores(path + (child.isDirectory() ? '/' : ''))) continue
       if (child.isDirectory()) {
-        const nested = await walk(full)
         result.push({
           path,
           name: child.name,
           kind: 'folder',
-          children: nested,
         })
       } else if (
         child.isFile() &&
@@ -272,6 +286,10 @@ export async function scanWorkspace(
         result.push({ path, name: child.name, kind: 'file' })
       }
     }
+    // Close the directory iterator before descending into child folders.
+    for (const entry of result)
+      if (entry.kind === 'folder')
+        entry.children = await walk(join(base, entry.path))
     return result.sort(
       (a, b) =>
         Number(b.kind === 'folder') - Number(a.kind === 'folder') ||
@@ -418,7 +436,7 @@ async function requestWorkspaceScan(
       workspaceScanFailed = true
       workspaceScanCapReached =
         error instanceof Error &&
-        error.message.includes('more than 20,000 items')
+        (error as NodeJS.ErrnoException).code === 'WORKSPACE_ENTRY_LIMIT'
       workspaceStream.publish('resync', null)
     }
     throw error

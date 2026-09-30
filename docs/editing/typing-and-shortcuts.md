@@ -2,6 +2,8 @@
 
 Use `Cmd` on macOS and `Ctrl` on Windows and Linux where a shortcut says `Cmd/Ctrl`. Change app shortcuts under **Settings → Hotkeys**.
 
+Letter shortcuts and punctuation on letter keys follow your active keyboard layout, including Dvorak. Digit-row shortcuts and other punctuation positions retain their physical bindings so existing defaults remain available on international keyboards. Characters outside the supported shortcut notation, including some Option-modified characters and non-Latin letters, retain their physical key bindings. Shortcut recording uses the same mapping.
+
 ## App shortcuts
 
 | Shortcut | Action |
@@ -47,6 +49,8 @@ These shortcuts work in source panes as well as the formatted editor. The toolba
 Custom app bindings take precedence over formatting shortcuts. [Vim](../guides/vim.md) handles its own keys first in source mode.
 
 Previous and next tab shortcuts wrap at either end of the tab strip and include addon tabs. Some Linux desktops reserve `Ctrl+Alt+Left/Right` for switching workspaces; choose another binding under **Settings → Hotkeys** if those keys do not reach Hibi.
+
+In an editable formatted list, `Tab` indents an item and `Shift+Tab` outdents it. If an item cannot move farther, focus stays in the editor. Outside lists, `Tab` keeps its usual keyboard navigation behavior.
 
 ## Typing speed
 

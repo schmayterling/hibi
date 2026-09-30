@@ -76,6 +76,20 @@ test('compact filters reset preferences, keep addon rows stable, and install rev
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   const addons = page.locator('#settings-addons')
+  const categoryButtons = addons.getByRole('group', {
+    name: /addon categories/i,
+  })
+  await categoryButtons
+    .getByRole('button', { name: 'Formats', exact: true })
+    .click()
+  await addons.getByRole('searchbox', { name: /filter addons/i }).fill('vim')
+  assert.equal(await addons.locator('.setting-row:visible').count(), 0)
+  await categoryButtons
+    .getByRole('button', { name: 'All', exact: true })
+    .click()
+  await addons.locator('#addon-vim').waitFor()
+  assert.equal(await addons.locator('.setting-row:visible').count(), 1)
+  await addons.getByRole('searchbox', { name: /filter addons/i }).fill('')
   assert.equal(await addons.locator('#addon-frontmatter').isChecked(), true)
   const vim = addons.locator('#addon-vim')
   await vim.scrollIntoViewIfNeeded()

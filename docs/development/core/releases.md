@@ -8,6 +8,8 @@ The main process owns channel preferences, feed requests, verified downloads, an
 
 The **nightly and releases** workflow builds Linux x64, Windows x64, macOS Apple Silicon, and macOS Intel installers from one fixed commit. Every release build compiles the app and runs the full required suite on each platform. Download caches can speed up installation; cached builds and previous test results never certify a release.
 
+Required checks run in four isolated shards per platform. All four reports must match the packaged commit and platform, and every shard must pass for that platform to be marked successful. Packaging runs once per platform after the checks finish.
+
 | Result | Nightly | Stable release |
 | --- | --- | --- |
 | All packages succeed and all required checks pass | Publish as **nightly-green** and update the recommended nightly. | Publish the release. |

@@ -130,6 +130,20 @@ const punctuation: Record<string, string> = {
   Equal: '=',
   Space: 'space',
 }
+// ponytail: digit and punctuation positions stay physical; full symbol layouts need layout maps.
+const shiftedKeys: Record<string, string> = {
+  _: '-',
+  '+': '=',
+  '{': '[',
+  '}': ']',
+  '|': '\\',
+  ':': ';',
+  '"': "'",
+  '<': ',',
+  '>': '.',
+  '?': '/',
+  '~': '`',
+}
 const specialKeys = [
   'space',
   'enter',
@@ -154,11 +168,20 @@ export function shortcutFromEvent(event: {
   altKey: boolean
   shiftKey: boolean
 }): string {
-  const key = /^Key[A-Z]$/.test(event.code)
+  const typed =
+    event.key === ' '
+      ? 'space'
+      : ((event.shiftKey ? shiftedKeys[event.key] : undefined) ??
+        event.key.toLowerCase())
+  const physical = /^Key[A-Z]$/.test(event.code)
     ? event.code.slice(3).toLowerCase()
     : /^Digit[0-9]$/.test(event.code)
       ? event.code.slice(5)
-      : (punctuation[event.code] ?? event.key.toLowerCase())
+      : punctuation[event.code]
+  const key =
+    isKey(typed) && (/^Key[A-Z]$/.test(event.code) || /^[a-z]$/.test(typed))
+      ? typed
+      : (physical ?? typed)
   if (!isKey(key)) return ''
   return [
     event.ctrlKey && 'ctrl',

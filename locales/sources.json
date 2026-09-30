@@ -150,6 +150,9 @@
   "6a2133724e54": [
     "src/main/addon-download.ts"
   ],
+  "52430b76a039": [
+    "src/renderer/src/AddonSettings.tsx"
+  ],
   "4b392ad897a3": [
     "src/renderer/src/AddonHotkeySettings.tsx"
   ],
@@ -1843,6 +1846,12 @@
   "c04cc3109ae9": [
     "src/renderer/src/CodeSyntaxSettings.tsx"
   ],
+  "ab816e656003": [
+    "src/renderer/src/LicenseSettings.tsx"
+  ],
+  "e4e385ac79bf": [
+    "src/renderer/src/LicenseSettings.tsx"
+  ],
   "8715f85e1785": [
     "src/addons/graph/Panel.tsx",
     "src/site/main.tsx"
@@ -2906,6 +2915,9 @@
   ],
   "ee43d3205df1": [
     "src/renderer/src/CodeSyntaxSettings.tsx"
+  ],
+  "65083ba6d5bf": [
+    "src/renderer/src/LicenseSettings.tsx"
   ],
   "5a859d101f66": [
     "src/addons/graph/Panel.tsx"

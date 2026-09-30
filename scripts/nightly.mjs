@@ -72,6 +72,28 @@ export function nightly(
   }
 }
 
+export function checksFromShards(platform, sha, reports) {
+  if (
+    !platforms.includes(platform) ||
+    reports.length !== 4 ||
+    [0, 1, 2, 3].some(
+      (shard) =>
+        reports.filter(
+          (report) =>
+            report.platform === platform &&
+            report.sha === sha &&
+            report.shard === shard,
+        ).length !== 1,
+    )
+  )
+    throw new Error(
+      'Every release check shard must report the same platform and revision',
+    )
+  return reports.every((report) => report.checks === 'success')
+    ? 'success'
+    : 'failure'
+}
+
 export function classifyRelease(release, reports) {
   if (
     reports.length !== platforms.length ||
@@ -285,6 +307,14 @@ if (
       .map((key) => `${key}=${release[key]}`)
       .join('\n')
     appendFileSync(process.env.GITHUB_OUTPUT, `${values}\n`)
+  } else if (process.argv[2] === 'check-shards') {
+    const [platform, sha, ...files] = process.argv.slice(3)
+    const result = checksFromShards(
+      platform,
+      sha,
+      files.map((file) => JSON.parse(readFileSync(file, 'utf8'))),
+    )
+    appendFileSync(process.env.GITHUB_OUTPUT, `result=${result}\n`)
   } else if (process.argv[2] === 'classify') {
     const release = classifyRelease(
       JSON.parse(readFileSync('release.json', 'utf8')),
@@ -324,7 +354,7 @@ if (
     )
   } else {
     throw new Error(
-      'Usage: node scripts/nightly.mjs prepare|classify|notes|notify|recommend',
+      'Usage: node scripts/nightly.mjs prepare|check-shards|classify|notes|notify|recommend',
     )
   }
 }

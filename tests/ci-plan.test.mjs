@@ -67,10 +67,14 @@ test('incremental checks select dependencies and fall back safely for cold, clea
     'tests/io.test.mjs',
     'tests/one.test.mjs',
   ])
-  const shards = [0, 1].map((index) =>
-    shardTests(source.tests, source.allTests, index, 2),
-  )
-  assert.deepEqual(shards.flat().sort(), source.tests)
+  for (const total of [2, 4]) {
+    for (const selected of [source, plan([], { force: true })]) {
+      const shards = Array.from({ length: total }, (_, index) =>
+        shardTests(selected.tests, selected.allTests, index, total),
+      )
+      assert.deepEqual(shards.flat().sort(), selected.tests)
+    }
+  }
   assert.deepEqual(
     plan([], {
       previousTests: previousTests.filter(

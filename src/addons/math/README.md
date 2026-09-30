@@ -12,7 +12,7 @@ Tectonic downloads packages as needed. You can search for packages or clear down
 
 ## Equations in Markdown
 
-Write `$x^2$` for an inline equation or use `$$` delimiters for a block. You can also insert equations from the toolbar or command palette. Click a rendered equation to edit it.
+Write `$x^2$` for an inline equation or use `$$` delimiters for a centered block in display math style. You can also insert equations from the toolbar or command palette. Click a rendered equation to edit it.
 
 Choose which math features to use in **Settings → Syntax**.
 

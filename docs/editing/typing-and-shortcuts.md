@@ -47,6 +47,8 @@ These shortcuts work in source panes as well as the formatted editor. The toolba
 
 Custom app bindings take precedence over formatting shortcuts. [Vim](../guides/vim.md) handles its own keys first in source mode.
 
+In an editable formatted list, `Tab` indents an item and `Shift+Tab` outdents it. If an item cannot move farther, focus stays in the editor. Outside lists, `Tab` keeps its usual keyboard navigation behavior.
+
 ## Typing speed
 
 Enable **Typing speed** under **Settings → Addons** to see estimated words or characters per minute while typing. For document totals instead, enable **Word count**.

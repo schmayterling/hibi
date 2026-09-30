@@ -80,6 +80,21 @@ test('hotkey validation rejects conflicts and preserves standard editing keys', 
     validateHotkeys({ ...defaults, palette: 'f1' }, 'darwin').palette,
     'f1',
   )
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    const mod = platform === 'darwin' ? 'meta' : 'ctrl'
+    const other = platform === 'darwin' ? 'ctrl' : 'meta'
+    const bindings = defaultHotkeys(platform)
+    assert.throws(
+      () =>
+        validateHotkeys({ ...bindings, palette: `${mod}+shift+v` }, platform),
+      /reserved for editing or window controls/,
+    )
+    assert.equal(
+      validateHotkeys({ ...bindings, palette: `${other}+shift+v` }, platform)
+        .palette,
+      `${other}+shift+v`,
+    )
+  }
   assert.equal(
     shortcutFromEvent({
       key: '!',

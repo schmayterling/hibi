@@ -836,47 +836,7 @@ function App() {
         setSettingsOpen(false)
         showTitlebar()
       },
-      async focusDocument(tabId) {
-        if (!currentDocument.current?.tabs.some((tab) => tab.id === tabId))
-          return false
-        const split = splitTabsRef.current
-        const side = split
-          ? split.left === tabId && split.right === tabId
-            ? split.active
-            : split.left === tabId
-              ? 'left'
-              : split.right === tabId
-                ? 'right'
-                : null
-          : null
-        if (side) await focusSplitTab(side)
-        else if (currentDocument.current.tabId !== tabId)
-          await applyDocumentOperation(() =>
-            window.hibi.selectDocumentTab(tabId),
-          )
-        if (currentDocument.current?.tabId !== tabId) return false
-        addonViews.selectDocument()
-        setSettingsOpen(false)
-        requestAnimationFrame(() => {
-          if (currentDocument.current?.tabId !== tabId) return
-          const current = splitTabsRef.current
-          const pane = window.document.querySelector<HTMLElement>(
-            current
-              ? `.editor-page[data-side="${current.active}"]`
-              : '#document-editor-panel',
-          )
-          Array.from(
-            pane?.querySelectorAll<HTMLElement>('[contenteditable="true"]') ??
-              [],
-          )
-            .find(
-              (element) =>
-                !element.closest('[inert]') && element.getClientRects().length,
-            )
-            ?.focus({ preventScroll: true })
-        })
-        return true
-      },
+      focusDocument,
       isBusy: () => busyRef.current,
       getMarkdown: () => editorDocument.get()?.markdown ?? '',
       runAction: (command) => runAction(command),
@@ -1849,6 +1809,80 @@ function App() {
       void applyDocumentOperation(() => window.hibi.navigateDocument(direction))
   }
 
+  async function focusDocument(tabId: string) {
+    if (!currentDocument.current?.tabs.some((tab) => tab.id === tabId))
+      return false
+    const split = splitTabsRef.current
+    const side = split
+      ? split.left === tabId && split.right === tabId
+        ? split.active
+        : split.left === tabId
+          ? 'left'
+          : split.right === tabId
+            ? 'right'
+            : null
+      : null
+    if (side) await focusSplitTab(side)
+    else if (currentDocument.current.tabId !== tabId)
+      await applyDocumentOperation(() => window.hibi.selectDocumentTab(tabId))
+    if (currentDocument.current?.tabId !== tabId) return false
+    addonViews.selectDocument()
+    setSettingsOpen(false)
+    requestAnimationFrame(() => {
+      if (currentDocument.current?.tabId !== tabId) return
+      const current = splitTabsRef.current
+      const pane = window.document.querySelector<HTMLElement>(
+        current
+          ? `.editor-page[data-side="${current.active}"]`
+          : '#document-editor-panel',
+      )
+      Array.from(
+        pane?.querySelectorAll<HTMLElement>('[contenteditable="true"]') ?? [],
+      )
+        .find(
+          (element) =>
+            !element.closest('[inert]') && element.getClientRects().length,
+        )
+        ?.focus({ preventScroll: true })
+    })
+    return true
+  }
+
+  function selectTab(id: string) {
+    if (focusUnsafe.current) {
+      if (id === currentDocument.current?.tabId) void retryDocumentFocus()
+      return
+    }
+    addonViews.selectDocument()
+    if (splitTabs && (id === splitTabs.left || id === splitTabs.right)) {
+      const side =
+        id === splitTabs.left && id === splitTabs.right
+          ? splitTabs.active
+          : id === splitTabs.left
+            ? 'left'
+            : 'right'
+      void focusSplitTab(side)
+    } else if (id !== document?.tabId)
+      void applyDocumentOperation(() => window.hibi.selectDocumentTab(id))
+  }
+
+  // Follows the tab strip order: document tabs, then addon tabs.
+  function cycleTab(step: 1 | -1) {
+    if (busyRef.current || settingsOpen || !document) return
+    const ids = [
+      ...document.tabs.map((tab) => tab.id),
+      ...addonTabs.map((tab) => tab.id),
+    ]
+    const index = ids.indexOf(activeAddonTab?.id ?? document.tabId)
+    if (index < 0 || ids.length < 2) return
+    const id = ids[(index + step + ids.length) % ids.length]!
+    const addon = addonTabs.find((tab) => tab.id === id)
+    if (addon) addon.handle.show()
+    // Leaving an addon tab hid the editor, so restore its focus too.
+    else if (activeAddonTab) void focusDocument(id)
+    else selectTab(id)
+  }
+
   function runAction(command: AppCommand) {
     if (dialogs.isOpen()) return
     if (command === 'palette') {
@@ -1867,6 +1901,12 @@ function App() {
       case 'back':
       case 'forward':
         navigate(command)
+        break
+      case 'previous-tab':
+        cycleTab(-1)
+        break
+      case 'next-tab':
+        cycleTab(1)
         break
       case 'history':
         void dialogs
@@ -2763,23 +2803,7 @@ function App() {
         onRightSidebarView={(view) =>
           selectSidebarView(view, undefined, 'right')
         }
-        onSelectTab={(id) => {
-          if (focusUnsafe.current) {
-            if (id === currentDocument.current?.tabId) void retryDocumentFocus()
-            return
-          }
-          addonViews.selectDocument()
-          if (splitTabs && (id === splitTabs.left || id === splitTabs.right)) {
-            const side =
-              id === splitTabs.left && id === splitTabs.right
-                ? splitTabs.active
-                : id === splitTabs.left
-                  ? 'left'
-                  : 'right'
-            void focusSplitTab(side)
-          } else if (id !== document?.tabId)
-            void applyDocumentOperation(() => window.hibi.selectDocumentTab(id))
-        }}
+        onSelectTab={selectTab}
         onCloseTab={(id) =>
           void applyDocumentOperation(() => window.hibi.closeDocumentTab(id))
         }

@@ -217,9 +217,10 @@ export function shortcutError(
     '-',
     '=',
     'shift+=',
-  ].map((key) => `${mod}+${key}`)
+  ]
   if (
-    reserved.includes(shortcut) ||
+    (shortcut.startsWith(`${mod}+`) &&
+      reserved.includes(shortcut.slice(mod.length + 1))) ||
     ['alt+f4', 'ctrl+alt+delete', 'ctrl+meta+f', 'meta+alt+h'].includes(
       shortcut,
     )

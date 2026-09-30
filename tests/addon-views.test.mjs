@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { clickMenu, pressShortcut, replaceRichText, splitTab } from './keyboard.mjs'
+import {
+  clickMenu,
+  pressShortcut,
+  replaceRichText,
+  splitTab,
+} from './keyboard.mjs'
 
 test('scoped views preserve sessions, pin documents, contain lazy failures, and revoke handles', {
   timeout: 40000,

@@ -295,6 +295,7 @@ test('app palettes update all surfaces, preserve editing, and persist native app
     void w.loadFile(path)
   }, html)
   const harness = await next
+  await harness.waitForFunction(() => typeof ThemeStore !== 'undefined')
   await harness.emulateMedia({ colorScheme: 'light' })
   const result = await harness.evaluate(() => {
     const store = ThemeStore.createColorschemeStore('test')

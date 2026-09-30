@@ -80,7 +80,7 @@ test('compact filters reset preferences, keep addon rows stable, and install rev
     name: /addon categories/i,
   })
   await categoryButtons
-    .getByRole('button', { name: 'Themes', exact: true })
+    .getByRole('button', { name: 'Formats', exact: true })
     .click()
   await addons.getByRole('searchbox', { name: /filter addons/i }).fill('vim')
   assert.equal(await addons.locator('.setting-row:visible').count(), 0)

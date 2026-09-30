@@ -150,6 +150,9 @@
   "6a2133724e54": [
     "src/main/addon-download.ts"
   ],
+  "52430b76a039": [
+    "src/renderer/src/AddonSettings.tsx"
+  ],
   "4b392ad897a3": [
     "src/renderer/src/AddonHotkeySettings.tsx"
   ],
@@ -662,6 +665,9 @@
   ],
   "519460187895": [
     "src/addons/quick-note/native.ts"
+  ],
+  "44ccfbb4da90": [
+    "src/main/workspace-settings.ts"
   ],
   "cf344c7a8b0f": [
     "src/addons/quick-note/native.ts"
@@ -1843,6 +1849,12 @@
   "c04cc3109ae9": [
     "src/renderer/src/CodeSyntaxSettings.tsx"
   ],
+  "ab816e656003": [
+    "src/renderer/src/LicenseSettings.tsx"
+  ],
+  "e4e385ac79bf": [
+    "src/renderer/src/LicenseSettings.tsx"
+  ],
   "8715f85e1785": [
     "src/addons/graph/Panel.tsx",
     "src/site/main.tsx"
@@ -2543,6 +2555,9 @@
   "318655cea4bd": [
     "src/renderer/src/CodeSyntaxSettings.tsx"
   ],
+  "8afab8fa80cb": [
+    "src/renderer/src/WorkspaceSettings.tsx"
+  ],
   "e139c41b9472": [
     "src/addons/vim/engine.ts"
   ],
@@ -2902,6 +2917,9 @@
   ],
   "ee43d3205df1": [
     "src/renderer/src/CodeSyntaxSettings.tsx"
+  ],
+  "65083ba6d5bf": [
+    "src/renderer/src/LicenseSettings.tsx"
   ],
   "5a859d101f66": [
     "src/addons/graph/Panel.tsx"
@@ -4886,7 +4904,7 @@
   "cb628f15bb2c": [
     "src/main/workspace.ts"
   ],
-  "f21c0d01153d": [
+  "31243b9077cb": [
     "src/main/workspace.ts"
   ],
   "1f93aa51a306": [
@@ -5419,6 +5437,9 @@
     "src/addons/graph/index.tsx"
   ],
   "919644e3d358": [
+    "src/renderer/src/WorkspaceSettings.tsx"
+  ],
+  "14592abed9a2": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
   "8ebd7fbef943": [

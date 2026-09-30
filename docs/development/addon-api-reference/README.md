@@ -139,6 +139,8 @@ For installed packages, use the [SideloadFactory](SideloadFactory.md) and the [s
 
 ## Workspace settings
 
+- [WORKSPACE_ENTRY_LIMITS](WORKSPACE_ENTRY_LIMITS.md)
+- [WorkspaceEntryLimit](WorkspaceEntryLimit.md)
 - [WorkspaceManifest](WorkspaceManifest.md)
 - [WorkspacePreferences](WorkspacePreferences.md)
 - [WorkspaceSettings](WorkspaceSettings.md)

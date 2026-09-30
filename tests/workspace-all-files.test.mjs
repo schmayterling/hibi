@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -26,6 +27,17 @@ test('workspace can show all files and opens unsupported text in source only', {
   await writeFile(join(folder, 'node_modules', 'package.json'), '{}')
   await writeFile(join(root, 'outside.json'), '{}')
   await symlink(join(root, 'outside.json'), join(folder, 'linked.json'))
+  await mkdir(join(root, 'profile'))
+  await writeFile(
+    join(root, 'profile', 'workspace-settings.json'),
+    JSON.stringify({
+      enabled: false,
+      showAllFiles: false,
+      path: null,
+      startup: 'empty',
+      startupFolder: null,
+    }),
+  )
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
   })
@@ -56,6 +68,8 @@ test('workspace can show all files and opens unsupported text in source only', {
   await page
     .getByRole('tab', { name: 'Workspace settings', exact: true })
     .click()
+  const limit = page.getByRole('combobox', { name: 'Workspace item limit' })
+  assert.equal(await limit.inputValue(), '20000')
   const toggle = page.getByRole('checkbox', {
     name: 'Show all files in sidebar',
   })
@@ -69,6 +83,26 @@ test('workspace can show all files and opens unsupported text in source only', {
   assert.ok(!shown.some((entry) => entry.name === '.hidden'))
   assert.ok(!shown.some((entry) => entry.name === 'node_modules'))
   assert.ok(!shown.some((entry) => entry.name === 'linked.json'))
+  await limit.selectOption('50000')
+  await waitForAppState(page, () =>
+    window.hibi
+      .getWorkspaceSettings()
+      .then((state) => state.entryLimit === 50000),
+  )
+  for (const invalid of [20001, '50000', null])
+    await assert.rejects(
+      page.evaluate(
+        (limit) =>
+          window.hibi.updateWorkspaceSettings({ action: 'entry-limit', limit }),
+        invalid,
+      ),
+      /Choose a workspace item limit/,
+    )
+  const preferences = JSON.parse(
+    await readFile(join(root, 'profile', 'workspace-settings.json'), 'utf8'),
+  )
+  assert.equal(preferences.entryLimit, 50000)
+  assert.equal(preferences.showAllFiles, true)
   const index = await page.evaluate(() => window.hibi.getWorkspaceIndex())
   assert.deepEqual(
     index.pages.map((page) => page.path),
@@ -120,4 +154,100 @@ test('workspace can show all files and opens unsupported text in source only', {
     window.hibi.getWorkspaceSettings().then((state) => !state.showAllFiles),
   )
   assert.ok(!(await entries()).some((entry) => entry.name === 'config.json'))
+})
+
+test('workspace scan budgets count unsupported entries and close on cap failures', {
+  timeout: 30000,
+}, async (t) => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), 'hibi-workspace-limit-')),
+  )
+  const folder = join(root, 'workspace')
+  await mkdir(folder)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await page.getByRole('textbox', { name: 'Document editor' }).waitFor()
+  // Stream virtual unsupported files instead of creating 100,001 disk fixtures.
+  await app.evaluate(({ dialog }, folder) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [folder],
+    })
+    const fs = process.getBuiltinModule('node:fs/promises')
+    const opendir = fs.opendir
+    const host = {
+      total: 21000,
+      read: 0,
+      closed: 0,
+    }
+    globalThis.workspaceLimitFixture = host
+    fs.opendir = async (path, ...args) => {
+      if (path !== folder) return opendir(path, ...args)
+      return {
+        async *[Symbol.asyncIterator]() {
+          host.read = 0
+          try {
+            for (let index = 0; index < host.total; index++) {
+              host.read++
+              yield {
+                name: `file-${index}.unsupported`,
+                isDirectory: () => false,
+                isSymbolicLink: () => false,
+                isFile: () => true,
+              }
+            }
+          } finally {
+            host.closed++
+          }
+        },
+      }
+    }
+    process.getBuiltinModule('node:module').syncBuiltinESMExports()
+  }, folder)
+  await assert.rejects(
+    page.evaluate(() => window.hibi.openWorkspace()),
+    /more than 20,000 items.*Increase the workspace item limit/,
+  )
+  assert.deepEqual(
+    await app.evaluate(() => ({
+      read: globalThis.workspaceLimitFixture.read,
+      closed: globalThis.workspaceLimitFixture.closed,
+    })),
+    { read: 20001, closed: 1 },
+  )
+  await page.evaluate(() =>
+    window.hibi.updateWorkspaceSettings({
+      action: 'entry-limit',
+      limit: 50000,
+    }),
+  )
+  const opened = await page.evaluate(() => window.hibi.openWorkspace())
+  assert.deepEqual(opened.entries, [])
+  assert.equal(
+    await app.evaluate(() => globalThis.workspaceLimitFixture.read),
+    21000,
+  )
+  await app.evaluate(() => {
+    globalThis.workspaceLimitFixture.total = 100001
+  })
+  await page.evaluate(() =>
+    window.hibi.updateWorkspaceSettings({
+      action: 'entry-limit',
+      limit: 100000,
+    }),
+  )
+  await assert.rejects(
+    page.evaluate(() => window.hibi.refreshWorkspace()),
+    /more than 100,000 items\. Open a smaller folder\./,
+  )
+  assert.equal(
+    await app.evaluate(() => globalThis.workspaceLimitFixture.closed),
+    3,
+  )
 })

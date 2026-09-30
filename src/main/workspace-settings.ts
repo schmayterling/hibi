@@ -10,10 +10,11 @@ import {
 } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
 import { app, type BrowserWindow, dialog } from 'electron'
-import type {
-  WorkspacePreferences,
-  WorkspaceSettings,
-  WorkspaceSettingsAction,
+import {
+  WORKSPACE_ENTRY_LIMITS,
+  type WorkspacePreferences,
+  type WorkspaceSettings,
+  type WorkspaceSettingsAction,
 } from '../shared/workspace-settings'
 import {
   getDocument,
@@ -40,6 +41,7 @@ import {
 const defaults: WorkspacePreferences = {
   enabled: false,
   showAllFiles: false,
+  entryLimit: WORKSPACE_ENTRY_LIMITS[0],
   path: null,
   startup: 'empty',
   startupFolder: null,
@@ -54,6 +56,8 @@ async function preferences(): Promise<WorkspacePreferences> {
       typeof value.enabled !== 'boolean' ||
       (value.showAllFiles !== undefined &&
         typeof value.showAllFiles !== 'boolean') ||
+      (value.entryLimit !== undefined &&
+        !WORKSPACE_ENTRY_LIMITS.includes(value.entryLimit)) ||
       !['empty', 'managed', 'folder'].includes(value.startup) ||
       ![value.path, value.startupFolder].every(
         (path) =>
@@ -73,6 +77,9 @@ async function preferences(): Promise<WorkspacePreferences> {
 }
 export async function showAllWorkspaceFiles() {
   return (await preferences()).showAllFiles
+}
+export async function workspaceEntryLimit() {
+  return (await preferences()).entryLimit
 }
 async function savePreferences(value: WorkspacePreferences) {
   await writeFile(`${location()}.tmp`, JSON.stringify(value), { mode: 0o600 })
@@ -141,6 +148,12 @@ export async function updateWorkspaceSettings(
     if (typeof value.enabled !== 'boolean')
       throw new Error('Choose whether to show all workspace files.')
     prefs.showAllFiles = value.enabled
+  } else if (value.action === 'entry-limit') {
+    if (!WORKSPACE_ENTRY_LIMITS.includes(value.limit))
+      throw new Error(
+        'Choose a workspace item limit of 20,000, 50,000, or 100,000.',
+      )
+    prefs.entryLimit = value.limit
   } else if (value.action === 'choose') {
     const selected = await chooseFolder(window, 'Choose Hibi workspace')
     if (selected) {

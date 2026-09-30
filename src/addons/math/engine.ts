@@ -205,7 +205,7 @@ export function startMath(context: AddonContext) {
       ]
     },
   }).configure({
-    katexOptions: options,
+    katexOptions: { ...options, displayMode: true },
     onClick: (node, pos) => {
       void edit(node, pos, true)
     },

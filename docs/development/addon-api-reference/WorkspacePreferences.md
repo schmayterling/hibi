@@ -2,7 +2,7 @@
 
 # WorkspacePreferences
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L12)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L15)
 
 <details>
 <summary>Declaration</summary>
@@ -11,6 +11,7 @@ Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/share
 type WorkspacePreferences = {
   enabled: boolean
   showAllFiles: boolean
+  entryLimit: WorkspaceEntryLimit
   path: string | null
   startup: 'empty' | 'managed' | 'folder'
   startupFolder: string | null
@@ -25,6 +26,7 @@ type WorkspacePreferences = {
 
 - [enabled](#enabled)
 - [showAllFiles](#showallfiles)
+- [entryLimit](#entrylimit)
 - [path](#path)
 - [startup](#startup)
 - [startupFolder](#startupfolder)
@@ -33,7 +35,7 @@ type WorkspacePreferences = {
 
 ### enabled
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L13)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L16)
 
 ```typescript
 enabled: boolean
@@ -41,15 +43,25 @@ enabled: boolean
 
 ### showAllFiles
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L14)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L17)
 
 ```typescript
 showAllFiles: boolean
 ```
 
+### entryLimit
+
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L18)
+
+```typescript
+entryLimit: WorkspaceEntryLimit
+```
+
+Related: [WorkspaceEntryLimit](WorkspaceEntryLimit.md).
+
 ### path
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L15)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L19)
 
 ```typescript
 path: string | null
@@ -57,7 +69,7 @@ path: string | null
 
 ### startup
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L16)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L20)
 
 ```typescript
 startup: 'empty' | 'managed' | 'folder'
@@ -65,8 +77,12 @@ startup: 'empty' | 'managed' | 'folder'
 
 ### startupFolder
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L17)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace-settings.ts#L21)
 
 ```typescript
 startupFolder: string | null
 ```
+
+## Related types
+
+[WorkspaceEntryLimit](WorkspaceEntryLimit.md).

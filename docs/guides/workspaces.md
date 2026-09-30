@@ -22,7 +22,9 @@ Choose **Workspaces** from the sidebar views to see every folder you have opened
 
 Opening a file selects its existing tab or creates one. In single-file mode, Hibi asks what to do with unsaved changes first. Use each item's menu to [create, rename, copy, move, or delete files](../editing/explorer.md).
 
-The tree updates when files change. By default, it shows supported documents and excludes hidden items, `node_modules`, and symbolic links. Turn on **Settings → Workspace → Show all files in sidebar** to include other file types and hidden files. Unsupported formats open in Source view, with Side-by-side and preview views disabled. Hidden folders, `node_modules`, symbolic links, and workspace ignore rules still apply. Files must be UTF-8 text no larger than 2 MiB to open in the editor. If Hibi reports that the folder is too large, open a smaller folder.
+The tree updates when files change. By default, it shows supported documents and excludes hidden items, `node_modules`, and symbolic links. Turn on **Settings → Workspace → Show all files in sidebar** to include other file types and hidden files. Unsupported formats open in Source view, with Side-by-side and preview views disabled. Hidden folders, `node_modules`, symbolic links, and workspace ignore rules still apply. Files must be UTF-8 text no larger than 2 MiB to open in the editor.
+
+Workspace scans stop at 20,000 items by default. For a larger folder, choose 50,000 or 100,000 under **Settings → Workspace → Workspace item limit**, then reopen the folder to apply the change immediately. Larger limits can use more memory and take longer to scan. This limit counts files and folders visited during a scan, including items excluded by ignore rules or unsupported file types. Hidden folders, symbolic links, and `node_modules` are skipped. Folders beyond 100,000 items still need to be split into smaller workspaces.
 
 ## Set up a Hibi workspace
 

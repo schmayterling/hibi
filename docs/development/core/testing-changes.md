@@ -31,6 +31,8 @@ For a UI change, exercise it in the app. Check narrow windows, keyboard navigati
 
 GitHub Actions checks pull requests and pushes to `main`. It reuses successful build output and selects tests using the changed files and their dependencies. Unknown inputs or missing history trigger a full check.
 
+Desktop checks use four isolated shards per platform. Every selected test file belongs to one shard; Electron tests remain serial within each shard so native keyboard focus is not shared between apps. Set `CI_SHARD=0/4`, `1/4`, `2/4`, or `3/4` to run an individual shard locally.
+
 Changes confined to Markdown or images under `docs/` rebuild the bundled documentation and run the documentation, addon-reference, export, and development-reload tests. License changes, addon source documentation, and mixed app changes retain the broader checks. Formatting, reference generation, documentation links, and UI copy checks always run.
 
 Run `npm run check:ci` to use the same selection locally. Set `CI_CLEAN=true` or choose the workflow's **clean** option to ignore cached results and run everything. `npm run check` always runs the full local suite.

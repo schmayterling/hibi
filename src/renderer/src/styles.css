@@ -971,7 +971,8 @@ button.ui-button.update-download-button:disabled {
   gap: var(--space-2);
   flex-wrap: wrap;
 }
-.addon-catalog-actions {
+.addon-catalog-actions,
+.addon-categories {
   margin-bottom: var(--space-4);
 }
 .addon-metadata > span {
@@ -1502,6 +1503,15 @@ button.ui-button.update-download-button:disabled {
 .tiptap ul[data-type="taskList"] li > div {
   flex: 1;
   min-width: 0;
+}
+/* Flex items keep the last item's paragraph margin; cancel it into the list margin like a bullet list.
+   ponytail: covers outer lists followed by more content only. Nested and document-final lists keep
+   the old gap, and items ending in code still assume paragraph margin. Do a fuller list spacing
+   pass after visual checks. */
+.tiptap
+  ul[data-type="taskList"]:not(:last-child, :is(ul, ol) *)
+  > li:last-child {
+  margin-bottom: -0.3em;
 }
 .tiptap input[type="checkbox"] {
   accent-color: var(--accent);

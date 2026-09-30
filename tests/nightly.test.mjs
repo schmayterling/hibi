@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { parse } from 'yaml'
 import {
+  checksFromShards,
   classifyRelease,
   nightly,
   nightlyWebhook,
@@ -234,6 +235,51 @@ test('nightlies build unchanged revisions daily and include real commits since t
   )
 })
 
+test('release checks require every shard from the packaged platform and revision', (t) => {
+  const platform = 'macos-x64'
+  const sha = 'a'.repeat(40)
+  const reports = [0, 1, 2, 3].map((shard) => ({
+    platform,
+    sha,
+    shard,
+    checks: 'success',
+  }))
+  assert.equal(checksFromShards(platform, sha, reports), 'success')
+  for (const checks of ['failure', 'cancelled', 'skipped', undefined])
+    assert.equal(
+      checksFromShards(platform, sha, [
+        ...reports.slice(0, 3),
+        { ...reports[3], checks },
+      ]),
+      'failure',
+    )
+  for (const invalid of [
+    reports.slice(0, 3),
+    [...reports, reports[0]],
+    [...reports.slice(0, 3), reports[0]],
+    [...reports.slice(0, 3), { ...reports[3], sha: 'b'.repeat(40) }],
+    [...reports.slice(0, 3), { ...reports[3], platform: 'linux-x64' }],
+  ])
+    assert.throws(
+      () => checksFromShards(platform, sha, invalid),
+      /Every release check shard/,
+    )
+  const root = mkdtempSync(join(tmpdir(), 'hibi-release-checks-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const files = reports.map((report) => {
+    const file = join(root, `${report.shard}.json`)
+    writeFileSync(file, JSON.stringify(report))
+    return file
+  })
+  const output = join(root, 'output')
+  execFileSync(
+    process.execPath,
+    [resolve('scripts/nightly.mjs'), 'check-shards', platform, sha, ...files],
+    { env: { ...process.env, GITHUB_OUTPUT: output }, stdio: 'pipe' },
+  )
+  assert.equal(readFileSync(output, 'utf8'), 'result=success\n')
+})
+
 test('publication fails closed for missing packages, checks and mismatched revisions', () => {
   const release = {
     channel: 'nightly',
@@ -351,17 +397,33 @@ test('release workflow always builds nightlies and gates stable publication on t
   )
   assert.equal(macBuilds.length, 2)
   for (const build of macBuilds) assert.doesNotMatch(build.args, /identity=-/)
-  const checks = steps.find((step) => step.id === 'checks')
+  assert.deepEqual(workflow.jobs.build.needs, ['prepare', 'checks'])
+  const checkJob = workflow.jobs.checks
+  assert.equal(checkJob.needs, 'prepare')
+  assert.deepEqual(checkJob.strategy.matrix.shard, [0, 1, 2, 3])
+  assert.deepEqual(
+    checkJob.strategy.matrix.include.map((item) => item.platform).sort(),
+    [...platforms].sort(),
+  )
+  const checks = checkJob.steps.find((step) => step.id === 'ci')
   assert.equal(
     checks['continue-on-error'],
     `\${{ needs.prepare.outputs.channel == 'nightly' }}`,
   )
-  assert.match(
-    checks.run,
-    /node --test --test-concurrency=1 tests\/\*\.test\.mjs/,
+  assert.equal(checks.uses, './.github/actions/ci')
+  assert.equal(checks.with.clean, true)
+  assert.equal(checks.with.shard, `\${{ matrix.shard }}/4`)
+  const aggregate = steps.find((step) => step.id === 'checks')
+  assert.match(aggregate.run, /nightly\.mjs check-shards/)
+  assert.equal(
+    steps.find((step) => step.name === 'Record platform results').env
+      .CHECKS_RESULT,
+    `\${{ steps.checks.outputs.result }}`,
   )
-  for (const command of ['lint', 'docs:check', 'copy:check'])
-    assert.ok(checks.run.includes(`npm run ${command}`))
+  const desktop = parse(readFileSync('.github/workflows/check.yml', 'utf8'))
+    .jobs.desktop
+  assert.deepEqual(desktop.strategy.matrix.shard, ['0/4', '1/4', '2/4', '3/4'])
+  assert.match(desktop.steps.at(-1).if, /matrix\.shard == '0\/4'/)
   assert.equal(steps.find((step) => step.id === 'compile').run, 'npm run build')
   assert.equal(
     steps.find((step) => step.id === 'package').if,

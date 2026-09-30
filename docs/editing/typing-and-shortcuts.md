@@ -2,6 +2,8 @@
 
 Use `Cmd` on macOS and `Ctrl` on Windows and Linux where a shortcut says `Cmd/Ctrl`. Change app shortcuts under **Settings → Hotkeys**.
 
+Letter shortcuts and punctuation on letter keys follow your active keyboard layout, including Dvorak. Digit-row shortcuts and other punctuation positions retain their physical bindings so existing defaults remain available on international keyboards. Characters outside the supported shortcut notation, including some Option-modified characters and non-Latin letters, retain their physical key bindings. Shortcut recording uses the same mapping.
+
 ## App shortcuts
 
 | Shortcut | Action |

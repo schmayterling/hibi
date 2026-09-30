@@ -7,7 +7,7 @@ import {
   launchBenchmarkApp,
   waitForEditor,
 } from '../scripts/benchmark-flows.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('tab shortcuts wrap and preserve source drafts without saving', {
@@ -20,6 +20,7 @@ test('tab shortcuts wrap and preserve source drafts without saving', {
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  page.setDefaultTimeout(6500)
   await waitForEditor(page)
   const ids = []
   for (const name of ['a', 'b', 'c']) {
@@ -31,11 +32,11 @@ test('tab shortcuts wrap and preserve source drafts without saving', {
         filePaths: [file],
       })
     }, file)
-    const state = await page.evaluate(() => window.hibi.openDocument())
-    ids.push(state.tabId)
+    await clickMenu(app, 'Open…')
     await page
       .getByRole('tab', { name: `${name}.md`, selected: true })
       .waitFor()
+    ids.push((await page.evaluate(() => window.hibi.getDocument())).tabId)
   }
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   const cycle = async (key, id) => {

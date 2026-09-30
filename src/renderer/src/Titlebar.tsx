@@ -58,7 +58,6 @@ export function Titlebar({
   activeAddonTab,
   onSelectAddonTab,
   onCloseAddonTab,
-  onSplitTab,
   splitTabs,
   busy,
 }: {
@@ -88,7 +87,6 @@ export function Titlebar({
   activeAddonTab: string | null
   onSelectAddonTab: (id: string) => void
   onCloseAddonTab: (id: string) => void
-  onSplitTab: (id: string) => void
   splitTabs: { left: string; right: string } | null
   busy: boolean
 }) {
@@ -266,7 +264,6 @@ export function Titlebar({
               activeAddonTab={activeAddonTab}
               onSelectAddon={onSelectAddonTab}
               onCloseAddon={onCloseAddonTab}
-              onSplit={onSplitTab}
               splitTabs={splitTabs}
             />
           ) : (

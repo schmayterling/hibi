@@ -2144,6 +2144,21 @@ function App() {
           run: () => void openFolder(id),
         })),
       })
+    if (document?.tabs.length && !busy && !settingsOpen)
+      paletteCommands.push({
+        id: 'document.split-right',
+        category: 'view',
+        label: 'Split right',
+        children: document.tabs.map((tab) => ({
+          id: `document.split-right.${tab.id}`,
+          category: 'view',
+          label: tab.id === document.tabId ? document.name : tab.name,
+          run: () => {
+            addonViews.selectDocument()
+            void splitDocumentTab(tab.id)
+          },
+        })),
+      })
     paletteCommands.push(
       {
         id: 'submenu.sidebar',
@@ -2805,10 +2820,6 @@ function App() {
         onCloseAddonTab={(id) =>
           addonTabs.find((tab) => tab.id === id)?.handle.close()
         }
-        onSplitTab={(id) => {
-          addonViews.selectDocument()
-          void splitDocumentTab(id)
-        }}
         splitTabs={splitTabs}
         sidebarOpen={settingsOpen ? settingsSidebarOpen : sidebarOpen}
         onSidebar={toggleSidebar}

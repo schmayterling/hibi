@@ -1,4 +1,4 @@
-import { PanelRightOpen, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import {
   useCallback,
   useEffect,
@@ -20,7 +20,6 @@ export function DocumentTabs({
   activeAddonTab,
   onSelectAddon,
   onCloseAddon,
-  onSplit,
   splitTabs,
 }: {
   document: DocumentState
@@ -32,7 +31,6 @@ export function DocumentTabs({
   activeAddonTab: string | null
   onSelectAddon: (id: string) => void
   onCloseAddon: (id: string) => void
-  onSplit: (id: string) => void
   splitTabs: { left: string; right: string } | null
 }) {
   const strip = useRef<HTMLDivElement>(null)
@@ -339,15 +337,6 @@ export function DocumentTabs({
                 </span>
               )}
             </button>
-            <IconButton
-              className="tab-split"
-              aria-label={`Open ${name} in right pane`}
-              title="Split right"
-              disabled={busy}
-              onClick={() => onSplit(tab.id)}
-            >
-              <PanelRightOpen size={12} />
-            </IconButton>
             <IconButton
               className="tab-close"
               aria-label={`Close ${name}`}

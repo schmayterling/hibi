@@ -20,7 +20,7 @@ Opening or creating a note adds a tab. Select one to return to its document, dra
 
 Press `Cmd/Ctrl+Alt+Left/Right` while editing to switch to the previous or next tab, including addon tabs. Navigation wraps at either end and keeps unsaved edits. Change these shortcuts under **Settings → Hotkeys**.
 
-Use **Split right** on any tab to open two editor panes side by side. You can show the same document twice with separate selections and scroll positions, or edit two documents at once. Click a pane to direct toolbar and keyboard commands to it. Each pane keeps its own view mode. Use **Close split** to return to one pane without closing either tab. On a narrow window, only the active pane is visible.
+Press `Cmd/Ctrl+K`, choose **Split right**, then choose an open document to show two editor panes side by side. You can show the same document twice with separate selections and scroll positions, or edit two documents at once. Click a pane to direct toolbar and keyboard commands to it. Each pane keeps its own view mode. Use **Close split** to return to one pane without closing either tab. On a narrow window, only the active pane is visible.
 
 With a tab focused, arrow keys and Home/End move between tabs. Use `Alt+Shift+Left/Right` to reorder them with the keyboard.
 

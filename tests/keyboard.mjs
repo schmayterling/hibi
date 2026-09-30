@@ -35,6 +35,16 @@ export async function clickMenu(app, label) {
     await page.getByRole('dialog', { name: /^command palette$/i }).waitFor()
 }
 
+export async function splitTab(app, page, id) {
+  await clickMenu(app, 'Command palette')
+  const palette = page.getByRole('dialog', { name: /^command palette$/i })
+  await palette
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('split right')
+  await palette.locator('[id="command-document.split-right"]').click()
+  await palette.locator(`[id="command-document.split-right.${id}"]`).click()
+}
+
 export async function pressShortcut(app, shortcut) {
   const parts = shortcut.split('+')
   const keyCode = parts.pop().toUpperCase()

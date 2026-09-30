@@ -15,7 +15,7 @@ import { performance } from 'node:perf_hooks'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { electron } from '../tests/electron.mjs'
-import { clickMenu, pressShortcut } from '../tests/keyboard.mjs'
+import { clickMenu, pressShortcut, splitTab } from '../tests/keyboard.mjs'
 import {
   launchBenchmarkApp,
   switchToSource,
@@ -1951,9 +1951,7 @@ async function runSplitTabsCase() {
         document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
       fixtures.left.id,
     )
-    await page
-      .locator('[data-tab-key="' + fixtures.right.id + '"] .tab-split')
-      .click()
+    await splitTab(app, page, fixtures.right.id)
     await page.locator('.editor-page[data-side="left"] .tiptap').click()
     await page.waitForFunction(
       async (id) =>

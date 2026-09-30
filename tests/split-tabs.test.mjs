@@ -5,7 +5,7 @@ import { basename, join, resolve } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { electron } from './electron.mjs'
-import { clickMenu } from './keyboard.mjs'
+import { clickMenu, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('split panes keep both editors mounted, edit both files, and share one document session', {
@@ -37,6 +37,7 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   await page.getByRole('checkbox', { name: /^autosave$/i }).check()
   await page.getByLabel(/^save after$/i).selectOption('1000')
   await page.getByRole('button', { name: /^back to app$/i }).click()
+  await page.locator('.app[data-screen="editor"]').waitFor()
   const open = async (file) => {
     await app.evaluate(({ dialog }, path) => {
       dialog.showOpenDialog = async () => ({
@@ -106,7 +107,7 @@ test('split panes keep both editors mounted, edit both files, and share one docu
     },
     { left: aId, right: bId },
   )
-  await page.locator(`[data-tab-key="${bId}"] .tab-split`).click()
+  await splitTab(app, page, bId)
   await page.getByRole('button', { name: 'Retry document focus' }).waitFor()
   assert.equal(await page.locator('.app').getAttribute('aria-busy'), 'true')
   assert.equal(await page.locator('.editor-page[data-side]').count(), 0)
@@ -135,7 +136,7 @@ test('split panes keep both editors mounted, edit both files, and share one docu
     (await page.evaluate(() => window.hibi.getDocument())).tabId,
     aId,
   )
-  await page.locator(`[data-tab-key="${bId}"] .tab-split`).click()
+  await splitTab(app, page, bId)
   const left = page.locator('.editor-page[data-side="left"] .tiptap')
   const right = page.locator('.editor-page[data-side="right"] .tiptap')
   await left.waitFor()
@@ -481,7 +482,9 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   await page.locator('[data-status-id="autosave"]').click()
   await page.getByLabel(/^save after$/i).selectOption('30000')
   await page.getByRole('button', { name: /^back to app$/i }).click()
-  await page.locator(`[data-tab-key="${aId}"] .tab-split`).click()
+  await page.locator('.app[data-screen="editor"]').waitFor()
+  await splitTab(app, page, aId)
+  await page.locator('.split-tab-pages[data-split="true"]').waitFor()
   const leftSource = page.locator('.editor-page[data-side="left"] .cm-content')
   const rightSource = page.locator(
     '.editor-page[data-side="right"] .cm-content',
@@ -535,7 +538,7 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   await page.waitForFunction(
     () => !document.querySelector('.editor-page[data-side]'),
   )
-  await page.locator(`[data-tab-key="${bId}"] .tab-split`).click()
+  await splitTab(app, page, bId)
   await rightSource.waitFor()
   await leftSource.click()
   await waitForAsync(

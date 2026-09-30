@@ -75,6 +75,7 @@ jobs:
           persist-credentials: false
       - name: Full required checks
         id: ci
+        timeout-minutes: 25
         continue-on-error: ${{ needs.prepare.outputs.channel == 'nightly' }}
         uses: ./.github/actions/ci
         with:

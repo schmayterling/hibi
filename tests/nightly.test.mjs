@@ -406,6 +406,10 @@ test('release workflow always builds nightlies and gates stable publication on t
     [...platforms].sort(),
   )
   const checks = checkJob.steps.find((step) => step.id === 'ci')
+  assert.ok(
+    checks['timeout-minutes'] < checkJob['timeout-minutes'],
+    'timed-out checks must leave time to record and upload failed shard reports',
+  )
   assert.equal(
     checks['continue-on-error'],
     `\${{ needs.prepare.outputs.channel == 'nightly' }}`,

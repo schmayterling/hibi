@@ -1,7 +1,9 @@
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, Search } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { LicenseInfo } from '../../shared/about'
+import { Panel, PanelMessage } from '../../ui/Controls'
 import { useDialogs } from '../../ui/DialogProvider'
+import { SettingsFilter } from '../../ui/SettingsFilter'
 import './hibi-settings.css'
 
 function LicenseText({ id }: { id: string }) {
@@ -33,6 +35,13 @@ export function LicenseSettings() {
   const dialogs = useDialogs()
   const [licenses, setLicenses] = useState<LicenseInfo[] | null>(null)
   const [failed, setFailed] = useState(false)
+  const [query, setQuery] = useState('')
+  const matching = licenses?.filter((license) =>
+    `${license.name} ${license.version ?? ''} ${license.license}`
+      .toLowerCase()
+      .includes(query.trim().toLowerCase()),
+  )
+  const noMatches = !!licenses?.length && !matching?.length
   useEffect(() => {
     let active = true
     void window.hibi.getLicenses().then(
@@ -50,18 +59,27 @@ export function LicenseSettings() {
   return (
     <>
       <h1 id="credits">Credits</h1>
+      <SettingsFilter
+        id="license-filter"
+        label="Filter licenses"
+        placeholder="Filter licenses…"
+        value={query}
+        onChange={setQuery}
+        disabled={!licenses?.length}
+      />
       <section
         className="settings-group license-list"
         aria-labelledby="credits"
+        hidden={noMatches}
       >
         {failed ? (
           <p role="alert">
             Could not load licenses. Reopen this page to try again.
           </p>
-        ) : licenses === null ? (
+        ) : !matching ? (
           <p role="status">Loading licenses…</p>
         ) : (
-          licenses.map((license) => (
+          matching.map((license) => (
             <button
               key={license.id}
               className="ui-action-row license-row"
@@ -90,6 +108,14 @@ export function LicenseSettings() {
           ))
         )}
       </section>
+      {noMatches && (
+        <Panel>
+          <PanelMessage
+            icon={<Search size={32} strokeWidth={1.5} />}
+            title="No matching licenses"
+          />
+        </Panel>
+      )}
     </>
   )
 }

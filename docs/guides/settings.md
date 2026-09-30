@@ -50,6 +50,8 @@ Use **Syntax** to enable or disable formatting features, and **Code Highlight** 
 
 Enable or disable addons and themes in the alphabetical **Addons** list. Enabling a addon makes its settings and formats available. **Reset all** restores the default enabled addons without removing installed packages.
 
+Choose a category above the list to show only features, formats, themes, or importers. Categories work together with the text filter; choose **All** to see every category. Categories without installed addons are hidden.
+
 **UI preview** is enabled when you run Hibi in development. In a release build, enable it under **Settings → Addons**, then choose **Open UI preview** from the command palette. Edit the sample text, turn on **Show red outlines** to inspect control boundaries, and enter CSS to preview changes across Hibi. Choose **Save CSS** to keep those rules after restart. If saved CSS obscures the interface, choose **Disable custom CSS** from the native Addons menu.
 
 Click anywhere on an addon row outside its controls to read its documentation. On a addon’s settings page, click its title. The row’s enable switch and remove button work separately.
@@ -85,4 +87,4 @@ Switching channels does not downgrade your installed version. If no build is ava
 
 **Workspace settings** is pinned below search. **Editing**, **Interface**, **Addons**, and **Addon settings** each have their own section. Enabled addon pages appear under Addon settings by default; addons can place pages in another section. **About**, **Credits**, and **Diagnostics** (when enabled) follow in a section without a heading. App and Electron versions appear after the last page.
 
-**About** shows the app version and creator. It links to the [documentation](https://docs.hibi.garden), [issue tracker](https://github.com/schmayterling/hibi/issues), [source repository](https://github.com/schmayterling/hibi), [Discord community](https://discord.gg/v9r4cABUP2), and [sponsor page](https://github.com/sponsors/schmayterling). Open **Credits**, then select a license to read its full notice offline.
+**About** shows the app version and creator. It links to the [documentation](https://docs.hibi.garden), [issue tracker](https://github.com/schmayterling/hibi/issues), [source repository](https://github.com/schmayterling/hibi), [Discord community](https://discord.gg/v9r4cABUP2), and [sponsor page](https://github.com/sponsors/schmayterling). Open **Credits**, then select a license to read its full notice offline. Type in the filter to find a license by package name, version, or license type. Clear the filter to restore the full list.

@@ -1439,10 +1439,7 @@ button.ui-button.update-download-button:disabled {
   margin-top: 1em;
 }
 :is(.tiptap, .format-content) li + li,
-:is(.tiptap, .format-content)
-  :is(li, li > label + div)
-  > :not(label)
-  + :is(ul, ol) {
+:is(.tiptap, .format-content) :is(li, li > label + div) > :is(ul, ol) {
   margin-top: 0.3em;
 }
 /* Node views wrap their block, so the wrapper carries the item spacing. */

@@ -132,4 +132,33 @@ test('failed list indentation keeps focus and lists keep one spacing rhythm', {
     })
   }
   assert.deepEqual(spacing[1], spacing[0], 'task lists match bullet lists')
+  // Rendered previews put tight item text straight into the li, before any nested list.
+  const rendered = await page.evaluate(() => {
+    const host = document.createElement('div')
+    host.className = 'format-content'
+    host.innerHTML = `<ul><li>sibling</li>${[
+      'plain',
+      '<strong>formatted</strong>',
+      '<input disabled="" type="checkbox"> checkbox',
+    ]
+      .map((parent) => `<li>${parent}<ul><li>child</li></ul></li>`)
+      .join('')}</ul>`
+    document.body.append(host)
+    const top = (element) => element.getBoundingClientRect().top
+    const [sibling, ...items] = host.querySelectorAll(':scope > ul > li')
+    const result = {
+      pitch: Math.round(top(items[0]) - top(sibling)),
+      nested: items.map((item) =>
+        Math.round(top(item.querySelector('ul')) - top(item)),
+      ),
+    }
+    host.remove()
+    return result
+  })
+  const { pitch } = rendered
+  assert.deepEqual(
+    rendered.nested,
+    [pitch, pitch, pitch],
+    'rendered nested lists',
+  )
 })

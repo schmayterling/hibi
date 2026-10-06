@@ -37,8 +37,11 @@ test('rich edits and autosave preserve untouched Obsidian syntax', {
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-obsidian-rich-'))
   const file = join(folder, 'note.md')
+  const spacing = 'Spacing: one&nbsp;two and three\u00a0four.'
   const original =
-    '# Notes\n\n> [!tip] Keep this callout.\n\n[[assets/some.svg]]\n\n- [ ] pending\n\nSource: keep this text.\n'
+    '# Notes\n\n> [!tip] Keep this callout.\n\n[[assets/some.svg]]\n\n- [ ] pending\n\n' +
+    spacing +
+    '\n\nSource: keep this text.\n'
   await writeFile(file, original)
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
@@ -71,7 +74,7 @@ test('rich edits and autosave preserve untouched Obsidian syntax', {
     .markdown
   assert.match(changed, /\[\[assets\/some\.svg\]\]/)
   assert.match(changed, /> \[!tip\] Keep this callout\./)
-  assert.doesNotMatch(changed, /&nbsp;/)
+  assert.ok(changed.includes(spacing))
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   assert.equal(await readFile(file, 'utf8'), changed)
 
@@ -81,6 +84,7 @@ test('rich edits and autosave preserve untouched Obsidian syntax', {
   )
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   const checked = await readFile(file, 'utf8')
+  assert.ok(checked.includes(spacing))
   assert.match(checked, /- \[x\] pending/)
   assert.match(checked, /\[\[assets\/some\.svg\]\]/)
   assert.match(checked, /> \[!tip\] Keep this callout\./)

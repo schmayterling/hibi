@@ -8,7 +8,9 @@ import { TaskList } from '@tiptap/extension-task-list'
 import { MarkdownManager } from '@tiptap/markdown'
 import { EditorState } from '@tiptap/pm/state'
 import { StarterKit } from '@tiptap/starter-kit'
+import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import { markdownSerializer } from '../src/renderer/src/markdown-serialization.ts'
+import { preserveRichSource } from '../src/renderer/src/rich-source-preservation.ts'
 
 const extensions = [
   StarterKit.configure({ trailingNode: false }),
@@ -88,6 +90,48 @@ test('empty paragraphs, entities, delimiters, and source preservation match full
     const result = markdownSerializer(manager, true)(doc)
     const expected = manager.serialize(doc.toJSON())
     assert.equal(result.source, expected, source)
+  }
+})
+
+test('native empty paragraphs serialize as blank lines and pass source preservation', () => {
+  const { core, parser, options } = markdownConfiguration([])
+  const schema = getSchema(core)
+  const manager = new MarkdownManager({
+    extensions: core,
+    marked: parser,
+    markedOptions: options,
+  })
+  const original = '# heading\r\n\r\nfirst\r\n'
+  const before = schema.nodeFromJSON(manager.parse(original))
+  const after = schema.nodes.doc.create(null, [
+    ...before.content.content,
+    schema.nodes.paragraph.create(),
+    schema.nodes.paragraph.create(),
+    schema.nodes.paragraph.create(null, schema.text('second ')),
+    schema.nodes.paragraph.create(),
+    schema.nodes.paragraph.create(),
+  ])
+  for (const blockLocal of [true, false]) {
+    const serialize = markdownSerializer(manager, blockLocal)
+    const source = serialize(after).source
+    assert.equal(source, '# heading\n\nfirst\n\n\n\n\n\nsecond \n\n\n\n')
+    assert.doesNotMatch(source, /&nbsp;|\u00a0/)
+    assert.ok(schema.nodeFromJSON(manager.parse(source)).eq(after))
+    const preserved = preserveRichSource(
+      original,
+      serialize(before).source,
+      source,
+      (candidate) => schema.nodeFromJSON(manager.parse(candidate)).eq(after),
+    )
+    assert.equal(
+      preserved,
+      '# heading\r\n\r\nfirst\r\n\r\n\r\n\r\n\r\n\r\nsecond \r\n\r\n\r\n\r\n\r\n',
+    )
+    const empty = schema.nodes.doc.create(null, [
+      schema.nodes.paragraph.create(),
+      schema.nodes.paragraph.create(),
+    ])
+    assert.equal(serialize(empty).source, '')
   }
 })
 

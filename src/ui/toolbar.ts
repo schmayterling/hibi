@@ -2,7 +2,7 @@ import type { ComponentType } from 'react'
 
 export type ToolbarPreferences = {
   visible: boolean
-  /** Defaults to true; uses the same typing/idle signal as the top bar. */
+  /** Defaults to false; uses the same typing/idle signal as the top bar. */
   autoHide?: boolean
   mode: 'icons' | 'icons-and-text' | 'text'
   /** Fully qualified item ids; omitted/new actions follow formatting actions in registration order. */

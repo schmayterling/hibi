@@ -10,7 +10,7 @@ Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/to
 ```typescript
 type ToolbarPreferences = {
   visible: boolean
-  /** Defaults to true; uses the same typing/idle signal as the top bar. */
+  /** Defaults to false; uses the same typing/idle signal as the top bar. */
   autoHide?: boolean
   mode: 'icons' | 'icons-and-text' | 'text'
   /** Fully qualified item ids; omitted/new actions follow formatting actions in registration order. */
@@ -46,7 +46,7 @@ visible: boolean
 
 Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/toolbar.ts#L6)
 
-Defaults to true; uses the same typing/idle signal as the top bar.
+Defaults to false; uses the same typing/idle signal as the top bar.
 
 ```typescript
 autoHide?: boolean

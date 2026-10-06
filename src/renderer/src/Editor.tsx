@@ -151,6 +151,8 @@ function revealRichRange(editor: Editor, from: number, to = from) {
     if (!bounds.width || !bounds.height) return false
     const start = editor.view.coordsAtPos(from)
     const end = to > from ? editor.view.coordsAtPos(to, -1) : start
+    // Hidden text measures as an empty rect, so there is nothing to reveal.
+    if (start.bottom <= start.top || end.bottom <= end.top) return false
     const margin = 24
     // Show the whole match when it fits, otherwise anchor its start.
     const tall =

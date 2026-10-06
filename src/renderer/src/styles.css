@@ -1429,14 +1429,14 @@ button.ui-button.update-download-button:disabled {
   margin: 0 0 1em;
   padding-left: 1.5em;
 }
-/* Items and nested lists sit 0.3em apart; blocks within an item keep paragraph spacing. Only top
-   margins are used because task items are flex containers, which don't collapse child margins.
-   Task item content sits in a div after the checkbox label. */
+/* Items and nested lists sit 0.3em apart; blocks within an item keep a paragraph-sized gap whatever
+   their own font size. Only top margins are used because task items are flex containers, which
+   don't collapse child margins. Task item content sits in a div after the checkbox label. */
 :is(.tiptap, .format-content) :is(li, li > label + div) > * {
   margin-block: 0;
 }
 :is(.tiptap, .format-content) :is(li, li > label + div) > :not(label) + * {
-  margin-top: 1em;
+  margin-top: var(--text-editor);
 }
 :is(.tiptap, .format-content) li + li,
 :is(.tiptap, .format-content) :is(li, li > label + div) > :is(ul, ol) {

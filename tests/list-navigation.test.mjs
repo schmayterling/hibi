@@ -79,7 +79,7 @@ test('failed list indentation keeps focus and lists keep one spacing rhythm', {
         'before',
         'after',
         `${marker} one\n${marker} two\n\n  second\n${marker} three\n  ${marker} nested`,
-        `${marker} code\n\n  \`\`\`\n  x\n  \`\`\`\n${marker} quote\n\n  > quoted\n${marker} table\n\n  | a |\n  | - |\n  | 1 |\n${marker} typst\n\n  \`\`\`typst\n  = Hi\n  \`\`\`\n${marker} last`,
+        `${marker} code\n\n  \`\`\`\n  x\n  \`\`\`\n${marker} quote\n\n  > quoted\n${marker} table\n\n  | a |\n  | - |\n  | 1 |\n${marker} typst\n\n  \`\`\`typst\n  = Hi\n  \`\`\`\n${marker} heading\n\n  # big\n${marker} subtext\n\n  -# small\n${marker} last`,
         'end',
       ].join('\n\n'),
     )
@@ -88,7 +88,7 @@ test('failed list indentation keeps focus and lists keep one spacing rhythm', {
       await page.locator('.tiptap').evaluate((element) => {
         const box = (target) =>
           (typeof target === 'string'
-            ? [...element.querySelectorAll('p, pre')].find(
+            ? [...element.querySelectorAll('p, pre, h1')].find(
                 (block) => block.textContent === target,
               )
             : target
@@ -108,7 +108,11 @@ test('failed list indentation keeps focus and lists keep one spacing rhythm', {
           intoTable: gap('table', table),
           afterTable: gap(table, 'typst'),
           intoTypst: gap('typst', typst),
-          afterTypst: gap(typst, 'last'),
+          afterTypst: gap(typst, 'heading'),
+          intoHeading: gap('heading', 'big'),
+          afterHeading: gap('big', 'subtext'),
+          intoSubtext: gap('subtext', 'small'),
+          afterSubtext: gap('small', 'last'),
         }
       }),
     )
@@ -129,6 +133,10 @@ test('failed list indentation keeps focus and lists keep one spacing rhythm', {
       afterTable: item,
       intoTypst: paragraph,
       afterTypst: item,
+      intoHeading: paragraph,
+      afterHeading: item,
+      intoSubtext: paragraph,
+      afterSubtext: item,
     })
   }
   assert.deepEqual(spacing[1], spacing[0], 'task lists match bullet lists')

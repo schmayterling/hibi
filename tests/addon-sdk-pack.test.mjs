@@ -280,6 +280,7 @@ test('generated addon installs, enables, runs, disables, and re-enables', {
       if (enabled) {
         await command.waitFor()
         assert.equal(await command.count(), 1)
+        assert.equal(await greeting.count(), 0)
         await command.press('Enter')
         await greeting.waitFor()
       } else {

@@ -217,16 +217,27 @@ test('find in document searches rich text and offscreen markdown without editing
   await rich.focus()
   await pressShortcut(app, shortcut)
   // Focus stays in the find bar, so the rich pane must scroll to each match.
-  const waitForVisibleMatch = (paragraph) =>
+  const waitForVisibleMatch = (block) =>
     page.waitForFunction((text) => {
       const match = document.querySelector(
         '.rich-pane .ProseMirror-active-search-match',
       )
-      if (match?.closest('p')?.textContent !== text) return false
-      const pane = match.closest('.rich-pane').getBoundingClientRect()
+      if (match?.closest('p, pre')?.textContent !== text) return false
       const bounds = match.getBoundingClientRect()
-      return bounds.top >= pane.top && bounds.bottom <= pane.bottom
-    }, paragraph)
+      // Nested scroll containers such as code blocks must show the match too.
+      return [match.closest('pre'), match.closest('.rich-pane')].every(
+        (container) => {
+          if (!container) return true
+          const box = container.getBoundingClientRect()
+          return (
+            bounds.top >= box.top &&
+            bounds.bottom <= box.bottom &&
+            bounds.left >= box.left &&
+            bounds.right <= box.right
+          )
+        },
+      )
+    }, block)
   await input.fill('needle')
   await waitForCount('1/2')
   await waitForVisibleMatch('needle top')
@@ -239,6 +250,21 @@ test('find in document searches rich text and offscreen markdown without editing
   await input.press('Shift+Enter')
   await waitForCount('2/2')
   await waitForVisibleMatch('needle bottom')
+  await input.press('Escape')
+  await bar.waitFor({ state: 'hidden' })
+
+  const longLine = `${'code '.repeat(60)}needle`
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource([...filler, `\`\`\`\n${longLine}\n\`\`\``].join('\n\n'))
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  await input.fill('needle')
+  await waitForCount('1/1')
+  await waitForVisibleMatch(longLine)
   await input.press('Escape')
   await bar.waitFor({ state: 'hidden' })
 

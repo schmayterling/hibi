@@ -165,14 +165,34 @@ function revealRichRange(editor: Editor, from: number, to = from) {
       left: wide ? start.left : Math.min(start.left, end.left),
       right: wide ? start.right : Math.max(start.right, end.right),
     }
-    if (cursor.top < bounds.top + margin)
-      pane.scrollTop += cursor.top - bounds.top - margin
-    else if (cursor.bottom > bounds.bottom - margin)
-      pane.scrollTop += cursor.bottom - bounds.bottom + margin
-    if (cursor.left < bounds.left + margin)
-      pane.scrollLeft += cursor.left - bounds.left - margin
-    else if (cursor.right > bounds.right - margin)
-      pane.scrollLeft += cursor.right - bounds.right + margin
+    // Scroll each overflowing container from the match out to the pane.
+    const { node } = editor.view.domAtPos(from)
+    let element = node instanceof Element ? node : node.parentElement
+    while (element) {
+      if (
+        element.scrollHeight > element.clientHeight ||
+        element.scrollWidth > element.clientWidth
+      ) {
+        const box = element === pane ? bounds : element.getBoundingClientRect()
+        const { scrollTop, scrollLeft } = element
+        if (cursor.top < box.top + margin)
+          element.scrollTop += cursor.top - box.top - margin
+        else if (cursor.bottom > box.bottom - margin)
+          element.scrollTop += cursor.bottom - box.bottom + margin
+        if (cursor.left < box.left + margin)
+          element.scrollLeft += cursor.left - box.left - margin
+        else if (cursor.right > box.right - margin)
+          element.scrollLeft += cursor.right - box.right + margin
+        const dy = element.scrollTop - scrollTop
+        const dx = element.scrollLeft - scrollLeft
+        cursor.top -= dy
+        cursor.bottom -= dy
+        cursor.left -= dx
+        cursor.right -= dx
+      }
+      if (element === pane) break
+      element = element.parentElement
+    }
     return true
   } catch {
     return false

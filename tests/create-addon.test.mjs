@@ -153,6 +153,43 @@ test('creator rejects invalid arguments before writing files and prints help', a
   assert.match(result.stdout, /Usage:/)
 })
 
+test('creator removes partial output after a write failure so creation can retry', async (t) => {
+  const directory = await scratch(t)
+  const target = join(directory, 'retry')
+  const preload = join(directory, 'fail-write.mjs')
+  await writeFile(
+    preload,
+    `import fs from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
+const writeFile = fs.writeFile
+let writes = 0
+fs.writeFile = async (...args) => {
+  if (++writes === 2) throw new Error('simulated write failure')
+  return writeFile(...args)
+}
+syncBuiltinESMExports()
+`,
+  )
+  await assert.rejects(
+    execute(process.execPath, [
+      '--import',
+      pathToFileURL(preload).href,
+      create,
+      target,
+    ]),
+    /simulated write failure/,
+  )
+  assert.deepEqual(await readdir(directory), ['fail-write.mjs'])
+  await execute(process.execPath, [create, target])
+  await execute(process.execPath, ['--check', join(target, 'index.js')])
+  assert.deepEqual((await readdir(target)).sort(), [
+    'README.md',
+    'hibi-addon.json',
+    'index.js',
+    'package.json',
+  ])
+})
+
 test('creator protects existing files and concurrent destinations', async (t) => {
   const directory = await scratch(t)
   const file = join(directory, 'existing')

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -77,12 +77,17 @@ async function create() {
       throw new Error(`Refusing to overwrite existing path: ${target}`)
     throw error
   }
-  for (const file of await readdir(template)) {
-    const content = await readFile(join(template, file), 'utf8')
-    await writeFile(
-      join(target, file),
-      content.replace(/__HIBI_[A-Z_]+__/g, (token) => replacements.get(token)),
-    )
+  try {
+    for (const file of await readdir(template)) {
+      const content = await readFile(join(template, file), 'utf8')
+      await writeFile(
+        join(target, file),
+        content.replace(/__HIBI_[A-Z_]+__/g, (token) => replacements.get(token)),
+      )
+    }
+  } catch (error) {
+    await rm(target, { recursive: true, force: true })
+    throw error
   }
   console.log(`Created ${name} (${id}) in ${target}`)
 }

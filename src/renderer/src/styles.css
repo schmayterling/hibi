@@ -1362,6 +1362,7 @@ button.ui-button.update-download-button:disabled {
   flex-direction: column;
 }
 .tiptap {
+  white-space: pre-wrap;
   flex: 1;
   min-height: 100%;
   padding: var(--editor-padding);

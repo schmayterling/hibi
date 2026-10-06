@@ -2,7 +2,7 @@ import { Extension } from '@tiptap/core'
 import { Placeholder } from '@tiptap/extension-placeholder'
 import { Markdown, type MarkdownExtensionOptions } from '@tiptap/markdown'
 import { StarterKit } from '@tiptap/starter-kit'
-import { Marked } from 'marked'
+import { Marked, type Token } from 'marked'
 import { search } from 'prosemirror-search'
 import type { MarkdownFlavor } from '../../addons/api'
 import { BlockExit } from './BlockExit.ts'
@@ -29,6 +29,23 @@ export function markdownConfiguration(
     ...flavors.map((flavor) => flavor.markedOptions),
   )
   const parser = installSyntaxPreferences(new Marked(options))
+  const BaseLexer = parser.Lexer
+  class RichLexer<
+    ParserOutput = string,
+    RendererOutput = string,
+  > extends BaseLexer<ParserOutput, RendererOutput> {
+    inlineTokens(source: string, tokens?: Token[]) {
+      const result = super.inlineTokens(source, tokens)
+      // Custom task tokens hide children from walkTokens; normalize at creation.
+      for (const token of result)
+        if (token.type === 'text')
+          token.text = token.text.replace(/[ \t]*\n[ \t]*/g, ' ')
+      return result
+    }
+  }
+  parser.Lexer = RichLexer
+  parser.lexer = (source, options) =>
+    new RichLexer(options ?? parser.defaults).lex(source)
   for (const flavor of flavors)
     for (const extension of flavor.export?.extensions ?? [])
       parser.use(extension)
@@ -47,6 +64,14 @@ export function markdownConfiguration(
     addExtensions() {
       return (
         this.parent?.()
+          .map((extension) =>
+            extension.name === 'paragraph'
+              ? extension.extend({
+                  renderMarkdown: (node, helpers) =>
+                    helpers.renderChildren(node.content ?? []),
+                })
+              : extension,
+          )
           .map((extension) =>
             taskItems ? parseEmptyTaskItems(extension) : extension,
           )

@@ -32,6 +32,8 @@ To keep one file open at a time, turn off **Settings → Editor → Documents �
 
 Select text, then choose a toolbar action. In side-by-side view, formatting actions are available while the source pane is focused. The toolbar offers tools for the current format, with extra buttons in the **More** menu. Within an editable formatted table, additional actions let you add or remove rows and columns.
 
+In Normal view and its side-by-side preview, soft line breaks and surrounding spaces or tabs display as a single space, including inside task items. Repeated spaces and tabs elsewhere keep their width.
+
 In formatted view, the active text block shows subtle Markdown hints for heading levels, bold, italic, strikethrough, and inline code. They follow the cursor and disappear when focus leaves the formatted editor or you select several blocks. Code blocks keep their literal text without extra hints.
 
 These markers are visual hints, not editable characters or a verbatim view of the original delimiters. They are excluded from copied text, saved Markdown, and exports. Use source view to edit the syntax itself. To hide the hints, turn off **Settings → Editor → Writing → Show Markdown markers**. The setting is on by default and persists on this device.
@@ -59,6 +61,8 @@ Press `Cmd/Ctrl+K` to search commands and settings. Use arrow keys and Enter to 
 ## Save and rename
 
 Use **File → Save** (`Cmd/Ctrl+S`) or **Save as** (`Cmd/Ctrl+Shift+S`). New notes need a location before [autosave](settings.md#autosave) can work. If another app changes a file, Hibi asks before replacing it.
+
+Empty paragraphs are saved as blank lines without nonbreaking-space placeholders. Consecutive empty lines collapse to normal paragraph spacing in exported HTML.
 
 To rename a note, run **Rename document…** from the command palette or choose **Rename** in its workspace menu. Renaming keeps unsaved edits and does not replace another file.
 

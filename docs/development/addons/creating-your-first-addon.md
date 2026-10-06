@@ -1,16 +1,30 @@
 # Creating your first addon
 
-This addon adds a command that displays a greeting. First, [run Hibi from source](../core/running-the-development-build.md).
+This addon adds a command that displays a greeting. Generate a standalone package, or follow the manual source-addon guide below.
 
-Once `create-hibi-addon` is published to npm, generate a standalone addon you can install and share without rebuilding Hibi:
+## Generate a standalone addon
+
+From a Hibi source checkout, run:
+
+```sh
+npm run create:addon -- hello --name "Hello" --author "Your name"
+```
+
+Once `create-hibi-addon` is published to npm, the same starter will be available without a checkout:
 
 ```sh
 npx create-hibi-addon hello --name "Hello" --author "Your name"
 ```
 
-From a Hibi source checkout, use `npm run create:addon -- hello` to run the bundled creator before npm publication.
+Use Node.js 22.18 or later and a new destination directory. The creator refuses to overwrite existing paths. It writes `hibi-addon.json`, `index.js`, `package.json`, and `README.md` without installing dependencies.
 
-## Create the files
+Run `npm run check` inside the generated folder. In Hibi, choose **Install addon…** from the command palette, select that folder, review it, and enable it in **Settings → Addons**. Run **Say hello** to display a greeting. The addon declares no UI or editor capabilities and loads when its command first runs; disabling it removes the command.
+
+The starter needs no SDK package at runtime. For optional TypeScript checking, use the local, types-only SDK tarball described in [sideloading and sharing](sideloading.md). The SDK is currently private and is not an npm dependency of the starter.
+
+## Create the files manually
+
+First, [run Hibi from source](../core/running-the-development-build.md).
 
 Create `src/useraddons/hello/`. This folder is ignored by Git, so you can experiment without adding the addon to the repository. Add these three files.
 

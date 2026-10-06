@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -12,6 +12,7 @@ test('failed list indentation keeps focus and lists keep one spacing rhythm', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-list-navigation-'))
+  await writeFile(join(profile, 'addons.json'), JSON.stringify({ typst: true }))
   const app = await launchBenchmarkApp(profile)
   t.after(async () => {
     await app.close()
@@ -66,36 +67,52 @@ test('failed list indentation keeps focus and lists keep one spacing rhythm', {
       `${type}: second Tab keeps editor focus`,
     )
   }
-  const spacing = await page.locator('.tiptap').evaluate((element) => {
-    const editor = element.editor
-    return ['-', '- [ ]'].map((marker) => {
-      editor.commands.setContent(
-        [
-          'before',
-          'after',
-          `${marker} one\n${marker} two\n\n  second\n${marker} three\n  ${marker} nested`,
-          `${marker} code\n\n  \`\`\`\n  x\n  \`\`\`\n${marker} quote\n\n  > quoted\n${marker} last`,
-          'end',
-        ].join('\n\n'),
-        { contentType: 'markdown' },
-      )
-      const box = (text) =>
-        [...element.querySelectorAll('p, pre')]
-          .find((block) => block.textContent === text)
-          .getBoundingClientRect()
-      const gap = (from, to) => Math.round(box(to).top - box(from).bottom)
-      return {
-        paragraph: gap('before', 'after'),
-        intoList: gap('after', 'one'),
-        withinItem: gap('two', 'second'),
-        outOfList: gap('last', 'end'),
-        item: gap('one', 'two'),
-        nested: gap('three', 'nested'),
-        afterCode: gap('x', 'quote'),
-        afterQuote: gap('quoted', 'last'),
-      }
-    })
-  })
+  const spacing = []
+  for (const marker of ['-', '- [ ]']) {
+    await page.locator('.tiptap').evaluate(
+      (element, markdown) => {
+        element.editor.commands.setContent(markdown, {
+          contentType: 'markdown',
+        })
+      },
+      [
+        'before',
+        'after',
+        `${marker} one\n${marker} two\n\n  second\n${marker} three\n  ${marker} nested`,
+        `${marker} code\n\n  \`\`\`\n  x\n  \`\`\`\n${marker} quote\n\n  > quoted\n${marker} table\n\n  | a |\n  | - |\n  | 1 |\n${marker} typst\n\n  \`\`\`typst\n  = Hi\n  \`\`\`\n${marker} last`,
+        'end',
+      ].join('\n\n'),
+    )
+    await page.locator('.tiptap .typst-block').waitFor()
+    spacing.push(
+      await page.locator('.tiptap').evaluate((element) => {
+        const box = (target) =>
+          (typeof target === 'string'
+            ? [...element.querySelectorAll('p, pre')].find(
+                (block) => block.textContent === target,
+              )
+            : target
+          ).getBoundingClientRect()
+        const gap = (from, to) => Math.round(box(to).top - box(from).bottom)
+        const table = element.querySelector('table')
+        const typst = element.querySelector('.typst-block')
+        return {
+          paragraph: gap('before', 'after'),
+          intoList: gap('after', 'one'),
+          withinItem: gap('two', 'second'),
+          outOfList: gap('last', 'end'),
+          item: gap('one', 'two'),
+          nested: gap('three', 'nested'),
+          afterCode: gap('x', 'quote'),
+          afterQuote: gap('quoted', 'table'),
+          intoTable: gap('table', table),
+          afterTable: gap(table, 'typst'),
+          intoTypst: gap('typst', typst),
+          afterTypst: gap(typst, 'last'),
+        }
+      }),
+    )
+  }
   for (const gaps of spacing) {
     const { paragraph, item } = gaps
     assert.ok(item > 0 && item < paragraph, JSON.stringify(gaps))
@@ -108,6 +125,10 @@ test('failed list indentation keeps focus and lists keep one spacing rhythm', {
       nested: item,
       afterCode: item,
       afterQuote: item,
+      intoTable: paragraph,
+      afterTable: item,
+      intoTypst: paragraph,
+      afterTypst: item,
     })
   }
   assert.deepEqual(spacing[1], spacing[0], 'task lists match bullet lists')

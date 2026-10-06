@@ -1430,16 +1430,25 @@ button.ui-button.update-download-button:disabled {
   padding-left: 1.5em;
 }
 /* Items and nested lists sit 0.3em apart; blocks within an item keep paragraph spacing. Only top
-   margins are used because task items are flex containers, which don't collapse child margins. */
-:is(.tiptap, .format-content) :is(li, li > div) > * {
+   margins are used because task items are flex containers, which don't collapse child margins.
+   Task item content sits in a div after the checkbox label. */
+:is(.tiptap, .format-content) :is(li, li > label + div) > * {
   margin-block: 0;
 }
-:is(.tiptap, .format-content) :is(li, li > div) > :not(label) + * {
+:is(.tiptap, .format-content) :is(li, li > label + div) > :not(label) + * {
   margin-top: 1em;
 }
 :is(.tiptap, .format-content) li + li,
-:is(.tiptap, .format-content) :is(li, li > div) > :not(label) + :is(ul, ol) {
+:is(.tiptap, .format-content)
+  :is(li, li > label + div)
+  > :not(label)
+  + :is(ul, ol) {
   margin-top: 0.3em;
+}
+/* Node views wrap their block, so the wrapper carries the item spacing. */
+:is(.tiptap, .format-content) li .tableWrapper > table,
+:is(.tiptap, .format-content) li [data-node-view-wrapper] {
+  margin-block: 0;
 }
 :is(.tiptap, .format-content) blockquote {
   margin-inline: 0;

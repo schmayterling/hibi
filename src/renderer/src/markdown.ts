@@ -1,4 +1,4 @@
-import { Extension } from '@tiptap/core'
+import { Extension, getExtensionField, type NodeConfig } from '@tiptap/core'
 import { Placeholder } from '@tiptap/extension-placeholder'
 import { Markdown, type MarkdownExtensionOptions } from '@tiptap/markdown'
 import { StarterKit } from '@tiptap/starter-kit'
@@ -28,6 +28,26 @@ const NativeStarterKit = StarterKit.extend({
               })
             : extension,
         )
+        .map((extension) => {
+          if (!['paragraph', 'heading'].includes(extension.name))
+            return extension
+          const parse = getExtensionField<
+            NonNullable<NodeConfig['parseMarkdown']>
+          >(extension, 'parseMarkdown')
+          return extension.extend({
+            parseMarkdown: (token, helpers) =>
+              parse(token, {
+                ...helpers,
+                // Soft breaks stay spaces in the rich view with pre-wrap.
+                parseInline: (tokens) =>
+                  helpers.parseInline(tokens).map((node) =>
+                    node.type === 'text' && node.text?.includes('\n')
+                      ? { ...node, text: node.text.replaceAll('\n', ' ') }
+                      : node,
+                  ),
+              }),
+          })
+        })
         .map(guardNativeListTokenizer)
         .map(guardNativeInputRules) ?? []
     )

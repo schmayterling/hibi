@@ -60,6 +60,8 @@ export function markdownConfiguration(
     }
   }
   parser.Lexer = RichLexer
+  parser.lexer = (source, options) =>
+    new RichLexer(options ?? parser.defaults).lex(source)
   for (const flavor of flavors)
     for (const extension of flavor.export?.extensions ?? [])
       parser.use(extension)

@@ -136,23 +136,30 @@ test('native empty paragraphs serialize as blank lines and pass source preservat
 })
 
 test('rich soft breaks render as spaces and retain their source after an unrelated edit', () => {
-  const { core, parser, options } = markdownConfiguration([])
-  const schema = getSchema(core)
+  const { core, addons, parser, options } = markdownConfiguration([
+    {
+      markedOptions: { gfm: true },
+      richExtensions: [TaskList, TaskItem.configure({ nested: true })],
+    },
+  ])
+  const extensions = [...core, ...addons]
+  const schema = getSchema(extensions)
   const manager = new MarkdownManager({
-    extensions: core,
+    extensions,
     marked: parser,
     markedOptions: options,
   })
-  for (const block of [
-    'a\nb',
-    '**a\nb**',
-    '> a\n> b',
-    '- a\n  b',
-    'a\nb\n=====',
+  for (const [block, text] of [
+    ['a\nb', 'a b'],
+    ['**a\nb**', 'a b'],
+    ['> a\n> b', 'a b'],
+    ['- a\n  b', 'a b'],
+    ['a\nb\n=====', 'a b'],
+    ['- [ ] t\n  p\n  q', 'tp q'],
   ]) {
     const original = `${block}\n\nelsewhere`
     const before = schema.nodeFromJSON(manager.parse(original))
-    assert.equal(before.firstChild.textContent, 'a b')
+    assert.equal(before.firstChild.textContent, text, block)
     const after = schema.nodes.doc.create(null, [
       before.firstChild,
       schema.nodes.paragraph.create(null, schema.text('edited elsewhere')),

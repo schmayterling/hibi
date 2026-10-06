@@ -43,6 +43,37 @@ export const MarkdownMarkExit = Extension.create({
     }
     return { ArrowRight: () => move(true), ArrowLeft: () => move(false) }
   },
+  addProseMirrorPlugins() {
+    // Like ProseMirror's composition mark cursor: an unmarked placeholder moves
+    // the DOM selection out of the formatted element, so the caret draws after it.
+    return [
+      new Plugin({
+        props: {
+          decorations({ doc, selection, storedMarks }) {
+            if (
+              !storedMarks ||
+              !(selection instanceof TextSelection) ||
+              !selection.eq(TextSelection.atEnd(doc)) ||
+              !selection.$from
+                .marks()
+                .some(
+                  (mark) =>
+                    delimiters[mark.type.name] && !mark.isInSet(storedMarks),
+                )
+            )
+              return DecorationSet.empty
+            return DecorationSet.create(doc, [
+              Decoration.widget(
+                selection.head,
+                (view) => view.dom.ownerDocument.createElement('span'),
+                { side: -1, marks: [], key: 'mark-exit' },
+              ),
+            ])
+          },
+        },
+      }),
+    ]
+  },
 })
 
 /** Formatting hints use canonical delimiters; they never become document text. */
@@ -127,7 +158,7 @@ export function observeMarkdownMarkers(editor: Editor) {
             state.doc,
             blockMarkdownMarkers(current, position).map(
               ({ pos, text, side }) => {
-                if (side === 1 && pos === outside) side = -1
+                if (side === 1 && pos === outside) side = -2
                 return Decoration.widget(
                   pos,
                   (view) => {

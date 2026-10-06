@@ -143,14 +143,28 @@ const grammarPreservingRich = new Map([
 ])
 
 // ProseMirror skips scrollIntoView while DOM focus is outside the editor.
-function revealRichPosition(editor: Editor, position: number) {
+function revealRichRange(editor: Editor, from: number, to = from) {
   try {
     const pane = editor.view.dom.closest<HTMLElement>('.rich-pane')
     if (!pane) return false
     const bounds = pane.getBoundingClientRect()
     if (!bounds.width || !bounds.height) return false
-    const cursor = editor.view.coordsAtPos(position)
+    const start = editor.view.coordsAtPos(from)
+    const end = to > from ? editor.view.coordsAtPos(to, -1) : start
     const margin = 24
+    // Show the whole match when it fits, otherwise anchor its start.
+    const tall =
+      Math.max(start.bottom, end.bottom) - Math.min(start.top, end.top) >
+      bounds.height - 2 * margin
+    const wide =
+      Math.max(start.right, end.right) - Math.min(start.left, end.left) >
+      bounds.width - 2 * margin
+    const cursor = {
+      top: tall ? start.top : Math.min(start.top, end.top),
+      bottom: tall ? start.bottom : Math.max(start.bottom, end.bottom),
+      left: wide ? start.left : Math.min(start.left, end.left),
+      right: wide ? start.right : Math.max(start.right, end.right),
+    }
     if (cursor.top < bounds.top + margin)
       pane.scrollTop += cursor.top - bounds.top - margin
     else if (cursor.bottom > bounds.bottom - margin)
@@ -591,7 +605,7 @@ export function MarkdownEditor({
             return false
           }
         },
-        reveal: (position) => revealRichPosition(editor, position),
+        reveal: (position) => revealRichRange(editor, position),
       },
     )
   }, [editor, documentState.tabId, viewId])
@@ -2677,7 +2691,7 @@ export function MarkdownEditor({
         )
         .scrollIntoView(),
     )
-    revealRichPosition(editor, first.from)
+    revealRichRange(editor, first.from, first.to)
   }, [editor, findQuery, findOpen, findTarget])
 
   useEffect(() => {
@@ -2691,7 +2705,11 @@ export function MarkdownEditor({
           editor.view.dispatch(transaction),
         )
       )
-        revealRichPosition(editor, editor.state.selection.from)
+        revealRichRange(
+          editor,
+          editor.state.selection.from,
+          editor.state.selection.to,
+        )
     }
   }, [editor, findMove, findOpen, findTarget])
 

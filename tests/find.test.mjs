@@ -241,4 +241,26 @@ test('find in document searches rich text and offscreen markdown without editing
   await waitForVisibleMatch('needle bottom')
   await input.press('Escape')
   await bar.waitFor({ state: 'hidden' })
+
+  // A long match wraps in a narrow pane and must be revealed to its end.
+  const wrapped = `wrapped needle ${'word '.repeat(24)}end`
+  await page.setViewportSize({ width: 480, height: 720 })
+  await page.waitForFunction(() => innerWidth === 480)
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource([...filler, wrapped, ...filler].join('\n\n'))
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  // Start above the match so the reveal scrolls down to it.
+  await rich.evaluate((element) => {
+    element.closest('.rich-pane').scrollTop = 0
+  })
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  await input.fill(wrapped)
+  await waitForCount('1/1')
+  await waitForVisibleMatch(wrapped)
+  await input.press('Escape')
+  await bar.waitFor({ state: 'hidden' })
 })

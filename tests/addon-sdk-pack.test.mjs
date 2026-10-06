@@ -286,6 +286,9 @@ test('generated addon installs, enables, runs, disables, and re-enables', {
       } else {
         assert.equal(await command.count(), 0)
         await page.keyboard.press('Escape')
+        await page
+          .getByRole('dialog', { name: /^command palette$/i })
+          .waitFor({ state: 'hidden' })
       }
     }
   } catch (error) {

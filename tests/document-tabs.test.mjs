@@ -91,49 +91,45 @@ test('an inactive journal edit survives a pending disk refresh', {
   }
   const first = await open(a)
   const second = await open(b)
-  await app.evaluate(
-    async (_, file) => {
-      const { open, stat } = process.getBuiltinModule('node:fs/promises')
-      const target = await stat(file)
-      const handle = await open(file, 'r')
-      const prototype = Object.getPrototypeOf(handle)
-      await handle.close()
-      const originalStat = prototype.stat,
-        originalRead = prototype.read,
-        handles = new WeakSet()
-      let enter, release
-      const entered = new Promise((resolve) => {
-        enter = resolve
-      })
-      const released = new Promise((resolve) => {
-        release = resolve
-      })
-      let blocked = true
-      prototype.stat = async function (...args) {
-        const info = await originalStat.apply(this, args)
-        if (info.dev === target.dev && info.ino === target.ino)
-          handles.add(this)
-        return info
+  await app.evaluate(async (_, file) => {
+    const { open, stat } = process.getBuiltinModule('node:fs/promises')
+    const target = await stat(file)
+    const handle = await open(file, 'r')
+    const prototype = Object.getPrototypeOf(handle)
+    await handle.close()
+    const originalStat = prototype.stat,
+      originalRead = prototype.read,
+      handles = new WeakSet()
+    let enter, release
+    const entered = new Promise((resolve) => {
+      enter = resolve
+    })
+    const released = new Promise((resolve) => {
+      release = resolve
+    })
+    let blocked = true
+    prototype.stat = async function (...args) {
+      const info = await originalStat.apply(this, args)
+      if (info.dev === target.dev && info.ino === target.ino) handles.add(this)
+      return info
+    }
+    prototype.read = async function (...args) {
+      if (blocked && handles.has(this)) {
+        blocked = false
+        enter()
+        await released
       }
-      prototype.read = async function (...args) {
-        if (blocked && handles.has(this)) {
-          blocked = false
-          enter()
-          await released
-        }
-        return originalRead.apply(this, args)
-      }
-      globalThis.reloadGate = {
-        entered,
-        release,
-        restore: () => {
-          prototype.stat = originalStat
-          prototype.read = originalRead
-        },
-      }
-    },
-    a,
-  )
+      return originalRead.apply(this, args)
+    }
+    globalThis.reloadGate = {
+      entered,
+      release,
+      restore: () => {
+        prototype.stat = originalStat
+        prototype.read = originalRead
+      },
+    }
+  }, a)
   const switching = assert.rejects(
     page.evaluate((id) => window.hibi.selectDocumentTab(id), first.tabId),
     /changed while switching tabs/,

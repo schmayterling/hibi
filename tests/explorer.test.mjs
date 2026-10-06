@@ -10,7 +10,11 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForAppState, waitForDocumentEditor } from './electron.mjs'
+import {
+  electron,
+  waitForAppState,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 

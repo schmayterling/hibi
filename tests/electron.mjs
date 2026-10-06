@@ -8,30 +8,26 @@ function drainElectronStdio(child) {
 }
 
 // Playwright can wait for inherited stdio to close after Electron itself exits.
-export function waitForElectronExit(child, closePromise) {
+export function waitForElectronExit(child, closePromise, drainStdio = true) {
   return new Promise((resolve, reject) => {
     let settled = false
     let closeSettled = false
     let exited = false
-    let grace
     const finish = (error) => {
       if (settled) return
       settled = true
-      clearTimeout(grace)
       child.off('exit', onExit)
-      if (exited) drainElectronStdio(child)
       if (error) reject(error)
       else resolve()
     }
     const onExit = (code, signal) => {
       exited = true
+      if (drainStdio) drainElectronStdio(child)
       if (code !== 0 || signal !== null) {
         finish(new Error(`Electron exited with code ${code}, signal ${signal}`))
         return
       }
-      // Playwright may never settle after a clean exit; allow prompt errors first.
       if (closeSettled) finish()
-      else grace = setTimeout(() => finish(), 100)
     }
     child.once('exit', onExit)
     closePromise.then(
@@ -54,21 +50,11 @@ export function waitForElectronShutdown(
   waitForTransport = false,
 ) {
   // Windows keeps profile databases locked until Chromium descendants close.
-  if (!waitForTransport && platform !== 'win32')
-    return waitForElectronExit(child, closePromise)
-  const exited = new Promise((resolve, reject) => {
-    const finish = (code, signal) => {
-      if (code === 0 && signal === null) resolve()
-      else
-        reject(new Error(`Electron exited with code ${code}, signal ${signal}`))
-    }
-    child.once('exit', finish)
-    if (child.exitCode !== null || child.signalCode !== null) {
-      child.off('exit', finish)
-      finish(child.exitCode, child.signalCode)
-    }
-  })
-  return Promise.all([closePromise, exited]).then(() => undefined)
+  return waitForElectronExit(
+    child,
+    closePromise,
+    !waitForTransport && platform !== 'win32',
+  )
 }
 
 export function stopElectronTree(child) {

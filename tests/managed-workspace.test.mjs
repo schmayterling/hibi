@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 test('managed workspaces stay opt-in, preserve files, import safely, and reopen at startup', {
@@ -38,9 +38,7 @@ test('managed workspaces stay opt-in, preserve files, import safely, and reopen 
     })
     const page = await app.firstWindow()
     page.setDefaultTimeout(10000)
-    await page
-      .getByRole('textbox', { name: 'Document editor', exact: true })
-      .waitFor()
+    await waitForDocumentEditor(app, page)
     return page
   }
   let page = await launch()

@@ -1,6 +1,6 @@
 # Editing
 
-Hibi opens on the welcome screen with no document tabs. Start typing to create an unsaved `untitled.md` tab, choose **Open a file…**, use **File → Open**, or select a recent workspace.
+Hibi opens on the welcome screen with no document tabs. Start typing to create an unsaved `untitled.md` tab, choose **Open a file…**, use **File → Open**, or select a recent workspace. Choose **Open workspace…** to pick a folder and open it as a workspace.
 
 ## Choose a view
 

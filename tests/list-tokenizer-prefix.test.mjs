@@ -10,7 +10,12 @@ import { OrderedList, TaskItem, TaskList } from '@tiptap/extension-list'
 import { MarkdownManager } from '@tiptap/markdown'
 import { StarterKit } from '@tiptap/starter-kit'
 import { Marked } from 'marked'
-import { guardNativeListTokenizer } from '../src/renderer/src/list-tokenizer-prefix.ts'
+import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
+import { GithubAlert } from '../src/addons/markdown/GithubAlert.ts'
+import {
+  guardNativeListTokenizer,
+  parseEmptyTaskItems,
+} from '../src/renderer/src/list-tokenizer-prefix.ts'
 import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import { preserveRichSource } from '../src/renderer/src/rich-source-preservation.ts'
 
@@ -19,7 +24,12 @@ function taskParser() {
     {
       id: 'github-markdown.github',
       markedOptions: { gfm: true },
-      richExtensions: [TaskList, TaskItem.configure({ nested: true })],
+      richExtensions: [
+        TaskList,
+        TaskItem.configure({ nested: true }),
+        GithubAlert,
+      ],
+      export: { extensions: [alertMarkdown] },
     },
   ])
   const extensions = [...core, ...addons]
@@ -32,78 +42,126 @@ function taskParser() {
   return { manager, schema }
 }
 
+const block = (type, ...content) => ({ type, content })
+const paragraph = (text = '') =>
+  block('paragraph', ...(text ? [{ type: 'text', text }] : []))
+const taskItem = (checked, text = '', ...nested) => ({
+  ...block('taskItem', paragraph(text), ...nested),
+  attrs: { checked },
+})
+const listItem = (text, ...nested) =>
+  block('listItem', paragraph(text), ...nested)
+
 const taskFixtures = [
-  ['- [ ]', [['taskItem', false, '']]],
-  ['- [ ] ', [['taskItem', false, '']]],
-  ['- [x]', [['taskItem', true, '']]],
-  ['+ [x]', [['taskItem', true, '']]],
-  ['* [ ]', [['taskItem', false, '']]],
+  ['- [ ]', [block('taskList', taskItem(false))]],
+  ['- [ ] ', [block('taskList', taskItem(false))]],
+  ['- [x]', [block('taskList', taskItem(true))]],
+  ['- [X]', [block('taskList', taskItem(true))]],
+  ['+ [x]', [block('taskList', taskItem(true))]],
+  ['* [ ]', [block('taskList', taskItem(false))]],
   [
     '- [ ] a\n- [ ] b',
-    [
-      ['taskItem', false, 'a'],
-      ['taskItem', false, 'b'],
-    ],
+    [block('taskList', taskItem(false, 'a'), taskItem(false, 'b'))],
   ],
   [
     '- [ ] a\n- [ ]',
-    [
-      ['taskItem', false, 'a'],
-      ['taskItem', false, ''],
-    ],
+    [block('taskList', taskItem(false, 'a'), taskItem(false))],
+  ],
+  ['- [ ]\n- [ ]', [block('taskList', taskItem(false), taskItem(false))]],
+  ['- [ ]\n- [x]', [block('taskList', taskItem(false), taskItem(true))]],
+  [
+    '- [ ]\n- [ ] a',
+    [block('taskList', taskItem(false), taskItem(false, 'a'))],
   ],
   [
     '- a\n- [ ] b',
     [
-      ['listItem', null, 'a'],
-      ['taskItem', false, 'b'],
+      block('bulletList', listItem('a')),
+      block('taskList', taskItem(false, 'b')),
     ],
   ],
   [
     '- a\n- [ ]',
-    [
-      ['listItem', null, 'a'],
-      ['taskItem', false, ''],
-    ],
+    [block('bulletList', listItem('a')), block('taskList', taskItem(false))],
   ],
   [
     '- [ ]\n- a',
-    [
-      ['taskItem', false, ''],
-      ['listItem', null, 'a'],
-    ],
+    [block('taskList', taskItem(false)), block('bulletList', listItem('a'))],
   ],
   [
     '- [x]\n- a\n- [ ]',
     [
-      ['taskItem', true, ''],
-      ['listItem', null, 'a'],
-      ['taskItem', false, ''],
+      block('taskList', taskItem(true)),
+      block('bulletList', listItem('a')),
+      block('taskList', taskItem(false)),
     ],
   ],
   [
     '- parent\n  - [ ]\n  - [x] done',
     [
-      ['listItem', null, 'parent'],
-      ['taskItem', false, ''],
-      ['taskItem', true, 'done'],
+      block(
+        'bulletList',
+        listItem(
+          'parent',
+          block('taskList', taskItem(false), taskItem(true, 'done')),
+        ),
+      ),
     ],
   ],
   [
     '- [ ]\n  - child',
     [
-      ['taskItem', false, ''],
-      ['listItem', null, 'child'],
+      block(
+        'taskList',
+        taskItem(false, '', block('bulletList', listItem('child'))),
+      ),
     ],
   ],
   [
     '- [ ]\n\n  - child',
     [
-      ['taskItem', false, ''],
-      ['listItem', null, 'child'],
+      block(
+        'taskList',
+        taskItem(false, '', block('bulletList', listItem('child'))),
+      ),
     ],
   ],
-  ['- [ ]text', [['listItem', null, '[ ]text']]],
+  [
+    '- [ ] a\n  - [ ]\n  - [x]',
+    [
+      block(
+        'taskList',
+        taskItem(
+          false,
+          'a',
+          block('taskList', taskItem(false), taskItem(true)),
+        ),
+      ),
+    ],
+  ],
+  [
+    '> - [ ] a\n> - [ ]',
+    [
+      block(
+        'blockquote',
+        block('taskList', taskItem(false, 'a'), taskItem(false)),
+      ),
+    ],
+  ],
+  [
+    '> - [ ]\n> - [x]',
+    [block('blockquote', block('taskList', taskItem(false), taskItem(true)))],
+  ],
+  [
+    '> [!NOTE]\n> - [ ]\n> - [X]',
+    [block('githubAlert', block('taskList', taskItem(false), taskItem(true)))],
+  ],
+  [
+    '- [ ]\n  lazy',
+    [block('taskList', taskItem(false, '', paragraph('lazy')))],
+  ],
+  ['1. [ ]', [block('orderedList', listItem('[ ]'))]],
+  ['- [ ]text', [block('bulletList', listItem('[ ]text'))]],
 ]
 
 test('empty, mixed and nested task items parse and round-trip without changing source bytes', () => {
@@ -114,16 +172,11 @@ test('empty, mixed and nested task items parse and round-trip without changing s
         const source = fixture.replaceAll('\n', eol) + ending
         const doc = schema.nodeFromJSON(manager.parse(source))
         doc.check()
-        const items = []
-        doc.descendants((node) => {
-          if (['taskItem', 'listItem'].includes(node.type.name))
-            items.push([
-              node.type.name,
-              node.attrs.checked ?? null,
-              node.firstChild.textContent,
-            ])
-        })
-        assert.deepEqual(items, expected, JSON.stringify(source))
+        assert.deepEqual(
+          doc.toJSON(),
+          schema.nodeFromJSON(block('doc', ...expected)).toJSON(),
+          JSON.stringify(source),
+        )
         const serialized = manager.serialize(doc.toJSON())
         assert.ok(schema.nodeFromJSON(manager.parse(serialized)).eq(doc))
         assert.equal(
@@ -142,7 +195,9 @@ test('empty, mixed and nested task items parse and round-trip without changing s
           node.content?.forEach(toggle)
         }
         toggle(changed)
-        if (!toggled) continue
+        // Native serialization lowercases [X]; byte-preserving toggles need
+        // the same marker spelling in the original and serialized source.
+        if (!toggled || source.match(/\[[ xX]\]/)?.[0] === '[X]') continue
         const after = schema.nodeFromJSON(changed)
         const edited = preserveRichSource(
           source,
@@ -169,6 +224,21 @@ const lexer = {
 }
 const tokenize = (extension, source) =>
   getExtensionField(extension, 'markdownTokenizer').tokenize(source, [], lexer)
+
+test('task tokenizer consumes consecutive empty items before the next block', () => {
+  const extension = parseEmptyTaskItems(TaskList)
+  for (const source of ['- [ ]\n- [ ]', '- [ ]\n- [x]', '- [ ] a\n- [ ]']) {
+    const token = tokenize(extension, `${source}\n\n# after`)
+    assert.equal(token.type, 'taskList')
+    assert.equal(token.raw, `${source}\n`)
+    assert.equal(token.items.length, 2)
+  }
+  const { manager } = taskParser()
+  assert.equal(
+    manager.serialize(manager.parse('- [ ]\n- [x]')),
+    '- [ ] \n- [x] ',
+  )
+})
 
 const cases = [
   '',
@@ -305,6 +375,7 @@ test('configured builtins retain options and custom addon tokenizers remain unto
       },
     })
     assert.equal(guardNativeListTokenizer(custom), custom)
+    assert.equal(parseEmptyTaskItems(custom), custom)
     assert.equal(tokenize(custom, 'ordinary').type, 'custom')
   }
   const unrelated = Node.create({ name: 'custom' })

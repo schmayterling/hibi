@@ -495,6 +495,30 @@ export function MarkdownEditor({
       shouldRerenderOnTransaction: false,
       editorProps: {
         handleDOMEvents: {
+          beforeinput(view, event) {
+            if (
+              !view.editable ||
+              !event.cancelable ||
+              event.isComposing ||
+              view.composing ||
+              event.inputType !== 'insertText' ||
+              !event.data?.includes(' ')
+            )
+              return false
+            // Keep typed spaces before Chromium turns them into nonbreaking spaces.
+            const text = event.data
+            const { from, to } = view.state.selection
+            const insert = () =>
+              view.state.tr.insertText(text, from, to).scrollIntoView()
+            event.preventDefault()
+            if (
+              !view.someProp('handleTextInput', (handle) =>
+                handle(view, from, to, text, insert),
+              )
+            )
+              view.dispatch(insert())
+            return true
+          },
           keydown(view, event) {
             if (
               ((event.ctrlKey && !event.metaKey) ||

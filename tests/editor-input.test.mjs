@@ -148,10 +148,9 @@ test('long documents with HTML and reference syntax stay visually editable throu
       )
     })
   await page.keyboard.insertText('edited ')
-  // Rich text may serialize the inserted trailing space as a nonbreaking space.
   await waitForAsync(page, async () =>
-    /^# edited[ \u00a0]Editable document/.test(
-      (await window.hibi.getDocument()).markdown,
+    (await window.hibi.getDocument()).markdown.startsWith(
+      '# edited Editable document',
     ),
   )
   const edited = (await page.evaluate(() => window.hibi.getDocument())).markdown

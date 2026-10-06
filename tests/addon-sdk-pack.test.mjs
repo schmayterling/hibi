@@ -276,7 +276,8 @@ test('generated addon installs, enables, runs, disables, and re-enables', {
       await clickMenu(app, 'Command palette')
       await page
         .getByRole('combobox', { name: /search commands/i })
-        .fill('Say hello')
+        .fill('sa')
+      await page.getByRole('option', { name: /^Save as/i }).waitFor()
       const command = page.getByRole('option', { name: /^Say hello/i })
       if (enabled) {
         await command.waitFor()
@@ -284,8 +285,7 @@ test('generated addon installs, enables, runs, disables, and re-enables', {
         await command.press('Enter')
         await greeting.waitFor()
       } else {
-        await greeting.waitFor({ state: 'hidden' })
-        await command.waitFor({ state: 'hidden' })
+        assert.equal(await command.count(), 0)
         await page.keyboard.press('Escape')
       }
     }

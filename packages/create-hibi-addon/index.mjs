@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
-import { constants } from 'node:fs'
-import { access, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
-import { basename, join, resolve } from 'node:path'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
@@ -13,12 +12,6 @@ Usage:
 
 From a Hibi checkout:
   npm run create:addon -- <directory>`
-
-const exists = (path) =>
-  access(path, constants.F_OK).then(
-    () => true,
-    () => false,
-  )
 
 function title(id) {
   return id
@@ -50,8 +43,6 @@ async function create() {
   if (positionals.length !== 1) throw new Error(usage)
 
   const target = resolve(positionals[0])
-  if (await exists(target))
-    throw new Error(`Refusing to overwrite existing path: ${target}`)
   const id = basename(target)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
@@ -68,17 +59,28 @@ async function create() {
     ['__HIBI_ID__', escaped(id)],
     ['__HIBI_NAME__', escaped(name)],
     ['__HIBI_AUTHOR__', escaped(author)],
-    ['__HIBI_GREETING__', escaped(`Hello from ${name}.`)],
+    [
+      '__HIBI_GREETING__',
+      escaped(`Hello from ${name}.`).replaceAll("'", "\\'"),
+    ],
     ['__HIBI_NAME_TEXT__', name],
   ])
   const template = fileURLToPath(new URL('template', import.meta.url))
 
-  await mkdir(target, { recursive: true })
+  await mkdir(dirname(target), { recursive: true })
+  try {
+    await mkdir(target)
+  } catch (error) {
+    if (error.code === 'EEXIST')
+      throw new Error(`Refusing to overwrite existing path: ${target}`)
+    throw error
+  }
   for (const file of await readdir(template)) {
-    let content = await readFile(join(template, file), 'utf8')
-    for (const [token, value] of replacements)
-      content = content.replaceAll(token, value)
-    await writeFile(join(target, file), content)
+    const content = await readFile(join(template, file), 'utf8')
+    await writeFile(
+      join(target, file),
+      content.replace(/__HIBI_[A-Z_]+__/g, (token) => replacements.get(token)),
+    )
   }
   console.log(`Created ${name} in ${target}`)
 }

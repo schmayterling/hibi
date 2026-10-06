@@ -5,6 +5,9 @@
   "version": "1.0.0",
   "apiVersion": 2,
   "kind": "extension",
+  "capabilities": [],
+  "activation": "command",
+  "commands": [{ "id": "greet", "label": "Say hello" }],
   "authors": [
     {
       "displayName": "__HIBI_AUTHOR__"

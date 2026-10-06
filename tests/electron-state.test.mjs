@@ -9,9 +9,19 @@ import {
   waitForDocumentEditor,
 } from './electron.mjs'
 
-test('app state waits for resolved ipc result', async () => {
+test('app state waits for resolved ipc result within its ten-second default', async (t) => {
   let reads = 0
-  await waitForAppState({ evaluate: async () => ++reads === 2 }, () => {})
+  let now = 0
+  t.mock.method(Date, 'now', () => now)
+  await waitForAppState(
+    {
+      evaluate: async () => {
+        now = 8000
+        return ++reads === 2
+      },
+    },
+    () => {},
+  )
   assert.equal(reads, 2)
 })
 
@@ -40,9 +50,8 @@ test('editor readiness requires settled app, addons and editable active pane', {
       <div id="split-document-editor-panel"><div role="textbox" aria-label="Document editor" contenteditable="true">inactive</div></div>
     </div>
   `)
-  page.setDefaultTimeout(1)
-  await waitForDocumentEditor(app, page)
   page.setDefaultTimeout(7000)
+  await waitForDocumentEditor(app, page)
   const errors = t.mock.method(console, 'error', () => {})
   for (const [selector, attribute, value] of [
     ['.app', 'aria-busy', 'true'],
@@ -58,7 +67,7 @@ test('editor readiness requires settled app, addons and editable active pane', {
     )
     await assert.rejects(
       waitForDocumentEditor(app, page, { timeout: 50 }),
-      /Timeout/,
+      /Timeout 50ms exceeded/,
     )
     const { dom } = JSON.parse(errors.mock.calls.at(-1).arguments[1]).renderer
     assert.equal(dom.appBusy, selector === '.app' ? 'true' : 'false')
@@ -85,4 +94,9 @@ test('editor readiness requires settled app, addons and editable active pane', {
     .locator('#document-editor-panel [role="textbox"]')
     .evaluate((element) => element.setAttribute('aria-label', 'Probe editor'))
   await waitForDocumentEditor(app, page, { name: 'Probe editor' })
+  page.setDefaultTimeout(50)
+  await assert.rejects(
+    waitForDocumentEditor(app, page),
+    /Timeout 50ms exceeded/,
+  )
 })

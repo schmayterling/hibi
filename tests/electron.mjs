@@ -1,6 +1,5 @@
 import { spawnSync } from 'node:child_process'
 import { _electron } from 'playwright'
-import { APP_STATE_TIMEOUT } from './poll.mjs'
 
 function drainElectronStdio(child) {
   for (const stream of child.stdio ?? [child.stdout, child.stderr])
@@ -306,7 +305,7 @@ export async function startupDiagnostics(application, page) {
 export async function waitForDocumentEditor(
   application,
   page,
-  { name = 'Document editor', timeout = APP_STATE_TIMEOUT } = {},
+  { name = 'Document editor', timeout } = {},
 ) {
   try {
     // A visible textbox can still belong to an inert addon or a pending tab.
@@ -331,11 +330,7 @@ export async function waitForDocumentEditor(
 }
 
 // Playwright's waitForFunction treats a returned Promise as truthy before it settles.
-export async function waitForAppState(
-  page,
-  check,
-  timeout = APP_STATE_TIMEOUT,
-) {
+export async function waitForAppState(page, check, timeout = 10000) {
   const deadline = Date.now() + timeout
   do {
     if (await page.evaluate(check)) return

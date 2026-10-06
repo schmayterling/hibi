@@ -81,6 +81,7 @@ test('failed list indentation keeps focus and lists keep one spacing rhythm', {
         `${marker} one\n${marker} two\n\n  second\n${marker} three\n  ${marker} nested`,
         `${marker} code\n\n  \`\`\`\n  x\n  \`\`\`\n${marker} quote\n\n  > quoted\n${marker} table\n\n  | a |\n  | - |\n  | 1 |\n${marker} typst\n\n  \`\`\`typst\n  = Hi\n  \`\`\`\n${marker} heading\n\n  # big\n${marker} subtext\n\n  -# small\n${marker} last`,
         'end',
+        `${marker} final`,
       ].join('\n\n'),
     )
     await page.locator('.tiptap .typst-block').waitFor()
@@ -96,6 +97,8 @@ test('failed list indentation keeps focus and lists keep one spacing rhythm', {
         const gap = (from, to) => Math.round(box(to).top - box(from).bottom)
         const table = element.querySelector('table')
         const typst = element.querySelector('.typst-block')
+        // The document ends in a list, which should leave the same trailing space as a paragraph.
+        const final = element.lastElementChild
         return {
           paragraph: gap('before', 'after'),
           intoList: gap('after', 'one'),
@@ -113,6 +116,11 @@ test('failed list indentation keeps focus and lists keep one spacing rhythm', {
           afterHeading: gap('big', 'subtext'),
           intoSubtext: gap('subtext', 'small'),
           afterSubtext: gap('small', 'last'),
+          final: Math.round(
+            box(final).bottom +
+              Number.parseFloat(getComputedStyle(final).marginBottom) -
+              box('final').bottom,
+          ),
         }
       }),
     )
@@ -137,6 +145,7 @@ test('failed list indentation keeps focus and lists keep one spacing rhythm', {
       afterHeading: item,
       intoSubtext: paragraph,
       afterSubtext: item,
+      final: paragraph,
     })
   }
   assert.deepEqual(spacing[1], spacing[0], 'task lists match bullet lists')

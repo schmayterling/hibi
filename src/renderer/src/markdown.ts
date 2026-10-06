@@ -9,22 +9,15 @@ import { BlockExit } from './BlockExit.ts'
 import { CodeHighlight } from './CodeHighlight.ts'
 import { guardNativeInputRules } from './input-rule-guard.ts'
 import { literalMarkdown } from './LiteralMarkdown.ts'
-import { guardNativeListTokenizer } from './list-tokenizer-prefix.ts'
+import {
+  guardNativeListTokenizer,
+  parseEmptyTaskItems,
+} from './list-tokenizer-prefix.ts'
 import { MarkdownMarkExit } from './markdown-markers.ts'
 import { markdownSyntax } from './markdown-syntax.ts'
 import { installSyntaxPreferences } from './syntax-parser.ts'
 
 export { projectMarkdown } from './markdown-projection.ts'
-
-const NativeStarterKit = StarterKit.extend({
-  addExtensions() {
-    return (
-      this.parent?.()
-        .map(guardNativeListTokenizer)
-        .map(guardNativeInputRules) ?? []
-    )
-  },
-})
 
 /** Shared declarations for the visual editor and native schema-only conversion. */
 export function markdownConfiguration(
@@ -43,6 +36,25 @@ export function markdownConfiguration(
   const levels = ([1, 2, 3, 4, 5, 6] as const).filter((level) =>
     enabled(`heading-${level}`),
   )
+  const taskItems = ['taskList', 'taskItem'].every(
+    (name) =>
+      markdownSyntax.extensionEnabled(name) &&
+      flavors.some((flavor) =>
+        flavor.richExtensions?.some((extension) => extension.name === name),
+      ),
+  )
+  const NativeStarterKit = StarterKit.extend({
+    addExtensions() {
+      return (
+        this.parent?.()
+          .map((extension) =>
+            taskItems ? parseEmptyTaskItems(extension) : extension,
+          )
+          .map(guardNativeListTokenizer)
+          .map(guardNativeInputRules) ?? []
+      )
+    },
+  })
   const core = [
     NativeStarterKit.configure({
       ...(history ? { undoRedo: false as const } : {}),

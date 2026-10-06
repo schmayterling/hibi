@@ -38,6 +38,8 @@ These markers are visual hints, not editable characters or a verbatim view of th
 
 At the end of a document, press the right arrow key to leave bold, italic, strikethrough, or inline code and continue with plain text. The cursor moves past the closing hint without adding a space or changing your text. This also works when Markdown markers are hidden.
 
+In GitHub Markdown, `- [ ]` and `- [x]` display as unchecked and checked tasks even without text after the marker. You can mix tasks with ordinary bullets and nest tasks inside bullet lists.
+
 For footnotes in GitHub Markdown, write `text[^note]` and add a definition such as `[^note]: Reference text.` in Source view. Side-by-side view and HTML export place referenced notes at the end of the document. Notes with footnote definitions open without Normal view so their source stays intact.
 
 Under **Settings → Appearance → Toolbar → Arrange toolbar actions**, drag actions or use the arrow controls to reorder them. By default, addon actions follow formatting actions. Select an action and choose **Show in toolbar**, **Menu only**, or **Hide**. Menu-only actions always stay in the **More** dropdown, even in a wide window. Hidden actions disappear from both the toolbar and its dropdown; their commands and shortcuts remain available. These choices are saved separately from the order, so **Reset order** keeps each action's placement.

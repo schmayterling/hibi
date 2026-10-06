@@ -192,6 +192,7 @@ test('drawn caret leaves final formatting at the end of the document', {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-markers-caret-'))
   const note = join(profile, 'caret.md')
   await writeFile(note, '**hello**')
+  await writeFile(join(profile, 'addons.json'), JSON.stringify({ math: true }))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`, note],
   })
@@ -246,6 +247,42 @@ test('drawn caret leaves final formatting at the end of the document', {
       )
     }
   }
+  // Inline nodes are not formatting placeholders; a tall equation keeps a text-sized caret.
+  await page.waitForFunction(
+    () => document.querySelector('.tiptap')?.editor.schema.nodes.inlineMath,
+  )
+  await rich.evaluate((element) => {
+    element.editor.commands.setContent(
+      '<p>hello <span data-type="inline-math" data-latex="\\dfrac{1}{\\dfrac{1}{2}}"></span></p>',
+    )
+    element.editor.commands.setTextSelection(1)
+    element.editor.view.focus()
+  })
+  await page.locator('.tiptap-mathematics-render .katex').waitFor()
+  await rich.press('End')
+  const math = await page.evaluate(async () => {
+    // The drawn caret measures on the next frame after the selection moves.
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    )
+    const caret = document
+      .querySelector('.editor-cursor')
+      .getBoundingClientRect()
+    return {
+      caret: { top: caret.top, bottom: caret.bottom, height: caret.height },
+      formula: document
+        .querySelector('.tiptap-mathematics-render')
+        .getBoundingClientRect()
+        .toJSON(),
+      fontSize: Number.parseFloat(
+        getComputedStyle(document.querySelector('.tiptap p')).fontSize,
+      ),
+    }
+  })
+  assert.ok(math.formula.height > math.fontSize * 2, JSON.stringify(math))
+  assert.ok(math.caret.height < math.fontSize * 1.5, JSON.stringify(math))
+  assert.ok(math.caret.top >= math.formula.top - 1, JSON.stringify(math))
+  assert.ok(math.caret.bottom <= math.formula.bottom + 1, JSON.stringify(math))
 })
 
 test('rich markers follow only the focused block, preserve copying and undo, and can be disabled', {

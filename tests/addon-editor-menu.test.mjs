@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
-import { clickMenu } from './keyboard.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
+import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('editor command shares rich and source action menus with guarded selection', {
@@ -82,12 +82,17 @@ test('editor command shares rich and source action menus with guarded selection'
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
+  await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
   await clickMenu(app, 'Open…')
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'note.md',
+  )
+  await waitForDocumentEditor(app, page)
   const rich = page.locator('.rich-pane .tiptap[contenteditable="true"]')
-  await rich.waitFor()
   await rich.click()
   await rich.evaluate((element) =>
     element.editor.commands.setTextSelection({ from: 1, to: 6 }),
@@ -96,7 +101,7 @@ test('editor command shares rich and source action menus with guarded selection'
   await rich.press('Shift+F10')
   await menu.getByRole('menuitem', { name: 'Inspect editor selection' }).click()
   await page.waitForFunction(() => window.editorMenuProbeStarts === 1)
-  await rich.fill('changed')
+  await replaceRichText(page, rich, 'changed')
   await waitForAsync(
     page,
     async () => (await window.hibi.getDocument()).markdown === 'changed',
@@ -134,7 +139,7 @@ test('editor command shares rich and source action menus with guarded selection'
     name: 'Markdown editor',
     exact: true,
   })
-  await source.waitFor()
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await source.focus()
   await source.press(process.platform === 'darwin' ? 'Meta+a' : 'Control+a')
   await source.press('Shift+F10')
@@ -142,7 +147,7 @@ test('editor command shares rich and source action menus with guarded selection'
     .getByRole('menuitem', { name: 'Inspect editor selection' })
     .waitFor()
   await menu.getByRole('menuitem', { name: 'Replace selection' }).waitFor()
-  await source.press('Enter')
+  await page.keyboard.press('Enter')
   await page.waitForFunction(() => window.editorMenuProbeRuns?.length === 2)
   const sourceInvocation = await page.evaluate(
     () => window.editorMenuProbeRuns[1],

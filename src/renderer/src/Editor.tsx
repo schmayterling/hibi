@@ -142,6 +142,72 @@ const grammarPreservingRich = new Map([
   ['tags.highlights', 'tags'],
 ])
 
+// ProseMirror skips scrollIntoView while DOM focus is outside the editor.
+function revealRichRange(editor: Editor, from: number, to = from) {
+  try {
+    const pane = editor.view.dom.closest<HTMLElement>('.rich-pane')
+    if (!pane) return false
+    const bounds = pane.getBoundingClientRect()
+    if (!bounds.width || !bounds.height) return false
+    const start = editor.view.coordsAtPos(from)
+    const end = to > from ? editor.view.coordsAtPos(to, -1) : start
+    // Hidden text measures as an empty rect, so there is nothing to reveal.
+    // Block boundaries measure zero height but keep their width.
+    const hidden = (rect: typeof start) =>
+      rect.right <= rect.left && rect.bottom <= rect.top
+    if (hidden(start) || hidden(end)) return false
+    const margin = 24
+    const first = { ...start }
+    const last = { ...end }
+    // Scroll each overflowing container from the match out to the pane.
+    const { node } = editor.view.domAtPos(from)
+    let element = node instanceof Element ? node : node.parentElement
+    while (element) {
+      if (
+        element.scrollHeight > element.clientHeight ||
+        element.scrollWidth > element.clientWidth
+      ) {
+        const box = element === pane ? bounds : element.getBoundingClientRect()
+        // Show the whole match if it fits here, otherwise anchor its start.
+        const tall =
+          Math.max(first.bottom, last.bottom) - Math.min(first.top, last.top) >
+          box.height - 2 * margin
+        const wide =
+          Math.max(first.right, last.right) - Math.min(first.left, last.left) >
+          box.width - 2 * margin
+        const cursor = {
+          top: tall ? first.top : Math.min(first.top, last.top),
+          bottom: tall ? first.bottom : Math.max(first.bottom, last.bottom),
+          left: wide ? first.left : Math.min(first.left, last.left),
+          right: wide ? first.right : Math.max(first.right, last.right),
+        }
+        const { scrollTop, scrollLeft } = element
+        if (cursor.top < box.top + margin)
+          element.scrollTop += cursor.top - box.top - margin
+        else if (cursor.bottom > box.bottom - margin)
+          element.scrollTop += cursor.bottom - box.bottom + margin
+        if (cursor.left < box.left + margin)
+          element.scrollLeft += cursor.left - box.left - margin
+        else if (cursor.right > box.right - margin)
+          element.scrollLeft += cursor.right - box.right + margin
+        const dy = element.scrollTop - scrollTop
+        const dx = element.scrollLeft - scrollLeft
+        for (const rect of [first, last]) {
+          rect.top -= dy
+          rect.bottom -= dy
+          rect.left -= dx
+          rect.right -= dx
+        }
+      }
+      if (element === pane) break
+      element = element.parentElement
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
 export type ViewMode = DocumentView
 
 export function MarkdownEditor({
@@ -568,27 +634,7 @@ export function MarkdownEditor({
             return false
           }
         },
-        reveal: (position) => {
-          try {
-            const pane = editor.view.dom.closest<HTMLElement>('.rich-pane')
-            if (!pane) return false
-            const bounds = pane.getBoundingClientRect()
-            if (!bounds.width || !bounds.height) return false
-            const cursor = editor.view.coordsAtPos(position)
-            const margin = 24
-            if (cursor.top < bounds.top + margin)
-              pane.scrollTop += cursor.top - bounds.top - margin
-            else if (cursor.bottom > bounds.bottom - margin)
-              pane.scrollTop += cursor.bottom - bounds.bottom + margin
-            if (cursor.left < bounds.left + margin)
-              pane.scrollLeft += cursor.left - bounds.left - margin
-            else if (cursor.right > bounds.right - margin)
-              pane.scrollLeft += cursor.right - bounds.right + margin
-            return true
-          } catch {
-            return false
-          }
-        },
+        reveal: (position) => revealRichRange(editor, position),
       },
     )
   }, [editor, documentState.tabId, viewId])
@@ -2666,14 +2712,15 @@ export function MarkdownEditor({
     if (!flushRich(editor)) return
     editor.view.dispatch(setSearchState(editor.state.tr, query))
     const first = query.valid ? query.findNext(editor.state, 0) : null
-    if (first)
-      editor.view.dispatch(
-        editor.state.tr
-          .setSelection(
-            TextSelection.create(editor.state.doc, first.from, first.to),
-          )
-          .scrollIntoView(),
-      )
+    if (!first) return
+    editor.view.dispatch(
+      editor.state.tr
+        .setSelection(
+          TextSelection.create(editor.state.doc, first.from, first.to),
+        )
+        .scrollIntoView(),
+    )
+    revealRichRange(editor, first.from, first.to)
   }, [editor, findQuery, findOpen, findTarget])
 
   useEffect(() => {
@@ -2682,7 +2729,16 @@ export function MarkdownEditor({
     if (editor && findOpen && findTarget === 'rich' && findMove.id) {
       if (!flushRich(editor)) return
       const command = findMove.direction === 'next' ? findNext : findPrev
-      command(editor.state, (transaction) => editor.view.dispatch(transaction))
+      if (
+        command(editor.state, (transaction) =>
+          editor.view.dispatch(transaction),
+        )
+      )
+        revealRichRange(
+          editor,
+          editor.state.selection.from,
+          editor.state.selection.to,
+        )
     }
   }, [editor, findMove, findOpen, findTarget])
 

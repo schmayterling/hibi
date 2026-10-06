@@ -9,7 +9,8 @@ import { validateAnalysisProjection } from '../src/shared/analysis.ts'
 import { electron, waitForElectronExit } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
-test('electron cleanup trusts clean process exit but reports close and crash failures', async () => {
+test('electron cleanup waits for exit and transport and reports close and crash failures', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
   const child = () => {
     const process = Object.assign(new EventEmitter(), {
       exitCode: null,
@@ -21,11 +22,23 @@ test('electron cleanup trusts clean process exit but reports close and crash fai
     return process
   }
   const clean = child()
-  const closed = waitForElectronExit(clean, new Promise(() => {}))
+  let closeTransport,
+    cleanSettled = false
+  const transport = new Promise((resolve) => {
+    closeTransport = resolve
+  })
+  const closed = waitForElectronExit(clean, transport).then(() => {
+    cleanSettled = true
+  })
   clean.exitCode = 0
   clean.emit('exit', 0, null)
-  await closed
   assert.equal(clean.drained, 2)
+  t.mock.timers.tick(1000)
+  await Promise.resolve()
+  assert.equal(cleanSettled, false)
+  closeTransport()
+  await closed
+  assert.equal(cleanSettled, true)
 
   const live = child()
   let done = false
@@ -48,6 +61,7 @@ test('electron cleanup trusts clean process exit but reports close and crash fai
   )
   late.exitCode = 0
   late.emit('exit', 0, null)
+  t.mock.timers.tick(1000)
   rejectClose(new Error('close failed after exit'))
   await assert.rejects(lateClose, /close failed after exit/)
 
@@ -74,7 +88,7 @@ test('electron cleanup drains transport pipes inherited by a surviving child', {
   })
   const exited = new Promise((resolve) => child.once('exit', resolve))
   const closed = new Promise((resolve) => child.once('close', resolve))
-  const shutdown = waitForElectronExit(child, new Promise(() => {}))
+  const shutdown = waitForElectronExit(child, closed)
   await exited
   await shutdown
   assert.ok(child.stdio.slice(1).every((stream) => stream.destroyed))

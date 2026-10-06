@@ -105,7 +105,7 @@ test('right arrow exits final formatting without changing text or trapping the c
     await rich.press('ArrowRight')
     const escaped = await rich.evaluate((element) => {
       const editor = element.editor
-      const marker = element.querySelector('.markdown-marker:last-of-type')
+      const marker = [...element.querySelectorAll('.markdown-marker')].at(-1)
       return {
         doc: editor.getJSON(),
         marks: editor.state.storedMarks?.map((mark) => mark.type.name),
@@ -184,6 +184,105 @@ test('right arrow exits final formatting without changing text or trapping the c
     { type: 'text', text: 'x' },
     'formatting can be exited with markers hidden',
   )
+})
+
+test('drawn caret leaves final formatting at the end of the document', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-markers-caret-'))
+  const note = join(profile, 'caret.md')
+  await writeFile(note, '**hello**')
+  await writeFile(join(profile, 'addons.json'), JSON.stringify({ math: true }))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`, note],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(8000)
+  const rich = page.getByRole('textbox', { name: /document editor/i })
+  for (const hints of [true, false]) {
+    await page.evaluate(
+      (hints) => localStorage.setItem('markdown-markers', String(hints)),
+      hints,
+    )
+    await page.reload()
+    await rich.waitFor()
+    for (const html of ['<strong>hello</strong>', '<code>hello</code>']) {
+      const label = `${html} with hints ${hints ? 'on' : 'off'}`
+      await rich.evaluate((element, html) => {
+        element.editor.commands.setContent(`<p>${html}</p>`)
+        element.editor.commands.setTextSelection(6)
+        element.editor.view.focus()
+      }, html)
+      await page.locator('.editor-cursor').waitFor()
+      await rich.press('ArrowRight')
+      // The drawn caret, not the editor position, must sit outside the styled box.
+      await page.waitForFunction(() => {
+        const caret = document.querySelector('.editor-cursor')
+        const mark = document.querySelector('.tiptap p > :is(strong, code)')
+        return (
+          caret &&
+          caret.getBoundingClientRect().left >=
+            mark.getBoundingClientRect().right - 0.5
+        )
+      }, null)
+      assert.equal(
+        await rich.locator('.markdown-marker').count(),
+        hints ? 2 : 0,
+        label,
+      )
+      await page.keyboard.insertText('x')
+      assert.deepEqual(
+        await rich.evaluate((element) =>
+          element.editor.getJSON().content[0].content.at(-1),
+        ),
+        { type: 'text', text: 'x' },
+        label,
+      )
+    }
+  }
+  // Inline nodes are not formatting placeholders; a tall equation keeps a text-sized caret.
+  await page.waitForFunction(
+    () => document.querySelector('.tiptap')?.editor.schema.nodes.inlineMath,
+  )
+  await rich.evaluate((element) => {
+    element.editor.commands.setContent(
+      '<p>hello <span data-type="inline-math" data-latex="\\dfrac{1}{\\dfrac{1}{2}}"></span></p>',
+    )
+    element.editor.commands.setTextSelection(1)
+    element.editor.view.focus()
+  })
+  await page.locator('.tiptap-mathematics-render .katex').waitFor()
+  await rich.press('End')
+  const math = await page.evaluate(async () => {
+    // The drawn caret measures on the next frame after the selection moves.
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    )
+    const caret = document
+      .querySelector('.editor-cursor')
+      .getBoundingClientRect()
+    return {
+      caret: { top: caret.top, bottom: caret.bottom, height: caret.height },
+      formula: document
+        .querySelector('.tiptap-mathematics-render')
+        .getBoundingClientRect()
+        .toJSON(),
+      fontSize: Number.parseFloat(
+        getComputedStyle(document.querySelector('.tiptap p')).fontSize,
+      ),
+    }
+  })
+  assert.ok(math.formula.height > math.fontSize * 2, JSON.stringify(math))
+  assert.ok(math.caret.height < math.fontSize * 1.5, JSON.stringify(math))
+  assert.ok(math.caret.top >= math.formula.top - 1, JSON.stringify(math))
+  assert.ok(math.caret.bottom <= math.formula.bottom + 1, JSON.stringify(math))
 })
 
 test('rich markers follow only the focused block, preserve copying and undo, and can be disabled', {

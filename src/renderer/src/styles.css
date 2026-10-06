@@ -1427,16 +1427,35 @@ button.ui-button.update-download-button:disabled {
 }
 :is(.tiptap, .format-content) ul,
 :is(.tiptap, .format-content) ol {
+  margin: 0 0 1em;
   padding-left: 1.5em;
 }
-:is(.tiptap, .format-content) li p {
-  margin-bottom: 0.3em;
+/* Items and nested lists sit 0.3em apart; blocks within an item keep a paragraph-sized gap whatever
+   their own font size. Only top margins are used because task items are flex containers, which
+   don't collapse child margins. Task item content sits in a div after the checkbox label. */
+:is(.tiptap, .format-content) :is(li, li > label + div) > * {
+  margin-block: 0;
+}
+:is(.tiptap, .format-content) :is(li, li > label + div) > :not(label) + * {
+  margin-top: var(--text-editor);
+}
+:is(.tiptap, .format-content) li + li,
+:is(.tiptap, .format-content) :is(li, li > label + div) > :is(ul, ol) {
+  margin-top: 0.3em;
+}
+/* Node views wrap their block, so the wrapper carries the item spacing. */
+:is(.tiptap, .format-content) li .tableWrapper > table,
+:is(.tiptap, .format-content) li [data-node-view-wrapper] {
+  margin-block: 0;
 }
 :is(.tiptap, .format-content) blockquote {
   margin-inline: 0;
   padding-left: 20px;
   border-left: 1px solid var(--border);
   color: var(--syntax-quote);
+}
+:is(.tiptap, .format-content) blockquote > :last-child {
+  margin-bottom: 0;
 }
 :is(.tiptap, .format-content) pre {
   background: var(--code-background);
@@ -1504,15 +1523,6 @@ button.ui-button.update-download-button:disabled {
 .tiptap ul[data-type="taskList"] li > div {
   flex: 1;
   min-width: 0;
-}
-/* Flex items keep the last item's paragraph margin; cancel it into the list margin like a bullet list.
-   ponytail: covers outer lists followed by more content only. Nested and document-final lists keep
-   the old gap, and items ending in code still assume paragraph margin. Do a fuller list spacing
-   pass after visual checks. */
-.tiptap
-  ul[data-type="taskList"]:not(:last-child, :is(ul, ol) *)
-  > li:last-child {
-  margin-bottom: -0.3em;
 }
 .tiptap input[type="checkbox"] {
   accent-color: var(--accent);

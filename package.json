@@ -32,6 +32,7 @@
     "copy:catalog": "node scripts/ui-copy.mjs",
     "copy:check": "node scripts/ui-copy.mjs --check",
     "sdk:pack": "npm pack ./packages/addon-sdk",
+    "create:addon": "node packages/create-hibi-addon/index.mjs",
     "export:docs": "npm run build:site && node scripts/export-docs.mjs",
     "check": "npm run lint && npm run docs:check && npm run copy:check && npm test",
     "check:ci": "node scripts/ci.mjs",

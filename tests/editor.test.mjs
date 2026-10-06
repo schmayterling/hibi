@@ -45,11 +45,11 @@ test('empty entry, three views, and lossless source switching', {
       document.querySelector('.workspace-sidebar').getAttribute('data-open') ===
       'false',
   )
-  await page.waitForFunction(
-    () => getComputedStyle(document.querySelector('.titlebar')).opacity === '0',
-  )
-  await page.waitForFunction(
-    () => getComputedStyle(document.querySelector('.titlebar')).opacity === '1',
+  assert.equal(
+    await page.evaluate(
+      () => getComputedStyle(document.querySelector('.titlebar')).opacity,
+    ),
+    '1',
   )
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })

@@ -18,6 +18,7 @@ import { GithubAlert } from '../src/addons/markdown/GithubAlert.ts'
 import { Subscript, Subtext } from '../src/addons/text-extras/nodes.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
 import { documentImage } from '../src/renderer/src/DocumentImage.ts'
+import { parseEmptyTaskItems } from '../src/renderer/src/list-tokenizer-prefix.ts'
 import { editorExtensions } from '../src/renderer/src/markdown.ts'
 import { createMarkdownSemantics } from '../src/renderer/src/markdown-semantics.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
@@ -45,7 +46,10 @@ const context = { before: false, after: false }
 const tokens = (source, taskGrammar = false) => {
   const parser = new Marked({ gfm: true }, alertMarkdown, textExtrasMarkdown)
   if (taskGrammar)
-    new MarkdownManager({ marked: parser, extensions: [TaskList, TaskItem] })
+    new MarkdownManager({
+      marked: parser,
+      extensions: [parseEmptyTaskItems(TaskList), TaskItem],
+    })
   return structuredClone([
     ...new parser.Lexer({ ...parser.defaults, tokenizer: null }).lex(source),
   ])
@@ -96,6 +100,11 @@ test('schema-only consumption matches current editor declarations without creati
     'one  \ntwo\n\n---\n\n```js\nconst x = 1\n```',
     '> quote\n>\n> ## nested heading\n>\n> - item',
     '- ordinary\n- items',
+    '- [ ]',
+    '- [ ] ',
+    '- [x]',
+    '- ordinary\n- [ ]',
+    '- ordinary\r\n- [ ]',
     '| a | b |\n|---|---|\n| c | d |',
     '> [!WARNING]\n> **careful**',
     'H~2~O and ~~strike~~\n\n-# small **words**',
@@ -143,6 +152,13 @@ test('public task tokenizer output consumes without native source re-lexing', ()
     '- [ ] **bold** H~2~O\n  - [x] nested\n  - ordinary',
     '> - [ ] quote task\n> - [x] complete',
     '- [ ] task\n- ordinary',
+    '- [ ]\n- [ ]',
+    '- [ ]\r\n- [x]\r\n',
+    '- [X]',
+    '> - [ ] a\n> - [ ]',
+    '> [!NOTE]\n> - [ ]\n> - [x]',
+    '- [ ]\n  lazy',
+    '1. [ ]',
   ]) {
     const actual = reader.read(tokens(source, true), context),
       expected = readFull(source)

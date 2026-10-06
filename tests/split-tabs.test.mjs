@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { electron } from './electron.mjs'
-import { clickMenu, splitTab } from './keyboard.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
+import { clickMenu, replaceRichText, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('split panes keep both editors mounted, edit both files, and share one document session', {
@@ -32,7 +32,7 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7500)
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await waitForDocumentEditor(app, page)
   await page.locator('[data-status-id="autosave"]').click()
   await page.getByRole('checkbox', { name: /^autosave$/i }).check()
   await page.getByLabel(/^save after$/i).selectOption('1000')
@@ -51,6 +51,7 @@ test('split panes keep both editors mounted, edit both files, and share one docu
       async (name) => (await window.hibi.getDocument()).name === name,
       basename(file),
     )
+    await waitForDocumentEditor(app, page)
   }
   await open(a)
   const aId = (await page.evaluate(() => window.hibi.getDocument())).tabId
@@ -142,7 +143,12 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   await left.waitFor()
   await right.waitFor()
   assert.equal(await page.locator('.editor-page[data-side]').count(), 2)
-  await page.waitForTimeout(500)
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    bId,
+  )
+  await waitForDocumentEditor(app, page)
   const splitState = await page.evaluate(async () => ({
     native: (await window.hibi.getDocument()).tabId,
     panes: Array.from(document.querySelectorAll('.editor-page[data-side]')).map(
@@ -258,7 +264,8 @@ test('split panes keep both editors mounted, edit both files, and share one docu
       return append(...args)
     })
   })
-  await left.fill('edited a')
+  await waitForDocumentEditor(app, page)
+  await replaceRichText(page, left, 'edited a')
   await app.evaluate(() => globalThis.splitAppendStarted)
   await right.click()
   await page.waitForFunction(
@@ -372,7 +379,8 @@ test('split panes keep both editors mounted, edit both files, and share one docu
     },
     { path: bPath, tabId: bId },
   )
-  await right.fill('edited b')
+  await waitForDocumentEditor(app, page)
+  await replaceRichText(page, right, 'edited b')
   const autosaveDeadline = performance.now() + 7000
   let autosaveState
   do {
@@ -492,6 +500,7 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   await leftSource.waitFor()
   await rightSource.waitFor()
   await rightSource.click()
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await rightSource.press('End')
   await page.keyboard.type('!')
   await page.waitForFunction(() =>

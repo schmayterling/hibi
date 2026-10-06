@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -8,10 +8,11 @@ import {
   waitForEditor,
 } from '../scripts/benchmark-flows.mjs'
 
-test('failed list indentation keeps focus and task lists match bullet spacing', {
+test('failed list indentation keeps focus and lists keep one spacing rhythm', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-list-navigation-'))
+  await writeFile(join(profile, 'addons.json'), JSON.stringify({ typst: true }))
   const app = await launchBenchmarkApp(profile)
   t.after(async () => {
     await app.close()
@@ -66,36 +67,115 @@ test('failed list indentation keeps focus and task lists match bullet spacing', 
       `${type}: second Tab keeps editor focus`,
     )
   }
-  const gaps = await page.locator('.tiptap').evaluate((element) => {
-    const editor = element.editor
-    return ['bulletList', 'taskList'].map((type) => {
-      editor.commands.setContent({
-        type: 'doc',
-        content: [
-          {
-            type,
-            content: [
-              {
-                type: type === 'taskList' ? 'taskItem' : 'listItem',
-                attrs: { checked: false },
-                content: [
-                  {
-                    type: 'paragraph',
-                    content: [{ type: 'text', text: 'item' }],
-                  },
-                ],
-              },
-            ],
-          },
-          { type: 'paragraph', content: [{ type: 'text', text: 'after' }] },
-        ],
-      })
-      const list = element.querySelector('ul')
-      return (
-        list.nextElementSibling.getBoundingClientRect().top -
-        list.querySelector('li p').getBoundingClientRect().bottom
-      )
+  const spacing = []
+  for (const marker of ['-', '- [ ]']) {
+    await page.locator('.tiptap').evaluate(
+      (element, markdown) => {
+        element.editor.commands.setContent(markdown, {
+          contentType: 'markdown',
+        })
+      },
+      [
+        'before',
+        'after',
+        `${marker} one\n${marker} two\n\n  second\n${marker} three\n  ${marker} nested`,
+        `${marker} code\n\n  \`\`\`\n  x\n  \`\`\`\n${marker} quote\n\n  > quoted\n${marker} table\n\n  | a |\n  | - |\n  | 1 |\n${marker} typst\n\n  \`\`\`typst\n  = Hi\n  \`\`\`\n${marker} heading\n\n  # big\n${marker} subtext\n\n  -# small\n${marker} last`,
+        'end',
+        `${marker} final`,
+      ].join('\n\n'),
+    )
+    await page.locator('.tiptap .typst-block').waitFor()
+    spacing.push(
+      await page.locator('.tiptap').evaluate((element) => {
+        const box = (target) =>
+          (typeof target === 'string'
+            ? [...element.querySelectorAll('p, pre, h1')].find(
+                (block) => block.textContent === target,
+              )
+            : target
+          ).getBoundingClientRect()
+        const gap = (from, to) => Math.round(box(to).top - box(from).bottom)
+        const table = element.querySelector('table')
+        const typst = element.querySelector('.typst-block')
+        // The document ends in a list, which should leave the same trailing space as a paragraph.
+        const final = element.lastElementChild
+        return {
+          paragraph: gap('before', 'after'),
+          intoList: gap('after', 'one'),
+          withinItem: gap('two', 'second'),
+          outOfList: gap('last', 'end'),
+          item: gap('one', 'two'),
+          nested: gap('three', 'nested'),
+          afterCode: gap('x', 'quote'),
+          afterQuote: gap('quoted', 'table'),
+          intoTable: gap('table', table),
+          afterTable: gap(table, 'typst'),
+          intoTypst: gap('typst', typst),
+          afterTypst: gap(typst, 'heading'),
+          intoHeading: gap('heading', 'big'),
+          afterHeading: gap('big', 'subtext'),
+          intoSubtext: gap('subtext', 'small'),
+          afterSubtext: gap('small', 'last'),
+          final: Math.round(
+            box(final).bottom +
+              Number.parseFloat(getComputedStyle(final).marginBottom) -
+              box('final').bottom,
+          ),
+        }
+      }),
+    )
+  }
+  for (const gaps of spacing) {
+    const { paragraph, item } = gaps
+    assert.ok(item > 0 && item < paragraph, JSON.stringify(gaps))
+    assert.deepEqual(gaps, {
+      paragraph,
+      intoList: paragraph,
+      withinItem: paragraph,
+      outOfList: paragraph,
+      item,
+      nested: item,
+      afterCode: item,
+      afterQuote: item,
+      intoTable: paragraph,
+      afterTable: item,
+      intoTypst: paragraph,
+      afterTypst: item,
+      intoHeading: paragraph,
+      afterHeading: item,
+      intoSubtext: paragraph,
+      afterSubtext: item,
+      final: paragraph,
     })
+  }
+  assert.deepEqual(spacing[1], spacing[0], 'task lists match bullet lists')
+  // Rendered previews put tight item text straight into the li, before any nested list.
+  const rendered = await page.evaluate(() => {
+    const host = document.createElement('div')
+    host.className = 'format-content'
+    host.innerHTML = `<ul><li>sibling</li>${[
+      'plain',
+      '<strong>formatted</strong>',
+      '<input disabled="" type="checkbox"> checkbox',
+    ]
+      .map((parent) => `<li>${parent}<ul><li>child</li></ul></li>`)
+      .join('')}</ul>`
+    document.body.append(host)
+    const top = (element) => element.getBoundingClientRect().top
+    const [sibling, ...items] = host.querySelectorAll(':scope > ul > li')
+    const result = {
+      pitch: Math.round(top(items[0]) - top(sibling)),
+      nested: items.map((item) =>
+        Math.round(top(item.querySelector('ul')) - top(item)),
+      ),
+    }
+    host.remove()
+    return result
   })
-  assert.ok(Math.abs(gaps[0] - gaps[1]) < 1, `list gaps differ: ${gaps}`)
+  const { pitch } = rendered
+  assert.deepEqual(
+    rendered.nested,
+    [pitch, pitch, pitch],
+    'rendered nested lists',
+  )
 })

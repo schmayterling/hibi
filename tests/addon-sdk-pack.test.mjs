@@ -261,13 +261,21 @@ test('generated addon installs, enables, runs, disables, and re-enables', {
       await page
         .getByRole('tab', { name: 'Addon Manager', exact: true })
         .click()
-      await page.locator('#addon-command-proof').setChecked(enabled)
+      // The controlled toggle updates after IPC; setChecked asserts too early.
+      await page.locator('#addon-command-proof').click()
       await waitForAsync(
         page,
-        async (enabled) =>
-          (await window.hibi.getAddonStates()).find(
+        async (enabled) => {
+          const state = (await window.hibi.getAddonStates()).find(
             ({ id }) => id === 'command-proof',
-          )?.enabled === enabled,
+          )
+          const checkbox = document.querySelector('#addon-command-proof')
+          return (
+            state?.enabled === enabled &&
+            checkbox?.checked === enabled &&
+            !checkbox.disabled
+          )
+        },
         enabled,
       )
       await page

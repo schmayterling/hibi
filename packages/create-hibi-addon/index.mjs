@@ -82,7 +82,9 @@ async function create() {
       const content = await readFile(join(template, file), 'utf8')
       await writeFile(
         join(target, file),
-        content.replace(/__HIBI_[A-Z_]+__/g, (token) => replacements.get(token)),
+        content.replace(/__HIBI_[A-Z_]+__/g, (token) =>
+          replacements.get(token),
+        ),
       )
     }
   } catch (error) {

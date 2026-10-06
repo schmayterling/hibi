@@ -274,9 +274,7 @@ test('generated addon installs, enables, runs, disables, and re-enables', {
         .getByRole('button', { name: 'Back to app', exact: true })
         .click()
       await clickMenu(app, 'Command palette')
-      await page
-        .getByRole('combobox', { name: /search commands/i })
-        .fill('sa')
+      await page.getByRole('combobox', { name: /search commands/i }).fill('sa')
       await page.getByRole('option', { name: /^Save as/i }).waitFor()
       const command = page.getByRole('option', { name: /^Say hello/i })
       if (enabled) {

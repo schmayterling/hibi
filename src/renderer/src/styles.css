@@ -1426,16 +1426,29 @@ button.ui-button.update-download-button:disabled {
 }
 :is(.tiptap, .format-content) ul,
 :is(.tiptap, .format-content) ol {
+  margin: 0 0 1em;
   padding-left: 1.5em;
 }
-:is(.tiptap, .format-content) li p {
-  margin-bottom: 0.3em;
+/* Items and nested lists sit 0.3em apart; blocks within an item keep paragraph spacing. Only top
+   margins are used because task items are flex containers, which don't collapse child margins. */
+:is(.tiptap, .format-content) :is(li, li > div) > * {
+  margin-block: 0;
+}
+:is(.tiptap, .format-content) :is(li, li > div) > :not(label) + * {
+  margin-top: 1em;
+}
+:is(.tiptap, .format-content) li + li,
+:is(.tiptap, .format-content) :is(li, li > div) > :not(label) + :is(ul, ol) {
+  margin-top: 0.3em;
 }
 :is(.tiptap, .format-content) blockquote {
   margin-inline: 0;
   padding-left: 20px;
   border-left: 1px solid var(--border);
   color: var(--syntax-quote);
+}
+:is(.tiptap, .format-content) blockquote > :last-child {
+  margin-bottom: 0;
 }
 :is(.tiptap, .format-content) pre {
   background: var(--code-background);
@@ -1503,15 +1516,6 @@ button.ui-button.update-download-button:disabled {
 .tiptap ul[data-type="taskList"] li > div {
   flex: 1;
   min-width: 0;
-}
-/* Flex items keep the last item's paragraph margin; cancel it into the list margin like a bullet list.
-   ponytail: covers outer lists followed by more content only. Nested and document-final lists keep
-   the old gap, and items ending in code still assume paragraph margin. Do a fuller list spacing
-   pass after visual checks. */
-.tiptap
-  ul[data-type="taskList"]:not(:last-child, :is(ul, ol) *)
-  > li:last-child {
-  margin-bottom: -0.3em;
 }
 .tiptap input[type="checkbox"] {
   accent-color: var(--accent);

@@ -93,12 +93,15 @@ export function EditorCursor({
       let rect = range.getBoundingClientRect()
       if (!rect.height && range.startContainer instanceof Element) {
         // Empty paragraphs have no range box; the line break carries the font baseline.
-        // Between inline elements, the caret follows the element before it.
+        // After exiting final formatting, the caret follows the empty placeholder.
         const { childNodes } = range.startContainer
         const child = childNodes[range.startOffset]
         const before = childNodes[range.startOffset - 1]
         if (child instanceof HTMLBRElement) rect = child.getBoundingClientRect()
-        else if (before instanceof HTMLElement) {
+        else if (
+          before instanceof HTMLElement &&
+          before.classList.contains('mark-exit')
+        ) {
           const box = before.getBoundingClientRect()
           rect = new DOMRect(box.right, box.top, 0, box.height)
         }

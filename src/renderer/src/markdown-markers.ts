@@ -65,7 +65,12 @@ export const MarkdownMarkExit = Extension.create({
             return DecorationSet.create(doc, [
               Decoration.widget(
                 selection.head,
-                (view) => view.dom.ownerDocument.createElement('span'),
+                (view) => {
+                  const placeholder =
+                    view.dom.ownerDocument.createElement('span')
+                  placeholder.className = 'mark-exit'
+                  return placeholder
+                },
                 { side: -1, marks: [], key: 'mark-exit' },
               ),
             ])

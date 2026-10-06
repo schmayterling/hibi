@@ -27,7 +27,9 @@ const taskPrefix = /^\s*[-+*][^\S\n]+\[[ xX]\][^\S\n]/
 const emptyTaskPrefix = /^\s*[-+*][^\S\n]+\[[ xX]\](?=\s|$)/
 const emptyTask: MarkdownTokenizer = {
   ...task,
-  start: (source) => (emptyTaskPrefix.test(source) ? 0 : -1),
+  // Marked already finds line-start bullets. Its start probe drops the first
+  // character, so matching here would turn "x- [ ]" into a task list.
+  start: () => -1,
   tokenize(source, _tokens, lexer) {
     if (!emptyTaskPrefix.test(source)) return undefined
     // Keep native indentation handling, but accept a checkbox at end of line.

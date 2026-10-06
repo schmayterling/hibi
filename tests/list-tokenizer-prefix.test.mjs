@@ -162,6 +162,8 @@ const taskFixtures = [
   ],
   ['1. [ ]', [block('orderedList', listItem('[ ]'))]],
   ['- [ ]text', [block('bulletList', listItem('[ ]text'))]],
+  ['x- [ ]', [paragraph('x- [ ]')]],
+  ['one\n- [ ]', [paragraph('one'), block('taskList', taskItem(false))]],
 ]
 
 test('empty, mixed and nested task items parse and round-trip without changing source bytes', () => {

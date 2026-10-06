@@ -135,6 +135,45 @@ test('native empty paragraphs serialize as blank lines and pass source preservat
   }
 })
 
+test('rich soft breaks render as spaces and retain their source after an unrelated edit', () => {
+  const { core, parser, options } = markdownConfiguration([])
+  const schema = getSchema(core)
+  const manager = new MarkdownManager({
+    extensions: core,
+    marked: parser,
+    markedOptions: options,
+  })
+  for (const block of [
+    'a\nb',
+    '**a\nb**',
+    '> a\n> b',
+    '- a\n  b',
+    'a\nb\n=====',
+  ]) {
+    const original = `${block}\n\nelsewhere`
+    const before = schema.nodeFromJSON(manager.parse(original))
+    assert.equal(before.firstChild.textContent, 'a b')
+    const after = schema.nodes.doc.create(null, [
+      before.firstChild,
+      schema.nodes.paragraph.create(null, schema.text('edited elsewhere')),
+    ])
+    const preserved = preserveRichSource(
+      original,
+      manager.serialize(before.toJSON()),
+      manager.serialize(after.toJSON()),
+      (candidate) => schema.nodeFromJSON(manager.parse(candidate)).eq(after),
+    )
+    assert.equal(preserved, `${block}\n\nedited elsewhere`)
+    assert.ok(schema.nodeFromJSON(manager.parse(preserved)).eq(after))
+  }
+  assert.equal(parser.parse('a\nb'), '<p>a\nb</p>\n')
+  assert.equal(manager.parse('a  \nb').content[0].content[1].type, 'hardBreak')
+  assert.equal(
+    schema.nodeFromJSON(manager.parse('```\na\nb\n```')).firstChild.textContent,
+    'a\nb',
+  )
+})
+
 test('undeclared serializers retain the full-document path and custom document joining', () => {
   let generation = 0
   const CustomDocument = Node.create({

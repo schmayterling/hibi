@@ -118,6 +118,52 @@ test('blank paragraphs and typed spaces survive tab switches without nonbreaking
   assert.equal(await readFile(file, 'utf8'), typed.markdown)
 })
 
+for (const spaces of [1, 2]) {
+  test(`typing a letter after ${spaces} trailing spaces keeps regular spaces`, {
+    timeout: 30000,
+  }, async (t) => {
+    const profile = await mkdtemp(join(tmpdir(), 'hibi-trailing-space-'))
+    const app = await launchBenchmarkApp(profile)
+    t.after(async () => {
+      await app.close()
+      await rm(profile, { recursive: true, force: true })
+    })
+    const page = await app.firstWindow()
+    const whitespaceWarnings = []
+    page.on('console', (message) => {
+      if (/white-space/.test(message.text()))
+        whitespaceWarnings.push(message.text())
+    })
+    await waitForEditor(page)
+    const rich = page.getByRole('textbox', { name: 'Document editor' })
+    assert.equal(
+      await rich.evaluate((element) => getComputedStyle(element).whiteSpace),
+      'pre-wrap',
+    )
+    await rich.click()
+    await page.keyboard.type('hi')
+    for (let index = 0; index < spaces; index++)
+      await page.keyboard.press('Space')
+    await page.keyboard.type('x')
+    const expected = `hi${' '.repeat(spaces)}x`
+    await waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      expected,
+    )
+    const { markdown } = await page.evaluate(() => window.hibi.getDocument())
+    assert.equal(markdown, expected)
+    assert.doesNotMatch(markdown, /&nbsp;|\u00a0/)
+    assert.equal(await rich.textContent(), expected)
+    assert.deepEqual(whitespaceWarnings, [])
+    await rich.evaluate((element) => element.editor.commands.undo())
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).markdown === '',
+    )
+  })
+}
+
 test('long documents with HTML and reference syntax stay visually editable through save and undo', {
   timeout: 60000,
 }, async (t) => {

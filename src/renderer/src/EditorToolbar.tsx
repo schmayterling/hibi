@@ -135,7 +135,7 @@ export function EditorToolbar({
   }, [items, mode, preferences, hasMenuItems])
   const shown = new Set(inline.slice(0, count).map((item) => item.id))
   const overflow = visible.filter((item) => !shown.has(item.id))
-  const hidden = typing && preferences.autoHide !== false && !open
+  const hidden = typing && preferences.autoHide === true && !open
   const closeMenu = () => {
     menu.current?.hidePopover()
     setOpen(false)
@@ -329,7 +329,7 @@ export function ToolbarSettings() {
         >
           <Toggle
             id="toolbar-autohide"
-            checked={preferences.autoHide !== false}
+            checked={preferences.autoHide === true}
             onChange={(event) =>
               toolbar.setPreferences({ autoHide: event.target.checked })
             }

@@ -25,7 +25,7 @@ const validPlacements = (
 let preferences: ToolbarPreferences = {
   visible: true,
   mode: 'icons',
-  autoHide: true,
+  autoHide: false,
 }
 try {
   const saved = JSON.parse(localStorage.getItem(key) ?? '{}')
@@ -74,7 +74,7 @@ function setPreferences(changes: Partial<ToolbarPreferences>) {
     autoHide:
       typeof changes.autoHide === 'boolean'
         ? changes.autoHide
-        : (preferences.autoHide ?? true),
+        : (preferences.autoHide ?? false),
     order:
       changes.order === undefined
         ? (preferences.order ?? [])

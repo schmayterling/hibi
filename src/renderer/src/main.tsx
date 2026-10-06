@@ -1071,7 +1071,7 @@ function App() {
     return Number.isInteger(value) && value >= 0 && value <= 96 ? value : 48
   })
   const [hideTitlebar, setHideTitlebar] = useState(
-    () => localStorage.getItem('hide-titlebar') !== 'false',
+    () => localStorage.getItem('hide-titlebar') === 'true',
   )
   const [statusBar, setStatusBar] = useState<StatusBarVisibility>(() => {
     const saved = localStorage.getItem('status-bar')

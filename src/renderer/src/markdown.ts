@@ -53,7 +53,8 @@ export function markdownConfiguration(
       const tokens = super.lex(source)
       // Tiptap consumes tokens directly; soft breaks need spaces with pre-wrap.
       parser.walkTokens(tokens, (token) => {
-        if (token.type === 'text') token.text = token.text.replaceAll('\n', ' ')
+        if (token.type === 'text')
+          token.text = token.text.replace(/[ \t]*\n[ \t]*/g, ' ')
         return []
       })
       return tokens

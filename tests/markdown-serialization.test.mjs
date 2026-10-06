@@ -151,6 +151,9 @@ test('rich soft breaks render as spaces and retain their source after an unrelat
   })
   for (const [block, text] of [
     ['a\nb', 'a b'],
+    ['a \nb', 'a b'],
+    ['1. a\n   b', 'a b'],
+    ['a\t\n\tb', 'a b'],
     ['**a\nb**', 'a b'],
     ['> a\n> b', 'a b'],
     ['- a\n  b', 'a b'],

@@ -1,12 +1,167 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { flattenExtensions, getExtensionField, Node } from '@tiptap/core'
+import {
+  flattenExtensions,
+  getExtensionField,
+  getSchema,
+  Node,
+} from '@tiptap/core'
 import { OrderedList, TaskItem, TaskList } from '@tiptap/extension-list'
 import { MarkdownManager } from '@tiptap/markdown'
 import { StarterKit } from '@tiptap/starter-kit'
 import { Marked } from 'marked'
 import { guardNativeListTokenizer } from '../src/renderer/src/list-tokenizer-prefix.ts'
 import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
+import { preserveRichSource } from '../src/renderer/src/rich-source-preservation.ts'
+
+function taskParser() {
+  const { parser, options, core, addons } = markdownConfiguration([
+    {
+      id: 'github-markdown.github',
+      markedOptions: { gfm: true },
+      richExtensions: [TaskList, TaskItem.configure({ nested: true })],
+    },
+  ])
+  const extensions = [...core, ...addons]
+  const schema = getSchema(extensions)
+  const manager = new MarkdownManager({
+    extensions,
+    marked: parser,
+    markedOptions: options,
+  })
+  return { manager, schema }
+}
+
+const taskFixtures = [
+  ['- [ ]', [['taskItem', false, '']]],
+  ['- [ ] ', [['taskItem', false, '']]],
+  ['- [x]', [['taskItem', true, '']]],
+  ['+ [x]', [['taskItem', true, '']]],
+  ['* [ ]', [['taskItem', false, '']]],
+  [
+    '- [ ] a\n- [ ] b',
+    [
+      ['taskItem', false, 'a'],
+      ['taskItem', false, 'b'],
+    ],
+  ],
+  [
+    '- [ ] a\n- [ ]',
+    [
+      ['taskItem', false, 'a'],
+      ['taskItem', false, ''],
+    ],
+  ],
+  [
+    '- a\n- [ ] b',
+    [
+      ['listItem', null, 'a'],
+      ['taskItem', false, 'b'],
+    ],
+  ],
+  [
+    '- a\n- [ ]',
+    [
+      ['listItem', null, 'a'],
+      ['taskItem', false, ''],
+    ],
+  ],
+  [
+    '- [ ]\n- a',
+    [
+      ['taskItem', false, ''],
+      ['listItem', null, 'a'],
+    ],
+  ],
+  [
+    '- [x]\n- a\n- [ ]',
+    [
+      ['taskItem', true, ''],
+      ['listItem', null, 'a'],
+      ['taskItem', false, ''],
+    ],
+  ],
+  [
+    '- parent\n  - [ ]\n  - [x] done',
+    [
+      ['listItem', null, 'parent'],
+      ['taskItem', false, ''],
+      ['taskItem', true, 'done'],
+    ],
+  ],
+  [
+    '- [ ]\n  - child',
+    [
+      ['taskItem', false, ''],
+      ['listItem', null, 'child'],
+    ],
+  ],
+  [
+    '- [ ]\n\n  - child',
+    [
+      ['taskItem', false, ''],
+      ['listItem', null, 'child'],
+    ],
+  ],
+  ['- [ ]text', [['listItem', null, '[ ]text']]],
+]
+
+test('empty, mixed and nested task items parse and round-trip without changing source bytes', () => {
+  const { manager, schema } = taskParser()
+  for (const [fixture, expected] of taskFixtures) {
+    for (const eol of ['\n', '\r\n']) {
+      for (const ending of ['', eol]) {
+        const source = fixture.replaceAll('\n', eol) + ending
+        const doc = schema.nodeFromJSON(manager.parse(source))
+        doc.check()
+        const items = []
+        doc.descendants((node) => {
+          if (['taskItem', 'listItem'].includes(node.type.name))
+            items.push([
+              node.type.name,
+              node.attrs.checked ?? null,
+              node.firstChild.textContent,
+            ])
+        })
+        assert.deepEqual(items, expected, JSON.stringify(source))
+        const serialized = manager.serialize(doc.toJSON())
+        assert.ok(schema.nodeFromJSON(manager.parse(serialized)).eq(doc))
+        assert.equal(
+          preserveRichSource(source, serialized, serialized, (candidate) =>
+            schema.nodeFromJSON(manager.parse(candidate)).eq(doc),
+          ),
+          source,
+        )
+        const changed = structuredClone(doc.toJSON())
+        let toggled = false
+        const toggle = (node) => {
+          if (!toggled && node.type === 'taskItem') {
+            node.attrs.checked = !node.attrs.checked
+            toggled = true
+          }
+          node.content?.forEach(toggle)
+        }
+        toggle(changed)
+        if (!toggled) continue
+        const after = schema.nodeFromJSON(changed)
+        const edited = preserveRichSource(
+          source,
+          serialized,
+          manager.serialize(changed),
+          (candidate) =>
+            schema.nodeFromJSON(manager.parse(candidate)).eq(after),
+        )
+        assert.equal(
+          edited,
+          source.replace(/\[([ xX])\]/, (_, checked) =>
+            checked === ' ' ? '[x]' : '[ ]',
+          ),
+          JSON.stringify(source),
+        )
+      }
+    }
+  }
+})
 
 const lexer = {
   inlineTokens: (source) => [{ type: 'text', raw: source, text: source }],

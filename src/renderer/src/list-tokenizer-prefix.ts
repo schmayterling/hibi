@@ -62,7 +62,7 @@ export function parseEmptyTaskItems(extension: AnyExtension) {
         }
         const type = checkbox ? 'taskList' : 'bulletList'
         const previous = groups.at(-1)
-        if (previous?.type === type) previous.content!.push(node)
+        if (previous?.type === type) previous.content?.push(node)
         else groups.push({ type, content: [node] })
       }
       return groups

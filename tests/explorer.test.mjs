@@ -10,7 +10,11 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import {
+  electron,
+  waitForAppState,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -37,8 +41,10 @@ test('workspace popovers, durable folders, ephemeral files, inline rename, dirty
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await waitForDocumentEditor(app, page)
   await pressShortcut(app, `${mod}+Shift+o`)
+  await waitForAppState(page, async () => !!(await window.hibi.getWorkspace()))
+  await waitForDocumentEditor(app, page)
   await page.getByRole('button', { name: /new workspace folder/i }).click()
   const rename = page.getByRole('textbox', { name: /rename item/i })
   await rename.waitFor()
@@ -96,11 +102,7 @@ test('workspace popovers, durable folders, ephemeral files, inline rename, dirty
     'rename text retains the filename indentation',
   )
   const rich = page.getByRole('textbox', { name: /document editor/i })
-  await page.waitForFunction(
-    () =>
-      document.querySelector('.tiptap')?.getAttribute('contenteditable') ===
-      'true',
-  )
+  await waitForDocumentEditor(app, page)
   await rich.fill('unsaved text')
   assert.equal(await page.locator('.sidebar-dirty').count(), 1)
   await assert.rejects(access(join(root, 'guides', 'hello.md')))

@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict'
-import { watch } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -24,7 +23,7 @@ test('disk refresh after focusing an older tab advances its revision', {
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await waitForDocumentEditor(app, page)
   const open = async (file) => {
     await app.evaluate(({ dialog }, selected) => {
       dialog.showOpenDialog = async () => ({
@@ -62,19 +61,17 @@ test('an inactive journal edit survives a pending disk refresh', {
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-tab-refresh-'))
   const a = join(root, 'a.md'),
-    b = join(root, 'b.md'),
-    entered = join(root, 'read-entered'),
-    released = join(root, 'read-released')
+    b = join(root, 'b.md')
   await writeFile(a, 'original a')
   await writeFile(b, 'original b')
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
   })
   t.after(async () => {
-    await writeFile(released, '')
     await app
       .evaluate(({ dialog }) => {
         dialog.showMessageBox = async () => ({ response: 1 })
+        globalThis.reloadGate?.release()
         globalThis.reloadGate?.restore()
       })
       .catch(() => {})
@@ -82,7 +79,7 @@ test('an inactive journal edit survives a pending disk refresh', {
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await waitForDocumentEditor(app, page)
   const open = async (file) => {
     await app.evaluate(({ dialog }, file) => {
       dialog.showOpenDialog = async () => ({
@@ -94,59 +91,50 @@ test('an inactive journal edit survives a pending disk refresh', {
   }
   const first = await open(a)
   const second = await open(b)
-  await app.evaluate(
-    async (_, { file, entered, released, root }) => {
-      const { open, stat } = process.getBuiltinModule('node:fs/promises')
-      const fs = process.getBuiltinModule('node:fs')
-      const target = await stat(file)
-      const handle = await open(file, 'r')
-      const prototype = Object.getPrototypeOf(handle)
-      await handle.close()
-      const originalStat = prototype.stat,
-        originalRead = prototype.read,
-        handles = new WeakSet()
-      let blocked = true
-      prototype.stat = async function (...args) {
-        const info = await originalStat.apply(this, args)
-        if (info.dev === target.dev && info.ino === target.ino)
-          handles.add(this)
-        return info
-      }
-      prototype.read = async function (...args) {
-        if (blocked && handles.has(this)) {
-          blocked = false
-          await new Promise((resolve) => {
-            const watcher = fs.watch(root, () => {
-              if (!fs.existsSync(released)) return
-              watcher.close()
-              resolve()
-            })
-            fs.writeFileSync(entered, '')
-          })
-        }
-        return originalRead.apply(this, args)
-      }
-      globalThis.reloadGate = {
-        restore: () => {
-          prototype.stat = originalStat
-          prototype.read = originalRead
-        },
-      }
-    },
-    { file: a, entered, released, root },
-  )
-  const readEntered = new Promise((resolve) => {
-    const watcher = watch(root, (_event, name) => {
-      if (name !== 'read-entered') return
-      watcher.close()
-      resolve()
+  await app.evaluate(async (_, file) => {
+    const { open, stat } = process.getBuiltinModule('node:fs/promises')
+    const target = await stat(file)
+    const handle = await open(file, 'r')
+    const prototype = Object.getPrototypeOf(handle)
+    await handle.close()
+    const originalStat = prototype.stat,
+      originalRead = prototype.read,
+      handles = new WeakSet()
+    let enter, release
+    const entered = new Promise((resolve) => {
+      enter = resolve
     })
-  })
-  const switching = page.evaluate(
-    (id) => window.hibi.selectDocumentTab(id),
-    first.tabId,
+    const released = new Promise((resolve) => {
+      release = resolve
+    })
+    let blocked = true
+    prototype.stat = async function (...args) {
+      const info = await originalStat.apply(this, args)
+      if (info.dev === target.dev && info.ino === target.ino) handles.add(this)
+      return info
+    }
+    prototype.read = async function (...args) {
+      if (blocked && handles.has(this)) {
+        blocked = false
+        enter()
+        await released
+      }
+      return originalRead.apply(this, args)
+    }
+    globalThis.reloadGate = {
+      entered,
+      release,
+      restore: () => {
+        prototype.stat = originalStat
+        prototype.read = originalRead
+      },
+    }
+  }, a)
+  const switching = assert.rejects(
+    page.evaluate((id) => window.hibi.selectDocumentTab(id), first.tabId),
+    /changed while switching tabs/,
   )
-  await readEntered
+  await app.evaluate(() => globalThis.reloadGate.entered)
   const ack = await page.evaluate(
     (before) =>
       window.hibi.appendSourceOperation({
@@ -167,8 +155,8 @@ test('an inactive journal edit survives a pending disk refresh', {
     first,
   )
   assert.equal(ack.tabId, first.tabId)
-  await writeFile(released, '')
-  await assert.rejects(switching, /changed while switching tabs/)
+  await app.evaluate(() => globalThis.reloadGate.release())
+  await switching
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).tabId,
     second.tabId,
@@ -203,7 +191,7 @@ test('overflowing tabs reveal close buttons and reorder without losing drafts', 
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await waitForDocumentEditor(app, page)
   await page.setViewportSize({ width: 720, height: 600 })
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   const open = async (file) => {
@@ -308,7 +296,7 @@ test('overflowing tabs reveal close buttons and reorder without losing drafts', 
   )
   const order = state.tabs.map((tab) => tab.id)
   await page.reload()
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await waitForDocumentEditor(app, page)
   assert.deepEqual(
     await page
       .locator('.document-tab')
@@ -477,7 +465,7 @@ test('single-file mode guards replacement, closes other tabs safely, and persist
   app = await launch()
   page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await waitForDocumentEditor(app, page)
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).tabsEnabled,
     false,
@@ -522,7 +510,7 @@ test('tab entry and exit animate, while reduced motion removes transitions', {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await waitForDocumentEditor(app, page)
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   await clickMenu(app, 'New')
   await waitForAsync(
@@ -628,7 +616,7 @@ test('file tabs preserve independent drafts and guard closing, saving, and works
   const page = await app.firstWindow()
   page.setDefaultTimeout(6500)
   const rich = page.getByRole('textbox', { name: /document editor/i })
-  await rich.waitFor()
+  await waitForDocumentEditor(app, page)
   const read = () => page.evaluate(() => window.hibi.getDocument())
   const choose = (file) =>
     app.evaluate(({ dialog }, file) => {
@@ -638,12 +626,7 @@ test('file tabs preserve independent drafts and guard closing, saving, and works
       })
       dialog.showSaveDialog = async () => ({ canceled: false, filePath: file })
     }, file)
-  const waitEditable = () =>
-    page.waitForFunction(
-      () =>
-        document.querySelector('.tiptap')?.getAttribute('contenteditable') ===
-        'true',
-    )
+  const waitEditable = () => waitForDocumentEditor(app, page)
   await replaceRichText(page, rich, 'untitled draft')
   const untitled = (await read()).tabId
   await clickMenu(app, 'New')
@@ -810,7 +793,7 @@ test('file tabs preserve independent drafts and guard closing, saving, and works
   assert.equal((await read()).tabs.length, 0)
   assert.equal((await read()).markdown, '')
   await page.reload()
-  await rich.waitFor()
+  await waitForDocumentEditor(app, page)
   await page.getByRole('region', { name: /start writing/i }).waitFor()
   const lastTab = (await read()).tabId
   await clickMenu(app, 'New')
@@ -850,9 +833,7 @@ test('source selection survives tab remounts with emoji and mixed line endings',
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  await page
-    .getByRole('textbox', { name: 'Document editor', exact: true })
-    .waitFor()
+  await waitForDocumentEditor(app, page)
   const open = async (file) => {
     await app.evaluate(({ dialog }, file) => {
       dialog.showOpenDialog = async () => ({

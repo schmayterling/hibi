@@ -194,6 +194,8 @@ export const electron = {
 function startupEntries({ BrowserWindow } = {}) {
   const doc = globalThis.document
   const editor = doc?.querySelector('.editor-page')
+  const panel = doc?.querySelector('#document-editor-panel')
+  const tiptap = panel?.querySelector('.tiptap')
   const input = editor?.querySelector(
     '.tiptap[contenteditable="true"], .cm-content[contenteditable="true"]',
   )
@@ -205,6 +207,10 @@ function startupEntries({ BrowserWindow } = {}) {
   return {
     dom: doc && {
       readyState: doc.readyState,
+      appBusy: doc.querySelector('.app')?.getAttribute('aria-busy'),
+      editorPanelBusy: panel?.getAttribute('aria-busy'),
+      tiptapReadOnly: tiptap?.getAttribute('aria-readonly'),
+      tiptapContentEditable: tiptap?.getAttribute('contenteditable'),
       editorBusy: editor?.getAttribute('aria-busy'),
       editorInert: editor?.inert,
       editorHidden: editor?.hidden,

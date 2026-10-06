@@ -34,8 +34,8 @@ test('editor readiness requires settled app, addons and editable active pane', {
   const page = await opened
   await page.setContent(`
     <div class="app" aria-busy="false">
-      <div id="document-editor-panel" aria-busy="false">
-        <div class="source-pane"><div role="textbox" aria-label="Document editor" contenteditable="true">ready</div></div>
+      <div id="document-editor-panel" class="editor-page" aria-busy="false">
+        <div class="source-pane"><div class="tiptap" role="textbox" aria-label="Document editor" aria-readonly="false" contenteditable="true">ready</div></div>
       </div>
       <div id="split-document-editor-panel"><div role="textbox" aria-label="Document editor" contenteditable="true">inactive</div></div>
     </div>
@@ -59,6 +59,17 @@ test('editor readiness requires settled app, addons and editable active pane', {
     await assert.rejects(
       waitForDocumentEditor(app, page, { timeout: 50 }),
       /Timeout/,
+    )
+    const { dom } = JSON.parse(errors.mock.calls.at(-1).arguments[1]).renderer
+    assert.equal(dom.appBusy, selector === '.app' ? 'true' : 'false')
+    assert.equal(
+      dom.editorPanelBusy,
+      selector === '#document-editor-panel' ? 'true' : 'false',
+    )
+    assert.equal(dom.tiptapReadOnly, 'false')
+    assert.equal(
+      dom.tiptapContentEditable,
+      attribute === 'contenteditable' ? 'false' : 'true',
     )
     await target.evaluate(
       (element, { attribute, before }) => {

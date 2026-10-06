@@ -20,6 +20,14 @@ const NativeStarterKit = StarterKit.extend({
   addExtensions() {
     return (
       this.parent?.()
+        .map((extension) =>
+          extension.name === 'paragraph'
+            ? extension.extend({
+                renderMarkdown: (node, helpers) =>
+                  helpers.renderChildren(node.content ?? []),
+              })
+            : extension,
+        )
         .map(guardNativeListTokenizer)
         .map(guardNativeInputRules) ?? []
     )

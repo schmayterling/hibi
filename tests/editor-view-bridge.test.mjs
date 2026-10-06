@@ -15,7 +15,7 @@ test('installed addon addresses source and rich selections by live view', {
   const first = join(profile, 'first.md')
   const second = join(profile, 'second.md')
   const plain = join(profile, 'plain.txt')
-  await writeFile(first, `# alpha\n\n${'word '.repeat(1200)}`)
+  await writeFile(first, `# alpha\n\n${'word '.repeat(1200)}\n\nomega`)
   await writeFile(second, '# beta')
   await writeFile(plain, 'plain text')
   await writeFile(
@@ -133,6 +133,22 @@ test('installed addon addresses source and rich selections by live view', {
       await page.evaluate((position) => window.viewProbe.reveal(position), {
         ...rich,
         position: 5000,
+      })
+    ).ok,
+    true,
+  )
+  assert.ok(
+    (await page.locator('.rich-pane').evaluate((pane) => pane.scrollTop)) > 100,
+  )
+  // Block boundaries measure as zero-height rects but are still visible.
+  await page.locator('.rich-pane').evaluate((pane) => {
+    pane.scrollTop = 0
+  })
+  assert.equal(
+    (
+      await page.evaluate((position) => window.viewProbe.reveal(position), {
+        ...rich,
+        position: 6009,
       })
     ).ok,
     true,

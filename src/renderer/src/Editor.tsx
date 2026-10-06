@@ -157,19 +157,8 @@ function revealRichRange(editor: Editor, from: number, to = from) {
       rect.right <= rect.left && rect.bottom <= rect.top
     if (hidden(start) || hidden(end)) return false
     const margin = 24
-    // Show the whole match when it fits, otherwise anchor its start.
-    const tall =
-      Math.max(start.bottom, end.bottom) - Math.min(start.top, end.top) >
-      bounds.height - 2 * margin
-    const wide =
-      Math.max(start.right, end.right) - Math.min(start.left, end.left) >
-      bounds.width - 2 * margin
-    const cursor = {
-      top: tall ? start.top : Math.min(start.top, end.top),
-      bottom: tall ? start.bottom : Math.max(start.bottom, end.bottom),
-      left: wide ? start.left : Math.min(start.left, end.left),
-      right: wide ? start.right : Math.max(start.right, end.right),
-    }
+    const first = { ...start }
+    const last = { ...end }
     // Scroll each overflowing container from the match out to the pane.
     const { node } = editor.view.domAtPos(from)
     let element = node instanceof Element ? node : node.parentElement
@@ -179,6 +168,19 @@ function revealRichRange(editor: Editor, from: number, to = from) {
         element.scrollWidth > element.clientWidth
       ) {
         const box = element === pane ? bounds : element.getBoundingClientRect()
+        // Show the whole match if it fits here, otherwise anchor its start.
+        const tall =
+          Math.max(first.bottom, last.bottom) - Math.min(first.top, last.top) >
+          box.height - 2 * margin
+        const wide =
+          Math.max(first.right, last.right) - Math.min(first.left, last.left) >
+          box.width - 2 * margin
+        const cursor = {
+          top: tall ? first.top : Math.min(first.top, last.top),
+          bottom: tall ? first.bottom : Math.max(first.bottom, last.bottom),
+          left: wide ? first.left : Math.min(first.left, last.left),
+          right: wide ? first.right : Math.max(first.right, last.right),
+        }
         const { scrollTop, scrollLeft } = element
         if (cursor.top < box.top + margin)
           element.scrollTop += cursor.top - box.top - margin
@@ -190,10 +192,12 @@ function revealRichRange(editor: Editor, from: number, to = from) {
           element.scrollLeft += cursor.right - box.right + margin
         const dy = element.scrollTop - scrollTop
         const dx = element.scrollLeft - scrollLeft
-        cursor.top -= dy
-        cursor.bottom -= dy
-        cursor.left -= dx
-        cursor.right -= dx
+        for (const rect of [first, last]) {
+          rect.top -= dy
+          rect.bottom -= dy
+          rect.left -= dx
+          rect.right -= dx
+        }
       }
       if (element === pane) break
       element = element.parentElement

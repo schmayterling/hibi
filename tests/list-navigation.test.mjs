@@ -8,7 +8,7 @@ import {
   waitForEditor,
 } from '../scripts/benchmark-flows.mjs'
 
-test('failed list indentation keeps focus and task lists match bullet spacing', {
+test('failed list indentation keeps focus and lists keep one spacing rhythm', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-list-navigation-'))
@@ -66,36 +66,49 @@ test('failed list indentation keeps focus and task lists match bullet spacing', 
       `${type}: second Tab keeps editor focus`,
     )
   }
-  const gaps = await page.locator('.tiptap').evaluate((element) => {
+  const spacing = await page.locator('.tiptap').evaluate((element) => {
     const editor = element.editor
-    return ['bulletList', 'taskList'].map((type) => {
-      editor.commands.setContent({
-        type: 'doc',
-        content: [
-          {
-            type,
-            content: [
-              {
-                type: type === 'taskList' ? 'taskItem' : 'listItem',
-                attrs: { checked: false },
-                content: [
-                  {
-                    type: 'paragraph',
-                    content: [{ type: 'text', text: 'item' }],
-                  },
-                ],
-              },
-            ],
-          },
-          { type: 'paragraph', content: [{ type: 'text', text: 'after' }] },
-        ],
-      })
-      const list = element.querySelector('ul')
-      return (
-        list.nextElementSibling.getBoundingClientRect().top -
-        list.querySelector('li p').getBoundingClientRect().bottom
+    return ['-', '- [ ]'].map((marker) => {
+      editor.commands.setContent(
+        [
+          'before',
+          'after',
+          `${marker} one\n${marker} two\n\n  second\n${marker} three\n  ${marker} nested`,
+          `${marker} code\n\n  \`\`\`\n  x\n  \`\`\`\n${marker} quote\n\n  > quoted\n${marker} last`,
+          'end',
+        ].join('\n\n'),
+        { contentType: 'markdown' },
       )
+      const box = (text) =>
+        [...element.querySelectorAll('p, pre')]
+          .find((block) => block.textContent === text)
+          .getBoundingClientRect()
+      const gap = (from, to) => Math.round(box(to).top - box(from).bottom)
+      return {
+        paragraph: gap('before', 'after'),
+        intoList: gap('after', 'one'),
+        withinItem: gap('two', 'second'),
+        outOfList: gap('last', 'end'),
+        item: gap('one', 'two'),
+        nested: gap('three', 'nested'),
+        afterCode: gap('x', 'quote'),
+        afterQuote: gap('quoted', 'last'),
+      }
     })
   })
-  assert.ok(Math.abs(gaps[0] - gaps[1]) < 1, `list gaps differ: ${gaps}`)
+  for (const gaps of spacing) {
+    const { paragraph, item } = gaps
+    assert.ok(item > 0 && item < paragraph, JSON.stringify(gaps))
+    assert.deepEqual(gaps, {
+      paragraph,
+      intoList: paragraph,
+      withinItem: paragraph,
+      outOfList: paragraph,
+      item,
+      nested: item,
+      afterCode: item,
+      afterQuote: item,
+    })
+  }
+  assert.deepEqual(spacing[1], spacing[0], 'task lists match bullet lists')
 })

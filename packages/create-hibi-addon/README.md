@@ -14,7 +14,7 @@ After this package is published to npm, you can use:
 npx create-hibi-addon hello --name "Hello" --author "Your name"
 ```
 
-The destination must not exist. The creator writes the addon manifest, JavaScript entry, readme, and a syntax-check script. It does not install dependencies or require the private, types-only `@hibi/addon-sdk` package.
+The destination must not exist. The addon ID comes from the folder name: accents are removed, letters become lowercase, and separators become hyphens. For example, `Über Café` becomes `uber-cafe`. The creator prints the derived ID and rejects names that produce an empty or invalid ID. The creator writes the addon manifest, JavaScript entry, readme, and a syntax-check script. It does not install dependencies or require the private, types-only `@hibi/addon-sdk` package.
 
 Run `npm run check` inside the generated folder, then choose **Install addon…** in Hibi, review the package, and enable it in **Settings → Addons**. Run **Say hello** from the command palette.
 

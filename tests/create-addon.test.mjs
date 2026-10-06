@@ -113,11 +113,34 @@ test('creator derives defaults from a nested destination', async (t) => {
   assert.deepEqual(manifest.authors, [{ displayName: 'Your name' }])
 })
 
+test('creator normalizes accents and reports the derived addon id', async (t) => {
+  const directory = await scratch(t)
+  for (const [folder, id, name] of [
+    ['Über Café', 'uber-cafe', 'Uber Cafe'],
+    ['Cafe\u0301', 'cafe', 'Cafe'],
+    ['ﬀoo', 'ffoo', 'Ffoo'],
+    ['-x', 'x', 'X'],
+    ['x-', 'x', 'X'],
+  ]) {
+    const target = join(directory, folder)
+    const { stdout } = await execute(process.execPath, [create, target])
+    const manifest = JSON.parse(
+      await readFile(join(target, 'hibi-addon.json'), 'utf8'),
+    )
+    assert.equal(manifest.id, id)
+    assert.equal(manifest.name, name)
+    assert(stdout.includes(`Created ${name} (${id}) in ${target}`))
+  }
+})
+
 test('creator rejects invalid arguments before writing files and prints help', async (t) => {
   const directory = await scratch(t)
   for (const args of [
     [],
     [join(directory, '123')],
+    [join(directory, '---')],
+    [join(directory, '東京')],
+    [join(directory, '\u0301')],
     [join(directory, 'x'.repeat(49))],
     [join(directory, 'valid'), '--name', ' '],
     [join(directory, 'valid'), '--author', 'line\nbreak'],

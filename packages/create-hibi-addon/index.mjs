@@ -44,6 +44,8 @@ async function create() {
 
   const target = resolve(positionals[0])
   const id = basename(target)
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
@@ -82,7 +84,7 @@ async function create() {
       content.replace(/__HIBI_[A-Z_]+__/g, (token) => replacements.get(token)),
     )
   }
-  console.log(`Created ${name} in ${target}`)
+  console.log(`Created ${name} (${id}) in ${target}`)
 }
 
 create().catch((error) => {

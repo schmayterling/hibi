@@ -16,7 +16,7 @@ Once `create-hibi-addon` is published to npm, the same starter will be available
 npx create-hibi-addon hello --name "Hello" --author "Your name"
 ```
 
-Use Node.js 22.18 or later and a new destination directory. The creator refuses to overwrite existing paths. It writes `hibi-addon.json`, `index.js`, `package.json`, and `README.md` without installing dependencies.
+Use Node.js 22.18 or later and a new destination directory. The creator refuses to overwrite existing paths. It writes `hibi-addon.json`, `index.js`, `package.json`, and `README.md` without installing dependencies. The folder name becomes the addon ID after removing accents, lowercasing letters, and converting separators to hyphens; `Über Café` becomes `uber-cafe`. The creator prints the derived ID and rejects names that produce an empty or invalid ID.
 
 Run `npm run check` inside the generated folder. In Hibi, choose **Install addon…** from the command palette, select that folder, review it, and enable it in **Settings → Addons**. Run **Say hello** to display a greeting. The addon declares no UI or editor capabilities and loads when its command first runs; disabling it removes the command.
 

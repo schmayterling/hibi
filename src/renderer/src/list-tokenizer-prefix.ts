@@ -3,6 +3,7 @@ import {
   getExtensionField,
   type JSONContent,
   type MarkdownTokenizer,
+  parseIndentedBlocks,
 } from '@tiptap/core'
 import {
   BulletList,
@@ -23,8 +24,46 @@ const orderedPrefix = new RegExp(
 )
 const taskPrefix = /^\s*[-+*][^\S\n]+\[[ xX]\][^\S\n]/
 
-/** Recover task markers that the native task tokenizer leaves in bullet lists. */
+const emptyTaskPrefix = /^\s*[-+*][^\S\n]+\[[ xX]\](?=\s|$)/
+const emptyTask: MarkdownTokenizer = {
+  ...task,
+  start: (source) => (emptyTaskPrefix.test(source) ? 0 : -1),
+  tokenize(source, _tokens, lexer) {
+    if (!emptyTaskPrefix.test(source)) return undefined
+    // Keep native indentation handling, but accept a checkbox at end of line.
+    const result = parseIndentedBlocks(
+      source,
+      {
+        itemPattern: /^(\s*)[-+*][^\S\n]+\[([ xX])\](?:[^\S\n]+(.*))?$/,
+        extractItemData: (match) => ({
+          indentLevel: match[1]?.length ?? 0,
+          mainContent: match[3] ?? '',
+          checked: match[2]?.toLowerCase() === 'x',
+        }),
+        createToken: (data, nestedTokens) => ({
+          type: 'taskItem',
+          raw: '',
+          ...data,
+          text: data.mainContent,
+          tokens: lexer.inlineTokens(data.mainContent),
+          nestedTokens,
+        }),
+      },
+      lexer,
+    )
+    if (result)
+      return {
+        type: 'taskList',
+        raw: source.slice(0, result.raw.length),
+        items: result.items,
+      }
+  },
+}
+
+/** Parse empty task markers in native task lists and mixed bullet lists. */
 export function parseEmptyTaskItems(extension: AnyExtension) {
+  if (getExtensionField(extension, 'markdownTokenizer') === task)
+    return extension.extend({ markdownTokenizer: emptyTask })
   if (extension.config.parseMarkdown !== BulletList.config.parseMarkdown)
     return extension
   return extension.extend({

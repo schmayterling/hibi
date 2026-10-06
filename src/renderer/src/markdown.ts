@@ -79,6 +79,9 @@ export function markdownConfiguration(
   const addons = flavors
     .flatMap((flavor) => flavor.richExtensions ?? [])
     .filter((extension) => markdownSyntax.extensionEnabled(extension.name))
+    .map((extension) =>
+      taskItems ? parseEmptyTaskItems(extension) : extension,
+    )
     .map(guardNativeListTokenizer)
     .map(guardNativeInputRules)
   return { parser, options, core, addons }

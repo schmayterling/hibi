@@ -172,6 +172,24 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
     0,
   )
   await app.evaluate(({ dialog }, path) => {
+    globalThis.workspaceDialog = null
+    dialog.showOpenDialog = async (_window, options) => {
+      globalThis.workspaceDialog = options.properties
+      return { canceled: false, filePaths: [path] }
+    }
+  }, reordered[1])
+  await welcome()
+    .getByRole('button', { name: /open workspace/i })
+    .click()
+  await page
+    .getByRole('treeitem', { name: /^empty\.md$/i, exact: true })
+    .waitFor()
+  assert.deepEqual(await app.evaluate(() => globalThis.workspaceDialog), [
+    'openDirectory',
+    'createDirectory',
+  ])
+  assert.equal(await welcome().isVisible(), true)
+  await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({
       canceled: false,
       filePaths: [path],

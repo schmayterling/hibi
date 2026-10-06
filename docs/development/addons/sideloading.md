@@ -57,7 +57,7 @@ Declaring capabilities also stages editor configuration, commands, toolbar items
 
 ## Install it locally
 
-Run **Install theme or extension…** from the command palette and choose the package folder. Review it, install it, then enable it in **Settings → Addons**. If you already have a source addon with the same ID, use a different ID for this package.
+Run **Install addon…** from the command palette and choose the package folder. Review it, install it, then enable it in **Settings → Addons**. If you already have a source addon with the same ID, use a different ID for this package.
 
 Installed extensions run trusted code with access to documents through the addon APIs. Install packages only from sources you trust. They cannot include native handlers; those must ship with Hibi.
 

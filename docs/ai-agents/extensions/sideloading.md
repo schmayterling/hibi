@@ -1,6 +1,6 @@
 # Installing addon packages
 
-Use Settings → Addons → **Install from URL** for a public HTTPS Git repository or ZIP package. **Install theme or extension…** in the palette also accepts a local folder. Packages need `hibi-addon.json`, `README.md`, and their declared compiled entry. Review metadata and the trust notice before installation. New packages start disabled; settings can enable or remove them without a restart.
+Use Settings → Addons → **Install from URL** for a public HTTPS Git repository or ZIP package. **Install addon…** in the palette also accepts a local folder. Packages need `hibi-addon.json`, `README.md`, and their declared compiled entry. Review metadata and the trust notice before installation. New packages start disabled; settings can enable or remove them without a restart.
 
 Installed extensions run trusted renderer code with access to document/workspace APIs. They have no Node integration or arbitrary network access, but this is not a security boundary against a hostile extension. Native addons must be built with Hibi. Opening a workspace never installs or runs its code.
 

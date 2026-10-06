@@ -142,6 +142,29 @@ const grammarPreservingRich = new Map([
   ['tags.highlights', 'tags'],
 ])
 
+// ProseMirror skips scrollIntoView while DOM focus is outside the editor.
+function revealRichPosition(editor: Editor, position: number) {
+  try {
+    const pane = editor.view.dom.closest<HTMLElement>('.rich-pane')
+    if (!pane) return false
+    const bounds = pane.getBoundingClientRect()
+    if (!bounds.width || !bounds.height) return false
+    const cursor = editor.view.coordsAtPos(position)
+    const margin = 24
+    if (cursor.top < bounds.top + margin)
+      pane.scrollTop += cursor.top - bounds.top - margin
+    else if (cursor.bottom > bounds.bottom - margin)
+      pane.scrollTop += cursor.bottom - bounds.bottom + margin
+    if (cursor.left < bounds.left + margin)
+      pane.scrollLeft += cursor.left - bounds.left - margin
+    else if (cursor.right > bounds.right - margin)
+      pane.scrollLeft += cursor.right - bounds.right + margin
+    return true
+  } catch {
+    return false
+  }
+}
+
 export type ViewMode = DocumentView
 
 export function MarkdownEditor({
@@ -568,27 +591,7 @@ export function MarkdownEditor({
             return false
           }
         },
-        reveal: (position) => {
-          try {
-            const pane = editor.view.dom.closest<HTMLElement>('.rich-pane')
-            if (!pane) return false
-            const bounds = pane.getBoundingClientRect()
-            if (!bounds.width || !bounds.height) return false
-            const cursor = editor.view.coordsAtPos(position)
-            const margin = 24
-            if (cursor.top < bounds.top + margin)
-              pane.scrollTop += cursor.top - bounds.top - margin
-            else if (cursor.bottom > bounds.bottom - margin)
-              pane.scrollTop += cursor.bottom - bounds.bottom + margin
-            if (cursor.left < bounds.left + margin)
-              pane.scrollLeft += cursor.left - bounds.left - margin
-            else if (cursor.right > bounds.right - margin)
-              pane.scrollLeft += cursor.right - bounds.right + margin
-            return true
-          } catch {
-            return false
-          }
-        },
+        reveal: (position) => revealRichPosition(editor, position),
       },
     )
   }, [editor, documentState.tabId, viewId])
@@ -2666,14 +2669,15 @@ export function MarkdownEditor({
     if (!flushRich(editor)) return
     editor.view.dispatch(setSearchState(editor.state.tr, query))
     const first = query.valid ? query.findNext(editor.state, 0) : null
-    if (first)
-      editor.view.dispatch(
-        editor.state.tr
-          .setSelection(
-            TextSelection.create(editor.state.doc, first.from, first.to),
-          )
-          .scrollIntoView(),
-      )
+    if (!first) return
+    editor.view.dispatch(
+      editor.state.tr
+        .setSelection(
+          TextSelection.create(editor.state.doc, first.from, first.to),
+        )
+        .scrollIntoView(),
+    )
+    revealRichPosition(editor, first.from)
   }, [editor, findQuery, findOpen, findTarget])
 
   useEffect(() => {
@@ -2682,7 +2686,12 @@ export function MarkdownEditor({
     if (editor && findOpen && findTarget === 'rich' && findMove.id) {
       if (!flushRich(editor)) return
       const command = findMove.direction === 'next' ? findNext : findPrev
-      command(editor.state, (transaction) => editor.view.dispatch(transaction))
+      if (
+        command(editor.state, (transaction) =>
+          editor.view.dispatch(transaction),
+        )
+      )
+        revealRichPosition(editor, editor.state.selection.from)
     }
   }, [editor, findMove, findOpen, findTarget])
 

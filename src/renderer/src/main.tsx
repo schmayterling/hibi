@@ -2622,6 +2622,7 @@ function App() {
               busy={busy}
               onOpen={(id) => void openFolder(id)}
               onOpenFile={() => void runCommand('open')}
+              onOpenWorkspace={() => void openFolder()}
               onDismiss={() => {
                 void applyDocumentOperation(
                   () => window.hibi.newDocument(),

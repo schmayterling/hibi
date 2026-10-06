@@ -39,6 +39,23 @@ function run(command, args, cwd) {
   return result.stdout
 }
 
+function createStarter(scratch) {
+  const installable = join(scratch, 'command-proof')
+  run(
+    process.execPath,
+    [
+      join(root, 'packages/create-hibi-addon/index.mjs'),
+      installable,
+      '--name',
+      'Command proof',
+      '--author',
+      'Hibi tests',
+    ],
+    root,
+  )
+  return installable
+}
+
 test('command failures report spawn errors', () => {
   assert.throws(
     () => run(join(root, 'missing-sdk-pack-command'), [], root),
@@ -46,13 +63,12 @@ test('command failures report spawn errors', () => {
   )
 })
 
-test('packed addon sdk checks external consumers and the generated addon lifecycle', {
+test('packed addon sdk checks external consumers', {
   timeout: 60000,
 }, async () => {
   const out = join(root, 'out')
   await mkdir(out, { recursive: true })
   const scratch = await mkdtemp(join(out, 'addon-sdk-pack-'))
-  let app
   try {
     const pack = JSON.parse(
       run(
@@ -103,19 +119,7 @@ test('packed addon sdk checks external consumers and the generated addon lifecyc
       ),
     )
 
-    const installable = join(scratch, 'command-proof')
-    run(
-      process.execPath,
-      [
-        join(root, 'packages/create-hibi-addon/index.mjs'),
-        installable,
-        '--name',
-        'Command proof',
-        '--author',
-        'Hibi tests',
-      ],
-      root,
-    )
+    const installable = createStarter(scratch)
     run(process.execPath, [npmCli, 'run', 'check'], installable)
     const { entry, ...manifest } = JSON.parse(
       await readFile(join(installable, 'hibi-addon.json'), 'utf8'),
@@ -197,7 +201,21 @@ export default create
       { cwd: consumer, encoding: 'utf8' },
     )
     assert.equal(runtime.status, 0, runtime.stderr)
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})
 
+test('generated addon installs, enables, runs, disables, and re-enables', {
+  timeout: 60000,
+}, async () => {
+  const out = join(root, 'out')
+  await mkdir(out, { recursive: true })
+  const scratch = await mkdtemp(join(out, 'addon-lifecycle-'))
+  let app
+  try {
+    const installable = createStarter(scratch)
+    const source = await readFile(join(installable, 'index.js'), 'utf8')
     const { electron, waitForDocumentEditor } = await import('./electron.mjs')
     const profile = join(scratch, 'profile')
     app = await electron.launch({

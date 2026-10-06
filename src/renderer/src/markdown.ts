@@ -2,7 +2,7 @@ import { Extension } from '@tiptap/core'
 import { Placeholder } from '@tiptap/extension-placeholder'
 import { Markdown, type MarkdownExtensionOptions } from '@tiptap/markdown'
 import { StarterKit } from '@tiptap/starter-kit'
-import { Marked } from 'marked'
+import { Marked, type Token } from 'marked'
 import { search } from 'prosemirror-search'
 import type { MarkdownFlavor } from '../../addons/api'
 import { BlockExit } from './BlockExit.ts'
@@ -49,15 +49,13 @@ export function markdownConfiguration(
     ParserOutput = string,
     RendererOutput = string,
   > extends BaseLexer<ParserOutput, RendererOutput> {
-    lex(source: string) {
-      const tokens = super.lex(source)
-      // Tiptap consumes tokens directly; soft breaks need spaces with pre-wrap.
-      parser.walkTokens(tokens, (token) => {
+    inlineTokens(source: string, tokens?: Token[]) {
+      const result = super.inlineTokens(source, tokens)
+      // Custom task tokens hide children from walkTokens; normalize at creation.
+      for (const token of result)
         if (token.type === 'text')
           token.text = token.text.replace(/[ \t]*\n[ \t]*/g, ' ')
-        return []
-      })
-      return tokens
+      return result
     }
   }
   parser.Lexer = RichLexer

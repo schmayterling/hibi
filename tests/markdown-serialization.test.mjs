@@ -176,6 +176,7 @@ test('rich soft breaks render as spaces and retain their source after an unrelat
     assert.equal(preserved, `${block}\n\nedited elsewhere`)
     assert.ok(schema.nodeFromJSON(manager.parse(preserved)).eq(after))
   }
+  assert.equal(parser.lexer('p\nq')[0].tokens[0].text, 'p q')
   assert.equal(parser.parse('a\nb'), '<p>a\nb</p>\n')
   assert.equal(manager.parse('a  \nb').content[0].content[1].type, 'hardBreak')
   assert.equal(

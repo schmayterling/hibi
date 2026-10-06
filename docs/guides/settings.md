@@ -20,6 +20,8 @@ Hover over a control briefly to see its compact help tooltip, or reach it with k
 
 Under **Appearance → Window**, set **Status bar** to **Show**, **Auto-hide**, or **Hide**. Auto-hide reveals the bar when you move to the bottom edge of the editor or focus one of its controls.
 
+The top bar and its document tabs stay visible while you type. Turn on **Hide top bar while typing** in the same section to give the document more room; the bar returns when you pause or move the pointer to the top of the window.
+
 **Zen mode** hides navigation, toolbars, and status while you write. Use **Enter zen mode** in the command palette or turn it on in Appearance. Leave with the exit button at the top or **Exit zen mode** in the palette. Your previous layout returns when you leave. You can assign a shortcut under Hotkeys.
 
 ## Autosave

@@ -42,7 +42,7 @@ For footnotes in GitHub Markdown, write `text[^note]` and add a definition such 
 
 Under **Settings → Appearance → Toolbar → Arrange toolbar actions**, drag actions or use the arrow controls to reorder them. By default, addon actions follow formatting actions. Select an action and choose **Show in toolbar**, **Menu only**, or **Hide**. Menu-only actions always stay in the **More** dropdown, even in a wide window. Hidden actions disappear from both the toolbar and its dropdown; their commands and shortcuts remain available. These choices are saved separately from the order, so **Reset order** keeps each action's placement.
 
-You can also choose how toolbar buttons appear. If the toolbar hides while typing, pause or move the pointer to the top of the window to reveal it.
+You can also choose how toolbar buttons appear. The toolbar stays visible while you type unless you turn on **Hide toolbar while typing**. When it is hidden, pause or move the pointer to the top of the window to reveal it.
 
 See [images and attachments](../editing/media-and-navigation.md#attachments) for adding media to your notes.
 

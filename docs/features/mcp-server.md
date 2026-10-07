@@ -12,8 +12,8 @@ claude mcp add --transport http hibi http://127.0.0.1:47821/mcp --header "Author
 
 Other clients need the endpoint URL as a streamable HTTP MCP server and an `Authorization: Bearer <access token>` header.
 
-Clients can use four tools: `list_documents` lists the workspace's documents, `read_document` returns a document's text, `search_documents` finds documents that contain some text, and `get_active_document` returns the document open in the editor.
+Clients can use four tools: `list_documents` lists the workspace's documents, `read_document` returns a document's text, `search_documents` finds documents whose path or text contains some words, and `get_active_document` returns the document open in the editor.
 
-The server accepts connections from this computer only and requires the access token. The tools are read-only and never edit, create, or delete files. Only the open workspace is reachable, and unsaved edits are included in what the tools read. Hibi must be running for clients to connect, and disabling the addon stops the server. Regenerating the token disconnects every client that uses the old one.
+The server accepts connections from this computer only and requires the access token. The tools are read-only and never edit, create, or delete files. They can read the open workspace and the document open in the editor, even if that document is outside the workspace or unsaved. Files the workspace hides or ignores are not available, and unsaved edits are included in what the tools read. Hibi must be running for clients to connect, and disabling the addon stops the server. Regenerating the token disconnects every client that uses the old one.
 
 Open the addon's README from its row in **Settings → Addons** for setup details.

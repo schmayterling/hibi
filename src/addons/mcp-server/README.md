@@ -27,16 +27,18 @@ Authorization: Bearer <access token>
 
 ## Tools
 
-- `list_documents` lists the documents in the open workspace.
-- `read_document` returns the text of one document.
-- `search_documents` finds documents that contain the given text.
-- `get_active_document` returns the document currently open in the editor.
+- `list_documents` lists the documents in the open workspace, or in one of its folders.
+- `read_document` returns the text of a document, given its path in the workspace.
+- `search_documents` finds documents whose path or text contains the given words, ignoring case, and shows up to three matching lines from each.
+- `get_active_document` returns the name and text of the document open in the editor.
+
+Text longer than 1 MiB is cut off. Search covers up to 2,000 documents or 20 MiB of text.
 
 ## Privacy and security
 
 The server accepts connections from this computer only, at `127.0.0.1`. Every request must include the access token, so other programs cannot connect without it.
 
-The tools are read-only. They never edit, create, or delete files. Only the workspace open in Hibi is reachable, and unsaved edits are included in what the tools read.
+The tools are read-only. They never edit, create, or delete files. They can read the workspace open in Hibi and the document open in the editor, even if that document is outside the workspace or has never been saved. Files that the workspace hides or ignores are not available. Unsaved edits are included in what the tools read.
 
 Hibi must be running for clients to connect. Disabling the addon stops the server. Regenerating the access token disconnects every client that uses the old token; run the setup command again or update the header in each client.
 

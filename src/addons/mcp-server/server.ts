@@ -139,8 +139,6 @@ export class McpServer {
   private opening: Promise<void> = Promise.resolve()
   private closing: Promise<void> = Promise.resolve()
   private state: ServerStatus = { state: 'stopped', message: '', url: '' }
-  private requestWindow = 0
-  private requestCount = 0
 
   constructor(private readonly version: string) {}
 
@@ -285,19 +283,6 @@ export class McpServer {
       'application/json'
     ) {
       httpError(response, 415)
-      return
-    }
-    const now = Date.now()
-    if (now - this.requestWindow >= 60_000) {
-      this.requestWindow = now
-      this.requestCount = 0
-    }
-    if (++this.requestCount > 120) {
-      response.setHeader(
-        'Retry-After',
-        Math.max(1, Math.ceil((this.requestWindow + 60_000 - now) / 1000)),
-      )
-      httpError(response, 429)
       return
     }
     if (Number(request.headers['content-length']) > MAX_BODY_BYTES) {

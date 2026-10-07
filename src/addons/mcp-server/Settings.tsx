@@ -97,8 +97,9 @@ export function Settings() {
           id="mcp-server-port"
           label="Port"
           description={
-            portError ||
-            'The server listens on this port on this computer only. Press Enter or leave the field to apply it.'
+            portError
+              ? portError
+              : 'The server listens on this port on this computer only. Press Enter or leave the field to apply it.'
           }
         >
           <TextInput

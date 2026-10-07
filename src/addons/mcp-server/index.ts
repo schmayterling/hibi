@@ -10,7 +10,6 @@ export default defineAddon({
     import('./Settings').then(({ Settings }) => ({ default: Settings })),
   ),
   start() {
-    // The server runs in the main process, so other windows keep it alive.
     const sync = () => {
       void window.hibi
         .invokeAddon(manifest.id, 'start', getPreferences())
@@ -18,10 +17,9 @@ export default defineAddon({
     }
     sync()
     window.addEventListener(settingsEvent, sync)
-    stop = () => {
-      window.removeEventListener(settingsEvent, sync)
-      void window.hibi.invokeAddon(manifest.id, 'stop').catch(() => {})
-    }
+    // The main process owns the server and closes it when the addon is disabled;
+    // closing one window must not stop it for the others.
+    stop = () => window.removeEventListener(settingsEvent, sync)
   },
   stop() {
     stop?.()

@@ -92,6 +92,9 @@
   "d8aa9d7083d6": [
     "src/renderer/src/editor-view-api.ts"
   ],
+  "31dd788747d0": [
+    "src/addons/mcp-server/Settings.tsx"
+  ],
   "4efca0d10c5f": [
     "src/renderer/src/HibiSettings.tsx",
     "src/renderer/src/SettingsScreen.tsx",
@@ -99,6 +102,9 @@
   ],
   "c913ac4eb666": [
     "src/renderer/src/DependencySettings.tsx"
+  ],
+  "9a911b08feb9": [
+    "src/addons/mcp-server/Settings.tsx"
   ],
   "ff8059dc6752": [
     "src/addons/ui-preview/index.tsx"
@@ -134,6 +140,9 @@
   ],
   "2b813bc62d17": [
     "src/addons/text-extras/manifest.ts"
+  ],
+  "62d8dc44bd26": [
+    "src/addons/mcp-server/Settings.tsx"
   ],
   "25bd3377df88": [
     "src/addons/diagnostics/Settings.tsx"
@@ -794,6 +803,9 @@
   "830121754331": [
     "src/addons/math/PackageSettings.tsx"
   ],
+  "b4d657c377f1": [
+    "src/addons/mcp-server/Settings.tsx"
+  ],
   "7d9eb7acb13e": [
     "src/renderer/src/CommandPalette.tsx",
     "src/ui/DialogProvider.tsx"
@@ -934,6 +946,9 @@
   "8c3440194015": [
     "src/shared/document-journal.ts"
   ],
+  "dad252a1ef19": [
+    "src/addons/mcp-server/Settings.tsx"
+  ],
   "42cf764db7da": [
     "src/addons/discord-presence/Settings.tsx"
   ],
@@ -956,7 +971,11 @@
     "src/addons/ui-preview/index.tsx"
   ],
   "8d525e5f158b": [
+    "src/addons/mcp-server/Settings.tsx",
     "src/renderer/src/RecoveryScreen.tsx"
+  ],
+  "e21f935f11d7": [
+    "src/addons/mcp-server/Settings.tsx"
   ],
   "ec7ee2826c84": [
     "src/renderer/src/RecoveryScreen.tsx"
@@ -1011,6 +1030,9 @@
   ],
   "4f995b757108": [
     "src/renderer/src/main.tsx"
+  ],
+  "7d13045e08a9": [
+    "src/addons/mcp-server/Settings.tsx"
   ],
   "0b0ebcc18cb7": [
     "src/main/addon-download.ts"
@@ -1661,6 +1683,9 @@
   "a68ae936a898": [
     "src/renderer/src/markdown-syntax.ts"
   ],
+  "2578179d1779": [
+    "src/addons/mcp-server/Settings.tsx"
+  ],
   "1eb30d44ddfa": [
     "src/addons/git/native.ts"
   ],
@@ -1678,6 +1703,9 @@
   ],
   "194e4e8f6e1f": [
     "src/renderer/src/workspace-menu.ts"
+  ],
+  "7b23c1fa88c7": [
+    "src/addons/mcp-server/types.ts"
   ],
   "245811b9dc75": [
     "src/addons/discord-presence/types.ts"
@@ -2088,6 +2116,7 @@
     "src/renderer/src/ImportDialog.tsx"
   ],
   "ac20a57bfde0": [
+    "src/addons/mcp-server/Settings.tsx",
     "src/renderer/src/EditorToolbar.tsx",
     "src/renderer/src/SettingsScreen.tsx"
   ],
@@ -2573,6 +2602,9 @@
   "bcccb5388362": [
     "src/renderer/src/CommandPalette.tsx"
   ],
+  "a1fa1631ffb7": [
+    "src/addons/mcp-server/manifest.ts"
+  ],
   "dbcd5e7bb7a0": [
     "src/addons/documentation/ExportDialog.tsx",
     "src/ui/ColorschemeSettings.tsx"
@@ -2667,6 +2699,12 @@
   ],
   "6187e018f81b": [
     "src/renderer/src/SettingsScreen.tsx"
+  ],
+  "960e444e9977": [
+    "src/addons/mcp-server/manifest.ts"
+  ],
+  "82554e21571b": [
+    "src/addons/mcp-server/Settings.tsx"
   ],
   "d434e4eb5746": [
     "src/addons/mdx/manifest.ts"
@@ -3330,6 +3368,9 @@
   "36be30dddfe1": [
     "src/addons/keybeats/manifest.ts"
   ],
+  "72e9a59f5a1d": [
+    "src/addons/mcp-server/Settings.tsx"
+  ],
   "6d031af10da7": [
     "src/renderer/src/NotificationSettings.tsx"
   ],
@@ -3561,6 +3602,9 @@
     "src/renderer/src/WorkspaceSidebar.tsx",
     "src/renderer/src/main.tsx"
   ],
+  "1651031bf58d": [
+    "src/addons/mcp-server/Settings.tsx"
+  ],
   "3fb379b5392a": [
     "src/shared/markdown-source-references.ts"
   ],
@@ -3736,6 +3780,9 @@
   ],
   "79bb614213b2": [
     "src/addons/_shared/format-renderer.tsx"
+  ],
+  "c35a489ad000": [
+    "src/addons/mcp-server/Settings.tsx"
   ],
   "aa297b69634e": [
     "src/addons/_shared/format-renderer.tsx"
@@ -3921,6 +3968,15 @@
   "f7104bb89272": [
     "src/renderer/src/markdown-semantics.ts"
   ],
+  "06b0ab106202": [
+    "src/addons/mcp-server/Settings.tsx"
+  ],
+  "4c906946c7f4": [
+    "src/addons/mcp-server/Settings.tsx"
+  ],
+  "b0f398a57ea3": [
+    "src/addons/mcp-server/Settings.tsx"
+  ],
   "6959b4159575": [
     "src/addons/diagnostics/Settings.tsx"
   ],
@@ -3937,6 +3993,9 @@
   ],
   "ba1edae91173": [
     "src/renderer/src/SettingsScreen.tsx"
+  ],
+  "6300595b1dfd": [
+    "src/addons/mcp-server/Settings.tsx"
   ],
   "62fdc7379808": [
     "src/addons/discord-presence/Settings.tsx"
@@ -3955,6 +4014,7 @@
     "src/addons/documentation/options.ts"
   ],
   "0df6f1cad36c": [
+    "src/addons/mcp-server/Settings.tsx",
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "6f5976e6606b": [
@@ -4590,6 +4650,9 @@
   ],
   "e16af0263168": [
     "src/renderer/src/document-edits.ts"
+  ],
+  "3399e3ac99f9": [
+    "src/addons/mcp-server/Settings.tsx"
   ],
   "75f8344e99c3": [
     "src/renderer/src/source-session.ts"

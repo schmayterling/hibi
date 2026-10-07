@@ -13,7 +13,8 @@ export type ServerStatus = {
 
 export const validPort = (value: number) =>
   Number.isInteger(value) && value >= 1024 && value <= 65535
-export const validToken = (value: string) => /^[A-Za-z0-9_-]{32,128}$/.test(value)
+export const validToken = (value: string) =>
+  /^[A-Za-z0-9_-]{32,128}$/.test(value)
 
 export function newToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32))

@@ -119,7 +119,7 @@ test('default diagnostics preserve editing, use the raw bridge and export only s
     await new Promise((resolve) => setTimeout(resolve, 25))
   }
   assert.ok(logs.includes('RENDERER_ERROR'))
-  assert.ok(logs.includes('44.3.0'))
+  assert.ok(logs.includes(await app.evaluate(() => process.versions.electron)))
   assert.ok(!logs.includes(sentinel))
   assert.ok(!logs.includes(profile))
   assert.equal(

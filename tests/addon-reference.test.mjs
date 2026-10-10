@@ -54,6 +54,7 @@ test('API reference extracts signatures, nested members, comments, and type link
   const records = parseDeclarations(
     'src/example.ts',
     [
+      'const identity = <T>(value: T) => value',
       '/** A saved result. */',
       'type Result = { value: string }',
       '/** Tools for notes. */',
@@ -69,6 +70,7 @@ test('API reference extracts signatures, nested members, comments, and type link
       '  }',
       '}',
       'export interface Loader { load(name: string): Result }',
+      'export type Frozen = Readonly<{ enabled: boolean; read(name: string): Result }>',
       '/** Build tools.',
       ' * @example const tools = createTools()',
       ' */',
@@ -92,6 +94,14 @@ test('API reference extracts signatures, nested members, comments, and type link
   assert.match(loader, /## Methods[\s\S]*### load/)
   assert.match(
     loader,
+    /\*\*Returns:\*\* <code><a href="Result.md">Result<\/a><\/code>/,
+  )
+  const frozen = pages.get(`${referenceRoot}/Frozen.md`)
+  assert.match(frozen, /## Properties[\s\S]*readonly enabled: boolean/)
+  assert.match(frozen, /## Methods[\s\S]*### read/)
+  assert.match(frozen, /<code>name<\/code> \| <code>string<\/code>/)
+  assert.match(
+    frozen,
     /\*\*Returns:\*\* <code><a href="Result.md">Result<\/a><\/code>/,
   )
   const create = pages.get(`${referenceRoot}/createTools.md`)

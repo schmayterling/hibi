@@ -139,7 +139,12 @@ test('plugin pages, metadata, shared controls, and full source vim editing', {
     text: el.textContent,
   }))
   assert.ok(footer.bottom > footer.height - 80)
-  assert.match(footer.text, /Hibi 0\.1\.0.*Electron 44\.3\.0/)
+  assert.match(footer.text, /Hibi 0\.1\.0/)
+  assert.ok(
+    footer.text.includes(
+      `Electron ${await app.evaluate(() => process.versions.electron)}`,
+    ),
+  )
   await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   assert.ok(
     (await page

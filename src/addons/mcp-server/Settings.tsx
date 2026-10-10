@@ -6,6 +6,7 @@ import {
   DocumentNotice,
   SettingRow,
   TextInput,
+  Toggle,
 } from '../ui'
 import {
   getPreferences,
@@ -158,6 +159,19 @@ export function Settings() {
               Regenerate
             </Button>
           </ControlRow>
+        </SettingRow>
+        <SettingRow
+          id="mcp-server-allow-edits"
+          label="Allow edits"
+          description="AI tools can create, edit, move, and trash documents. Edits to documents open in a tab appear as unsaved changes you can review, undo, or save."
+        >
+          <Toggle
+            id="mcp-server-allow-edits"
+            checked={preferences.allowEdits}
+            onChange={(event) =>
+              setLocal(setPreferences({ allowEdits: event.target.checked }))
+            }
+          />
         </SettingRow>
       </div>
       <h2>Connect Claude Code</h2>

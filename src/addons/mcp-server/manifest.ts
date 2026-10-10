@@ -8,7 +8,7 @@ export default {
   apiVersion: 2,
   kind: 'extension',
   description:
-    'Let AI tools such as Claude Code read and search your workspace over the Model Context Protocol.',
+    'Let AI tools such as Claude Code read, search, and optionally edit your workspace over the Model Context Protocol.',
   settings: { icon: 'plug' },
   defaultEnabled: false,
   startup: 'background',

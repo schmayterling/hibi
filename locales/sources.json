@@ -95,6 +95,9 @@
   "31dd788747d0": [
     "src/addons/mcp-server/Settings.tsx"
   ],
+  "fc003dd03776": [
+    "src/addons/mcp-server/Settings.tsx"
+  ],
   "4efca0d10c5f": [
     "src/renderer/src/HibiSettings.tsx",
     "src/renderer/src/SettingsScreen.tsx",
@@ -190,6 +193,9 @@
   ],
   "b1295e49f642": [
     "src/addons/git/Panel.tsx"
+  ],
+  "a8fa19f8631e": [
+    "src/addons/mcp-server/Settings.tsx"
   ],
   "168511d24d9e": [
     "src/main/index.ts"
@@ -568,6 +574,9 @@
   "4f06af701050": [
     "src/main/workspace-actions.ts"
   ],
+  "e6257468726a": [
+    "src/addons/mcp-server/tools.ts"
+  ],
   "dd2dda50df8c": [
     "src/main/addon-documentation.ts"
   ],
@@ -594,6 +603,9 @@
   ],
   "fa5baa0440ec": [
     "src/main/workspace-entry-transfer.ts"
+  ],
+  "c99299e12377": [
+    "src/addons/mcp-server/tools.ts"
   ],
   "dbdbacffd9f6": [
     "src/renderer/src/WorkspaceSettings.tsx"
@@ -1170,6 +1182,9 @@
   "f6a61661c1fd": [
     "src/renderer/src/document-worker-client.ts"
   ],
+  "d071576151e8": [
+    "src/addons/mcp-server/server.ts"
+  ],
   "77fbde96f850": [
     "src/main/analysis.ts"
   ],
@@ -1498,6 +1513,9 @@
   "63956d2fc93e": [
     "src/main/addon-download.ts"
   ],
+  "380ca3b00419": [
+    "src/addons/mcp-server/types.ts"
+  ],
   "cf38d1cfb9e9": [
     "src/main/sideload.ts"
   ],
@@ -1614,6 +1632,9 @@
   ],
   "a608f028f460": [
     "src/renderer/src/SourceEditor.tsx"
+  ],
+  "b02278826abb": [
+    "src/addons/mcp-server/types.ts"
   ],
   "61a62a841f54": [
     "src/addons/diagnostics/Settings.tsx",
@@ -2602,7 +2623,7 @@
   "bcccb5388362": [
     "src/renderer/src/CommandPalette.tsx"
   ],
-  "a1fa1631ffb7": [
+  "b43ab3ba74ce": [
     "src/addons/mcp-server/manifest.ts"
   ],
   "dbcd5e7bb7a0": [
@@ -2633,6 +2654,9 @@
   ],
   "6f202f54a7b2": [
     "src/addons/frontmatter/Properties.tsx"
+  ],
+  "493bec83fea0": [
+    "src/addons/mcp-server/tools.ts"
   ],
   "744bd1526d4c": [
     "src/renderer/src/markdown-syntax.ts"
@@ -3158,6 +3182,9 @@
     "src/main/workspace-actions.ts",
     "src/main/workspace.ts"
   ],
+  "eb8ed4796035": [
+    "src/addons/mcp-server/tools.ts"
+  ],
   "c8970b4bfa71": [
     "src/addons/quick-note/native.ts"
   ],
@@ -3371,6 +3398,9 @@
   "72e9a59f5a1d": [
     "src/addons/mcp-server/Settings.tsx"
   ],
+  "fc687c9d23cb": [
+    "src/addons/mcp-server/server.ts"
+  ],
   "6d031af10da7": [
     "src/renderer/src/NotificationSettings.tsx"
   ],
@@ -3518,6 +3548,12 @@
   ],
   "e1dda8fa3404": [
     "src/addons/rmarkdown/manifest.ts"
+  ],
+  "5676fea0fc98": [
+    "src/addons/mcp-server/tools.ts"
+  ],
+  "d2766140ec6c": [
+    "src/addons/mcp-server/tools.ts"
   ],
   "4646ea9c2a6e": [
     "src/main/workspace-files.ts"
@@ -3916,6 +3952,9 @@
   ],
   "0a57174b2c85": [
     "src/addons/math/PackageSettings.tsx"
+  ],
+  "7ee609e625df": [
+    "src/addons/mcp-server/tools.ts"
   ],
   "255b076dd828": [
     "src/renderer/src/SettingsScreen.tsx"
@@ -4382,6 +4421,9 @@
   "0e3f939f4a03": [
     "src/main/addon-download.ts"
   ],
+  "3b7490f51f8f": [
+    "src/addons/mcp-server/tools.ts"
+  ],
   "a4f6f8a722fa": [
     "src/main/addon-download.ts"
   ],
@@ -4536,12 +4578,16 @@
     "src/main/media.ts"
   ],
   "a5aedb8a518f": [
+    "src/addons/mcp-server/index.ts",
     "src/renderer/src/document-edits.ts",
     "src/renderer/src/document-target-edits.ts",
     "src/renderer/src/main.tsx"
   ],
   "cb65399b7ce1": [
     "src/renderer/src/document-target-edits.ts"
+  ],
+  "b88bd0babc22": [
+    "src/addons/mcp-server/index.ts"
   ],
   "8ea97b4e248c": [
     "src/shared/document-checkpoint.ts"
@@ -4596,6 +4642,9 @@
   ],
   "c9e161d3f3c3": [
     "src/renderer/src/RecoveryScreen.tsx"
+  ],
+  "ad09a080177f": [
+    "src/addons/mcp-server/index.ts"
   ],
   "ac1dd1f24840": [
     "src/main/sideload.ts"
@@ -4717,6 +4766,9 @@
   ],
   "2a3a78043479": [
     "src/main/imports.ts"
+  ],
+  "b3df6627a45a": [
+    "src/addons/mcp-server/tools.ts"
   ],
   "3a6e6f7e43b2": [
     "src/addons/documentation/site.ts"
@@ -5739,6 +5791,12 @@
   "28391d3bc64e": [
     "src/addons/graph/Panel.tsx",
     "src/renderer/src/EditorToolbar.tsx"
+  ],
+  "03b0f1b66a14": [
+    "src/addons/mcp-server/types.ts"
+  ],
+  "026c3a7db7ce": [
+    "src/addons/mcp-server/types.ts"
   ],
   "f771f4d32eee": [
     "src/addons/diagnostics/Settings.tsx"

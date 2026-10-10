@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { GFM, parser } from '@lezer/markdown'
 import { FrontmatterSourceModel } from '../src/shared/frontmatter-source-model.ts'
+import { markdownLink } from '../src/shared/markdown-link.ts'
 import { MarkdownSourceModel } from '../src/shared/markdown-source-model.ts'
 import {
   MarkdownSourceReferences,
@@ -84,6 +85,25 @@ function fixture(t, text, frontmatter = false) {
   settle()
   return { check, checkDefinitions, edit, settle, references, model, store }
 }
+
+test('source links resolve whitespace and unicode-folded labels in indexed and fallback definitions', (t) => {
+  for (const prefix of ['', '<div>\n\n'])
+    for (const [link, definition] of [
+      ['[label][ A  B ]', 'a b'],
+      ['[label][ Straße ]', 'STRASSE'],
+      ['[ẞ]', 'SS'],
+      ['[ Straße ][]', 'STRASSE'],
+    ]) {
+      const f = fixture(t, `${prefix}${link}\n\n[${definition}]: /target`)
+      assert.equal(f.references.semanticsAvailable(), !prefix, prefix)
+      const target = markdownLink(link)
+      assert.equal(
+        f.references.lookup(target.label)?.href,
+        '/target',
+        `${prefix}${link}`,
+      )
+    }
+})
 
 for (const tag of ['script', 'style', 'pre', 'textarea']) {
   const wrong = tag === 'script' ? 'style' : 'script'

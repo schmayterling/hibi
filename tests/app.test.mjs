@@ -44,9 +44,10 @@ test('desktop launch, isolation, offline reload, and recovery', {
   if (!showTestWindows) assert.equal(windowState.focused, false)
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^about$/i, exact: true }).click()
+  const electronVersion = await app.evaluate(() => process.versions.electron)
   await page
     .locator('.settings-sidebar .settings-versions')
-    .getByText(/^electron 44\.3\.0$/i, { exact: true })
+    .getByText(`Electron ${electronVersion}`, { exact: true })
     .waitFor()
   await page.keyboard.press('Escape')
   assert.deepEqual(

@@ -4,11 +4,23 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # electron-vite 5 and CodSpeed require Vite 7; revisit with their stable upgrades.
+      - dependency-name: vite
+        versions: ['>=8']
+      - dependency-name: '@vitejs/plugin-react'
+        versions: ['>=6']
+      # CodSpeed's Vitest integration supports Vitest 3 and 4.
+      - dependency-name: vitest
+        versions: ['>=5']
+      # Tiptap Mathematics supports KaTeX through 0.18.
+      - dependency-name: katex
+        versions: ['>=0.19']
     groups:
       development:
         patterns: ['*']
         exclude-patterns: [electron]
   - package-ecosystem: github-actions
-    directory: /
+    directories: ['/', '/.github/actions/ci']
     schedule:
       interval: monthly

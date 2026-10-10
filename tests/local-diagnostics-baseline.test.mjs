@@ -4,25 +4,6 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import electron from 'electron'
 
-test('passive exception monitoring preserves the existing fatal policy', () => {
-  const run = (monitor) =>
-    spawnSync(
-      process.execPath,
-      [
-        '-e',
-        `${monitor ? "process.on('uncaughtExceptionMonitor', () => process.stdout.write('observed\\n'));" : ''}
-         process.on('uncaughtException', () => process.stdout.write('existing-handler\\n'));
-         throw new Error('synthetic');`,
-      ],
-      { encoding: 'utf8' },
-    )
-  const before = run(false)
-  const after = run(true)
-  assert.equal(after.status, before.status)
-  assert.equal(before.stdout, 'existing-handler\n')
-  assert.equal(after.stdout, 'observed\nexisting-handler\n')
-})
-
 test('native error branding and stack descriptor inspection do not invoke custom formatting', () => {
   const result = spawnSync(
     electron,

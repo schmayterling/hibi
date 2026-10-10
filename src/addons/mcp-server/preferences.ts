@@ -16,7 +16,11 @@ export function getPreferences(): Preferences {
     )
   } catch {
     // Persist the first token so connected clients keep working across launches.
-    const preferences = { port: DEFAULT_PORT, token: newToken() }
+    const preferences = {
+      port: DEFAULT_PORT,
+      token: newToken(),
+      allowEdits: false,
+    }
     localStorage.setItem(storageKey, JSON.stringify(preferences))
     return preferences
   }

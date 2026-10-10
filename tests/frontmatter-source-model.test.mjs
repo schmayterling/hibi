@@ -5,7 +5,6 @@ import { readFrontmatter } from '../src/shared/frontmatter.ts'
 import { FrontmatterParser } from '../src/shared/frontmatter-parser.ts'
 import { FrontmatterSourceModel } from '../src/shared/frontmatter-source-model.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
-import { sourceParserInput } from '../src/shared/source-parser.ts'
 import { normalizedSource } from '../src/shared/source-projection.ts'
 
 const finish = (model) => {

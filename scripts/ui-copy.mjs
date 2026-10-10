@@ -60,7 +60,7 @@ for (const entry of await readdir('src', {
   if (file.includes('useraddons') || /\.(?:d|worker)\.ts$/.test(file)) continue
   const source = parse(await readFile(file, 'utf8'), {
     sourceType: 'module',
-    plugins: ['typescript', 'jsx'],
+    plugins: file.endsWith('.tsx') ? ['typescript', 'jsx'] : ['typescript'],
   })
   function visit(node, parent) {
     if (node.type === 'JSXText') add(node.value, file)

@@ -122,7 +122,7 @@ function comment(node) {
 export function parseDeclarations(input, source, group, names) {
   const ast = parse(source, {
     sourceType: 'module',
-    plugins: ['typescript', 'jsx'],
+    plugins: input.endsWith('.tsx') ? ['typescript', 'jsx'] : ['typescript'],
   })
   const result = []
   for (const statement of ast.program.body) {
@@ -176,7 +176,7 @@ function members(node, prefix = '', readonly = false) {
   if (node.type === 'TSIntersectionType')
     return node.types.flatMap((type) => members(type, prefix, readonly))
   if (node.type === 'TSTypeReference' && node.typeName.name === 'Readonly')
-    return members(node.typeParameters?.params[0], prefix, true)
+    return members(node.typeArguments?.params[0], prefix, true)
   const items = node.members ?? node.body ?? []
   if (!Array.isArray(items)) return []
   return items.flatMap((member) => {

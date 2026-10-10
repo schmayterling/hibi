@@ -10,8 +10,8 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { crashAndReload, electron } from './electron.mjs'
-import { clickMenu } from './keyboard.mjs'
+import { crashAndReload, electron, waitForDocumentEditor } from './electron.mjs'
+import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('native file operations preserve drafts and avoid silent overwrites', {
@@ -40,11 +40,11 @@ test('native file operations preserve drafts and avoid silent overwrites', {
   })
   const page = await app.firstWindow()
   const rich = page.getByRole('textbox', { name: /document editor/i })
-  await rich.waitFor()
+  await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, path) => {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })
   }, destination)
-  await rich.fill('hello file')
+  await replaceRichText(page, rich, 'hello file')
   await clickMenu(app, 'Save')
   await page
     .getByRole('status', { name: /unsaved changes/i })
@@ -55,7 +55,7 @@ test('native file operations preserve drafts and avoid silent overwrites', {
     false,
   )
 
-  await rich.fill('unsaved draft')
+  await replaceRichText(page, rich, 'unsaved draft')
   await app.evaluate(({ dialog }) => {
     dialog.showMessageBox = async () => ({
       response: 2,
@@ -109,7 +109,7 @@ test('native file operations preserve drafts and avoid silent overwrites', {
   await page
     .getByRole('button', { name: /^source view$/i, exact: true })
     .click()
-  await page.getByRole('textbox', { name: /markdown editor/i }).waitFor()
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await clickMenu(app, 'Save')
   assert.equal(await readFile(fixture, 'utf8'), original)
   assert.equal(
@@ -122,13 +122,13 @@ test('native file operations preserve drafts and avoid silent overwrites', {
     true,
   )
 
-  await page
-    .locator(
-      '.editor-panes.mode-markdown[data-source-ready="true"] .source-pane:not([inert]) .cm-content[contenteditable="true"]',
-    )
-    .waitFor()
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   const draft = 'recover this draft'
-  await page.getByRole('textbox', { name: /markdown editor/i }).fill(draft)
+  await replaceSourceText(
+    page,
+    page.getByRole('textbox', { name: /markdown editor/i }),
+    draft,
+  )
   await waitForAsync(
     page,
     async (expected) => (await window.hibi.getDocument()).markdown === expected,

@@ -13,6 +13,12 @@ export async function replaceRichText(page, target, text) {
   await page.keyboard.insertText(text)
 }
 
+export async function replaceSourceText(page, target, text) {
+  // CodeMirror owns selection; DOM-only fill can lose its range on focus/measure.
+  await target.press('ControlOrMeta+a')
+  await page.keyboard.insertText(text)
+}
+
 // CDP keyboard events bypass Electron's native shortcut processing.
 export async function clickMenu(app, label) {
   const page = await app.firstWindow()

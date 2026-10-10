@@ -36,6 +36,8 @@ export type SourceEditResult =
 
 export type OpenDocumentMetadata = Readonly<{
   target: VersionedDocumentTarget
+  /** Window-local tab identity, stable across save and rename. */
+  tabId: string
   name: string
   dirty: boolean
   ephemeral: boolean

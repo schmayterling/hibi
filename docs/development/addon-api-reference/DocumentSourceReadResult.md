@@ -2,7 +2,7 @@
 
 # DocumentSourceReadResult
 
-Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L67)
+Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L69)
 
 ```typescript
 type DocumentSourceReadResult =

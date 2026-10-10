@@ -3278,6 +3278,7 @@
     "src/addons/graph/index.tsx"
   ],
   "5ff9f7742d6d": [
+    "src/renderer/src/StartupPlaceholder.tsx",
     "src/shared/hotkeys.ts"
   ],
   "656d97eb82c8": [

@@ -1,16 +1,11 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import {
-  copyFile,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { clickMenu } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const sdk = join(root, 'packages/addon-sdk')
@@ -44,6 +39,23 @@ function run(command, args, cwd) {
   return result.stdout
 }
 
+function createStarter(scratch) {
+  const installable = join(scratch, 'command-proof')
+  run(
+    process.execPath,
+    [
+      join(root, 'packages/create-hibi-addon/index.mjs'),
+      installable,
+      '--name',
+      'Command proof',
+      '--author',
+      'Hibi tests',
+    ],
+    root,
+  )
+  return installable
+}
+
 test('command failures report spawn errors', () => {
   assert.throws(
     () => run(join(root, 'missing-sdk-pack-command'), [], root),
@@ -51,13 +63,12 @@ test('command failures report spawn errors', () => {
   )
 })
 
-test('packed addon sdk checks external consumers and installs compiled addon', {
+test('packed addon sdk checks external consumers', {
   timeout: 60000,
 }, async () => {
   const out = join(root, 'out')
   await mkdir(out, { recursive: true })
   const scratch = await mkdtemp(join(out, 'addon-sdk-pack-'))
-  let app
   try {
     const pack = JSON.parse(
       run(
@@ -108,10 +119,16 @@ test('packed addon sdk checks external consumers and installs compiled addon', {
       ),
     )
 
+    const installable = createStarter(scratch)
+    run(process.execPath, [npmCli, 'run', 'check'], installable)
+    const { entry, ...manifest } = JSON.parse(
+      await readFile(join(installable, 'hibi-addon.json'), 'utf8'),
+    )
+    const source = await readFile(join(installable, entry), 'utf8')
     const fixtures = {
       'command.ts': `import type { AddonManifest, CapabilityFactory } from '@hibi/addon-sdk'
-export const manifest = { id: 'command-proof', name: 'Command proof', description: 'Command proof.', version: '1.0.0', apiVersion: 2, capabilities: [], activation: 'command', commands: [{ id: 'greet', label: 'Greet' }] } satisfies AddonManifest
-const create: CapabilityFactory = () => ({ start(context) { context.commands.register({ id: 'greet', label: 'Greet', run: () => context.notify('Hello.') }) } })
+export const manifest = ${JSON.stringify(manifest)} satisfies AddonManifest
+const create: CapabilityFactory = ${source.replace(/^export default /, '')}
 export default create
 `,
       'ui.ts': `import type { CapabilityFactory } from '@hibi/addon-sdk/sdk-loader'
@@ -184,31 +201,22 @@ export default create
       { cwd: consumer, encoding: 'utf8' },
     )
     assert.equal(runtime.status, 0, runtime.stderr)
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+})
 
-    const installable = join(scratch, 'installable')
-    await mkdir(installable)
-    await writeFile(
-      join(installable, 'hibi-addon.json'),
-      JSON.stringify({
-        id: 'command-proof',
-        name: 'Command proof',
-        description: 'Compiled against the packed SDK.',
-        version: '1.0.0',
-        apiVersion: 2,
-        kind: 'extension',
-        capabilities: [],
-        activation: 'command',
-        commands: [{ id: 'greet', label: 'Greet' }],
-        authors: [{ displayName: 'Hibi tests' }],
-        entry: 'index.js',
-      }),
-    )
-    await writeFile(join(installable, 'README.md'), '# Command proof\n')
-    await copyFile(
-      join(consumer, 'compiled/command.js'),
-      join(installable, 'index.js'),
-    )
-    const { electron } = await import('./electron.mjs')
+test('generated addon installs, enables, runs, disables, and re-enables', {
+  timeout: 60000,
+}, async () => {
+  const out = join(root, 'out')
+  await mkdir(out, { recursive: true })
+  const scratch = await mkdtemp(join(out, 'addon-lifecycle-'))
+  let app
+  try {
+    const installable = createStarter(scratch)
+    const source = await readFile(join(installable, 'index.js'), 'utf8')
+    const { electron, waitForDocumentEditor } = await import('./electron.mjs')
     const profile = join(scratch, 'profile')
     app = await electron.launch({
       args: [root, `--user-data-dir=${profile}`],
@@ -221,8 +229,17 @@ export default create
       dialog.showMessageBox = async () => ({ response: 1 })
     }, installable)
     const page = await app.firstWindow()
-    await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-    await page.evaluate(() => window.hibi.installAddon())
+    await waitForDocumentEditor(app, page)
+    await clickMenu(app, 'Command palette')
+    await page
+      .getByRole('combobox', { name: /search commands/i })
+      .fill('Install addon')
+    await page.getByRole('option', { name: /^Install addon/ }).press('Enter')
+    await waitForAsync(page, async () =>
+      (await window.hibi.getInstalledAddons()).some(
+        ({ manifest }) => manifest.id === 'command-proof',
+      ),
+    )
     const installed = await page.evaluate(() =>
       window.hibi.getInstalledAddons(),
     )
@@ -234,8 +251,57 @@ export default create
         join(profile, 'installed-addons/command-proof/index.js'),
         'utf8',
       ),
-      await readFile(join(consumer, 'compiled/command.js'), 'utf8'),
+      source,
     )
+    const greeting = page.getByText('Hello from Command proof.', {
+      exact: true,
+    })
+    for (const enabled of [true, false, true, false]) {
+      await clickMenu(app, 'Settings')
+      await page
+        .getByRole('tab', { name: 'Addon Manager', exact: true })
+        .click()
+      // The controlled toggle updates after IPC; setChecked asserts too early.
+      await page.locator('#addon-command-proof').click()
+      await waitForAsync(
+        page,
+        async (enabled) => {
+          const state = (await window.hibi.getAddonStates()).find(
+            ({ id }) => id === 'command-proof',
+          )
+          const checkbox = document.querySelector('#addon-command-proof')
+          return (
+            state?.enabled === enabled &&
+            checkbox?.checked === enabled &&
+            !checkbox.disabled
+          )
+        },
+        enabled,
+      )
+      await page
+        .getByRole('button', { name: 'Back to app', exact: true })
+        .click()
+      await clickMenu(app, 'Command palette')
+      await page.getByRole('combobox', { name: /search commands/i }).fill('sa')
+      await page.getByRole('option', { name: /^Save as/i }).waitFor()
+      const command = page.getByRole('option', { name: /^Say hello/i })
+      if (enabled) {
+        await command.waitFor()
+        assert.equal(await command.count(), 1)
+        assert.equal(await greeting.count(), 0)
+        await command.press('Enter')
+        await greeting.waitFor()
+      } else {
+        assert.equal(await command.count(), 0)
+        await page.keyboard.press('Escape')
+        await page
+          .getByRole('dialog', { name: /^command palette$/i })
+          .waitFor({ state: 'hidden' })
+      }
+    }
+  } catch (error) {
+    console.error('generated addon lifecycle:', error)
+    throw error
   } finally {
     if (app) await app.close()
     await rm(scratch, { recursive: true, force: true })

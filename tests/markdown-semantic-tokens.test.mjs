@@ -228,6 +228,19 @@ test('whitespace-only bodies retain their lexical paragraph context', (t) => {
 
 test('semantic regions preserve CRLF indentation and nested definition precedence', (t) => {
   const cases = [
+    '- [ ]\r\n',
+    '- [ ] \r\n',
+    '- [x]\r\n',
+    '- [X]\r\n',
+    '- [ ]\r\n- [ ]\r\n',
+    '- [ ]\r\n- [x]\r\n',
+    '> - [ ] a\r\n> - [ ]\r\n',
+    '> [!NOTE]\r\n> - [ ]\r\n> - [x]\r\n',
+    '- [ ]\r\n  lazy\r\n',
+    '1. [ ]\r\n',
+    '- [ ] a\r\n- [ ]\r\n- bullet\r\n',
+    '- parent\r\n  - [ ]\r\n  - [x]\r\n',
+    '- [ ]\r\n  - child\r\n',
     '  # [ref]\r\n\r\n> [ref]\r\n>\r\n> [ref]: /quote\r\n\r\n- item\r\n  continuation\r\n\r\n[ref]: /outer\r\n',
     '[ref]: /first\r\n\r\n- [ref]\r\n\r\n  [ref]: /inside\r\n\r\n[ref]: /last\r\n',
     '\r\n\r\n\tcode\r\n\r\n  # indented\r\n',

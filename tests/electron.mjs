@@ -7,30 +7,26 @@ function drainElectronStdio(child) {
 }
 
 // Playwright can wait for inherited stdio to close after Electron itself exits.
-export function waitForElectronExit(child, closePromise) {
+export function waitForElectronExit(child, closePromise, drainStdio = true) {
   return new Promise((resolve, reject) => {
     let settled = false
     let closeSettled = false
     let exited = false
-    let grace
     const finish = (error) => {
       if (settled) return
       settled = true
-      clearTimeout(grace)
       child.off('exit', onExit)
-      if (exited) drainElectronStdio(child)
       if (error) reject(error)
       else resolve()
     }
     const onExit = (code, signal) => {
       exited = true
+      if (drainStdio) drainElectronStdio(child)
       if (code !== 0 || signal !== null) {
         finish(new Error(`Electron exited with code ${code}, signal ${signal}`))
         return
       }
-      // Playwright may never settle after a clean exit; allow prompt errors first.
       if (closeSettled) finish()
-      else grace = setTimeout(() => finish(), 100)
     }
     child.once('exit', onExit)
     closePromise.then(
@@ -53,21 +49,11 @@ export function waitForElectronShutdown(
   waitForTransport = false,
 ) {
   // Windows keeps profile databases locked until Chromium descendants close.
-  if (!waitForTransport && platform !== 'win32')
-    return waitForElectronExit(child, closePromise)
-  const exited = new Promise((resolve, reject) => {
-    const finish = (code, signal) => {
-      if (code === 0 && signal === null) resolve()
-      else
-        reject(new Error(`Electron exited with code ${code}, signal ${signal}`))
-    }
-    child.once('exit', finish)
-    if (child.exitCode !== null || child.signalCode !== null) {
-      child.off('exit', finish)
-      finish(child.exitCode, child.signalCode)
-    }
-  })
-  return Promise.all([closePromise, exited]).then(() => undefined)
+  return waitForElectronExit(
+    child,
+    closePromise,
+    !waitForTransport && platform !== 'win32',
+  )
 }
 
 export function stopElectronTree(child) {
@@ -207,6 +193,8 @@ export const electron = {
 function startupEntries({ BrowserWindow } = {}) {
   const doc = globalThis.document
   const editor = doc?.querySelector('.editor-page')
+  const panel = doc?.querySelector('#document-editor-panel')
+  const tiptap = panel?.querySelector('.tiptap')
   const input = editor?.querySelector(
     '.tiptap[contenteditable="true"], .cm-content[contenteditable="true"]',
   )
@@ -218,6 +206,10 @@ function startupEntries({ BrowserWindow } = {}) {
   return {
     dom: doc && {
       readyState: doc.readyState,
+      appBusy: doc.querySelector('.app')?.getAttribute('aria-busy'),
+      editorPanelBusy: panel?.getAttribute('aria-busy'),
+      tiptapReadOnly: tiptap?.getAttribute('aria-readonly'),
+      tiptapContentEditable: tiptap?.getAttribute('contenteditable'),
       editorBusy: editor?.getAttribute('aria-busy'),
       editorInert: editor?.inert,
       editorHidden: editor?.hidden,
@@ -310,11 +302,20 @@ export async function startupDiagnostics(application, page) {
   return { renderer, main, consoleErrors, pageErrors }
 }
 
-export async function waitForDocumentEditor(application, page) {
+export async function waitForDocumentEditor(
+  application,
+  page,
+  { name = 'Document editor', timeout } = {},
+) {
   try {
+    // A visible textbox can still belong to an inert addon or a pending tab.
     await page
-      .getByRole('textbox', { name: 'Document editor', exact: true })
-      .waitFor()
+      .locator(
+        '.app[aria-busy="false"] #document-editor-panel[aria-busy="false"]',
+      )
+      .getByRole('textbox', { name, exact: true })
+      .and(page.locator('[contenteditable="true"]:not([inert] *)'))
+      .waitFor({ timeout })
   } catch (error) {
     try {
       console.error(

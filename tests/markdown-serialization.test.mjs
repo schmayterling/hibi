@@ -8,7 +8,9 @@ import { TaskList } from '@tiptap/extension-task-list'
 import { MarkdownManager } from '@tiptap/markdown'
 import { EditorState } from '@tiptap/pm/state'
 import { StarterKit } from '@tiptap/starter-kit'
+import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import { markdownSerializer } from '../src/renderer/src/markdown-serialization.ts'
+import { preserveRichSource } from '../src/renderer/src/rich-source-preservation.ts'
 
 const extensions = [
   StarterKit.configure({ trailingNode: false }),
@@ -89,6 +91,98 @@ test('empty paragraphs, entities, delimiters, and source preservation match full
     const expected = manager.serialize(doc.toJSON())
     assert.equal(result.source, expected, source)
   }
+})
+
+test('native empty paragraphs serialize as blank lines and pass source preservation', () => {
+  const { core, parser, options } = markdownConfiguration([])
+  const schema = getSchema(core)
+  const manager = new MarkdownManager({
+    extensions: core,
+    marked: parser,
+    markedOptions: options,
+  })
+  const original = '# heading\r\n\r\nfirst\r\n'
+  const before = schema.nodeFromJSON(manager.parse(original))
+  const after = schema.nodes.doc.create(null, [
+    ...before.content.content,
+    schema.nodes.paragraph.create(),
+    schema.nodes.paragraph.create(),
+    schema.nodes.paragraph.create(null, schema.text('second ')),
+    schema.nodes.paragraph.create(),
+    schema.nodes.paragraph.create(),
+  ])
+  for (const blockLocal of [true, false]) {
+    const serialize = markdownSerializer(manager, blockLocal)
+    const source = serialize(after).source
+    assert.equal(source, '# heading\n\nfirst\n\n\n\n\n\nsecond \n\n\n\n')
+    assert.doesNotMatch(source, /&nbsp;|\u00a0/)
+    assert.ok(schema.nodeFromJSON(manager.parse(source)).eq(after))
+    const preserved = preserveRichSource(
+      original,
+      serialize(before).source,
+      source,
+      (candidate) => schema.nodeFromJSON(manager.parse(candidate)).eq(after),
+    )
+    assert.equal(
+      preserved,
+      '# heading\r\n\r\nfirst\r\n\r\n\r\n\r\n\r\n\r\nsecond \r\n\r\n\r\n\r\n\r\n',
+    )
+    const empty = schema.nodes.doc.create(null, [
+      schema.nodes.paragraph.create(),
+      schema.nodes.paragraph.create(),
+    ])
+    assert.equal(serialize(empty).source, '')
+  }
+})
+
+test('rich soft breaks render as spaces and retain their source after an unrelated edit', () => {
+  const { core, addons, parser, options } = markdownConfiguration([
+    {
+      markedOptions: { gfm: true },
+      richExtensions: [TaskList, TaskItem.configure({ nested: true })],
+    },
+  ])
+  const extensions = [...core, ...addons]
+  const schema = getSchema(extensions)
+  const manager = new MarkdownManager({
+    extensions,
+    marked: parser,
+    markedOptions: options,
+  })
+  for (const [block, text] of [
+    ['a\nb', 'a b'],
+    ['a \nb', 'a b'],
+    ['1. a\n   b', 'a b'],
+    ['a\t\n\tb', 'a b'],
+    ['**a\nb**', 'a b'],
+    ['> a\n> b', 'a b'],
+    ['- a\n  b', 'a b'],
+    ['a\nb\n=====', 'a b'],
+    ['- [ ] t\n  p\n  q', 'tp q'],
+  ]) {
+    const original = `${block}\n\nelsewhere`
+    const before = schema.nodeFromJSON(manager.parse(original))
+    assert.equal(before.firstChild.textContent, text, block)
+    const after = schema.nodes.doc.create(null, [
+      before.firstChild,
+      schema.nodes.paragraph.create(null, schema.text('edited elsewhere')),
+    ])
+    const preserved = preserveRichSource(
+      original,
+      manager.serialize(before.toJSON()),
+      manager.serialize(after.toJSON()),
+      (candidate) => schema.nodeFromJSON(manager.parse(candidate)).eq(after),
+    )
+    assert.equal(preserved, `${block}\n\nedited elsewhere`)
+    assert.ok(schema.nodeFromJSON(manager.parse(preserved)).eq(after))
+  }
+  assert.equal(parser.lexer('p\nq')[0].tokens[0].text, 'p q')
+  assert.equal(parser.parse('a\nb'), '<p>a\nb</p>\n')
+  assert.equal(manager.parse('a  \nb').content[0].content[1].type, 'hardBreak')
+  assert.equal(
+    schema.nodeFromJSON(manager.parse('```\na\nb\n```')).firstChild.textContent,
+    'a\nb',
+  )
 })
 
 test('undeclared serializers retain the full-document path and custom document joining', () => {

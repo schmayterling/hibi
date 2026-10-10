@@ -1,10 +1,12 @@
 import { setTimeout } from 'node:timers/promises'
 
+export const APP_STATE_TIMEOUT = 7000
+
 // This Playwright build treats Promise-valued waitForFunction predicates as
 // truthy before they resolve. Evaluate and await async checks in the host.
 export async function waitForAsync(page, predicate, arg) {
   const started = performance.now()
-  const deadline = started + 7000
+  const deadline = started + APP_STATE_TIMEOUT
   let attempts = 0
   do {
     attempts++

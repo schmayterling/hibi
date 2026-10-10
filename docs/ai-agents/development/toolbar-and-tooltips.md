@@ -32,7 +32,7 @@ Appearance settings expose visibility, display mode, and **Arrange toolbar actio
 
 ## Auto-hide
 
-`autoHide` defaults to true. The toolbar and titlebar share an editor-activity signal and a 1.2-second idle timer, with separate appearance settings. Collapse moves the editor up; expansion moves it back. The toolbar slide uses `--motion-feedback`, with its contents fading out before collapse and in during expansion to avoid clipping.
+`autoHide` defaults to false. The toolbar and titlebar share an editor-activity signal and a 1.2-second idle timer, with separate appearance settings. Collapse moves the editor up; expansion moves it back. The toolbar slide uses `--motion-feedback`, with its contents fading out before collapse and in during expansion to avoid clipping.
 
 Hidden bars are inert and excluded from keyboard navigation. Pointer movement near the window top, control focus, find, palette, and settings reveal both bars. Reduced motion disables transitions. The find bar sits below the toolbar and its bottom margin, or directly below the titlebar when no toolbar is shown.
 

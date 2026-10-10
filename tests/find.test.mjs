@@ -207,4 +207,127 @@ test('find in document searches rich text and offscreen markdown without editing
   )
   await input.press('Escape')
   await bar.waitFor({ state: 'hidden' })
+
+  const filler = Array.from({ length: 120 }, (_, index) => `line ${index}`)
+  await replaceSource(
+    [...filler, 'needle top', ...filler, 'needle bottom'].join('\n\n'),
+  )
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  // Focus stays in the find bar, so the rich pane must scroll to each match.
+  const waitForVisibleMatch = (block) =>
+    page.waitForFunction((text) => {
+      const match = document.querySelector(
+        '.rich-pane .ProseMirror-active-search-match',
+      )
+      if (match?.closest('p, pre')?.textContent !== text) return false
+      const bounds = match.getBoundingClientRect()
+      // Nested scroll containers such as code blocks must show the match too.
+      return [match.closest('pre'), match.closest('.rich-pane')].every(
+        (container) => {
+          if (!container) return true
+          const box = container.getBoundingClientRect()
+          return (
+            bounds.top >= box.top &&
+            bounds.bottom <= box.bottom &&
+            bounds.left >= box.left &&
+            bounds.right <= box.right
+          )
+        },
+      )
+    }, block)
+  await input.fill('needle')
+  await waitForCount('1/2')
+  await waitForVisibleMatch('needle top')
+  await input.press('Enter')
+  await waitForCount('2/2')
+  await waitForVisibleMatch('needle bottom')
+  await input.press('Enter')
+  await waitForCount('1/2')
+  await waitForVisibleMatch('needle top')
+  await input.press('Shift+Enter')
+  await waitForCount('2/2')
+  await waitForVisibleMatch('needle bottom')
+  await input.press('Escape')
+  await bar.waitFor({ state: 'hidden' })
+
+  const longLine = `${'code '.repeat(60)}needle`
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource([...filler, `\`\`\`\n${longLine}\n\`\`\``].join('\n\n'))
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  await input.fill('needle')
+  await waitForCount('1/1')
+  await waitForVisibleMatch(longLine)
+  await input.press('Escape')
+  await bar.waitFor({ state: 'hidden' })
+
+  // A long match wraps in a narrow pane and must be revealed to its end.
+  const wrapped = `wrapped needle ${'word '.repeat(24)}end`
+  await page.setViewportSize({ width: 480, height: 720 })
+  await page.waitForFunction(() => innerWidth === 480)
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource([...filler, wrapped, ...filler].join('\n\n'))
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  // Start above the match so the reveal scrolls down to it.
+  await rich.evaluate((element) => {
+    element.closest('.rich-pane').scrollTop = 0
+  })
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  await input.fill(wrapped)
+  await waitForCount('1/1')
+  await waitForVisibleMatch(wrapped)
+  await input.press('Escape')
+  await bar.waitFor({ state: 'hidden' })
+
+  // A match wider than its code block but narrower than the pane keeps its start visible.
+  const codeSource = (match) =>
+    [...filler, `\`\`\`\n${'code '.repeat(60)}${match}\n\`\`\``].join('\n\n')
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource(codeSource('x'))
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  const length = await page.locator('.rich-pane pre').evaluate((pre) => {
+    const range = document.createRange()
+    range.selectNodeContents(pre)
+    const glyph = range.getBoundingClientRect().width / pre.textContent.length
+    const pane = pre.closest('.rich-pane').getBoundingClientRect().width
+    const code = pre.getBoundingClientRect().width
+    return Math.floor((code + Math.min(pane, code + 80) - 96) / 2 / glyph)
+  })
+  const wide = `needle${'x'.repeat(length - 6)}`
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource(codeSource(wide))
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  await input.fill(wide)
+  await waitForCount('1/1')
+  await page.waitForFunction(() => {
+    const match = document.querySelector(
+      '.rich-pane .ProseMirror-active-search-match',
+    )
+    const pre = match?.closest('pre')
+    if (!pre || pre.scrollLeft === 0) return false
+    const start = match.getBoundingClientRect().left
+    const box = pre.getBoundingClientRect()
+    return start >= box.left && start < box.right
+  })
+  await input.press('Escape')
+  await bar.waitFor({ state: 'hidden' })
 })

@@ -52,7 +52,7 @@ test('addon actions follow formatting by default and keep custom toolbar order',
   assert.equal((await ids()).at(-1), 'tags.browse')
 })
 
-test('toolbar auto-hide defaults on, shares top-bar timing, and moves content smoothly', {
+test('toolbar and top bar stay visible by default, auto-hide shares timing, and moves content smoothly', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-toolbar-hide-'))
@@ -77,16 +77,32 @@ test('toolbar auto-hide defaults on, shares top-bar timing, and moves content sm
     name: /^hide toolbar while typing$/i,
     exact: true,
   })
-  assert.equal(await autoHide.isChecked(), true)
-  assert.equal(
-    await page
-      .getByRole('checkbox', {
-        name: /^hide top bar while typing$/i,
-        exact: true,
-      })
-      .isChecked(),
-    true,
+  const hideTopBar = page.getByRole('checkbox', {
+    name: /^hide top bar while typing$/i,
+    exact: true,
+  })
+  assert.equal(await autoHide.isChecked(), false)
+  assert.equal(await hideTopBar.isChecked(), false)
+  await page.getByRole('button', { name: /^back to app$/i }).click()
+  await rich.press('x')
+  // Typing renders synchronously from the input event; two frames cover the commit.
+  await page.evaluate(
+    () =>
+      new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)),
+      ),
   )
+  assert.deepEqual(
+    await page.evaluate(() => ({
+      typing: document.querySelector('.app').dataset.typing,
+      toolbar: document.querySelector('.toolbar-slot').dataset.hidden,
+      title: getComputedStyle(document.querySelector('.titlebar')).opacity,
+    })),
+    { typing: 'false', toolbar: 'false', title: '1' },
+  )
+  await clickMenu(app, 'Settings')
+  await autoHide.check()
+  await hideTopBar.check()
   await page.getByRole('button', { name: /^back to app$/i }).click()
   await page.locator('.toolbar-slot').evaluate(async (element) => {
     await Promise.all(

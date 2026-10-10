@@ -95,6 +95,7 @@ test('source links resolve whitespace and unicode-folded labels in indexed and f
       ['[ Straße ][]', 'STRASSE'],
     ]) {
       const f = fixture(t, `${prefix}${link}\n\n[${definition}]: /target`)
+      assert.equal(f.references.semanticsAvailable(), !prefix, prefix)
       const target = markdownLink(link)
       assert.equal(
         f.references.lookup(target.label)?.href,

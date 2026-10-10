@@ -640,8 +640,14 @@
   "c3a44a6b8a12": [
     "src/main/workspace-settings.ts"
   ],
+  "ae1b910fa42a": [
+    "src/addons/mcp-server/tools.ts"
+  ],
   "2874c2767f58": [
     "src/main/workspace.ts"
+  ],
+  "3cc25a18d979": [
+    "src/addons/mcp-server/tools.ts"
   ],
   "5a3cfacf2245": [
     "src/main/workspace-actions.ts"
@@ -860,6 +866,12 @@
   ],
   "426be84ac71a": [
     "src/main/workspace-files.ts"
+  ],
+  "5e23480c81c1": [
+    "src/addons/mcp-server/tools.ts"
+  ],
+  "7fdde378ddd4": [
+    "src/addons/mcp-server/tools.ts"
   ],
   "31a8910a7cf4": [
     "src/renderer/src/DocumentTabs.tsx"
@@ -1193,6 +1205,9 @@
   ],
   "841f66a926a7": [
     "src/shared/document-journal.ts"
+  ],
+  "a491f369baa5": [
+    "src/addons/mcp-server/tools.ts"
   ],
   "72b5c3e0383d": [
     "src/renderer/src/WorkspaceSettings.tsx"
@@ -2847,6 +2862,12 @@
   "64316050ccd6": [
     "src/renderer/src/ImportDialog.tsx"
   ],
+  "343dd44fa1d7": [
+    "src/addons/mcp-server/tools.ts"
+  ],
+  "8321835f5c83": [
+    "src/addons/mcp-server/tools.ts"
+  ],
   "df6c593c35d7": [
     "src/addons/block-drag/index.ts"
   ],
@@ -3503,6 +3524,9 @@
   "a7f7a5d390ba": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
+  "c7e2f3e4d8b1": [
+    "src/addons/mcp-server/server.ts"
+  ],
   "b66d044181a0": [
     "src/addons/git/Panel.tsx"
   ],
@@ -3715,6 +3739,9 @@
   ],
   "97b7a53b9210": [
     "src/main/sideload.ts"
+  ],
+  "d32315af8e33": [
+    "src/addons/mcp-server/tools.ts"
   ],
   "6beb76e49302": [
     "src/main/document.ts"
@@ -4560,6 +4587,9 @@
   "602cad822b0c": [
     "src/main/document.ts"
   ],
+  "68218ba6809b": [
+    "src/addons/mcp-server/tools.ts"
+  ],
   "22f211fd2570": [
     "src/renderer/src/document-target-edits.ts"
   ],
@@ -4681,6 +4711,9 @@
   ],
   "a3a83b5e3ed9": [
     "src/addons/_shared/format-native.ts"
+  ],
+  "cf9108c9789b": [
+    "src/addons/mcp-server/tools.ts"
   ],
   "590fb9c8974a": [
     "src/addons/_shared/format-native.ts"
@@ -5426,6 +5459,9 @@
   ],
   "7674c6f9fdd5": [
     "src/main/workspace-metadata.ts"
+  ],
+  "98ab5610a80c": [
+    "src/addons/mcp-server/server.ts"
   ],
   "dfa48f0d383b": [
     "src/main/workspace-files.ts"

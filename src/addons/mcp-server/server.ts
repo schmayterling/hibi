@@ -121,7 +121,7 @@ async function dispatch(message: unknown, version: string, access: ToolAccess) {
           capabilities: { tools: {} },
           serverInfo: { name: 'hibi', version },
           instructions:
-            'Read and search the open Hibi workspace. Paths are workspace-relative POSIX paths. Documents include unsaved edits.',
+            'Read and search the open Hibi workspace. With Allow edits enabled, create_document, edit_document, move_document and trash_document can change workspace documents. Paths are workspace-relative POSIX paths. Reads include unsaved edits; edits to open documents become unsaved changes.',
         }
         break
       case 'ping':
@@ -322,8 +322,6 @@ export class McpServer {
             : 'Could not start the MCP server. Choose another port and try again.',
         url: '',
       }
-      server.close()
-      server.closeAllConnections()
     })
     this.opening = new Promise((resolve) => {
       const finish = () => {

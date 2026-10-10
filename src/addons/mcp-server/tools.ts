@@ -1,3 +1,4 @@
+import { shell } from 'electron'
 import {
   getDocument,
   getDocumentPath,
@@ -13,14 +14,28 @@ import {
   workspaceRelativePath,
   workspaceRoot,
 } from '../../main/workspace'
-import { readWorkspaceText } from '../../main/workspace-files'
+import {
+  createWorkspaceText,
+  readWorkspaceText,
+  renameWorkspaceFile,
+  trashWorkspaceFile,
+  updateWorkspaceText,
+} from '../../main/workspace-files'
 import { workspaceIgnore } from '../../main/workspace-metadata'
 import {
   resolveWorkspaceEntry,
   validateWorkspaceName,
 } from '../../main/workspace-paths'
-import type { WorkspaceEntry } from '../../shared/workspace'
-import type { OpenEditReply, TextEdit } from './types'
+import type {
+  WorkspaceEntry,
+  WorkspaceFileResult,
+} from '../../shared/workspace'
+import {
+  applyPlannedEdits,
+  type OpenEditReply,
+  planEdits,
+  type TextEdit,
+} from './types'
 
 export const EDITING_DISABLED =
   'Editing is turned off. Turn on Allow edits in the MCP Server settings in Hibi.'
@@ -41,9 +56,80 @@ const annotations = {
   idempotentHint: true,
   openWorldHint: false,
 }
+const writeAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: false,
+}
+const OPEN_DOCUMENT_CONFLICT =
+  'Close this document before updating its disk file.'
 const pathSchema = { type: 'string', minLength: 1, maxLength: 4096 }
 
 export const toolDefinitions = [
+  {
+    name: 'create_document',
+    description:
+      'Create a document without overwriting an existing file. The parent folder must exist.',
+    inputSchema: {
+      type: 'object',
+      properties: { path: pathSchema, text: { type: 'string' } },
+      required: ['path', 'text'],
+      additionalProperties: false,
+    },
+    annotations: { ...writeAnnotations, destructiveHint: false },
+  },
+  {
+    name: 'edit_document',
+    description:
+      'Replace exact text occurring once per edit, without overlaps. Open documents receive unsaved changes; closed documents are saved to disk.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: pathSchema,
+        edits: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 50,
+          items: {
+            type: 'object',
+            properties: {
+              oldText: { type: 'string', minLength: 1 },
+              newText: { type: 'string' },
+            },
+            required: ['oldText', 'newText'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['path', 'edits'],
+      additionalProperties: false,
+    },
+    annotations: writeAnnotations,
+  },
+  {
+    name: 'move_document',
+    description:
+      'Move a closed document without overwriting the destination. The destination folder must exist.',
+    inputSchema: {
+      type: 'object',
+      properties: { path: pathSchema, destination: pathSchema },
+      required: ['path', 'destination'],
+      additionalProperties: false,
+    },
+    annotations: writeAnnotations,
+  },
+  {
+    name: 'trash_document',
+    description: 'Move a closed document to the operating system trash.',
+    inputSchema: {
+      type: 'object',
+      properties: { path: pathSchema },
+      required: ['path'],
+      additionalProperties: false,
+    },
+    annotations: writeAnnotations,
+  },
   {
     name: 'list_documents',
     description:
@@ -179,18 +265,164 @@ async function openWorkspace() {
   return { root, target, workspace, documents, folders, visible, ensureCurrent }
 }
 
-async function runTool(name: string, input: unknown) {
-  const args = argumentsFor(
-    input,
-    name === 'list_documents'
-      ? ['folder', 'limit']
-      : name === 'read_document'
-        ? ['path']
-        : name === 'search_documents'
-          ? ['query', 'limit']
-          : [],
+function editsFor(value: unknown): TextEdit[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 50)
+    throw new InvalidParams('Provide between 1 and 50 edits.')
+  return value.map((value) => {
+    const edit = argumentsFor(value, ['oldText', 'newText'])
+    if (
+      typeof edit.oldText !== 'string' ||
+      !edit.oldText ||
+      typeof edit.newText !== 'string'
+    )
+      throw new InvalidParams(
+        'Each edit needs a non-empty oldText string and a newText string.',
+      )
+    return { oldText: edit.oldText, newText: edit.newText }
+  })
+}
+
+function workspaceResult(result: WorkspaceFileResult<unknown>, name: string) {
+  if (result.ok) return textResult(JSON.stringify(result.value))
+  if (result.code === 'disposed') throw new Error(EDITING_DISABLED)
+  if (result.message === OPEN_DOCUMENT_CONFLICT)
+    throw new Error(
+      name === 'trash_document'
+        ? 'Close this document in Hibi before moving it to the trash.'
+        : 'Close this document in Hibi before moving it.',
+    )
+  if (
+    result.message ===
+    'This file changed on disk. Read it again before updating.'
   )
+    throw new Error('The document changed. Read it again and retry.')
+  if (name === 'create_document' && result.code === 'not-found')
+    throw new Error('The parent folder is missing. Choose an existing folder.')
+  throw new Error(result.message)
+}
+
+async function runTool(
+  name: string,
+  args: Record<string, unknown>,
+  access?: ToolAccess,
+) {
   const scope = await openWorkspace()
+  if (
+    name === 'create_document' ||
+    name === 'edit_document' ||
+    name === 'move_document' ||
+    name === 'trash_document'
+  ) {
+    if (!access) throw new Error(EDITING_DISABLED)
+    const ensureCurrent = () => {
+      if (!access.isCurrentOwner()) throw new Error(EDITING_DISABLED)
+      scope.ensureCurrent()
+    }
+    ensureCurrent()
+    const path = pathFor(args.path)
+    if (!scope.visible(path))
+      throw new Error('Choose a supported document visible in this workspace.')
+    if (name === 'create_document') {
+      if (typeof args.text !== 'string')
+        throw new InvalidParams('Provide document text as a string.')
+      return workspaceResult(
+        await createWorkspaceText(
+          scope.target,
+          path,
+          args.text,
+          access.isCurrentOwner,
+        ),
+        name,
+      )
+    }
+    if (!scope.documents.includes(path))
+      throw new Error('Choose a document visible in this workspace.')
+    const file = await resolveWorkspaceEntry(scope.root, path)
+    ensureCurrent()
+    const openTab = () =>
+      getOpenDocuments().find((entry) => entry.file === file)
+    const edits = name === 'edit_document' ? editsFor(args.edits) : []
+    const editOpen = async () => {
+      const tab = openTab()
+      if (!tab) return null
+      const reply = await access.editOpenDocument(
+        tab.tabId,
+        edits,
+        ensureCurrent,
+      )
+      if (!reply.ok)
+        throw new Error(reply.message || 'Hibi could not apply this edit.')
+      return textResult(
+        JSON.stringify({
+          path,
+          tabId: tab.tabId,
+          unsaved: true,
+          message: reply.message,
+        }),
+      )
+    }
+    if (name === 'edit_document') {
+      const result = await editOpen()
+      if (result) return result
+    } else if (openTab())
+      throw new Error(
+        name === 'move_document'
+          ? 'Close this document in Hibi before moving it.'
+          : 'Close this document in Hibi before moving it to the trash.',
+      )
+    const read = await readWorkspaceText(scope.target, path)
+    if (!read.ok) throw new Error(read.message)
+    ensureCurrent()
+    if (name === 'edit_document') {
+      const open = await editOpen()
+      if (open) return open
+      const text = applyPlannedEdits(
+        read.value.markdown,
+        planEdits(read.value.markdown, edits),
+      )
+      const result = await updateWorkspaceText(
+        scope.target,
+        path,
+        read.value.version,
+        text,
+        { allowMetadataReset: true },
+        access.isCurrentOwner,
+      )
+      if (!result.ok && result.message === OPEN_DOCUMENT_CONFLICT) {
+        const open = await editOpen()
+        if (open) return open
+        throw new Error('The document changed. Read it again and retry.')
+      }
+      return workspaceResult(result, name)
+    }
+    if (name === 'move_document') {
+      const destination = pathFor(args.destination)
+      if (!scope.visible(destination))
+        throw new Error(
+          'Choose a supported destination visible in this workspace.',
+        )
+      return workspaceResult(
+        await renameWorkspaceFile(
+          scope.target,
+          path,
+          destination,
+          read.value.version,
+          access.isCurrentOwner,
+        ),
+        name,
+      )
+    }
+    return workspaceResult(
+      await trashWorkspaceFile(
+        scope.target,
+        path,
+        read.value.version,
+        (file) => shell.trashItem(file),
+        access.isCurrentOwner,
+      ),
+      name,
+    )
+  }
   if (name === 'list_documents') {
     const folder = pathFor(args.folder, true)
     const limit = limitFor(args.limit, 500, 2000)
@@ -305,13 +537,19 @@ export async function callTool(
   if (!tool.annotations.readOnlyHint && !access?.isCurrentOwner())
     return textResult(EDITING_DISABLED, true)
   try {
-    return await runTool(name, input ?? {})
+    return await runTool(
+      name,
+      argumentsFor(input ?? {}, Object.keys(tool.inputSchema.properties)),
+      access,
+    )
   } catch (error) {
     if (error instanceof InvalidParams) throw error
     return textResult(
       error instanceof Error && !(error as NodeJS.ErrnoException).code
         ? error.message
-        : 'Could not read this workspace document. Try again.',
+        : tool.annotations.readOnlyHint
+          ? 'Could not read this workspace document. Try again.'
+          : 'Could not change this workspace document. Try again.',
       true,
     )
   }

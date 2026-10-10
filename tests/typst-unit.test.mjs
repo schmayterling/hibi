@@ -7,6 +7,7 @@ import {
   typstBlock,
   typstFlavor,
 } from '../src/addons/typst/syntax.ts'
+import { NATIVE_COMPILER_READY_TIMEOUT, NATIVE_FONT_TIMEOUT } from './poll.mjs'
 
 test('typst fences preserve source and exclude incomplete or quoted examples', () => {
   const source = '~~~typst\n$ x^2 $\n~~~\n'
@@ -32,7 +33,7 @@ test('typst fences preserve source and exclude incomplete or quoted examples', (
 })
 
 test('pinned native compiler sends package requests through the denying proxy', {
-  timeout: 70000,
+  timeout: 15000 + NATIVE_COMPILER_READY_TIMEOUT,
 }, async (t) => {
   let blocked = 0
   const server = createServer((_request, response) => {
@@ -89,7 +90,7 @@ test('pinned native compiler sends package requests through the denying proxy', 
     const markers = ['module-start\n', 'module-done\n', 'font-done\n']
     const phases = [
       ['native module load', 15000],
-      ['font initialization', 30000],
+      ['font initialization', NATIVE_FONT_TIMEOUT],
       ['network compilation', 10000],
     ]
     child.stdout.on('data', (chunk) => {

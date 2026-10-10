@@ -6,7 +6,11 @@ import test from 'node:test'
 import { getSchema } from '@tiptap/core'
 import { StarterKit } from '@tiptap/starter-kit'
 import { blockMarkdownMarkers } from '../src/renderer/src/markdown-markers.ts'
-import { electron } from './electron.mjs'
+import {
+  electron,
+  showTestWindows,
+  waitForDocumentEditor,
+} from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -212,7 +216,16 @@ test('drawn caret leaves final formatting at the end of the document', {
       hints,
     )
     await page.reload()
-    await rich.waitFor()
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'caret.md',
+    )
+    await waitForDocumentEditor(app, page)
+    // Hidden local windows have no OS focus; caret geometry still needs focus.
+    if (!showTestWindows)
+      await page.evaluate(() => {
+        document.hasFocus = () => true
+      })
     for (const html of ['<strong>hello</strong>', '<code>hello</code>']) {
       const label = `${html} with hints ${hints ? 'on' : 'off'}`
       await rich.evaluate((element, html) => {

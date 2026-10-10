@@ -10,9 +10,9 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
-import { clickMenu, pressShortcut } from './keyboard.mjs'
-import { waitForAsync } from './poll.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
+import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
+import { NATIVE_COMPILER_READY_TIMEOUT, waitForAsync } from './poll.mjs'
 import { renameDocument } from './rename.mjs'
 import { uiName } from './ui.mjs'
 
@@ -53,11 +53,12 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   page.on('pageerror', (error) => errors.push(error.message))
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   const read = () => page.evaluate(() => window.hibi.getDocument())
-  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await waitForDocumentEditor(app, page)
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-typst').click()
   await page.getByRole('button', { name: /^back to app$/i }).click()
+  await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, notes) => {
     dialog.showOpenDialog = async (_window, options) => ({
       canceled: false,
@@ -70,6 +71,11 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     dialog.showMessageBox = async () => ({ response: 1 })
   }, notes)
   await pressShortcut(app, `${mod}+Shift+o`)
+  await waitForAsync(page, async () =>
+    (await window.hibi.getWorkspace())?.entries.some(
+      (entry) => entry.path === 'report.typ',
+    ),
+  )
   const tree = page.getByRole('tree', { name: /workspace files/i })
   await tree
     .getByRole('treeitem', { name: /^report\.typ$/i, exact: true })
@@ -82,7 +88,7 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
       document.querySelector('.typst-preview')?.getAttribute('aria-busy') ===
       'false',
     undefined,
-    { timeout: 65000 },
+    { timeout: NATIVE_COMPILER_READY_TIMEOUT + 10000 },
   )
   assert.equal(
     await preview.isVisible(),
@@ -159,7 +165,7 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   await page.getByRole('button', { name: /^bold$/i, exact: true }).waitFor()
   await page.locator('.source-pane .hibi-token-keyword').first().waitFor()
   const updated = `${original}\nsecond paragraph.\n`
-  await source.fill(updated)
+  await replaceSourceText(page, source, updated)
   await waitForAsync(
     page,
     async (updated) => (await window.hibi.getDocument()).markdown === updated,
@@ -345,7 +351,7 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     })
   }
   // Empty/incomplete syntax reports diagnostics without modifying the buffer.
-  await source.fill('#let =')
+  await replaceSourceText(page, source, '#let =')
   await page.locator('.typst-preview .document-notice').waitFor()
   assert.equal(await page.locator('.rich-editor-host').isVisible(), false)
   assert.equal(
@@ -355,7 +361,12 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     true,
   )
   assert.equal((await read()).markdown, '#let =')
-  await source.fill(updated)
+  await replaceSourceText(page, source, updated)
+  await waitForAsync(
+    page,
+    async (updated) => (await window.hibi.getDocument()).markdown === updated,
+    updated,
+  )
   await tree
     .getByRole('treeitem', { name: /^blocks\.md$/i, exact: true })
     .click()

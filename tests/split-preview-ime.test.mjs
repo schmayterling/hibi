@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 test('native source IME survives split preview catch-up and keeps one undo group', {
@@ -67,9 +67,7 @@ test('native source IME survives split preview catch-up and keeps one undo group
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  await page
-    .getByRole('textbox', { name: 'Document editor', exact: true })
-    .waitFor()
+  await waitForDocumentEditor(app, page)
   await page.waitForFunction(() => window.imeFixture)
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
@@ -85,7 +83,7 @@ test('native source IME survives split preview catch-up and keeps one undo group
     name: 'Markdown editor',
     exact: true,
   })
-  await source.waitFor()
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await page.waitForFunction(
     () => document.querySelector('.tiptap')?.editor?.isEditable === false,
   )

@@ -314,7 +314,16 @@ export async function waitForDocumentEditor(
         '.app[aria-busy="false"] #document-editor-panel[aria-busy="false"]',
       )
       .getByRole('textbox', { name, exact: true })
-      .and(page.locator('[contenteditable="true"]:not([inert] *)'))
+      .and(
+        page.locator(
+          '[contenteditable="true"]:not([aria-readonly="true"]):not([inert] *)',
+        ),
+      )
+      .and(
+        page.locator(
+          ':not(.cm-content), [data-source-ready="true"] .cm-content',
+        ),
+      )
       .waitFor({ timeout })
   } catch (error) {
     try {

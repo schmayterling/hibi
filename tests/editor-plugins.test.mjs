@@ -3,8 +3,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
-import { clickMenu, pressShortcut } from './keyboard.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
+import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('word counts and block dragging preserve drafts, formatting, undo, and plugin cleanup', {
@@ -66,7 +66,7 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
       name,
     )
   }
-  await rich.waitFor()
+  await waitForDocumentEditor(app, page)
   await count('0 words · 0 characters')
   await open('sample.md')
   await count('12 words · 85 characters')
@@ -123,19 +123,23 @@ test('word counts and block dragging preserve drafts, formatting, undo, and plug
     (await window.hibi.getDocument()).markdown.startsWith('second paragraph'),
   )
   await rich.press(`${mod}+z`)
+  await waitForAsync(
+    page,
+    async (initial) => (await window.hibi.getDocument()).markdown === initial,
+    initial,
+  )
 
   await pressShortcut(app, `${mod}+Shift+]`)
   const source = page.getByRole('textbox', {
     name: 'Markdown editor',
     exact: true,
   })
-  await page
-    .locator(
-      '.editor-panes.mode-markdown[data-source-ready="true"] .source-pane:not([inert]) .cm-content[contenteditable="true"]',
-    )
-    .waitFor({ timeout: 15_000 })
+  await waitForDocumentEditor(app, page, {
+    name: 'Markdown editor',
+    timeout: 15_000,
+  })
   try {
-    await source.fill('# cafe\u0301 👨‍👩‍👧‍👦\n\n中文')
+    await replaceSourceText(page, source, '# cafe\u0301 👨‍👩‍👧‍👦\n\n中文')
   } catch (error) {
     const bounded = async (promise, milliseconds) => {
       let timer

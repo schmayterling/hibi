@@ -12,7 +12,7 @@ import {
   alertTypes,
 } from '../src/addons/markdown/alerts.ts'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('Markdown callouts preserve quote boundaries, titles and fold markers', () => {
@@ -161,7 +161,11 @@ test('github alerts edit in rich view, preview in split, and export with markers
   await page.waitForFunction(
     () => document.querySelector('.tiptap')?.editor?.isEditable,
   )
-  await warning.locator('.github-alert-body > p').fill('edited warning')
+  await replaceRichText(
+    page,
+    warning.locator('.github-alert-body > p'),
+    'edited warning',
+  )
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.includes('edited warning'),
   )

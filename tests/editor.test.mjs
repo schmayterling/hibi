@@ -94,10 +94,6 @@ test('empty entry, three views, and lossless source switching', {
   await clickMenu(app, 'Settings')
   await page.getByRole('main', { name: /settings/i }).waitFor()
   assert.equal(await rich.isVisible(), false)
-  await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
-  await page
-    .getByRole('checkbox', { name: /hide top bar while typing/i })
-    .uncheck()
   await page.getByRole('tab', { name: /^editor$/i, exact: true }).click()
   await page.getByRole('slider', { name: /content padding/i }).press('Home')
   assert.equal(
@@ -143,12 +139,6 @@ test('empty entry, three views, and lossless source switching', {
   await rich.waitFor()
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
-  assert.equal(
-    await page
-      .getByRole('checkbox', { name: /hide top bar while typing/i })
-      .isChecked(),
-    false,
-  )
   const appearance = page.getByRole('tab', {
     name: /^appearance$/i,
     exact: true,

@@ -283,6 +283,18 @@ test('source font and layout are ready before the pane starts moving', {
               })
           })
         : load(font, text)
+    const request = window.requestAnimationFrame.bind(window)
+    window.requestAnimationFrame = (callback) =>
+      callback.toString().includes('this.measure()')
+        ? request((time) => {
+            // Hold CodeMirror measures at run time, including frames queued before the hold.
+            if (!window.holdSourceMeasure) return callback(time)
+            window.releaseSourceMeasure = () => {
+              window.holdSourceMeasure = false
+              request(callback)
+            }
+          })
+        : request(callback)
   })
   await Promise.all([
     page.waitForEvent('domcontentloaded'),
@@ -313,23 +325,8 @@ test('source font and layout are ready before the pane starts moving', {
   await page.waitForFunction(
     () => typeof window.releaseSourceFont === 'function',
   )
-  await page.evaluate(() => new Promise(requestAnimationFrame))
   await page.evaluate(() => {
-    const request = window.requestAnimationFrame.bind(window)
-    window.requestAnimationFrame = (callback) => {
-      // Hold CodeMirror's own measure frame; other app frames keep running.
-      if (
-        !window.releaseSourceMeasure &&
-        callback.toString().includes('this.measure()')
-      ) {
-        window.releaseSourceMeasure = () => {
-          window.requestAnimationFrame = request
-          request(callback)
-        }
-        return request(() => {})
-      }
-      return request(callback)
-    }
+    window.holdSourceMeasure = true
   })
   await page.evaluate(() => window.releaseSourceFont())
   await page.waitForFunction(

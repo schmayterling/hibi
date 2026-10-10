@@ -2,7 +2,7 @@
 
 # TargetDocumentSaveResult
 
-Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L54)
+Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L56)
 
 ```typescript
 type TargetDocumentSaveResult =

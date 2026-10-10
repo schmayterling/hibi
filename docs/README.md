@@ -29,6 +29,7 @@ Start with [editing](guides/editing.md), or choose a topic below.
 - [Vim editing](guides/vim.md)
 - [Keyboard sounds](guides/keybeats.md)
 - [Discord Rich Presence](features/discord-presence.md)
+- [MCP Server for AI tools](features/mcp-server.md)
 
 ## Share your work
 

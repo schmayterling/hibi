@@ -2,7 +2,7 @@
 
 # DocumentLifecycleEvent
 
-Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L47)
+Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L49)
 
 ```typescript
 type DocumentLifecycleEvent =

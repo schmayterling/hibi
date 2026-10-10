@@ -92,6 +92,7 @@ export function createDocumentTargetEditScope(
         ...identity,
         contentVersion: document.contentVersion,
       }),
+      tabId: document.tabId,
       name: document.name,
       dirty: document.dirty,
       ephemeral: document.ephemeral,

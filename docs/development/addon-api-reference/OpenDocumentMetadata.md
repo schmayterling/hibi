@@ -10,6 +10,8 @@ Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/
 ```typescript
 type OpenDocumentMetadata = Readonly<{
   target: VersionedDocumentTarget
+  /** Window-local tab identity, stable across save and rename. */
+  tabId: string
   name: string
   dirty: boolean
   ephemeral: boolean
@@ -24,6 +26,7 @@ type OpenDocumentMetadata = Readonly<{
 **Properties**
 
 - [target](#target)
+- [tabId](#tabid)
 - [name](#name)
 - [dirty](#dirty)
 - [ephemeral](#ephemeral)
@@ -41,9 +44,19 @@ readonly target: VersionedDocumentTarget
 
 Related: [VersionedDocumentTarget](VersionedDocumentTarget.md).
 
+### tabId
+
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L40)
+
+Window-local tab identity, stable across save and rename.
+
+```typescript
+readonly tabId: string
+```
+
 ### name
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L39)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L41)
 
 ```typescript
 readonly name: string
@@ -51,7 +64,7 @@ readonly name: string
 
 ### dirty
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L40)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L42)
 
 ```typescript
 readonly dirty: boolean
@@ -59,7 +72,7 @@ readonly dirty: boolean
 
 ### ephemeral
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L41)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L43)
 
 ```typescript
 readonly ephemeral: boolean
@@ -67,7 +80,7 @@ readonly ephemeral: boolean
 
 ### canAutosave
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L42)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L44)
 
 ```typescript
 readonly canAutosave: boolean

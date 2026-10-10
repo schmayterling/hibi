@@ -2,7 +2,7 @@
 
 # DocumentMetadataResult
 
-Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L44)
+Type alias · Supporting type · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/document-edits.ts#L46)
 
 ```typescript
 type DocumentMetadataResult =

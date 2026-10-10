@@ -20,6 +20,19 @@ import {
   validateWorkspaceName,
 } from '../../main/workspace-paths'
 import type { WorkspaceEntry } from '../../shared/workspace'
+import type { OpenEditReply, TextEdit } from './types'
+
+export const EDITING_DISABLED =
+  'Editing is turned off. Turn on Allow edits in the MCP Server settings in Hibi.'
+
+export type ToolAccess = {
+  isCurrentOwner: () => boolean
+  editOpenDocument: (
+    tabId: string,
+    edits: TextEdit[],
+    ensureCurrent: () => void,
+  ) => Promise<OpenEditReply>
+}
 
 const MAX_TEXT_BYTES = 1024 * 1024
 const annotations = {
@@ -282,9 +295,15 @@ async function runTool(name: string, input: unknown) {
   )
 }
 
-export async function callTool(name: string, input: unknown) {
-  if (!toolDefinitions.some((tool) => tool.name === name))
-    throw new InvalidParams(`Unknown tool: ${name}`)
+export async function callTool(
+  name: string,
+  input: unknown,
+  access?: ToolAccess,
+) {
+  const tool = toolDefinitions.find((tool) => tool.name === name)
+  if (!tool) throw new InvalidParams(`Unknown tool: ${name}`)
+  if (!tool.annotations.readOnlyHint && !access?.isCurrentOwner())
+    return textResult(EDITING_DISABLED, true)
   try {
     return await runTool(name, input ?? {})
   } catch (error) {

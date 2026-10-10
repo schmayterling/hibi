@@ -1,15 +1,38 @@
-import { timingSafeEqual } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import {
   createServer,
   type IncomingMessage,
   type Server,
   type ServerResponse,
 } from 'node:http'
-import { callTool, InvalidParams, isObject, toolDefinitions } from './tools'
-import type { Preferences, ServerStatus } from './types'
+import {
+  callTool,
+  EDITING_DISABLED,
+  InvalidParams,
+  isObject,
+  type ToolAccess,
+  toolDefinitions,
+} from './tools'
+import type {
+  OpenEditReply,
+  OpenEditRequest,
+  Preferences,
+  ServerStatus,
+  TextEdit,
+} from './types'
 
 const versions = ['2025-11-25', '2025-06-18', '2025-03-26']
 const MAX_BODY_BYTES = 1024 * 1024
+
+const OPEN_EDIT_TIMEOUT =
+  'Hibi could not apply the edit to the open document. Make sure a Hibi window is open.'
+
+type PendingEdit = {
+  request: OpenEditRequest
+  delivered: boolean
+  ensureCurrent: () => void
+  finish: (reply: OpenEditReply) => void
+}
 
 type RequestId = string | number | null
 
@@ -51,7 +74,7 @@ function readBody(request: IncomingMessage, response: ServerResponse) {
   })
 }
 
-async function dispatch(message: unknown, version: string) {
+async function dispatch(message: unknown, version: string, access: ToolAccess) {
   if (!isObject(message) || message.jsonrpc !== '2.0')
     return rpcError(null, -32600, 'Invalid Request')
   const hasId = Object.hasOwn(message, 'id')
@@ -118,7 +141,7 @@ async function dispatch(message: unknown, version: string) {
           throw new InvalidParams(
             'Provide a tool name and an arguments object.',
           )
-        result = await callTool(params.name, params.arguments)
+        result = await callTool(params.name, params.arguments, access)
         break
       default:
         return rpcError(id, -32601, 'Method not found')
@@ -134,6 +157,9 @@ async function dispatch(message: unknown, version: string) {
 export class McpServer {
   private server: Server | null = null
   private port = 0
+  private allowEdits = false
+  private pendingEdits = new Map<string, PendingEdit>()
+  private pollers = new Set<(request: OpenEditRequest | null) => void>()
   private token = Buffer.alloc(0)
   private generation = 0
   private opening: Promise<void> = Promise.resolve()
@@ -146,11 +172,110 @@ export class McpServer {
     return { ...this.state }
   }
 
+  async relay(input: unknown): Promise<OpenEditRequest | null> {
+    const args = input ?? {}
+    if (!isObject(args) || Object.keys(args).some((key) => key !== 'reply'))
+      throw new Error('Use a relay request with an optional edit reply.')
+    if (args.reply !== undefined) {
+      const reply = args.reply
+      if (
+        !isObject(reply) ||
+        Object.keys(reply).some(
+          (key) => !['id', 'ok', 'message'].includes(key),
+        ) ||
+        typeof reply.id !== 'string' ||
+        typeof reply.ok !== 'boolean' ||
+        typeof reply.message !== 'string'
+      )
+        throw new Error('Provide an edit reply with id, ok and message.')
+      const pending = this.pendingEdits.get(reply.id)
+      if (pending?.delivered) {
+        try {
+          pending.ensureCurrent()
+          pending.finish({ id: reply.id, ok: reply.ok, message: reply.message })
+        } catch (error) {
+          pending.finish({
+            id: reply.id,
+            ok: false,
+            message: error instanceof Error ? error.message : OPEN_EDIT_TIMEOUT,
+          })
+        }
+      }
+    }
+    if (!this.server || this.state.state !== 'running') return null
+    const request = this.nextEdit()
+    if (request) return request
+    return new Promise((resolve) => {
+      const finish = (request: OpenEditRequest | null) => {
+        clearTimeout(timer)
+        this.pollers.delete(finish)
+        resolve(request)
+      }
+      const timer = setTimeout(() => finish(null), 25_000)
+      this.pollers.add(finish)
+    })
+  }
+
+  private nextEdit(): OpenEditRequest | null {
+    for (const pending of this.pendingEdits.values()) {
+      if (pending.delivered) continue
+      try {
+        pending.ensureCurrent()
+      } catch (error) {
+        pending.finish({
+          id: pending.request.id,
+          ok: false,
+          message: error instanceof Error ? error.message : OPEN_EDIT_TIMEOUT,
+        })
+        continue
+      }
+      pending.delivered = true
+      return pending.request
+    }
+    return null
+  }
+
+  private editOpenDocument(
+    tabId: string,
+    edits: TextEdit[],
+    ensureCurrent: () => void,
+  ): Promise<OpenEditReply> {
+    ensureCurrent()
+    const request = { id: randomUUID(), tabId, edits }
+    return new Promise((resolve) => {
+      const finish = (reply: OpenEditReply) => {
+        clearTimeout(timer)
+        this.pendingEdits.delete(request.id)
+        resolve(reply)
+      }
+      const timer = setTimeout(
+        () => finish({ id: request.id, ok: false, message: OPEN_EDIT_TIMEOUT }),
+        15_000,
+      )
+      this.pendingEdits.set(request.id, {
+        request,
+        delivered: false,
+        ensureCurrent,
+        finish,
+      })
+      const poller = this.pollers.values().next().value
+      if (poller) poller(this.nextEdit())
+    })
+  }
+
+  private clearRelay(message: string) {
+    for (const pending of this.pendingEdits.values())
+      pending.finish({ id: pending.request.id, ok: false, message })
+    for (const poller of this.pollers) poller(null)
+  }
+
   stop(): ServerStatus {
     this.generation++
     const server = this.server
     this.server = null
+    this.allowEdits = false
     this.token = Buffer.alloc(0)
+    this.clearRelay(OPEN_EDIT_TIMEOUT)
     this.state = { state: 'stopped', message: '', url: '' }
     if (server) {
       this.closing = new Promise((resolve) => server.close(() => resolve()))
@@ -162,6 +287,8 @@ export class McpServer {
   async start(preferences: Preferences): Promise<ServerStatus> {
     if (this.server && this.port === preferences.port) {
       this.token = Buffer.from(`Bearer ${preferences.token}`)
+      this.allowEdits = preferences.allowEdits
+      if (!this.allowEdits) this.clearRelay(EDITING_DISABLED)
       await this.opening
       return this.snapshot()
     }
@@ -170,6 +297,7 @@ export class McpServer {
     await this.closing
     if (generation !== this.generation) return this.snapshot()
     this.port = preferences.port
+    this.allowEdits = preferences.allowEdits
     this.token = Buffer.from(`Bearer ${preferences.token}`)
     const server = createServer((request, response) => {
       void this.handle(request, response, server, preferences.port).catch(
@@ -185,8 +313,7 @@ export class McpServer {
     server.maxConnections = 16
     server.on('error', (error: NodeJS.ErrnoException) => {
       if (this.server !== server) return
-      this.server = null
-      this.token = Buffer.alloc(0)
+      this.stop()
       this.state = {
         state: 'error',
         message:
@@ -305,7 +432,14 @@ export class McpServer {
       json(response, rpcError(null, -32700, 'Parse error'))
       return
     }
-    const result = await dispatch(message, this.version)
+    const result = await dispatch(message, this.version, {
+      isCurrentOwner: () =>
+        this.server === server &&
+        this.state.state === 'running' &&
+        this.allowEdits,
+      editOpenDocument: (tabId, edits, ensureCurrent) =>
+        this.editOpenDocument(tabId, edits, ensureCurrent),
+    })
     if (this.server !== server || response.destroyed) return
     if (!this.authorized(authorization, server)) {
       httpError(response, 401)

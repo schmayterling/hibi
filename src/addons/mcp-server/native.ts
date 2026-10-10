@@ -16,6 +16,9 @@ export default {
     async status() {
       return server.snapshot()
     },
+    async relay(input) {
+      return server.relay(input)
+    },
   },
   methods: {
     async start(input) {

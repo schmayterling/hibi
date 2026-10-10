@@ -10,8 +10,8 @@ import {
   replaceFrontmatter,
   splitFrontmatter,
 } from '../src/addons/frontmatter/markdown.ts'
-import { electron } from './electron.mjs'
-import { clickMenu, replaceRichText } from './keyboard.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
+import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 import { renameDocument } from './rename.mjs'
 import { uiName } from './ui.mjs'
@@ -373,16 +373,12 @@ test('typing a leading divider never activates frontmatter or disables editing',
     await page
       .getByRole('button', { name: /^source view$/i, exact: true })
       .click()
-    // Select through CodeMirror once its pane is live; DOM fill ranges race its redraws.
-    await page
-      .locator(
-        '.editor-panes.mode-markdown[data-source-ready="true"] .source-pane:not([inert]) .cm-content[contenteditable="true"]',
-      )
-      .waitFor()
-    const editor = page.getByRole('textbox', { name: /markdown editor/i })
-    await editor.focus()
-    await editor.press('ControlOrMeta+a')
-    await page.keyboard.insertText(source)
+    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+    await replaceSourceText(
+      page,
+      page.getByRole('textbox', { name: /markdown editor/i }),
+      source,
+    )
     await waitForAsync(
       page,
       async (expected) =>

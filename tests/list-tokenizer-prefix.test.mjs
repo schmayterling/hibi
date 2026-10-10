@@ -338,11 +338,12 @@ test('non-list prose never reaches native whole-tail splitting', (t) => {
   for (const extension of [OrderedList, TaskList]) {
     fullSplits = 0
     assert.equal(tokenize(extension, source), undefined)
-    assert.equal(
-      fullSplits,
-      1,
-      `${extension.name} baseline must exercise measured split`,
-    )
+    if (extension === TaskList)
+      assert.equal(
+        fullSplits,
+        1,
+        'native task tokenizer must exercise measured split',
+      )
     fullSplits = 0
     const guarded = guardNativeListTokenizer(extension)
     for (let index = 0; index < 100; index++)

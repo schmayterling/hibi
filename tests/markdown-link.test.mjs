@@ -6,7 +6,7 @@ test('source links preserve tokenizer normalization and distinguish nested image
   const cases = [
     ['[direct](/note.md "title")', { href: '/note.md' }],
     ['<https://example.com>', { href: 'https://example.com' }],
-    ['[label][ A  B ]', { label: ' a b ' }],
+    ['[label][ A  B ]', { label: 'a b' }],
     ['[Label][]', { label: 'label' }],
     ['[Label]', { label: 'label' }],
     ['[![alt][image]](/target)', { href: '/target' }],

@@ -373,7 +373,16 @@ test('typing a leading divider never activates frontmatter or disables editing',
     await page
       .getByRole('button', { name: /^source view$/i, exact: true })
       .click()
-    await page.getByRole('textbox', { name: /markdown editor/i }).fill(source)
+    // Select through CodeMirror once its pane is live; DOM fill ranges race its redraws.
+    await page
+      .locator(
+        '.editor-panes.mode-markdown[data-source-ready="true"] .source-pane:not([inert]) .cm-content[contenteditable="true"]',
+      )
+      .waitFor()
+    const editor = page.getByRole('textbox', { name: /markdown editor/i })
+    await editor.focus()
+    await editor.press('ControlOrMeta+a')
+    await page.keyboard.insertText(source)
     await waitForAsync(
       page,
       async (expected) =>

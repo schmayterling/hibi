@@ -1,3 +1,6 @@
+/** A stalled stylesheet fails its activation instead of holding the editor. */
+const ADDON_SHEET_TIMEOUT_MS = 5000
+
 /**
  * Declarative package sheets sit in the body, after every head stylesheet and
  * before every runtime addon style, ordered by owner id and then declared
@@ -27,15 +30,23 @@ export function linkAddonSheets(owner: string, urls: readonly string[]) {
               (dataset.addonStyle === owner &&
                 Number(dataset.addonStyleIndex) > index),
           )
-          // Disposal settles pending loads so stale callbacks never fail a later start.
-          links.set(element, resolve)
-          element.onload = () => resolve()
-          element.onerror = () =>
+          const fail = () => {
+            clearTimeout(timer)
             reject(
               new Error(
                 `The ${owner} addon could not load ${href.replace(/^.*\/[a-f\d]{64}\//, '')}.`,
               ),
             )
+          }
+          const timer = setTimeout(fail, ADDON_SHEET_TIMEOUT_MS)
+          // Disposal settles pending loads so stale callbacks never fail a later start.
+          const settle = () => {
+            clearTimeout(timer)
+            resolve()
+          }
+          links.set(element, settle)
+          element.onload = settle
+          element.onerror = fail
           element.href = href
           document.body.insertBefore(element, next ?? null)
         }),

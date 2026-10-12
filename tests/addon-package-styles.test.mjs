@@ -472,6 +472,14 @@ test('package sheets follow late core styles, apply after activation, and give u
         } });`,
       },
     ],
+    // Required (not background) so the document stays busy while it activates.
+    'slow-addon': [
+      { styles: ['fast.css', 'slow.css'], startup: undefined },
+      {
+        'fast.css': '.slow-probe { color: rgb(40, 41, 42); }',
+        'slow.css': '.slow-probe { outline-color: rgb(40, 41, 42); }',
+      },
+    ],
   }
   for (const [id, [fields, files]] of Object.entries(packages)) {
     const folder = join(profile, 'installed-addons', id)
@@ -600,4 +608,49 @@ test('package sheets follow late core styles, apply after activation, and give u
   )
   assert.deepEqual(await loaded('pending-addon'), [])
   assert.equal(await probe('pending-probe'), baseline)
+
+  // A stalled sheet fails the activation at its deadline; its late response adds nothing.
+  await app.evaluate(() => {
+    const fs = process.getBuiltinModule('node:fs/promises')
+    const lstat = fs.lstat
+    globalThis.slowCss = new Promise((resolve) => {
+      globalThis.releaseSlowCss = resolve
+    })
+    fs.lstat = async (path, ...rest) => {
+      if (String(path).endsWith('slow.css')) await globalThis.slowCss
+      return lstat(path, ...rest)
+    }
+    process.getBuiltinModule('node:module').syncBuiltinESMExports()
+  })
+  const slowBaseline = await probe('slow-probe')
+  await toggle('slow-addon')
+  await page.waitForFunction(
+    () =>
+      document.querySelector(
+        'link[data-addon-style="slow-addon"][data-addon-style-index="0"]',
+      )?.sheet,
+  )
+  assert.deepEqual(await loaded('slow-addon'), [true, false])
+  assert.equal(await probe('slow-probe'), slowBaseline)
+  await page.getByRole('button', { name: 'Back to app', exact: true }).click()
+  // Waits past the 5 s sheet deadline in src/renderer/src/addon-sheets.ts.
+  await page.waitForFunction(
+    () =>
+      /slow-addon addon could not load slow\.css/i.test(
+        document.body.innerText,
+      ),
+    undefined,
+    { timeout: 15000 },
+  )
+  await page.waitForFunction(
+    () => !document.querySelector('[inert][aria-busy="true"]'),
+  )
+  assert.deepEqual(await loaded('slow-addon'), [])
+  await app.evaluate(() => globalThis.releaseSlowCss())
+  await page.evaluate(
+    (url) => fetch(url).catch(() => {}),
+    `app://hibi/installed-addons/slow-addon/${hash}/slow.css`,
+  )
+  assert.deepEqual(await loaded('slow-addon'), [])
+  assert.equal(await probe('slow-probe'), slowBaseline)
 })

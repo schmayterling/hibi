@@ -5521,7 +5521,7 @@
     "src/renderer/src/addons.ts"
   ],
   "c4035b9b3e8d": [
-    "src/renderer/src/addon-overrides.ts"
+    "src/renderer/src/addon-sheets.ts"
   ],
   "3a58d36bd2a4": [
     "src/renderer/src/addon-registry.ts"

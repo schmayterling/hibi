@@ -225,19 +225,22 @@ export function parseAddonManifest(
         if (!themeFiles) return entry
         value = themeFiles.get(entry)
       }
-      if (
-        !value ||
-        typeof value !== 'object' ||
-        !('colors' in value) ||
-        !value.colors ||
-        typeof value.colors !== 'object'
-      )
-        throw new Error(
-          typeof entry === 'string'
-            ? `The theme file ${entry} has an invalid color scheme.`
-            : 'This theme has an invalid color scheme.',
+      try {
+        if (
+          !value ||
+          typeof value !== 'object' ||
+          !('colors' in value) ||
+          !value.colors ||
+          typeof value.colors !== 'object'
         )
-      return defineColorscheme(value as ColorschemeInput)
+          throw new Error('This theme has an invalid color scheme.')
+        return defineColorscheme(value as ColorschemeInput)
+      } catch (error) {
+        if (typeof entry !== 'string') throw error
+        throw new Error(
+          `The theme file ${entry} has an invalid color scheme. ${(error as Error).message}`,
+        )
+      }
     }) ?? []
   const inlineThemes = themes.filter((theme) => typeof theme !== 'string')
   const themePaths = themes.filter((theme) => typeof theme === 'string')

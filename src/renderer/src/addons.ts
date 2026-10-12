@@ -2067,15 +2067,18 @@ export function useAddons(
             `addon:${id}`,
             async () => {
               const sheets = addonRegistry.styles(id)
+              let sheetsReady: Promise<void> | undefined
+              let publishSheets = () => {}
               if (sheets.length) {
                 const { linkAddonSheets } = await import('./addon-sheets')
                 if (!disposed) {
                   const linked = linkAddonSheets(id, sheets)
                   cleanups.add(linked.dispose)
-                  await linked.ready
+                  sheetsReady = linked.ready
+                  publishSheets = linked.publish
                 }
               }
-              if (!disposed) await start()
+              if (!disposed) await Promise.all([sheetsReady, start()])
               if (disposed) startDetail.status = 'cancelled'
               else {
                 batch.commit()
@@ -2097,6 +2100,7 @@ export function useAddons(
                       `The ${syntax.id} syntax does not match its declared preservation contract.`,
                     )
                 }
+                publishSheets()
               }
             },
             startDetail,

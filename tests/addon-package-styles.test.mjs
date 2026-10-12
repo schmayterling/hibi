@@ -255,7 +255,13 @@ test('package stylesheets and themes install, attach in order, and leave with th
       owner,
     )
   await toggle('styled-addon')
-  await page.waitForFunction(() => window.styledStarts === 1)
+  await page.waitForFunction(
+    () =>
+      window.styledStarts === 1 &&
+      document.querySelectorAll(
+        'link[data-addon-style="styled-addon"]:not([media])',
+      ).length === 3,
+  )
   assert.deepEqual(await sheets('styled-addon'), styled.styles)
 
   const cascade = await page.evaluate(async () => {
@@ -343,7 +349,13 @@ test('package stylesheets and themes install, attach in order, and leave with th
     'styled-addon.dusk',
   )
   await toggle('styled-addon')
-  await page.waitForFunction(() => window.styledStarts === 2)
+  await page.waitForFunction(
+    () =>
+      window.styledStarts === 2 &&
+      document.querySelectorAll(
+        'link[data-addon-style="styled-addon"]:not([media])',
+      ).length === 3,
+  )
   await page.waitForFunction(
     () => document.documentElement.dataset.colorscheme === 'styled-addon.dusk',
   )
@@ -448,6 +460,18 @@ test('package sheets follow late core styles, apply after activation, and give u
       { styles: ['order.css'] },
       { 'order.css': '.hibi-name { font-weight: 900; }' },
     ],
+    'pending-addon': [
+      { styles: ['pending.css'] },
+      {
+        'pending.css': '.pending-probe { color: rgb(30, 31, 32); }',
+        'index.js': `export default () => ({ start() {
+          window.pendingStarts = (window.pendingStarts || 0) + 1;
+          return new Promise((resolve, reject) => {
+            window.settlePending = (error) => error ? reject(new Error(error)) : resolve();
+          });
+        } });`,
+      },
+    ],
   }
   for (const [id, [fields, files]] of Object.entries(packages)) {
     const folder = join(profile, 'installed-addons', id)
@@ -517,4 +541,63 @@ test('package sheets follow late core styles, apply after activation, and give u
     }),
     { coreFirst: true, coreLoaded: true, weight: '900' },
   )
+
+  // Loaded sheets stay inactive until start succeeds, and never apply when it fails.
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  const toggle = async (id) => {
+    const checkbox = page.locator(`#addon-${id}`)
+    const next = !(await checkbox.isChecked())
+    await checkbox.click()
+    await page.waitForFunction(
+      ([id, next]) => document.querySelector(`#addon-${id}`)?.checked === next,
+      [id, next],
+    )
+  }
+  const probe = (name) =>
+    page.evaluate((name) => {
+      let element = document.querySelector(`.${name}`)
+      if (!element) {
+        element = document.createElement('div')
+        element.className = name
+        document.body.append(element)
+      }
+      return getComputedStyle(element).color
+    }, name)
+  const loaded = (owner) =>
+    page.evaluate(
+      (owner) =>
+        [...document.querySelectorAll(`link[data-addon-style="${owner}"]`)].map(
+          (link) => !!link.sheet,
+        ),
+      owner,
+    )
+  const baseline = await probe('pending-probe')
+  await toggle('pending-addon')
+  await page.waitForFunction(
+    () =>
+      window.settlePending &&
+      document.querySelector('link[data-addon-style="pending-addon"]')?.sheet,
+  )
+  assert.equal(await probe('pending-probe'), baseline)
+  await page.evaluate(() => window.settlePending())
+  await page.waitForFunction(
+    () =>
+      getComputedStyle(document.querySelector('.pending-probe')).color ===
+      'rgb(30, 31, 32)',
+  )
+  await toggle('pending-addon')
+  assert.deepEqual(await loaded('pending-addon'), [])
+  await toggle('pending-addon')
+  await page.waitForFunction(
+    () =>
+      window.pendingStarts === 2 &&
+      document.querySelector('link[data-addon-style="pending-addon"]')?.sheet,
+  )
+  assert.equal(await probe('pending-probe'), baseline)
+  await page.evaluate(() => window.settlePending('pending start rejected'))
+  await page.waitForFunction(() =>
+    /pending start rejected/i.test(document.body.innerText),
+  )
+  assert.deepEqual(await loaded('pending-addon'), [])
+  assert.equal(await probe('pending-probe'), baseline)
 })

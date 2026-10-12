@@ -122,7 +122,7 @@ test('installed admission rejects compiled ids and privileged declarations regar
   }
 })
 
-test('loading existing packages ignores old unknown declarations without admitting new installs', () => {
+test('loading existing packages ignores old unknown declarations without admitting malformed installs', () => {
   for (const key of ['styles', 'themes', 'native', 'importer', 'windows']) {
     for (const value of [
       null,
@@ -139,7 +139,14 @@ test('loading existing packages ignores old unknown declarations without admitti
         admitInstalledAddon(base, []),
       )
       assert.deepEqual(input[key], value)
-      assert.throws(() => admitInstalledAddon(input, []))
+      // Empty resource lists are valid now; malformed declarations still fail installation.
+      if (
+        ['styles', 'themes'].includes(key) &&
+        Array.isArray(value) &&
+        !value.length
+      )
+        admitInstalledAddon(input, [])
+      else assert.throws(() => admitInstalledAddon(input, []))
     }
   }
   const input = {
@@ -236,22 +243,57 @@ test('themes retain mixed inline and file order and share existing color validat
     assert.throws(() => parseAddonManifest({ ...base, themes }))
 })
 
-test('installed packages reject every new resource declaration, including empty arrays', () => {
-  for (const input of [
-    { ...base, styles: [] },
-    { ...base, styles: ['styles/main.css'] },
-    { ...base, themes: [] },
-    { ...base, themes: [scheme] },
-    { ...base, themes: ['themes/night.json'] },
-    { ...themePackage, themes: ['themes/night.json'] },
-    { ...themePackage, themes: [scheme, 'themes/day.json'] },
-  ]) {
-    assert.doesNotThrow(() => parseAddonManifest(input))
+test('installed packages admit styles and theme files once each file is resolved', () => {
+  const files = new Map([['themes/dusk.json', { ...scheme, id: 'dusk' }]])
+  const admitted = admitInstalledAddon(
+    {
+      ...base,
+      styles: ['styles/main.css', 'base.css'],
+      themes: [scheme, 'themes/dusk.json'],
+    },
+    [],
+    'install',
+    files,
+  )
+  assert.deepEqual(admitted.styles, ['styles/main.css', 'base.css'])
+  assert.deepEqual(
+    admitted.themes.map((theme) => theme.id),
+    ['night', 'dusk'],
+  )
+  assert.equal(admitted.manifest.licenses, undefined)
+  assert.deepEqual(
+    admitInstalledAddon(
+      { ...themePackage, themes: ['themes/dusk.json'] },
+      [],
+      'install',
+      files,
+    ).manifest.licenses.map((license) => license.id),
+    ['theme-dusk'],
+  )
+  for (const [themes, files, error] of [
+    [['themes/dusk.json'], undefined, /theme files could not be read/],
+    [['themes/dusk.json'], new Map(), /dusk\.json has an invalid color/],
+    [['themes/dusk.json'], new Map([['themes/dusk.json', []]]), /invalid/],
+    [
+      ['themes/dusk.json'],
+      new Map([
+        [
+          'themes/dusk.json',
+          { ...scheme, colors: { ...scheme.colors, custom: '#ffffff' } },
+        ],
+      ]),
+      /unknown color name/,
+    ],
+    [
+      [scheme, 'themes/dusk.json'],
+      new Map([['themes/dusk.json', scheme]]),
+      /unique ID/,
+    ],
+  ])
     assert.throws(
-      () => admitInstalledAddon(input, []),
-      /not supported for installed addons yet/,
+      () => admitInstalledAddon({ ...base, themes }, [], 'install', files),
+      error,
     )
-  }
 })
 
 test('inline data themes retain api compatibility, color defaults, and license credits', () => {

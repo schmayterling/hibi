@@ -17,7 +17,11 @@ import {
   requiredAddonDependencies,
   validateAddonRequirements,
 } from '../shared/addon-dependencies'
-import { admitInstalledAddon, validId } from '../shared/addon-manifest'
+import {
+  admitInstalledAddon,
+  parseAddonManifest,
+  validId,
+} from '../shared/addon-manifest'
 import {
   MAX_ADDON_BYTES,
   MAX_ADDON_ENTRIES,
@@ -31,10 +35,12 @@ import { downloadRepository, repositoryUrl } from './addon-repository'
 type Package = InstalledAddon & { entry: string; hash: string; files: string[] }
 let installed: Package[] = []
 const root = () => join(app.getPath('userData'), 'installed-addons')
+/** `files` is the recorded inventory; declared resources must appear in it. */
 async function readManifest(
   folder: string,
   compiledIds: readonly string[],
   phase: 'install' | 'load' = 'install',
+  files?: readonly string[],
 ) {
   const path = join(folder, 'hibi-addon.json')
   const stat = await lstat(path)
@@ -46,25 +52,62 @@ async function readManifest(
     throw new Error(
       'hibi-addon.json must be a JSON file no larger than 64 KiB.',
     )
-  return admitInstalledAddon(
-    JSON.parse(await readFile(path, 'utf8')),
-    compiledIds,
-    phase,
-  )
+  const value = JSON.parse(await readFile(path, 'utf8'))
+  const themeFiles = new Map<string, unknown>()
+  if (phase === 'install')
+    for (const theme of parseAddonManifest(value).themes) {
+      if (typeof theme !== 'string') continue
+      const file = await packageFile(folder, theme, files)
+      if (!file || file.size > MAX_ADDON_MANIFEST_BYTES)
+        throw new Error(
+          `The theme file ${theme} must be a JSON file in the addon no larger than 64 KiB.`,
+        )
+      try {
+        themeFiles.set(theme, JSON.parse(await readFile(file.path, 'utf8')))
+      } catch {
+        throw new Error(`The theme file ${theme} is not valid JSON.`)
+      }
+    }
+  const data = admitInstalledAddon(value, compiledIds, phase, themeFiles)
+  for (const style of data.styles ?? [])
+    if (!(await packageFile(folder, style, files)))
+      throw new Error(`The stylesheet ${style} is missing from the addon.`)
+  return data
+}
+/** A regular file reached without symbolic links, listed in `files` when given. */
+async function packageFile(
+  folder: string,
+  relative: string,
+  files?: readonly string[],
+) {
+  if (files && !files.includes(relative)) return null
+  let path = folder
+  try {
+    for (const part of relative.split('/')) {
+      path = join(path, part)
+      if ((await lstat(path)).isSymbolicLink()) return null
+    }
+    const stat = await lstat(path)
+    return stat.isFile() ? { path, size: stat.size } : null
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
 }
 function descriptor(data: Omit<Package, 'url'>): Package {
+  const base = `app://hibi/installed-addons/${data.manifest.id}/${data.hash}/`
   return {
     ...data,
-    url: data.entry
-      ? `app://hibi/installed-addons/${data.manifest.id}/${data.hash}/${data.entry}`
-      : null,
+    url: data.entry ? base + data.entry : null,
+    ...(data.styles ? { styles: data.styles.map((path) => base + path) } : {}),
   }
 }
 export function installedAddons(): InstalledAddon[] {
-  return installed.map(({ manifest, url, themes, source }) => ({
+  return installed.map(({ manifest, url, themes, styles, source }) => ({
     manifest,
     url,
     themes,
+    ...(styles ? { styles } : {}),
     source: source ?? 'local',
   }))
 }
@@ -96,19 +139,26 @@ export async function loadInstalledAddons(
       continue
     try {
       const folder = join(root(), entry.name)
-      const [data, record] = await Promise.all([
-        readManifest(folder, builtinIds, 'load'),
-        readFile(join(folder, '.hibi-install.json'), 'utf8').then((text) =>
-          JSON.parse(text),
-        ),
-      ])
+      const record = JSON.parse(
+        await readFile(join(folder, '.hibi-install.json'), 'utf8'),
+      )
       if (
-        data.manifest.id !== entry.name ||
         !/^[a-f\d]{64}$/.test(record.hash) ||
         !Array.isArray(record.files) ||
         record.files.length > MAX_ADDON_ENTRIES ||
         !record.files.every(validPath)
       )
+        throw new Error(
+          'The addon installation record is invalid. Reinstall the addon.',
+        )
+      // Older installs never validated styles or theme files, so they keep ignoring them.
+      const data = await readManifest(
+        folder,
+        builtinIds,
+        record.resources === true ? 'install' : 'load',
+        record.files,
+      )
+      if (data.manifest.id !== entry.name)
         throw new Error(
           'The addon installation record is invalid. Reinstall the addon.',
         )
@@ -335,13 +385,18 @@ async function installDirectory(
       throw new Error(
         'The addon needs README.md and the entry file listed in hibi-addon.json.',
       )
-    const copied = await readManifest(staging, compiledIds)
+    const copied = await readManifest(staging, compiledIds, 'install', files)
     if (JSON.stringify(copied) !== JSON.stringify(data))
       throw new Error('The addon files changed during installation. Try again.')
     const fingerprint = hash.digest('hex')
     await writeFile(
       join(staging, '.hibi-install.json'),
-      JSON.stringify({ hash: fingerprint, files, source: origin }),
+      JSON.stringify({
+        hash: fingerprint,
+        files,
+        source: origin,
+        resources: true,
+      }),
       { mode: 0o600 },
     )
     const exists = await lstat(destination).catch(

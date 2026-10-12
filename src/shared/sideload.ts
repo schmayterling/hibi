@@ -6,6 +6,8 @@ export type InstalledAddon = {
   /** Versioned local module URL. Themes contain data only. */
   url: string | null
   themes: ColorschemeInput[]
+  /** Versioned stylesheet URLs in declared order. */
+  styles?: string[]
   /** Installation provenance supplied by the host, never the addon manifest. */
   source?: 'local' | 'third-party'
 }

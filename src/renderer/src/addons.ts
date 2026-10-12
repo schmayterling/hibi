@@ -2067,7 +2067,14 @@ export function useAddons(
             `addon:${id}`,
             async () => {
               const sheets = addonRegistry.styles(id)
-              if (sheets.length) await overrides.link(sheets)
+              if (sheets.length) {
+                const { linkAddonSheets } = await import('./addon-sheets')
+                if (!disposed) {
+                  const linked = linkAddonSheets(id, sheets)
+                  cleanups.add(linked.dispose)
+                  await linked.ready
+                }
+              }
               if (!disposed) await start()
               if (disposed) startDetail.status = 'cancelled'
               else {

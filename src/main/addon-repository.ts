@@ -22,7 +22,9 @@ export async function downloadRepository(
   value: unknown,
   temporary: string,
   run = execute,
+  signal?: AbortSignal,
 ) {
+  signal?.throwIfAborted()
   const url = addonPackageUrl(value)
   if (['github.com', 'gitlab.com', 'codeberg.org'].includes(url.hostname))
     url.pathname = `${url.pathname.replace(/\/$/, '').replace(/\.git$/, '')}.git`
@@ -119,7 +121,7 @@ export async function downloadRepository(
         env,
         windowsHide: true,
         timeout: 30000,
-        signal: abort.signal,
+        signal: signal ? AbortSignal.any([abort.signal, signal]) : abort.signal,
         maxBuffer: 1024 * 1024,
       },
     )
@@ -132,12 +134,14 @@ export async function downloadRepository(
         env,
         windowsHide: true,
         timeout: 20000,
+        signal,
         maxBuffer: MAX_ADDON_BYTES,
         encoding: 'buffer',
       },
     )
     return { zip: stdout, host: url.host }
   } catch (error) {
+    signal?.throwIfAborted()
     if ((error as NodeJS.ErrnoException).code === 'ENOENT')
       throw new Error('Install Git to add addons from repositories.')
     if (oversized)

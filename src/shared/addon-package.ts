@@ -3,7 +3,8 @@ export const MAX_ADDON_BYTES = 25 * 1024 * 1024
 export const MAX_ADDON_FILE_BYTES = 5 * 1024 * 1024
 export const MAX_ADDON_ENTRIES = 1000
 
-export function validAddonPath(value: unknown): value is string {
+/** Portable repository names, including names excluded from installation. */
+export function validAddonInventoryPath(value: unknown): value is string {
   return (
     typeof value === 'string' &&
     value.length < 2048 &&
@@ -12,9 +13,29 @@ export function validAddonPath(value: unknown): value is string {
       .every(
         (part) =>
           !!part &&
-          !part.startsWith('.') &&
-          !/[\\:?%#<>"|*]|\p{Cc}/u.test(part),
+          part !== '.' &&
+          part !== '..' &&
+          !/[\\:?<>"|*]|\p{Cc}/u.test(part) &&
+          !/[. ]$/.test(part) &&
+          !/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(part),
       )
+  )
+}
+
+export function excludedAddonPath(path: string): boolean {
+  return path.split('/').some((part) => {
+    const name = part.toLowerCase()
+    return (
+      name.startsWith('.') || name === 'node_modules' || name === '__macosx'
+    )
+  })
+}
+
+export function validAddonPath(value: unknown): value is string {
+  return (
+    validAddonInventoryPath(value) &&
+    !/[%#]/.test(value) &&
+    value.split('/').every((part) => !part.startsWith('.'))
   )
 }
 

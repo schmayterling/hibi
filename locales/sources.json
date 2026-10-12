@@ -188,7 +188,7 @@
     "src/shared/addon-dependencies.ts"
   ],
   "bfa4692ee9ec": [
-    "src/main/sideload.ts"
+    "src/main/addon-install-candidates.ts"
   ],
   "c59e9dc04941": [
     "src/renderer/src/AddonSettings.tsx",
@@ -199,8 +199,8 @@
   "8b7d06a0cfea": [
     "src/renderer/src/AddonSettings.tsx"
   ],
-  "6a2133724e54": [
-    "src/main/addon-download.ts"
+  "8a1b1d517f9f": [
+    "src/main/addon-inventory.ts"
   ],
   "52430b76a039": [
     "src/renderer/src/AddonSettings.tsx"
@@ -211,17 +211,29 @@
   "1dda1ac8e844": [
     "src/shared/addon-dependencies.ts"
   ],
-  "9939894c9461": [
-    "src/main/sideload.ts"
-  ],
   "c48fd48c43a3": [
-    "src/main/sideload.ts"
+    "src/main/addon-inventory.ts"
+  ],
+  "f0a89ce33008": [
+    "src/main/addon-inventory.ts"
   ],
   "81982f241342": [
     "src/addons/diagnostics/Settings.tsx"
   ],
+  "f2555a9735bb": [
+    "src/main/sideload.ts"
+  ],
+  "61c94a32d79a": [
+    "src/main/addon-inventory.ts"
+  ],
+  "53cd6750229b": [
+    "src/main/addon-inventory.ts"
+  ],
   "afbe92392457": [
     "src/renderer/src/settings-categories.ts"
+  ],
+  "e78cd700a9a2": [
+    "src/main/addon-install-candidates.ts"
   ],
   "c11b83517a72": [
     "src/addons/ui-preview/index.tsx"
@@ -266,10 +278,16 @@
     "src/renderer/src/editor-view-api.ts"
   ],
   "b7209017b20b": [
-    "src/main/sideload.ts"
+    "src/main/addon-inventory.ts"
   ],
   "79544f28fd8e": [
     "src/shared/dependencies.ts"
+  ],
+  "9455134415a3": [
+    "src/main/addon-inventory.ts"
+  ],
+  "54b00e14a2dd": [
+    "src/main/addon-inventory.ts"
   ],
   "9ade719b95a9": [
     "src/renderer/src/document-edits.ts",
@@ -451,6 +469,9 @@
   "83d0a88afd6d": [
     "src/addons/math/engine.ts"
   ],
+  "f7574f80ead5": [
+    "src/renderer/src/AddonInstallChooser.tsx"
+  ],
   "94fee62e68e2": [
     "src/renderer/src/FormattingToolbar.tsx",
     "src/renderer/src/markdown-syntax.ts"
@@ -506,6 +527,9 @@
   "b73a5e2ca645": [
     "src/addons/diagnostics/Settings.tsx"
   ],
+  "399dd99cb60b": [
+    "src/renderer/src/AddonInstallChooser.tsx"
+  ],
   "19766ed6ccb2": [
     "src/addons/dictionary/PackSettings.tsx",
     "src/addons/frontmatter/Properties.tsx",
@@ -517,6 +541,7 @@
     "src/main/index.ts",
     "src/main/sideload.ts",
     "src/renderer/src/AddonHotkeySettings.tsx",
+    "src/renderer/src/AddonInstallChooser.tsx",
     "src/renderer/src/FormattingToolbar.tsx",
     "src/renderer/src/ImportDialog.tsx",
     "src/renderer/src/VersionHistory.tsx"
@@ -817,6 +842,9 @@
   "9b428a658996": [
     "src/addons/quick-note/native.ts"
   ],
+  "8a41fcea7a8d": [
+    "src/main/sideload.ts"
+  ],
   "7beddfe6d6c2": [
     "src/renderer/src/main.tsx"
   ],
@@ -853,6 +881,9 @@
   ],
   "44ce6e4a2f8d": [
     "src/addons/documentation/ExportDialog.tsx"
+  ],
+  "9c6dedb366f5": [
+    "src/main/sideload.ts"
   ],
   "8df705147953": [
     "src/addons/quick-note/native.ts"
@@ -939,6 +970,7 @@
   ],
   "7d9eb7acb13e": [
     "src/addons/ui-preview/index.tsx",
+    "src/renderer/src/AddonInstallChooser.tsx",
     "src/renderer/src/CommandPalette.tsx",
     "src/ui/DialogProvider.tsx"
   ],
@@ -1009,6 +1041,9 @@
   ],
   "662b650e135e": [
     "src/renderer/src/markdown-syntax.ts"
+  ],
+  "f1421a557e0a": [
+    "src/renderer/src/AddonInstallChooser.tsx"
   ],
   "10ee94005bb9": [
     "src/site/main.tsx"
@@ -1740,7 +1775,7 @@
     "src/addons/diagnostics/Settings.tsx"
   ],
   "63956d2fc93e": [
-    "src/main/addon-download.ts"
+    "src/main/addon-inventory.ts"
   ],
   "380ca3b00419": [
     "src/addons/mcp-server/types.ts"
@@ -2125,6 +2160,9 @@
   "031a8f0f659d": [
     "src/addons/diagnostics/Settings.tsx"
   ],
+  "af1e8f26685e": [
+    "src/renderer/src/AddonInstallChooser.tsx"
+  ],
   "7bd31a025d29": [
     "src/addons/diagnostics/Settings.tsx"
   ],
@@ -2276,6 +2314,9 @@
   "74ccd4330384": [
     "src/addons/quick-note/Settings.tsx",
     "src/renderer/src/ImportDialog.tsx"
+  ],
+  "82eee8d973ac": [
+    "src/renderer/src/AddonInstallChooser.tsx"
   ],
   "17c397893668": [
     "src/addons/dictionary/SideView.tsx"
@@ -2678,6 +2719,9 @@
   "1e7a5cff30e0": [
     "src/renderer/src/ModalEditingSettings.tsx"
   ],
+  "f376d0e9a6a6": [
+    "src/renderer/src/AddonInstallChooser.tsx"
+  ],
   "100436457fde": [
     "src/shared/hotkeys.ts"
   ],
@@ -2695,6 +2739,9 @@
   ],
   "f6e17928a426": [
     "src/addons/dictionary/PackSettings.tsx"
+  ],
+  "134da806050c": [
+    "src/renderer/src/AddonInstallChooser.tsx"
   ],
   "7ba22bb19b67": [
     "src/addons/dictionary/index.tsx"
@@ -2732,10 +2779,14 @@
   "08b480ad47e2": [
     "src/renderer/src/DependencySettings.tsx"
   ],
+  "f99d5978e568": [
+    "src/renderer/src/AddonInstallChooser.tsx"
+  ],
   "9f8bf0382e82": [
     "src/addons/dictionary/PackSettings.tsx"
   ],
   "530bcc355f0a": [
+    "src/renderer/src/AddonInstallChooser.tsx",
     "src/renderer/src/DependencySettings.tsx"
   ],
   "c26b3ed4ce70": [
@@ -2882,6 +2933,9 @@
   ],
   "55fd4183e9eb": [
     "src/shared/document-worker-service.ts"
+  ],
+  "ba00fcfe42c7": [
+    "src/renderer/src/AddonInstallChooser.tsx"
   ],
   "cb0035a4d3ad": [
     "src/shared/source-parser.ts"
@@ -3342,6 +3396,9 @@
   "c1ebc7817870": [
     "src/renderer/src/DependencySettings.tsx"
   ],
+  "8d8883d879cb": [
+    "src/renderer/src/AddonInstallChooser.tsx"
+  ],
   "6300ef800bb8": [
     "src/renderer/src/NotificationSettings.tsx"
   ],
@@ -3433,6 +3490,9 @@
   ],
   "61d62d11fed2": [
     "src/main/imports.ts"
+  ],
+  "906579302758": [
+    "src/main/addon-install-candidates.ts"
   ],
   "56db8832782f": [
     "src/addons/graph/Panel.tsx"
@@ -3550,6 +3610,9 @@
   ],
   "e3ebaa16dd9d": [
     "src/renderer/src/DependencySettings.tsx"
+  ],
+  "df12aeba9bb9": [
+    "src/renderer/src/AddonInstallChooser.tsx"
   ],
   "d8da2c49df39": [
     "src/addons/quick-note/CaptureWindow.tsx"
@@ -4308,6 +4371,9 @@
   "90826115501d": [
     "src/addons/dictionary/SideView.tsx"
   ],
+  "ee8045711045": [
+    "src/renderer/src/AddonInstallChooser.tsx"
+  ],
   "cff651bb978f": [
     "src/main/workspace-files.ts"
   ],
@@ -4337,6 +4403,9 @@
   ],
   "1fb65b9d0630": [
     "src/renderer/src/addons.ts"
+  ],
+  "33d638b90b19": [
+    "src/renderer/src/AddonInstallChooser.tsx"
   ],
   "645982c52b7c": [
     "src/ui/SettingsFilter.tsx"
@@ -4406,6 +4475,9 @@
   "8612007e996d": [
     "src/addons/review/index.tsx"
   ],
+  "2f89d8cec142": [
+    "src/renderer/src/AddonInstallChooser.tsx"
+  ],
   "af6cace30a4a": [
     "src/renderer/src/rich-source-session.ts"
   ],
@@ -4435,6 +4507,15 @@
   ],
   "109311589787": [
     "src/addons/diagnostics/Settings.tsx"
+  ],
+  "994580ea2bbb": [
+    "src/renderer/src/AddonInstallChooser.tsx"
+  ],
+  "4f5db15afab6": [
+    "src/renderer/src/AddonInstallChooser.tsx"
+  ],
+  "43908859d84e": [
+    "src/renderer/src/AddonInstallChooser.tsx"
   ],
   "658077a58f4f": [
     "src/addons/ui-preview/index.tsx"
@@ -4596,6 +4677,9 @@
   ],
   "d67c7a8d7229": [
     "src/addons/tags/Panel.tsx"
+  ],
+  "eaaf1a44a912": [
+    "src/renderer/src/AddonInstallChooser.tsx"
   ],
   "d00076041fb8": [
     "src/addons/dictionary/CustomWords.tsx"
@@ -4904,6 +4988,12 @@
     "src/renderer/src/main.tsx",
     "src/shared/hotkeys.ts"
   ],
+  "7d8010513dbb": [
+    "src/renderer/src/AddonInstallChooser.tsx"
+  ],
+  "55260a7157b3": [
+    "src/renderer/src/AddonInstallChooser.tsx"
+  ],
   "c75049813154": [
     "src/renderer/src/Introduction.tsx",
     "src/renderer/src/SettingsScreen.tsx"
@@ -5090,23 +5180,14 @@
   "4e86151b9409": [
     "src/main/zip-reader.ts"
   ],
-  "efb97ec08cba": [
-    "src/main/addon-download.ts"
-  ],
-  "0e3f939f4a03": [
+  "29eb782c7e75": [
     "src/main/addon-download.ts"
   ],
   "3b7490f51f8f": [
     "src/addons/mcp-server/tools.ts"
   ],
-  "a4f6f8a722fa": [
-    "src/main/addon-download.ts"
-  ],
-  "1342f7aedc1e": [
-    "src/main/addon-download.ts"
-  ],
   "c89de18bbda0": [
-    "src/main/addon-download.ts"
+    "src/main/addon-inventory.ts"
   ],
   "90d9d5c6ec27": [
     "src/shared/addon-manifest.ts"
@@ -5123,20 +5204,29 @@
   "507430b4427c": [
     "src/shared/dependencies.ts"
   ],
+  "d26b37dc9053": [
+    "src/main/addon-inventory.ts"
+  ],
+  "d955ad7e2ada": [
+    "src/main/addon-inventory.ts"
+  ],
   "f71617647792": [
     "src/shared/addon-manifest.ts"
   ],
   "b3aaffb41ae2": [
     "src/renderer/src/addons.ts"
   ],
-  "8dbb293968f6": [
-    "src/main/sideload.ts"
-  ],
   "54c5b809f0a2": [
-    "src/main/addon-download.ts"
+    "src/main/addon-inventory.ts"
   ],
   "58bb3944d226": [
     "src/main/sideload.ts"
+  ],
+  "b274b63d34c9": [
+    "src/main/addon-inventory.ts"
+  ],
+  "dcdec7486dc1": [
+    "src/main/addon-inventory.ts"
   ],
   "1e152cb5f367": [
     "src/renderer/src/addons.ts"
@@ -5156,14 +5246,32 @@
   "d62200507764": [
     "src/shared/host-network.ts"
   ],
+  "b3399bd968c8": [
+    "src/main/addon-inventory.ts"
+  ],
   "9d855d273e81": [
     "src/main/sideload.ts"
+  ],
+  "8074b10d2354": [
+    "src/main/addon-install-candidates.ts"
   ],
   "4659069874da": [
     "src/shared/addon-manifest.ts"
   ],
+  "a668b805cddb": [
+    "src/main/addon-inventory.ts"
+  ],
+  "209da89ce331": [
+    "src/main/addon-inventory.ts"
+  ],
+  "85d906e10180": [
+    "src/main/addon-inventory.ts"
+  ],
   "7da468d62980": [
     "src/main/addons.ts"
+  ],
+  "d8a1ff307289": [
+    "src/main/addon-inventory.ts"
   ],
   "684444d409b0": [
     "src/shared/addon-manifest.ts"
@@ -5402,8 +5510,14 @@
   "cbfa05cbaf75": [
     "src/renderer/src/main.tsx"
   ],
+  "8c78f72115db": [
+    "src/main/addon-inventory.ts"
+  ],
   "1a9c37310c3f": [
     "src/main/files.ts"
+  ],
+  "b98fc4a907d6": [
+    "src/main/addon-inventory.ts"
   ],
   "e16af0263168": [
     "src/renderer/src/document-edits.ts"
@@ -5455,6 +5569,7 @@
     "src/shared/addon-manifest.ts"
   ],
   "dfda8bedc2ef": [
+    "src/main/addon-install-candidates.ts",
     "src/main/sideload.ts"
   ],
   "6ed02132319f": [
@@ -5613,6 +5728,9 @@
   ],
   "5354d03e9037": [
     "src/main/addons.ts"
+  ],
+  "d3fd6657348f": [
+    "src/main/sideload.ts"
   ],
   "e64719f55f97": [
     "src/main/addon-storage.ts"
@@ -5805,8 +5923,8 @@
   "718fb2f4f052": [
     "src/main/workspace-files.ts"
   ],
-  "2fad5aad9df6": [
-    "src/main/sideload.ts"
+  "9cbb30d86bfd": [
+    "src/main/addon-inventory.ts"
   ],
   "cf8ff1213c6d": [
     "src/main/workspace-files.ts"
@@ -5836,7 +5954,7 @@
     "src/renderer/src/HibiSettings.tsx"
   ],
   "ecce9bbe9bbe": [
-    "src/main/addon-download.ts"
+    "src/main/addon-inventory.ts"
   ],
   "4c1532864ab1": [
     "src/renderer/src/WindowEditor.tsx"
@@ -6618,7 +6736,11 @@
     "src/renderer/src/ImportDialog.tsx"
   ],
   "8d0efe4395b4": [
+    "src/main/addon-inventory.ts",
     "src/main/sideload.ts"
+  ],
+  "b52fa392a621": [
+    "src/main/addon-install-candidates.ts"
   ],
   "06e6689b4b7a": [
     "src/renderer/src/AddonSettings.tsx"
@@ -6774,7 +6896,7 @@
   "507e6dce93ec": [
     "src/renderer/src/main.tsx"
   ],
-  "4d6dd9306250": [
+  "52d8502dcf31": [
     "src/main/sideload.ts"
   ],
   "229213386c16": [
@@ -6835,6 +6957,9 @@
   ],
   "928195cef709": [
     "src/renderer/src/Titlebar.tsx"
+  ],
+  "08bd01c1a924": [
+    "src/renderer/src/AddonInstallChooser.tsx"
   ],
   "46dbf485989a": [
     "src/addons/graph/Canvas.tsx"

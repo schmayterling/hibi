@@ -1,35 +1,46 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import {
   lstat,
   mkdir,
   mkdtemp,
   readdir,
   readFile,
-  realpath,
   rename,
   rm,
   writeFile,
 } from 'node:fs/promises'
-import { extname, join } from 'node:path'
+import { join } from 'node:path'
 import { app, type BrowserWindow, dialog, shell } from 'electron'
 import type { AddonManifest } from '../addons/api'
-import {
-  requiredAddonDependencies,
-  validateAddonRequirements,
-} from '../shared/addon-dependencies'
+import { validateAddonRequirements } from '../shared/addon-dependencies'
 import {
   admitInstalledAddon,
   parseAddonManifest,
   validId,
 } from '../shared/addon-manifest'
 import {
-  MAX_ADDON_BYTES,
   MAX_ADDON_ENTRIES,
   MAX_ADDON_FILE_BYTES,
   MAX_ADDON_MANIFEST_BYTES,
   validAddonPath as validPath,
 } from '../shared/addon-package'
-import type { InstalledAddon } from '../shared/sideload'
+import type {
+  AddonInstallResult,
+  AddonInstallSession,
+  InstalledAddon,
+} from '../shared/sideload'
+import {
+  type InstallCandidate,
+  inspectAddonCandidates,
+  validateCandidateSelection,
+  validateGraph,
+} from './addon-install-candidates'
+import {
+  type AddonInventory,
+  copyAddonPackage,
+  inventoryAddonArchive,
+  inventoryAddonDirectory,
+} from './addon-inventory'
 import { downloadRepository, repositoryUrl } from './addon-repository'
 
 type Package = InstalledAddon & { entry: string; hash: string; files: string[] }
@@ -216,167 +227,281 @@ export async function loadInstalledAddons(
   installed = next
   return notices
 }
+type InstallSession = {
+  id: string
+  window: BrowserWindow
+  abort: AbortController
+  temporary: string
+  inventory?: AddonInventory
+  refresh?: () => Promise<AddonInventory>
+  candidates: InstallCandidate[]
+  source: 'local' | 'third-party'
+  host?: string
+  active: boolean
+  timer: ReturnType<typeof setTimeout>
+  closed: () => void
+}
+const installSessions = new Map<number, InstallSession>()
+const installError = (error: unknown) =>
+  error instanceof Error ? error.message : String(error)
+
+async function disposeInstallSession(session: InstallSession) {
+  if (installSessions.get(session.window.id) === session)
+    installSessions.delete(session.window.id)
+  clearTimeout(session.timer)
+  session.window.removeListener('closed', session.closed)
+  session.abort.abort(new Error('Addon installation canceled.'))
+  if (!session.active)
+    await rm(session.temporary, { recursive: true, force: true })
+}
+
+export async function cancelPackageInstall(
+  window: BrowserWindow,
+  id: unknown,
+): Promise<void> {
+  const session = installSessions.get(window.id)
+  if (session && session.id === id) await disposeInstallSession(session)
+}
+
 export async function installPackage(
   window: BrowserWindow,
   builtins: readonly AddonManifest[],
   disable: (id: string) => Promise<() => Promise<void>>,
   url?: unknown,
-): Promise<boolean> {
-  if (url !== undefined) {
-    const { downloadAddon, unpackAddon } = await import('./addon-download')
-    const temporary = await mkdtemp(join(app.getPath('temp'), 'hibi-addon-'))
-    try {
+): Promise<AddonInstallSession | null> {
+  const previous = installSessions.get(window.id)
+  if (previous) await disposeInstallSession(previous)
+  const temporary = await mkdtemp(join(app.getPath('temp'), 'hibi-addon-'))
+  const abort = new AbortController()
+  const closed = () => {
+    void disposeInstallSession(session).catch(console.error)
+  }
+  const session: InstallSession = {
+    id: randomUUID(),
+    window,
+    abort,
+    temporary,
+    candidates: [],
+    source: url === undefined ? 'local' : 'third-party',
+    active: true,
+    timer: setTimeout(closed, 10 * 60 * 1000),
+    closed,
+  }
+  session.timer.unref()
+  installSessions.set(window.id, session)
+  window.once('closed', closed)
+  let reviewing = false
+  try {
+    if (window.isDestroyed()) throw new Error('Addon installation canceled.')
+    if (url !== undefined) {
+      const { downloadAddon } = await import('./addon-download')
       let download = repositoryUrl(url)
-        ? await downloadRepository(url, temporary)
-        : await downloadAddon(url)
+        ? await downloadRepository(url, temporary, undefined, abort.signal)
+        : await downloadAddon(url, abort.signal)
       if (
         download.zip.length < 4 ||
         download.zip.readUInt32LE(0) !== 0x04034b50
       )
-        download = await downloadRepository(url, temporary)
-      const packageDirectory = join(temporary, 'package')
-      await mkdir(packageDirectory, { mode: 0o700 })
-      await unpackAddon(download.zip, packageDirectory)
-      return await installDirectory(
-        window,
-        packageDirectory,
-        builtins,
-        disable,
-        'third-party',
-        download.host,
+        download = await downloadRepository(
+          url,
+          temporary,
+          undefined,
+          abort.signal,
+        )
+      session.inventory = await inventoryAddonArchive(
+        download.zip,
+        abort.signal,
       )
-    } finally {
-      await rm(temporary, { recursive: true, force: true })
+      session.host = download.host
+    } else {
+      const selection = await dialog.showOpenDialog(window, {
+        title: 'Choose an addon folder',
+        properties: ['openDirectory'],
+      })
+      if (selection.canceled || !selection.filePaths[0]) return null
+      const source = selection.filePaths[0]
+      session.refresh = () => inventoryAddonDirectory(source, abort.signal)
+      session.inventory = await session.refresh()
+    }
+    session.candidates = await inspectAddonCandidates(
+      session.inventory,
+      builtins,
+      installed,
+    )
+    abort.signal.throwIfAborted()
+    if (session.candidates.length === 1) {
+      const candidate = session.candidates[0]!
+      if (candidate.review.status !== 'installable') {
+        if (candidate.data)
+          validateGraph([candidate.data.manifest], builtins, installed)
+        throw new Error(candidate.review.reasons.join('\n'))
+      }
+      const data = candidate.data!
+      const verdict = await dialog.showMessageBox(window, {
+        type: data.manifest.kind === 'extension' ? 'warning' : 'question',
+        message: `Install ${data.manifest.name} ${data.manifest.version}?`,
+        detail: `${data.manifest.description}\n\nBy ${data.manifest.authors?.map((author) => author.displayName).join(', ')}${session.host ? `\n\nDownloaded from ${session.host}` : ''}${candidate.review.replaces ? `\n\nReplaces ${candidate.review.replaces.version} (${candidate.review.replaces.source}).` : ''}${data.manifest.network ? `\n\nConnects to: ${data.manifest.network.origins.join(', ')}` : ''}\n\n${data.manifest.kind === 'extension' ? 'Extensions can run code and read or edit documents in Hibi. Only install addons you trust. ' : ''}This addon will stay disabled until you enable it.`,
+        buttons: [
+          'Cancel',
+          candidate.review.replaces ? 'Replace addon' : 'Install',
+        ],
+        defaultId: 0,
+        cancelId: 0,
+      })
+      if (verdict.response !== 1) return null
+      await refreshInstallSession(session, builtins)
+      await installDirectory(session, candidate, builtins, disable)
+      return null
+    }
+    reviewing = true
+    return {
+      id: session.id,
+      source: session.source,
+      ...(session.host ? { host: session.host } : {}),
+      candidates: session.candidates.map((candidate) => candidate.review),
+      providers: [
+        ...builtins,
+        ...installed.map(({ manifest }) => manifest),
+      ].map(({ id, requires }) => ({ id, ...(requires ? { requires } : {}) })),
+    }
+  } finally {
+    session.active = false
+    if (!reviewing || abort.signal.aborted) await disposeInstallSession(session)
+  }
+}
+
+async function refreshInstallSession(
+  session: InstallSession,
+  builtins: readonly AddonManifest[],
+) {
+  session.abort.signal.throwIfAborted()
+  if (session.refresh) session.inventory = await session.refresh()
+  const current = await inspectAddonCandidates(
+    session.inventory!,
+    builtins,
+    installed,
+  )
+  for (const candidate of session.candidates) {
+    const updated = current.find((item) => item.folder === candidate.folder)
+    if (
+      !updated ||
+      updated.review.status !== 'installable' ||
+      JSON.stringify(updated.data) !== JSON.stringify(candidate.data)
+    ) {
+      candidate.review.status =
+        updated?.review.status === 'invalid' ? 'invalid' : 'blocked'
+      candidate.review.reasons = updated?.review.reasons.length
+        ? updated.review.reasons
+        : ['The addon files changed during installation. Try again.']
+    } else {
+      candidate.review.status = 'installable'
+      candidate.review.reasons = []
     }
   }
-  const selection = await dialog.showOpenDialog(window, {
-    title: 'Choose an addon folder',
-    properties: ['openDirectory'],
-  })
-  if (selection.canceled || !selection.filePaths[0]) return false
-  const source = await realpath(selection.filePaths[0])
-  return installDirectory(window, source, builtins, disable, 'local')
+  session.abort.signal.throwIfAborted()
+}
+
+export async function installPackageSelection(
+  window: BrowserWindow,
+  id: unknown,
+  keys: unknown,
+  builtins: readonly AddonManifest[],
+  disable: (id: string) => Promise<() => Promise<void>>,
+): Promise<AddonInstallResult[]> {
+  const session = installSessions.get(window.id)
+  if (!session || session.id !== id || session.active)
+    throw new Error(
+      'This addon selection has expired. Choose the source again.',
+    )
+  if (
+    !Array.isArray(keys) ||
+    !keys.length ||
+    keys.length > session.candidates.length ||
+    keys.some((key) => typeof key !== 'string') ||
+    new Set(keys).size !== keys.length
+  )
+    throw new Error('Choose at least one available addon.')
+  const selected = keys.map((key) =>
+    session.candidates.find((candidate) => candidate.review.key === key),
+  )
+  if (selected.some((candidate) => !candidate))
+    throw new Error('Choose only available addons from this source.')
+  const candidates = selected as InstallCandidate[]
+  session.active = true
+  const results = new Map<string, AddonInstallResult>()
+  try {
+    await refreshInstallSession(session, builtins)
+    const proposed = candidates.map((candidate) => ({
+      ...candidate,
+      review: { ...candidate.review, reasons: [...candidate.review.reasons] },
+    }))
+    const order = validateCandidateSelection(proposed, builtins, installed)
+    for (const candidate of proposed)
+      if (candidate.review.status !== 'installable')
+        results.set(candidate.review.key, {
+          key: candidate.review.key,
+          status: 'failed',
+          error: candidate.review.reasons.join('\n'),
+        })
+    for (const addonId of order) {
+      const candidate = proposed.find(
+        (item) => item.data?.manifest.id === addonId,
+      )!
+      try {
+        session.abort.signal.throwIfAborted()
+        await installDirectory(session, candidate, builtins, disable)
+        results.set(candidate.review.key, {
+          key: candidate.review.key,
+          status: 'installed',
+        })
+      } catch (error) {
+        results.set(candidate.review.key, {
+          key: candidate.review.key,
+          status: 'failed',
+          error: installError(error),
+        })
+      }
+    }
+  } catch (error) {
+    for (const candidate of candidates)
+      results.set(candidate.review.key, {
+        key: candidate.review.key,
+        status: 'failed',
+        error: installError(error),
+      })
+  } finally {
+    session.active = false
+    if (session.abort.signal.aborted) await disposeInstallSession(session)
+  }
+  return candidates.map((candidate) => results.get(candidate.review.key)!)
 }
 
 async function installDirectory(
-  window: BrowserWindow,
-  source: string,
+  session: InstallSession,
+  candidate: InstallCandidate,
   builtins: readonly AddonManifest[],
   disable: (id: string) => Promise<() => Promise<void>>,
-  origin: 'local' | 'third-party',
-  host?: string,
-): Promise<boolean> {
+): Promise<void> {
+  if (candidate.review.status !== 'installable')
+    throw new Error(candidate.review.reasons.join('\n'))
+  const data = candidate.data!
   const compiledIds = builtins.map((manifest) => manifest.id)
-  const data = await readManifest(source, compiledIds)
-  const validateGraph = () => {
-    const graph = [
-      ...builtins,
-      ...installed
-        .filter((addon) => addon.manifest.id !== data.manifest.id)
-        .map((addon) => addon.manifest),
-      data.manifest,
-    ]
-    validateAddonRequirements(graph, { allowMissing: true })
-    const ids = new Set(graph.map((manifest) => manifest.id))
-    for (const id of requiredAddonDependencies(graph, data.manifest.id))
-      if (!ids.has(id))
-        throw new Error(
-          `Addon "${data.manifest.id}" requires unknown addon "${id}".`,
-        )
-  }
-  validateGraph()
-  const verdict = await dialog.showMessageBox(window, {
-    type: data.manifest.kind === 'extension' ? 'warning' : 'question',
-    message: `Install ${data.manifest.name} ${data.manifest.version}?`,
-    detail: `${data.manifest.description}\n\nBy ${data.manifest.authors?.map((author) => author.displayName).join(', ')}${host ? `\n\nDownloaded from ${host}` : ''}${data.manifest.network ? `\n\nConnects to: ${data.manifest.network.origins.join(', ')}` : ''}\n\n${data.manifest.kind === 'extension' ? 'Extensions can run code and read or edit documents in Hibi. Only install addons you trust. ' : ''}This addon will stay disabled until you enable it.`,
-    buttons: [
-      'Cancel',
-      installed.some((item) => item.manifest.id === data.manifest.id)
-        ? 'Replace addon'
-        : 'Install',
-    ],
-    defaultId: 0,
-    cancelId: 0,
-  })
-  if (verdict.response !== 1) return false
+  const validate = () => validateGraph([data.manifest], builtins, installed)
+  validate()
   await mkdir(root(), { recursive: true, mode: 0o700 })
   const staging = join(root(), `.staging-${randomUUID()}`)
   await mkdir(staging, { mode: 0o700 })
-  const files: string[] = []
-  let bytes = 0
-  let count = 0
-  const hash = createHash('sha256')
   let restore: (() => Promise<void>) | undefined
   const destination = join(root(), data.manifest.id),
     backup = join(root(), `.backup-${randomUUID()}`)
   let backedUp = false,
     replaced = false
   try {
-    async function copy(directory: string, parent = '') {
-      const entries = (await readdir(directory, { withFileTypes: true })).sort(
-        (a, b) => a.name.localeCompare(b.name),
-      )
-      for (const entry of entries) {
-        if (entry.name.startsWith('.')) continue
-        if (++count > MAX_ADDON_ENTRIES)
-          throw new Error('An addon can contain up to 1,000 entries.')
-        const relative = parent ? `${parent}/${entry.name}` : entry.name
-        if (!validPath(relative) || entry.isSymbolicLink())
-          throw new Error(
-            'Addon folders cannot contain symbolic links or invalid paths.',
-          )
-        const path = join(directory, entry.name),
-          target = join(staging, relative)
-        if (entry.isDirectory()) {
-          await mkdir(target)
-          await copy(path, relative)
-          continue
-        }
-        if (
-          !entry.isFile() ||
-          ![
-            '.js',
-            '.mjs',
-            '.json',
-            '.css',
-            '.woff',
-            '.woff2',
-            '.ttf',
-            '.svg',
-            '.png',
-            '.jpg',
-            '.jpeg',
-            '.webp',
-            '.gif',
-            '.mp3',
-            '.ogg',
-            '.wav',
-            '.md',
-            '.txt',
-          ].includes(extname(entry.name).toLowerCase())
-        )
-          throw new Error(
-            `This file type is not allowed in addons: ${relative}`,
-          )
-        const stat = await lstat(path)
-        if (
-          stat.isSymbolicLink() ||
-          stat.size > MAX_ADDON_FILE_BYTES ||
-          files.length >= MAX_ADDON_ENTRIES
-        )
-          throw new Error(
-            'Addon files must be regular files no larger than 5 MiB, with at most 1,000 entries in total.',
-          )
-        const content = await readFile(path)
-        bytes += content.length
-        if (bytes > MAX_ADDON_BYTES)
-          throw new Error('The addon exceeds the 25 MiB limit.')
-        await writeFile(target, content, { mode: 0o600, flag: 'wx' })
-        files.push(relative)
-        hash.update(relative).update('\0').update(content)
-      }
-    }
-    await copy(source)
+    const { files, hash: fingerprint } = await copyAddonPackage(
+      session.inventory!,
+      candidate.folder,
+      staging,
+    )
     if (
       !files.includes('README.md') ||
       (data.entry && !files.includes(data.entry)) ||
@@ -388,13 +513,12 @@ async function installDirectory(
     const copied = await readManifest(staging, compiledIds, 'install', files)
     if (JSON.stringify(copied) !== JSON.stringify(data))
       throw new Error('The addon files changed during installation. Try again.')
-    const fingerprint = hash.digest('hex')
     await writeFile(
       join(staging, '.hibi-install.json'),
       JSON.stringify({
         hash: fingerprint,
         files,
-        source: origin,
+        source: session.source,
         resources: true,
       }),
       { mode: 0o600 },
@@ -412,23 +536,30 @@ async function installDirectory(
       throw new Error(
         'An unrecognized addon already uses this ID. Check the addons folder before installing.',
       )
-    validateGraph()
+    session.abort.signal.throwIfAborted()
+    validate()
     restore = await disable(data.manifest.id)
+    session.abort.signal.throwIfAborted()
     if (exists) {
       await rename(destination, backup)
       backedUp = true
     }
+    session.abort.signal.throwIfAborted()
     await rename(staging, destination)
     replaced = true
     installed = [
       ...installed.filter((item) => item.manifest.id !== data.manifest.id),
-      descriptor({ ...copied, hash: fingerprint, files, source: origin }),
+      descriptor({
+        ...copied,
+        hash: fingerprint,
+        files,
+        source: session.source,
+      }),
     ]
     if (backedUp)
       await shell
         .trashItem(backup)
         .catch((error) => console.error('old addon package retained:', error))
-    return true
   } catch (error) {
     if (!replaced && backedUp) await rename(backup, destination)
     if (!replaced) await restore?.()

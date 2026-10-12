@@ -2308,13 +2308,20 @@ export function useAddons(
   }
   async function install(url?: string) {
     try {
-      await window.hibi.installAddon(url)
-      const [states, packages] = await Promise.all([
-        window.hibi.getAddonStates(),
-        window.hibi.getInstalledAddons(),
-      ])
-      setStates(states)
-      addonRegistry.hydrate(packages)
+      const session = await window.hibi.installAddon(url)
+      try {
+        if (session) {
+          const { reviewAddonInstall } = await import('./AddonInstallChooser')
+          await reviewAddonInstall(dialogService.api, session)
+        }
+      } finally {
+        const [states, packages] = await Promise.all([
+          window.hibi.getAddonStates(),
+          window.hibi.getInstalledAddons(),
+        ])
+        setStates(states)
+        addonRegistry.hydrate(packages)
+      }
     } catch (error) {
       latest.current.error(error)
     }

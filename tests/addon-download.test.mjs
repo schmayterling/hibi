@@ -75,7 +75,7 @@ test('addon archives preserve wrappers and reject unsafe or oversized contents',
   const many = zipFiles(packageFiles)
   many.writeUInt16LE(65535, many.length - 14)
   many.writeUInt16LE(65535, many.length - 12)
-  await assert.rejects(unpackAddon(many, root), /1,000 entries/)
+  await assert.rejects(unpackAddon(many, root), /5,000 entries/)
   await assert.rejects(
     unpackAddon(Buffer.from('not a zip'), root),
     /This is not a valid addon ZIP file\./,
@@ -96,6 +96,22 @@ test('addon urls stay https through redirects and downloads remain bounded', asy
   assert.throws(() => addonPackageUrl(undefined), {
     message: 'Enter an HTTPS URL for an addon ZIP file or Git repository.',
   })
+  const canceled = new AbortController()
+  canceled.abort(new Error('fixture canceled'))
+  await assert.rejects(
+    downloadAddon('https://example.com/a.zip', canceled.signal),
+    /fixture canceled/,
+  )
+  const pendingController = new AbortController()
+  globalThis.fetch = async (_url, options) => {
+    assert.equal(options.signal.aborted, false)
+    pendingController.abort(new Error('fixture canceled'))
+    return new Promise(() => {})
+  }
+  await assert.rejects(
+    downloadAddon('https://example.com/a.zip', pendingController.signal),
+    /fixture canceled/,
+  )
   let calls = 0
   globalThis.fetch = async (_url, options) => {
     assert.equal(options.redirect, 'manual')
@@ -126,6 +142,45 @@ test('addon urls stay https through redirects and downloads remain bounded', asy
     downloadAddon('https://example.com/a.zip'),
     /25 MiB limit/,
   )
+})
+
+test('repository cancellation reaches both bare clone and archive without starting later work', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-repo-cancel-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  for (const stage of ['before', 'clone', 'archive']) {
+    const temporary = join(root, stage)
+    await mkdir(temporary)
+    const controller = new AbortController()
+    if (stage === 'before') controller.abort(new Error('fixture canceled'))
+    const calls = []
+    await assert.rejects(
+      downloadRepository(
+        'https://example.com/addon.git',
+        temporary,
+        async (_command, args, options) => {
+          const command = args.includes('clone') ? 'clone' : 'archive'
+          calls.push(command)
+          assert.ok(options.signal)
+          if (command === stage) {
+            controller.abort(new Error('fixture canceled'))
+            options.signal.throwIfAborted()
+          }
+          await mkdir(join(temporary, 'repository.git'))
+          return { stdout: Buffer.alloc(0) }
+        },
+        controller.signal,
+      ),
+      /fixture canceled/,
+    )
+    assert.deepEqual(
+      calls,
+      stage === 'before'
+        ? []
+        : stage === 'clone'
+          ? ['clone']
+          : ['clone', 'archive'],
+    )
+  }
 })
 
 test('repository installs archive without checkout, hooks, or inherited git config', {

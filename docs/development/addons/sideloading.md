@@ -57,7 +57,11 @@ Declaring capabilities also stages editor configuration, commands, toolbar items
 
 ## Install it locally
 
-Run **Install addon…** from the command palette and choose the package folder. Review it, install it, then enable it in **Settings → Addons**. If you already have a source addon with the same ID, use a different ID for this package.
+Run **Install addon…** from the command palette and choose a package folder or a folder containing several packages. Hibi searches nested folders for `hibi-addon.json`. A single candidate uses the usual confirmation. Several candidates open a review list with every detected package, including invalid or blocked ones and their reasons.
+
+All installable packages start selected. Review their folders, versions, sources, permissions, network origins, required providers, and any replacement details. Use `Tab` to move between controls and `Space` to toggle a checkbox, then choose **Install selected**. Required providers must already be installed or remain selected. Unchecking a missing provider makes its consumers unavailable and shows a reason; other selected packages can still install. Selecting the provider again makes those consumers available. Selected providers install before their consumers.
+
+Each selected package installs independently. The review list shows success or failure for each row; one failure does not undo other successful installations. Keep the review open to select remaining packages or retry failed rows without downloading the source again. **Cancel** during installation stops pending work, while completed installations remain. Closing the dialog or pressing `Escape` also cancels pending work. Installed and replaced packages stay disabled until you enable them in **Settings → Addons**. If you already have a source addon with the same ID, use a different ID for this package.
 
 Installed extensions run trusted code with access to documents through the addon APIs. Install packages only from sources you trust. Native handlers, importers, and addon windows must ship with Hibi; installed manifests cannot declare these privileges or replace a built-in addon ID.
 
@@ -86,8 +90,18 @@ Relative `url()` and `@import` references resolve from the stylesheet's own loca
 
 ## Share it
 
-Publish the prepared files in a public HTTPS Git repository or ZIP archive. The manifest can sit at the archive root or inside one wrapping folder. Users can install that URL through **Settings → Addons → Install from URL**.
+Publish the prepared files in a public HTTPS Git repository or ZIP archive. Hibi searches recursively, so each package can live in its own nested folder. Users can install that URL through **Settings → Addons → Install from URL** and review several packages together.
 
-Git packages need their compiled entry committed on the default branch, and Git installed on the user's machine. Private repositories and SSH URLs are not supported. Keep packages under 25 MiB, with no more than 1,000 files and no individual file over 5 MiB. Do not include `node_modules`, secrets, or native executables.
+Git packages need their compiled entry committed on the default branch, and Git installed on the user's machine. Private repositories, SSH URLs, and submodules are not supported. Do not include `node_modules`, secrets, or native executables.
+
+## Discovery and package limits
+
+Repository discovery allows at most 5,000 entries, 64 MiB of uncompressed data, 5 MiB per file, and 64 manifests. A manifest may sit at the root or beneath at most 12 directory segments. ZIP downloads retain a 25 MiB compressed transfer limit. Exceeding a discovery limit rejects the input rather than showing an incomplete list.
+
+Each selected package retains its own limits: 1,000 entries, 25 MiB total, and 5 MiB per file. Its readme and declared compiled entry must be inside its folder. Parent or sibling libraries are not copied automatically.
+
+Discovery excludes hidden directories, `.git`, `node_modules`, and `__MACOSX`, regardless of case. Ignored ZIP entries still count toward archive limits. Parent directory aliases are resolved before scanning. The selected folder and its contents cannot be links or junctions. Special files, unsafe paths, and conflicting archive paths are refused.
+
+Structurally valid packages with duplicate IDs are all blocked. A valid package containing another valid package also blocks both roots; publish them in separate folders. An invalid outer manifest remains visible but does not hide a valid prepared package beneath it. Built-in and source addon IDs cannot be replaced. An installed external ID is a reviewed replacement, with its old and new versions and sources shown before installation.
 
 To update a package, increase its version and install the replacement. Replacements start disabled so the user can review them before enabling them.

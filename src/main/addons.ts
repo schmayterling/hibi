@@ -34,6 +34,7 @@ import { validateMarkdown, writeText } from './files'
 import {
   installedAddons,
   installPackage,
+  installPackageSelection,
   loadInstalledAddons,
   removePackage,
 } from './sideload'
@@ -457,15 +458,26 @@ async function disableAddonForReplacement(
   }
 }
 
-export async function installAddon(
-  window: BrowserWindow,
-  url?: unknown,
-): Promise<void> {
-  await installPackage(
+export async function installAddon(window: BrowserWindow, url?: unknown) {
+  return installPackage(
     window,
     bundledManifests,
     disableAddonForReplacement,
     url,
+  )
+}
+
+export async function installAddonSelection(
+  window: BrowserWindow,
+  id: unknown,
+  keys: unknown,
+) {
+  return installPackageSelection(
+    window,
+    id,
+    keys,
+    bundledManifests,
+    disableAddonForReplacement,
   )
 }
 

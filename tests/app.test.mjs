@@ -105,6 +105,8 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'openDroppedFile',
         'getInstalledAddons',
         'installAddon',
+        'installAddonSelection',
+        'cancelAddonInstall',
         'openAddonsFolder',
         'openAddonGarden',
         'removeAddon',

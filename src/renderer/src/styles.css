@@ -951,6 +951,32 @@ button.ui-button.update-download-button:disabled {
 .formats-intro .document-notice {
   margin: 0;
 }
+.addon-install-list {
+  display: grid;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.addon-install-list > li + li {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+.addon-install-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.addon-install-label input {
+  flex: none;
+  accent-color: var(--accent);
+}
+.addon-install-list p {
+  margin: var(--space-2) 0 0;
+}
+.addon-install-details {
+  font-size: var(--text-sm);
+}
 .addon-metadata {
   display: flex;
   flex-wrap: wrap;

@@ -92,6 +92,7 @@ import {
   getAddonStartupNotices,
   getAddonStates,
   installAddon,
+  installAddonSelection,
   invalidateAddonActivations,
   invokeAddon,
   isAddonActivationCurrent,
@@ -174,7 +175,12 @@ import {
   resolveAssetPath,
 } from './security'
 import { SelectedTextService } from './selected-text'
-import { installedAddons, installedAsset, openAddonsFolder } from './sideload'
+import {
+  cancelPackageInstall,
+  installedAddons,
+  installedAsset,
+  openAddonsFolder,
+} from './sideload'
 import { getUiCase, loadUiCase, saveUiCase } from './ui-case'
 import {
   cancelUpdateInstall,
@@ -1541,6 +1547,14 @@ if (!app.requestSingleInstanceLock()) {
       })
       handle(SIDELOAD_CHANNELS.install, (event, url: unknown) =>
         runFileOperation(event, (window) => installAddon(window, url)),
+      )
+      handle(SIDELOAD_CHANNELS.selection, (event, id: unknown, keys: unknown) =>
+        runFileOperation(event, (window) =>
+          installAddonSelection(window, id, keys),
+        ),
+      )
+      handle(SIDELOAD_CHANNELS.cancel, (event, id: unknown) =>
+        cancelPackageInstall(trustedWindow(event), id),
       )
       handle(SIDELOAD_CHANNELS.folder, (event) => {
         trustedWindow(event)

@@ -98,13 +98,14 @@ export function createAddonOverrides(owner: string) {
         const element = document.createElement('style')
         element.dataset.addonStyle = `${owner}.${id}`
         element.textContent = css
+        // The body follows every head stylesheet, including code-split core CSS appended later.
         if (options?.priority === 'override') {
           element.dataset.addonStylePriority = 'override'
-          document.head.append(element)
+          document.body.append(element)
         } else {
-          document.head.insertBefore(
+          document.body.insertBefore(
             element,
-            document.head.querySelector(
+            document.body.querySelector(
               'style[data-addon-style-priority="override"]',
             ),
           )

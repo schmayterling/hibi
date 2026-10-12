@@ -249,11 +249,9 @@ test('package stylesheets and themes install, attach in order, and leave with th
   const sheets = (owner) =>
     page.evaluate(
       (owner) =>
-        [
-          ...document.head.querySelectorAll(
-            `link[data-addon-style="${owner}"]`,
-          ),
-        ].map((link) => link.href),
+        [...document.querySelectorAll(`link[data-addon-style="${owner}"]`)].map(
+          (link) => link.href,
+        ),
       owner,
     )
   await toggle('styled-addon')
@@ -261,9 +259,11 @@ test('package stylesheets and themes install, attach in order, and leave with th
   assert.deepEqual(await sheets('styled-addon'), styled.styles)
 
   const cascade = await page.evaluate(async () => {
-    const head = [...document.head.children]
+    const sheets = [
+      ...document.querySelectorAll('link[rel="stylesheet"], style'),
+    ]
     const position = (selector) =>
-      head.indexOf(document.head.querySelector(selector))
+      sheets.indexOf(document.querySelector(selector))
     const probe = getComputedStyle(document.querySelector('.styled-probe'))
     return {
       afterCore:
@@ -436,4 +436,85 @@ test('startup resolves recorded package resources and keeps older installs uncha
     ['t'],
   )
   assert.equal(find('unlisted-styles'), undefined)
+})
+
+test('package sheets follow late core styles, apply after activation, and give up on stalled loads', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-package-styles-timing-'))
+  const hash = 'b'.repeat(64)
+  const packages = {
+    'order-addon': [
+      { styles: ['order.css'] },
+      { 'order.css': '.hibi-name { font-weight: 900; }' },
+    ],
+  }
+  for (const [id, [fields, files]] of Object.entries(packages)) {
+    const folder = join(profile, 'installed-addons', id)
+    await writePackage(folder, metadata(id, fields), files)
+    await writeFile(
+      join(folder, '.hibi-install.json'),
+      JSON.stringify({
+        hash,
+        files: [
+          'hibi-addon.json',
+          'README.md',
+          'index.js',
+          ...Object.keys(files),
+        ],
+        source: 'local',
+        resources: true,
+      }),
+    )
+  }
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'order-addon': true }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+
+  // Settings CSS loads with its chunk after the package sheet is already attached.
+  await page.waitForFunction(
+    () =>
+      document.querySelector(
+        'link[data-addon-style="order-addon"]:not([media])',
+      )?.sheet,
+  )
+  assert.equal(await page.locator('.hibi-name').count(), 0)
+  await clickMenu(app, 'Settings')
+  await page.locator('#category-hibi').click()
+  await page.locator('.hibi-name').waitFor()
+  assert.deepEqual(
+    await page.evaluate(() => {
+      const sheets = [
+        ...document.querySelectorAll('link[rel="stylesheet"], style'),
+      ]
+      const firstAddon = sheets.findIndex((element) =>
+        element.matches('[data-addon-style]'),
+      )
+      const core = sheets.filter(
+        (element) =>
+          element.localName === 'link' &&
+          !element.matches('[data-addon-style]'),
+      )
+      return {
+        coreFirst: core.every(
+          (element) => sheets.indexOf(element) < firstAddon,
+        ),
+        coreLoaded: core.every((element) => !!element.sheet),
+        weight: getComputedStyle(document.querySelector('.hibi-name'))
+          .fontWeight,
+      }
+    }),
+    { coreFirst: true, coreLoaded: true, weight: '900' },
+  )
 })

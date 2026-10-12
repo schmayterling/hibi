@@ -153,7 +153,7 @@ test('css overrides and package sheets apply, keep their order, and clean up in 
     )
     const prioritized = getComputedStyle(element).color
     const sheets = [
-      ...document.head.querySelectorAll('style[data-addon-style]'),
+      ...document.body.querySelectorAll('style[data-addon-style]'),
     ]
     const normalBeforeOverride =
       sheets.findIndex((sheet) => sheet.dataset.addonStyle === 'later.normal') <
@@ -204,7 +204,7 @@ test('css overrides and package sheets apply, keep their order, and clean up in 
       const alpha = exports.linkAddonSheets('alpha', [`${href}?a0`])
       await alpha.ready
       const order = () =>
-        [...document.head.querySelectorAll('[data-addon-style]')]
+        [...document.body.querySelectorAll('[data-addon-style]')]
           .map((element) => element.dataset.addonStyle)
           .filter((owner) => /^(alpha|zeta|runtime\.)/.test(owner))
       const attached = order()

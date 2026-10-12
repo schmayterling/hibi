@@ -1,7 +1,7 @@
 /**
- * Declarative package sheets sit after core styles and before every runtime
- * addon style, ordered by owner id and then declared order. A URL keeps the
- * browser's base for relative `url()` and `@import`.
+ * Declarative package sheets sit in the body, after every head stylesheet and
+ * before every runtime addon style, ordered by owner id and then declared
+ * order. A URL keeps the browser's base for relative `url()` and `@import`.
  */
 export function linkAddonSheets(owner: string, urls: readonly string[]) {
   const links = new Map<HTMLLinkElement, () => void>()
@@ -14,7 +14,7 @@ export function linkAddonSheets(owner: string, urls: readonly string[]) {
           element.dataset.addonStyle = owner
           element.dataset.addonStyleIndex = String(index)
           const next = [
-            ...document.head.querySelectorAll<HTMLElement>(
+            ...document.body.querySelectorAll<HTMLElement>(
               '[data-addon-style]',
             ),
           ].find(
@@ -34,7 +34,7 @@ export function linkAddonSheets(owner: string, urls: readonly string[]) {
               ),
             )
           element.href = href
-          document.head.insertBefore(element, next ?? null)
+          document.body.insertBefore(element, next ?? null)
         }),
     ),
   ).then(() => {})

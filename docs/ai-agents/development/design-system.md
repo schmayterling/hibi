@@ -8,7 +8,7 @@ Components use semantic colors: `--background`, `--surface`, `--sidebar`, `--ink
 
 `src/shared/color-palettes.ts` defines the nine bundled schemes. `src/ui/colorschemes.ts` applies them without remounting editors. Preferences store an appearance mode and a light/dark pair. Electron validates and saves solid window colors before creating the next window.
 
-Base tokens use CSS layer `hibi-base`; palettes use `hibi-theme`. Unlayered addon styles take precedence. Scope overrides with selectors such as `:root[data-colorscheme="catppuccin-mocha"]` or `:root[data-appearance="dark"]`. Register selectable palettes with `context.colorschemes.register`; arbitrary theme files are not supported. See [colorschemes](../../guides/colorschemes.md) and the [API](../reference/colorscheme-api.md).
+Base tokens use CSS layer `hibi-base`; palettes use `hibi-theme`. Unlayered addon styles take precedence. Scope overrides with selectors such as `:root[data-colorscheme="catppuccin-mocha"]` or `:root[data-appearance="dark"]`. Register selectable palettes with `context.colorschemes.register` or a package's `themes` field; palettes contain color roles only, never CSS. See [colorschemes](../../guides/colorschemes.md) and the [API](../reference/colorscheme-api.md).
 
 UI fonts, sizes, spacing, icons, radii, and motion durations use tokens. Durations are milliseconds. The editor's text fade uses `--motion-feedback`. Document typography, pane geometry, and user-selected padding or sidebar width remain separate. Reduced motion overrides animations.
 

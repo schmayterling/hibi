@@ -448,7 +448,7 @@ test('startup loads unordered dependencies and missing consumers while culling o
   )
 })
 
-test('installation rejects reserved ids, privileges, and pending resources before review', async (t) => {
+test('installation rejects reserved ids and privileges before review while older installs ignore resources', async (t) => {
   const h = await host(t)
   await h.loadAddons()
   const source = join(h.state.root, 'sources')
@@ -461,6 +461,9 @@ test('installation rejects reserved ids, privileges, and pending resources befor
     details('importer-claim', { importer: {} }),
     details('window-claim', { windows: {} }),
     details('modal-claim', { capabilities: ['modalEditing'] }),
+  ]
+  // Records written before resource validation keep ignoring these declarations.
+  const legacy = [
     details('style-claim', { styles: ['style.css'] }),
     details('theme-claim', { themes: ['theme.json'] }),
     details('empty-style-claim', { styles: [] }),
@@ -468,17 +471,16 @@ test('installation rejects reserved ids, privileges, and pending resources befor
   ]
   for (const manifest of invalid) {
     h.state.source = await fixture(source, manifest)
-    for (const path of [...(manifest.styles ?? []), ...(manifest.themes ?? [])])
-      await writeFile(join(h.state.source, path), '{}')
     await assert.rejects(
       h.installAddon(h.window),
-      /built-in addon|cannot declare|SDK capabilities|not supported/,
+      /built-in addon|cannot declare|SDK capabilities/,
     )
   }
   assert.equal(h.state.reviews.length, 0)
   assert.deepEqual(h.installedAddons(), [])
   const installed = join(h.state.root, 'installed-addons')
-  for (const manifest of invalid) await fixture(installed, manifest, true)
+  for (const manifest of [...invalid, ...legacy])
+    await fixture(installed, manifest, true)
   const notices = await h.loadInstalledAddons([details('markdown')])
   assert.equal(notices.length, 1)
   assert.match(notices[0], /modal-claim/)
@@ -487,7 +489,7 @@ test('installation rejects reserved ids, privileges, and pending resources befor
       .installedAddons()
       .map((addon) => addon.manifest.id)
       .sort(),
-    invalid
+    [...invalid, ...legacy]
       .filter((manifest) => !['markdown', 'modal-claim'].includes(manifest.id))
       .map((manifest) => manifest.id)
       .sort(),

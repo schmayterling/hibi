@@ -177,12 +177,12 @@ test('package stylesheets and themes install, attach in order, and leave with th
     return page.evaluate(() => window.hibi.installAddon())
   }
   for (const [id, error] of [
-    ['missing-style', /stylesheet missing\.css is missing/],
-    ['missing-theme', /theme file themes\/gone\.json must be a JSON file/],
-    ['oversize-theme', /theme file big\.json must be a JSON file/],
+    ['missing-style', /needs README\.md and the entry files/],
+    ['missing-theme', /needs README\.md and the entry files/],
+    ['oversize-theme', /theme files must be no larger than 64 KiB/],
     ['invalid-json', /theme file broken\.json is not valid JSON/],
     ['invalid-theme', /theme file wrong\.json has an invalid color scheme/],
-    ['outside-theme', /theme file linked\.json must be a JSON file/],
+    ['outside-theme', /cannot contain symbolic links/],
   ])
     await assert.rejects(install(id), error, id)
   for (const id of ['styled-addon', 'fragile-addon', 'paper-theme'])

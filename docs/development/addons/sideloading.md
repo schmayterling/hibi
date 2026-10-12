@@ -71,14 +71,15 @@ Packages installed before Hibi accepted stylesheets and theme files keep ignorin
 
 ## Add stylesheets and themes
 
-An extension can list up to 16 CSS files in `styles` and up to 20 color schemes in `themes`. A theme entry is either an inline color scheme or the path of a JSON file that contains one. Paths are relative to the package folder.
+An extension can list up to 16 CSS files in `styles` and up to 20 color schemes in `themes`. Paths are relative to the package folder.
 
 ```json
 {
-  "styles": ["styles/base.css", "styles/panels.css"],
-  "themes": ["themes/evening.json"]
+  "styles": ["styles/base.css", "styles/panels.css"]
 }
 ```
+
+A theme entry is either an inline color scheme or the path of a JSON file that contains one, such as `"themes": ["themes/evening.json"]`.
 
 Hibi checks these files when you install the package. Each one must be a regular file inside the package, and each theme file must be valid JSON no larger than 64 KiB that describes one color scheme. Stylesheets follow the usual package file limits.
 

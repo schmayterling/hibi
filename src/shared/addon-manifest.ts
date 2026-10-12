@@ -48,7 +48,9 @@ export type ParsedAddonManifest = {
 /** `themeFiles` holds parsed JSON by declared path; without it, theme paths stay unresolved. */
 export function parseAddonManifest(
   value: unknown,
-  themeFiles?: ReadonlyMap<string, unknown>,
+  {
+    themeFiles,
+  }: { themeFiles?: ReadonlyMap<string, unknown> | undefined } = {},
 ): ParsedAddonManifest {
   if (!value || typeof value !== 'object')
     throw new Error('The addon details in hibi-addon.json are invalid.')
@@ -311,7 +313,7 @@ export function admitInstalledAddon(
       ...(data.kind === 'extension' ? { themes: undefined } : {}),
     }
   }
-  const parsed = parseAddonManifest(value, themeFiles)
+  const parsed = parseAddonManifest(value, { themeFiles })
   const data = value as Record<string, unknown>
   if (compiledIds.includes(parsed.manifest.id))
     throw new Error(

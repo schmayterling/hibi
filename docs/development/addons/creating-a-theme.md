@@ -33,4 +33,6 @@ Replace the author and license with your own information. Use opaque hex colors.
 
 [Install the folder](sideloading.md), enable the theme, and select it in **Settings → Appearance**. A package can include both light and dark schemes in its `themes` array.
 
+Each `themes` entry can also be the path of a JSON file in the package, such as `"themes/evening-dark.json"`, containing one color scheme in the same format. Theme packages contain color data only. An extension that also needs CSS can list the same `themes` entries beside its `styles`; see [stylesheets and themes](sideloading.md#add-stylesheets-and-themes).
+
 For a bundled or local source addon, register a [ColorschemeInput](../addon-api-reference/ColorschemeInput.md) through `context.colorschemes.register()` instead. Keep upstream credits and license notices when adapting another theme.

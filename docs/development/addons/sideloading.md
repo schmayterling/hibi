@@ -63,7 +63,26 @@ Installed extensions run trusted code with access to documents through the addon
 
 Keep `hibi-addon.json` within 64 KiB, including full license notices. Each top-level `licenses[].text` notice can use up to 64 KiB of UTF-8 text, subject to that total manifest limit. Inline color scheme notices retain their 32,000-character limit. API versions 1 and 2 use the same package format and validation.
 
-Declarative `styles`, extension `themes`, and theme JSON file paths are not supported for installation yet. New installations and replacements declaring them are rejected. Previously installed packages keep ignoring these unsupported fields and native/importer/window declarations without granting privileges. Color-only theme packages can continue to supply inline color schemes; extensions can use the existing runtime styles and colorscheme APIs.
+Packages installed before Hibi accepted stylesheets and theme files keep ignoring those fields and native/importer/window declarations without granting privileges. Reinstall such a package to use its stylesheets and themes.
+
+## Add stylesheets and themes
+
+An extension can list up to 16 CSS files in `styles` and up to 20 color schemes in `themes`. A theme entry is either an inline color scheme or the path of a JSON file that contains one. Paths are relative to the package folder.
+
+```json
+{
+  "styles": ["styles/base.css", "styles/panels.css"],
+  "themes": ["themes/evening.json"]
+}
+```
+
+Hibi checks these files when you install the package. Each one must be a regular file inside the package, and each theme file must be valid JSON no larger than 64 KiB that describes one color scheme. Stylesheets follow the usual package file limits.
+
+Stylesheets and themes load when the extension starts and are removed when it stops, is disabled, or fails to start. A disabled extension loads none of its files. Their themes are available in **Settings → Appearance** while the extension runs. If the selected theme's extension is disabled, Hibi uses the default theme until the extension is enabled again, and your selection is kept.
+
+Package stylesheets apply after Hibi's own styles and selected theme, in addon ID order and then in the order listed. Styles registered with `context.styles` come after them, and override-priority styles, such as custom CSS from **UI preview**, still come last. Specificity, cascade layers, and `!important` continue to decide the final result.
+
+Relative `url()` and `@import` references resolve from the stylesheet's own location, so fonts and images can live in the package. Remote stylesheets, fonts, and images are blocked. Prefix your selectors with a class unique to your addon unless you intend to restyle Hibi itself; stylesheets are not isolated from the rest of the app.
 
 ## Share it
 

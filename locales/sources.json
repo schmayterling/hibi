@@ -1404,9 +1404,6 @@
   "d0b43f84af18": [
     "src/addons/dictionary/online.ts"
   ],
-  "e8ffd55b05d1": [
-    "src/shared/addon-manifest.ts"
-  ],
   "a2e7d5bd8495": [
     "src/shared/addon-manifest.ts"
   ],
@@ -5183,6 +5180,9 @@
   "9a02a116c1fb": [
     "src/shared/addon-manifest.ts"
   ],
+  "9ef1a5d6d2b1": [
+    "src/shared/addon-manifest.ts"
+  ],
   "a4e0693c4c13": [
     "src/main/analysis.ts"
   ],
@@ -5441,12 +5441,24 @@
   "bd0d4d522e2d": [
     "src/main/workspace-atomic-update.ts"
   ],
+  "4dfa22469b2f": [
+    "src/main/sideload.ts"
+  ],
   "09aae7464226": [
     "src/main/workspace-layout.ts"
   ],
   "bee50784d023": [
     "src/renderer/src/document-target-edits.ts",
     "src/shared/document-edits.ts"
+  ],
+  "6aa88449912f": [
+    "src/shared/addon-manifest.ts"
+  ],
+  "dfda8bedc2ef": [
+    "src/main/sideload.ts"
+  ],
+  "6ed02132319f": [
+    "src/main/sideload.ts"
   ],
   "2c9095034e70": [
     "src/shared/updates.ts"
@@ -5507,6 +5519,9 @@
   ],
   "dbb4c5f7df5c": [
     "src/renderer/src/addons.ts"
+  ],
+  "c4035b9b3e8d": [
+    "src/renderer/src/addon-overrides.ts"
   ],
   "3a58d36bd2a4": [
     "src/renderer/src/addon-registry.ts"

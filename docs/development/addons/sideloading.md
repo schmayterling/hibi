@@ -83,7 +83,7 @@ A theme entry is either an inline color scheme or the path of a JSON file that c
 
 Hibi checks these files when you install the package. Each one must be a regular file inside the package, and each theme file must be valid JSON no larger than 64 KiB that describes one color scheme. Stylesheets follow the usual package file limits.
 
-Stylesheets and themes load when the extension starts and are removed when it stops, is disabled, or fails to start. A disabled extension loads none of its files. Their themes are available in **Settings → Appearance** while the extension runs. If the selected theme's extension is disabled, Hibi uses the default theme until the extension is enabled again, and your selection is kept.
+Stylesheets and themes load when the extension starts and are removed when it stops, is disabled, or fails to start. Stylesheets apply only after the extension has started successfully. If one cannot be loaded within five seconds, the extension stops with an error. A disabled extension loads none of its files. Their themes are available in **Settings → Appearance** while the extension runs. If the selected theme's extension is disabled, Hibi uses the default theme until the extension is enabled again, and your selection is kept.
 
 Package stylesheets apply after Hibi's own styles and selected theme, in addon ID order and then in the order listed. Styles registered with `context.styles` come after them, and override-priority styles, such as custom CSS from **UI preview**, still come last. Specificity, cascade layers, and `!important` continue to decide the final result.
 

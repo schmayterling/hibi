@@ -2066,7 +2066,9 @@ export function useAddons(
           startupSpan(
             `addon:${id}`,
             async () => {
-              await start()
+              const sheets = addonRegistry.styles(id)
+              if (sheets.length) await overrides.link(sheets)
+              if (!disposed) await start()
               if (disposed) startDetail.status = 'cancelled'
               else {
                 batch.commit()

@@ -101,12 +101,10 @@ function describeAddon(
     ...(declared.Settings ? { Settings: declared.Settings } : {}),
     async start(context) {
       const token = ++generation
-      // Installed themes are data; source themes still register colors in `start`.
-      if (manifest.kind === 'theme' && declared.themes) {
-        for (const theme of declared.themes)
-          context.colorschemes.register(theme)
-        return
-      }
+      // Declared themes are data owned by this activation; source themes still register colors in `start`.
+      for (const theme of declared.themes ?? [])
+        context.colorschemes.register(theme)
+      if (manifest.kind === 'theme' && declared.themes) return
       const definition = await startupSpan(
         `addon-load:${manifest.id}`,
         async () =>
@@ -200,6 +198,7 @@ const installed = new Map<
     addon: Addon
     retire: () => void
     source: 'local' | 'third-party'
+    styles: readonly string[]
   }
 >()
 const listeners = new Set<() => void>()
@@ -216,6 +215,7 @@ export const addonRegistry = {
     }
   },
   isInstalled: (id: string) => installed.has(id),
+  styles: (id: string) => installed.get(id)?.styles ?? [],
   origin: (id: string) =>
     installed.get(id)?.source ?? origins.get(id) ?? 'local',
   hydrate(packages: readonly InstalledAddon[]) {
@@ -248,6 +248,7 @@ export const addonRegistry = {
           { themes: item.themes },
         ),
         source: item.source ?? 'local',
+        styles: item.styles ?? [],
       })
     }
     publish()

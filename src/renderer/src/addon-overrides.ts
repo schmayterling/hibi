@@ -68,6 +68,7 @@ export function createAddonOverrides(owner: string) {
   let disposed = false
   const cleanup = new Set<() => void>()
   const styles = new Map<string, HTMLStyleElement>()
+  const sheets = new Map<HTMLLinkElement, () => void>()
   const registerPatch =
     (kind: Patch['kind']) =>
     (target: object, key: PropertyKey, callback: Method) => {
@@ -124,12 +125,58 @@ export function createAddonOverrides(owner: string) {
         }
       },
     },
+    /**
+     * Declarative package sheets sit after core styles and before every runtime
+     * addon style, ordered by owner id and then declared order. A URL keeps the
+     * browser's base for relative `url()` and `@import`.
+     */
+    link(urls: readonly string[]): Promise<void> {
+      if (disposed) return Promise.resolve()
+      return Promise.all(
+        urls.map(
+          (href, index) =>
+            new Promise<void>((resolve, reject) => {
+              const element = document.createElement('link')
+              element.rel = 'stylesheet'
+              element.dataset.addonStyle = owner
+              element.dataset.addonStyleIndex = String(index)
+              const next = [
+                ...document.head.querySelectorAll<HTMLElement>(
+                  '[data-addon-style]',
+                ),
+              ].find(
+                ({ localName, dataset }) =>
+                  localName !== 'link' ||
+                  (dataset.addonStyle ?? '') > owner ||
+                  (dataset.addonStyle === owner &&
+                    Number(dataset.addonStyleIndex) > index),
+              )
+              // Disposal settles pending loads so stale callbacks never fail a later start.
+              sheets.set(element, resolve)
+              element.onload = () => resolve()
+              element.onerror = () =>
+                reject(
+                  new Error(
+                    `The ${owner} addon could not load ${href.replace(/^.*\/[a-f\d]{64}\//, '')}.`,
+                  ),
+                )
+              element.href = href
+              document.head.insertBefore(element, next ?? null)
+            }),
+        ),
+      ).then(() => {})
+    },
     dispose() {
       if (disposed) return
       disposed = true
       for (const remove of cleanup) remove()
       for (const element of styles.values()) element.remove()
       styles.clear()
+      for (const [element, settle] of sheets) {
+        element.remove()
+        settle()
+      }
+      sheets.clear()
     },
   }
 }

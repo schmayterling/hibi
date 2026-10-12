@@ -185,4 +185,34 @@ test('css overrides apply, update, keep priority, and clean up in a real rendere
   assert.equal(result.normalBeforeOverride, true)
   assert.equal(result.normalAfterDispose, 'rgb(90, 80, 70)')
   assert.equal(result.priorityRestored, result.baseline)
+
+  const sheets = await page.evaluate(async (code) => {
+    const exports = {}
+    new Function('exports', code)(exports)
+    const href = document.querySelector('link[rel="stylesheet"]').href
+    const runtime = exports.createAddonOverrides('runtime')
+    runtime.styles.register('normal', '')
+    const zeta = exports.createAddonOverrides('zeta')
+    const alpha = exports.createAddonOverrides('alpha')
+    await zeta.link([`${href}?z0`, `${href}?z1`])
+    await alpha.link([`${href}?a0`])
+    const order = () =>
+      [...document.head.querySelectorAll('[data-addon-style]')]
+        .map((element) => element.dataset.addonStyle)
+        .filter((owner) => /^(alpha|zeta|runtime\.)/.test(owner))
+    const attached = order()
+    const pending = alpha.link([`${href}?pending`])
+    alpha.dispose()
+    await pending
+    await alpha.link([`${href}?late`])
+    const afterAlpha = order()
+    zeta.dispose()
+    runtime.dispose()
+    return { attached, afterAlpha, remaining: order() }
+  }, code)
+  assert.deepEqual(sheets, {
+    attached: ['alpha', 'zeta', 'zeta', 'runtime.normal'],
+    afterAlpha: ['zeta', 'zeta', 'runtime.normal'],
+    remaining: [],
+  })
 })

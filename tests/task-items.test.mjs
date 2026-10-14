@@ -7,6 +7,39 @@ import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
+test('typing a task marker creates a checkbox and saves unescaped Markdown', {
+  timeout: 30000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-task-input-'))
+  const file = join(profile, 'tasks.md')
+  await writeFile(file, '')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`, file],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  await waitForDocumentEditor(app, page)
+  const rich = page.getByRole('textbox', {
+    name: 'Document editor',
+    exact: true,
+  })
+  await rich.click()
+  await page.keyboard.type('- [ ] task')
+  await rich.getByRole('checkbox').waitFor()
+  assert.equal(await rich.getByRole('checkbox').isChecked(), false)
+  assert.equal(await rich.locator('li p').textContent(), 'task')
+  await clickMenu(app, 'Save')
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  assert.equal((await readFile(file, 'utf8')).trim(), '- [ ] task')
+})
+
 test('populated and empty task markers render as checkboxes and preserve CRLF source', {
   timeout: 30000,
 }, async (t) => {

@@ -9,8 +9,11 @@ import {
   BulletList,
   ORDERED_LIST_MARKER_PATTERN,
   OrderedList,
+  TaskItem,
   TaskList,
 } from '@tiptap/extension-list'
+import { TextSelection } from '@tiptap/pm/state'
+import { canJoin } from '@tiptap/pm/transform'
 
 const ordered = getExtensionField<MarkdownTokenizer>(
   OrderedList,
@@ -62,8 +65,69 @@ const emptyTask: MarkdownTokenizer = {
   },
 }
 
-/** Parse empty task markers in native task lists and mixed bullet lists. */
+/** Parse and type task markers in native task lists and mixed bullet lists. */
 export function parseEmptyTaskItems(extension: AnyExtension) {
+  if (extension.config.addInputRules === TaskItem.config.addInputRules)
+    return extension.extend({
+      addInputRules() {
+        return (this.parent?.() ?? []).map((rule) => {
+          const original = rule.handler
+          rule.handler = (props) => {
+            const { state, range, match } = props
+            const start = state.doc.resolve(range.from)
+            if (
+              !/^\s*\[[ x]?\]\s$/.test(match[0]) ||
+              start.depth < 3 ||
+              start.parent.type.name !== 'paragraph' ||
+              start.index(-1) !== 0 ||
+              start.node(-1).type.name !== 'listItem' ||
+              start.node(-2).type.name !== 'bulletList'
+            )
+              return original(props)
+            const taskList = state.schema.nodes[this.options.taskListTypeName]
+            const taskItem = state.schema.nodes[extension.name]
+            if (!taskList || !taskItem) return original(props)
+            // Native wrapping cannot replace a list item's required first paragraph.
+            // Split its bullet list so only this item becomes a task.
+            const tr = state.tr.delete(range.from, range.to)
+            const at = tr.doc.resolve(range.from)
+            const list = at.node(-2)
+            const item = at.node(-1)
+            const offset = at.before(-1) - at.start(-2)
+            const before = list.copy(list.content.cut(0, offset))
+            const after = list.copy(list.content.cut(offset + item.nodeSize))
+            const task = taskList.create(
+              null,
+              taskItem.create(
+                { checked: match[match.length - 1] === 'x' },
+                item.content,
+              ),
+            )
+            const position = at.before(-2)
+            tr.replaceWith(position, at.after(-2), [
+              ...(before.childCount ? [before] : []),
+              task,
+              ...(after.childCount ? [after] : []),
+            ])
+            const taskPosition =
+              position + (before.childCount ? before.nodeSize : 0)
+            tr.setSelection(TextSelection.create(tr.doc, taskPosition + 3))
+            if (
+              tr.doc.resolve(taskPosition).nodeBefore?.type === taskList &&
+              canJoin(tr.doc, taskPosition)
+            )
+              tr.join(taskPosition)
+            const end = tr.selection.$from.after(-2)
+            if (
+              tr.doc.resolve(end).nodeAfter?.type === taskList &&
+              canJoin(tr.doc, end)
+            )
+              tr.join(end)
+          }
+          return rule
+        })
+      },
+    })
   if (getExtensionField(extension, 'markdownTokenizer') === task)
     return extension.extend({ markdownTokenizer: emptyTask })
   if (extension.config.parseMarkdown !== BulletList.config.parseMarkdown)

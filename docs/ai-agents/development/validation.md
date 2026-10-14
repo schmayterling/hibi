@@ -65,7 +65,9 @@ Vite may replace the initial navigation while optimizing a new dependency. Devel
 
 ## Performance benchmarks
 
-`bench/core/` contains 18 seeded Vitest benchmarks for core/default-enabled plugins: Markdown lexing/rendering, GitHub alerts, text extras, frontmatter, colorschemes, hotkeys, and UI casing. Optional math, Typst, graph, and tags are excluded.
+`bench/core/` contains 28 deterministic Vitest benchmarks for core/default-enabled plugins. The original 18 cover Markdown lexing/rendering, GitHub alerts, text extras, frontmatter, colorschemes, hotkeys, and UI casing. Ten more cover source-buffer edits and reads, full and incremental owner parsing, workspace reference-index construction and cache reuse, and sized-table transactions before and after the first uniqueness proof. Optional math, Typst, graph, and tags are excluded.
+
+The new cases validate source text, owner ranges, links, table sizes, and native undo/redo during collection, outside timed callbacks. Cold construction is included where named; edit/restore cases time both directions. Immutable table bases keep first-proof and warm-proof samples distinct. These cases use 8 warmup and 32 measured iterations locally; CodSpeed simulation controls its own runs. They measure CPU work, not cooperative scheduling, UI latency, startup time, or retained process memory.
 
 After `npm run build`, `npm run bench:desktop` measures six flows through CodSpeed's Tinybench plugin: fresh/retained startup through input and recent-workspace readiness, first displayed keystroke, large-note opening, code-heavy-note opening, and the first source-view transition. It shares fixtures and interaction/readiness helpers with `scripts/benchmark-startup.mjs`. See [performance measurement](performance.md) for timing boundaries.
 

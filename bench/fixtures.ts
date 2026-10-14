@@ -81,3 +81,26 @@ export function noteWithFrontmatter(seed: number, paragraphs = 12) {
     note(seed, paragraphs),
   ].join('\n')
 }
+
+/** 128 sections, a stable middle paragraph, Unicode and raw CRLF positions. */
+export function sourceNote() {
+  return ['# Café 😀', note(23, 64), 'source edit target', note(29, 64)]
+    .join('\n\n')
+    .replaceAll('\n', '\r\n')
+}
+
+/** An extra opening fence changes every later fence pairing. */
+export function fenceNote() {
+  return Array.from(
+    { length: 512 },
+    (_, index) => `\`\`\`\r\nbody ${index}\r\n`,
+  ).join('')
+}
+
+/** 128 notes with one resolvable outgoing link and backlink apiece. */
+export function linkedNotes() {
+  return Array.from({ length: 128 }, (_, index) => ({
+    path: `note-${index}.md`,
+    markdown: `[next](note-${(index + 1) % 128}.md)\n\n${note(index, 2)}`,
+  }))
+}

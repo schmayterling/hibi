@@ -1,0 +1,21 @@
+{
+  "id": "review",
+  "name": "Review",
+  "version": "1.0.0",
+  "apiVersion": 2,
+  "description": "Find repeated words and common English typos.",
+  "defaultEnabled": false,
+  "startup": "background",
+  "capabilities": ["ui"],
+  "analysis": {
+    "entry": "analysis.js"
+  },
+  "authors": [
+    {
+      "discordId": "1262793452236570667",
+      "displayName": "may"
+    }
+  ],
+  "kind": "extension",
+  "entry": "index.tsx"
+}

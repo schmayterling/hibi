@@ -43,6 +43,56 @@ test('development watches main, renderer, preload, addons, and documentation gen
       filter: (file) => !file.split(sep).includes('useraddons'),
     })
   await symlink(resolve('node_modules'), join(root, 'node_modules'), 'junction')
+  const previewFolder = join(root, 'src/addons/ui-preview')
+  const previewManifest = join(previewFolder, 'hibi-addon.json')
+  await writeFile(
+    previewManifest,
+    JSON.stringify(
+      {
+        ...JSON.parse(await readFile(previewManifest, 'utf8')),
+        entry: 'window.tsx',
+        native: { entry: 'host.ts' },
+      },
+      null,
+      2,
+    ),
+  )
+  await writeFile(
+    join(previewFolder, 'host.ts'),
+    "export default { id: 'ui-preview', queries: { probe: async () => 'owner-native' }, methods: {} }",
+  )
+  await writeFile(
+    join(previewFolder, 'window.tsx'),
+    `
+      import { createElement } from 'react'
+      import original from './index'
+      const owner = location.pathname.endsWith('/addon-window.html')
+      const probe = owner ? (window.catalogWindowProbe = {
+        sealed: window.hibiAddonWindow.seal() === undefined,
+        desktop: typeof window.hibi,
+        closed: window.hibiAddonWindow.query('probe').then(() => false, error => /bridge is closed/.test(error.message)),
+        factories: 0, starts: 0,
+      }) : undefined
+      export default () => {
+        if (probe) probe.factories++
+        const { manifest, ...definition } = original
+        return {
+          ...definition,
+          start(context) {
+            if (probe) probe.starts++
+            return original.start(context)
+          },
+          windows: {
+            ...original.windows,
+            preview(props) {
+              if (probe) probe.native ??= props.native.query('probe')
+              return createElement(original.windows.preview, props)
+            },
+          },
+        }
+      }
+    `,
+  )
   const holdMainBuild = join(root, 'hold-main-build')
   const mainBuildPaused = join(root, 'main-build-paused')
   const releaseMainBuild = join(root, 'release-main-build')
@@ -580,6 +630,73 @@ dialog.showMessageBox = (...args) => {
     'Latest folder importer.',
   )
   mark('clean rebuild restarts after earlier cancellation')
+
+  const metadataStarts = seenEndpoints.length
+  await replace(
+    'src/addons/ui-preview/hibi-addon.json',
+    '"name": "UI preview"',
+    '"name": "Updated UI preview"',
+  )
+  await connectRestartedPage(metadataStarts)
+  assert.equal(
+    await page.evaluate(async () => {
+      const { addons } = await import('/src/addon-registry.ts')
+      return addons.find(({ manifest }) => manifest.id === 'ui-preview')
+        .manifest.name
+    }),
+    'Updated UI preview',
+  )
+  const opened = page.context().waitForEvent('page')
+  await page.evaluate(() =>
+    window.hibi.openAddonWindow('ui-preview', { id: 'preview' }),
+  )
+  const owner = await opened
+  await owner.waitForFunction(() => Boolean(window.hibiAddonWindow))
+  assert.equal(
+    (await owner.evaluate(() => window.hibiAddonWindow.context())).title,
+    'Updated UI preview',
+  )
+  await owner.getByRole('button', { name: 'Close', exact: true }).waitFor()
+  assert.deepEqual(
+    await owner.evaluate(async () => {
+      const probe = window.catalogWindowProbe
+      return {
+        ...probe,
+        closed: await probe.closed,
+        native: await probe.native,
+      }
+    }),
+    {
+      sealed: true,
+      desktop: 'undefined',
+      closed: true,
+      factories: 1,
+      starts: 0,
+      native: 'owner-native',
+    },
+  )
+  await owner.close()
+  mark(
+    'json catalog resolves a declared factory entry after sealing the owner bridge',
+  )
+
+  const noticeId = 'addon:typst:typst-assets'
+  const originalNotice = await page.evaluate(
+    (id) => window.hibi.getLicense(id),
+    noticeId,
+  )
+  const noticeStarts = seenEndpoints.length
+  const noticePath = join(root, 'docs/licenses/typst-assets.md')
+  await writeFile(
+    noticePath,
+    `Catalog notice probe.\n${await readFile(noticePath, 'utf8')}`,
+  )
+  await connectRestartedPage(noticeStarts)
+  assert.equal(
+    await page.evaluate((id) => window.hibi.getLicense(id), noticeId),
+    `Catalog notice probe.\n${originalNotice}`,
+  )
+  mark('transitive notice input updates lazy catalog details')
 
   await replace('scripts/addon-reference.mjs', '[Source]', '[Updated source]')
   await until(

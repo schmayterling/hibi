@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { createServer } from 'vite'
 import { codeHtml, codeLanguages } from '../src/renderer/src/code-languages.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
@@ -53,6 +54,100 @@ test('production entry keeps rich and source editor implementations behind deman
   assert.ok(
     chunks.some((chunk) =>
       chunk.modules.includes('src/renderer/src/SourceEditor.tsx'),
+    ),
+  )
+})
+
+test('startup catalog stays within the main byte budget and leaves notices and authors lazy', async () => {
+  const chunks = JSON.parse(
+    await readFile('out/renderer/startup-bundle.json', 'utf8'),
+  )
+  const byFile = new Map(chunks.map((chunk) => [chunk.file, chunk]))
+  const reached = new Set()
+  const visit = (file) => {
+    if (reached.has(file)) return
+    reached.add(file)
+    for (const dependency of byFile.get(file)?.imports ?? []) visit(dependency)
+  }
+  for (const chunk of chunks) if (chunk.entry) visit(chunk.file)
+  const initial = chunks.filter((chunk) => reached.has(chunk.file))
+  // Catalog baseline: 689137 bytes, plus 318 bytes for declarative styles/themes (#218).
+  const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
+  assert.ok(bytes <= 689455, `startup catalog grew to ${bytes} bytes`)
+  const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
+  assert.doesNotMatch(
+    modules,
+    /addons\/authors\.ts|addons\/[^/]+\/(?:manifest\.ts|hibi-addon\.json)|docs\/licenses\//,
+  )
+  assert.doesNotMatch(
+    modules,
+    /addons\/[^/]+\/(?:index\.(?:tsx?|m?js)|Settings\.tsx|[^/]+\.md)|addons\/sdk(?:\.ts|-ui\.ts)|hibi-addon-catalog\/details|@codemirror\//,
+  )
+  assert.doesNotMatch(
+    chunks.flatMap((chunk) => chunk.modules).join('\n'),
+    /src\/(?:user)?addons\/[^/]+\/native\.tsx?/,
+  )
+  const code = (
+    await Promise.all(
+      // Vite discards the report's empty javascript facades for css-only chunks.
+      initial
+        .filter((chunk) => chunk.bytes > 1)
+        .map((chunk) => readFile(join('out/renderer', chunk.file), 'utf8')),
+    )
+  ).join('\n')
+  const server = await createServer({
+    configFile: false,
+    optimizeDeps: { noDiscovery: true },
+    root: resolve('.'),
+    server: { middlewareMode: true },
+    appType: 'custom',
+  })
+  try {
+    const { readAddonPackages } = await server.ssrLoadModule(
+      '/scripts/addon-packages.ts',
+    )
+    const packages = await readAddonPackages()
+    let notices = 0
+    for (const { manifest } of packages) {
+      for (const author of manifest.authors ?? [])
+        for (const identity of [author.discordId, author.github].filter(
+          Boolean,
+        ))
+          assert.equal(
+            code.includes(identity),
+            false,
+            `startup contains author details: ${manifest.id}`,
+          )
+      for (const license of manifest.licenses ?? []) {
+        const lines = license.text
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line.length >= 40)
+        assert.ok(
+          lines.length,
+          `missing notice probe: ${manifest.id}/${license.id}`,
+        )
+        assert.equal(
+          lines.every(
+            (line) =>
+              code.includes(line) ||
+              code.includes(JSON.stringify(line).slice(1, -1)),
+          ),
+          false,
+          `startup contains bundled license text: ${manifest.id}/${license.id}`,
+        )
+        notices++
+      }
+    }
+    assert.ok(notices > 0)
+  } finally {
+    await server.close()
+  }
+  assert.ok(
+    chunks.some((chunk) =>
+      chunk.modules.some((module) =>
+        module.includes('hibi-addon-catalog/details'),
+      ),
     ),
   )
 })
@@ -124,6 +219,7 @@ test('blank startup leaves disabled runtimes and closed settings unloaded and so
   }
   const initial = await loadedModules()
   assert.match(initial, /src\/renderer\/src\/main\.tsx/)
+  assert.doesNotMatch(initial, /hibi-addon-catalog\/details/)
   assert.doesNotMatch(
     initial,
     /src\/addons\/(?:math|typst|mdx|graph|git|word-count|block-drag|diagnostics)\/index\./,
@@ -187,6 +283,15 @@ test('blank startup leaves disabled runtimes and closed settings unloaded and so
   await clickMenu(app, 'Settings')
   assert.match(await loadedModules(), /src\/renderer\/src\/SettingsScreen\.tsx/)
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  await page
+    .locator('.addon-list [data-discord-id="297656178358616064"]')
+    .waitFor()
+  assert.match(await loadedModules(), /hibi-addon-catalog\/details/)
+  await page
+    .getByRole('searchbox', { name: 'Filter addons', exact: true })
+    .fill('angelo')
+  await page.getByRole('checkbox', { name: 'Vim', exact: true }).waitFor()
+  assert.doesNotMatch(await loadedModules(), /src\/addons\/vim\/index\./)
   assert.doesNotMatch(
     await loadedModules(),
     /src\/addons\/(?:math|typst|mdx)\/index\./,

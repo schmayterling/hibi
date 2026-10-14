@@ -79,7 +79,7 @@ async function readManifest(
         throw new Error(`The theme file ${theme} is not valid JSON.`)
       }
     }
-  const data = admitInstalledAddon(value, compiledIds, phase, themeFiles)
+  const data = admitInstalledAddon(value, compiledIds, phase, { themeFiles })
   for (const style of data.styles ?? [])
     if (!(await packageFile(folder, style, files)))
       throw new Error(`The stylesheet ${style} is missing from the addon.`)

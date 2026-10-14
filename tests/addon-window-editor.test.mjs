@@ -23,10 +23,21 @@ test('addon window boot code loads no addon module before taking the bridge', as
   }
   visit(entry.file)
   // Manifests are addon code too; an eager one could otherwise take the bridge first.
-  const addonModules = [...reached]
-    .flatMap((file) => byFile.get(file).modules)
-    .filter((module) => /^src\/(?:user)?addons\/[^/]+\//.test(module))
-  assert.deepEqual(addonModules, [])
+  const addonModules = () =>
+    [...reached]
+      .flatMap((file) => byFile.get(file).modules)
+      .filter((module) => /^src\/(?:user)?addons\/[^/]+\//.test(module))
+  assert.deepEqual(addonModules(), [])
+  // Resolving an owner must not import the editor's flavor sidecars either.
+  for (const module of [
+    '\0virtual:hibi-addon-catalog/windows',
+    'src/renderer/src/addon-definition.ts',
+  ]) {
+    const chunk = chunks.find((chunk) => chunk.modules.includes(module))
+    assert.ok(chunk, module)
+    visit(chunk.file)
+  }
+  assert.deepEqual(addonModules(), [])
 })
 
 test('addon windows host the editor without desktop privileges', {

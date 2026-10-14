@@ -204,6 +204,8 @@ test('candidate review reports invalid metadata, duplicate ids before policy, an
       requires: { addons: [{ id: 'absent' }] },
     }),
     ...packageFiles('b', 'duplicate', { native: false }),
+    ...packageFiles('c', 'duplicate', { importer: false }),
+    ...packageFiles('d', 'duplicate', { windows: false }),
     ...packageFiles('outer', 'outer'),
     ...packageFiles('outer/child', 'child'),
     { name: 'broken/hibi-addon.json', content: '{' },
@@ -226,6 +228,8 @@ test('candidate review reports invalid metadata, duplicate ids before policy, an
       'a',
       'b',
       'broken',
+      'c',
+      'd',
       'outer',
       'outer/child',
       'reserved',
@@ -233,7 +237,7 @@ test('candidate review reports invalid metadata, duplicate ids before policy, an
       'source/prepared',
     ],
   )
-  for (const folder of ['a', 'b'])
+  for (const folder of ['a', 'b', 'c', 'd'])
     assert.match(byFolder.get(folder).reasons.join(' '), /Duplicate addon ID/)
   for (const folder of ['outer', 'outer/child'])
     assert.match(byFolder.get(folder).reasons.join(' '), /folders overlap/)
@@ -241,6 +245,122 @@ test('candidate review reports invalid metadata, duplicate ids before policy, an
   assert.equal(byFolder.get('source').status, 'invalid')
   assert.equal(byFolder.get('source/prepared').status, 'installable')
   assert.match(byFolder.get('reserved').reasons.join(' '), /built-in addon/)
+})
+
+test('review rejects missing styles and themes before selection for folders and archives', async (t) => {
+  const f = await fixture(t)
+  const files = [
+    ...packageFiles('missing-style', 'missing-style', {
+      styles: ['missing.css'],
+    }),
+    ...packageFiles('wrong-case', 'wrong-case', { styles: ['case.css'] }),
+    { name: 'wrong-case/Case.css', content: '.case {}' },
+    ...packageFiles('missing-theme', 'missing-theme', {
+      themes: ['missing.json'],
+    }),
+    ...packageFiles('good', 'good', { styles: ['missing.css'] }),
+    { name: 'good/missing.css', content: '.good {}' },
+  ]
+  await f.write(files)
+  for (const inventory of [
+    await f.api.inventoryAddonDirectory(f.source),
+    await f.api.inventoryAddonArchive(zipFiles(files)),
+  ]) {
+    const candidates = await f.api.inspectAddonCandidates(inventory, [], [])
+    for (const id of ['missing-style', 'wrong-case', 'missing-theme']) {
+      const candidate = candidates.find(({ folder }) => folder === id)
+      assert.equal(candidate.review.status, 'invalid', id)
+      assert.match(candidate.review.reasons.join(' '), /entry files listed/)
+      assert.equal(candidate.data, undefined)
+    }
+    assert.equal(
+      candidates.find(({ folder }) => folder === 'good').review.status,
+      'installable',
+    )
+  }
+  const session = await f.prepare()
+  assert.equal(f.confirmations.length, 0)
+  assert.deepEqual(f.api.installedAddons(), [])
+  const invalid = session.candidates.find(
+    ({ folder }) => folder === 'missing-style',
+  )
+  const result = await f.install(session, [invalid.key])
+  assert.equal(result[0].status, 'failed')
+  assert.match(result[0].error, /entry files listed/)
+  assert.deepEqual(f.api.installedAddons(), [])
+})
+
+test('installed styles and resolved theme files stay bound to their recorded package', async (t) => {
+  const f = await fixture(t)
+  const theme = {
+    id: 'night',
+    name: 'Night',
+    appearance: 'dark',
+    author: 'Test',
+    license: { name: 'MIT', text: 'Permission notice' },
+    colors: {
+      background: '#111111',
+      surface: '#222222',
+      ink: '#eeeeee',
+      muted: '#aaaaaa',
+      accent: '#88cccc',
+      border: '#333333',
+    },
+  }
+  await f.write([
+    ...packageFiles('', 'styled', {
+      styles: ['b.css', 'a.css'],
+      themes: ['night.json'],
+    }),
+    { name: 'a.css', content: '.a {}' },
+    { name: 'b.css', content: '.b {}' },
+    { name: 'night.json', content: JSON.stringify(theme) },
+  ])
+  assert.equal(await f.prepare(), null)
+  assert.equal(f.confirmations.length, 1)
+  const installed = f.api.installedAddons()[0]
+  assert.deepEqual(
+    installed.themes.map(({ id }) => id),
+    ['night'],
+  )
+  const folder = join(f.profile, 'installed-addons', 'styled')
+  const recordPath = join(folder, '.hibi-install.json')
+  const record = JSON.parse(await fs.readFile(recordPath, 'utf8'))
+  assert.equal(record.resources, true)
+  const base = `app://hibi/installed-addons/styled/${record.hash}/`
+  assert.deepEqual(installed.styles, [`${base}b.css`, `${base}a.css`])
+  assert.equal(
+    await f.api.installedAsset(`${base}a.css`),
+    join(folder, 'a.css'),
+  )
+  assert.equal(await f.api.installedAsset(`${base}../a.css`), null)
+  assert.equal(
+    await f.api.installedAsset(
+      base.replace(record.hash, 'b'.repeat(64)) + 'a.css',
+    ),
+    null,
+  )
+  await fs.writeFile(join(folder, 'unlisted.css'), '.unlisted {}')
+  assert.equal(await f.api.installedAsset(`${base}unlisted.css`), null)
+  await fs.rename(join(folder, 'a.css'), join(folder, 'original.css'))
+  await fs.symlink(join(folder, 'original.css'), join(folder, 'a.css'))
+  assert.equal(await f.api.installedAsset(`${base}a.css`), null)
+  assert.match(
+    (await f.api.loadInstalledAddons([])).join(' '),
+    /stylesheet a.css is missing/,
+  )
+  assert.deepEqual(f.api.installedAddons(), [])
+  await fs.unlink(join(folder, 'a.css'))
+  await fs.rename(join(folder, 'original.css'), join(folder, 'a.css'))
+  assert.deepEqual(await f.api.loadInstalledAddons([]), [])
+  assert.deepEqual(f.api.installedAddons(), [installed])
+  await fs.writeFile(
+    recordPath,
+    JSON.stringify({ ...record, resources: undefined }),
+  )
+  assert.deepEqual(await f.api.loadInstalledAddons([]), [])
+  assert.equal(f.api.installedAddons()[0].styles, undefined)
+  assert.deepEqual(f.api.installedAddons()[0].themes, [])
 })
 
 test('combined graph includes retained replacements, optional edges, and missing provider paths', async (t) => {

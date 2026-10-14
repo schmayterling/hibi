@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
@@ -20,7 +20,6 @@ const details = (id, extra = {}) => ({
 })
 const requires = (...ids) => ({ addons: ids.map((id) => ({ id })) })
 const hostImporter = /[\\/](addons|sideload|addon-inventory)\.ts$/
-const hostModule = /[\\/]main[\\/]addons\.ts$/
 
 async function fixture(root, manifest, installed = false) {
   const folder = join(root, manifest.id)
@@ -49,6 +48,12 @@ async function host(t, builtins = [details('markdown')]) {
     ]),
   )
   const stubs = {
+    'virtual:hibi-addon-catalog/main': `import {state} from 'electron';
+      export default Object.entries(state.manifests).map(([path, manifest]) => ({
+        manifest, directory: path.slice(0, path.lastIndexOf('/')),
+        loadNative: state.nativeModules[path.replace('/manifest.ts', '/native.ts')],
+      }));`,
+    'virtual:hibi-addon-catalog/details': `export default ${JSON.stringify(Object.fromEntries(builtins.map((manifest) => [manifest.id, { authors: manifest.authors, licenses: manifest.licenses }])))};`,
     electron: `import {rm} from 'node:fs/promises';import {EventEmitter} from 'node:events';
       export const window = Object.assign(new EventEmitter(), {id:1,isDestroyed:()=>false});
       export const state = {root:${JSON.stringify(root)}, manifests:${JSON.stringify(modules)}, nativeModules:{}, natives:{}, source:null, failTrash:false, failRename:false, reviews:[]};
@@ -102,21 +107,6 @@ async function host(t, builtins = [details('markdown')]) {
           bundle.onLoad({ filter: /.*/, namespace: 'host' }, ({ path }) => ({
             contents: stubs[path],
           }))
-          bundle.onLoad({ filter: hostModule }, async ({ path }) => ({
-            contents:
-              "import {state as hostState} from 'electron';\n" +
-              (await readFile(path, 'utf8'))
-                .replace(
-                  /const manifestModules =[\s\S]*?(?=const bundledManifests)/,
-                  'const manifestModules = hostState.manifests\n',
-                )
-                .replace(
-                  /const nativeModules =[\s\S]*?(?=const nativeLoaders)/,
-                  'const nativeModules = hostState.nativeModules\n',
-                ),
-            loader: 'ts',
-            resolveDir: dirname(path),
-          }))
         },
       },
     ],
@@ -132,14 +122,12 @@ test('main host path guards match Windows and POSIX module paths', () => {
     'C:\\repo\\src\\main\\addons.ts',
   ]) {
     assert.equal(hostImporter.test(path), true)
-    assert.equal(hostModule.test(path), true)
   }
   for (const path of [
     '/repo/src/main/sideload.ts',
     'C:\\repo\\src\\main\\sideload.ts',
   ]) {
     assert.equal(hostImporter.test(path), true)
-    assert.equal(hostModule.test(path), false)
   }
 })
 

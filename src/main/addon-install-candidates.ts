@@ -173,7 +173,7 @@ export async function inspectAddonCandidates(
         value,
         builtins.map((manifest) => manifest.id),
         'install',
-        themeFiles,
+        { themeFiles },
       )
     } catch (error) {
       block(candidate, error instanceof Error ? error.message : String(error))

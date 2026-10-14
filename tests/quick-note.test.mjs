@@ -794,6 +794,39 @@ test('a stalled save keeps what was typed meanwhile', {
   assert.equal(await captureHides(app), before)
 })
 
+test('disabling quick note waits for a capture save in flight', {
+  timeout: 45000,
+}, async (t) => {
+  const h = await harness(t)
+  const { app, page } = await h.launch()
+  const capture = await openCapture(app, page)
+  await writeNote(capture, 'alpha')
+  await pause(app, 'quick-note-save')
+  // Record when the save reaches the pause, which it holds inside the file-operation lock.
+  await app.evaluate(() => {
+    const held = globalThis.hibiTestPauses['quick-note-save']
+    Object.defineProperty(globalThis.hibiTestPauses, 'quick-note-save', {
+      configurable: true,
+      get() {
+        globalThis.quickNoteSaveHeld = true
+        return held
+      },
+    })
+  })
+  await capture.keyboard.press('ControlOrMeta+Enter')
+  await until(() => app.evaluate(() => globalThis.quickNoteSaveHeld))
+  const disabling = page.evaluate(() =>
+    window.hibi.setAddonEnabled('quick-note', false),
+  )
+  await resume(app, 'quick-note-save')
+  const states = await disabling
+  assert.equal(states.find((state) => state.id === 'quick-note').enabled, false)
+  assert.equal(
+    await readFile(join(h.workspace, 'Quick note.md'), 'utf8'),
+    'alpha',
+  )
+})
+
 test('the unsaved note survives a crash', {
   timeout: 60000,
 }, async (t) => {

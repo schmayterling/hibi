@@ -1,10 +1,6 @@
 import { lazy, type ReactNode, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import type {
-  Addon,
-  AddonWindowEditorProps,
-  AddonWindowProps,
-} from '../../addons/api'
+import type { AddonWindowEditorProps, AddonWindowProps } from '../../addons/api'
 import type {
   AddonWindowContext,
   AddonWindowGlobal,
@@ -28,13 +24,6 @@ declare global {
 // Take the bridge before any addon module loads. This module's imports contain no
 // addon code, and afterwards the global answers only `context` and `close`.
 const bridge = window.hibiAddonWindow.seal()
-// Only compiled addons can provide window content. Only the owner's module loads
-// here, found by folder; other addons load with the editor.
-const implementations = import.meta.glob<Addon>(
-  ['../../addons/*/index.{ts,tsx}', '../../useraddons/*/index.{ts,tsx}'],
-  { import: 'default' },
-)
-
 // Same origin as the main window, so appearance follows its saved choice.
 createColorschemeStore('hibi-colorscheme').start()
 // The main window's resolved palette wins, so addon colorschemes apply here too.
@@ -80,14 +69,14 @@ async function render() {
   if (!bridge) throw new Error('This addon window is unavailable.')
   context = await bridge.context()
   const { addonId, id, input } = context
-  const load = ['addons', 'useraddons']
-    .flatMap((root) =>
-      ['ts', 'tsx'].map((ext) => `../../${root}/${addonId}/index.${ext}`),
-    )
-    .map((path) => implementations[path])
-    .find(Boolean)
-  const addon = load && (await load())
-  const windows = addon?.manifest.id === addonId ? addon.windows : undefined
+  const [{ default: catalog }, { normalizeDefinition }] = await Promise.all([
+    import('virtual:hibi-addon-catalog/windows'),
+    import('./addon-definition'),
+  ])
+  const owner = catalog.find(({ id }) => id === addonId)
+  const addon =
+    owner && (await normalizeDefinition((await owner.load()).default, owner))
+  const windows = addon?.windows
   // Only own keys: an id such as "constructor" must not reach Object.prototype.
   const Content =
     windows && Object.hasOwn(windows, id) ? windows[id] : undefined

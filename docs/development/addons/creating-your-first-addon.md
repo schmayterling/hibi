@@ -73,6 +73,16 @@ Hibi calls `start` when the addon is enabled. It prefixes the command ID with yo
 Run **Say hello** from the command palette to display a greeting.
 ```
 
+## Use a JSON source manifest
+
+Source addons can keep their metadata in `hibi-addon.json` instead of `manifest.ts`. Declare `kind: "extension"` and an `entry` such as `index.tsx`. The folder name must match the manifest ID. Hibi validates the metadata and entry files during the application build, then generates separate main and renderer catalogs with lazy code loaders.
+
+If addon code still imports `./manifest`, keep a small shim that imports the JSON, removes `entry` and `native`, and exports the remaining metadata as `AddonManifest`. Maintain metadata only in the JSON. Existing source addons without JSON continue to use `manifest.ts` and the conventional `index.ts` or `index.tsx`.
+
+Compiled native addons declare `native: { "entry": "native.ts" }`. Settings continue to use `Settings.tsx`; there is no `settings.entry`. Compiled flavor detectors stay in `flavor-info.ts`. An analyzer declared as `analysis: { "entry": "analysis.js" }` can use `analysis.ts` as its source input.
+
+This catalog is part of the application build. Installing a standalone addon still requires prepared JavaScript and does not compile TypeScript or grant native handlers, importers, or desktop windows. See [sideloading and sharing](sideloading.md).
+
 ## Try it
 
 Restart `npm run dev` after creating the folder. Open **Settings → Addons**, enable **Hello**, then open the command palette and choose **Say hello**. Disabling the addon removes its command.

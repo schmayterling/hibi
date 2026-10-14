@@ -77,6 +77,32 @@ test('build catalog contains generated app and lazy worker artifacts, never sour
       type: 'chunk',
       modules: { [`${root}/src/shared/model.ts`]: {} },
     },
+    'assets/catalog.js': {
+      type: 'chunk',
+      modules: {
+        '\0virtual:hibi-addon-catalog/renderer': {},
+        [`${root}/src/renderer/src/addon-registry.ts`]: {},
+      },
+    },
+    'assets/catalog-windows.js': {
+      type: 'chunk',
+      modules: { '\0virtual:hibi-addon-catalog/windows': {} },
+    },
+    'assets/catalog-details.js': {
+      type: 'chunk',
+      modules: { '\0virtual:hibi-addon-catalog/details': {} },
+    },
+    'assets/unknown-virtual.js': {
+      type: 'chunk',
+      modules: { '\0virtual:hibi-addon-catalog/unknown': {} },
+    },
+    'assets/private-catalog.js': {
+      type: 'chunk',
+      modules: {
+        '\0virtual:hibi-addon-catalog/renderer': {},
+        [`${root}/src/useraddons/private.ts`]: {},
+      },
+    },
     'assets/user-addon.js': {
       type: 'chunk',
       modules: { '/owned/src/useraddons/private/index.ts': {} },
@@ -102,6 +128,9 @@ test('build catalog contains generated app and lazy worker artifacts, never sour
   assert.deepEqual(
     catalog.artifacts.map(([name]) => name),
     [
+      'assets/catalog-details.js',
+      'assets/catalog-windows.js',
+      'assets/catalog.js',
       'assets/document.worker-abc.js',
       'assets/frontmatter-source-model-abc.js',
       'assets/index-abc.js',

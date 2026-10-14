@@ -654,3 +654,97 @@ test('package sheets follow late core styles, apply after activation, and give u
   assert.deepEqual(await loaded('slow-addon'), [])
   assert.equal(await probe('slow-probe'), slowBaseline)
 })
+
+test('package styles stop and restart in hidden kept-alive addon editor windows', {
+  timeout: 45000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-package-window-'))
+  const id = 'window-style'
+  const folder = join(profile, 'installed-addons', id)
+  await writePackage(
+    folder,
+    metadata(id, {
+      startup: undefined,
+      styles: ['window.css'],
+      themes: [scheme('night', 'Window night')],
+    }),
+    {
+      'index.js':
+        'export default { start() { window.windowStyleStarts = (window.windowStyleStarts || 0) + 1 } }',
+      'window.css': '.editor-page { --package-window: active; }',
+    },
+  )
+  await writeFile(
+    join(folder, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'c'.repeat(64),
+      files: ['hibi-addon.json', 'README.md', 'index.js', 'window.css'],
+      resources: true,
+    }),
+  )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({
+      'ui-preview': true,
+      [id]: true,
+    }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  const opened = app.waitForEvent('window')
+  await page.evaluate(() =>
+    window.hibi.openAddonWindow('ui-preview', {
+      id: 'editor',
+      keepAlive: true,
+      show: false,
+    }),
+  )
+  const kept = await opened
+  const attached = () =>
+    kept.waitForFunction(
+      () =>
+        document.querySelector(
+          'link[data-addon-style="window-style"]:not([media])',
+        )?.sheet,
+    )
+  await attached()
+  await kept.locator('.tiptap[contenteditable="true"]').waitFor()
+  const starts = await kept.evaluate(() => window.windowStyleStarts)
+  const color = () =>
+    kept.evaluate(() =>
+      getComputedStyle(document.querySelector('.editor-page'))
+        .getPropertyValue('--package-window')
+        .trim(),
+    )
+  assert.equal(await color(), 'active')
+  await kept.evaluate(() => {
+    window.windowStyleMarker = 'kept'
+  })
+  await page.evaluate(() => window.hibi.setAddonEnabled('window-style', false))
+  await kept
+    .locator('link[data-addon-style="window-style"]')
+    .waitFor({ state: 'detached' })
+  assert.equal(await color(), '')
+  await page.evaluate(() => window.hibi.setAddonEnabled('window-style', true))
+  await attached()
+  assert.equal(await color(), 'active')
+  assert.equal(await kept.evaluate(() => window.windowStyleStarts), starts + 1)
+  await page.evaluate(() =>
+    window.hibi.openAddonWindow('ui-preview', {
+      id: 'editor',
+      keepAlive: true,
+    }),
+  )
+  assert.equal(await kept.evaluate(() => window.windowStyleMarker), 'kept')
+  assert.equal(
+    await kept.locator('link[data-addon-style="window-style"]').count(),
+    1,
+  )
+})

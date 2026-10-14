@@ -1,6 +1,7 @@
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'electron-vite'
+import { addonCatalog } from './scripts/addon-packages'
 import { analysisBundles, sandboxPreloads } from './scripts/analysis-bundles'
 import { writeLicenses } from './scripts/licenses'
 import {
@@ -16,6 +17,7 @@ export default defineConfig({
   main: {
     define: diagnosticsDefines(),
     plugins: [
+      addonCatalog('main'),
       { name: 'app-licenses', buildStart: writeLicenses },
       analysisBundles(),
     ],
@@ -57,7 +59,12 @@ export default defineConfig({
     },
   },
   renderer: {
-    plugins: [react(), startupBundle(), diagnosticArtifacts.renderer],
+    plugins: [
+      addonCatalog('renderer'),
+      react(),
+      startupBundle(),
+      diagnosticArtifacts.renderer,
+    ],
     worker: { format: 'es', plugins: () => [diagnosticArtifacts.worker()] },
     build: {
       target: 'chrome152',

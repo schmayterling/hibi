@@ -567,7 +567,7 @@
     "src/addons/dictionary/settings.ts"
   ],
   "eb27a06d869e": [
-    "src/addons/quick-note/manifest.ts"
+    "src/addons/quick-note/hibi-addon.json"
   ],
   "139549ca9bd9": [
     "src/renderer/src/main.tsx"
@@ -2262,7 +2262,7 @@
     "src/renderer/src/FindBar.tsx"
   ],
   "cb86b77b0dde": [
-    "src/addons/review/manifest.ts"
+    "src/addons/review/hibi-addon.json"
   ],
   "c7c62a20bbf5": [
     "src/shared/document-worker-service.ts"
@@ -2683,7 +2683,7 @@
     "src/addons/math/engine.ts"
   ],
   "f3173eb8ad73": [
-    "src/addons/ui-preview/manifest.ts"
+    "src/addons/ui-preview/hibi-addon.json"
   ],
   "19cc80ee9887": [
     "src/addons/ui-preview/index.tsx"
@@ -4145,7 +4145,7 @@
   ],
   "b7fc47179f67": [
     "src/addons/quick-note/capture.ts",
-    "src/addons/quick-note/manifest.ts"
+    "src/addons/quick-note/hibi-addon.json"
   ],
   "bccf10da05f5": [
     "src/addons/quick-note/Settings.tsx"
@@ -4463,8 +4463,8 @@
     "src/addons/ui-preview/index.tsx"
   ],
   "aff0766a5290": [
-    "src/addons/review/index.tsx",
-    "src/addons/review/manifest.ts"
+    "src/addons/review/hibi-addon.json",
+    "src/addons/review/index.tsx"
   ],
   "8e4806ed8b01": [
     "src/renderer/src/main.tsx"
@@ -5231,6 +5231,12 @@
   "1e152cb5f367": [
     "src/renderer/src/addons.ts"
   ],
+  "b07f69db1d6a": [
+    "src/shared/addon-manifest.ts"
+  ],
+  "880be33a67e8": [
+    "src/shared/addon-manifest.ts"
+  ],
   "217fd53d2b6e": [
     "src/main/sideload.ts"
   ],
@@ -5462,6 +5468,9 @@
   "ac1dd1f24840": [
     "src/shared/addon-manifest.ts"
   ],
+  "eab0ba025b4c": [
+    "src/shared/addon-manifest.ts"
+  ],
   "a22ad77d6876": [
     "src/renderer/src/document-target-edits.ts"
   ],
@@ -5485,6 +5494,9 @@
   ],
   "5b9df36cc43f": [
     "src/shared/document-journal.ts"
+  ],
+  "ab67f8c89666": [
+    "src/shared/addon-manifest.ts"
   ],
   "c7085d2772ec": [
     "src/renderer/src/FormattingToolbar.tsx"
@@ -5638,9 +5650,6 @@
   "c4035b9b3e8d": [
     "src/renderer/src/addon-sheets.ts"
   ],
-  "3a58d36bd2a4": [
-    "src/renderer/src/addon-registry.ts"
-  ],
   "ef1a419b566d": [
     "src/renderer/src/addon-exchange.ts"
   ],
@@ -5675,7 +5684,7 @@
     "src/renderer/src/addon-global-shortcuts.ts"
   ],
   "7b1a3f290d48": [
-    "src/renderer/src/addon-registry.ts"
+    "src/renderer/src/addon-definition.ts"
   ],
   "a8a565024afb": [
     "src/main/addon-hotkeys.ts",
@@ -5700,7 +5709,7 @@
     "src/main/addons.ts"
   ],
   "a5631e854921": [
-    "src/renderer/src/addon-registry.ts"
+    "src/renderer/src/addon-definition.ts"
   ],
   "0d3f68fa85cf": [
     "src/renderer/src/addon-exchange.ts",
@@ -5805,7 +5814,7 @@
     "src/main/addon-windows.ts"
   ],
   "a7742e0a996e": [
-    "src/renderer/src/addon-registry.ts"
+    "src/renderer/src/addon-definition.ts"
   ],
   "92382357bcdf": [
     "src/main/workspace-files.ts"
@@ -6241,8 +6250,8 @@
     "src/addons/typst/compiler.ts"
   ],
   "d575b5ac673f": [
-    "src/addons/ui-preview/index.tsx",
-    "src/addons/ui-preview/manifest.ts"
+    "src/addons/ui-preview/hibi-addon.json",
+    "src/addons/ui-preview/index.tsx"
   ],
   "eecd4c4fc8ee": [
     "src/renderer/src/addons.ts"

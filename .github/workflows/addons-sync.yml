@@ -22,6 +22,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: source/.nvmrc
+      - name: Install catalog validation dependencies
+        working-directory: source
+        run: npm ci --ignore-scripts
       - name: Export catalog data
         working-directory: source
         run: node scripts/export-addons.mjs

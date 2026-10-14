@@ -56,7 +56,11 @@ for (const entry of await readdir('src', {
   recursive: true,
   withFileTypes: true,
 })) {
-  if (!entry.isFile() || !/\.(?:ts|tsx)$/.test(entry.name)) continue
+  if (
+    !entry.isFile() ||
+    !/(?:\.(?:ts|tsx)|^hibi-addon\.json)$/.test(entry.name)
+  )
+    continue
   const file = join(entry.parentPath, entry.name)
   if (file.includes('useraddons') || /\.(?:d|worker)\.ts$/.test(file)) continue
   // Worker failures are logged and mapped to one installation message in main.
@@ -66,7 +70,8 @@ for (const entry of await readdir('src', {
     )
   )
     continue
-  const source = parse(await readFile(file, 'utf8'), {
+  const contents = await readFile(file, 'utf8')
+  const source = parse(file.endsWith('.json') ? `(${contents})` : contents, {
     sourceType: 'module',
     plugins: file.endsWith('.tsx') ? ['typescript', 'jsx'] : ['typescript'],
   })
@@ -88,7 +93,7 @@ for (const entry of await readdir('src', {
       if (
         displayFields.has(field) ||
         field === 'buttons' ||
-        (field === 'name' && /manifest\.ts$/.test(file))
+        (field === 'name' && /(?:manifest\.ts|hibi-addon\.json)$/.test(file))
       )
         collect(node.value, file)
     }

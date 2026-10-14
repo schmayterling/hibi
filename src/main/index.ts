@@ -1572,8 +1572,11 @@ if (!app.requestSingleInstanceLock()) {
       handle(
         ADDON_CHANNELS.enable,
         (event, id: unknown, enabled: unknown, includeRequired: unknown) =>
-          runFileOperation(event, () =>
-            enableAddon(id, enabled, includeRequired),
+          // An addon window's draft read or save may hold the lock; wait instead of refusing the toggle.
+          readAfterFileOperation(event, (window) =>
+            lockFileOperation(window, () =>
+              enableAddon(id, enabled, includeRequired),
+            ),
           ),
       )
       handle(

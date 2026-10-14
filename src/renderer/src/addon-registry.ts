@@ -1,82 +1,14 @@
+import catalog from 'virtual:hibi-addon-catalog/renderer'
 import { type ComponentType, lazy } from 'react'
 import type { Addon, AddonManifest, MarkdownFlavor } from '../../addons/api'
-import { loadAddonSdk } from '../../addons/sdk-loader'
 import type { ColorschemeInput } from '../../shared/colorschemes'
 import type { InstalledAddon } from '../../shared/sideload'
 import { startupSpan } from '../../shared/startup'
+import { type Definition, normalizeDefinition } from './addon-definition'
 
-const manifests = import.meta.glob<AddonManifest>(
-  ['../../addons/*/manifest.ts', '../../useraddons/*/manifest.ts'],
-  { eager: true, import: 'default' },
+const origins = new Map(
+  catalog.map(({ manifest, source }) => [manifest.id, source]),
 )
-const implementations = import.meta.glob<Addon>(
-  ['../../addons/*/index.{ts,tsx}', '../../useraddons/*/index.{ts,tsx}'],
-  { import: 'default' },
-)
-const settings = import.meta.glob<{ Settings: ComponentType }>([
-  '../../addons/*/Settings.tsx',
-  '../../useraddons/*/Settings.tsx',
-])
-const flavorInfo = import.meta.glob<readonly MarkdownFlavor[]>(
-  ['../../addons/*/flavor-info.ts', '../../useraddons/*/flavor-info.ts'],
-  { eager: true, import: 'default' },
-)
-const origins = new Map<string, string>()
-type Definition = Omit<Addon, 'manifest'> & { manifest?: AddonManifest }
-// Elements also carry `$$typeof`, so only React's component wrappers qualify.
-const wrappers = new Set(
-  ['react.memo', 'react.forward_ref', 'react.lazy'].map((name) =>
-    Symbol.for(name),
-  ),
-)
-const component = (value: unknown) =>
-  typeof value === 'function' ||
-  (typeof value === 'object' &&
-    value !== null &&
-    wrappers.has((value as { $$typeof: symbol }).$$typeof))
-/** Accepts a direct `Addon` or a factory; only factories load an SDK, chosen by the canonical manifest. */
-async function normalizeDefinition(
-  exported: unknown,
-  manifest: AddonManifest,
-  cancelled = () => false,
-): Promise<Definition | undefined> {
-  if (
-    typeof exported !== 'function' &&
-    (typeof exported !== 'object' || exported === null)
-  )
-    throw new Error(
-      'This addon has no valid startup function. Contact its author.',
-    )
-  // Capabilities select the optional SDK; omitting them keeps the legacy factory contract.
-  const sdk =
-    typeof exported === 'function'
-      ? await loadAddonSdk(manifest.capabilities)
-      : undefined
-  // A stop during loading must not run factory code that would own resources.
-  if (cancelled()) return
-  const definition: Partial<Definition> | null | undefined =
-    typeof exported === 'function'
-      ? (exported as (sdk: unknown) => Definition)(sdk)
-      : exported
-  if (
-    !definition ||
-    typeof definition.start !== 'function' ||
-    (definition.stop !== undefined && typeof definition.stop !== 'function') ||
-    (definition.Settings !== undefined && !component(definition.Settings)) ||
-    (definition.windows !== undefined &&
-      (typeof definition.windows !== 'object' ||
-        definition.windows === null ||
-        !Object.values(definition.windows).every(component)))
-  )
-    throw new Error(
-      'This addon cannot start. Contact its author for an updated version.',
-    )
-  if (definition.manifest && definition.manifest.id !== manifest.id)
-    throw new Error(
-      'This addon’s files do not match its manifest. Reinstall it.',
-    )
-  return definition as Definition
-}
 /** One descriptor for bundled and installed addons. Nothing is imported until `start` or declared settings render. */
 function describeAddon(
   manifest: AddonManifest,
@@ -161,35 +93,24 @@ function describeAddon(
   }
   return { addon: descriptor, retire }
 }
-const bundled = Object.entries(manifests).map(([path, manifest]): Addon => {
-  const directory = path.slice(0, path.lastIndexOf('/'))
-  origins.set(manifest.id, path.includes('/useraddons/') ? 'local' : 'built-in')
-  const loader =
-    implementations[`${directory}/index.ts`] ??
-    implementations[`${directory}/index.tsx`]
-  const importer = () =>
-    loader
-      ? loader()
-      : Promise.reject(
-          new Error(
-            `The ${manifest.id} addon is missing its startup file. Reinstall it.`,
-          ),
-        )
-  const settingsLoader = settings[`${directory}/Settings.tsx`]
-  return describeAddon(manifest, importer, {
-    flavors: flavorInfo[`${directory}/flavor-info.ts`],
-    ...(settingsLoader || manifest.fileExtensions?.length
-      ? {
-          Settings: lazy(async () => ({
-            default: settingsLoader
-              ? (await settingsLoader()).Settings
-              : ((await normalizeDefinition(await importer(), manifest))
-                  ?.Settings ?? (() => null)),
-          })),
-        }
-      : {}),
-  }).addon
-})
+const bundled = catalog.map(
+  ({ manifest, load, loadSettings, flavors }): Addon => {
+    const importer = async () => (await load()).default
+    return describeAddon(manifest, importer, {
+      flavors,
+      ...(loadSettings || manifest.fileExtensions?.length
+        ? {
+            Settings: lazy(async () => ({
+              default: loadSettings
+                ? (await loadSettings()).Settings
+                : ((await normalizeDefinition(await importer(), manifest))
+                    ?.Settings ?? (() => null)),
+            })),
+          }
+        : {}),
+    }).addon
+  },
+)
 export let addons = bundled
 const installed = new Map<
   string,
@@ -206,8 +127,22 @@ const publish = () => {
   addons = [...bundled, ...[...installed.values()].map((entry) => entry.addon)]
   for (const listener of listeners) listener()
 }
+let details: Promise<void> | undefined
 export const addonRegistry = {
   snapshot: () => addons,
+  loadDetails() {
+    details ??= import('virtual:hibi-addon-catalog/details')
+      .then(({ default: metadata }) => {
+        for (const { manifest } of bundled)
+          Object.assign(manifest, metadata[manifest.id])
+        publish()
+      })
+      .catch((error) => {
+        details = undefined
+        throw error
+      })
+    return details
+  },
   subscribe(listener: () => void) {
     listeners.add(listener)
     return () => {

@@ -42,6 +42,7 @@ export type ParsedAddonManifest = {
   manifest: AddonManifest
   entry: string
   styles?: string[]
+  native?: { entry: string }
   themes: (ColorschemeInput | string)[]
 }
 
@@ -49,12 +50,33 @@ export type ParsedAddonManifest = {
 export function parseAddonManifest(
   value: unknown,
   {
+    trust = 'installed',
     themeFiles,
-  }: { themeFiles?: ReadonlyMap<string, unknown> | undefined } = {},
+  }: {
+    trust?: 'installed' | 'compiled'
+    themeFiles?: ReadonlyMap<string, unknown> | undefined
+  } = {},
 ): ParsedAddonManifest {
   if (!value || typeof value !== 'object')
     throw new Error('The addon details in hibi-addon.json are invalid.')
   const data = value as Record<string, unknown>
+  const modulePath = (entry: unknown): entry is string =>
+    validPath(entry) &&
+    (trust === 'compiled' ? /\.(m?js|tsx?)$/ : /\.m?js$/).test(entry)
+  let native: ParsedAddonManifest['native']
+  if (trust === 'compiled' && data.native !== undefined) {
+    const entry =
+      data.native &&
+      typeof data.native === 'object' &&
+      !Array.isArray(data.native)
+        ? (data.native as { entry?: unknown }).entry
+        : undefined
+    if (!modulePath(entry))
+      throw new Error(
+        'The native entry must be a module inside the addon folder.',
+      )
+    native = { entry }
+  }
   const string = (value: unknown, max: number): value is string =>
     typeof value === 'string' && !!value.trim() && value.length <= max
   if (
@@ -64,21 +86,22 @@ export function parseAddonManifest(
     !compatibleAddonManifest(data) ||
     !['theme', 'extension'].includes(String(data.kind)) ||
     !string(data.version, 40) ||
-    !Array.isArray(data.authors) ||
-    !data.authors.length ||
-    data.authors.length > 20 ||
-    data.authors.some(
-      (author) =>
-        !author ||
-        !string(author.displayName, 100) ||
-        (author.discordId !== undefined &&
-          (typeof author.discordId !== 'string' ||
-            !/^\d{5,24}$/.test(author.discordId))) ||
-        (author.github !== undefined &&
-          (typeof author.github !== 'string' ||
-            !/^[a-z\d-]{1,39}$/i.test(author.github))) ||
-        (author.role !== undefined && !string(author.role, 100)),
-    )
+    ((trust === 'installed' || data.authors !== undefined) &&
+      (!Array.isArray(data.authors) ||
+        (trust === 'installed' && !data.authors.length) ||
+        data.authors.length > 20 ||
+        data.authors.some(
+          (author) =>
+            !author ||
+            !string(author.displayName, 100) ||
+            (author.discordId !== undefined &&
+              (typeof author.discordId !== 'string' ||
+                !/^\d{5,24}$/.test(author.discordId))) ||
+            (author.github !== undefined &&
+              (typeof author.github !== 'string' ||
+                !/^[a-z\d-]{1,39}$/i.test(author.github))) ||
+            (author.role !== undefined && !string(author.role, 100)),
+        )))
   )
     throw new Error(
       'The addon needs an ID, kind, API version, version, description, and authors in hibi-addon.json.',
@@ -94,7 +117,7 @@ export function parseAddonManifest(
           !string(license.name, 100) ||
           !string(license.license, 100) ||
           !string(license.text, MAX_ADDON_MANIFEST_BYTES) ||
-          // Installed manifests hit the file cap first; future compiled manifests need this byte check.
+          // Installed manifests hit the file cap first; compiled manifests need this byte check.
           new TextEncoder().encode(license.text).length >
             MAX_ADDON_MANIFEST_BYTES,
       ))
@@ -154,7 +177,7 @@ export function parseAddonManifest(
     apiVersion: ADDON_API_VERSION,
     kind: data.kind as 'theme' | 'extension',
     version: data.version,
-    authors: data.authors,
+    ...(Array.isArray(data.authors) ? { authors: data.authors } : {}),
     defaultEnabled: data.defaultEnabled === true,
     ...(data.network === undefined
       ? {}
@@ -168,7 +191,10 @@ export function parseAddonManifest(
       : { settings: settingsMetadata(data.settings) }),
     ...(data.analysis === undefined
       ? {}
-      : { analysis: parseAnalysis(data.analysis) }),
+      : { analysis: parseAnalysis(data.analysis, trust) }),
+    ...(trust !== 'compiled' || data.importer === undefined
+      ? {}
+      : { importer: parseImporter(data.importer) }),
     ...(data.syntax === undefined
       ? {}
       : { syntax: parseSyntaxDescriptors(data.syntax)! }),
@@ -253,8 +279,13 @@ export function parseAddonManifest(
     new Set(themePaths).size !== themePaths.length
   )
     throw new Error('Each theme needs a valid, unique ID or path.')
-  if (base.kind === 'theme') {
+  if (
+    base.kind === 'theme' &&
+    (trust === 'installed' || data.entry === undefined)
+  ) {
     if (
+      data.native !== undefined ||
+      data.importer !== undefined ||
       data.analysis !== undefined ||
       data.syntax !== undefined ||
       data.capabilities !== undefined ||
@@ -279,14 +310,17 @@ export function parseAddonManifest(
     ]
     return { manifest: base, entry: '', themes }
   }
-  if (!validPath(data.entry) || !/\.(m?js)$/.test(data.entry))
+  if (!modulePath(data.entry))
     throw new Error(
-      'The extension entry must point to a .js or .mjs file inside the addon folder.',
+      trust === 'compiled'
+        ? 'The extension entry must point to a .ts, .tsx, .js or .mjs file inside the addon folder.'
+        : 'The extension entry must point to a .js or .mjs file inside the addon folder.',
     )
   return {
     manifest: base,
     entry: data.entry,
     themes,
+    ...(native === undefined ? {} : { native }),
     ...(data.styles === undefined ? {} : { styles: data.styles as string[] }),
   }
 }
@@ -295,7 +329,9 @@ export function admitInstalledAddon(
   value: unknown,
   compiledIds: readonly string[],
   phase: 'install' | 'load' = 'install',
-  themeFiles?: ReadonlyMap<string, unknown>,
+  {
+    themeFiles,
+  }: { themeFiles?: ReadonlyMap<string, unknown> | undefined } = {},
 ): {
   manifest: AddonManifest
   entry: string
@@ -336,12 +372,31 @@ export function admitInstalledAddon(
   }
 }
 
-function parseAnalysis(value: unknown): { entry: string } {
+function parseImporter(value: unknown): NonNullable<AddonManifest['importer']> {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error('The addon importer metadata is invalid.')
+  const { instructions, sources } = value as Record<string, unknown>
+  if (
+    typeof instructions !== 'string' ||
+    !Array.isArray(sources) ||
+    sources.some((source) => source !== 'folder' && source !== 'zip')
+  )
+    throw new Error('The addon importer instructions or sources are invalid.')
+  return { instructions, sources }
+}
+
+function parseAnalysis(
+  value: unknown,
+  trust: 'installed' | 'compiled',
+): { entry: string } {
   const entry =
     value && typeof value === 'object'
       ? (value as { entry?: unknown }).entry
       : undefined
-  if (!validPath(entry) || !/\.m?js$/.test(entry))
+  if (
+    !validPath(entry) ||
+    !(trust === 'compiled' ? /\.(m?js|ts)$/ : /\.m?js$/).test(entry)
+  )
     throw new Error(
       'The analysis entry must be a JavaScript module inside the addon folder.',
     )

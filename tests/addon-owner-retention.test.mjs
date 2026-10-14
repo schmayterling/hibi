@@ -1,13 +1,20 @@
 import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
 import test from 'node:test'
-import { createServer } from 'vite'
+import { createServer, loadConfigFromFile } from 'vite'
 
 test('stopping an installed addon releases its Settings closure but keeps flavor metadata', {
   timeout: 30000,
 }, async (t) => {
+  const { config } = await loadConfigFromFile(
+    { command: 'serve', mode: 'test' },
+    resolve('electron.vite.config.ts'),
+  )
   const server = await createServer({
     configFile: false,
+    plugins: config.renderer.plugins.filter(
+      (plugin) => plugin.name === 'addon-catalog-renderer',
+    ),
     root: resolve('.'),
     server: { middlewareMode: true },
     appType: 'custom',

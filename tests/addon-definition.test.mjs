@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir, rm, rmdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import test from 'node:test'
-import { createServer } from 'vite'
+import { createServer, loadConfigFromFile } from 'vite'
 
 const manifest = (id, extra = {}) => ({
   id,
@@ -24,8 +24,15 @@ const fixture = `
   }
 `
 async function registry(t) {
+  const { config } = await loadConfigFromFile(
+    { command: 'serve', mode: 'test' },
+    resolve('electron.vite.config.ts'),
+  )
   const server = await createServer({
     configFile: false,
+    plugins: config.renderer.plugins.filter(
+      (plugin) => plugin.name === 'addon-catalog-renderer',
+    ),
     root: resolve('.'),
     server: { middlewareMode: true },
     appType: 'custom',
@@ -183,6 +190,75 @@ export default {
     colorschemes: { register: (scheme) => registered.push(scheme.id) },
   })
   assert.deepEqual(registered, ['probe'])
+})
+
+test('declared themes precede runtime registration and duplicate IDs fail without replacing colors', async (t) => {
+  const { server, addonRegistry, find } = await registry(t)
+  const { createColorschemeStore } = await server.ssrLoadModule(
+    '/src/ui/colorschemes.ts',
+  )
+  const previous = {
+    document: globalThis.document,
+    matchMedia: globalThis.matchMedia,
+  }
+  globalThis.document = { createElement: () => ({ dataset: {} }) }
+  globalThis.matchMedia = () => ({ matches: false })
+  t.after(() => Object.assign(globalThis, previous))
+  const store = createColorschemeStore('collision-test', undefined, false)
+  const scheme = {
+    id: 'night',
+    name: 'Declared night',
+    appearance: 'dark',
+    author: 'Test',
+    license: { name: 'MIT', text: 'Permission notice' },
+    colors: {
+      background: '#111111',
+      surface: '#222222',
+      ink: '#eeeeee',
+      muted: '#aaaaaa',
+      accent: '#88cccc',
+      border: '#333333',
+    },
+  }
+  const id = 'collision-probe'
+  addonRegistry.hydrate([
+    {
+      manifest: manifest(id),
+      themes: [scheme],
+      url: module(`export default {
+      start(context) {
+        context.colorschemes.register(${JSON.stringify({ ...scheme, name: 'Runtime replacement' })})
+      }
+    }`),
+    },
+  ])
+  const cleanups = []
+  const context = {
+    colorschemes: {
+      register(input) {
+        const remove = store.register({ ...input, id: `${id}.${input.id}` })
+        cleanups.push(remove)
+        return remove
+      },
+    },
+  }
+  const addon = find(id)
+  // useAddons owns cleanup after descriptor failure; exercise the same removers.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assert.rejects(
+      addon.start(context),
+      /duplicate colorscheme: collision-probe.night/,
+    )
+    assert.equal(
+      store.snapshot().schemes.find((entry) => entry.id === `${id}.night`).name,
+      'Declared night',
+    )
+    addon.stop()
+    for (const remove of cleanups.splice(0)) remove()
+    assert.ok(
+      !store.snapshot().schemes.some((entry) => entry.id.startsWith(`${id}.`)),
+    )
+  }
 })
 
 test('settings and windows must be components, not elements', {

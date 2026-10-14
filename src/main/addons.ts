@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 import { lstat, readFile, realpath, rename, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
+import catalog from 'virtual:hibi-addon-catalog/main'
 import { app, type BrowserWindow, dialog } from 'electron'
 import {
-  type AddonManifest,
   type AddonState,
   compatibleAddonManifest,
   type NativeAddon,
@@ -48,20 +48,11 @@ import {
   workspaceRoot,
 } from './workspace'
 
-const manifestModules = import.meta.glob<AddonManifest>(
-  ['../addons/*/manifest.ts', '../useraddons/*/manifest.ts'],
-  { eager: true, import: 'default' },
-)
-const bundledManifests = Object.values(manifestModules)
-const nativeModules = import.meta.glob<NativeAddon>(
-  ['../addons/*/native.ts', '../useraddons/*/native.ts'],
-  { import: 'default' },
-)
+const bundledManifests = catalog.map(({ manifest }) => manifest)
 const nativeLoaders = new Map(
-  Object.entries(manifestModules).flatMap(([path, manifest]) => {
-    const load = nativeModules[path.replace('/manifest.ts', '/native.ts')]
-    return load ? [[manifest.id, load] as const] : []
-  }),
+  catalog.flatMap(({ manifest, loadNative }) =>
+    loadNative ? [[manifest.id, loadNative] as const] : [],
+  ),
 )
 const natives = new Map<string, NativeAddon>()
 const pendingNatives = new Map<string, Promise<NativeAddon>>()
@@ -110,12 +101,17 @@ const manifests = () => [
 ]
 export const getAddonManifests = manifests
 
-export function getAddonLicenses() {
+export async function getAddonLicenses() {
+  const { default: details } = await import(
+    'virtual:hibi-addon-catalog/details'
+  )
   return manifests().flatMap((manifest) =>
-    (manifest.licenses ?? []).map((license) => ({
-      ...license,
-      id: `addon:${manifest.id}:${license.id}`,
-    })),
+    (details[manifest.id]?.licenses ?? manifest.licenses ?? []).map(
+      (license) => ({
+        ...license,
+        id: `addon:${manifest.id}:${license.id}`,
+      }),
+    ),
   )
 }
 
@@ -125,12 +121,10 @@ export async function readAddonDocumentation(id: unknown, path: unknown) {
     !manifests().some((manifest) => manifest.id === id)
   )
     throw new Error('This addon is unavailable.')
-  const source = Object.entries(manifestModules).find(
-    ([, manifest]) => manifest.id === id,
-  )?.[0]
+  const source = catalog.find(({ manifest }) => manifest.id === id)?.directory
   return (await import('./addon-documentation')).readDocumentation(
     id,
-    source?.slice(0, source.lastIndexOf('/')),
+    source,
     path,
   )
 }

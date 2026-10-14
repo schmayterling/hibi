@@ -253,7 +253,7 @@ test('installed packages admit styles and theme files once each file is resolved
     },
     [],
     'install',
-    files,
+    { themeFiles: files },
   )
   assert.deepEqual(admitted.styles, ['styles/main.css', 'base.css'])
   assert.deepEqual(
@@ -266,7 +266,7 @@ test('installed packages admit styles and theme files once each file is resolved
       { ...themePackage, themes: ['themes/dusk.json'] },
       [],
       'install',
-      files,
+      { themeFiles: files },
     ).manifest.licenses.map((license) => license.id),
     ['theme-dusk'],
   )
@@ -291,9 +291,31 @@ test('installed packages admit styles and theme files once each file is resolved
     ],
   ])
     assert.throws(
-      () => admitInstalledAddon({ ...base, themes }, [], 'install', files),
+      () =>
+        admitInstalledAddon({ ...base, themes }, [], 'install', {
+          themeFiles: files,
+        }),
       error,
     )
+})
+
+test('theme resolution composes with caller-owned trust and cannot admit installed source code', () => {
+  const input = { ...base, entry: 'index.ts', themes: ['night.json'] }
+  const themeFiles = new Map([['night.json', scheme]])
+  const compiled = parseAddonManifest(input, { trust: 'compiled', themeFiles })
+  assert.equal(compiled.entry, 'index.ts')
+  assert.equal(compiled.themes[0].id, 'night')
+  assert.throws(
+    () => parseAddonManifest(input, { themeFiles }),
+    /extension entry/,
+  )
+  assert.throws(
+    () =>
+      admitInstalledAddon({ ...input, trust: 'compiled' }, [], 'install', {
+        themeFiles,
+      }),
+    /extension entry/,
+  )
 })
 
 test('inline data themes retain api compatibility, color defaults, and license credits', () => {

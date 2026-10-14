@@ -12,7 +12,10 @@ function load() {
       catalog = undefined
       throw error
     })
-  return catalog.then((entries) => [...entries, ...getAddonLicenses()])
+  return catalog.then(async (entries) => [
+    ...entries,
+    ...(await getAddonLicenses()),
+  ])
 }
 export async function listLicenses(): Promise<LicenseInfo[]> {
   return (await load()).map(({ text: _text, ...info }) => info)

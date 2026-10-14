@@ -3,6 +3,7 @@ import {
   Component,
   type ReactNode,
   Suspense,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -30,6 +31,7 @@ import { SettingsDiscovery, settingsIndex } from '../../ui/settings-index'
 import { uiCase } from '../../ui/ui-case'
 import { AddonMetadata, AddonSettings, useAddonReadme } from './AddonSettings'
 import { AutosaveSettings } from './AutosaveSettings'
+import { addonRegistry } from './addon-registry'
 import { addons } from './addons'
 import { CodeSyntaxSettings } from './CodeSyntaxSettings'
 import { colorschemes } from './colorschemes'
@@ -164,6 +166,9 @@ export function SettingsScreen({
   tabsBusy: boolean
   onTabsEnabled: (enabled: boolean) => void
 }) {
+  useEffect(() => {
+    if (open) void addonRegistry.loadDetails().catch(console.error)
+  }, [open])
   const screen = useRef<HTMLElement>(null)
   const openReadme = useAddonReadme()
   const wasOpen = useRef(false)

@@ -29,7 +29,7 @@ Release builds use download caches only. Both nightly and stable channels always
 
 ## Website addon catalog
 
-`.github/workflows/addons-sync.yml` runs when a push to `main` changes `src/addons/**`, or on manual dispatch. `node scripts/export-addons.mjs` copies `authors.ts`, manifests, Markdown, and images into `out/addons`, preserving relative paths. It excludes runtime TypeScript, CSS, audio, hidden files, and symlinks. Manifests are copied without execution.
+`.github/workflows/addons-sync.yml` runs when a push to `main` changes `src/addons/**`, or on manual dispatch. `node scripts/export-addons.mjs` copies `authors.ts`, manifests, Markdown, and images into `out/addons`, preserving relative paths. It excludes runtime TypeScript, CSS, audio, hidden files, and symlinks. Legacy manifests are copied without execution. For JSON packages, the exporter validates `hibi-addon.json` with the shared compiled-manifest parser and generates a `manifest.ts` object literal for the site's static reader. The JSON remains the only maintained metadata; its compatibility shim is not copied. The workflow installs dependencies without lifecycle scripts before validation, and the exporter never executes addon code.
 
 The workflow replaces generated catalog files in `hibigarden/site/addons`, removes stale files, and preserves `addons/index.html`. After the site's tests and build pass, it commits `chore(addons): sync to main (<source short commit id>)`. Unchanged data creates no commit. Runs are serialized and use normal pushes, preserving concurrent site work.
 

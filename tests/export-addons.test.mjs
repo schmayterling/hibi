@@ -9,7 +9,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { parse } from '@babel/parser'
@@ -127,10 +127,13 @@ test('all 42 canonical manifests export website object literals with frozen meta
     shims.set(id, await readFile(join(source, id, 'manifest.ts'), 'utf8'))
   const files = await exportAddons(source, destination)
   assert.equal(
-    files.filter((file) => file.endsWith('/hibi-addon.json')).length,
+    files.filter((file) => basename(file) === 'hibi-addon.json').length,
     42,
   )
-  assert.equal(files.filter((file) => file.endsWith('/manifest.ts')).length, 42)
+  assert.equal(
+    files.filter((file) => basename(file) === 'manifest.ts').length,
+    42,
+  )
   for (const [id, hash] of Object.entries(expected)) {
     const canonical = await readFile(
       join(source, id, 'hibi-addon.json'),

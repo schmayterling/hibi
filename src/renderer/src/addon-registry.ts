@@ -158,8 +158,7 @@ export const addonRegistry = {
   styles: async (id: string) =>
     installed.get(id)?.styles ??
     (await catalog.find((item) => item.manifest.id === id)?.loadResources?.())
-      ?.styles ??
-    [],
+      ?.styles,
   origin: (id: string) =>
     installed.get(id)?.source ?? origins.get(id) ?? 'local',
   hydrate(packages: readonly InstalledAddon[]) {

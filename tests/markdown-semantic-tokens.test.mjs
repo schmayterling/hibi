@@ -551,25 +551,22 @@ test('contiguous heading boundaries keep semantic reads local across neighbor ed
   assert.equal(changed.tokens[0].text, 'y')
 })
 
-test('physical-line regions keep synthetic long-heading fragments together', (t) => {
+test('physical-line regions keep long-heading boundaries exact', (t) => {
   const source = `# small\n\n# ${'large '.repeat(2000)}\n`,
     f = fixture(t, source),
     owners = f.settle(),
     rows = [...owners.records()].filter((row) => row.owner.kind !== 'trivia'),
     heading = rows[1],
     region = semanticRegion(f.store.snapshot(), owners, heading.owner.slot)
+  assert.equal(rows.length, 2)
   assert.equal(heading.owner.kind, 'markdown:ATXHeading1')
-  assert.ok(heading.to < source.length - 1)
+  assert.equal(heading.to, source.length - 1)
   assert.equal(region.from, source.indexOf('# large'))
   assert.equal(region.to, source.length)
-  assert.ok(region.members.length > 1)
+  assert.equal(region.endIndex, heading.index)
+  assert.deepEqual(region.members, [heading.owner])
   assert.equal(
     f.store.snapshot().sliceRaw(region.from, region.to),
     source.slice(region.from),
   )
-  for (const row of rows.slice(2))
-    assert.equal(
-      semanticRegion(f.store.snapshot(), owners, row.owner.slot),
-      null,
-    )
 })

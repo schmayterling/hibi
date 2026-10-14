@@ -39,21 +39,105 @@ const edit = (store, changes) => {
   return prepared
 }
 
-test('ENG13: normalized snapshot Input starts chunks exactly at every UTF-16 coordinate', () => {
-  const source = '\uFEFFa\r\nb😀\nc\rd\r\n',
-    normalized = normalizedSource(source)
-  const store = new SourceStore(source, { tabId: 'input', revision: 0 })
-  for (const size of [1, 2, 3, 4, 32]) {
-    const input = sourceParserInput(store.snapshot(), undefined, size)
-    assert.equal(input.lineChunks, false)
+test('ENG13: normalized snapshot Input returns complete lines at every UTF-16 coordinate', () => {
+  for (const source of [
+    '',
+    '\uFEFFa\r\nb😀\nc\rd\r\n',
+    '\r\n\r\n',
+    '😀\rlast',
+  ]) {
+    const normalized = normalizedSource(source)
+    const store = new SourceStore(source, { tabId: 'input', revision: 0 }, 0, {
+      chunkUnits: 4,
+      leafCapacity: 4,
+      fanout: 4,
+    })
+    const input = sourceParserInput(store.snapshot())
+    assert.equal(input.lineChunks, true)
     assert.equal(input.length, normalized.length)
     for (let from = 0; from <= input.length; from++) {
-      assert.equal(input.chunk(from), normalized.slice(from, from + size))
+      const end = normalized.indexOf('\n', from)
+      assert.equal(
+        input.chunk(from),
+        from === end
+          ? '\n'
+          : normalized.slice(from, end < 0 ? input.length : end),
+      )
       for (let to = from; to <= input.length; to++)
         assert.equal(input.read(from, to), normalized.slice(from, to))
     }
-    for (const value of [-1, NaN, Infinity, input.length + 1])
+    for (const value of [-1, NaN, Infinity, 0.5, input.length + 1]) {
       assert.throws(() => input.chunk(value), /outside/)
+      assert.throws(() => input.read(value, input.length), /outside/)
+      assert.throws(() => input.read(0, value), /outside/)
+    }
+    if (input.length) assert.throws(() => input.read(1, 0), /outside/)
+  }
+})
+
+test('long physical lines keep exact Markdown trees across source edits', () => {
+  const long = 'word 😀 '.repeat(900)
+  for (const ending of ['\n', '\r\n', '\r']) {
+    for (const text of [
+      '# ' + long,
+      '```md\n' + long + '\n```\n\n# after',
+      'first\n' + long + '\nlast\n\n# after',
+    ]) {
+      const source = text.replaceAll('\n', ending)
+      for (const dialect of [parser, parser.configure(GFM)]) {
+        const store = new SourceStore(source, {
+          tabId: 'long-lines',
+          revision: 0,
+        })
+        const session = new SourceParserSession(
+          store.snapshot(),
+          dialect,
+          'test',
+        )
+        try {
+          const compare = () =>
+            assert.deepEqual(
+              treeShape(finish(session)),
+              treeShape(
+                dialect.parse(normalizedSource(store.snapshot().materialize())),
+              ),
+              JSON.stringify({ ending, start: text.slice(0, 6) }),
+            )
+          compare()
+          let at = 4096
+          while (!store.snapshot().isEditBoundary(at)) at++
+          const insert = ending + '# inserted' + ending
+          session.apply(edit(store, [{ from: at, to: at, insert }]))
+          compare()
+          session.apply(
+            edit(store, [{ from: at, to: at + insert.length, insert: '' }]),
+          )
+          compare()
+        } finally {
+          session.dispose()
+        }
+      }
+    }
+  }
+})
+
+test('line chunks report long reads without materializing a multiline document', () => {
+  const source = ['# title', 'x'.repeat(8193), 'tail'].join('\r\n')
+  const store = new SourceStore(source, { tabId: 'line-work', revision: 0 })
+  const session = new SourceParserSession(
+    store.snapshot(),
+    parser,
+    'commonmark',
+  )
+  store.counters(true)
+  try {
+    finish(session)
+    assert.equal(session.counters().maximumRead, 8193)
+    assert.ok(session.counters().readUnits <= source.length)
+    assert.equal(store.counters().materializations, 0)
+    assert.equal(store.counters().materializedUnits, 0)
+  } finally {
+    session.dispose()
   }
 })
 

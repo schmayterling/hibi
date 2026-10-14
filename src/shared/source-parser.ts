@@ -37,10 +37,7 @@ const emptyWork = (): ParserWork => ({
 export function sourceParserInput(
   source: SourceSnapshot,
   work = emptyWork(),
-  chunkUnits = 4096,
 ): Input {
-  if (!Number.isSafeInteger(chunkUnits) || chunkUnits < 1 || chunkUnits > 65536)
-    throw new Error('Invalid parser input chunk size.')
   const read = (from: number, to: number) => {
     const rawFrom = source.editorToRaw(from),
       rawTo = source.editorToRaw(to)
@@ -53,9 +50,18 @@ export function sourceParserInput(
   }
   return Object.freeze({
     length: source.normalizedLength,
-    lineChunks: false,
-    chunk: (from: number) =>
-      read(from, Math.min(source.normalizedLength, from + chunkUnits)),
+    lineChunks: true,
+    chunk: (from: number) => {
+      const raw = source.editorToRaw(from),
+        line = raw === null ? null : source.lineAt(raw)
+      if (!line)
+        throw new Error('Parser input range is outside its source snapshot.')
+      // ponytail: Markdown scanner needs whole physical lines. One long line can
+      // allocate its full length; bounded chunks need scanner support for split lines.
+      let to = source.rawToEditor(line.to)!
+      if (to === from && from < source.normalizedLength) to++
+      return read(from, to)
+    },
     read,
   })
 }

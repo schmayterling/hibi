@@ -150,7 +150,7 @@ export const addonRegistry = {
     }
   },
   isInstalled: (id: string) => installed.has(id),
-  styles: (id: string) => installed.get(id)?.styles ?? [],
+  styles: (id: string) => installed.get(id)?.styles,
   origin: (id: string) =>
     installed.get(id)?.source ?? origins.get(id) ?? 'local',
   hydrate(packages: readonly InstalledAddon[]) {

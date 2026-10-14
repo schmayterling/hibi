@@ -46,6 +46,8 @@ type ApplyResult = {
 type CanCommit = () => boolean
 
 const workSlice = 64
+// ponytail: one page can exceed this budget; bounding it needs interruptible parsing.
+const workSliceMs = 4
 const yieldToEventLoop = () =>
   new Promise<void>((resolve) => setImmediate(resolve))
 
@@ -146,6 +148,7 @@ export class WorkspaceReferenceIndex {
     const next = new Map<string, DocumentLinks>()
     const changed = new Set<string>()
     let parsed = 0
+    let sliceStarted = performance.now()
     for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
       const page = pages[pageIndex]
       if (!page) continue
@@ -190,7 +193,14 @@ export class WorkspaceReferenceIndex {
         changed.add(page.path)
         if (markdownSource && referenceComplete) parsed++
       }
-      if ((pageIndex + 1) % workSlice === 0) yield
+      if (
+        (pageIndex + 1) % workSlice === 0 ||
+        performance.now() - sliceStarted >= workSliceMs
+      ) {
+        yield
+        if (this.documents !== snapshot || !canCommit()) return null
+        sliceStarted = performance.now()
+      }
     }
     const pathsChanged =
       !sameWorkspace ||

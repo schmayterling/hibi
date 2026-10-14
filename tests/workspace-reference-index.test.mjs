@@ -227,6 +227,80 @@ test('cooperative metadata work yields between batches and publishes whole snaps
   )
 })
 
+test('cooperative metadata yields after a slow page and publishes the completed snapshot', async (t) => {
+  let clock = 0
+  let parsed = 0
+  const yielded = []
+  t.mock.method(performance, 'now', () => clock)
+  const index = new WorkspaceReferenceIndex(
+    (source) => {
+      parsed++
+      clock += 5
+      return noteReferences(source)
+    },
+    async () => {
+      yielded.push(parsed)
+    },
+  )
+  index.apply(workspace, [page('old.md', '[[target]]'), page('target.md')])
+  parsed = 0
+  const applying = index.applyCooperatively(workspace, [
+    page('first.md', '[[second]]'),
+    page('second.md'),
+  ])
+  assert.equal(parsed, 1)
+  assert.deepEqual(yielded, [1])
+  assert.deepEqual(index.backlinks('target.md', 0, 10).items, ['old.md'])
+  assert.deepEqual(await applying, { parsed: 2, resolved: 2 })
+  assert.deepEqual(yielded, [1, 2])
+  assert.deepEqual(index.backlinks('second.md', 0, 10).items, ['first.md'])
+  assert.equal(index.has('old.md'), false)
+})
+
+for (const replacing of [false, true]) {
+  test(`slow-page work stops before another parse after ${replacing ? 'snapshot replacement' : 'cancellation'}`, async (t) => {
+    let clock = 0
+    let parsed = 0
+    let current = true
+    let release
+    t.mock.method(performance, 'now', () => clock)
+    const index = new WorkspaceReferenceIndex(
+      (source) => {
+        parsed++
+        clock += 5
+        return noteReferences(source)
+      },
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    index.apply(workspace, [page('old.md', '[[target]]'), page('target.md')])
+    parsed = 0
+    const applying = index.applyCooperatively(
+      workspace,
+      [page('first.md', '[[second]]'), page('second.md')],
+      undefined,
+      () => current,
+    )
+    assert.equal(parsed, 1)
+    assert.deepEqual(index.backlinks('target.md', 0, 10).items, ['old.md'])
+    if (replacing)
+      index.apply(workspace, [
+        page('replacement.md', '[[target]]'),
+        page('target.md'),
+      ])
+    else current = false
+    const beforeResume = parsed
+    release()
+    assert.equal(await applying, null)
+    assert.equal(parsed, beforeResume)
+    assert.deepEqual(index.backlinks('target.md', 0, 10).items, [
+      replacing ? 'replacement.md' : 'old.md',
+    ])
+  })
+}
+
 test('cooperative metadata cancels stale caches and cannot overwrite an overlapping apply', async () => {
   const pages = Array.from({ length: 128 }, (_, number) =>
     page(`notes/${number}.md`, `---\nbucket: 1\n---\n#new [[target]]`),

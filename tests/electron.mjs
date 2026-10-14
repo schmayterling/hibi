@@ -57,8 +57,8 @@ export function waitForElectronShutdown(
 }
 
 export function stopElectronTree(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return
   if (process.platform === 'win32') {
+    if (child.exitCode !== null || child.signalCode !== null) return
     const result = spawnSync(
       'taskkill',
       ['/PID', String(child.pid), '/T', '/F'],
@@ -69,7 +69,7 @@ export function stopElectronTree(child) {
     )
     if (result.status === 0) return
   } else {
-    // Playwright launches Electron as its own process group on Unix.
+    // Playwright's Unix process group can outlive its Electron leader.
     try {
       process.kill(-child.pid, 'SIGKILL')
       return
@@ -77,7 +77,8 @@ export function stopElectronTree(child) {
       // Fall back to the main process if the group has already exited.
     }
   }
-  child.kill('SIGKILL')
+  if (child.exitCode === null && child.signalCode === null)
+    child.kill('SIGKILL')
 }
 
 // Local tests never take desktop focus. Hosted runners use their isolated desktop

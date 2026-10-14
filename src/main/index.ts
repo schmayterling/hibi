@@ -2155,8 +2155,9 @@ if (!app.requestSingleInstanceLock()) {
             let document = null
             const errors: string[] = []
             try {
+              const hadWorkspace = Boolean(getWorkspace())
               await openStartupWorkspace(window, externalFiles.length > 0)
-              if (getWorkspace()) document = getDocument()
+              if (!hadWorkspace && getWorkspace()) document = getDocument()
             } catch (error) {
               errors.push(
                 error instanceof Error

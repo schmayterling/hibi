@@ -28,6 +28,8 @@ With a tab focused, arrow keys and Home/End move between tabs. Use `Alt+Shift+Le
 
 Addons can also open their own tabs. Select an addon tab to show its view, or close it with its close button or `Cmd/Ctrl+W`. Returning to a document tab keeps the addon tab available until you close it or turn off the addon.
 
+Opening or creating a document while an addon tab is selected shows the document and keeps the addon tab's session available. Cancelling an open, an unsuccessful open, or closing or reordering a document tab in the background keeps the addon tab selected.
+
 To keep one file open at a time, turn off **Settings → Editor → Documents → Use tabs**. Hibi keeps the active note and asks what to do with other unsaved tabs. Turning tabs back on does not reopen closed notes. Open tabs are not restored after quitting Hibi.
 
 ## Format text

@@ -424,6 +424,11 @@ function App() {
       throw error
     }
   }
+
+  function showDocument() {
+    addonViews.selectDocument()
+    setSettingsOpen(false)
+  }
   const availableFlavors = useSyncExternalStore(
     flavors.subscribe,
     flavors.snapshot,
@@ -1287,7 +1292,7 @@ function App() {
         const result = await window.hibi.openExternalDocuments()
         if (result.document) {
           await acceptOperationDocument(result.document, true)
-          setSettingsOpen(false)
+          showDocument()
           setWorkspace(await window.hibi.getWorkspace())
         }
         if (result.errors.length) setError(result.errors.join('\n'))
@@ -1344,7 +1349,7 @@ function App() {
               next,
               command === 'new' || command === 'open',
             )
-          if (command === 'new' || command === 'open') setSettingsOpen(false)
+          if (command === 'new' || command === 'open') showDocument()
           setWorkspace(await window.hibi.getWorkspace())
         }
         return Boolean(next)
@@ -1414,7 +1419,7 @@ function App() {
       const next = await window.hibi.openWorkspaceFile(path)
       if (next) {
         await acceptOperationDocument(next)
-        setSettingsOpen(false)
+        showDocument()
         setWorkspace(await window.hibi.getWorkspace())
         if (sidebarResize.overlay) setSidebarOpen(false)
       }
@@ -1508,7 +1513,7 @@ function App() {
           action.action === 'new-file',
         )
         setWorkspace(result.workspace)
-        if (action.action === 'new-file') setSettingsOpen(false)
+        if (action.action === 'new-file') showDocument()
         if (action.action === 'new-file' || action.action === 'new-folder') {
           selectSidebarView('workspace')
           setSettingsOpen(false)
@@ -1564,9 +1569,9 @@ function App() {
       const result = await window.hibi.openDroppedFile(file)
       if (result?.document) {
         await acceptOperationDocument(result.document, true)
+        showDocument()
         setWorkspace(await window.hibi.getWorkspace())
         if ('workspace' in result) selectSidebarView('workspace')
-        setSettingsOpen(false)
       }
     } catch (error) {
       setError(
@@ -1594,7 +1599,7 @@ function App() {
       await acceptOperationDocument(next, replaceLocal)
       setWorkspace(await window.hibi.getWorkspace())
       if (revealDocument) {
-        setSettingsOpen(false)
+        showDocument()
         settingsNavigation.current.forward = []
       }
       if (next.tabs.length === 0)
@@ -1998,7 +2003,7 @@ function App() {
               const next = await window.hibi.restoreVersion(id)
               if (!next) return
               await acceptOperationDocument(next, true)
-              setSettingsOpen(false)
+              showDocument()
             } catch (error) {
               setError(String(error))
             } finally {
@@ -2851,11 +2856,15 @@ function App() {
         }
         onSelectTab={selectTab}
         onCloseTab={(id) =>
-          void applyDocumentOperation(() => window.hibi.closeDocumentTab(id))
+          void applyDocumentOperation(
+            () => window.hibi.closeDocumentTab(id),
+            false,
+          )
         }
         onMoveTab={(id, beforeId) =>
-          void applyDocumentOperation(() =>
-            window.hibi.moveDocumentTab(id, beforeId),
+          void applyDocumentOperation(
+            () => window.hibi.moveDocumentTab(id, beforeId),
+            false,
           )
         }
         addonTabs={addonTabs}

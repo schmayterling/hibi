@@ -12,6 +12,335 @@ import {
 } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
+test('accepted document navigation reveals documents and retains addon tab sessions', {
+  timeout: 60000,
+}, async (t) => {
+  const temp = await mkdtemp(join(tmpdir(), 'hibi-view-navigation-'))
+  const profile = join(temp, 'profile')
+  const directory = join(profile, 'installed-addons', 'navigation-fixture')
+  const workspace = join(temp, 'notes')
+  await mkdir(directory, { recursive: true })
+  await mkdir(workspace)
+  await writeFile(join(workspace, 'sample.md'), '# Markdown navigation')
+  await writeFile(join(workspace, 'sample.mdx'), '# MDX navigation')
+  await writeFile(join(workspace, 'sample.txt'), 'Plain text navigation')
+  await writeFile(join(workspace, 'unsupported.bin'), 'Unsupported document')
+  await writeFile(
+    join(directory, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'navigation-fixture',
+      name: 'Navigation fixture',
+      description: 'Document navigation fixture',
+      kind: 'extension',
+      authors: [{ displayName: 'Test' }],
+      apiVersion: 2,
+      version: '1.0.0',
+      capabilities: ['ui'],
+      entry: 'index.js',
+    }),
+  )
+  await writeFile(
+    join(directory, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['index.js', 'hibi-addon.json'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'navigation-fixture': true, mdx: true }),
+  )
+  await writeFile(
+    join(directory, 'index.js'),
+    `export default ({ React }) => ({ start(context) {
+      function Content() {
+        const [count, setCount] = React.useState(0);
+        return React.createElement('button', {onClick: () => setCount(count + 1)}, 'Count ' + count);
+      }
+      window.navigationView = context.views.register({
+        id: 'tab', label: 'Navigation fixture', location: 'tab', lifetime: 'session', Content
+      });
+    }});`,
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(temp, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  await page.waitForFunction(() => window.navigationView)
+  await page.evaluate(() => {
+    window.navigationView.open({ id: 'session' })
+  })
+  const addonTab = page.getByRole('tab', { name: 'Navigation fixture' })
+  const addonPanel = page.getByRole('tabpanel', { name: 'Navigation fixture' })
+  const documentPanel = page.locator('#document-editor-panel')
+  await addonPanel.getByRole('button', { name: 'Count 0' }).click()
+
+  async function idle() {
+    await page.locator('.app[aria-busy="false"]').waitFor()
+  }
+  async function retained() {
+    await idle()
+    assert.equal(await addonTab.getAttribute('aria-selected'), 'true')
+    await addonPanel.getByRole('button', { name: 'Count 1' }).waitFor()
+    assert.equal(await documentPanel.isVisible(), false)
+  }
+  async function revealed(name, editorName, content, capture) {
+    await page.getByRole('tab', { name, exact: true, selected: true }).waitFor()
+    const editor = documentPanel.getByRole('textbox', {
+      name: editorName,
+      exact: true,
+    })
+    await editor.waitFor()
+    await idle()
+    assert.equal(await editor.textContent(), content)
+    assert.equal(await addonPanel.isVisible(), false)
+    if (capture)
+      await page.screenshot({
+        path: `test-results/addon-navigation-${capture}.png`,
+      })
+    await addonTab.click()
+    await retained()
+  }
+  async function nativeOpen(file) {
+    await app.evaluate(({ dialog }) => {
+      dialog.showOpenDialog = () =>
+        new Promise((resolve) => {
+          globalThis.finishNavigationOpen = resolve
+        })
+    })
+    await clickMenu(app, 'Open')
+    await page.locator('.app[aria-busy="true"]').waitFor()
+    await app.evaluate((_electron, file) => {
+      globalThis.finishNavigationOpen({
+        canceled: file === null,
+        filePaths: file ? [file] : [],
+      })
+    }, file)
+    await idle()
+  }
+
+  await t.test(
+    'native New and Open reveal documents; cancelled and failed opens retain the addon',
+    async () => {
+      await clickMenu(app, 'New')
+      await revealed('untitled.md', 'Document editor', '')
+      const before = await page.evaluate(() => window.hibi.getDocument())
+      await nativeOpen(null)
+      await retained()
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).tabId,
+        before.tabId,
+      )
+      await nativeOpen(join(workspace, 'missing.md'))
+      await retained()
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).tabId,
+        before.tabId,
+      )
+      await nativeOpen(join(workspace, 'sample.md'))
+      await revealed(
+        'sample.md',
+        'Document editor',
+        'Markdown navigation',
+        'markdown',
+      )
+    },
+  )
+
+  await t.test(
+    'Explorer reveals MDX, including reopening the current document',
+    async () => {
+      await app.evaluate(({ dialog }, folder) => {
+        dialog.showOpenDialog = async () => ({
+          canceled: false,
+          filePaths: [folder],
+        })
+      }, workspace)
+      await page
+        .getByRole('button', { name: /toggle workspace sidebar/i })
+        .click()
+      await page.getByRole('button', { name: /^open workspace$/i }).click()
+      const file = page.getByRole('treeitem', {
+        name: 'sample.mdx',
+        exact: true,
+      })
+      await file.waitFor()
+      await retained()
+      await file.click()
+      await revealed('sample.mdx', 'MDX editor', '# MDX navigation', 'mdx')
+      await file.click()
+      await revealed('sample.mdx', 'MDX editor', '# MDX navigation')
+    },
+  )
+
+  await t.test(
+    'external and dropped files reveal documents without recreating the addon',
+    async () => {
+      await app.evaluate(
+        ({ app }, file) => {
+          app.emit('open-file', { preventDefault() {} }, file)
+        },
+        join(workspace, 'sample.txt'),
+      )
+      await revealed(
+        'sample.txt',
+        'Plain text editor',
+        'Plain text navigation',
+        'text',
+      )
+      await app.evaluate(
+        ({ app }, file) => app.emit('open-file', { preventDefault() {} }, file),
+        join(workspace, 'missing-external.md'),
+      )
+      await page.getByText(/missing-external\.md:/).waitFor()
+      await retained()
+      const cdp = await page.context().newCDPSession(page)
+      async function drop(file) {
+        for (const type of ['dragEnter', 'dragOver', 'drop'])
+          await cdp.send('Input.dispatchDragEvent', {
+            type,
+            x: 600,
+            y: 300,
+            data: { items: [], files: [file], dragOperationsMask: 1 },
+          })
+      }
+      try {
+        await drop(join(workspace, 'sample.md'))
+        await revealed('sample.md', 'Document editor', 'Markdown navigation')
+        await drop(join(workspace, 'unsupported.bin'))
+        await page
+          .getByText(
+            'Drop a supported document or folder to open it. Drop an image or video onto the editor to attach it.',
+            { exact: true },
+          )
+          .waitFor()
+        await retained()
+      } finally {
+        await cdp.detach()
+      }
+    },
+  )
+
+  await t.test(
+    'background reorder and close keep the addon selected',
+    async () => {
+      const state = await page.evaluate(() => window.hibi.getDocument())
+      const first = state.tabs[0].id
+      await page.locator(`#document-tab-${first}`).focus()
+      await page.keyboard.press('Alt+Shift+ArrowRight')
+      await waitForAsync(
+        page,
+        async (id) => (await window.hibi.getDocument()).tabs[1].id === id,
+        first,
+      )
+      await retained()
+      await page
+        .locator(`#document-tab-${first}`)
+        .locator('..')
+        .getByRole('button', { name: /close/i })
+        .click()
+      await page
+        .locator(`#document-tab-${first}`)
+        .waitFor({ state: 'detached' })
+      await retained()
+      const active = state.tabId
+      await page
+        .locator(`#document-tab-${active}`)
+        .locator('..')
+        .getByRole('button', { name: /close/i })
+        .click()
+      await page
+        .locator(`#document-tab-${active}`)
+        .waitFor({ state: 'detached' })
+      await retained()
+    },
+  )
+
+  await t.test(
+    'cancelled replacement New, Open, external and drop preserve the draft and addon',
+    async () => {
+      await nativeOpen(join(workspace, 'sample.md'))
+      await documentPanel
+        .getByRole('textbox', { name: 'Document editor', exact: true })
+        .waitFor()
+      await replaceRichText(
+        page,
+        documentPanel.locator('.tiptap'),
+        'Unsaved navigation draft',
+      )
+      await clickMenu(app, 'Settings')
+      await page.getByRole('tab', { name: 'Editor', exact: true }).click()
+      await page
+        .getByRole('checkbox', { name: 'Use tabs', exact: true })
+        .uncheck()
+      await page
+        .getByRole('button', { name: 'Back to app', exact: true })
+        .click()
+      await addonTab.click()
+      await app.evaluate(({ dialog }) => {
+        dialog.showMessageBox = () =>
+          new Promise((resolve) => {
+            globalThis.cancelNavigationReplacement = () =>
+              resolve({ response: 2 })
+          })
+      })
+      const before = await page.evaluate(() => window.hibi.getDocument())
+      for (const action of ['New', 'Open', 'external', 'drop']) {
+        await app.evaluate(
+          ({ dialog }, file) => {
+            globalThis.cancelNavigationReplacement = null
+            dialog.showOpenDialog = async () => ({
+              canceled: false,
+              filePaths: [file],
+            })
+          },
+          join(workspace, 'sample.txt'),
+        )
+        if (action === 'external') {
+          await app.evaluate(
+            ({ app }, file) =>
+              app.emit('open-file', { preventDefault() {} }, file),
+            join(workspace, 'sample.txt'),
+          )
+        } else if (action === 'drop') {
+          const cdp = await page.context().newCDPSession(page)
+          for (const type of ['dragEnter', 'dragOver', 'drop'])
+            await cdp.send('Input.dispatchDragEvent', {
+              type,
+              x: 600,
+              y: 300,
+              data: {
+                items: [],
+                files: [join(workspace, 'sample.txt')],
+                dragOperationsMask: 1,
+              },
+            })
+          await cdp.detach()
+        } else await clickMenu(app, action)
+        await page.locator('.app[aria-busy="true"]').waitFor()
+        await app.evaluate(async () => {
+          while (!globalThis.cancelNavigationReplacement)
+            await new Promise((resolve) => setTimeout(resolve, 10))
+          globalThis.cancelNavigationReplacement()
+        })
+        await retained()
+        const after = await page.evaluate(() => window.hibi.getDocument())
+        assert.equal(after.tabId, before.tabId, action)
+        assert.equal(after.markdown, 'Unsaved navigation draft', action)
+      }
+    },
+  )
+})
+
 test('scoped views preserve sessions, pin documents, contain lazy failures, and revoke handles', {
   timeout: 40000,
 }, async (t) => {

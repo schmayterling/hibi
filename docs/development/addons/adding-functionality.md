@@ -210,4 +210,6 @@ A failed cleanup does not prevent Hibi from attempting the remaining host cleanu
 
 Bundled addons can include a `native.ts` entry implementing [NativeAddon](../addon-api-reference/NativeAddon.md). Call its methods through `context.native.invoke()`. Read-only handlers belong in `queries` and use `context.native.query()`.
 
+Native methods called from the main window wait for an existing file operation before running. Hibi checks the window and addon activation again when they run. If the addon is restarted or disabled, or the active document or workspace changes while waiting, the action is rejected so it cannot run in a different context. Run the action again for the current document or workspace.
+
 Validate each handler's input before using it. Prefer the document, workspace, and export operations on [NativeAddonContext](../addon-api-reference/NativeAddonContext.md) over accepting arbitrary paths. Sideloaded packages cannot add native handlers.

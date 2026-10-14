@@ -5396,6 +5396,9 @@
   "b88bd0babc22": [
     "src/addons/mcp-server/index.ts"
   ],
+  "b971fca74b19": [
+    "src/main/index.ts"
+  ],
   "8ea97b4e248c": [
     "src/shared/document-checkpoint.ts"
   ],
@@ -5783,7 +5786,8 @@
     "src/shared/addon-manifest.ts"
   ],
   "2d715c5a75aa": [
-    "src/main/addons.ts"
+    "src/main/addons.ts",
+    "src/main/index.ts"
   ],
   "b442d72f5b4f": [
     "src/main/addons.ts"

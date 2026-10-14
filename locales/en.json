@@ -1726,6 +1726,7 @@
   "a5aedb8a518f": "The document is busy. Try again in a moment.",
   "cb65399b7ce1": "The document is busy. Try again.",
   "b88bd0babc22": "The document is no longer open.",
+  "b971fca74b19": "The document or workspace changed. Try the action again.",
   "8ea97b4e248c": "The document recovery checkpoint does not match.",
   "ee76fd92b752": "The document recovery checkpoint is stale.",
   "53a9d03e9663": "The documentation changed. Open it again.",

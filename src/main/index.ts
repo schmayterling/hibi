@@ -122,6 +122,7 @@ import {
   getDocument,
   getDocumentPath,
   getDocumentPathForTab,
+  getDocumentSource,
   getDocumentSourceFor,
   getOpenDocumentVersions,
   hasOpenDocumentPath,
@@ -197,6 +198,7 @@ import {
   startUpdateChecks,
 } from './updates'
 import {
+  currentWorkspaceTarget,
   deleteKnownWorkspace,
   documentFileChanged,
   getWorkspace,
@@ -1581,10 +1583,44 @@ if (!app.requestSingleInstanceLock()) {
       )
       handle(
         ADDON_CHANNELS.invoke,
-        (event, id: unknown, method: unknown, input: unknown) =>
-          runFileOperation(event, (window) =>
-            invokeAddon(window, id, method, input),
-          ),
+        (event, id: unknown, method: unknown, input: unknown) => {
+          const window = trustedWindow(event)
+          const owner =
+            typeof id === 'string' && typeof method === 'string'
+              ? currentAddonOwner(id)
+              : null
+          if (!owner)
+            throw new Error('Enable this addon in Settings → Addons first.')
+          const { tabId, revision } = getDocumentSource().snapshot().document
+          const workspace = currentWorkspaceTarget()
+          return readAfterFileOperation(
+            event,
+            // Recheck the sender and target after waiting before taking action.
+            () =>
+              runFileOperation(event, async (window) => {
+                const current = getDocumentSource().snapshot().document
+                if (
+                  current.tabId !== tabId ||
+                  current.revision !== revision ||
+                  currentWorkspaceTarget() !== workspace
+                )
+                  throw new Error(
+                    'The document or workspace changed. Try the action again.',
+                  )
+                if (
+                  !isAddonActivationCurrent(
+                    owner.addonId,
+                    owner.activationGeneration,
+                  )
+                )
+                  throw new Error(
+                    'This addon was disabled. Enable it in Settings → Addons to continue.',
+                  )
+                return invokeAddon(window, id, method, input)
+              }),
+            window,
+          )
+        },
       )
       handle(
         ADDON_CHANNELS.query,

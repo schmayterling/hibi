@@ -827,6 +827,60 @@ test('disabling quick note waits for a capture save in flight', {
   )
 })
 
+test('choosing a quick note workspace waits for a capture save in flight', {
+  timeout: 45000,
+}, async (t) => {
+  const h = await harness(t)
+  const { app, page } = await h.launch()
+  const destination = join(h.root, 'chosen')
+  await mkdir(destination)
+  await app.evaluate(({ ipcMain }) => {
+    const invoke = ipcMain._invokeHandlers.get('addons:invoke')
+    ipcMain.removeHandler('addons:invoke')
+    ipcMain.handle('addons:invoke', (...args) => {
+      if (args[1] === 'quick-note' && args[2] === 'chooseWorkspace')
+        globalThis.quickNoteChoiceRequested = true
+      return invoke(...args)
+    })
+  })
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [path],
+    })
+  }, destination)
+  const capture = await openCapture(app, page)
+  await writeNote(capture, 'alpha')
+  await pause(app, 'quick-note-save')
+  await app.evaluate(() => {
+    const held = globalThis.hibiTestPauses['quick-note-save']
+    Object.defineProperty(globalThis.hibiTestPauses, 'quick-note-save', {
+      configurable: true,
+      get() {
+        globalThis.quickNoteSaveHeld = true
+        return held
+      },
+    })
+  })
+  await capture.keyboard.press('ControlOrMeta+Enter')
+  await until(() => app.evaluate(() => globalThis.quickNoteSaveHeld))
+  const choosing = page
+    .evaluate(() => window.hibi.invokeAddon('quick-note', 'chooseWorkspace'))
+    .then(
+      (result) => ({ result }),
+      (error) => ({ error }),
+    )
+  await until(() => app.evaluate(() => globalThis.quickNoteChoiceRequested))
+  await resume(app, 'quick-note-save')
+  const { result, error } = await choosing
+  assert.ifError(error)
+  assert.equal(result.path, await realpath(destination))
+  assert.equal(
+    await readFile(join(h.workspace, 'Quick note.md'), 'utf8'),
+    'alpha',
+  )
+})
+
 test('the unsaved note survives a crash', {
   timeout: 60000,
 }, async (t) => {

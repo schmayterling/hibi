@@ -54,6 +54,8 @@ export default defineConfig({
   preload: {
     plugins: [sandboxPreloads()],
     build: {
+      // Keep the last preload available to renderers reloading during a rebuild.
+      emptyOutDir: process.env.NODE_ENV_ELECTRON_VITE !== 'development',
       externalizeDeps: false,
       rollupOptions: { output: { format: 'cjs', entryFileNames: 'index.cjs' } },
     },

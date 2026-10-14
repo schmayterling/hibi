@@ -96,10 +96,14 @@ test('development watches main, renderer, preload, addons, and documentation gen
   const holdMainBuild = join(root, 'hold-main-build')
   const mainBuildPaused = join(root, 'main-build-paused')
   const releaseMainBuild = join(root, 'release-main-build')
+  const holdPreloadBuild = join(root, 'hold-preload-build')
+  const preloadBuildPaused = join(root, 'preload-build-paused')
+  const releasePreloadBuild = join(root, 'release-preload-build')
   const configPath = join(root, 'electron.vite.config.ts')
-  const config = (await readFile(configPath, 'utf8')).replace(
-    'analysisBundles(),',
-    `analysisBundles(),
+  const config = (await readFile(configPath, 'utf8'))
+    .replace(
+      'analysisBundles(),',
+      `analysisBundles(),
       {
         name: 'hold-main-rebuild',
         async writeBundle() {
@@ -112,8 +116,31 @@ test('development watches main, renderer, preload, addons, and documentation gen
           }
         },
       },`,
-  )
+    )
+    .replace(
+      'plugins: [sandboxPreloads()],',
+      `plugins: [
+      sandboxPreloads(),
+      (() => {
+        let builds = 0
+        return {
+          name: 'hold-preload-rebuild',
+          async generateBundle() {
+            const fs = await import('node:fs/promises')
+            try { await fs.access(${JSON.stringify(holdPreloadBuild)}) } catch { return }
+            if (++builds !== 2) return
+            await fs.writeFile(${JSON.stringify(preloadBuildPaused)}, '')
+            while (true) {
+              try { await fs.access(${JSON.stringify(releasePreloadBuild)}); return } catch {}
+              await new Promise((done) => setTimeout(done, 50))
+            }
+          },
+        }
+      })(),
+    ],`,
+    )
   assert.ok(config.includes("name: 'hold-main-rebuild'"))
+  assert.ok(config.includes("name: 'hold-preload-rebuild'"))
   await writeFile(
     configPath,
     config.replace(
@@ -267,14 +294,14 @@ dialog.showMessageBox = (...args) => {
         .trim() === 'updated',
   )
   mark('renderer stylesheet updated')
-  let viteReady = false
+  let viteConnections = 0
   const viteEvents = []
   const onViteSocket = (socket) => {
     if (!socket.url().includes('?token=')) return
     viteEvents.push(`created ${socket.url().split('?')[0]}`)
     socket.on('framereceived', ({ payload }) => {
       if (String(payload).includes('"type":"connected"')) {
-        viteReady = true
+        viteConnections++
         viteEvents.push('connected')
       }
     })
@@ -298,18 +325,70 @@ dialog.showMessageBox = (...args) => {
   mark('addon runtime updated and draft retained')
   // The addon change reloads the page; a preload rebuild must reach its new Vite socket.
   await until(
-    () => viteReady,
+    () => viteConnections > 0,
     'vite websocket reconnects after addon reload',
   ).catch((error) => {
     t.diagnostic(`vite websocket events: ${viteEvents.join(', ') || 'none'}`)
     throw error
   })
-  page.off('websocket', onViteSocket)
   const preload = join(root, 'src/preload/index.ts')
-  await writeFile(
-    preload,
-    `${await readFile(preload, 'utf8')}\ncontextBridge.exposeInMainWorld('devWatchProbe', 'updated')\n`,
-  )
+  const preloadSource = await readFile(preload, 'utf8')
+  const preloadUrl = page.url()
+  const previousConnections = viteConnections
+  let heldNavigation
+  let releaseNavigation
+  const navigationGate = new Promise((resolve) => {
+    releaseNavigation = resolve
+  })
+  const holdFirstReload = async (route) => {
+    if (route.request().isNavigationRequest() && !heldNavigation) {
+      heldNavigation = route
+      await navigationGate
+    }
+    await route.continue()
+  }
+  await page.route(preloadUrl, holdFirstReload)
+  await writeFile(holdPreloadBuild, '')
+  try {
+    await writeFile(
+      preload,
+      `${preloadSource}\ncontextBridge.exposeInMainWorld('devWatchProbe', 'previous')\n`,
+    )
+    await until(() => !!heldNavigation, 'first preload reload starts')
+    await writeFile(
+      preload,
+      `${preloadSource}\ncontextBridge.exposeInMainWorld('devWatchProbe', 'updated')\n`,
+    )
+    await until(async () => {
+      try {
+        await access(preloadBuildPaused)
+        return true
+      } catch {
+        return false
+      }
+    }, 'second preload build reaches output generation')
+    // Navigate while the next build has prepared its output but cannot write it.
+    const loaded = page.waitForEvent('domcontentloaded')
+    releaseNavigation()
+    await loaded
+    assert.deepEqual(
+      await page.evaluate(() => ({
+        bridge: typeof window.hibi,
+        probe: window.devWatchProbe,
+      })),
+      { bridge: 'object', probe: 'previous' },
+      'reloading during a preload rebuild keeps the previous bridge',
+    )
+    await until(
+      () => viteConnections > previousConnections,
+      'vite websocket reconnects before the second preload build finishes',
+    )
+  } finally {
+    releaseNavigation()
+    await writeFile(releasePreloadBuild, '')
+    await page.unroute(preloadUrl, holdFirstReload)
+    page.off('websocket', onViteSocket)
+  }
   await page
     .waitForFunction(() => window.devWatchProbe === 'updated')
     .catch((error) => {

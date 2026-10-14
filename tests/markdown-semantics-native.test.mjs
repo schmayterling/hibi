@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
+import { markdownSourceParser } from '../src/shared/markdown-source-references.ts'
 import {
   electron,
   stopElectronTree,
@@ -79,9 +80,8 @@ const cases = [
     unavailable: true,
   },
   {
-    name: 'long heading split',
+    name: 'long physical heading',
     source: `# ${'a'.repeat(4094)}[other]: /fake\n\n[other]`,
-    unavailable: true,
   },
   {
     name: 'task list',
@@ -200,6 +200,7 @@ export async function run(cases) {
           json:same(actual,expected),text:actualText===expectedText,
           headings:same(headings,expectedHeadings),stats:same(totals,countText(expectedText)),
           crSeam:actualParts.slice(0,-1).some(part=>part.text.endsWith('\\r')),
+          ...(fixture.name==='long physical heading'?{regions:rows}:{}),
           ...(same(actual,expected)?{}:{actual,expected}),
         })
       }
@@ -301,6 +302,45 @@ test('paginated worker semantics match native schema text, headings and counts',
           assert.equal(result.text, true, name)
           assert.equal(result.headings, true, name)
           assert.equal(result.stats, true, name)
+          if (fixture.name === 'long physical heading') {
+            const source = fixture.source,
+              paragraphFrom = source.lastIndexOf('[other]')
+            assert.equal(result.pages, 2, name)
+            assert.deepEqual(
+              result.regions.map(({ from, contentFrom, to, nonSpace }) => [
+                from,
+                contentFrom,
+                to,
+                nonSpace,
+              ]),
+              [
+                [0, 0, paragraphFrom, true],
+                [paragraphFrom, paragraphFrom, source.length, true],
+              ],
+              name,
+            )
+            assert.deepEqual(
+              result.regions.flatMap((row) => row.tokens),
+              [
+                ...markdownSourceParser({
+                  gfm: true,
+                  alerts: true,
+                  textExtras: true,
+                }).lexer(source),
+              ],
+              name,
+            )
+            assert.equal(
+              result.regions[0].tokens[0].text,
+              source.slice(2, source.indexOf('\n')),
+              name,
+            )
+            assert.equal(
+              result.regions[1].tokens[0].tokens[0].type,
+              'text',
+              name,
+            )
+          }
         }
       }
     })

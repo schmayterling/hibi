@@ -4,7 +4,10 @@ import { GFM, parser } from '@lezer/markdown'
 import { Lexer } from 'marked'
 import { MarkdownSemanticCache } from '../src/shared/markdown-semantic-cache.ts'
 import { MarkdownSourceModel } from '../src/shared/markdown-source-model.ts'
-import { MarkdownSourceReferences } from '../src/shared/markdown-source-references.ts'
+import {
+  MarkdownSourceReferences,
+  markdownSourceParser,
+} from '../src/shared/markdown-source-references.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const syntax = { gfm: true, alerts: true, textExtras: true }
@@ -246,18 +249,96 @@ test('oversized values remain readable without retaining or evicting useful entr
   assert.equal(cache.counters().bytes, bytes)
 })
 
-test('synthetically split long headings refuse regional cache reads', (t) => {
-  const f = fixture(t, `# small\n\n# ${'large '.repeat(2000)}\n`),
+test('long physical headings preserve full-source cache tokens and metadata', (t) => {
+  for (const ending of ['\n', '\r\n']) {
+    const text = `${'large 😀 '.repeat(2000)}**bold** [ref]`,
+      source = ['# small', '', `# ${text}`, '', '[ref]: /target', ''].join(
+        ending,
+      ),
+      full = markdownSourceParser(syntax).lexer(source),
+      f = fixture(t, source),
+      owners = f.settle(),
+      cache = new MarkdownSemanticCache(syntax),
+      rows = headings(owners),
+      heading = rows[1],
+      from = source.indexOf('# large'),
+      to = source.indexOf('[ref]: /target')
+    assert.equal(rows.length, 2)
+    assert.equal(heading.from, from)
+    assert.equal(heading.to, from + 2 + text.length)
+    assert.equal(f.references.semanticsAvailable(), true)
+    assert.equal(f.references.counters().fullParses, 0)
+    const reads = [...owners.records()].flatMap(
+        (row) => f.read(cache, owners, row.owner.slot) ?? [],
+      ),
+      read = reads.find((value) => value.region.owner === heading.owner)
+    assert.deepEqual(
+      reads.flatMap((value) => value.tokens),
+      [...full],
+    )
+    assert.deepEqual(headingText(read), [text])
+    assert.equal(read.nonSpace, true)
+    assert.equal(read.region.from, from)
+    assert.equal(read.region.contentFrom, from)
+    assert.equal(read.region.to, to)
+    assert.equal(read.region.index, heading.index)
+    assert.equal(read.region.endIndex, heading.index)
+    assert.deepEqual(read.region.members, [heading.owner])
+    assert.equal(read.region.first, false)
+    assert.equal(read.region.last, false)
+    assert.equal(
+      f.store.snapshot().sliceRaw(read.region.from, read.region.to),
+      source.slice(from, to),
+    )
+    assert.equal(read.scope.current(), true)
+    assert.deepEqual(read.scope.resolve('ref').value, {
+      ...full.links.ref,
+      title: full.links.ref.title ?? null,
+    })
+    assert.equal(f.references.lookup('ref').href, '/target')
+    const cached = f.read(cache, owners, heading.owner.slot)
+    assert.equal(cached.tokens, read.tokens)
+    assert.deepEqual(cached.region, read.region)
+    assert.equal(cached.scope.current(), true)
+    assert.equal(cache.counters().reads, reads.length)
+    assert.equal(cache.counters().hits, 1)
+    assert.equal(cache.counters().entries, reads.length)
+    assert.ok(cache.counters().bytes > 0)
+    assert.equal(f.store.counters().materializations, 0)
+  }
+})
+
+test('chunk-boundary definitions stay literal in complete heading cache reads', (t) => {
+  const text = `${'a'.repeat(4094)}[other]: /fake`,
+    source = `# ${text}\n\n[other]`,
+    f = fixture(t, source),
     owners = f.settle(),
     cache = new MarkdownSemanticCache(syntax),
-    heading = headings(owners)[1]
-  assert.equal(f.references.semanticsAvailable(), false)
-  assert.throws(
-    () => f.read(cache, owners, heading.owner.slot),
-    /Regional reference provenance is unavailable/,
+    paragraphFrom = source.lastIndexOf('[other]')
+  assert.equal(f.references.semanticsAvailable(), true)
+  assert.equal(f.references.counters().fullParses, 0)
+  assert.equal(f.references.lookup('other'), null)
+  const reads = [...owners.records()].flatMap(
+    (row) => f.read(cache, owners, row.owner.slot) ?? [],
   )
-  assert.equal(cache.counters().entries, 0)
-  assert.equal(cache.counters().bytes, 0)
+  assert.deepEqual(
+    reads.flatMap((value) => value.tokens),
+    [...markdownSourceParser(syntax).lexer(source)],
+  )
+  assert.deepEqual(
+    reads.map(({ region, nonSpace }) => [
+      region.from,
+      region.contentFrom,
+      region.to,
+      nonSpace,
+    ]),
+    [
+      [0, 0, paragraphFrom, true],
+      [paragraphFrom, paragraphFrom, source.length, true],
+    ],
+  )
+  assert.deepEqual(headingText(reads[0]), [text])
+  assert.equal(reads[1].tokens[0].tokens[0].type, 'text')
 })
 
 test('owner arenas and grammar configurations cannot reuse foreign cache entries', (t) => {

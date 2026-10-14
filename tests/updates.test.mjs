@@ -24,6 +24,7 @@ import {
 } from '../src/shared/updates.ts'
 import { electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 const version = '0.1.0-nightly.20260921.gaaaaaaa.15.1'
 const tag = 'nightly-2026-09-21-aaaaaaa-15-1'
@@ -513,20 +514,29 @@ test('update settings expose both channels, persist choice, and fit narrow windo
       /frequency/,
     )
     await frequency.selectOption('12')
-    await page.waitForFunction(
+    await waitForAsync(
+      page,
       async () => (await window.hibi.getUpdateState()).checkFrequency === 12,
+      undefined,
+      { timeout: 30000 },
     )
     await startup.uncheck()
-    await page.waitForFunction(
+    await waitForAsync(
+      page,
       async () => !(await window.hibi.getUpdateState()).checkOnStartup,
+      undefined,
+      { timeout: 30000 },
     )
     await page.waitForFunction(
       () => !document.querySelector('#update-startup-check').checked,
     )
     assert.equal(await startup.isChecked(), false)
     await picker.selectOption('nightly')
-    await page.waitForFunction(
+    await waitForAsync(
+      page,
       async () => (await window.hibi.getUpdateState()).channel === 'nightly',
+      undefined,
+      { timeout: 30000 },
     )
     assert.equal(
       await page

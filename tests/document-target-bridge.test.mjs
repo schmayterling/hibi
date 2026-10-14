@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
 import { clickMenu, splitTab } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('installed addon edits inactive documents and guards deferred legacy commands', {
   timeout: 60000,
@@ -155,8 +156,11 @@ test('installed addon edits inactive documents and guards deferred legacy comman
     '# two',
   )
   await page.getByRole('tab', { name: 'first.md' }).click()
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async () => (await window.hibi.getDocument()).markdown === '# ONE',
+    undefined,
+    { timeout: 30000 },
   )
   await page.waitForFunction(
     () => document.querySelector('.tiptap')?.isContentEditable,
@@ -214,9 +218,12 @@ test('installed addon edits inactive documents and guards deferred legacy comman
   await page.evaluate(() => window.targetProbe.release())
   await page.waitForFunction(() => window.targetProbe.result !== null)
   assert.equal(await page.evaluate(() => window.targetProbe.result), 'applied')
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async () =>
       (await window.hibi.getDocument()).markdown === '# two\nfrom command',
+    undefined,
+    { timeout: 30000 },
   )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
@@ -224,16 +231,22 @@ test('installed addon edits inactive documents and guards deferred legacy comman
   )
 
   await page.evaluate(() => window.targetProbe.sync())
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async () =>
       (await window.hibi.getDocument()).markdown ===
       '# two\nfrom command\nfrom sync command',
+    undefined,
+    { timeout: 30000 },
   )
   await page.evaluate(() => window.targetProbe.background())
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async () =>
       (await window.hibi.getDocument()).markdown ===
       '# two\nfrom command\nfrom sync command\nfrom background',
+    undefined,
+    { timeout: 30000 },
   )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
@@ -281,12 +294,15 @@ test('installed addon edits inactive documents and guards deferred legacy comman
   )
 
   await leftRich.click()
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async () =>
       document
         .querySelector('.editor-page[data-side="left"]')
         ?.getAttribute('data-active') === 'true' &&
       (await window.hibi.getDocument()).name === 'first.md',
+    undefined,
+    { timeout: 30000 },
   )
   await page.getByRole('button', { name: 'side-by-side', exact: true }).click()
   await page.waitForFunction(

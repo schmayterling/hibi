@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 import { uiName } from './ui.mjs'
 
 test('command palette, full-height settings, and local geist fonts', {
@@ -373,7 +374,10 @@ test('recent workspace submenu filters, returns, and opens a workspace', {
   await search.fill('second-workspace')
   await search.press('Enter')
   await palette.waitFor({ state: 'hidden' })
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async () => (await window.hibi.getWorkspace())?.name === 'second-workspace',
+    undefined,
+    { timeout: 30000 },
   )
 })

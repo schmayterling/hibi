@@ -10,6 +10,7 @@ import {
   replaceRichText,
   splitTab,
 } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('scoped views preserve sessions, pin documents, contain lazy failures, and revoke handles', {
   timeout: 40000,
@@ -217,7 +218,8 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   await splitTab(app, page, second)
   const leftEditor = page.locator('.editor-page[data-side="left"] .tiptap')
   const leftNode = await leftEditor.elementHandle()
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async (id) => (await window.hibi.getDocument()).tabId === id,
     second,
   )
@@ -227,7 +229,8 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
     ),
     true,
   )
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async (id) =>
       (await window.hibi.getDocument()).tabId === id &&
       document

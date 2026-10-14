@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('workspace creation keeps typing in rename and accepts names on click away', {
   timeout: 60000,
@@ -43,11 +44,12 @@ test('workspace creation keeps typing in rename and accepts names on click away'
   const tree = page.getByRole('tree', { name: /workspace files/i })
   await page.locator('.app[aria-busy="false"]').waitFor()
   await tree.getByRole('treeitem', { name: 'existing.md', exact: true }).click()
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async () =>
       (await window.hibi.getWorkspace())?.activePath === 'existing.md',
     null,
-    { polling: 100 },
+    { timeout: 8000, polling: 100 },
   )
   await page.locator('.app[aria-busy="false"]').waitFor()
   const rename = page.getByRole('textbox', { name: 'Rename item', exact: true })

@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
 import { electron } from './electron.mjs'
 import { clickMenu, pressPastCompletionDelay } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 const packagePath = resolve('examples/foundation-proof-addon')
 const shortcut = 'CommandOrControl+Alt+Shift+F11'
@@ -562,9 +563,11 @@ test('proof addon installs and composes captured edits, queries, providers, and 
       })
     }, path)
     await clickMenu(app, 'Open…')
-    await page.waitForFunction(
+    await waitForAsync(
+      page,
       async (name) => (await window.hibi.getDocument())?.name === name,
       basename(path),
+      { timeout: 10000 },
     )
   }
 
@@ -622,9 +625,12 @@ test('proof addon installs and composes captured edits, queries, providers, and 
     'b.md',
   )
   await page.getByRole('tab', { name: 'a.md' }).click()
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async () =>
       (await window.hibi.getDocument())?.markdown === '# Alpha\n\n#proof',
+    undefined,
+    { timeout: 10000 },
   )
   await page.getByRole('tab', { name: 'b.md' }).click()
 
@@ -650,20 +656,30 @@ test('proof addon installs and composes captured edits, queries, providers, and 
     )
   }
   await page.keyboard.press('Enter')
-  await page.waitForFunction(async () =>
-    (await window.hibi.getDocument())?.markdown.includes('#proof'),
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument())?.markdown.includes('#proof'),
+    undefined,
+    { timeout: 10000 },
   )
   await rich.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async () => !(await window.hibi.getDocument())?.markdown.includes('#proof'),
+    undefined,
+    { timeout: 10000 },
   )
   await rich.locator('p').last().click()
   await rich.press('End')
   await page.keyboard.type(' @pr')
   await richMenu.getByRole('option', { name: /\[\[proof-note\]\]/ }).waitFor()
   await page.keyboard.press('Enter')
-  await page.waitForFunction(async () =>
-    (await window.hibi.getDocument())?.markdown.includes('[[proof-note]]'),
+  await waitForAsync(
+    page,
+    async () =>
+      (await window.hibi.getDocument())?.markdown.includes('[[proof-note]]'),
+    undefined,
+    { timeout: 10000 },
   )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown.includes(
@@ -672,9 +688,12 @@ test('proof addon installs and composes captured edits, queries, providers, and 
     false,
   )
   await rich.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async () =>
       !(await window.hibi.getDocument())?.markdown.includes('[[proof-note]]'),
+    undefined,
+    { timeout: 10000 },
   )
 
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
@@ -694,8 +713,12 @@ test('proof addon installs and composes captured edits, queries, providers, and 
     })
     .waitFor()
   await pressPastCompletionDelay(page, 'Tab')
-  await page.waitForFunction(async () =>
-    (await window.hibi.getDocument())?.markdown.includes('[[proof-note]]'),
+  await waitForAsync(
+    page,
+    async () =>
+      (await window.hibi.getDocument())?.markdown.includes('[[proof-note]]'),
+    undefined,
+    { timeout: 10000 },
   )
 
   await createChange('change-before-second.md')
@@ -732,12 +755,18 @@ test('proof addon installs and composes captured edits, queries, providers, and 
     .getByRole('menuitem', { name: 'Capitalize proof tag' })
     .waitFor()
   await source.press('Enter')
-  await page.waitForFunction(async () =>
-    (await window.hibi.getDocument())?.markdown.endsWith('#Proof'),
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument())?.markdown.endsWith('#Proof'),
+    undefined,
+    { timeout: 10000 },
   )
   await source.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
-  await page.waitForFunction(async () =>
-    (await window.hibi.getDocument())?.markdown.endsWith('#proof'),
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument())?.markdown.endsWith('#proof'),
+    undefined,
+    { timeout: 10000 },
   )
 
   await app.evaluate(({ dialog }) => {

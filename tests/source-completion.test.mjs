@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
 import { clickMenu, pressPastCompletionDelay } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('source completions stream, accept in one undo step, and retract on provider disposal', {
   timeout: 30000,
@@ -125,7 +126,8 @@ test('source completions stream, accept in one undo step, and retract on provide
     'ab',
   )
   await pressPastCompletionDelay(page, 'Tab')
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async () => (await window.hibi.getDocument()).markdown === 'abeta',
   )
   assert.equal(
@@ -139,7 +141,8 @@ test('source completions stream, accept in one undo step, and retract on provide
     'beta',
   )
   await source.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async () => (await window.hibi.getDocument()).markdown === 'ab',
   )
   await page.waitForFunction(
@@ -387,7 +390,8 @@ test('source completions stream, accept in one undo step, and retract on provide
       hasText: 'beta',
     })
     .click()
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async () => (await window.hibi.getDocument()).markdown === 'abeta',
   )
   const acceptedCount = await page.evaluate(
@@ -457,7 +461,8 @@ test('source completions stream, accept in one undo step, and retract on provide
   await source.press('Escape')
   await slash.waitFor({ state: 'hidden' })
   for (let i = 0; i < 5; i++) await source.press('Backspace')
-  await page.waitForFunction(
+  await waitForAsync(
+    page,
     async () => (await window.hibi.getDocument()).markdown === 'ab',
   )
 

@@ -7,13 +7,19 @@ import { build } from 'esbuild'
 const require = createRequire(import.meta.url)
 const { Schema } = require('@tiptap/pm/model')
 const { EditorState, PluginKey } = require('@tiptap/pm/state')
+const { closeHistory, history, redo, undo } = require('@tiptap/pm/history')
 const { Decoration } = require('@tiptap/pm/view')
 const { Fragment } = require('@tiptap/pm/model')
 const { __insertCells, tableNodes } = require('@tiptap/pm/tables')
 
 globalThis.tableLayoutEcho = new PluginKey('documentSourceEcho')
 const bundle = await build({
-  entryPoints: ['src/renderer/src/table-layout.ts'],
+  stdin: {
+    contents:
+      "export { tableLayout } from './src/renderer/src/table-layout.ts'; export { blockMove } from './src/addons/block-drag/move.ts'",
+    resolveDir: process.cwd(),
+    loader: 'ts',
+  },
   bundle: true,
   platform: 'node',
   format: 'cjs',
@@ -40,7 +46,7 @@ new Function('module', 'exports', 'require', bundle.outputFiles[0].text)(
   module.exports,
   require,
 )
-const { tableLayout } = module.exports
+const { tableLayout, blockMove } = module.exports
 const [plugin] = tableLayout.config.addProseMirrorPlugins.call({
   options: { tabId: 'test' },
 })
@@ -108,6 +114,163 @@ const styles = (state) => {
     return { columns, rows }
   })
 }
+
+test('rich block moves carry only the retained table sizes through undo and redo', () => {
+  const first = table(['same', 'header'], [['1', '2']])
+  const second = table(['same', 'header'], [['3', '4']])
+  let state = create(paragraph('before'), first, second)
+  state = size(state, tables(state)[0], 'column', 0, 160)
+  state = size(state, tables(state)[0], 'row', 1, 70)
+  state = size(state, tables(state)[1], 'column', 1, 240)
+  state = state.reconfigure({ plugins: [plugin, history()] })
+  const check = () => {
+    assert.deepEqual(
+      styles(state),
+      tables(state).map((pos) =>
+        state.doc.nodeAt(pos) === first
+          ? {
+              columns: ['width: 160px', ''],
+              rows: ['', '--table-row-height: 70px'],
+            }
+          : { columns: ['', 'width: 240px'], rows: ['', ''] },
+      ),
+    )
+  }
+  for (const direction of [-1, 1, 1, -1]) {
+    const before = state.doc
+    const pos = tables(state).find((pos) => state.doc.nodeAt(pos) === first)
+    const tr = blockMove({ state, isEditable: true }, pos, direction)
+    assert.ok(tr)
+    state = state.apply(tr)
+    check()
+    assert.ok(
+      undo(state, (tr) => {
+        state = state.apply(tr)
+      }),
+    )
+    assert.ok(state.doc.eq(before))
+    check()
+    assert.ok(
+      redo(state, (tr) => {
+        state = state.apply(tr)
+      }),
+    )
+    check()
+  }
+})
+
+test('table sizes survive a move and separate cell edit through undo and redo', () => {
+  const original = table(['one', 'two'], [['1', '2']])
+  let state = create(original, paragraph('after'))
+  state = size(state, tables(state)[0], 'column', 0, 160)
+  state = size(state, tables(state)[0], 'row', 1, 70)
+  state = state.reconfigure({ plugins: [plugin, history()] })
+  const check = () =>
+    assert.deepEqual(styles(state)[0], {
+      columns: ['width: 160px', ''],
+      rows: ['', '--table-row-height: 70px'],
+    })
+  state = state.apply(
+    blockMove({ state, isEditable: true }, tables(state)[0], 1),
+  )
+  state = state.apply(
+    closeHistory(state.tr).insertText('z', tables(state)[0] + 4),
+  )
+  check()
+  for (const command of [undo, undo, redo, redo]) {
+    assert.ok(
+      command(state, (tr) => {
+        state = state.apply(tr)
+      }),
+    )
+    check()
+  }
+})
+
+test('lost mappings reject ambiguous historical table versions', () => {
+  for (const duplicateBefore of [false, true]) {
+    const original = table(['a', 'b'], [['1', '2']])
+    let state = create(paragraph('before'), original)
+    state = size(state, tables(state)[0], 'column', 0, 160)
+    state = state.apply(state.tr.insertText('z', tables(state)[0] + 4))
+    const edited = state.doc.nodeAt(tables(state)[0])
+    if (duplicateBefore) state = state.apply(state.tr.insert(0, original))
+    state = state.apply(
+      state.tr.replaceWith(
+        0,
+        state.doc.content.size,
+        duplicateBefore ? [original] : [original, edited],
+      ),
+    )
+    assert.deepEqual(plugin.getState(state).tables, [])
+    assert.ok(
+      styles(state).every(({ columns }) => columns.every((size) => !size)),
+    )
+  }
+})
+
+test('source sync clears historical table identity while retaining current sizes', () => {
+  const original = table(['a', 'b'], [['1', '2']])
+  let state = create(paragraph('before'), original)
+  state = size(state, tables(state)[0], 'column', 0, 160)
+  state = state.apply(state.tr.insertText('z', tables(state)[0] + 4))
+  const replacement = schema.nodeFromJSON(
+    state.doc.nodeAt(tables(state)[0]).toJSON(),
+  )
+  state = state.apply(
+    state.tr
+      .replaceWith(0, state.doc.content.size, [
+        paragraph('before'),
+        replacement,
+      ])
+      .setMeta(globalThis.tableLayoutEcho, true),
+  )
+  assert.equal(styles(state)[0].columns[0], 'width: 160px')
+  state = state.apply(
+    state.tr.replaceWith(0, state.doc.content.size, [
+      original,
+      paragraph('after'),
+    ]),
+  )
+  assert.deepEqual(plugin.getState(state).tables, [])
+})
+
+test('lost mappings do not choose between duplicated retained table nodes', () => {
+  const shared = table(['a', 'b'], [['1', '2']])
+  const other = table(['c', 'd'], [['3', '4']])
+  const text = paragraph('before')
+  for (const [before, after] of [
+    [
+      [text, shared, other],
+      [shared, shared, other],
+    ],
+    [
+      [text, shared, shared],
+      [shared, text],
+    ],
+  ]) {
+    let state = create(...before)
+    state = size(state, tables(state)[0], 'column', 0, 160)
+    state = state.apply(state.tr.replaceWith(0, state.doc.content.size, after))
+    assert.deepEqual(plugin.getState(state).tables, [])
+    assert.ok(
+      styles(state).every(({ columns }) => columns.every((size) => !size)),
+    )
+  }
+})
+
+test('lost mappings do not match a reconstructed table by content', () => {
+  const original = table(['a', 'b'], [['1', '2']])
+  let state = create(paragraph('before'), original)
+  state = size(state, tables(state)[0], 'column', 0, 160)
+  const replacement = schema.nodeFromJSON(original.toJSON())
+  assert.ok(replacement.eq(original))
+  assert.notEqual(replacement, original)
+  state = state.apply(
+    state.tr.replaceWith(0, state.doc.content.size, replacement),
+  )
+  assert.deepEqual(plugin.getState(state).tables, [])
+})
 
 test('source sync does not move sizes between tables', () => {
   const first = table(['a', 'b'], [['1', '2']])

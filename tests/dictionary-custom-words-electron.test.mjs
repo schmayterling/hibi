@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -144,11 +144,11 @@ test('custom words are added, edited, removed, kept across restart, and suggeste
   )
   // Export copies plain text that import accepts.
   await words.getByRole('button', { name: 'Export as text' }).click()
-  assert.equal(
-    await words
-      .getByRole('textbox', { name: 'Custom words as text' })
-      .inputValue(),
-    'zorp\t\ta made-up word\nHibiland',
+  await waitForAsync(
+    page,
+    () =>
+      document.getElementById('dictionary-words-text').value ===
+      'zorp\t\ta made-up word\nHibiland',
   )
   await words
     .getByRole('textbox', { name: 'Custom words as text' })
@@ -161,5 +161,334 @@ test('custom words are added, edited, removed, kept across restart, and suggeste
       .inputValue(),
     'tl',
   )
+
+  // A second click while the picker is open is ignored, and cancelling changes nothing.
+  const status = words.getByRole('status')
+  const listed = words.getByRole('listitem')
+  const importFile = words.getByRole('button', { name: 'Import from file…' })
+  await app.evaluate(({ dialog }) => {
+    globalThis.pickers = 0
+    dialog.showOpenDialog = () => {
+      globalThis.pickers++
+      return new Promise((done) => {
+        globalThis.closePicker = done
+      })
+    }
+  })
+  await importFile.dblclick()
+  await waitForAsync(app, () => globalThis.pickers === 1)
+  assert.equal(await importFile.isDisabled(), true)
+  await app.evaluate(() =>
+    globalThis.closePicker({ canceled: true, filePaths: [] }),
+  )
+  await waitForAsync(page, () =>
+    [...document.querySelectorAll('button')].some(
+      (button) =>
+        button.textContent === 'Import from file…' && !button.disabled,
+    ),
+  )
+  assert.equal(await app.evaluate(() => globalThis.pickers), 1)
+  assert.equal(await status.textContent(), 'Imported 1 word.')
+  assert.equal(await listed.count(), 3)
+
+  // Export writes a new file only and never replaces one.
+  const directory = await realpath(profile)
+  const exported = join(directory, 'words.txt')
+  const saved = 'zorp\t\ta made-up word\nHibiland\nkilig\ttl\tgiddy\n'
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })
+  }, exported)
+  const exportFile = words.getByRole('button', { name: 'Export to file…' })
+  await exportFile.click()
+  await words.getByText('Saved your words to words.txt.').waitFor()
+  assert.equal(await readFile(exported, 'utf8'), saved)
+  await exportFile.click()
+  await words.getByText('A file already exists at the selected name.').waitFor()
+  assert.equal(await readFile(exported, 'utf8'), saved)
+
+  // A file that is not UTF-8 text keeps the typed text and the words.
+  const text = words.getByRole('textbox', { name: 'Custom words as text' })
+  await text.fill('draft\ten')
+  const choose = (path) =>
+    app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, path)
+  await writeFile(join(directory, 'bad.txt'), Buffer.from([0x7a, 0xff, 0x0a]))
+  await choose(join(directory, 'bad.txt'))
+  await importFile.click()
+  await words.getByText('Choose a text file saved as UTF-8.').waitFor()
+  assert.equal(await text.inputValue(), 'draft\ten')
+  assert.equal(await listed.count(), 3)
+
+  await writeFile(
+    join(directory, 'good.txt'),
+    'zest\ten\tkeen\nkilig\ttl\tbutterflies\n',
+  )
+  await choose(join(directory, 'good.txt'))
+  await importFile.click()
+  await words.getByText('Imported 2 words.').waitFor()
+  assert.equal(await listed.count(), 4)
+  assert.equal(await text.inputValue(), 'draft\ten')
+
+  // An imported note shows at once, focus alone saves nothing, and a typed note outlives an import.
+  const kiligNote = words.getByRole('textbox', { name: 'Note for “kilig”' })
+  assert.equal(await kiligNote.inputValue(), 'butterflies')
+  await kiligNote.focus()
+  await kiligNote.blur()
+  const zorpNote = words.getByRole('textbox', { name: 'Note for “zorp”' })
+  await text.fill('zorp\t\timported')
+  await zorpNote.fill('typed note')
+  // A DOM click keeps focus in the note.
+  await words
+    .getByRole('button', { name: 'Import text' })
+    .evaluate((button) => button.click())
+  await words.getByText('Imported 1 word.').waitFor()
+  assert.equal(await zorpNote.inputValue(), 'typed note')
+  await zorpNote.blur()
+  await status.waitFor({ state: 'detached' })
+  await words.getByRole('button', { name: 'Export as text' }).click()
+  await waitForAsync(
+    page,
+    () =>
+      document.getElementById('dictionary-words-text').value ===
+      'zorp\t\ttyped note\nHibiland\nkilig\ttl\tbutterflies\nzest\ten\tkeen',
+  )
+
+  // With slow saves, typing a note, another, then the first again keeps the last one typed.
+  await app.evaluate(({ ipcMain }) => {
+    const exportWrite = ipcMain._invokeHandlers.get(
+      'host-selected-io:write-export',
+    )
+    const cancel = ipcMain._invokeHandlers.get('host-selected-io:cancel')
+    globalThis.exportWrites = 0
+    globalThis.canceledExports = []
+    ipcMain.removeHandler('host-selected-io:write-export')
+    ipcMain.handle('host-selected-io:write-export', (...args) => {
+      globalThis.exportWrites++
+      return exportWrite(...args)
+    })
+    ipcMain.removeHandler('host-selected-io:cancel')
+    ipcMain.handle('host-selected-io:cancel', async (...args) => {
+      const result = await cancel(...args)
+      globalThis.canceledExports.push(result)
+      return result
+    })
+    const write = ipcMain._invokeHandlers.get('addon-storage:write')
+    globalThis.held = []
+    globalThis.written = 0
+    ipcMain.removeHandler('addon-storage:write')
+    ipcMain.handle('addon-storage:write', async (event, request) => {
+      if (request?.owner !== 'dictionary' || request.key !== 'custom-words')
+        return write(event, request)
+      await new Promise((resolve) => globalThis.held.push(resolve))
+      try {
+        if (globalThis.failNextWrite) {
+          globalThis.failNextWrite = false
+          return { status: 'unavailable', reason: 'corrupt' }
+        }
+        const result = await write(event, request)
+        globalThis.lastWrite = result
+        return result
+      } finally {
+        globalThis.written++
+      }
+    })
+  })
+  const release = async (count) => {
+    await waitForAsync(app, () => globalThis.held.length === 1)
+    await app.evaluate(() => globalThis.held.shift()())
+    await waitForAsync(app, (_, count) => globalThis.written === count, count)
+  }
+  const stored = (note) =>
+    waitForAsync(
+      app,
+      (_, note) =>
+        globalThis.lastWrite?.value?.find((item) => item.word === 'zorp')
+          ?.note === note,
+      note,
+    )
+  await zorpNote.fill('first')
+  await zorpNote.blur()
+  await zorpNote.fill('second')
+  await zorpNote.blur()
+  await zorpNote.fill('first')
+  await release(1)
+  await release(2)
+  await stored('second')
+  assert.equal(await zorpNote.inputValue(), 'first')
+  await zorpNote.blur()
+  await release(3)
+  await stored('first')
+  assert.equal(await zorpNote.inputValue(), 'first')
+  // Typing back the saved note while another save waits still saves it last.
+  await zorpNote.fill('other')
+  await zorpNote.blur()
+  await zorpNote.fill('first')
+  await zorpNote.blur()
+  await release(4)
+  await stored('other')
+  await release(5)
+  await stored('first')
+  assert.equal(await zorpNote.inputValue(), 'first')
+
+  // Clicking export blurs the note; saving while the picker waits must reach the file.
+  const heldExport = join(directory, 'held-words.txt')
+  await app.evaluate(({ dialog }) => {
+    globalThis.exportPickers = 0
+    dialog.showSaveDialog = () => {
+      globalThis.exportPickers++
+      return new Promise((done) => {
+        globalThis.closeExportPicker = done
+      })
+    }
+  })
+  await zorpNote.fill('exported note')
+  await exportFile.click()
+  await waitForAsync(
+    app,
+    () => globalThis.held.length === 1 && globalThis.exportPickers === 1,
+  )
+  assert.equal(await exportFile.isDisabled(), true)
+  await release(6)
+  await stored('exported note')
+  await app.evaluate(
+    (_, path) =>
+      globalThis.closeExportPicker({ canceled: false, filePath: path }),
+    heldExport,
+  )
+  await words.getByText('Saved your words to held-words.txt.').waitFor()
+  assert.equal(
+    await readFile(heldExport, 'utf8'),
+    'zorp\t\texported note\nHibiland\nkilig\ttl\tbutterflies\nzest\ten\tkeen\n',
+  )
+
+  // Clipboard export waits for the note save too, leaving the text alone until then.
+  await text.fill('paste draft')
+  await zorpNote.fill('copied note')
+  await words.getByRole('button', { name: 'Export as text' }).click()
+  await waitForAsync(app, () => globalThis.held.length === 1)
+  assert.equal(await text.inputValue(), 'paste draft')
+  await release(7)
+  const copied =
+    'zorp\t\tcopied note\nHibiland\nkilig\ttl\tbutterflies\nzest\ten\tkeen'
+  await waitForAsync(
+    page,
+    (copied) =>
+      document.getElementById('dictionary-words-text').value === copied,
+    copied,
+  )
+  await words.getByText('Copied your words as text.').waitFor()
+  assert.equal(
+    await app.evaluate(({ clipboard }) => clipboard.readText()),
+    copied,
+  )
+
+  // A failed pending save blocks file export and keeps both typed drafts.
+  const failedExport = join(directory, 'failed-words.txt')
+  await app.evaluate(({ dialog }, path) => {
+    globalThis.failNextWrite = true
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })
+  }, failedExport)
+  await text.fill('keep pasted draft')
+  await zorpNote.fill('unsaved note')
+  await exportFile.click()
+  await waitForAsync(app, () => globalThis.held.length === 1)
+  await release(8)
+  await waitForAsync(
+    page,
+    () =>
+      ![...document.querySelectorAll('button')].find(
+        (button) => button.textContent === 'Export to file…',
+      ).disabled,
+  )
+  assert.equal(await status.textContent(), 'Could not save custom words.')
+  assert.equal(await zorpNote.inputValue(), 'unsaved note')
+  assert.equal(await text.inputValue(), 'keep pasted draft')
+  await assert.rejects(readFile(failedExport), { code: 'ENOENT' })
+  assert.deepEqual(await app.evaluate(() => globalThis.canceledExports), [
+    { ok: true, value: null },
+  ])
+  assert.equal(await app.evaluate(() => globalThis.exportWrites), 1)
+  assert.equal(await app.evaluate(() => globalThis.written), 8)
+  assert.equal(await app.evaluate(() => globalThis.held.length), 0)
+
+  // A failed note followed by a successful language save stays an export failure.
+  const queuedExport = join(directory, 'queued-failure.txt')
+  await app.evaluate(({ dialog }) => {
+    globalThis.failNextWrite = true
+    globalThis.exportPickers = 0
+    dialog.showSaveDialog = () => {
+      globalThis.exportPickers++
+      return new Promise((done) => {
+        globalThis.closeExportPicker = done
+      })
+    }
+  })
+  await text.fill('queued paste draft')
+  await zorpNote.fill('queued unsaved note')
+  await zorpNote.blur()
+  await waitForAsync(app, () => globalThis.held.length === 1)
+  await words
+    .getByRole('combobox', { name: 'Language of “zorp”' })
+    .selectOption('en')
+  await exportFile.click()
+  await waitForAsync(app, () => globalThis.exportPickers === 1)
+  await release(9)
+  await waitForAsync(app, () => globalThis.held.length === 1)
+  assert.equal(await exportFile.isDisabled(), true)
+  await release(10)
+  await stored('copied note')
+  assert.equal(await zorpNote.inputValue(), 'queued unsaved note')
+  await app.evaluate(
+    (_, path) =>
+      globalThis.closeExportPicker({ canceled: false, filePath: path }),
+    queuedExport,
+  )
+  await waitForAsync(
+    page,
+    () =>
+      ![...document.querySelectorAll('button')].find(
+        (button) => button.textContent === 'Export to file…',
+      ).disabled,
+  )
+  assert.equal(await status.textContent(), 'Could not save custom words.')
+  assert.equal(await text.inputValue(), 'queued paste draft')
+  assert.equal(await zorpNote.inputValue(), 'queued unsaved note')
+  await assert.rejects(readFile(queuedExport), { code: 'ENOENT' })
+  assert.deepEqual(await app.evaluate(() => globalThis.canceledExports), [
+    { ok: true, value: null },
+    { ok: true, value: null },
+  ])
+  assert.equal(await app.evaluate(() => globalThis.exportWrites), 1)
+
+  // An explicit note retry recovers without retaining the earlier export failure.
+  await zorpNote.fill('recovered note')
+  await words.getByRole('button', { name: 'Export as text' }).click()
+  await waitForAsync(app, () => globalThis.held.length === 1)
+  await release(11)
+  await waitForAsync(
+    page,
+    () =>
+      document.getElementById('dictionary-words-text').value ===
+      'zorp\ten\trecovered note\nHibiland\nkilig\ttl\tbutterflies\nzest\ten\tkeen',
+  )
+  await words.getByText('Copied your words as text.').waitFor()
+  const recoveredExport = join(directory, 'recovered-words.txt')
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })
+  }, recoveredExport)
+  await exportFile.click()
+  await words.getByText('Saved your words to recovered-words.txt.').waitFor()
+  assert.equal(
+    await readFile(recoveredExport, 'utf8'),
+    'zorp\ten\trecovered note\nHibiland\nkilig\ttl\tbutterflies\nzest\ten\tkeen\n',
+  )
+  assert.equal(await app.evaluate(() => globalThis.exportWrites), 2)
+  assert.equal(await app.evaluate(() => globalThis.canceledExports.length), 2)
+  assert.equal(await app.evaluate(() => globalThis.written), 11)
+  assert.equal(await app.evaluate(() => globalThis.held.length), 0)
   assert.deepEqual(await online(), [])
 })

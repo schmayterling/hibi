@@ -1,4 +1,5 @@
 import type { AddonStorageHandle } from '../../shared/addon-storage'
+import type { HostSelectedIoHostApi } from '../../shared/host-selected-io'
 import type { AddonContext } from '../api'
 import {
   type DictionaryProvider,
@@ -29,6 +30,11 @@ const MAX_NOTE = 2000
 const key = (word: CustomWord) =>
   `${word.word.normalize('NFC').toLowerCase()}\u0000${word.lang ?? ''}`
 
+function wordText(word: string) {
+  const text = word.trim().normalize('NFC')
+  return text && text.length <= 64 && !/[\p{Cc}]/u.test(text) ? text : undefined
+}
+
 /** Valid words only, first spelling kept for each word and language. */
 export function customWords(value: unknown, limit = MAX_WORDS): CustomWord[] {
   if (!Array.isArray(value)) return []
@@ -38,8 +44,8 @@ export function customWords(value: unknown, limit = MAX_WORDS): CustomWord[] {
     if (!item || typeof item !== 'object') continue
     const { id, word, lang, note } = item as Record<string, unknown>
     if (typeof word !== 'string') continue
-    const text = word.trim().normalize('NFC')
-    if (!text || text.length > 64 || /[\p{Cc}]/u.test(text)) continue
+    const text = wordText(word)
+    if (!text) continue
     const entry: CustomWord = {
       ...(typeof id === 'string' && id && id.length <= 128 ? { id } : {}),
       word: text,
@@ -73,6 +79,7 @@ function withIds(list: CustomWord[], loaded = false) {
 
 let words: readonly CustomWord[] = Object.freeze([])
 let handle: AddonStorageHandle<unknown> | null = null
+let fileIo: HostSelectedIoHostApi | null = null
 let revision = 0
 const listeners = new Set<() => void>()
 
@@ -93,16 +100,28 @@ export function onCustomWordsChanged(listener: () => void): () => void {
   }
 }
 
+/** File picking for settings, which render without the addon's context; null while closed. */
+export function customWordsFileIo() {
+  return fileIo
+}
+
 /** Loads the saved words and follows changes made in other windows. */
 export async function openCustomWords(context: AddonContext) {
   const opened = await context.storage.global<unknown>('custom-words', 1)
   handle = opened
+  saving = Promise.resolve()
+  pendingSaves = new Set()
+  exportBarriers = new Set()
+  fileIo = context.host.selectedIo
   revision = 0
   sync()
   const stop = opened.subscribe(sync)
   return () => {
     stop()
-    if (handle === opened) handle = null
+    if (handle === opened) {
+      handle = null
+      fileIo = null
+    }
     revision = 0
     publish([])
   }
@@ -124,6 +143,8 @@ function sync() {
 }
 
 let saving: Promise<unknown> = Promise.resolve()
+let pendingSaves = new Set<Promise<unknown>>()
+let exportBarriers = new Set<Set<Promise<unknown>>>()
 
 /**
  * Saves `change` applied to the latest list. Changes run one at a time, so a
@@ -133,15 +154,19 @@ let saving: Promise<unknown> = Promise.resolve()
 export function updateCustomWords(
   change: (current: readonly CustomWord[]) => readonly CustomWord[],
 ) {
-  const run = saving.then(async () => {
-    if (!handle)
+  const opened = handle
+  const previous = saving.catch(() => {})
+  const run = previous.then(async () => {
+    if (!opened || handle !== opened)
       throw new Error('Turn on Dictionary and thesaurus to keep custom words.')
     const next = withIds(customWords(change(words), Infinity))
     if (next.length > MAX_WORDS)
       throw new Error(
         'You can keep up to 5,000 custom words. Remove some to add more.',
       )
-    const result = await handle.set(next)
+    const result = await opened.set(next)
+    if (handle !== opened)
+      throw new Error('Turn on Dictionary and thesaurus to keep custom words.')
     if (result.status === 'conflict')
       throw new Error('Custom words changed in another window. Try again.')
     if (result.status !== 'saved')
@@ -149,7 +174,14 @@ export function updateCustomWords(
     // A newer change from another window may have arrived before this reply.
     sync()
   })
-  saving = run.catch(() => {})
+  saving = run
+  const pending = pendingSaves
+  pending.add(run)
+  for (const barrier of exportBarriers) barrier.add(run)
+  void run.then(
+    () => pending.delete(run),
+    () => pending.delete(run),
+  )
   return run
 }
 
@@ -185,11 +217,17 @@ export function mergeCustomWords(
   return [...merged.values()]
 }
 
-/** Adds `word`, or updates its note when it is already listed. */
+/** Adds `word`, or updates its note when it is already listed; a listed word keeps its note when `word` has none. */
 export function addCustomWord(word: CustomWord) {
-  const added = customWords([word])
-  if (!added.length) return Promise.reject(new Error('Enter a word to add.'))
-  return updateCustomWords((current) => mergeCustomWords(current, added))
+  const [added] = customWords([word])
+  if (!added) return Promise.reject(new Error('Enter a word to add.'))
+  return updateCustomWords((current) => {
+    const note =
+      word.note === undefined
+        ? current.find((item) => key(item) === key(added))?.note
+        : undefined
+    return mergeCustomWords(current, [note ? { ...added, note } : added])
+  })
 }
 
 /**
@@ -211,22 +249,81 @@ export function exportCustomWords(list: readonly CustomWord[]) {
     .join('\n')
 }
 
-/** Parses exported text; blank lines and lines starting with `#` are skipped. */
+/**
+ * Exports after every captured or joining save settles; any failure rejects.
+ * `ready` waits for file selection; false cancels without waiting for saves.
+ */
+export async function exportSavedCustomWords(ready?: Promise<boolean>) {
+  const opened = handle
+  const active = exportBarriers
+  const pending = new Set([...pendingSaves, saving])
+  active.add(pending)
+  try {
+    if (ready && !(await ready)) return ''
+    for (;;) {
+      const tail = saving
+      const results = await Promise.allSettled(pending)
+      if (!opened || handle !== opened)
+        throw new Error(
+          'Turn on Dictionary and thesaurus to keep custom words.',
+        )
+      if (tail !== saving) continue
+      const failure = results.find((result) => result.status === 'rejected')
+      if (failure) throw failure.reason
+      return exportCustomWords(words)
+    }
+  } finally {
+    active.delete(pending)
+  }
+}
+
+/**
+ * Parses one line at a time, skipping blanks and comments. Keeps one word over
+ * capacity so the queued merge rejects the whole import instead of a partial list.
+ */
 export function importCustomWords(text: string) {
-  return customWords(
-    text
-      .split(/\r?\n/)
-      .filter((line) => line.trim() && !line.trimStart().startsWith('#'))
-      .map((line) => {
-        const [word = '', lang, ...note] = line.split('\t')
-        return {
-          word: word.trim().replace(/^\\(?=\\*#)/, ''),
-          lang: lang?.trim(),
-          note: note.join(' '),
-        }
+  const words: CustomWord[] = []
+  const seen = new Set<string>()
+  for (let start = 0; start < text.length; ) {
+    const newline = text.indexOf('\n', start)
+    const end = newline < 0 ? text.length : newline
+    const line = text.slice(start, end)
+    start = end + 1
+    if (line.trimStart().startsWith('#')) continue
+    const first = line.indexOf('\t')
+    const word = wordText(
+      (first < 0 ? line : line.slice(0, first))
+        .trim()
+        .replace(/^\\(?=\\*#)/, ''),
+    )
+    if (!word) continue
+    const second = first < 0 ? -1 : line.indexOf('\t', first + 1)
+    const code =
+      first < 0
+        ? undefined
+        : line.slice(first + 1, second < 0 ? undefined : second).trim()
+    const lang = LANGS.includes(code as Lang) ? (code as Lang) : undefined
+    const id = `${word.toLowerCase()}\u0000${lang ?? ''}`
+    if (seen.has(id)) continue
+    seen.add(id)
+    const note =
+      second < 0
+        ? ''
+        : line
+            .slice(second + 1)
+            .trim()
+            .slice(0, MAX_NOTE)
+            .replaceAll('\t', ' ')
+    words.push(
+      Object.freeze({
+        word,
+        ...(lang ? { lang } : {}),
+        ...(note ? { note } : {}),
       }),
-    Infinity,
-  )
+    )
+    if (words.length > MAX_WORDS) break
+  }
+  return words
 }
 
 /**

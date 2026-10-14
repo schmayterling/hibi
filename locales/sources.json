@@ -788,6 +788,9 @@
   "387bea5c5e14": [
     "src/main/selected-text.ts"
   ],
+  "2d7b7b9db26a": [
+    "src/addons/dictionary/CustomWords.tsx"
+  ],
   "4498a0e9706f": [
     "src/main/files.ts"
   ],
@@ -2188,6 +2191,9 @@
   "23b5bc4d7a20": [
     "src/main/workspace.ts"
   ],
+  "e7154684d4df": [
+    "src/addons/dictionary/CustomWords.tsx"
+  ],
   "1be2e5ce4ccb": [
     "src/addons/typst/Preview.tsx"
   ],
@@ -2649,6 +2655,9 @@
   ],
   "fcfe00a28562": [
     "src/addons/import-obsidian/manifest.ts"
+  ],
+  "509eae9be642": [
+    "src/addons/dictionary/CustomWords.tsx"
   ],
   "802db18c0a29": [
     "src/main/imports.ts"
@@ -3643,6 +3652,9 @@
   ],
   "5e67bf447384": [
     "src/addons/dictionary/SideView.tsx"
+  ],
+  "e61f6e6b7c67": [
+    "src/addons/dictionary/CustomWords.tsx"
   ],
   "2d529fe708e1": [
     "src/addons/dictionary/CustomWords.tsx"
@@ -4687,6 +4699,9 @@
   ],
   "bddb9129d59e": [
     "src/renderer/src/VersionHistory.tsx"
+  ],
+  "b956699645b4": [
+    "src/addons/dictionary/CustomWords.tsx"
   ],
   "1eb89644df2d": [
     "src/addons/quick-note/CaptureWindow.tsx"
@@ -6227,6 +6242,7 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "7586b13894e7": [
+    "src/addons/dictionary/CustomWords.tsx",
     "src/addons/dictionary/custom-words.ts"
   ],
   "9a928ba210da": [

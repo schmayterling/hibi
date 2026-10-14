@@ -2,7 +2,7 @@
 
 # DialogApi
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L45)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L47)
 
 Open dialogs that share the app's focus handling and keyboard controls.
 
@@ -46,7 +46,7 @@ type DialogApi = {
 
 ### open
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L47)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L49)
 
 Open custom content and receive a handle for closing it or awaiting its result.
 
@@ -66,7 +66,7 @@ Related: [DialogOptions](DialogOptions.md), [DialogHandle](DialogHandle.md).
 
 ### alert
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L49)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L51)
 
 Show a message and wait for dismissal.
 
@@ -86,7 +86,7 @@ Related: [MessageDialogOptions](MessageDialogOptions.md).
 
 ### confirm
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L51)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L53)
 
 Ask for confirmation. Cancellation returns false.
 
@@ -112,7 +112,7 @@ Related: [MessageDialogOptions](MessageDialogOptions.md).
 
 ### prompt
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L59)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L61)
 
 Ask for a text value. Cancellation returns null.
 
@@ -132,7 +132,7 @@ Related: [PromptDialogOptions](PromptDialogOptions.md).
 
 ### isOpen
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L61)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L63)
 
 Report whether a shared dialog is currently open.
 

@@ -2,7 +2,7 @@
 
 # MessageDialogOptions
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L29)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L31)
 
 <details>
 <summary>Declaration</summary>
@@ -29,7 +29,7 @@ type MessageDialogOptions = {
 
 ### title
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L30)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L32)
 
 ```typescript
 title: string
@@ -37,7 +37,7 @@ title: string
 
 ### description
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L31)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L33)
 
 ```typescript
 description?: string
@@ -45,7 +45,7 @@ description?: string
 
 ### confirmLabel
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L32)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L34)
 
 ```typescript
 confirmLabel?: string

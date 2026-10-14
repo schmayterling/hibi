@@ -109,6 +109,9 @@
   gap: var(--space-2);
   margin-top: var(--space-5);
 }
+.dialog-footer > .dialog-actions {
+  margin-top: 0;
+}
 .dialog-form {
   display: grid;
   gap: var(--space-2);

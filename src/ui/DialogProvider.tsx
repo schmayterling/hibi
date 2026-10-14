@@ -268,19 +268,23 @@ function DialogFrame({
     const timer = setTimeout(finish, 140)
     return () => clearTimeout(timer)
   }, [request, request.closing, service])
+  const { preserveTitleCase } = request.options
+  const title = preserveTitleCase
+    ? request.options.title
+    : sentenceCase(request.options.title)
   return (
     <Modal
       ref={modal}
       className={`app-dialog${request.closing ? ' closing' : ''}`}
       data-size={request.options.size ?? 'normal'}
-      aria-label={sentenceCase(request.options.title)}
+      aria-label={title}
       aria-describedby={request.options.description ? description : undefined}
       closeOnOutsideClick={request.options.closeOnOutsideClick ?? true}
       onDismiss={() => close()}
     >
       <header className="dialog-heading">
         <div className="dialog-title-row">
-          <h2>{sentenceCase(request.options.title)}</h2>
+          <h2 data-verbatim={preserveTitleCase || undefined}>{title}</h2>
           <IconButton aria-label="Close dialog" onClick={() => close()}>
             <X size={16} aria-hidden="true" />
           </IconButton>

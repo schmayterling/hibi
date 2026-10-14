@@ -2,6 +2,8 @@ import type { ReactNode } from 'react'
 
 export type DialogOptions<T> = {
   title: string
+  /** Show the title exactly as written, such as an addon or file name. */
+  preserveTitleCase?: boolean
   description?: string
   size?: 'normal' | 'wide' | 'fullscreen'
   closeOnOutsideClick?: boolean

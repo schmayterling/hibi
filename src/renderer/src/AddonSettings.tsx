@@ -24,6 +24,7 @@ export function useAddonReadme() {
   return (manifest: AddonManifest) =>
     dialogs.open({
       title: manifest.name,
+      preserveTitleCase: true,
       size: 'wide',
       content: () => (
         <Suspense

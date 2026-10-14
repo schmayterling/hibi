@@ -254,6 +254,23 @@ test('published development docs render linked, highlighted API pages offline at
       'the page must not scroll sideways',
     )
     assert.equal(geometry.pageOverflow, false)
+    // Newlines between exported tags must not render as blank lines; code keeps its own whitespace.
+    const spacing = await page.evaluate(() => {
+      const [first, second] = document.querySelectorAll(
+        '.site-content article ul > li',
+      )
+      return {
+        item: first.getBoundingClientRect().height,
+        step:
+          second.getBoundingClientRect().top -
+          first.getBoundingClientRect().top,
+        pre: getComputedStyle(
+          document.querySelector('.site-content article pre'),
+        ).whiteSpace,
+      }
+    })
+    assert.ok(spacing.step < spacing.item * 1.5, JSON.stringify(spacing))
+    assert.equal(spacing.pre, 'pre')
     await page.screenshot({ path: `test-results/api-reference-${width}.png` })
   }
   assert.deepEqual(await page.pageErrors(), [])

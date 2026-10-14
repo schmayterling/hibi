@@ -10,6 +10,8 @@ Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/di
 ```typescript
 type DialogOptions<T> = {
   title: string
+  /** Show the title exactly as written, such as an addon or file name. */
+  preserveTitleCase?: boolean
   description?: string
   size?: 'normal' | 'wide' | 'fullscreen'
   closeOnOutsideClick?: boolean
@@ -36,6 +38,7 @@ type DialogOptions<T> = {
 **Properties**
 
 - [title](#title)
+- [preserveTitleCase](#preservetitlecase)
 - [description](#description)
 - [size](#size)
 - [closeOnOutsideClick](#closeonoutsideclick)
@@ -55,9 +58,19 @@ type DialogOptions<T> = {
 title: string
 ```
 
+### preserveTitleCase
+
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L6)
+
+Show the title exactly as written, such as an addon or file name.
+
+```typescript
+preserveTitleCase?: boolean
+```
+
 ### description
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L5)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L7)
 
 ```typescript
 description?: string
@@ -65,7 +78,7 @@ description?: string
 
 ### size
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L6)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L8)
 
 ```typescript
 size?: 'normal' | 'wide' | 'fullscreen'
@@ -73,7 +86,7 @@ size?: 'normal' | 'wide' | 'fullscreen'
 
 ### closeOnOutsideClick
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L7)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L9)
 
 ```typescript
 closeOnOutsideClick?: boolean
@@ -83,7 +96,7 @@ closeOnOutsideClick?: boolean
 
 ### content
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L12)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L14)
 
 Use a component for content that needs React hooks. `signal` aborts as
 soon as the dialog starts closing, before its exit animation.
@@ -105,7 +118,7 @@ content: (controls: {
 
 ### footer
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L17)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/dialogs.ts#L19)
 
 Optional actions outside the scrolling content.
 

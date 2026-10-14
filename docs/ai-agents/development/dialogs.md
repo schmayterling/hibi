@@ -24,7 +24,7 @@ if (confirmed) await context.dialogs.alert({ title: 'name selected', description
 
 ## Custom content
 
-`open<T>({ title, description?, content, footer?, size?, closeOnOutsideClick? })` returns `{ result: Promise<T | null>, close(value?) }`. The `content({ close })` and optional `footer({ close })` functions must be pure. Render a component inside them if you need hooks.
+`open<T>({ title, preserveTitleCase?, description?, content, footer?, size?, closeOnOutsideClick? })` returns `{ result: Promise<T | null>, close(value?) }`. The `content({ close })` and optional `footer({ close })` functions must be pure. Render a component inside them if you need hooks. Titles use sentence case; set `preserveTitleCase` when the title is a name, such as an addon or file, so it keeps its exact spelling in either interface case.
 
 Sizes are `normal`, `wide`, and `fullscreen`; all fit the viewport. Use fullscreen only when the view needs the whole app window. The expanded graph uses a wide modal. Outside clicks dismiss by default; a form can disable that behavior. Escape and the close button remain available.
 

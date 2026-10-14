@@ -417,6 +417,31 @@ test('shared dialogs validate input, trap focus, queue, and clean up by addon ow
   assert.ok(footerBounds.y + footerBounds.height <= 560)
   await footerDialog.getByRole('button', { name: /footer action/i }).click()
   assert.equal(await page.evaluate(() => window.footerDialog.result), 'saved')
+  // Names such as addons keep their spelling, even in the lowercase interface style.
+  for (const [preserveTitleCase, title] of [
+    [true, 'keyBeats'],
+    [false, 'KeyBeats'],
+  ]) {
+    await page.evaluate((preserveTitleCase) => {
+      document.documentElement.dataset.uiCase = 'lowercase'
+      window.titleDialog = window.dialogTest.dialogs.open({
+        title: 'keyBeats',
+        preserveTitleCase,
+        content: () => window.dialogTest.createElement('p', null, 'readme'),
+      })
+    }, preserveTitleCase)
+    const titled = page.getByRole('dialog', { name: title, exact: true })
+    assert.equal(await titled.locator('h2').textContent(), title)
+    assert.equal(
+      await titled.locator('h2').innerText(),
+      preserveTitleCase ? title : 'keybeats',
+    )
+    await page.evaluate(() => {
+      delete document.documentElement.dataset.uiCase
+      window.titleDialog.close()
+    })
+    await titled.waitFor({ state: 'hidden' })
+  }
   // Addon-scoped actions run once from a click or Enter, then dismiss.
   await page.evaluate(() => {
     window.toastRuns = 0

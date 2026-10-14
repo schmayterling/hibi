@@ -7,6 +7,7 @@ import {
   useDialogs,
 } from '../../src/ui/DialogProvider'
 import '../../src/renderer/src/styles.css'
+import '../../src/ui/ui-case.css'
 import { EditorToolbar } from '../../src/renderer/src/EditorToolbar'
 import { toolbar } from '../../src/renderer/src/toolbar'
 import { ToastProvider, useToastService } from '../../src/ui/Sonner'

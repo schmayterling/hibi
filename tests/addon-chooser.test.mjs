@@ -226,6 +226,13 @@ test('addon chooser reviews every candidate, supports keyboard selection, and se
           ),
           true,
         )
+        // Actions stay outside the scrolling list, even on a short window.
+        const actions = await install.evaluate((button) => ({
+          inFooter: !!button.closest('.dialog-footer'),
+          bottom: button.getBoundingClientRect().bottom,
+        }))
+        assert.equal(actions.inFooter, true)
+        assert.ok(actions.bottom <= 640, JSON.stringify(actions))
         await checkbox('consumer').focus()
         await page.screenshot({
           path: `test-results/addon-chooser-${appearance}.png`,

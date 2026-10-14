@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type {
   AddonInstallResult,
   AddonInstallSession,
@@ -29,6 +30,7 @@ export async function reviewAddonInstall(
       )
     return operation
   }
+  const footer = `addon-install-${session.id}-footer`
   try {
     await dialogs.open({
       title: 'Install addons',
@@ -43,8 +45,10 @@ export async function reviewAddonInstall(
           cancel={cancel}
           install={install}
           close={() => close(null)}
+          footer={footer}
         />
       ),
+      footer: () => <div id={footer} className="dialog-actions" />,
     }).result
   } finally {
     cancel()
@@ -59,15 +63,21 @@ function AddonInstallChooser({
   cancel,
   install,
   close,
+  footer,
 }: {
   session: AddonInstallSession
   signal: AbortSignal
   cancel: () => void
   install: (keys: string[]) => Promise<AddonInstallResult[]>
   close: () => void
+  footer: string
 }) {
   const id = useId()
   const closeButton = useRef<HTMLButtonElement>(null)
+  const [actions, setActions] = useState<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    setActions(document.getElementById(footer))
+  }, [footer])
   const [selected, setSelected] = useState(
     () =>
       new Set(
@@ -253,28 +263,32 @@ function AddonInstallChooser({
           )
         })}
       </ul>
-      <div className="dialog-actions">
-        <Button
-          ref={closeButton}
-          onClick={() => {
-            if (busy) {
-              setCanceled(true)
-              cancel()
-            } else close()
-          }}
-        >
-          {busy || !results ? 'Cancel' : 'Close'}
-        </Button>
-        {!canceled && !!remaining.length && (
-          <Button
-            className="dialog-primary"
-            disabled={busy || !keys.length}
-            onClick={() => void submit()}
-          >
-            {busy ? 'Installing…' : `Install selected (${keys.length})`}
-          </Button>
+      {actions &&
+        createPortal(
+          <>
+            <Button
+              ref={closeButton}
+              onClick={() => {
+                if (busy) {
+                  setCanceled(true)
+                  cancel()
+                } else close()
+              }}
+            >
+              {busy || !results ? 'Cancel' : 'Close'}
+            </Button>
+            {!canceled && !!remaining.length && (
+              <Button
+                className="dialog-primary"
+                disabled={busy || !keys.length}
+                onClick={() => void submit()}
+              >
+                {busy ? 'Installing…' : `Install selected (${keys.length})`}
+              </Button>
+            )}
+          </>,
+          actions,
         )}
-      </div>
     </>
   )
 }

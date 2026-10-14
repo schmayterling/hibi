@@ -172,10 +172,12 @@
 .site-reading {
   min-width: 0;
 }
+/* Exported HTML keeps source newlines between tags; the editor's pre-wrap would render them as blank lines. */
 .site-content article {
   margin: 0;
   min-height: auto;
   padding: 0;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 .site-content a {

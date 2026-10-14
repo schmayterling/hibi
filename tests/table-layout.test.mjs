@@ -61,6 +61,7 @@ const schema = new Schema({
     tableHeader: { content: 'paragraph' },
     tableCell: { content: 'paragraph' },
   },
+  marks: { strong: {} },
 })
 const paragraph = (text) =>
   schema.nodes.paragraph.create(null, text ? schema.text(text) : null)
@@ -184,6 +185,71 @@ test('table sizes survive a move and separate cell edit through undo and redo', 
       }),
     )
     check()
+  }
+})
+
+test('local table edits reuse uniqueness without walking the document', (t) => {
+  const original = table(['a', 'b'], [['1', '2']])
+  let state = create(
+    ...Array.from({ length: 100 }, () => paragraph('before')),
+    original,
+  )
+  let pos = tables(state)[0]
+  state = size(state, pos, 'column', 0, 160)
+  const walk = t.mock.method(Object.getPrototypeOf(state.doc), 'descendants')
+  state = state.apply(state.tr.insertText('x', pos + 4))
+  assert.equal(walk.mock.callCount(), 2)
+  walk.mock.resetCalls()
+  for (let index = 0; index < 20; index++)
+    state = state.apply(state.tr.insertText('x', pos + 4))
+  assert.equal(walk.mock.callCount(), 0)
+  state = size(state, pos, 'column', 1, 180)
+  state = state.apply(state.tr.insertText('x', pos + 4))
+  assert.equal(walk.mock.callCount(), 0)
+
+  state = state.apply(state.tr.insertText('x', 1))
+  pos++
+  assert.equal(walk.mock.callCount(), 0)
+  state = state.apply(state.tr.insertText('x', pos + 4))
+  assert.equal(walk.mock.callCount(), 2)
+  walk.mock.resetCalls()
+  state = state.apply(state.tr.insertText('x', pos + 4))
+  assert.equal(walk.mock.callCount(), 0)
+
+  const tr = state.tr.insertText('x', 1)
+  pos++
+  state = state.apply(tr.insertText('x', pos + 4))
+  assert.equal(walk.mock.callCount(), 2)
+  walk.mock.resetCalls()
+  const marked = state.tr.addMark(1, 2, schema.marks.strong.create())
+  state = state.apply(marked.insertText('x', pos + 4))
+  assert.equal(walk.mock.callCount(), 2)
+})
+
+test('duplicated tables cannot keep a stale local identity proof', () => {
+  for (const scenario of ['initial', 'outside', 'mixed']) {
+    const original = table(['a', 'b'], [['1', '2']])
+    let state = create(
+      ...(scenario === 'initial' ? [original] : []),
+      paragraph('before'),
+      original,
+    )
+    const at = () => tables(state).at(-1)
+    state = size(state, at(), 'column', 0, 160)
+    state = state.apply(state.tr.insertText('x', at() + 4))
+    if (scenario === 'outside') {
+      state = state.apply(state.tr.insert(0, original))
+      state = state.apply(state.tr.insertText('y', at() + 4))
+    } else if (scenario === 'mixed') {
+      state = state.apply(
+        state.tr.insertText('y', at() + 4).insert(0, original),
+      )
+    }
+    state = state.apply(state.tr.delete(0, original.nodeSize))
+    state = state.apply(
+      state.tr.replaceWith(0, state.doc.content.size, original),
+    )
+    assert.deepEqual(plugin.getState(state).tables, [], scenario)
   }
 })
 

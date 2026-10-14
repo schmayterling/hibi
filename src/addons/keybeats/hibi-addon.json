@@ -1,0 +1,35 @@
+{
+  "id": "keybeats",
+  "name": "keyBeats",
+  "description": "Play mechanical keyboard sounds while you write.",
+  "apiVersion": 2,
+  "kind": "extension",
+  "version": "1.0.1",
+  "authors": [
+    {
+      "discordId": "1262793452236570667",
+      "displayName": "may",
+      "role": "Hibi port"
+    }
+  ],
+  "defaultEnabled": false,
+  "settings": {
+    "icon": "audio-lines"
+  },
+  "startup": "background",
+  "licenses": [
+    {
+      "id": "keybeats",
+      "name": "keyBeats",
+      "license": "MIT",
+      "text": "# keyBeats license\n\nHibi includes keyboard sounds and profile mappings from keyBeats by Yug Bhanushali. The original MIT license follows.\n\n---\n\nMIT License\n\nCopyright (c) 2024 Yug Bhanushali\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+    },
+    {
+      "id": "kbsim",
+      "name": "Kbsim sounds",
+      "license": "MIT",
+      "text": "# kbsim license\n\nHibi includes keyboard recordings from kbsim by Thomas Lai. The original MIT license follows.\n\n---\n\nCopyright (c) Thomas Lai\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \"Software\"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.\n"
+    }
+  ],
+  "entry": "index.ts"
+}

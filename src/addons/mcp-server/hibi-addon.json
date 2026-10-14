@@ -1,0 +1,24 @@
+{
+  "id": "mcp-server",
+  "name": "MCP Server",
+  "description": "Let AI tools such as Claude Code read, search, and optionally edit your workspace over the Model Context Protocol.",
+  "apiVersion": 2,
+  "kind": "extension",
+  "version": "1.0.0",
+  "authors": [
+    {
+      "discordId": "1262793452236570667",
+      "displayName": "may"
+    }
+  ],
+  "defaultEnabled": false,
+  "settings": {
+    "icon": "plug"
+  },
+  "capabilities": [],
+  "startup": "background",
+  "entry": "index.ts",
+  "native": {
+    "entry": "native.ts"
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "id": "dictionary",
+  "name": "Dictionary and thesaurus",
+  "description": "Look up definitions and synonyms in English, Chinese, Cantonese, Japanese, Filipino, French, and German. Words you look up are sent to Wiktionary and Datamuse.",
+  "apiVersion": 2,
+  "kind": "extension",
+  "version": "1.0.0",
+  "authors": [
+    {
+      "discordId": "1262793452236570667",
+      "displayName": "may"
+    }
+  ],
+  "defaultEnabled": false,
+  "network": {
+    "origins": ["https://en.wiktionary.org", "https://api.datamuse.com"]
+  },
+  "settings": {
+    "category": "addons",
+    "icon": "book-open"
+  },
+  "startup": "background",
+  "licenses": [
+    {
+      "id": "dictionary-german-wiktionary",
+      "name": "German Wiktionary / Kaikki",
+      "license": "CC BY-SA 4.0 / GFDL 1.1 or later",
+      "text": "German dictionary text by Wiktionary contributors, extracted by Wiktextract and distributed by Kaikki.org.\nSource: https://kaikki.org/dictionary/German/\nOriginal entries and contributor histories: https://en.wiktionary.org/\nCopyright statement: https://en.wiktionary.org/wiki/Wiktionary:Copyrights\nCC license: https://creativecommons.org/licenses/by-sa/4.0/\nCC license text: https://creativecommons.org/licenses/by-sa/4.0/legalcode.en\nAlternative GFDL licence: https://www.gnu.org/licenses/old-licenses/fdl-1.1.html\nHibi uses the CC BY-SA 4.0 option for this text.\nChanges: Hibi converts the German JSON Lines extract into an offline lookup index, retaining definitions and lexical relations.\nThe verified extraction was produced on 2026-10-03 from the English Wiktionary dump dated 2026-09-02. Installed download metadata identifies each fetched snapshot."
+    },
+    {
+      "id": "dictionary-french-wiktionary",
+      "name": "French Wiktionary / Kaikki",
+      "license": "CC BY-SA 4.0 / GFDL 1.1 or later",
+      "text": "French dictionary text by Wiktionary contributors, extracted by Wiktextract and distributed by Kaikki.org.\nSource: https://kaikki.org/dictionary/French/\nOriginal entries and contributor histories: https://en.wiktionary.org/\nCopyright statement: https://en.wiktionary.org/wiki/Wiktionary:Copyrights\nCC license: https://creativecommons.org/licenses/by-sa/4.0/\nCC license text: https://creativecommons.org/licenses/by-sa/4.0/legalcode.en\nAlternative GFDL licence: https://www.gnu.org/licenses/old-licenses/fdl-1.1.html\nHibi uses the CC BY-SA 4.0 option for this text.\nChanges: Hibi converts the French JSON Lines extract into an offline lookup index, retaining definitions, forms and lexical relations.\nThe extraction observed during verification was produced on 2026-10-03 from the English Wiktionary dump dated 2026-09-02. Installed download metadata identifies each fetched snapshot."
+    },
+    {
+      "id": "dictionary-oewn",
+      "name": "Open English WordNet",
+      "license": "CC BY 4.0 and Princeton WordNet notices",
+      "text": "Open English WordNet 2025\nCopyright (c) 2019-present, The Open English WordNet Team.\nDerived from Princeton University WordNet. Attribution is given to both Princeton WordNet and the Open English WordNet team.\nSource: https://en-word.net/\nLicense: https://creativecommons.org/licenses/by/4.0/\nLicense text: https://creativecommons.org/licenses/by/4.0/legalcode.en\nUpstream notices: https://github.com/globalwordnet/english-wordnet/blob/2025-edition/LICENSE.md\nPrinceton notice: https://github.com/globalwordnet/english-wordnet/blob/2025-edition/WNDB_License.txt\nChanges: Hibi converts the upstream XML into an offline lookup index, retaining definitions, forms and lexical relations.\n\nWordNet 3.1 Copyright 2011 by Princeton University. All rights reserved.\n\nPermission to use, copy, modify and distribute this software and database and its documentation for any purpose and without fee or royalty is hereby granted, provided that you agree to comply with the following copyright notice and statements, including the disclaimer, and that the same appear on ALL copies of the software, database and documentation, including modifications that you make for internal use or for distribution.\n\nTHIS SOFTWARE AND DATABASE IS PROVIDED \"AS IS\" AND PRINCETON UNIVERSITY MAKES NO REPRESENTATIONS OR WARRANTIES, EXPRESS OR IMPLIED. BY WAY OF EXAMPLE, BUT NOT LIMITATION, PRINCETON UNIVERSITY MAKES NO REPRESENTATIONS OR WARRANTIES OF MERCHANTABILITY OR FITNESS FOR ANY PARTICULAR PURPOSE OR THAT THE USE OF THE LICENSED SOFTWARE, DATABASE OR DOCUMENTATION WILL NOT INFRINGE ANY THIRD PARTY PATENTS, COPYRIGHTS, TRADEMARKS OR OTHER RIGHTS.\n\nThe name of Princeton University or Princeton may not be used in advertising or publicity pertaining to distribution of the software and/or database. Title to copyright in this software, database and any associated documentation shall at all times remain with Princeton University and LICENSEE agrees to preserve same."
+    },
+    {
+      "id": "dictionary-cc-cedict",
+      "name": "CC-CEDICT",
+      "license": "CC BY-SA 4.0",
+      "text": "CC-CEDICT is maintained by the CC-CEDICT community and published by MDBG.\nReferenced work: CEDICT, Copyright (c) 1997, 1998 Paul Andrew Denisowski.\nSource: https://www.mdbg.net/chinese/dictionary?page=cedict\nLicense: https://creativecommons.org/licenses/by-sa/4.0/\nLicense text: https://creativecommons.org/licenses/by-sa/4.0/legalcode.en\nChanges: Hibi converts the upstream text into an offline lookup index. The Cantonese pack combines these definitions with separately attributed Cantonese readings."
+    },
+    {
+      "id": "dictionary-cc-canto",
+      "name": "CC-Canto",
+      "license": "CC BY-SA 3.0",
+      "text": "CC-Canto, version 2017-02-02.\nCopyright (c) 2015-17 Pleco Inc.\nSource: https://cantonese.org/download.html\nLicense: https://creativecommons.org/licenses/by-sa/3.0/\nLicense text: https://creativecommons.org/licenses/by-sa/3.0/legalcode.en\nChanges: Hibi converts the upstream text into an offline Cantonese lookup index and combines it with separately attributed CC-CEDICT data."
+    },
+    {
+      "id": "dictionary-cc-cedict-cantonese-readings",
+      "name": "CC-CEDICT Cantonese Readings",
+      "license": "CC BY-SA 3.0",
+      "text": "CC-CEDICT Cantonese Readings, version 2015-09-23.\nCopyright (c) 2015 Pleco Software Incorporated.\nSource: https://cantonese.org/download.html\nLicense: https://creativecommons.org/licenses/by-sa/3.0/\nLicense text: https://creativecommons.org/licenses/by-sa/3.0/legalcode.en\nChanges: Hibi joins the upstream Cantonese readings to separately attributed CC-CEDICT definitions and indexes the resulting entries for offline lookup."
+    },
+    {
+      "id": "dictionary-jmdict",
+      "name": "JMdict / EDRDG",
+      "license": "CC BY-SA 4.0",
+      "text": "JMdict is copyright James William Breen and the Electronic Dictionary Research and Development Group.\nSource: https://www.edrdg.org/jmdict/j_jmdict.html\nUpstream licence statement: https://www.edrdg.org/edrdg/licence.html\nLicense: https://creativecommons.org/licenses/by-sa/4.0/\nLicense text: https://creativecommons.org/licenses/by-sa/4.0/legalcode.en\nChanges: Hibi converts the English-gloss JMdict_e XML into an offline lookup index with Japanese spellings and readings.\nThe upstream licence statement requires appropriate acknowledgement and a procedure for regular dictionary updates."
+    },
+    {
+      "id": "dictionary-tagalog-wiktionary",
+      "name": "Tagalog Wiktionary / Kaikki",
+      "license": "CC BY-SA 4.0 / GFDL 1.1 or later",
+      "text": "Tagalog dictionary text by Wiktionary contributors, extracted by Wiktextract and distributed by Kaikki.org.\nSource: https://kaikki.org/dictionary/Tagalog/\nOriginal entries and contributor histories: https://en.wiktionary.org/\nCopyright statement: https://en.wiktionary.org/wiki/Wiktionary:Copyrights\nCC license: https://creativecommons.org/licenses/by-sa/4.0/\nCC license text: https://creativecommons.org/licenses/by-sa/4.0/legalcode.en\nAlternative GFDL licence: https://www.gnu.org/licenses/old-licenses/fdl-1.1.html\nWiktionary states GFDL version 1.1 or later, with no invariant sections or cover texts.\nHibi uses the CC BY-SA 4.0 option for this text.\nChanges: Hibi converts the Tagalog JSON Lines extract into an offline lookup index, retaining definitions, forms and lexical relations.\nThe extraction observed during source verification was produced on 2026-10-03 from the English Wiktionary dump dated 2026-09-02. Installed download metadata identifies each fetched snapshot."
+    }
+  ],
+  "entry": "index.tsx",
+  "native": {
+    "entry": "native.ts"
+  }
+}

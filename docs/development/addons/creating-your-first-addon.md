@@ -75,7 +75,7 @@ Run **Say hello** from the command palette to display a greeting.
 
 ## Use a JSON source manifest
 
-Source addons can keep their metadata in `hibi-addon.json` instead of `manifest.ts`. Declare `kind: "extension"` and an `entry` such as `index.tsx`. The folder name must match the manifest ID. Hibi validates the metadata and entry files during the application build, then generates separate main and renderer catalogs with lazy code loaders.
+All bundled addons keep canonical metadata in `hibi-addon.json`. Private source addons can use the same format or retain the legacy `manifest.ts` shown above. Declare `kind: "extension"` and an `entry` such as `index.tsx`. The folder name must match the manifest ID. Hibi validates the metadata and entry files during the application build, then generates separate main and renderer catalogs with lazy code loaders.
 
 If addon code still imports `./manifest`, keep a small shim that imports the JSON, removes `entry` and `native`, and exports the remaining metadata as `AddonManifest`. Maintain metadata only in the JSON. Existing source addons without JSON continue to use `manifest.ts` and the conventional `index.ts` or `index.tsx`.
 

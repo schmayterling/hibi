@@ -1,0 +1,28 @@
+{
+  "id": "vim",
+  "name": "Vim",
+  "description": "Use Vim keys and commands in source views.",
+  "apiVersion": 2,
+  "kind": "extension",
+  "version": "0.3.2",
+  "authors": [
+    {
+      "discordId": "1262793452236570667",
+      "displayName": "may"
+    },
+    {
+      "discordId": "297656178358616064",
+      "displayName": "Angelo",
+      "github": "angelofallars"
+    }
+  ],
+  "defaultEnabled": false,
+  "settings": {
+    "icon": "keyboard"
+  },
+  "capabilities": ["modalEditing"],
+  "entry": "index.ts",
+  "native": {
+    "entry": "native.ts"
+  }
+}

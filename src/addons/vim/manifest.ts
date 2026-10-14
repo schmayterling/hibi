@@ -1,14 +1,6 @@
 import type { AddonManifest } from '../api'
-import { authors } from '../authors'
+import details from './hibi-addon.json'
 
-export default {
-  id: 'vim',
-  name: 'Vim',
-  version: '0.3.2',
-  authors: [authors.may, authors.angelo],
-  description: 'Use Vim keys and commands in source views.',
-  settings: { icon: 'keyboard' },
-  apiVersion: 2,
-  capabilities: ['modalEditing'],
-  defaultEnabled: false,
-} satisfies AddonManifest
+const { entry: _entry, native: _native, ...manifest } = details
+
+export default manifest as AddonManifest & typeof manifest

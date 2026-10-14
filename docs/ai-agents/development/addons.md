@@ -7,17 +7,24 @@ Source addons are compiled with Hibi and enabled in settings. They are trusted a
 Put bundled addons in `src/addons/<id>/` and private addons in the Git-ignored `src/useraddons/<id>/`:
 
 ```text
-manifest.ts   metadata and api version
-index.ts     renderer entry point
-native.ts    optional native methods
-README.md    addon documentation
+hibi-addon.json  canonical metadata and explicit entry paths
+manifest.ts      typed compatibility shim for addon code
+index.ts         renderer entry point (or index.tsx)
+native.ts        optional native methods
+README.md        addon documentation
 ```
 
-Vite discovers these folders. Rebuild after adding files, or use `npm start`. Renderer addons use browser APIs; filesystem work belongs in the native entry point. Private addons import the SDK from `../../addons/api`.
+All bundled addons use `hibi-addon.json`. Declare `kind: "extension"`, the renderer `entry`, and `native: { "entry": "native.ts" }` when needed. Keep `manifest.ts` as a typed JSON import that removes `entry` and `native`; addon code still imports `./manifest`. Do not duplicate metadata in the shim.
 
-Use a unique lowercase ID containing letters, numbers, or hyphens. The manifest requires a nonempty `version` of at most 40 characters. `authors` lists people who wrote or contributed to the Hibi plugin, including its port, using `{ displayName, discordId?, github?, role? }`. Bundled plugins share entries from `src/addons/authors.ts`. Do not invent missing identifiers. Credit upstream library, engine, and asset creators in the README and preserve their license notices.
+The build catalog validates these folders as trusted compiled code and generates separate main and renderer loaders. Private source addons without JSON retain the legacy `manifest.ts`, `index.ts` or `index.tsx`, and optional `native.ts` conventions. Installed packages still require prepared JavaScript and cannot gain native handlers, importers, or desktop windows by declaring compiled metadata. Opening a workspace never grants compiled trust.
+
+Rebuild after adding files, or use `npm start`. Renderer addons use browser APIs; filesystem work belongs in the native entry point. Private addons import the SDK from `../../addons/api`. `Settings.tsx` and `flavor-info.ts` remain convention-discovered. Only declared analyzers are loaded; `analysis: { "entry": "analysis.js" }` can resolve to `analysis.ts` during the build.
+
+Use a unique lowercase ID containing letters, numbers, or hyphens. The manifest requires a nonempty `version` of at most 40 characters. `authors` lists people who wrote or contributed to the Hibi plugin, including its port, using `{ displayName, discordId?, github?, role? }`. Bundled JSON manifests copy complete records from `src/addons/authors.ts`; parity tests keep identifiers, order, and roles in sync. Keep that public author module and `src/shared/file-associations.ts`, which also serves installers and document types. Do not invent missing identifiers. Credit upstream library, engine, and asset creators in the README and preserve their license notices.
 
 Optional `licenses` entries contain `id`, `name`, `license`, and full `text`. They appear in Hibi → Open source licenses even when the addon is disabled. The host prefixes license IDs with the addon ID. Settings show author names and roles, with Discord IDs or GitHub usernames in tooltips.
+
+Inline complete notices and dependency objects in the JSON; the entire manifest must fit within 64 KiB. Keep original notice files for documentation links. The website export still generates an object-literal `manifest.ts` from validated JSON.
 
 ## Renderer entry point
 

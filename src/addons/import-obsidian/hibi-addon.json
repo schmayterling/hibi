@@ -1,0 +1,23 @@
+{
+  "id": "import-obsidian",
+  "name": "Import from Obsidian",
+  "description": "Bring notes and attachments from an Obsidian vault.",
+  "apiVersion": 2,
+  "kind": "extension",
+  "version": "1.0.0",
+  "authors": [
+    {
+      "discordId": "1262793452236570667",
+      "displayName": "may"
+    }
+  ],
+  "defaultEnabled": false,
+  "importer": {
+    "instructions": "Choose your Obsidian vault folder.",
+    "sources": ["folder"]
+  },
+  "entry": "index.ts",
+  "native": {
+    "entry": "native.ts"
+  }
+}

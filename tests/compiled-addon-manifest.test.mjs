@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readdir } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -184,7 +184,7 @@ test('api compatibility uses one format and caller-owned compiled trust', () => 
   assert.throws(() => compiled({ apiVersion: 3 }), /API version/)
 })
 
-test('all compiled legacy metadata survives with only kind and defaultEnabled defaults', async () => {
+test('all 42 json manifests match their compatibility shims without entry or native metadata', async () => {
   const parent = join(root, 'src/addons')
   const folders = []
   for (const folder of await readdir(parent, { withFileTypes: true })) {
@@ -215,23 +215,21 @@ test('all compiled legacy metadata survives with only kind and defaultEnabled de
     `data:text/javascript;base64,${Buffer.from(outputFiles[0].contents).toString('base64')}`
   )
   assert.equal(manifests.length, 42)
-  manifests.forEach((manifest, index) => {
-    const { files } = folders[index]
-    const kind = manifest.kind ?? 'extension'
-    const input = {
-      ...manifest,
-      kind,
-      entry: files.includes('index.ts') ? 'index.ts' : 'index.tsx',
-      ...(files.includes('native.ts')
-        ? { native: { entry: 'native.ts' } }
-        : {}),
-    }
+  for (const [index, manifest] of manifests.entries()) {
+    const { path } = folders[index]
+    const input = JSON.parse(
+      await readFile(join(path, 'hibi-addon.json'), 'utf8'),
+    )
+    const { entry: _entry, native: _native, ...metadata } = input
+    assert.deepEqual(manifest, metadata, manifest.id)
     assert.deepEqual(
       parseAddonManifest(input, { trust: 'compiled' }).manifest,
-      { ...manifest, kind, defaultEnabled: manifest.defaultEnabled ?? false },
+      manifest,
       manifest.id,
     )
-  })
+    assert.equal('entry' in manifest, false, manifest.id)
+    assert.equal('native' in manifest, false, manifest.id)
+  }
   assert.deepEqual(manifests.find(({ id }) => id === 'review').analysis, {
     entry: 'analysis.js',
   })

@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   symlink,
   writeFile,
@@ -26,6 +28,7 @@ const { readAddonPackages, addonCatalog } = await server.ssrLoadModule(
   '/scripts/addon-packages.ts',
 )
 const packages = await readAddonPackages()
+const builtins = packages.filter(({ source }) => source === 'built-in')
 const stable = (value) =>
   Array.isArray(value)
     ? value.map(stable)
@@ -37,7 +40,7 @@ const stable = (value) =>
         )
       : value
 
-test('all 42 compiled manifests retain their metadata before catalog migration', async () => {
+test('all 42 compiled manifests retain their frozen normalized metadata', async () => {
   const expected = JSON.parse(
     await readFile(
       fileURLToPath(
@@ -46,7 +49,6 @@ test('all 42 compiled manifests retain their metadata before catalog migration',
       'utf8',
     ),
   )
-  const builtins = packages.filter(({ source }) => source === 'built-in')
   assert.equal(builtins.length, 42)
   for (const { manifest, directory } of builtins) {
     assert.equal(basename(directory), manifest.id)
@@ -60,25 +62,204 @@ test('all 42 compiled manifests retain their metadata before catalog migration',
   }
 })
 
-test('pilot author metadata stays in sync with the shared author record', async () => {
+test('all builtin author records retain shared identifiers, order, and port roles', async () => {
   const { authors } = await server.ssrLoadModule('/src/addons/authors.ts')
-  for (const id of ['ui-preview', 'quick-note', 'review'])
-    assert.deepEqual(
-      packages.find(({ manifest }) => manifest.id === id).manifest.authors,
-      [authors.may],
-      id,
-    )
+  for (const { manifest } of builtins) {
+    const expected =
+      manifest.id === 'vim'
+        ? [authors.may, authors.angelo]
+        : manifest.id === 'keybeats'
+          ? [{ ...authors.may, role: 'Hibi port' }]
+          : [authors.may]
+    assert.deepEqual(manifest.authors, expected, manifest.id)
+  }
 })
 
-test('catalog watches the real files behind metadata imports', async () => {
+test('json file associations and tool dependencies retain their full shared values', async () => {
+  const { fileAssociations } = await server.ssrLoadModule(
+    '/src/shared/file-associations.ts',
+  )
+  const tools = await server.ssrLoadModule(
+    '/src/addons/_shared/tool-dependencies.ts',
+  )
+  const expected = {
+    asciidoc: [tools.pandocDependency],
+    creole: [tools.pandocDependency],
+    djot: [tools.pandocDependency],
+    git: [tools.gitDependency],
+    math: [tools.tectonicDependency],
+    mediawiki: [tools.pandocDependency],
+    org: [tools.pandocDependency],
+    quarto: [tools.pandocDependency, tools.quartoDependency],
+    rmarkdown: [tools.pandocDependency, tools.rDependency],
+    rst: [tools.pandocDependency],
+    textile: [tools.pandocDependency],
+    typst: [
+      {
+        id: 'typst',
+        name: 'Typst',
+        command: 'typst',
+        homepage: 'https://typst.app/open-source/',
+        reason:
+          'Optional system compiler for previews and PDF export. Use Typst 0.15 or newer for variable fonts.',
+        optional: true,
+        install: { brew: { package: 'typst' }, winget: 'Typst.Typst' },
+      },
+    ],
+  }
+  for (const { manifest } of builtins) {
+    assert.deepEqual(
+      manifest.fileExtensions,
+      fileAssociations[manifest.id]?.ext,
+      manifest.id,
+    )
+    assert.deepEqual(manifest.dependencies, expected[manifest.id], manifest.id)
+  }
+})
+
+test('json retains all dictionary, keybeats, and typst license notices verbatim', async () => {
+  const { packLicenses } = await server.ssrLoadModule(
+    '/src/addons/dictionary/pack-licenses.ts',
+  )
+  const byId = Object.fromEntries(
+    builtins.map(({ manifest }) => [manifest.id, manifest]),
+  )
+  assert.deepEqual(byId.dictionary.licenses, packLicenses)
+  for (const [id, files] of [
+    [
+      'keybeats',
+      [
+        'src/addons/keybeats/LICENSE.keybeats.md',
+        'src/addons/keybeats/LICENSE.kbsim.md',
+      ],
+    ],
+    ['typst', ['docs/licenses/typst-assets.md']],
+  ]) {
+    assert.deepEqual(
+      byId[id].licenses.map(({ text }) => text),
+      await Promise.all(files.map((file) => readFile(file, 'utf8'))),
+      id,
+    )
+  }
+})
+
+test('all builtins declare bounded json and preserve the renderer and native entry inventory', async () => {
+  const tsx = new Set([
+    'autocomplete',
+    'dictionary',
+    'documentation',
+    'git',
+    'graph',
+    'markdown',
+    'mermaid',
+    'quick-note',
+    'review',
+    'tags',
+    'typst',
+    'ui-preview',
+  ])
+  const native = new Set([
+    'asciidoc',
+    'bbcode',
+    'creole',
+    'diagnostics',
+    'dictionary',
+    'discord-presence',
+    'djot',
+    'documentation',
+    'git',
+    'html',
+    'import-bear',
+    'import-notion',
+    'import-obsidian',
+    'markdoc',
+    'math',
+    'mcp-server',
+    'mdsvex',
+    'mdx',
+    'mediawiki',
+    'mermaid',
+    'org',
+    'quarto',
+    'quick-note',
+    'rmarkdown',
+    'rst',
+    'textile',
+    'typst',
+    'vim',
+  ])
+  for (const item of builtins) {
+    const id = item.manifest.id
+    const text = await readFile(join(item.directory, 'hibi-addon.json'), 'utf8')
+    const json = JSON.parse(text)
+    const entry = tsx.has(id) ? 'index.tsx' : 'index.ts'
+    assert.ok(Buffer.byteLength(text) <= 64 * 1024, id)
+    assert.equal(json.kind, 'extension', id)
+    assert.equal(json.entry, entry, id)
+    assert.equal(item.entry, `src/addons/${id}/${entry}`, id)
+    assert.deepEqual(
+      json.native,
+      native.has(id) ? { entry: 'native.ts' } : undefined,
+      id,
+    )
+    assert.equal(
+      item.native,
+      native.has(id) ? `src/addons/${id}/native.ts` : undefined,
+      id,
+    )
+    for (const field of ['styles', 'themes', 'windows'])
+      assert.equal(field in json, false, `${id}.${field}`)
+    assert.equal(json.settings?.entry, undefined, id)
+  }
+})
+
+test('settings, flavors, and analysis retain their existing discovery rules', () => {
+  assert.deepEqual(
+    builtins
+      .filter(({ settings }) => settings)
+      .map(({ manifest }) => manifest.id),
+    [
+      'autocomplete',
+      'diagnostics',
+      'dictionary',
+      'discord-presence',
+      'frontmatter',
+      'graph',
+      'keybeats',
+      'mcp-server',
+      'mermaid',
+      'quick-note',
+      'typst',
+      'vim',
+    ],
+  )
+  assert.deepEqual(
+    builtins
+      .filter(({ flavors }) => flavors)
+      .map(({ manifest }) => manifest.id),
+    ['markdown', 'math', 'text-extras', 'typst'],
+  )
+  assert.deepEqual(
+    builtins
+      .filter(({ analysis }) => analysis)
+      .map(({ manifest, analysis }) => [
+        manifest.id,
+        manifest.analysis,
+        analysis,
+      ]),
+    [['review', { entry: 'analysis.js' }, 'src/addons/review/analysis.ts']],
+  )
+})
+
+test('catalog watches every canonical json without importing runtime or shared metadata', async () => {
   const inputs = new Set()
   await readAddonPackages(undefined, (file) => inputs.add(file))
-  assert.ok(inputs.has(resolve('src/addons/quick-note/hibi-addon.json')))
-  assert.ok(inputs.has(resolve('src/addons/authors.ts')))
-  assert.ok(inputs.has(resolve('docs/licenses/typst-assets.md')))
-  assert.ok([...inputs].every((file) => !file.includes('?')))
-  assert.equal(inputs.has(resolve('src/addons/quick-note/index.tsx')), false)
-  assert.equal(inputs.has(resolve('src/addons/quick-note/native.ts')), false)
+  assert.deepEqual(
+    [...inputs].sort(),
+    builtins
+      .map(({ directory }) => resolve(directory, 'hibi-addon.json'))
+      .sort(),
+  )
 })
 
 test('catalog emits process-specific lazy entries and separate author/license details', async () => {
@@ -154,6 +335,73 @@ async function fixture(t) {
   await write(manifest)
   return { root, folder, manifest, write }
 }
+
+test('legacy private addons watch transitive metadata and raw notices', async (t) => {
+  const { root, manifest } = await fixture(t)
+  const local = join(root, 'src/useraddons/local')
+  await mkdir(local, { recursive: true })
+  const { entry: _entry, kind: _kind, ...metadata } = manifest
+  await writeFile(
+    join(local, 'manifest.ts'),
+    `import { details } from './details'
+export default { ...${JSON.stringify({ ...metadata, id: 'local' })}, ...details }`,
+  )
+  await writeFile(
+    join(local, 'details.ts'),
+    `import notice from './notice.md?raw'
+export const details = {
+  authors: [{ displayName: 'Legacy author' }],
+  licenses: [{ id: 'legacy', name: 'Legacy notice', license: 'MIT', text: notice }],
+}`,
+  )
+  await writeFile(join(local, 'notice.md'), 'Original legacy notice.\n')
+  for (const file of ['index.ts', 'native.ts', 'Settings.tsx', 'analysis.ts'])
+    await writeFile(join(local, file), 'throw new Error("never execute")')
+  // Start esbuild in the fixture project, as the development command does.
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `
+      import { createServer } from ${JSON.stringify(import.meta.resolve('vite'))}
+      import { writeFile } from 'node:fs/promises'
+      const server = await createServer({
+        configFile: false,
+        root: ${JSON.stringify(resolve('.'))},
+        optimizeDeps: { noDiscovery: true },
+        server: { middlewareMode: true },
+        appType: 'custom',
+      })
+      try {
+        const { readAddonPackages } = await server.ssrLoadModule('/scripts/addon-packages.ts')
+        const inputs = []
+        const items = await readAddonPackages(undefined, (file) => inputs.push(file))
+        const item = items.find(({ source }) => source === 'local')
+        await writeFile('src/useraddons/local/notice.md', 'Updated legacy notice.\\n')
+        const updated = (await readAddonPackages()).find(({ source }) => source === 'local')
+        console.log(JSON.stringify({ item, inputs, updatedNotice: updated.manifest.licenses[0].text }))
+      } finally {
+        await server.close()
+      }
+    `,
+    ],
+    { cwd: root, encoding: 'utf8' },
+  )
+  assert.equal(result.status, 0, result.stderr)
+  const { item, inputs, updatedNotice } = JSON.parse(result.stdout)
+  assert.equal(item.manifest.kind, 'extension')
+  assert.equal(item.entry, 'src/useraddons/local/index.ts')
+  assert.equal(item.native, 'src/useraddons/local/native.ts')
+  assert.equal(item.settings, 'src/useraddons/local/Settings.tsx')
+  assert.equal(item.analysis, undefined)
+  assert.deepEqual(item.manifest.authors, [{ displayName: 'Legacy author' }])
+  for (const file of ['manifest.ts', 'details.ts', 'notice.md'])
+    assert.ok(inputs.includes(await realpath(join(local, file))), file)
+  assert.ok(inputs.every((file) => !file.includes('?')))
+  assert.equal(inputs.includes(await realpath(join(local, 'index.ts'))), false)
+  assert.equal(updatedNotice, 'Updated legacy notice.\n')
+})
 
 test('json takes precedence over a legacy shim and declares the owner renderer entry', async (t) => {
   const { root, folder } = await fixture(t)

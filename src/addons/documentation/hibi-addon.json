@@ -1,0 +1,20 @@
+{
+  "id": "documentation",
+  "name": "Export",
+  "description": "Customize and export your workspace as a website.",
+  "apiVersion": 2,
+  "kind": "extension",
+  "version": "0.2.3",
+  "authors": [
+    {
+      "discordId": "1262793452236570667",
+      "displayName": "may"
+    }
+  ],
+  "defaultEnabled": true,
+  "startup": "background",
+  "entry": "index.tsx",
+  "native": {
+    "entry": "native.ts"
+  }
+}

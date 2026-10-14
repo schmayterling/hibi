@@ -1,0 +1,20 @@
+{
+  "id": "mdx",
+  "name": "MDX",
+  "description": "Edit and preview MDX; run embedded code when you choose.",
+  "apiVersion": 2,
+  "kind": "extension",
+  "version": "1.0.1",
+  "authors": [
+    {
+      "discordId": "1262793452236570667",
+      "displayName": "may"
+    }
+  ],
+  "defaultEnabled": false,
+  "fileExtensions": ["mdx"],
+  "entry": "index.ts",
+  "native": {
+    "entry": "native.ts"
+  }
+}

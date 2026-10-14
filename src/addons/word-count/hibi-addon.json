@@ -1,0 +1,17 @@
+{
+  "id": "word-count",
+  "name": "Word count",
+  "description": "See word and character counts for your current document.",
+  "apiVersion": 2,
+  "kind": "extension",
+  "version": "1.1.1",
+  "authors": [
+    {
+      "discordId": "1262793452236570667",
+      "displayName": "may"
+    }
+  ],
+  "defaultEnabled": false,
+  "startup": "background",
+  "entry": "index.ts"
+}

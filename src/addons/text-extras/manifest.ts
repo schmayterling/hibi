@@ -1,13 +1,6 @@
 import type { AddonManifest } from '../api'
-import { authors } from '../authors'
+import details from './hibi-addon.json'
 
-export default {
-  id: 'text-extras',
-  name: 'Text extras',
-  description: 'Add subscript and Discord-style small text.',
-  kind: 'extension',
-  version: '1.0.2',
-  apiVersion: 2,
-  defaultEnabled: true,
-  authors: [authors.may],
-} satisfies AddonManifest
+const { entry: _entry, ...manifest } = details
+
+export default manifest as AddonManifest & typeof manifest

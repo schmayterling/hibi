@@ -1,13 +1,6 @@
 import type { AddonManifest } from '../api'
-import { authors } from '../authors'
+import details from './hibi-addon.json'
 
-export default {
-  id: 'documentation',
-  name: 'Export',
-  version: '0.2.3',
-  authors: [authors.may],
-  description: 'Customize and export your workspace as a website.',
-  apiVersion: 2,
-  defaultEnabled: true,
-  startup: 'background',
-} satisfies AddonManifest
+const { entry: _entry, native: _native, ...manifest } = details
+
+export default manifest as AddonManifest & typeof manifest

@@ -1,0 +1,21 @@
+{
+  "id": "mermaid",
+  "name": "Mermaid",
+  "description": "Write and preview diagrams.",
+  "apiVersion": 2,
+  "kind": "extension",
+  "version": "1.0.0",
+  "authors": [
+    {
+      "discordId": "1262793452236570667",
+      "displayName": "may"
+    }
+  ],
+  "defaultEnabled": false,
+  "capabilities": ["ui", "rich", "source", "markdown"],
+  "fileExtensions": ["mmd", "mermaid"],
+  "entry": "index.tsx",
+  "native": {
+    "entry": "native.ts"
+  }
+}

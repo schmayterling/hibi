@@ -1,14 +1,6 @@
 import type { AddonManifest } from '../api'
-import { authors } from '../authors'
+import details from './hibi-addon.json'
 
-export default {
-  id: 'diagnostics',
-  name: 'Diagnostics',
-  version: '1.0.1',
-  settings: { category: 'general', icon: 'activity' },
-  apiVersion: 2,
-  description: 'Inspect startup timings, addon activity, and app performance.',
-  defaultEnabled: false,
-  startup: 'background',
-  authors: [authors.may],
-} satisfies AddonManifest
+const { entry: _entry, native: _native, ...manifest } = details
+
+export default manifest as AddonManifest & typeof manifest

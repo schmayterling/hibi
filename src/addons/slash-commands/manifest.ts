@@ -1,12 +1,6 @@
 import type { AddonManifest } from '../api'
-import { authors } from '../authors'
+import details from './hibi-addon.json'
 
-export default {
-  id: 'slash-commands',
-  name: 'Slash commands',
-  version: '0.1.1',
-  authors: [authors.may],
-  description: 'Type / at the start of a line to insert a block.',
-  apiVersion: 2,
-  defaultEnabled: true,
-} satisfies AddonManifest
+const { entry: _entry, ...manifest } = details
+
+export default manifest as AddonManifest & typeof manifest

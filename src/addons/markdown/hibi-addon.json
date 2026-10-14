@@ -1,0 +1,20 @@
+{
+  "id": "markdown",
+  "name": "Markdown",
+  "description": "Write Markdown with formatted editing, source view, and HTML export.",
+  "apiVersion": 2,
+  "kind": "extension",
+  "version": "1.0.1",
+  "authors": [
+    {
+      "discordId": "1262793452236570667",
+      "displayName": "may"
+    }
+  ],
+  "defaultEnabled": true,
+  "settings": {
+    "icon": "file-text"
+  },
+  "fileExtensions": ["md", "markdown"],
+  "entry": "index.tsx"
+}

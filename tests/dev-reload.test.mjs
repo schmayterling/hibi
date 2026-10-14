@@ -686,17 +686,18 @@ dialog.showMessageBox = (...args) => {
     noticeId,
   )
   const noticeStarts = seenEndpoints.length
-  const noticePath = join(root, 'docs/licenses/typst-assets.md')
-  await writeFile(
-    noticePath,
-    `Catalog notice probe.\n${await readFile(noticePath, 'utf8')}`,
-  )
+  const noticePath = join(root, 'src/addons/typst/hibi-addon.json')
+  const noticeManifest = JSON.parse(await readFile(noticePath, 'utf8'))
+  assert.equal(noticeManifest.licenses[0].text, originalNotice)
+  noticeManifest.licenses[0].text = `Catalog notice probe.\n${originalNotice}`
+  await writeFile(noticePath, JSON.stringify(noticeManifest, null, 2))
+
   await connectRestartedPage(noticeStarts)
   assert.equal(
     await page.evaluate((id) => window.hibi.getLicense(id), noticeId),
     `Catalog notice probe.\n${originalNotice}`,
   )
-  mark('transitive notice input updates lazy catalog details')
+  mark('canonical json notice updates lazy catalog details')
 
   await replace('scripts/addon-reference.mjs', '[Source]', '[Updated source]')
   await until(

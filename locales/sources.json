@@ -163,7 +163,7 @@
     "src/addons/frontmatter/Properties.tsx"
   ],
   "2b813bc62d17": [
-    "src/addons/text-extras/manifest.ts"
+    "src/addons/text-extras/hibi-addon.json"
   ],
   "62d8dc44bd26": [
     "src/addons/mcp-server/Settings.tsx"
@@ -387,7 +387,7 @@
     "src/renderer/src/EditorToolbar.tsx"
   ],
   "42f0fec8e4fc": [
-    "src/addons/asciidoc/manifest.ts"
+    "src/addons/asciidoc/hibi-addon.json"
   ],
   "864373a5c00f": [
     "src/addons/quick-note/Settings.tsx"
@@ -405,7 +405,7 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "4db0a7e493a8": [
-    "src/addons/autocomplete/manifest.ts"
+    "src/addons/autocomplete/hibi-addon.json"
   ],
   "cf7f9f2535c6": [
     "src/addons/autocomplete/index.tsx"
@@ -429,7 +429,7 @@
     "src/addons/diagnostics/Settings.tsx"
   ],
   "18eaaf82f8ed": [
-    "src/addons/bbcode/manifest.ts"
+    "src/addons/bbcode/hibi-addon.json"
   ],
   "1f1e5971d696": [
     "src/addons/bbcode/index.ts"
@@ -464,7 +464,7 @@
     "src/addons/block-drag/index.ts"
   ],
   "a936b1f4cf9c": [
-    "src/addons/block-drag/manifest.ts"
+    "src/addons/block-drag/hibi-addon.json"
   ],
   "83d0a88afd6d": [
     "src/addons/math/engine.ts"
@@ -489,13 +489,13 @@
     "src/site/main.tsx"
   ],
   "ec665cf35a0b": [
-    "src/addons/import-obsidian/manifest.ts"
+    "src/addons/import-obsidian/hibi-addon.json"
   ],
   "57d9fa7bedf4": [
-    "src/addons/import-bear/manifest.ts"
+    "src/addons/import-bear/hibi-addon.json"
   ],
   "9711da7f3cd9": [
-    "src/addons/import-notion/manifest.ts"
+    "src/addons/import-notion/hibi-addon.json"
   ],
   "bacfd35540a3": [
     "src/addons/tags/index.tsx"
@@ -511,6 +511,15 @@
   ],
   "f9a00edd1208": [
     "src/addons/dictionary/SideView.tsx"
+  ],
+  "47bdb3efe990": [
+    "src/addons/dictionary/hibi-addon.json"
+  ],
+  "806b2ea16ad0": [
+    "src/addons/dictionary/hibi-addon.json"
+  ],
+  "6f2a36c7a59c": [
+    "src/addons/dictionary/hibi-addon.json"
   ],
   "db9a4c7d4c19": [
     "src/addons/diagnostics/Settings.tsx"
@@ -1099,7 +1108,7 @@
     "src/addons/typst/Preview.tsx"
   ],
   "7f37c8c8332a": [
-    "src/addons/writing-suggestions/manifest.ts"
+    "src/addons/writing-suggestions/hibi-addon.json"
   ],
   "22a970d2e5b1": [
     "src/addons/diagnostics/Settings.tsx"
@@ -1402,7 +1411,7 @@
     "src/renderer/src/settings-categories.ts"
   ],
   "cae2d6782eb3": [
-    "src/addons/creole/manifest.ts"
+    "src/addons/creole/hibi-addon.json"
   ],
   "184c749f9915": [
     "src/renderer/src/WorkspaceSettings.tsx"
@@ -1430,7 +1439,7 @@
     "src/addons/dictionary/custom-words.ts"
   ],
   "020405ad0651": [
-    "src/addons/documentation/manifest.ts"
+    "src/addons/documentation/hibi-addon.json"
   ],
   "60acc53f13a5": [
     "src/addons/documentation/ExportDialog.tsx",
@@ -1521,7 +1530,7 @@
     "src/addons/diagnostics/Settings.tsx"
   ],
   "268f14bbfe11": [
-    "src/addons/diagnostics/manifest.ts",
+    "src/addons/diagnostics/hibi-addon.json",
     "src/renderer/src/HibiSettings.tsx"
   ],
   "27a853a6a7fb": [
@@ -1534,7 +1543,7 @@
     "src/addons/dictionary/index.tsx"
   ],
   "62c1486ecb8e": [
-    "src/addons/dictionary/manifest.ts"
+    "src/addons/dictionary/hibi-addon.json"
   ],
   "5bff997ead1a": [
     "src/addons/dictionary/pack-store.ts"
@@ -1561,7 +1570,7 @@
     "src/renderer/src/addons.ts"
   ],
   "855e169eae01": [
-    "src/addons/discord-presence/manifest.ts"
+    "src/addons/discord-presence/hibi-addon.json"
   ],
   "8fb56f68512f": [
     "src/addons/discord-presence/Settings.tsx"
@@ -1616,7 +1625,7 @@
     "src/renderer/src/markdown-syntax.ts"
   ],
   "a6da1e2efc63": [
-    "src/addons/djot/manifest.ts"
+    "src/addons/djot/hibi-addon.json"
   ],
   "7af023c43013": [
     "src/renderer/src/HibiSettings.tsx"
@@ -1745,7 +1754,7 @@
     "src/renderer/src/DocumentTabs.tsx"
   ],
   "f5d8a4fcbe0e": [
-    "src/addons/block-drag/manifest.ts"
+    "src/addons/block-drag/hibi-addon.json"
   ],
   "b300aa88984f": [
     "src/ui/Sidebar.tsx"
@@ -1796,19 +1805,19 @@
     "src/renderer/src/Introduction.tsx"
   ],
   "4f0a4d2cb076": [
-    "src/addons/bbcode/manifest.ts"
+    "src/addons/bbcode/hibi-addon.json"
   ],
   "79afa479a588": [
-    "src/addons/mdx/manifest.ts"
+    "src/addons/mdx/hibi-addon.json"
   ],
   "b37add271ae2": [
-    "src/addons/mdsvex/manifest.ts"
+    "src/addons/mdsvex/hibi-addon.json"
   ],
   "2427b8df5e86": [
-    "src/addons/quarto/manifest.ts"
+    "src/addons/quarto/hibi-addon.json"
   ],
   "020bd15463d3": [
-    "src/addons/rmarkdown/manifest.ts"
+    "src/addons/rmarkdown/hibi-addon.json"
   ],
   "14c7bbeb603c": [
     "src/renderer/src/Editor.tsx",
@@ -1821,7 +1830,7 @@
     "src/renderer/src/main.tsx"
   ],
   "7bc860ccf5e3": [
-    "src/addons/frontmatter/manifest.ts"
+    "src/addons/frontmatter/hibi-addon.json"
   ],
   "0daa134af314": [
     "src/shared/document-edits.ts"
@@ -1830,31 +1839,31 @@
     "src/addons/ui-preview/index.tsx"
   ],
   "c7bf14938074": [
-    "src/addons/asciidoc/manifest.ts"
+    "src/addons/asciidoc/hibi-addon.json"
   ],
   "a5e6633b7976": [
-    "src/addons/creole/manifest.ts"
+    "src/addons/creole/hibi-addon.json"
   ],
   "99f10d2562f2": [
-    "src/addons/djot/manifest.ts"
+    "src/addons/djot/hibi-addon.json"
   ],
   "a6e84e178701": [
-    "src/addons/html/manifest.ts"
+    "src/addons/html/hibi-addon.json"
   ],
   "ed576e8db69a": [
-    "src/addons/markdoc/manifest.ts"
+    "src/addons/markdoc/hibi-addon.json"
   ],
   "2863e66d02a3": [
-    "src/addons/mediawiki/manifest.ts"
+    "src/addons/mediawiki/hibi-addon.json"
   ],
   "4b168fa00231": [
-    "src/addons/org/manifest.ts"
+    "src/addons/org/hibi-addon.json"
   ],
   "412769bd37ae": [
-    "src/addons/textile/manifest.ts"
+    "src/addons/textile/hibi-addon.json"
   ],
   "1c0c39f95ac6": [
-    "src/addons/rst/manifest.ts"
+    "src/addons/rst/hibi-addon.json"
   ],
   "51c81d4fcb3d": [
     "src/shared/source-buffer.ts"
@@ -2112,7 +2121,7 @@
   "3664895579f0": [
     "src/addons/_shared/format-renderer.tsx",
     "src/addons/documentation/ExportDialog.tsx",
-    "src/addons/documentation/manifest.ts"
+    "src/addons/documentation/hibi-addon.json"
   ],
   "17f681a91a24": [
     "src/addons/_shared/local-preview.tsx"
@@ -2346,9 +2355,12 @@
     "src/addons/dictionary/packs.ts",
     "src/addons/dictionary/settings.ts"
   ],
+  "19b1e162ddd5": [
+    "src/addons/dictionary/hibi-addon.json"
+  ],
   "323d638f6497": [
-    "src/addons/frontmatter/index.ts",
-    "src/addons/frontmatter/manifest.ts"
+    "src/addons/frontmatter/hibi-addon.json",
+    "src/addons/frontmatter/index.ts"
   ],
   "ed16c742ef42": [
     "src/addons/frontmatter/Properties.tsx"
@@ -2370,9 +2382,12 @@
     "src/addons/dictionary/packs.ts",
     "src/addons/dictionary/settings.ts"
   ],
+  "6ae55e8dbbc1": [
+    "src/addons/dictionary/hibi-addon.json"
+  ],
   "b949c922b6ef": [
-    "src/addons/git/index.tsx",
-    "src/addons/git/manifest.ts"
+    "src/addons/git/hibi-addon.json",
+    "src/addons/git/index.tsx"
   ],
   "903136bdf7e4": [
     "src/addons/git/Panel.tsx"
@@ -2414,7 +2429,7 @@
     "src/shared/hotkeys.ts"
   ],
   "32ab018fd38a": [
-    "src/addons/graph/manifest.ts",
+    "src/addons/graph/hibi-addon.json",
     "src/site/main.tsx"
   ],
   "d9b2b1f797c3": [
@@ -2425,7 +2440,7 @@
   ],
   "07239dbd2a1a": [
     "src/addons/_shared/format-renderer.tsx",
-    "src/addons/html/manifest.ts"
+    "src/addons/html/hibi-addon.json"
   ],
   "e9069e56a977": [
     "src/renderer/src/markdown-syntax.ts"
@@ -2585,13 +2600,13 @@
     "src/renderer/src/ImportDialog.tsx"
   ],
   "e5193e7a62bb": [
-    "src/addons/import-bear/manifest.ts"
+    "src/addons/import-bear/hibi-addon.json"
   ],
   "c5b051920267": [
-    "src/addons/import-notion/manifest.ts"
+    "src/addons/import-notion/hibi-addon.json"
   ],
   "fcfe00a28562": [
-    "src/addons/import-obsidian/manifest.ts"
+    "src/addons/import-obsidian/hibi-addon.json"
   ],
   "802db18c0a29": [
     "src/main/imports.ts"
@@ -2689,7 +2704,7 @@
     "src/addons/ui-preview/index.tsx"
   ],
   "7c9e45ebb254": [
-    "src/addons/diagnostics/manifest.ts"
+    "src/addons/diagnostics/hibi-addon.json"
   ],
   "569ca49f4aaf": [
     "src/main/dependencies.ts",
@@ -3019,6 +3034,9 @@
     "src/renderer/src/FormattingToolbar.tsx",
     "src/renderer/src/markdown-syntax.ts"
   ],
+  "53fa6ec918e8": [
+    "src/addons/dictionary/hibi-addon.json"
+  ],
   "be4ee906d3ef": [
     "src/addons/dictionary/packs.ts",
     "src/addons/dictionary/settings.ts"
@@ -3027,7 +3045,7 @@
     "src/renderer/src/HibiSettings.tsx"
   ],
   "b3b8fd86f36e": [
-    "src/addons/keybeats/manifest.ts"
+    "src/addons/keybeats/hibi-addon.json"
   ],
   "5720aebea161": [
     "src/addons/documentation/options.ts"
@@ -3043,7 +3061,7 @@
   ],
   "8f27fdcc77ab": [
     "src/addons/math/engine.ts",
-    "src/addons/math/manifest.ts"
+    "src/addons/math/hibi-addon.json"
   ],
   "eed0e6220f2f": [
     "src/addons/math/syntax.ts"
@@ -3079,7 +3097,7 @@
     "src/renderer/src/CommandPalette.tsx"
   ],
   "b43ab3ba74ce": [
-    "src/addons/mcp-server/manifest.ts"
+    "src/addons/mcp-server/hibi-addon.json"
   ],
   "dbcd5e7bb7a0": [
     "src/addons/documentation/ExportDialog.tsx",
@@ -3183,7 +3201,7 @@
     "src/addons/dictionary/SideView.tsx"
   ],
   "ead1f4ffc27e": [
-    "src/addons/dictionary/manifest.ts"
+    "src/addons/dictionary/hibi-addon.json"
   ],
   "0c4dc0d6a354": [
     "src/addons/dictionary/SideView.tsx"
@@ -3211,16 +3229,16 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "960e444e9977": [
-    "src/addons/mcp-server/manifest.ts"
+    "src/addons/mcp-server/hibi-addon.json"
   ],
   "82554e21571b": [
     "src/addons/mcp-server/Settings.tsx"
   ],
   "d434e4eb5746": [
-    "src/addons/mdx/manifest.ts"
+    "src/addons/mdx/hibi-addon.json"
   ],
   "976dffd73c2a": [
-    "src/addons/mdsvex/manifest.ts"
+    "src/addons/mdsvex/hibi-addon.json"
   ],
   "5701c0350a11": [
     "src/addons/_shared/format-worker.ts"
@@ -3259,10 +3277,10 @@
     "src/addons/dictionary/packs.ts"
   ],
   "6595f39b9d4b": [
-    "src/addons/markdoc/manifest.ts"
+    "src/addons/markdoc/hibi-addon.json"
   ],
   "0e52f6b9d025": [
-    "src/addons/markdown/manifest.ts"
+    "src/addons/markdown/hibi-addon.json"
   ],
   "77be4df12d6b": [
     "src/renderer/src/main.tsx"
@@ -3304,7 +3322,7 @@
     "src/addons/diagnostics/Settings.tsx"
   ],
   "3a56756a0930": [
-    "src/addons/mediawiki/manifest.ts"
+    "src/addons/mediawiki/hibi-addon.json"
   ],
   "c3963aedaac6": [
     "src/addons/diagnostics/Settings.tsx"
@@ -3313,7 +3331,7 @@
     "src/renderer/src/EditorToolbar.tsx"
   ],
   "1356a57a7a4b": [
-    "src/addons/mermaid/manifest.ts"
+    "src/addons/mermaid/hibi-addon.json"
   ],
   "0f082e133791": [
     "src/addons/mermaid/Block.tsx"
@@ -3702,6 +3720,9 @@
   "48b28302e75c": [
     "src/renderer/src/FormatsSettings.tsx"
   ],
+  "d131786d412a": [
+    "src/addons/dictionary/hibi-addon.json"
+  ],
   "4dfb4b4c8f10": [
     "src/main/background.ts"
   ],
@@ -3872,10 +3893,10 @@
     "src/renderer/src/Introduction.tsx"
   ],
   "2c61e6ee7007": [
-    "src/addons/org/manifest.ts"
+    "src/addons/org/hibi-addon.json"
   ],
   "bf670b7ba450": [
-    "src/addons/tags/manifest.ts"
+    "src/addons/tags/hibi-addon.json"
   ],
   "ebdad9ba4c5e": [
     "src/renderer/src/settings-pages.ts"
@@ -3918,6 +3939,17 @@
   ],
   "a469ab4ca4e5": [
     "src/site/main.tsx"
+  ],
+  "60b14317b8ae": [
+    "src/addons/asciidoc/hibi-addon.json",
+    "src/addons/creole/hibi-addon.json",
+    "src/addons/djot/hibi-addon.json",
+    "src/addons/mediawiki/hibi-addon.json",
+    "src/addons/org/hibi-addon.json",
+    "src/addons/quarto/hibi-addon.json",
+    "src/addons/rmarkdown/hibi-addon.json",
+    "src/addons/rst/hibi-addon.json",
+    "src/addons/textile/hibi-addon.json"
   ],
   "c3b03dd28595": [
     "src/renderer/src/FormattingToolbar.tsx"
@@ -3999,7 +4031,7 @@
     "src/addons/diagnostics/Settings.tsx"
   ],
   "36be30dddfe1": [
-    "src/addons/keybeats/manifest.ts"
+    "src/addons/keybeats/hibi-addon.json"
   ],
   "72e9a59f5a1d": [
     "src/addons/mcp-server/Settings.tsx"
@@ -4137,8 +4169,11 @@
   "f2a78d052de9": [
     "src/renderer/src/markdown-syntax.ts"
   ],
+  "8980ad0e1017": [
+    "src/addons/quarto/hibi-addon.json"
+  ],
   "df900d657cbf": [
-    "src/addons/quarto/manifest.ts"
+    "src/addons/quarto/hibi-addon.json"
   ],
   "e0cbecb3f0cb": [
     "src/addons/_shared/format-worker.ts"
@@ -4166,8 +4201,11 @@
   "8dc37869d63b": [
     "src/renderer/src/markdown-syntax.ts"
   ],
+  "8c2574892063": [
+    "src/addons/rmarkdown/hibi-addon.json"
+  ],
   "e1dda8fa3404": [
-    "src/addons/rmarkdown/manifest.ts"
+    "src/addons/rmarkdown/hibi-addon.json"
   ],
   "5676fea0fc98": [
     "src/addons/mcp-server/tools.ts"
@@ -4470,7 +4508,7 @@
     "src/renderer/src/main.tsx"
   ],
   "5f3ceab57e9e": [
-    "src/addons/git/manifest.ts"
+    "src/addons/git/hibi-addon.json"
   ],
   "8612007e996d": [
     "src/addons/review/index.tsx"
@@ -4661,13 +4699,13 @@
     "src/addons/ui-preview/index.tsx"
   ],
   "d605d205a5bf": [
-    "src/addons/graph/manifest.ts"
+    "src/addons/graph/hibi-addon.json"
   ],
   "456dc12dbf91": [
-    "src/addons/word-count/manifest.ts"
+    "src/addons/word-count/hibi-addon.json"
   ],
   "e6c08bcacceb": [
-    "src/addons/typing-speed/manifest.ts"
+    "src/addons/typing-speed/hibi-addon.json"
   ],
   "a767b8dfdabc": [
     "src/renderer/src/UpdateSettings.tsx"
@@ -4824,7 +4862,7 @@
     "src/renderer/src/main.tsx"
   ],
   "86e811695eda": [
-    "src/addons/discord-presence/manifest.ts"
+    "src/addons/discord-presence/hibi-addon.json"
   ],
   "208052ce5a29": [
     "src/addons/_shared/format-renderer.tsx"
@@ -4852,7 +4890,7 @@
     "src/addons/vim/Settings.tsx"
   ],
   "fb87b8dba88b": [
-    "src/addons/slash-commands/manifest.ts"
+    "src/addons/slash-commands/hibi-addon.json"
   ],
   "1519597c4e0b": [
     "src/addons/diagnostics/Settings.tsx"
@@ -5063,7 +5101,7 @@
     "src/addons/ui-preview/index.tsx"
   ],
   "53095d6ae829": [
-    "src/addons/autocomplete/manifest.ts"
+    "src/addons/autocomplete/hibi-addon.json"
   ],
   "e7aff57d9332": [
     "src/addons/autocomplete/Settings.tsx"
@@ -5129,12 +5167,15 @@
   "49fdfe8f8361": [
     "src/addons/tags/Panel.tsx"
   ],
+  "3b0d9c6eb324": [
+    "src/addons/dictionary/hibi-addon.json"
+  ],
   "45cb20fc920a": [
     "src/addons/tags/Panel.tsx"
   ],
   "1331275bc537": [
-    "src/addons/tags/index.tsx",
-    "src/addons/tags/manifest.ts"
+    "src/addons/tags/hibi-addon.json",
+    "src/addons/tags/index.tsx"
   ],
   "5ac3d4652d44": [
     "src/addons/tags/Panel.tsx"
@@ -5151,16 +5192,19 @@
   "b846ef5125c2": [
     "src/addons/markdown/index.tsx"
   ],
+  "3691716ca9b7": [
+    "src/addons/math/hibi-addon.json"
+  ],
   "71988c4d8e08": [
     "src/addons/frontmatter/Properties.tsx",
     "src/addons/slash-commands/commands.ts",
     "src/renderer/src/EditorToolbar.tsx"
   ],
   "298c5c533fc9": [
-    "src/addons/text-extras/manifest.ts"
+    "src/addons/text-extras/hibi-addon.json"
   ],
   "90115ae3fa70": [
-    "src/addons/textile/manifest.ts"
+    "src/addons/textile/hibi-addon.json"
   ],
   "f50cce0f1ca7": [
     "src/addons/_shared/format-native.ts"
@@ -6164,15 +6208,15 @@
     "src/addons/markdown/index.tsx"
   ],
   "47561c884131": [
-    "src/addons/slash-commands/manifest.ts"
+    "src/addons/slash-commands/hibi-addon.json"
   ],
   "9d1ff237078a": [
-    "src/addons/typing-speed/manifest.ts"
+    "src/addons/typing-speed/hibi-addon.json"
   ],
   "38c14037e93b": [
     "src/addons/typst/Block.tsx",
-    "src/addons/typst/index.tsx",
-    "src/addons/typst/manifest.ts"
+    "src/addons/typst/hibi-addon.json",
+    "src/addons/typst/index.tsx"
   ],
   "a6f3a93777ef": [
     "src/addons/typst/system-compiler.ts"
@@ -6184,7 +6228,7 @@
     "src/addons/typst/index.tsx"
   ],
   "5b3a15a26936": [
-    "src/addons/typst/manifest.ts"
+    "src/addons/typst/hibi-addon.json"
   ],
   "6ee65ea3f066": [
     "src/addons/typst/compiler.ts",
@@ -6362,7 +6406,7 @@
     "src/addons/dictionary/PackSettings.tsx"
   ],
   "b9fea9d6320c": [
-    "src/addons/vim/manifest.ts"
+    "src/addons/vim/hibi-addon.json"
   ],
   "e6048a69201f": [
     "src/addons/vim/Settings.tsx"
@@ -6472,7 +6516,7 @@
     "src/main/index.ts"
   ],
   "c71ba099f440": [
-    "src/addons/vim/manifest.ts"
+    "src/addons/vim/hibi-addon.json"
   ],
   "9c66eb04c102": [
     "src/addons/vim/engine.ts"
@@ -6514,7 +6558,7 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "653913ac0e67": [
-    "src/addons/word-count/manifest.ts"
+    "src/addons/word-count/hibi-addon.json"
   ],
   "c4853f18f5cc": [
     "src/addons/dictionary/Settings.tsx"
@@ -6610,19 +6654,19 @@
     "src/addons/tags/Panel.tsx"
   ],
   "c2f041ad9727": [
-    "src/addons/math/manifest.ts"
+    "src/addons/math/hibi-addon.json"
   ],
   "a03fccdc8fea": [
-    "src/addons/markdown/manifest.ts"
+    "src/addons/markdown/hibi-addon.json"
   ],
   "2cfece6a285e": [
-    "src/addons/typst/manifest.ts"
+    "src/addons/typst/hibi-addon.json"
   ],
   "4548dc08958d": [
     "src/addons/quick-note/native.ts"
   ],
   "a9ed0d8684a9": [
-    "src/addons/mermaid/manifest.ts"
+    "src/addons/mermaid/hibi-addon.json"
   ],
   "1d32ed2533d6": [
     "src/renderer/src/Introduction.tsx"
@@ -6634,7 +6678,7 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "47dee81a2783": [
-    "src/addons/writing-suggestions/manifest.ts"
+    "src/addons/writing-suggestions/hibi-addon.json"
   ],
   "9b6e8abe425e": [
     "src/addons/frontmatter/Properties.tsx"
@@ -6779,7 +6823,7 @@
     "src/renderer/src/toolbar.ts"
   ],
   "1e0534e54772": [
-    "src/addons/keybeats/manifest.ts"
+    "src/addons/keybeats/hibi-addon.json"
   ],
   "55ea09e5715d": [
     "src/main/addon-windows.ts",
@@ -6836,7 +6880,7 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "b2d69362d754": [
-    "src/addons/rst/manifest.ts"
+    "src/addons/rst/hibi-addon.json"
   ],
   "043a718774c5": [
     "src/addons/diagnostics/Settings.tsx"

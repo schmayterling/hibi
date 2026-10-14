@@ -1,0 +1,24 @@
+{
+  "id": "diagnostics",
+  "name": "Diagnostics",
+  "description": "Inspect startup timings, addon activity, and app performance.",
+  "apiVersion": 2,
+  "kind": "extension",
+  "version": "1.0.1",
+  "authors": [
+    {
+      "discordId": "1262793452236570667",
+      "displayName": "may"
+    }
+  ],
+  "defaultEnabled": false,
+  "settings": {
+    "category": "general",
+    "icon": "activity"
+  },
+  "startup": "background",
+  "entry": "index.ts",
+  "native": {
+    "entry": "native.ts"
+  }
+}

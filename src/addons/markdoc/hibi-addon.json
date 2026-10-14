@@ -1,0 +1,20 @@
+{
+  "id": "markdoc",
+  "name": "Markdoc",
+  "description": "Edit, preview, and export Markdoc documents.",
+  "apiVersion": 2,
+  "kind": "extension",
+  "version": "1.0.1",
+  "authors": [
+    {
+      "discordId": "1262793452236570667",
+      "displayName": "may"
+    }
+  ],
+  "defaultEnabled": false,
+  "fileExtensions": ["mdoc"],
+  "entry": "index.ts",
+  "native": {
+    "entry": "native.ts"
+  }
+}

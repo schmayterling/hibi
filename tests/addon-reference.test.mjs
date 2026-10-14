@@ -271,6 +271,20 @@ test('published development docs render linked, highlighted API pages offline at
     })
     assert.ok(spacing.step < spacing.item * 1.5, JSON.stringify(spacing))
     assert.equal(spacing.pre, 'pre')
+    // Inline code keeps repeated spaces: `a  b` must render wider than `a b`.
+    const inline = await page.evaluate(() => {
+      const paragraph = document.createElement('p')
+      const code = paragraph.appendChild(document.createElement('code'))
+      document.querySelector('.site-content article').append(paragraph)
+      const measure = (text) => {
+        code.textContent = text
+        return code.getBoundingClientRect().width
+      }
+      const widths = { double: measure('a  b'), single: measure('a b') }
+      paragraph.remove()
+      return widths
+    })
+    assert.ok(inline.double > inline.single, JSON.stringify(inline))
     await page.screenshot({ path: `test-results/api-reference-${width}.png` })
   }
   assert.deepEqual(await page.pageErrors(), [])

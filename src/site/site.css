@@ -180,6 +180,9 @@
   white-space: normal;
   overflow-wrap: anywhere;
 }
+.site-content article :not(pre) > code {
+  white-space: pre-wrap;
+}
 .site-content a {
   cursor: pointer;
 }

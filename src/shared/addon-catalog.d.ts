@@ -13,6 +13,10 @@ declare module 'virtual:hibi-addon-catalog/renderer' {
     manifest: import('../addons/api').AddonManifest
     source: 'built-in' | 'local'
     load: () => Promise<{ default: unknown }>
+    loadResources?: () => Promise<{
+      styles: string[]
+      themes: import('../shared/colorschemes').ColorschemeInput[]
+    }>
     loadSettings?: () => Promise<{ Settings: import('react').ComponentType }>
     flavors?: readonly import('../addons/api').MarkdownFlavor[]
   }[]
@@ -24,6 +28,10 @@ declare module 'virtual:hibi-addon-catalog/windows' {
     id: string
     capabilities?: import('../addons/api').AddonManifest['capabilities']
     load: () => Promise<{ default: unknown }>
+    loadResources?: () => Promise<{
+      styles: string[]
+      themes: import('../shared/colorschemes').ColorschemeInput[]
+    }>
   }[]
   export default catalog
 }

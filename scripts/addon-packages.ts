@@ -6,6 +6,7 @@ import type { AddonManifest } from '../src/addons/api'
 import { validateAddonRequirements } from '../src/shared/addon-dependencies'
 import { parseAddonManifest } from '../src/shared/addon-manifest'
 import { MAX_ADDON_MANIFEST_BYTES } from '../src/shared/addon-package'
+import type { ColorschemeInput } from '../src/shared/colorschemes'
 
 export type AddonPackage = {
   manifest: AddonManifest
@@ -16,6 +17,8 @@ export type AddonPackage = {
   analysis?: string
   settings?: string
   flavors?: string
+  styles: string[]
+  themes: ColorschemeInput[]
 }
 
 const slash = (path: string) => path.split(sep).join('/')
@@ -110,7 +113,7 @@ export async function readAddonPackages(
       }
       if (Buffer.byteLength(JSON.stringify(value)) > MAX_ADDON_MANIFEST_BYTES)
         throw new Error('The addon manifest exceeds 64 KiB.')
-      const parsed = parseAddonManifest(value, { trust: 'compiled' })
+      let parsed = parseAddonManifest(value, { trust: 'compiled' })
       if (parsed.manifest.id !== basename(path))
         throw new Error('The addon folder must match its manifest ID.')
       const file = async (entry: string) => {
@@ -122,12 +125,28 @@ export async function readAddonPackages(
           )
         return slash(relative(root, target))
       }
+      const styles = await Promise.all((parsed.styles ?? []).map(file))
+      const themeFiles = new Map<string, unknown>()
+      for (const theme of parsed.themes) {
+        if (typeof theme !== 'string') continue
+        const path = await file(theme)
+        const bytes = await readFile(resolve(root, path))
+        if (bytes.length > MAX_ADDON_MANIFEST_BYTES)
+          throw new Error('Addon theme files must be no larger than 64 KiB.')
+        themeFiles.set(theme, JSON.parse(bytes.toString('utf8')))
+        watch(resolve(root, path))
+      }
+      if (themeFiles.size)
+        parsed = parseAddonManifest(value, { trust: 'compiled', themeFiles })
+      const themes = parsed.themes.filter((theme) => typeof theme !== 'string')
       const analysis = parsed.manifest.analysis?.entry
       packages.push({
         manifest: parsed.manifest,
         source,
         directory: slash(relative(root, path)),
         entry: await file(parsed.entry),
+        styles,
+        themes,
         ...(parsed.native ? { native: await file(parsed.native.entry) } : {}),
         ...(analysis
           ? {
@@ -161,10 +180,14 @@ export async function readAddonPackages(
 const catalogId = 'virtual:hibi-addon-catalog'
 
 /** Process-specific modules share validated metadata, never each other's imports. */
-export function addonCatalog(process: 'main' | 'renderer'): Plugin {
+export function addonCatalog(
+  process: 'main' | 'renderer',
+  root = globalThis.process.cwd(),
+): Plugin {
   const moduleId = `${catalogId}/${process}`
   const detailsId = `${catalogId}/details`
   const windowsId = `${catalogId}/windows`
+  const resourcesId = `${catalogId}/resources/`
   const moduleIds = [
     moduleId,
     detailsId,
@@ -175,7 +198,13 @@ export function addonCatalog(process: 'main' | 'renderer'): Plugin {
   return {
     name: `addon-catalog-${process}`,
     resolveId(id) {
-      if (moduleIds.includes(id)) return `\0${id}`
+      if (
+        moduleIds.includes(id) ||
+        (process === 'renderer' &&
+          id.startsWith(resourcesId) &&
+          /^[a-z][a-z0-9-]{0,47}$/.test(id.slice(resourcesId.length)))
+      )
+        return `\0${id}`
     },
     watchChange(id) {
       if (inputs.has(slash(id))) pending = undefined
@@ -191,13 +220,32 @@ export function addonCatalog(process: 'main' | 'renderer'): Plugin {
       return []
     },
     async load(id) {
-      if (!moduleIds.some((module) => id === `\0${module}`)) return
-      pending ??= readAddonPackages(undefined, (path) => {
+      const resourceOwner =
+        process === 'renderer' && id.startsWith(`\0${resourcesId}`)
+          ? id.slice(resourcesId.length + 1)
+          : undefined
+      if (!resourceOwner && !moduleIds.some((module) => id === `\0${module}`))
+        return
+      pending ??= readAddonPackages(root, (path) => {
         inputs.add(slash(path))
         this.addWatchFile(path)
       })
       const packages = await pending
       for (const input of inputs) this.addWatchFile(input)
+      if (resourceOwner) {
+        const item = packages.find(
+          ({ manifest }) => manifest.id === resourceOwner,
+        )
+        if (!item)
+          throw new Error(`Unknown addon resource owner: ${resourceOwner}`)
+        return [
+          ...item.styles.map(
+            (path, index) =>
+              `import style${index} from ${JSON.stringify(`${slash(resolve(root, path))}?url`)}`,
+          ),
+          `export default {styles:[${item.styles.map((_, index) => `style${index}`).join(',')}],themes:${JSON.stringify(item.themes)}}`,
+        ].join('\n')
+      }
       if (id === `\0${detailsId}`)
         return `export default ${JSON.stringify(
           Object.fromEntries(
@@ -212,9 +260,13 @@ export function addonCatalog(process: 'main' | 'renderer'): Plugin {
       const imports: string[] = []
       const entries = packages.map((item, index) => {
         const load = (path: string) =>
-          `import(${JSON.stringify(slash(resolve(path)))})`
+          `import(${JSON.stringify(slash(resolve(root, path)))})`
+        const resources =
+          item.styles.length || item.themes.length
+            ? `loadResources:()=>import(${JSON.stringify(resourcesId + item.manifest.id)}).then(module=>module.default)`
+            : undefined
         if (id === `\0${windowsId}`)
-          return `{id:${JSON.stringify(item.manifest.id)},capabilities:${JSON.stringify(item.manifest.capabilities)},load:()=>${load(item.entry)}}`
+          return `{id:${JSON.stringify(item.manifest.id)},capabilities:${JSON.stringify(item.manifest.capabilities)},load:()=>${load(item.entry)}${resources ? `,${resources}` : ''}}`
         const {
           authors: _authors,
           licenses: _licenses,
@@ -234,6 +286,7 @@ export function addonCatalog(process: 'main' | 'renderer'): Plugin {
             )
         } else {
           parts.push(`load:()=>${load(item.entry)}`)
+          if (resources) parts.push(resources)
           if (item.settings)
             parts.push(`loadSettings:()=>${load(item.settings)}`)
           if (item.flavors) {

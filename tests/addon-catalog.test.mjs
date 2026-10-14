@@ -414,6 +414,72 @@ test('json takes precedence over a legacy shim and declares the owner renderer e
   assert.equal(item.entry, 'src/addons/sample/views/window.tsx')
 })
 
+test('compiled resources stay in their package and load outside the initial catalog', async (t) => {
+  const { root, folder, manifest, write } = await fixture(t)
+  await mkdir(join(folder, 'styles'))
+  await mkdir(join(folder, 'themes'))
+  await writeFile(join(folder, 'styles/main.css'), '.probe { color: red }')
+  const theme = {
+    id: 'night',
+    name: 'Night',
+    appearance: 'dark',
+    author: 'Test',
+    license: { name: 'MIT', text: 'Resource notice' },
+    colors: {
+      background: '#111111',
+      surface: '#222222',
+      ink: '#eeeeee',
+      muted: '#aaaaaa',
+      accent: '#88cccc',
+      border: '#333333',
+    },
+  }
+  await writeFile(join(folder, 'themes/night.json'), JSON.stringify(theme))
+  await write({
+    ...manifest,
+    styles: ['styles/main.css'],
+    themes: ['themes/night.json'],
+  })
+  const watched = []
+  const [item] = await readAddonPackages(root, (path) => watched.push(path))
+  assert.deepEqual(item.styles, ['src/addons/sample/styles/main.css'])
+  assert.equal(item.themes[0].id, 'night')
+  assert.ok(watched.includes(await realpath(join(folder, 'themes/night.json'))))
+  const plugin = addonCatalog('renderer', root)
+  const context = { addWatchFile() {} }
+  const code = await plugin.load.call(
+    context,
+    '\0virtual:hibi-addon-catalog/renderer',
+  )
+  assert.match(code, /loadResources/)
+  assert.doesNotMatch(code, /Resource notice|main\.css/)
+  const owner = await plugin.load.call(
+    context,
+    '\0virtual:hibi-addon-catalog/windows',
+  )
+  assert.match(owner, /loadResources/)
+  const resourceId = 'virtual:hibi-addon-catalog/resources/sample'
+  assert.equal(plugin.resolveId(resourceId), `\0${resourceId}`)
+  const resources = await plugin.load.call(context, `\0${resourceId}`)
+  assert.ok(resources.includes('styles/main.css?url'))
+  assert.match(resources, /Resource notice/)
+  assert.doesNotMatch(resources, /views\/window|loadNative/)
+  const main = addonCatalog('main', root)
+  assert.equal(main.resolveId(resourceId), undefined)
+  assert.doesNotMatch(
+    await main.load.call(context, '\0virtual:hibi-addon-catalog/main'),
+    /loadResources/,
+  )
+  await write({ ...manifest, styles: ['missing.css'] })
+  await assert.rejects(readAddonPackages(root), /ENOENT/)
+  await symlink(join(folder, 'styles/main.css'), join(folder, 'linked.css'))
+  await write({ ...manifest, styles: ['linked.css'] })
+  await assert.rejects(readAddonPackages(root), /regular file inside/)
+  await write({ ...manifest, themes: ['themes/night.json'] })
+  await writeFile(join(folder, 'themes/night.json'), ' '.repeat(65537))
+  await assert.rejects(readAddonPackages(root), /64 KiB/)
+})
+
 test('catalog rejects mismatched ids, missing entries and paths outside the package', async (t) => {
   const { root, folder, manifest, write } = await fixture(t)
   await write({ ...manifest, id: 'different' })

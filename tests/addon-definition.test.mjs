@@ -192,6 +192,54 @@ export default {
   assert.deepEqual(registered, ['probe'])
 })
 
+test('compiled styles and declared themes use the same owned activation path', async (t) => {
+  const id = 'definition-resources-probe'
+  const root = resolve('src/useraddons')
+  const folder = resolve(root, id)
+  await mkdir(folder, { recursive: true })
+  t.after(async () => {
+    await rm(folder, { recursive: true, force: true })
+    await rmdir(root).catch(() => {})
+  })
+  const theme = {
+    id: 'night',
+    name: 'Night',
+    appearance: 'dark',
+    author: 'Test',
+    license: { name: 'MIT', text: 'Resource notice' },
+    colors: {
+      background: '#111111',
+      surface: '#222222',
+      ink: '#eeeeee',
+      muted: '#aaaaaa',
+      accent: '#88cccc',
+      border: '#333333',
+    },
+  }
+  await writeFile(
+    resolve(folder, 'hibi-addon.json'),
+    JSON.stringify({
+      ...manifest(id),
+      entry: 'index.ts',
+      styles: ['style.css'],
+      themes: [theme],
+    }),
+  )
+  await writeFile(resolve(folder, 'index.ts'), 'export default { start() {} }')
+  await writeFile(resolve(folder, 'style.css'), '.probe { color: red }')
+  const { addonRegistry, find } = await registry(t)
+  const styles = await addonRegistry.styles(id)
+  assert.equal(styles.length, 1)
+  assert.ok(
+    styles[0].endsWith('/src/useraddons/definition-resources-probe/style.css'),
+  )
+  const registered = []
+  await find(id).start({
+    colorschemes: { register: (scheme) => registered.push(scheme.id) },
+  })
+  assert.deepEqual(registered, ['night'])
+})
+
 test('declared themes precede runtime registration and duplicate IDs fail without replacing colors', async (t) => {
   const { server, addonRegistry, find } = await registry(t)
   const { createColorschemeStore } = await server.ssrLoadModule(

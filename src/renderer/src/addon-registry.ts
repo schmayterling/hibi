@@ -17,6 +17,7 @@ function describeAddon(
     flavors?: readonly MarkdownFlavor[] | undefined
     Settings?: ComponentType
     themes?: readonly ColorschemeInput[]
+    loadResources?: (typeof catalog)[number]['loadResources']
   } = {},
 ) {
   let pending: Promise<unknown> | undefined
@@ -33,9 +34,12 @@ function describeAddon(
     ...(declared.Settings ? { Settings: declared.Settings } : {}),
     async start(context) {
       const token = ++generation
+      const themes = declared.loadResources
+        ? (await declared.loadResources()).themes
+        : declared.themes
+      if (token !== generation) return
       // Declared themes are data owned by this activation; source themes still register colors in `start`.
-      for (const theme of declared.themes ?? [])
-        context.colorschemes.register(theme)
+      for (const theme of themes ?? []) context.colorschemes.register(theme)
       if (manifest.kind === 'theme' && declared.themes) return
       const definition = await startupSpan(
         `addon-load:${manifest.id}`,
@@ -94,10 +98,11 @@ function describeAddon(
   return { addon: descriptor, retire }
 }
 const bundled = catalog.map(
-  ({ manifest, load, loadSettings, flavors }): Addon => {
+  ({ manifest, load, loadSettings, loadResources, flavors }): Addon => {
     const importer = async () => (await load()).default
     return describeAddon(manifest, importer, {
       flavors,
+      ...(loadResources ? { loadResources } : {}),
       ...(loadSettings || manifest.fileExtensions?.length
         ? {
             Settings: lazy(async () => ({
@@ -150,7 +155,11 @@ export const addonRegistry = {
     }
   },
   isInstalled: (id: string) => installed.has(id),
-  styles: (id: string) => installed.get(id)?.styles ?? [],
+  styles: async (id: string) =>
+    installed.get(id)?.styles ??
+    (await catalog.find((item) => item.manifest.id === id)?.loadResources?.())
+      ?.styles ??
+    [],
   origin: (id: string) =>
     installed.get(id)?.source ?? origins.get(id) ?? 'local',
   hydrate(packages: readonly InstalledAddon[]) {

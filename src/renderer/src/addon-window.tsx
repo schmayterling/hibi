@@ -47,6 +47,8 @@ const request = async <T,>(pending: Promise<unknown>) => {
 }
 
 let context: AddonWindowContext | undefined
+let disposeSheets = () => {}
+window.addEventListener('pagehide', () => disposeSheets(), { once: true })
 
 function show(children: ReactNode) {
   root.render(
@@ -74,6 +76,15 @@ async function render() {
     import('./addon-definition'),
   ])
   const owner = catalog.find(({ id }) => id === addonId)
+  const resources = await owner?.loadResources?.()
+  const sheets = resources?.styles.length
+    ? (await import('./addon-sheets')).linkAddonSheets(
+        addonId,
+        resources.styles,
+      )
+    : undefined
+  disposeSheets = () => sheets?.dispose()
+  await sheets?.ready
   const addon =
     owner && (await normalizeDefinition((await owner.load()).default, owner))
   const windows = addon?.windows
@@ -104,12 +115,14 @@ async function render() {
     Editor,
   }
   show(<Content {...props} />)
+  sheets?.publish()
 }
 
-render().catch((error: unknown) =>
+render().catch((error: unknown) => {
+  disposeSheets()
   show(
     <p role="alert" className="addon-window-error">
       {errorMessage(error)}
     </p>,
-  ),
-)
+  )
+})

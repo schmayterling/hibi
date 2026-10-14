@@ -81,6 +81,8 @@ If addon code still imports `./manifest`, keep a small shim that imports the JSO
 
 Compiled native addons declare `native: { "entry": "native.ts" }`. Settings continue to use `Settings.tsx`; there is no `settings.entry`. Compiled flavor detectors stay in `flavor-info.ts`. An analyzer declared as `analysis: { "entry": "analysis.js" }` can use `analysis.ts` as its source input.
 
+Source manifests can also declare the [stylesheets and themes](sideloading.md#add-stylesheets-and-themes) used by installed packages. Hibi validates their files during catalog generation and loads them when the addon starts. A compiled addon's own windows also load its declared stylesheets, without calling the addon's `start()`.
+
 This catalog is part of the application build. Installing a standalone addon still requires prepared JavaScript and does not compile TypeScript or grant native handlers, importers, or desktop windows. See [sideloading and sharing](sideloading.md).
 
 ## Try it

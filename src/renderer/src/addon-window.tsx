@@ -12,7 +12,6 @@ import {
   createColorschemeStore,
 } from '../../ui/colorschemes'
 import './styles.css'
-import { windowDesktop } from './window-desktop'
 import '../../ui/ui-case'
 
 declare global {
@@ -94,6 +93,7 @@ async function render() {
   if (!Content) throw new Error('This addon window is unavailable.')
   // The editor host's modules expect window.hibi; give them a privilege-free stand-in.
   const Editor = lazy(async () => {
+    const { windowDesktop } = await import('./window-desktop')
     Object.defineProperty(window, 'hibi', {
       value: windowDesktop(bridge),
       configurable: true,

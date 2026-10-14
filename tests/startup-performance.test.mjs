@@ -87,6 +87,14 @@ test('startup catalog stays within the main byte budget and leaves notices and a
     chunks.flatMap((chunk) => chunk.modules).join('\n'),
     /src\/(?:user)?addons\/[^/]+\/native\.tsx?/,
   )
+  assert.doesNotMatch(modules, /src\/renderer\/src\/window-desktop\.ts/)
+  assert.ok(
+    chunks.some(
+      (chunk) =>
+        !reached.has(chunk.file) &&
+        chunk.modules.includes('src/renderer/src/window-desktop.ts'),
+    ),
+  )
   const code = (
     await Promise.all(
       // Vite discards the report's empty javascript facades for css-only chunks.

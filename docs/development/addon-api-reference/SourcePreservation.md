@@ -2,7 +2,7 @@
 
 # SourcePreservation
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L337)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L344)
 
 <details>
 <summary>Declaration</summary>
@@ -28,7 +28,7 @@ type SourcePreservation = {
 
 ### level
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L338)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L345)
 
 ```typescript
 level: 'semantic' | 'verbatim'
@@ -36,7 +36,7 @@ level: 'semantic' | 'verbatim'
 
 ### version
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L340)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L347)
 
 Change when the parser/serializer contract changes. Separate from the addon release version.
 

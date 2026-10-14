@@ -2,7 +2,7 @@
 
 # AddonExportsApi
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L323)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L330)
 
 <details>
 <summary>Declaration</summary>
@@ -28,7 +28,7 @@ type AddonExportsApi = {
 
 ### provide
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L327)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L334)
 
 Publish a plain object. It becomes available after start succeeds and is removed on stop.
 Returns a disposer for this publication; a newer publication is not affected.

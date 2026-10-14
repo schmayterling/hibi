@@ -153,7 +153,7 @@ For an active-note worker, `context.editor.getMetadataSyntax(document.id, docume
 
 ## Attach editor behavior
 
-`context.editor.registerRich()` attaches behavior to each visual editor. Its `attach(editor)` callback must return a cleanup function. It can register a ProseMirror plugin, but cannot change the editor schema. `registerSource()` creates a CodeMirror extension for each source editor. See [RichExtension](../addon-api-reference/RichExtension.md) and [SourceExtension](../addon-api-reference/SourceExtension.md).
+`context.editor.registerRich()` attaches behavior to each visual editor. Its `attach(editor, context)` callback must return a cleanup function. It can register a ProseMirror plugin, but cannot change the editor schema. `registerSource()` calls `create(context)` to make a CodeMirror extension for each source editor. `context.viewId` names the view that holds the editor and matches `viewId` in the view targets from `context.editorViews`, so a command can find the editor it was run from when a split shows the same note twice. Hibi always supplies this context when it invokes the hooks. The parameter is optional so existing wrappers can still call `create()` or `attach(editor)` manually; callbacks that use view identity must handle an omitted context. See [RichExtension](../addon-api-reference/RichExtension.md) and [SourceExtension](../addon-api-reference/SourceExtension.md).
 
 Throw when an attachment cannot be installed. Hibi displays the failure and keeps that editor read-only until the failing addon is disabled or successfully installed. Already attached rich-editor features are detached if a later attachment fails.
 

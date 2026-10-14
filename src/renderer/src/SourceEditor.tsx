@@ -1750,8 +1750,9 @@ export function SourceEditor({
     setExtensionError('')
     if (!editor) return
     let canceled = false
+    const context = Object.freeze({ viewId: viewId as ViewId })
     void Promise.all(
-      sourceExtensions.map(async (extension) => extension.create()),
+      sourceExtensions.map(async (extension) => extension.create(context)),
     )
       .then((extensions) => {
         if (!canceled) {
@@ -1767,7 +1768,7 @@ export function SourceEditor({
     return () => {
       canceled = true
     }
-  }, [bridge, sourceExtensions])
+  }, [bridge, sourceExtensions, viewId])
   useEffect(
     () =>
       tabIndent.subscribe(() =>

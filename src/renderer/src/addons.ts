@@ -1663,13 +1663,13 @@ export function useAddons(
                 const entry = {
                   id: key,
                   addonId: id,
-                  attach(editor: Parameters<RichExtension['attach']>[0]) {
+                  attach(...args: Parameters<RichExtension['attach']>) {
                     if (disposed) return () => {}
                     try {
                       const detach = performanceDiagnostics.measure(
                         id,
                         `rich attachment:${extension.id}`,
-                        () => extension.attach(editor),
+                        () => extension.attach(...args),
                       )
                       return () => {
                         try {
@@ -1712,13 +1712,13 @@ export function useAddons(
                 const entry = {
                   id: key,
                   addonId: id,
-                  async create() {
+                  async create(...args: Parameters<SourceExtension['create']>) {
                     if (disposed) return []
                     try {
                       const result = await performanceDiagnostics.measure(
                         id,
                         `source attachment:${extension.id}`,
-                        () => extension.create(),
+                        () => extension.create(...args),
                       )
                       return disposed ? [] : result
                     } catch (error) {

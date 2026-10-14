@@ -2,7 +2,7 @@
 
 # CommandMenuContribution
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L118)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L119)
 
 ```typescript
 type CommandMenuContribution =

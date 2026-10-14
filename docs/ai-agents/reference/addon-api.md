@@ -12,6 +12,7 @@ See the [addon API reference](../../development/addon-api-reference/README.md).
 - [AddonSyntaxDescriptor](../../development/addon-api-reference/AddonSyntaxDescriptor.md)
 - [AddonManifest](../../development/addon-api-reference/AddonManifest.md)
 - [AddonAuthor](../../development/addon-api-reference/AddonAuthor.md)
+- [EditorExtensionContext](../../development/addon-api-reference/EditorExtensionContext.md)
 - [SourceExtension](../../development/addon-api-reference/SourceExtension.md)
 - [RichExtension](../../development/addon-api-reference/RichExtension.md)
 - [StatusItem](../../development/addon-api-reference/StatusItem.md)

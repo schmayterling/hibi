@@ -2,7 +2,7 @@
 
 # EditorInputEvent
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L220)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L227)
 
 Typed characters only: excludes paste, deletion, shortcuts, and programmatic edits.
 
@@ -29,7 +29,7 @@ type EditorInputEvent = Readonly<{
 
 ### characters
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L221)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L228)
 
 ```typescript
 readonly characters: number
@@ -37,7 +37,7 @@ readonly characters: number
 
 ### view
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L222)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L229)
 
 ```typescript
 readonly view: 'normal' | 'source'

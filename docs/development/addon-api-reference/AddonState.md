@@ -2,7 +2,7 @@
 
 # AddonState
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L310)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L317)
 
 <details>
 <summary>Declaration</summary>
@@ -34,7 +34,7 @@ type AddonState = {
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L311)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L318)
 
 ```typescript
 id: string
@@ -42,7 +42,7 @@ id: string
 
 ### enabled
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L313)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L320)
 
 The user's preference, retained while required addons are unavailable.
 
@@ -52,7 +52,7 @@ enabled: boolean
 
 ### savedEnabled
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L315)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L322)
 
 Explicit saved choice, absent when the manifest default applies.
 
@@ -62,7 +62,7 @@ savedEnabled?: boolean
 
 ### blockedBy
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L317)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L324)
 
 Missing or disabled required addon IDs. Blocked addons cannot run.
 

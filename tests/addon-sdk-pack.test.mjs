@@ -135,14 +135,14 @@ export default create
 const create: CapabilityFactory = (sdk) => ({ start(context) { if (!sdk.React || !sdk.ui) throw Error('ui unavailable'); const Button = sdk.ui.Button; context.notify(String(sdk.React.createElement(Button, { children: 'Hello' }).type)) } })
 export default create
 `,
-      'source.ts': `import type { SourceExtension } from '@hibi/addon-sdk/api'
+      'source.ts': `import type { SourceExtension, ViewId } from '@hibi/addon-sdk/api'
 import type { CapabilityFactory } from '@hibi/addon-sdk/sdk-loader'
-const create: CapabilityFactory = (sdk) => ({ start(context) { if (!sdk.codeMirror) throw Error('source unavailable'); const extension: SourceExtension = { id: 'source-proof', create: () => sdk.codeMirror!.state.StateField.define({ create: () => 0, update: (value) => value }) }; context.editor.registerSource(extension) } })
+const create: CapabilityFactory = (sdk) => ({ start(context) { if (!sdk.codeMirror) throw Error('source unavailable'); const extension: SourceExtension = { id: 'source-proof', create: () => sdk.codeMirror!.state.StateField.define({ create: () => 0, update: (value) => value }) }; const delegated: SourceExtension = { id: 'source-delegated', create: () => extension.create() }; const viewAware: SourceExtension = { id: 'source-view', create(editorContext) { if (!editorContext) return []; const viewId: ViewId = editorContext.viewId; return sdk.codeMirror!.state.StateField.define<ViewId>({ create: () => viewId, update: (value) => value }) } }; context.editor.registerSource(extension); context.editor.registerSource(delegated); context.editor.registerSource(viewAware) } })
 export default create
 `,
-      'rich.ts': `import type { RichExtension } from '@hibi/addon-sdk/api'
+      'rich.ts': `import type { RichExtension, ViewId } from '@hibi/addon-sdk/api'
 import type { CapabilityFactory } from '@hibi/addon-sdk/sdk-loader'
-const create: CapabilityFactory = (sdk) => ({ start(context) { if (!sdk.tiptap) throw Error('rich unavailable'); const rich: RichExtension = { id: 'rich-proof', attach(editor) { editor.commands.focus(); return () => {} } }; sdk.tiptap.Extension.create({ name: 'rich-proof' }); context.editor.registerRich(rich) } })
+const create: CapabilityFactory = (sdk) => ({ start(context) { if (!sdk.tiptap) throw Error('rich unavailable'); const rich: RichExtension = { id: 'rich-proof', attach(editor) { editor.commands.focus(); return () => {} } }; const delegated: RichExtension = { id: 'rich-delegated', attach: (editor) => rich.attach(editor) }; const viewAware: RichExtension = { id: 'rich-view', attach(_editor, editorContext) { if (!editorContext) return () => {}; const view: ViewId = editorContext.viewId; return () => context.notify(view) } }; sdk.tiptap.Extension.create({ name: 'rich-proof' }); context.editor.registerRich(rich); context.editor.registerRich(delegated); context.editor.registerRich(viewAware) } })
 export default create
 `,
       'legacy.ts': `import type { SideloadFactory } from '@hibi/addon-sdk/sdk'

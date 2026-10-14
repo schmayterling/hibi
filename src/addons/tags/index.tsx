@@ -161,11 +161,11 @@ export default defineAddon({
     context.editor.registerRich(richTags(browse))
     context.editor.registerSource({
       id: 'highlights',
-      async create() {
+      async create(editorContext) {
         const { sourceTags } = await import('./decorations')
         return sourceTags(browse, () =>
           isMarkdownDocument(context.editor.getDocument()?.name ?? ''),
-        ).create()
+        ).create(editorContext)
       },
     })
     stop = () => {

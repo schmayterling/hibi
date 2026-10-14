@@ -3085,9 +3085,10 @@ export function MarkdownEditor({
       cleanup()
       setRichExtensionError('')
       if (editor.isDestroyed) return
+      const context = Object.freeze({ viewId: viewId as ViewId })
       try {
         for (const extension of richExtensions)
-          detach.push(extension.attach(editor))
+          detach.push(extension.attach(editor, context))
       } catch (error) {
         cleanup()
         editor.setEditable(false, false)
@@ -3102,7 +3103,7 @@ export function MarkdownEditor({
       editor.off('unmount', cleanup)
       cleanup()
     }
-  }, [editor, richExtensions, paneMode])
+  }, [editor, richExtensions, paneMode, viewId])
 
   useEffect(() => {
     if (!editor || !findOpen || findTarget !== 'rich') return

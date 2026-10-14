@@ -2,7 +2,7 @@
 
 # AddonExports
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L321)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L328)
 
 A renderer API object with a positive integer contract version chosen by its provider.
 
@@ -25,7 +25,7 @@ type AddonExports = { readonly version: number }
 
 ### version
 
-Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L321)
+Readonly · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L328)
 
 ```typescript
 readonly version: number

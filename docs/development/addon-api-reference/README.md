@@ -37,6 +37,7 @@ For installed packages, use the [SideloadFactory](SideloadFactory.md) and the [s
 - [DocumentPreviewProps](DocumentPreviewProps.md)
 - [DocumentsApi](DocumentsApi.md)
 - [DocumentSelection](DocumentSelection.md)
+- [EditorExtensionContext](EditorExtensionContext.md)
 - [EditorInputEvent](EditorInputEvent.md)
 - [EditorKeyEvent](EditorKeyEvent.md)
 - [EditorViewPosition](EditorViewPosition.md)

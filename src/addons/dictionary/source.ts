@@ -1,12 +1,16 @@
 import { isolateHistory } from '@codemirror/commands'
 import { Transaction } from '@codemirror/state'
 import { type EditorView, ViewPlugin } from '@codemirror/view'
+import type { ViewId } from '../../shared/foundation-contracts'
 import { type LookupTarget, wordAt } from './lookup'
 import { readPreferences } from './settings'
 
-export const trackSourceViews = (views: Set<EditorView>) =>
+export const trackSourceViews = (
+  views: Map<EditorView, ViewId>,
+  viewId: ViewId,
+) =>
   ViewPlugin.define((view) => {
-    views.add(view)
+    views.set(view, viewId)
     return { destroy: () => views.delete(view) }
   })
 

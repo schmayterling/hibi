@@ -2,7 +2,7 @@
 
 # MarkdownParagraphRuleContext
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L350)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L357)
 
 Host context for a paragraph escaping rule, independent of the editor library.
 
@@ -31,7 +31,7 @@ type MarkdownParagraphRuleContext = {
 
 ### parentType
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L352)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L359)
 
 Parent node type; table paragraphs receive 'table'.
 
@@ -41,7 +41,7 @@ parentType?: string | null
 
 ### literals
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L354)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L361)
 
 Protected literal text, keyed by opaque sentinels.
 

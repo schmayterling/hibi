@@ -2,7 +2,7 @@
 
 # SettingsApi
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L619)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L626)
 
 <details>
 <summary>Declaration</summary>
@@ -27,7 +27,7 @@ type SettingsApi = {
 
 ### registerCategory
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L620)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L627)
 
 ```typescript
 registerCategory: (category: SettingsCategory) => () => void
@@ -45,7 +45,7 @@ Related: [SettingsCategory](SettingsCategory.md).
 
 ### register
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L621)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L628)
 
 ```typescript
 register: (page: SettingsPage) => () => void

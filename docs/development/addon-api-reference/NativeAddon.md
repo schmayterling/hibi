@@ -2,7 +2,7 @@
 
 # NativeAddon
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L984)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L991)
 
 Native handlers compiled with Hibi. Sideloaded renderer packages cannot register these handlers.
 
@@ -59,7 +59,7 @@ type NativeAddon = {
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L985)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L992)
 
 ```typescript
 id: string
@@ -67,7 +67,7 @@ id: string
 
 ### globalShortcuts
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L995)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L1002)
 
 Run in the main process when this addon's global shortcut fires, instead of showing the main window. Keys are local shortcut IDs.
 
@@ -84,7 +84,7 @@ Related: [AddonWindowOptions](AddonWindowOptions.md).
 
 ### queries
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L1002)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L1009)
 
 Trusted read-only handlers. No user-file changes or dialogs; private compilation caches are allowed.
 
@@ -99,7 +99,7 @@ Related: [NativeAddonContext](NativeAddonContext.md).
 
 ### methods
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L1006)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L1013)
 
 ```typescript
 methods: Record<
@@ -114,7 +114,7 @@ Related: [NativeAddonContext](NativeAddonContext.md).
 
 ### import
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L987)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L994)
 
 Convert a selected export in memory. Core validates paths and writes a new destination folder.
 
@@ -139,7 +139,7 @@ Related: [ImportFile](ImportFile.md).
 
 ### stop
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L993)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L1000)
 
 ```typescript
 stop?: () => void

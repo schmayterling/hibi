@@ -2,7 +2,7 @@
 
 # RichExtension
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L190)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L197)
 
 <details>
 <summary>Declaration</summary>
@@ -11,7 +11,7 @@ Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addon
 type RichExtension = {
   id: string
   /** Attach editor behavior without rebuilding its schema or undo history. */
-  attach: (editor: Editor) => () => void
+  attach: (editor: Editor, context?: EditorExtensionContext) => () => void
 }
 ```
 
@@ -31,7 +31,7 @@ type RichExtension = {
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L191)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L198)
 
 ```typescript
 id: string
@@ -41,18 +41,25 @@ id: string
 
 ### attach
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L193)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L200)
 
 Attach editor behavior without rebuilding its schema or undo history.
 
 ```typescript
-attach: (editor: Editor) => () => void
+attach: (editor: Editor, context?: EditorExtensionContext) => () => void
 ```
+
+Related: [EditorExtensionContext](EditorExtensionContext.md).
 
 **Parameters**
 
 | Name | Type |
 | --- | --- |
 | <code>editor</code> | <code>Editor</code> |
+| <code>context?</code> | <code><a href="EditorExtensionContext.md">EditorExtensionContext</a></code> |
 
 **Returns:** <code>() =&gt; void</code>
+
+## Related types
+
+[EditorExtensionContext](EditorExtensionContext.md).

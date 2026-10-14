@@ -13,6 +13,7 @@ import {
 import { useEffect, useState } from 'react'
 import type {
   CommandExecutionContext,
+  ViewId,
   ViewTarget,
 } from '../../shared/foundation-contracts'
 import { defineAddon } from '../api'
@@ -379,31 +380,26 @@ export default defineAddon({
         }).result
       },
     })
-    const richEditors = new Set<Editor>()
-    const sourceViews = new Set<EditorView>()
+    const richEditors = new Map<Editor, ViewId>()
+    const sourceViews = new Map<EditorView, ViewId>()
     context.editor.registerRich({
       id: 'lookup',
-      attach(editor) {
-        richEditors.add(editor)
+      attach(editor, editorContext) {
+        if (!editorContext) return () => {}
+        richEditors.set(editor, editorContext.viewId)
         return () => richEditors.delete(editor)
       },
     })
     context.editor.registerSource({
       id: 'lookup',
-      create: async () =>
-        (await import('./source')).trackSourceViews(sourceViews),
+      async create(editorContext) {
+        if (!editorContext) return []
+        return (await import('./source')).trackSourceViews(
+          sourceViews,
+          editorContext.viewId,
+        )
+      },
     })
-    // ponytail: extensions are not told which view they belong to, so split
-    // panes are matched through core's `data-side`, which is also their view
-    // ID. Use a view ID from core once extensions receive one.
-    const inView = (dom: Element, view: ViewTarget) => {
-      const pane = dom.closest<HTMLElement>('.editor-page')
-      return (
-        dom.isConnected &&
-        !!pane &&
-        (pane.dataset.side ?? view.viewId) === view.viewId
-      )
-    }
     async function target(invocation: CommandExecutionContext) {
       // Palette and shortcut invocations capture the view but not its selection.
       const view = invocation.view ?? context.editorViews.getActive()
@@ -414,37 +410,41 @@ export default defineAddon({
       if (!selection) return null
       const from = Math.min(selection.anchor, selection.head)
       const to = Math.max(selection.anchor, selection.head)
-      const at = (dom: Element, anchor: number, head: number) =>
-        inView(dom, view) &&
+      const at = (viewId: ViewId, anchor: number, head: number) =>
+        viewId === view.viewId &&
         anchor === selection.anchor &&
         head === selection.head
       let found: LookupTarget | null = null
-      let dom: Element | undefined
+      let inView = () => false
       if (selection.editor === 'rich') {
         const editor = [...richEditors].find(
-          (editor) =>
+          ([editor, viewId]) =>
             !editor.isDestroyed &&
             at(
-              editor.view.dom,
+              viewId,
               editor.state.selection.anchor,
               editor.state.selection.head,
             ),
-        )
-        found = editor ? richTarget(editor, from, to) : null
-        dom = editor?.view.dom
+        )?.[0]
+        if (editor) {
+          found = richTarget(editor, from, to)
+          inView = () => richEditors.get(editor) === view.viewId
+        }
       } else {
         const { sourceTarget } = await import('./source')
-        const editor = [...sourceViews].find((editor) =>
+        const editor = [...sourceViews].find(([editor, viewId]) =>
           at(
-            editor.dom,
+            viewId,
             editor.state.selection.main.anchor,
             editor.state.selection.main.head,
           ),
-        )
-        found = editor ? sourceTarget(editor, from, to) : null
-        dom = editor?.dom
+        )?.[0]
+        if (editor) {
+          found = sourceTarget(editor, from, to)
+          inView = () => sourceViews.get(editor) === view.viewId
+        }
       }
-      if (!found || !dom) return null
+      if (!found) return null
       const { editable, replace } = found
       return {
         ...found,
@@ -458,13 +458,13 @@ export default defineAddon({
               if (
                 !current.ok ||
                 current.value.editor !== selection.editor ||
-                !inView(dom, view)
+                !inView()
               )
                 return false
               if (replace(text)) return true
               if (editable()) return false
             }
-            if (!inView(dom, view) || performance.now() > deadline) return false
+            if (!inView() || performance.now() > deadline) return false
             await new Promise((resolve) => setTimeout(resolve, 16))
           }
         },

@@ -9,6 +9,7 @@ import type {
   ThemePreferences,
 } from '../shared/colorschemes'
 import type { DocumentCommand } from '../shared/desktop'
+import type { ViewId } from '../shared/foundation-contracts'
 import type { AppCommand } from '../shared/hotkeys'
 import type {
   DocumentSyntaxFeature,
@@ -181,16 +182,22 @@ export type AddonAuthor = {
   role?: string
 }
 
+/** Identifies the editor instance an extension is attached to. */
+export type EditorExtensionContext = Readonly<{
+  /** Matches `ViewTarget.viewId` for the view that hosts this editor. */
+  viewId: ViewId
+}>
+
 export type SourceExtension = {
   id: string
   /** Created per source editor; may lazy-load an editor integration. */
-  create: () => Extension | Promise<Extension>
+  create: (context?: EditorExtensionContext) => Extension | Promise<Extension>
 }
 
 export type RichExtension = {
   id: string
   /** Attach editor behavior without rebuilding its schema or undo history. */
-  attach: (editor: Editor) => () => void
+  attach: (editor: Editor, context?: EditorExtensionContext) => () => void
 }
 
 export type StatusItem = {

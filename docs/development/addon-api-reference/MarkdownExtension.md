@@ -2,7 +2,7 @@
 
 # MarkdownExtension
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L508)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L515)
 
 <details>
 <summary>Declaration</summary>
@@ -40,7 +40,7 @@ type MarkdownExtension = {
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L509)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L516)
 
 ```typescript
 id: string
@@ -48,7 +48,7 @@ id: string
 
 ### priority
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L511)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L518)
 
 Higher priority projects first; equal priorities use stable addon/feature IDs.
 
@@ -58,7 +58,7 @@ priority?: number
 
 ### preservation
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L513)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L520)
 
 Verbatim projections keep the exact prefix and suffix around an unchanged source body.
 
@@ -70,7 +70,7 @@ Related: [SourcePreservation](SourcePreservation.md).
 
 ### Editor
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L517)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L524)
 
 Optional properties UI above the rich editor. Receives the complete source.
 
@@ -84,7 +84,7 @@ Related: [MarkdownEditorProps](MarkdownEditorProps.md).
 
 ### parse
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L515)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L522)
 
 Pure source-to-body projection; return null for unrecognized documents.
 

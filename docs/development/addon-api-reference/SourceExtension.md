@@ -2,7 +2,7 @@
 
 # SourceExtension
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L184)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L191)
 
 <details>
 <summary>Declaration</summary>
@@ -11,7 +11,7 @@ Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/addon
 type SourceExtension = {
   id: string
   /** Created per source editor; may lazy-load an editor integration. */
-  create: () => Extension | Promise<Extension>
+  create: (context?: EditorExtensionContext) => Extension | Promise<Extension>
 }
 ```
 
@@ -31,7 +31,7 @@ type SourceExtension = {
 
 ### id
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L185)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L192)
 
 ```typescript
 id: string
@@ -41,12 +41,24 @@ id: string
 
 ### create
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L187)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts#L194)
 
 Created per source editor; may lazy-load an editor integration.
 
 ```typescript
-create: () => Extension | Promise<Extension>
+create: (context?: EditorExtensionContext) => Extension | Promise<Extension>
 ```
 
+Related: [EditorExtensionContext](EditorExtensionContext.md).
+
+**Parameters**
+
+| Name | Type |
+| --- | --- |
+| <code>context?</code> | <code><a href="EditorExtensionContext.md">EditorExtensionContext</a></code> |
+
 **Returns:** <code>Extension &#124; Promise&lt;Extension&gt;</code>
+
+## Related types
+
+[EditorExtensionContext](EditorExtensionContext.md).

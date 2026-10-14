@@ -29,6 +29,9 @@ const commands: BlockCommand[] = [
   },
 ]
 
+// A slash plus 48 Unicode code points, each up to two UTF-16 units.
+export const maximumSlashQueryUnits = 1 + 48 * 2
+
 /** Only a slash at a block boundary is a command, never a path or URL. */
 export function slashQuery(text: string) {
   return /^\/([\p{L}\p{N} -]{0,48})$/u.exec(text)?.[1] ?? null

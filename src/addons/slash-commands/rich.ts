@@ -1,10 +1,29 @@
 import type { Editor } from '@tiptap/core'
 import { closeHistory } from '@tiptap/pm/history'
+import type { Node } from '@tiptap/pm/model'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import type { EditorView } from '@tiptap/pm/view'
 import type { AddonContext } from '../api'
-import { slashQuery } from './commands'
+import { maximumSlashQueryUnits, slashQuery } from './commands'
 import { createSlashMenu } from './menu'
+
+/** Count text across marks and inline containers, stopping once a match is impossible. */
+function impossiblePrefix(parent: Node, to: number) {
+  let units = 0
+  function scan(node: Node, end: number): boolean {
+    for (let index = 0, position = 0; position < end; index++) {
+      const child = node.child(index)
+      if (child.isText) units += Math.min(child.nodeSize, end - position)
+      else if (child.isLeaf) return true
+      else if (scan(child, Math.min(child.content.size, end - position - 1)))
+        return true
+      if (units > maximumSlashQueryUnits) return true
+      position += child.nodeSize
+    }
+    return false
+  }
+  return scan(parent, to)
+}
 
 export function attachRich(editor: Editor, context: AddonContext) {
   const key = new PluginKey('slashCommands')
@@ -22,6 +41,11 @@ export function attachRich(editor: Editor, context: AddonContext) {
       !$from.parent.isTextblock ||
       $from.parent.type.spec.code ||
       $from.marks().some((mark) => mark.type.name === 'code')
+    )
+      return null
+    if (
+      $from.parentOffset > maximumSlashQueryUnits &&
+      impossiblePrefix($from.parent, $from.parentOffset)
     )
       return null
     const query = slashQuery(

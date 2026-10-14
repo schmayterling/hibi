@@ -5,7 +5,7 @@ import { EditorView, ViewPlugin } from '@codemirror/view'
 import { isMarkdownDocument } from '../../shared/document-types'
 import { readFrontmatter } from '../../shared/frontmatter'
 import type { AddonContext } from '../api'
-import { slashQuery } from './commands'
+import { maximumSlashQueryUnits, slashQuery } from './commands'
 import { createSlashMenu } from './menu'
 
 function current(view: EditorView) {
@@ -20,7 +20,10 @@ function current(view: EditorView) {
   )
     return null
   const line = view.state.doc.lineAt(selection.head)
-  const query = slashQuery(line.text.slice(0, selection.head - line.from))
+  if (selection.head - line.from > maximumSlashQueryUnits) return null
+  const query = slashQuery(
+    view.state.doc.sliceString(line.from, selection.head),
+  )
   if (query === null) return null
   for (
     let node = syntaxTree(view.state).resolveInner(selection.head, -1);

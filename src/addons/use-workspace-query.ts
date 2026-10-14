@@ -29,15 +29,19 @@ export function useWorkspaceQueryTarget(
       ReturnType<typeof context.workspace.subscribeChanges>
     > | null = null
     const read = async () => {
+      clearTimeout(timer)
       const current = ++revision
       try {
-        const [snapshot, workspace] = await Promise.all([
-          context.workspace.changeSnapshot(),
-          context.workspace.get(),
-        ])
+        const workspace = await context.workspace.get()
         if (active && current === revision)
           setState({
-            target: snapshot.target,
+            target:
+              workspace?.id && workspace.workspaceGeneration !== undefined
+                ? {
+                    workspaceId: workspace.id as WorkspaceTarget['workspaceId'],
+                    workspaceGeneration: workspace.workspaceGeneration,
+                  }
+                : null,
             workspace,
             loading: false,
             error: '',

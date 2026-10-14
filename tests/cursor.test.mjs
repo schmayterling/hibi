@@ -3,8 +3,39 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, startupDiagnostics } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
+
+async function cursorDiagnostics(app, page, phase) {
+  console.error('cursor phase:', phase)
+  if (!app || !page) return
+  let timer
+  try {
+    await Promise.race([
+      Promise.allSettled([
+        startupDiagnostics(app, page).then((state) =>
+          console.error('cursor startup:', JSON.stringify(state)),
+        ),
+        page
+          .evaluate(() => ({
+            active: document.activeElement?.className,
+            nativeFocus: Document.prototype.hasFocus.call(document),
+            selection: document.getSelection()?.type,
+            sourceLength:
+              document.querySelector('.cm-content')?.textContent.length,
+          }))
+          .then((state) =>
+            console.error('cursor focus:', JSON.stringify(state)),
+          ),
+      ]),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, 1200)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 async function assertCursorAnimationUnqueried(page, editor, name) {
   await page.evaluate(() => {
@@ -47,21 +78,36 @@ async function assertCursorAnimationUnqueried(page, editor, name) {
 test('cursor appearance, movement, selection hiding, and persistence in both editors', {
   timeout: 30000,
 }, async (t) => {
+  let phase = 'launch',
+    app,
+    page,
+    diagnostic
+  let complete = false
+  const onAbort = () => {
+    if (!complete) diagnostic ??= cursorDiagnostics(app, page, phase)
+  }
+  t.signal.addEventListener('abort', onAbort, { once: true })
   const profile = await mkdtemp(join(tmpdir(), 'hibi-cursor-'))
-  const app = await electron.launch({
+  app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
   t.after(async () => {
+    onAbort()
+    t.signal.removeEventListener('abort', onAbort)
+    await diagnostic
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1 })
     })
     await app.close()
     await rm(profile, { recursive: true, force: true })
   })
-  const page = await app.firstWindow()
+  phase = 'first window'
+  page = await app.firstWindow()
   const rich = page.getByRole('textbox', { name: /document editor/i })
+  phase = 'initial editor'
   await rich.waitFor()
   await page.getByRole('button', { name: /dismiss this screen/i }).click()
+  phase = 'initial caret'
   // Exercise caret rendering without taking focus from the user's active window.
   await page.evaluate(() => {
     document.hasFocus = () => true
@@ -90,11 +136,14 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     '',
   )
+  phase = 'rich fill'
   await rich.fill('cursor movement sample')
   const cursor = page.locator('.editor-cursor')
   await cursor.waitFor()
   assert.equal(await cursor.getAttribute('data-style'), 'bar')
+  phase = 'rich animation'
   await assertCursorAnimationUnqueried(page, rich, 'cursor-blink')
+  phase = 'settings controls'
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
   await page
@@ -104,6 +153,7 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
   await page
     .getByLabel(/^cursor animation$/i, { exact: true })
     .selectOption('smooth')
+  phase = 'smooth settings restore'
   await page.getByRole('button', { name: /^back to app$/i }).click()
   await page
     .getByRole('main', { name: /^settings$/i })
@@ -116,6 +166,7 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
         requestAnimationFrame(() => requestAnimationFrame(resolve)),
       ),
   )
+  phase = 'smooth movement'
   const before = (await cursor.boundingBox()).x
   await page.evaluate(() => {
     const caret = document.querySelector('.editor-cursor')
@@ -162,7 +213,9 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
   assert.equal(motion.duration, '0.6s')
   assert.equal(motion.name, 'cursor-smooth')
   assert.notEqual(motion.border, '0px')
+  phase = 'smooth animation'
   await assertCursorAnimationUnqueried(page, rich, 'cursor-smooth')
+  phase = 'split view'
   await pressShortcut(
     app,
     process.platform === 'darwin' ? 'Meta+Shift+\\' : 'Control+Shift+\\',
@@ -176,6 +229,7 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
   )
   // Split preview is read-only; its editable source pane owns the typing caret.
   assert.equal(await rich.getAttribute('contenteditable'), 'false')
+  phase = 'split source caret'
   await page.getByRole('textbox', { name: /markdown editor/i }).focus()
   await page.locator('.source-pane .editor-cursor').waitFor()
   assert.ok(
@@ -193,6 +247,7 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     ['block', 'slow'],
     ['underline', 'normal'],
   ]) {
+    phase = `${shape} settings`
     await clickMenu(app, 'Settings')
     await page
       .getByLabel(/^cursor style$/i, { exact: true })
@@ -203,6 +258,7 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     await page
       .getByLabel(/^cursor animation$/i, { exact: true })
       .selectOption('blink')
+    phase = `${shape} caret restore`
     await page.getByRole('button', { name: /^back to app$/i }).click()
     await page
       .getByRole('main', { name: /^settings$/i })
@@ -218,15 +274,18 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     )
     assert.equal(await cursor.getAttribute('data-move'), 'false')
   }
+  phase = 'source view'
   await page
     .getByRole('button', { name: /^source view$/i, exact: true })
     .click()
   const source = page.getByRole('textbox', { name: /markdown editor/i })
+  phase = 'source clear'
   await source.fill('')
   await source.focus()
   await page.waitForFunction(() =>
     document.querySelector('.source-pane .editor-cursor'),
   )
+  phase = 'source placeholder'
   await page.locator('.source-pane .cm-placeholder').waitFor()
   const sourceGeometry = await page.evaluate(() => {
     const caret = document
@@ -248,17 +307,21 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     ),
     JSON.stringify(sourceGeometry),
   )
+  phase = 'source fill'
   await source.fill('source cursor sample')
   await cursor.waitFor()
   assert.equal(
     await source.evaluate((element) => getComputedStyle(element).caretColor),
     'rgba(0, 0, 0, 0)',
   )
+  phase = 'source selection'
   await source.press(process.platform === 'darwin' ? 'Meta+a' : 'Control+a')
   await cursor.waitFor({ state: 'hidden' })
   await source.press('ArrowRight')
   await cursor.waitFor()
+  phase = 'source animation'
   await assertCursorAnimationUnqueried(page, source, 'cursor-blink')
+  phase = 'reduced motion'
   await page.emulateMedia({ reducedMotion: 'reduce' })
   assert.equal(
     await cursor.evaluate(
@@ -268,7 +331,9 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
   )
   await assertCursorAnimationUnqueried(page, source, 'none')
   await page.emulateMedia({ reducedMotion: 'no-preference' })
+  phase = 'source animation'
   await assertCursorAnimationUnqueried(page, source, 'cursor-blink')
+  phase = 'reload'
   await Promise.all([
     page.waitForEvent('domcontentloaded'),
     app.evaluate(({ BrowserWindow }) =>
@@ -276,6 +341,7 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     ),
   ])
   await rich.waitFor()
+  phase = 'settings controls'
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
   assert.equal(
@@ -290,4 +356,5 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     await page.getByLabel(/^cursor animation$/i, { exact: true }).inputValue(),
     'blink',
   )
+  complete = true
 })

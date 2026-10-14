@@ -178,6 +178,9 @@
   "022c1a6073fb": [
     "src/addons/dictionary/custom-words.ts"
   ],
+  "c8ed9bf97a64": [
+    "src/addons/dictionary/index.tsx"
+  ],
   "25bd3377df88": [
     "src/addons/diagnostics/Settings.tsx"
   ],
@@ -1077,6 +1080,9 @@
   "5c9f7a4e454f": [
     "src/addons/git/Panel.tsx"
   ],
+  "075577ab872f": [
+    "src/addons/git/index.tsx"
+  ],
   "c3f93413b825": [
     "src/addons/git/Panel.tsx"
   ],
@@ -1196,6 +1202,9 @@
   "3636e99d3bcf": [
     "src/main/updates.ts"
   ],
+  "84e5e54892f8": [
+    "src/addons/review/index.tsx"
+  ],
   "cbf582aa15a3": [
     "src/ui/DialogProvider.tsx"
   ],
@@ -1204,6 +1213,9 @@
   ],
   "f29958bfab73": [
     "src/addons/quick-note/Settings.tsx"
+  ],
+  "8b7c73237abe": [
+    "src/addons/autocomplete/index.tsx"
   ],
   "8ee887cb7d7b": [
     "src/renderer/src/main.tsx"
@@ -1241,6 +1253,9 @@
   "f56d1f9d0955": [
     "src/main/updates.ts"
   ],
+  "000851134485": [
+    "src/addons/dictionary/pack-store.ts"
+  ],
   "9ec4e620e7b9": [
     "src/addons/dictionary/pack-store.ts"
   ],
@@ -1250,6 +1265,9 @@
   "7513fb43c0f9": [
     "src/addons/dictionary/PackSettings.tsx"
   ],
+  "cf29ea1f6ead": [
+    "src/addons/keybeats/index.ts"
+  ],
   "349ceed84d07": [
     "src/renderer/src/LicenseSettings.tsx"
   ],
@@ -1258,6 +1276,9 @@
   ],
   "fc8b8ebd6f13": [
     "src/ui/DialogProvider.tsx"
+  ],
+  "74fb22abb7fb": [
+    "src/addons/keybeats/engine.ts"
   ],
   "a1b6ea912527": [
     "src/renderer/src/LicenseSettings.tsx"
@@ -1275,6 +1296,7 @@
     "src/renderer/src/main.tsx"
   ],
   "4ed9d9eca342": [
+    "src/addons/vim/engine.ts",
     "src/renderer/src/main.tsx"
   ],
   "243d7d0be442": [
@@ -1289,11 +1311,17 @@
   "2ea302167076": [
     "src/addons/vim/Settings.tsx"
   ],
+  "2e27bc9fcffb": [
+    "src/addons/vim/keymaps.ts"
+  ],
   "da2df709d46e": [
     "src/renderer/src/document-worker-client.ts"
   ],
   "ce6331b7277c": [
     "src/main/addon-hotkeys.ts"
+  ],
+  "99c812ab8819": [
+    "src/addons/review/index.tsx"
   ],
   "278a4d546369": [
     "src/main/index.ts"
@@ -1354,6 +1382,7 @@
     "src/main/dependencies.ts"
   ],
   "98bdb8dbc149": [
+    "src/addons/dictionary/SideView.tsx",
     "src/addons/dictionary/custom-words.ts",
     "src/addons/dictionary/index.tsx"
   ],
@@ -1368,6 +1397,9 @@
   ],
   "6704c0f053f8": [
     "src/renderer/src/HotkeySettings.tsx"
+  ],
+  "0af861157fe6": [
+    "src/renderer/src/autosave.ts"
   ],
   "f6a61661c1fd": [
     "src/renderer/src/document-worker-client.ts"
@@ -1417,7 +1449,16 @@
     "src/addons/documentation/ExportDialog.tsx",
     "src/addons/ui-preview/index.tsx"
   ],
+  "078ccef8c644": [
+    "src/addons/ui-preview/index.tsx"
+  ],
   "910025c38938": [
+    "src/addons/ui-preview/index.tsx"
+  ],
+  "74aacc0457aa": [
+    "src/addons/ui-preview/index.tsx"
+  ],
+  "a04c9b95fb0a": [
     "src/addons/ui-preview/index.tsx"
   ],
   "f454b68dc829": [
@@ -1943,6 +1984,9 @@
   "3809a20d54e6": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
+  "bb3ed8c465fb": [
+    "src/addons/math/engine.ts"
+  ],
   "27a0ae578c51": [
     "src/renderer/src/FormatsSettings.tsx"
   ],
@@ -2153,6 +2197,16 @@
   "c48ede563ddf": [
     "src/addons/documentation/index.tsx",
     "src/main/addons.ts"
+  ],
+  "bbb399c5f459": [
+    "src/addons/typst/Block.tsx",
+    "src/addons/typst/index.tsx"
+  ],
+  "d3007be4c75c": [
+    "src/addons/_shared/format-renderer.tsx"
+  ],
+  "e79bf6ba8cdf": [
+    "src/addons/documentation/index.tsx"
   ],
   "a2dd9cbb7013": [
     "src/addons/documentation/ExportDialog.tsx"
@@ -3078,6 +3132,9 @@
   "7b4dbd556bfc": [
     "src/addons/autocomplete/Settings.tsx"
   ],
+  "6af8cc7da9bd": [
+    "src/addons/autocomplete/index.tsx"
+  ],
   "bcccb5388362": [
     "src/renderer/src/CommandPalette.tsx"
   ],
@@ -3295,6 +3352,9 @@
     "src/addons/diagnostics/Settings.tsx"
   ],
   "d48500aea832": [
+    "src/addons/math/engine.ts"
+  ],
+  "e773d5d47ec0": [
     "src/addons/math/engine.ts"
   ],
   "a1a5936d3b0f": [
@@ -3718,6 +3778,9 @@
     "src/addons/typst/index.tsx"
   ],
   "5862e6d7b21b": [
+    "src/addons/git/native.ts"
+  ],
+  "7fc1c1e94007": [
     "src/addons/git/native.ts"
   ],
   "7dcab1ae38fe": [
@@ -4153,6 +4216,12 @@
   "bccf10da05f5": [
     "src/addons/quick-note/Settings.tsx"
   ],
+  "34ed72df5e43": [
+    "src/addons/quick-note/index.tsx"
+  ],
+  "1cd8f5b89cc7": [
+    "src/addons/quick-note/index.tsx"
+  ],
   "239c9fef4eb8": [
     "src/addons/quick-note/index.tsx"
   ],
@@ -4386,6 +4455,9 @@
   "17cd13d49eb4": [
     "src/renderer/src/addons.ts"
   ],
+  "b94843a2e903": [
+    "src/addons/git/index.tsx"
+  ],
   "fd90aa22434a": [
     "src/main/dependencies.ts"
   ],
@@ -4601,6 +4673,12 @@
   "67fe7834e543": [
     "src/main/workspace-settings.ts"
   ],
+  "8e4fa79a7929": [
+    "src/addons/ui-preview/index.tsx"
+  ],
+  "292148a75a28": [
+    "src/addons/ui-preview/index.tsx"
+  ],
   "bf72b619b5bd": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
@@ -4612,6 +4690,9 @@
   ],
   "1eb89644df2d": [
     "src/addons/quick-note/CaptureWindow.tsx"
+  ],
+  "fca046ccd586": [
+    "src/addons/vim/engine.ts"
   ],
   "096b73624b09": [
     "src/renderer/src/AutosaveSettings.tsx"
@@ -5362,6 +5443,7 @@
     "src/main/document.ts"
   ],
   "7936a209d09a": [
+    "src/addons/dictionary/SideView.tsx",
     "src/addons/dictionary/index.tsx"
   ],
   "68218ba6809b": [
@@ -6103,6 +6185,9 @@
   "a6e128c99269": [
     "src/addons/dictionary/index.tsx"
   ],
+  "db74ff730bc3": [
+    "src/renderer/src/SourceEditor.tsx"
+  ],
   "451aa51a0fb5": [
     "src/renderer/src/EditorToolbar.tsx"
   ],
@@ -6338,6 +6423,9 @@
   ],
   "0c78f3e5ef4e": [
     "src/renderer/src/DependencySettings.tsx"
+  ],
+  "051431d0ea14": [
+    "src/addons/vim/engine.ts"
   ],
   "5b31cbaacd39": [
     "src/main/workspace-files.ts"

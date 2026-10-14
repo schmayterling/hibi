@@ -9,6 +9,8 @@ const displayFields = new Set([
   'data-tooltip',
   'description',
   'message',
+  'error',
+  'notice',
   'detail',
   'tooltip',
   'placeholder',
@@ -76,6 +78,8 @@ for (const entry of await readdir('src', {
     plugins: file.endsWith('.tsx') ? ['typescript', 'jsx'] : ['typescript'],
   })
   function visit(node, parent) {
+    if (node.type === 'VariableDeclarator' && /_CHANNELS$/.test(node.id.name))
+      return
     if (node.type === 'JSXText') add(node.value, file)
     if (
       node.type === 'JSXAttribute' &&
@@ -104,8 +108,13 @@ for (const entry of await readdir('src', {
     )
       collect(node.arguments[0], file)
     if (
-      node.type === 'CallExpression' &&
-      /^(?:setError|setNotice|setMessage|alert)$/.test(node.callee.name) &&
+      ['CallExpression', 'OptionalCallExpression'].includes(node.type) &&
+      (/^(?:setError|setNotice|setMessage|alert)$/.test(node.callee.name) ||
+        (['MemberExpression', 'OptionalMemberExpression'].includes(
+          node.callee.type,
+        ) &&
+          !node.callee.computed &&
+          node.callee.property.name === 'notify')) &&
       node.arguments[0]
     )
       collect(node.arguments[0], file)

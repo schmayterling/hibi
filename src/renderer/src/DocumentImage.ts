@@ -1,9 +1,22 @@
 import { Image } from '@tiptap/extension-image'
 import { attachmentMarkdown } from '../../shared/media.ts'
+import { decodeMarkdownEntities } from './markdown-entities.ts'
 
 /** Resolve display URLs without changing the Markdown stored in image attrs. */
 export function documentImage(revision: number) {
   return Image.extend({
+    parseMarkdown: (token, helpers) => {
+      const inline = token.tokens ? helpers.parseInline(token.tokens) : []
+      return helpers.createNode('image', {
+        src: token.href,
+        // Keep the original label when inline nodes cannot become plain text.
+        alt:
+          inline.length && inline.every((node) => node.type === 'text')
+            ? inline.map((node) => node.text ?? '').join('')
+            : decodeMarkdownEntities(token.text ?? ''),
+        title: token.title ? decodeMarkdownEntities(token.title) : null,
+      })
+    },
     renderMarkdown: (node) =>
       attachmentMarkdown([
         {

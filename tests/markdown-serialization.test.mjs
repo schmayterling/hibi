@@ -18,6 +18,7 @@ import { Marked } from 'marked'
 import {
   ObsidianHighlight,
   obsidianMarkdown,
+  WikiEmbed,
   WikiLink,
 } from '../src/addons/markdown/obsidian.ts'
 import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
@@ -983,6 +984,200 @@ test('rich soft breaks render as spaces and retain their source after an unrelat
     schema.nodeFromJSON(manager.parse('```\na\nb\n```')).firstChild.textContent,
     'a\nb',
   )
+})
+
+test('image descriptions and titles decode once and preserve literal entities on save', async () => {
+  const { documentImage } = await import('../src/renderer/src/DocumentImage.ts')
+  const { core, parser, options } = markdownConfiguration([])
+  const extensions = [...core, documentImage(0)]
+  const schema = getSchema(extensions)
+  const manager = new MarkdownManager({
+    extensions,
+    marked: parser,
+    markedOptions: options,
+  })
+  for (const [encoded, decoded] of [
+    ['&copy;', '©'],
+    ['&#169;', '©'],
+    ['&#xA9;', '©'],
+    ['&amp;copy;', '&copy;'],
+    ['&amp;#169;', '&#169;'],
+    ['&unknown;', '&unknown;'],
+    ['&copy', '&copy'],
+    ['first&#10;second&#13;third', 'first\nsecond\rthird'],
+  ]) {
+    const doc = schema.nodeFromJSON(
+      manager.parse(`![${encoded}](photo.png "${encoded}")`),
+    )
+    assert.equal(doc.firstChild.attrs.alt, decoded)
+    assert.equal(doc.firstChild.attrs.title, decoded)
+    for (const local of [false, true]) {
+      const saved = markdownSerializer(manager, local)(doc).source
+      assert.ok(schema.nodeFromJSON(manager.parse(saved)).eq(doc), saved)
+    }
+  }
+  const doc = schema.node('doc', null, [
+    schema.node('image', {
+      src: 'photo.png',
+      alt: 'literal &copy; [brackets] \\ slash',
+      title: 'literal &#169; "quote" \\ slash\nnext',
+    }),
+  ])
+  for (const local of [false, true]) {
+    const saved = markdownSerializer(manager, local)(doc).source
+    assert.ok(schema.nodeFromJSON(manager.parse(saved)).eq(doc), saved)
+  }
+})
+
+test('literal image descriptions preserve inline Markdown through full and cached saves', async () => {
+  const { documentImage } = await import('../src/renderer/src/DocumentImage.ts')
+  const { InlineMath } = await import('@tiptap/extension-mathematics')
+  const { Strike } = await import('@tiptap/extension-strike')
+  const { inlineMath, mathTokens } = await import(
+    '../src/addons/math/syntax.ts'
+  )
+  for (const flavors of [
+    [],
+    [
+      {
+        id: 'markdown.github',
+        markedOptions: { gfm: true },
+        richExtensions: [Strike],
+      },
+      {
+        id: 'markdown.obsidian',
+        richExtensions: [ObsidianHighlight, WikiLink],
+        export: { extensions: [obsidianMarkdown] },
+      },
+      {
+        id: 'math.latex',
+        richExtensions: [
+          InlineMath.extend({
+            markdownTokenizer: {
+              name: 'inlineMath',
+              level: 'inline',
+              start: (source) => source.indexOf('$'),
+              tokenize: inlineMath,
+            },
+          }),
+        ],
+        export: { extensions: [mathTokens] },
+      },
+    ],
+  ]) {
+    const { core, addons, parser, options } = markdownConfiguration(flavors)
+    const extensions = [...core, ...addons, documentImage(0)]
+    const schema = getSchema(extensions)
+    const manager = new MarkdownManager({
+      extensions,
+      marked: parser,
+      markedOptions: options,
+    })
+    for (const [encoded, literal] of [
+      ['&#42;literal&#42;', '*literal*'],
+      ['&#42;&#42;literal&#42;&#42;', '**literal**'],
+      ['&#95;literal&#95;', '_literal_'],
+      ['&#95;&#95;literal&#95;&#95;', '__literal__'],
+      ['&#96;literal&#96;', '`literal`'],
+      ['&#60;span&#62;literal&#60;/span&#62;', '<span>literal</span>'],
+      ['&#60;https://example.test&#62;', '<https://example.test>'],
+      ['&#91;label&#93;(target)', '[label](target)'],
+      ['&#33;&#91;alt&#93;(photo.png)', '![alt](photo.png)'],
+      ['&#126;&#126;literal&#126;&#126;', '~~literal~~'],
+      ['&#36;x + y&#36;', '$x + y$'],
+      ['&#61;&#61;literal&#61;&#61;', '==literal=='],
+      ['&#37;&#37;literal&#37;&#37;', '%%literal%%'],
+    ]) {
+      const doc = schema.nodeFromJSON(
+        manager.parse(`![${encoded}](photo.png)\n\nbefore`),
+      )
+      assert.equal(doc.firstChild.attrs.alt, literal)
+      const next = schema.node('doc', null, [
+        doc.firstChild,
+        schema.node('paragraph', null, schema.text('after')),
+      ])
+      for (const local of [false, true]) {
+        const serialize = markdownSerializer(manager, local)
+        for (const current of [doc, next]) {
+          const saved = serialize(current).source
+          assert.ok(
+            schema.nodeFromJSON(manager.parse(saved)).eq(current),
+            saved,
+          )
+        }
+      }
+    }
+  }
+})
+
+test('incoming image descriptions preserve non-text inline source through full and cached saves', async (t) => {
+  const { documentImage } = await import('../src/renderer/src/DocumentImage.ts')
+  const { InlineMath } = await import('@tiptap/extension-mathematics')
+  const { inlineMath, mathTokens } = await import(
+    '../src/addons/math/syntax.ts'
+  )
+  const { core, addons, parser, options } = markdownConfiguration([
+    {
+      id: 'markdown.obsidian',
+      richExtensions: [ObsidianHighlight, WikiLink, WikiEmbed],
+      export: { extensions: [obsidianMarkdown] },
+    },
+    {
+      id: 'math.latex',
+      richExtensions: [
+        InlineMath.extend({
+          markdownTokenizer: {
+            name: 'inlineMath',
+            level: 'inline',
+            start: (source) => source.indexOf('$'),
+            tokenize: inlineMath,
+          },
+        }),
+      ],
+      export: { extensions: [mathTokens] },
+    },
+  ])
+  const extensions = [...core, ...addons, documentImage(0)]
+  const schema = getSchema(extensions)
+  const manager = new MarkdownManager({
+    extensions,
+    marked: parser,
+    markedOptions: options,
+  })
+  for (const [name, source, expected = source] of [
+    ['math', 'E $x^2$'],
+    ['space hard break', 'first  \nsecond'],
+    ['backslash hard break', 'first\\\nsecond'],
+    ['HTML break', 'first<br>second'],
+    ['addon atom', 'asset ![[drawing.png|caption]]'],
+    [
+      'mixed formatting',
+      'before **bold** $x$ &amp; after',
+      'before **bold** $x$ & after',
+    ],
+    ['decode once', 'before $x$ &amp;copy;', 'before $x$ &copy;'],
+  ]) {
+    await t.test(name, () => {
+      const doc = schema.nodeFromJSON(
+        manager.parse(`![${source}](photo.png)\n\nbefore`),
+      )
+      assert.equal(doc.firstChild.attrs.alt, expected)
+      const next = schema.node('doc', null, [
+        doc.firstChild,
+        schema.node('paragraph', null, schema.text('after')),
+      ])
+      for (const local of [false, true]) {
+        const serialize = markdownSerializer(manager, local)
+        for (const current of [doc, next]) {
+          const saved = serialize(current).source
+          assert.ok(
+            schema.nodeFromJSON(manager.parse(saved)).eq(current),
+            saved,
+          )
+        }
+      }
+    })
+  }
 })
 
 test('native HTML entities decode once and survive full and cached serialization', async (t) => {

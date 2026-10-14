@@ -19,16 +19,28 @@ export function isMediaFile(file: Pick<File, 'name' | 'type'>) {
   )
 }
 
+function attachmentText(text: string) {
+  return text.replace(/[&\r\n]/g, (character) =>
+    character === '&' ? '&amp;' : `&#${character.charCodeAt(0)};`,
+  )
+}
+
 export function attachmentMarkdown(
   items: readonly (MediaAttachment & { title?: string })[],
 ) {
   return items
     .map(({ alt, url, title }) => {
-      const label = alt.replace(/[\\[\]]/g, '\\$&')
+      // Descriptions are parsed as inline Markdown, including addon syntax.
+      const label = alt.replace(
+        /[!-/:-@[-`{-~\r\n]/g,
+        (character) => `&#${character.charCodeAt(0)};`,
+      )
       const destination = /\s/.test(url)
         ? `<${url.replace(/[\\<>]/g, '\\$&')}>`
         : url.replace(/\\/g, '\\\\').replace(/[()]/g, '\\$&')
-      const suffix = title ? ` "${title.replace(/[\\"]/g, '\\$&')}"` : ''
+      const suffix = title
+        ? ` "${attachmentText(title).replace(/[\\"]/g, '\\$&')}"`
+        : ''
       return `![${label}](${destination}${suffix})`
     })
     .join('\n\n')

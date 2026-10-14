@@ -1,7 +1,7 @@
 import { Extension } from '@tiptap/core'
 import type { Node } from '@tiptap/pm/model'
 import { Plugin, PluginKey, type Transaction } from '@tiptap/pm/state'
-import type { Mappable } from '@tiptap/pm/transform'
+import { type Mappable, ReplaceStep } from '@tiptap/pm/transform'
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view'
 import type { TableLayout } from '../../shared/table-layout'
 import { richSourceEcho } from './rich-source-session'
@@ -14,6 +14,7 @@ type Sized = {
   columns: number[]
   rows: number[]
   versions?: WeakSet<Node>
+  unique?: boolean
 }
 type State = {
   tables: Sized[]
@@ -133,7 +134,7 @@ function mapped(
 ): Sized[] {
   let beforeTables: ReturnType<typeof tablesIn> | undefined
   let afterTables: ReturnType<typeof tablesIn> | undefined
-  return tables.flatMap((sized) => {
+  return tables.flatMap<Sized>((sized) => {
     const result = tr.mapping.mapResult(sized.pos, 1)
     const table = tr.doc.nodeAt(result.pos)
     const old = before.nodeAt(sized.pos)
@@ -154,7 +155,7 @@ function mapped(
         if (beforeTables.filter(({ node }) => versions.has(node)).length !== 1)
           return []
         touched.push(moved.pos)
-        return [{ ...sized, pos: moved.pos, versions }]
+        return [{ ...sized, pos: moved.pos, versions, unique: true }]
       }
     }
     if (table?.type.name !== 'table') return []
@@ -166,23 +167,33 @@ function mapped(
         tr.mapping.mapResult(sized.pos + table.nodeSize, -1).deleted
       )
         touched.push(result.pos)
-      return [{ ...sized, pos: result.pos, versions }]
+      return [{ ...sized, pos: result.pos, versions, unique: false }]
     }
     touched.push(result.pos)
     if (result.deleted) return []
-    if (!old) return [{ ...sized, pos: result.pos }]
+    if (!old) return [{ ...sized, pos: result.pos, unique: false }]
+    const step = tr.steps.length === 1 ? tr.steps[0] : null
+    // A single interior replacement cannot introduce this family elsewhere.
+    let unique =
+      !!sized.unique &&
+      step instanceof ReplaceStep &&
+      step.from > sized.pos &&
+      step.to < sized.pos + old.nodeSize
     const end = tr.mapping.mapResult(sized.pos + old.nodeSize, -1)
-    beforeTables ??= tablesIn(before)
-    afterTables ??= tablesIn(tr.doc)
-    if (
+    const intact =
       !result.deletedAfter &&
       !end.deletedBefore &&
-      end.pos === result.pos + table.nodeSize &&
-      beforeTables.filter(({ node }) => versions.has(node)).length === 1 &&
-      afterTables.filter(({ node }) => node === table || versions.has(node))
-        .length === 1
-    )
-      versions.add(table)
+      end.pos === result.pos + table.nodeSize
+    if (!unique || !intact) {
+      beforeTables ??= tablesIn(before)
+      afterTables ??= tablesIn(tr.doc)
+      unique =
+        intact &&
+        beforeTables.filter(({ node }) => versions.has(node)).length === 1 &&
+        afterTables.filter(({ node }) => node === table || versions.has(node))
+          .length === 1
+    }
+    if (unique) versions.add(table)
     else versions = new WeakSet([table])
     // Step by step, so a paste that first adds columns and then replaces
     // cells keeps sizes: rows or columns that were inserted or deleted carry
@@ -211,7 +222,7 @@ function mapped(
       }
       pos = next.pos
     })
-    return [{ pos: result.pos, columns, rows, versions }]
+    return [{ pos: result.pos, columns, rows, versions, unique }]
   })
 }
 

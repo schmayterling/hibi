@@ -549,6 +549,17 @@ test('quick note captures to a chosen folder without replacing files', {
 test('quick note shortcut opens one capture window without raising Hibi', {
   timeout: 45000,
 }, async (t) => {
+  const probe = { phase: 'setup', presses: 0, attempts: 0, lastPress: null }
+  t.signal.addEventListener(
+    'abort',
+    () => {
+      try {
+        if (probe.phase !== 'complete')
+          t.diagnostic(`quick-note-shortcut-abort ${JSON.stringify(probe)}`)
+      } catch {}
+    },
+    { once: true },
+  )
   const root = await mkdtemp(join(tmpdir(), 'hibi-quick-note-window-'))
   const workspace = join(root, 'workspace')
   const profile = join(root, 'profile')
@@ -598,13 +609,19 @@ test('quick note shortcut opens one capture window without raising Hibi', {
     { shortcut, workspaceId },
   )
   const press = async () => {
+    probe.phase = `shortcut-${++probe.presses}`
     for (;;) {
+      probe.attempts++
       const pressed = await app.evaluate((_electron, accelerator) => {
         const callback = globalThis.quickNoteShortcuts.get(accelerator)
         callback?.()
         return !!callback
       }, shortcut)
-      if (pressed) return
+      probe.lastPress = pressed
+      if (pressed) {
+        probe.phase += '-returned'
+        return
+      }
       await setTimeout(30)
     }
   }
@@ -616,8 +633,10 @@ test('quick note shortcut opens one capture window without raising Hibi', {
   )
 
   const closeWith = async (capture, key) => {
+    probe.phase = `close-${key}`
     const before = await captureHides(app)
     await capture.keyboard.press(key)
+    probe.phase = `wait-hidden-${key}`
     await hidden(app, before)
   }
 
@@ -656,7 +675,9 @@ test('quick note shortcut opens one capture window without raising Hibi', {
   const saving = await captureWindow(app)
   assert.equal(await noteText(saving), 'Keep this')
   const before = await captureHides(app)
+  probe.phase = 'save-key'
   await saving.keyboard.press('ControlOrMeta+Enter')
+  probe.phase = 'saved-status'
   await saving.getByRole('status').getByText('Saved Quick note.md.').waitFor()
   await hidden(app, before)
   assert.equal(
@@ -679,13 +700,18 @@ test('quick note shortcut opens one capture window without raising Hibi', {
   assert.equal(await noteText(empty), '')
   await closeWith(empty, 'Escape')
 
-  if (process.platform !== 'darwin') return
+  if (process.platform !== 'darwin') {
+    probe.phase = 'complete'
+    return
+  }
   // macOS keeps Hibi and its shortcut running after the last window closes.
+  probe.phase = 'main-close'
   await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()
       .find((window) => window.webContents.getURL() === 'app://hibi/')
       .close(),
   )
+  probe.phase = 'wait-main-close'
   while ((await appWindows(app)).includes('app://hibi/')) await setTimeout(30)
   await press()
   const windowless = await captureWindow(app)
@@ -696,6 +722,7 @@ test('quick note shortcut opens one capture window without raising Hibi', {
     'No main window',
   )
   assert.equal((await appWindows(app)).includes('app://hibi/'), false)
+  probe.phase = 'complete'
 })
 
 test('the capture window renders markdown like the main editor', {

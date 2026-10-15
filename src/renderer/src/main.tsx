@@ -87,7 +87,6 @@ import { isEditorCommandTargetCurrent } from './editor-command-targets'
 import { setEditorCommandMenu } from './editor-interaction-presence'
 import { editorPreferences, useEditorPreference } from './editor-preferences'
 import { FlavorPicker } from './FlavorPicker'
-import { FormatEditor } from './FormatEditor'
 import {
   automaticFlavor,
   type FlavorChoice,
@@ -318,7 +317,23 @@ function App() {
       active = false
     }
   }, [needsRichEditor, richEditor])
-  const DocumentEditor = markdownDocument ? richEditor.Component : FormatEditor
+  const [formatEditor, setFormatEditor] = useState<{
+    Component?: typeof import('./FormatEditor').FormatEditor
+    error?: Error
+  }>({})
+  const needsFormatEditor =
+    document !== null &&
+    (!markdownDocument ||
+      !!(
+        splitTabs &&
+        [splitTabs.left, splitTabs.right].some((id) => {
+          const pane = documentRuntime.get(id)
+          return pane && !documentFormats.isMarkdown(pane.name)
+        })
+      ))
+  const DocumentEditor = markdownDocument
+    ? richEditor.Component
+    : formatEditor.Component
   useLayoutEffect(() => {
     startupMark('app-layout-effect')
     editorDocument.publish(documentRuntime.get() ?? document)
@@ -891,7 +906,7 @@ function App() {
         snapshot: () => window.hibi.getWorkspaceSnapshot(),
         get: () => window.hibi.getWorkspace(),
         open: openFolder,
-        openFile: openFile,
+        openFile: (path, owner) => openFile(path, owner),
       },
       invoke: async (id, method, input) => {
         if (busyRef.current)
@@ -927,6 +942,27 @@ function App() {
         : 'markdown'
       : selectedMode,
   )
+  useEffect(() => {
+    if (
+      !addonHost.ready ||
+      !needsFormatEditor ||
+      formatEditor.Component ||
+      formatEditor.error
+    )
+      return
+    let active = true
+    void import('./FormatEditor').then(
+      ({ FormatEditor }) => {
+        if (active) setFormatEditor({ Component: FormatEditor })
+      },
+      (error: Error) => {
+        if (active) setFormatEditor({ error })
+      },
+    )
+    return () => {
+      active = false
+    }
+  }, [addonHost.ready, needsFormatEditor, formatEditor])
   useEffect(() => {
     setEditorCommandMenu(addonHost.commands, () =>
       addonHost.captureCommandContext('menu'),
@@ -1410,7 +1446,7 @@ function App() {
     }
   }
 
-  async function openFile(path: string): Promise<void> {
+  async function openFile(path: string, owner?: string): Promise<void> {
     if (busyRef.current) return
     busyRef.current = true
     setBusy(true)
@@ -1419,7 +1455,13 @@ function App() {
       const next = await window.hibi.openWorkspaceFile(path)
       if (next) {
         await acceptOperationDocument(next)
-        showDocument()
+        const views = addonViews.snapshot()
+        const selected = views.instances.find(
+          (view) => view.id === views.activeTab,
+        )
+        if (!owner || selected?.definition.owner !== owner)
+          addonViews.selectDocument()
+        setSettingsOpen(false)
         setWorkspace(await window.hibi.getWorkspace())
         if (sidebarResize.overlay) setSidebarOpen(false)
       }
@@ -2145,6 +2187,8 @@ function App() {
 
   if (document) startupMark('document-available')
   if (markdownDocument && richEditor.error) throw richEditor.error
+  if (addonHost.ready && needsFormatEditor && formatEditor.error)
+    throw formatEditor.error
   if (!document && !failed) return <LoadingScreen full />
   startupMark('shell')
   if (addonHost.ready) {
@@ -2522,7 +2566,9 @@ function App() {
       !paneDocument || documentFormats.isMarkdown(paneDocument.name)
     const paneFootnoteDocument =
       paneMarkdown && hasFootnoteDefinitions(paneDocument?.markdown ?? '')
-    const PaneEditor = paneMarkdown ? richEditor.Component : FormatEditor
+    const PaneEditor = paneMarkdown
+      ? richEditor.Component
+      : formatEditor.Component
     const requestedMode = splitTabs
       ? side === 'left'
         ? splitTabs.leftMode

@@ -286,6 +286,179 @@ test('export waits for all queued notes, reads the latest words, and never write
   assert.equal(writes, 2)
 })
 
+async function nativeClipboard(clipboard) {
+  const source = await readFile(
+    new URL('../src/addons/dictionary/native.ts', import.meta.url),
+    'utf8',
+  )
+  const start = source.indexOf('async copyCustomWords(input) {')
+  const end = source.indexOf('\n    },', start)
+  assert.ok(start >= 0 && end > start)
+  return new Function(
+    'clipboard',
+    'HOST_SELECTED_IO_MAX_BYTES',
+    `return ({${source.slice(start, end)}\n    }}).copyCustomWords`,
+  )(clipboard, HOST_SELECTED_IO_MAX_BYTES)
+}
+
+test('clipboard export waits for saves and native acknowledgement without browser focus', async (t) => {
+  const source = await readFile(
+    new URL('../src/addons/dictionary/CustomWords.tsx', import.meta.url),
+    'utf8',
+  )
+  const end = source.indexOf('\n        >\n          Export as text\n')
+  const start = source.lastIndexOf('onClick={', end)
+  assert.ok(start >= 0 && end > start)
+  const callback = source
+    .slice(start + 'onClick={'.length, end)
+    .trimEnd()
+    .slice(0, -1)
+  const { handle, context } = storage([{ word: 'zorp', note: 'old' }])
+  const set = handle.set
+  const save = Promise.withResolvers()
+  const copy = Promise.withResolvers()
+  let failSave = false
+  let failCopy = false
+  handle.set = async (value) => {
+    await save.promise
+    return failSave ? { status: 'unavailable', reason: 'corrupt' } : set(value)
+  }
+  const close = await openCustomWords(context)
+  const calls = []
+  const writes = []
+  const copyCustomWords = await nativeClipboard({
+    async writeText(value) {
+      await copy.promise
+      if (failCopy) throw new Error('clipboard unavailable')
+      writes.push(value)
+    },
+  })
+  let browserCalls = 0
+  let text = 'paste draft'
+  let message = 'previous status'
+  const exportText = new Function(
+    'exportSavedCustomWords',
+    'setText',
+    'setMessage',
+    'failed',
+    'navigator',
+    'window',
+    `return (${callback})`,
+  )(
+    exportSavedCustomWords,
+    (value) => {
+      text = value
+    },
+    (value) => {
+      message = value
+    },
+    (error) => error.message,
+    {
+      clipboard: {
+        writeText: async () => {
+          browserCalls++
+          throw new Error('Document is not focused.')
+        },
+      },
+    },
+    {
+      hibi: {
+        invokeAddon: async (id, method, value) => {
+          assert.equal(id, 'dictionary')
+          assert.equal(method, 'copyCustomWords')
+          calls.push(value)
+          await copyCustomWords(value)
+        },
+      },
+    },
+  )
+  let saving
+  let exporting
+  t.after(async () => {
+    save.resolve()
+    copy.resolve()
+    await Promise.allSettled([saving, exporting])
+    close()
+  })
+  saving = editCustomWord(listCustomWords()[0], (item) => ({
+    ...item,
+    note: 'copied note',
+  })).then(() => {
+    message = ''
+  })
+  exporting = exportText()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(text, 'paste draft')
+  assert.equal(calls.length, 0)
+  save.resolve()
+  await saving
+  await new Promise((resolve) => setImmediate(resolve))
+  const copied = 'zorp\t\tcopied note'
+  assert.equal(text, copied)
+  assert.equal(browserCalls, 0)
+  assert.deepEqual(calls, [copied])
+  assert.deepEqual(writes, [])
+  assert.equal(message, '')
+  copy.resolve()
+  await exporting
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(writes, [copied])
+  assert.equal(message, 'Copied your words as text.')
+
+  failCopy = true
+  await exportText()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(message, 'Select the text to copy it.')
+  assert.deepEqual(writes, [copied])
+
+  failCopy = false
+  await exportText()
+  assert.equal(message, 'Copied your words as text.')
+  assert.deepEqual(writes, [copied, copied])
+
+  failSave = true
+  text = 'keep pasted draft'
+  saving = assert.rejects(
+    editCustomWord(listCustomWords()[0], (item) => ({
+      ...item,
+      note: 'unsaved',
+    })),
+    /Could not save custom words/,
+  )
+  exporting = exportText()
+  await Promise.all([saving, exporting])
+  assert.equal(text, 'keep pasted draft')
+  assert.equal(message, 'Could not save custom words.')
+  assert.deepEqual(calls, [copied, copied, copied])
+  assert.deepEqual(writes, [copied, copied])
+})
+
+test('native clipboard rejects invalid payloads and preserves maximum-size Unicode exports', async () => {
+  const writes = []
+  const copy = await nativeClipboard({ writeText: (text) => writes.push(text) })
+  for (const value of [
+    null,
+    7,
+    {},
+    [],
+    'x'.repeat(HOST_SELECTED_IO_MAX_BYTES + 1),
+  ])
+    await assert.rejects(copy(value), TypeError)
+  assert.deepEqual(writes, [])
+  const text = exportCustomWords(
+    customWords(
+      Array.from({ length: 5000 }, (_, index) => ({
+        word: `${'界'.repeat(60)}${String(index).padStart(4, '0')}`,
+        lang: 'yue',
+        note: '界'.repeat(2000),
+      })),
+    ),
+  )
+  assert.ok(Buffer.byteLength(text) > HOST_SELECTED_IO_MAX_BYTES)
+  await copy(text)
+  assert.deepEqual(writes, [text])
+})
+
 test('export keeps a pending note conflict after a queued language save recovers', async (t) => {
   const gates = [Promise.withResolvers(), Promise.withResolvers()]
   const listeners = new Set()

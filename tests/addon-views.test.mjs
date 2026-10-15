@@ -117,7 +117,7 @@ test('accepted document navigation reveals documents and retains addon tab sessi
           globalThis.finishNavigationOpen = resolve
         })
     })
-    await clickMenu(app, 'Open')
+    await clickMenu(app, 'Open…')
     await page.locator('.app[aria-busy="true"]').waitFor()
     await app.evaluate((_electron, file) => {
       globalThis.finishNavigationOpen({
@@ -218,10 +218,11 @@ test('accepted document navigation reveals documents and retains addon tab sessi
         await revealed('sample.md', 'Document editor', 'Markdown navigation')
         await drop(join(workspace, 'unsupported.bin'))
         await page
-          .getByText(
-            'Drop a supported document or folder to open it. Drop an image or video onto the editor to attach it.',
-            { exact: true },
-          )
+          .getByRole('alert')
+          .filter({
+            hasText:
+              'Drop a supported document or folder to open it. Drop an image or video onto the editor to attach it.',
+          })
           .waitFor()
         await retained()
       } finally {
@@ -243,13 +244,15 @@ test('accepted document navigation reveals documents and retains addon tab sessi
         first,
       )
       await retained()
+      const background = state.tabs.find((tab) => tab.id !== state.tabId)
+      assert.ok(background)
       await page
-        .locator(`#document-tab-${first}`)
+        .locator(`#document-tab-${background.id}`)
         .locator('..')
         .getByRole('button', { name: /close/i })
         .click()
       await page
-        .locator(`#document-tab-${first}`)
+        .locator(`#document-tab-${background.id}`)
         .waitFor({ state: 'detached' })
       await retained()
       const active = state.tabId
@@ -281,7 +284,10 @@ test('accepted document navigation reveals documents and retains addon tab sessi
       await page.getByRole('tab', { name: 'Editor', exact: true }).click()
       await page
         .getByRole('checkbox', { name: 'Use tabs', exact: true })
-        .uncheck()
+        .click()
+      await page
+        .locator('#document-tabs:not(:checked)[aria-disabled="false"]')
+        .waitFor()
       await page
         .getByRole('button', { name: 'Back to app', exact: true })
         .click()
@@ -294,7 +300,9 @@ test('accepted document navigation reveals documents and retains addon tab sessi
           })
       })
       const before = await page.evaluate(() => window.hibi.getDocument())
-      for (const action of ['New', 'Open', 'external', 'drop']) {
+      assert.match(before.markdown, /Unsaved navigation draft/)
+      assert.equal(before.dirty, true)
+      for (const action of ['New', 'Open…', 'external', 'drop']) {
         await app.evaluate(
           ({ dialog }, file) => {
             globalThis.cancelNavigationReplacement = null
@@ -335,7 +343,8 @@ test('accepted document navigation reveals documents and retains addon tab sessi
         await retained()
         const after = await page.evaluate(() => window.hibi.getDocument())
         assert.equal(after.tabId, before.tabId, action)
-        assert.equal(after.markdown, 'Unsaved navigation draft', action)
+        assert.equal(after.markdown, before.markdown, action)
+        assert.equal(after.dirty, true, action)
       }
     },
   )

@@ -27,6 +27,14 @@ test('modified link clicks, note/settings history, and file-menu remote imports'
     )
   })
   await new Promise((done) => server.listen(0, '127.0.0.1', done))
+  // Register first so a failed Electron launch or close cannot leak the listener.
+  t.after(
+    () =>
+      new Promise((done) => {
+        server.close(done)
+        server.closeAllConnections()
+      }),
+  )
   const url = `http://127.0.0.1:${server.address().port}`
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
@@ -36,8 +44,6 @@ test('modified link clicks, note/settings history, and file-menu remote imports'
       dialog.showMessageBox = async () => ({ response: 1 })
     })
     await app.close()
-    server.closeAllConnections()
-    await new Promise((done) => server.close(done))
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()

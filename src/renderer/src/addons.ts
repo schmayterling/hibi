@@ -170,8 +170,10 @@ type Environment = Omit<
   openAddonSettings: (id?: string) => void
   workspace: Pick<
     AddonContext['workspace'],
-    'index' | 'snapshot' | 'get' | 'open' | 'openFile'
-  >
+    'index' | 'snapshot' | 'get' | 'open'
+  > & {
+    openFile: (path: string, owner: string) => Promise<void>
+  }
   invoke: (id: string, method: string, input?: unknown) => Promise<unknown>
   error: (error: unknown) => void
   isBusy: () => boolean
@@ -2029,7 +2031,7 @@ export function useAddons(
               openFile: (path) =>
                 disposed
                   ? Promise.resolve()
-                  : latest.current.workspace.openFile(path),
+                  : latest.current.workspace.openFile(path, id),
             },
             native: {
               query: <T>(method: string, input?: unknown) =>

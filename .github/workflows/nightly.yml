@@ -217,7 +217,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
           codesign --display --verbose=4 "$app" 2>&1 | grep -F "TeamIdentifier=$APPLE_TEAM_ID"
           spctl --assess --type execute --verbose=4 "$app"
-          xcrun stapler validate "$app"
+          bash scripts/validate-stapled-ticket.sh "$app"
       - name: Record platform results
         env:
           PLATFORM: ${{ matrix.platform }}

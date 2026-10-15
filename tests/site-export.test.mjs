@@ -237,13 +237,20 @@ test('published sites support direct routes, crawlable HTML, branding, locked th
     response.end(files.get(path))
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  // Register first so a failed Electron launch or close cannot leak the listener.
+  t.after(
+    () =>
+      new Promise((done) => {
+        server.close(done)
+        server.closeAllConnections()
+      }),
+  )
   const base = `http://127.0.0.1:${server.address().port}/docs/`
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
   })
   t.after(async () => {
     await app.close()
-    await new Promise((resolve) => server.close(resolve))
     await rm(folder, { recursive: true, force: true })
   })
   await app.firstWindow()

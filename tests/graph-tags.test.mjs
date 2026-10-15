@@ -10,7 +10,7 @@ import {
 } from '../src/addons/graph/model.ts'
 import { noteTags } from '../src/addons/tags/syntax.ts'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 import { uiName } from './ui.mjs'
 
@@ -162,11 +162,20 @@ test('tags and graph plugins browse/open notes, honor drafts, and clean up when 
   await pressShortcut(app, `${mod}+Shift+]`)
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   await source.locator('.hibi-tag[data-tag="personal"]').waitFor()
-  await source.fill('No tags in this note.')
+  await replaceSourceText(page, source, 'No tags in this note.')
+  await waitForAsync(
+    page,
+    async () =>
+      (await window.hibi.getDocument()).markdown === 'No tags in this note.',
+  )
   await page
     .locator('[data-status-id="tags.tags"]')
     .waitFor({ state: 'hidden' })
-  await source.fill('# beta\n\n#personal #newtag\n\n[back](a.md)')
+  await replaceSourceText(
+    page,
+    source,
+    '# beta\n\n#personal #newtag\n\n[back](a.md)',
+  )
   await page
     .locator('[data-status-id="tags.tags"]')
     .filter({ hasText: /tags · 2/i })
@@ -252,6 +261,28 @@ test('tags and graph plugins browse/open notes, honor drafts, and clean up when 
   assert.equal(await expanded.isVisible(), true)
   await centerNode(expanded, 'b.md', true)
   assert.equal(await expanded.isVisible(), true)
+  await choose('browse tags')
+  dialog = page.getByRole('complementary', { name: /^tags$/i, exact: true })
+  await dialog.getByRole('button', { name: /^#work 1$/i, exact: true }).click()
+  await dialog.getByRole('button', { name: /^a\.md$/i, exact: true }).click()
+  await expanded.waitFor({ state: 'hidden' })
+  await page
+    .getByRole('tab', { name: /^a\.md$/i, exact: true })
+    .and(page.locator('[aria-selected="true"]'))
+    .waitFor()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).name,
+    'a.md',
+  )
+  await page.locator('#document-editor-panel').waitFor()
+  assert.equal(
+    await page.getByRole('tab', { name: 'Workspace graph' }).count(),
+    1,
+  )
+  await choose('open workspace graph')
+  await graph.locator('.graph-canvas').waitFor()
+  await page.getByRole('tab', { name: 'Workspace graph' }).click()
+  await centerNode(expanded, 'b.md', true)
   await page.getByRole('button', { name: 'Close Workspace graph' }).click()
   await expanded.waitFor({ state: 'hidden' })
   await graph.locator('.graph-canvas').waitFor()

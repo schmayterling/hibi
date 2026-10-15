@@ -25,7 +25,7 @@ test('language loading deduplicates aliases and respects disabled preferences du
   assert.match(codeHtml('def sample(): return 1', 'py'), /hibi-token-keyword/)
 })
 
-test('production entry keeps rich and source editor implementations behind demand imports', async () => {
+test('production entry keeps editor implementations behind demand imports', async () => {
   const chunks = JSON.parse(
     await readFile('out/renderer/startup-bundle.json', 'utf8'),
   )
@@ -43,7 +43,7 @@ test('production entry keeps rich and source editor implementations behind deman
     .join('\n')
   assert.doesNotMatch(
     initial,
-    /src\/renderer\/src\/(?:Editor|SourceEditor)\.tsx/,
+    /src\/renderer\/src\/(?:Editor|SourceEditor|FormatEditor)\.tsx/,
   )
   assert.doesNotMatch(initial, /node_modules\/@tiptap\//)
   assert.ok(
@@ -54,6 +54,11 @@ test('production entry keeps rich and source editor implementations behind deman
   assert.ok(
     chunks.some((chunk) =>
       chunk.modules.includes('src/renderer/src/SourceEditor.tsx'),
+    ),
+  )
+  assert.ok(
+    chunks.some((chunk) =>
+      chunk.modules.includes('src/renderer/src/FormatEditor.tsx'),
     ),
   )
 })
@@ -238,6 +243,7 @@ test('blank startup leaves disabled runtimes and closed settings unloaded and so
   )
   assert.doesNotMatch(initial, /@codemirror\//)
   assert.doesNotMatch(initial, /src\/renderer\/src\/SourceEditor\.tsx/)
+  assert.doesNotMatch(initial, /src\/renderer\/src\/FormatEditor\.tsx/)
   await page.evaluate(() => {
     const editor = document.querySelector('.editor-surface')
     const height = editor.getBoundingClientRect().height

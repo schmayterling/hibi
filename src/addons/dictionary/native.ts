@@ -1,5 +1,6 @@
 import { join } from 'node:path'
-import { app } from 'electron'
+import { app, clipboard } from 'electron'
+import { HOST_SELECTED_IO_MAX_BYTES } from '../../shared/host-selected-io'
 import type { NativeAddon } from '../api'
 import manifest from './manifest'
 import { completionLimit, completionPrefix } from './pack-runtime'
@@ -58,6 +59,15 @@ export default {
     },
   },
   methods: {
+    async copyCustomWords(input) {
+      // A valid 5,000-word export fits this character bound, including its notes.
+      if (
+        typeof input !== 'string' ||
+        input.length > HOST_SELECTED_IO_MAX_BYTES
+      )
+        throw new TypeError('Invalid custom words text')
+      return clipboard.writeText(input)
+    },
     installPack: async (input) => (await store()).install(input),
     cancelPack: async (input) => (await store()).cancel(input),
     uninstallPack: async (input) => (await store()).uninstall(input),

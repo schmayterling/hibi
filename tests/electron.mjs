@@ -104,8 +104,31 @@ export const electron = {
       closing = true
       clearTimeout(slowStartTimer)
       const child = application.process()
-      let timer
+      let timer, diagnosticTimer
       try {
+        diagnosticTimer = setTimeout(() => {
+          try {
+            console.error(
+              'electron-shutdown-pending',
+              JSON.stringify({
+                pid: child.pid,
+                exitCode: child.exitCode,
+                signalCode: child.signalCode,
+                profile: child.spawnargs
+                  ?.find((arg) => arg.startsWith('--user-data-dir='))
+                  ?.slice(0, 256),
+                pipes: child.stdio?.slice(0, 8).map(
+                  (stream) =>
+                    stream && {
+                      destroyed: stream.destroyed,
+                      closed: stream.closed,
+                    },
+                ),
+              }),
+            )
+          } catch {}
+        }, 3000)
+        diagnosticTimer.unref()
         const pendingClose = close()
         await Promise.race([
           waitForElectronShutdown(
@@ -126,6 +149,7 @@ export const electron = {
         throw error
       } finally {
         clearTimeout(timer)
+        clearTimeout(diagnosticTimer)
       }
     }
     if (showTestWindows) {

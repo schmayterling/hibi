@@ -204,8 +204,8 @@ export function CustomWords() {
             exportSavedCustomWords()
               .then((exported) => {
                 setText(exported)
-                void navigator.clipboard
-                  ?.writeText(exported)
+                return window.hibi
+                  .invokeAddon('dictionary', 'copyCustomWords', exported)
                   .then(() => setMessage('Copied your words as text.'))
                   .catch(() => setMessage('Select the text to copy it.'))
               })

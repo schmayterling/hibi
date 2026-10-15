@@ -469,7 +469,7 @@ test('release workflow always builds nightlies and gates stable publication on t
   for (const command of [
     'codesign --verify',
     'spctl --assess',
-    'stapler validate "$app"',
+    'bash scripts/validate-stapled-ticket.sh "$app"',
   ])
     assert.ok(verifyMac.run.includes(command))
   const builder = parse(readFileSync('electron-builder.yml', 'utf8'))

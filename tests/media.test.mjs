@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { pressShortcut } from './keyboard.mjs'
+import { pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 import { uiName } from './ui.mjs'
 
@@ -273,7 +273,11 @@ test('file picker and drops attach media safely, stream videos, and move/open wo
   const tree = page.getByRole('tree', { name: /workspace files/i })
   const one = tree.getByRole('treeitem', { name: /^one\.md$/i, exact: true })
   await one.waitFor()
-  await source.fill('# unsaved one')
+  await replaceSourceText(page, source, '# unsaved one')
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === '# unsaved one',
+  )
   const transfer = await page.evaluateHandle(() => new DataTransfer())
   await one.dispatchEvent('dragstart', { dataTransfer: transfer })
   await tree
@@ -344,7 +348,7 @@ test('file picker and drops attach media safely, stream videos, and move/open wo
     page,
     async () => (await window.hibi.getDocument()).name === 'untitled.md',
   )
-  await source.fill('keep me')
+  await replaceSourceText(page, source, 'keep me')
   await waitForAsync(
     page,
     async () => (await window.hibi.getDocument()).markdown === 'keep me',

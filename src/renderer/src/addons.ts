@@ -974,6 +974,18 @@ export function useAddons(
             'Editor integrations must finish before input is enabled. Use startup or editor-view activation for this addon.',
           )
       }
+      const live = <T>(
+        call: () => Promise<T>,
+        error = () => new Error('This addon has stopped.'),
+      ) => (disposed ? Promise.reject(error()) : call())
+      const track = (remove: () => void) => {
+        const cleanup = () => {
+          remove()
+          cleanups.delete(cleanup)
+        }
+        cleanups.add(cleanup)
+        return cleanup
+      }
       const observe = (
         subscribe: (listener: () => void) => () => void,
         listener: () => void,
@@ -986,11 +998,7 @@ export function useAddons(
             latest.current.error(error)
           }
         })
-        cleanups.add(remove)
-        return () => {
-          remove()
-          cleanups.delete(remove)
-        }
+        return track(remove)
       }
       const registerScheme: AddonContext['colorschemes']['register'] = (
         scheme,
@@ -1002,12 +1010,7 @@ export function useAddons(
           ...scheme,
           id: `${id}.${scheme.id}`,
         })
-        const cleanup = () => {
-          remove()
-          cleanups.delete(cleanup)
-        }
-        cleanups.add(cleanup)
-        return cleanup
+        return track(remove)
       }
       // Declared package resources; once started, an in-place update swaps them without restarting code.
       let linked:
@@ -1260,74 +1263,56 @@ export function useAddons(
             editorViews: editorViewScope,
             host: {
               selectedText: {
-                select: () =>
-                  disposed
-                    ? Promise.reject(new Error('This addon has stopped.'))
-                    : window.hibi.selectUserText(id),
+                select: () => live(() => window.hibi.selectUserText(id)),
                 read: (handle) =>
-                  disposed
-                    ? Promise.reject(new Error('This addon has stopped.'))
-                    : window.hibi.readSelectedText(id, handle),
+                  live(() => window.hibi.readSelectedText(id, handle)),
               },
               selectedIo: {
                 selectImport: (choice) =>
-                  disposed
-                    ? Promise.reject(new Error('This addon has stopped.'))
-                    : window.hibi.selectHostImport(id, choice),
+                  live(() => window.hibi.selectHostImport(id, choice)),
                 readImport: (handle) =>
-                  disposed
-                    ? Promise.reject(new Error('This addon has stopped.'))
-                    : window.hibi.readHostImport(id, handle),
+                  live(() => window.hibi.readHostImport(id, handle)),
                 selectExport: (choice) =>
-                  disposed
-                    ? Promise.reject(new Error('This addon has stopped.'))
-                    : window.hibi.selectHostExport(id, choice),
+                  live(() => window.hibi.selectHostExport(id, choice)),
                 writeExport: (handle, bytes) =>
-                  disposed
-                    ? Promise.reject(new Error('This addon has stopped.'))
-                    : window.hibi.writeHostExport(id, handle, bytes),
+                  live(() => window.hibi.writeHostExport(id, handle, bytes)),
                 cancel: (handle) =>
-                  disposed
-                    ? Promise.reject(new Error('This addon has stopped.'))
-                    : window.hibi.cancelHostSelectedIo(id, handle),
+                  live(() => window.hibi.cancelHostSelectedIo(id, handle)),
               },
               network: {
                 getText: (request) =>
-                  disposed
-                    ? Promise.reject(new Error('This addon has stopped.'))
-                    : window.hibi.getHostText(id, request),
+                  live(() => window.hibi.getHostText(id, request)),
               },
               credentials: {
                 store: (request) =>
-                  disposed
-                    ? Promise.reject(new Error('This addon has stopped.'))
-                    : window.hibi.storeHostCredential(id, request),
+                  live(() => window.hibi.storeHostCredential(id, request)),
                 remove: (request) =>
-                  disposed
-                    ? Promise.reject(new Error('This addon has stopped.'))
-                    : window.hibi.removeHostCredential(id, request),
+                  live(() => window.hibi.removeHostCredential(id, request)),
                 status: (request) =>
-                  disposed
-                    ? Promise.reject(new Error('This addon has stopped.'))
-                    : window.hibi.getHostCredentialStatus(id, request),
+                  live(() => window.hibi.getHostCredentialStatus(id, request)),
               },
             },
             dependencies: {
               list: () =>
-                disposed
-                  ? Promise.reject(new Error('Enable this addon first.'))
-                  : window.hibi.getDependencies(id),
+                live(
+                  () => window.hibi.getDependencies(id),
+                  () => new Error('Enable this addon first.'),
+                ),
               check: (dependency) =>
-                disposed
-                  ? Promise.reject(new Error('Enable this addon first.'))
-                  : window.hibi.checkDependency({ addon: id, id: dependency }),
+                live(
+                  () =>
+                    window.hibi.checkDependency({ addon: id, id: dependency }),
+                  () => new Error('Enable this addon first.'),
+                ),
               install: (dependency) =>
-                disposed
-                  ? Promise.reject(new Error('Enable this addon first.'))
-                  : window.hibi.installDependency({
+                live(
+                  () =>
+                    window.hibi.installDependency({
                       addon: id,
                       id: dependency,
                     }),
+                  () => new Error('Enable this addon first.'),
+                ),
               openSettings: () => {
                 if (!disposed) latest.current.openDependencySettings()
               },
@@ -1378,11 +1363,7 @@ export function useAddons(
                         listener()
                       },
                     )
-                    const remove = () => {
-                      off()
-                      cleanups.delete(remove)
-                    }
-                    cleanups.add(remove)
+                    const remove = track(off)
                     return remove
                   },
                 }
@@ -1509,11 +1490,7 @@ export function useAddons(
                   ...feature,
                   scope: 'document',
                 })
-                cleanups.add(remove)
-                return () => {
-                  remove()
-                  cleanups.delete(remove)
-                }
+                return track(remove)
               },
               registerSyntax(feature) {
                 if (disposed) return () => {}
@@ -1521,11 +1498,7 @@ export function useAddons(
                 const remove = batch.register(`syntax:${feature.id}`, () =>
                   markdownSyntax.register(id, feature),
                 )
-                cleanups.add(remove)
-                return () => {
-                  remove()
-                  cleanups.delete(remove)
-                }
+                return track(remove)
               },
               isSyntaxEnabled: (localId) =>
                 markdownSyntax.enabled(`${id}.${localId}`),
@@ -1566,11 +1539,7 @@ export function useAddons(
                     latest.current.error(error)
                   }
                 })
-                cleanups.add(remove)
-                return () => {
-                  remove()
-                  cleanups.delete(remove)
-                }
+                return track(remove)
               },
               registerDocumentFormat(format) {
                 if (disposed) return () => {}
@@ -1581,11 +1550,7 @@ export function useAddons(
                     addon.manifest.fileExtensions ?? [],
                   ),
                 )
-                cleanups.add(remove)
-                return () => {
-                  remove()
-                  cleanups.delete(remove)
-                }
+                return track(remove)
               },
               async renderDocument(source, name, documentId) {
                 const format = documentFormats.get(name)
@@ -1604,12 +1569,7 @@ export function useAddons(
                 const remove = batch.register(`language:${language.id}`, () =>
                   codeLanguages.register(id, language),
                 )
-                const cleanup = () => {
-                  remove()
-                  cleanups.delete(cleanup)
-                }
-                cleanups.add(cleanup)
-                return cleanup
+                return track(remove)
               },
               resolveCodeLanguage: codeLanguages.resolve,
               registerFlavor(flavor) {
@@ -1618,12 +1578,7 @@ export function useAddons(
                 const remove = batch.register(`flavor:${flavor.id}`, () =>
                   flavors.register(id, flavor),
                 )
-                const cleanup = () => {
-                  remove()
-                  cleanups.delete(cleanup)
-                }
-                cleanups.add(cleanup)
-                return cleanup
+                return track(remove)
               },
               renderMarkdown(source, documentId) {
                 return renderMarkdown(
@@ -1643,23 +1598,16 @@ export function useAddons(
                     latest.current.error(error)
                   }
                 })
-                const cleanup = () => {
-                  remove()
-                  cleanups.delete(cleanup)
-                }
-                cleanups.add(cleanup)
-                return cleanup
+                return track(remove)
               },
               onTypingContext(listener) {
                 if (disposed) return () => {}
                 let stopped = false
                 let remove = () => {}
-                const cleanup = () => {
+                const cleanup = track(() => {
                   stopped = true
                   remove()
-                  cleanups.delete(cleanup)
-                }
-                cleanups.add(cleanup)
+                })
                 void loadCompletionBroker()
                   .then(({ completionBroker }) => {
                     if (disposed || stopped) return
@@ -1687,12 +1635,7 @@ export function useAddons(
                   0,
                   options,
                 )
-                const cleanup = () => {
-                  remove()
-                  cleanups.delete(cleanup)
-                }
-                cleanups.add(cleanup)
-                return cleanup
+                return track(remove)
               },
               async registerHoverProvider(provider) {
                 if (disposed) throw new Error('This addon has stopped.')
@@ -1702,13 +1645,10 @@ export function useAddons(
                 if (disposed) throw new Error('This addon has stopped.')
                 const remove = registerHoverProvider(completionOwner, provider)
                 const stopPresence = countEditorInteractionProvider()
-                const cleanup = () => {
+                return track(() => {
                   remove()
                   stopPresence()
-                  cleanups.delete(cleanup)
-                }
-                cleanups.add(cleanup)
-                return cleanup
+                })
               },
               async registerContextActionProvider(provider) {
                 if (disposed) throw new Error('This addon has stopped.')
@@ -1722,13 +1662,10 @@ export function useAddons(
                   provider,
                 )
                 const stopPresence = countEditorInteractionProvider()
-                const cleanup = () => {
+                return track(() => {
                   remove()
                   stopPresence()
-                  cleanups.delete(cleanup)
-                }
-                cleanups.add(cleanup)
-                return cleanup
+                })
               },
               onKeyEvent(listener) {
                 if (disposed) return () => {}
@@ -1742,12 +1679,7 @@ export function useAddons(
                     latest.current.error(error)
                   }
                 })
-                const cleanup = () => {
-                  remove()
-                  cleanups.delete(cleanup)
-                }
-                cleanups.add(cleanup)
-                return cleanup
+                return track(remove)
               },
               registerRich(extension) {
                 if (disposed) return () => {}
@@ -1901,10 +1833,7 @@ export function useAddons(
               },
             },
             commands: {
-              execute: (command) =>
-                disposed
-                  ? Promise.reject(new Error('This addon has stopped.'))
-                  : executeCommand(id, command),
+              execute: (command) => live(() => executeCommand(id, command)),
               getSlashCommands() {
                 if (disposed) return []
                 const source = latest.current.getMarkdown()
@@ -2009,29 +1938,18 @@ export function useAddons(
                   `${id}.${provider.id}`,
                   provider,
                 )
-                const cleanup = () => {
-                  remove()
-                  cleanups.delete(cleanup)
-                }
-                cleanups.add(cleanup)
-                return cleanup
+                return track(remove)
               },
               snapshot: () =>
-                disposed
-                  ? Promise.reject(
-                      new Error(
-                        'Enable this addon in Settings → Addons first.',
-                      ),
-                    )
-                  : latest.current.workspace.snapshot(),
+                live(
+                  () => latest.current.workspace.snapshot(),
+                  () =>
+                    new Error('Enable this addon in Settings → Addons first.'),
+                ),
               changeSnapshot: () =>
-                disposed
-                  ? Promise.reject(new Error('This addon has stopped.'))
-                  : window.hibi.getWorkspaceChangeSnapshot(),
+                live(() => window.hibi.getWorkspaceChangeSnapshot()),
               listPage: (request) =>
-                disposed
-                  ? Promise.reject(new Error('This addon has stopped.'))
-                  : window.hibi.listWorkspaceEntryPage(id, request),
+                live(() => window.hibi.listWorkspaceEntryPage(id, request)),
               async subscribeChanges(listener) {
                 if (disposed) throw new Error('This addon has stopped.')
                 const subscription =
@@ -2042,82 +1960,72 @@ export function useAddons(
                   subscription.dispose()
                   throw new Error('This addon has stopped.')
                 }
-                const dispose = () => {
-                  subscription.dispose()
-                  cleanups.delete(dispose)
-                }
-                cleanups.add(dispose)
+                const dispose = track(() => subscription.dispose())
                 return { snapshot: subscription.snapshot, dispose }
               },
               readText: (target, path) =>
-                disposed
-                  ? Promise.reject(new Error('This addon has stopped.'))
-                  : window.hibi.readWorkspaceText(id, target, path),
+                live(() => window.hibi.readWorkspaceText(id, target, path)),
               readBinary: (target, path) =>
-                disposed
-                  ? Promise.reject(new Error('This addon has stopped.'))
-                  : window.hibi.readWorkspaceBinary(id, target, path),
+                live(() => window.hibi.readWorkspaceBinary(id, target, path)),
               createText: (target, path, markdown) =>
-                disposed
-                  ? Promise.reject(new Error('This addon has stopped.'))
-                  : window.hibi.createWorkspaceText(id, target, path, markdown),
+                live(() =>
+                  window.hibi.createWorkspaceText(id, target, path, markdown),
+                ),
               createBinary: (target, path, bytes) =>
-                disposed
-                  ? Promise.reject(new Error('This addon has stopped.'))
-                  : window.hibi.createWorkspaceBinary(id, target, path, bytes),
+                live(() =>
+                  window.hibi.createWorkspaceBinary(id, target, path, bytes),
+                ),
               updateText: (target, path, expectedVersion, markdown, options) =>
-                disposed
-                  ? Promise.reject(new Error('This addon has stopped.'))
-                  : window.hibi.updateWorkspaceText(
-                      id,
-                      target,
-                      path,
-                      expectedVersion,
-                      markdown,
-                      options,
-                    ),
+                live(() =>
+                  window.hibi.updateWorkspaceText(
+                    id,
+                    target,
+                    path,
+                    expectedVersion,
+                    markdown,
+                    options,
+                  ),
+                ),
               renameFile: (
                 target,
                 sourcePath,
                 destinationPath,
                 expectedVersion,
               ) =>
-                disposed
-                  ? Promise.reject(new Error('This addon has stopped.'))
-                  : window.hibi.renameWorkspaceFile(
-                      id,
-                      target,
-                      sourcePath,
-                      destinationPath,
-                      expectedVersion,
-                    ),
+                live(() =>
+                  window.hibi.renameWorkspaceFile(
+                    id,
+                    target,
+                    sourcePath,
+                    destinationPath,
+                    expectedVersion,
+                  ),
+                ),
               trashFile: (target, path, expectedVersion) =>
-                disposed
-                  ? Promise.reject(new Error('This addon has stopped.'))
-                  : window.hibi.trashWorkspaceFile(
-                      id,
-                      target,
-                      path,
-                      expectedVersion,
-                    ),
+                live(() =>
+                  window.hibi.trashWorkspaceFile(
+                    id,
+                    target,
+                    path,
+                    expectedVersion,
+                  ),
+                ),
               query: (request) =>
-                disposed
-                  ? Promise.reject(new Error('This addon has stopped.'))
-                  : window.hibi.queryWorkspaceReferences({
-                      ...request,
-                      syntaxSnapshot: captureWorkspaceSyntaxSnapshot(
-                        currentActivation.current.available.has('tags'),
-                        [...extensions.values()],
-                      ),
-                    }),
+                live(() =>
+                  window.hibi.queryWorkspaceReferences({
+                    ...request,
+                    syntaxSnapshot: captureWorkspaceSyntaxSnapshot(
+                      currentActivation.current.available.has('tags'),
+                      [...extensions.values()],
+                    ),
+                  }),
+                ),
               index: () =>
-                disposed
-                  ? Promise.reject(
-                      new Error(
-                        'Enable this addon in Settings → Addons first.',
-                      ),
-                    )
-                  : latest.current.workspace.index(),
+                live(
+                  () => latest.current.workspace.index(),
+                  () =>
+                    new Error('Enable this addon in Settings → Addons first.'),
+                ),
               get: () => latest.current.workspace.get(),
               open: () =>
                 disposed
@@ -2130,29 +2038,27 @@ export function useAddons(
             },
             native: {
               query: <T>(method: string, input?: unknown) =>
-                disposed
-                  ? Promise.reject(
-                      new Error(
-                        'Enable this addon in Settings → Addons first.',
-                      ),
-                    )
-                  : (performanceDiagnostics.measure(
+                live(
+                  () =>
+                    performanceDiagnostics.measure(
                       id,
                       `native query:${method}`,
                       () => window.hibi.queryAddon(id, method, input),
-                    ) as Promise<T>),
+                    ) as Promise<T>,
+                  () =>
+                    new Error('Enable this addon in Settings → Addons first.'),
+                ),
               invoke: <T>(method: string, input?: unknown) =>
-                disposed
-                  ? Promise.reject(
-                      new Error(
-                        'Enable this addon in Settings → Addons first.',
-                      ),
-                    )
-                  : (performanceDiagnostics.measure(
+                live(
+                  () =>
+                    performanceDiagnostics.measure(
                       id,
                       `native action:${method}`,
                       () => latest.current.invoke(id, method, input),
-                    ) as Promise<T>),
+                    ) as Promise<T>,
+                  () =>
+                    new Error('Enable this addon in Settings → Addons first.'),
+                ),
             },
             notify: (message) => {
               if (!disposed) toastScope.api.show({ message })

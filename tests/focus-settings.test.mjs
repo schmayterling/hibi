@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { settingsPages } from '../src/renderer/src/settings-pages.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
-import { clickMenu, replaceRichText } from './keyboard.mjs'
+import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 
 test('settings registrations use addon ownership and clean up without collisions', () => {
   const Content = () => null
@@ -110,6 +110,23 @@ test('reopening settings cancels a pending Back close', {
   await back.click()
   await requests(2)
   assert.equal(await settings.isVisible(), true)
+  await app.evaluate(() => globalThis.recordingOffReleases.shift()())
+  await settings.waitFor({ state: 'hidden' })
+
+  // History that hides and reopens settings cancels the pending close, and the
+  // next Back still closes them.
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await clickMenu(app, 'Settings')
+  await settings.waitFor()
+  await back.click()
+  await requests(3)
+  await pressShortcut(app, `${mod}+[`)
+  await settings.waitFor({ state: 'hidden' })
+  await pressShortcut(app, `${mod}+]`)
+  await settings.waitFor()
+  await app.evaluate(() => globalThis.recordingOffReleases.shift()())
+  await back.click()
+  await requests(4)
   await app.evaluate(() => globalThis.recordingOffReleases.shift()())
   await settings.waitFor({ state: 'hidden' })
 })

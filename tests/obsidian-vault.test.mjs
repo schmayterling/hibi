@@ -71,6 +71,37 @@ test('Obsidian vault opens in place with wiki links, SVG embeds and backup promp
   await app.evaluate(({ dialog }, root) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] })
   }, root)
+  // Main publishes the new workspace before it replies, so the vault prompt can
+  // open Settings while the folder is still opening.
+  const holdReply = (channel, path) =>
+    app.evaluate(
+      ({ ipcMain }, { channel, path }) => {
+        const handler = ipcMain._invokeHandlers.get(channel)
+        ipcMain._invokeHandlers.set(channel, async (event, ...args) => {
+          ipcMain._invokeHandlers.set(channel, handler)
+          const released = new Promise((resolve) => {
+            globalThis.releaseReply = resolve
+          })
+          const result = await handler(event, ...(path ? [path] : args))
+          await released
+          return result
+        })
+      },
+      { channel, path },
+    )
+  const settingsStayOpen = async () => {
+    await page.getByRole('main', { name: 'Settings' }).waitFor()
+    await app.evaluate(() => globalThis.releaseReply())
+    await page.waitForFunction(
+      () =>
+        document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+    )
+    assert.equal(
+      await page.locator('.app').getAttribute('data-screen'),
+      'settings',
+    )
+  }
+  await holdReply('workspace:open')
   await pressShortcut(
     app,
     `${process.platform === 'darwin' ? 'Meta' : 'Control'}+Shift+o`,
@@ -83,7 +114,7 @@ test('Obsidian vault opens in place with wiki links, SVG embeds and backup promp
   await warning.getByText(/Enable a relevant Hibi addon/i).waitFor()
   await warning.getByRole('button', { name: 'Review addons' }).waitFor()
   await warning.getByRole('button', { name: 'Review addons' }).click()
-  await page.getByRole('main', { name: 'Settings' }).waitFor()
+  await settingsStayOpen()
   await page.getByRole('button', { name: 'Back to app' }).click()
   assert.equal(
     await page.getByRole('treeitem', { name: '.obsidian' }).count(),
@@ -148,4 +179,108 @@ test('Obsidian vault opens in place with wiki links, SVG embeds and backup promp
     .getByRole('button', { name: 'Continue' })
   await continueButton.click()
   await warning.waitFor({ state: 'hidden' })
+
+  const droppedRoot = join(folder, 'dropped-vault')
+  await mkdir(join(droppedRoot, '.obsidian'), { recursive: true })
+  await writeFile(
+    join(droppedRoot, '.obsidian', 'community-plugins.json'),
+    '["dataview"]',
+  )
+  // A synthetic file has no path, so main receives the folder path instead.
+  await holdReply('media:open-dropped', droppedRoot)
+  await page.evaluate(() => {
+    const data = new DataTransfer()
+    data.items.add(new File([''], 'dropped-vault'))
+    document.querySelector('.app').dispatchEvent(
+      new DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: data,
+      }),
+    )
+  })
+  await warning.getByRole('button', { name: 'Review addons' }).click()
+  await settingsStayOpen()
+
+  // Settings reopened through forward history also count as opened meanwhile.
+  const notes = join(folder, 'notes')
+  await mkdir(notes)
+  await app.evaluate(({ dialog }, notes) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [notes],
+    })
+  }, notes)
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await pressShortcut(app, `${mod}+[`)
+  await page.locator('.app[data-screen="editor"]').waitFor()
+  await holdReply('workspace:open')
+  await pressShortcut(app, `${mod}+Shift+o`)
+  await page.locator('.app[aria-busy="true"]').waitFor()
+  await pressShortcut(app, `${mod}+]`)
+  await settingsStayOpen()
+})
+
+test('a startup vault keeps Settings opened from its backup prompt', {
+  timeout: 30000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-obsidian-startup-'))
+  const vault = join(folder, 'vault')
+  const profile = join(folder, 'profile')
+  await mkdir(join(vault, '.obsidian'), { recursive: true })
+  await mkdir(profile)
+  await writeFile(
+    join(vault, '.obsidian', 'community-plugins.json'),
+    '["dataview"]',
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(() => globalThis.releaseReply?.())
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  await page.getByRole('textbox', { name: 'Document editor' }).waitFor()
+  // The external-document queue opens the startup folder, publishing the vault
+  // before it replies.
+  await writeFile(
+    join(profile, 'workspace-settings.json'),
+    JSON.stringify({
+      enabled: false,
+      path: null,
+      startup: 'folder',
+      startupFolder: vault,
+    }),
+  )
+  await app.evaluate(({ ipcMain, BrowserWindow }) => {
+    const read = ipcMain._invokeHandlers.get('document:external')
+    ipcMain._invokeHandlers.set('document:external', async (...args) => {
+      ipcMain._invokeHandlers.set('document:external', read)
+      const released = new Promise((resolve) => {
+        globalThis.releaseReply = resolve
+      })
+      const result = await read(...args)
+      await released
+      return result
+    })
+    BrowserWindow.getAllWindows()[0].webContents.send(
+      'document:external-pending',
+    )
+  })
+  await page
+    .getByRole('dialog', { name: 'Back up this Obsidian vault' })
+    .getByRole('button', { name: 'Review addons' })
+    .click()
+  await page.getByRole('main', { name: 'Settings' }).waitFor()
+  await app.evaluate(() => globalThis.releaseReply())
+  await page.waitForFunction(
+    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+  )
+  assert.equal(
+    await page.locator('.app').getAttribute('data-screen'),
+    'settings',
+  )
 })

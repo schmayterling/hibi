@@ -668,21 +668,16 @@ export function SourceEditor({
         ? null
         : safeCompletionContext(state.sliceDoc(from, to), pos - from)
     }
-    const captureCompletion = (
-      trigger: CompletionRequest['trigger'],
-      allowSelection = false,
-    ): CompletionRequest | null => {
+    // Requests describe only this mounted, editable view of the current document.
+    const captureLive = (allowBlurred: boolean) => {
       const context = editContext.current
       const active = documentRuntime.get(document.tabId)
       const target = documentRuntime.captureActiveView()
       const owner = documentRuntime.captureDocument(document.tabId)
-      const state = editor.state
-      const selected = state.selection
       if (
         view.current !== editor ||
-        !editor.hasFocus ||
+        (!editor.hasFocus && !allowBlurred) ||
         editor.composing ||
-        otherPopupOpen(editor.contentDOM) ||
         !context.editTarget ||
         context.disabled ||
         !context.inputReady ||
@@ -695,12 +690,28 @@ export function SourceEditor({
         target.documentGeneration !== owner.documentGeneration ||
         target.viewId !== viewId ||
         !documentRuntime.isLiveView(target) ||
-        selected.ranges.length !== 1 ||
-        (!allowSelection && !selected.main.empty)
+        editor.state.selection.ranges.length !== 1
       )
         return null
       const snapshot = bridge.snapshot()
-      if (snapshot.version !== active.contentVersion) return null
+      return snapshot.version === active.contentVersion
+        ? { target, snapshot }
+        : null
+    }
+    const captureCompletion = (
+      trigger: CompletionRequest['trigger'],
+      allowSelection = false,
+    ): CompletionRequest | null => {
+      const live = captureLive(false)
+      const state = editor.state
+      const selected = state.selection
+      if (
+        !live ||
+        otherPopupOpen(editor.contentDOM) ||
+        (!allowSelection && !selected.main.empty)
+      )
+        return null
+      const { target, snapshot } = live
       const pos = selected.main.head
       const markdownMode = parserOptions.current.markdownMode
       const prose = lazyCompletionProse(() => proseAt(state, markdownMode))
@@ -723,35 +734,16 @@ export function SourceEditor({
       allowBlurred = false,
       toolbarSelection = false,
     ): EditorInteractionRequest | null => {
-      const context = editContext.current
-      const active = documentRuntime.get(document.tabId)
-      const target = documentRuntime.captureActiveView()
-      const owner = documentRuntime.captureDocument(document.tabId)
+      const live = captureLive(allowBlurred)
       const selected = editor.state.selection
       if (
-        view.current !== editor ||
-        (!editor.hasFocus && !allowBlurred) ||
-        editor.composing ||
-        !context.editTarget ||
-        context.disabled ||
-        !context.inputReady ||
-        !active ||
-        active.revision !== context.document.revision ||
-        documentRuntime.session(document.tabId) !== session ||
-        !target ||
-        !owner ||
-        target.documentId !== owner.documentId ||
-        target.documentGeneration !== owner.documentGeneration ||
-        target.viewId !== viewId ||
-        !documentRuntime.isLiveView(target) ||
-        selected.ranges.length !== 1 ||
+        !live ||
         !Number.isSafeInteger(position) ||
         position < 0 ||
         position > editor.state.doc.length
       )
         return null
-      const snapshot = bridge.snapshot()
-      if (snapshot.version !== active.contentVersion) return null
+      const { target, snapshot } = live
       return {
         view: target,
         contentVersion: snapshot.version,

@@ -1,5 +1,11 @@
 import { Check, RotateCcw, X } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import {
   type AppCommand,
   actions,
@@ -50,7 +56,9 @@ export function HotkeySettings({
     if (!active) cancel()
   }, [active, cancel])
 
-  useEffect(() => {
+  // Focus and stop recording in the same commit that shows or hides it, so no
+  // key press or new recording can slip in between.
+  useLayoutEffect(() => {
     if (!recording) return
     recorder.current?.focus()
     window.addEventListener('blur', cancel)

@@ -1,5 +1,11 @@
 import { Check, RotateCcw, X } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import type { AddonHotkeyBinding } from '../../shared/addon-hotkeys'
 import { shortcutError, shortcutFromEvent } from '../../shared/hotkeys'
 import { IconButton } from '../../ui/Controls'
@@ -63,7 +69,9 @@ export function AddonHotkeySettings({
       off()
     }
   }, [])
-  useEffect(() => {
+  // Focus and stop recording in the same commit that shows or hides it, so no
+  // key press or new recording can slip in between.
+  useLayoutEffect(() => {
     if (!recording) return
     recorder.current?.focus()
     window.addEventListener('blur', cancel)

@@ -175,10 +175,26 @@ test('rebind, conflict, clear, reset, native menus, and relaunch persistence', {
     name: /^rebind command palette$/i,
     exact: true,
   })
+  // Keys pressed as soon as a recorder shows recording must reach it.
+  await page.evaluate(() => {
+    window.recordingFocus = []
+    new MutationObserver(() => {
+      const recorder = document.querySelector(
+        '.hotkey-recorder[aria-pressed="true"]',
+      )
+      if (recorder)
+        window.recordingFocus.push(document.activeElement === recorder)
+    }).observe(document.body, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['aria-pressed'],
+    })
+  })
   await binding.click()
   await page.waitForFunction(() =>
     document.querySelector('.hotkey-recorder[aria-pressed="true"]'),
   )
+  assert.deepEqual(await page.evaluate(() => window.recordingFocus), [true])
   await pressShortcut(app, `${mod}+s`)
   await page
     .getByRole('status')

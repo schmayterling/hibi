@@ -1,15 +1,8 @@
 import { contextBridge, ipcRenderer as transport, webUtils } from 'electron'
 import { ADDON_CHANNELS } from '../addons/api'
 import { ABOUT_CHANNELS } from '../shared/about'
-import {
-  ADDON_HOTKEY_CHANNELS,
-  type AddonCommandInvocation,
-  type AddonHotkeyBinding,
-} from '../shared/addon-hotkeys'
-import {
-  ADDON_STORAGE_CHANNELS,
-  type AddonStorageChange,
-} from '../shared/addon-storage'
+import { ADDON_HOTKEY_CHANNELS } from '../shared/addon-hotkeys'
+import { ADDON_STORAGE_CHANNELS } from '../shared/addon-storage'
 import { ADDON_WINDOW_CHANNELS } from '../shared/addon-windows'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { BACKGROUND_CHANNELS } from '../shared/background'
@@ -29,15 +22,12 @@ import type {
   WorkspaceChangeEvent,
   WorkspaceTarget,
 } from '../shared/foundation-contracts'
-import {
-  GLOBAL_SHORTCUT_CHANNELS,
-  type GlobalShortcutInvocation,
-} from '../shared/global-shortcuts'
+import { GLOBAL_SHORTCUT_CHANNELS } from '../shared/global-shortcuts'
 import { HISTORY_CHANNELS } from '../shared/history'
 import { HOST_CREDENTIAL_CHANNELS } from '../shared/host-credentials'
 import { HOST_NETWORK_CHANNELS } from '../shared/host-network'
 import { HOST_SELECTED_IO_CHANNELS } from '../shared/host-selected-io'
-import { type AppCommand, HOTKEY_CHANNELS } from '../shared/hotkeys'
+import { HOTKEY_CHANNELS } from '../shared/hotkeys'
 import { IMPORT_CHANNELS } from '../shared/imports'
 import { DIAGNOSTIC_CHANNEL } from '../shared/local-diagnostics'
 import { MEDIA_CHANNELS } from '../shared/media'
@@ -45,7 +35,7 @@ import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
-import { UPDATE_CHANNELS, type UpdateState } from '../shared/updates'
+import { UPDATE_CHANNELS } from '../shared/updates'
 import {
   type KnownWorkspace,
   toRecentWorkspaces,
@@ -95,6 +85,14 @@ if (process.isMainFrame) {
     invoke,
     on: transport.on.bind(transport),
     removeListener: transport.removeListener.bind(transport),
+  }
+  function subscribe<T>(channel: string, callback: (payload: T) => void) {
+    const listener = (_event: Electron.IpcRendererEvent, payload: T) =>
+      callback(payload)
+    ipcRenderer.on(channel, listener)
+    return () => {
+      ipcRenderer.removeListener(channel, listener)
+    }
   }
   transport.on(DOCUMENT_CHANNELS.flush, (_event, token: string) => {
     void journal.flush().then(
@@ -205,8 +203,9 @@ if (process.isMainFrame) {
         id: string,
       ) => callback(addonId, id)
       ipcRenderer.on(ADDON_WINDOW_CHANNELS.closed, listener)
-      return () =>
+      return () => {
         ipcRenderer.removeListener(ADDON_WINDOW_CHANNELS.closed, listener)
+      }
     },
     getAddonWindowOwners: () =>
       ipcRenderer.invoke(ADDON_WINDOW_CHANNELS.owners),
@@ -225,23 +224,9 @@ if (process.isMainFrame) {
             ),
         }
       : {}),
-    onAddonReload: (callback) => {
-      const listener = (
-        _event: Electron.IpcRendererEvent,
-        request: { id: string; scope: 'code' | 'styles' },
-      ) => callback(request)
-      ipcRenderer.on(ADDON_CHANNELS.reload, listener)
-      return () => ipcRenderer.removeListener(ADDON_CHANNELS.reload, listener)
-    },
-    onGlobalShortcut: (callback) => {
-      const listener = (
-        _event: Electron.IpcRendererEvent,
-        invocation: GlobalShortcutInvocation,
-      ) => callback(invocation)
-      ipcRenderer.on(GLOBAL_SHORTCUT_CHANNELS.invoked, listener)
-      return () =>
-        ipcRenderer.removeListener(GLOBAL_SHORTCUT_CHANNELS.invoked, listener)
-    },
+    onAddonReload: (callback) => subscribe(ADDON_CHANNELS.reload, callback),
+    onGlobalShortcut: (callback) =>
+      subscribe(GLOBAL_SHORTCUT_CHANNELS.invoked, callback),
     getBackgroundMode: () => transport.invoke(BACKGROUND_CHANNELS.get),
     setBackgroundMode: (enabled) =>
       transport.invoke(BACKGROUND_CHANNELS.set, enabled),
@@ -254,8 +239,9 @@ if (process.isMainFrame) {
           .invoke(BACKGROUND_CHANNELS.settingsReady)
           .catch(console.error)
       }
-      return () =>
+      return () => {
         transport.removeListener(BACKGROUND_CHANNELS.settings, listener)
+      }
     },
     getUpdateState: () => transport.invoke(UPDATE_CHANNELS.get),
     setUpdateChannel: (channel) =>
@@ -267,16 +253,7 @@ if (process.isMainFrame) {
     checkForUpdates: () => transport.invoke(UPDATE_CHANNELS.check),
     downloadUpdate: () => transport.invoke(UPDATE_CHANNELS.download),
     installUpdate: () => ipcRenderer.invoke(UPDATE_CHANNELS.install),
-    onUpdateChanged: (callback) => {
-      const listener = (
-        _event: Electron.IpcRendererEvent,
-        state: UpdateState,
-      ) => callback(state)
-      transport.on(UPDATE_CHANNELS.changed, listener)
-      return () => {
-        transport.removeListener(UPDATE_CHANNELS.changed, listener)
-      }
-    },
+    onUpdateChanged: (callback) => subscribe(UPDATE_CHANNELS.changed, callback),
     getDependencies: (owner) =>
       transport.invoke(DEPENDENCY_CHANNELS.list, owner),
     checkDependency: (target) =>
@@ -378,15 +355,8 @@ if (process.isMainFrame) {
       transport.invoke(ADDON_STORAGE_CHANNELS.read, request),
     writeAddonStorage: (request) =>
       transport.invoke(ADDON_STORAGE_CHANNELS.write, request),
-    onAddonStorageChanged: (callback) => {
-      const listener = (
-        _event: Electron.IpcRendererEvent,
-        change: AddonStorageChange,
-      ) => callback(change)
-      transport.on(ADDON_STORAGE_CHANNELS.changed, listener)
-      return () =>
-        transport.removeListener(ADDON_STORAGE_CHANNELS.changed, listener)
-    },
+    onAddonStorageChanged: (callback) =>
+      subscribe(ADDON_STORAGE_CHANNELS.changed, callback),
     selectUserText: (owner) =>
       transport.invoke(SELECTED_TEXT_CHANNELS.select, owner),
     readSelectedText: (owner, handle) =>
@@ -525,16 +495,8 @@ if (process.isMainFrame) {
         ipcRenderer.removeListener(WORKSPACE_CHANNELS.changed, listener)
       }
     },
-    onWorkspaceListChanged: (callback) => {
-      const listener = (
-        _event: Electron.IpcRendererEvent,
-        known: KnownWorkspace[],
-      ) => callback(known)
-      ipcRenderer.on(WORKSPACE_CHANNELS.listChanged, listener)
-      return () => {
-        ipcRenderer.removeListener(WORKSPACE_CHANNELS.listChanged, listener)
-      }
-    },
+    onWorkspaceListChanged: (callback) =>
+      subscribe(WORKSPACE_CHANNELS.listChanged, callback),
     getAppInfo: () => ipcRenderer.invoke(APP_INFO_CHANNEL),
     setUiCase: (value) => ipcRenderer.invoke(UI_CASE_CHANNEL, value),
     getDocument: () => ipcRenderer.invoke(DOCUMENT_CHANNELS.get),
@@ -559,8 +521,9 @@ if (process.isMainFrame) {
       const listener = () => callback()
       ipcRenderer.on(DOCUMENT_CHANNELS.externalPending, listener)
       if (externalPending) queueMicrotask(callback)
-      return () =>
+      return () => {
         ipcRenderer.removeListener(DOCUMENT_CHANNELS.externalPending, listener)
+      }
     },
     newDocument: () => ipcRenderer.invoke(DOCUMENT_CHANNELS.new),
     saveDocument: (saveAs) =>
@@ -589,36 +552,13 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(ADDON_HOTKEY_CHANNELS.save, id, shortcut),
     resetAddonHotkey: (id) =>
       ipcRenderer.invoke(ADDON_HOTKEY_CHANNELS.reset, id),
-    onAddonHotkeysChanged: (callback) => {
-      const listener = (
-        _event: Electron.IpcRendererEvent,
-        bindings: AddonHotkeyBinding[],
-      ) => callback(bindings)
-      ipcRenderer.on(ADDON_HOTKEY_CHANNELS.changed, listener)
-      return () =>
-        ipcRenderer.removeListener(ADDON_HOTKEY_CHANNELS.changed, listener)
-    },
-    onAddonCommand: (callback) => {
-      const listener = (
-        _event: Electron.IpcRendererEvent,
-        invocation: AddonCommandInvocation,
-      ) => callback(invocation)
-      ipcRenderer.on(ADDON_HOTKEY_CHANNELS.invoke, listener)
-      return () =>
-        ipcRenderer.removeListener(ADDON_HOTKEY_CHANNELS.invoke, listener)
-    },
+    onAddonHotkeysChanged: (callback) =>
+      subscribe(ADDON_HOTKEY_CHANNELS.changed, callback),
+    onAddonCommand: (callback) =>
+      subscribe(ADDON_HOTKEY_CHANNELS.invoke, callback),
     saveHotkeys: (hotkeys) => ipcRenderer.invoke(HOTKEY_CHANNELS.save, hotkeys),
     setHotkeyRecording: (recording) =>
       ipcRenderer.invoke(HOTKEY_CHANNELS.record, recording),
-    onCommand: (callback) => {
-      const listener = (
-        _event: Electron.IpcRendererEvent,
-        command: AppCommand,
-      ) => callback(command)
-      ipcRenderer.on(HOTKEY_CHANNELS.command, listener)
-      return () => {
-        ipcRenderer.removeListener(HOTKEY_CHANNELS.command, listener)
-      }
-    },
+    onCommand: (callback) => subscribe(HOTKEY_CHANNELS.command, callback),
   } satisfies DesktopApi)
 }

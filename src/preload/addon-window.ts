@@ -13,8 +13,9 @@ const bridge: AddonWindowBridge = {
     const receive = (_event: Electron.IpcRendererEvent, states: AddonState[]) =>
       listener(states)
     ipcRenderer.on(ADDON_WINDOW_CHANNELS.statesChanged, receive)
-    return () =>
+    return () => {
       ipcRenderer.removeListener(ADDON_WINDOW_CHANNELS.statesChanged, receive)
+    }
   },
   close: () => ipcRenderer.invoke(ADDON_WINDOW_CHANNELS.closeSelf),
   query: (method, input) =>

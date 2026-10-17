@@ -50,6 +50,22 @@ test('autosave keeps a dirty tab scheduled after focus moves to another tab', {
   }
   await page.getByRole('tab', { name: 'a.md' }).click()
   await waitForDocumentEditor(app, page)
+  // Hosted windows sometimes never save a.md; record each autosave outcome.
+  await app.evaluate(({ ipcMain }) => {
+    const outcomes = []
+    globalThis.autosaveOutcomes = outcomes
+    const handler = ipcMain._invokeHandlers.get('document:autosave')
+    ipcMain._invokeHandlers.set('document:autosave', async (...args) => {
+      try {
+        const result = await handler(...args)
+        outcomes.push(result?.status)
+        return result
+      } catch (error) {
+        outcomes.push(String(error).slice(0, 300))
+        throw error
+      }
+    })
+  })
   await replaceRichText(page, rich, 'edited a')
   await page.getByRole('tab', { name: 'b.md' }).click()
   const deadline = performance.now() + 7000
@@ -58,7 +74,23 @@ test('autosave keeps a dirty tab scheduled after focus moves to another tab', {
     performance.now() < deadline
   )
     await delay(30)
-  assert.equal(await readFile(a, 'utf8'), 'edited a')
+  const saved = await readFile(a, 'utf8')
+  if (saved !== 'edited a')
+    console.error(
+      'autosave dirty tab:',
+      JSON.stringify({
+        outcomes: await app.evaluate(() =>
+          globalThis.autosaveOutcomes.slice(-10),
+        ),
+        tabs: await page.evaluate(async () =>
+          (await window.hibi.getDocument()).tabs.map(({ name, dirty }) => ({
+            name,
+            dirty,
+          })),
+        ),
+      }),
+    )
+  assert.equal(saved, 'edited a')
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).name,
     'b.md',

@@ -205,7 +205,9 @@ test('reference preparation yields to find, cancels and reacquires without parti
     '../src/shared/markdown-source-references.ts'
   )
   const update = MarkdownSourceReferences.prototype.update
-  const f = fixture(t, '[ref]: /first\n\n'.repeat(50))
+  // Every two slow steps below cost a timer turn. Few definitions keep each reply
+  // within a handful of turns on coarse or busy Windows timers.
+  const f = fixture(t, '[ref]: /first\n\n'.repeat(5))
   let entered = false,
     cancel = false,
     turn = 0

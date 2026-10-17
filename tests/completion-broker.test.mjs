@@ -639,8 +639,24 @@ test('changed view, content version, or selection discards late results', async 
       ...initial,
       view: { ...initial.view, viewGeneration: 2 },
     }),
+    (initial) => ({
+      ...initial,
+      view: { ...initial.view, documentId: 'document-two' },
+    }),
+    (initial) => ({
+      ...initial,
+      view: { ...initial.view, documentGeneration: 2 },
+    }),
+    (initial) => ({
+      ...initial,
+      view: { ...initial.view, viewId: 'view-two' },
+    }),
+    (initial) => ({ ...initial, editor: 'rich' }),
     (initial) => ({ ...initial, contentVersion: 4 }),
+    (initial) => ({ ...initial, documentLength: 7 }),
     (initial) => ({ ...initial, selection: { anchor: 4, head: 4 } }),
+    (initial) => ({ ...initial, selection: { anchor: 2, head: 3 } }),
+    (initial) => ({ ...initial, selection: { anchor: 3, head: 4 } }),
   ]
   for (const change of changes) {
     const broker = new CompletionBroker()

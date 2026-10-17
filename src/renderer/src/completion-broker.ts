@@ -1,11 +1,13 @@
-import type {
-  CompletionItem,
-  CompletionProvider,
-  CompletionProviderOptions,
-  CompletionRequest,
-  CompletionUpdate,
-  TypingContext,
-} from '../../shared/completions'
+import {
+  type CompletionItem,
+  type CompletionProvider,
+  type CompletionProviderOptions,
+  type CompletionRequest,
+  type CompletionUpdate,
+  sameCompletionContext,
+  sameCompletionView,
+  type TypingContext,
+} from '../../shared/completions.ts'
 import type { AddonOwner, Dispose } from '../../shared/foundation-contracts'
 
 const MAX_PROVIDERS = 16
@@ -137,33 +139,6 @@ function snapshot(
   return Object.freeze(bounded)
 }
 
-function sameView(a: CompletionRequest, b: CompletionRequest) {
-  return (
-    a.editor === b.editor &&
-    a.view.documentId === b.view.documentId &&
-    a.view.documentGeneration === b.view.documentGeneration &&
-    a.view.viewId === b.view.viewId &&
-    a.view.viewGeneration === b.view.viewGeneration
-  )
-}
-
-function sameContext(a: CompletionRequest, b: CompletionRequest | null) {
-  if (!b) return false
-  const av = a.view,
-    bv = b.view
-  return (
-    av.documentId === bv.documentId &&
-    av.documentGeneration === bv.documentGeneration &&
-    av.viewId === bv.viewId &&
-    av.viewGeneration === bv.viewGeneration &&
-    a.contentVersion === b.contentVersion &&
-    a.editor === b.editor &&
-    a.documentLength === b.documentLength &&
-    a.selection.anchor === b.selection.anchor &&
-    a.selection.head === b.selection.head
-  )
-}
-
 function validItems(items: readonly CompletionItem[], length: number) {
   if (!Array.isArray(items)) return []
   const result: CompletionItem[] = []
@@ -288,7 +263,7 @@ export class CompletionBroker {
     let accepted = this.#accepted
     if (
       accepted &&
-      (!sameView(accepted.request, request) ||
+      (!sameCompletionView(accepted.request, request) ||
         this.#registrations.get(accepted.registration.id) !==
           accepted.registration ||
         performance.now() - accepted.at > 10000 ||
@@ -340,7 +315,7 @@ export class CompletionBroker {
     const session = this.#active ?? this.#visible
     if (
       !session ||
-      !sameContext(session.request, request) ||
+      !sameCompletionContext(session.request, request) ||
       !this.#current(session) ||
       !this.#items(session).includes(item)
     )
@@ -516,7 +491,7 @@ export class CompletionBroker {
 
   #current(session: Session) {
     try {
-      return sameContext(session.request, session.current())
+      return sameCompletionContext(session.request, session.current())
     } catch {
       return false
     }

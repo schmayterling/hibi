@@ -36,6 +36,7 @@ import {
   type CompletionRequest,
   type CompletionUpdate,
   safeCompletionContext,
+  sameCompletionContext,
   type TypingContext,
 } from '../../shared/completions'
 import type { DocumentState } from '../../shared/desktop'
@@ -907,16 +908,6 @@ export function MarkdownEditor({
         trigger,
       }
     }
-    const same = (left: CompletionRequest, right: CompletionRequest | null) =>
-      !!right &&
-      left.view.documentId === right.view.documentId &&
-      left.view.documentGeneration === right.view.documentGeneration &&
-      left.view.viewId === right.view.viewId &&
-      left.view.viewGeneration === right.view.viewGeneration &&
-      left.contentVersion === right.contentVersion &&
-      left.documentLength === right.documentLength &&
-      left.selection.anchor === right.selection.anchor &&
-      left.selection.head === right.selection.head
     const range = (item: CompletionItem, request: CompletionRequest) => {
       if (
         item.to !== request.selection.head ||
@@ -993,7 +984,7 @@ export function MarkdownEditor({
       if (
         !shown ||
         !item ||
-        !same(shown.request, capture(shown.request.trigger))
+        !sameCompletionContext(shown.request, capture(shown.request.trigger))
       ) {
         dismiss()
         return
@@ -1076,7 +1067,10 @@ export function MarkdownEditor({
     }
     const publish = (update: CompletionUpdate) => {
       if (update.done) pending = false
-      if (disposed || !same(update.request, capture(update.request.trigger))) {
+      if (
+        disposed ||
+        !sameCompletionContext(update.request, capture(update.request.trigger))
+      ) {
         hide()
         return
       }

@@ -172,3 +172,32 @@ export interface CompletionUpdate {
   readonly items: readonly CompletionItem[]
   readonly done: boolean
 }
+
+/** Whether both positions belong to the same editor view generation. */
+export function sameCompletionView(
+  a: Pick<CompletionRequest, 'editor' | 'view'>,
+  b: Pick<CompletionRequest, 'editor' | 'view'>,
+) {
+  return (
+    a.editor === b.editor &&
+    a.view.documentId === b.view.documentId &&
+    a.view.documentGeneration === b.view.documentGeneration &&
+    a.view.viewId === b.view.viewId &&
+    a.view.viewGeneration === b.view.viewGeneration
+  )
+}
+
+/** Whether a request still matches the current content and selection. */
+export function sameCompletionContext(
+  a: CompletionRequest,
+  b: CompletionRequest | null,
+) {
+  return (
+    !!b &&
+    sameCompletionView(a, b) &&
+    a.contentVersion === b.contentVersion &&
+    a.documentLength === b.documentLength &&
+    a.selection.anchor === b.selection.anchor &&
+    a.selection.head === b.selection.head
+  )
+}

@@ -232,6 +232,9 @@ test('version gaps, resets, unrelated edits and view changes invalidate typed pr
   for (const reason of [
     'version',
     'view',
+    'document generation',
+    'view id',
+    'editor',
     'replace',
     'undo',
     'reset',
@@ -257,11 +260,13 @@ test('version gaps, resets, unrelated edits and view changes invalidate typed pr
         languages,
       )
     const extra =
-      reason === 'version'
-        ? { contentVersion: version + 2 }
-        : reason === 'view'
-          ? { view: { ...view, viewGeneration: 2 } }
-          : {}
+      {
+        version: { contentVersion: version + 2 },
+        view: { view: { ...view, viewGeneration: 2 } },
+        'document generation': { view: { ...view, documentGeneration: 2 } },
+        'view id': { view: { ...view, viewId: 'rich' } },
+        editor: { editor: 'rich' },
+      }[reason] ?? {}
     signals.input(input('wild ', extra), session, languages)
     assert.deepEqual(seen, [], reason)
   }

@@ -58,6 +58,7 @@ import {
   type CompletionItem,
   type CompletionRequest,
   safeCompletionContext,
+  sameCompletionContext,
   sourceProseAllowed,
   type TypingContext,
 } from '../../shared/completions'
@@ -156,20 +157,6 @@ const sameReferenceSyntax = (
   a.textExtras === b.textExtras &&
   !!a.math === !!b.math &&
   a.frontmatter === b.frontmatter
-
-const sameCompletionContext = (
-  a: CompletionRequest,
-  b: CompletionRequest | null,
-) =>
-  !!b &&
-  a.view.documentId === b.view.documentId &&
-  a.view.documentGeneration === b.view.documentGeneration &&
-  a.view.viewId === b.view.viewId &&
-  a.view.viewGeneration === b.view.viewGeneration &&
-  a.contentVersion === b.contentVersion &&
-  a.documentLength === b.documentLength &&
-  a.selection.anchor === b.selection.anchor &&
-  a.selection.head === b.selection.head
 
 export function SourceEditor({
   document,

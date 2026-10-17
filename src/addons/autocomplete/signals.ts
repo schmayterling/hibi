@@ -1,7 +1,8 @@
-import type {
-  CompletionItem,
-  CompletionRequest,
-  TypingContext,
+import {
+  type CompletionItem,
+  type CompletionRequest,
+  sameCompletionView,
+  type TypingContext,
 } from '../../shared/completions.ts'
 import type { Lang } from '../dictionary/providers.ts'
 import type { LearningObservation } from './learning.ts'
@@ -10,15 +11,6 @@ import { precedingWords, type TypingSession } from './suggestions.ts'
 type Position = {
   view: CompletionRequest['view']
   editor: CompletionRequest['editor']
-}
-function sameView(left: Position, right: Position) {
-  return (
-    left.editor === right.editor &&
-    left.view.documentId === right.view.documentId &&
-    left.view.documentGeneration === right.view.documentGeneration &&
-    left.view.viewId === right.view.viewId &&
-    left.view.viewGeneration === right.view.viewGeneration
-  )
 }
 type TypedSpan = Position & {
   from: number
@@ -106,7 +98,7 @@ export function createTypingSignals(
       }
       let skipWord = false
       if (accepted) {
-        if (!sameView(accepted, event)) accepted = undefined
+        if (!sameCompletionView(accepted, event)) accepted = undefined
       }
       if (accepted && now() - accepted.at > 10000) {
         skipWord =
@@ -140,7 +132,7 @@ export function createTypingSignals(
       const { from, to, insertedLength } = event.change
       if (
         typed &&
-        (!sameView(typed, event) ||
+        (!sameCompletionView(typed, event) ||
           typed.scope !== session.scope ||
           event.contentVersion !== typed.version + 1)
       )

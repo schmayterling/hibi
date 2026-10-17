@@ -79,6 +79,30 @@ class PluginSettingsBoundary extends Component<
   }
 }
 
+function SettingsPanel({
+  id,
+  label,
+  category,
+  children,
+}: {
+  id: string
+  label: string
+  category: string
+  children: ReactNode
+}) {
+  return (
+    <section
+      id={`settings-${id}`}
+      role="tabpanel"
+      aria-labelledby={`category-${id}`}
+      aria-label={label}
+      hidden={category !== id}
+    >
+      {children}
+    </section>
+  )
+}
+
 function AddonUpdating() {
   return (
     <DocumentNotice
@@ -399,38 +423,20 @@ export function SettingsScreen({
           tabIndex={-1}
           inert={overlay && sidebarOpen}
         >
-          <section
-            id="settings-hibi"
-            role="tabpanel"
-            aria-labelledby="category-hibi"
-            aria-label="About"
-            hidden={category !== 'hibi'}
-          >
+          <SettingsPanel id="hibi" label="About" category={category}>
             {(discover || (open && (category === 'hibi' || searching))) && (
               <HibiSettings
                 info={info}
                 onShowIntroduction={onShowIntroduction}
               />
             )}
-          </section>
-          <section
-            id="settings-licenses"
-            role="tabpanel"
-            aria-labelledby="category-licenses"
-            aria-label="Credits"
-            hidden={category !== 'licenses'}
-          >
+          </SettingsPanel>
+          <SettingsPanel id="licenses" label="Credits" category={category}>
             {(discover || (open && category === 'licenses')) && (
               <LicenseSettings />
             )}
-          </section>
-          <section
-            id="settings-editor"
-            role="tabpanel"
-            aria-labelledby="category-editor"
-            aria-label="Editor"
-            hidden={category !== 'editor'}
-          >
+          </SettingsPanel>
+          <SettingsPanel id="editor" label="Editor" category={category}>
             <h1>Editor</h1>
             <h2>Documents</h2>
             <div className="settings-group">
@@ -563,32 +569,18 @@ export function SettingsScreen({
                 openAddons={() => onCategory('addons')}
               />
             )}
-          </section>
-          <section
-            id="settings-syntax"
-            role="tabpanel"
-            aria-labelledby="category-syntax"
-            aria-label="Syntax"
-            hidden={category !== 'syntax'}
-          >
+          </SettingsPanel>
+          <SettingsPanel id="syntax" label="Syntax" category={category}>
             <SyntaxSettings />
-          </section>
-          <section
-            id="settings-code-syntax"
-            role="tabpanel"
-            aria-labelledby="category-code-syntax"
-            aria-label="Code Highlight"
-            hidden={category !== 'code-syntax'}
+          </SettingsPanel>
+          <SettingsPanel
+            id="code-syntax"
+            label="Code Highlight"
+            category={category}
           >
             <CodeSyntaxSettings />
-          </section>
-          <section
-            id="settings-appearance"
-            role="tabpanel"
-            aria-labelledby="category-appearance"
-            aria-label="Appearance"
-            hidden={category !== 'appearance'}
-          >
+          </SettingsPanel>
+          <SettingsPanel id="appearance" label="Appearance" category={category}>
             <h1>Appearance</h1>
             <h2>Interface text</h2>
             <div className="settings-group">
@@ -721,14 +713,8 @@ export function SettingsScreen({
             </div>
             <ToolbarSettings />
             <NotificationSettings />
-          </section>
-          <section
-            id="settings-hotkeys"
-            role="tabpanel"
-            aria-labelledby="category-hotkeys"
-            aria-label="Hotkeys"
-            hidden={category !== 'hotkeys'}
-          >
+          </SettingsPanel>
+          <SettingsPanel id="hotkeys" label="Hotkeys" category={category}>
             {category === 'hotkeys' && (
               <HotkeySettings
                 active={open}
@@ -737,14 +723,8 @@ export function SettingsScreen({
                 platform={info?.platform ?? 'darwin'}
               />
             )}
-          </section>
-          <section
-            id="settings-addons"
-            role="tabpanel"
-            aria-labelledby="category-addons"
-            aria-label="Addon Manager"
-            hidden={category !== 'addons'}
-          >
+          </SettingsPanel>
+          <SettingsPanel id="addons" label="Addon Manager" category={category}>
             <AddonSettings
               addons={addons}
               states={addonStates}
@@ -752,13 +732,11 @@ export function SettingsScreen({
               install={onInstallAddon}
               remove={onRemoveAddon}
             />
-          </section>
-          <section
-            id="settings-dependencies"
-            role="tabpanel"
-            aria-labelledby="category-dependencies"
-            aria-label="Dependencies"
-            hidden={category !== 'dependencies'}
+          </SettingsPanel>
+          <SettingsPanel
+            id="dependencies"
+            label="Dependencies"
+            category={category}
           >
             <DependencySettings
               active={open && category === 'dependencies'}
@@ -771,14 +749,8 @@ export function SettingsScreen({
                 )
               }
             />
-          </section>
-          <section
-            id="settings-formats"
-            role="tabpanel"
-            aria-labelledby="category-formats"
-            aria-label="Formats"
-            hidden={category !== 'formats'}
-          >
+          </SettingsPanel>
+          <SettingsPanel id="formats" label="Formats" category={category}>
             <FormatsSettings
               active={open && category === 'formats'}
               addons={addons}
@@ -786,28 +758,19 @@ export function SettingsScreen({
               setEnabled={onAddonEnabled}
               open={onCategory}
             />
-          </section>
-          <section
-            id="settings-workspace"
-            role="tabpanel"
-            aria-labelledby="category-workspace"
-            aria-label="Workspace settings"
-            hidden={category !== 'workspace'}
+          </SettingsPanel>
+          <SettingsPanel
+            id="workspace"
+            label="Workspace settings"
+            category={category}
           >
             <WorkspaceSettings
               active={open && category === 'workspace'}
               onChanged={onWorkspaceChanged}
             />
-          </section>
+          </SettingsPanel>
           {extraPages.map(({ id, label, Content, owner }) => (
-            <section
-              key={id}
-              id={`settings-${id}`}
-              role="tabpanel"
-              aria-labelledby={`category-${id}`}
-              aria-label={label}
-              hidden={category !== id}
-            >
+            <SettingsPanel key={id} id={id} label={label} category={category}>
               <h1>{label}</h1>
               {updatingAddons.has(owner) ? (
                 <AddonUpdating />
@@ -824,16 +787,14 @@ export function SettingsScreen({
                   </PluginSettingsBoundary>
                 )
               )}
-            </section>
+            </SettingsPanel>
           ))}
           {pluginPages.map(({ manifest, Settings }) => (
-            <section
+            <SettingsPanel
               key={manifest.id}
-              id={`settings-plugin-${manifest.id}`}
-              role="tabpanel"
-              aria-labelledby={`category-plugin-${manifest.id}`}
-              aria-label={manifest.name}
-              hidden={category !== `plugin-${manifest.id}`}
+              id={`plugin-${manifest.id}`}
+              label={manifest.name}
+              category={category}
             >
               <h1>
                 <button
@@ -917,7 +878,7 @@ export function SettingsScreen({
                   </PluginSettingsBoundary>
                 )
               )}
-            </section>
+            </SettingsPanel>
           ))}
         </div>
       </main>

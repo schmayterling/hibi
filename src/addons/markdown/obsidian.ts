@@ -13,7 +13,7 @@ const escapeHtml = (value: string) =>
       ] ?? character,
   )
 
-export function wikiParts(raw: string) {
+function wikiParts(raw: string) {
   const match = wiki.exec(raw)
   if (!match) return null
   const [target, alias] = (match[2] ?? '').split('|', 2)

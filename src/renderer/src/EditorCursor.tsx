@@ -7,7 +7,7 @@ export type CursorSettings = {
   speed: 'fast' | 'normal' | 'slow'
   animation: 'smooth' | 'blink'
 }
-export const defaultCursor: CursorSettings = {
+const defaultCursor: CursorSettings = {
   style: 'bar',
   speed: 'normal',
   animation: 'blink',

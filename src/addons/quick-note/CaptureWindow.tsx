@@ -57,7 +57,7 @@ const plain = (tokens: readonly Token[] = []): string =>
     .join('')
 
 /** File name from the note's first Markdown heading, or the default title. */
-export function noteTitle(markdown: string, fallback: string) {
+function noteTitle(markdown: string, fallback: string) {
   // Frontmatter is metadata; its closing `---` would otherwise read as a setext underline.
   const body = readFrontmatter(markdown)?.content ?? markdown
   const heading = Lexer.lex(body).find((token) => token.type === 'heading')

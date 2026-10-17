@@ -6,7 +6,7 @@ import {
   textFile,
 } from '../_shared/import-markdown.ts'
 
-export function csvTable(source: string) {
+function csvTable(source: string) {
   const rows: string[][] = []
   let row: string[] = [],
     cell = '',

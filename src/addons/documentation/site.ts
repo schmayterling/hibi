@@ -395,7 +395,7 @@ function themeCss(site: SiteData) {
     : rules(site.options.theme.mode)
 }
 
-export function siteHead(
+function siteHead(
   site: SiteData,
   page: SitePage | undefined,
   canonical: string,

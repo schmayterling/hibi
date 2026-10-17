@@ -33,7 +33,7 @@ type Request = {
 }
 
 /** One queue per window. Each addon start owns a separate scope. */
-export function createDialogService() {
+function createDialogService() {
   let requests: Request[] = []
   let nextId = 0
   let active = true

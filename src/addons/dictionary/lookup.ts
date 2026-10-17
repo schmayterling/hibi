@@ -42,7 +42,7 @@ export function detectLangs(
 }
 
 /** Segmenter locale for the text around a caret; scripts without spaces need it. */
-export function segmentLocale(text: string, preferences: LanguagePreferences) {
+function segmentLocale(text: string, preferences: LanguagePreferences) {
   if (kana.test(text)) return 'ja'
   if (han.test(text))
     return { zh: 'zh', yue: 'zh-Hant', ja: 'ja' }[preferences.han]

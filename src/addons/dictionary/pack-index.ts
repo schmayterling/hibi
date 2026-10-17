@@ -44,7 +44,7 @@ function strings(value: unknown, limit: number): boolean {
     Array.isArray(value) && value.length <= limit && value.every((v) => text(v))
   )
 }
-export function validateEntry(value: unknown): asserts value is PackEntry {
+function validateEntry(value: unknown): asserts value is PackEntry {
   const e = value as PackEntry
   requireValid(
     e &&

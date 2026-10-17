@@ -22,7 +22,7 @@ import {
 } from '../../shared/source-projection.ts'
 import type { SourceSelection } from '../../shared/source-selection.ts'
 
-export const sourceOperationEcho = Annotation.define<string>()
+const sourceOperationEcho = Annotation.define<string>()
 
 /** Construct CM's native Text once without flattening the canonical source. */
 export function sourceEditorText(source: SourceSnapshot): Text {

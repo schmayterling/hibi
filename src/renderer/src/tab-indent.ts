@@ -1,7 +1,7 @@
 import { Extension } from '@tiptap/core'
 import { Plugin, TextSelection } from '@tiptap/pm/state'
 
-export const indentUnits = ['\t', '  ', '    '] as const
+const indentUnits = ['\t', '  ', '    '] as const
 type Preferences = { enabled: boolean; unit: (typeof indentUnits)[number] }
 const key = 'hibi:tab-indent'
 let preferences: Preferences = { enabled: true, unit: '\t' }

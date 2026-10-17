@@ -50,7 +50,7 @@ function tablesIn(doc: Node) {
 const columnCount = (table: Node) => table.firstChild?.childCount ?? 0
 
 /** Ordinal plus a hash of the header row, so edits elsewhere keep sizes. */
-export function tableKey(index: number, table: Node) {
+function tableKey(index: number, table: Node) {
   let text = String(columnCount(table))
   table.firstChild?.forEach((cell) => {
     text += `\t${cell.textContent}`

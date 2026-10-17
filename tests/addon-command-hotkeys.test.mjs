@@ -170,6 +170,21 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
   await page.getByRole('tab', { name: 'Hotkeys', exact: true }).click()
   const rebind = page.getByRole('button', { name: 'Rebind Example action' })
   await rebind.waitFor()
+  // Keys pressed as soon as a recorder shows recording must reach it.
+  await page.evaluate(() => {
+    window.recordingFocus = []
+    new MutationObserver(() => {
+      const recorder = document.querySelector(
+        '.hotkey-recorder[aria-pressed="true"]',
+      )
+      if (recorder)
+        window.recordingFocus.push(document.activeElement === recorder)
+    }).observe(document.body, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['aria-pressed'],
+    })
+  })
   await rebind.click()
   await page.waitForFunction(
     () =>
@@ -177,6 +192,7 @@ test('addon menu and configurable in-app shortcut use one lazy command', {
         .querySelector('[aria-label="Rebind Example action"]')
         ?.getAttribute('aria-pressed') === 'true',
   )
+  assert.deepEqual(await page.evaluate(() => window.recordingFocus), [true])
   await rebind.press(`${modifier}+Alt+Shift+J`)
   await page
     .getByRole('button', { name: 'Save shortcut for Example action' })

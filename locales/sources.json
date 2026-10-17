@@ -558,18 +558,17 @@
     "src/main/document.ts",
     "src/main/index.ts",
     "src/main/sideload.ts",
-    "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/AddonInstallChooser.tsx",
     "src/renderer/src/FormattingToolbar.tsx",
+    "src/renderer/src/HotkeyRow.tsx",
     "src/renderer/src/ImportDialog.tsx",
     "src/renderer/src/VersionHistory.tsx"
   ],
   "8fa63eb3c5e1": [
-    "src/renderer/src/HotkeySettings.tsx"
+    "src/renderer/src/HotkeyRow.tsx"
   ],
   "cb141fb6cd63": [
-    "src/renderer/src/AddonHotkeySettings.tsx",
-    "src/renderer/src/HotkeySettings.tsx"
+    "src/renderer/src/HotkeyRow.tsx"
   ],
   "e825f1937d21": [
     "src/addons/dictionary/PackSettings.tsx"
@@ -974,14 +973,10 @@
     "src/renderer/src/SettingsScreen.tsx"
   ],
   "b22b0b3873a1": [
-    "src/renderer/src/AddonHotkeySettings.tsx",
-    "src/renderer/src/HotkeySettings.tsx"
+    "src/renderer/src/HotkeyRow.tsx"
   ],
   "954d1afa8200": [
-    "src/renderer/src/HotkeySettings.tsx"
-  ],
-  "79a3988c60c2": [
-    "src/renderer/src/AddonHotkeySettings.tsx"
+    "src/renderer/src/HotkeyRow.tsx"
   ],
   "830121754331": [
     "src/addons/math/PackageSettings.tsx"
@@ -4142,7 +4137,7 @@
     "src/addons/dictionary/PackSettings.tsx"
   ],
   "066305f46edb": [
-    "src/renderer/src/AddonHotkeySettings.tsx"
+    "src/renderer/src/HotkeyRow.tsx"
   ],
   "ac81d61ec2b5": [
     "src/renderer/src/DependencySettings.tsx"
@@ -4152,8 +4147,7 @@
     "src/renderer/src/SourceEditor.tsx"
   ],
   "95d3d7e8feed": [
-    "src/renderer/src/AddonHotkeySettings.tsx",
-    "src/renderer/src/HotkeySettings.tsx"
+    "src/renderer/src/HotkeyRow.tsx"
   ],
   "324b134f57c7": [
     "src/renderer/src/NotificationSettings.tsx",
@@ -4337,10 +4331,7 @@
     "src/renderer/src/AddonReadme.tsx"
   ],
   "e88bb0e03de7": [
-    "src/renderer/src/HotkeySettings.tsx"
-  ],
-  "7329f549ae73": [
-    "src/renderer/src/AddonHotkeySettings.tsx"
+    "src/renderer/src/HotkeyRow.tsx"
   ],
   "78f021c43d7b": [
     "src/addons/diagnostics/Settings.tsx"
@@ -4557,14 +4548,10 @@
     "src/renderer/src/EditorToolbar.tsx"
   ],
   "e4af9a2eda8c": [
-    "src/renderer/src/AddonHotkeySettings.tsx",
-    "src/renderer/src/HotkeySettings.tsx"
+    "src/renderer/src/HotkeyRow.tsx"
   ],
   "aca879baa006": [
-    "src/renderer/src/HotkeySettings.tsx"
-  ],
-  "0a9b767dc873": [
-    "src/renderer/src/AddonHotkeySettings.tsx"
+    "src/renderer/src/HotkeyRow.tsx"
   ],
   "46f6013774d6": [
     "src/renderer/src/SettingsScreen.tsx"
@@ -4712,16 +4699,13 @@
     "src/addons/quick-note/Settings.tsx"
   ],
   "5a88d622ebec": [
-    "src/renderer/src/AddonHotkeySettings.tsx"
+    "src/renderer/src/HotkeyRow.tsx"
   ],
   "34d21cb11ffc": [
-    "src/renderer/src/HotkeySettings.tsx"
+    "src/renderer/src/HotkeyRow.tsx"
   ],
   "1a0ec19679a9": [
-    "src/renderer/src/HotkeySettings.tsx"
-  ],
-  "6d5648313edc": [
-    "src/renderer/src/AddonHotkeySettings.tsx"
+    "src/renderer/src/HotkeyRow.tsx"
   ],
   "dbb4cb54de95": [
     "src/renderer/src/document-target-edits.ts"
@@ -6442,8 +6426,7 @@
     "src/renderer/src/addons.ts"
   ],
   "14d33bd014e6": [
-    "src/renderer/src/AddonHotkeySettings.tsx",
-    "src/renderer/src/HotkeySettings.tsx"
+    "src/renderer/src/HotkeyRow.tsx"
   ],
   "a5c4e03c56e0": [
     "src/addons/diagnostics/Settings.tsx"

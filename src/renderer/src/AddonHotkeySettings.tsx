@@ -1,9 +1,13 @@
-import { Check, RotateCcw, X } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import type { AddonHotkeyBinding } from '../../shared/addon-hotkeys'
-import { shortcutError, shortcutFromEvent } from '../../shared/hotkeys'
-import { IconButton } from '../../ui/Controls'
-import { ShortcutKeys } from '../../ui/ShortcutKeys'
+import { shortcutError } from '../../shared/hotkeys'
+import { HotkeyRow } from './HotkeyRow'
 
 export function AddonHotkeySettings({
   active,
@@ -63,7 +67,9 @@ export function AddonHotkeySettings({
       off()
     }
   }, [])
-  useEffect(() => {
+  // Focus and stop recording in the same commit that shows or hides it, so no
+  // key press or new recording can slip in between.
+  useLayoutEffect(() => {
     if (!recording) return
     recorder.current?.focus()
     window.addEventListener('blur', cancel)
@@ -128,156 +134,62 @@ export function AddonHotkeySettings({
     <div className="settings-group hotkey-list">
       <h2>Addon commands</h2>
       {visible.map((binding) => (
-        <div
-          className="hotkey-row"
+        <HotkeyRow
           key={binding.id}
-          data-recording={recording === binding.id}
-        >
-          <div className="hotkey-name">
-            <span>{binding.label}</span>
-            <small>{binding.id}</small>
-          </div>
-          <div className="hotkey-binding">
-            <button
-              type="button"
-              className="hotkey-recorder"
-              ref={recording === binding.id ? recorder : undefined}
-              aria-label={`Rebind ${binding.label}`}
-              aria-pressed={recording === binding.id}
-              disabled={
-                saving ||
-                disabled ||
-                !!pending ||
-                (!!recording && recording !== binding.id)
+          label={binding.label}
+          detail={binding.id}
+          shortcut={binding.shortcut}
+          platform={platform}
+          recorder={recorder}
+          recording={recording === binding.id}
+          pending={pending === binding.id}
+          candidate={candidate}
+          invalid={invalid}
+          recorderDisabled={
+            saving ||
+            disabled ||
+            !!pending ||
+            (!!recording && recording !== binding.id)
+          }
+          actionsDisabled={saving}
+          editDisabled={saving || disabled || !!pending || !!recording}
+          canReset={binding.overridden}
+          onStart={async () => {
+            if (recording || starting.current || !activeRef.current) return
+            starting.current = true
+            const started = generation.current
+            setPending(binding.id)
+            setError('')
+            onRecordingChange(true)
+            try {
+              await window.hibi.setHotkeyRecording(true)
+              if (!activeRef.current || generation.current !== started) {
+                await window.hibi.setHotkeyRecording(false)
+                onRecordingChange(false)
+                return
               }
-              onClick={async () => {
-                if (recording || starting.current || !activeRef.current) return
-                starting.current = true
-                const started = generation.current
-                setPending(binding.id)
-                setError('')
-                onRecordingChange(true)
-                try {
-                  await window.hibi.setHotkeyRecording(true)
-                  if (!activeRef.current || generation.current !== started) {
-                    await window.hibi.setHotkeyRecording(false)
-                    onRecordingChange(false)
-                    return
-                  }
-                  setCandidate('')
-                  setRecording(binding.id)
-                } catch {
-                  onRecordingChange(false)
-                  setError('Could not record a shortcut. Try again.')
-                } finally {
-                  starting.current = false
-                  setPending(null)
-                }
-              }}
-              onKeyDown={(event) => {
-                if (recording !== binding.id) return
-                event.preventDefault()
-                event.stopPropagation()
-                if (event.key === 'Escape' || event.key === 'Tab') {
-                  cancel()
-                  return
-                }
-                if (
-                  event.key === 'Enter' &&
-                  !event.metaKey &&
-                  !event.ctrlKey &&
-                  !event.altKey &&
-                  !event.shiftKey
-                ) {
-                  if (candidate && !invalid) void save(binding.id, candidate)
-                  return
-                }
-                if (event.repeat || event.nativeEvent.isComposing) return
-                const shortcut = shortcutFromEvent(event)
-                if (shortcut) setCandidate(shortcut)
-              }}
-            >
-              {pending === binding.id ? (
-                <span>Preparing shortcut…</span>
-              ) : recording === binding.id ? (
-                candidate ? (
-                  <ShortcutKeys shortcut={candidate} platform={platform} />
-                ) : (
-                  <span>Press shortcut…</span>
-                )
-              ) : binding.shortcut ? (
-                <ShortcutKeys shortcut={binding.shortcut} platform={platform} />
-              ) : (
-                <span>Unassigned</span>
-              )}
-            </button>
-            {recording === binding.id ? (
-              <>
-                <IconButton
-                  type="button"
-                  aria-label={`Save shortcut for ${binding.label}`}
-                  title="Save shortcut"
-                  disabled={saving || !candidate || !!invalid}
-                  onClick={() => void save(binding.id, candidate)}
-                >
-                  <Check size={15} />
-                </IconButton>
-                <IconButton
-                  type="button"
-                  aria-label="Cancel rebinding"
-                  title="Cancel"
-                  disabled={saving}
-                  onClick={cancel}
-                >
-                  <X size={15} />
-                </IconButton>
-              </>
-            ) : (
-              <>
-                <IconButton
-                  type="button"
-                  aria-label={`Reset shortcut for ${binding.label}`}
-                  title="Reset shortcut"
-                  disabled={
-                    saving ||
-                    disabled ||
-                    !!pending ||
-                    !!recording ||
-                    !binding.overridden
-                  }
-                  onClick={() => void reset(binding.id)}
-                >
-                  <RotateCcw size={14} />
-                </IconButton>
-                <IconButton
-                  type="button"
-                  aria-label={`Clear shortcut for ${binding.label}`}
-                  title="Clear shortcut"
-                  disabled={
-                    saving ||
-                    disabled ||
-                    !!pending ||
-                    !!recording ||
-                    !binding.shortcut
-                  }
-                  onClick={() => void save(binding.id, '')}
-                >
-                  <X size={14} />
-                </IconButton>
-              </>
-            )}
-          </div>
-          {recording === binding.id && (
-            <p className="hotkey-feedback" role="status">
-              {invalid || 'Enter to save · Escape to cancel'}
-            </p>
-          )}
+              setCandidate('')
+              setRecording(binding.id)
+            } catch {
+              onRecordingChange(false)
+              setError('Could not record a shortcut. Try again.')
+            } finally {
+              starting.current = false
+              setPending(null)
+            }
+          }}
+          onCandidate={setCandidate}
+          onSave={() => void save(binding.id, candidate)}
+          onCancel={cancel}
+          onReset={() => void reset(binding.id)}
+          onClear={() => void save(binding.id, '')}
+        >
           {!recording && binding.conflictWith && (
             <p className="hotkey-feedback" role="status">
               Already used by {binding.conflictWith.label}.
             </p>
           )}
-        </div>
+        </HotkeyRow>
       ))}
       {error && (
         <p className="hotkey-feedback" role="alert">

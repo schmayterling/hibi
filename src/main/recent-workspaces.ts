@@ -7,6 +7,7 @@ import {
   type RecentWorkspace,
   toRecentWorkspaces,
 } from '../shared/workspace'
+import { retryRename } from './atomic-rename'
 
 type SavedWorkspace = { path: string; pinned: boolean; hidden: boolean }
 
@@ -75,7 +76,7 @@ function writeWorkspaces(
       const file = location()
       const saved = update(await readWorkspaces())
       await writeFile(`${file}.tmp`, JSON.stringify(saved), { mode: 0o600 })
-      await rename(`${file}.tmp`, file)
+      await retryRename(() => rename(`${file}.tmp`, file))
       const known = asKnown(saved)
       for (const listener of listeners) listener(known)
       return known

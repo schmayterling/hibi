@@ -11,6 +11,7 @@ import {
   parseDependencies,
 } from '../shared/dependencies'
 import { getAddonManifests, getAddonStates } from './addons'
+import { retryRename } from './atomic-rename'
 import { executableFile, findTool, toolSearchPath } from './tool-paths'
 import { workspaceRoot } from './workspace'
 
@@ -257,7 +258,7 @@ export async function configureDependency(
     else delete next[entry.key]
     const file = join(app.getPath('userData'), 'dependencies.json')
     await writeFile(`${file}.tmp`, JSON.stringify(next), { mode: 0o600 })
-    await rename(`${file}.tmp`, file)
+    await retryRename(() => rename(`${file}.tmp`, file))
     preferences = Promise.resolve(next)
     checked.delete(entry.key)
   })

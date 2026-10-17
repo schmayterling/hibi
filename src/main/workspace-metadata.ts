@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 import { lstat, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join } from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
 import ignore from 'ignore'
 import type { WorkspaceManifest } from '../shared/workspace-settings'
+import { retryRename } from './atomic-rename.ts'
 
 export const WORKSPACE_MANIFEST = '.hibi/workspace.json'
 export const WORKSPACE_IGNORE = '.hibi/ignore'
@@ -145,23 +145,7 @@ export async function writeWorkspaceText(
   )
   await writeFile(temporary, content, { flag: 'wx', mode: 0o600 })
   try {
-    // Windows can briefly deny replacement while another process holds the manifest.
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await rename(temporary, path)
-        break
-      } catch (error) {
-        if (
-          process.platform !== 'win32' ||
-          !['EPERM', 'EBUSY'].includes(
-            (error as NodeJS.ErrnoException).code ?? '',
-          ) ||
-          attempt === 5
-        )
-          throw error
-        await delay(50 * 2 ** attempt)
-      }
-    }
+    await retryRename(() => rename(temporary, path))
   } catch (error) {
     await import('node:fs/promises').then((fs) =>
       fs.rm(temporary, { force: true }),

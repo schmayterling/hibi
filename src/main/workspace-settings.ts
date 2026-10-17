@@ -16,6 +16,7 @@ import {
   type WorkspaceSettings,
   type WorkspaceSettingsAction,
 } from '../shared/workspace-settings'
+import { retryRename } from './atomic-rename'
 import {
   getDocument,
   getDocumentPath,
@@ -83,7 +84,7 @@ export async function workspaceEntryLimit() {
 }
 async function savePreferences(value: WorkspacePreferences) {
   await writeFile(`${location()}.tmp`, JSON.stringify(value), { mode: 0o600 })
-  await rename(`${location()}.tmp`, location())
+  await retryRename(() => rename(`${location()}.tmp`, location()))
 }
 export async function getWorkspaceSettings(): Promise<WorkspaceSettings> {
   const currentPath = workspaceRoot()

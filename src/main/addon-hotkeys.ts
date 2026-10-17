@@ -12,6 +12,7 @@ import {
   shortcutError,
   validateHotkeys,
 } from '../shared/hotkeys.ts'
+import { retryRename } from './atomic-rename.ts'
 
 const idPattern = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/
 const savedVersion = 1
@@ -301,7 +302,7 @@ export class AddonHotkeys {
       JSON.stringify({ version: savedVersion, overrides }),
       { mode: 0o600 },
     )
-    await rename(`${this.file}.tmp`, this.file)
+    await retryRename(() => rename(`${this.file}.tmp`, this.file))
   }
 
   private queueWrite<T>(write: () => Promise<T>): Promise<T> {

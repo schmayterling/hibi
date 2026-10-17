@@ -14,6 +14,7 @@ import {
   type AddonWindowOptions,
 } from '../shared/addon-windows'
 import { appearanceColors, titleBarColors } from './appearance'
+import { retryRename } from './atomic-rename'
 import { isTrustedRendererUrl } from './security'
 import { testPause } from './test-pauses'
 
@@ -156,7 +157,7 @@ function rememberBounds(windowKey: string, bounds: Rectangle) {
       }
       const path = boundsPath()
       await writeFile(`${path}.tmp`, JSON.stringify(saved), { mode: 0o600 })
-      await rename(`${path}.tmp`, path)
+      await retryRename(() => rename(`${path}.tmp`, path))
     })
     .catch((error: unknown) =>
       console.error('could not remember addon window position:', error),

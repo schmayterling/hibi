@@ -13,6 +13,7 @@ import {
   updateCheckFrequency,
   updateRelease,
 } from '../shared/updates'
+import { retryRename } from './atomic-rename'
 
 let state: UpdateState = {
   channel: 'nightly-green',
@@ -146,7 +147,9 @@ export function setUpdateStartupCheck(input: unknown) {
     await writeFile(`${startupPreferencePath()}.tmp`, JSON.stringify(input), {
       mode: 0o600,
     })
-    await rename(`${startupPreferencePath()}.tmp`, startupPreferencePath())
+    await retryRename(() =>
+      rename(`${startupPreferencePath()}.tmp`, startupPreferencePath()),
+    )
     publish({ checkOnStartup: input })
   })
 }
@@ -157,7 +160,9 @@ export function setUpdateCheckFrequency(input: unknown) {
     await writeFile(`${frequencyPreferencePath()}.tmp`, JSON.stringify(hours), {
       mode: 0o600,
     })
-    await rename(`${frequencyPreferencePath()}.tmp`, frequencyPreferencePath())
+    await retryRename(() =>
+      rename(`${frequencyPreferencePath()}.tmp`, frequencyPreferencePath()),
+    )
     publish({ checkFrequency: hours })
     if (periodicCheck) schedulePeriodicChecks()
   })
@@ -169,7 +174,7 @@ export function setUpdateChannel(input: unknown) {
     await writeFile(`${preferencePath()}.tmp`, JSON.stringify(channel), {
       mode: 0o600,
     })
-    await rename(`${preferencePath()}.tmp`, preferencePath())
+    await retryRename(() => rename(`${preferencePath()}.tmp`, preferencePath()))
     release = undefined
     publish({
       channel,

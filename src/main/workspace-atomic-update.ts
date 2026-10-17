@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { BigIntStats } from 'node:fs'
 import { lstat, open, rename, unlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { retryRename } from './atomic-rename.ts'
 
 /** Stage bytes before a best-effort disk-version check and atomic rename. */
 export async function replaceExistingText(
@@ -26,23 +27,26 @@ export async function replaceExistingText(
       await staged.close()
       closed = true
     }
-    await beforeCommit()
-    const current = await lstat(temporary, { bigint: true })
-    if (
-      current.dev !== ready.dev ||
-      current.ino !== ready.ino ||
-      current.size !== ready.size ||
-      current.mtimeNs !== ready.mtimeNs ||
-      current.ctimeNs !== ready.ctimeNs
-    )
-      throw new Error('The staged file changed. Review it before updating.')
-    if (!closed) {
-      await staged.close()
-      closed = true
+    const checkCommit = async () => {
+      await beforeCommit()
+      const current = await lstat(temporary, { bigint: true })
+      if (
+        current.dev !== ready.dev ||
+        current.ino !== ready.ino ||
+        current.size !== ready.size ||
+        current.mtimeNs !== ready.mtimeNs ||
+        current.ctimeNs !== ready.ctimeNs
+      )
+        throw new Error('The staged file changed. Review it before updating.')
+      if (!closed) {
+        await staged.close()
+        closed = true
+      }
     }
+    await checkCommit()
     // Node rename has neither an expected-inode condition for the disk file
     // nor a handle-relative source. Both pathnames can change after checks.
-    await rename(temporary, path)
+    await retryRename(() => rename(temporary, path), checkCommit)
     committed = true
 
     let directorySynced = false

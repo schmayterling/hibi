@@ -17,6 +17,7 @@ import type {
   AddonStorageWriteResult,
 } from '../shared/addon-storage'
 import type { WorkspaceTarget } from '../shared/foundation-contracts'
+import { retryRename } from './atomic-rename.ts'
 
 const VALUE_LIMIT = 10 * 1024 * 1024
 const FILE_LIMIT = 16 * 1024 * 1024
@@ -350,9 +351,12 @@ export function createAddonStorage(
           const temporary = `${file}.${randomUUID()}.tmp`
           try {
             await writeFile(temporary, encoded, { mode: 0o600 })
-            const beforeRename = stale(request, generation)
-            if (beforeRename) return beforeRename
-            await rename(temporary, file)
+            const blocked = await retryRename(async () => {
+              const beforeRename = stale(request, generation)
+              if (beforeRename) return beforeRename
+              await rename(temporary, file)
+            })
+            if (blocked) return blocked
           } finally {
             await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
               if (error.code !== 'ENOENT') throw error

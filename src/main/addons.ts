@@ -19,6 +19,7 @@ import { parseDependencies } from '../shared/dependencies'
 import { validDocumentExtensions } from '../shared/document-types'
 import type { AddonId, AddonOwner } from '../shared/foundation-contracts'
 import { exportedAppearance } from './appearance'
+import { retryRename } from './atomic-rename'
 import {
   clearDocument,
   getDocument,
@@ -189,7 +190,7 @@ export async function loadAddons(): Promise<void> {
     for (const manifest of enabledModal) enabled[manifest.id] = false
     const path = join(app.getPath('userData'), 'addons.json')
     await writeFile(`${path}.tmp`, JSON.stringify(enabled), { mode: 0o600 })
-    await rename(`${path}.tmp`, path)
+    await retryRename(() => rename(`${path}.tmp`, path))
     addonStartupNotices.push(
       'Multiple modal addons were enabled. They were disabled to keep regular editing mode safe.',
     )
@@ -408,7 +409,7 @@ async function savePreferences(
   const before = getAddonStates()
   const path = join(app.getPath('userData'), 'addons.json')
   await writeFile(`${path}.tmp`, JSON.stringify(next), { mode: 0o600 })
-  await rename(`${path}.tmp`, path)
+  await retryRename(() => rename(`${path}.tmp`, path))
   enabled = next
   await deactivateUnavailable(before)
   const states = getAddonStates()

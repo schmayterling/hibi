@@ -8,6 +8,7 @@ import {
   restoreHotkeys,
   validateHotkeys,
 } from '../shared/hotkeys'
+import { retryRename } from './atomic-rename'
 
 export let hotkeys = defaultHotkeys(process.platform)
 let saving = false
@@ -39,7 +40,7 @@ export async function saveHotkeys(value: unknown): Promise<Hotkeys> {
       JSON.stringify({ ...next, _version: HOTKEYS_VERSION }),
       { mode: 0o600 },
     )
-    await rename(`${path}.tmp`, path)
+    await retryRename(() => rename(`${path}.tmp`, path))
     hotkeys = next
     return hotkeys
   } finally {

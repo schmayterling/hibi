@@ -4,6 +4,7 @@ import { copyFile, link, open, rename, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { MAX_DOCUMENT_BYTES } from '../shared/desktop'
 import { exceedsUtf8Limit } from '../shared/text-size'
+import { retryRename } from './atomic-rename'
 
 // ponytail: cap documents at 2 MiB; move parsing off-thread before raising this.
 
@@ -80,9 +81,12 @@ export async function writeText(
     } finally {
       await file.close()
     }
-    if (canCommit && !canCommit())
-      throw new Error('The save request is no longer current.')
+    const checkCommit = () => {
+      if (canCommit && !canCommit())
+        throw new Error('The save request is no longer current.')
+    }
     if (exclusive) {
+      checkCommit()
       try {
         await link(temp, path)
       } catch (error) {
@@ -94,7 +98,11 @@ export async function writeText(
           throw error
         await copyFile(temp, path, constants.COPYFILE_EXCL)
       }
-    } else await rename(temp, path)
+    } else
+      await retryRename(() => {
+        checkCommit()
+        return rename(temp, path)
+      })
   } finally {
     await unlink(temp).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== 'ENOENT') throw error

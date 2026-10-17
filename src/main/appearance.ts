@@ -6,6 +6,7 @@ import {
   type NativeAppearance,
   themePreferences,
 } from '../shared/colorschemes'
+import { retryRename } from './atomic-rename'
 
 let appearance: NativeAppearance = {
   preferences: DEFAULT_THEME,
@@ -91,7 +92,7 @@ export function saveAppearance(value: unknown) {
     .catch(() => {})
     .then(async () => {
       await writeFile(`${path}.tmp`, JSON.stringify(next), { mode: 0o600 })
-      await rename(`${path}.tmp`, path)
+      await retryRename(() => rename(`${path}.tmp`, path))
     })
   return writing
 }

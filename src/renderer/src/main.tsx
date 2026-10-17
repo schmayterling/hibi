@@ -153,6 +153,13 @@ type SplitTabs = {
   rightMode: ViewMode
 }
 
+function carryFlavorChoice(from: string, to: string) {
+  const choice = localStorage.getItem(`hibi:flavor:${from}`)
+  if (!choice) return
+  localStorage.setItem(`hibi:flavor:${to}`, choice)
+  workspaceSyntaxEvents.publish()
+}
+
 function App() {
   startupMark('app-render')
   const addonViewState = useSyncExternalStore(
@@ -405,13 +412,8 @@ function App() {
         previous.tabId === next.tabId &&
         previous.id !== next.id &&
         previous.revision === next.revision
-      ) {
-        const choice = localStorage.getItem(`hibi:flavor:${previous.id}`)
-        if (choice) {
-          localStorage.setItem(`hibi:flavor:${next.id}`, choice)
-          workspaceSyntaxEvents.publish()
-        }
-      }
+      )
+        carryFlavorChoice(previous.id, next.id)
       currentDocument.current = active
       shellDocument.current = active
       setDocument(active)
@@ -485,6 +487,16 @@ function App() {
   const [resetEditor, setResetEditor] = useState(0)
   const busyRef = useRef(false)
   const [busy, setBusy] = useState(false)
+  // Saving blocks other file operations but leaves the saved tab's editors writable.
+  const [savingTab, setSavingTab] = useState<string | null>(null)
+  function startBusy() {
+    busyRef.current = true
+    setBusy(true)
+  }
+  function endBusy() {
+    busyRef.current = focusUnsafe.current
+    setBusy(focusUnsafe.current)
+  }
   useEffect(() => {
     const side = focusSplitSide.current
     if (busy || !DocumentEditor || !side || splitTabs?.active !== side) return
@@ -531,13 +543,8 @@ function App() {
         previous &&
         previous.id !== acknowledged.id &&
         previous.revision === acknowledged.revision
-      ) {
-        const choice = localStorage.getItem(`hibi:flavor:${previous.id}`)
-        if (choice) {
-          localStorage.setItem(`hibi:flavor:${acknowledged.id}`, choice)
-          workspaceSyntaxEvents.publish()
-        }
-      }
+      )
+        carryFlavorChoice(previous.id, acknowledged.id)
       if (documentRuntime.get()?.tabId !== saved.tabId) return
       currentDocument.current = acknowledged
       shellDocument.current = acknowledged
@@ -917,8 +924,7 @@ function App() {
           throw new Error(
             'Another action is still running. Try again in a moment.',
           )
-        busyRef.current = true
-        setBusy(true)
+        startBusy()
         try {
           const result = await window.hibi.invokeAddon(id, method, input)
           const next = await window.hibi.getDocument()
@@ -928,8 +934,7 @@ function App() {
           setWorkspace(await window.hibi.getWorkspace())
           return result
         } finally {
-          busyRef.current = focusUnsafe.current
-          setBusy(focusUnsafe.current)
+          endBusy()
         }
       },
       error: (error) =>
@@ -1326,8 +1331,7 @@ function App() {
       }
       requested = false
       running = true
-      busyRef.current = true
-      setBusy(true)
+      startBusy()
       try {
         const result = await window.hibi.openExternalDocuments()
         if (result.document) {
@@ -1342,8 +1346,7 @@ function App() {
         )
       } finally {
         running = false
-        busyRef.current = focusUnsafe.current
-        setBusy(focusUnsafe.current)
+        endBusy()
         void drain()
       }
     }
@@ -1373,8 +1376,8 @@ function App() {
         window.document.activeElement
           ?.closest('.cm-editor')
           ?.querySelector<HTMLElement>('.cm-content')
-      busyRef.current = true
-      setBusy(true)
+      startBusy()
+      setSavingTab(saving ? (currentDocument.current?.tabId ?? null) : null)
       setError('')
       try {
         const next = await (command === 'new'
@@ -1401,9 +1404,9 @@ function App() {
         )
         return false
       } finally {
-        busyRef.current = focusUnsafe.current
-        if (source) flushSync(() => setBusy(focusUnsafe.current))
-        else setBusy(focusUnsafe.current)
+        if (source) flushSync(endBusy)
+        else endBusy()
+        setSavingTab(null)
         if (source)
           requestAnimationFrame(() => {
             const active = window.document.activeElement
@@ -1422,8 +1425,7 @@ function App() {
 
   async function openFolder(recentId?: string): Promise<WorkspaceState | null> {
     if (busyRef.current) return null
-    busyRef.current = true
-    setBusy(true)
+    startBusy()
     setError('')
     try {
       const next = await (recentId
@@ -1445,15 +1447,13 @@ function App() {
       )
       return null
     } finally {
-      busyRef.current = focusUnsafe.current
-      setBusy(focusUnsafe.current)
+      endBusy()
     }
   }
 
   async function openFile(path: string, owner?: string): Promise<void> {
     if (busyRef.current) return
-    busyRef.current = true
-    setBusy(true)
+    startBusy()
     setError('')
     try {
       const next = await window.hibi.openWorkspaceFile(path)
@@ -1474,8 +1474,7 @@ function App() {
         error instanceof Error ? error.message : 'Could not open this file.',
       )
     } finally {
-      busyRef.current = focusUnsafe.current
-      setBusy(focusUnsafe.current)
+      endBusy()
     }
   }
 
@@ -1493,8 +1492,7 @@ function App() {
 
   async function renameFile(name: string) {
     if (busyRef.current) return
-    busyRef.current = true
-    setBusy(true)
+    startBusy()
     setError('')
     try {
       await acceptOperationDocument(await window.hibi.renameDocument(name))
@@ -1504,8 +1502,7 @@ function App() {
         error instanceof Error ? error.message : 'Could not rename this file.',
       )
     } finally {
-      busyRef.current = focusUnsafe.current
-      setBusy(focusUnsafe.current)
+      endBusy()
     }
   }
 
@@ -1549,8 +1546,7 @@ function App() {
       throw new Error(
         'Another file operation is in progress. Wait for it to finish, then try again.',
       )
-    busyRef.current = true
-    setBusy(true)
+    startBusy()
     try {
       const result = await window.hibi.workspaceAction(action)
       if (result) {
@@ -1572,8 +1568,7 @@ function App() {
       }
       return result
     } finally {
-      busyRef.current = focusUnsafe.current
-      setBusy(focusUnsafe.current)
+      endBusy()
     }
   }
 
@@ -1592,8 +1587,7 @@ function App() {
       (split ? split[side] !== tabId || split.active !== side : side !== 'left')
     )
       return null
-    busyRef.current = true
-    setBusy(true)
+    startBusy()
     try {
       const result = await window.hibi.attachMedia(files, target.revision)
       if (!result) return null
@@ -1601,16 +1595,14 @@ function App() {
       setWorkspace(await window.hibi.getWorkspace())
       return result.attachments
     } finally {
-      busyRef.current = focusUnsafe.current
       // Restore editor editability before the caller inserts its captured selection.
-      flushSync(() => setBusy(focusUnsafe.current))
+      flushSync(endBusy)
     }
   }
 
   async function openDroppedFile(file: File) {
     if (busyRef.current || dialogs.isOpen()) return
-    busyRef.current = true
-    setBusy(true)
+    startBusy()
     try {
       const result = await window.hibi.openDroppedFile(file)
       if (result?.document) {
@@ -1626,8 +1618,7 @@ function App() {
           : 'Could not open the dropped file.',
       )
     } finally {
-      busyRef.current = focusUnsafe.current
-      setBusy(focusUnsafe.current)
+      endBusy()
     }
   }
 
@@ -1637,8 +1628,7 @@ function App() {
     replaceLocal = false,
   ) {
     if (busyRef.current || dialogs.isOpen()) return
-    busyRef.current = true
-    setBusy(true)
+    startBusy()
     try {
       const next = await operation()
       if (!next) return
@@ -1663,8 +1653,7 @@ function App() {
           : 'Could not open this document.',
       )
     } finally {
-      busyRef.current = focusUnsafe.current
-      setBusy(focusUnsafe.current)
+      endBusy()
     }
   }
 
@@ -1674,16 +1663,14 @@ function App() {
     if (!left || !currentDocument.current?.tabs.some((tab) => tab.id === id))
       return
     if (left !== id) {
-      busyRef.current = true
-      setBusy(true)
+      startBusy()
       try {
         await focusRetainedTab(id)
       } catch (error) {
         setError(error instanceof Error ? error.message : String(error))
         return
       } finally {
-        busyRef.current = focusUnsafe.current
-        setBusy(focusUnsafe.current)
+        endBusy()
       }
     }
     if (currentDocument.current?.tabId === id) {
@@ -1759,8 +1746,7 @@ function App() {
         return false
       }
     } finally {
-      busyRef.current = focusUnsafe.current
-      setBusy(focusUnsafe.current)
+      endBusy()
     }
   }
 
@@ -1787,8 +1773,7 @@ function App() {
     )
     if (currentDocument.current?.tabId === id && !focusPending.current) return
     focusPending.current = true
-    busyRef.current = true
-    setBusy(true)
+    startBusy()
     const task = focusQueue.current.then(async () => {
       if (currentDocument.current?.tabId === id) return
       try {
@@ -1801,8 +1786,7 @@ function App() {
     await task
     if (focusQueue.current === task) {
       focusPending.current = false
-      busyRef.current = focusUnsafe.current
-      setBusy(focusUnsafe.current)
+      endBusy()
       const latest = splitTabsRef.current
       const actual = currentDocument.current?.tabId
       if (
@@ -1833,16 +1817,14 @@ function App() {
         ? 'right'
         : current.active
     if (active === 'right' && current.left !== current.right) {
-      busyRef.current = true
-      setBusy(true)
+      startBusy()
       try {
         await focusRetainedTab(current.left)
       } catch (error) {
         setError(error instanceof Error ? error.message : String(error))
         return
       } finally {
-        busyRef.current = focusUnsafe.current
-        setBusy(focusUnsafe.current)
+        endBusy()
       }
     }
     setSelectedMode(current.leftMode)
@@ -2043,8 +2025,7 @@ function App() {
           })
           .result.then(async (id) => {
             if (!id || busyRef.current) return
-            busyRef.current = true
-            setBusy(true)
+            startBusy()
             try {
               const next = await window.hibi.restoreVersion(id)
               if (!next) return
@@ -2053,8 +2034,7 @@ function App() {
             } catch (error) {
               setError(String(error))
             } finally {
-              busyRef.current = focusUnsafe.current
-              setBusy(focusUnsafe.current)
+              endBusy()
             }
           })
         break
@@ -2711,7 +2691,11 @@ function App() {
                 )
               }
               mode={paneMode}
-              disabled={busy || !addonHost.ready || addonHost.reloading}
+              disabled={
+                (busy && savingTab !== paneDocument.tabId) ||
+                !addonHost.ready ||
+                addonHost.reloading
+              }
               findOpen={findOpen && active && !settingsOpen}
               onCloseFind={() => setFindOpen(false)}
             />

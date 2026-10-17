@@ -14,6 +14,7 @@ import {
   splitTab,
 } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
+import { renameDocument } from './rename.mjs'
 
 test('math detection respects code, escaped delimiters, and currency spacing', () => {
   for (const source of ['$x^2$', '$$\nx^2\n$$', '$2+2$'])
@@ -165,6 +166,18 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
   )
   const saved = await readFile(file, 'utf8')
   assert.equal(saved, initial.replace('$x^2$', '$x^3$'))
+  // Saving the draft to a file keeps its flavor choice under the new document id.
+  assert.equal(
+    await page.evaluate(
+      async () =>
+        JSON.parse(
+          localStorage.getItem(
+            `hibi:flavor:${(await window.hibi.getDocument()).id}`,
+          ),
+        ).dialect,
+    ),
+    'markdown.github',
+  )
   await pressShortcut(app, `${mod}+Shift+o`)
   await page.getByRole('button', { name: /new workspace file/i }).waitFor()
   await choose('export workspace to html')
@@ -434,6 +447,27 @@ test('split focus preserves each file flavor', {
     () => document.querySelectorAll('.editor-page[data-side]').length === 0,
   )
   assert.equal(await page.locator('.tiptap .github-alert').count(), 0)
+  const beforeRename = await page.evaluate(() => window.hibi.getDocument())
+  await renameDocument(app, page, 'renamed')
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).id !== id,
+    beforeRename.id,
+  )
+  // The renderer copies the flavor choice when it receives the rename reply.
+  await page.waitForFunction(
+    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+  )
+  assert.deepEqual(
+    await page.evaluate(async () =>
+      JSON.parse(
+        localStorage.getItem(
+          `hibi:flavor:${(await window.hibi.getDocument()).id}`,
+        ),
+      ),
+    ),
+    { dialect: 'markdown', syntax: 'auto' },
+  )
 })
 
 test('rich editor survives document-only syntax and rebuilds for flavor changes', {

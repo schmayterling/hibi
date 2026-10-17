@@ -767,6 +767,28 @@ test('the capture window renders markdown like the main editor', {
     join(workspace, 'Reading list.md'),
   )
   await page.locator('.tiptap h1').getByText('Reading list').waitFor()
+  // Hosted macOS sometimes measures block markers; record what moves the caret.
+  await page.evaluate(() => {
+    const { editor } = document.querySelector('.tiptap')
+    const started = performance.now()
+    const log = []
+    window.parityLog = log
+    const record = (event) => {
+      if (log.length === 20) log.shift()
+      log.push([
+        Math.round(performance.now() - started),
+        event,
+        editor.state.selection.head,
+        editor.isFocused,
+        document.hasFocus(),
+      ])
+    }
+    for (const event of ['selectionUpdate', 'focus', 'blur'])
+      editor.on(event, () => record(event))
+    for (const event of ['focus', 'blur'])
+      window.addEventListener(event, () => record(`window ${event}`))
+    window.parityEditor = editor
+  })
   const capture = await openCapture(app, page)
   const shape = async (editor) => {
     const root = editor.locator('.tiptap[contenteditable="true"]')
@@ -784,19 +806,36 @@ test('the capture window renders markdown like the main editor', {
           view.posAtDOM(paragraph, paragraph.childNodes.length)
       )
     })
-    return root.evaluate((element) => ({
-      headings: element.querySelectorAll('h1').length,
-      tasks: element.querySelectorAll('ul[data-type="taskList"] > li').length,
-      checkboxes: element.querySelectorAll('input[type="checkbox"]').length,
-      bold: element.querySelectorAll('strong').length,
-      markers: [...element.querySelectorAll('.markdown-marker')].filter(
+    return root.evaluate((element) => {
+      const markers = [...element.querySelectorAll('.markdown-marker')].filter(
         (marker) => marker.getClientRects().length,
-      ).length,
-      heading: getComputedStyle(element.querySelector('h1')).fontSize,
-      text: getComputedStyle(element.querySelector('p')).lineHeight,
-    }))
+      )
+      const { selection } = element.editor.state
+      return {
+        shape: {
+          headings: element.querySelectorAll('h1').length,
+          tasks: element.querySelectorAll('ul[data-type="taskList"] > li')
+            .length,
+          checkboxes: element.querySelectorAll('input[type="checkbox"]').length,
+          bold: element.querySelectorAll('strong').length,
+          markers: markers.length,
+          heading: getComputedStyle(element.querySelector('h1')).fontSize,
+          text: getComputedStyle(element.querySelector('p')).lineHeight,
+        },
+        // Read with the marker count so a later caret move cannot hide the cause.
+        diagnostic: {
+          sameEditor: element.editor === window.parityEditor,
+          head: selection.head,
+          block: selection.$head.parent.textContent,
+          markers: markers.map((marker) => marker.dataset.marker),
+          log: window.parityLog?.slice(),
+        },
+      }
+    })
   }
-  const main = await shape(page)
+  const { shape: main, diagnostic } = await shape(page)
+  if (main.markers)
+    console.error('quick note parity:', JSON.stringify(diagnostic))
   assert.deepEqual(main, {
     headings: 1,
     tasks: 2,
@@ -806,7 +845,7 @@ test('the capture window renders markdown like the main editor', {
     heading: main.heading,
     text: main.text,
   })
-  assert.deepEqual(await shape(capture), main)
+  assert.deepEqual((await shape(capture)).shape, main)
 })
 
 test('a stalled save keeps what was typed meanwhile', {

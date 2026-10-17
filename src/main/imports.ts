@@ -7,7 +7,7 @@ import {
   rmdir,
   writeFile,
 } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
+import { basename, dirname, join, relative, sep } from 'node:path'
 import { type BrowserWindow, dialog } from 'electron'
 import type { Importer, ImportRequest, ImportResult } from '../shared/imports'
 import { convertImport, getImporters } from './addons'
@@ -18,6 +18,7 @@ import {
 } from './import-files'
 import { refreshWorkspace, workspaceId, workspaceRoot } from './workspace'
 import { workspaceMetadata } from './workspace-metadata'
+import { isPathInside } from './workspace-paths'
 
 export function listImporters(): Importer[] {
   return [
@@ -56,14 +57,7 @@ export async function importIntoWorkspace(
   })
   if (selected.canceled || !selected.filePaths[0]) return null
   const source = await realpath(selected.filePaths[0])
-  const inside = relative(source, root)
-  if (
-    request.source === 'folder' &&
-    (!inside ||
-      (!inside.startsWith(`..${sep}`) &&
-        inside !== '..' &&
-        !isAbsolute(inside)))
-  )
+  if (request.source === 'folder' && isPathInside(source, root))
     throw new Error(
       'Choose a source folder that does not contain the destination workspace.',
     )

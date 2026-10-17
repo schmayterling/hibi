@@ -2,6 +2,7 @@ import { constants } from 'node:fs'
 import { lstat, open, readdir, realpath } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import type { ImportFile } from '../shared/imports'
+import { isPathInside } from './workspace-paths.ts'
 import { openBoundedZip, readZipEntry } from './zip-reader.ts'
 
 export const IMPORT_LIMITS = {
@@ -98,8 +99,7 @@ export async function readImportFolder(root: string) {
     entries = 0
   async function walk(directory: string) {
     const actual = await realpath(directory)
-    const child = relative(root, actual)
-    if (isAbsolute(child) || child === '..' || child.startsWith(`..${sep}`))
+    if (!isPathInside(root, actual))
       throw new Error('An import folder points outside the selected folder.')
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const path = relative(root, join(directory, entry.name))

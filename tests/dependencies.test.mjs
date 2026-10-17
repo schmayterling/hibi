@@ -9,10 +9,11 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, posix, resolve, win32 } from 'node:path'
 import test from 'node:test'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import { executableFile, findTool } from '../src/main/tool-paths.ts'
 import {
@@ -96,6 +97,72 @@ test('automatic tool discovery excludes workspace executables and symlink target
     process.env.PATH = bin
     assert.equal(await findTool(command, workspace), null)
     assert.equal(await executableFile(link), await realpath(executable))
+  }
+})
+
+test('tool exclusion keeps containment boundaries on posix and windows', async () => {
+  const { outputFiles } = await build({
+    entryPoints: [
+      fileURLToPath(new URL('../src/main/tool-paths.ts', import.meta.url)),
+    ],
+    bundle: true,
+    write: false,
+    platform: 'node',
+    format: 'cjs',
+  })
+  const evaluate = new Function(
+    'require',
+    'module',
+    'exports',
+    outputFiles[0].text,
+  )
+  const require = createRequire(import.meta.url)
+  for (const paths of [posix, win32]) {
+    const module = { exports: {} }
+    const mocks = {
+      'node:path': paths,
+      'node:fs/promises': {
+        realpath: async (path) => path,
+        stat: async () => ({ isFile: () => true }),
+        access: async () => {},
+      },
+    }
+    evaluate((id) => mocks[id] ?? require(id), module, module.exports)
+    const root = paths === win32 ? 'C:\\notes' : '/notes'
+    for (const [candidate, excluded] of [
+      [root, true],
+      [root + paths.sep, true],
+      [paths.join(root, 'child', 'tool'), true],
+      [paths.join(root, '..tools', 'tool'), true],
+      [paths.join(root, 'child', '..', 'tool'), true],
+      [`${root.replaceAll('\\', '/')}/tool`, true],
+      [paths.dirname(root), false],
+      [`${root}-copy${paths.sep}tool`, false],
+      [paths.join(root, '..', 'other', 'tool'), false],
+      [paths === win32 ? 'D:\\notes\\tool' : '/other/tool', false],
+    ])
+      assert.equal(
+        await module.exports.executableFile(candidate, root),
+        excluded ? null : candidate,
+        candidate,
+      )
+    if (paths === win32)
+      for (const [candidate, root, excluded] of [
+        ['c:\\NOTES\\tool', 'C:\\notes\\tool', true],
+        ['\\\\server\\share\\notes', '\\\\server\\share\\notes', true],
+        ['\\\\server\\share\\notes\\tool', '\\\\server\\share\\notes', true],
+        [
+          '\\\\server\\share\\notes-copy\\tool',
+          '\\\\server\\share\\notes',
+          false,
+        ],
+        ['\\\\server\\other\\notes\\tool', '\\\\server\\share\\notes', false],
+      ])
+        assert.equal(
+          await module.exports.executableFile(candidate, root),
+          excluded ? null : candidate,
+          candidate,
+        )
   }
 })
 

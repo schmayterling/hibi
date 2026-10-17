@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { type BigIntStats, constants } from 'node:fs'
 import { link, lstat, open, realpath, unlink } from 'node:fs/promises'
-import { dirname, isAbsolute, relative, sep } from 'node:path'
+import { dirname, relative, sep } from 'node:path'
 import { MAX_DOCUMENT_BYTES } from '../shared/desktop'
 import type { WorkspaceTarget } from '../shared/foundation-contracts'
 import type {
@@ -29,7 +29,10 @@ import {
   createExclusiveText,
 } from './workspace-exclusive-create'
 import { renameWithTableLayout } from './workspace-layout'
-import { resolveWorkspaceEntry } from './workspace-paths'
+import {
+  isPathInside as inside,
+  resolveWorkspaceEntry,
+} from './workspace-paths'
 
 const MAX_BINARY_BYTES = 16 * 1024 * 1024
 
@@ -44,11 +47,6 @@ const disposed = (): WorkspaceFileResult<never> => ({
   code: 'disposed',
   message: 'This addon is no longer active.',
 })
-
-function inside(root: string, candidate: string): boolean {
-  const path = relative(root, candidate)
-  return !isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`)
-}
 
 type ParentIdentity = { canonical: string; dev: number; ino: number }
 

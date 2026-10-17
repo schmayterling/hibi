@@ -1,8 +1,9 @@
 import { constants } from 'node:fs'
 import { lstat, open, readFile, realpath, stat } from 'node:fs/promises'
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { marked } from 'marked'
+import { isPathInside } from './workspace-paths.ts'
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
@@ -133,14 +134,10 @@ export async function resolveDocumentMediaPath(
     }
   }
   for (const candidate of candidates) {
-    const part = relative(base, candidate)
-    if (part === '..' || part.startsWith(`..${sep}`) || isAbsolute(part))
-      continue
+    if (!isPathInside(base, candidate)) continue
     const real = await realpath(candidate).catch(() => null)
     if (!real) continue
-    const child = relative(canonicalBase, real)
-    if (child === '..' || child.startsWith(`..${sep}`) || isAbsolute(child))
-      continue
+    if (!isPathInside(canonicalBase, real)) continue
     if (
       await stat(real).then(
         (info) => info.isFile(),

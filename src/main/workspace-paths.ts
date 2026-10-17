@@ -1,9 +1,15 @@
 import { lstat } from 'node:fs/promises'
-import { isAbsolute, join } from 'node:path'
+import { isAbsolute, join, relative, sep } from 'node:path'
 
 const missing = (error: NodeJS.ErrnoException) => {
   if (error.code !== 'ENOENT') throw error
   return null
+}
+
+/** inclusive lexical containment; filesystem checks stay with callers. */
+export function isPathInside(parent: string, child: string): boolean {
+  const path = relative(parent, child)
+  return !isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`)
 }
 
 export function validateWorkspaceName(name: unknown): asserts name is string {

@@ -38,6 +38,7 @@ import {
   writeText,
 } from './files'
 import { recordVersion } from './history'
+import { isPathInside } from './workspace-paths'
 
 let path: string | null = null
 let pendingPath: string | null = null
@@ -460,11 +461,7 @@ export async function confirmDiscardAll(
 }
 function containsPath(parent: string, file: string | null) {
   if (!file) return false
-  const child = relative(parent, file)
-  return (
-    child === '' ||
-    (!isAbsolute(child) && child !== '..' && !child.startsWith(`..${sep}`))
-  )
+  return isPathInside(parent, file)
 }
 function removeTabs(window: BrowserWindow, ids: Set<string>) {
   storeTab()

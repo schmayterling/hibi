@@ -1,13 +1,5 @@
 import { lstat, mkdir } from 'node:fs/promises'
-import {
-  basename,
-  dirname,
-  extname,
-  isAbsolute,
-  join,
-  relative,
-  sep,
-} from 'node:path'
+import { basename, dirname, extname, join, relative, sep } from 'node:path'
 import { type BrowserWindow, shell } from 'electron'
 import type { WorkspaceActionResult } from '../shared/workspace'
 import {
@@ -29,7 +21,11 @@ import {
 } from './workspace'
 import { copyEntry, moveEntry } from './workspace-entry-transfer'
 import { renameWithTableLayout } from './workspace-layout'
-import { resolveWorkspaceEntry, validateWorkspaceName } from './workspace-paths'
+import {
+  isPathInside,
+  resolveWorkspaceEntry,
+  validateWorkspaceName,
+} from './workspace-paths'
 
 export { validateWorkspaceName } from './workspace-paths'
 
@@ -39,11 +35,7 @@ const missing = (error: NodeJS.ErrnoException) => {
 }
 function contains(parent: string, child: string | null) {
   if (!child) return false
-  const path = relative(parent, child)
-  return (
-    !path ||
-    (!isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`))
-  )
+  return isPathInside(parent, child)
 }
 async function unique(parent: string, name: string) {
   const extension = extname(name),

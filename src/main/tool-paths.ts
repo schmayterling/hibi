@@ -1,6 +1,7 @@
 import { constants } from 'node:fs'
 import { access, realpath, stat } from 'node:fs/promises'
-import { delimiter, isAbsolute, join, relative, sep } from 'node:path'
+import { delimiter, isAbsolute, join } from 'node:path'
+import { isPathInside } from './workspace-paths.ts'
 
 export function toolSearchPath() {
   return [
@@ -29,12 +30,7 @@ export async function executableFile(path: string, excluded?: string | null) {
   if (!resolved) return null
   if (excluded) {
     const root = await realpath(excluded).catch(() => excluded)
-    const child = relative(root, resolved)
-    if (
-      !child ||
-      (child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child))
-    )
-      return null
+    if (isPathInside(root, resolved)) return null
   }
   try {
     if (!(await stat(resolved)).isFile()) return null

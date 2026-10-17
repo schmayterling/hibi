@@ -329,7 +329,16 @@ export function attachEditorInteractions(adapter: Adapter) {
   const outside = (event: PointerEvent) => {
     if (!menu.contains(event.target as Node)) closeMenu()
   }
-  const scroll = () => invalidate()
+  // Revealing an item scrolls the panel itself; only other scrolls move its anchor.
+  const scroll = (event: Event) => {
+    const target = event.target
+    if (
+      target instanceof Node &&
+      (menu.contains(target) || hover.contains(target))
+    )
+      return
+    invalidate()
+  }
   menu.addEventListener('pointerdown', (event) => event.preventDefault())
   adapter.element.addEventListener('pointermove', pointerMove)
   adapter.element.addEventListener('pointerleave', closeHover)

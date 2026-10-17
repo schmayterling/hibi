@@ -14,6 +14,7 @@ import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { NATIVE_COMPILER_READY_TIMEOUT, waitForAsync } from './poll.mjs'
 import { renameDocument } from './rename.mjs'
+import { recordToasts } from './toasts.mjs'
 import { uiName } from './ui.mjs'
 
 test('typst documents and markdown blocks preview locally, export, and preserve source', {
@@ -54,6 +55,25 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   const read = () => page.evaluate(() => window.hibi.getDocument())
   await waitForDocumentEditor(app, page)
+  // Record which native compiler phases report, for a slow PDF export below.
+  await app.evaluate(({ utilityProcess }) => {
+    const phases = []
+    globalThis.typstPhases = phases
+    const fork = utilityProcess.fork
+    utilityProcess.fork = (...args) => {
+      const child = fork(...args)
+      if (!String(args[0]).endsWith('typst-worker.js')) return child
+      const started = performance.now()
+      child.on('message', (message) => {
+        if (phases.length === 20) phases.shift()
+        phases.push([
+          Math.round(performance.now() - started),
+          message?.phase ?? (message?.pdf ? 'pdf' : 'result'),
+        ])
+      })
+      return child
+    }
+  })
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-typst').click()
@@ -194,9 +214,28 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   await app.evaluate(({ dialog }, path) => {
     dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })
   }, pdf)
+  const stopToasts = await recordToasts(page)
+  await app.evaluate(() => {
+    globalThis.typstPhases.length = 0
+  })
   await choose('export typst pdf')
   // PDF export can queue behind a preview; each native compile has a 10s limit.
-  await page.getByText(/exported pdf to/i).waitFor({ timeout: 25000 })
+  await page
+    .getByText(/exported pdf to/i)
+    .waitFor({ timeout: 25000 })
+    .catch(async (error) => {
+      try {
+        console.error(
+          'typst pdf export:',
+          JSON.stringify({
+            toasts: await stopToasts(),
+            phases: await app.evaluate(() => globalThis.typstPhases),
+          }),
+        )
+      } catch {}
+      throw error
+    })
+  await stopToasts()
   assert.equal((await readFile(pdf)).subarray(0, 5).toString(), '%PDF-')
   await choose('insert typst block')
   const formatDialog = page.getByRole('dialog', {

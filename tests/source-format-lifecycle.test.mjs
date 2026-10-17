@@ -89,8 +89,9 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
       stopElectronTree(app.process())
     }, 8000)
     let failed = false
+    let page
     try {
-      const page = await app.firstWindow()
+      page = await app.firstWindow()
       mark('firstWindow')
       page.setDefaultTimeout(5000)
       const editor = page.getByRole('textbox', {
@@ -131,6 +132,14 @@ test('lazy rich startup applies view attributes after mounting and accepts nativ
       failed = true
       attempts[attempt].error = String(error).slice(0, 180)
       report('failure')
+      // Capture the renderer before cleanup stops it.
+      if (page)
+        try {
+          console.error(
+            'source format startup:',
+            JSON.stringify(await startupDiagnostics(app, page)),
+          )
+        } catch {}
       throw error
     } finally {
       mark('cleanupStart')

@@ -116,10 +116,13 @@ export const electron = {
       rows: [],
     }
     let slowStartTimer
+    let slowStart
     let closing = false
     application.close = async ({ waitForTransport = false } = {}) => {
       closing = true
       clearTimeout(slowStartTimer)
+      // A failed startup wait closes the app; let its report finish first.
+      await slowStart
       const child = application.process()
       let timer, diagnosticTimer
       try {
@@ -455,8 +458,7 @@ export const electron = {
         })
         for (const window of BrowserWindow.getAllWindows()) show(window)
       })
-      slowStartTimer = setTimeout(async () => {
-        if (closing || page.isClosed()) return
+      const reportSlowStart = async () => {
         try {
           let readinessTimer
           const ready = await Promise.race([
@@ -481,9 +483,8 @@ export const electron = {
             }),
           ])
           clearTimeout(readinessTimer)
-          if (ready || closing) return
+          if (ready) return
           const snapshot = await startupDiagnostics(application, page)
-          if (closing) return
           const dom = snapshot.renderer.dom
           if (
             dom?.settingsOpen ||
@@ -497,6 +498,10 @@ export const electron = {
         } catch {
           // Diagnostics must not change test results.
         }
+      }
+      slowStartTimer = setTimeout(() => {
+        if (closing || page.isClosed()) return
+        slowStart = reportSlowStart()
       }, 4000)
       slowStartTimer.unref()
     }

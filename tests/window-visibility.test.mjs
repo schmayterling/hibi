@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { stopElectronTree } from './electron.mjs'
+import { electronTestArgs, stopElectronTree } from './electron.mjs'
 
 test('closed windows discard visibility listeners without changing live pages', {
   timeout: 30000,
@@ -25,18 +25,14 @@ test('closed windows discard visibility listeners without changing live pages', 
   delete env.ELECTRON_RENDERER_URL
   const child = spawn(
     createRequire(import.meta.url)('electron'),
-    [
+    electronTestArgs([
       '--require',
       fileURLToPath(
         new URL('./fixtures/window-visibility.cjs', import.meta.url),
       ),
       resolve('.'),
-      '--hibi-test',
       `--user-data-dir=${join(root, 'profile')}`,
-      ...(process.platform === 'linux'
-        ? ['--use-gl=angle', '--use-angle=swiftshader']
-        : []),
-    ],
+    ]),
     {
       env,
       detached: process.platform !== 'win32',
@@ -67,7 +63,10 @@ test('closed windows discard visibility listeners without changing live pages', 
   for (const row of result.late)
     await t.test(`late ${row.event} after destruction`, () => {
       assert.equal(row.destroyed, true)
+      assert.ok(row.names.includes('visibilityChanged'))
       assert.equal(row.error, null)
+      assert.equal(row.preserved, true)
+      assert.equal(row.calls, 1)
     })
   await t.test(
     'native macOS page visibility still follows live windows',

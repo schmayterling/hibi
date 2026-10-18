@@ -23,14 +23,32 @@ dialog.showSaveDialog = async () => ({ canceled: true })
 async function probe() {
   for (const event of ['show', 'hide', 'minimize', 'maximize', 'restore']) {
     const window = new BrowserWindow({ show: false, focusable: false })
+    const listeners = window.listeners(event)
+    const otherListeners = listeners.filter(
+      (listener) => listener.name !== 'visibilityChanged',
+    )
+    let calls = 0
+    const keep = () => calls++
+    window.on(event, keep)
     window.destroy()
+    const remaining = window.listeners(event)
+    const beforeEmit = calls
     let error = null
     try {
       window.emit(event)
     } catch (caught) {
       error = caught.stack
     }
-    result.late.push({ event, destroyed: window.isDestroyed(), error })
+    result.late.push({
+      event,
+      destroyed: window.isDestroyed(),
+      error,
+      names: listeners.map((listener) => listener.name),
+      preserved: [keep, ...otherListeners].every((listener) =>
+        remaining.includes(listener),
+      ),
+      calls: calls - beforeEmit,
+    })
   }
   // Native visibility and minimization are the affected macOS behavior.
   // Run without Playwright: focus emulation keeps document.visibilityState visible.

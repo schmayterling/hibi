@@ -217,7 +217,10 @@ export function workspaceGroupMenuItems(
     {
       id: 'copy-path',
       label: 'Copy relative paths',
-      onSelect: () => navigator.clipboard.writeText(paths.join('\n')),
+      onSelect: () =>
+        navigator.clipboard.writeText(
+          entries.map((entry) => entry.path).join('\n'),
+        ),
     },
     {
       id: 'delete',

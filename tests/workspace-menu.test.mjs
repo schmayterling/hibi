@@ -1,12 +1,31 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { runEach, selectedRoots } from '../src/renderer/src/workspace-menu.ts'
+import {
+  runEach,
+  selectedRoots,
+  workspaceGroupMenuItems,
+} from '../src/renderer/src/workspace-menu.ts'
 
 test('group actions skip selected descendants and stop at cancellation or errors', async () => {
   assert.deepEqual(
     selectedRoots(['docs', 'docs/a.md', 'docs-old/b.md', 'docs/sub/c.md']),
     ['docs', 'docs-old/b.md'],
   )
+  const copied = []
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { clipboard: { writeText: async (text) => copied.push(text) } },
+  })
+  const items = workspaceGroupMenuItems(
+    { workspaceId: 'workspace', workspaceGeneration: 1 },
+    [
+      { path: 'docs', name: 'docs', kind: 'folder' },
+      { path: 'docs/a.md', name: 'a.md', kind: 'file' },
+    ],
+    { dialogs: {}, onAction: async () => null },
+  )
+  await items.find((item) => item.id === 'copy-path').onSelect()
+  assert.deepEqual(copied, ['docs\ndocs/a.md'])
 
   const ran = []
   await runEach(['a', 'b', 'c'], 'moved', async (path) => {

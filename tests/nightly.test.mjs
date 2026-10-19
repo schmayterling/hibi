@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -464,6 +465,25 @@ test('release workflow always builds nightlies and gates stable publication on t
     assert.equal(packageStep.env[name], undefined)
   for (const name of ['APPLE_API_KEY_ID', 'APPLE_API_ISSUER', 'APPLE_TEAM_ID'])
     assert.match(packageStep.env[name], /startsWith\(matrix\.platform/)
+  // Installers are built and smoke-tested only by the release workflow.
+  for (const file of readdirSync('.github/workflows')) {
+    if (file === 'nightly.yml') continue
+    const { jobs } = parse(readFileSync(`.github/workflows/${file}`, 'utf8'))
+    for (const job of Object.values(jobs))
+      for (const { run = '' } of job.steps ?? [])
+        assert.doesNotMatch(run, /electron-builder(?![^\n]*--dir)/, file)
+  }
+  const linuxSteps = [
+    'Install Flatpak packaging tools',
+    'Inspect Linux installers',
+    'Launch installed Linux packages',
+  ].map((name) => steps.find((step) => step.name === name))
+  for (const step of linuxSteps)
+    assert.equal(step.if, "startsWith(matrix.platform, 'linux-')")
+  assert.deepEqual(
+    linuxSteps.map((step) => steps.indexOf(step) > steps.indexOf(packageStep)),
+    [false, true, true],
+  )
   const verifyMac = steps.find(
     (step) => step.name === 'Verify signed macOS installers',
   )

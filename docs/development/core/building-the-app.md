@@ -20,7 +20,7 @@ On Linux, `npm run dist` creates an AppImage, a Debian package, and a Flatpak bu
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 ```
 
-The **linux packages** workflow builds all three formats on x64 and arm64 when a pull request changes packaging inputs, then installs and briefly launches the Debian and Flatpak packages.
+Pull request and `main` checks only build the unpacked app. Installers are built by the nightly and release workflow, which also installs and briefly launches the Debian and Flatpak packages on x64 and arm64.
 
 ## Nightly builds
 

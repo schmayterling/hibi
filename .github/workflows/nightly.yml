@@ -218,6 +218,25 @@ jobs:
             -c.extraMetadata.version="$RELEASE_VERSION" \
             -c.buildVersion="${RELEASE_VERSION%%-*}.$GITHUB_RUN_NUMBER" \
             "-c.artifactName=hibi-\${version}-\${os}-\${arch}.\${ext}"
+      - name: Inspect Linux installers
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          test "$(ls release/*.AppImage release/*.deb release/*.flatpak | wc -l)" = 3
+          test "$(dpkg-deb --field release/*.deb Architecture)" = "$(dpkg --print-architecture)"
+          dpkg-deb --contents release/*.deb | grep -F ./usr/share/applications/com.ryanaque.hibi.desktop
+          flatpak install --user --noninteractive --bundle release/*.flatpak
+          flatpak info --user com.ryanaque.hibi
+      # Catch immediate startup failures: each launch must still be running after 20 seconds.
+      - name: Launch installed Linux packages
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          sudo apt-get install -y xvfb ./release/*.deb
+          for command in hibi 'flatpak run com.ryanaque.hibi'; do
+            launch_exit=0
+            # shellcheck disable=SC2086
+            timeout --kill-after=5 20 dbus-run-session -- xvfb-run --auto-servernum $command || launch_exit=$?
+            test "$launch_exit" = 124
+          done
       - name: Verify signed macOS installers
         if: startsWith(matrix.platform, 'macos-')
         env:

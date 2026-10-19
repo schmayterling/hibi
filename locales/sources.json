@@ -671,6 +671,9 @@
   "1a9f084bf2db": [
     "src/main/document.ts"
   ],
+  "981b2d03403d": [
+    "src/main/file-associations.ts"
+  ],
   "8bb83f8c1719": [
     "src/addons/vim/native.ts"
   ],

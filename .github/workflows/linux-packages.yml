@@ -61,6 +61,16 @@ jobs:
           dpkg-deb --contents release/*.deb | grep -F ./usr/share/applications/com.ryanaque.hibi.desktop
           flatpak install --user --noninteractive --bundle release/*.flatpak
           flatpak info --user com.ryanaque.hibi
+      # Catch immediate startup failures: each launch must still be running after 20 seconds.
+      - name: Launch installed packages
+        run: |
+          sudo apt-get install -y xvfb ./release/*.deb
+          for command in hibi 'flatpak run com.ryanaque.hibi'; do
+            status=0
+            # shellcheck disable=SC2086
+            timeout --kill-after=5 20 dbus-run-session -- xvfb-run --auto-servernum $command || status=$?
+            test "$status" = 124
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: linux-${{ matrix.arch }}

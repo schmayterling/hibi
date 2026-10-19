@@ -56,10 +56,12 @@ test('nightlies build unchanged revisions daily and include real commits since t
     'mac-arm64.dmg',
     'mac-x64.zip',
     'mac-arm64.zip',
-    'linux-x86_64.AppImage',
+    ...['x64', 'arm64'].flatMap((arch) =>
+      ['AppImage', 'deb', 'flatpak'].map((ext) => `linux-${arch}.${ext}`),
+    ),
   ].map((suffix) => `hibi-${next.version}-${suffix}`)
   const checksums = names
-    .map((name, index) => `${String(index).repeat(64)}  ./${name}`)
+    .map((name, index) => `${index.toString(16).repeat(64)}  ./${name}`)
     .join('\n')
   const reports = platforms.map((platform) => ({
     platform,
@@ -160,11 +162,11 @@ test('nightlies build unchanged revisions daily and include real commits since t
   )
   assert.match(
     notes,
-    /\[windows\].+ • \[macOS \(intel\)\].+ • \[linux \(appImage\)\]/,
+    /\[windows\].+ • \[macOS \(intel\)\].+ • \[linux x64 \(AppImage\)\].+ • \[linux arm64 \(flatpak\)\]\([^)]+-linux-arm64\.flatpak\)$/m,
   )
   for (const [index, name] of names.entries()) {
     assert.ok(notes.includes(`/releases/download/${next.tag}/${name}`))
-    assert.ok(notes.includes(`\`${String(index).repeat(64)}\``))
+    assert.ok(notes.includes(`\`${index.toString(16).repeat(64)}\``))
   }
   assert.equal(notes.match(/^SHA256 /gm).length, names.length)
   assert.ok(notes.includes('\n## changes\n'))

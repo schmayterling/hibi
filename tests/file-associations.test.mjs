@@ -183,3 +183,12 @@ test('Linux registers a quoted persistent launcher and changes only the selected
     ),
   )
 })
+
+test('Flatpak cannot report sandbox-only defaults as host defaults', async (t) => {
+  const api = await adapter(t, 'linux')
+  process.env.FLATPAK_ID = DESKTOP_APP_ID
+  t.after(() => delete process.env.FLATPAK_ID)
+  assert.equal((await api.getFileAssociations()).available, false)
+  await assert.rejects(api.setFileAssociation('html'), /Open With/)
+  assert.deepEqual(api.state.calls, [])
+})

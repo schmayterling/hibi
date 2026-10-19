@@ -66,6 +66,10 @@ test('workspace files support multiple selection and group actions', {
   const openMenu = async (path, label) => {
     await row(path).click({ button: 'right' })
     await menu.waitFor()
+    // The release that ends the right-click must not dismiss the menu.
+    assert.ok(
+      await menu.evaluate((element) => element.matches(':popover-open')),
+    )
     assert.match(await menu.getAttribute('aria-label'), label)
     return menu
       .getByRole('menuitem')

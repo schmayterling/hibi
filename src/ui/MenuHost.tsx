@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { sentenceCase } from '../shared/ui-case'
 import { menus } from './menu-store'
@@ -40,15 +40,30 @@ export function MenuHost() {
     host.style.top = `${Math.max(8, Math.min(open.y + 4, innerHeight - bounds.height - 8))}px`
     host.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
   }, [open])
+  // Manual popovers skip native light dismiss, whose release check would close
+  // a context menu that opened on button press (macOS and Linux).
+  useEffect(() => {
+    if (!open) return
+    const outside = (event: PointerEvent) => {
+      if (!element.current?.contains(event.target as Node)) menus.close()
+    }
+    document.addEventListener('pointerdown', outside, true)
+    return () => document.removeEventListener('pointerdown', outside, true)
+  }, [open])
   return createPortal(
     <div
       ref={element}
-      popover="auto"
+      popover="manual"
       role="menu"
       aria-label={menu?.label ?? 'Actions'}
       className="ui-menu"
       onToggle={(event) => {
-        if ((event.nativeEvent as ToggleEvent).newState !== 'closed') return
+        // A queued close from an earlier menu must not close its replacement.
+        if (
+          (event.nativeEvent as ToggleEvent).newState !== 'closed' ||
+          event.currentTarget.matches(':popover-open')
+        )
+          return
         if (open) menus.close()
         if (
           document.activeElement === document.body ||

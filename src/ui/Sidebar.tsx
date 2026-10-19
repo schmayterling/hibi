@@ -264,7 +264,12 @@ export function Sidebar({
   }
   useEffect(() => {
     // A selection the caller replaced, such as another workspace's, starts a new range.
-    if (selectionIds !== chosen.current) anchor.current = null
+    const previous = chosen.current
+    if (
+      selectionIds?.length !== previous?.length ||
+      selectionIds?.some((id, index) => id !== previous?.[index])
+    )
+      anchor.current = null
     chosen.current = selectionIds
     if (picked && picked.length !== selectionIds?.length) {
       chosen.current = picked

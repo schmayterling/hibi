@@ -14,11 +14,19 @@ npm run dist
 
 Build output goes to `release/`. Packaging settings live in `electron-builder.yml`.
 
+On Linux, `npm run dist` creates an AppImage, a Debian package, and a Flatpak bundle. The Flatpak build needs `flatpak` and `flatpak-builder`, plus Flathub as a user remote so it can download the pinned runtime:
+
+```sh
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+```
+
+The **linux packages** workflow builds all three formats on x64 and arm64 when a pull request changes packaging inputs, then installs and briefly launches the Debian and Flatpak packages.
+
 ## Nightly builds
 
-The **nightly** GitHub Actions workflow builds Linux AppImage, Windows installer, and macOS Intel and Apple Silicon packages. It runs checks before publishing a prerelease with download hashes and a changelog. Run it manually from Actions when you need a new build; unchanged revisions are normally skipped.
+The **nightly** GitHub Actions workflow builds Linux AppImage, Debian, and Flatpak packages for x64 and arm64, a Windows installer, and macOS Intel and Apple Silicon packages. It runs checks before publishing a prerelease with download hashes and a changelog. Run it manually from Actions when you need a new build; unchanged revisions still build. See [releases and nightly builds](releases.md) for publication rules.
 
-Windows packages are unsigned. macOS packages use ad-hoc signing without notarization. Distribution signing requires separate credentials.
+Windows and Linux packages are unsigned. macOS packages use Developer ID signing and notarization from repository secrets.
 
 ## Update icons
 

@@ -1,12 +1,12 @@
 # Releases and nightly builds
 
-The updater reads `update.json` from the rolling `nightly-green` (recommended) or `nightly` (all nightlies, including broken builds) release. Publication generates SHA-512 hashes and sizes from the packaged installers with `scripts/update-feed.mjs`. The manifest pins downloads to an immutable dated release, which also contains `latest.yml`, `latest-linux.yml`, and `latest-mac.yml` for electron-updater. A failed package job cannot publish either feed. Broken checks advance only the all-nightlies feed.
+The updater reads `update.json` from the rolling `nightly-green` (recommended) or `nightly` (all nightlies, including broken builds) release. Publication generates SHA-512 hashes and sizes from the packaged installers with `scripts/update-feed.mjs`. The manifest pins downloads to an immutable dated release, which also contains `latest.yml`, `latest-linux.yml`, `latest-linux-arm64.yml`, and `latest-mac.yml` for electron-updater. A failed package job cannot publish either feed. Broken checks advance only the all-nightlies feed.
 
-Before publication, Linux AppImage filenames are normalized from `linux-x86_64` to `linux-x64`. This keeps feeds compatible with older installed updaters that reject underscores, including when checking from macOS or Windows.
+Before publication, Linux package filenames are normalized to `linux-x64` and `linux-arm64`, replacing `x86_64`, `amd64`, and `aarch64`. This keeps feeds compatible with older installed updaters that reject underscores, including when checking from macOS or Windows. Publication fails if two packages would get the same name.
 
-The main process owns channel preferences, feed requests, verified downloads, and installation. Windows NSIS, Linux AppImage, and macOS ZIP updates use electron-updater. The macOS feed includes both architectures, and the manifest keeps DMG entries for older builds while pinning the ZIP hashes for self-updating builds. Restart installation passes through the normal document flush and unsaved-edit confirmation. Nightly ordering uses date and numeric workflow run/attempt, never lexical commit-hash order.
+The main process owns channel preferences, feed requests, verified downloads, and installation. Windows NSIS, Linux AppImage (x64 and arm64), and macOS ZIP updates use electron-updater. Debian and Flatpak packages are published as downloads only. They never appear in `update.json`, because older updaters reject the whole feed when any asset has an unknown extension, and those installs report updates as unavailable. The macOS feed includes both architectures, and the manifest keeps DMG entries for older builds while pinning the ZIP hashes for self-updating builds. Restart installation passes through the normal document flush and unsaved-edit confirmation. Nightly ordering uses date and numeric workflow run/attempt, never lexical commit-hash order.
 
-The **nightly and releases** workflow builds Linux x64, Windows x64, macOS Apple Silicon, and macOS Intel installers from one fixed commit. Every release build compiles the app and runs the full required suite on each platform. Download caches can speed up installation; cached builds and previous test results never certify a release.
+The **nightly and releases** workflow builds Linux x64, Linux arm64, Windows x64, macOS Apple Silicon, and macOS Intel installers from one fixed commit. Linux arm64 builds and checks run on GitHub's native `ubuntu-24.04-arm` runner. Every release build compiles the app and runs the full required suite on each platform. Download caches can speed up installation; cached builds and previous test results never certify a release.
 
 Required checks run in four isolated shards per platform. All four reports must match the packaged commit and platform, and every shard must pass for that platform to be marked successful. Packaging runs once per platform after the checks finish.
 
@@ -30,7 +30,7 @@ Set the repository Actions secret `NIGHTLIES_WEBHOOK_URL` to a Discord webhook U
 
 ## Stable releases
 
-Push a `v<version>` tag that exactly matches the non-prerelease version in `package.json`, such as `v0.1.0`. The same workflow runs the full required checks on all four platforms. A failing, skipped, or cancelled check cannot be promoted to a stable release. Compilation and packaging must also succeed everywhere.
+Push a `v<version>` tag that exactly matches the non-prerelease version in `package.json`, such as `v0.1.0`. The same workflow runs the full required checks on all five platforms. A failing, skipped, or cancelled check cannot be promoted to a stable release. Compilation and packaging must also succeed everywhere.
 
 For local distribution packages, use `npm run dist`. It runs `npm run check` before creating installers. `npm run package` creates an unpacked development app and does not certify a release.
 

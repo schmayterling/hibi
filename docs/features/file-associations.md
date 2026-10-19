@@ -18,6 +18,8 @@ Install Hibi with its Windows installer. Choose **Choose default…** in Hibi to
 
 Keep the AppImage in a permanent location, then choose **Make default**. This requires `xdg-utils`, `shared-mime-info`, and `desktop-file-utils`. If you move the AppImage, repeat the action from its new location. Extensions for the same file type, such as `.html` and `.htm`, may share a default.
 
+The Debian package registers Hibi in **Open with** when it is installed, and **Make default** works as it does for an AppImage. The Flatpak cannot change system defaults from inside its sandbox. Choose Hibi in your desktop's default apps settings or your file manager's **Open with** menu instead.
+
 ## Other builds and addons
 
 Development and preview builds can open files but do not change system defaults. Third-party addon formats can be opened inside Hibi but are not registered with the operating system automatically.

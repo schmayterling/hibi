@@ -110,7 +110,14 @@ Under **About → Updates**, choose **Recommended nightly** for the latest build
 
 While Hibi is open, installed builds check for updates every six hours by default. Use **Check frequency** to choose one, six, twelve, or twenty-four hours. **Check for updates on startup** also checks shortly after Hibi opens; it is on by default and can be turned off without changing the chosen frequency. **Check now** checks immediately. Choose **Download update** when a newer build is available, then **Restart and install** on macOS, Windows, or a Linux AppImage. Hibi asks you to save or discard unsaved edits before restarting; cancelling keeps the app open. Back up your documents before using a nightly.
 
-On macOS, install Hibi in Applications once. Later updates replace the installed app when you choose **Restart and install**. Downloads are verified before installation. Development builds and Linux builds outside an AppImage cannot update themselves.
+On macOS, install Hibi in Applications once. Later updates replace the installed app when you choose **Restart and install**. Downloads are verified before installation. Development builds and Linux builds outside an AppImage cannot update themselves. To update a Debian or Flatpak install, download the newer package for your architecture from the release page and install it over the current one:
+
+```sh
+sudo apt install ./hibi-<version>-linux-x64.deb
+flatpak install --user ./hibi-<version>-linux-x64.flatpak
+```
+
+Use the `arm64` package on 64-bit ARM computers. The Flatpak needs [Flathub](https://flathub.org/setup) set up so it can download its runtime.
 
 Switching channels does not downgrade your installed version. If no build is available yet, or a check or download fails, you can retry from this page.
 

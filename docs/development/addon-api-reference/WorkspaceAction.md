@@ -21,6 +21,8 @@ type WorkspaceAction = {
   path: string
   /** New basename for rename; complete relative destination for copy/move. */
   destination?: string
+  /** Reject the action if another workspace session has replaced this one. */
+  target?: WorkspaceTarget
 }
 ```
 
@@ -33,6 +35,7 @@ type WorkspaceAction = {
 - [action](#action)
 - [path](#path)
 - [destination](#destination)
+- [target](#target)
 
 ## Properties
 
@@ -69,3 +72,19 @@ New basename for rename; complete relative destination for copy/move.
 ```typescript
 destination?: string
 ```
+
+### target
+
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L238)
+
+Reject the action if another workspace session has replaced this one.
+
+```typescript
+target?: WorkspaceTarget
+```
+
+Related: [WorkspaceTarget](WorkspaceTarget.md).
+
+## Related types
+
+[WorkspaceTarget](WorkspaceTarget.md).

@@ -34,9 +34,15 @@ type SidebarProps = {
   /** Custom view content in the shared sidebar frame instead of tree rows. */
   content?: ReactNode
   empty?: ReactNode
-  onMenu?: (id: string, anchor: HTMLElement) => void
-  /** Move a tree item into a folder; null targets the tree root. */
-  onMove?: (id: string, parent: string | null) => void
+  /** Let tree rows build a multiple selection with modifier clicks, Shift ranges, and Space. Ids missing from `items` are dropped. */
+  selection?: {
+    ids: readonly string[]
+    onChange: (ids: string[]) => void
+  }
+  /** `ids` lists the selected group when the row belongs to it, otherwise only `id`. */
+  onMenu?: (id: string, anchor: HTMLElement, ids?: string[]) => void
+  /** Move a tree item into a folder; null targets the tree root. `ids` lists every dragged item. */
+  onMove?: (id: string, parent: string | null, ids?: string[]) => void
   editing?: {
     id: string
     value: string
@@ -82,6 +88,7 @@ type SidebarProps = {
 - [fadeEdges](#fadeedges)
 - [content](#content)
 - [empty](#empty)
+- [selection](#selection)
 - [editing](#editing)
 - [resize](#resize)
 
@@ -250,9 +257,22 @@ Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Side
 empty?: ReactNode
 ```
 
+### selection
+
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L61)
+
+Let tree rows build a multiple selection with modifier clicks, Shift ranges, and Space. Ids missing from `items` are dropped.
+
+```typescript
+selection?: {
+    ids: readonly string[]
+    onChange: (ids: string[]) => void
+  }
+```
+
 ### editing
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L63)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L69)
 
 ```typescript
 editing?: {
@@ -271,7 +291,7 @@ Related: [Select](Select.md).
 
 ### resize
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L73)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L79)
 
 ```typescript
 resize?: {
@@ -314,10 +334,12 @@ onDismiss?: () => void
 
 ### onMenu
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L60)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L66)
+
+`ids` lists the selected group when the row belongs to it, otherwise only `id`.
 
 ```typescript
-onMenu?: (id: string, anchor: HTMLElement) => void
+onMenu?: (id: string, anchor: HTMLElement, ids?: string[]) => void
 ```
 
 **Parameters**
@@ -326,17 +348,18 @@ onMenu?: (id: string, anchor: HTMLElement) => void
 | --- | --- |
 | <code>id</code> | <code>string</code> |
 | <code>anchor</code> | <code>HTMLElement</code> |
+| <code>ids?</code> | <code>string[]</code> |
 
 **Returns:** <code>void</code>
 
 ### onMove
 
-Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L62)
+Optional · [Source](https://github.com/schmayterling/hibi/blob/main/src/ui/Sidebar.tsx#L68)
 
-Move a tree item into a folder; null targets the tree root.
+Move a tree item into a folder; null targets the tree root. `ids` lists every dragged item.
 
 ```typescript
-onMove?: (id: string, parent: string | null) => void
+onMove?: (id: string, parent: string | null, ids?: string[]) => void
 ```
 
 **Parameters**
@@ -345,6 +368,7 @@ onMove?: (id: string, parent: string | null) => void
 | --- | --- |
 | <code>id</code> | <code>string</code> |
 | <code>parent</code> | <code>string &#124; null</code> |
+| <code>ids?</code> | <code>string[]</code> |
 
 **Returns:** <code>void</code>
 

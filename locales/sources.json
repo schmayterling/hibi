@@ -132,6 +132,9 @@
     "src/renderer/src/WorkspacesSidebar.tsx",
     "src/ui/Sidebar.tsx"
   ],
+  "51fe2f480ed9": [
+    "src/renderer/src/WorkspaceSidebar.tsx"
+  ],
   "6934e9d2bb61": [
     "src/renderer/src/ModalEditingSettings.tsx"
   ],
@@ -1200,6 +1203,9 @@
   "d6fac84c4dc9": [
     "src/renderer/src/workspace-menu.ts"
   ],
+  "f2d84273cb78": [
+    "src/renderer/src/workspace-menu.ts"
+  ],
   "2317ee71d0e1": [
     "src/main/analysis.ts"
   ],
@@ -1573,6 +1579,9 @@
   ],
   "526e0087cc3f": [
     "src/renderer/src/WorkspaceSettings.tsx"
+  ],
+  "e5cc0d5cbec3": [
+    "src/renderer/src/workspace-menu.ts"
   ],
   "b7c2fd280c22": [
     "src/renderer/src/workspace-menu.ts"
@@ -2080,6 +2089,9 @@
   ],
   "c660726ed628": [
     "src/main/document.ts"
+  ],
+  "60a7eb27b26a": [
+    "src/renderer/src/workspace-menu.ts"
   ],
   "33c4e36cc1fd": [
     "src/addons/quick-note/native.ts"
@@ -2604,6 +2616,9 @@
   ],
   "227cee0db498": [
     "src/renderer/src/ImportDialog.tsx"
+  ],
+  "3609c413edb9": [
+    "src/renderer/src/workspace-menu.ts"
   ],
   "ac20a57bfde0": [
     "src/addons/mcp-server/Settings.tsx",
@@ -3491,6 +3506,9 @@
   "b250a454877d": [
     "src/renderer/src/workspace-menu.ts"
   ],
+  "86dc9b3877c1": [
+    "src/renderer/src/workspace-menu.ts"
+  ],
   "816580969665": [
     "src/renderer/src/EditorToolbar.tsx"
   ],
@@ -3834,7 +3852,8 @@
   ],
   "ed077f3d8125": [
     "src/renderer/src/CommandPalette.tsx",
-    "src/renderer/src/main.tsx"
+    "src/renderer/src/main.tsx",
+    "src/renderer/src/workspace-menu.ts"
   ],
   "48b28302e75c": [
     "src/renderer/src/FormatsSettings.tsx"
@@ -5830,6 +5849,12 @@
   "671a56401be1": [
     "src/addons/documentation/native.ts"
   ],
+  "1f9371eb85f2": [
+    "src/main/workspace.ts"
+  ],
+  "fd9073856129": [
+    "src/main/workspace-actions.ts"
+  ],
   "fc77ba3291d5": [
     "src/addons/git/Panel.tsx"
   ],
@@ -6180,6 +6205,9 @@
     "src/main/addons.ts"
   ],
   "2ff13ca6ab5c": [
+    "src/renderer/src/workspace-menu.ts"
+  ],
+  "196b275af5c3": [
     "src/renderer/src/workspace-menu.ts"
   ],
   "4955b8400e8f": [
@@ -6897,6 +6925,9 @@
     "src/addons/dictionary/custom-words.ts"
   ],
   "0ec4c65bb923": [
+    "src/renderer/src/workspace-menu.ts"
+  ],
+  "676453f9ece5": [
     "src/renderer/src/workspace-menu.ts"
   ],
   "8a0497a74dfc": [

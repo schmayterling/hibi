@@ -913,8 +913,14 @@ export async function resolveWikiDocument(from: string | null, target: string) {
   return path ? resolveWorkspaceFile(root, path) : null
 }
 
-export async function openWorkspaceFile(window: BrowserWindow, path: unknown) {
+export async function openWorkspaceFile(
+  window: BrowserWindow,
+  path: unknown,
+  target?: unknown,
+) {
   if (!root) throw new Error('Open a workspace first.')
+  if (target !== undefined && !isCurrentWorkspaceTarget(target))
+    throw new Error('The workspace changed, so this file did not open.')
   if (typeof path === 'string' && getWorkspace()?.activePath === path)
     return getDocument()
   const draft =

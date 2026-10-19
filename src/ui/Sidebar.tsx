@@ -57,9 +57,15 @@ export type SidebarProps = {
   /** Custom view content in the shared sidebar frame instead of tree rows. */
   content?: ReactNode
   empty?: ReactNode
-  onMenu?: (id: string, anchor: HTMLElement) => void
-  /** Move a tree item into a folder; null targets the tree root. */
-  onMove?: (id: string, parent: string | null) => void
+  /** Let tree rows build a multiple selection with modifier clicks, Shift ranges, and Space. Ids missing from `items` are dropped. */
+  selection?: {
+    ids: readonly string[]
+    onChange: (ids: string[]) => void
+  }
+  /** `ids` lists the selected group when the row belongs to it, otherwise only `id`. */
+  onMenu?: (id: string, anchor: HTMLElement, ids?: string[]) => void
+  /** Move a tree item into a folder; null targets the tree root. `ids` lists every dragged item. */
+  onMove?: (id: string, parent: string | null, ids?: string[]) => void
   editing?: {
     id: string
     value: string
@@ -141,6 +147,7 @@ export function Sidebar({
   fadeEdges = false,
   content,
   empty,
+  selection,
   onMenu,
   onMove,
   editing,
@@ -211,7 +218,7 @@ export function Sidebar({
     null,
   )
   const [dragging, setDragging] = useState(false)
-  const draggedItem = useRef<string | null>(null)
+  const draggedItem = useRef<{ id: string; ids: string[] } | null>(null)
   const [dragged, setDragged] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -240,7 +247,37 @@ export function Sidebar({
     [items, expanded, collapsible],
   )
   const { rows, indices } = model
-  const active = selected === null ? -1 : (indices.get(selected) ?? -1)
+  const selectionIds = mode === 'tree' ? selection?.ids : undefined
+  // Tree order keeps batch actions predictable; removed items drop out.
+  const picked = useMemo(() => {
+    if (!selectionIds) return null
+    const ids = new Set(selectionIds)
+    return [...parents.keys()].filter((id) => ids.has(id))
+  }, [selectionIds, parents])
+  const pickedSet = useMemo(() => picked && new Set(picked), [picked])
+  const anchor = useRef<string | null>(null)
+  const chosen = useRef<readonly string[] | undefined>(undefined)
+  const onSelectionChange = selection?.onChange
+  function choose(ids: string[]) {
+    chosen.current = ids
+    onSelectionChange?.(ids)
+  }
+  useEffect(() => {
+    // A selection the caller replaced, such as another workspace's, starts a new range.
+    if (selectionIds !== chosen.current) anchor.current = null
+    chosen.current = selectionIds
+    if (picked && picked.length !== selectionIds?.length) {
+      chosen.current = picked
+      onSelectionChange?.(picked)
+    }
+  }, [picked, selectionIds, onSelectionChange])
+  // One selected row keeps the sliding marker; a group highlights each row.
+  const marked = picked
+    ? picked.length === 1
+      ? (picked[0] ?? null)
+      : null
+    : selected
+  const active = marked === null ? -1 : (indices.get(marked) ?? -1)
   const focusId =
     focused !== null && indices.has(focused)
       ? focused
@@ -311,8 +348,36 @@ export function Sidebar({
       else next.add(id)
       return next
     })
-  function focus(id: string | undefined) {
+  /** Visible rows from the anchor through `id`; collapsed descendants stay out. */
+  function selectRange(id: string, from: string) {
+    if (!anchor.current || !indices.has(anchor.current)) anchor.current = from
+    const start = indices.get(anchor.current) ?? 0
+    const end = indices.get(id) ?? start
+    choose(
+      rows
+        .slice(Math.min(start, end), Math.max(start, end) + 1)
+        .map((row) => row.item.id),
+    )
+  }
+  function toggleSelected(id: string) {
+    if (!picked) return
+    anchor.current = id
+    choose(
+      pickedSet?.has(id)
+        ? picked.filter((other) => other !== id)
+        : [...picked, id],
+    )
+  }
+  /** Menus and drags keep a selected group; an unselected row replaces it. */
+  function menuGroup(id: string) {
+    if (!picked || pickedSet?.has(id)) return picked ?? [id]
+    anchor.current = id
+    choose([id])
+    return [id]
+  }
+  function focus(id: string | undefined, extendFrom?: string) {
     if (!id) return
+    if (picked && extendFrom) selectRange(id, extendFrom)
     setFocused(id)
     const button = buttons.current.get(id)
     if (button) {
@@ -394,7 +459,7 @@ export function Sidebar({
             if (disabled || !onMove || !draggedItem.current) return
             event.preventDefault()
             event.stopPropagation()
-            onMove(draggedItem.current, null)
+            onMove(draggedItem.current.id, null, draggedItem.current.ids)
             draggedItem.current = null
             setDragged(null)
             setDropTarget(null)
@@ -413,6 +478,7 @@ export function Sidebar({
             role={mode === 'tabs' ? 'tablist' : 'tree'}
             aria-label={label}
             aria-orientation={mode === 'tabs' ? 'vertical' : undefined}
+            aria-multiselectable={picked ? true : undefined}
           >
             <div className="sidebar-metrics" aria-hidden="true">
               <span
@@ -467,6 +533,9 @@ export function Sidebar({
                     }
                     onFocusCapture={() => setFocused(item.id)}
                     data-editing={editing?.id === item.id}
+                    data-selected={
+                      (marked === null && pickedSet?.has(item.id)) || undefined
+                    }
                     data-drop-target={dropTarget === item.id}
                     onDragOver={(event) => {
                       const source = draggedItem.current
@@ -474,8 +543,9 @@ export function Sidebar({
                       event.stopPropagation()
                       const target = item.children ? item.id : parent
                       if (
-                        source === target ||
-                        target?.startsWith(`${source}/`)
+                        source.ids.some(
+                          (id) => id === target || target?.startsWith(`${id}/`),
+                        )
                       ) {
                         setDropTarget(null)
                         return
@@ -491,10 +561,11 @@ export function Sidebar({
                       event.stopPropagation()
                       const target = item.children ? item.id : parent
                       if (
-                        source !== target &&
-                        !target?.startsWith(`${source}/`)
+                        !source.ids.some(
+                          (id) => id === target || target?.startsWith(`${id}/`),
+                        )
                       ) {
-                        onMove(source, target)
+                        onMove(source.id, target, source.ids)
                         if (target)
                           setExpanded((old) => new Set([...old, target]))
                       }
@@ -539,7 +610,10 @@ export function Sidebar({
                         draggable={mode === 'tree' && !!onMove && !disabled}
                         onDragStart={(event) => {
                           if (!onMove) return
-                          draggedItem.current = item.id
+                          draggedItem.current = {
+                            id: item.id,
+                            ids: menuGroup(item.id),
+                          }
                           setDragged(item.id)
                           event.dataTransfer.setData(
                             'application/x-hibi-sidebar',
@@ -553,7 +627,11 @@ export function Sidebar({
                           setDropTarget(null)
                         }}
                         role={mode === 'tabs' ? 'tab' : 'treeitem'}
-                        aria-selected={selected === item.id}
+                        aria-selected={
+                          pickedSet
+                            ? pickedSet.has(item.id)
+                            : selected === item.id
+                        }
                         aria-expanded={
                           item.children
                             ? !collapsible || expanded.has(item.id)
@@ -590,16 +668,33 @@ export function Sidebar({
                           if (onMenu && !disabled) {
                             event.preventDefault()
                             setFocused(item.id)
-                            onMenu(item.id, event.currentTarget)
+                            onMenu(
+                              item.id,
+                              event.currentTarget,
+                              menuGroup(item.id),
+                            )
                           }
                         }}
                         onFocus={() => {
                           setFocused(item.id)
                           rowWindow.reveal(index)
                         }}
-                        onClick={() => {
+                        onClick={(event) => {
+                          if (picked) {
+                            if (event.shiftKey)
+                              return selectRange(item.id, picked[0] ?? item.id)
+                            if (event.metaKey || event.ctrlKey)
+                              return toggleSelected(item.id)
+                            anchor.current = item.id
+                            choose([item.id])
+                          }
                           if (item.children && collapsible) toggle(item.id)
                           else onSelect(item.id)
+                        }}
+                        onKeyUp={(event) => {
+                          // Space toggles selection instead of activating the button.
+                          if (picked && event.key === ' ')
+                            event.preventDefault()
                         }}
                         onKeyDown={(event) => {
                           if (
@@ -608,8 +703,29 @@ export function Sidebar({
                               (event.shiftKey && event.key === 'F10'))
                           ) {
                             event.preventDefault()
-                            onMenu(item.id, event.currentTarget)
+                            onMenu(
+                              item.id,
+                              event.currentTarget,
+                              menuGroup(item.id),
+                            )
                             return
+                          }
+                          const extend = event.shiftKey ? item.id : undefined
+                          if (picked && !event.altKey && !event.shiftKey) {
+                            if (event.key === ' ') {
+                              event.preventDefault()
+                              toggleSelected(item.id)
+                              return
+                            }
+                            if (
+                              (event.metaKey || event.ctrlKey) &&
+                              event.key.toLowerCase() === 'a'
+                            ) {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              choose(rows.map((row) => row.item.id))
+                              return
+                            }
                           }
                           switch (event.key) {
                             case 'ArrowDown':
@@ -617,19 +733,23 @@ export function Sidebar({
                               focus(
                                 rows[Math.min(index + 1, rows.length - 1)]?.item
                                   .id,
+                                extend,
                               )
                               break
                             case 'ArrowUp':
                               event.preventDefault()
-                              focus(rows[Math.max(index - 1, 0)]?.item.id)
+                              focus(
+                                rows[Math.max(index - 1, 0)]?.item.id,
+                                extend,
+                              )
                               break
                             case 'Home':
                               event.preventDefault()
-                              focus(rows[0]?.item.id)
+                              focus(rows[0]?.item.id, extend)
                               break
                             case 'End':
                               event.preventDefault()
-                              focus(rows.at(-1)?.item.id)
+                              focus(rows.at(-1)?.item.id, extend)
                               break
                             case 'ArrowRight':
                               if (item.children) {
@@ -696,7 +816,11 @@ export function Sidebar({
                         aria-haspopup="menu"
                         onClick={(event) => {
                           setFocused(item.id)
-                          onMenu(item.id, event.currentTarget)
+                          onMenu(
+                            item.id,
+                            event.currentTarget,
+                            menuGroup(item.id),
+                          )
                         }}
                       >
                         <MoreHorizontal size={14} aria-hidden="true" />

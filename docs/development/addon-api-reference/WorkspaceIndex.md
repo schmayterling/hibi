@@ -2,7 +2,7 @@
 
 # WorkspaceIndex
 
-Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L261)
+Type alias · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L263)
 
 Lightweight note data for sidebar indexes; never embeds media.
 
@@ -29,7 +29,7 @@ type WorkspaceIndex = {
 
 ### workspace
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L262)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L264)
 
 ```typescript
 workspace: WorkspaceState
@@ -39,7 +39,7 @@ Related: [WorkspaceState](WorkspaceState.md).
 
 ### pages
 
-[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L263)
+[Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L265)
 
 ```typescript
 pages: WorkspacePage[]

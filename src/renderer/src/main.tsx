@@ -24,6 +24,7 @@ import type {
   FileId,
   FileTarget,
   WorkspaceId,
+  WorkspaceTarget,
 } from '../../shared/foundation-contracts'
 import {
   type AppCommand,
@@ -912,7 +913,9 @@ function App() {
         snapshot: () => window.hibi.getWorkspaceSnapshot(),
         get: () => window.hibi.getWorkspace(),
         open: openFolder,
-        openFile: (path, owner) => openFile(path, owner),
+        openFile: async (path, owner) => {
+          await openFile(path, owner)
+        },
       },
       invoke: async (id, method, input) => {
         if (busyRef.current)
@@ -1493,12 +1496,16 @@ function App() {
     }
   }
 
-  async function openFile(path: string, owner?: string): Promise<void> {
-    if (busyRef.current) return
+  async function openFile(
+    path: string,
+    owner?: string,
+    target?: WorkspaceTarget,
+  ): Promise<boolean> {
+    if (busyRef.current) return false
     startBusy()
     setError('')
     try {
-      const next = await window.hibi.openWorkspaceFile(path)
+      const next = await window.hibi.openWorkspaceFile(path, target)
       if (next) {
         await acceptOperationDocument(next)
         const views = addonViews.snapshot()
@@ -1511,10 +1518,12 @@ function App() {
         setWorkspace(await window.hibi.getWorkspace())
         if (sidebarResize.overlay) setSidebarOpen(false)
       }
+      return !!next
     } catch (error) {
       setError(
         error instanceof Error ? error.message : 'Could not open this file.',
       )
+      return false
     } finally {
       endBusy()
     }
@@ -3031,7 +3040,8 @@ function App() {
         }
         workspace={workspace}
         onOpen={() => addonHost.app.runAction('open-workspace')}
-        onFile={(path) => void openFile(path)}
+        onFile={(path, target) => openFile(path, undefined, target)}
+        tabs={document?.tabsEnabled !== false}
         onRefresh={() => void refreshFiles()}
         commands={addonHost.commands}
         captureCommandContext={captureFileCommandContext}

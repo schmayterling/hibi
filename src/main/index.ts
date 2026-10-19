@@ -2169,8 +2169,12 @@ if (!app.requestSingleInstanceLock()) {
         trustedWindow(event)
         return refreshWorkspace()
       })
-      handle(WORKSPACE_CHANNELS.openFile, (event, path: unknown) =>
-        runFileOperation(event, (window) => openWorkspaceFile(window, path)),
+      handle(
+        WORKSPACE_CHANNELS.openFile,
+        (event, path: unknown, target: unknown) =>
+          runFileOperation(event, (window) =>
+            openWorkspaceFile(window, path, target),
+          ),
       )
       observeWorkspace((change) =>
         mainWindow?.webContents.send(

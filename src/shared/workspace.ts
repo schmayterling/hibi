@@ -234,6 +234,8 @@ export type WorkspaceAction = {
   path: string
   /** New basename for rename; complete relative destination for copy/move. */
   destination?: string
+  /** Reject the action if another workspace session has replaced this one. */
+  target?: WorkspaceTarget
 }
 export type WorkspaceActionResult = {
   workspace: WorkspaceState | null

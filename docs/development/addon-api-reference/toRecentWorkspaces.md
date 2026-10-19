@@ -2,7 +2,7 @@
 
 # toRecentWorkspaces
 
-Function · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L271)
+Function · [Source](https://github.com/schmayterling/hibi/blob/main/src/shared/workspace.ts#L273)
 
 ```typescript
 function toRecentWorkspaces(known: readonly KnownWorkspace[]): RecentWorkspace[]

@@ -14,7 +14,10 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react'
-import type { CommandExecutionContext } from '../../shared/foundation-contracts'
+import type {
+  CommandExecutionContext,
+  WorkspaceTarget,
+} from '../../shared/foundation-contracts'
 import type {
   WorkspaceAction,
   WorkspaceActionResult,
@@ -27,12 +30,21 @@ import { useMenus } from '../../ui/MenuHost'
 import { Sidebar, type SidebarItem, type SidebarProps } from '../../ui/Sidebar'
 import type { RegisteredCommand } from './addons'
 import { explorerDecorations } from './explorer-decorations'
-import { type WorkspaceRename, workspaceMenuItems } from './workspace-menu'
+import {
+  runEach,
+  selectedRoots,
+  type WorkspaceRename,
+  workspaceGroupMenuItems,
+  workspaceMenuItems,
+  workspaceStep,
+  workspaceTarget,
+} from './workspace-menu'
 
 export function WorkspaceSidebar({
   workspace,
   onOpen,
   onFile,
+  tabs,
   onRefresh,
   commands,
   captureCommandContext,
@@ -49,7 +61,9 @@ export function WorkspaceSidebar({
 }: {
   workspace: WorkspaceState | null
   onOpen: () => void
-  onFile: (path: string) => void
+  onFile: (path: string, target?: WorkspaceTarget) => Promise<boolean>
+  /** Each opened file gets its own tab, so a group can open together. */
+  tabs: boolean
   onRefresh: () => void
   commands: RegisteredCommand[]
   captureCommandContext: (
@@ -76,6 +90,15 @@ export function WorkspaceSidebar({
   )
   const rootDecoration = decorations.get('')
   const workspaceCommands = commands.filter((command) => command.workspace)
+  // Opening a file or another workspace replaces the selection with the active file.
+  const scope = `${workspace?.id}:${workspace?.workspaceGeneration}:${workspace?.activePath}`
+  const [picked, setPicked] = useState({ scope: '', ids: [] as string[] })
+  const activePath = workspace?.activePath
+  const selection = useMemo(
+    () =>
+      picked.scope === scope ? picked.ids : activePath ? [activePath] : [],
+    [picked, scope, activePath],
+  )
   useLayoutEffect(() => {
     explorerDecorations.setWorkspace(workspace)
   }, [workspace])
@@ -111,8 +134,9 @@ export function WorkspaceSidebar({
       setRenaming(false)
     }
   }
-  function openMenu(path: string, anchor: HTMLElement) {
-    if (busy) return
+  function openMenu(path: string, anchor: HTMLElement, paths = [path]) {
+    if (busy || !workspace) return
+    const target = workspaceTarget(workspace)
     const find = (entries: WorkspaceEntry[]): WorkspaceEntry | undefined => {
       for (const entry of entries) {
         if (entry.path === path) return entry
@@ -120,7 +144,28 @@ export function WorkspaceSidebar({
         if (nested) return nested
       }
     }
-    const entry = find(workspace?.entries ?? [])
+    if (target && paths.length > 1) {
+      const wanted = new Set(paths)
+      const group: WorkspaceEntry[] = []
+      const collect = (entries: WorkspaceEntry[]) => {
+        for (const entry of entries) {
+          if (wanted.has(entry.path)) group.push(entry)
+          if (entry.children) collect(entry.children)
+        }
+      }
+      collect(workspace.entries)
+      menu.open({
+        label: `Actions for ${group.length} items`,
+        anchor,
+        items: workspaceGroupMenuItems(target, group, {
+          dialogs,
+          onAction,
+          ...(tabs ? { open: onFile } : {}),
+        }),
+      })
+      return
+    }
+    const entry = find(workspace.entries)
     if (!entry) return
     const contributions = commands
       .filter((command) => command.menu?.location === 'explorer')
@@ -173,6 +218,8 @@ export function WorkspaceSidebar({
   }, [workspace?.entries, workspace?.activePath, dirty, decorations])
   return (
     <Sidebar
+      // Another workspace starts with fresh expansion, focus, and range state.
+      key={`${workspace?.id}:${workspace?.workspaceGeneration}`}
       resize={resize}
       disabled={busy}
       open={open}
@@ -181,14 +228,24 @@ export function WorkspaceSidebar({
       className={`document-sidebar workspace-sidebar ${workspace ? '' : 'workspace-empty'}`}
       items={items}
       selected={workspace?.activePath ?? null}
+      selection={{
+        ids: selection,
+        onChange: (ids) => setPicked({ scope, ids }),
+      }}
       onSelect={onFile}
       onMenu={openMenu}
-      onMove={(path, parent) => {
-        const destination = [parent, path.split('/').at(-1)]
-          .filter(Boolean)
-          .join('/')
-        if (path !== destination)
-          void onAction({ action: 'move', path, destination }).catch(onError)
+      onMove={(path, parent, paths = [path]) => {
+        const target = workspaceTarget(workspace)
+        if (!target) return
+        const destination = (path: string) =>
+          [parent, path.split('/').at(-1)].filter(Boolean).join('/')
+        const moving = selectedRoots(paths).filter(
+          (path) => path !== destination(path),
+        )
+        const run = workspaceStep(target, onAction)
+        void runEach(moving, 'moved', (path) =>
+          run({ action: 'move', path, destination: destination(path) }),
+        ).catch(onError)
       }}
       editing={
         editing && {

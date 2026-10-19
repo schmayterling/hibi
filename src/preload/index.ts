@@ -493,8 +493,8 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(WORKSPACE_CHANNELS.action, action),
     openWorkspace: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.open),
     refreshWorkspace: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.refresh),
-    openWorkspaceFile: (path) =>
-      ipcRenderer.invoke(WORKSPACE_CHANNELS.openFile, path),
+    openWorkspaceFile: (path, target) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.openFile, path, target),
     onWorkspaceChanged: (callback) => {
       const listener = (
         _event: Electron.IpcRendererEvent,

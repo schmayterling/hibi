@@ -15,6 +15,7 @@ import {
 import { isDocumentName } from './document-types'
 import {
   getWorkspace,
+  isCurrentWorkspaceTarget,
   notifyWorkspaceContent,
   refreshWorkspace,
   workspaceRoot,
@@ -85,7 +86,11 @@ export async function workspaceAction(
   if (!base) throw new Error('Open a workspace first.')
   if (!input || typeof input !== 'object')
     throw new Error('Hibi could not read this file operation. Try again.')
-  const { action, path, destination } = input as Record<string, unknown>
+  const { action, path, destination, target } = input as Record<string, unknown>
+  if (target !== undefined && !isCurrentWorkspaceTarget(target))
+    throw new Error(
+      'The workspace changed, so this file operation did not run.',
+    )
   if (
     ![
       'new-file',

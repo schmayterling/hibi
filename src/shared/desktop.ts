@@ -451,7 +451,11 @@ export type DesktopApi = {
   ) => Promise<import('./workspace').WorkspaceActionResult | null>
   openWorkspace: () => Promise<WorkspaceState | null>
   refreshWorkspace: () => Promise<WorkspaceState | null>
-  openWorkspaceFile: (path: string) => Promise<DocumentState | null>
+  /** `target` rejects the request if another workspace session replaced it. */
+  openWorkspaceFile: (
+    path: string,
+    target?: import('./foundation-contracts').WorkspaceTarget,
+  ) => Promise<DocumentState | null>
   onWorkspaceChanged: (
     callback: (
       workspace: WorkspaceState | null,

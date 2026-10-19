@@ -339,6 +339,9 @@ html:has(.sidebar-resizer:is([data-dragging="true"], :focus-visible))
     transition: none;
   }
 }
+.sidebar-row[data-selected="true"] {
+  background: var(--active);
+}
 .sidebar-row[data-drop-target="true"],
 .sidebar-scroll[data-drop-target="true"] {
   outline: 1px solid var(--accent);

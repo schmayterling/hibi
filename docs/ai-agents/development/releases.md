@@ -8,9 +8,10 @@ The `nightly and releases` workflow runs from `main` daily at 18:00 UTC (02:00 M
 
 Each nightly gets a `nightly-YYYY-MM-DD-<commit>-<run>-<attempt>` tag and prerelease version, with `nightly-broken-` used when required checks fail. Its changelog links commits since the previous reachable dated release tag. Rolling recommendation tags are excluded. The first nightly includes all history if no earlier release exists. Release notes do not create a source commit.
 
-Four jobs compile the app, run all required lint, documentation, copy, and test checks, then package:
+Five jobs compile the app, run all required lint, documentation, copy, and test checks, then package:
 
-- Linux x64: AppImage.
+- Linux x64: AppImage, Debian package, and Flatpak bundle.
+- Linux arm64: AppImage, Debian package, and Flatpak bundle, built on `ubuntu-24.04-arm`.
 - Windows x64: NSIS installer.
 - macOS Apple Silicon: DMG and ZIP.
 - macOS Intel: DMG and ZIP.

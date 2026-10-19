@@ -49,11 +49,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-latest, macos-15-intel]
         shard: [0, 1, 2, 3]
         include:
           - os: ubuntu-latest
             platform: linux-x64
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
           - os: windows-latest
             platform: windows-x64
           - os: macos-latest
@@ -112,6 +114,9 @@ jobs:
           - os: ubuntu-latest
             platform: linux-x64
             args: --linux --x64
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+            args: --linux --arm64
           - os: windows-latest
             platform: windows-x64
             args: --win --x64
@@ -164,6 +169,12 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
           SHA: ${{ needs.prepare.outputs.sha }}
         run: node scripts/nightly.mjs check-shards "$PLATFORM" "$SHA" check-shards/*.json
+      - name: Install Flatpak packaging tools
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
       - name: Install macOS signing credentials
         if: startsWith(matrix.platform, 'macos-')
         env:
@@ -242,6 +253,8 @@ jobs:
             release/*.zip
             release/*.exe
             release/*.AppImage
+            release/*.deb
+            release/*.flatpak
             release/checks-${{ matrix.platform }}.json
   publish:
     needs: [prepare, build]
@@ -279,7 +292,7 @@ jobs:
           SHA: ${{ needs.prepare.outputs.sha }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          (cd installers && sha256sum ./*.exe ./*.dmg ./*.zip ./*.AppImage > SHA256SUMS.txt)
+          (cd installers && sha256sum ./*.exe ./*.dmg ./*.zip ./*.AppImage ./*.deb ./*.flatpak > SHA256SUMS.txt)
           node scripts/nightly.mjs notes > release-notes.md
           prerelease=true
           latest=false

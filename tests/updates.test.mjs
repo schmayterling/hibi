@@ -38,6 +38,7 @@ const manifest = (broken = false) => ({
     [
       ['win32-x64', 'win-x64.exe'],
       ['linux-x64', 'linux-x86_64.AppImage'],
+      ['linux-arm64', 'linux-arm64.AppImage'],
       ['darwin-arm64', 'mac-arm64.dmg'],
       ['darwin-x64', 'mac-x64.dmg'],
     ].map(([platform, suffix]) => [
@@ -120,6 +121,14 @@ test('publication hashes real installers and keeps both feeds pinned to a comple
     await writeFile(join(root, asset.name), bytes)
     if (asset.zip) await writeFile(join(root, asset.zip.name), bytes)
   }
+  const systemPackages = {
+    'x64.deb': 'amd64.deb',
+    'x64.flatpak': 'x86_64.flatpak',
+    'arm64.deb': 'arm64.deb',
+    'arm64.flatpak': 'aarch64.flatpak',
+  }
+  for (const built of Object.values(systemPackages))
+    await writeFile(join(root, `hibi-${version}-linux-${built}`), bytes)
   const reports = platforms.map((platform) => ({
     platform,
     sha: 'a'.repeat(40),
@@ -145,15 +154,21 @@ test('publication hashes real installers and keeps both feeds pinned to a comple
       await readFile(join(root, expected.assets['linux-x64'].name)),
       bytes,
     )
-    assert.ok(
-      !(await readdir(root)).includes(manifest().assets['linux-x64'].name),
-    )
+    const files = await readdir(root)
+    assert.ok(!files.includes(manifest().assets['linux-x64'].name))
+    // Debian and Flatpak downloads share AppImage labels but stay out of feeds older updaters validate.
+    for (const [normalized, built] of Object.entries(systemPackages)) {
+      assert.ok(files.includes(`hibi-${version}-linux-${normalized}`))
+      if (normalized !== built)
+        assert.ok(!files.includes(`hibi-${version}-linux-${built}`))
+    }
     assert.deepEqual(updateRelease(generated, 'nightly'), generated)
     if (!broken)
       assert.deepEqual(updateRelease(generated, 'nightly-green'), generated)
     for (const [platform, name] of [
       ['win32-x64', 'latest.yml'],
       ['linux-x64', 'latest-linux.yml'],
+      ['linux-arm64', 'latest-linux-arm64.yml'],
     ]) {
       const feed = parse(await readFile(join(root, name), 'utf8'))
       assert.equal(feed.version, version)
@@ -188,6 +203,34 @@ test('publication hashes real installers and keeps both feeds pinned to a comple
     ),
     /Every release platform/,
   )
+  // An architecture alias beside its normalized name must not overwrite either package.
+  for (const [alias, canonical] of [
+    ['linux-x86_64.AppImage', 'linux-x64.AppImage'],
+    ['linux-amd64.deb', 'linux-x64.deb'],
+  ]) {
+    const duplicate = await mkdtemp(join(tmpdir(), 'hibi-feed-duplicate-'))
+    t.after(() => rm(duplicate, { recursive: true, force: true }))
+    await writeFile(join(duplicate, `hibi-${version}-${alias}`), 'alias')
+    await writeFile(
+      join(duplicate, `hibi-${version}-${canonical}`),
+      'canonical',
+    )
+    await assert.rejects(
+      updateFeed(
+        { ...manifest(), channel: 'nightly', sha: 'a'.repeat(40), reports },
+        duplicate,
+      ),
+      /Ambiguous Linux packages/,
+    )
+    assert.deepEqual(
+      await readFile(join(duplicate, `hibi-${version}-${alias}`), 'utf8'),
+      'alias',
+    )
+    assert.deepEqual(
+      await readFile(join(duplicate, `hibi-${version}-${canonical}`), 'utf8'),
+      'canonical',
+    )
+  }
   const workflow = parse(
     await readFile('.github/workflows/nightly.yml', 'utf8'),
   )
@@ -212,7 +255,13 @@ test('publication hashes real installers and keeps both feeds pinned to a comple
   )
 })
 
-async function adapter(t, platform = 'darwin', arch = 'x64', packaged = true) {
+async function adapter(
+  t,
+  platform = 'darwin',
+  arch = 'x64',
+  packaged = true,
+  appImage = '/tmp/hibi.AppImage',
+) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-updater-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const output = join(root, 'updates.mjs')
@@ -228,7 +277,7 @@ async function adapter(t, platform = 'darwin', arch = 'x64', packaged = true) {
     define: {
       'process.platform': JSON.stringify(platform),
       'process.arch': JSON.stringify(arch),
-      'process.env.APPIMAGE': JSON.stringify('/tmp/hibi.AppImage'),
+      'process.env.APPIMAGE': appImage ? JSON.stringify(appImage) : 'undefined',
     },
     plugins: [
       {
@@ -357,6 +406,11 @@ test('checks handle missing feeds, offline failures, concurrent actions, and ins
   development.startUpdateChecks()
   assert.equal((await development.checkForUpdates()).status, 'error')
   assert.equal(development.mock.requests.length, 0)
+  // Debian and Flatpak installs have no AppImage path to replace.
+  const systemPackage = await adapter(t, 'linux', 'arm64', true, '')
+  assert.equal(systemPackage.getUpdateState().supported, false)
+  assert.equal((await systemPackage.checkForUpdates()).status, 'error')
+  assert.equal(systemPackage.mock.requests.length, 0)
 })
 
 test('startup and frequency choices persist and reschedule checks', async (t) => {
@@ -429,8 +483,12 @@ test('startup and frequency choices persist and reschedule checks', async (t) =>
 })
 
 test('windows and linux pin downloads and install only after close confirmation; cancellation and errors keep protection', async (t) => {
-  for (const platform of ['win32', 'linux']) {
-    const manager = await adapter(t, platform)
+  for (const [platform, arch] of [
+    ['win32', 'x64'],
+    ['linux', 'x64'],
+    ['linux', 'arm64'],
+  ]) {
+    const manager = await adapter(t, platform, arch)
     await manager.checkForUpdates()
     manager.mock.failDownload = true
     assert.equal((await manager.downloadUpdate()).status, 'error')

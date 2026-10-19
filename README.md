@@ -16,6 +16,15 @@ download a build from [releases](https://github.com/schmayterling/hibi/releases)
 > 
 > macos nightlies are signed properly and you won't get a gatekeeper warning (hopefully).
 
+on linux, pick the AppImage, `.deb`, or `.flatpak` for your architecture (`x64` or `arm64`). only the AppImage can update itself; install a newer `.deb` or `.flatpak` the same way to update:
+
+```sh
+sudo apt install ./hibi-<version>-linux-x64.deb
+flatpak install --user ./hibi-<version>-linux-x64.flatpak
+```
+
+the flatpak needs [flathub](https://flathub.org/setup) set up so it can download its runtime.
+
 start typing, open a file, or open a folder as a workspace. confused? read the [user guide](docs/README.md).
 
 roadmaps and discussions are available on the [hibi discord](https://discord.gg/v9r4cABUP2).

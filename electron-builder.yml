@@ -46,4 +46,9 @@ win:
   target: [nsis]
 linux:
   icon: build/icon-linux.png
-  target: [AppImage]
+  target: [AppImage, deb, flatpak]
+  maintainer: schmayterling
+# Pinned because electron-builder 26 defaults to end-of-life 20.08 runtimes.
+flatpak:
+  runtimeVersion: '25.08'
+  baseVersion: '25.08'

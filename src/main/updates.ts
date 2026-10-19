@@ -105,8 +105,9 @@ export async function loadUpdates() {
     ((process.platform === 'darwin' &&
       ['arm64', 'x64'].includes(process.arch)) ||
       (process.platform === 'win32' && process.arch === 'x64') ||
+      // Debian and Flatpak installs are replaced by installing a newer package.
       (process.platform === 'linux' &&
-        process.arch === 'x64' &&
+        ['arm64', 'x64'].includes(process.arch) &&
         !!process.env.APPIMAGE))
   state.message = state.supported
     ? 'Hibi checks for updates automatically. You choose when to download and install.'

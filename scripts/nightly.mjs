@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 
 export const platforms = [
   'linux-x64',
+  'linux-arm64',
   'windows-x64',
   'macos-arm64',
   'macos-x64',
@@ -269,7 +270,11 @@ export function releaseNotes(release, repository, checksums) {
       download('windows', '-win-x64.exe'),
       download('macOS (intel)', '-mac-x64.dmg'),
       download('macOS (apple silicon)', '-mac-arm64.dmg'),
-      download('linux (appImage)', '.AppImage'),
+      ...['x64', 'arm64'].flatMap((arch) =>
+        ['AppImage', 'deb', 'flatpak'].map((format) =>
+          download(`linux ${arch} (${format})`, `-linux-${arch}.${format}`),
+        ),
+      ),
     ].join(' • '),
     '',
     '---',

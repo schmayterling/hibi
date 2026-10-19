@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "license": "GPL-3.0-only",
   "description": "hibi desktop",
+  "homepage": "https://github.com/schmayterling/hibi",
   "private": true,
   "type": "module",
   "main": "out/main/index.js",

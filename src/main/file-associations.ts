@@ -42,7 +42,8 @@ async function macDefaults(mode: 'get' | 'set', extensions: string[]) {
 
 export async function getFileAssociations(): Promise<FileAssociationState> {
   const state: FileAssociationState = {
-    available: app.isPackaged,
+    // Flatpak's sandbox cannot change host defaults; its exported entry offers Open With.
+    available: app.isPackaged && !process.env.FLATPAK_ID,
     systemSettings: process.platform === 'win32',
     defaults: [],
   }
@@ -141,6 +142,10 @@ export async function setFileAssociation(value: unknown): Promise<void> {
   if (typeof value !== 'string' || !Object.hasOwn(fileAssociations, value))
     throw new Error('Unknown document format.')
   if (!app.isPackaged) throw new Error('Install Hibi to manage file defaults.')
+  if (process.env.FLATPAK_ID)
+    throw new Error(
+      'Choose Hibi in your system settings or your file manager’s Open With menu.',
+    )
   if (
     value !== 'text' &&
     !getAddonStates().some(({ id, enabled }) => id === value && enabled)

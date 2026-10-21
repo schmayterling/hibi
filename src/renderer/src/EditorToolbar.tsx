@@ -24,7 +24,7 @@ import {
 } from '../../ui/Controls'
 import type { ToolbarItem, ToolbarPreferences } from '../../ui/toolbar'
 import type { ViewMode } from './Editor'
-import { toolbar } from './toolbar'
+import { defaultToolbarOrder, toolbar } from './toolbar'
 import './toolbar.css'
 
 function useReorder() {
@@ -368,8 +368,12 @@ export function ToolbarSettings() {
               dropdown.
             </p>
             <Button
-              disabled={!preferences.order?.length}
-              onClick={() => toolbar.setPreferences({ order: [] })}
+              disabled={
+                preferences.order?.join() === defaultToolbarOrder.join()
+              }
+              onClick={() =>
+                toolbar.setPreferences({ order: defaultToolbarOrder })
+              }
             >
               Reset order
             </Button>

@@ -36,6 +36,8 @@ To keep one file open at a time, turn off **Settings → Editor → Documents �
 
 Select text, then choose a toolbar action. In side-by-side view, formatting actions are available while the source pane is focused. The toolbar offers tools for the current format, with extra buttons in the **More** menu. Within an editable formatted table, additional actions let you add or remove rows and columns.
 
+New profiles start with undo and redo, bold and italic, two heading levels, lists, links, and images. Other formatting actions stay in **More**. Tags, workspace graph, and keyboard sound buttons start hidden; their commands remain available. Existing toolbar layouts are preserved.
+
 To resize a table column or row in Normal view, drag the right or bottom border of a cell. Columns and rows never shrink below their content. Double-click a border to return that column or row to its automatic size. Sizes are not part of the Markdown, so resizing never changes the file or adds an undo step. For files in a workspace, Hibi remembers sizes in `.hibi/layout.json`. Files outside a workspace keep their sizes only until you close them. Moving a table with Block dragging in Normal view keeps its sizes. Saved layouts still use table order and header text, so reordering tables or editing their headers in Source view or another app can reset sizes. Exports use automatic sizes.
 
 In Normal view and its side-by-side preview, soft line breaks and surrounding spaces or tabs display as a single space, including inside task items. Repeated spaces and tabs elsewhere keep their width.

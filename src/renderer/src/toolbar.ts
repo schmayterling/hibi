@@ -7,6 +7,48 @@ import type {
 } from '../../ui/toolbar'
 
 const key = 'hibi:toolbar'
+export const defaultToolbarOrder = [
+  'format.undo',
+  'format.redo',
+  'format.bold',
+  'format.italic',
+  'format.heading-1',
+  'format.heading-2',
+  'format.bullet-list',
+  'format.numbered-list',
+  'format.checklist',
+  'format.link',
+  'format.image',
+] as const
+const defaultPlacements: NonNullable<ToolbarPreferences['placements']> = {
+  'format.strike': 'menu',
+  'format.inline-code': 'menu',
+  'format.subscript': 'menu',
+  'format.subtext': 'menu',
+  'format.paragraph': 'menu',
+  'format.heading-3': 'menu',
+  'format.heading-4': 'menu',
+  'format.heading-5': 'menu',
+  'format.heading-6': 'menu',
+  'format.indent': 'menu',
+  'format.outdent': 'menu',
+  'format.quote': 'menu',
+  'format.code-block': 'menu',
+  'format.divider': 'menu',
+  'format.hard-break': 'menu',
+  'format.unlink': 'menu',
+  'format.table': 'menu',
+  'format.row-before': 'menu',
+  'format.row-after': 'menu',
+  'format.row-delete': 'menu',
+  'format.column-before': 'menu',
+  'format.column-after': 'menu',
+  'format.column-delete': 'menu',
+  'format.table-delete': 'menu',
+  'tags.browse': 'hidden',
+  'graph.open': 'hidden',
+  'keybeats.mute': 'hidden',
+}
 const validId = (id: unknown): id is string =>
   typeof id === 'string' && /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/.test(id)
 const validOrder = (value: unknown): string[] =>
@@ -27,9 +69,13 @@ function load(): ToolbarPreferences {
     visible: true,
     mode: 'icons',
     autoHide: false,
+    order: defaultToolbarOrder,
+    placements: defaultPlacements,
   }
   try {
-    const saved = JSON.parse(localStorage.getItem(key) ?? '{}')
+    const stored = localStorage.getItem(key)
+    if (stored === null) return loaded
+    const saved = JSON.parse(stored)
     if (typeof saved?.visible === 'boolean') loaded.visible = saved.visible
     if (typeof saved?.autoHide === 'boolean') loaded.autoHide = saved.autoHide
     if (['icons', 'icons-and-text', 'text'].includes(saved?.mode))

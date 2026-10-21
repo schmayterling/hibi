@@ -25,11 +25,41 @@ test('toolbar placements persist, keep menu-only actions in overflow, and recove
   page.setDefaultTimeout(7000)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.setViewportSize({ width: 1800, height: 900 })
+  await waitForDocumentEditor(app, page)
+  const initialBar = page.getByRole('navigation', { name: /editor toolbar/i })
+  assert.deepEqual(
+    await initialBar
+      .locator(':scope > [data-toolbar-id]')
+      .evaluateAll((items) => items.map((item) => item.dataset.toolbarId)),
+    [
+      'format.undo',
+      'format.redo',
+      'format.bold',
+      'format.italic',
+      'format.heading-1',
+      'format.heading-2',
+      'format.bullet-list',
+      'format.numbered-list',
+      'format.checklist',
+      'format.link',
+      'format.image',
+    ],
+  )
+  await mkdir('test-results', { recursive: true })
+  await page.screenshot({ path: 'test-results/toolbar-defaults.png' })
+  await initialBar
+    .getByRole('button', { name: /more formatting actions/i })
+    .click()
+  const initialMenu = initialBar.getByRole('menu')
+  for (const id of ['inline-code', 'heading-3', 'code-block', 'table'])
+    await initialMenu.locator(`[data-toolbar-id="format.${id}"]`).waitFor()
+  await page.keyboard.press('Escape')
   await page.evaluate(() =>
     localStorage.setItem(
       'hibi:toolbar',
       JSON.stringify({
         autoHide: false,
+        order: ['format.italic', 'format.bold'],
         placements: {
           'format.table-delete': 'menu',
           'future.action': 'menu',
@@ -51,6 +81,14 @@ test('toolbar placements persist, keep menu-only actions in overflow, and recove
   const menu = bar.getByRole('menu', { name: /more formatting actions/i })
   const more = bar.getByRole('button', { name: /more formatting actions/i })
   await inline('bold').waitFor()
+  assert.deepEqual(
+    await bar
+      .locator(':scope > [data-toolbar-id]')
+      .evaluateAll((items) =>
+        items.slice(0, 2).map((item) => item.dataset.toolbarId),
+      ),
+    ['format.italic', 'format.bold'],
+  )
   assert.equal(
     await more.isVisible(),
     false,

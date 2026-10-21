@@ -2,7 +2,7 @@
 
 Open **Settings → Appearance** and choose **System**, **Light**, or **Dark**. System follows your operating system's appearance. You can choose a different palette for light and dark mode.
 
-Choose **hibsy** for a dark charcoal palette with lavender accents and muted gold highlights.
+Choose **hibsy** (inspired by notesy) for a dark charcoal palette with lavender accents and muted gold highlights.
 
 ## Exported documentation
 

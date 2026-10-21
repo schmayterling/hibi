@@ -60,7 +60,7 @@ const palettes: ColorschemeInput[] = [
     author: 'may',
     license: {
       name: 'Hibi',
-      text: 'Hibsy palette. Included with hibi.',
+      text: 'Hibsy palette (inspired by notesy). Included with hibi.',
     },
   },
   {

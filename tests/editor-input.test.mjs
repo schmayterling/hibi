@@ -182,7 +182,14 @@ test('formatting toolbar states match each action check across selections, typin
       await page.waitForFunction(
         () => {
           const { expected, actual } = window.__toolbarStates()
-          return JSON.stringify(actual) === JSON.stringify(expected)
+          return (
+            Object.keys(actual).length === Object.keys(expected).length &&
+            Object.entries(expected).every(
+              ([id, state]) =>
+                actual[id]?.pressed === state.pressed &&
+                actual[id]?.disabled === state.disabled,
+            )
+          )
         },
         undefined,
         { timeout: APP_STATE_TIMEOUT },

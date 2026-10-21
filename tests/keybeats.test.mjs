@@ -174,6 +174,16 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
     path: 'test-results/keybeats-settings.png',
     animations: 'disabled',
   })
+  await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
+  await page.locator('.toolbar-order summary').click()
+  await page
+    .locator('.toolbar-order [data-toolbar-id="keybeats.mute"] button')
+    .click()
+  const placement = page.getByRole('combobox', {
+    name: /^toolbar placement for mute keyboard sounds$/i,
+  })
+  assert.equal(await placement.inputValue(), 'hidden')
+  await placement.selectOption('toolbar')
   await page.getByRole('button', { name: /^back to app$/i }).click()
   const toolbar = page.getByRole('navigation', { name: /editor toolbar/i })
   await toolbar.waitFor()

@@ -35,7 +35,7 @@ function contrast(a, b) {
 }
 
 test('bundled palettes retain licenses, provide every role, and keep text readable', async () => {
-  assert.equal(bundledColorschemes.length, 9)
+  assert.equal(bundledColorschemes.length, 10)
   for (const scheme of bundledColorschemes) {
     assert.deepEqual(
       Object.keys(scheme.colors).sort(),

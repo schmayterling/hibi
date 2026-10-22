@@ -253,7 +253,7 @@ export function SettingsScreen({
     if (!opening) return
     const target = sidebarOpen
       ? (screen.current?.querySelector<HTMLElement>(
-          '[role="tab"][aria-selected="true"]',
+          '.settings-sidebar [role="tab"][aria-selected="true"]',
         ) ?? search.current)
       : screen.current?.querySelector<HTMLElement>('.settings-content')
     target?.focus({ preventScroll: true })

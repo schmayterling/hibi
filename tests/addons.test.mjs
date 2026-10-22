@@ -410,7 +410,8 @@ test('plugin pages, metadata, shared controls, and full source vim editing', {
   assert.equal(await page.locator('[data-status-id^="vim."]').count(), 0)
   const beforePlain = await read()
   await source.press('End')
-  await source.pressSequentially(' plain')
+  // One edit keeps undo independent of per-key delays on hosted runners.
+  await page.keyboard.insertText(' plain')
   assert.ok((await read()).includes(' plain'))
   await source.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z')
   assert.equal(await read(), beforePlain)

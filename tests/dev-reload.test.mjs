@@ -30,7 +30,8 @@ for (const scenario of ['renderer', 'main', 'catalog'])
   test(
     `development ${scenario} updates preserve documents and addon ownership`,
     {
-      timeout: scenarioTimeout,
+      // Main covers nine rebuilds and guarded restarts, including cold Intel builds.
+      timeout: scenario === 'main' ? 300000 : scenarioTimeout,
     },
     (t) => watchDevelopment(scenario, t),
   )
@@ -518,8 +519,9 @@ dialog.showMessageBox = (...args) => {
     phase(label)
     const end = Date.now() + timeout
     while (Date.now() < end) {
+      t.signal.throwIfAborted()
       if (await predicate()) return
-      await delay(100)
+      await delay(100, undefined, { signal: t.signal })
     }
     assert.fail(`${label}\n${output.slice(-2500)}`)
   }

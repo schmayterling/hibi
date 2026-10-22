@@ -50,7 +50,7 @@ test('pinned native compiler sends package requests through the denying proxy', 
     server.close()
   })
   const proxy = `http://127.0.0.1:${server.address().port}`
-  const script = `import { writeSync } from 'node:fs'; writeSync(1, 'module-start\\n'); const { NodeCompiler } = await import('@myriaddreamin/typst-ts-node-compiler'); writeSync(1, 'module-done\\n'); writeSync(1, 'font-start\\n'); const compiler = NodeCompiler.create(); writeSync(1, 'font-done\\n'); console.log(compiler.compile({ mainFileContent: '#import "@preview/hibi-nonexistent-package:0.0.0": *' }).hasError());`
+  const script = `import { writeSync } from 'node:fs'; writeSync(1, 'module-start\\n'); const { NodeCompiler } = await import('@myriaddreamin/typst-ts-node-compiler'); writeSync(1, 'module-done\\n'); writeSync(1, 'font-start\\n'); const compiler = NodeCompiler.create(); writeSync(1, 'font-done\\n'); console.log(String(compiler.compile({ mainFileContent: '#import "@preview/hibi-nonexistent-package:0.0.0": *' }).hasError()));`
   const stdout = await new Promise((resolve, reject) => {
     let timer
     let output = ''

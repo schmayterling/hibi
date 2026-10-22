@@ -8,7 +8,7 @@ Exported navigation uses the same compact tooltips as Hibi. Hover over an unavai
 
 Export options are saved for each workspace. Turning off Export keeps them for the next time you enable it. If saved options cannot be read, the dialog shows defaults and leaves the stored copy untouched.
 
-See [Exporting](../../../docs/guides/exporting.md) for more options.
+See [Exporting](https://docs.hibi.garden/#page=guides%2Fexporting.md) for more options.
 
 ## Credits
 

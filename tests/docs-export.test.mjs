@@ -10,11 +10,14 @@ test('public documentation exports exclude agent notes', async (t) => {
   t.after(() => rm(folder, { recursive: true, force: true }))
   await mkdir(join(folder, 'ai-agents'))
   const source =
-    '---\ntitle: Getting started\ndescription: Public guide.\n---\n\n# User guide'
+    '---\ntitle: Getting started\ndescription: Public guide.\n---\n\n# User guide\n\n[Source](https://github.com/schmayterling/hibi/blob/main/src/addons/api.ts)'
   await writeFile(join(folder, 'README.md'), source)
   await writeFile(join(folder, 'ai-agents', 'README.md'), '# Internal notes')
   const output = join(folder, 'index.html')
-  execFileSync(process.execPath, ['scripts/export-docs.mjs', folder, output])
+  const revision = 'a'.repeat(40)
+  execFileSync(process.execPath, ['scripts/export-docs.mjs', folder, output], {
+    env: { ...process.env, HIBI_SOURCE_REVISION: revision },
+  })
   const html = await readFile(output, 'utf8')
   const data = JSON.parse(
     html.match(/<script id="workspace-data"[^>]*>([\s\S]*?)<\/script>/)[1],
@@ -25,6 +28,7 @@ test('public documentation exports exclude agent notes', async (t) => {
   )
   assert.equal(data.pages[0].markdown, source)
   assert.equal(data.pages[0].title, 'Getting started')
+  assert.ok(data.pages[0].html.includes(`/blob/${revision}/src/addons/api.ts`))
   assert.doesNotMatch(data.pages[0].html, /title:|description:/)
   const staticOutput = join(folder, 'website')
   const args = [

@@ -19,6 +19,7 @@ export default function AddonReadme({ id }: { id: string }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const host = useRef<HTMLDivElement>(null)
+  const pendingAnchor = useRef<string | null>(null)
   const path = history.at(-1)!
   useEffect(() => {
     let active = true
@@ -160,7 +161,15 @@ export default function AddonReadme({ id }: { id: string }) {
     return () => {
       active = false
     }
-  }, [id, path])
+  }, [id, path, history.length])
+
+  useEffect(() => {
+    if (loading || !pendingAnchor.current) return
+    host.current
+      ?.querySelector(`#readme-${CSS.escape(pendingAnchor.current)}`)
+      ?.scrollIntoView({ block: 'start' })
+    pendingAnchor.current = null
+  }, [loading])
 
   const follow = useCallback(
     async (event: MouseEvent) => {
@@ -175,6 +184,22 @@ export default function AddonReadme({ id }: { id: string }) {
               `#readme-${CSS.escape(decodeURIComponent(href.slice(1)))}`,
             )
             ?.scrollIntoView({ block: 'start' })
+        } else if (href.startsWith('https://docs.hibi.garden/')) {
+          const url = new URL(href)
+          const params = new URLSearchParams(url.hash.slice(1))
+          const document =
+            url.pathname === '/'
+              ? await window.hibi
+                  .getAddonDocumentation(
+                    id,
+                    `../../../docs/${params.get('page') || 'README.md'}`,
+                  )
+                  .catch(() => null)
+              : null
+          if (document) {
+            pendingAnchor.current = params.get('anchor')
+            setHistory((items) => [...items, document.path])
+          } else await window.hibi.openAddonDocumentationLink(href)
         } else if (external.test(href)) {
           await window.hibi.openAddonDocumentationLink(
             href.startsWith('//') ? `https:${href}` : href,
@@ -184,7 +209,7 @@ export default function AddonReadme({ id }: { id: string }) {
         setError(errorMessage(error))
       }
     },
-    [path],
+    [id, path],
   )
   useEffect(() => {
     const element = host.current

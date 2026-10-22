@@ -87,7 +87,7 @@ English uses WordNet definitions, synonym groups, antonyms, and explicit inflect
 
 CC-CEDICT, CC-Canto, and JMdict do not supply a general thesaurus. Their packs therefore provide definitions and readings; synonym results depend on available source relations or the online fallback. Filipino, French, and German retain Wiktionary synonym and antonym fields. No extra thesaurus dataset is bundled.
 
-See [offline pack help](../../../docs/features/dictionary-packs.md) and the [pack implementation and measurements](../../../docs/development/addons/dictionary-packs.md).
+See [offline pack help](https://docs.hibi.garden/#page=features%2Fdictionary-packs.md) and the [pack implementation and measurements](https://docs.hibi.garden/#page=development%2Faddons%2Fdictionary-packs.md).
 
 ### Offline dictionary sources
 

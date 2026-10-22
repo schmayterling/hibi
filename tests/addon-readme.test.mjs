@@ -20,7 +20,7 @@ test('addon readmes render safely without activation, and settings headers have 
   const folder = join(root, 'installed-addons', 'readme-fixture')
   await mkdir(folder, { recursive: true })
   const source =
-    '# Readme fixture\n\n**Bold text** and `code`.\n\n| Name | Value |\n| --- | --- |\n| Test | Works |\n\n- [x] Checked item\n\n![Local image](pixel.png)\n\n[More help](guide.md) · [Website](https://example.com/help)\n\n<img src="missing.png" onerror="window.readmeAttack = true"><script>window.readmeAttack = true</script><iframe src="https://example.com"></iframe><div class="sidebar" style="position:fixed" id="app">Plain content</div>'
+    '# Readme fixture\n\n**Bold text** and `code`.\n\n| Name | Value |\n| --- | --- |\n| Test | Works |\n\n- [x] Checked item\n\n![Local image](pixel.png)\n\n[More help](guide.md) · [Website](https://example.com/help) · [Hibi help](https://docs.hibi.garden/#page=editing%2Ftypst.md)\n\n<img src="missing.png" onerror="window.readmeAttack = true"><script>window.readmeAttack = true</script><iframe src="https://example.com"></iframe><div class="sidebar" style="position:fixed" id="app">Plain content</div>'
   const files = [
     'README.md',
     'guide.md',
@@ -200,6 +200,11 @@ test('addon readmes render safely without activation, and settings headers have 
     await app.evaluate(() => globalThis.readmeLink),
     'https://example.com/help',
   )
+  await modal.getByRole('link', { name: 'Hibi help', exact: true }).click()
+  assert.equal(
+    await app.evaluate(() => globalThis.readmeLink),
+    'https://docs.hibi.garden/#page=editing%2Ftypst.md',
+  )
   await modal.getByRole('link', { name: 'More help', exact: true }).click()
   await modal.getByRole('heading', { name: 'More help', level: 1 }).waitFor()
   await modal.getByRole('button', { name: 'Back', exact: true }).click()
@@ -225,6 +230,32 @@ test('addon readmes render safely without activation, and settings headers have 
     await row.getByRole('button', { name: 'View readme', exact: true }).count(),
     0,
   )
+  await filter.fill('typst')
+  await page
+    .locator('[data-setting-id="addon-typst"]')
+    .getByRole('button', { name: /readme$/i })
+    .click()
+  const typstReadme = page.getByRole('dialog', {
+    name: /^typst$/i,
+    exact: true,
+  })
+  await typstReadme.getByRole('heading', { name: 'Typst', level: 1 }).waitFor()
+  await app.evaluate(() => {
+    globalThis.readmeLink = null
+  })
+  await typstReadme
+    .getByRole('link', { name: 'Typst guide', exact: true })
+    .click()
+  await typstReadme
+    .getByRole('heading', { name: 'Write and export', level: 2 })
+    .waitFor()
+  assert.equal(await app.evaluate(() => globalThis.readmeLink), null)
+  await typstReadme.getByRole('button', { name: 'Back', exact: true }).click()
+  await typstReadme
+    .getByRole('link', { name: 'Typst guide', exact: true })
+    .waitFor()
+  await page.keyboard.press('Escape')
+  await typstReadme.waitFor({ state: 'hidden' })
   await filter.fill('keybeats')
   const keybeats = page.locator('[data-setting-id="addon-keybeats"]')
   if (!(await keybeats.getByRole('checkbox').isChecked()))

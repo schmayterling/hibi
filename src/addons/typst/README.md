@@ -24,7 +24,7 @@ Automatic flavor detection requires a closed Typst fence. A Typst example inside
 
 Local imports must stay inside your workspace, or the current file's folder when no workspace is open. Packages are not downloaded automatically.
 
-See the [Typst guide](../../../docs/editing/typst.md) for more help.
+See the [Typst guide](https://docs.hibi.garden/#page=editing%2Ftypst.md) for more help.
 
 ## Credits
 

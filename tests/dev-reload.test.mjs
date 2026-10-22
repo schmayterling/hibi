@@ -174,6 +174,48 @@ async function watchDevelopment(scenario, t) {
     `,
   }))
     await writeFile(join(localFolder, name), content)
+  // A tiny built-in editor-input probe covers bundled addon code updates without shipping one.
+  const typingProbe = join(root, 'src/addons/typing-probe')
+  await mkdir(typingProbe)
+  for (const [name, content] of Object.entries({
+    'hibi-addon.json': JSON.stringify({
+      id: 'typing-probe',
+      name: 'Typing probe',
+      description: 'Counts committed editor input.',
+      apiVersion: 2,
+      kind: 'extension',
+      version: '1.0.0',
+      authors: [{ displayName: 'Test' }],
+      defaultEnabled: false,
+      startup: 'background',
+      entry: 'index.ts',
+    }),
+    'README.md': '# Typing probe',
+    'manifest.ts': `
+      import type { AddonManifest } from '../api'
+      import details from './hibi-addon.json'
+      const { entry: _entry, ...manifest } = details
+      export default manifest as AddonManifest & typeof manifest
+    `,
+    'index.ts': `
+      import { defineAddon } from '../api'
+      import manifest from './manifest'
+      export default defineAddon({
+        manifest,
+        start(context) {
+          let characters = 0
+          const item = context.statusBar.register({
+            id: 'count', label: '0', tooltip: 'Original typing probe runtime.',
+          })
+          context.editor.onInput((event) => {
+            characters += event.characters
+            item.update({ label: String(characters) })
+          })
+        },
+      })
+    `,
+  }))
+    await writeFile(join(typingProbe, name), content)
   const previewFolder = join(root, 'src/addons/ui-preview')
   const originalImage =
     "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><rect width='1' height='1' fill='red'/></svg>"
@@ -433,7 +475,7 @@ dialog.showMessageBox = (...args) => {
   await writeFile(
     join(profile, 'addons.json'),
     JSON.stringify({
-      'typing-speed': true,
+      'typing-probe': true,
       'ui-preview': true,
     }),
   )
@@ -553,7 +595,7 @@ dialog.showMessageBox = (...args) => {
       },
     )
     mark('initial renderer bootstrapped')
-    await page.locator('[data-status-id="typing-speed.wpm"]').waitFor()
+    await page.locator('[data-status-id="typing-probe.count"]').waitFor()
   } catch (error) {
     try {
       console.error(
@@ -780,18 +822,18 @@ dialog.showMessageBox = (...args) => {
       'inline css, declared sheets, and theme json update without addon restarts',
     )
 
-    await addonUpdate('typing-speed', 'code', () =>
+    await addonUpdate('typing-probe', 'code', () =>
       replace(
-        'src/addons/typing-speed/index.ts',
-        'This estimates how many words you type per minute.',
-        'Updated typing speed runtime.',
+        'src/addons/typing-probe/index.ts',
+        'Original typing probe runtime.',
+        'Updated typing probe runtime.',
       ),
     )
     await page.waitForFunction(() =>
       document
-        .querySelector('[data-status-id="typing-speed.wpm"]')
+        .querySelector('[data-status-id="typing-probe.count"]')
         ?.getAttribute('data-tooltip')
-        ?.startsWith('Updated typing speed runtime.'),
+        ?.startsWith('Updated typing probe runtime.'),
     )
     assert.equal(
       (await page.evaluate(() => window.hibi.getDocument())).markdown,
@@ -1679,7 +1721,7 @@ dialog.showMessageBox = (...args) => {
     const beforeForgedContract = await captureAddonState()
     for (const fields of [
       { network: { origins: ['https://example.com'] } },
-      { requires: { addons: [{ id: 'typing-speed' }] } },
+      { requires: { addons: [{ id: 'typing-probe' }] } },
       { defaultEnabled: false },
     ]) {
       const manifest = { ...bridgeManifest, ...fields }
@@ -1706,7 +1748,7 @@ dialog.showMessageBox = (...args) => {
     )
     Object.assign(localMetadata, {
       network: { origins: ['https://example.com'] },
-      requires: { addons: [{ id: 'typing-speed' }] },
+      requires: { addons: [{ id: 'typing-probe' }] },
     })
     for (const enabled of [false, true]) {
       localMetadata.defaultEnabled = enabled
@@ -1739,7 +1781,7 @@ dialog.showMessageBox = (...args) => {
           requires: localMetadata.requires,
         },
       )
-      await page.locator('[data-status-id="typing-speed.wpm"]').waitFor()
+      await page.locator('[data-status-id="typing-probe.count"]').waitFor()
       await page.locator('[data-status-id="dev-watch-local.probe"]').waitFor({
         state: enabled ? 'visible' : 'detached',
       })

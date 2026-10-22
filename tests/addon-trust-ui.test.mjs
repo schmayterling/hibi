@@ -167,8 +167,9 @@ test('addon trust settings, install review marks, and revoked rows', {
         .locator('#check-revoked-addons:not(:checked):enabled')
         .waitFor()
       assert.deepEqual(await app.evaluate(() => globalThis.trustChanges), [
-        { allowUnsigned: true },
-        { checkRevocations: false },
+        // Main accepts only complete settings.
+        { allowUnsigned: true, checkRevocations: true },
+        { allowUnsigned: true, checkRevocations: false },
       ])
       await app.evaluate(() => {
         globalThis.failTrustSave = true

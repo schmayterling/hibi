@@ -524,10 +524,14 @@ function AddonSecuritySettings() {
     }
   }, [])
   async function save(changes: Partial<AddonTrustSettings>) {
+    // Main validates complete settings; the toggles stay disabled until these load.
+    if (!settings) return
     setSaving(true)
     setError('')
     try {
-      setSettings(await window.hibi.setAddonTrustSettings(changes))
+      setSettings(
+        await window.hibi.setAddonTrustSettings({ ...settings, ...changes }),
+      )
     } catch (error) {
       setError(errorMessage(error))
     } finally {

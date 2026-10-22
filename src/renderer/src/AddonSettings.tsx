@@ -93,6 +93,7 @@ function matches(
   origin = addonRegistry.origin(manifest.id),
 ) {
   return [
+    manifest.id,
     manifest.name,
     manifest.description,
     manifest.kind,
@@ -318,6 +319,14 @@ export function AddonSettings({
             onClick={() => void run(() => window.hibi.openAddonGarden())}
           >
             View on website
+          </Button>
+        )}
+        {garden && (
+          <Button
+            disabled={busy || directory.status === 'loading'}
+            onClick={retry}
+          >
+            Refresh
           </Button>
         )}
         <Button disabled={busy} onClick={() => void fromUrl()}>

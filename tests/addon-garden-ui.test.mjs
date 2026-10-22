@@ -30,6 +30,7 @@ const entries = [
   }),
   entry('garden-update', 'Garden update'),
   entry('vim', 'Vim'),
+  entry('garden-later', 'Later addon'),
 ]
 
 test('hibi garden tab, installs, and addon links', {
@@ -59,9 +60,17 @@ test('hibi garden tab, installs, and addon links', {
       }
       replace('addons:directory', (_event, refresh) => {
         globalThis.directoryCalls.push(refresh)
-        return globalThis.directoryCalls.length === 1
-          ? { entries: [], fetchedAt: null, error: 'Hibi is offline.' }
-          : { entries, fetchedAt: '2026-10-23T00:00:00.000Z' }
+        const calls = globalThis.directoryCalls.length
+        if (calls === 1)
+          return { entries: [], fetchedAt: null, error: 'Hibi is offline.' }
+        // A manual refresh picks up entries published after the first load.
+        return {
+          entries:
+            calls === 2
+              ? entries.filter(({ id }) => id !== 'garden-later')
+              : entries,
+          fetchedAt: '2026-10-23T00:00:00.000Z',
+        }
       })
       replace('addons:directory-install', async (_event, id, openSettings) => {
         globalThis.installs.push([id, openSettings])
@@ -123,6 +132,26 @@ test('hibi garden tab, installs, and addon links', {
         false,
         true,
       ])
+      const later = addons.locator('[data-setting-id="garden-garden-later"]')
+      assert.equal(await later.count(), 0)
+      await addons.getByRole('button', { name: /^refresh$/i }).click()
+      await later.waitFor()
+      assert.deepEqual(await app.evaluate(() => globalThis.directoryCalls), [
+        false,
+        true,
+        true,
+      ])
+      // Search also matches addon IDs.
+      const filter = addons.getByRole('searchbox', { name: /filter addons/i })
+      await filter.fill('garden-theme')
+      await addons.locator('[data-setting-id="garden-garden-theme"]').waitFor()
+      assert.equal(
+        await addons
+          .locator('[data-setting-id="garden-garden-hello"]')
+          .isVisible(),
+        false,
+      )
+      await filter.fill('')
     },
   )
 

@@ -331,7 +331,7 @@ test('sideloads reviewed packages disabled, discovers their settings/themes/comm
   await page
     .locator('.setting-row')
     .filter({ has: page.locator('#addon-fixture-addon') })
-    .getByRole('button', { name: /^remove$/i, exact: true })
+    .getByRole('button', { name: /^uninstall$/i, exact: true })
     .click()
   await page.locator('#addon-fixture-addon').waitFor({ state: 'detached' })
   assert.equal(

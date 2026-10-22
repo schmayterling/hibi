@@ -96,10 +96,18 @@ test('hibi garden tab, installs, and addon links', {
         themes: [],
         source: 'third-party',
       })
-      replace('addons:installed', () => [
+      globalThis.packages = [
         installed('garden-hello', 'Garden hello', '2.0.0'),
         installed('garden-update', 'Garden update', '1.0.0'),
-      ])
+      ]
+      globalThis.removed = []
+      replace('addons:installed', () => globalThis.packages)
+      replace('addons:remove', (_event, id) => {
+        globalThis.removed.push(id)
+        globalThis.packages = globalThis.packages.filter(
+          ({ manifest }) => manifest.id !== id,
+        )
+      })
     },
     { entries },
   )
@@ -184,6 +192,41 @@ test('hibi garden tab, installs, and addon links', {
     const [[id, openSettings]] = await app.evaluate(() => globalThis.installs)
     assert.equal(id, 'garden-hello')
     assert.ok(Array.isArray(openSettings))
+  })
+
+  await t.test('installed garden addons can be uninstalled', async () => {
+    const row = (id) => addons.locator(`[data-setting-id="garden-${id}"]`)
+    await row('garden-update')
+      .getByRole('button', { name: 'Uninstall Garden update' })
+      .waitFor()
+    assert.equal(
+      await row('vim')
+        .getByRole('button', { name: /^uninstall/i })
+        .count(),
+      0,
+    )
+    assert.equal(
+      await row('garden-theme')
+        .getByRole('button', { name: /^uninstall/i })
+        .count(),
+      0,
+    )
+    await row('garden-hello')
+      .getByRole('button', { name: 'Uninstall Garden hello' })
+      .click()
+    await row('garden-hello')
+      .getByRole('button', { name: 'Install Garden hello' })
+      .waitFor()
+    assert.deepEqual(await app.evaluate(() => globalThis.removed), [
+      'garden-hello',
+    ])
+    // The installed tab uses the same label.
+    await installed.click()
+    await addons
+      .locator('[data-setting-id="addon-garden-update"]')
+      .getByRole('button', { name: /^uninstall$/i })
+      .waitFor()
+    await garden.click()
   })
 
   await t.test('addon links queue and run one at a time', async () => {

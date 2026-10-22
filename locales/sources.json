@@ -1281,6 +1281,10 @@
   "7d13045e08a9": [
     "src/addons/mcp-server/Settings.tsx"
   ],
+  "3dd174afbe86": [
+    "src/main/addon-directory.ts",
+    "src/main/sideload.ts"
+  ],
   "a3ef55d8c922": [
     "src/main/links.ts"
   ],
@@ -4506,7 +4510,6 @@
   ],
   "c3812fc4acb8": [
     "src/addons/dictionary/CustomWords.tsx",
-    "src/renderer/src/AddonSettings.tsx",
     "src/renderer/src/addons.ts"
   ],
   "65e648140def": [
@@ -5486,6 +5489,9 @@
   "54c5b809f0a2": [
     "src/main/addon-inventory.ts"
   ],
+  "efc8570003b1": [
+    "src/main/addon-inventory.ts"
+  ],
   "58bb3944d226": [
     "src/main/sideload.ts"
   ],
@@ -6133,6 +6139,9 @@
   "f469169d3df0": [
     "src/main/addon-windows.ts"
   ],
+  "3edb7996e11c": [
+    "src/main/sideload.ts"
+  ],
   "a7742e0a996e": [
     "src/renderer/src/addon-definition.ts"
   ],
@@ -6604,7 +6613,12 @@
     "src/renderer/src/FormattingToolbar.tsx"
   ],
   "fe199528850a": [
-    "src/addons/dictionary/PackSettings.tsx"
+    "src/addons/dictionary/PackSettings.tsx",
+    "src/renderer/src/AddonGarden.tsx",
+    "src/renderer/src/AddonSettings.tsx"
+  ],
+  "f981cf355235": [
+    "src/renderer/src/AddonGarden.tsx"
   ],
   "7786cacd2ef2": [
     "src/addons/dictionary/PackSettings.tsx"

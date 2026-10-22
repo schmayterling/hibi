@@ -419,7 +419,56 @@ test('command-palette export opens options and writes a configured static folder
   await mkdir(profile)
   await writeFile(
     join(profile, 'addons.json'),
-    JSON.stringify({ mermaid: true }),
+    JSON.stringify({ mermaid: true, 'site-probe': true }),
+  )
+  const probe = join(profile, 'installed-addons', 'site-probe')
+  await mkdir(probe, { recursive: true })
+  await writeFile(
+    join(probe, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'site-probe',
+      name: 'Site probe',
+      description: 'Static export integration.',
+      kind: 'extension',
+      apiVersion: 2,
+      version: '1.0.0',
+      capabilities: ['ui'],
+      startup: 'background',
+      defaultEnabled: true,
+      requires: { addons: [{ id: 'documentation' }] },
+      authors: [{ displayName: 'Test' }],
+      entry: 'index.js',
+    }),
+  )
+  await writeFile(
+    join(probe, 'index.js'),
+    `export default () => ({
+    async start(context) {
+      context.site.register({
+        description: 'Adds a static export banner.',
+        css: '.site-probe{font-weight:700}',
+        transform: async rendered => ({
+          ...rendered, html: rendered.html + '<p class="site-probe">Addon export works.</p>',
+        }),
+      })
+      context.colorschemes.register({
+        id: 'blue', name: 'Probe blue', appearance: 'light', author: 'Test',
+        license: {name: 'MIT', text: 'Test theme license.'},
+        colors: {background:'#eef4ff',surface:'#e0e8ff',ink:'#112244',
+          muted:'#445577',accent:'#2244aa',border:'#aabbcc'},
+      })
+      window.siteProbe = await context.addons.ready('documentation')
+    },
+    stop() { delete window.siteProbe },
+  })`,
+  )
+  await writeFile(
+    join(probe, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['hibi-addon.json', 'index.js'],
+      source: 'local',
+    }),
   )
   await mkdir(join(output, 'notes-site'))
   await writeFile(join(output, 'notes-site', 'keep.txt'), 'keep me')
@@ -454,6 +503,18 @@ test('command-palette export opens options and writes a configured static folder
   await page.evaluate(
     ({ id, value }) => localStorage.setItem(`hibi:export:${id}`, value),
     { id: workspaceId, value: legacy },
+  )
+  await page.waitForFunction(() => !!window.siteProbe?.buildSite)
+  assert.match(
+    await page.evaluate(async () => {
+      try {
+        await window.siteProbe.buildSite()
+        return ''
+      } catch (error) {
+        return error.message
+      }
+    }),
+    /Review and save export options/,
   )
   await clickMenu(app, 'Command palette')
   await page
@@ -524,6 +585,12 @@ test('command-palette export opens options and writes a configured static folder
     .getByLabel('Site title', { exact: true })
     .fill('My published garden')
   await modal.getByRole('checkbox', { name: /single html file/i }).uncheck()
+  await modal.getByLabel(/^light theme$/i).selectOption('site-probe.blue')
+  await modal.locator('summary').filter({ hasText: 'Site addons' }).click()
+  assert.equal(
+    await modal.getByRole('checkbox', { name: /Site probe/i }).isChecked(),
+    true,
+  )
   await modal.getByRole('checkbox', { name: /lock theme/i }).check()
   await app.evaluate(({ dialog }, output) => {
     dialog.showOpenDialog = async () => ({
@@ -546,6 +613,35 @@ test('command-palette export opens options and writes a configured static folder
   const exportedIndex = join(output, 'notes-site-2', 'index.html')
   const exportedHtml = await readFile(exportedIndex, 'utf8')
   assert.match(exportedHtml, /My published garden/)
+  assert.match(exportedHtml, /class="site-probe"/)
+  const built = await page.evaluate(() => window.siteProbe.buildSite())
+  assert.equal(built.version, 1)
+  assert.equal(built.pages, 2)
+  const customCss = built.files.find((file) =>
+    file.path.endsWith('/custom.css'),
+  ).content
+  assert.match(customCss, /--background:#eef4ff/)
+  assert.match(customCss, /\.site-probe\{font-weight:700\}/)
+  const omitted = await page.evaluate(() =>
+    window.siteProbe.buildSite({
+      addons: { 'site-probe': false },
+    }),
+  )
+  assert.doesNotMatch(
+    JSON.stringify(omitted),
+    /Addon export works|font-weight:700/,
+  )
+  assert.match(
+    await page.evaluate(async () => {
+      try {
+        await window.siteProbe.buildSite({ passwordProtected: false })
+        return ''
+      } catch (error) {
+        return error.message
+      }
+    }),
+    /Review and save export options/,
+  )
   assert.match(
     exportedHtml.match(/<article class="tiptap">([\s\S]*?)<\/article>/)?.[1],
     /data:image\/svg\+xml,%3Csvg/,
@@ -609,6 +705,17 @@ test('command-palette export opens options and writes a configured static folder
   await modal.waitFor({ state: 'hidden' })
   assert.ok(
     !(await readFile(protectedPath, 'utf8')).includes('My published garden'),
+  )
+  assert.match(
+    await page.evaluate(async () => {
+      try {
+        await window.siteProbe.buildSite()
+        return ''
+      } catch (error) {
+        return error.message
+      }
+    }),
+    /Turn off password protection/,
   )
   assert.equal(
     await page.evaluate(() =>

@@ -15,7 +15,387 @@ import {
 import { MAX_URL_LENGTH } from '../src/shared/host-network.ts'
 
 const windowKey = {}
+const postRequest = (extra = {}) => ({
+  url: 'https://example.test/upload',
+  method: 'POST',
+  body: '{"note":"hëllo 🌱"}',
+  ...extra,
+})
+test('POST requires exact declared public HTTPS origin before grants or DNS', async (t) => {
+  for (const [url, origins] of [
+    ['https://example.test/upload', []],
+    ['https://example.test/upload', ['https://other.test']],
+    ['https://example.test:444/upload', ['https://example.test']],
+    ['https://other.example.test/upload', ['https://example.test']],
+    ...[
+      'localhost',
+      '127.0.0.1',
+      '[::1]',
+      'intranet',
+      'api.local',
+      'api.lan',
+      'api.internal',
+      'home.arpa',
+      'api.home.arpa',
+      'api.localhost',
+    ].map((name) => [`https://${name}/upload`, [`https://${name}`]]),
+  ]) {
+    const { host, destinations, lookups, transports } = fixture(t, {
+      declaredOrigins: () => origins,
+    })
+    failure(
+      await host.requestText('demo', windowKey, postRequest({ url })),
+      'permission-denied',
+    )
+    assert.deepEqual(destinations, [])
+    assert.deepEqual(lookups, [])
+    assert.deepEqual(transports, [])
+  }
+})
+test('POST validates literal method, body, credentials, and no arbitrary headers', async (t) => {
+  const { host, destinations, lookups } = fixture(t, {
+    declaredOrigins: () => ['https://example.test'],
+  })
+  for (const input of [
+    null,
+    [],
+    {},
+    { url: 'https://example.test/upload' },
+    postRequest({ method: 'GET' }),
+    postRequest({ method: 'post' }),
+    postRequest({ body: undefined }),
+    postRequest({ body: {} }),
+    postRequest({ credentialKey: '../token' }),
+    postRequest({ headers: { Authorization: 'Bearer injected' } }),
+    postRequest({ redirect: 'follow' }),
+    postRequest({ url: 'http://example.test/upload' }),
+  ])
+    failure(await host.requestText('demo', windowKey, input), 'invalid-request')
+  assert.deepEqual(destinations, [])
+  assert.deepEqual(lookups, [])
+})
+test('POST always asks fresh upload grant, independent of declared GET grants', async (t) => {
+  let allow = true
+  const { host, destinations, transports } = fixture(t, {
+    declaredOrigins: () => ['https://example.test'],
+    grantDestination: async () => allow,
+  })
+  assert.equal(
+    (await host.request('demo', windowKey, { url: 'https://example.test/' }))
+      .ok,
+    true,
+  )
+  assert.equal(destinations.length, 0)
+  const input = postRequest({ credentialKey: 'token' })
+  assert.equal((await host.requestText('demo', windowKey, input)).ok, true)
+  assert.equal((await host.requestText('demo', windowKey, input)).ok, true)
+  allow = false
+  failure(await host.requestText('demo', windowKey, input), 'permission-denied')
+  assert.equal(transports.length, 3)
+  assert.equal(destinations.length, 3)
+  for (const grant of destinations)
+    assert.deepEqual(grant, {
+      addonId: 'demo',
+      activationGeneration: 1,
+      windowKey,
+      operation: 'post-utf8',
+      url: input.url,
+      credentialKey: 'token',
+      bodyBytes: Buffer.byteLength(input.body, 'utf8'),
+    })
+})
+test('POST upload ceiling counts UTF-8 bytes before consent', async (t) => {
+  const { host, destinations, transports } = fixture(t, {
+    declaredOrigins: () => ['https://example.test'],
+  })
+  const body = 'é'.repeat(32 * 1024 * 1024)
+  failure(
+    await host.requestText(
+      'demo',
+      windowKey,
+      postRequest({ body: `${body}x` }),
+    ),
+    'limit-exceeded',
+  )
+  assert.equal(destinations.length, 0)
+  assert.equal(transports.length, 0)
+  assert.equal(
+    (await host.requestText('demo', windowKey, postRequest({ body }))).ok,
+    true,
+  )
+  assert.equal(destinations[0].bodyBytes, 64 * 1024 * 1024)
+  assert.equal(transports[0].body, body)
+})
+test('POST private DNS still requires separate pinned-address grant', async (t) => {
+  const { host, destinations, privateGrants, transports } = fixture(t, {
+    declaredOrigins: () => ['https://example.test'],
+    resolve: async () => [{ address: '127.0.0.1', family: 4 }],
+    grantPrivateAddress: async () => false,
+  })
+  failure(
+    await host.requestText('demo', windowKey, postRequest()),
+    'permission-denied',
+  )
+  assert.equal(destinations.length, 1)
+  assert.deepEqual(privateGrants, [
+    { ...destinations[0], address: '127.0.0.1' },
+  ])
+  assert.deepEqual(transports, [])
+})
+test('POST cancellation, stale owner/window, and late consent never upload', async (t) => {
+  for (const scenario of ['abort', 'owner', 'window', 'generation']) {
+    const started = deferred()
+    const waiting = deferred()
+    const { host, owners, windows, lookups, transports } = fixture(t, {
+      declaredOrigins: () => ['https://example.test'],
+      timeoutMs: 5000,
+      grantDestination: async () => {
+        started.resolve()
+        return waiting.promise
+      },
+    })
+    const controller = new AbortController()
+    const pending = host.requestText(
+      'demo',
+      windowKey,
+      postRequest(),
+      controller.signal,
+    )
+    await started.promise
+    if (scenario === 'abort') controller.abort()
+    if (scenario === 'owner') host.stopOwner(owners.get('demo'))
+    if (scenario === 'window') {
+      windows.delete(windowKey)
+      host.stopWindow(windowKey)
+    }
+    if (scenario === 'generation')
+      owners.set('demo', { addonId: 'demo', activationGeneration: 2 })
+    if (scenario === 'generation') waiting.resolve(true)
+    failure(await pending, scenario === 'abort' ? 'cancelled' : 'stale')
+    waiting.resolve(true)
+    await new Promise(setImmediate)
+    assert.deepEqual(lookups, [])
+    assert.deepEqual(transports, [])
+  }
+})
+test('POST shares stale credential and late response guards', async (t) => {
+  const staleCredential = fixture(t, {
+    declaredOrigins: () => ['https://example.test'],
+    applyCredential: async () => ({ ok: false, code: 'stale' }),
+  })
+  failure(
+    await staleCredential.host.requestText(
+      'demo',
+      windowKey,
+      postRequest({ credentialKey: 'token' }),
+    ),
+    'stale',
+  )
+  assert.deepEqual(staleCredential.transports, [])
+
+  const started = deferred()
+  const release = deferred()
+  const body = Readable.from([Buffer.from('private response')])
+  const { host, owners } = fixture(t, {
+    declaredOrigins: () => ['https://example.test'],
+    transport: async () => {
+      started.resolve()
+      await release.promise
+      return { status: 409, headers: {}, body }
+    },
+  })
+  const pending = host.requestText('demo', windowKey, postRequest())
+  await started.promise
+  owners.set('demo', { addonId: 'demo', activationGeneration: 2 })
+  release.resolve()
+  failure(await pending, 'stale')
+  assert.equal(body.destroyed, true)
+})
+test('real POST transport pins DNS, sends exact UTF-8 JSON, returns final statuses, and rejects redirects/echo/size/errors', async (t) => {
+  const certificate = await readFile(
+    join(import.meta.dirname, 'fixtures/host-network-upload-cert.pem'),
+    'utf8',
+  )
+  const key = await readFile(
+    join(import.meta.dirname, 'fixtures/host-network-localhost-key.pem'),
+    'utf8',
+  )
+  const originalCAs = getCACertificates('default')
+  setDefaultCACertificates([...originalCAs, certificate])
+  t.after(() => setDefaultCACertificates(originalCAs))
+  const seen = []
+  const server = createServer(
+    { cert: certificate, key },
+    async (request, reply) => {
+      const chunks = []
+      for await (const chunk of request) chunks.push(chunk)
+      seen.push({
+        path: request.url,
+        method: request.method,
+        headers: request.headers,
+        body: Buffer.concat(chunks),
+      })
+      const [, route, code] = request.url.split('/')
+      if (route === 'drop') return request.socket.destroy()
+      reply.setHeader('content-type', 'application/json; charset=utf-8')
+      reply.statusCode = Number(code || 200)
+      if (route === 'redirect') reply.setHeader('location', '/status/200')
+      if (route === 'large') return reply.end('x'.repeat(1024 * 1024 + 1))
+      if (route === 'bomb') {
+        reply.setHeader('content-encoding', 'gzip')
+        return reply.end(gzipSync(Buffer.alloc(1024 * 1024 + 1, 65)))
+      }
+      if (route === 'utf8') return reply.end(Buffer.from([0xff]))
+      reply.end(
+        route === 'echo' ? request.headers.authorization : '{"saved":true}',
+      )
+    },
+  )
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const origin = `https://upload.example.test:${server.address().port}`
+  const grants = []
+  const privateGrants = []
+  let allowed = true
+  const host = new HostNetwork({
+    currentOwner: () => ({ addonId: 'demo', activationGeneration: 1 }),
+    declaredOrigins: () => [origin],
+    isWindowLive: () => true,
+    grantDestination: async (grant) => {
+      grants.push(grant)
+      return allowed
+    },
+    grantPrivateAddress: async (grant) => {
+      privateGrants.push(grant)
+      return true
+    },
+    applyCredential: async (_owner, _window, _key, apply) => {
+      apply('host-only-secret', new AbortController().signal)
+      return { ok: true, value: { applied: true } }
+    },
+    resolve: async (hostname) => {
+      assert.equal(hostname, 'upload.example.test')
+      return [{ address: '127.0.0.1', family: 4 }]
+    },
+  })
+  t.after(() => host.dispose())
+  const body = '{"note":"hëllo 🌱"}'
+  const post = (path, extra = {}) =>
+    host.requestText(
+      'demo',
+      windowKey,
+      postRequest({
+        url: origin + path,
+        body,
+        credentialKey: 'token',
+        ...extra,
+      }),
+    )
+  for (const status of [200, 201, 204, 304, 400, 401, 409, 413, 500, 599]) {
+    assert.deepEqual(await post(`/status/${status}`), {
+      ok: true,
+      value: {
+        url: `${origin}/status/${status}`,
+        status,
+        text: [204, 304].includes(status) ? '' : '{"saved":true}',
+      },
+    })
+  }
+  assert.deepEqual(
+    await post('/status/200', { body: '', credentialKey: undefined }),
+    {
+      ok: true,
+      value: {
+        url: `${origin}/status/200`,
+        status: 200,
+        text: '{"saved":true}',
+      },
+    },
+  )
+  for (const status of [301, 302, 303, 307, 308]) {
+    const count = seen.length
+    failure(await post(`/redirect/${status}`), 'permission-denied')
+    assert.equal(seen.length, count + 1)
+  }
+  for (const status of [200, 401, 500])
+    failure(await post(`/echo/${status}`), 'unavailable')
+  failure(await post('/large'), 'limit-exceeded')
+  failure(await post('/bomb'), 'limit-exceeded')
+  failure(await post('/utf8'), 'unavailable')
+  failure(await post('/drop'), 'unavailable')
+  for (const entry of seen) {
+    const empty = entry.headers.authorization === undefined
+    assert.equal(entry.method, 'POST')
+    assert.equal(
+      entry.headers['content-type'],
+      'application/json; charset=utf-8',
+    )
+    assert.equal(
+      entry.headers['content-length'],
+      String(Buffer.byteLength(empty ? '' : body)),
+    )
+    assert.equal(entry.headers['transfer-encoding'], undefined)
+    assert.equal(entry.headers.cookie, undefined)
+    assert.deepEqual(entry.body, Buffer.from(empty ? '' : body))
+    if (!empty)
+      assert.equal(entry.headers.authorization, 'Bearer host-only-secret')
+  }
+  assert.equal(grants.length, seen.length)
+  assert.equal(privateGrants.length, seen.length)
+  assert.equal(grants[0].operation, 'post-utf8')
+  assert.equal(grants[0].bodyBytes, Buffer.byteLength(body))
+  assert.equal(grants[0].credentialKey, 'token')
+  allowed = false
+  const count = seen.length
+  failure(await post('/status/200'), 'permission-denied')
+  assert.equal(seen.length, count)
+  assert.equal(privateGrants.length, count)
+})
 const publicAddress = { address: '8.8.8.8', family: 4 }
+
+test('POST gives uploads the full network budget after destination and private consent', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const consent = deferred(),
+    privateConsent = deferred(),
+    sent = deferred(),
+    reply = deferred()
+  const { host } = fixture(t, {
+    declaredOrigins: () => ['https://example.test'],
+    grantDestination: () => consent.promise,
+    resolve: async () => [{ address: '127.0.0.1', family: 4 }],
+    grantPrivateAddress: () => privateConsent.promise,
+    transport: async () => {
+      sent.resolve()
+      return reply.promise
+    },
+  })
+  const pending = host.requestText('demo', windowKey, postRequest())
+  await new Promise(setImmediate)
+  t.mock.timers.tick(120_000)
+  consent.resolve(true)
+  await new Promise(setImmediate)
+  t.mock.timers.tick(120_000)
+  privateConsent.resolve(true)
+  await sent.promise
+  t.mock.timers.tick(11_000)
+  reply.resolve(response(201, 'uploaded'))
+  assert.equal((await pending).value.status, 201)
+
+  const started = deferred(),
+    stalled = deferred()
+  const timeout = fixture(t, {
+    declaredOrigins: () => ['https://example.test'],
+    transport: async () => {
+      started.resolve()
+      return stalled.promise
+    },
+  })
+  const expired = timeout.host.requestText('demo', windowKey, postRequest())
+  await started.promise
+  t.mock.timers.tick(60_001)
+  failure(await expired, 'timeout')
+  stalled.resolve(response())
+})
 
 function deferred() {
   let resolve
@@ -65,10 +445,10 @@ function fixture(t, overrides = {}) {
       lookups.push(hostname)
       return (await overrides.resolve?.(hostname)) ?? [publicAddress]
     },
-    transport: async (url, address, signal, bearer) => {
-      transports.push({ url: url.href, address, signal, bearer })
+    transport: async (url, address, signal, bearer, body) => {
+      transports.push({ url: url.href, address, signal, bearer, body })
       return (
-        (await overrides.transport?.(url, address, signal, bearer)) ??
+        (await overrides.transport?.(url, address, signal, bearer, body)) ??
         response()
       )
     },

@@ -23,6 +23,7 @@ test('installed addon network bridge asks for each destination and private addre
       defaultEnabled: true,
       startup: 'background',
       capabilities: [],
+      network: { origins: ['https://upload.example.test'] },
       authors: [{ displayName: 'Test' }],
       entry: 'index.js',
     }),
@@ -33,6 +34,7 @@ test('installed addon network bridge asks for each destination and private addre
       start(context) {
         window.networkProbe = {
           get: (url, credentialKey) => context.host.network.getText({ url, ...(credentialKey ? { credentialKey } : {}) }),
+          post: (request) => context.host.network.requestText(request),
           store: (key, secret) => context.host.credentials.store({ key, secret, mode: 'session' }),
         }
       },
@@ -128,6 +130,49 @@ test('installed addon network bridge asks for each destination and private addre
   )
   await app.evaluate(() => {
     globalThis.networkPrompts = []
+    globalThis.networkResponses = [0, 0]
+  })
+  assert.deepEqual(
+    await page.evaluate(() =>
+      window.networkProbe.post({
+        url: 'https://example.com/upload',
+        method: 'POST',
+        body: '',
+      }),
+    ),
+    { ok: false, code: 'permission-denied' },
+  )
+  assert.deepEqual(await app.evaluate(() => globalThis.networkPrompts), [])
+  const upload = {
+    url: 'https://upload.example.test/note',
+    method: 'POST',
+    body: '{"note":"hëllo 🌱"}',
+  }
+  for (const credentialKey of [undefined, 'api-token'])
+    assert.deepEqual(
+      await page.evaluate((request) => window.networkProbe.post(request), {
+        ...upload,
+        ...(credentialKey ? { credentialKey } : {}),
+      }),
+      { ok: false, code: 'permission-denied' },
+    )
+  const uploads = await app.evaluate(() => globalThis.networkPrompts)
+  assert.equal(uploads.length, 2)
+  for (const prompt of uploads) {
+    assert.match(prompt.message, /upload data/)
+    assert.ok(prompt.detail.includes(upload.url))
+    assert.ok(
+      prompt.detail.includes(
+        `Upload: ${Buffer.byteLength(upload.body)} UTF-8 bytes`,
+      ),
+    )
+    assert.match(prompt.detail, /Only this POST request is allowed/)
+  }
+  assert.match(uploads[0].detail, /Credential: None/)
+  assert.match(uploads[1].detail, /Credential: api-token \(bearer token\)/)
+  assert.equal(JSON.stringify(uploads).includes('bridge-only-secret'), false)
+  await app.evaluate(() => {
+    globalThis.networkPrompts = []
     globalThis.networkResponses = [1, 0]
   })
   assert.deepEqual(
@@ -183,6 +228,13 @@ test('installed addon network bridge asks for each destination and private addre
     globalThis.releaseNetworkGrant({ response: 0 })
   })
   await page.evaluate(() => window.hibi.setAddonEnabled('network-probe', false))
+  assert.deepEqual(
+    await page.evaluate(
+      (request) => window.hibi.requestHostText('network-probe', request),
+      upload,
+    ),
+    { ok: false, code: 'stale' },
+  )
   assert.deepEqual(
     await page.evaluate(() =>
       window.hibi.getHostText('network-probe', { url: 'https://example.com/' }),

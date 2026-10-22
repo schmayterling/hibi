@@ -5,36 +5,9 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
 
-test('documentation breadcrumbs, outline, pagination, and phone navigation', {
-  timeout: 45000,
-}, async (t) => {
-  const folder = await mkdtemp(join(tmpdir(), 'hibi-site-'))
+async function openSite(t, folder, snapshot) {
   const html = join(folder, 'docs.html')
-  const paragraph = 'a short paragraph for this section.\n\n'.repeat(9)
-  const snapshot = {
-    name: 'hibi documentation',
-    appearance: {
-      mode: 'dark',
-      light: 'vscode-light',
-      dark: 'catppuccin-mocha',
-    },
-    pages: [
-      {
-        path: 'README.md',
-        markdown: '# welcome\n\na quiet place for your documentation.',
-      },
-      {
-        path: 'guides/start.md',
-        markdown: `# getting started\n\n## introduction\n\n${paragraph}## install\n\n\`\`\`sh\n${'long-command-'.repeat(30)}\n\`\`\`\n\n| option | value |\n| --- | --- |\n| long | ${'table-value-'.repeat(40)} |\n\n${paragraph}## usage\n\n### first step\n\n${paragraph}### next step\n\n${paragraph}`,
-      },
-      { path: 'guides/next.md', markdown: '# next steps\n\nkeep writing.' },
-    ],
-  }
   const template = await readFile('out/site/template.html', 'utf8')
-  for (const name of ['catppuccin', 'vscode', 'nord'])
-    assert.ok(
-      template.includes(await readFile(`docs/licenses/${name}.md`, 'utf8')),
-    )
   await writeFile(
     html,
     template.replace('__HIBI_WORKSPACE_DATA__', () =>
@@ -66,6 +39,39 @@ test('documentation breadcrumbs, outline, pagination, and phone navigation', {
   }, html)
   const page = await nextWindow
   await page.setViewportSize({ width: 1440, height: 900 })
+  return page
+}
+
+test('documentation breadcrumbs, outline, pagination, and phone navigation', {
+  timeout: 45000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-site-'))
+  const paragraph = 'a short paragraph for this section.\n\n'.repeat(9)
+  const snapshot = {
+    name: 'hibi documentation',
+    appearance: {
+      mode: 'dark',
+      light: 'vscode-light',
+      dark: 'catppuccin-mocha',
+    },
+    pages: [
+      {
+        path: 'README.md',
+        markdown: '# welcome\n\na quiet place for your documentation.',
+      },
+      {
+        path: 'guides/start.md',
+        markdown: `# getting started\n\n## introduction\n\n${paragraph}## install\n\n\`\`\`sh\n${'long-command-'.repeat(30)}\n\`\`\`\n\n| option | value |\n| --- | --- |\n| long | ${'table-value-'.repeat(40)} |\n\n${paragraph}## usage\n\n### first step\n\n${paragraph}### next step\n\n${paragraph}`,
+      },
+      { path: 'guides/next.md', markdown: '# next steps\n\nkeep writing.' },
+    ],
+  }
+  const template = await readFile('out/site/template.html', 'utf8')
+  for (const name of ['catppuccin', 'vscode', 'nord'])
+    assert.ok(
+      template.includes(await readFile(`docs/licenses/${name}.md`, 'utf8')),
+    )
+  const page = await openSite(t, folder, snapshot)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('heading', { name: /^welcome$/i, exact: true }).waitFor()
@@ -269,5 +275,95 @@ test('documentation breadcrumbs, outline, pagination, and phone navigation', {
         await page.screenshot({ path: 'test-results/documentation-mobile.png' })
     }
   }
+  assert.deepEqual(errors, [])
+})
+
+test('exported site applies layout options, addon themes, and heading search', {
+  timeout: 45000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-site-'))
+  const page = await openSite(t, folder, {
+    name: 'custom site',
+    appearance: { mode: 'dark', light: 'vscode-light', dark: 'hibi-dark' },
+    pages: [
+      { path: 'a.md', markdown: '# alpha\n\n## install steps\n\nrun it.' },
+      { path: 'guides/setup.md', markdown: '# setup\n\nconfigure.' },
+      { path: 'guides/README.md', markdown: '# guides overview\n\nstart.' },
+      { path: 'README.md', markdown: '# welcome\n\nhello.' },
+    ],
+    options: {
+      homePage: 'a.md',
+      footer: 'Made with care.',
+      contentWidth: 'wide',
+      outline: false,
+      theme: { mode: 'dark', light: 'vscode-light', dark: 'addon-night' },
+    },
+    colorschemes: [
+      {
+        id: 'addon-night',
+        name: 'Addon night',
+        appearance: 'dark',
+        author: 'test',
+        license: { name: 'MIT', text: 'MIT License' },
+        colors: {
+          background: '#101010',
+          surface: '#202020',
+          ink: '#eeeeee',
+          muted: '#aaaaaa',
+          accent: '#ff8800',
+          border: '#333333',
+        },
+      },
+    ],
+    addons: [
+      { id: 'demo', name: 'Demo', css: '.site-footer{letter-spacing:3px}' },
+    ],
+  })
+  const errors = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  await page.getByRole('heading', { name: /^alpha$/i, exact: true }).waitFor()
+  assert.equal(
+    await page.locator('html').getAttribute('data-colorscheme'),
+    'addon-night',
+  )
+  const footer = page.locator('.site-footer')
+  assert.equal(await footer.innerText(), 'Made with care.')
+  assert.equal(
+    await footer.evaluate((element) => getComputedStyle(element).letterSpacing),
+    '3px',
+  )
+  assert.equal(await page.locator('.site-outline').count(), 0)
+  assert.equal(
+    await page
+      .locator('.site-document-layout')
+      .evaluate((element) => getComputedStyle(element).maxWidth),
+    '1380px',
+  )
+  const tree = page.getByRole('tree')
+  await tree
+    .getByRole('treeitem', { name: /guides overview/i })
+    .first()
+    .click()
+  assert.deepEqual(await tree.getByRole('treeitem').allInnerTexts(), [
+    'alpha',
+    'welcome',
+    'guides overview',
+    'guides overview',
+    'setup',
+  ])
+  const pagination = page.getByRole('navigation', { name: /page navigation/i })
+  await page.getByRole('treeitem', { name: /^alpha$/i, exact: true }).click()
+  await pagination.getByRole('link', { name: /next welcome/i }).waitFor()
+  await page.keyboard.press(
+    process.platform === 'darwin' ? 'Meta+k' : 'Control+k',
+  )
+  await page.keyboard.type('install')
+  await page.getByRole('option', { name: /install steps.*alpha/i }).waitFor()
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(() =>
+    location.hash.includes('anchor=install-steps'),
+  )
+  await mkdir('test-results', { recursive: true })
+  await page.screenshot({ path: 'test-results/documentation-custom.png' })
   assert.deepEqual(errors, [])
 })

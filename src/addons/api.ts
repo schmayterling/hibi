@@ -31,6 +31,13 @@ export type {
   EditorInteractionRequest,
 } from '../shared/editor-interactions'
 export type {
+  HostNetworkFailure,
+  HostTextPostRequest,
+  HostTextRequest,
+  HostTextResponse,
+  HostTextResult,
+} from '../shared/host-network'
+export type {
   DocumentSyntaxFeature,
   MarkdownSyntaxFeature,
 } from '../shared/markdown-syntax'
@@ -404,6 +411,27 @@ export type MarkdownFlavor = {
   }
 }
 export type RenderedMarkdown = { html: string; css: string }
+export type SiteExportPage = {
+  path: string
+  markdown: string
+  id?: string
+}
+/** Static site additions registered only while the providing addon is active. */
+export type SiteExportContribution = {
+  description: string
+  css?: string
+  /** Runs in Hibi during export. Resulting HTML is sanitized; no addon code runs in the site. */
+  transform?: (
+    rendered: RenderedMarkdown,
+    page: Readonly<SiteExportPage>,
+  ) => Promise<RenderedMarkdown>
+}
+/** UTF-8 files built in memory by the documentation addon's version 1 buildSite API. */
+export type SiteExportArtifact = {
+  version: 1
+  files: { path: string; content: string }[]
+  pages: number
+}
 export type DocumentPreviewProps = {
   value: string
   document: Readonly<import('../shared/desktop').DocumentState>
@@ -667,6 +695,10 @@ export type AddonContext = {
   /** Same-renderer API exchange for trusted addons; declarations are not a security boundary. */
   addons: AddonAccessApi
   exports: AddonExportsApi
+  site: {
+    /** Contribute optional CSS and page transforms to workspace exports. Removed on addon stop. */
+    register: (contribution: SiteExportContribution) => () => void
+  }
   /** OS-wide shortcuts work while Hibi runs, even when another app has focus. */
   globalShortcuts: {
     /** Electron accelerator, such as CommandOrControl+Alt+N. Registration can fail if another app owns it. */
@@ -821,6 +853,12 @@ export type AddonContext = {
       /** Ask the user for each HTTPS GET destination and return bounded UTF-8 text. */
       getText: (
         request: import('../shared/host-network').HostTextRequest,
+      ) => Promise<import('../shared/host-network').HostTextResult>
+      /** Ask for each JSON POST upload; returns bounded text for any final HTTP status.
+       * Requires an exact manifest-declared public HTTPS origin. Never follows redirects.
+       */
+      requestText: (
+        request: import('../shared/host-network').HostTextPostRequest,
       ) => Promise<import('../shared/host-network').HostTextResult>
     }
     /** Store and inspect host-owned secrets without returning stored plaintext. */

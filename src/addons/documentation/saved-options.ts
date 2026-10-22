@@ -9,6 +9,44 @@ import {
   validateExportOptions,
 } from './options.ts'
 
+/** Publishing must not guess whether unreadable or unmigrated preferences are protected. */
+export async function publishingOptions(
+  store: AddonStorageHandle<ExportOptions>,
+  legacyText: string | null,
+  name: string,
+  theme: ThemePreferences,
+  input: Partial<ExportOptions> = {},
+): Promise<ExportOptions> {
+  const saved = store.snapshot()
+  if (
+    !input ||
+    typeof input !== 'object' ||
+    Array.isArray(input) ||
+    Object.hasOwn(input, 'passwordProtected') ||
+    !['ready', 'missing'].includes(saved.status) ||
+    (saved.status === 'missing' && legacyText !== null)
+  )
+    throw new Error('Review and save export options before publishing.')
+  const loaded = await loadExportOptions(store, null, name, theme)
+  if (loaded.warning || !loaded.canSave)
+    throw new Error('Review and save export options before publishing.')
+  if (loaded.initial.passwordProtected)
+    throw new Error(
+      'Turn off password protection in export options before publishing.',
+    )
+  return validateExportOptions(
+    exportOptions(
+      {
+        ...loaded.initial,
+        ...input,
+        singleFile: false,
+      },
+      name,
+      theme,
+    ),
+  )
+}
+
 type LoadedOptions = {
   initial: ExportOptions
   warning: string | null

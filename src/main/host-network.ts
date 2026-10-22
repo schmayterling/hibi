@@ -13,6 +13,7 @@ import {
   type HostTextResult,
   LOCAL_HOSTNAME_SUFFIX,
   MAX_URL_LENGTH,
+  parseAddonNetwork,
 } from '../shared/host-network.ts'
 
 const MAX_ACTIVE = 4
@@ -23,6 +24,7 @@ const MAX_PENDING_EXTERNAL = 16
 const MAX_REDIRECTS = 3
 const MAX_RAW_BYTES = 2 * 1024 * 1024
 const MAX_TEXT_BYTES = 1024 * 1024
+const MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 const REQUEST_TIMEOUT_MS = 60_000
 const HOP_TIMEOUT_MS = 10_000
 
@@ -84,7 +86,8 @@ type Grant = {
   readonly addonId: string
   readonly activationGeneration: number
   readonly windowKey: object
-  readonly operation: 'get-utf8'
+  readonly operation: 'get-utf8' | 'post-utf8'
+  readonly bodyBytes?: number
   readonly url: string
   readonly credentialKey?: string
   readonly redirectFrom?: string
@@ -113,6 +116,7 @@ type Options = {
     address: Address,
     signal: AbortSignal,
     bearer?: string,
+    body?: string,
   ) => Promise<Response>
   timeoutMs?: number
   /** Descriptive client name; some public APIs reject requests without one. */
@@ -257,12 +261,13 @@ async function sendHttps(
   signal: AbortSignal,
   bearer?: string,
   userAgent?: string,
+  body?: string,
 ): Promise<Response> {
   return new Promise((resolve, reject) => {
     const request = httpsRequest(
       url,
       {
-        method: 'GET',
+        method: body === undefined ? 'GET' : 'POST',
         agent: false,
         family: address.family,
         maxHeaderSize: 16 * 1024,
@@ -270,6 +275,12 @@ async function sendHttps(
         headers: {
           Accept: 'text/plain, application/json;q=0.9, */*;q=0.1',
           'Accept-Encoding': 'gzip, deflate, br',
+          ...(body === undefined
+            ? {}
+            : {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Length': Buffer.byteLength(body, 'utf8'),
+              }),
           ...(userAgent ? { 'User-Agent': userAgent } : {}),
           ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
         },
@@ -287,7 +298,7 @@ async function sendHttps(
         }),
     )
     request.once('error', reject)
-    request.end()
+    request.end(body, 'utf8')
   })
 }
 
@@ -330,7 +341,7 @@ async function abortable<T>(
   })
 }
 
-/** Main-owned grants and owner/window leases make each GET explicit and revocable.
+/** Main-owned grants and owner/window leases make requests explicit and revocable.
  * Addons still share one renderer; this does not isolate a hostile same-realm addon.
  */
 export class HostNetwork {
@@ -392,6 +403,25 @@ export class HostNetwork {
     input: unknown,
     signal?: AbortSignal,
   ): Promise<HostTextResult> {
+    return this.#request(addonId, windowKey, input, false, signal)
+  }
+
+  async requestText(
+    addonId: string,
+    windowKey: object,
+    input: unknown,
+    signal?: AbortSignal,
+  ): Promise<HostTextResult> {
+    return this.#request(addonId, windowKey, input, true, signal)
+  }
+
+  async #request(
+    addonId: string,
+    windowKey: object,
+    input: unknown,
+    post: boolean,
+    signal?: AbortSignal,
+  ): Promise<HostTextResult> {
     if (this.#disposed) return { ok: false, code: 'stale' }
     if (typeof addonId !== 'string' || !/^[a-z][a-z0-9-]*$/.test(addonId))
       return { ok: false, code: 'invalid-request' }
@@ -419,10 +449,15 @@ export class HostNetwork {
     if (signal?.aborted) controller.abort()
     else signal?.addEventListener('abort', externalAbort, { once: true })
     let timedOut = false
-    const timeout = setTimeout(() => {
-      timedOut = true
-      controller.abort()
-    }, this.#options.timeoutMs ?? REQUEST_TIMEOUT_MS)
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const startTimeout = () => {
+      clearTimeout(timeout)
+      timeout = setTimeout(() => {
+        timedOut = true
+        controller.abort()
+      }, this.#options.timeoutMs ?? REQUEST_TIMEOUT_MS)
+    }
+    if (!post) startTimeout()
     const live = () => {
       const current = this.#options.currentOwner(addonId)
       if (
@@ -444,10 +479,23 @@ export class HostNetwork {
         Array.isArray(input) ||
         !Object.hasOwn(input, 'url') ||
         Object.keys(input).some(
-          (key) => key !== 'url' && key !== 'credentialKey',
+          (key) =>
+            key !== 'url' &&
+            key !== 'credentialKey' &&
+            !(post && (key === 'method' || key === 'body')),
         )
       )
         fail('invalid-request')
+      let body: string | undefined
+      let bodyBytes = 0
+      if (post) {
+        const upload = input as { method?: unknown; body?: unknown }
+        if (upload.method !== 'POST' || typeof upload.body !== 'string')
+          fail('invalid-request')
+        body = upload.body as string
+        bodyBytes = Buffer.byteLength(body, 'utf8')
+        if (bodyBytes > MAX_UPLOAD_BYTES) fail('limit-exceeded')
+      }
       const requestedKey = (input as { credentialKey?: unknown }).credentialKey
       let credentialKey: string | undefined
       if (requestedKey !== undefined) {
@@ -459,6 +507,15 @@ export class HostNetwork {
         else fail('invalid-request')
       }
       let url = parseUrl((input as { url: unknown }).url)
+      if (post) {
+        try {
+          parseAddonNetwork({ origins: [url.origin] })
+        } catch {
+          fail('permission-denied')
+        }
+        if (!this.#options.declaredOrigins?.(addonId).includes(url.origin))
+          fail('permission-denied')
+      }
       let redirectFrom: string | undefined
       for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
         live()
@@ -466,7 +523,8 @@ export class HostNetwork {
           addonId,
           activationGeneration: owner.activationGeneration,
           windowKey,
-          operation: 'get-utf8',
+          operation: post ? 'post-utf8' : 'get-utf8',
+          ...(post ? { bodyBytes } : {}),
           url: url.href,
           ...(credentialKey ? { credentialKey } : {}),
           ...(redirectFrom ? { redirectFrom } : {}),
@@ -484,7 +542,8 @@ export class HostNetwork {
             fail('permission-denied')
           live()
         }
-        if (!declared) await askDestination()
+        if (post || !declared) await askDestination()
+        if (post) startTimeout()
         const hostname = url.hostname.replace(/^\[|\]$/g, '')
         const literalFamily = isIP(hostname)
         const addresses = literalFamily
@@ -513,7 +572,8 @@ export class HostNetwork {
         const selected = publicAddress ?? valid[0]
         if (!selected) fail('unavailable')
         if (!publicAddress) {
-          if (declared) await askDestination()
+          if (declared && !post) await askDestination()
+          if (post) clearTimeout(timeout)
           if (
             !(await this.#call(
               () =>
@@ -525,6 +585,7 @@ export class HostNetwork {
             ))
           )
             fail('permission-denied')
+          if (post) startTimeout()
           live()
         }
         let bearer: string | undefined
@@ -555,23 +616,35 @@ export class HostNetwork {
         }
         let hopTimedOut = false
         const hop = new AbortController()
-        const hopTimer = setTimeout(() => {
-          hopTimedOut = true
-          hop.abort()
-        }, HOP_TIMEOUT_MS)
+        const hopTimer = setTimeout(
+          () => {
+            hopTimedOut = true
+            hop.abort()
+          },
+          post
+            ? (this.#options.timeoutMs ?? REQUEST_TIMEOUT_MS)
+            : HOP_TIMEOUT_MS,
+        )
         const hopSignal = AbortSignal.any([controller.signal, hop.signal])
         let response: Response | undefined
         try {
           response = await this.#call(
             () =>
               this.#options.transport
-                ? this.#options.transport(url, selected, hopSignal, bearer)
+                ? this.#options.transport(
+                    url,
+                    selected,
+                    hopSignal,
+                    bearer,
+                    body,
+                  )
                 : sendHttps(
                     url,
                     selected,
                     hopSignal,
                     bearer,
                     this.#options.userAgent,
+                    body,
                   ),
             hopSignal,
             (late) => late.body.destroy(),
@@ -587,7 +660,7 @@ export class HostNetwork {
           }
           if ([301, 302, 303, 307, 308].includes(response.status)) {
             response.body.destroy()
-            if (credentialKey) fail('permission-denied')
+            if (post || credentialKey) fail('permission-denied')
             if (redirects === MAX_REDIRECTS) fail('limit-exceeded')
             const location = header(response.headers, 'location')
             if (!location) fail('unavailable')
@@ -599,7 +672,8 @@ export class HostNetwork {
             }
             continue
           }
-          if (response.status < 200 || response.status >= 300) {
+          if (post && response.status < 200) fail('unavailable')
+          if (!post && (response.status < 200 || response.status >= 300)) {
             response.body.destroy()
             fail('http-status', response.status)
           }

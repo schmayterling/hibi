@@ -4,15 +4,23 @@ export const MAX_URL_LENGTH = 2048
 export const LOCAL_HOSTNAME_SUFFIX =
   /\.(?:localhost|local|lan|internal|home\.arpa)$/
 
-/** This first network capability reads bounded UTF-8 text over HTTPS GET. */
+/** Main-owned, bounded UTF-8 HTTPS requests. */
 export const HOST_NETWORK_CHANNELS = {
   getText: 'host-network:get-text',
+  requestText: 'host-network:request-text',
 } as const
 
 export interface HostTextRequest {
   readonly url: string
   /** Stored under this addon's host credentials; sent once as an HTTPS bearer token. */
   readonly credentialKey?: string
+}
+
+/** One consented JSON upload to an exact manifest-declared public HTTPS origin. */
+export interface HostTextPostRequest extends HostTextRequest {
+  readonly method: 'POST'
+  /** UTF-8 JSON text, at most 64 MiB. No custom headers or redirects. */
+  readonly body: string
 }
 
 export interface HostTextResponse {

@@ -5,6 +5,7 @@
     "includes": [
       "**",
       "!!out",
+      "!!packages/addon-sdk/dist",
       "!!release",
       "!!test-results",
       "!!package-lock.json",

@@ -418,6 +418,8 @@ if (process.isMainFrame) {
       transport.invoke(HOST_SELECTED_IO_CHANNELS.cancel, owner, handle),
     getHostText: (owner, request) =>
       transport.invoke(HOST_NETWORK_CHANNELS.getText, owner, request),
+    requestHostText: (owner, request) =>
+      transport.invoke(HOST_NETWORK_CHANNELS.requestText, owner, request),
     storeHostCredential: (owner, request) =>
       transport.invoke(HOST_CREDENTIAL_CHANNELS.store, owner, request),
     removeHostCredential: (owner, request) =>

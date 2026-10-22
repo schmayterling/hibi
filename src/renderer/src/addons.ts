@@ -82,6 +82,7 @@ import { projectMarkdown } from './markdown-projection'
 import { markdownSyntax } from './markdown-syntax'
 import { registrationBatch } from './registration-batch'
 import { settingsPages } from './settings-pages'
+import { siteContributions } from './site-contributions'
 import { toolbar } from './toolbar'
 import { viewNotifications } from './view-notifications'
 import {
@@ -168,6 +169,7 @@ type Environment = Omit<
   | 'windows'
   | 'addons'
   | 'exports'
+  | 'site'
 > & {
   openDependencySettings: () => void
   openAddonSettings: (id?: string) => void
@@ -1275,6 +1277,20 @@ export function useAddons(
           addon.start({
             addons: exchangeScope.addons,
             exports: exchangeScope.exports,
+            site: {
+              register(contribution) {
+                if (disposed) return () => {}
+                return track(
+                  batch.register('site', () =>
+                    siteContributions.register(
+                      id,
+                      addon.manifest.name,
+                      contribution,
+                    ),
+                  ),
+                )
+              },
+            },
             storage: storageScope.api,
             documents: {
               listOpen: targetEditScope.listOpen,
@@ -1306,6 +1322,8 @@ export function useAddons(
               network: {
                 getText: (request) =>
                   live(() => window.hibi.getHostText(id, request)),
+                requestText: (request) =>
+                  live(() => window.hibi.requestHostText(id, request)),
               },
               credentials: {
                 store: (request) =>

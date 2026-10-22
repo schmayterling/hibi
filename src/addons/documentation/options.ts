@@ -21,6 +21,14 @@ export type ExportOptions = {
   passwordProtected: boolean
   theme: ThemePreferences
   css: string
+  /** Workspace path of the landing page; empty uses README, index, or the first page. */
+  homePage: string
+  footer: string
+  contentWidth: 'normal' | 'wide'
+  outline: boolean
+  pagination: boolean
+  /** Addon id to whether its site contribution is included; missing ids are included. */
+  addons: Record<string, boolean>
 }
 
 export function exportOptions(
@@ -49,6 +57,20 @@ export function exportOptions(
     lockTheme: input.lockTheme === true,
     passwordProtected: input.passwordProtected === true,
     theme: themePreferences(input.theme ?? theme),
+    homePage: text('homePage'),
+    footer: text('footer'),
+    contentWidth: input.contentWidth === 'wide' ? 'wide' : 'normal',
+    outline: input.outline !== false,
+    pagination: input.pagination !== false,
+    addons: Object.fromEntries(
+      Object.entries(
+        input.addons && typeof input.addons === 'object'
+          ? (input.addons as Record<string, unknown>)
+          : {},
+      ).filter(
+        (entry): entry is [string, boolean] => typeof entry[1] === 'boolean',
+      ),
+    ),
   }
 }
 
@@ -63,10 +85,14 @@ export function validateExportOptions(value: unknown): ExportOptions {
     'language',
     'url',
     'socialImage',
+    'homePage',
+    'footer',
   ] as const)
     if (
       options[key].length >
-      (key === 'url' || key === 'socialImage' ? 2048 : 500)
+      (key === 'url' || key === 'socialImage' || key === 'homePage'
+        ? 2048
+        : 500)
     )
       throw new Error('Shorten the site details before exporting.')
   if (!/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/i.test(options.language))
@@ -102,6 +128,12 @@ export function validateExportOptions(value: unknown): ExportOptions {
         options[key].length > 4 * 1024 * 1024)
     )
       throw new Error('Choose a logo or favicon smaller than 3 MiB.')
+  const addons = Object.keys(options.addons)
+  if (
+    addons.length > 100 ||
+    addons.some((id) => !/^[a-z][a-z0-9-]{0,47}$/.test(id))
+  )
+    throw new Error('Choose valid site addons.')
   if (options.css.length > 128 * 1024)
     throw new Error('Keep CSS overrides below 128 KB.')
   return options

@@ -38,15 +38,27 @@ export function startSite(workspace: SiteData, root: Root) {
     options.theme,
     !options.lockTheme && !options.passwordProtected,
   )
+  colorschemes.batch(() => {
+    for (const scheme of workspace.colorschemes ?? [])
+      try {
+        colorschemes.register(scheme)
+      } catch {
+        /* Skip damaged or duplicate addon colorschemes; bundled ones remain. */
+      }
+  })
   colorschemes.start()
   document.documentElement.lang = options.language
   if (
     !document.getElementById('site-overrides') &&
-    (workspace.css || options.css)
+    (workspace.css || options.css || workspace.addons?.length)
   ) {
     const styles = document.createElement('style')
     styles.id = 'site-overrides'
-    styles.textContent = `${workspace.css ?? ''}\n${options.css}`
+    styles.textContent = [
+      workspace.css ?? '',
+      ...(workspace.addons ?? []).map((addon) => addon.css ?? ''),
+      options.css,
+    ].join('\n')
     document.head.append(styles)
   }
   const pages = workspace.pages.map((page) => {
@@ -66,19 +78,9 @@ export function startSite(workspace: SiteData, root: Root) {
               ?.replace(/\.[^./]+$/, '') ?? page.path)),
     }
   })
-  const home = homePage(pages)
+  const home = homePage(pages, options.homePage)
   const byPath = new Map(pages.map((page) => [page.path, page]))
-  const index = new MiniSearch({
-    fields: ['title', 'path', 'markdown'],
-    storeFields: ['path', 'title'],
-    searchOptions: {
-      prefix: true,
-      fuzzy: 0.2,
-      boost: { title: 4, path: 2 },
-      combineWith: 'AND',
-    },
-  })
-  index.addAll(pages)
+  const folderLabels = new Map<string, string>()
   const navigation: SidebarItem[] = []
   for (const page of pages) {
     const parts = page.path.split('/')
@@ -99,12 +101,29 @@ export function startSite(workspace: SiteData, root: Root) {
             icon: Folder,
             children: [],
           }
+          folderLabels.set(path, folder.label)
           siblings.push(folder)
         }
         siblings = folder.children ?? []
       }
     }
   }
+
+  // The home page and folder overviews lead their level; pagination follows the tree.
+  const leads = (id: string) =>
+    id === home?.path || /(?:^|\/)(?:readme|index)\.md$/i.test(id)
+  const ordered: typeof pages = []
+  const arrange = (items: SidebarItem[]) => {
+    items.sort(
+      (left, right) => Number(leads(right.id)) - Number(leads(left.id)),
+    )
+    for (const item of items) {
+      const page = byPath.get(item.id)
+      if (item.children) arrange(item.children)
+      else if (page) ordered.push(page)
+    }
+  }
+  arrange(navigation)
 
   const siteRoot = new URL(
     document.querySelector('meta[name="hibi-root"]')?.getAttribute('content') ??
@@ -325,6 +344,58 @@ export function startSite(workspace: SiteData, root: Root) {
     return { html: container.innerHTML, outline }
   }
 
+  const rendered = new Map<string, ReturnType<typeof renderMarkdown>>()
+  const renderPage = (page: (typeof pages)[number]) => {
+    let result = rendered.get(page.path)
+    if (!result) {
+      result = renderMarkdown(page.path, page.markdown, page.html)
+      rendered.set(page.path, result)
+    }
+    return result
+  }
+  type SearchEntry = {
+    id: string
+    path: string
+    anchor: string
+    title: string
+    text: string
+  }
+  let searchIndex: MiniSearch<SearchEntry> | undefined
+  // ponytail: the first search renders every page to index its headings; prebuild the index in the exporter if large sites feel slow.
+  const search = (query: string) => {
+    if (!searchIndex) {
+      searchIndex = new MiniSearch<SearchEntry>({
+        fields: ['title', 'text'],
+        storeFields: ['path', 'anchor', 'title'],
+        searchOptions: {
+          prefix: true,
+          fuzzy: 0.2,
+          boost: { title: 4 },
+          combineWith: 'AND',
+        },
+      })
+      searchIndex.addAll(
+        ordered.flatMap((page) => [
+          {
+            id: page.path,
+            path: page.path,
+            anchor: '',
+            title: page.title,
+            text: `${page.path} ${page.markdown}`,
+          },
+          ...renderPage(page).outline.map((heading) => ({
+            id: `${page.path}#${heading.id}`,
+            path: page.path,
+            anchor: heading.id.slice(4),
+            title: heading.label,
+            text: page.title,
+          })),
+        ]),
+      )
+    }
+    return searchIndex.search(query) as unknown as SearchEntry[]
+  }
+
   function DocumentationSite() {
     const dialogs = useDialogs()
     const [current, setCurrent] = useState(() => route())
@@ -335,10 +406,7 @@ export function startSite(workspace: SiteData, root: Root) {
     const sidebarResize = useSidebarResize(256)
     const page = byPath.get(current.path)
     const { html, outline } = useMemo(
-      () =>
-        page
-          ? renderMarkdown(page.path, page.markdown, page.html)
-          : { html: '', outline: [] },
+      () => (page ? renderPage(page) : { html: '', outline: [] }),
       [page],
     )
     useEffect(() => {
@@ -472,9 +540,11 @@ export function startSite(workspace: SiteData, root: Root) {
         cancelAnimationFrame(frame)
       }
     }, [outline])
-    const pageIndex = pages.findIndex((entry) => entry.path === current.path)
-    const previous = pages[pageIndex - 1]
-    const next = pageIndex >= 0 ? pages[pageIndex + 1] : undefined
+    const pageIndex = ordered.findIndex((entry) => entry.path === current.path)
+    const previous = options.pagination ? ordered[pageIndex - 1] : undefined
+    const next =
+      options.pagination && pageIndex >= 0 ? ordered[pageIndex + 1] : undefined
+    const showOutline = options.outline && outline.length > 0
     const folders = current.path.split('/').slice(0, -1)
     const outlineLinks = (
       <nav aria-label="On this page">
@@ -499,12 +569,17 @@ export function startSite(workspace: SiteData, root: Root) {
         ))}
       </nav>
     )
-    const command = (path: string): PaletteCommand => ({
-      id: path,
-      label: byPath.get(path)?.title ?? path,
+    const command = (
+      path: string,
+      anchor = '',
+      label = byPath.get(path)?.title ?? path,
+    ): PaletteCommand => ({
+      id: anchor ? `${path}#${anchor}` : path,
+      label,
+      detail: anchor ? (byPath.get(path)?.title ?? path) : path,
       category: 'documents',
       run: () => {
-        navigate(path)
+        navigate(path, anchor)
         if (innerWidth <= 700) setSidebar(false)
       },
     })
@@ -514,6 +589,7 @@ export function startSite(workspace: SiteData, root: Root) {
       <div
         className="documentation-site"
         data-sidebar={sidebar}
+        data-width={options.contentWidth}
         style={
           { '--sidebar-width': `${sidebarResize.width}px` } as CSSProperties
         }
@@ -578,9 +654,11 @@ export function startSite(workspace: SiteData, root: Root) {
                     <li key={prefix}>
                       <ChevronRight aria-hidden="true" />
                       {target ? (
-                        <a href={destination(target)}>{folder}</a>
+                        <a href={destination(target)}>
+                          {folderLabels.get(prefix) ?? folder}
+                        </a>
                       ) : (
-                        <span>{folder}</span>
+                        <span>{folderLabels.get(prefix) ?? folder}</span>
                       )}
                     </li>
                   )
@@ -670,7 +748,7 @@ export function startSite(workspace: SiteData, root: Root) {
             {page ? (
               <div className="site-document-layout">
                 <div className="site-reading">
-                  {outline.length > 0 && (
+                  {showOutline && (
                     <details className="site-outline-mobile">
                       <summary>
                         On this page
@@ -713,8 +791,11 @@ export function startSite(workspace: SiteData, root: Root) {
                       )}
                     </nav>
                   )}
+                  {options.footer && (
+                    <footer className="site-footer">{options.footer}</footer>
+                  )}
                 </div>
-                {outline.length > 0 && (
+                {showOutline && (
                   <aside className="site-outline">
                     <p>On this page</p>
                     {outlineLinks}
@@ -733,15 +814,16 @@ export function startSite(workspace: SiteData, root: Root) {
         </div>
         {palette && (
           <CommandPalette
-            commands={pages.map((page) => command(page.path))}
+            commands={ordered.map((page) => command(page.path))}
             platform={/Mac/.test(navigator.platform) ? 'darwin' : 'linux'}
             searchCommands={(query) =>
               query.trim()
-                ? index
-                    .search(query)
+                ? search(query)
                     .slice(0, 50)
-                    .map((result) => command(String(result.id)))
-                : pages.slice(0, 50).map((page) => command(page.path))
+                    .map((result) =>
+                      command(result.path, result.anchor, result.title),
+                    )
+                : ordered.slice(0, 50).map((page) => command(page.path))
             }
             onClose={() => setPalette(false)}
           />

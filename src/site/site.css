@@ -172,6 +172,23 @@
 .site-reading {
   min-width: 0;
 }
+.documentation-site[data-width="wide"] .site-document-layout {
+  grid-template-columns: minmax(0, 1000px) minmax(140px, 180px);
+  max-width: 1380px;
+}
+.site-footer {
+  margin-top: 48px;
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+.site-pagination + .site-footer {
+  margin-top: var(--space-5);
+  padding-top: 0;
+  border-top: none;
+}
 /* Exported HTML keeps source newlines between tags; the editor's pre-wrap would render them as blank lines. */
 .site-content article {
   margin: 0;
@@ -308,7 +325,8 @@
   display: none;
 }
 @container (max-width: 900px) {
-  .site-document-layout {
+  .site-document-layout,
+  .documentation-site[data-width="wide"] .site-document-layout {
     display: block;
     max-width: 840px;
     padding: 32px;

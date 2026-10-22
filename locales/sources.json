@@ -8,6 +8,9 @@
   "e218b4dfe0cf": [
     "src/addons/math/engine.ts"
   ],
+  "12954e60379e": [
+    "src/addons/documentation/ExportDialog.tsx"
+  ],
   "39fdfa8c72e8": [
     "src/renderer/src/markdown-syntax.ts"
   ],
@@ -435,6 +438,7 @@
     "src/addons/autocomplete/index.tsx"
   ],
   "d461a493a375": [
+    "src/addons/documentation/ExportDialog.tsx",
     "src/renderer/src/FlavorPicker.tsx"
   ],
   "284cc8732649": [
@@ -767,6 +771,9 @@
   "dbdbacffd9f6": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
+  "4bd42dc4ae96": [
+    "src/addons/documentation/site.ts"
+  ],
   "beb39bee9f77": [
     "src/renderer/src/addons.ts"
   ],
@@ -948,6 +955,9 @@
     "src/main/media.ts"
   ],
   "57886749ce8a": [
+    "src/addons/documentation/options.ts"
+  ],
+  "a493e995dcdd": [
     "src/addons/documentation/options.ts"
   ],
   "23d7c3da66d2": [
@@ -2093,6 +2103,11 @@
   "65431e454a90": [
     "src/renderer/src/AddonSettings.tsx"
   ],
+  "b71bf70fb4dd": [
+    "src/addons/documentation/index.tsx",
+    "src/addons/documentation/native.ts",
+    "src/renderer/src/site-contributions.ts"
+  ],
   "a0d8a682c986": [
     "src/renderer/src/ModalEditingSettings.tsx"
   ],
@@ -2675,6 +2690,9 @@
   "721eb80bb358": [
     "src/renderer/src/WorkspacesSidebar.tsx"
   ],
+  "11d58b08de98": [
+    "src/addons/documentation/ExportDialog.tsx"
+  ],
   "3e7e6d92f47d": [
     "src/renderer/src/markdown-syntax.ts"
   ],
@@ -3237,6 +3255,9 @@
   ],
   "a511909161e1": [
     "src/renderer/src/SettingsScreen.tsx"
+  ],
+  "dfb082b906e1": [
+    "src/addons/documentation/ExportDialog.tsx"
   ],
   "7b4dbd556bfc": [
     "src/addons/autocomplete/Settings.tsx"
@@ -3977,7 +3998,7 @@
   "b177c63e4070": [
     "src/addons/graph/Panel.tsx"
   ],
-  "480cbf78a0ec": [
+  "b0dea4a4624f": [
     "src/addons/documentation/index.tsx"
   ],
   "48a7ae24583b": [
@@ -4121,6 +4142,9 @@
   ],
   "a469ab4ca4e5": [
     "src/site/main.tsx"
+  ],
+  "217fbef16da6": [
+    "src/addons/documentation/ExportDialog.tsx"
   ],
   "60b14317b8ae": [
     "src/addons/asciidoc/hibi-addon.json",
@@ -4561,6 +4585,9 @@
   "14374df2ce3a": [
     "src/ui/Sidebar.tsx"
   ],
+  "b830b6d6e0db": [
+    "src/addons/documentation/site.ts"
+  ],
   "745d884b85d8": [
     "src/addons/mermaid/index.tsx"
   ],
@@ -4698,6 +4725,9 @@
   ],
   "8e4806ed8b01": [
     "src/renderer/src/main.tsx"
+  ],
+  "9cd45e572d5c": [
+    "src/addons/documentation/saved-options.ts"
   ],
   "5f3ceab57e9e": [
     "src/addons/git/hibi-addon.json"
@@ -5093,6 +5123,9 @@
   "465e9a60e6bf": [
     "src/renderer/src/AddonInstallChooser.tsx"
   ],
+  "2ec6e405d90f": [
+    "src/addons/documentation/ExportDialog.tsx"
+  ],
   "28d03596d24e": [
     "src/renderer/src/Introduction.tsx"
   ],
@@ -5255,6 +5288,9 @@
   ],
   "afdf8989956d": [
     "src/addons/git/Panel.tsx"
+  ],
+  "ef6691545d2c": [
+    "src/addons/documentation/ExportDialog.tsx"
   ],
   "dda8aeaeb198": [
     "src/renderer/src/HotkeySettings.tsx"
@@ -5975,6 +6011,9 @@
   "ef1a419b566d": [
     "src/renderer/src/addon-exchange.ts"
   ],
+  "15e43ce876d2": [
+    "src/renderer/src/site-contributions.ts"
+  ],
   "ea84903d5e12": [
     "src/renderer/src/addons.ts"
   ],
@@ -6105,6 +6144,9 @@
   "44aefe8adcd8": [
     "src/renderer/src/addons.ts"
   ],
+  "0e2673e84d68": [
+    "src/renderer/src/site-contributions.ts"
+  ],
   "b738d6071c03": [
     "src/renderer/src/settings-pages.ts"
   ],
@@ -6224,6 +6266,21 @@
   ],
   "dd81768f0d54": [
     "src/renderer/src/document-runtime.ts"
+  ],
+  "d99179d7c45b": [
+    "src/addons/documentation/site.ts"
+  ],
+  "5e007f781071": [
+    "src/addons/documentation/native.ts"
+  ],
+  "2e5b373d5ec6": [
+    "src/addons/documentation/site.ts"
+  ],
+  "89e8d77a7bff": [
+    "src/addons/documentation/site.ts"
+  ],
+  "7a5592fe56ea": [
+    "src/addons/documentation/site.ts"
   ],
   "160f0858f2bd": [
     "src/main/workspace-files.ts"
@@ -6489,6 +6546,9 @@
   ],
   "7c37fac1f988": [
     "src/renderer/src/DependencySettings.tsx"
+  ],
+  "7db7504e1c2f": [
+    "src/addons/documentation/saved-options.ts"
   ],
   "fb665036c60b": [
     "src/renderer/src/SettingsScreen.tsx"
@@ -6849,6 +6909,9 @@
   "eb2260106901": [
     "src/addons/vim/engine.ts"
   ],
+  "668fc66b8e4f": [
+    "src/addons/documentation/ExportDialog.tsx"
+  ],
   "b10fb966d720": [
     "src/addons/keybeats/Settings.tsx"
   ],
@@ -6866,6 +6929,9 @@
   ],
   "fb54cddcd7f2": [
     "src/renderer/src/Introduction.tsx"
+  ],
+  "147170e793c6": [
+    "src/addons/documentation/ExportDialog.tsx"
   ],
   "39965152019f": [
     "src/addons/markdown/flavor-info.ts"

@@ -140,6 +140,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'writeHostExport',
         'cancelHostSelectedIo',
         'getHostText',
+        'requestHostText',
         'storeHostCredential',
         'removeHostCredential',
         'getHostCredentialStatus',

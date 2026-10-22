@@ -455,19 +455,23 @@ const hostNetwork = new HostNetwork({
     askNetworkGrant(
       grant.windowKey,
       signal,
-      grant.credentialKey
-        ? `Allow ${grant.addonId} to use a stored credential for this HTTPS URL?`
-        : `Allow ${grant.addonId} to read this HTTPS URL?`,
-      grant.credentialKey
-        ? `${grant.url}\nCredential: ${grant.credentialKey} (bearer token)\n\nOnly this GET request is allowed. Credentials are not sent to redirects.`
-        : `${grant.url}\n\nOnly this GET request is allowed. Redirects ask again.`,
+      grant.operation === 'post-utf8'
+        ? `Allow ${grant.addonId} to upload data to this HTTPS URL?`
+        : grant.credentialKey
+          ? `Allow ${grant.addonId} to use a stored credential for this HTTPS URL?`
+          : `Allow ${grant.addonId} to read this HTTPS URL?`,
+      grant.operation === 'post-utf8'
+        ? `${grant.url}\nUpload: ${grant.bodyBytes} UTF-8 bytes\nCredential: ${grant.credentialKey ? `${grant.credentialKey} (bearer token)` : 'None'}\n\nOnly this POST request is allowed. Redirects and retries are not allowed.`
+        : grant.credentialKey
+          ? `${grant.url}\nCredential: ${grant.credentialKey} (bearer token)\n\nOnly this GET request is allowed. Credentials are not sent to redirects.`
+          : `${grant.url}\n\nOnly this GET request is allowed. Redirects ask again.`,
     ),
   grantPrivateAddress: (grant, signal) =>
     askNetworkGrant(
       grant.windowKey,
       signal,
       `Allow ${grant.addonId} to contact a local or private address?`,
-      `${grant.url}\nAddress: ${grant.address}${grant.credentialKey ? `\nCredential: ${grant.credentialKey} (bearer token)` : ''}\n\nOnly this GET request is allowed.`,
+      `${grant.url}\nAddress: ${grant.address}${grant.credentialKey ? `\nCredential: ${grant.credentialKey} (bearer token)` : ''}\n\nOnly this ${grant.operation === 'post-utf8' ? 'POST' : 'GET'} request is allowed.`,
     ),
   applyCredential: (owner, windowKey, key, apply) =>
     hostCredentials.applyForApprovedRequest(owner, windowKey, key, apply),
@@ -1614,6 +1618,16 @@ if (!app.requestSingleInstanceLock()) {
           trustedWindow(event)
           return typeof owner === 'string'
             ? hostNetwork.request(owner, networkWindowKey, request)
+            : { ok: false, code: 'invalid-request' }
+        },
+        addonsReady,
+      )
+      handle(
+        HOST_NETWORK_CHANNELS.requestText,
+        (event, owner: unknown, request: unknown) => {
+          trustedWindow(event)
+          return typeof owner === 'string'
+            ? hostNetwork.requestText(owner, networkWindowKey, request)
             : { ok: false, code: 'invalid-request' }
         },
         addonsReady,

@@ -315,6 +315,10 @@ export type DesktopApi = {
     owner: string,
     request: import('./host-network').HostTextRequest,
   ) => Promise<import('./host-network').HostTextResult>
+  requestHostText: (
+    owner: string,
+    request: import('./host-network').HostTextPostRequest,
+  ) => Promise<import('./host-network').HostTextResult>
   storeHostCredential: (
     owner: string,
     request: import('./host-credentials').StoreCredentialRequest,

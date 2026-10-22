@@ -1,9 +1,68 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { exportOptions } from '../src/addons/documentation/options.ts'
-import { loadExportOptions } from '../src/addons/documentation/saved-options.ts'
+import {
+  exportOptions,
+  validateExportOptions,
+} from '../src/addons/documentation/options.ts'
+import {
+  loadExportOptions,
+  publishingOptions,
+} from '../src/addons/documentation/saved-options.ts'
 
 const theme = exportOptions().theme
+
+test('publishing preserves protection and rejects unknown preferences without writes', async () => {
+  let writes = 0
+  const store = (snapshot) => ({
+    snapshot: () => snapshot,
+    set: async () => {
+      writes++
+      throw new Error('must not write while building')
+    },
+  })
+  for (const snapshot of [
+    { status: 'version-mismatch', storedVersion: 2 },
+    { status: 'unavailable', reason: 'corrupt' },
+    { status: 'ready', value: { passwordProtected: false } },
+  ])
+    await assert.rejects(
+      publishingOptions(store(snapshot), null, 'notes', theme),
+      /Review and save/,
+    )
+  const missing = store({ status: 'missing' })
+  await assert.rejects(
+    publishingOptions(missing, '{"passwordProtected":true}', 'notes', theme),
+    /Review and save/,
+  )
+  await assert.rejects(
+    publishingOptions(missing, null, 'notes', theme, {
+      passwordProtected: false,
+    }),
+    /Review and save/,
+  )
+  const ready = (value) => store({ status: 'ready', value })
+  await assert.rejects(
+    publishingOptions(
+      ready(exportOptions({ passwordProtected: true })),
+      null,
+      'notes',
+      theme,
+    ),
+    /Turn off password protection/,
+  )
+  const options = await publishingOptions(
+    ready(exportOptions({ title: 'Garden', homePage: 'guide.md' })),
+    null,
+    'notes',
+    theme,
+    { footer: 'Written with care.' },
+  )
+  assert.equal(options.title, 'Garden')
+  assert.equal(options.homePage, 'guide.md')
+  assert.equal(options.footer, 'Written with care.')
+  assert.equal(options.singleFile, false)
+  assert.equal(writes, 0)
+})
 
 test('valid legacy export options wait for durable migration and retain source text', async () => {
   const legacy = JSON.stringify(
@@ -121,4 +180,47 @@ test('host value wins over legacy text and concurrent migration conflict', async
   )
   assert.equal(migrated.initial.title, 'host title')
   assert.equal(writes, 0)
+})
+
+test('site layout and addon options default for earlier saves and reject invalid addons', async () => {
+  const earlier = exportOptions({}, 'workspace', theme)
+  for (const key of [
+    'homePage',
+    'footer',
+    'contentWidth',
+    'outline',
+    'pagination',
+    'addons',
+  ])
+    delete earlier[key]
+  const store = {
+    snapshot: () => ({ status: 'ready', revision: 1, value: earlier }),
+    set: async () => assert.fail('should not write'),
+  }
+  const { initial, canSave } = await loadExportOptions(
+    store,
+    null,
+    'workspace',
+    theme,
+  )
+  assert.equal(canSave, true)
+  assert.deepEqual(
+    [
+      initial.homePage,
+      initial.footer,
+      initial.contentWidth,
+      initial.outline,
+      initial.pagination,
+      initial.addons,
+    ],
+    ['', '', 'normal', true, true, {}],
+  )
+  assert.deepEqual(
+    validateExportOptions({ addons: { mermaid: false, math: 1 } }).addons,
+    { mermaid: false },
+  )
+  assert.throws(
+    () => validateExportOptions({ addons: { '../x': true } }),
+    /valid site addons/,
+  )
 })

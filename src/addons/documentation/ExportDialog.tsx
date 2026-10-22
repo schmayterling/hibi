@@ -2,7 +2,7 @@ import { ChevronRight, Image, X } from 'lucide-react'
 import { useLayoutEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { bundledColorschemes } from '../../shared/color-palettes'
-import type { ThemePreferences } from '../../shared/colorschemes'
+import type { Colorscheme, ThemePreferences } from '../../shared/colorschemes'
 import { errorMessage } from '../../shared/errors'
 import type { AddonContext } from '../api'
 import {
@@ -26,6 +26,9 @@ export function ExportDialog({
   graph,
   warning,
   save,
+  pages = [],
+  colorschemes = [],
+  contributions = [],
 }: {
   formId: string
   context: AddonContext
@@ -33,7 +36,19 @@ export function ExportDialog({
   graph: boolean
   warning: string | null
   save: (options: ExportOptions, password: string) => Promise<boolean>
+  pages?: readonly { path: string }[]
+  /** Enabled addon colorschemes; bundled schemes are always listed. */
+  colorschemes?: readonly Colorscheme[]
+  /** Enabled addons that add styles or behavior to exported sites. */
+  contributions?: readonly { id: string; name: string; description: string }[]
 }) {
+  const schemes = [
+    ...bundledColorschemes,
+    ...colorschemes.filter(
+      (scheme) =>
+        !bundledColorschemes.some((bundled) => bundled.id === scheme.id),
+    ),
+  ]
   const [options, setOptions] = useState(initial)
   const locked = options.passwordProtected
   const [password, setPassword] = useState('')
@@ -54,7 +69,8 @@ export function ExportDialog({
       | 'author'
       | 'url'
       | 'socialImage'
-      | 'language',
+      | 'language'
+      | 'footer',
     label: string,
     placeholder?: string,
   ) => (
@@ -68,7 +84,14 @@ export function ExportDialog({
     </SettingRow>
   )
   const toggle = (
-    key: 'singleFile' | 'autoSeo' | 'indexing' | 'lockTheme' | 'graph',
+    key:
+      | 'singleFile'
+      | 'autoSeo'
+      | 'indexing'
+      | 'lockTheme'
+      | 'graph'
+      | 'outline'
+      | 'pagination',
     label: string,
     description?: string,
   ) => (
@@ -206,7 +229,7 @@ export function ExportDialog({
                     })
                   }
                 >
-                  {bundledColorschemes
+                  {schemes
                     .filter((scheme) => scheme.appearance === mode)
                     .map((scheme) => (
                       <option key={scheme.id} value={scheme.id}>
@@ -224,6 +247,93 @@ export function ExportDialog({
             {graph && toggle('graph', 'Include graph')}
           </div>
         </details>
+        <details className="ui-disclosure">
+          <summary>
+            <ChevronRight size={14} aria-hidden />
+            Layout and navigation
+          </summary>
+          <div className="settings-group">
+            <SettingRow
+              id="export-homePage"
+              label="Home page"
+              description="Visitors see this page first."
+            >
+              <Select
+                id="export-homePage"
+                value={options.homePage}
+                onChange={(event) => set('homePage', event.target.value)}
+              >
+                <option value="">Automatic</option>
+                {options.homePage &&
+                  !pages.some((page) => page.path === options.homePage) && (
+                    <option value={options.homePage}>
+                      {options.homePage} (missing)
+                    </option>
+                  )}
+                {pages.map((page) => (
+                  <option key={page.path} value={page.path}>
+                    {page.path}
+                  </option>
+                ))}
+              </Select>
+            </SettingRow>
+            <SettingRow id="export-contentWidth" label="Page width">
+              <Select
+                id="export-contentWidth"
+                value={options.contentWidth}
+                onChange={(event) =>
+                  set(
+                    'contentWidth',
+                    event.target.value as ExportOptions['contentWidth'],
+                  )
+                }
+              >
+                <option value="normal">Standard</option>
+                <option value="wide">Wide</option>
+              </Select>
+            </SettingRow>
+            {toggle(
+              'outline',
+              'Page outline',
+              'List the headings on each page.',
+            )}
+            {toggle(
+              'pagination',
+              'Previous and next links',
+              'Link each page to its neighbors in the navigation.',
+            )}
+            {text('footer', 'Footer text', '© 2026 Your name')}
+          </div>
+        </details>
+        {contributions.length > 0 && (
+          <details className="ui-disclosure">
+            <summary>
+              <ChevronRight size={14} aria-hidden />
+              Site addons
+            </summary>
+            <div className="settings-group">
+              {contributions.map((addon) => (
+                <SettingRow
+                  key={addon.id}
+                  id={`export-addon-${addon.id}`}
+                  label={addon.name}
+                  description={addon.description}
+                >
+                  <Toggle
+                    id={`export-addon-${addon.id}`}
+                    checked={options.addons[addon.id] !== false}
+                    onChange={(event) =>
+                      set('addons', {
+                        ...options.addons,
+                        [addon.id]: event.target.checked,
+                      })
+                    }
+                  />
+                </SettingRow>
+              ))}
+            </div>
+          </details>
+        )}
         <details className="ui-disclosure">
           <summary>
             <ChevronRight size={14} aria-hidden />

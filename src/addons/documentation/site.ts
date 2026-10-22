@@ -5,7 +5,7 @@ import { marked } from 'marked'
 import sanitizeHtml from 'sanitize-html'
 import { parseDocument } from 'yaml'
 import { bundledColorschemes } from '../../shared/color-palettes.ts'
-import { COLOR_TOKENS } from '../../shared/colorschemes.ts'
+import { COLOR_TOKENS, defineColorscheme } from '../../shared/colorschemes.ts'
 import { readFrontmatter } from '../../shared/frontmatter.ts'
 import type { WorkspaceSnapshot } from '../../shared/workspace'
 import {
@@ -14,6 +14,7 @@ import {
   type LockedSite,
   localPage,
   pageRoute,
+  type SiteAddon,
   type SiteData,
   type SitePage,
   siteJson,
@@ -53,7 +54,10 @@ const alertAttributes = ({
       }
     : {}),
 })
-const renderedHtml = (html: string) =>
+const renderedHtml = (
+  html: string,
+  transforms: sanitizeHtml.IOptions['transformTags'] = {},
+) =>
   sanitizeHtml(html, {
     allowedTags: [
       ...sanitizeHtml.defaults.allowedTags,
@@ -144,14 +148,59 @@ const renderedHtml = (html: string) =>
           ...(/^fn-[\w%.~-]+$/.test(id ?? '') ? { id } : {}),
         },
       }),
+      ...transforms,
     },
   })
 
 export function prepareSite(
-  snapshot: WorkspaceSnapshot,
+  snapshot: WorkspaceSnapshot & { colorschemes?: unknown; addons?: unknown },
   options: ExportOptions,
 ): SiteData {
   options = exportOptions(options)
+  if (
+    options.homePage &&
+    !snapshot.pages.some((page) => page.path === options.homePage)
+  )
+    throw new Error('Choose a home page that exists in this workspace.')
+  if (
+    (snapshot.colorschemes !== undefined &&
+      (!Array.isArray(snapshot.colorschemes) ||
+        snapshot.colorschemes.length > 100)) ||
+    (snapshot.addons !== undefined &&
+      (!Array.isArray(snapshot.addons) || snapshot.addons.length > 100))
+  )
+    throw new Error('This export contains too many addon contributions.')
+  const colorschemes = (
+    (snapshot.colorschemes as unknown[] | undefined) ?? []
+  ).map((scheme) =>
+    defineColorscheme(scheme as Parameters<typeof defineColorscheme>[0]),
+  )
+  if (
+    new Set(colorschemes.map((scheme) => scheme.id)).size !==
+    colorschemes.length
+  )
+    throw new Error('This export contains duplicate colorschemes.')
+  const addons = ((snapshot.addons as SiteAddon[] | undefined) ?? [])
+    .map((addon) => {
+      if (
+        !addon ||
+        !/^[a-z][a-z0-9-]{0,47}$/.test(addon.id) ||
+        typeof addon.name !== 'string' ||
+        !addon.name.trim() ||
+        addon.name.length > 100 ||
+        (addon.css !== undefined &&
+          (typeof addon.css !== 'string' || addon.css.length > 128 * 1024))
+      )
+        throw new Error('This export contains an invalid addon contribution.')
+      return {
+        id: addon.id,
+        name: addon.name,
+        ...(addon.css ? { css: addon.css } : {}),
+      }
+    })
+    .filter((addon) => options.addons[addon.id] !== false)
+  if (new Set(addons.map((addon) => addon.id)).size !== addons.length)
+    throw new Error('This export contains duplicate addon contributions.')
   const seen = new Set<string>()
   const pages = snapshot.pages.map((page) => {
     if (
@@ -176,6 +225,15 @@ export function prepareSite(
     )
       throw new Error(
         'Rename files with names that cannot be used in a static export.',
+      )
+    if (
+      !options.singleFile &&
+      ['index.html', 'robots.txt', 'sitemap.xml'].includes(
+        page.path.split('/')[0]?.toLowerCase() ?? '',
+      )
+    )
+      throw new Error(
+        'Rename top-level index.html, robots.txt, or sitemap.xml documents or folders before a static export.',
       )
     if (!options.singleFile && seen.has(page.path.toLowerCase()))
       throw new Error(
@@ -232,6 +290,8 @@ export function prepareSite(
     pages,
     options,
     appearance: options.theme,
+    colorschemes,
+    addons,
     routing: options.singleFile ? 'hash' : 'paths',
     ...(typeof snapshot.css === 'string' ? { css: snapshot.css } : {}),
     ...(options.graph ? { graph: noteGraph(pages) } : {}),
@@ -240,120 +300,89 @@ export function prepareSite(
 
 function content(site: SiteData, page: SitePage, prefix: string) {
   const paths = new Set(site.pages.map((page) => page.path))
-  let html = sanitizeHtml(page.html ?? '', {
-    allowedTags: [
-      ...sanitizeHtml.defaults.allowedTags,
-      'img',
-      'details',
-      'summary',
-      'input',
-      'del',
-      's',
-    ],
-    allowedAttributes: {
-      '*': ['class'],
-      a: [
-        'href',
-        'title',
-        'rel',
-        'id',
-        'data-footnote-ref',
-        'data-footnote-backref',
-        'aria-describedby',
-        'aria-label',
-      ],
-      blockquote: ['data-alert', 'data-fold'],
-      h2: ['id'],
-      li: ['id'],
-      section: ['data-footnotes', 'role'],
-      img: ['src', 'alt', 'title'],
-      input: ['type', 'checked', 'disabled'],
-    },
-    allowedSchemes: ['http', 'https', 'mailto', 'data'],
-    transformTags: {
-      blockquote: (_tag, attrs) => ({
-        tagName: 'blockquote',
-        attribs: alertAttributes(attrs),
-      }),
-      a: (_tag, attrs) => {
-        const target = localPage(page.path, attrs.href ?? '', paths)
-        const href = target
-          ? site.routing === 'hash'
-            ? `#${new URLSearchParams({ page: target.path, ...(target.anchor ? { anchor: target.anchor } : {}) })}`
-            : `${prefix}${pageRoute(target.path)}${target.anchor ? `#${encodeURIComponent(target.anchor)}` : ''}`
-          : /^(?:https?:|mailto:)/i.test(attrs.href ?? '')
-            ? attrs.href
-            : undefined
-        return {
-          tagName: 'a',
-          attribs: {
-            ...(href ? { href } : {}),
-            rel: 'noopener noreferrer',
-            ...(attrs['data-footnote-ref'] !== undefined &&
-            /^fnref-[\w%.~-]+$/.test(attrs.id ?? '')
-              ? {
-                  id: attrs.id,
-                  'data-footnote-ref': '',
-                  'aria-describedby': 'footnote-label',
-                }
-              : {}),
-            ...(attrs['data-footnote-backref'] !== undefined
-              ? {
-                  'data-footnote-backref': '',
-                  'aria-label': attrs['aria-label'] ?? 'Back to reference',
-                }
-              : {}),
-          },
-        }
-      },
-      h2: (_tag, attrs) => ({
-        tagName: 'h2',
+  let html = renderedHtml(page.html ?? '', {
+    blockquote: (_tag, attrs) => ({
+      tagName: 'blockquote',
+      attribs: alertAttributes(attrs),
+    }),
+    a: (_tag, attrs) => {
+      const target = localPage(page.path, attrs.href ?? '', paths)
+      const href = target
+        ? site.routing === 'hash'
+          ? `#${new URLSearchParams({ page: target.path, ...(target.anchor ? { anchor: target.anchor } : {}) })}`
+          : `${prefix}${pageRoute(target.path)}${target.anchor ? `#${encodeURIComponent(target.anchor)}` : ''}`
+        : /^(?:https?:|mailto:)/i.test(attrs.href ?? '')
+          ? attrs.href
+          : undefined
+      return {
+        tagName: 'a',
         attribs: {
-          ...(attrs.class ? { class: attrs.class } : {}),
-          ...(attrs.class === 'sr-only' && attrs.id === 'footnote-label'
-            ? { id: 'footnote-label' }
+          ...(href ? { href } : {}),
+          rel: 'noopener noreferrer',
+          ...(attrs['data-footnote-ref'] !== undefined &&
+          /^fnref-[\w%.~-]+$/.test(attrs.id ?? '')
+            ? {
+                id: attrs.id,
+                'data-footnote-ref': '',
+                'aria-describedby': 'footnote-label',
+              }
+            : {}),
+          ...(attrs['data-footnote-backref'] !== undefined
+            ? {
+                'data-footnote-backref': '',
+                'aria-label': attrs['aria-label'] ?? 'Back to reference',
+              }
             : {}),
         },
-      }),
-      li: (_tag, attrs) => ({
-        tagName: 'li',
-        attribs: {
-          ...(attrs.class ? { class: attrs.class } : {}),
-          ...(/^fn-[\w%.~-]+$/.test(attrs.id ?? '') ? { id: attrs.id } : {}),
-        },
-      }),
-      section: (_tag, attrs) => ({
-        tagName: 'section',
-        attribs: {
-          ...(attrs.class ? { class: attrs.class } : {}),
-          ...(attrs['data-footnotes'] === undefined
-            ? {}
-            : { 'data-footnotes': '', role: 'doc-endnotes' }),
-        },
-      }),
-      img: (_tag, attrs) => {
-        const src = page.images?.[attrs.src ?? '']
-        return {
-          tagName: 'img',
-          attribs: {
-            alt: attrs.alt ?? '',
-            ...(src?.startsWith('data:image/')
-              ? { src }
-              : isMermaidImage(attrs.src ?? '', attrs.class ?? '')
-                ? { src: attrs.src }
-                : {}),
-          },
-        }
-      },
-      input: (_tag, attrs) => ({
-        tagName: 'input',
-        attribs: {
-          type: 'checkbox',
-          disabled: '',
-          ...(attrs.checked === undefined ? {} : { checked: '' }),
-        },
-      }),
+      }
     },
+    h2: (_tag, attrs) => ({
+      tagName: 'h2',
+      attribs: {
+        ...(attrs.class ? { class: attrs.class } : {}),
+        ...(attrs.class === 'sr-only' && attrs.id === 'footnote-label'
+          ? { id: 'footnote-label' }
+          : {}),
+      },
+    }),
+    li: (_tag, attrs) => ({
+      tagName: 'li',
+      attribs: {
+        ...(attrs.class ? { class: attrs.class } : {}),
+        ...(/^fn-[\w%.~-]+$/.test(attrs.id ?? '') ? { id: attrs.id } : {}),
+      },
+    }),
+    section: (_tag, attrs) => ({
+      tagName: 'section',
+      attribs: {
+        ...(attrs.class ? { class: attrs.class } : {}),
+        ...(attrs['data-footnotes'] === undefined
+          ? {}
+          : { 'data-footnotes': '', role: 'doc-endnotes' }),
+      },
+    }),
+    img: (_tag, attrs) => {
+      const src = page.images?.[attrs.src ?? '']
+      return {
+        tagName: 'img',
+        attribs: {
+          alt: attrs.alt ?? '',
+          ...(src?.startsWith('data:image/')
+            ? { src }
+            : isMermaidImage(attrs.src ?? '', attrs.class ?? '')
+              ? { src: attrs.src }
+              : {}),
+        },
+      }
+    },
+    input: (_tag, attrs) => ({
+      tagName: 'input',
+      attribs: {
+        type: 'checkbox',
+        disabled: '',
+        ...(attrs.checked === undefined ? {} : { checked: '' }),
+      },
+    }),
   })
   const slugs = new Map<string, number>()
   html = html.replace(
@@ -370,7 +399,7 @@ function content(site: SiteData, page: SitePage, prefix: string) {
       return `<${tag}${attrs} id="${escapeHtml(slug)}${count ? `-${count}` : ''}">${body}</${tag}>`
     },
   )
-  const home = homePage(site.pages)
+  const home = homePage(site.pages, site.options.homePage)
   const index = site.pages.indexOf(page)
   const navigation =
     page === home
@@ -378,13 +407,13 @@ function content(site: SiteData, page: SitePage, prefix: string) {
       : [home, site.pages[index - 1], site.pages[index + 1]].filter(
           (entry): entry is SitePage => !!entry,
         )
-  return `<div class="documentation-site"><header class="site-header">${escapeHtml(site.name)}</header><div class="site-layout"><main class="site-content"><div class="site-document-layout"><article class="tiptap">${html}</article><nav aria-label="Pages">${[...new Set(navigation)].map((entry) => `<a href="${escapeHtml(site.routing === 'hash' ? `#${new URLSearchParams({ page: entry.path })}` : `${prefix}${pageRoute(entry.path)}`)}">${escapeHtml(entry.title)}</a>`).join(' ')}</nav></div></main></div></div>`
+  return `<div class="documentation-site" data-width="${site.options.contentWidth}"><header class="site-header">${escapeHtml(site.name)}</header><div class="site-layout"><main class="site-content"><div class="site-document-layout"><article class="tiptap">${html}</article><nav aria-label="Pages">${[...new Set(navigation)].map((entry) => `<a href="${escapeHtml(site.routing === 'hash' ? `#${new URLSearchParams({ page: entry.path })}` : `${prefix}${pageRoute(entry.path)}`)}">${escapeHtml(entry.title)}</a>`).join(' ')}</nav>${site.options.footer ? `<footer class="site-footer">${escapeHtml(site.options.footer)}</footer>` : ''}</div></main></div></div>`
 }
 
 function themeCss(site: SiteData) {
   const rules = (mode: 'light' | 'dark') => {
     const scheme =
-      bundledColorschemes.find(
+      [...(site.colorschemes ?? []), ...bundledColorschemes].find(
         (scheme) =>
           scheme.id === site.options.theme[mode] && scheme.appearance === mode,
       ) ?? bundledColorschemes.find((scheme) => scheme.id === `hibi-${mode}`)!
@@ -458,13 +487,15 @@ export async function siteFiles(
       options: { ...site.options, passwordProtected: true },
     }
   const data = locked ? await encrypt(site, password) : site
-  const home = homePage(site.pages) as SitePage | undefined
+  const home = homePage(site.pages, site.options.homePage) as
+    | SitePage
+    | undefined
   let assets = 'hibi-assets'
   while (
     site.pages.some((page) => page.path.toLowerCase().split('/')[0] === assets)
   )
     assets += '-site'
-  const customCss = `@layer hibi-theme {${themeCss(site)}}\n${site.css ?? ''}\n${site.options.css}`
+  const customCss = `@layer hibi-theme {${themeCss(site)}}\n${site.css ?? ''}\n${(site.addons ?? []).map((addon) => addon.css ?? '').join('\n')}\n${site.options.css}`
   const safeStyle = (css: string) => css.replace(/<\/style/gi, '<\\/style')
   const decorate = (
     html: string,

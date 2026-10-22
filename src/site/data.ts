@@ -1,5 +1,6 @@
 import type { ExportOptions } from '../addons/documentation/options'
 import type { noteGraph } from '../addons/graph/model'
+import type { Colorscheme } from '../shared/colorschemes'
 import type { WorkspacePage, WorkspaceSnapshot } from '../shared/workspace'
 
 export type SitePage = WorkspacePage & { title: string; description: string }
@@ -8,7 +9,12 @@ export type SiteData = Omit<WorkspaceSnapshot, 'pages'> & {
   options: ExportOptions
   routing: 'hash' | 'paths'
   graph?: ReturnType<typeof noteGraph>
+  /** Addon colorschemes available to the site; bundled schemes are always present. */
+  colorschemes?: Colorscheme[]
+  /** Included addon contributions; CSS is data only and never runs addon code. */
+  addons?: SiteAddon[]
 }
+export type SiteAddon = { id: string; name: string; css?: string }
 export type LockedSite = {
   encrypted: true
   salt: string
@@ -23,8 +29,13 @@ export const siteJson = (value: unknown) =>
     .replaceAll('\u2029', '\\u2029')
 export const pageRoute = (path: string) =>
   path.split('/').map(encodeURIComponent).join('/') + '/'
-export const homePage = (pages: readonly WorkspacePage[]) =>
-  pages.find((page) => /^(readme|index)\.md$/i.test(page.path)) ?? pages[0]
+export const homePage = <Page extends WorkspacePage>(
+  pages: readonly Page[],
+  preferred = '',
+) =>
+  (preferred && pages.find((page) => page.path === preferred)) ||
+  pages.find((page) => /^(readme|index)\.md$/i.test(page.path)) ||
+  pages[0]
 
 export const isMermaidImage = (src: string, className: string) =>
   className.split(/\s+/).includes('mermaid-diagram') &&

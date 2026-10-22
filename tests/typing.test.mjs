@@ -1,32 +1,60 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { typingSpeed } from '../src/addons/typing-speed/speed.ts'
 import { electron } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-test('typing speed estimates a session rate and resets after a five-second pause', () => {
-  const speed = typingSpeed()
-  speed.add(5, 0)
-  speed.add(15, 1000)
-  assert.deepEqual(speed.read(1000), { cpm: 1200, wpm: 240 })
-  assert.deepEqual(speed.read(5999), { cpm: 1200, wpm: 240 })
-  assert.deepEqual(speed.read(6000), { cpm: 0, wpm: 0 })
-  speed.add(5, 7000)
-  assert.deepEqual(speed.read(7000), { cpm: 300, wpm: 60 })
-  speed.add(5, 9000)
-  assert.deepEqual(speed.read(9000), { cpm: 300, wpm: 60 })
-  speed.add(1, 15000)
-  assert.deepEqual(speed.read(15000), { cpm: 60, wpm: 12 })
-})
+// Counts committed editor input in the status bar; Typing speed itself is tested in its directory repository.
+async function installTypingProbe(profile) {
+  const directory = join(profile, 'installed-addons', 'typing-probe')
+  await mkdir(directory, { recursive: true })
+  await writeFile(
+    join(directory, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'typing-probe',
+      name: 'Typing probe',
+      description: 'Counts committed editor input.',
+      kind: 'extension',
+      apiVersion: 2,
+      version: '1.0.0',
+      authors: [{ displayName: 'Test' }],
+      capabilities: [],
+      entry: 'index.js',
+    }),
+  )
+  await writeFile(
+    join(directory, 'index.js'),
+    `export default () => ({ start(context) {
+      let characters = 0
+      const item = context.statusBar.register({ id: 'count', label: '0' })
+      context.editor.onInput((event) => {
+        characters += event.characters
+        item.update({ label: String(characters) })
+      })
+    } })`,
+  )
+  await writeFile(
+    join(directory, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['hibi-addon.json', 'index.js'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'typing-probe': true }),
+  )
+}
 
-test('typing pills, source formatting shortcuts, and sidebar shortcut', {
+test('editor input, source formatting shortcuts, and sidebar shortcut', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-typing-'))
+  await installTypingProbe(profile)
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -40,56 +68,20 @@ test('typing pills, source formatting shortcuts, and sidebar shortcut', {
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  const count = page.locator('[data-status-id="typing-probe.count"]')
+  const counted = (value) =>
+    page.waitForFunction(
+      (value) =>
+        document.querySelector('[data-status-id="typing-probe.count"]')
+          ?.textContent === value,
+      value,
+    )
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-  await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
-  await page.evaluate(() => {
-    // Keep the session-rate denominator deterministic without changing native
-    // timer delivery. Observe the addon's existing one-second display refresh.
-    globalThis.typingTestClock = { now: 1000, refreshes: 0 }
-    performance.now = () => globalThis.typingTestClock.now
-    const interval = window.setInterval.bind(window)
-    window.setInterval = (callback, delay, ...args) =>
-      interval(
-        delay === 1000 && typeof callback === 'function'
-          ? (...values) => {
-              callback(...values)
-              globalThis.typingTestClock.refreshes++
-            }
-          : callback,
-        delay,
-        ...args,
-      )
-    const idle = window.requestIdleCallback.bind(window)
-    const pending = []
-    window.requestIdleCallback = (callback, options) => {
-      pending.push([callback, options])
-      return pending.length
-    }
-    window.releaseTypingIdle = () => {
-      window.requestIdleCallback = idle
-      for (const [callback, options] of pending) idle(callback, options)
-    }
-  })
-  await page.locator('#addon-typing-speed').click()
-  await page.getByRole('button', { name: /^back to app$/i }).click()
-  const cpm = page.locator('[data-status-id="typing-speed.cpm"]')
-  const wpm = page.locator('[data-status-id="typing-speed.wpm"]')
-  try {
-    await cpm.waitFor()
-  } finally {
-    await page.evaluate(() => window.releaseTypingIdle())
-  }
+  await counted('0')
   await page
     .getByRole('textbox', { name: /document editor/i })
     .pressSequentially('hello')
-  await page.waitForFunction(
-    () =>
-      document.querySelector('[data-status-id="typing-speed.cpm"]')
-        ?.textContent === '≈300 CPM',
-  )
-  const initialCpm = await cpm.innerText()
-  assert.equal(await wpm.innerText(), '≈60 WPM')
+  await counted('5')
   await pressShortcut(app, `${mod}+Shift+]`)
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   await source.press(`${mod}+a`)
@@ -98,7 +90,6 @@ test('typing pills, source formatting shortcuts, and sidebar shortcut', {
     page,
     async () => (await window.hibi.getDocument()).markdown === '**hello**',
   )
-  assert.equal(await cpm.innerText(), initialCpm)
   await pressShortcut(app, `${mod}+Shift+\\`)
   await source.focus()
   await pressShortcut(app, `${mod}+i`)
@@ -107,16 +98,9 @@ test('typing pills, source formatting shortcuts, and sidebar shortcut', {
     async () => (await window.hibi.getDocument()).markdown === '***hello***',
   )
   await source.press('ArrowRight')
-  await page.evaluate(() => {
-    globalThis.typingTestClock.now = 2000
-  })
+  // Formatting adds no input, so the source-view key is the sixth character.
   await source.pressSequentially('!')
-  await page.waitForFunction(
-    () =>
-      document.querySelector('[data-status-id="typing-speed.cpm"]')
-        ?.textContent === '≈360 CPM',
-  )
-  assert.equal(await wpm.innerText(), '≈72 WPM')
+  await counted('6')
   const before = await page.locator('.app').getAttribute('data-sidebar')
   await pressShortcut(app, `${mod}+/`)
   await page.waitForFunction(
@@ -125,22 +109,20 @@ test('typing pills, source formatting shortcuts, and sidebar shortcut', {
   )
   await pressShortcut(app, `${mod}+k`)
   await page.getByRole('combobox').fill('typing')
-  const refreshes = await page.evaluate(
-    () => globalThis.typingTestClock.refreshes,
-  )
-  await page.waitForFunction(
-    (before) => globalThis.typingTestClock.refreshes > before,
-    refreshes,
-  )
-  // Six editor characters, including the source-view key, still determine the
-  // published totals after a refresh. Palette input and formatting add none.
-  assert.equal(await cpm.innerText(), '≈360 CPM')
-  assert.equal(await wpm.innerText(), '≈72 WPM')
   await page.keyboard.press('Escape')
   await page
     .getByRole('dialog', { name: /command palette/i })
     .waitFor({ state: 'hidden' })
+  // Palette text is not editor input: the next editor key makes seven.
+  await source.focus()
+  await source.pressSequentially('?')
+  await counted('7')
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    '***hello***!?',
+  )
   await clickMenu(app, 'Settings')
-  await page.locator('#addon-typing-speed').click()
-  assert.equal(await cpm.count(), 0)
+  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
+  await page.locator('#addon-typing-probe').click()
+  await count.waitFor({ state: 'detached' })
 })

@@ -38,8 +38,7 @@ const { values } = parseArgs({
     rate: { type: 'string', default: '30' },
     addons: {
       type: 'string',
-      default:
-        'frontmatter,github-markdown,text-extras,word-count,typing-speed',
+      default: 'frontmatter,github-markdown,text-extras,word-count',
     },
     out: { type: 'string' },
     quick: { type: 'boolean' },

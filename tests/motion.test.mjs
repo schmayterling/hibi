@@ -471,10 +471,12 @@ test('workspace sidebar remains above editor content during motion and preserves
         })
       }
       const halfway = async () => {
+        // Catch the transition at commit time: transitionrun waits for a frame,
+        // and a slow frame can finish the 240 ms transition before it fires.
         const started = new Promise((resolve) => {
-          const onRun = (event) => {
-            if (event.propertyName !== 'transform') return
-            sidebar.removeEventListener('transitionrun', onRun)
+          const observer = new MutationObserver(() => {
+            observer.disconnect()
+            // getAnimations() flushes style, creating the new transition.
             const transition = sidebar
               .getAnimations()
               .find((animation) => animation.transitionProperty === 'transform')
@@ -483,8 +485,10 @@ test('workspace sidebar remains above editor content during motion and preserves
               transition.currentTime =
                 Number(transition.effect.getTiming().duration) / 2
             resolve(transition)
-          }
-          sidebar.addEventListener('transitionrun', onRun)
+          })
+          observer.observe(sidebar.parentElement, {
+            attributeFilter: ['data-open'],
+          })
         })
         toggle.click()
         return started

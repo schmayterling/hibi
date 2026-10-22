@@ -87,5 +87,6 @@ test('checkpoint comparison accepts an owned storage swap without accepting anot
     ),
     journalHead(store),
   )
-  assert.equal(reads, 2)
+  // Verification may yield and recheck ownership before its final read.
+  assert.ok(reads >= 2)
 })

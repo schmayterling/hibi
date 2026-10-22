@@ -298,13 +298,18 @@ test('dictionary replaces the word in the split pane it was invoked from', {
   }
   const focusPane = async (side, editor) => {
     await editor.click()
-    await page.waitForFunction(
-      (side) =>
-        document
-          .querySelector(`.editor-page[data-side="${side}"]`)
-          ?.getAttribute('data-active') === 'true',
-      side,
-    )
+    // The pane is marked active before its tab switch finishes; the app stays
+    // busy (editors read-only) until it refocuses the pane's editor.
+    await page.waitForFunction((side) => {
+      const pane = document.querySelector(`.editor-page[data-side="${side}"]`)
+      const input = document.activeElement
+      return (
+        pane?.getAttribute('data-active') === 'true' &&
+        document.querySelector('.app')?.getAttribute('aria-busy') === 'false' &&
+        pane.contains(input) &&
+        input.isContentEditable
+      )
+    }, side)
   }
   const markdown = async (side, editor) => {
     await focusPane(side, editor(side))

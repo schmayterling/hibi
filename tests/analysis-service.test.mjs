@@ -141,6 +141,7 @@ test('analysis is process-isolated, bounded, connection-bound, and revoked on ca
     if (text.includes('spin')) { while (true) {} }
     if (text.includes('large')) return 'x'.repeat(300000);
     if (text.includes('delay')) await new Promise(resolve => setTimeout(resolve, 650));
+    if (text.includes('hold')) await new Promise(() => {});
     if (text.includes('probe')) {
       const attempts = await Promise.all(['https://example.com/', 'file:///etc/passwd', 'app://hibi/index.html', '/private.txt'].map(async url => {try {await fetch(url); return false} catch {return true}}));
       let moduleDenied = false;
@@ -330,7 +331,8 @@ test('analysis is process-isolated, bounded, connection-bound, and revoked on ca
     (await page.evaluate(() => window.analysisPending)).status,
     'cancelled',
   )
-  await replaceRichText(page, editor, 'delay disable')
+  // Disabling persists addons.json before cancelling; hold until it cancels.
+  await replaceRichText(page, editor, 'hold disable')
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.evaluate(() => {

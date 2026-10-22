@@ -68,7 +68,7 @@ test('shutdown snapshot finds pipe holders after their process group leader exit
       `
 const { spawn } = require('node:child_process')
 const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: ['ignore', 1, 2] })
-console.log(child.pid)
+console.log(String(child.pid))
 child.unref()
 `,
     ],

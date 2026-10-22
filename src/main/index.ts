@@ -1303,7 +1303,6 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(async () => {
       startupMark('app-ready')
-      if (app.isPackaged) app.setAsDefaultProtocolClient('hibi')
       // Installed macOS apps already carry their full-resolution bundle icon.
       // A dock-sized development icon avoids re-encoding 1024px images at launch.
       if (process.platform === 'darwin' && !app.isPackaged)

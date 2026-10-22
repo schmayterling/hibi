@@ -216,9 +216,12 @@ test('detached signatures come from the catalog location without credentials and
   )
   const api = module.exports
   assert.deepEqual(await api.directorySignature('example'), Buffer.from(body))
-  assert.deepEqual(urls, [
+  const requested = new URL(urls[0])
+  assert.equal(
+    `${requested.origin}${requested.pathname}`,
     'https://raw.githubusercontent.com/hibigarden/addons-repository/main/signatures/example.json',
-  ])
+  )
+  assert.match(requested.searchParams.get('t'), /^\d+$/)
   await assert.rejects(api.directorySignature('../catalog'), /Choose an addon/)
   assert.equal(urls.length, 1)
   body = 'x'.repeat(5 * 1024 * 1024)

@@ -75,7 +75,10 @@ async function fetchDirectoryFile(
     ? process.env.HIBI_TEST_ADDON_DIRECTORY_URL
     : undefined
   const catalog = override ?? ADDON_DIRECTORY_URL
-  const source = path ? new URL(path, catalog).href : catalog
+  const target = new URL(path ?? catalog, catalog)
+  // Avoid a cached catalog/signature after a maintainer publishes an update.
+  if (!override) target.searchParams.set('t', String(Date.now()))
+  const source = target.href
   const timeout = AbortSignal.timeout(15_000)
   const parts: Uint8Array[] = []
   await download(source, {

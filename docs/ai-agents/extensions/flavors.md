@@ -14,4 +14,4 @@ Declare lightweight `Addon.flavors` descriptors so bundled syntax can be detecte
 
 `context.workspace.snapshot()` returns Markdown pages, opaque file IDs, and local images from the open folder. Workspace files cannot register flavors or execute code.
 
-See the [addon API](../reference/addon-api.md), [Markdown](../../../src/addons/markdown/README.md), and [LaTeX](../../../src/addons/math/README.md).
+See the [addon API](../../development/addon-api-reference/MarkdownFlavor.md), [Markdown](../../../src/addons/markdown/README.md), and [LaTeX](../../../src/addons/math/README.md).

@@ -34,4 +34,4 @@ Also register tokenizers through the flavor's `export.extensions`, so disabled r
 
 `context.editor.isSyntaxEnabled('callout')` reads the preference; `context.editor.onSyntaxChange(listener)` reports changes. Registrations/listeners return cleanup functions and are removed on addon shutdown. Preferences survive disable/re-enable. Settings and palette entries appear automatically. Unregistered syntax remains enabled.
 
-See the [syntax API](../reference/markdown-syntax-api.md) and [addon API](../reference/addon-api.md).
+See the [syntax API](../../development/addon-api-reference/MarkdownSyntaxFeature.md) and [addon API](../../development/addon-api-reference/README.md).

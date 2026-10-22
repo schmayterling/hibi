@@ -29,4 +29,4 @@ These guides describe Hibi's code, extension APIs, validation, and release proce
 
 ## API references
 
-The [addon API](reference/addon-api.md) and [sideload SDK](reference/sideload-sdk.md) describe the public contracts. References in `reference/` are generated from source declarations. Change the source, run `npm run docs`, and confirm `npm run docs:check` passes.
+The [addon API reference](../development/addon-api-reference/README.md) describes the public contracts. It is generated from source declarations into the ignored documentation snapshot. Change the source, run `npm run docs`, and confirm `npm run docs:check` passes.

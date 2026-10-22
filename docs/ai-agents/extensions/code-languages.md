@@ -37,4 +37,4 @@ Themes can override `syntax-keyword`, `syntax-string`, `syntax-number`, `syntax-
 
 Source highlighting uses CodeMirror's incremental parser. Rich view caches unchanged blocks and skips highlighting above 100,000 characters to keep editing responsive. Exports preserve these large blocks as complete plain text.
 
-See the [code language API](../reference/code-language-api.md), [addon API](../reference/addon-api.md), and [sideload SDK](../reference/sideload-sdk.md).
+See the [code language API](../../development/addon-api-reference/CodeLanguage.md), [addon API](../../development/addon-api-reference/README.md), and [sideload SDK](../../development/addon-api-reference/sdk.md).

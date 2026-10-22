@@ -486,7 +486,7 @@ export function withAddonFile(
   path: string,
   bytes: Buffer,
 ): AddonInventory {
-  if (!validAddonPath(path) || bytes.length > MAX_ADDON_MANIFEST_BYTES)
+  if (!validAddonPath(path) || bytes.length > MAX_ADDON_FILE_BYTES)
     throw new Error('The addon file is invalid.')
   const content = Buffer.from(bytes)
   return finishInventory(

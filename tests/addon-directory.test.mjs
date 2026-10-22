@@ -221,13 +221,18 @@ test('detached signatures come from the catalog location without credentials and
   ])
   await assert.rejects(api.directorySignature('../catalog'), /Choose an addon/)
   assert.equal(urls.length, 1)
+  body = 'x'.repeat(5 * 1024 * 1024)
+  assert.equal(
+    (await api.directorySignature('example')).length,
+    5 * 1024 * 1024,
+  )
   for (const failure of [
     () => {
       status = 404
     },
     () => {
       status = 200
-      body = 'x'.repeat(64 * 1024 + 1)
+      body = 'x'.repeat(5 * 1024 * 1024 + 1)
     },
   ]) {
     failure()

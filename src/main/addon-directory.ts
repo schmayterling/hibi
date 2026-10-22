@@ -9,7 +9,7 @@ import {
   parseAddonDirectory,
 } from '../shared/addon-directory'
 import { validId } from '../shared/addon-manifest'
-import { MAX_ADDON_MANIFEST_BYTES } from '../shared/addon-package'
+import { MAX_ADDON_FILE_BYTES } from '../shared/addon-package'
 import { retryRename } from './atomic-rename'
 import { download } from './download'
 
@@ -154,7 +154,7 @@ export async function directorySignature(
   if (!validId(id)) throw new Error('Choose an addon from Hibi garden.')
   try {
     return await fetchDirectoryFile(
-      MAX_ADDON_MANIFEST_BYTES,
+      MAX_ADDON_FILE_BYTES,
       `signatures/${id}.json`,
       signal,
     )

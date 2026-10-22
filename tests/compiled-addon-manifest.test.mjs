@@ -184,7 +184,7 @@ test('api compatibility uses one format and caller-owned compiled trust', () => 
   assert.throws(() => compiled({ apiVersion: 3 }), /API version/)
 })
 
-test('all 42 json manifests match their compatibility shims without entry or native metadata', async () => {
+test('all 41 json manifests match their compatibility shims without entry or native metadata', async () => {
   const parent = join(root, 'src/addons')
   const folders = []
   for (const folder of await readdir(parent, { withFileTypes: true })) {

@@ -101,7 +101,7 @@ test('addon catalog export keeps metadata, markdown, and relative images without
   assert.ok(!(await readdir(join(destination, 'sample'))).includes('guide.md'))
 })
 
-test('all 42 canonical manifests export website object literals with frozen metadata', async (t) => {
+test('all 41 canonical manifests export website object literals with frozen metadata', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-builtin-export-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const source = fileURLToPath(new URL('../src/addons/', import.meta.url))
@@ -128,11 +128,11 @@ test('all 42 canonical manifests export website object literals with frozen meta
   const files = await exportAddons(source, destination)
   assert.equal(
     files.filter((file) => basename(file) === 'hibi-addon.json').length,
-    42,
+    41,
   )
   assert.equal(
     files.filter((file) => basename(file) === 'manifest.ts').length,
-    42,
+    41,
   )
   for (const [id, hash] of Object.entries(expected)) {
     const canonical = await readFile(

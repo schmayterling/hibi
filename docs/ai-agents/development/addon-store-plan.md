@@ -13,7 +13,7 @@ this replaces the earlier signed-catalog proposal. the implementation follows th
 ## curated package trust
 
 - every accepted directory entry needs a hibi signature, including entries linking to another repository or zip. detached envelopes live at `signatures/<id>.json` in the directory repository and use the existing `hibi-addon-signature` format and trusted keys.
-- maintainers review the exact package and sign it locally with `scripts/addon-signing.mjs`. private keys stay outside repositories and ci. an external author's repository does not need to be modified: its prepared files can be attested by a detached signature.
+- maintainers review changes before merging. a main-only actions workflow signs accepted packages with a dedicated package-signing key from its protected environment; the offline root key remains outside ci and alone authorizes revocation lists. unchanged valid signatures are retained. an external author's repository does not need to be modified: its prepared files can be attested by a detached signature.
 - main fetches the sidecar from the fixed directory origin, binds the original manifest metadata, and includes the sidecar in the package inventory. the existing signature, file hash, revocation, dependency, confirmation, atomic install, and reload checks remain authoritative. the signature is kept with the installed package for verification after restart.
 - a directory install must verify as signed even if unsigned installs are allowed. the repository location alone never grants execution permission. direct github or zip installs retain the existing signed/unsigned policy.
 - installing still asks for confirmation. new packages stay disabled until enabled. replacements retain their setting only when their access is unchanged. uninstall uses the existing removal and resource cleanup path.
@@ -29,8 +29,8 @@ this replaces the earlier signed-catalog proposal. the implementation follows th
 
 - typing speed is no longer bundled. its signed package lives in `hibigarden/addons-repository`, retains its id, version, behavior, attribution, and gpl license, and declares an empty capabilities list.
 - hibi-doom is listed at its reviewed commit and folder, with its original license and attribution. the directory carries a detached hibi signature for those exact bytes.
-- `hibigarden/addon-starter` is a github template with an extension and a data-only light/dark theme. it has independent checks and tests. these examples are not automatically directory entries; direct installation still requires unsigned opt-in unless signed.
-- directory ci checks source metadata, package limits, signatures, remote bindings, and package tests. starter ci checks both packages and examples. signing never happens in ci.
+- `hibigarden/addon-starter` is an extension template. `hibigarden/theme-starter` is a separate template for a data-only light/dark theme. both have independent checks and tests. these examples are not automatically directory entries; direct installation still requires unsigned opt-in unless signed.
+- directory pull requests check source metadata, package limits, remote bindings, and package tests without signing credentials. after merge, actions signs changed packages and runs strict signature verification before publishing its signature commit. starter ci checks its package and examples. new listings appear on the website and through the manager's refresh action without a hibi release.
 - app tests cover directory validation/cache recovery, source binding, trust boundaries, install/uninstall hydration, deep links, and theme cleanup. `HIBI_NETWORK_TESTS=1` enables the real github and garden install tests; ordinary checks stay offline.
 - run `npm run check` on the integrated app tree. verify the garden and documentation deployments after merging. do not create a nightly as part of this work.
 

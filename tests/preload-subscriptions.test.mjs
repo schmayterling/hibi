@@ -18,6 +18,35 @@ const evaluateAddonWindow = new Function(
   ),
 )
 
+test('garden startup requests survive an immediately disposed subscription', async () => {
+  const pending = [{ id: 'typing-speed', install: true }]
+  const transport = Object.assign(new EventEmitter(), {
+    invoke: async (channel) =>
+      channel === 'addons:garden-requests' ? pending.splice(0) : null,
+    send() {},
+  })
+  const exposed = new Map()
+  evaluate(
+    () => ({
+      ipcRenderer: transport,
+      contextBridge: { exposeInMainWorld: exposed.set.bind(exposed) },
+    }),
+    { isMainFrame: true },
+  )
+  const api = exposed.get('hibi')
+  const discarded = [],
+    received = []
+  const stop = api.onAddonGardenRequest((value) => discarded.push(value))
+  stop()
+  const keep = api.onAddonGardenRequest((value) => received.push(value))
+  await new Promise((done) => setImmediate(done))
+  assert.deepEqual(discarded, [])
+  assert.deepEqual(received, [{ id: 'typing-speed', install: true }])
+  assert.equal(transport.listenerCount('addons:garden-pending'), 1)
+  keep()
+  assert.equal(transport.listenerCount('addons:garden-pending'), 0)
+})
+
 for (const [method, channel, arity = 1] of [
   ['onAddonReload', 'addons:reload'],
   ['onGlobalShortcut', 'global-shortcut:invoked'],

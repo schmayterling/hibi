@@ -352,7 +352,11 @@ if (process.isMainFrame) {
           .catch(console.error)
       }
       ipcRenderer.on(SIDELOAD_CHANNELS.gardenPending, listener)
-      listener()
+      // StrictMode mounts, disposes, and mounts effects before this microtask.
+      // A disposed subscription must not drain startup links for the live one.
+      queueMicrotask(() => {
+        if (active) listener()
+      })
       return () => {
         active = false
         ipcRenderer.removeListener(SIDELOAD_CHANNELS.gardenPending, listener)

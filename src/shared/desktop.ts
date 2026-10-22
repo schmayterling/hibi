@@ -236,6 +236,16 @@ export type DesktopApi = {
     url?: string,
     openSettings?: readonly string[],
   ) => Promise<import('./sideload').AddonInstallSession | null>
+  getAddonDirectory: (
+    refresh?: boolean,
+  ) => Promise<import('./addon-directory').AddonDirectory>
+  installDirectoryAddon: (
+    id: string,
+    openSettings?: readonly string[],
+  ) => Promise<import('./sideload').AddonInstallSession | null>
+  onAddonGardenRequest: (
+    callback: (request: import('./addon-directory').AddonGardenRequest) => void,
+  ) => () => void
   installAddonSelection: (
     sessionId: string,
     candidateKeys: string[],

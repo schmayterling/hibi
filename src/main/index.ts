@@ -22,6 +22,10 @@ import {
 import { ADDON_CHANNELS } from '../addons/api'
 import { ABOUT_CHANNELS, SPONSOR_URL } from '../shared/about'
 import {
+  type AddonGardenRequest,
+  parseAddonGardenLink,
+} from '../shared/addon-directory'
+import {
   ADDON_HOTKEY_CHANNELS,
   type AddonHotkeyRegistration,
 } from '../shared/addon-hotkeys'
@@ -101,6 +105,7 @@ import {
   getAddonStates,
   installAddon,
   installAddonSelection,
+  installDirectoryAddon,
   installedAddonResources,
   invalidateAddonActivations,
   invokeAddon,
@@ -563,6 +568,30 @@ const loadAddonHotkeys = () => {
 }
 let pendingGlobalShortcut: { id: string; accelerator: string } | null = null
 const externalFiles: string[] = []
+const gardenRequests: AddonGardenRequest[] = []
+function queueAddonLinks(values: readonly string[]) {
+  for (const value of values) {
+    const request = parseAddonGardenLink(value)
+    if (!request) continue
+    if (
+      !gardenRequests.some(
+        (pending) =>
+          pending.id === request.id && pending.install === request.install,
+      )
+    ) {
+      if (gardenRequests.length === 8) gardenRequests.shift()
+      gardenRequests.push(request)
+    }
+    if (app.isReady()) {
+      showMainWindow()
+      mainWindow?.webContents.send(SIDELOAD_CHANNELS.gardenPending)
+    }
+  }
+}
+app.on('open-url', (event, value) => {
+  event.preventDefault()
+  queueAddonLinks([value])
+})
 function showMainWindow() {
   if (!mainWindow) createWindow()
   if (!mainWindow) return
@@ -1249,10 +1278,12 @@ if (!app.requestSingleInstanceLock()) {
       }
     },
   })
+  queueAddonLinks(process.argv)
   externalFiles.push(
     ...externalFileArguments(process.argv, process.cwd(), !app.isPackaged),
   )
   app.on('second-instance', (_event, argv, cwd) => {
+    queueAddonLinks(argv)
     queueExternalFiles(externalFileArguments(argv, cwd, !app.isPackaged))
     showMainWindow()
   })
@@ -1272,6 +1303,7 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(async () => {
       startupMark('app-ready')
+      if (app.isPackaged) app.setAsDefaultProtocolClient('hibi')
       // Installed macOS apps already carry their full-resolution bundle icon.
       // A dock-sized development icon avoids re-encoding 1024px images at launch.
       if (process.platform === 'darwin' && !app.isPackaged)
@@ -1663,6 +1695,23 @@ if (!app.requestSingleInstanceLock()) {
             installAddon(window, url, openSettings),
           ),
       )
+      handle(SIDELOAD_CHANNELS.directory, (event, refresh: unknown) => {
+        trustedWindow(event)
+        return import('./addon-directory').then(({ getAddonDirectory }) =>
+          getAddonDirectory(refresh === true),
+        )
+      })
+      handle(
+        SIDELOAD_CHANNELS.directoryInstall,
+        (event, id: unknown, openSettings: unknown) =>
+          runFileOperation(event, (window) =>
+            installDirectoryAddon(window, id, openSettings),
+          ),
+      )
+      handle(SIDELOAD_CHANNELS.gardenRequests, (event) => {
+        trustedWindow(event)
+        return gardenRequests.splice(0)
+      })
       handle(
         SIDELOAD_CHANNELS.selection,
         (event, id: unknown, keys: unknown, openSettings: unknown) =>

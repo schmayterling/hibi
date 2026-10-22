@@ -136,7 +136,7 @@ context.colorschemes.register({
 
 The six base colors must be opaque six-digit hex values. Other roles default from them; overrides accept six- or eight-digit hex. CSS expressions, URLs, unknown roles, and duplicate IDs are rejected. Author, license name, and full license text are required. An optional source URL must use HTTPS. Registered data is copied and frozen. Preserve upstream notices for adapted palettes.
 
-`list()` returns palettes with fully qualified IDs. `getPreferences()` returns `{ mode, light, dark }`; `setPreferences(partial)` updates them. Selected IDs must match the requested appearance. The [colorscheme API](../reference/colorscheme-api.md) lists all roles.
+`list()` returns palettes with fully qualified IDs. `getPreferences()` returns `{ mode, light, dark }`; `setPreferences(partial)` updates them. Selected IDs must match the requested appearance. The [colorscheme API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FColorschemeColors.md) lists all roles.
 
 Base colors use CSS layer `hibi-base`, palettes use `hibi-theme`, and unlayered `context.styles` rules retain precedence. Palette changes do not rebuild editors. Workspace snapshots include appearance preferences, but exports bundle only audited built-in palettes and fall back to Hibi for addon palette IDs.
 
@@ -188,7 +188,7 @@ These APIs run trusted renderer code. They grant no native permissions, never lo
 
 Export a `NativeAddon` with an ID and asynchronous methods. Renderer calls through `context.native.invoke` can reach only that enabled addon's exported methods. Inputs arrive as `unknown`; validate them. Never expose a generic filesystem or IPC dispatcher.
 
-`context.workspace` opens or reads the selected workspace. Native `context.workspace.snapshot()` returns Markdown pages with relative paths. `context.exportHtml()` opens a save dialog and writes the HTML. See `src/addons/documentation/`, the [export guide](../../guides/exporting.md), and the [addon API](../reference/addon-api.md).
+`context.workspace` opens or reads the selected workspace. Native `context.workspace.snapshot()` returns Markdown pages with relative paths. `context.exportHtml()` opens a save dialog and writes the HTML. See `src/addons/documentation/`, the [export guide](../../guides/exporting.md), and the [addon API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FREADME.md).
 
 ## Shared navigation
 

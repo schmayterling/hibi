@@ -24,4 +24,4 @@ An `action` makes the whole notification clickable and renders a ghost button wi
 
 Stopping or removing an addon removes its notices and cancels their timers. Old handles cannot bring them back. Notifications appear above an active modal and remain dismissible. They need no desktop notification permission.
 
-See the [toast API](../reference/toast-api.md) and [dialog API](../reference/dialog-api.md).
+See the [toast API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FToastApi.md) and [dialog API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FDialogApi.md).

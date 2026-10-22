@@ -115,10 +115,8 @@ test('export options validate URLs, images and portable paths; protected files c
 test('site export keeps supported static content and omits addon runtime state', async () => {
   const template = await readFile('out/site/template.html', 'utf8')
   const math = katex.renderToString('x^2')
-  const installedAddonCode = await readFile(
-    'examples/foundation-proof-addon/index.js',
-    'utf8',
-  )
+  const installedAddonCode =
+    "export default { activate() { throw new Error('installed-addon-code-sentinel') } }"
   const attachment = 'data:image/png;base64,aGVsbG8='
   const unusedAttachment = 'data:image/png;base64,cHJpdmF0ZQ=='
   const snapshot = {
@@ -162,7 +160,7 @@ test('site export keeps supported static content and omits addon runtime state',
       'workspace-grant-sentinel',
       'privileged-bridge-sentinel',
       'option-secret-sentinel',
-      'Foundation proof preferences need a supported version.',
+      'installed-addon-code-sentinel',
       unusedAttachment,
       'window.hibi',
       'ipcRenderer',

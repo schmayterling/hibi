@@ -57,10 +57,10 @@ export default ({ React, ui }) => ({
 })
 ```
 
-The SDK supplies `React`, `ui`, `tiptap`, `codeMirror`, and `markdown.Marked`. Return the usual lifecycle, settings, and flavor contributions without a second manifest. See the [sideload SDK](../reference/sideload-sdk.md) and [addon API](../reference/addon-api.md).
+The SDK supplies `React`, `ui`, `tiptap`, `codeMirror`, and `markdown.Marked`. Return the usual lifecycle, settings, and flavor contributions without a second manifest. See the [sideload SDK](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2Fsdk.md) and [addon API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FREADME.md).
 
 ## Theme package
 
-Set `kind: "theme"`, omit `entry`, and add a `themes` array of [colorscheme definitions](../reference/colorscheme-api.md). Each has `id`, `name`, `appearance`, `author`, full `license`, and `colors`. Required hex colors are `background`, `surface`, `ink`, `muted`, `accent`, and `border`; other roles are optional. Themes contain data only.
+Set `kind: "theme"`, omit `entry`, and add a `themes` array of [colorscheme definitions](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FColorschemeInput.md). Each has `id`, `name`, `appearance`, `author`, full `license`, and `colors`. Required hex colors are `background`, `surface`, `ink`, `muted`, `accent`, and `border`; other roles are optional. Themes contain data only.
 
 Enabled palettes appear in settings and the command palette. Removing an active theme restores Hibi's fallback. Preserve upstream authors and license notices. Manifest `licenses` and theme licenses appear in Hibi's license dialogs. Author records support `displayName` and optional `discordId`, `github`, and `role`.

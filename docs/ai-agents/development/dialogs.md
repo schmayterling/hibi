@@ -48,4 +48,4 @@ Dialogs open in request order. Closing a queued dialog removes it immediately. S
 
 Native file pickers and unsaved-file checks stay in the main process. `isOpen()` reports whether the shared queue is occupied; built-in shortcuts pause while it is. Addon settings should retain the context from `start` and use its owned dialog API. Reserve `useDialogs()` for built-ins. A directly rendered `Modal` follows its React component's lifetime.
 
-See the [dialog API](../reference/dialog-api.md) and [modal component](../reference/modal-api.md).
+See the [dialog API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FDialogApi.md) and [modal component](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FModal.md).

@@ -48,4 +48,4 @@ Trusted native addons can use `context.document.get()`, `context.document.path(i
 
 Run heavy compilers in owned background processes with cancellation, bounded output, and scoped inputs. Typst provides an example in `src/addons/typst/`. Shared text-format services live in `src/addons/_shared/`: data-only metadata, disposable parser processes, and source toolbar mappings that use the host's selection and undo handling. Reuse these services instead of copying them into plugins.
 
-See the [format guide](../../editing/formats.md) for dependencies and execution limits, and the [addon API](../reference/addon-api.md) for signatures.
+See the [format guide](../../editing/formats.md) for dependencies and execution limits, and the [addon API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FDocumentFormat.md) for signatures.

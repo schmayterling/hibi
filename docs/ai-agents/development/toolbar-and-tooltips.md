@@ -58,4 +58,4 @@ Hover waits 400 ms; focus reached through Tab or arrow-key navigation shows help
 
 `DialogProvider` mounts one `TooltipHost`. Standalone renderers can mount it explicitly. Native popovers place tooltips above modals without blocking clicks. All app hints use compact dark surfaces, white semibold text, and a small arrow toward the control. Long text wraps within the viewport. Motion uses shared timing tokens and respects reduced motion.
 
-See the [toolbar API](../reference/toolbar-api.md) and [tooltip API](../reference/tooltip-api.md).
+See the [toolbar API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FToolbarApi.md) and [tooltip API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FTooltipApi.md).

@@ -33,4 +33,4 @@ Trusted native addons can export `queries` alongside `methods`. `context.native.
 
 Capture `context.workspace.id()` before a query and return it with the result. Callers must recheck it after asynchronous work, because reads can overlap saves or folder changes.
 
-See the [workspace API](../reference/workspace-api.md), [addon API](../reference/addon-api.md), and [sidebar API](../reference/sidebar-api.md).
+See the [workspace API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FExplorerDecorationProvider.md), [addon API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FREADME.md), and [sidebar API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FSidebar.md).

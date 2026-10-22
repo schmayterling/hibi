@@ -1,6 +1,6 @@
 # Shared UI and themes
 
-Use the controls exported by `src/addons/ui.ts` instead of copying their markup. The app and exported documentation share `src/ui/tokens.css`; `npm run docs:check` checks its [generated reference](../reference/theme-tokens.md).
+Use the controls exported by `src/addons/ui.ts` instead of copying their markup. The app and exported documentation share `src/ui/tokens.css`; `npm run docs:check` checks its [generated reference](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2Ftheme-tokens.md).
 
 ## Colors and measurements
 
@@ -8,7 +8,7 @@ Components use semantic colors: `--background`, `--surface`, `--sidebar`, `--ink
 
 `src/shared/color-palettes.ts` defines the nine bundled schemes. `src/ui/colorschemes.ts` applies them without remounting editors. Preferences store an appearance mode and a light/dark pair. Electron validates and saves solid window colors before creating the next window.
 
-Base tokens use CSS layer `hibi-base`; palettes use `hibi-theme`. Unlayered addon styles take precedence. Scope overrides with selectors such as `:root[data-colorscheme="catppuccin-mocha"]` or `:root[data-appearance="dark"]`. Register selectable palettes with `context.colorschemes.register` or a package's `themes` field; palettes contain color roles only, never CSS. See [colorschemes](../../guides/colorschemes.md) and the [API](../reference/colorscheme-api.md).
+Base tokens use CSS layer `hibi-base`; palettes use `hibi-theme`. Unlayered addon styles take precedence. Scope overrides with selectors such as `:root[data-colorscheme="catppuccin-mocha"]` or `:root[data-appearance="dark"]`. Register selectable palettes with `context.colorschemes.register` or a package's `themes` field; palettes contain color roles only, never CSS. See [colorschemes](../../guides/colorschemes.md) and the [API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FColorscheme.md).
 
 UI fonts, sizes, spacing, icons, radii, and motion durations use tokens. Durations are milliseconds. The editor's text fade uses `--motion-feedback`. Document typography, pane geometry, and user-selected padding or sidebar width remain separate. Reduced motion overrides animations.
 
@@ -36,7 +36,7 @@ Use sentence case for labels and descriptions. Preserve names such as GitHub, Vi
 
 Group related rows on one surface with inset separators. Put the label on the left and the control on the right. Add a description only when the label needs explanation; `SettingRow` accepts one as an optional prop. Controls, shortcut badges, and reset buttons must wrap within narrow panels. Give distinct groups a heading and use shared heading margins so adjacent cards remain separate.
 
-Use `SettingsFilter` for search and reset. Keep filtered `SettingRow` components mounted with `hidden` so the command palette can find them. Palette navigation clears the filter to reveal its target. Reset applies to the whole page, including hidden results. See the [component reference](../reference/settings-filter-api.md).
+Use `SettingsFilter` for search and reset. Keep filtered `SettingRow` components mounted with `hidden` so the command palette can find them. Palette navigation clears the filter to reveal its target. Reset applies to the whole page, including hidden results. See the [component reference](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FSettingsFilter.md).
 
 The titlebar holds sidebar controls, tabs, and view switches. New, open, and save actions live in the File menu; settings and the command palette are available from View or their shortcuts. Opening settings focuses its selected sidebar category. **Back to app** and Escape return to the editor. App and Electron versions appear in the settings sidebar footer.
 

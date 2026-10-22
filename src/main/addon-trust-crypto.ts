@@ -1,6 +1,7 @@
 import { createHash, createPublicKey, verify } from 'node:crypto'
 import type { AddonManifest } from '../addons/api'
 import {
+  ADDON_PACKAGE_TRUST_KEYS,
   ADDON_SIGNATURE_FILE,
   ADDON_TRUST_KEYS,
   type AddonRevocationStatement,
@@ -77,7 +78,7 @@ export async function verifyAddonSignature(
   inventory: AddonInventory,
   folder: string,
   manifest: Pick<AddonManifest, 'id' | 'version'>,
-  keys: Readonly<Record<string, string>> = ADDON_TRUST_KEYS,
+  keys: Readonly<Record<string, string>> = ADDON_PACKAGE_TRUST_KEYS,
 ): Promise<AddonTrust> {
   const signaturePath = folder
     ? `${folder}/${ADDON_SIGNATURE_FILE}`

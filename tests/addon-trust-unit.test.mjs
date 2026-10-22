@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { generateKeyPairSync, sign } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -14,6 +14,10 @@ import {
   revokedAddon,
   verifyAddonSignature,
 } from '../src/main/addon-trust-crypto.ts'
+import {
+  ADDON_PACKAGE_TRUST_KEYS,
+  ADDON_TRUST_KEYS,
+} from '../src/shared/addon-trust.ts'
 
 const { privateKey } = generateKeyPairSync('ed25519')
 const pem = privateKey.export({ type: 'pkcs8', format: 'pem' })
@@ -105,6 +109,42 @@ test('unknown and inherited key ids are refused', async (t) => {
   assert.match((await f.verify({})).reason, /unknown key/)
   await f.write({ ...signEnvelope(f.statement, key), keyId: 'toString' })
   assert.match((await f.verify()).reason, /unknown key/)
+})
+
+test('the garden automation key verifies packages by default but never revocation lists', async (t) => {
+  const automation = '8dc7673025d00464'
+  for (const [id, raw] of Object.entries(ADDON_PACKAGE_TRUST_KEYS))
+    assert.equal(
+      createHash('sha256')
+        .update(Buffer.from(raw, 'base64'))
+        .digest('hex')
+        .slice(0, 16),
+      id,
+    )
+  assert.deepEqual(
+    Object.keys(ADDON_PACKAGE_TRUST_KEYS).sort(),
+    [...Object.keys(ADDON_TRUST_KEYS), automation].sort(),
+  )
+  assert.equal(Object.hasOwn(ADDON_TRUST_KEYS, automation), false)
+  // Envelopes naming the automation key reach signature verification only for packages.
+  const f = await fixture(t)
+  await f.write({ ...signEnvelope(f.statement, key), keyId: automation })
+  const trust = await verifyAddonSignature(
+    await inventoryAddonDirectory(f.folder),
+    '',
+    manifest,
+  )
+  assert.match(trust.reason, /signature is invalid/)
+  const list = { ...signEnvelope(revocations(), key), keyId: automation }
+  assert.throws(() => parseAddonRevocations(list), /unknown key/)
+  // A stand-in automation key signs packages but is refused for revocations.
+  const packages = { ...ADDON_TRUST_KEYS, ...key.keys }
+  await f.write(signEnvelope(f.statement, key))
+  assert.equal((await f.verify(packages)).status, 'signed')
+  assert.throws(
+    () => parseAddonRevocations(signEnvelope(revocations(), key)),
+    /unknown key/,
+  )
 })
 
 test('malformed envelopes, JSON, encoding and signatures are invalid', async (t) => {

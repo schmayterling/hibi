@@ -144,10 +144,11 @@ test('addon urls stay https through redirects and downloads remain bounded', asy
   )
 })
 
-test('repository cancellation reaches both bare clone and archive without starting later work', async (t) => {
+test('repository cancellation reaches init, fetch, and archive without starting later work', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-repo-cancel-'))
   t.after(() => rm(root, { recursive: true, force: true }))
-  for (const stage of ['before', 'clone', 'archive']) {
+  const stages = ['init', 'fetch', 'archive']
+  for (const stage of ['before', ...stages]) {
     const temporary = join(root, stage)
     await mkdir(temporary)
     const controller = new AbortController()
@@ -158,28 +159,26 @@ test('repository cancellation reaches both bare clone and archive without starti
         'https://example.com/addon.git',
         temporary,
         async (_command, args, options) => {
-          const command = args.includes('clone') ? 'clone' : 'archive'
+          const command = stages.find((name) => args.includes(name))
           calls.push(command)
           assert.ok(options.signal)
           if (command === stage) {
             controller.abort(new Error('fixture canceled'))
             options.signal.throwIfAborted()
           }
-          await mkdir(join(temporary, 'repository.git'))
+          if (command === 'init') await mkdir(join(temporary, 'repository.git'))
+          if (command === 'fetch')
+            await writeFile(
+              join(temporary, 'repository.git', 'FETCH_HEAD'),
+              `${'a'.repeat(40)}\t\tfixture\n`,
+            )
           return { stdout: Buffer.alloc(0) }
         },
         controller.signal,
       ),
       /fixture canceled/,
     )
-    assert.deepEqual(
-      calls,
-      stage === 'before'
-        ? []
-        : stage === 'clone'
-          ? ['clone']
-          : ['clone', 'archive'],
-    )
+    assert.deepEqual(calls, stages.slice(0, stages.indexOf(stage) + 1))
   }
 })
 
@@ -238,10 +237,10 @@ test('repository installs archive without checkout, hooks, or inherited git conf
   await mkdir(folder)
   await unpackAddon(archive.zip, folder)
   assert.equal(await readFile(join(folder, 'README.md'), 'utf8'), 'fixture')
-  assert.equal(commands.length, 2)
+  assert.equal(commands.length, 3)
   assert.ok(commands[0].args.includes('--bare'))
-  assert.ok(commands[0].args.includes('--depth=1'))
-  assert.ok(commands[1].args.includes('archive'))
+  assert.ok(commands[1].args.includes('--depth=1'))
+  assert.ok(commands[2].args.includes('archive'))
   assert.equal(commands[0].system, '1')
   assert.equal(await readFile(commands[0].config, 'utf8'), '')
   assert.ok(commands[0].args.includes('credential.helper='))

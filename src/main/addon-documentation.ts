@@ -5,7 +5,12 @@ import { imageMime } from './images'
 import { installedDocumentationPath } from './sideload'
 
 const documents = import.meta.glob<string>(
-  ['../addons/**/*.md', '../useraddons/**/*.md', '../../docs/**/*.md'],
+  [
+    '../addons/**/*.md',
+    '../useraddons/**/*.md',
+    '../../docs/**/*.md',
+    '!../../docs/ai-agents/**',
+  ],
   { query: '?raw', import: 'default' },
 )
 const images = import.meta.glob<string>(
@@ -13,6 +18,7 @@ const images = import.meta.glob<string>(
     '../addons/**/*.{png,jpg,jpeg,gif,webp,avif,svg}',
     '../useraddons/**/*.{png,jpg,jpeg,gif,webp,avif,svg}',
     '../../docs/**/*.{png,jpg,jpeg,gif,webp,avif,svg}',
+    '!../../docs/ai-agents/**',
   ],
   { query: '?inline', import: 'default' },
 )
@@ -38,7 +44,10 @@ export async function readDocumentation(
   let content: string
   if (directory) {
     const key = posix.join(directory, path)
-    if (!key.startsWith(`${directory}/`) && !key.startsWith('../../docs/'))
+    if (
+      key.startsWith('../../docs/ai-agents/') ||
+      (!key.startsWith(`${directory}/`) && !key.startsWith('../../docs/'))
+    )
       throw new Error('Choose a file inside this addon’s documentation.')
     const load = (markdown ? documents : images)[key]
     if (!load) throw new Error('This documentation file is unavailable.')

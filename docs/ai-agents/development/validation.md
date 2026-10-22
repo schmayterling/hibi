@@ -6,7 +6,7 @@ Use Node 24 LTS, or Node 22.18 or newer, and install dependencies with `npm ci`.
 npm start           # app and static exporter template watch mode
 npm run preview     # last production build
 npm run docs        # refresh generated API references
-npm run docs:check  # reject stale references
+npm run docs:check  # prepare references and validate documentation links
 npm run export:docs # export docs to out/docs/index.html
 npm run check       # lint, API docs, typecheck, builds, native tests
 npm run bench       # core and default-plugin CPU benchmarks
@@ -77,12 +77,12 @@ Successful core runs publish to [CodSpeed](https://app.codspeed.io/schmayterling
 
 ## Documentation publishing
 
-Prose guides must change with behavior. API/sidebar references come from TypeScript declarations. Run `npm run docs` after public API changes and `npm run docs:check` to find stale output. Release builds must pass `npm run check`.
+Public prose is maintained in [hibigarden/docs](https://github.com/hibigarden/docs). Hibi's `docs-revision` pins its authored documentation. `npm run docs` restores that snapshot into ignored paths under `docs/` and generates the API reference from the current TypeScript declarations. License sources and internal agent notes remain tracked in Hibi. Generated API pages are build output.
 
-Pushes to `main` that change `docs/**` run `.github/workflows/docs-sync.yml`. It checks references, builds the app's self-contained site template, and exports `out/docs/index.html`. Nested Markdown and local images inside `docs/` are included; symlinked pages and images outside it are excluded or rejected.
+Run `npm run docs:check` to prepare the reference and validate local links. Builds and development startup prepare documentation before bundling offline addon help. A prepared snapshot works offline. Snapshot updates refuse locally modified files; edit prose in a docs repository checkout and set `HIBI_DOCS_SOURCE` to that checkout's absolute path when running Hibi's commands. Bump `docs-revision` alongside behavior changes that need new help.
 
-The workflow replaces only `index.html` in `hibigarden/docs` on `main`, then pushes `docs: sync to main (<source short commit id>)`. Unchanged HTML creates no commit. Destination workflows, license, README, and domain settings remain intact. Runs are serialized; concurrent destination changes reject the push instead of being overwritten. The destination's Pages workflow publishes the commit.
+The documentation repository owns site publishing. Its workflow checks out one exact Hibi revision, uses its own authored guides through `HIBI_DOCS_SOURCE`, runs documentation and example checks, and exports `out/docs/index.html` with the existing viewer. `HIBI_SOURCE_REVISION` pins API and source links to that app commit. The published artifact records both commit IDs in `revision.txt`. Public hash routes remain based on their existing paths relative to `docs/`. Internal agent notes are excluded from the site and app documentation bundles.
 
-Store a fine-grained token as `DOCS_SYNC_TOKEN` in **schmayterling/hibi → Settings → Secrets and variables → Actions**. Use resource owner `hibigarden`, access only to `hibigarden/docs`, and **Contents: read and write**. Renew it before expiry and obtain organization approval if required. The destination disables deploy keys, so this workflow does not use SSH.
+Hibi's `.github/workflows/docs-sync.yml` requests a rebuild through the `hibi-docs-update` repository dispatch event when app, exporter, license, or documentation inputs change on `main`. It never writes generated HTML into the docs repository. Store a fine-grained token as `DOCS_SYNC_TOKEN` in **schmayterling/hibi → Settings → Secrets and variables → Actions**, limited to **hibigarden/docs** with **Contents: read and write**. Keep tokens out of source files and logs.
 
-Source checkout credentials are not persisted; both checkout actions remove credentials after the job. Never put tokens in source files or logs.
+For rollback, restore the previous validated app/docs revision pair and rerun the documentation publisher. If reverting the migration, disable the new publisher before restoring the old HTML synchronization workflow so only one publisher can deploy.

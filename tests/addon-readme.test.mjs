@@ -111,6 +111,7 @@ test('addon readmes render safely without activation, and settings headers have 
   )
   for (const [id, path] of [
     ['missing', 'README.md'],
+    ['typst', '../../../docs/ai-agents/AGENTS.md'],
     ['readme-fixture', '../../outside.md'],
     ['readme-fixture', 'index.js'],
     ['keybeats', '../../useraddons/private/README.md'],

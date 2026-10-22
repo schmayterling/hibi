@@ -17,6 +17,11 @@ import { readFrontmatter } from '../src/shared/frontmatter.ts'
 const markdownParser = new Marked({
   async: true,
   walkTokens(token) {
+    if (token.type === 'link' && process.env.HIBI_SOURCE_REVISION)
+      token.href = token.href.replace(
+        'https://github.com/schmayterling/hibi/blob/main/',
+        `https://github.com/schmayterling/hibi/blob/${process.env.HIBI_SOURCE_REVISION}/`,
+      )
     if (token.type === 'code') return codeLanguages.ensure(token.lang ?? '')
   },
   renderer: {

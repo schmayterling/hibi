@@ -25,7 +25,7 @@ flatpak install --user ./hibi-<version>-linux-x64.flatpak
 
 the flatpak needs [flathub](https://flathub.org/setup) set up so it can download its runtime.
 
-start typing, open a file, or open a folder as a workspace. confused? read the [user guide](docs/README.md).
+start typing, open a file, or open a folder as a workspace. confused? read the [user guide](https://docs.hibi.garden/).
 
 roadmaps and discussions are available on the [hibi discord](https://discord.gg/v9r4cABUP2).
 

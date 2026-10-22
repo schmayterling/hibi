@@ -85,6 +85,7 @@ async function watchDevelopment(scenario, t) {
     'build',
     'package.json',
     'package-lock.json',
+    'docs-revision',
     'electron.vite.config.ts',
     'tsconfig.json',
     'tsconfig.node.json',

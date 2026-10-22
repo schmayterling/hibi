@@ -1,9 +1,0 @@
-# Analysis isolation
-
-The analysis service runs addon analysis in a worker inside a hidden sandboxed renderer process. Each addon uses a separate in-memory session and each process gets a new origin. The main application renderer retains its own sandbox and context isolation settings. Electron documents the underlying boundaries in [Process Sandboxing](https://www.electronjs.org/docs/latest/tutorial/sandbox) and [protocol sessions](https://www.electronjs.org/docs/latest/api/protocol).
-
-The session serves only its trusted host, worker wrapper, and approved addon module. Content Security Policy and request filtering deny network traffic, frames, and unrelated resources. The addon runs in the worker, where neither DOM access nor either preload bridge exists. The host bridge accepts one bounded JSON completion for the current request. Native handlers bind it to the service's sender, frame, origin, addon, and request ID; payload fields cannot select another owner or document.
-
-Before granting a projection, the main process checks the active tab, revision, content version, and each literal source span. It strips extra fields and checks the document identity again when work completes. Results never modify documents directly. The renderer must still validate their shape and use the normal versioned edit API.
-
-Cancellation destroys the process and settles active and queued requests. The service limits queue depth, output size, process count, request duration, and sampled working-set memory. These limits keep ordinary runaway work away from typing; they do not replace Chromium's sandbox or provide a hard operating-system memory quota. The integration tests cover denied capabilities, owner spoofing, stale documents, queue replacement, oversized output, infinite loops, crash recovery, disable, and reload.

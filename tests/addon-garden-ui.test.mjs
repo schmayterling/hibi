@@ -266,5 +266,32 @@ test('hibi garden tab, installs, and addon links', {
     assert.equal(await garden.getAttribute('aria-selected'), 'true')
   })
 
+  await t.test(
+    'security toggles save through the real main process',
+    async () => {
+      // Other tests stub these handlers; this one keeps main's own validation.
+      const allow = addons.getByRole('checkbox', {
+        name: 'Allow unsigned addons',
+      })
+      await allow.click()
+      await page
+        .getByRole('dialog', { name: /^allow unsigned addons$/i })
+        .getByRole('button', { name: /^allow unsigned addons$/i })
+        .click()
+      await addons.locator('#allow-unsigned-addons:checked:enabled').waitFor()
+      await addons
+        .getByRole('checkbox', { name: 'Check for revoked addons' })
+        .click()
+      await addons
+        .locator('#check-revoked-addons:not(:checked):enabled')
+        .waitFor()
+      assert.deepEqual(
+        await page.evaluate(() => window.hibi.getAddonTrustSettings()),
+        { allowUnsigned: true, checkRevocations: false },
+      )
+      assert.equal(await addons.getByRole('alert').count(), 0)
+    },
+  )
+
   assert.deepEqual(errors, [])
 })

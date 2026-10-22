@@ -10,8 +10,8 @@ import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
 import { signEnvelope, signingKey } from '../scripts/addon-signing.mjs'
 import {
+  ADDON_PACKAGE_TRUST_KEYS,
   ADDON_REVOCATIONS_URL,
-  ADDON_TRUST_KEYS,
 } from '../src/shared/addon-trust.ts'
 
 const DAY = 86400000
@@ -184,7 +184,7 @@ test('test keys and endpoint overrides require unpackaged build and explicit tes
   ])
     await t.test(JSON.stringify(mode), async (t) => {
       const h = await host(t, mode)
-      assert.deepEqual(h.api.addonTrustKeys(), ADDON_TRUST_KEYS)
+      assert.deepEqual(h.api.addonTrustKeys(), ADDON_PACKAGE_TRUST_KEYS)
       h.start()
       await h.check()
       assert.equal(h.calls[0].url, ADDON_REVOCATIONS_URL)
@@ -274,4 +274,14 @@ test('network failures, oversized lists, rollback and equal-sequence changes ret
     reason: 'Revoked fixture.',
   })
   assert.ok(h.errors.length >= 4)
+})
+
+test('main trusts the garden automation key for packages but not revocation lists', async (t) => {
+  const h = await host(t, { packaged: true, testFlag: false })
+  assert.equal(Object.hasOwn(h.api.addonTrustKeys(), '8dc7673025d00464'), true)
+  h.respond({ ...envelope(1), keyId: '8dc7673025d00464' })
+  h.start()
+  await h.check()
+  assert.equal(h.applied(), 0)
+  assert.match(String(h.errors.at(-1)?.[1]?.message), /unknown key/)
 })

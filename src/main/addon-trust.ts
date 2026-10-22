@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { app, BrowserWindow } from 'electron'
 import type { AddonManifest } from '../addons/api'
 import {
+  ADDON_PACKAGE_TRUST_KEYS,
   ADDON_REVOCATIONS_URL,
   ADDON_TRUST_CHANNELS,
   ADDON_TRUST_KEYS,
@@ -21,7 +22,9 @@ const defaults: AddonTrustSettings = {
   checkRevocations: true,
 }
 let settings = { ...defaults }
-let keys = ADDON_TRUST_KEYS
+let keys = ADDON_PACKAGE_TRUST_KEYS
+// Package automation keys never authorize revocation lists.
+let revocationKeys = ADDON_TRUST_KEYS
 let revocations: AddonRevocationStatement | undefined
 let timer: ReturnType<typeof setTimeout> | undefined
 let request: AbortController | undefined
@@ -59,7 +62,8 @@ async function save(file: string, value: unknown) {
 
 export async function loadAddonTrust() {
   settings = { ...defaults }
-  keys = ADDON_TRUST_KEYS
+  keys = ADDON_PACKAGE_TRUST_KEYS
+  revocationKeys = ADDON_TRUST_KEYS
   revocations = undefined
   if (testing() && process.env.HIBI_TEST_ADDON_TRUST_KEYS) {
     const extra: unknown = JSON.parse(
@@ -75,10 +79,13 @@ export async function loadAddonTrust() {
           Buffer.from(value, 'base64').length === 32 &&
           Buffer.from(value, 'base64').toString('base64') === value,
       ) ||
-      Object.keys(extra).some((key) => Object.hasOwn(ADDON_TRUST_KEYS, key))
+      Object.keys(extra).some((key) =>
+        Object.hasOwn(ADDON_PACKAGE_TRUST_KEYS, key),
+      )
     )
       throw new Error('The addon test keys are invalid.')
-    keys = { ...ADDON_TRUST_KEYS, ...extra }
+    keys = { ...ADDON_PACKAGE_TRUST_KEYS, ...extra }
+    revocationKeys = { ...ADDON_TRUST_KEYS, ...extra }
   }
   try {
     settings = parseSettings(
@@ -94,7 +101,7 @@ export async function loadAddonTrust() {
       throw new Error('The cached addon revocation list is too large.')
     revocations = parseAddonRevocations(
       JSON.parse(bytes.toString('utf8')),
-      keys,
+      revocationKeys,
     )
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
@@ -209,7 +216,11 @@ async function refreshRevocations() {
       await reader.cancel()
     }
     const envelope: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-    const next = parseAddonRevocations(envelope, keys, revocations?.sequence)
+    const next = parseAddonRevocations(
+      envelope,
+      revocationKeys,
+      revocations?.sequence,
+    )
     if (controller.signal.aborted || !settings.checkRevocations) return
     // Equal sequences retain the accepted contents as well as blocking rollback.
     if (revocations && next.sequence === revocations.sequence) return

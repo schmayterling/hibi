@@ -1,6 +1,12 @@
-/** Ed25519 public keys (raw 32 bytes, base64) whose signatures mark an addon as signed, by key id. */
+/** Offline root Ed25519 public keys (raw 32 bytes, base64) by key id; only these sign revocation lists. */
 export const ADDON_TRUST_KEYS: Readonly<Record<string, string>> = {
   '1b43eadedb48d51d': 'JZEDarSlRAFAdC9WC++vLgpLVWI8pi9yBG8Wm73/S1w=',
+}
+
+/** Keys whose package signatures mark an addon as signed: the root keys and the Hibi garden automation key. */
+export const ADDON_PACKAGE_TRUST_KEYS: Readonly<Record<string, string>> = {
+  ...ADDON_TRUST_KEYS,
+  '8dc7673025d00464': '+COFs2NeRFH27glN2PuJsyAHuMur86WTJT6HoaQliqY=',
 }
 
 /** Signature file shipped next to hibi-addon.json; excluded from the signed file list. */

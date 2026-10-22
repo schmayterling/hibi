@@ -47,6 +47,8 @@ async function repository(t, files, branch = 'main') {
   const root = await mkdtemp(join(tmpdir(), 'hibi-repo-github-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const source = join(root, 'source')
+  const config = join(root, 'gitconfig')
+  await writeFile(config, '')
   for (const [name, content] of Object.entries(files)) {
     await mkdir(dirname(join(source, name)), { recursive: true })
     await writeFile(join(source, name), content)
@@ -73,7 +75,7 @@ async function repository(t, files, branch = 'main') {
         // Fixtures ignore the developer's config, including any Git LFS filter.
         env: {
           ...process.env,
-          GIT_CONFIG_GLOBAL: '/dev/null',
+          GIT_CONFIG_GLOBAL: config,
           GIT_CONFIG_NOSYSTEM: '1',
         },
       },

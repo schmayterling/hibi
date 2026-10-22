@@ -164,7 +164,7 @@ export async function downloadRepository(
     await walk(repository)
   }
   let monitor: ReturnType<typeof setInterval> | undefined
-  let reason = ''
+  let failure: Error | undefined
   try {
     await run('git', [...config, 'init', '--bare', '-q', repository], {
       ...options,
@@ -203,8 +203,10 @@ export async function downloadRepository(
         )
         .at(-1)
       if (!found) {
-        reason = 'Could not find this branch or tag in the GitHub repository.'
-        throw new Error(reason)
+        failure = new Error(
+          'Could not find this branch or tag in the GitHub repository.',
+        )
+        throw failure
       }
       ;({ ref, path } = found)
     }
@@ -248,8 +250,8 @@ export async function downloadRepository(
       !COMMIT.test(commit) ||
       (COMMIT.test(ref) && commit !== ref)
     ) {
-      reason = 'The repository returned an unexpected commit.'
-      throw new Error(reason)
+      failure = new Error('The repository returned an unexpected commit.')
+      throw failure
     }
     // The highest-priority attributes keep archived bytes and files identical to the commit.
     await mkdir(join(repository, 'info'), { recursive: true })
@@ -289,7 +291,7 @@ export async function downloadRepository(
       throw new Error(
         'This repository exceeds the limit of 5,000 entries or 64 MiB, or contains a symbolic link.',
       )
-    if (reason) throw new Error(reason)
+    if (failure) throw failure
     throw new Error(
       'Could not read this Git repository. Use a public HTTPS repository containing a ready-to-install addon.',
       { cause: error },

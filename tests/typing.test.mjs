@@ -119,7 +119,7 @@ test('editor input, source formatting shortcuts, and sidebar shortcut', {
   await counted('7')
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    '***hello***!?',
+    '***hello!?***',
   )
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()

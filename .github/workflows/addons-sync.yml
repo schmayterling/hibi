@@ -2,7 +2,12 @@ name: sync addons
 on:
   push:
     branches: [main]
-    paths: ['src/addons/**']
+    paths:
+      - 'src/addons/**'
+      - 'scripts/export-addons.mjs'
+      - 'src/shared/addon-manifest.ts'
+      - 'src/shared/addon-package.ts'
+      - '.github/workflows/addons-sync.yml'
   workflow_dispatch:
 permissions:
   contents: read
@@ -64,7 +69,8 @@ jobs:
         env:
           SOURCE_COMMIT: ${{ steps.source.outputs.sha }}
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.name 'schmayterling'
+          git config user.email 'ryana@ryanaque.com'
           git commit -m "chore(addons): sync to main ($SOURCE_COMMIT)"
+          git pull --rebase origin main
           git push origin HEAD:main

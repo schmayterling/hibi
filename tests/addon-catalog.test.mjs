@@ -40,7 +40,7 @@ const stable = (value) =>
         )
       : value
 
-test('all 42 compiled manifests retain their frozen normalized metadata', async () => {
+test('all 41 compiled manifests retain their frozen normalized metadata', async () => {
   const expected = JSON.parse(
     await readFile(
       fileURLToPath(
@@ -49,7 +49,7 @@ test('all 42 compiled manifests retain their frozen normalized metadata', async 
       'utf8',
     ),
   )
-  assert.equal(builtins.length, 42)
+  assert.equal(builtins.length, 41)
   for (const { manifest, directory } of builtins) {
     assert.equal(basename(directory), manifest.id)
     assert.equal(

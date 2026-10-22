@@ -135,6 +135,6 @@
     "esbuild": "0.28.2",
     "luaparse": "0.3.1",
     "marked-github-footnote": "1.0.0",
-    "sanitize-html": "2.18.0"
+    "sanitize-html": "2.18.1"
   }
 }

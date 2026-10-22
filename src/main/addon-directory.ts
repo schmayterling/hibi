@@ -9,6 +9,7 @@ import {
   parseAddonDirectory,
 } from '../shared/addon-directory'
 import { validId } from '../shared/addon-manifest'
+import { MAX_ADDON_MANIFEST_BYTES } from '../shared/addon-package'
 import { retryRename } from './atomic-rename'
 import { download } from './download'
 
@@ -63,38 +64,51 @@ async function loadDirectory(refresh: boolean): Promise<AddonDirectory> {
   return refreshDirectory()
 }
 
+/** Directory files come only from the catalog's own location, without credentials or redirects elsewhere. */
+async function fetchDirectoryFile(
+  maxBytes: number,
+  path?: string,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  const testing = !app.isPackaged && app.commandLine.hasSwitch('hibi-test')
+  const override = testing
+    ? process.env.HIBI_TEST_ADDON_DIRECTORY_URL
+    : undefined
+  const catalog = override ?? ADDON_DIRECTORY_URL
+  const source = path ? new URL(path, catalog).href : catalog
+  const timeout = AbortSignal.timeout(15_000)
+  const parts: Uint8Array[] = []
+  await download(source, {
+    maxBytes,
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    stallTimeoutMs: 5000,
+    accept: 'application/json',
+    allowedOrigins: [new URL(source).origin],
+    ...(override
+      ? {
+          parseUrl: (value: string) => {
+            const url = new URL(value)
+            if (url.href !== source)
+              throw new Error('The test directory redirected.')
+            return url
+          },
+        }
+      : {}),
+    fetch: (input, init) =>
+      net.fetch(input instanceof URL ? input.href : input, init),
+    write: (chunk) => {
+      parts.push(chunk)
+    },
+  })
+  return Buffer.concat(parts)
+}
+
 async function refreshDirectory(): Promise<AddonDirectory> {
   try {
-    const testing = !app.isPackaged && app.commandLine.hasSwitch('hibi-test')
-    const override = testing
-      ? process.env.HIBI_TEST_ADDON_DIRECTORY_URL
-      : undefined
-    const source = override ?? ADDON_DIRECTORY_URL
-    const parts: Uint8Array[] = []
-    await download(source, {
-      maxBytes: MAX_DIRECTORY_BYTES,
-      signal: AbortSignal.timeout(15_000),
-      stallTimeoutMs: 5000,
-      accept: 'application/json',
-      allowedOrigins: [new URL(source).origin],
-      ...(override
-        ? {
-            parseUrl: (value: string) => {
-              const url = new URL(value)
-              if (url.href !== source)
-                throw new Error('The test directory redirected.')
-              return url
-            },
-          }
-        : {}),
-      fetch: (input, init) =>
-        net.fetch(input instanceof URL ? input.href : input, init),
-      write: (chunk) => {
-        parts.push(chunk)
-      },
-    })
     const entries = parseAddonDirectory(
-      JSON.parse(Buffer.concat(parts).toString('utf8')),
+      JSON.parse(
+        (await fetchDirectoryFile(MAX_DIRECTORY_BYTES)).toString('utf8'),
+      ),
     )
     const next: AddonDirectory = {
       entries,
@@ -130,4 +144,25 @@ export async function directoryAddon(
         'This addon is not in Hibi garden. Refresh the directory and try again.',
     )
   return entry
+}
+
+/** Every listed addon has a detached Hibi signature beside the catalog. */
+export async function directorySignature(
+  id: string,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  if (!validId(id)) throw new Error('Choose an addon from Hibi garden.')
+  try {
+    return await fetchDirectoryFile(
+      MAX_ADDON_MANIFEST_BYTES,
+      `signatures/${id}.json`,
+      signal,
+    )
+  } catch (error) {
+    signal?.throwIfAborted()
+    throw new Error(
+      'Could not download the Hibi signature for this addon. Refresh the directory and try again.',
+      { cause: error },
+    )
+  }
 }

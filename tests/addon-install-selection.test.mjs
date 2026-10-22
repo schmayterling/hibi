@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
+import { createHash, generateKeyPairSync } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import * as fs from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
+import { signEnvelope, signingKey } from '../scripts/addon-signing.mjs'
 import { zipFiles } from './zip.mjs'
 
 const { outputFiles } = await build({
@@ -75,6 +76,7 @@ async function fixture(t) {
     BrowserWindow: { getAllWindows: () => [] },
     app: {
       getPath: (name) => (name === 'userData' ? profile : temporary),
+      commandLine: { hasSwitch: (name) => name === 'hibi-test' },
     },
     dialog: {
       showOpenDialog: async () => ({ canceled: !chosen, filePaths: [chosen] }),
@@ -512,10 +514,52 @@ test('downloaded nested candidates use the same chooser and preserve third-party
   assert.deepEqual(await fs.readdir(f.temporary), [])
 })
 
-test('garden installation binds the selected identity and release bytes before confirmation', async (t) => {
+const testKey = () =>
+  signingKey(
+    generateKeyPairSync('ed25519').privateKey.export({
+      type: 'pkcs8',
+      format: 'pem',
+    }),
+  )
+// A detached package signature over the given files, as the directory publishes it.
+const detachedSignature = (key, id, files, fields = {}) =>
+  Buffer.from(
+    JSON.stringify(
+      signEnvelope(
+        {
+          type: 'hibi-addon-signature',
+          version: 1,
+          id,
+          addonVersion: '1.0.0',
+          files: Object.fromEntries(
+            files.map(({ name, content }) => [
+              name.split('/').at(-1),
+              createHash('sha256').update(content).digest('hex'),
+            ]),
+          ),
+          signedAt: '2026-10-23T00:00:00.000Z',
+          ...fields,
+        },
+        key,
+      ),
+    ),
+  )
+
+test('garden installation binds the selected identity, release bytes, and detached signature', async (t) => {
   const f = await fixture(t)
+  const key = testKey()
+  const keyFile = join(f.profile, '..', 'test-public-keys.json')
+  await fs.writeFile(keyFile, JSON.stringify(key.keys))
+  process.env.HIBI_TEST_ADDON_TRUST_KEYS = keyFile
+  t.after(() => {
+    delete process.env.HIBI_TEST_ADDON_TRUST_KEYS
+  })
+  await f.api.loadAddonTrust()
+  const one = packageFiles('one', 'one')
+  // The packaged signature is replaced by the directory's detached one.
   const zip = zipFiles([
-    ...packageFiles('one', 'one'),
+    ...one,
+    { name: 'one/hibi-addon.sig.json', content: '{}' },
     ...packageFiles('two', 'two'),
   ])
   t.mock.method(globalThis, 'fetch', async () => new Response(zip))
@@ -528,6 +572,16 @@ test('garden installation binds the selected identity and release bytes before c
       sha256: createHash('sha256').update(zip).digest('hex'),
     },
   }
+  const signature = detachedSignature(key, 'one', one)
+  const prepare = (expected, sidecar = signature) =>
+    f.api.installPackage(
+      f.window,
+      [],
+      async () => async () => {},
+      entry.download.url,
+      expected,
+      sidecar,
+    )
   for (const changed of [
     { ...entry, version: 'wrong' },
     { ...entry, id: 'missing' },
@@ -537,33 +591,66 @@ test('garden installation binds the selected identity and release bytes before c
     { ...entry, download: { ...entry.download, sha256: '0'.repeat(64) } },
   ])
     await assert.rejects(
-      f.prepare(entry.download.url, changed),
+      prepare(changed),
       /does not match its Hibi garden listing/,
     )
-  assert.equal(f.confirmations.length, 0)
-  assert.deepEqual(f.api.installedAddons(), [])
-  // A valid directory never bypasses unsigned policy.
-  await f.api.setAddonTrustSettings({
-    allowUnsigned: false,
-    checkRevocations: false,
-  })
-  await assert.rejects(f.prepare(entry.download.url, entry), /Allow unsigned/)
-  assert.equal(f.confirmations.length, 0)
+  // Allowing unsigned addons never admits a missing or broken directory signature.
   await f.api.setAddonTrustSettings({
     allowUnsigned: true,
     checkRevocations: false,
   })
+  const envelope = JSON.parse(signature.toString('utf8'))
+  for (const [sidecar, reason] of [
+    [null, /Could not download the Hibi signature/],
+    [
+      Buffer.from(
+        JSON.stringify({
+          ...envelope,
+          signature: Buffer.alloc(64).toString('base64'),
+        }),
+      ),
+      /signature is invalid/,
+    ],
+    [
+      detachedSignature(key, 'one', [
+        ...one.slice(0, 2),
+        { name: 'index.js', content: 'changed' },
+      ]),
+      /does not match its files/,
+    ],
+    [
+      detachedSignature(key, 'one', one, { addonVersion: '2.0.0' }),
+      /signed addon details/,
+    ],
+    [detachedSignature(testKey(), 'one', one), /unknown key/],
+  ])
+    await assert.rejects(prepare(entry, sidecar), reason)
+  assert.equal(f.confirmations.length, 0)
+  assert.deepEqual(f.api.installedAddons(), [])
+
+  await f.api.setAddonTrustSettings({
+    allowUnsigned: false,
+    checkRevocations: false,
+  })
   f.confirm(0)
-  assert.equal(await f.prepare(entry.download.url, entry), null)
+  assert.equal(await prepare(entry), null)
+  assert.match(f.confirmations.at(-1).detail, /Signed by Hibi/)
   assert.deepEqual(f.api.installedAddons(), [])
   f.confirm(1)
-  assert.equal(await f.prepare(entry.download.url, entry), null)
+  assert.equal(await prepare(entry), null)
+  const [installed] = f.api.installedAddons()
+  assert.equal(installed.manifest.id, 'one')
+  assert.equal(installed.manifest.defaultEnabled, false)
+  assert.equal(installed.source, 'third-party')
+  assert.equal(installed.trust, 'signed')
   assert.deepEqual(
-    f.api.installedAddons().map(({ manifest }) => manifest.id),
-    ['one'],
+    await fs.readFile(
+      join(f.profile, 'installed-addons', 'one', 'hibi-addon.sig.json'),
+    ),
+    signature,
   )
-  assert.equal(f.api.installedAddons()[0].manifest.defaultEnabled, false)
-  assert.equal(f.api.installedAddons()[0].source, 'third-party')
+  assert.deepEqual(await f.api.loadInstalledAddons([]), [])
+  assert.equal(f.api.installedAddons()[0].trust, 'signed')
   assert.deepEqual(await fs.readdir(f.temporary), [])
 })
 

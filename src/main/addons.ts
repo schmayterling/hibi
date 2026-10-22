@@ -550,7 +550,9 @@ export async function installDirectoryAddon(
   id: unknown,
   openSettings?: unknown,
 ) {
-  const { directoryAddon } = await import('./addon-directory')
+  const { directoryAddon, directorySignature } = await import(
+    './addon-directory'
+  )
   const { directoryInstallUrl } = await import('../shared/addon-directory')
   const entry = await directoryAddon(id)
   const result = await installPackage(
@@ -559,6 +561,7 @@ export async function installDirectoryAddon(
     replacing(openSettings),
     directoryInstallUrl(entry),
     entry,
+    await directorySignature(entry.id),
   )
   await applyAddonRevocations()
   return result

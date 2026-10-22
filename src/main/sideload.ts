@@ -332,9 +332,10 @@ export async function installPackage(
     if (window.isDestroyed()) throw new Error('Addon installation canceled.')
     if (url !== undefined) {
       const { downloadAddon } = await import('./addon-download')
-      let download = repositoryUrl(url)
-        ? await downloadRepository(url, temporary, undefined, abort.signal)
-        : await downloadAddon(url, abort.signal)
+      let download =
+        !expected?.download && repositoryUrl(url)
+          ? await downloadRepository(url, temporary, undefined, abort.signal)
+          : await downloadAddon(url, abort.signal)
       if (
         expected?.download &&
         (download.zip.length !== expected.download.size ||

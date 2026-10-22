@@ -545,6 +545,25 @@ const replacing = (openSettings: unknown) => (id: string, keep: boolean) =>
       : [],
   )
 
+export async function installDirectoryAddon(
+  window: BrowserWindow,
+  id: unknown,
+  openSettings?: unknown,
+) {
+  const { directoryAddon } = await import('./addon-directory')
+  const { directoryInstallUrl } = await import('../shared/addon-directory')
+  const entry = await directoryAddon(id)
+  const result = await installPackage(
+    window,
+    bundledManifests,
+    replacing(openSettings),
+    directoryInstallUrl(entry),
+    entry,
+  )
+  await applyAddonRevocations()
+  return result
+}
+
 export async function installAddon(
   window: BrowserWindow,
   url?: unknown,

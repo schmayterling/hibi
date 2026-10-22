@@ -29,7 +29,13 @@ import { DocumentNotice } from '../../ui/DocumentNotice'
 import { Sidebar, type SidebarItem, type SidebarProps } from '../../ui/Sidebar'
 import { SettingsDiscovery, settingsIndex } from '../../ui/settings-index'
 import { uiCase } from '../../ui/ui-case'
-import { AddonMetadata, AddonSettings, useAddonReadme } from './AddonSettings'
+import {
+  type AddonInstallTarget,
+  AddonMetadata,
+  type AddonRequest,
+  AddonSettings,
+  useAddonReadme,
+} from './AddonSettings'
 import { AutosaveSettings } from './AutosaveSettings'
 import { addonRegistry } from './addon-registry'
 import { addons } from './addons'
@@ -139,6 +145,8 @@ export function SettingsScreen({
   onAddonEnabled,
   onInstallAddon,
   onRemoveAddon,
+  addonRequest,
+  onAddonRequestDone,
   updatingAddons,
   resize,
   cursorSettings,
@@ -182,8 +190,10 @@ export function SettingsScreen({
   onHotkeys: (hotkeys: Hotkeys) => void
   addonStates: AddonState[]
   onAddonEnabled: (id: string, enabled: boolean) => Promise<void>
-  onInstallAddon: (url?: string) => Promise<void>
+  onInstallAddon: (target?: AddonInstallTarget) => Promise<void>
   onRemoveAddon: (id: string) => Promise<void>
+  addonRequest?: AddonRequest | null
+  onAddonRequestDone?: (key: number) => void
   /** Addons being updated; their settings stay closed so a restart cannot discard edits. */
   updatingAddons: ReadonlySet<string>
   resize: NonNullable<SidebarProps['resize']>
@@ -731,6 +741,8 @@ export function SettingsScreen({
               setEnabled={onAddonEnabled}
               install={onInstallAddon}
               remove={onRemoveAddon}
+              request={addonRequest}
+              onRequestDone={onAddonRequestDone}
             />
           </SettingsPanel>
           <SettingsPanel

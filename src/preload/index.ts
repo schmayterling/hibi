@@ -333,6 +333,31 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(SIDELOAD_CHANNELS.resources, id),
     installAddon: (url, openSettings) =>
       ipcRenderer.invoke(SIDELOAD_CHANNELS.install, url, openSettings),
+    getAddonDirectory: (refresh) =>
+      ipcRenderer.invoke(SIDELOAD_CHANNELS.directory, refresh),
+    installDirectoryAddon: (id, openSettings) =>
+      ipcRenderer.invoke(SIDELOAD_CHANNELS.directoryInstall, id, openSettings),
+    onAddonGardenRequest: (callback) => {
+      let active = true
+      const listener = () => {
+        void ipcRenderer
+          .invoke(SIDELOAD_CHANNELS.gardenRequests)
+          .then(
+            (
+              requests: import('../shared/addon-directory').AddonGardenRequest[],
+            ) => {
+              if (active) for (const request of requests) callback(request)
+            },
+          )
+          .catch(console.error)
+      }
+      ipcRenderer.on(SIDELOAD_CHANNELS.gardenPending, listener)
+      listener()
+      return () => {
+        active = false
+        ipcRenderer.removeListener(SIDELOAD_CHANNELS.gardenPending, listener)
+      }
+    },
     installAddonSelection: (id, keys, openSettings) =>
       ipcRenderer.invoke(SIDELOAD_CHANNELS.selection, id, keys, openSettings),
     cancelAddonInstall: (id) =>

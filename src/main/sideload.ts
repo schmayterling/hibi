@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   lstat,
   mkdir,
@@ -16,6 +16,10 @@ import {
   isAddonInDependencyCycle,
   validateAddonRequirements,
 } from '../shared/addon-dependencies'
+import {
+  type AddonDirectoryEntry,
+  directoryManifestMatches,
+} from '../shared/addon-directory'
 import {
   admitInstalledAddon,
   parseAddonManifest,
@@ -300,6 +304,7 @@ export async function installPackage(
   builtins: readonly AddonManifest[],
   disable: (id: string, keep: boolean) => Promise<() => Promise<void>>,
   url?: unknown,
+  expected?: AddonDirectoryEntry,
 ): Promise<AddonInstallSession | null> {
   const previous = installSessions.get(window.id)
   if (previous) await disposeInstallSession(previous)
@@ -331,8 +336,17 @@ export async function installPackage(
         ? await downloadRepository(url, temporary, undefined, abort.signal)
         : await downloadAddon(url, abort.signal)
       if (
-        download.zip.length < 4 ||
-        download.zip.readUInt32LE(0) !== 0x04034b50
+        expected?.download &&
+        (download.zip.length !== expected.download.size ||
+          createHash('sha256').update(download.zip).digest('hex') !==
+            expected.download.sha256)
+      )
+        throw new Error(
+          'The downloaded addon does not match its Hibi garden listing. Refresh the directory and try again.',
+        )
+      if (
+        !expected?.download &&
+        (download.zip.length < 4 || download.zip.readUInt32LE(0) !== 0x04034b50)
       )
         download = await downloadRepository(
           url,
@@ -362,6 +376,32 @@ export async function installPackage(
       builtins,
       installed,
     )
+    if (expected) {
+      session.candidates = session.candidates.filter(
+        (candidate) => candidate.review.manifest?.id === expected.id,
+      )
+      const candidate = session.candidates[0]
+      // Admission upgrades legacy API manifests; bind against the publisher's original metadata.
+      const manifest: AddonManifest | undefined =
+        candidate?.review.manifest &&
+        JSON.parse(
+          (
+            await session.inventory.read(
+              candidate.folder
+                ? `${candidate.folder}/hibi-addon.json`
+                : 'hibi-addon.json',
+            )
+          ).toString('utf8'),
+        )
+      if (
+        session.candidates.length !== 1 ||
+        !manifest ||
+        !directoryManifestMatches(expected, manifest)
+      )
+        throw new Error(
+          'The downloaded addon does not match its Hibi garden listing. Refresh the directory and try again.',
+        )
+    }
     abort.signal.throwIfAborted()
     if (session.candidates.length === 1) {
       const candidate = session.candidates[0]!

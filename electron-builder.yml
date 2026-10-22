@@ -1,6 +1,9 @@
 appId: com.ryanaque.hibi
 extends: ./scripts/file-associations.cjs
 productName: hibi
+protocols:
+  - name: Hibi addons
+    schemes: [hibi]
 directories:
   output: release
 files:

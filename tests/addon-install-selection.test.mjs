@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import * as fs from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -126,8 +127,8 @@ async function fixture(t) {
       else preferences.set(id, previous)
     }
   }
-  const prepare = async (url) => {
-    const session = await api.installPackage(window, [], disable, url)
+  const prepare = async (url, expected) => {
+    const session = await api.installPackage(window, [], disable, url, expected)
     if (session) sessions.push(session)
     return session
   }
@@ -508,6 +509,61 @@ test('downloaded nested candidates use the same chooser and preserve third-party
     f.api.installedAddons().every(({ source }) => source === 'third-party'),
   )
   await f.api.cancelPackageInstall(f.window, session.id)
+  assert.deepEqual(await fs.readdir(f.temporary), [])
+})
+
+test('garden installation binds the selected identity and release bytes before confirmation', async (t) => {
+  const f = await fixture(t)
+  const zip = zipFiles([
+    ...packageFiles('one', 'one'),
+    ...packageFiles('two', 'two'),
+  ])
+  t.mock.method(globalThis, 'fetch', async () => new Response(zip))
+  const entry = {
+    ...metadata('one'),
+    license: 'MIT',
+    download: {
+      url: 'https://example.com/packages.zip',
+      size: zip.length,
+      sha256: createHash('sha256').update(zip).digest('hex'),
+    },
+  }
+  for (const changed of [
+    { ...entry, version: 'wrong' },
+    { ...entry, id: 'missing' },
+    { ...entry, kind: 'theme' },
+    { ...entry, authors: [{ displayName: 'Someone else' }] },
+    { ...entry, download: { ...entry.download, size: zip.length + 1 } },
+    { ...entry, download: { ...entry.download, sha256: '0'.repeat(64) } },
+  ])
+    await assert.rejects(
+      f.prepare(entry.download.url, changed),
+      /does not match its Hibi garden listing/,
+    )
+  assert.equal(f.confirmations.length, 0)
+  assert.deepEqual(f.api.installedAddons(), [])
+  // A valid directory never bypasses unsigned policy.
+  await f.api.setAddonTrustSettings({
+    allowUnsigned: false,
+    checkRevocations: false,
+  })
+  await assert.rejects(f.prepare(entry.download.url, entry), /Allow unsigned/)
+  assert.equal(f.confirmations.length, 0)
+  await f.api.setAddonTrustSettings({
+    allowUnsigned: true,
+    checkRevocations: false,
+  })
+  f.confirm(0)
+  assert.equal(await f.prepare(entry.download.url, entry), null)
+  assert.deepEqual(f.api.installedAddons(), [])
+  f.confirm(1)
+  assert.equal(await f.prepare(entry.download.url, entry), null)
+  assert.deepEqual(
+    f.api.installedAddons().map(({ manifest }) => manifest.id),
+    ['one'],
+  )
+  assert.equal(f.api.installedAddons()[0].manifest.defaultEnabled, false)
+  assert.equal(f.api.installedAddons()[0].source, 'third-party')
   assert.deepEqual(await fs.readdir(f.temporary), [])
 })
 

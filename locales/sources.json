@@ -1290,6 +1290,9 @@
   "9a19e86ea92a": [
     "src/addons/_shared/local-format-native.ts"
   ],
+  "ed7aa09e55c2": [
+    "src/main/addon-repository.ts"
+  ],
   "f56d1f9d0955": [
     "src/main/updates.ts"
   ],
@@ -5757,6 +5760,9 @@
   "cbfa05cbaf75": [
     "src/renderer/src/main.tsx"
   ],
+  "511ec6df64c2": [
+    "src/main/addon-repository.ts"
+  ],
   "8c78f72115db": [
     "src/main/addon-inventory.ts"
   ],
@@ -6651,6 +6657,9 @@
   ],
   "e6048a69201f": [
     "src/addons/vim/Settings.tsx"
+  ],
+  "9098e6f8753c": [
+    "src/main/addon-repository.ts"
   ],
   "4e3017d9661a": [
     "src/main/files.ts"

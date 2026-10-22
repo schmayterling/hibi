@@ -244,6 +244,9 @@
   "afbe92392457": [
     "src/renderer/src/settings-categories.ts"
   ],
+  "5ea297fb0290": [
+    "src/renderer/src/AddonSettings.tsx"
+  ],
   "e78cd700a9a2": [
     "src/main/addon-install-candidates.ts"
   ],
@@ -257,6 +260,9 @@
   ],
   "005b5710be48": [
     "src/renderer/src/Introduction.tsx"
+  ],
+  "6265d8064bce": [
+    "src/renderer/src/AddonGarden.tsx"
   ],
   "7e778f24c85b": [
     "src/renderer/src/DependencySettings.tsx"
@@ -859,6 +865,9 @@
   "3aa9d06341aa": [
     "src/main/sideload.ts"
   ],
+  "1b9e5bdd7a70": [
+    "src/main/addon-directory.ts"
+  ],
   "d5efb9d61d52": [
     "src/renderer/src/HibiSettings.tsx"
   ],
@@ -1397,6 +1406,9 @@
   "77db28621bac": [
     "src/main/index.ts"
   ],
+  "8f937a318765": [
+    "src/main/addon-directory.ts"
+  ],
   "76934949f22e": [
     "src/renderer/src/main.tsx"
   ],
@@ -1461,6 +1473,9 @@
   ],
   "841f66a926a7": [
     "src/shared/document-journal.ts"
+  ],
+  "7bab60b7ad0a": [
+    "src/renderer/src/AddonGarden.tsx"
   ],
   "a491f369baa5": [
     "src/addons/mcp-server/tools.ts"
@@ -2589,8 +2604,11 @@
   "9ba584a1febb": [
     "src/main/workspace-actions.ts"
   ],
-  "e61eb301dc7f": [
+  "d40777b675fa": [
     "src/renderer/src/AddonSettings.tsx"
+  ],
+  "83bde05a6f7d": [
+    "src/renderer/src/AddonGarden.tsx"
   ],
   "b30aab4cb471": [
     "src/renderer/src/Introduction.tsx"
@@ -2767,6 +2785,9 @@
   "0c00c8000f4b": [
     "src/addons/autocomplete/Settings.tsx"
   ],
+  "dece75f22001": [
+    "src/renderer/src/AddonGarden.tsx"
+  ],
   "38d6dd9e30d9": [
     "src/shared/source-owners.ts"
   ],
@@ -2821,7 +2842,8 @@
   ],
   "569ca49f4aaf": [
     "src/main/dependencies.ts",
-    "src/main/sideload.ts"
+    "src/main/sideload.ts",
+    "src/renderer/src/AddonGarden.tsx"
   ],
   "7719857066e6": [
     "src/addons/git/native.ts"
@@ -2903,6 +2925,9 @@
   ],
   "b18b85dc391e": [
     "src/main/dependencies.ts"
+  ],
+  "f8b32f4e92bd": [
+    "src/renderer/src/AddonGarden.tsx"
   ],
   "73581a21f0ae": [
     "src/shared/addon-manifest.ts"
@@ -3268,6 +3293,9 @@
   "8a6bdb6b18da": [
     "src/addons/diagnostics/Settings.tsx"
   ],
+  "0849033411ce": [
+    "src/renderer/src/AddonGarden.tsx"
+  ],
   "7e11e029a961": [
     "src/addons/_shared/FormatPdf.tsx",
     "src/addons/_shared/format-renderer.tsx"
@@ -3621,6 +3649,9 @@
   ],
   "2fad274e563d": [
     "src/renderer/src/DependencySettings.tsx"
+  ],
+  "2d16071bb068": [
+    "src/renderer/src/AddonSettings.tsx"
   ],
   "a3d81b876044": [
     "src/main/analysis.ts"
@@ -4435,6 +4466,9 @@
   "dbcdfde02229": [
     "src/shared/source-references.ts"
   ],
+  "0e9161011702": [
+    "src/renderer/src/AddonSettings.tsx"
+  ],
   "903ae9ad0d9f": [
     "src/addons/git/Panel.tsx"
   ],
@@ -4444,6 +4478,9 @@
   "306960dcad4c": [
     "src/renderer/src/WorkspaceSidebar.tsx",
     "src/renderer/src/main.tsx"
+  ],
+  "ce1d62a8f785": [
+    "src/renderer/src/AddonGarden.tsx"
   ],
   "1651031bf58d": [
     "src/addons/mcp-server/Settings.tsx"
@@ -4544,7 +4581,8 @@
     "src/addons/_shared/local-preview.tsx"
   ],
   "95e154398a4b": [
-    "src/main/document.ts"
+    "src/main/document.ts",
+    "src/renderer/src/AddonGarden.tsx"
   ],
   "97b7a53b9210": [
     "src/main/sideload.ts"
@@ -4870,9 +4908,6 @@
   "456dc12dbf91": [
     "src/addons/word-count/hibi-addon.json"
   ],
-  "e6c08bcacceb": [
-    "src/addons/typing-speed/hibi-addon.json"
-  ],
   "a767b8dfdabc": [
     "src/renderer/src/UpdateSettings.tsx"
   ],
@@ -5039,6 +5074,9 @@
   "dce21c8b89ea": [
     "src/addons/math/PackageSettings.tsx"
   ],
+  "ce74a584813a": [
+    "src/renderer/src/AddonGarden.tsx"
+  ],
   "efca80330d7b": [
     "src/renderer/src/Introduction.tsx",
     "src/renderer/src/SettingsScreen.tsx"
@@ -5075,6 +5113,7 @@
     "src/addons/keybeats/engine.ts"
   ],
   "0e570ca6fabe": [
+    "src/renderer/src/AddonGarden.tsx",
     "src/renderer/src/ImportDialog.tsx"
   ],
   "99eefeb52942": [
@@ -5429,6 +5468,21 @@
   "b3aaffb41ae2": [
     "src/renderer/src/addons.ts"
   ],
+  "d9e82550dbf4": [
+    "src/shared/addon-directory.ts"
+  ],
+  "47d9e53a2c74": [
+    "src/shared/addon-directory.ts"
+  ],
+  "21760c67c3ff": [
+    "src/shared/addon-directory.ts"
+  ],
+  "15e1e21beabe": [
+    "src/shared/addon-directory.ts"
+  ],
+  "74896bdd3523": [
+    "src/shared/addon-directory.ts"
+  ],
   "54c5b809f0a2": [
     "src/main/addon-inventory.ts"
   ],
@@ -5661,6 +5715,9 @@
   "e407511b9824": [
     "src/main/download.ts"
   ],
+  "d3a23215018d": [
+    "src/main/sideload.ts"
+  ],
   "23b54a5e62e2": [
     "src/shared/document-edits.ts"
   ],
@@ -5822,6 +5879,9 @@
   ],
   "09aae7464226": [
     "src/main/workspace-layout.ts"
+  ],
+  "69dd525bd911": [
+    "src/main/addon-directory.ts"
   ],
   "bee50784d023": [
     "src/renderer/src/document-target-edits.ts",
@@ -6097,9 +6157,6 @@
   "1824f46c0e29": [
     "src/renderer/src/Editor.tsx"
   ],
-  "53d696e8d077": [
-    "src/addons/typing-speed/index.ts"
-  ],
   "1629952fe484": [
     "src/main/dependencies.ts"
   ],
@@ -6158,9 +6215,6 @@
   ],
   "dd81768f0d54": [
     "src/renderer/src/document-runtime.ts"
-  ],
-  "6a25699e5870": [
-    "src/addons/typing-speed/index.ts"
   ],
   "160f0858f2bd": [
     "src/main/workspace-files.ts"
@@ -6417,7 +6471,8 @@
   ],
   "d8b8392e2c54": [
     "src/addons/dictionary/SideView.tsx",
-    "src/addons/dictionary/index.tsx"
+    "src/addons/dictionary/index.tsx",
+    "src/renderer/src/AddonGarden.tsx"
   ],
   "c9379e975e66": [
     "src/addons/graph/Panel.tsx",
@@ -6444,9 +6499,6 @@
   ],
   "47561c884131": [
     "src/addons/slash-commands/hibi-addon.json"
-  ],
-  "9d1ff237078a": [
-    "src/addons/typing-speed/hibi-addon.json"
   ],
   "38c14037e93b": [
     "src/addons/typst/Block.tsx",
@@ -6764,6 +6816,9 @@
   ],
   "dcc839a4015c": [
     "src/main/index.ts"
+  ],
+  "1c889cdc10dc": [
+    "src/renderer/src/AddonSettings.tsx"
   ],
   "c71ba099f440": [
     "src/addons/vim/hibi-addon.json"
@@ -7173,6 +7228,7 @@
     "src/main/index.ts"
   ],
   "4c94485e0c21": [
+    "src/renderer/src/AddonGarden.tsx",
     "src/renderer/src/AddonSettings.tsx"
   ],
   "0695b563acde": [
@@ -7204,9 +7260,6 @@
   ],
   "507e6dce93ec": [
     "src/renderer/src/main.tsx"
-  ],
-  "a83d13909ec8": [
-    "src/main/sideload.ts"
   ],
   "229213386c16": [
     "src/renderer/src/main.tsx"
@@ -7258,11 +7311,17 @@
     "src/renderer/src/FormatsSettings.tsx",
     "src/renderer/src/main.tsx"
   ],
+  "d6691ac93edb": [
+    "src/renderer/src/AddonGarden.tsx"
+  ],
   "a10bf03bcf08": [
     "src/renderer/src/DependencySettings.tsx"
   ],
   "1954f44f1495": [
     "src/renderer/src/Titlebar.tsx"
+  ],
+  "568011698b8c": [
+    "src/main/sideload.ts"
   ],
   "905425b01a19": [
     "src/addons/dictionary/PackSettings.tsx"
@@ -7293,17 +7352,5 @@
   ],
   "57aea1c5dbe7": [
     "src/ui/ColorschemeSettings.tsx"
-  ],
-  "39b5a0ba6363": [
-    "src/addons/typing-speed/index.ts"
-  ],
-  "55692c4bc353": [
-    "src/addons/typing-speed/index.ts"
-  ],
-  "8472a11aab38": [
-    "src/addons/typing-speed/index.ts"
-  ],
-  "f6f10501e72b": [
-    "src/addons/typing-speed/index.ts"
   ]
 }

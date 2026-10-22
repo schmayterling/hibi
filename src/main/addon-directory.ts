@@ -1,6 +1,6 @@
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { app } from 'electron'
+import { app, net } from 'electron'
 import {
   ADDON_DIRECTORY_URL,
   type AddonDirectory,
@@ -71,7 +71,6 @@ async function refreshDirectory(): Promise<AddonDirectory> {
       : undefined
     const source = override ?? ADDON_DIRECTORY_URL
     const parts: Uint8Array[] = []
-    const { net } = await import('electron')
     await download(source, {
       maxBytes: MAX_DIRECTORY_BYTES,
       signal: AbortSignal.timeout(15_000),
@@ -88,7 +87,8 @@ async function refreshDirectory(): Promise<AddonDirectory> {
             },
           }
         : {}),
-      fetch: (input, init) => net.fetch(input as string | Request, init),
+      fetch: (input, init) =>
+        net.fetch(input instanceof URL ? input.href : input, init),
       write: (chunk) => {
         parts.push(chunk)
       },

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'electron-vite'
@@ -13,6 +14,9 @@ import {
   diagnosticsDefines,
 } from './scripts/local-diagnostics-build'
 import { startupBundle } from './scripts/startup-bundle'
+
+if (!existsSync('docs/README.md'))
+  throw new Error('Documentation is missing. Run npm run docs before building.')
 
 const diagnosticArtifacts = diagnosticsBuild()
 const mainOutput = resolve('out/main')

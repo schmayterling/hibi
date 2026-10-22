@@ -22,6 +22,7 @@ export default function AddonReadme({ id }: { id: string }) {
   const pendingAnchor = useRef<string | null>(null)
   const path = history.at(-1)!
   useEffect(() => {
+    const path = history.at(-1)!
     let active = true
     setLoading(true)
     setError('')
@@ -161,7 +162,7 @@ export default function AddonReadme({ id }: { id: string }) {
     return () => {
       active = false
     }
-  }, [id, path, history.length])
+  }, [id, history])
 
   useEffect(() => {
     if (loading || !pendingAnchor.current) return

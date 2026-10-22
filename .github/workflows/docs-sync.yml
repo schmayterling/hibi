@@ -9,6 +9,7 @@ on:
       - docs/licenses/**
       - src/**
       - scripts/**
+      - tests/addon-reference.test.mjs
       - package.json
       - package-lock.json
       - .nvmrc

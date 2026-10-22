@@ -350,6 +350,7 @@ jobs:
           if ! gh release view nightly-green >/dev/null 2>&1; then
             gh release create nightly-green --target "$SHA" --title 'Latest recommended nightly' --notes-file recommended-notes.md --prerelease --latest=false
           fi
+          node scripts/nightly.mjs recommend-assets
           gh release upload nightly-green recommended-nightly.json --clobber
           gh release upload nightly-green installers/update.json --clobber
           gh release edit nightly-green --target "$SHA" --notes-file recommended-notes.md --prerelease --latest=false

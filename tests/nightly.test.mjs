@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   mkdirSync,
   mkdtempSync,
@@ -21,6 +22,7 @@ import {
   recommendedNightly,
   releaseNotes,
   sendNightlyWebhook,
+  syncRecommendedAssets,
 } from '../scripts/nightly.mjs'
 
 test('nightlies build unchanged revisions daily and include real commits since the previous release', (t) => {
@@ -236,6 +238,152 @@ test('nightlies build unchanged revisions daily and include real commits since t
     readFileSync(join(cwd, 'recommended-nightly.json'), 'utf8'),
     pointer,
   )
+})
+
+test('recommended releases mirror installers and keep old downloads until every upload succeeds', (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'hibi-green-assets-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const version = '0.1.0-nightly.20261023.gaaaaaaa.12.1'
+  const sha = 'a'.repeat(40)
+  const release = classifyRelease(
+    {
+      sha,
+      version,
+      channel: 'nightly',
+      tag: 'nightly-2026-10-23-aaaaaaa-12-1',
+      commits: '',
+    },
+    platforms.map((platform) => ({
+      platform,
+      sha,
+      build: 'success',
+      package: 'success',
+      checks: 'success',
+    })),
+  )
+  const names = [
+    'win-x64.exe',
+    'mac-x64.dmg',
+    'mac-arm64.dmg',
+    'mac-x64.zip',
+    'mac-arm64.zip',
+    ...['x64', 'arm64'].flatMap((arch) =>
+      ['AppImage', 'deb', 'flatpak'].map((ext) => `linux-${arch}.${ext}`),
+    ),
+  ].map((suffix) => `hibi-${version}-${suffix}`)
+  const checksums = names
+    .map((name) => {
+      writeFileSync(join(directory, name), `installer ${name}`)
+      return `${createHash('sha256').update(`installer ${name}`).digest('hex')}  ./${name}`
+    })
+    .join('\n')
+  writeFileSync(join(directory, 'SHA256SUMS.txt'), checksums)
+  const previous = new Map([
+    ['hibi-old-win-x64.exe', 'old windows'],
+    ['hibi-old-mac-arm64.zip', 'old macos'],
+    ['recommended-nightly.json', 'old recommendation'],
+    ['update.json', 'old update feed'],
+    ['support.zip', 'unrelated attachment'],
+  ])
+  let assets, calls, failAt
+  const reset = () => {
+    assets = new Map(previous)
+    calls = []
+  }
+  const gh = (...args) => {
+    calls.push(args)
+    assert.equal(
+      args[2],
+      'nightly-green',
+      'immutable releases are never changed',
+    )
+    if (args[1] === 'view')
+      return JSON.stringify({
+        assets: [...assets.keys()].map((name) => ({ name })),
+      })
+    if (args[1] === 'upload') {
+      const files = args.filter(
+        (arg, index) =>
+          index > 2 &&
+          arg !== '--repo' &&
+          arg !== '--clobber' &&
+          args[index - 1] !== '--repo',
+      )
+      for (const file of files) {
+        const name = file.slice(directory.length + 1)
+        if (name === failAt) throw new Error('injected upload failure')
+        assets.set(name, readFileSync(file, 'utf8'))
+      }
+    } else if (args[1] === 'delete-asset') {
+      for (const name of [...names, 'SHA256SUMS.txt'])
+        assert.ok(
+          assets.has(name),
+          `missing new download before cleanup: ${name}`,
+        )
+      assets.delete(args[3])
+    } else assert.fail('unexpected gh command')
+    return ''
+  }
+  reset()
+  syncRecommendedAssets(release, 'owner/repo', directory, gh)
+  for (const name of [...names, 'SHA256SUMS.txt'])
+    assert.equal(assets.get(name), readFileSync(join(directory, name), 'utf8'))
+  assert.equal(assets.has('hibi-old-win-x64.exe'), false)
+  assert.equal(assets.has('hibi-old-mac-arm64.zip'), false)
+  for (const name of ['recommended-nightly.json', 'update.json', 'support.zip'])
+    assert.equal(assets.get(name), previous.get(name))
+
+  calls = []
+  syncRecommendedAssets(release, 'owner/repo', directory, gh)
+  assert.ok(calls.every((args) => args[1] !== 'delete-asset'))
+
+  for (failAt of [names[1], 'SHA256SUMS.txt']) {
+    reset()
+    assert.throws(
+      () => syncRecommendedAssets(release, 'owner/repo', directory, gh),
+      /injected upload failure/,
+    )
+    for (const name of previous.keys()) assert.ok(assets.has(name), name)
+    assert.ok(calls.every((args) => args[1] !== 'delete-asset'))
+  }
+  failAt = undefined
+  reset()
+  assert.throws(
+    () =>
+      syncRecommendedAssets(
+        { ...release, status: 'nightly-broken' },
+        'owner/repo',
+        directory,
+        gh,
+      ),
+    /Only fully checked/,
+  )
+  assert.equal(calls.length, 0)
+  writeFileSync(
+    join(directory, 'SHA256SUMS.txt'),
+    checksums.replace(`./${names[0]}`, `../${names[0]}`),
+  )
+  assert.throws(
+    () => syncRecommendedAssets(release, 'owner/repo', directory, gh),
+    /Invalid recommended nightly installer/,
+  )
+  assert.equal(calls.length, 0)
+  writeFileSync(
+    join(directory, 'SHA256SUMS.txt'),
+    checksums.replace(version, '0.0.0-old'),
+  )
+  assert.throws(
+    () => syncRecommendedAssets(release, 'owner/repo', directory, gh),
+    /Invalid recommended nightly installer/,
+  )
+  assert.equal(calls.length, 0)
+  writeFileSync(join(directory, 'SHA256SUMS.txt'), checksums)
+  rmSync(join(directory, names[0]))
+  assert.throws(
+    () => syncRecommendedAssets(release, 'owner/repo', directory, gh),
+    /ENOENT/,
+  )
+  assert.equal(calls.length, 0)
 })
 
 test('release checks require every shard from the packaged platform and revision', (t) => {
@@ -517,6 +665,10 @@ test('release workflow always builds nightlies and gates stable publication on t
   )
   assert.equal(promotion.if, "steps.classify.outputs.status == 'nightly-green'")
   assert.match(promotion.run, /node scripts\/nightly.mjs recommend/)
+  assert.ok(promotion.run.includes('node scripts/nightly.mjs recommend-assets'))
+  assert.ok(
+    promotion.run.indexOf('exit 0') < promotion.run.indexOf('recommend-assets'),
+  )
   const publishSteps = workflow.jobs.publish.steps
   const announcement = publishSteps.find(
     (step) => step.name === 'Announce nightly on Discord',

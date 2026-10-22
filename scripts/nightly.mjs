@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { appendFileSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { basename, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export const platforms = [
@@ -169,6 +169,44 @@ function releaseAssets(release, repository, checksums) {
         url: `${url}/releases/download/${encodeURIComponent(release.tag)}/${encodeURIComponent(name)}`,
       }
     })
+}
+
+/** Mirror complete green installers before removing superseded rolling downloads. */
+export function syncRecommendedAssets(
+  release,
+  repository,
+  directory,
+  gh = (...args) => execFileSync('gh', args, { encoding: 'utf8' }),
+) {
+  recommendedNightly(release, repository)
+  const checksums = readFileSync(resolve(directory, 'SHA256SUMS.txt'), 'utf8')
+  releaseNotes(release, repository, checksums)
+  const names = releaseAssets(release, repository, checksums).map(
+    ({ name }) => name,
+  )
+  const files = names.map((name) => {
+    if (
+      basename(name) !== name ||
+      !name.startsWith(`hibi-${release.version}-`) ||
+      !statSync(resolve(directory, name)).isFile()
+    )
+      throw new Error('Invalid recommended nightly installer')
+    return resolve(directory, name)
+  })
+  const run = (...args) => gh('release', ...args, '--repo', repository)
+  const { assets } = JSON.parse(
+    run('view', 'nightly-green', '--json', 'assets'),
+  )
+  run('upload', 'nightly-green', ...files, '--clobber')
+  run(
+    'upload',
+    'nightly-green',
+    resolve(directory, 'SHA256SUMS.txt'),
+    '--clobber',
+  )
+  for (const { name } of assets)
+    if (name.startsWith('hibi-') && !names.includes(name))
+      run('delete-asset', 'nightly-green', name, '--yes')
 }
 
 export function nightlyWebhook(release, repository, checksums) {
@@ -347,6 +385,12 @@ if (
         readFileSync('installers/SHA256SUMS.txt', 'utf8'),
       ),
     )
+  } else if (process.argv[2] === 'recommend-assets') {
+    syncRecommendedAssets(
+      JSON.parse(readFileSync('release.json', 'utf8')),
+      process.env.GITHUB_REPOSITORY,
+      'installers',
+    )
   } else if (process.argv[2] === 'recommend') {
     const pointer = recommendedNightly(
       JSON.parse(readFileSync('release.json', 'utf8')),
@@ -359,7 +403,7 @@ if (
     )
   } else {
     throw new Error(
-      'Usage: node scripts/nightly.mjs prepare|check-shards|classify|notes|notify|recommend',
+      'Usage: node scripts/nightly.mjs prepare|check-shards|classify|notes|notify|recommend|recommend-assets',
     )
   }
 }

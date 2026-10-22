@@ -18,7 +18,7 @@ Five jobs compile the app, run all required lint, documentation, copy, and test 
 
 Publication waits for all platform packages. Nightly check failures are recorded before packaging continues. Complete packages with failing checks publish as `nightly-broken` for debugging, with warnings, platform results, and links to logs. Compilation or packaging failures prevent release publication. The prerelease contains installers, build metadata, and `SHA256SUMS.txt`; temporary Actions artifacts expire after one day. Failed uploads leave a draft for retry. Runs are serialized and the source commit is fixed before builds start.
 
-Only an all-platform `nightly-green` result can update the rolling `nightly-green` tag and its `recommended-nightly.json` asset. Dated release tags never move. Promotion refuses to move the pointer backward to an older commit. Consumers must follow the recommendation instead of treating the newest prerelease as safe.
+Only an all-platform `nightly-green` result can update the rolling `nightly-green` tag and its `recommended-nightly.json` asset. The rolling release also includes the verified installers and their `SHA256SUMS.txt`. Superseded rolling installers are removed only after the complete new installer set and checksums upload successfully; dated releases keep their original assets. Dated release tags never move. Promotion refuses to move the pointer backward to an older commit. Consumers must follow the recommendation instead of treating the newest prerelease as safe.
 
 Notes start with the short source SHA, status, platform results, a backup warning, and direct installer links. Every download, including ZIP files, gets a linked SHA256 entry. Changes follow the downloads.
 

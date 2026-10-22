@@ -85,6 +85,15 @@ test('compact filters reset preferences, keep addon rows stable, and install rev
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  // Keep Hibi garden offline once main has registered its handlers; the
+  // directory has its own tests.
+  await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('addons:directory')
+    ipcMain.handle('addons:directory', () => ({
+      entries: [],
+      fetchedAt: '2026-10-23T00:00:00.000Z',
+    }))
+  })
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   const addons = page.locator('#settings-addons')
@@ -194,10 +203,14 @@ test('compact filters reset preferences, keep addon rows stable, and install rev
   await page.waitForFunction(
     () => !document.querySelector('#addon-vim').checked,
   )
-  await addons.getByRole('button', { name: /hibi garden/i }).click()
+  await addons.getByRole('tab', { name: /^hibi garden$/i }).click()
+  await addons.getByText('Hibi garden has no addons yet').waitFor()
+  await addons.getByRole('button', { name: /^view on website$/i }).click()
+  await waitForAsync(app, () => globalThis.openedAddonLinks.length > 0)
   assert.deepEqual(await app.evaluate(() => globalThis.openedAddonLinks), [
     'https://hibi.garden/addons',
   ])
+  await addons.getByRole('tab', { name: /^installed$/i }).click()
   await addons.getByRole('button', { name: /open addons folder/i }).click()
   await waitForAsync(app, () => Boolean(globalThis.openedAddonFolder))
   assert.equal(
@@ -230,7 +243,7 @@ test('compact filters reset preferences, keep addon rows stable, and install rev
   assert.equal(await page.evaluate(() => window.urlFixtureStarted), undefined)
   assert.match(
     (await app.evaluate(() => globalThis.reviewedAddon)).detail,
-    /Downloaded from example.com\n\nConnects to: https:\/\/en\.wiktionary\.org, https:\/\/api\.datamuse\.com:8443/,
+    /Unsigned\. Hibi cannot confirm who made this addon\.[\s\S]*Downloaded from example.com\n\nConnects to: https:\/\/en\.wiktionary\.org, https:\/\/api\.datamuse\.com:8443/,
   )
   assert.equal(
     JSON.parse(

@@ -29,4 +29,4 @@ These guides describe Hibi's code, extension APIs, validation, and release proce
 
 ## API references
 
-The [addon API reference](../development/addon-api-reference/README.md) describes the public contracts. It is generated from source declarations into the ignored documentation snapshot. Change the source, run `npm run docs`, and confirm `npm run docs:check` passes.
+The [addon API reference](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FREADME.md) describes the public contracts. It is generated from source declarations; `npm run docs` writes a local copy into the ignored documentation snapshot. Change the source, run `npm run docs`, and confirm `npm run docs:check` passes.

@@ -1003,9 +1003,37 @@ button.ui-button.update-download-button:disabled {
   gap: var(--space-2);
   flex-wrap: wrap;
 }
+.addon-tabs,
 .addon-catalog-actions,
 .addon-categories {
   margin-bottom: var(--space-4);
+}
+.addon-tabs {
+  display: flex;
+  gap: var(--space-1);
+}
+.addon-tabs button.ui-button[aria-selected="true"] {
+  background: var(--selection);
+  color: var(--selection-ink);
+}
+.addon-garden-note,
+.addon-garden-status {
+  margin-bottom: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+.addon-garden-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.addon-garden-retry {
+  justify-content: center;
+}
+.addon-garden-included {
+  font-size: var(--text-sm);
+  color: var(--muted);
 }
 .addon-revoked {
   display: block;

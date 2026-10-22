@@ -2,6 +2,7 @@ import { FileText, Search } from 'lucide-react'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import type { Addon, AddonManifest, AddonState } from '../../addons/api'
 import { addonDefaultEnabled } from '../../shared/addon-defaults'
+import type { AddonDirectoryEntry } from '../../shared/addon-directory'
 import { addonPackageUrl } from '../../shared/addon-package'
 import type { AddonTrustSettings } from '../../shared/addon-trust'
 import { errorMessage } from '../../shared/errors'
@@ -17,6 +18,7 @@ import {
 import { useDialogs } from '../../ui/DialogProvider'
 import { SettingsFilter } from '../../ui/SettingsFilter'
 import { useToasts } from '../../ui/Sonner'
+import { AddonGarden, useAddonDirectory } from './AddonGarden'
 import { addonRegistry } from './addon-registry'
 
 const AddonReadme = lazy(() => import('./AddonReadme'))
@@ -82,13 +84,20 @@ export function AddonMetadata({ manifest }: { manifest: AddonManifest }) {
   )
 }
 
-function matches(manifest: AddonManifest, query: string) {
+function matches(
+  manifest: Pick<
+    AddonManifest,
+    'id' | 'name' | 'description' | 'kind' | 'version' | 'authors'
+  >,
+  query: string,
+  origin = addonRegistry.origin(manifest.id),
+) {
   return [
     manifest.name,
     manifest.description,
     manifest.kind,
     manifest.version,
-    addonRegistry.origin(manifest.id),
+    origin,
     ...(manifest.authors?.map((author) => author.displayName) ?? []),
   ]
     .join(' ')
@@ -99,12 +108,18 @@ function matches(manifest: AddonManifest, query: string) {
 const categories = ['Features', 'Formats', 'Themes', 'Importers'] as const
 type Category = (typeof categories)[number]
 
-function addonCategory(manifest: AddonManifest): Category {
+function addonCategory(
+  manifest: Pick<AddonManifest, 'kind' | 'fileExtensions' | 'importer'>,
+): Category {
   if (manifest.kind === 'theme') return 'Themes'
   if (manifest.fileExtensions?.length) return 'Formats'
   if (manifest.importer) return 'Importers'
   return 'Features'
 }
+
+/** A `hibi://addons/…` link: reveal an addon, or offer a Hibi garden install. */
+export type AddonRequest = { id: string; install: boolean; key: number }
+export type AddonInstallTarget = string | { directoryId: string }
 
 export function AddonSettings({
   addons,
@@ -112,16 +127,23 @@ export function AddonSettings({
   setEnabled,
   install,
   remove,
+  request,
+  onRequestDone,
 }: {
   addons: readonly Addon[]
   states: readonly AddonState[]
   setEnabled: (id: string, enabled: boolean) => Promise<void>
-  install: (url?: string) => Promise<void>
+  install: (target?: AddonInstallTarget) => Promise<void>
   remove: (id: string) => Promise<void>
+  request?: AddonRequest | null | undefined
+  onRequestDone?: ((key: number) => void) | undefined
 }) {
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState<Category | null>(null)
+  const [tab, setTab] = useState<'installed' | 'garden'>('installed')
   const [busy, setBusy] = useState(false)
+  const { directory, retry } = useAddonDirectory(tab === 'garden')
+  const handled = useRef<number | null>(null)
   const restoreFocus = useRef<string | null>(null)
   const categoryRow = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -163,14 +185,59 @@ export function AddonSettings({
         sensitivity: 'base',
       }) || a.manifest.id.localeCompare(b.manifest.id),
   )
+  const garden = tab === 'garden'
   const present = categories.filter((option) =>
-    addons.some(({ manifest }) => addonCategory(manifest) === option),
+    garden
+      ? directory.entries.some((entry) => addonCategory(entry) === option)
+      : addons.some(({ manifest }) => addonCategory(manifest) === option),
   )
   // Removing the last addon in a category falls back to the full list.
   const active = category && present.includes(category) ? category : null
   const shown = (manifest: AddonManifest) =>
     (!active || addonCategory(manifest) === active) && matches(manifest, query)
-  const matching = ordered.filter(({ manifest }) => shown(manifest))
+  const shownEntry = (entry: AddonDirectoryEntry) =>
+    (!active || addonCategory(entry) === active) &&
+    matches(entry, query, 'third-party')
+  const matching = garden
+    ? directory.entries.filter(shownEntry)
+    : ordered.filter(({ manifest }) => shown(manifest))
+  const relation = (entry: AddonDirectoryEntry) => {
+    const current = addons.find(({ manifest }) => manifest.id === entry.id)
+    if (!current) return 'new' as const
+    if (!addonRegistry.isInstalled(entry.id)) return 'builtin' as const
+    return current.manifest.version === entry.version
+      ? ('installed' as const)
+      : ('update' as const)
+  }
+  // Links from the website or other apps queue in main; each finishes before the next starts.
+  useEffect(() => {
+    if (!request || handled.current === request.key || busy) return
+    const finish = () => onRequestDone?.(request.key)
+    if (!request.install) {
+      handled.current = request.key
+      setTab('installed')
+      if (!addons.some(({ manifest }) => manifest.id === request.id))
+        toasts.show({
+          message: `No addon with the ID "${request.id}" is installed.`,
+          variant: 'error',
+        })
+      finish()
+      return
+    }
+    setTab('garden')
+    if (directory.status === 'idle' || directory.status === 'loading') return
+    handled.current = request.key
+    const entry = directory.entries.find((item) => item.id === request.id)
+    // A failed load already shows its reason and a retry in the garden panel.
+    if (!entry && directory.entries.length)
+      toasts.show({
+        message: `Hibi garden doesn't list an addon with the ID "${request.id}".`,
+        variant: 'error',
+      })
+    if (entry && ['new', 'update'].includes(relation(entry)))
+      void run(() => install({ directoryId: entry.id })).finally(finish)
+    else finish()
+  })
   async function run(action: () => Promise<void>) {
     if (busy) return
     setBusy(true)
@@ -207,13 +274,52 @@ export function AddonSettings({
   return (
     <>
       <h1>Addon Manager</h1>
+      <div className="addon-tabs" role="tablist" aria-label="Addon sources">
+        {(
+          [
+            ['installed', 'Installed'],
+            ['garden', 'Hibi garden'],
+          ] as const
+        ).map(([value, label]) => (
+          <Button
+            key={value}
+            id={`addon-tab-${value}`}
+            role="tab"
+            variant="ghost"
+            aria-selected={tab === value}
+            aria-controls="addon-tab-panel"
+            tabIndex={tab === value ? 0 : -1}
+            onClick={() => setTab(value)}
+            onKeyDown={(event) => {
+              if (
+                !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)
+              )
+                return
+              event.preventDefault()
+              const next = value === 'installed' ? 'garden' : 'installed'
+              const target =
+                event.key === 'Home'
+                  ? 'installed'
+                  : event.key === 'End'
+                    ? 'garden'
+                    : next
+              setTab(target)
+              document.getElementById(`addon-tab-${target}`)?.focus()
+            }}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
       <ControlRow className="addon-catalog-actions">
-        <Button
-          disabled={busy}
-          onClick={() => void run(() => window.hibi.openAddonGarden())}
-        >
-          Hibi garden
-        </Button>
+        {garden && (
+          <Button
+            disabled={busy}
+            onClick={() => void run(() => window.hibi.openAddonGarden())}
+          >
+            View on website
+          </Button>
+        )}
         <Button disabled={busy} onClick={() => void fromUrl()}>
           Install from URL
         </Button>
@@ -256,112 +362,133 @@ export function AddonSettings({
           </Button>
         ))}
       </ControlRow>
-      <div className="settings-group addon-list" hidden={!matching.length}>
-        {ordered.map(({ manifest }) => {
-          const blockedBy =
-            states.find((state) => state.id === manifest.id)?.blockedBy ?? []
-          const providers = blockedBy.map(
-            (id) => addons.find((addon) => addon.manifest.id === id)?.manifest,
-          )
-          const retry = blockedBy.every(enabled)
-          const revoked = addonRegistry.revoked(manifest.id)
-          return (
-            <SettingRow
-              key={manifest.id}
-              id={`addon-${manifest.id}`}
-              label={manifest.name}
-              details={{
-                label: `${manifest.name} readme`,
-                onOpen: () => {
-                  openReadme(manifest)
-                },
-              }}
-              hidden={!shown(manifest)}
-              description={
-                <>
-                  {manifest.description}
-                  <AddonMetadata manifest={manifest} />
-                  {blockedBy.map((id) => {
-                    const dependency = addons.find(
-                      (addon) => addon.manifest.id === id,
-                    )?.manifest
-                    return (
-                      <span className="addon-metadata" key={id}>
-                        {enabled(id)
-                          ? `Could not start ${dependency?.name ?? id}`
-                          : `Requires ${dependency?.name ?? id}`}
-                      </span>
-                    )
-                  })}
-                  {revoked && (
-                    <span className="addon-revoked">
-                      {`Hibi disabled this addon because it was revoked: ${revoked.reason}`}
-                    </span>
-                  )}
-                </>
-              }
-            >
-              <div className="addon-actions">
-                {!revoked &&
-                  blockedBy.length > 0 &&
-                  providers.every(Boolean) && (
-                    <Button
-                      disabled={busy}
-                      onClick={() =>
-                        void run(() => setEnabled(manifest.id, true))
-                      }
-                    >
-                      {blockedBy.length === 1
-                        ? retry
-                          ? `Retry ${providers[0]?.name}`
-                          : `Enable ${providers[0]?.name} too`
-                        : retry
-                          ? 'Retry required addons'
-                          : 'Enable required addons'}
-                    </Button>
-                  )}
-                {addonRegistry.isInstalled(manifest.id) && (
-                  <Button
-                    disabled={busy}
-                    onClick={() => void run(() => remove(manifest.id))}
-                  >
-                    Remove
-                  </Button>
-                )}
-                {manifest.id === 'markdown' ? (
-                  <Toggle
-                    id={`addon-${manifest.id}`}
-                    aria-label={manifest.name}
-                    checked
-                    disabled
-                  />
-                ) : (
-                  <Toggle
-                    id={`addon-${manifest.id}`}
-                    aria-label={manifest.name}
-                    aria-describedby={`addon-${manifest.id}-description`}
-                    disabled={busy || !!revoked}
-                    checked={!revoked && enabled(manifest.id)}
-                    onChange={(event) => {
-                      restoreFocus.current = event.target.id
-                      const next = event.target.checked
-                      void run(() => setEnabled(manifest.id, next))
-                    }}
-                  />
-                )}
-              </div>
-            </SettingRow>
-          )
-        })}
-      </div>
-      {!matching.length && (
-        <Panel>
-          <PanelMessage
-            icon={<Search size={32} strokeWidth={1.5} />}
-            title="No matching addons"
+      <div
+        id="addon-tab-panel"
+        role="tabpanel"
+        aria-labelledby={`addon-tab-${tab}`}
+      >
+        {garden ? (
+          <AddonGarden
+            directory={directory}
+            retry={retry}
+            shown={shownEntry}
+            status={relation}
+            busy={busy}
+            install={(entry) =>
+              void run(() => install({ directoryId: entry.id }))
+            }
           />
-        </Panel>
-      )}
+        ) : (
+          <div className="settings-group addon-list" hidden={!matching.length}>
+            {ordered.map(({ manifest }) => {
+              const blockedBy =
+                states.find((state) => state.id === manifest.id)?.blockedBy ??
+                []
+              const providers = blockedBy.map(
+                (id) =>
+                  addons.find((addon) => addon.manifest.id === id)?.manifest,
+              )
+              const retry = blockedBy.every(enabled)
+              const revoked = addonRegistry.revoked(manifest.id)
+              return (
+                <SettingRow
+                  key={manifest.id}
+                  id={`addon-${manifest.id}`}
+                  label={manifest.name}
+                  details={{
+                    label: `${manifest.name} readme`,
+                    onOpen: () => {
+                      openReadme(manifest)
+                    },
+                  }}
+                  hidden={!shown(manifest)}
+                  description={
+                    <>
+                      {manifest.description}
+                      <AddonMetadata manifest={manifest} />
+                      {blockedBy.map((id) => {
+                        const dependency = addons.find(
+                          (addon) => addon.manifest.id === id,
+                        )?.manifest
+                        return (
+                          <span className="addon-metadata" key={id}>
+                            {enabled(id)
+                              ? `Could not start ${dependency?.name ?? id}`
+                              : `Requires ${dependency?.name ?? id}`}
+                          </span>
+                        )
+                      })}
+                      {revoked && (
+                        <span className="addon-revoked">
+                          {`Hibi disabled this addon because it was revoked: ${revoked.reason}`}
+                        </span>
+                      )}
+                    </>
+                  }
+                >
+                  <div className="addon-actions">
+                    {!revoked &&
+                      blockedBy.length > 0 &&
+                      providers.every(Boolean) && (
+                        <Button
+                          disabled={busy}
+                          onClick={() =>
+                            void run(() => setEnabled(manifest.id, true))
+                          }
+                        >
+                          {blockedBy.length === 1
+                            ? retry
+                              ? `Retry ${providers[0]?.name}`
+                              : `Enable ${providers[0]?.name} too`
+                            : retry
+                              ? 'Retry required addons'
+                              : 'Enable required addons'}
+                        </Button>
+                      )}
+                    {addonRegistry.isInstalled(manifest.id) && (
+                      <Button
+                        disabled={busy}
+                        onClick={() => void run(() => remove(manifest.id))}
+                      >
+                        Remove
+                      </Button>
+                    )}
+                    {manifest.id === 'markdown' ? (
+                      <Toggle
+                        id={`addon-${manifest.id}`}
+                        aria-label={manifest.name}
+                        checked
+                        disabled
+                      />
+                    ) : (
+                      <Toggle
+                        id={`addon-${manifest.id}`}
+                        aria-label={manifest.name}
+                        aria-describedby={`addon-${manifest.id}-description`}
+                        disabled={busy || !!revoked}
+                        checked={!revoked && enabled(manifest.id)}
+                        onChange={(event) => {
+                          restoreFocus.current = event.target.id
+                          const next = event.target.checked
+                          void run(() => setEnabled(manifest.id, next))
+                        }}
+                      />
+                    )}
+                  </div>
+                </SettingRow>
+              )
+            })}
+          </div>
+        )}
+        {!matching.length && (!garden || directory.entries.length > 0) && (
+          <Panel>
+            <PanelMessage
+              icon={<Search size={32} strokeWidth={1.5} />}
+              title="No matching addons"
+            />
+          </Panel>
+        )}
+      </div>
       <AddonSecuritySettings />
     </>
   )

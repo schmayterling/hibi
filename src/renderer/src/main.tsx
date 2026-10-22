@@ -66,6 +66,7 @@ import {
   type DocumentFlavorStatus,
 } from './ActiveDocumentEditor'
 import { AddonPanel } from './AddonPanel'
+import type { AddonRequest } from './AddonSettings'
 import { AddonSidebar, builtInViews, viewShortcut } from './AddonSidebar'
 import { AddonTab } from './AddonTab'
 import { AddonViewContent } from './AddonViewContent'
@@ -169,6 +170,9 @@ function App() {
   )
   const [settingsCategory, setSettingsCategory] = useState('workspace')
   const [settingTarget, setSettingTarget] = useState<string | null>(null)
+  const [addonRequests, setAddonRequests] = useState<AddonRequest[]>([])
+  const addonRequestKey = useRef(0)
+  const addonRequest = addonRequests[0] ?? null
   const registeredSettings = useSyncExternalStore(
     settingsPages.subscribe,
     settingsPages.snapshot,
@@ -1561,6 +1565,30 @@ function App() {
     window.hibi.onCommand((command) => addonHost.app.runAction(command)),
   )
   useEffect(() => window.hibi.onOpenSettings(() => openSetting('hibi')))
+  // hibi://addons/install?id= and /open?id= links; main has already validated the ID.
+  useEffect(
+    () =>
+      window.hibi.onAddonGardenRequest(({ id, install }) =>
+        setAddonRequests((queue) =>
+          // ponytail: a burst of links beyond ten is dropped; raise the cap if people batch installs.
+          queue.length < 10
+            ? [...queue, { id, install, key: ++addonRequestKey.current }]
+            : queue,
+        ),
+      ),
+    // Subscribing drains main's pending links, so subscribe once.
+    [],
+  )
+  const revealedAddonRequest = useRef(0)
+  useEffect(() => {
+    if (!addonRequest || revealedAddonRequest.current === addonRequest.key)
+      return
+    revealedAddonRequest.current = addonRequest.key
+    openSetting(
+      'addons',
+      `${addonRequest.install ? 'garden' : 'addon'}-${addonRequest.id}`,
+    )
+  })
   useEffect(() =>
     window.hibi.onOpenRemote(() => {
       void openRemote()
@@ -3162,6 +3190,12 @@ function App() {
             discover={paletteOpen}
             onBack={leaveSettings}
             onInstallAddon={addonHost.install}
+            addonRequest={addonRequest}
+            onAddonRequestDone={(key) =>
+              setAddonRequests((queue) =>
+                queue.filter((request) => request.key !== key),
+              )
+            }
             onRemoveAddon={addonHost.remove}
             updatingAddons={addonHost.updating}
             selected={settingsCategory}

@@ -2337,7 +2337,8 @@ export function useAddons(
       latest.current.error(error)
     }
   }
-  async function install(url?: string) {
+  /** A URL or local folder, or a Hibi garden entry chosen by ID. */
+  async function install(target?: string | { directoryId: string }) {
     // A second request would only be rejected by main; it must not touch the running one's reservation.
     if (installing.current) {
       latest.current.error(
@@ -2362,7 +2363,13 @@ export function useAddons(
     )
     setUpdating(reservation)
     try {
-      const session = await window.hibi.installAddon(url, openSettings)
+      const session =
+        typeof target === 'object'
+          ? await window.hibi.installDirectoryAddon(
+              target.directoryId,
+              openSettings,
+            )
+          : await window.hibi.installAddon(target, openSettings)
       try {
         if (session) {
           const { reviewAddonInstall } = await import('./AddonInstallChooser')

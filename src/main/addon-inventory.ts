@@ -480,6 +480,25 @@ export async function inventoryAddonDirectory(
   return finishInventory(entries, read)
 }
 
+/** Add or replace one host-supplied file; every package check still applies to the result. */
+export function withAddonFile(
+  inventory: AddonInventory,
+  path: string,
+  bytes: Buffer,
+): AddonInventory {
+  if (!validAddonPath(path) || bytes.length > MAX_ADDON_MANIFEST_BYTES)
+    throw new Error('The addon file is invalid.')
+  const content = Buffer.from(bytes)
+  return finishInventory(
+    [
+      ...inventory.entries.filter((entry) => entry.path !== path),
+      { path, directory: false, size: content.length },
+    ],
+    async (file) =>
+      file === path ? Buffer.from(content) : inventory.read(file),
+  )
+}
+
 /** Validate the admitted subtree without parsing or executing its metadata. */
 export function addonPackageFiles(
   inventory: AddonInventory,

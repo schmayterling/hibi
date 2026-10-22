@@ -183,6 +183,61 @@ test('directory fetch is lazy, coalesced, cached offline and preserves good data
   await assert.rejects(api.directoryAddon('missing'), /invalid entry/)
 })
 
+test('detached signatures come from the catalog location without credentials and stay bounded', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-directory-signature-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const { outputFiles } = await build({
+    entryPoints: ['src/main/addon-directory.ts'],
+    bundle: true,
+    write: false,
+    platform: 'node',
+    format: 'cjs',
+    packages: 'external',
+  })
+  const urls = []
+  let body = '{"keyId":"k"}',
+    status = 200
+  const desktop = {
+    app: { isPackaged: true, getPath: () => root },
+    net: {
+      fetch: async (url, options) => {
+        urls.push(url)
+        assert.equal(options.credentials, 'omit')
+        return new Response(body, { status })
+      },
+    },
+  }
+  const require = createRequire(import.meta.url)
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', outputFiles[0].text)(
+    (id) => (id === 'electron' ? desktop : require(id)),
+    module,
+    module.exports,
+  )
+  const api = module.exports
+  assert.deepEqual(await api.directorySignature('example'), Buffer.from(body))
+  assert.deepEqual(urls, [
+    'https://raw.githubusercontent.com/hibigarden/addons-repository/main/signatures/example.json',
+  ])
+  await assert.rejects(api.directorySignature('../catalog'), /Choose an addon/)
+  assert.equal(urls.length, 1)
+  for (const failure of [
+    () => {
+      status = 404
+    },
+    () => {
+      status = 200
+      body = 'x'.repeat(64 * 1024 + 1)
+    },
+  ]) {
+    failure()
+    await assert.rejects(
+      api.directorySignature('example'),
+      /Could not download the Hibi signature/,
+    )
+  }
+})
+
 test('garden links accept only explicit addon ids and install or open actions', () => {
   for (const install of [true, false])
     assert.deepEqual(

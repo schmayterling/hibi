@@ -70,6 +70,7 @@ async function host(t, builtins = [details('markdown')]) {
         showOpenDialog:async()=>({canceled:!state.source,filePaths:state.source?[state.source]:[]}),
         showMessageBox:async(_window,options)=>{state.reviews.push(options);return {response:1}}
       };
+      export const net = {fetch:()=>{throw new Error('No network in this test')}};
       export const shell = {trashItem:async path=>{if(state.failTrash)throw new Error('trash failed');await rm(path,{recursive:true,force:true})}};
     `,
     'node:fs/promises': `import * as fs from 'node:fs/promises';import {basename} from 'node:path';import {state} from 'electron';

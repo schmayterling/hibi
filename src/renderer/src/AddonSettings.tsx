@@ -383,6 +383,7 @@ export function AddonSettings({
             shown={shownEntry}
             status={relation}
             busy={busy}
+            uninstall={(entry) => void run(() => remove(entry.id))}
             install={(entry) =>
               void run(() => install({ directoryId: entry.id }))
             }
@@ -459,7 +460,7 @@ export function AddonSettings({
                         disabled={busy}
                         onClick={() => void run(() => remove(manifest.id))}
                       >
-                        Remove
+                        Uninstall
                       </Button>
                     )}
                     {manifest.id === 'markdown' ? (

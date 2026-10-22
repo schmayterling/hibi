@@ -64,6 +64,7 @@ export function AddonGarden({
   status,
   busy,
   install,
+  uninstall,
 }: {
   directory: Directory
   retry: () => void
@@ -75,6 +76,7 @@ export function AddonGarden({
   ) => 'builtin' | 'installed' | 'update' | 'new'
   busy: boolean
   install: (entry: AddonDirectoryEntry) => void
+  uninstall: (entry: AddonDirectoryEntry) => void
 }) {
   const { entries } = directory
   const matching = entries.filter(shown)
@@ -163,6 +165,15 @@ export function AddonGarden({
                 >
                   Source
                 </Button>
+                {(relation === 'installed' || relation === 'update') && (
+                  <Button
+                    aria-label={`Uninstall ${entry.name}`}
+                    disabled={busy}
+                    onClick={() => uninstall(entry)}
+                  >
+                    Uninstall
+                  </Button>
+                )}
                 {relation === 'builtin' ? (
                   <span className="addon-garden-included">
                     Included with Hibi

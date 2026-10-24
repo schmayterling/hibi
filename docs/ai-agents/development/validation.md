@@ -21,6 +21,8 @@ The exporter template watches shared UI dependencies, and API references regener
 
 Vite remains on 7 and `@vitejs/plugin-react` on 5. `electron-vite` 6 and CodSpeed 6 accept Vite 8, but the bundler and React plugin upgrade is a separate migration with its own build and development checks. Node type definitions can update independently.
 
+CodSpeed 6 changes CPU simulation on Node 24 by disabling Maglev and minor GC tasks. Its measurements need a fresh baseline and cannot be compared directly with CodSpeed 5 results. Keep instrumentation upgrades separate from application dependency updates, then compare both revisions with the same instrumentation version. See the [upstream breaking changes](https://github.com/CodSpeedHQ/codspeed-node/releases/tag/v6.0.0).
+
 ## Continuous integration
 
 Desktop checks run once per pull request and on pushes to `main`. Feature-branch pushes do not duplicate the matrix. The shared `.github/actions/ci` action powers regular incremental checks. Release builds use the [full-suite release policy](../../development/core/releases.md).

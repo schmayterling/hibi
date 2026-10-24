@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
-// Electron-vite 5 starts a replacement before the old app releases its lock.
+// Electron-vite 6 starts a replacement before the old app releases its lock.
 // Request a normal close so unsaved documents still get their save prompt.
 let entry
 try {
@@ -19,14 +19,14 @@ const packagePath = fileURLToPath(
   import.meta.resolve('electron-vite/package.json'),
 )
 const { version } = JSON.parse(await readFile(packagePath, 'utf8'))
-if (version !== '5.0.0')
+if (version !== '6.0.0')
   throw new Error(
     'electron-vite version changed. Review the dev restart patch.',
   )
 
 const chunks = [
   [
-    './chunks/lib-7y7CgM8M.js',
+    './chunks/lib-CLhLGLN3.js',
     [
       ['        let ps;\n', '        let ps;\n        let restarting;\n'],
       [
@@ -40,7 +40,9 @@ const chunks = [
                     if (restarting)
                         return restarting;
                     const previous = ps;
-                    previous.removeListener('close', process.exit);
+                    const closeListeners = previous.rawListeners('close');
+                    for (const listener of closeListeners)
+                        previous.removeListener('close', listener);
                     let finish;
                     restarting = new Promise((resolve) => { finish = resolve; });
                     let settled = false;
@@ -51,7 +53,8 @@ const chunks = [
                         clearTimeout(receiptTimer);
                         previous.removeListener('close', onClose);
                         previous.removeListener('message', onMessage);
-                        previous.on('close', process.exit);
+                        for (const listener of closeListeners)
+                            previous.on('close', listener);
                         restarting = undefined;
                         finish();
                         return true;
@@ -130,7 +133,7 @@ const chunks = [
     ],
   ],
   [
-    './chunks/lib-q6ns0vZr.js',
+    './chunks/lib-DoUt4oMD.js',
     [
       [
         "    const ps = spawn(electronPath, [entry].concat(args), { stdio: 'inherit' });",

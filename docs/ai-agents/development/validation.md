@@ -19,7 +19,7 @@ npm run package     # unpacked local application
 
 The exporter template watches shared UI dependencies, and API references regenerate when their source declarations change. Both generators also restart when their own scripts change. The last exporter template stays available during a rebuild. To pass Electron arguments, use `npm run dev -- -- --user-data-dir=/path/to/profile`.
 
-Keep Vite on 7 and `@vitejs/plugin-react` on 5 while stable `electron-vite` 5 and `@codspeed/vitest-plugin` 5 require Vite 7 or earlier. Update them together when their stable peer ranges allow Vite 8. Node type definitions can update independently.
+Vite remains on 7 and `@vitejs/plugin-react` on 5. `electron-vite` 6 and CodSpeed 6 accept Vite 8, but the bundler and React plugin upgrade is a separate migration with its own build and development checks. Node type definitions can update independently.
 
 ## Continuous integration
 

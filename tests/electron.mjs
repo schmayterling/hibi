@@ -242,13 +242,22 @@ export function stopElectronTree(child) {
 export const showTestWindows =
   (process.env.GITHUB_ACTIONS === 'true' && !!process.env.GITHUB_RUN_ID) ||
   process.env.HIBI_TEST_SHOW_WINDOWS === '1'
+export function electronTestArgs(args, chromiumSandbox = false) {
+  const linux = process.platform === 'linux'
+  // Match Playwright's default sandbox handling for native test launches.
+  const sandboxArgs =
+    linux && !chromiumSandbox && !args.includes('--no-sandbox')
+      ? ['--no-sandbox']
+      : []
+  // Cold Xvfb runners can lose the default GPU process before first paint.
+  const gpuArgs =
+    showTestWindows && linux
+      ? ['--use-gl=angle', '--use-angle=swiftshader']
+      : []
+  return [...sandboxArgs, ...args, '--hibi-test', ...gpuArgs]
+}
 export const electron = {
   async launch({ diagnostics = true, ...options }) {
-    // Cold Xvfb runners can lose the default GPU process before first paint.
-    const gpuArgs =
-      showTestWindows && process.platform === 'linux'
-        ? ['--use-gl=angle', '--use-angle=swiftshader']
-        : []
     const application = await _electron.launch({
       ...options,
       env: {
@@ -258,7 +267,7 @@ export const electron = {
         ).href,
         ...(options.env ?? process.env),
       },
-      args: [...options.args, '--hibi-test', ...gpuArgs],
+      args: electronTestArgs(options.args, options.chromiumSandbox),
     })
     forwardElectronDiagnostics(application.process().stderr)
     const close = application.close.bind(application)

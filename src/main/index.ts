@@ -364,6 +364,16 @@ if (testing)
   )
 if (testing && process.platform === 'darwin')
   app.setActivationPolicy('accessory')
+app.on('browser-window-created', (_event, window: NodeJS.EventEmitter) => {
+  window.once('closed', () => {
+    // Work around Electron 44's unguarded BrowserWindow.visibilityChanged.
+    // Remove after upgrading to Electron 45 (electron/electron#54048).
+    for (const event of ['show', 'hide', 'minimize', 'maximize', 'restore'])
+      for (const listener of window.listeners(event))
+        if (listener.name === 'visibilityChanged')
+          window.removeListener(event, listener)
+  })
+})
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'hibi-analysis',

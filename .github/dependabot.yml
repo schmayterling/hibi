@@ -5,12 +5,12 @@ updates:
     schedule:
       interval: weekly
     ignore:
-      # electron-vite 5 and CodSpeed require Vite 7; revisit with their stable upgrades.
+      # electron-vite 5 requires Vite 7; review its upgrade separately.
       - dependency-name: vite
         versions: ['>=8']
       - dependency-name: '@vitejs/plugin-react'
         versions: ['>=6']
-      # CodSpeed's Vitest integration supports Vitest 3 and 4.
+      # Review the Vitest 5 migration separately.
       - dependency-name: vitest
         versions: ['>=5']
       # Tiptap Mathematics supports KaTeX through 0.18.

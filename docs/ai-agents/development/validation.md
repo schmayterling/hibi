@@ -19,7 +19,9 @@ npm run package     # unpacked local application
 
 The exporter template watches shared UI dependencies, and API references regenerate when their source declarations change. Both generators also restart when their own scripts change. The last exporter template stays available during a rebuild. To pass Electron arguments, use `npm run dev -- -- --user-data-dir=/path/to/profile`.
 
-Keep Vite on 7 and `@vitejs/plugin-react` on 5 while stable `electron-vite` 5 and `@codspeed/vitest-plugin` 5 require Vite 7 or earlier. Update them together when their stable peer ranges allow Vite 8. Node type definitions can update independently.
+Keep Vite on 7 and `@vitejs/plugin-react` on 5 while electron-vite 5 requires Vite 7. CodSpeed 6 accepts Vite 8 and Vitest 5; validate bundler and test-framework migrations separately. Node type definitions can update independently.
+
+CodSpeed 6 changes CPU simulation on Node 24 by disabling Maglev and minor GC tasks. Its measurements need a fresh baseline and cannot be compared directly with CodSpeed 5 results. Keep instrumentation upgrades separate from application dependency updates, then compare both revisions with the same instrumentation version. See the [upstream breaking changes](https://github.com/CodSpeedHQ/codspeed-node/releases/tag/v6.0.0).
 
 ## Continuous integration
 

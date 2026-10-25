@@ -202,7 +202,6 @@ export class McpServer {
         }
       }
     }
-    if (!this.server || this.state.state !== 'running') return null
     const request = this.nextEdit()
     if (request) return request
     return new Promise((resolve) => {
@@ -331,13 +330,14 @@ export class McpServer {
         resolve()
       }
       const listening = () => {
-        if (this.server === server && generation === this.generation)
+        if (this.server === server && generation === this.generation) {
           this.state = {
             state: 'running',
             message: '',
             url: `http://127.0.0.1:${preferences.port}/mcp`,
           }
-        else {
+          for (const poller of this.pollers) poller(null)
+        } else {
           server.close()
           server.closeAllConnections()
         }

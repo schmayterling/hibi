@@ -36,9 +36,9 @@ const bundle = await build({
       ]
     : [],
 })
-const { mkdtemp, rm } = await import('node:fs/promises')
-const { tmpdir } = await import('node:os')
-const { join } = await import('node:path')
+const { mkdtemp, rm } = process.getBuiltinModule('node:fs/promises')
+const { tmpdir } = process.getBuiltinModule('node:os')
+const { join } = process.getBuiltinModule('node:path')
 const profile = await mkdtemp(join(tmpdir(), 'hibi-export-bench-'))
 const app = await electron.launch({
   args: [resolve('.'), '--user-data-dir=' + profile],
@@ -47,10 +47,10 @@ try {
   await app.firstWindow()
   const result = await app.evaluate(
     async ({ app }, { code, count, baseline }) => {
-      const { createRequire } = await import('node:module')
-      const { mkdtemp, rm, stat } = await import('node:fs/promises')
-      const { tmpdir } = await import('node:os')
-      const { join } = await import('node:path')
+      const { createRequire } = process.getBuiltinModule('node:module')
+      const { mkdtemp, rm, stat } = process.getBuiltinModule('node:fs/promises')
+      const { tmpdir } = process.getBuiltinModule('node:os')
+      const { join } = process.getBuiltinModule('node:path')
       const module = { exports: {} }
       new Function('require', 'module', 'exports', code)(
         createRequire(join(app.getAppPath(), 'package.json')),

@@ -1377,6 +1377,7 @@
   ],
   "7f43531f5a30": [
     "src/addons/documentation/native.ts",
+    "src/addons/documentation/prepare.ts",
     "src/addons/documentation/site-runtime.ts"
   ],
   "283432fdadc1": [

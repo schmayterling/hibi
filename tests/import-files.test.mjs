@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { constants } from 'node:fs'
 import {
   mkdir,
   mkdtemp,
@@ -10,6 +12,7 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -18,6 +21,7 @@ import { importNotion } from '../src/addons/import-notion/convert.ts'
 import { importObsidian } from '../src/addons/import-obsidian/convert.ts'
 import {
   copyImportFile,
+  readImportFile,
   readImportFolder,
   readImportZip,
   validateImportFiles,
@@ -115,6 +119,41 @@ test('folder catalog never buffers attachment bytes or refuses large attachments
   await assert.rejects(
     copyImportFile(catalog.files[0], join(root, 'linked.mov')),
   )
+})
+test('source opens reject fifo substitutions without waiting for a writer', {
+  skip: process.platform === 'win32',
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-import-fifo-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const path = join(root, 'source.md')
+  await writeFile(path, 'original')
+  const source = (await readImportFolder(root)).files[0]
+  const fs = process.getBuiltinModule('node:fs/promises')
+  const open = fs.open
+  let opens = 0
+  fs.open = (...args) => {
+    opens++
+    assert.ok(
+      args[1] & constants.O_NONBLOCK,
+      'source opens must be nonblocking',
+    )
+    return open(...args)
+  }
+  syncBuiltinESMExports()
+  try {
+    await copyImportFile(source, join(root, 'copy.md'))
+    assert.ok(opens > 0)
+    await rm(path)
+    execFileSync('mkfifo', [path])
+    await assert.rejects(
+      copyImportFile(source, join(root, 'fifo.md')),
+      /changed/,
+    )
+    await assert.rejects(readImportFile(source), /changed/)
+  } finally {
+    fs.open = open
+    syncBuiltinESMExports()
+  }
 })
 test('workspace settings move into .hibi on save and preserve legacy files', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-metadata-'))

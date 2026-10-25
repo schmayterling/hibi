@@ -21,6 +21,8 @@ export async function streamImportWorker(
   format: ImportFormat,
   stream: ImportStream,
 ): Promise<string[]> {
+  const { signal } = stream
+  signal?.throwIfAborted()
   const worker = new Worker(path, { workerData: { format } })
   let failure: Error | undefined
   let resolvePending: ((value: unknown) => void) | undefined
@@ -29,6 +31,11 @@ export async function streamImportWorker(
     failure = error
     rejectPending?.(error)
   }
+  const abort = () => {
+    fail(signal?.reason ?? new Error('Import cancelled.'))
+    void worker.terminate()
+  }
+  signal?.addEventListener('abort', abort, { once: true })
   worker.on('message', (value: unknown) => resolvePending?.(value))
   worker.once('error', fail)
   worker.once('exit', (code) =>
@@ -38,6 +45,7 @@ export async function streamImportWorker(
     message: unknown,
     buffers: ArrayBuffer[] = [],
   ): Promise<T> {
+    signal?.throwIfAborted()
     if (failure) throw failure
     try {
       return await new Promise<T>((resolve, reject) => {
@@ -60,8 +68,10 @@ export async function streamImportWorker(
       const result = await request<{ packet: ImportPacket; done: boolean }>({
         type: 'next',
       })
-      for (const entry of unpackImportEntries(result.packet))
+      for (const entry of unpackImportEntries(result.packet)) {
+        signal?.throwIfAborted()
         await stream.write(entry)
+      }
       if (result.done) break
     }
   }
@@ -89,6 +99,7 @@ export async function streamImportWorker(
       let entries: ImportEntry[] = [],
         size = 0
       for (let offset = 0; offset < reads.length; offset++) {
+        signal?.throwIfAborted()
         const index = start + offset
         const path = stream.paths[index] as string
         const data = reads[offset]
@@ -109,6 +120,7 @@ export async function streamImportWorker(
     }
     return await request<string[]>({ type: 'finish' })
   } finally {
+    signal?.removeEventListener('abort', abort)
     await worker.terminate()
   }
 }

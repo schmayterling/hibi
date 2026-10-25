@@ -341,6 +341,7 @@ export async function convertImport(
       const buffered: ImportFile[] = []
       let size = 0
       for (let index = 0; index < stream.paths.length; index++) {
+        stream.signal?.throwIfAborted()
         const data = await stream.read(index)
         size += data.byteLength
         if (size > 256 * 1024 * 1024)
@@ -352,7 +353,11 @@ export async function convertImport(
       input = buffered
     }
     result = await addon.import(input)
-    if (stream) for (const file of result.files) await stream.write(file)
+    if (stream)
+      for (const file of result.files) {
+        stream.signal?.throwIfAborted()
+        await stream.write(file)
+      }
   }
   if (!isAddonActivationCurrent(id, generation))
     throw new Error(

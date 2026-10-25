@@ -39,11 +39,16 @@ const skipPath = (path: string) =>
       (part) =>
         part.startsWith('.') || ['node_modules', '__MACOSX'].includes(part),
     )
-export async function validateImportPaths(files: readonly { path: string }[]) {
+export async function validateImportPaths(
+  files: readonly { path: string }[],
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted()
   if (!Array.isArray(files))
     throw new Error('The import contains an invalid file list.')
   const seen = new Set<string>()
   for (const file of files) {
+    signal?.throwIfAborted()
     if (!validImportPath(file.path) || skipPath(file.path))
       throw new Error('The import contains an unsafe file path.')
     const key = file.path.normalize('NFC').toLowerCase()
@@ -54,6 +59,7 @@ export async function validateImportPaths(files: readonly { path: string }[]) {
   }
   let checked = 0
   for (const key of seen) {
+    signal?.throwIfAborted()
     const parts = key.split('/')
     while (parts.length > 1) {
       parts.pop()
@@ -63,10 +69,14 @@ export async function validateImportPaths(files: readonly { path: string }[]) {
     if (++checked % 64 === 0) await setImmediate()
   }
 }
-export async function validateImportFiles(files: readonly ImportFile[]) {
-  await validateImportPaths(files)
+export async function validateImportFiles(
+  files: readonly ImportFile[],
+  signal?: AbortSignal,
+) {
+  await validateImportPaths(files, signal)
   let checked = 0
   for (const file of files) {
+    signal?.throwIfAborted()
     if (!(file.data instanceof Uint8Array))
       throw new Error('The import contains an unsafe file path.')
     if (file.data.byteLength > IMPORT_LIMITS.file)
@@ -98,9 +108,14 @@ async function boundedFile(
   path: string,
   limit: number,
   expected?: ImportSourceFile,
+  signal?: AbortSignal,
 ) {
+  signal?.throwIfAborted()
   if (expected) await checkSourceParent(expected)
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  const handle = await open(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0),
+  )
   try {
     const stat = await handle.stat()
     if (expected) checkSource(expected, stat)
@@ -110,10 +125,12 @@ async function boundedFile(
     const bytes = Buffer.alloc(Math.min(stat.size + 1, limit + 1))
     let size = 0
     while (size < bytes.length) {
+      signal?.throwIfAborted()
       const result = await handle.read(bytes, size, bytes.length - size, size)
       if (!result.bytesRead) break
       size += result.bytesRead
     }
+    signal?.throwIfAborted()
     if (size !== stat.size || (await handle.stat()).mtimeMs !== stat.mtimeMs)
       throw new Error('An import file changed while being read. Try again.')
     if (expected) checkSource(expected, await handle.stat())
@@ -122,14 +139,19 @@ async function boundedFile(
     await handle.close()
   }
 }
-export function readImportFile(file: ImportSourceFile) {
-  return boundedFile(file.source, IMPORT_LIMITS.file, file)
+export function readImportFile(file: ImportSourceFile, signal?: AbortSignal) {
+  return boundedFile(file.source, IMPORT_LIMITS.file, file, signal)
 }
-export async function copyImportFile(file: ImportSourceFile, target: string) {
+export async function copyImportFile(
+  file: ImportSourceFile,
+  target: string,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted()
   await checkSourceParent(file)
   const handle = await open(
     file.source,
-    constants.O_RDONLY | constants.O_NOFOLLOW,
+    constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0),
   )
   try {
     checkSource(file, await handle.stat())
@@ -147,6 +169,7 @@ export async function copyImportFile(file: ImportSourceFile, target: string) {
         }
       },
       createWriteStream(target, { flags: 'wx' }),
+      { signal },
     )
     if (size !== file.stat.size)
       throw new Error('An import file changed while being read. Try again.')
@@ -155,15 +178,18 @@ export async function copyImportFile(file: ImportSourceFile, target: string) {
     await handle.close()
   }
 }
-export async function readImportFolder(root: string) {
+export async function readImportFolder(root: string, signal?: AbortSignal) {
+  signal?.throwIfAborted()
   root = await realpath(root)
   const files: ImportSourceFile[] = [],
     warnings: string[] = []
   async function walk(directory: string) {
+    signal?.throwIfAborted()
     const actual = await realpath(directory)
     if (!isPathInside(root, actual))
       throw new Error('An import folder points outside the selected folder.')
     for (const entry of await readdir(directory, { withFileTypes: true })) {
+      signal?.throwIfAborted()
       const path = relative(root, join(directory, entry.name))
         .split(sep)
         .join('/')
@@ -193,15 +219,16 @@ export async function readImportFolder(root: string) {
     }
   }
   await walk(root)
-  await validateImportPaths(files)
+  await validateImportPaths(files, signal)
   return { files, warnings }
 }
-export async function readImportZip(path: string) {
-  const zip = await boundedFile(path, IMPORT_LIMITS.zipBytes)
+export async function readImportZip(path: string, signal?: AbortSignal) {
+  const zip = await boundedFile(path, IMPORT_LIMITS.zipBytes, undefined, signal)
   const directory = await openBoundedZip(zip, IMPORT_LIMITS.zipEntries)
   const files: ImportFile[] = []
   let total = 0
   for (const entry of directory.files) {
+    signal?.throwIfAborted()
     const path = entry.path.replace(/\/$/, '')
     const mode = (entry.externalFileAttributes >>> 16) & 0xf000
     if (
@@ -216,10 +243,11 @@ export async function readImportZip(path: string) {
     const data = await readZipEntry(
       entry,
       Math.min(IMPORT_LIMITS.file, IMPORT_LIMITS.zipBytes - total),
+      signal,
     )
     total += data.length
     files.push({ path, data })
   }
-  await validateImportFiles(files)
+  await validateImportFiles(files, signal)
   return { files, warnings: [] as string[] }
 }

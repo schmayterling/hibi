@@ -45,7 +45,9 @@ export function listImporters(): Importer[] {
 export async function importIntoWorkspace(
   window: BrowserWindow,
   input: unknown,
+  signal: AbortSignal,
 ): Promise<ImportResult | null> {
+  signal.throwIfAborted()
   const request = input as ImportRequest | null
   const importer = listImporters().find((item) => item.id === request?.id)
   const root = workspaceRoot()
@@ -68,6 +70,7 @@ export async function importIntoWorkspace(
         : {}),
     }),
   )
+  signal.throwIfAborted()
   if (selected.canceled || !selected.filePaths[0]) return null
   const source = await realpath(selected.filePaths[0])
   if (request.source === 'folder' && isPathInside(source, root))
@@ -76,8 +79,8 @@ export async function importIntoWorkspace(
     )
   const original =
     request.source === 'folder'
-      ? await readImportFolder(source)
-      : await readImportZip(source)
+      ? await readImportFolder(source, signal)
+      : await readImportZip(source, signal)
   if (workspaceRoot() !== root || request.workspaceId !== workspaceId())
     throw new Error('The workspace changed. Start the import again.')
   const stage = await mkdtemp(join(root, '.hibi-import-'))
@@ -90,29 +93,38 @@ export async function importIntoWorkspace(
   let destination: string | undefined
   try {
     const written: { path: string }[] = []
+    const seen = new Set<string>()
     const stream: ImportStream = {
+      signal,
       paths: original.files.map((file) => file.path),
       read: async (index) => {
         const file = original.files[index]
         if (!file) throw new Error('The import contains an unsafe file path.')
-        return 'source' in file ? readImportFile(file) : file.data
+        signal.throwIfAborted()
+        return 'source' in file ? readImportFile(file, signal) : file.data
       },
       write: async (entry: ImportEntry) => {
-        await validateImportPaths([entry])
+        await validateImportPaths([entry], signal)
+        const key = entry.path.normalize('NFC').toLowerCase()
+        if (seen.has(key))
+          throw new Error(
+            `The import contains duplicate file names: ${entry.path}`,
+          )
+        seen.add(key)
         const target = join(stage, entry.path)
         await mkdir(dirname(target), { recursive: true })
         if ('data' in entry) {
           const file = entry as ImportFile
-          await validateImportFiles([file])
-          await writeFile(target, file.data, { flag: 'wx' })
+          await validateImportFiles([file], signal)
+          await writeFile(target, file.data, { flag: 'wx', signal })
         } else {
           const file =
             Number.isSafeInteger(entry.original) && entry.original !== undefined
               ? original.files[entry.original]
               : undefined
           if (!file) throw new Error('The import contains an unsafe file path.')
-          if ('source' in file) await copyImportFile(file, target)
-          else await writeFile(target, file.data, { flag: 'wx' })
+          if ('source' in file) await copyImportFile(file, target, signal)
+          else await writeFile(target, file.data, { flag: 'wx', signal })
         }
         written.push({ path: entry.path })
       },
@@ -127,12 +139,13 @@ export async function importIntoWorkspace(
           path: stream.paths[index] as string,
           original: index,
         })
-    await validateImportPaths(written)
+    await validateImportPaths(written, signal)
     if (!written.length) throw new Error('No files were found in this export.')
     if (workspaceRoot() !== root || request.workspaceId !== workspaceId())
       throw new Error('The workspace changed. Start the import again.')
     // Reserve a fresh container atomically. Existing files are never overwritten.
     for (let suffix = 1; ; suffix++) {
+      signal.throwIfAborted()
       const candidate = join(root, suffix === 1 ? name : `${name} ${suffix}`)
       try {
         await mkdir(candidate)
@@ -143,6 +156,7 @@ export async function importIntoWorkspace(
       }
     }
     // The reserved folder contains one staged tree, published in a single rename.
+    signal.throwIfAborted()
     await rename(stage, join(destination, 'Imported files'))
     const warnings = [
       ...new Set([...original.warnings, ...(converted.warnings ?? [])]),

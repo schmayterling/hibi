@@ -2735,6 +2735,9 @@
   "47fa752d5df7": [
     "src/renderer/src/markdown-syntax.ts"
   ],
+  "33ffe414fe4e": [
+    "src/addons/_shared/import-worker-client.ts"
+  ],
   "199a7dbf37b9": [
     "src/addons/_shared/import-worker-client.ts"
   ],
@@ -5827,7 +5830,8 @@
     "src/shared/imports.ts"
   ],
   "c6ba816d86a5": [
-    "src/main/import-files.ts"
+    "src/main/import-files.ts",
+    "src/main/imports.ts"
   ],
   "23aa870889ee": [
     "src/main/import-files.ts"

@@ -1,6 +1,7 @@
 export const IMPORT_CHANNELS = {
   list: 'imports:list',
   run: 'imports:run',
+  cancel: 'imports:cancel',
 } as const
 export type ImportSource = 'folder' | 'zip'
 export type Importer = {
@@ -23,6 +24,7 @@ export function importTextData(file: ImportEntry): Uint8Array {
   return file.data
 }
 export type ImportStream = {
+  signal?: AbortSignal
   paths: readonly string[]
   read: (index: number) => Promise<Uint8Array>
   write: (entry: ImportEntry) => Promise<void>

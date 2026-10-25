@@ -6,7 +6,10 @@ import {
   packImportEntries,
   unpackImportEntries,
 } from '../src/addons/_shared/import-packet.ts'
-import { runImportWorker } from '../src/addons/_shared/import-worker-client.ts'
+import {
+  runImportWorker,
+  streamImportWorker,
+} from '../src/addons/_shared/import-worker-client.ts'
 import { importBear } from '../src/addons/import-bear/convert.ts'
 import { importNotion } from '../src/addons/import-notion/convert.ts'
 import { importObsidian } from '../src/addons/import-obsidian/convert.ts'
@@ -100,6 +103,28 @@ test('packed files share one byte buffer and missing attachment bytes fail close
     } else assert.equal('data' in unpacked[index], false)
   assert.throws(() => importText({ path: 'missing.md' }), /unsafe/)
   assert.throws(() => packImportEntries([{ path: 'rewrapped.png' }]), /unsafe/)
+})
+test('aborting an active conversion rejects its request before any output is written', async (t) => {
+  const controller = new AbortController()
+  const postMessage = Worker.prototype.postMessage
+  t.mock.method(Worker.prototype, 'postMessage', function (message, buffers) {
+    const result = postMessage.call(this, message, buffers)
+    if (message.type === 'files') controller.abort()
+    return result
+  })
+  let writes = 0
+  await assert.rejects(
+    streamImportWorker(workerPath, 'obsidian', {
+      paths: ['note.md'],
+      signal: controller.signal,
+      read: async () => Buffer.from('[[#heading]]'),
+      write: async () => {
+        writes++
+      },
+    }),
+    { name: 'AbortError' },
+  )
+  assert.equal(writes, 0)
 })
 test('import worker failures preserve decoder and format errors', async () => {
   await assert.rejects(

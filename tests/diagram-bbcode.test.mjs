@@ -101,10 +101,10 @@ test('Mermaid and BBCode edit, preview, and export without executing content', {
     await diagram.evaluate((svg) => svg === window.drawnDiagram),
     true,
   )
-  const darkSurface = await page.evaluate(() =>
-    getComputedStyle(document.documentElement)
-      .getPropertyValue('--surface')
-      .trim(),
+  const [darkSurface, darkBackground] = await page.evaluate(() =>
+    ['--surface', '--background'].map((role) =>
+      getComputedStyle(document.documentElement).getPropertyValue(role).trim(),
+    ),
   )
   assert.equal(
     await diagram.evaluate((svg) => getComputedStyle(svg).maxHeight),
@@ -157,6 +157,7 @@ test('Mermaid and BBCode edit, preview, and export without executing content', {
   assert.ok(image)
   const exportedSvg = decodeURIComponent(image.split(',')[1])
   assert.ok(exportedSvg.includes(`--pele-surface:${darkSurface}`))
+  assert.ok(exportedSvg.includes(`background:${darkBackground}`))
   assert.doesNotMatch(exportedSvg, /<a\b|<image\b|<foreignObject|javascript:/i)
   assert.ok(
     await page.evaluate(async (source) => {

@@ -96,12 +96,13 @@ export function diagramTheme(color: (role: ColorToken) => string) {
     accent: color('accent'),
     critical: color('status-danger'),
     error: color('status-danger'),
-    'series-1': color('accent'),
-    'series-2': color('status-info'),
-    'series-3': color('status-success'),
-    'series-4': color('status-warning'),
-    'series-5': color('status-danger'),
-    'series-6': mix('status-info', 'status-danger'),
+    // Status colors stay distinct from each other in every scheme; accents may not.
+    'series-1': color('status-info'),
+    'series-2': color('status-success'),
+    'series-3': color('status-warning'),
+    'series-4': color('status-danger'),
+    'series-5': mix('status-info', 'status-danger'),
+    'series-6': mix('status-success', 'status-info'),
     'series-7': mix('status-success', 'status-warning'),
     'series-8': color('muted'),
   })
@@ -109,7 +110,7 @@ export function diagramTheme(color: (role: ColorToken) => string) {
     .join(';')
 }
 
-/** Exports keep the active colorscheme in a self-contained image. */
+/** Exports keep the active colorscheme in a self-contained image with its own background. */
 export async function renderDiagram(source: string, scheme: Colorscheme) {
   if (!source.trim()) return ''
   const engine = await loadEngine(source)
@@ -118,12 +119,13 @@ export async function renderDiagram(source: string, scheme: Colorscheme) {
       ...options,
       fontFamily: 'sans-serif',
       fontFamilyMono: 'monospace',
+      padding: 16,
     }).svg,
   ).firstElementChild
   if (!svg) return ''
   svg.setAttribute(
     'style',
-    `${svg.getAttribute('style') ?? ''};${diagramTheme((role) => scheme.colors[role])}`,
+    `${svg.getAttribute('style') ?? ''};background:${scheme.colors.background};${diagramTheme((role) => scheme.colors[role])}`,
   )
   return `<img class="mermaid-diagram" alt="Mermaid diagram" src="data:image/svg+xml,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}">`
 }

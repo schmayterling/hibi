@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
+import crypto, { createHash } from 'node:crypto'
 import {
   mkdir,
   mkdtemp,
@@ -10,7 +10,7 @@ import {
   symlink,
   writeFile,
 } from 'node:fs/promises'
-import { createRequire } from 'node:module'
+import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -195,6 +195,76 @@ for (const [id, query, word, count] of [
     await reopened.close()
   })
 
+test('first lookup hashes only in worker, once per file identity across launches', async (t) => {
+  const ctx = await setup(t)
+  await install(ctx.store, 'en')
+  await ctx.store.close()
+  const counter = join(ctx.root, 'hashes')
+  const measuredWorker = join(ctx.root, 'measured-worker.mjs')
+  await writeFile(counter, '')
+  await writeFile(
+    measuredWorker,
+    `
+    import crypto from 'node:crypto'
+    import { appendFileSync } from 'node:fs'
+    import { syncBuiltinESMExports } from 'node:module'
+    const hash = crypto.createHash
+    crypto.createHash = (...args) => {
+      appendFileSync(${JSON.stringify(counter)}, 'hash\\n')
+      return hash(...args)
+    }
+    syncBuiltinESMExports()
+    await import(${JSON.stringify(pathToFileURL(worker).href)})
+  `,
+  )
+  const mainHash = t.mock.method(crypto, 'createHash')
+  syncBuiltinESMExports()
+  t.after(() => {
+    mainHash.mock.restore()
+    syncBuiltinESMExports()
+  })
+  const hashes = async () =>
+    (await readFile(counter, 'utf8')).split('\n').length - 1
+  const fresh = () => {
+    const store = new PackStore(ctx.root, pathToFileURL(measuredWorker))
+    t.after(() => store.close())
+    return store
+  }
+  const first = fresh()
+  await first.installed('en')
+  assert.equal(await hashes(), 0, 'metadata inspection reads no pack payload')
+  const found = await Promise.all(
+    Array.from({ length: 8 }, () => first.lookup('en', 'children')),
+  )
+  assert.ok(found.every((entries) => entries[0].word === 'child'))
+  assert.equal(mainHash.mock.callCount(), 0, 'no main-thread hashing')
+  assert.equal(
+    await hashes(),
+    2,
+    'one hash per payload, shared by concurrent reads',
+  )
+  await first.complete('en', 'ch')
+  assert.equal(await hashes(), 2)
+  await first.close()
+  const second = fresh()
+  assert.equal((await second.lookup('en', 'children'))[0].word, 'child')
+  assert.equal(
+    await hashes(),
+    2,
+    'unchanged files are not rehashed after restart',
+  )
+  const path = join(ctx.root, 'en', 'data.jsonl')
+  const bytes = await readFile(path)
+  bytes[0] ^= 1
+  await writeFile(path, bytes)
+  await assert.rejects(second.lookup('en', 'children'), /checksum/)
+  assert.equal(
+    await hashes(),
+    3,
+    'same-size changed file is reverified even in a warm store',
+  )
+})
+
 test('installed languages share one cached list, invalidated after install and uninstall', async (t) => {
   const { store } = await setup(t)
   const lists = t.mock.method(store, 'list')
@@ -224,6 +294,7 @@ test('offline lookups keep working during another pack download, blocked convers
       contents: `
         import { parentPort } from 'node:worker_threads'
         import { PackIndex } from ${JSON.stringify(fileURLToPath(new URL('../src/addons/dictionary/pack-index.ts', import.meta.url)))}
+        import { verifyPack } from ${JSON.stringify(fileURLToPath(new URL('../src/addons/dictionary/pack-verification.ts', import.meta.url)))}
         const index = new PackIndex()
         let queue = Promise.resolve()
         parentPort.on('message', job => {
@@ -234,7 +305,9 @@ test('offline lookups keep working during another pack download, blocked convers
             }
             const result = job.type === 'unload'
               ? await index.unload(job.id)
-              : await index.lookup(job.id, job.directory, job.word)
+              : job.type === 'verify'
+                ? await verifyPack(job.directory, job.manifest)
+                : await index.lookup(job.id, job.directory, job.word)
             parentPort.postMessage({ seq: job.seq, result })
           })
         })

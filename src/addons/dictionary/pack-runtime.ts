@@ -1,6 +1,7 @@
 import { Worker } from 'node:worker_threads'
 import type { PackEntry } from './pack-converters'
 import { type PackId, type PackStats, validateId } from './pack-index'
+import type { PackManifest } from './packs'
 
 export function completionLimit(value: unknown = 8): number {
   if (
@@ -95,9 +96,14 @@ export class PackWorker {
     progress?: ((entries: number) => void) | undefined,
   ): Promise<T> {
     if (
-      !['unload', 'convert', 'lookup', 'preload', 'complete'].includes(
-        job.type as string,
-      )
+      ![
+        'unload',
+        'convert',
+        'verify',
+        'lookup',
+        'preload',
+        'complete',
+      ].includes(job.type as string)
     )
       throw new Error('Invalid dictionary operation')
     if (job.type === 'complete') {
@@ -183,6 +189,9 @@ export class PackWorker {
   }
   lookup(id: PackId, directory: string, word: string): Promise<PackEntry[]> {
     return this.request({ type: 'lookup', id, directory, word })
+  }
+  verify(id: PackId, directory: string, manifest: PackManifest): Promise<void> {
+    return this.request({ type: 'verify', id, directory, manifest })
   }
   preload(id: PackId, directory: string): Promise<void> {
     return this.request({ type: 'preload', id, directory })

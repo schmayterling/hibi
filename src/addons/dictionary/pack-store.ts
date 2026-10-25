@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto'
-import { createReadStream } from 'node:fs'
 import {
   lstat,
   mkdir,
@@ -17,6 +15,7 @@ import {
   completionPrefix,
   PackWorker,
 } from './pack-runtime.ts'
+import { packStamp } from './pack-verification.ts'
 import {
   type PackId,
   type PackManifest,
@@ -76,20 +75,6 @@ async function manifestAt(path: string, id: PackId) {
     JSON.parse(await readFile(join(path, 'manifest.json'), 'utf8')),
     id,
   )
-}
-async function verifyFile(
-  path: string,
-  expected: { bytes: number; sha256: string },
-) {
-  const info = await regularFile(path, expected.bytes)
-  if (info.size !== expected.bytes)
-    throw new Error('This dictionary pack is incomplete. Install it again.')
-  const hash = createHash('sha256')
-  for await (const chunk of createReadStream(path)) hash.update(chunk)
-  if (hash.digest('hex') !== expected.sha256)
-    throw new Error(
-      'This dictionary pack failed its checksum. Install it again.',
-    )
 }
 
 /** Main owns downloads; lookup and short-lived conversion workers stay independent. */
@@ -491,16 +476,15 @@ export class PackStore {
       if (!(await exists(path))) return empty
       const manifest = await manifestAt(path, id)
       if (changed()) return empty
+      const stamp = await packStamp(path, manifest)
+      if (changed()) return empty
       let verification = this.verified.get(id)
       if (
-        verification?.stamp !== manifest.installedAt ||
+        verification?.stamp !== stamp ||
         verification.generation !== generation
       ) {
-        const pending = (async () => {
-          await verifyFile(join(path, 'data.jsonl'), manifest.data)
-          await verifyFile(join(path, 'index.json'), manifest.index)
-        })()
-        verification = { stamp: manifest.installedAt, generation, pending }
+        const pending = this.worker.verify(id, path, manifest)
+        verification = { stamp, generation, pending }
         const current = verification
         this.verified.set(id, current)
         void pending.catch(() => {

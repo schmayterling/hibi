@@ -206,11 +206,45 @@ test('pack dialog install, offline definition, profile restart, path rejection a
   )
   await page.keyboard.press('Escape')
   await definition.waitFor({ state: 'detached' })
+  await page.evaluate(() => window.hibi.setAddonEnabled('dictionary', false))
   await app.close()
   app = undefined
   launched = await launch(profile)
   app = launched.app
   page = launched.page
+  await app.evaluate(async ({ ipcMain }) => {
+    globalThis.dictionaryStartupQueries = []
+    globalThis.dictionaryPayloadReads = 0
+    const handler = ipcMain._invokeHandlers.get('addons:query')
+    ipcMain.removeHandler('addons:query')
+    ipcMain.handle('addons:query', (event, id, method, input) => {
+      if (id === 'dictionary') globalThis.dictionaryStartupQueries.push(method)
+      return handler(event, id, method, input)
+    })
+    const fs = (await import('node:fs')).default
+    const stream = fs.createReadStream
+    fs.createReadStream = (path, ...args) => {
+      if (/dictionary-packs.*(?:data.jsonl|index.json)$/.test(String(path)))
+        globalThis.dictionaryPayloadReads++
+      return stream(path, ...args)
+    }
+    const { syncBuiltinESMExports } = await import('node:module')
+    syncBuiltinESMExports()
+  })
+  await page.evaluate(() => window.hibi.setAddonEnabled('dictionary', true))
+  await waitForAsync(page, () =>
+    performance
+      .getEntriesByName('hibi:addon:dictionary', 'measure')
+      .some((entry) => entry.detail.status === 'ready'),
+  )
+  assert.deepEqual(
+    await app.evaluate(() => ({
+      queries: globalThis.dictionaryStartupQueries,
+      reads: globalThis.dictionaryPayloadReads,
+    })),
+    { queries: [], reads: 0 },
+    'dictionary activation reads no pack payloads',
+  )
   await waitForPack(page, 'installed')
   assert.deepEqual(await lookup(page), entries)
   assert.deepEqual(

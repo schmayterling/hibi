@@ -6224,16 +6224,17 @@
     "src/addons/mermaid/render.ts"
   ],
   "e0642a812b2e": [
-    "src/addons/dictionary/pack-store.ts"
+    "src/addons/dictionary/pack-verification.ts"
   ],
   "4aca8915ed3c": [
     "src/addons/dictionary/packs.ts"
   ],
   "794c92bbef64": [
-    "src/addons/dictionary/pack-store.ts"
+    "src/addons/dictionary/pack-store.ts",
+    "src/addons/dictionary/pack-verification.ts"
   ],
   "3f08b04c75dd": [
-    "src/addons/dictionary/pack-store.ts"
+    "src/addons/dictionary/pack-verification.ts"
   ],
   "f70a180e8466": [
     "src/shared/imports.ts"

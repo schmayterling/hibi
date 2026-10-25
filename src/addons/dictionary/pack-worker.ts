@@ -2,6 +2,8 @@ import { parentPort } from 'node:worker_threads'
 import { convertEntries } from './pack-converters'
 import { type PackId, PackIndex, validateId, writePack } from './pack-index'
 import { completionLimit, completionPrefix } from './pack-runtime'
+import { verifyPack } from './pack-verification'
+import { validateManifest } from './packs'
 
 const port = parentPort
 if (!port) throw new Error('Dictionary worker requires parent port')
@@ -18,6 +20,7 @@ port.on(
     word: string
     prefix: string
     limit?: number
+    manifest?: unknown
   }) => {
     queue = queue.then(async () => {
       try {
@@ -48,6 +51,12 @@ port.on(
               job.directory,
               (entries) =>
                 port.postMessage({ seq: job.seq, progress: entries }),
+            )
+          } else if (job.type === 'verify') {
+            await index.unload(job.id)
+            await verifyPack(
+              job.directory,
+              validateManifest(job.manifest, job.id),
             )
           } else if (job.type === 'lookup') {
             if (typeof job.word !== 'string' || job.word.length > 256)

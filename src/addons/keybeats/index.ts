@@ -4,6 +4,7 @@ import manifest from './manifest'
 
 let generation = 0
 let stop: (() => void) | undefined
+let idle: number | undefined
 export default defineAddon({
   manifest,
   Settings: lazy(() =>
@@ -11,21 +12,32 @@ export default defineAddon({
   ),
   start(context) {
     const run = ++generation
-    // Warm Chromium's audio service asynchronously; a cold AudioContext can
-    // synchronously block editing while it queries the output device.
-    void navigator.mediaDevices
-      .enumerateDevices()
-      .catch(() => undefined)
-      .then(() => (run === generation ? import('./engine') : undefined))
+    const failed = () => {
+      if (run === generation) context.notify('Could not load keyBeats.')
+    }
+    void import('./engine')
       .then((module) => {
-        if (module && run === generation) stop = module.startKeybeats(context)
+        if (run !== generation) return
+        // Cold output-device initialization must stay off the input callback.
+        idle = requestIdleCallback(
+          () => {
+            idle = undefined
+            if (run !== generation) return
+            try {
+              stop = module.startKeybeats(context)
+            } catch {
+              failed()
+            }
+          },
+          { timeout: 1000 },
+        )
       })
-      .catch(() => {
-        if (run === generation) context.notify('Could not load keyBeats.')
-      })
+      .catch(failed)
   },
   stop() {
     generation++
+    if (idle !== undefined) cancelIdleCallback(idle)
+    idle = undefined
     stop?.()
     stop = undefined
   },

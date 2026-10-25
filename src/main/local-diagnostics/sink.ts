@@ -70,6 +70,7 @@ export class LocalDiagnosticSink {
   readonly profile: DiagnosticProfile
   private readonly fs: typeof filesystem
   private readonly identity: DiagnosticIdentity
+  private readonly onFailure: (() => void) | undefined
   private readonly run = randomUUID()
   private readonly queue: DiagnosticQueue
   private directory = ''
@@ -92,9 +93,11 @@ export class LocalDiagnosticSink {
     profile: DiagnosticProfile
     identity: DiagnosticIdentity
     filesystem?: typeof filesystem
+    onFailure?: () => void
   }) {
     this.profile = options.profile
     this.identity = diagnosticIdentity(options.identity)
+    this.onFailure = options.onFailure
     this.fs = options.filesystem ?? filesystem
     this.queue = new DiagnosticQueue(this.profile, 'main')
     this.ready = this.initialize(options.userData).catch(() => this.fail())
@@ -345,7 +348,11 @@ export class LocalDiagnosticSink {
     this.segmentSize = header.length
   }
 
-  private async renameSmall(name: string, maximum: number) {
+  private async renameSmall(
+    name: string,
+    maximum: number,
+    signal?: AbortSignal,
+  ) {
     const verify = async () => {
       const staged = await this.openOwned(
         'incident-next.txt',
@@ -369,6 +376,7 @@ export class LocalDiagnosticSink {
           join(this.directory, name),
         ),
       verify,
+      signal,
     )
   }
 
@@ -490,6 +498,11 @@ export class LocalDiagnosticSink {
 
   private async fail() {
     this.state = 'failed'
+    try {
+      this.onFailure?.()
+    } catch {
+      /* Observers cannot interrupt sink retirement. */
+    }
     this.failures = incrementDiagnosticCount(this.failures)
     if (this.timer) clearTimeout(this.timer)
     this.timer = undefined
@@ -511,23 +524,23 @@ export class LocalDiagnosticSink {
     }
   }
 
-  // Called only after final, non-cancelable shutdown confirmation. Best effort:
-  // the runtime may exit before this async write completes, leaving "active".
-  finish(): Promise<void> {
-    this.ending ??= this.closeCleanly()
+  // Called after final shutdown confirmation. An expired finish must not commit
+  // a clean marker if pending diagnostic I/O later resumes.
+  finish(signal?: AbortSignal): Promise<void> {
+    this.ending ??= this.closeCleanly(signal)
     return this.ending
   }
 
-  private async closeCleanly() {
+  private async closeCleanly(signal?: AbortSignal) {
     await this.ready
-    if (this.state !== 'ready') return
+    if (this.state !== 'ready' || signal?.aborted) return
     this.store({
       code: 'RUN_ENDED',
       stackStatus: 'unavailable',
       role: 'main',
     })
     await this.flush()
-    if (this.state !== 'ready') return
+    if (this.state !== 'ready' || signal?.aborted) return
     try {
       const handle = this.handle
       this.handle = null
@@ -538,7 +551,11 @@ export class LocalDiagnosticSink {
         diagnosticLimits.summaryBytes,
         diagnosticLimits.markerBytes,
       )
-      await this.renameSmall('run-state.txt', diagnosticLimits.markerBytes)
+      await this.renameSmall(
+        'run-state.txt',
+        diagnosticLimits.markerBytes,
+        signal,
+      )
     } catch {
       await this.fail()
       return

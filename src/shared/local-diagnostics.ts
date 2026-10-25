@@ -58,6 +58,7 @@ export const diagnosticEvents = {
     critical: false,
   },
   WINDOW_RESPONSIVE: { severity: 'info', producer: false, critical: false },
+  MAIN_LOOP_STALLED: { severity: 'warning', producer: false, critical: false },
   SOURCE_WORKER_FAILED: { severity: 'error', producer: true, critical: false },
   WORD_COUNT_WORKER_FAILED: {
     severity: 'error',
@@ -129,6 +130,7 @@ const safeErrorCodes = [
   'ETIMEDOUT',
 ] as const
 type SafeErrorCode = (typeof safeErrorCodes)[number]
+const stallDurationBuckets = ['1-5s', '5-15s', '15-60s', '60s+'] as const
 export type SafeDiagnostic = Readonly<{
   code: DiagnosticCode
   stackStatus: StackStatus
@@ -138,6 +140,7 @@ export type SafeDiagnostic = Readonly<{
   role?: (typeof diagnosticRoles)[number]
   reason?: (typeof processReasons)[number]
   exitCode?: number
+  durationBucket?: (typeof stallDurationBuckets)[number]
   time?: number
 }>
 export type ArtifactCatalog = ReadonlyMap<string, number>
@@ -212,7 +215,7 @@ export function decodeDiagnostic(
     if (!data || typeof data !== 'object' || Array.isArray(data)) return null
     const keys = Object.keys(data)
     if (
-      keys.length > 9 ||
+      keys.length > 10 ||
       keys.some(
         (key) =>
           ![
@@ -224,6 +227,7 @@ export function decodeDiagnostic(
             'role',
             'reason',
             'exitCode',
+            'durationBucket',
             'time',
           ].includes(key),
       )
@@ -254,6 +258,12 @@ export function decodeDiagnostic(
       return null
     const code: unknown = data.code
     if (!diagnosticCode(code) || (producer && !diagnosticEvents[code].producer))
+      return null
+    if (
+      data.durationBucket !== undefined &&
+      (code !== 'MAIN_LOOP_STALLED' ||
+        !stallDurationBuckets.includes(data.durationBucket))
+    )
       return null
     if (!stackStatuses.includes(data.stackStatus)) return null
     if (

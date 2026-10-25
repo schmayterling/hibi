@@ -55,6 +55,44 @@ const encode = (extra = {}) =>
   })
 
 for (const profile of ['release', 'debug']) {
+  test(`${profile}: main-loop stall records use bounded host-only duration buckets`, () => {
+    for (const durationBucket of ['1-5s', '5-15s', '15-60s', '60s+']) {
+      const wire = encode({
+        code: 'MAIN_LOOP_STALLED',
+        role: 'main',
+        durationBucket,
+        time: 123,
+      })
+      assert.equal(
+        decodeDiagnostic(wire, profile)?.durationBucket,
+        durationBucket,
+      )
+      assert.equal(decodeDiagnostic(wire, profile, true), null)
+    }
+    for (const durationBucket of [secret, 1000, null, {}, '0-1s'])
+      assert.equal(
+        decodeDiagnostic(
+          encode({ code: 'MAIN_LOOP_STALLED', durationBucket }),
+          profile,
+        ),
+        null,
+      )
+    assert.equal(
+      decodeDiagnostic(encode({ durationBucket: '1-5s' }), profile),
+      null,
+    )
+  })
+
+  test(`${profile}: main-loop stalls admit at most one record per minute during a storm`, () => {
+    const admission = new DiagnosticAdmission(profile)
+    assert.ok(admission.admit('MAIN_LOOP_STALLED', 1))
+    for (let now = 1001; now < 60001; now += 1000)
+      assert.equal(admission.admit('MAIN_LOOP_STALLED', now), false)
+    assert.equal(admission.takeDropped(), 59)
+    assert.ok(admission.admit('MAIN_LOOP_STALLED', 60001))
+    assert.ok(admission.admit('MAIN_EXCEPTION', 60001))
+  })
+
   test(`${profile}: canonical number expansion cannot exceed queue byte caps`, () => {
     for (let count = 1; count <= diagnosticPolicies[profile].frames; count++) {
       const queue = new DiagnosticQueue(profile, 'main')

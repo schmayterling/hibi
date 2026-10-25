@@ -440,11 +440,12 @@ export function useFormattingToolbar(
     [toasts],
   )
   const refresh = useRef(() => {})
+  const scheduleRefresh = useRef(() => {})
   const attachSource = useCallback(
     (value: SourceFormatting | null) => {
       const initial = !source.current
       source.current = value
-      refresh.current()
+      scheduleRefresh.current()
       if (initial && latest.current.mode === 'markdown' && focusOwnedByEditor())
         value?.focus()
     },
@@ -592,9 +593,11 @@ export function useFormattingToolbar(
       if (frame) return
       frame = requestAnimationFrame(() => afterPaint.port2.postMessage(null))
     }
+    scheduleRefresh.current = update
     editor?.on('transaction', update)
     update()
     return () => {
+      scheduleRefresh.current = () => {}
       cancelAnimationFrame(frame)
       afterPaint.port1.close()
       editor?.off('transaction', update)

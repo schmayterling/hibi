@@ -502,6 +502,7 @@ if (process.isMainFrame) {
       ),
     queryWorkspaceReferences: (request) =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.queryReferences, request),
+    cancelWorkspaceImport: () => ipcRenderer.invoke(IMPORT_CHANNELS.cancel),
     listImporters: () => ipcRenderer.invoke(IMPORT_CHANNELS.list),
     importIntoWorkspace: (request) =>
       ipcRenderer.invoke(IMPORT_CHANNELS.run, request),

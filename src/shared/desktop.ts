@@ -37,7 +37,6 @@ export const DOCUMENT_CHANNELS = {
   requestRemote: 'document:request-remote',
 } as const
 
-export const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 export type DocumentState = {
   /** Stable window-local tab identity, including across save and rename. */
   tabId: string

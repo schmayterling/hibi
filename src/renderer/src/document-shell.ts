@@ -89,12 +89,22 @@ export function subscribeDocumentShell(
   })
 }
 
+/** An opening policy, not a content ceiling: larger notes remain fully editable in source view. */
+export function preferSourceOpening(
+  runtime: Pick<DocumentRuntime, 'sourceFor'>,
+  document: DocumentState | null,
+) {
+  return (
+    !!document && (runtime.sourceFor(document)?.utf16Length ?? 0) > 256 * 1024
+  )
+}
+
 /** Shell and pane renders share one full footnote lex per immutable source. */
 export function hasDocumentFootnotes(
   runtime: Pick<DocumentRuntime, 'sourceFor'>,
   document: DocumentState | null,
 ) {
-  if (!document) return false
+  if (!document || preferSourceOpening(runtime, document)) return false
   const source = runtime.sourceFor(document)
   let found = source && footnoteSources.get(source)
   if (found === undefined) {

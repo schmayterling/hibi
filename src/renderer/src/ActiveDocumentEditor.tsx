@@ -4,7 +4,11 @@ import type { ViewId } from '../../shared/foundation-contracts'
 import { needsOwnedSource } from '../../shared/preservation'
 import { addonRegistry } from './addon-registry'
 import { documentRuntime } from './document-runtime'
-import { afterDocumentQuiet, editorDocumentUpdates } from './document-shell'
+import {
+  afterDocumentQuiet,
+  editorDocumentUpdates,
+  preferSourceOpening,
+} from './document-shell'
 import type { MarkdownEditor } from './Editor'
 import { type FlavorChoice, flavorMatches } from './flavors'
 import { projectMarkdown } from './markdown-projection'
@@ -116,15 +120,18 @@ export function ActiveDocumentEditor({
     current.revision === props.document.revision
       ? current
       : props.document
-  const source = markdown ? document.markdown : ''
+  const deferredSource =
+    markdown && preferSourceOpening(documentRuntime, document)
+  const source = markdown && !deferredSource ? document.markdown : ''
   const unsupported = useMemo(() => {
-    if (!markdown) return false
+    if (!markdown || deferredSource) return false
     if (needsOwnedSource(source, manifests, enabledAddons)) return true
     if (!protectionFlavors.length) return false
     const body = projectMarkdown(source, props.markdownExtensions).content
     return protectionFlavors.some((flavor) => flavorMatches(flavor, body))
   }, [
     markdown,
+    deferredSource,
     source,
     manifests,
     enabledAddons,
@@ -132,7 +139,7 @@ export function ActiveDocumentEditor({
     props.markdownExtensions,
   ])
   useEffect(() => {
-    if (!markdown) return
+    if (!markdown || deferredSource) return
     // Display-only flavor detection can wait for typing to pause.
     return afterDocumentQuiet(
       documentRuntime,
@@ -157,6 +164,7 @@ export function ActiveDocumentEditor({
     )
   }, [
     markdown,
+    deferredSource,
     document,
     source,
     props.markdownExtensions,
@@ -172,6 +180,29 @@ export function ActiveDocumentEditor({
       {...(viewId ? { viewId } : {})}
       document={document}
       value={source}
+      mode={deferredSource ? 'markdown' : props.mode}
+      largePreview={markdown && deferredSource && props.mode !== 'markdown'}
+      previewSupported={
+        certifiedVisual &&
+        chosenFlavors.every(
+          (flavor) =>
+            [
+              'markdown.github',
+              'markdown.obsidian',
+              'github-markdown.github',
+              'text-extras.text-extras',
+              'math.latex',
+            ].includes(flavor.id) &&
+            knownFlavors.some(
+              (known) =>
+                known.id === flavor.id &&
+                addonRegistry.origin(known.addonId) === 'built-in',
+            ),
+        ) &&
+        props.markdownExtensions.every(
+          ({ id }) => id === 'frontmatter.metadata',
+        )
+      }
     />
   )
 }

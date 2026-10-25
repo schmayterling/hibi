@@ -3,6 +3,7 @@ import type {
   DocumentTarget,
   VersionedDocumentTarget,
 } from './foundation-contracts'
+import type { SourceSnapshot } from './source-buffer.ts'
 import { exceedsUtf8Limit } from './text-size.ts'
 
 /** UTF-16 offsets in the complete, unprojected document source. */
@@ -151,24 +152,27 @@ export function sourceEditMatches(
   )
 }
 
-/** Validate exact ranges before an editor transaction is created. */
-export function editedSource(
-  source: string,
+/** Validate only requested ranges; snapshots never need whole-source materialization. */
+export function validateSourceEdits(
+  source: string | SourceSnapshot,
   changes: readonly SourceEdit[],
-  maximumBytes: number,
-) {
-  const splitsSurrogate = (position: number) =>
-    /[\uD800-\uDBFF]/.test(source.charAt(position - 1)) &&
-    /[\uDC00-\uDFFF]/.test(source.charAt(position))
+): boolean {
+  const read = (from: number, to: number) =>
+    typeof source === 'string'
+      ? source.slice(from, to)
+      : source.sliceRaw(from, to)
+  const length = typeof source === 'string' ? source.length : source.utf16Length
+  const boundary = (position: number) =>
+    typeof source === 'string'
+      ? !(
+          /[\uD800-\uDBFF]/.test(source.charAt(position - 1)) &&
+          /[\uDC00-\uDFFF]/.test(source.charAt(position))
+        )
+      : source.isEditBoundary(position)
   let previous: SourceEdit | undefined
-  const parts: string[] = []
-  let end = 0
+  let changed = false
   for (const change of changes) {
-    if (
-      change.to > source.length ||
-      splitsSurrogate(change.from) ||
-      splitsSurrogate(change.to)
-    )
+    if (change.to > length || !boundary(change.from) || !boundary(change.to))
       throw new Error(
         'The edit range is outside the text or splits a Unicode character.',
       )
@@ -179,15 +183,30 @@ export function editedSource(
           (change.from === change.to || previous.from === previous.to)))
     )
       throw new Error('Edit ranges overlap or share an insertion boundary.')
-    if (source.slice(change.from, change.to) !== change.expectedText)
+    if (read(change.from, change.to) !== change.expectedText)
       throw new Error('The text at the edit range has changed.')
+    changed ||= change.insert !== change.expectedText
+    previous = change
+  }
+  return changed
+}
+
+/** Legacy whole-source transforms can retain an explicit byte override. */
+export function editedSource(
+  source: string,
+  changes: readonly SourceEdit[],
+  maximumBytes?: number,
+) {
+  validateSourceEdits(source, changes)
+  const parts: string[] = []
+  let end = 0
+  for (const change of changes) {
     parts.push(source.slice(end, change.from), change.insert)
     end = change.to
-    previous = change
   }
   parts.push(source.slice(end))
   const result = parts.join('')
-  if (exceedsUtf8Limit(result, maximumBytes))
+  if (maximumBytes !== undefined && exceedsUtf8Limit(result, maximumBytes))
     throw new Error('The edited document exceeds its size limit.')
   return result
 }

@@ -2478,6 +2478,12 @@
     "src/renderer/src/Editor.tsx",
     "src/renderer/src/FormatEditor.tsx"
   ],
+  "4bf40e194a49": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
+  ],
+  "f613e96f398e": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
+  ],
   "f1c65e14817e": [
     "src/main/index.ts"
   ],
@@ -3679,6 +3685,9 @@
   "115967f77ac6": [
     "src/renderer/src/FindBar.tsx"
   ],
+  "bb33bf08a10d": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
+  ],
   "1ef9522a9a8a": [
     "src/main/index.ts",
     "src/shared/hotkeys.ts"
@@ -4106,6 +4115,9 @@
   "f5cc17a5ad18": [
     "src/addons/graph/Canvas.tsx"
   ],
+  "1d204cfab031": [
+    "src/renderer/src/main.tsx"
+  ],
   "1f1d592bdd1a": [
     "src/main/index.ts"
   ],
@@ -4268,6 +4280,9 @@
   "6d031af10da7": [
     "src/renderer/src/NotificationSettings.tsx"
   ],
+  "983826d83b6d": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
+  ],
   "a54e09e55035": [
     "src/addons/dictionary/PackSettings.tsx"
   ],
@@ -4329,6 +4344,9 @@
   ],
   "a1ac3c3a93fa": [
     "src/renderer/src/FindBar.tsx"
+  ],
+  "84480cf303d2": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
   ],
   "c88d5e7ec3a8": [
     "src/main/index.ts",
@@ -5205,6 +5223,9 @@
   "bb4430a2cffb": [
     "src/shared/source-buffer.ts"
   ],
+  "fc537eec08e6": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
+  ],
   "f45809bdd48a": [
     "src/shared/source-buffer.ts"
   ],
@@ -5785,7 +5806,7 @@
   "8c6ee6bc52e4": [
     "src/addons/documentation/native.ts"
   ],
-  "6d78247b2a33": [
+  "92ca4db1aa24": [
     "src/main/links.ts"
   ],
   "974b4f94f221": [
@@ -5971,6 +5992,9 @@
   "bee50784d023": [
     "src/renderer/src/document-target-edits.ts",
     "src/shared/document-edits.ts"
+  ],
+  "bfffe147f4f5": [
+    "src/main/workspace-files.ts"
   ],
   "6aa88449912f": [
     "src/shared/addon-manifest.ts"
@@ -6295,9 +6319,6 @@
   "f3baf23e2a31": [
     "src/main/addon-documentation.ts"
   ],
-  "28d14c9029bb": [
-    "src/renderer/src/main.tsx"
-  ],
   "4396b1d0a374": [
     "src/renderer/src/Editor.tsx"
   ],
@@ -6403,6 +6424,9 @@
   "557e75befd2a": [
     "src/renderer/src/WorkspacesSidebar.tsx"
   ],
+  "e94cf57dc0b9": [
+    "src/renderer/src/main.tsx"
+  ],
   "726915b074e5": [
     "src/main/addon-trust-crypto.ts"
   ],
@@ -6418,11 +6442,17 @@
   "dd8dcbe75100": [
     "src/main/document.ts"
   ],
+  "c70bc0cdd914": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
+  ],
   "a8509d324773": [
     "src/main/workspace-paths.ts"
   ],
   "7026bfea8279": [
     "src/main/workspace-files.ts"
+  ],
+  "5311471f72b4": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
   ],
   "5089081cf601": [
     "src/renderer/src/document-edits.ts"

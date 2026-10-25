@@ -4,7 +4,9 @@ import {
   editedSource,
   parseSourceEditRequest,
   sourceEditMatches,
+  validateSourceEdits,
 } from '../src/shared/document-edits.ts'
+import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const request = (changes) => ({
   requestId: 'review:1',
@@ -73,4 +75,54 @@ test('source edits validate exact ranges, order, Unicode boundaries, and UTF-8 l
     editedSource('ab', [edit(0, 1, 'x', 'a'), edit(1, 2, 'y', 'b')], 2),
     'xy',
   )
+})
+
+test('whole source edits have no default content ceiling and retain explicit byte bounds', () => {
+  const source = 'é'.repeat(2 * 1024 * 1024)
+  const changes = [edit(0, 1, '中', 'é')]
+  assert.equal(editedSource(source, changes), '中' + source.slice(1))
+  assert.throws(
+    () => editedSource(source, changes, 2 * 1024 * 1024),
+    /size limit/,
+  )
+})
+
+test('range validation on 50 mib reads only exact changed spans and unicode boundaries', () => {
+  const store = new SourceStore('a'.repeat(50 * 1024 * 1024), {
+    tabId: 'large',
+    revision: 0,
+  })
+  const source = store.snapshot()
+  store.counters(true)
+  assert.equal(
+    validateSourceEdits(source, [
+      edit(0, 1, 'b', 'a'),
+      edit(source.utf16Length - 1, source.utf16Length, 'c', 'a'),
+    ]),
+    true,
+  )
+  assert.equal(validateSourceEdits(source, [edit(0, 1, 'a', 'a')]), false)
+  assert.throws(
+    () => validateSourceEdits(source, [edit(0, 1, 'b', 'wrong')]),
+    /has changed/,
+  )
+  assert.throws(
+    () =>
+      validateSourceEdits(source, [edit(0, 1, 'b', 'a'), edit(0, 1, 'c', 'a')]),
+    /overlap/,
+  )
+  assert.ok(
+    store.counters().sourceUnitsRead < 128,
+    JSON.stringify(store.counters()),
+  )
+  assert.equal(store.counters().materializations, 0)
+  const unicode = new SourceStore('😀\r\nend', {
+    tabId: 'unicode',
+    revision: 0,
+  }).snapshot()
+  for (const from of [1, 3])
+    assert.throws(
+      () => validateSourceEdits(unicode, [edit(from, from, 'x')]),
+      /splits/,
+    )
 })

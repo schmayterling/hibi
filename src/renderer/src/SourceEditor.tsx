@@ -63,12 +63,12 @@ import {
   sourceProseAllowed,
   type TypingContext,
 } from '../../shared/completions'
-import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop'
+import type { DocumentState } from '../../shared/desktop'
 import {
-  editedSource,
   type SourceEditRequest,
   type SourceEditResult,
   sourceEditMatches,
+  validateSourceEdits,
 } from '../../shared/document-edits'
 import type { MarkdownReferenceSyntax } from '../../shared/document-worker-protocol'
 import {
@@ -80,10 +80,7 @@ import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
 import { markdownLink } from '../../shared/markdown-link'
 import { wikiHref } from '../../shared/note-links'
 import type { RawEdit } from '../../shared/source-operations'
-import {
-  editorChangesFromSource,
-  normalizedSource as normalizeSource,
-} from '../../shared/source-projection'
+import { editorChangesFromSource } from '../../shared/source-projection'
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
 import { codeHighlighter, codeLanguages } from './code-languages'
@@ -1471,27 +1468,21 @@ export function SourceEditor({
           status: 'stale',
           message: 'The editor is synchronizing. Review the edits again.',
         }
-      let expected: string
+      let changes: readonly RawEdit[]
       try {
-        const source = snapshot.materialize()
-        expected = editedSource(source, request.changes, MAX_DOCUMENT_BYTES)
-        if (expected === source)
+        if (!validateSourceEdits(snapshot, request.changes))
           return { status: 'applied', contentVersion: current.contentVersion }
+        changes = editorChangesFromSource(snapshot, request.changes)
       } catch (error) {
         return { status: 'invalid', message: String(error) }
       }
-      if (normalizeSource(expected) === editor.state.doc.toString())
+      if (!changes.length)
         return {
           status: 'invalid',
           message:
             'Edits must keep line-ending pairs intact. Use a whole-source transform to change only line endings.',
         }
-      let changes: readonly RawEdit[]
-      try {
-        changes = editorChangesFromSource(snapshot, request.changes)
-      } catch (error) {
-        return { status: 'invalid', message: String(error) }
-      }
+      const expected = editor.state.changes(changes)
       const transaction = editor.state.update({
         changes,
         annotations: [
@@ -1499,7 +1490,10 @@ export function SourceEditor({
           Transaction.userEvent.of('input.addon'),
         ],
       })
-      if (transaction.newDoc.toString() !== normalizeSource(expected))
+      if (
+        JSON.stringify(transaction.changes.toJSON()) !==
+        JSON.stringify(expected.toJSON())
+      )
         return {
           status: 'invalid',
           message: 'An editor extension changed this edit.',

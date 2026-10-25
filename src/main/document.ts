@@ -25,7 +25,6 @@ import type {
   DocumentState,
   DocumentTab,
 } from '../shared/desktop'
-import { MAX_DOCUMENT_BYTES } from '../shared/desktop'
 import type { DocumentSaveResult } from '../shared/document-edits'
 import { HISTORY_CHANNELS } from '../shared/history'
 import { type SourceSnapshot, SourceStore } from '../shared/source-buffer'
@@ -81,9 +80,7 @@ function releaseMaintenance() {
 }
 function makeSource(text: string, tabId = activeTab, version = 0) {
   releaseMaintenance()
-  const store = new SourceStore(text, { tabId, revision }, version, {
-    maximumBytes: MAX_DOCUMENT_BYTES,
-  })
+  const store = new SourceStore(text, { tabId, revision }, version)
   materialized.set(store.snapshot(), text)
   return store
 }
@@ -92,7 +89,6 @@ async function readSource(file: string, tabId = activeTab, version = 0) {
     readMarkdownChunks(file),
     { tabId, revision },
     version,
-    { maximumBytes: MAX_DOCUMENT_BYTES },
   )
 }
 async function sameSource(a: SourceSnapshot, b: SourceSnapshot) {
@@ -949,7 +945,11 @@ export function restoreDocument(
 }
 
 export async function confirmDiscard(window: BrowserWindow): Promise<boolean> {
-  if (textOf(source.snapshot()) === textOf(saved) && !pendingPath) return true
+  if (
+    !pendingPath &&
+    (!dirty(source, saved) || (await sameSource(source.snapshot(), saved)))
+  )
+    return true
   const result = await runFileDialog(() =>
     dialog.showMessageBox(window, {
       type: 'warning',
@@ -964,7 +964,7 @@ export async function confirmDiscard(window: BrowserWindow): Promise<boolean> {
   if (result.response === 1) return true
   return (
     Boolean(await saveDocument(window)) &&
-    textOf(source.snapshot()) === textOf(saved)
+    (await sameSource(source.snapshot(), saved))
   )
 }
 

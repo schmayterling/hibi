@@ -1,8 +1,4 @@
-import {
-  type DocumentFocus,
-  type DocumentState,
-  MAX_DOCUMENT_BYTES,
-} from '../../shared/desktop.ts'
+import type { DocumentFocus, DocumentState } from '../../shared/desktop.ts'
 import { sourceChange } from '../../shared/document-journal.ts'
 import { DocumentSession } from '../../shared/document-session.ts'
 import type {
@@ -452,7 +448,6 @@ export class DocumentRuntime {
             ...this.#options,
             historyBytes: Math.min(8 * 1024 * 1024, this.#historyLimits.bytes),
             historyGroups: Math.min(128, this.#historyLimits.groups),
-            maximumBytes: MAX_DOCUMENT_BYTES,
           },
         )
         this.#sessions.set(document.tabId, session)

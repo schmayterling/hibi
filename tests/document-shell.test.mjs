@@ -5,6 +5,8 @@ import {
   afterDocumentQuiet,
   certifyVisualEcho,
   editorDocumentUpdates,
+  hasDocumentFootnotes,
+  preferSourceOpening,
   sameDocumentShell,
   subscribeDocumentShell,
 } from '../src/renderer/src/document-shell.ts'
@@ -315,4 +317,41 @@ test('visual configuration opt-out, unproved edits, undo and save remain immedia
   assert.equal(notifications, 5)
   stop()
   runtime.dispose()
+})
+
+test('large source opening policy reads only snapshot metrics and leaves small notes unchanged', () => {
+  const state = document()
+  Object.defineProperty(state, 'markdown', {
+    get() {
+      throw new Error('opening policy must not read whole source')
+    },
+  })
+  for (const units of [
+    0,
+    16384,
+    256 * 1024,
+    256 * 1024 + 1,
+    50 * 1024 * 1024,
+  ]) {
+    const runtime = {
+      sourceFor: (value) => {
+        assert.equal(value, state)
+        return { utf16Length: units }
+      },
+    }
+    assert.equal(preferSourceOpening(runtime, state), units > 256 * 1024)
+    if (units > 256 * 1024)
+      assert.equal(hasDocumentFootnotes(runtime, state), false)
+  }
+  assert.equal(
+    preferSourceOpening(
+      {
+        sourceFor() {
+          throw new Error('no document')
+        },
+      },
+      null,
+    ),
+    false,
+  )
 })

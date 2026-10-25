@@ -219,51 +219,64 @@ export function TooltipHost() {
         validate()
       })
     }
-    // Attributes of the anchor, its siblings, and its ancestors can hide or move it.
-    const attributes = new MutationObserver((records) => {
+    // Composed ancestry continues from shadow roots to their hosts, which also hide shadow content.
+    const ancestry: ParentNode[] = []
+    for (
+      let node = anchor.parentNode;
+      node;
+      node = node instanceof ShadowRoot ? node.host : node.parentNode
+    )
+      ancestry.push(node)
+    const reparented = () => {
+      let node = anchor.parentNode
+      for (const ancestor of ancestry) {
+        if (node !== ancestor) return true
+        node = node instanceof ShadowRoot ? node.host : node.parentNode
+      }
+      return node !== null
+    }
+    // Visibility attributes on the anchor or an ancestor dismiss help at once.
+    const visibility = new MutationObserver((records) => {
       if (
-        records.some(
-          (record) =>
-            [
-              'hidden',
-              'inert',
-              'style',
-              'class',
-              'open',
-              'aria-hidden',
-              'data-tooltip',
-            ].includes(record.attributeName ?? '') &&
-            record.target instanceof Element &&
-            record.target.contains(anchor),
+        records.some((record) =>
+          [
+            'hidden',
+            'inert',
+            'style',
+            'class',
+            'open',
+            'aria-hidden',
+            'data-tooltip',
+          ].includes(record.attributeName ?? ''),
         )
       ) {
         tooltipStore.hide(active)
       } else schedule()
     })
-    const container = anchor.closest('dialog[open]') ?? document.body
-    const local =
-      anchor.parentElement && anchor.parentElement !== container
-        ? anchor.parentElement
-        : anchor
-    attributes.observe(local, { attributes: true, subtree: true })
-    for (
-      let parent = local.parentElement;
-      parent;
-      parent = parent.parentElement
-    )
-      attributes.observe(parent, { attributes: true })
-    // Removal anywhere in the tooltip's container detaches the anchor; other structure changes can move it.
-    const structure = new MutationObserver(() => {
-      if (!anchor.isConnected) tooltipStore.hide(active)
+    for (const node of [anchor, ...ancestry])
+      if (node instanceof Element)
+        visibility.observe(node, { attributes: true })
+    // Any other change can shift layout, so it only schedules a check. A changed
+    // ancestry dismisses help, because the observers above follow the old one.
+    const changes = new MutationObserver(() => {
+      if (reparented()) tooltipStore.hide(active)
       else schedule()
     })
-    structure.observe(container, { childList: true, subtree: true })
+    for (const root of [
+      document.documentElement,
+      ...ancestry.filter((node) => node instanceof ShadowRoot),
+    ])
+      changes.observe(root, {
+        attributes: true,
+        childList: true,
+        subtree: true,
+      })
     const resize = new ResizeObserver(validate)
     resize.observe(anchor)
     return () => {
       cancelAnimationFrame(frame)
-      attributes.disconnect()
-      structure.disconnect()
+      visibility.disconnect()
+      changes.disconnect()
       resize.disconnect()
       const remaining = (anchor.getAttribute('aria-describedby') ?? '')
         .split(/\s+/)

@@ -8,6 +8,13 @@ export async function checkTooltips(page) {
   const other = page.getByRole('button', { name: /open built-in prompt/i })
   const tip = page.getByRole('tooltip')
   const hidden = () => tip.waitFor({ state: 'hidden' })
+  const frames = () =>
+    page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    )
   const hover = async () => {
     await other.hover()
     await target.hover()
@@ -165,6 +172,80 @@ export async function checkTooltips(page) {
     document.querySelector('#tooltip-removable').remove(),
   )
   await hidden()
+  // Layout shifts from elsewhere, shadow hosts, and a new ancestry must not leave stale help.
+  await page.mouse.move(700, 20)
+  for (const scenario of [
+    'cousin',
+    'body sibling',
+    'dialog',
+    'shadow host',
+    'reparent',
+  ]) {
+    await page.evaluate((scenario) => {
+      const root = document.createElement('section')
+      root.style.cssText = 'position:fixed;top:180px;left:80px;width:420px'
+      const left = document.createElement('div')
+      const right = document.createElement('div')
+      const spacer = document.createElement('div')
+      const anchor = document.createElement('button')
+      anchor.textContent = 'probe control'
+      left.append(spacer)
+      right.append(anchor)
+      root.append(left, right)
+      document.body.append(root)
+      let host = null
+      if (scenario === 'body sibling') {
+        root.style.cssText = 'width:420px'
+        document.body.append(anchor)
+      }
+      if (scenario === 'dialog') {
+        const dialog = document.createElement('dialog')
+        dialog.style.cssText =
+          'position:fixed;top:120px;left:80px;width:440px;height:200px;margin:0'
+        root.style.cssText = 'width:420px'
+        root.replaceWith(dialog)
+        dialog.append(root)
+        dialog.show()
+      }
+      if (scenario === 'shadow host') {
+        host = document.createElement('div')
+        root.append(host)
+        host.attachShadow({ mode: 'open' }).append(right)
+      }
+      if (scenario === 'reparent')
+        left.style.cssText = right.style.cssText =
+          'position:absolute;top:0;left:0'
+      window.tooltipProbe = { root, left, spacer, anchor, host }
+      window.dialogTest.tips.api.show({ anchor, text: 'probe help' })
+    }, scenario)
+    await tip.waitFor()
+    // Let the anchor's first resize callback pass, so only the change below can dismiss help.
+    await frames()
+    await page.evaluate((scenario) => {
+      const { left, spacer, anchor, host } = window.tooltipProbe
+      if (scenario === 'shadow host') host.style.visibility = 'hidden'
+      else if (scenario === 'reparent') left.append(anchor)
+      else spacer.style.height = '40px'
+    }, scenario)
+    if (scenario === 'reparent') {
+      // The new parent's visibility belongs to the moved anchor too.
+      await frames()
+      await page.evaluate(() => {
+        window.tooltipProbe.left.style.visibility = 'hidden'
+      })
+    }
+    await hidden()
+    assert.equal(
+      await page.evaluate(() => {
+        const { root, anchor } = window.tooltipProbe
+        ;(root.closest('dialog') ?? root).remove()
+        anchor.remove()
+        return anchor.getAttribute('aria-describedby')
+      }),
+      null,
+      scenario,
+    )
+  }
   // Closed help stops observing its anchor.
   await hover()
   await page.keyboard.press('Escape')

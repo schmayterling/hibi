@@ -24,6 +24,7 @@ import {
   DiagnosticAdmission,
   DiagnosticQueue,
 } from '../../shared/local-diagnostics-budget'
+import { testPause } from '../test-pauses'
 import { DiagnosticIngress } from './ingress'
 import { consumeDiagnosticService, installOwnedFailureReporter } from './owned'
 import { LocalDiagnosticSink } from './sink'
@@ -49,6 +50,8 @@ export class LocalDiagnostics {
   private artifactsReady: Promise<void> = Promise.resolve()
   private sink: LocalDiagnosticSink | null = null
   private started = false
+  private finishing = false
+  private finished = false
 
   constructor() {
     try {
@@ -209,13 +212,46 @@ export class LocalDiagnostics {
           exitCode: details.exitCode,
         })
       })
+      app.on('will-quit', (event) => {
+        void this.finishBeforeQuit(event)
+      })
       app.once('quit', () => {
         installOwnedFailureReporter(null)
         process.removeListener('uncaughtExceptionMonitor', this.mainException)
-        void this.sink?.finish().catch(() => {})
       })
     } catch {
       /* Unavailable diagnostics do not affect startup or saving. */
+    }
+  }
+
+  private async finishBeforeQuit(event: Electron.Event) {
+    if (this.finished) return
+    event.preventDefault()
+    if (this.finishing) return
+    this.finishing = true
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      // All document confirmations have resolved before will-quit.
+      await Promise.race([
+        (async () => {
+          await testPause('local-diagnostics-finish')
+          await this.sink?.finish(controller.signal)
+        })(),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            controller.abort()
+            resolve()
+          }, 1500)
+        }),
+      ])
+    } catch {
+      /* Diagnostics cannot prevent an already confirmed quit. */
+    } finally {
+      clearTimeout(timer)
+      this.finished = true
+      // Let Electron unwind the prevented event even if the sink was unavailable.
+      setImmediate(() => app.quit())
     }
   }
 

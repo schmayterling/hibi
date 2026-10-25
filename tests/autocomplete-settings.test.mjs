@@ -86,17 +86,106 @@ test('privacy preferences reload across windows and after resubscribing', async 
   again()
 })
 
+test('all 600 document and workspace exclusions survive reload, additions and removals', async () => {
+  const documents = Array.from({ length: 600 }, (_, i) => `document-${i}`)
+  const workspaces = Array.from({ length: 600 }, (_, i) => `workspace-${i}`)
+  const settings = await preferences({})
+  settings.writePreferences({
+    ...settings.readPreferences(),
+    excludedDocuments: [...documents, documents[0], documents.at(-1)],
+    excludedWorkspaces: [...workspaces, workspaces[0], workspaces.at(-1)],
+  })
+  const reloaded = await import(
+    `../src/addons/autocomplete/settings.ts?test=${serial++}`
+  )
+  assert.equal(reloaded.readPreferences().excludedDocuments.length, 600)
+  assert.equal(reloaded.readPreferences().excludedWorkspaces.length, 600)
+  assert.deepEqual(reloaded.readPreferences().excludedDocuments, documents)
+  assert.deepEqual(reloaded.readPreferences().excludedWorkspaces, workspaces)
+  const next = {
+    ...reloaded.readPreferences(),
+    excludedDocuments: [...documents.slice(1), 'new-document'],
+    excludedWorkspaces: [...workspaces.slice(1), 'new-workspace'],
+  }
+  reloaded.writePreferences(next)
+  const updated = await import(
+    `../src/addons/autocomplete/settings.ts?test=${serial++}`
+  )
+  assert.deepEqual(updated.readPreferences(), next)
+})
+
+test('failed storage writes keep exclusions active through resubscription and storage events, then retry', async (t) => {
+  const settings = await preferences({
+    'hibi:autocomplete': { learning: true },
+  })
+  const events = new EventTarget()
+  globalThis.window = events
+  t.after(() => {
+    delete globalThis.window
+  })
+  const error = t.mock.method(console, 'error', () => {})
+  assert.equal(settings.preferencesSaved(), true)
+  const initial = settings.readPreferences()
+  const stored = localStorage.getItem('hibi:autocomplete')
+  const set = localStorage.setItem
+  localStorage.setItem = () => {
+    throw new DOMException('storage full', 'QuotaExceededError')
+  }
+  let changes = 0
+  const stop = settings.onPreferencesChange(() => changes++)
+  const next = {
+    ...initial,
+    excludedDocuments: Array.from({ length: 600 }, (_, i) => `document-${i}`),
+    excludedWorkspaces: Array.from({ length: 600 }, (_, i) => `workspace-${i}`),
+  }
+  settings.writePreferences(next)
+  assert.equal(settings.readPreferences(), next)
+  assert.equal(changes, 1)
+  assert.equal(error.mock.callCount(), 1)
+  assert.equal(settings.preferencesSaved(), false)
+  assert.equal(localStorage.getItem('hibi:autocomplete'), stored)
+  stop()
+  const again = settings.onPreferencesChange(() => changes++)
+  t.after(again)
+  assert.equal(settings.readPreferences(), next)
+  for (const key of ['hibi:autocomplete', null]) {
+    events.dispatchEvent(
+      Object.assign(new Event('storage'), { key, storageArea: localStorage }),
+    )
+    assert.equal(settings.readPreferences(), next)
+  }
+  assert.equal(changes, 3)
+  assert.equal(settings.preferencesSaved(), false)
+  localStorage.setItem = set
+  settings.writePreferences(next)
+  assert.equal(changes, 4)
+  assert.equal(settings.preferencesSaved(), true)
+  const reloaded = await import(
+    `../src/addons/autocomplete/settings.ts?test=${serial++}`
+  )
+  assert.deepEqual(reloaded.readPreferences(), next)
+})
+
 test('autocomplete validates stored languages and exclusions, and defaults safely', async () => {
   const settings = await preferences({
     'hibi:autocomplete': {
       languages: ['en', 'bad', 'en', 'tl'],
-      excludedDocuments: ['note', 3, null],
+      excludedDocuments: [
+        'note',
+        'note',
+        3,
+        null,
+        {},
+        [],
+        'x'.repeat(256),
+        'x'.repeat(257),
+      ],
       excludedWorkspaces: {},
     },
   })
   const value = settings.readPreferences()
   assert.deepEqual(value.languages, ['en', 'tl'])
-  assert.deepEqual(value.excludedDocuments, ['note'])
+  assert.deepEqual(value.excludedDocuments, ['note', 'x'.repeat(256)])
   assert.deepEqual(value.excludedWorkspaces, [])
   assert.equal(value.learning, true)
   assert.equal(value.suggest, true)

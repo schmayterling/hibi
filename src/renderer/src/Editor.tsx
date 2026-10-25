@@ -2388,7 +2388,13 @@ export function MarkdownEditor({
         }
       if (request.changes.length > 32) return unsupported
       try {
-        const source = editedSource(current.markdown, request.changes)
+        const snapshot = documentRuntime.session(current.tabId)?.snapshot()
+        if (!snapshot || snapshot.version !== current.contentVersion)
+          return {
+            status: 'stale',
+            message: 'The document changed. Review the edits again.',
+          }
+        const source = editedSource(snapshot, request.changes)
         if (source === current.markdown)
           return { status: 'applied', contentVersion: current.contentVersion }
         const offset = projection.sourceOffset!

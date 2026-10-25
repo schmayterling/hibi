@@ -53,7 +53,14 @@ import {
   placeholder,
 } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type { DocumentFormat, SourceExtension } from '../../addons/api'
 import {
   type CompletionItem,
@@ -68,7 +75,6 @@ import {
   type SourceEditRequest,
   type SourceEditResult,
   sourceEditMatches,
-  validateSourceEdits,
 } from '../../shared/document-edits'
 import type { MarkdownReferenceSyntax } from '../../shared/document-worker-protocol'
 import {
@@ -120,6 +126,7 @@ import { sourceIndentation } from './source-indent'
 import {
   createSourceSession,
   sourceEditorTextCooperatively,
+  sourceEditTransaction,
 } from './source-session'
 import {
   registerSourceView,
@@ -1468,36 +1475,18 @@ export function SourceEditor({
           status: 'stale',
           message: 'The editor is synchronizing. Review the edits again.',
         }
-      let changes: readonly RawEdit[]
+      let transaction: Transaction | null
       try {
-        if (!validateSourceEdits(snapshot, request.changes))
+        transaction = sourceEditTransaction(
+          editor.state,
+          snapshot,
+          request.changes,
+        )
+        if (!transaction)
           return { status: 'applied', contentVersion: current.contentVersion }
-        changes = editorChangesFromSource(snapshot, request.changes)
       } catch (error) {
         return { status: 'invalid', message: String(error) }
       }
-      if (!changes.length)
-        return {
-          status: 'invalid',
-          message:
-            'Edits must keep line-ending pairs intact. Use a whole-source transform to change only line endings.',
-        }
-      const expected = editor.state.changes(changes)
-      const transaction = editor.state.update({
-        changes,
-        annotations: [
-          isolateHistory.of('full'),
-          Transaction.userEvent.of('input.addon'),
-        ],
-      })
-      if (
-        JSON.stringify(transaction.changes.toJSON()) !==
-        JSON.stringify(expected.toJSON())
-      )
-        return {
-          status: 'invalid',
-          message: 'An editor extension changed this edit.',
-        }
       exactChanges.current = request.changes
       try {
         editor.dispatch(transaction)
@@ -1763,6 +1752,11 @@ export function SourceEditor({
       if (editor) closeCompletion(editor)
     }
   }, [disabled, editTarget, inputReady])
+
+  // Before paint and before focus moves here, a shown or targeted view catches up.
+  useLayoutEffect(() => {
+    bridge.setVisible(sourceVisible || editTarget)
+  }, [bridge, sourceVisible, editTarget])
 
   useEffect(() => {
     const editor = view.current

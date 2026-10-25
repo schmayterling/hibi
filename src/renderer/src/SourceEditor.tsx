@@ -52,7 +52,14 @@ import {
   placeholder,
 } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type { DocumentFormat, SourceExtension } from '../../addons/api'
 import {
   type CompletionItem,
@@ -64,7 +71,6 @@ import {
 } from '../../shared/completions'
 import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop'
 import {
-  editedSource,
   type SourceEditRequest,
   type SourceEditResult,
   sourceEditMatches,
@@ -79,10 +85,7 @@ import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
 import { markdownLink } from '../../shared/markdown-link'
 import { wikiHref } from '../../shared/note-links'
 import type { RawEdit } from '../../shared/source-operations'
-import {
-  editorChangesFromSource,
-  normalizedSource as normalizeSource,
-} from '../../shared/source-projection'
+import { editorChangesFromSource } from '../../shared/source-projection'
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
 import { codeHighlighter, codeLanguages } from './code-languages'
@@ -119,7 +122,11 @@ import {
   sourceFormatting,
 } from './source-formatting'
 import { sourceIndentation } from './source-indent'
-import { createSourceSession, sourceEditorText } from './source-session'
+import {
+  createSourceSession,
+  sourceEditorText,
+  sourceEditTransaction,
+} from './source-session'
 import {
   registerSourceView,
   type SourceReferenceResult,
@@ -1434,39 +1441,19 @@ export function SourceEditor({
           status: 'stale',
           message: 'The editor is synchronizing. Review the edits again.',
         }
-      let expected: string
+      let transaction: Transaction | null
       try {
-        const source = snapshot.materialize()
-        expected = editedSource(source, request.changes, MAX_DOCUMENT_BYTES)
-        if (expected === source)
+        transaction = sourceEditTransaction(
+          editor.state,
+          snapshot,
+          request.changes,
+          MAX_DOCUMENT_BYTES,
+        )
+        if (!transaction)
           return { status: 'applied', contentVersion: current.contentVersion }
       } catch (error) {
         return { status: 'invalid', message: String(error) }
       }
-      if (normalizeSource(expected) === editor.state.doc.toString())
-        return {
-          status: 'invalid',
-          message:
-            'Edits must keep line-ending pairs intact. Use a whole-source transform to change only line endings.',
-        }
-      let changes: readonly RawEdit[]
-      try {
-        changes = editorChangesFromSource(snapshot, request.changes)
-      } catch (error) {
-        return { status: 'invalid', message: String(error) }
-      }
-      const transaction = editor.state.update({
-        changes,
-        annotations: [
-          isolateHistory.of('full'),
-          Transaction.userEvent.of('input.addon'),
-        ],
-      })
-      if (transaction.newDoc.toString() !== normalizeSource(expected))
-        return {
-          status: 'invalid',
-          message: 'An editor extension changed this edit.',
-        }
       exactChanges.current = request.changes
       try {
         editor.dispatch(transaction)
@@ -1731,6 +1718,11 @@ export function SourceEditor({
       if (editor) closeCompletion(editor)
     }
   }, [disabled, editTarget, inputReady])
+
+  // Before paint and before focus moves here, a shown or targeted view catches up.
+  useLayoutEffect(() => {
+    bridge.setVisible(sourceVisible || editTarget)
+  }, [bridge, sourceVisible, editTarget])
 
   useEffect(() => {
     const editor = view.current

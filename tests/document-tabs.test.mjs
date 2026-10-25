@@ -880,3 +880,127 @@ test('source selection survives tab remounts with emoji and mixed line endings',
     'first\r\n😀second\nthird',
   )
 })
+
+test('five hundred tabs skip geometry for unchanged lists and read before writing', {
+  timeout: 120000,
+}, async (t) => {
+  const temp = await mkdtemp(join(tmpdir(), 'hibi-tab-scale-'))
+  const root = join(temp, 'workspace')
+  await mkdir(root, { recursive: true })
+  const names = Array.from(
+    { length: 500 },
+    (_, index) => `note-${String(index).padStart(3, '0')}.md`,
+  )
+  for (const name of names) await writeFile(join(root, name), `# ${name}`)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(temp, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(temp, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(15000)
+  await waitForDocumentEditor(app, page)
+  await page.setViewportSize({ width: 1000, height: 600 })
+  await app.evaluate(({ dialog }, root) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] })
+  }, root)
+  // Open every file in the main process, then mount all tabs in one reload.
+  await page.evaluate(async (names) => {
+    await window.hibi.openWorkspace()
+    for (const name of names) await window.hibi.openWorkspaceFile(name)
+  }, names)
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  await page.waitForFunction(
+    (count) => document.querySelectorAll('.document-tab').length === count,
+    names.length,
+  )
+  // Revealing the active tab is separate; count geometry reads of the other tabs.
+  await page.evaluate(() => {
+    const strip = document.querySelector('.document-tabs')
+    const log = []
+    window.tabGeometry = log
+    for (const name of ['offsetLeft', 'offsetWidth']) {
+      const { get } = Object.getOwnPropertyDescriptor(
+        HTMLElement.prototype,
+        name,
+      )
+      Object.defineProperty(HTMLElement.prototype, name, {
+        configurable: true,
+        get() {
+          if (strip.contains(this) && this.dataset.active === 'false')
+            log.push('read')
+          return get.call(this)
+        },
+      })
+    }
+    const { setProperty } = CSSStyleDeclaration.prototype
+    CSSStyleDeclaration.prototype.setProperty = function (name, ...rest) {
+      if (name === '--tab-width') log.push('write')
+      return setProperty.call(this, name, ...rest)
+    }
+    const app = document.querySelector('.app')
+    window.tabBusy = 0
+    new MutationObserver(() => {
+      if (app.getAttribute('aria-busy') === 'true') window.tabBusy++
+    }).observe(app, { attributes: true, attributeFilter: ['aria-busy'] })
+  })
+  const update = async (action) => {
+    const busy = await page.evaluate(() => {
+      window.tabGeometry.length = 0
+      return window.tabBusy
+    })
+    await action()
+    await page.waitForFunction(
+      (busy) =>
+        window.tabBusy > busy &&
+        document.querySelector('.app').getAttribute('aria-busy') === 'false',
+      busy,
+    )
+    return page.evaluate(() => {
+      let wrote = false
+      const result = { reads: 0, readsAfterWrites: 0 }
+      for (const entry of window.tabGeometry) {
+        if (entry === 'write') wrote = true
+        else {
+          result.reads++
+          if (wrote) result.readsAfterWrites++
+        }
+      }
+      return result
+    })
+  }
+  const active = await page.evaluate(() => window.hibi.getDocument())
+  assert.equal(active.tabs.length, names.length)
+  await app.evaluate(
+    ({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    },
+    join(root, active.name),
+  )
+  // Reopening the active file replaces the tab list with an equal one.
+  assert.deepEqual(await update(() => clickMenu(app, 'Open…')), {
+    reads: 0,
+    readsAfterWrites: 0,
+  })
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).tabId,
+    active.tabId,
+  )
+  await page.locator(`[data-tab-id="${active.tabId}"]`).focus()
+  const selected = await update(() => page.keyboard.press('ArrowLeft'))
+  assert.notEqual(
+    (await page.evaluate(() => window.hibi.getDocument())).tabId,
+    active.tabId,
+  )
+  // One pass reads each other tab's position and width once, before any width is written.
+  assert.deepEqual(selected, {
+    reads: 2 * (names.length - 1),
+    readsAfterWrites: 0,
+  })
+})

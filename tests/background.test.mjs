@@ -41,7 +41,7 @@ async function adapter(t, platform = 'darwin', packaged = false) {
           build.onResolve(
             { filter: /^node:fs\/promises$/ },
             ({ path, importer }) =>
-              importer === resolve('src/main/background.ts')
+              importer === resolve('src/main/files.ts')
                 ? { path, namespace: 'background-fs' }
                 : undefined,
           )
@@ -49,10 +49,15 @@ async function adapter(t, platform = 'darwin', packaged = false) {
             contents: `
               import * as fs from 'node:fs/promises';
               import { state } from 'electron';
-              export const readFile = fs.readFile;
-              export const writeFile = async (...args) => {
-                if (state.writeError) throw state.writeError;
-                return fs.writeFile(...args);
+              export const { copyFile, link, stat, unlink } = fs;
+              export const open = async (...args) => {
+                const file = await fs.open(...args);
+                const write = file.writeFile.bind(file);
+                file.writeFile = async (...args) => {
+                  if (state.writeError) throw state.writeError;
+                  return write(...args);
+                };
+                return file;
               };
               export const rename = async (...args) => {
                 await state.beforeRename?.();

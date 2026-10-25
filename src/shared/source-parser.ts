@@ -11,6 +11,7 @@ import {
   type SourceSnapshot,
   type SourceStorageChange,
 } from './source-buffer.ts'
+import { safePosition } from './source-operations.ts'
 import {
   editorChangesFromSource,
   normalizedSource,
@@ -38,29 +39,57 @@ export function sourceParserInput(
   source: SourceSnapshot,
   work = emptyWork(),
 ): Input {
-  const read = (from: number, to: number) => {
-    const rawFrom = source.editorToRaw(from),
-      rawTo = source.editorToRaw(to)
-    if (rawFrom === null || rawTo === null || to < from)
+  const length = source.normalizedLength
+  let cachedFrom = -1,
+    cachedTo = -1,
+    lineTo = -1,
+    text = ''
+  const range = (from: number, to: number) => {
+    if (!safePosition(from) || !safePosition(to) || to < from || to > length)
       throw new Error('Parser input range is outside its source snapshot.')
+  }
+  const lineAt = (from: number) => {
+    if (
+      from >= cachedFrom &&
+      (from < cachedTo || (from === length && lineTo === length))
+    )
+      return
+    const raw = source.editorToRaw(from),
+      line = raw === null ? null : source.lineAt(raw)
+    if (!line)
+      throw new Error('Parser input range is outside its source snapshot.')
+    cachedFrom = source.rawToEditor(line.from)!
+    // Lezer may scan a fragment boundary backwards one character at a time.
+    // Keep that work on this snapshot's normalized line instead of the piece table.
+    text = normalizedSource(source.sliceRaw(line.from, line.to))
+    lineTo = cachedFrom + text.length
+    if (line.number < source.lineCount) text += '\n'
+    cachedTo = cachedFrom + text.length
+  }
+  const read = (from: number, to: number) => {
+    range(from, to)
     work.readCalls++
     work.readUnits += to - from
     work.maximumRead = Math.max(work.maximumRead, to - from)
+    // The unit before a cached line start is its normalized line break.
+    if (from === cachedFrom - 1 && to === cachedFrom) return '\n'
+    lineAt(from)
+    if (to <= cachedTo) return text.slice(from - cachedFrom, to - cachedFrom)
+    const rawFrom = source.editorToRaw(from),
+      rawTo = source.editorToRaw(to)
+    if (rawFrom === null || rawTo === null)
+      throw new Error('Parser input range is outside its source snapshot.')
     return normalizedSource(source.sliceRaw(rawFrom, rawTo))
   }
   return Object.freeze({
-    length: source.normalizedLength,
+    length,
     lineChunks: true,
     chunk: (from: number) => {
-      const raw = source.editorToRaw(from),
-        line = raw === null ? null : source.lineAt(raw)
-      if (!line)
-        throw new Error('Parser input range is outside its source snapshot.')
+      range(from, from)
+      lineAt(from)
       // ponytail: Markdown scanner needs whole physical lines. One long line can
       // allocate its full length; bounded chunks need scanner support for split lines.
-      let to = source.rawToEditor(line.to)!
-      if (to === from && from < source.normalizedLength) to++
-      return read(from, to)
+      return read(from, from === lineTo && from < length ? from + 1 : lineTo)
     },
     read,
   })

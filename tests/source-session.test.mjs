@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { EditorState, Transaction } from '@codemirror/state'
+import { EditorState, StateEffect, Transaction } from '@codemirror/state'
 import {
   createSourceSession,
   sourceEditorText,
@@ -121,6 +121,118 @@ test('two source views share text and history but keep separate selections', () 
   assert.equal(f.session.selection('right').ranges[0].head, 4)
   left.dispose()
   right.dispose()
+  f.session.dispose()
+})
+
+test('a hidden source view coalesces canonical edits and catches up exactly when shown', () => {
+  const f = fixture('one\r\ntwo\rthree\n')
+  const surface = f.attach()
+  surface.dispatch({ selection: { anchor: 3 } })
+  surface.bridge.setVisible(false)
+  f.observations.length = 0
+  const at = (text) => f.session.snapshot().materialize().indexOf(text)
+  for (const letter of 'abc')
+    f.session.edit(
+      [{ from: at('\r\n'), to: at('\r\n'), insert: letter }],
+      'visual',
+      'typing',
+    )
+  // Joining "\r" with a new "\n" turns two editor lines into one CRLF.
+  f.session.edit(
+    [{ from: at('three'), to: at('three'), insert: '\n' }],
+    'visual',
+    'seam',
+  )
+  f.session.edit([{ from: 0, to: 3, insert: 'ONE' }], 'visual', 'replace')
+  f.session.undo()
+  f.session.edit(
+    [{ from: at('two'), to: at('two') + 3, insert: '' }],
+    'visual',
+    'delete',
+  )
+  assert.equal(f.observations.length, 0)
+  assert.equal(f.operations.length, 7)
+  assert.equal(f.session.snapshot().materialize(), 'oneabc\r\n\r\nthree\n')
+  assert.equal(f.session.state().canUndo, true)
+  surface.bridge.setVisible(true)
+  assert.deepEqual(f.observations, [{ version: 7, operationCount: 7 }])
+  assert.equal(
+    surface.view.state.doc.toString(),
+    sourceEditorText(f.session.snapshot()).toString(),
+  )
+  assert.equal(
+    surface.view.state.selection.main.head,
+    f.session.snapshot().rawToEditor(f.session.selection().ranges[0].head),
+  )
+  surface.dispatch(type(6, '!', 0))
+  assert.equal(f.session.snapshot().materialize(), 'oneabc!\r\n\r\nthree\n')
+  assert.ok(f.session.undo())
+  assert.equal(surface.view.state.doc.toString(), 'oneabc\n\nthree\n')
+  assert.deepEqual(f.errors, [])
+  surface.dispose()
+  f.session.dispose()
+})
+
+test('reads, internal effects and stale input keep a hidden source replica exact', () => {
+  const f = fixture('alpha\r\nbeta')
+  const surface = f.attach()
+  surface.dispatch({ selection: { anchor: 5 } })
+  surface.bridge.setVisible(false)
+  f.session.edit([{ from: 0, to: 0, insert: '# ' }], 'visual', 'heading')
+  f.observations.length = 0
+  // Parser and configuration effects apply to the replica without catching up.
+  const effect = StateEffect.define()
+  surface.bridge.dispatch(
+    [surface.view.state.update({ effects: effect.of(1) })],
+    surface.view,
+  )
+  assert.equal(surface.view.state.doc.toString(), 'alpha\nbeta')
+  const selection = f.session.selection()
+  surface.dispatch({ selection: { anchor: 1 } })
+  assert.equal(f.session.selection(), selection)
+  assert.throws(() => surface.dispatch(type(0, 'x', 0)), /synchronizing/)
+  assert.equal(f.session.snapshot().materialize(), '# alpha\r\nbeta')
+  assert.equal(surface.view.state.doc.toString(), '# alpha\nbeta')
+  assert.equal(f.observations.length, 3)
+  f.session.edit([{ from: 2, to: 7, insert: 'ALPHA' }], 'visual', 'caps')
+  assert.equal(surface.bridge.snapshot(), f.session.snapshot())
+  assert.equal(surface.view.state.doc.toString(), '# ALPHA\nbeta')
+  assert.equal(f.operations.length, 2)
+  assert.deepEqual(f.errors, [])
+  surface.dispose()
+  f.session.dispose()
+})
+
+test('storage compaction while source is hidden keeps the pending replica', async () => {
+  const chunk = 65536
+  const f = fixture('keep\r\nthis', { chunkUnits: chunk })
+  const surface = f.attach()
+  surface.bridge.setVisible(false)
+  // One retained character per arena chunk leaves reclaimable storage.
+  f.session.edit(
+    [{ from: 4, to: 4, insert: 'x'.repeat(5 * chunk) }],
+    'visual',
+    'paste',
+  )
+  f.session.edit(
+    Array.from({ length: 5 }, (_, index) => ({
+      from: 5 + index * chunk,
+      to: 4 + (index + 1) * chunk,
+      insert: '',
+    })),
+    'visual',
+    'cut',
+  )
+  f.session.edit([{ from: 0, to: 0, insert: '> ' }], 'visual', 'quote')
+  const before = f.session.snapshot()
+  await f.session.maintainStorage()
+  assert.notEqual(f.session.snapshot(), before)
+  f.session.edit([{ from: 17, to: 17, insert: '!' }], 'visual', 'mark')
+  surface.bridge.setVisible(true)
+  assert.equal(surface.view.state.doc.toString(), '> keepxxxxx\nthis!')
+  assert.equal(f.session.snapshot().materialize(), '> keepxxxxx\r\nthis!')
+  assert.deepEqual(f.errors, [])
+  surface.dispose()
   f.session.dispose()
 })
 

@@ -52,7 +52,14 @@ import {
   placeholder,
 } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type { DocumentFormat, SourceExtension } from '../../addons/api'
 import {
   type CompletionItem,
@@ -1731,6 +1738,11 @@ export function SourceEditor({
       if (editor) closeCompletion(editor)
     }
   }, [disabled, editTarget, inputReady])
+
+  // Before paint and before focus moves here, a shown or targeted view catches up.
+  useLayoutEffect(() => {
+    bridge.setVisible(sourceVisible || editTarget)
+  }, [bridge, sourceVisible, editTarget])
 
   useEffect(() => {
     const editor = view.current

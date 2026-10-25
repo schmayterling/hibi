@@ -1,6 +1,7 @@
 import { isolateHistory } from '@codemirror/commands'
 import {
   Annotation,
+  ChangeSet,
   EditorSelection,
   type EditorState,
   Text,
@@ -90,6 +91,10 @@ export function createSourceSession(
   let group = '',
     lastEvent = '',
     lastTime = -Infinity
+  // A hidden view keeps one composed echo until it is shown or read.
+  let visible = true,
+    pending: ChangeSet | null = null,
+    flush = () => {}
   const dispatch = (
     transactions: readonly Transaction[],
     view: Pick<EditorView, 'state' | 'update'> & {
@@ -120,7 +125,11 @@ export function createSourceSession(
       transaction.annotation(isolateHistory),
     )
     if (!changes.length) {
-      if (transactions.some((transaction) => transaction.selection)) {
+      // A behind replica's selection is replaced by the session's when flushed.
+      if (
+        !pending &&
+        transactions.some((transaction) => transaction.selection)
+      ) {
         if (!view.composing || isolated) group = ''
         session.select(
           rawSelection(snapshot, state.selection),
@@ -131,6 +140,10 @@ export function createSourceSession(
       rememberSourceHistory(state, session.historyDepth())
       view.update(transactions)
       return
+    }
+    if (pending) {
+      flush()
+      throw new Error('The source editor is synchronizing.')
     }
     const last = transactions.at(-1)!
     const event = last.annotation(Transaction.userEvent) ?? 'input'
@@ -175,9 +188,17 @@ export function createSourceSession(
     if (isolated || !typing) group = ''
   }
   return {
-    snapshot: () => snapshot,
+    /** Reading the replica's snapshot first brings a hidden view up to date. */
+    snapshot: () => {
+      flush()
+      return snapshot
+    },
     selection: () => editorSelection(snapshot, session.selection(viewId)),
     dispatch,
+    setVisible(next: boolean) {
+      visible = next
+      if (visible) flush()
+    },
     attach(view: Pick<EditorView, 'state' | 'update'>) {
       if (!session.ownsCurrentSnapshot(snapshot))
         throw new Error('The source editor is synchronizing.')
@@ -187,30 +208,36 @@ export function createSourceSession(
         redo: () => !!session.redo(),
       })
       rememberSourceHistory(view.state, session.historyDepth())
-      const unsubscribe = session.subscribeOperations((prepared) => {
-        if (snapshot === prepared.after) return
-        if (snapshot !== prepared.before)
-          throw new Error('The source replica missed an operation.')
-        const selection = editorSelection(
-          prepared.after,
-          session.selection(viewId),
-        )
+      let echo = ''
+      flush = () => {
+        if (!pending) return
+        const selection = editorSelection(snapshot, session.selection(viewId))
         const transaction = view.state.update({
-          changes: editorChangesFromSource(
-            prepared.before,
-            prepared.operation.changes,
-          ),
+          changes: pending,
           ...(selection ? { selection } : {}),
           annotations: [
-            sourceOperationEcho.of(prepared.operation.operationId),
+            sourceOperationEcho.of(echo),
             Transaction.addToHistory.of(false),
           ],
           filter: false,
         })
-        snapshot = prepared.after
-        group = ''
+        pending = null
         rememberSourceHistory(transaction.state, session.historyDepth())
         view.update([transaction])
+      }
+      const unsubscribe = session.subscribeOperations((prepared) => {
+        if (snapshot === prepared.after) return
+        if (snapshot !== prepared.before)
+          throw new Error('The source replica missed an operation.')
+        const changes = ChangeSet.of(
+          editorChangesFromSource(prepared.before, prepared.operation.changes),
+          prepared.before.normalizedLength,
+        )
+        pending = pending ? pending.compose(changes) : changes
+        echo = prepared.operation.operationId
+        snapshot = prepared.after
+        group = ''
+        if (visible) flush()
       })
       const unsubscribeStorage = session.subscribeStorage((change) => {
         if (snapshot !== change.before)
@@ -218,6 +245,8 @@ export function createSourceSession(
         snapshot = change.after
       })
       return () => {
+        flush = () => {}
+        pending = null
         unregister()
         unsubscribe()
         unsubscribeStorage()

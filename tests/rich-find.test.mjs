@@ -49,7 +49,7 @@ function expectedMatches(doc, query) {
       value += child.isText
         ? child.text
         : child.isLeaf
-          ? '￼'
+          ? '\ufffc'
           : ` ${text(child)} `
     })
     return value

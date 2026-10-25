@@ -14,10 +14,10 @@ import {
   BOOTSTRAP_CHANNELS,
   type DesktopApi,
   DOCUMENT_CHANNELS,
-  MAX_DOCUMENT_BYTES,
 } from '../shared/desktop'
 import type { JournalCheckpoint } from '../shared/document-checkpoint'
 import { createDocumentJournal } from '../shared/document-journal'
+import type { DocumentTransferApi } from '../shared/document-transfer'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
 import type {
   WorkspaceChangeEvent,
@@ -34,9 +34,10 @@ import { DIAGNOSTIC_CHANNEL } from '../shared/local-diagnostics'
 import { MEDIA_CHANNELS } from '../shared/media'
 import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
-import type {
-  SourceTransferChunk,
-  SourceTransferRequest,
+import {
+  SOURCE_TRANSFER_UNITS,
+  type SourceTransferChunk,
+  type SourceTransferRequest,
 } from '../shared/source-transfer'
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
@@ -75,16 +76,16 @@ if (process.isMainFrame) {
     {
       timeoutMs: 5000,
       retryDelays: [100, 500, 2000],
-      maximumCheckpointUnits: MAX_DOCUMENT_BYTES,
+      maximumCheckpointUnits: SOURCE_TRANSFER_UNITS,
       checkpoint: (tabId) => {
         if (!checkpoint)
           throw new Error('Document recovery is not ready. Retry saving.')
         return checkpoint(tabId)
       },
       head: (tabId) => transport.invoke(DOCUMENT_CHANNELS.recoveryHead, tabId),
-      verify: async (snapshot) => {
+      verify: async (snapshot, progress) => {
         if ('source' in snapshot)
-          return transport.invoke(DOCUMENT_CHANNELS.verifyCheckpoint, snapshot)
+          throw new Error('Invalid document recovery checkpoint.')
         if (!checkpointRead)
           throw new Error('Document recovery is not ready. Retry saving.')
         let request: SourceTransferRequest = {
@@ -93,12 +94,14 @@ if (process.isMainFrame) {
         }
         try {
           await transport.invoke(DOCUMENT_CHANNELS.verifyCheckpoint, snapshot)
+          progress()
           for (;;) {
             const chunk = checkpointRead(request)
             request = await transport.invoke(
               DOCUMENT_CHANNELS.checkpointChunk,
               chunk,
             )
+            progress()
             if (chunk.done) break
           }
           return await transport.invoke(
@@ -217,7 +220,13 @@ if (process.isMainFrame) {
   for (const pending of [startupDocument, startupAddons, startupKnown])
     void pending.catch(() => {})
   let backgroundSettingsReady = false
-  contextBridge.exposeInMainWorld('hibi', {
+  contextBridge.exposeInMainWorld('hibiTransport', {
+    readDocumentTransfer: (request) =>
+      transport.invoke(DOCUMENT_CHANNELS.transferRead, request),
+    finishDocumentTransfer: (request) =>
+      transport.invoke(DOCUMENT_CHANNELS.transferFinish, request),
+    abortDocumentTransfer: (request) =>
+      transport.invoke(DOCUMENT_CHANNELS.transferAbort, request),
     registerGlobalShortcut: (id, accelerator, token) =>
       ipcRenderer.invoke(
         GLOBAL_SHORTCUT_CHANNELS.register,
@@ -643,5 +652,5 @@ if (process.isMainFrame) {
     setHotkeyRecording: (recording) =>
       ipcRenderer.invoke(HOTKEY_CHANNELS.record, recording),
     onCommand: (callback) => subscribe(HOTKEY_CHANNELS.command, callback),
-  } satisfies DesktopApi)
+  } satisfies DesktopApi & DocumentTransferApi)
 }

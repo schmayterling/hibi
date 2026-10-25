@@ -56,7 +56,9 @@ export function useAutosave(document: DocumentState | null, busy: boolean) {
     [
       document?.id,
       document?.revision,
-      document?.savedMarkdown,
+      document
+        ? documentRuntime.session(document.tabId)?.savedSnapshot()
+        : null,
       settings.enabled,
     ],
   )

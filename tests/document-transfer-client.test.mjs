@@ -1,0 +1,185 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
+import {
+  documentTransferApi,
+  loadedDocument,
+} from '../src/renderer/src/document-transfer.ts'
+import { DocumentSession } from '../src/shared/document-session.ts'
+import { SourceStore } from '../src/shared/source-buffer.ts'
+import { SourceTransferSender } from '../src/shared/source-transfer.ts'
+
+function fixture(current, baseline = current) {
+  const head = {
+    tabId: 'one',
+    revision: 1,
+    contentVersion: 7,
+    streamId: 'stream',
+    length: current.length + (baseline === current ? 0 : baseline.length),
+  }
+  const chunks = function* () {
+    for (const source of baseline === current ? [current] : [current, baseline])
+      for (let at = 0; at < source.length; at += 4096)
+        yield source.slice(at, at + 4096)
+  }
+  const sender = new SourceTransferSender(head, chunks()),
+    messages = []
+  const wire = {
+    tabId: 'one',
+    revision: 1,
+    contentVersion: 7,
+    tabs: [{ id: 'one', name: 'one.md', dirty: current !== baseline }],
+    tabsEnabled: true,
+    id: 'file',
+    ephemeral: false,
+    name: 'one.md',
+    dirty: current !== baseline,
+    canAutosave: true,
+    documentTransfer: head,
+    sourceLength: current.length,
+    savedLength: baseline.length,
+    sameSource: current === baseline,
+  }
+  let aborted = 0,
+    finished = false,
+    stale = false
+  const native = {
+    getDocument: async () => wire,
+    readDocumentTransfer: async (request) => {
+      if (stale) throw new Error('stale')
+      const message = sender.read(request)
+      messages.push(message)
+      return message
+    },
+    finishDocumentTransfer: async (request) => {
+      sender.finish(request)
+      finished = true
+      return head
+    },
+    abortDocumentTransfer: async () => {
+      aborted++
+    },
+    bootstrap: {
+      document: async () => ({ document: wire, info: 'unchanged' }),
+    },
+    immediate: () => true,
+  }
+  const api = documentTransferApi(native)
+  return {
+    api,
+    native,
+    wire,
+    messages,
+    setStale: () => {
+      stale = true
+    },
+    state: () => ({ aborted, finished }),
+  }
+}
+
+test('renderer hydrates bounded chunks into owned source without reading whole source', async () => {
+  const source = '\uFEFFone\r\n😀 end\r\n'.repeat(10000),
+    baseline = source.slice(0, -20)
+  const f = fixture(source, baseline),
+    document = await f.api.getDocument(),
+    prepared = loadedDocument(document)
+  assert.equal(f.state().finished, true)
+  assert.equal(f.state().aborted, 1)
+  assert.equal(prepared.store.counters().materializations, 0)
+  const runtime = new DocumentRuntime({
+    enqueue() {},
+    onError: (error) => assert.fail(String(error)),
+  })
+  const active = runtime.activate(document)
+  assert.equal(runtime.session().snapshot().sharesRoot(prepared.current), true)
+  assert.equal(prepared.store.counters().materializations, 0)
+  assert.equal(runtime.session().savedSnapshot(), prepared.saved)
+  assert.equal(active.markdown, source)
+  assert.equal(active.savedMarkdown, baseline)
+  assert.equal(active.dirty, true)
+  assert.equal(f.api.immediate(), true)
+  runtime
+    .session()
+    .edit([{ from: 1, to: 1, insert: 'new' }], 'source', 'typing')
+  assert.equal(document.markdown, source)
+  runtime.dispose()
+})
+
+test('50 mib native load never crosses a bridge as one string and stays bounded per append', async () => {
+  const source = 'x'.repeat(50 * 1024 * 1024),
+    f = fixture(source)
+  const document = await f.api.getDocument(),
+    prepared = loadedDocument(document)
+  assert.equal(prepared.store.snapshot().utf16Length, source.length)
+  assert.equal(f.messages.length, 800)
+  assert.ok(
+    f.messages.every(
+      (message) =>
+        message.chunks.length <= 16 &&
+        message.chunks.reduce((sum, chunk) => sum + chunk.length, 0) <= 65536,
+    ),
+  )
+  assert.ok(prepared.store.counters().maxLoadUnitsScanned <= 65536)
+  assert.equal(prepared.store.counters().materializations, 0)
+  assert.equal(prepared.saved, prepared.store.snapshot())
+})
+
+test('nested bootstrap responses hydrate and concurrent consumers share one stream', async () => {
+  const f = fixture('first\r\n😀last')
+  const [a, b] = await Promise.all([
+    f.api.bootstrap.document(),
+    f.api.getDocument(),
+  ])
+  assert.equal(a.document, b)
+  assert.equal(a.document.markdown, 'first\r\n😀last')
+  assert.equal(a.info, 'unchanged')
+  assert.equal(f.messages.length, 1)
+})
+
+test('version changes abort before publication and leave native text untouched', async () => {
+  const f = fixture('x'.repeat(100000)),
+    read = f.native.readDocumentTransfer
+  let calls = 0
+  f.native.readDocumentTransfer = async (request) => {
+    const value = await read(request)
+    if (++calls === 1) f.setStale()
+    return value
+  }
+  // Build another wrapper so the test uses the replaced transport function.
+  const api = documentTransferApi(f.native)
+  await assert.rejects(api.getDocument(), /stale/)
+  assert.deepEqual(f.state(), { aborted: 1, finished: false })
+})
+
+test('a reused empty tab with a new revision and file identity replaces its old source', async () => {
+  const empty = fixture(''),
+    opened = fixture('opened source')
+  empty.wire.id = 'untitled'
+  opened.wire.revision = opened.wire.documentTransfer.revision = 2
+  const runtime = new DocumentRuntime({
+    enqueue() {},
+    onError: (error) => assert.fail(String(error)),
+  })
+  runtime.activate(await empty.api.getDocument())
+  const document = await opened.api.getDocument()
+  assert.equal(runtime.activate(document).markdown, 'opened source')
+  runtime.dispose()
+})
+
+test('preloaded sessions retain explicit kernel limits without scanning their source', () => {
+  const store = new SourceStore('kept', { tabId: 'a', revision: 0 })
+  const scanned = store.counters().unitsScanned
+  const session = new DocumentSession(store, store.snapshot().document, 0, {
+    maximumBytes: 4,
+    enqueue() {},
+    onError: (error) => assert.fail(String(error)),
+  })
+  assert.equal(session.snapshot().sharesRoot(store.snapshot()), true)
+  assert.throws(
+    () => session.edit([{ from: 4, to: 4, insert: 'x' }], 'source', 'typing'),
+    /size limit/,
+  )
+  assert.equal(session.snapshot().sliceRaw(0, 4), 'kept')
+  assert.equal(store.counters().unitsScanned, scanned)
+  session.dispose()
+})

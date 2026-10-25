@@ -11,11 +11,12 @@ import type {
   ViewId,
   ViewTarget,
 } from '../../shared/foundation-contracts.ts'
-import type { SourceSnapshot } from '../../shared/source-buffer.ts'
+import { type SourceSnapshot, SourceStore } from '../../shared/source-buffer.ts'
 import type {
   RawEdit,
   SourceOperation,
 } from '../../shared/source-operations.ts'
+import { loadedDocument } from './document-transfer.ts'
 
 type RuntimeOptions = {
   /** Combined retained history across open tabs; payload bytes are estimated. */
@@ -384,14 +385,41 @@ export class DocumentRuntime {
   activate(document: DocumentState, replaceLocal = false) {
     this.#updating = true
     try {
-      const { markdown, savedMarkdown, ...metadata } = document
+      const prepared = loadedDocument(document)
+      const {
+        tabId,
+        tabs,
+        tabsEnabled,
+        id,
+        ephemeral,
+        name,
+        dirty,
+        revision,
+        contentVersion,
+        canAutosave,
+      } = document
+      const metadata = {
+        tabId,
+        tabs,
+        tabsEnabled,
+        id,
+        ephemeral,
+        name,
+        dirty,
+        revision,
+        contentVersion,
+        canAutosave,
+      }
       let session = this.#sessions.get(document.tabId)
       const local = session?.snapshot()
       if (
         session &&
         local &&
         (local.version !== document.contentVersion ||
-          local.materialize() !== markdown)
+          (prepared &&
+            local.document.revision !== document.revision &&
+            this.#metadata.get(document.tabId)?.id !== document.id) ||
+          (!prepared && local.materialize() !== document.markdown))
       ) {
         const retained = session.state()
         if (
@@ -409,7 +437,15 @@ export class DocumentRuntime {
       }
       if (!session) {
         session = new DocumentSession(
-          markdown,
+          prepared
+            ? prepared.store.ownsCurrentSnapshot(prepared.current)
+              ? prepared.store
+              : SourceStore.fromSnapshot(
+                  prepared.current,
+                  document,
+                  document.contentVersion,
+                )
+            : document.markdown,
           document,
           document.contentVersion,
           {
@@ -454,7 +490,14 @@ export class DocumentRuntime {
         const progress = this.#saves.get(document.tabId)
         if (progress) progress.epoch++
       }
-      session.importSaved(savedMarkdown)
+      session.importSaved(
+        prepared
+          ? prepared.saved === prepared.current &&
+            session.snapshot().version === document.contentVersion
+            ? session.snapshot()
+            : prepared.saved
+          : document.savedMarkdown,
+      )
       this.#active = session
       this.#activeId = document.tabId
       this.#metadata.set(document.tabId, metadata)
@@ -526,7 +569,15 @@ export class DocumentRuntime {
       return null
     this.#updating = true
     try {
-      session.importSaved(document.savedMarkdown)
+      const prepared = loadedDocument(document)
+      session.importSaved(
+        prepared
+          ? prepared.saved === prepared.current &&
+            session.snapshot().version === document.contentVersion
+            ? session.snapshot()
+            : prepared.saved
+          : document.savedMarkdown,
+      )
       progress.acknowledged = token.sequence
       if (expectedId !== undefined && current.id === expectedId)
         this.#metadata.set(document.tabId, {

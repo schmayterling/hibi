@@ -2,22 +2,17 @@ import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { copyFile, link, open, rename, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { MAX_DOCUMENT_BYTES } from '../shared/desktop'
-import { exceedsUtf8Limit } from '../shared/text-size'
+import type { SourceSnapshot } from '../shared/source-buffer'
 import { retryRename } from './atomic-rename'
 
-// ponytail: cap documents at 2 MiB; move parsing off-thread before raising this.
-
 export function validateMarkdown(value: unknown): asserts value is string {
-  if (
-    typeof value !== 'string' ||
-    exceedsUtf8Limit(value, MAX_DOCUMENT_BYTES)
-  ) {
-    throw new Error('Use a UTF-8 text document no larger than 2 MiB.')
-  }
+  if (typeof value !== 'string')
+    throw new Error('Choose a UTF-8 text document.')
 }
 
-export async function readMarkdown(path: string): Promise<string> {
+export async function* readMarkdownChunks(
+  path: string,
+): AsyncGenerator<string> {
   const file = await open(
     path,
     constants.O_RDONLY | (constants.O_NONBLOCK ?? 0),
@@ -26,45 +21,65 @@ export async function readMarkdown(path: string): Promise<string> {
     const info = await file.stat()
     if (!info.isFile())
       throw new Error('Choose a text file, not a folder or device.')
-    if (info.size > MAX_DOCUMENT_BYTES)
-      throw new Error(
-        'This document exceeds the 2 MiB limit. Open a smaller file.',
-      )
-    const bytes = Buffer.alloc(info.size + 1)
-    let bytesRead = 0
-    while (bytesRead < bytes.length) {
+    const bytes = Buffer.allocUnsafe(65536),
+      decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+    let offset = 0
+    while (offset < info.size) {
       const chunk = await file.read(
         bytes,
-        bytesRead,
-        bytes.length - bytesRead,
-        bytesRead,
+        0,
+        Math.min(bytes.length, info.size - offset),
+        offset,
       )
-      if (!chunk.bytesRead) break
-      bytesRead += chunk.bytesRead
+      if (!chunk.bytesRead)
+        throw new Error('The file changed while opening. Try again.')
+      offset += chunk.bytesRead
+      const text = decoder.decode(bytes.subarray(0, chunk.bytesRead), {
+        stream: true,
+      })
+      for (let from = 0; from < text.length; from += 65536)
+        yield text.slice(from, from + 65536)
     }
-    if (bytesRead !== info.size)
-      throw new Error('The file changed while opening. Try again.')
-    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
-      bytes.subarray(0, bytesRead),
+    const extra = await file.read(bytes, 0, 1, offset),
+      after = await file.stat()
+    if (
+      extra.bytesRead ||
+      after.size !== info.size ||
+      after.mtimeMs !== info.mtimeMs ||
+      after.ctimeMs !== info.ctimeMs
     )
+      throw new Error('The file changed while opening. Try again.')
+    const tail = decoder.decode()
+    if (tail) yield tail
   } finally {
     await file.close()
   }
 }
 
+export async function readMarkdown(path: string): Promise<string> {
+  const chunks: string[] = []
+  for await (const chunk of readMarkdownChunks(path)) chunks.push(chunk)
+  return chunks.join('')
+}
+
 export async function writeMarkdown(
   path: string,
-  markdown: string,
+  markdown: string | SourceSnapshot,
   exclusive = false,
   canCommit?: () => boolean,
 ): Promise<void> {
-  validateMarkdown(markdown)
-  return writeText(path, markdown, exclusive, canCommit)
+  if (typeof markdown === 'string') validateMarkdown(markdown)
+  return writeText(
+    path,
+    typeof markdown === 'string' ? markdown : markdown.encodedChunks(),
+    exclusive,
+    canCommit,
+  )
 }
 
 export async function writeText(
   path: string,
-  text: string | Uint8Array,
+  text: string | Uint8Array | Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
   exclusive = false,
   canCommit?: () => boolean,
 ): Promise<void> {

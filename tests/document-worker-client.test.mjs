@@ -3,6 +3,7 @@ import test from 'node:test'
 import { DocumentWorkerClient } from '../src/renderer/src/document-worker-client.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
+import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const wait = async (predicate) => {
   const end = Date.now() + 3000
@@ -19,7 +20,7 @@ class TestWorker {
   onerror = null
   onmessageerror = null
   service = new DocumentWorkerService((reply) =>
-    queueMicrotask(() => {
+    setImmediate(() => {
       if (!this.terminated) this.onmessage?.({ data: structuredClone(reply) })
     }),
   )
@@ -27,7 +28,7 @@ class TestWorker {
     const copy = structuredClone(message)
     this.messages.push(copy)
     if (!this.blocked)
-      queueMicrotask(() => {
+      setImmediate(() => {
         if (!this.terminated) this.service.receive(copy)
       })
   }
@@ -300,13 +301,219 @@ test('client lazily bootstraps immutable chunks and applies an exact operation s
   assert.equal(f.results.at(-1).location.total, 20001)
   assert.equal(f.session.counters().materializations, 0)
   const first = f.workers[0].messages[0]
-  assert.equal(first.type, 'load')
-  assert.ok(first.chunks.every((chunk) => chunk.length <= 65536))
+  assert.equal(first.type, 'load-start')
+  assert.ok(
+    f.workers[0].messages.some((message) => message.type === 'load-finish'),
+  )
   f.append(' one')
   await wait(() => f.results.at(-1).location.total === 20002)
   assert.equal(f.workers.length, 1)
   assert.ok(f.workers[0].messages.some((message) => message.type === 'edit'))
   assert.deepEqual(f.errors, [])
+})
+
+test('client streams 50 mib and nonascii above 20 mib with bounded append work and task yields', async (t) => {
+  const original = SourceStore.loader
+  let published
+  t.mock.method(SourceStore, 'loader', (...args) => {
+    const loader = original(...args)
+    return {
+      append: loader.append,
+      finish() {
+        published = loader.finish()
+        return published
+      },
+    }
+  })
+  for (const [pattern, units] of [
+    ['a', 50 * 1024 * 1024],
+    ['中😀\r\n', 12 * 1024 * 1024],
+  ]) {
+    const source =
+      '\ufeff' +
+      pattern.repeat(Math.ceil(units / pattern.length)).slice(0, units) +
+      '\ud800'
+    assert.ok(
+      Buffer.byteLength(source) > (pattern === 'a' ? 50 : 20) * 1024 * 1024,
+    )
+    const done = Promise.withResolvers()
+    const f = fixture(t, source, {
+      result: () => done.resolve(),
+      error: (message) => done.reject(new Error(message)),
+    })
+    f.session.counters(true)
+    published = undefined
+    f.find('')
+    await wait(() => f.workers.length)
+    const worker = f.workers[0]
+    assert.equal(worker.messages[0].type, 'load-start')
+    let turns = 0
+    const tick = () => {
+      turns++
+      if (!published && !worker.terminated) setImmediate(tick)
+    }
+    setImmediate(tick)
+    await done.promise
+    assert.deepEqual(f.errors, [])
+    assert.ok(published)
+    const chunks = worker.messages.filter(
+      (message) => message.type === 'load-chunk',
+    )
+    assert.ok(chunks.length >= Math.ceil(source.length / 65536))
+    assert.ok(
+      turns >= chunks.length,
+      'bootstrap must yield through worker tasks',
+    )
+    let transferred = 0
+    for (const { chunk } of chunks) {
+      const size = chunk.chunks.reduce((sum, text) => sum + text.length, 0)
+      assert.ok(size <= 65536)
+      assert.ok(chunk.chunks.length <= 16)
+      transferred += size
+    }
+    assert.equal(transferred, source.length)
+    assert.equal(
+      worker.messages.some((message) => message.type === 'load'),
+      false,
+    )
+    assert.equal(
+      worker.messages.filter((message) => message.type === 'load-finish')
+        .length,
+      1,
+    )
+    assert.equal(f.workers.length, 1)
+    const counters = published.counters()
+    assert.equal(
+      counters.loadAppends,
+      chunks.reduce((sum, { chunk }) => sum + chunk.chunks.length, 0),
+    )
+    assert.ok(counters.maxLoadInputUnits <= 65536)
+    assert.ok(counters.maxLoadUnitsScanned <= 67584, JSON.stringify(counters))
+    assert.ok(counters.maxLoadTreeWork < 10000, JSON.stringify(counters))
+    assert.ok(
+      counters.unitsScanned <= source.length + counters.loadAppends * 2048,
+    )
+    assert.equal(counters.materializations, 0)
+    t.diagnostic(
+      JSON.stringify({
+        bytes: published.snapshot().utf8Bytes,
+        messages: chunks.length,
+        maxMessageUnits: Math.max(
+          ...chunks.map(({ chunk }) =>
+            chunk.chunks.reduce((sum, text) => sum + text.length, 0),
+          ),
+        ),
+        appends: counters.loadAppends,
+        maxAppendUnits: counters.maxLoadInputUnits,
+        maxAppendScanned: counters.maxLoadUnitsScanned,
+        maxAppendTreeWork: counters.maxLoadTreeWork,
+      }),
+    )
+    assert.equal(f.session.counters().materializations, 0)
+    assert.equal(f.session.counters().sourceUnitsRead, source.length)
+    let offset = 0
+    for (const part of published.snapshot().chunks()) {
+      assert.equal(part, source.slice(offset, offset + part.length))
+      offset += part.length
+    }
+    assert.equal(offset, source.length)
+    assert.equal(published.snapshot().utf8Bytes, Buffer.byteLength(source))
+    f.append('é')
+    await wait(() => published.snapshot().version === 1)
+    assert.equal(
+      published.snapshot().sliceRaw(source.length, source.length + 1),
+      'é',
+    )
+    f.client.dispose()
+    f.session.dispose()
+  }
+})
+
+test('edits and document changes during bootstrap restart current source and ignore stale acknowledgements', async (t) => {
+  const f = fixture(t, 'one '.repeat(40000), {
+    worker: () => {
+      const worker = new TestWorker(),
+        block = f.workers.length === 0 || f.workers.length === 2,
+        post = worker.postMessage.bind(worker)
+      worker.postMessage = (message) => {
+        if (block && message.type === 'load-chunk') worker.blocked = true
+        post(message)
+      }
+      f.workers.push(worker)
+      return worker
+    },
+  })
+  f.find('one')
+  await wait(() => f.workers.length)
+  const first = f.workers[0]
+  first.blocked = true
+  await wait(() =>
+    first.messages.some((message) => message.type === 'load-chunk'),
+  )
+  const stale = first.messages.at(-1)
+  f.append('one')
+  assert.equal(first.terminated, true)
+  first.onmessage({ data: { type: 'ack', epoch: stale.epoch, version: 0 } })
+  await wait(() => f.results.length)
+  assert.equal(f.workers.length, 2)
+  assert.equal(f.workers[1].messages[0].head.contentVersion, 1)
+  assert.equal(f.results.at(-1).location.total, 40001)
+  f.workers[1].onerror({ preventDefault() {} })
+  await wait(() => f.workers.length === 3)
+  const third = f.workers[2]
+  third.blocked = true
+  await wait(() =>
+    third.messages.some((message) => message.type === 'load-chunk'),
+  )
+  f.session.reidentify({ tabId: 'saved', revision: 2 })
+  await wait(() => f.workers.length === 4 && f.results.length === 2)
+  assert.equal(third.terminated, true)
+  assert.equal(f.workers[3].messages[0].head.tabId, 'saved')
+  assert.equal(f.workers[3].messages[0].head.revision, 2)
+  assert.equal(f.workers[3].messages[0].head.contentVersion, 1)
+  assert.equal(f.session.snapshot().version, 1)
+  assert.deepEqual(f.errors, [])
+})
+
+test('client requires ordered bootstrap acknowledgements and publication before querying', async (t) => {
+  const f = fixture(t, 'one', {
+    worker: () => {
+      const worker = new TestWorker()
+      worker.blocked = true
+      f.workers.push(worker)
+      return worker
+    },
+  })
+  f.find('one')
+  await wait(() => f.workers.length)
+  const first = f.workers[0],
+    start = first.messages[0]
+  first.onmessage({
+    data: {
+      type: 'load-ack',
+      epoch: start.epoch,
+      request: { streamId: start.head.streamId, sequence: 1 },
+    },
+  })
+  assert.equal(first.terminated, true)
+  await wait(() => f.workers.length === 2)
+  const second = f.workers[1],
+    next = second.messages[0]
+  second.onmessage({
+    data: {
+      type: 'load-ack',
+      epoch: next.epoch,
+      request: { streamId: next.head.streamId, sequence: 0 },
+    },
+  })
+  assert.equal(second.messages.at(-1).type, 'load-chunk')
+  assert.equal(
+    second.messages.some((message) => message.type === 'find'),
+    false,
+  )
+  second.onmessage({ data: { type: 'ack', epoch: next.epoch, version: 0 } })
+  assert.equal(second.terminated, true)
+  assert.equal(f.errors.length, 1)
 })
 
 test('client coalesces superseded queries and ignores late replies and errors from terminated generations', async (t) => {
@@ -348,7 +555,7 @@ test('client coalesces superseded queries and ignores late replies and errors fr
   assert.equal(f.results.length, before)
   assert.equal(f.workers[1].terminated, false)
   assert.equal(f.session.snapshot().version, 8)
-  assert.equal(f.workers[1].messages[0].version, 8)
+  assert.equal(f.workers[1].messages[0].head.contentVersion, 8)
   await wait(() => f.results.at(-1).location.total === 10000)
   assert.deepEqual(f.errors, [])
 })
@@ -416,5 +623,5 @@ test('a new document identity gets a fresh worker after a failed generation', as
   const freshWorker = await freshFind
   assert.equal(workers.length, 3)
   assert.equal(freshWorker, workers[2])
-  assert.equal(freshWorker.messages[0].document.revision, 1)
+  assert.equal(freshWorker.messages[0].head.revision, 1)
 })

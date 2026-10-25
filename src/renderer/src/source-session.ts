@@ -46,6 +46,81 @@ export function sourceEditorText(source: SourceSnapshot): Text {
   return Text.of(lines)
 }
 
+export type SourceEditorTextTask = Readonly<{
+  sourceUnits: number
+  chunks: number
+  appends: number
+  maxLines: number
+}>
+
+/** Build only bounded native Text pieces before yielding to another browser task. */
+export async function sourceEditorTextCooperatively(
+  source: SourceSnapshot,
+  {
+    signal,
+    isCurrent = () => true,
+    yieldTask,
+    onTask,
+  }: {
+    signal: AbortSignal
+    isCurrent?: () => boolean
+    yieldTask?: () => Promise<void>
+    onTask?: (work: SourceEditorTextTask) => void
+  },
+): Promise<Text | null> {
+  let text = Text.empty,
+    channel: MessageChannel | undefined
+  const current = () => !signal.aborted && isCurrent()
+  const pause =
+    yieldTask ??
+    (() =>
+      new Promise<void>((resolve) => {
+        channel ??= new MessageChannel()
+        channel.port1.onmessage = () => resolve()
+        channel.port2.postMessage(null)
+      }))
+  try {
+    for (let from = 0; from < source.utf16Length; ) {
+      if (!current()) return null
+      let to = Math.min(from + 16384, source.utf16Length)
+      if (!source.isEditBoundary(to)) to--
+      let lines = [''],
+        chunks = 0,
+        appends = 0,
+        maxLines = 1
+      const append = () => {
+        maxLines = Math.max(maxLines, lines.length)
+        text = text.append(Text.of(lines))
+        appends++
+        lines = ['']
+      }
+      for (const chunk of normalizedChunks(source, from, to)) {
+        chunks++
+        let start = 0
+        for (
+          let end = chunk.indexOf('\n');
+          end >= 0;
+          end = chunk.indexOf('\n', start)
+        ) {
+          lines[lines.length - 1] += chunk.slice(start, end)
+          lines.push('')
+          if (lines.length === 512) append()
+          start = end + 1
+        }
+        lines[lines.length - 1] += chunk.slice(start)
+      }
+      append()
+      onTask?.({ sourceUnits: to - from, chunks, appends, maxLines })
+      from = to
+      if (from < source.utf16Length) await pause()
+    }
+    return current() ? text : null
+  } finally {
+    channel?.port1.close()
+    channel?.port2.close()
+  }
+}
+
 const rawSelection = (
   source: SourceSnapshot,
   selection: EditorSelection,

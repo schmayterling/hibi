@@ -3,6 +3,7 @@ import { mkdir, readFile, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app } from 'electron'
 import type { DocumentVersion } from '../shared/history'
+import type { SourceSnapshot } from '../shared/source-buffer'
 import { readMarkdown, writeText } from './files'
 
 type Version = DocumentVersion & { hash: string }
@@ -60,7 +61,7 @@ export async function previewVersion(
 }
 export async function recordVersions(
   path: string,
-  markdowns: string[],
+  markdowns: (string | SourceSnapshot)[],
 ): Promise<void> {
   const current = await versions(path)
   const folder = directory(path)
@@ -68,17 +69,39 @@ export async function recordVersions(
   let copyFailure: { error: unknown } | undefined
   try {
     for (const markdown of markdowns) {
-      const hash = createHash('sha256').update(markdown).digest('hex')
+      const digest = createHash('sha256')
+      let bytes = 0
+      if (typeof markdown === 'string') {
+        digest.update(markdown)
+        bytes = Buffer.byteLength(markdown)
+      } else {
+        let started = performance.now(),
+          scanned = 0
+        for (const chunk of markdown.encodedChunks()) {
+          digest.update(chunk)
+          bytes += chunk.byteLength
+          scanned += chunk.byteLength
+          if (scanned >= 65536 || performance.now() - started >= 1) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 0))
+            scanned = 0
+            started = performance.now()
+          }
+        }
+      }
+      const hash = digest.digest('hex')
       if (next.at(-1)?.hash === hash) continue
       if (next.length === current.length)
         await mkdir(folder, { recursive: true, mode: 0o700 })
       const id = randomUUID()
-      await writeText(join(folder, `${id}.md`), markdown)
+      await writeText(
+        join(folder, `${id}.md`),
+        typeof markdown === 'string' ? markdown : markdown.encodedChunks(),
+      )
       next.push({
         id,
         hash,
         savedAt: Date.now(),
-        bytes: Buffer.byteLength(markdown),
+        bytes,
       })
     }
   } catch (error) {

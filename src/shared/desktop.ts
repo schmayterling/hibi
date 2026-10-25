@@ -5,6 +5,9 @@ export const BOOTSTRAP_CHANNELS = {
 } as const
 export const DOCUMENT_CHANNELS = {
   get: 'document:get',
+  transferRead: 'document:transfer-read',
+  transferFinish: 'document:transfer-finish',
+  transferAbort: 'document:transfer-abort',
   update: 'document:update',
   append: 'document:append',
   recoveryHead: 'document:recovery-head',

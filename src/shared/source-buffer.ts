@@ -19,7 +19,7 @@ export type SourceBufferOptions = Readonly<{
   fanout?: number
   leafCapacity?: number
   chunkUnits?: number
-  maximumBytes?: number
+  maximumBytes?: number | undefined
 }>
 export type SourceBufferCounters = {
   nodeVisits: number
@@ -83,6 +83,7 @@ type Config = Readonly<{
 }>
 type Axis = 'rawUnits' | 'normalizedUnits' | 'utf8Bytes' | 'breaks'
 const roots = new WeakMap<SourceSnapshot, Node>()
+const trees = new WeakMap<SourceSnapshot, PieceTree>()
 const increment = (value: number) => {
   if (!Number.isSafeInteger(value + 1))
     throw new Error('Source generation exhausted.')
@@ -560,6 +561,7 @@ export class SourceSnapshot {
     this.storageEpoch = storageEpoch
     this.rootId = rootId
     roots.set(this, root)
+    trees.set(this, tree)
     Object.freeze(this)
   }
 
@@ -859,6 +861,33 @@ export class SourceStore {
       this.#rootId,
     )
     this.#accepted.add(this.#current)
+  }
+  /** Fork an immutable generation without reading its source or rebuilding its indexes. */
+  static fromSnapshot(
+    snapshot: SourceSnapshot,
+    document = snapshot.document,
+    version = snapshot.version,
+    limits: Pick<SourceBufferOptions, 'maximumBytes'> = {},
+  ) {
+    const store = new SourceStore('', document, version, {
+      ...trees.get(snapshot)!.config,
+      ...limits,
+    })
+    if (
+      store.#tree.config.maximumBytes !== undefined &&
+      snapshot.utf8Bytes > store.#tree.config.maximumBytes
+    )
+      throw new Error('Source exceeds the document size limit.')
+    store.#current = new SourceSnapshot(
+      store.#tree,
+      roots.get(snapshot)!,
+      store.#current.document,
+      version,
+      0,
+      0,
+    )
+    store.#accepted.add(store.#current)
+    return store
   }
   /** Unpublished construction; callers yield or acknowledge between bounded appends. */
   static loader(

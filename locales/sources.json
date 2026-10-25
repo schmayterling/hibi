@@ -703,6 +703,7 @@
     "src/addons/import-notion/convert.ts"
   ],
   "5389a69dd998": [
+    "src/main/files.ts",
     "src/main/workspace-files.ts"
   ],
   "ddfe19879e4e": [
@@ -3059,6 +3060,7 @@
     "src/addons/dictionary/pack-store.ts"
   ],
   "5a2f299940cc": [
+    "src/main/index.ts",
     "src/shared/document-journal.ts"
   ],
   "648a4f2f5294": [
@@ -3068,6 +3070,7 @@
     "src/shared/document-worker-service.ts"
   ],
   "5f0c6a56de07": [
+    "src/preload/index.ts",
     "src/shared/document-checkpoint.ts"
   ],
   "62734d46cb24": [
@@ -3078,6 +3081,7 @@
     "src/shared/source-transfer.ts"
   ],
   "dc0dc106489e": [
+    "src/renderer/src/document-transfer.ts",
     "src/shared/source-transfer.ts"
   ],
   "c2e3add49974": [
@@ -5217,6 +5221,7 @@
     "src/shared/source-buffer.ts"
   ],
   "180c25278220": [
+    "src/shared/document-session.ts",
     "src/shared/source-buffer.ts"
   ],
   "a3ec45d2752b": [
@@ -5700,6 +5705,10 @@
     "src/shared/document-checkpoint-stream.ts",
     "src/shared/document-checkpoint.ts"
   ],
+  "f8848b91279e": [
+    "src/main/document-transfer.ts",
+    "src/renderer/src/document-transfer.ts"
+  ],
   "4f933c48f0a0": [
     "src/renderer/src/document-target-edits.ts"
   ],
@@ -5763,6 +5772,8 @@
     "src/shared/source-transfer.ts"
   ],
   "9dc071e43d04": [
+    "src/main/document-transfer.ts",
+    "src/shared/document-worker-service.ts",
     "src/shared/source-transfer.ts"
   ],
   "bc01d897e63b": [
@@ -6260,9 +6271,6 @@
   ],
   "f70a180e8466": [
     "src/addons/_shared/import-markdown.ts"
-  ],
-  "b3e591b2b962": [
-    "src/main/files.ts"
   ],
   "73b6a9218822": [
     "src/addons/bbcode/render.ts"
@@ -6818,9 +6826,6 @@
   ],
   "9098e6f8753c": [
     "src/main/addon-repository.ts"
-  ],
-  "4e3017d9661a": [
-    "src/main/files.ts"
   ],
   "837f32b3dfef": [
     "src/addons/documentation/options.ts"

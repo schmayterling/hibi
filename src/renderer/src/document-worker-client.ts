@@ -14,6 +14,10 @@ import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import type { SourceOperation } from '../../shared/source-operations.ts'
 import type { ReferenceValue } from '../../shared/source-references.ts'
 import type { SearchLocation } from '../../shared/source-search-index.ts'
+import {
+  type SourceTransferRequest,
+  SourceTransferSender,
+} from '../../shared/source-transfer.ts'
 
 type Transport = Pick<
   Worker,
@@ -48,13 +52,18 @@ export class DocumentWorkerClient {
   #worker: Transport | null = null
   #epoch = ''
   #document: SourceSnapshot['document']
-  #bootstrap: SourceSnapshot | null = null
+  #bootstrap: {
+    source: SourceSnapshot
+    sender: SourceTransferSender
+    request: SourceTransferRequest
+    done: boolean
+    finishing: boolean
+  } | null = null
   #loaded = false
   #ack = -1
   #sent = -1
   readonly #pending = new Map<number, number>()
   #bytes = 0
-  #queued: SourceOperation[] = []
   #latest: Request | null = null
   #requestId = 0
   #sentRequest = 0
@@ -80,7 +89,9 @@ export class DocumentWorkerClient {
       session.subscribeOperations((prepared) => {
         if (this.#disposed || this.#failed) return
         const operation = prepared.operation
-        if (this.#bootstrap || this.#loaded) {
+        if (this.#bootstrap) {
+          this.#restart()
+        } else if (this.#loaded) {
           const bytes = journalMessageBytes(operation)
           if (
             this.#bytes + bytes >
@@ -98,8 +109,7 @@ export class DocumentWorkerClient {
             this.#metadataReleasing = false
             clearTimeout(this.#metadataDeadline)
             this.#metadataDeadline = undefined
-            if (this.#loaded) this.#sendOperation(operation)
-            else this.#queued.push(operation)
+            this.#sendOperation(operation)
           }
         }
         options.changed()
@@ -295,8 +305,56 @@ export class DocumentWorkerClient {
   }
   #reply(reply: DocumentWorkerReply) {
     if (this.#disposed || reply.epoch !== this.#epoch) return
-    if (reply.type === 'ack') {
-      if (!Number.isSafeInteger(reply.version) || reply.version > this.#sent) {
+    if (reply.type === 'load-ack') {
+      const bootstrap = this.#bootstrap
+      if (
+        !bootstrap ||
+        bootstrap.finishing ||
+        reply.request?.streamId !== bootstrap.request.streamId ||
+        reply.request?.sequence !== bootstrap.request.sequence
+      ) {
+        this.#fail(
+          new Error('Document worker acknowledged an unknown version.'),
+        )
+        return
+      }
+      if (!this.#session.ownsCurrentSnapshot(bootstrap.source)) {
+        this.#restart()
+        return
+      }
+      clearTimeout(this.#deadline)
+      this.#deadline = undefined
+      try {
+        if (bootstrap.done) {
+          bootstrap.sender.finish(reply.request)
+          bootstrap.finishing = true
+          this.#sent = bootstrap.source.version
+          this.#post({
+            type: 'load-finish',
+            epoch: this.#epoch,
+            request: reply.request,
+          })
+        } else {
+          const chunk = bootstrap.sender.read(reply.request)
+          bootstrap.request = {
+            streamId: chunk.streamId,
+            sequence: chunk.sequence + 1,
+          }
+          bootstrap.done = chunk.done
+          this.#post({ type: 'load-chunk', epoch: this.#epoch, chunk })
+        }
+      } catch (error) {
+        this.#fail(error)
+        return
+      }
+    } else if (reply.type === 'ack') {
+      if (
+        !Number.isSafeInteger(reply.version) ||
+        reply.version > this.#sent ||
+        (this.#bootstrap &&
+          (!this.#bootstrap.finishing ||
+            reply.version !== this.#bootstrap.source.version))
+      ) {
         this.#fail(
           new Error('Document worker acknowledged an unknown version.'),
         )
@@ -306,8 +364,10 @@ export class DocumentWorkerClient {
       clearTimeout(this.#deadline)
       this.#deadline = undefined
       this.#ack = reply.version
-      if (this.#bootstrap && reply.version >= this.#bootstrap.version)
+      if (this.#bootstrap) {
         this.#bootstrap = null
+        this.#loaded = true
+      }
       for (const [version, bytes] of this.#pending)
         if (version <= reply.version) {
           this.#pending.delete(version)
@@ -402,8 +462,8 @@ export class DocumentWorkerClient {
     this.#startTimer = this.#deadline = undefined
     this.#worker?.terminate()
     this.#worker = null
+    this.#bootstrap?.sender.close()
     this.#bootstrap = null
-    this.#queued = []
     this.#pending.clear()
     this.#bytes = 0
     this.#loaded = false
@@ -436,31 +496,32 @@ export class DocumentWorkerClient {
     const epoch = this.#epoch
     this.#startTimer = setTimeout(() => {
       this.#startTimer = undefined
-      void this.#start(epoch).catch((error) => {
+      try {
+        this.#start(epoch)
+      } catch (error) {
         if (epoch === this.#epoch) this.#fail(error)
-      })
+      }
     }, 0)
   }
-  async #start(epoch: string) {
+  #start(epoch: string) {
     if (this.#disposed || epoch !== this.#epoch) return
-    const snapshot = this.#session.snapshot()
-    this.#bootstrap = snapshot
-    const chunks: string[] = []
-    let pending = '',
-      started = performance.now()
-    for (const chunk of snapshot.chunks()) {
-      pending += chunk
-      while (pending.length >= 65536) {
-        chunks.push(pending.slice(0, 65536))
-        pending = pending.slice(65536)
-      }
-      if (performance.now() - started >= 1) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 0))
-        if (this.#disposed || epoch !== this.#epoch) return
-        started = performance.now()
-      }
+    const snapshot = this.#session.snapshot(),
+      sender = new SourceTransferSender(
+        {
+          ...snapshot.document,
+          contentVersion: snapshot.version,
+          streamId: epoch,
+          length: snapshot.utf16Length,
+        },
+        snapshot.chunks(),
+      )
+    this.#bootstrap = {
+      source: snapshot,
+      sender,
+      request: { streamId: epoch, sequence: 0 },
+      done: false,
+      finishing: false,
     }
-    if (pending) chunks.push(pending)
     const worker =
       this.#options.worker?.() ??
       new Worker(new URL('./document.worker.ts', import.meta.url), {
@@ -482,20 +543,7 @@ export class DocumentWorkerClient {
         this.#fail(new Error('Could not read a document worker reply.'))
       }
     }
-    this.#sent = snapshot.version
-    this.#loaded = true
-    if (
-      !this.#post({
-        type: 'load',
-        epoch,
-        document: snapshot.document,
-        version: snapshot.version,
-        chunks,
-      })
-    )
-      return
-    for (const operation of this.#queued) this.#sendOperation(operation)
-    this.#queued = []
+    if (!this.#post({ type: 'load-start', epoch, head: sender.head })) return
     this.#watch()
   }
   #fail(error: unknown) {

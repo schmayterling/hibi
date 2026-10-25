@@ -41,15 +41,13 @@ import {
   type AppInfo,
   BOOTSTRAP_CHANNELS,
   DOCUMENT_CHANNELS,
-  MAX_DOCUMENT_BYTES,
 } from '../shared/desktop'
-import {
-  journalHead,
-  parseJournalCheckpoint,
-  verifyJournalCheckpoint,
-} from '../shared/document-checkpoint'
+import { journalHead } from '../shared/document-checkpoint'
 import { createCheckpointVerifier } from '../shared/document-checkpoint-stream'
-import { createJournalReceiver } from '../shared/document-journal'
+import {
+  createJournalReceiver,
+  MAX_JOURNAL_INSERT_UNITS,
+} from '../shared/document-journal'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
 import type { AddonId, WorkspaceTarget } from '../shared/foundation-contracts'
 import {
@@ -158,6 +156,7 @@ import {
   updateDocument,
   updateDocumentEdited,
 } from './document'
+import { createDocumentTransfers } from './document-transfer'
 import { isDocumentName } from './document-types'
 import { externalFileArguments } from './external-files'
 import {
@@ -867,6 +866,7 @@ function showStartupError(window: BrowserWindow | null = mainWindow): void {
 let windowSetupReady = false
 const appendDocumentChange = createJournalReceiver(getDocumentSourceFor)
 const checkpointVerifier = createCheckpointVerifier(getDocumentSourceFor)
+const documentTransfers = createDocumentTransfers()
 function createWindow(): void {
   if (!windowSetupReady) return
   closing = false
@@ -913,6 +913,7 @@ function createWindow(): void {
   window.webContents.on('did-start-loading', () => {
     analysisService.cancel()
     checkpointVerifier.clear()
+    documentTransfers.clear()
   })
   window.webContents.on('render-process-gone', () => {
     backgroundSettingsReady = false
@@ -1370,12 +1371,24 @@ if (!app.requestSingleInstanceLock()) {
           trustedWindow(args[0])
           if (!foundationsIpcBenchmark) {
             await ready
-            return listener(...args)
+            return documentTransfers.encode(
+              args[0].sender.id,
+              await listener(...args),
+              channel === DOCUMENT_CHANNELS.save ||
+                channel === DOCUMENT_CHANNELS.saveTarget ||
+                channel === DOCUMENT_CHANNELS.autosave,
+            )
           }
           foundationsIpcBenchmark.request(channel, args.slice(1))
           try {
             await ready
-            const result = await listener(...args)
+            const result = documentTransfers.encode(
+              args[0].sender.id,
+              await listener(...args),
+              channel === DOCUMENT_CHANNELS.save ||
+                channel === DOCUMENT_CHANNELS.saveTarget ||
+                channel === DOCUMENT_CHANNELS.autosave,
+            )
             foundationsIpcBenchmark.response(channel, result)
             return result
           } catch (error) {
@@ -1958,6 +1971,15 @@ if (!app.requestSingleInstanceLock()) {
         recordingHotkey = value
         window.webContents.setIgnoreMenuShortcuts(value)
       })
+      handle(DOCUMENT_CHANNELS.transferRead, (event, request: unknown) =>
+        documentTransfers.read(event.sender.id, request),
+      )
+      handle(DOCUMENT_CHANNELS.transferFinish, (event, request: unknown) =>
+        documentTransfers.finish(event.sender.id, request),
+      )
+      handle(DOCUMENT_CHANNELS.transferAbort, (event, request: unknown) =>
+        documentTransfers.abort(event.sender.id, request),
+      )
       handle(DOCUMENT_CHANNELS.get, (event) => {
         trustedWindow(event)
         return getDocument()
@@ -2280,6 +2302,11 @@ if (!app.requestSingleInstanceLock()) {
       )
       handle(DOCUMENT_CHANNELS.update, (event, value: unknown) => {
         const window = trustedWindow(event)
+        if (
+          typeof value !== 'string' ||
+          value.length > MAX_JOURNAL_INSERT_UNITS
+        )
+          throw new Error('Invalid document change.')
         updateDocument(value)
         updateDocumentEdited(window)
       })
@@ -2299,13 +2326,7 @@ if (!app.requestSingleInstanceLock()) {
         DOCUMENT_CHANNELS.verifyCheckpoint,
         (event, checkpoint: unknown) => {
           trustedWindow(event)
-          const parsed = parseJournalCheckpoint(checkpoint, MAX_DOCUMENT_BYTES)
-          if ('streamId' in parsed) return checkpointVerifier.begin(parsed)
-          return verifyJournalCheckpoint(
-            () => getDocumentSourceFor(parsed.tabId),
-            parsed,
-            MAX_DOCUMENT_BYTES,
-          )
+          return checkpointVerifier.begin(checkpoint)
         },
       )
       handle(DOCUMENT_CHANNELS.checkpointChunk, (event, chunk: unknown) => {

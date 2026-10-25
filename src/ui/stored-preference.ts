@@ -1,6 +1,12 @@
 const refresh = new Map<string, () => void>()
+const storageHost = globalThis as {
+  addEventListener?: (
+    type: string,
+    listener: (event: { key: string | null }) => void,
+  ) => void
+}
 // Addon editor windows share this origin's storage, so changes in one window reach the others.
-window.addEventListener('storage', (event) => {
+storageHost.addEventListener?.('storage', (event) => {
   if (event.key === null) for (const update of refresh.values()) update()
   else refresh.get(event.key)?.()
 })

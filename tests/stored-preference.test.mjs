@@ -28,11 +28,9 @@ function stores(storage) {
   runInNewContext(outputFiles[0].text, {
     module,
     localStorage: storage,
-    window: {
-      addEventListener(type, listener) {
-        assert.equal(type, 'storage')
-        listeners.push(listener)
-      },
+    addEventListener(type, listener) {
+      assert.equal(type, 'storage')
+      listeners.push(listener)
     },
     require(id) {
       if (id === './EditorCursor') return { loadCursor: () => ({}) }

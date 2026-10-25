@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { stored } from '../../ui/stored-preference.ts'
+import { stored } from '../../ui/stored-preference'
 import { type CursorSettings, loadCursor } from './EditorCursor'
 
 /** Editor preferences shared by the main window and addon editor windows. */

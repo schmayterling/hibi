@@ -4,17 +4,13 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
+import { sourceIndent } from '../src/renderer/src/source-indent.ts'
+import { detectIndentUnit } from '../src/renderer/src/tab-indent.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-test('indentation follows the first indented line', async (t) => {
-  globalThis.window = new EventTarget()
-  t.after(() => {
-    delete globalThis.window
-  })
-  const { sourceIndent } = await import('../src/renderer/src/source-indent.ts')
-  const { detectIndentUnit } = await import('../src/renderer/src/tab-indent.ts')
+test('indentation follows the first indented line', () => {
   assert.equal(detectIndentUnit('a\n  \n\tb'), '\t')
   assert.equal(detectIndentUnit('a\n b\n   c'), '   ')
   assert.equal(detectIndentUnit('        code'), '    ')

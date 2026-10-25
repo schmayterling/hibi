@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { DocumentState } from '../../shared/desktop'
-import { stored } from '../../ui/stored-preference.ts'
+import { stored } from '../../ui/stored-preference'
 import { documentRuntime } from './document-runtime'
 
 export const autosaveDelays = [1000, 2000, 5000, 10000, 30000] as const

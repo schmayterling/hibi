@@ -59,6 +59,7 @@ export function createLayout(
   let spare: ArrayBuffer[] = []
   const settled = () =>
     !simulation ||
+    !nodes.length ||
     (reduced ? remaining <= 0 : simulation.alpha() < simulation.alphaMin())
   function publish() {
     const buffer = spare.pop()

@@ -2,7 +2,7 @@ import type { Editor, EditorEvents } from '@tiptap/core'
 import { closeHistory } from '@tiptap/pm/history'
 import type { Node as RichNode } from '@tiptap/pm/model'
 import { AllSelection, TextSelection, type Transaction } from '@tiptap/pm/state'
-import { Mapping, ReplaceStep, StepMap } from '@tiptap/pm/transform'
+import { Mapping, ReplaceStep } from '@tiptap/pm/transform'
 import { EditorContent, useEditor } from '@tiptap/react'
 import {
   findNext,
@@ -116,6 +116,7 @@ import type { OutlineHeading, OutlineRequest } from './OutlineSidebar'
 import { outlineHeadingAt } from './outline-position'
 import { createPlainSourceSync } from './plain-source-sync'
 import { observeRichAnnotations } from './rich-annotations'
+import { richChangeMap } from './rich-change-map'
 import { createRichParagraphProof } from './rich-paragraph-proof'
 import {
   preserveRichSource,
@@ -2080,26 +2081,9 @@ export function MarkdownEditor({
             emitUpdate: false,
           })
           .command(({ tr }) => {
-            // Positions outside the changed range keep their exact selection,
-            // including select-all and selected nodes.
-            const from = tr.before.content.findDiffStart(tr.doc.content)
-            const to =
-              from === null
-                ? null
-                : tr.before.content.findDiffEnd(tr.doc.content)
-            if (from !== null && to) {
-              const overlap = Math.max(0, from - Math.min(to.a, to.b))
-              tr.setSelection(
-                kept.map(
-                  tr.doc,
-                  new StepMap([
-                    from,
-                    to.a + overlap - from,
-                    to.b + overlap - from,
-                  ]),
-                ),
-              )
-            }
+            // Wherever the old and new previews agree, the selection keeps its
+            // exact place and kind, including select-all, nodes and cells.
+            tr.setSelection(kept.map(tr.doc, richChangeMap(tr.before, tr.doc)))
             if (bookmark) {
               const offset =
                 projected.sourceOffset ?? source.lastIndexOf(projected.content)

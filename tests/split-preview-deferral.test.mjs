@@ -375,3 +375,96 @@ test('split preview catch-up keeps select-all and selected nodes, also across a 
   assert.equal(remaining.includes('![first]'), false, remaining)
   assert.equal(remaining.includes('omega'), false, remaining)
 })
+
+test('split preview catch-up keeps selections in content the edits left alone', {
+  timeout: 60000,
+}, async (t) => {
+  const original =
+    '# notes\n\n![first](https://example.com/a.png)\n\nalpha $x^2$ beta\n\n| a | b |\n| --- | --- |\n| c | d |\n\nomega'
+  const { page, rich, source, preview, pauseClock } = await openSplit(
+    t,
+    original,
+  )
+  const read = () =>
+    rich.evaluate((element) => {
+      const { selection, doc } = element.editor.state
+      return {
+        json: selection.toJSON(),
+        node: selection.node?.type.name ?? null,
+        text: doc.textBetween(selection.from, selection.to, '|', '#'),
+      }
+    })
+  const select = async (kind) => {
+    await rich.evaluate((element, kind) => {
+      const editor = element.editor
+      const positions = []
+      editor.state.doc.descendants((node, pos) => {
+        if (kind === 'node' && node.type.name === 'image') positions.push(pos)
+        if (kind === 'cell' && node.type.name === 'tableCell')
+          positions.push(pos)
+        if (kind === 'text' && node.isText && node.text.includes('beta'))
+          positions.push(pos + node.text.indexOf('beta'))
+      })
+      if (kind === 'node') editor.commands.setNodeSelection(positions[0])
+      else if (kind === 'cell')
+        editor.commands.setCellSelection({
+          anchorCell: positions[0],
+          headCell: positions[1],
+        })
+      else
+        editor.commands.setTextSelection({
+          from: positions[0],
+          to: positions[0] + 4,
+        })
+    }, kind)
+    return read()
+  }
+  // One source transaction; the preview must stay untouched until catch-up.
+  const edit = (kind) =>
+    page.evaluate((kind) => {
+      const { sdk } = window.deferralFixture
+      const view = sdk.codeMirror.view.EditorView.findFromDOM(
+        document.querySelector('.cm-content'),
+      )
+      if (!view.hasFocus) throw new Error('source must own input')
+      const before = document.querySelector('.tiptap').editor.state.doc
+      const text = view.state.doc.toString()
+      view.dispatch({
+        changes:
+          kind === 'final newline'
+            ? [{ from: text.length, insert: '\n' }]
+            : [
+                { from: 0, insert: 'preface\n\n' },
+                { from: text.lastIndexOf('omega') + 5, insert: ' suffix' },
+              ],
+        annotations:
+          sdk.codeMirror.state.Transaction.userEvent.of('input.type'),
+      })
+      return document.querySelector('.tiptap').editor.state.doc === before
+    }, kind)
+  await pauseClock()
+
+  // A final newline changes the source but not the preview.
+  for (const kind of ['text', 'node', 'cell']) {
+    const before = await select(kind)
+    await source.focus()
+    assert.equal(await edit('final newline'), true)
+    await page.clock.runFor(201)
+    assert.equal((await preview()).exact, true)
+    assert.deepEqual(await read(), before, kind)
+  }
+  // Separate edits before and after keep what lies between them selected.
+  for (const kind of ['text', 'cell']) {
+    const before = await select(kind)
+    await source.focus()
+    assert.equal(await edit('around'), true)
+    await page.clock.runFor(201)
+    assert.equal((await preview()).exact, true)
+    const after = await read()
+    assert.deepEqual(
+      { type: after.json.type, text: after.text },
+      { type: before.json.type, text: before.text },
+      kind,
+    )
+  }
+})

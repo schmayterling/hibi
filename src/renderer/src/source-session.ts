@@ -57,6 +57,8 @@ export function sourceEditTransaction(
   changes: readonly SourceEdit[],
   maximumBytes: number,
 ): Transaction | null {
+  if (state.doc.length !== snapshot.normalizedLength)
+    throw new Error('The source editor is synchronizing.')
   const validation = validateSourceEdits(snapshot, changes, maximumBytes)
   if (validation.status !== 'valid') throw new Error(validation.message)
   if (!validation.changed) return null

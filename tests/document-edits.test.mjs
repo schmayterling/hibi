@@ -9,7 +9,6 @@ import {
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
 test('snapshot admission distinguishes conflicts and reads only edited ranges', () => {
-  assert.equal(typeof sourceEdits.validateSourceEdits, 'function')
   const store = new SourceStore('a\r\n😀b'.repeat(30000), {
     tabId: 'test',
     revision: 0,

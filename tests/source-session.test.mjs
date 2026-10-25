@@ -95,6 +95,28 @@ test('addon admission uses exact ranges and rejects native vetoes without flatte
   }
 })
 
+test('addon admission rejects mismatched native lengths before reading source', () => {
+  const f = fixture('a\r\n😀b')
+  const snapshot = f.session.snapshot()
+  f.session.counters(true)
+  for (const doc of ['a', 'a longer native replica'])
+    for (const insert of ['A', 'a'])
+      assert.throws(
+        () =>
+          sourceEditTransaction(
+            EditorState.create({ doc }),
+            snapshot,
+            [{ from: 0, to: 1, insert, expectedText: 'a' }],
+            100,
+          ),
+        /The source editor is synchronizing/,
+      )
+  assert.equal(f.session.counters().sourceUnitsRead, 0)
+  assert.equal(f.session.counters().materializations, 0)
+  assert.equal(f.operations.length, 0)
+  f.session.dispose()
+})
+
 test('addon admission preserves exact byte limits and line-ending-only refusal', () => {
   for (const [source, changes, maximum, error] of [
     [

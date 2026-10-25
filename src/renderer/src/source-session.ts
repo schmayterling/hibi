@@ -7,6 +7,10 @@ import {
   Transaction,
 } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
+import {
+  type SourceEdit,
+  validateSourceEdits,
+} from '../../shared/document-edits.ts'
 import type { DocumentSession } from '../../shared/document-session.ts'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import {
@@ -44,6 +48,49 @@ export function sourceEditorText(source: SourceSnapshot): Text {
   }
   lines.push(parts.join(''))
   return Text.of(lines)
+}
+
+/** Compare only native changed ranges after extension/filter admission. */
+export function sourceEditTransaction(
+  state: EditorState,
+  snapshot: SourceSnapshot,
+  changes: readonly SourceEdit[],
+  maximumBytes: number,
+): Transaction | null {
+  const validation = validateSourceEdits(snapshot, changes, maximumBytes)
+  if (validation.status !== 'valid') throw new Error(validation.message)
+  if (!validation.changed) return null
+  const intended = state.changes(editorChangesFromSource(snapshot, changes))
+  if (intended.empty)
+    throw new Error(
+      'Edits must keep line-ending pairs intact. Use a whole-source transform to change only line endings.',
+    )
+  const transaction = state.update({
+    changes: intended,
+    annotations: [
+      isolateHistory.of('full'),
+      Transaction.userEvent.of('input.addon'),
+    ],
+  })
+  const expected: { from: number; to: number; insert: Text }[] = []
+  intended.iterChanges((from, to, _fromB, _toB, insert) => {
+    expected.push({ from, to, insert })
+  })
+  let index = 0,
+    matches = true
+  transaction.changes.iterChanges((from, to, _fromB, _toB, insert) => {
+    const change = expected[index++]
+    if (
+      !change ||
+      change.from !== from ||
+      change.to !== to ||
+      !insert.eq(change.insert)
+    )
+      matches = false
+  })
+  if (!matches || index !== expected.length)
+    throw new Error('An editor extension changed this edit.')
+  return transaction
 }
 
 const rawSelection = (

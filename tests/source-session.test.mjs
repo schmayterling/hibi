@@ -4,6 +4,7 @@ import { EditorState, Transaction } from '@codemirror/state'
 import {
   createSourceSession,
   sourceEditorText,
+  sourceEditTransaction,
 } from '../src/renderer/src/source-session.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 
@@ -52,6 +53,93 @@ function fixture(source, options = {}, extensions = []) {
   }
   return { session, operations, errors, observations, attach }
 }
+test('addon admission uses exact ranges and rejects native vetoes without flattening', () => {
+  for (const extensions of [
+    [],
+    [EditorState.changeFilter.of(() => false)],
+    [
+      EditorState.transactionFilter.of((tr) => [
+        tr,
+        { changes: { from: tr.newDoc.length, insert: '!' }, sequential: true },
+      ]),
+    ],
+  ]) {
+    const f = fixture('a\r\n😀b'.repeat(30000), {}, extensions)
+    const view = f.attach()
+    f.session.counters(true)
+    const snapshot = f.session.snapshot()
+    const changes = [{ from: 5, to: 6, insert: 'B', expectedText: 'b' }]
+    if (extensions.length)
+      assert.throws(
+        () =>
+          sourceEditTransaction(view.view.state, snapshot, changes, 1000000),
+        /extension changed/,
+      )
+    else {
+      const transaction = sourceEditTransaction(
+        view.view.state,
+        snapshot,
+        changes,
+        1000000,
+      )
+      assert.ok(transaction)
+      view.bridge.dispatch([transaction], view.view, changes)
+      assert.equal(f.session.snapshot().sliceRaw(0, 6), 'a\r\n😀B')
+      view.bridge.undo()
+      assert.equal(f.session.snapshot().sliceRaw(0, 6), 'a\r\n😀b')
+    }
+    assert.equal(f.session.counters().materializations, 0)
+    assert.ok(f.session.counters().sourceUnitsRead < 1000)
+    view.dispose()
+    f.session.dispose()
+  }
+})
+
+test('addon admission preserves exact byte limits and line-ending-only refusal', () => {
+  for (const [source, changes, maximum, error] of [
+    [
+      'é',
+      [{ from: 0, to: 1, insert: '😀', expectedText: 'é' }],
+      3,
+      /size limit/,
+    ],
+    [
+      'a\r\nb',
+      [{ from: 1, to: 3, insert: '\n', expectedText: '\r\n' }],
+      100,
+      /line-ending pairs/,
+    ],
+    [
+      'a\r\nb',
+      [{ from: 2, to: 2, insert: 'x', expectedText: '' }],
+      100,
+      /split/,
+    ],
+    [
+      'abc',
+      [{ from: 1, to: 2, insert: 'x', expectedText: 'wrong' }],
+      100,
+      /text at/,
+    ],
+  ]) {
+    const f = fixture(source)
+    const view = f.attach()
+    assert.throws(
+      () =>
+        sourceEditTransaction(
+          view.view.state,
+          f.session.snapshot(),
+          changes,
+          maximum,
+        ),
+      error,
+    )
+    assert.equal(f.session.snapshot().version, 0)
+    view.dispose()
+    f.session.dispose()
+  }
+})
+
 const type = (from, insert, time) => ({
   changes: { from, insert },
   selection: { anchor: from + insert.length },

@@ -21,6 +21,7 @@ diagnostics.start({
   rendererUrl: 'app://hibi/',
   trusted: () => false,
 })
+const armedBeforeReady = !!Reflect.get(diagnostics, 'stallTimer')
 const sink = () => Reflect.get(diagnostics, 'sink') as LocalDiagnosticSink
 let dialogs = 0
 dialog.showErrorBox = () => {
@@ -29,6 +30,30 @@ dialog.showErrorBox = () => {
 
 Object.assign(globalThis, {
   diagnosticFixture: {
+    sampling() {
+      return {
+        armedBeforeReady,
+        armed: !!Reflect.get(diagnostics, 'stallTimer'),
+      }
+    },
+    visibility(visible: boolean, minimized = false) {
+      const window = BrowserWindow.getAllWindows()[0]
+      window.isVisible = () => visible
+      window.isMinimized = () => minimized
+      window.emit(minimized ? 'minimize' : visible ? 'show' : 'hide')
+      return !!Reflect.get(diagnostics, 'stallTimer')
+    },
+    async failSink() {
+      Reflect.set(sink(), 'fs', {
+        ...process.getBuiltinModule('node:fs/promises'),
+        lstat: async () => {
+          throw new Error('PRIVATE_SINK_FAILURE')
+        },
+      })
+      diagnostics.report('MAIN_EXCEPTION')
+      await sink().flush()
+      return sink().status.state
+    },
     policy() {
       return {
         before,

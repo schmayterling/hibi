@@ -5,14 +5,6 @@ import { AllSelection, TextSelection, type Transaction } from '@tiptap/pm/state'
 import { Mapping, ReplaceStep } from '@tiptap/pm/transform'
 import { EditorContent, useEditor } from '@tiptap/react'
 import {
-  findNext,
-  findPrev,
-  getMatchHighlights,
-  getSearchState,
-  SearchQuery,
-  setSearchState,
-} from 'prosemirror-search'
-import {
   lazy,
   type MouseEvent,
   Suspense,
@@ -116,6 +108,13 @@ import type { OutlineHeading, OutlineRequest } from './OutlineSidebar'
 import { outlineHeadingAt } from './outline-position'
 import { createPlainSourceSync } from './plain-source-sync'
 import { observeRichAnnotations } from './rich-annotations'
+import {
+  findNext,
+  findPrev,
+  firstRichMatch,
+  richFindKey,
+  setRichFindQuery,
+} from './rich-find'
 import { createRichParagraphProof } from './rich-paragraph-proof'
 import {
   preserveRichSource,
@@ -3115,13 +3114,10 @@ export function MarkdownEditor({
   useEffect(() => {
     if (!editor || !findOpen || findTarget !== 'rich') return
     const report = () => {
-      const matches = getMatchHighlights(editor.state).find()
-      const selection = editor.state.selection
-      const total = matches.length
-      const current =
-        matches.findIndex(
-          (match) => match.from === selection.from && match.to === selection.to,
-        ) + 1
+      const { total, current } = richFindKey.getState(editor.state) ?? {
+        total: 0,
+        current: 0,
+      }
       // Keep the status object when matches and the current match are unchanged, so selection moves do not re-render the editor.
       setFindStatus((status) =>
         status.total === total &&
@@ -3141,14 +3137,11 @@ export function MarkdownEditor({
 
   useEffect(() => {
     if (!editor) return
-    const query = new SearchQuery({
-      search: findOpen && findTarget === 'rich' ? findQuery : '',
-      literal: true,
-    })
-    if (!query.valid && !getSearchState(editor.state)?.query.valid) return
+    const query = findOpen && findTarget === 'rich' ? findQuery : ''
+    if (!query && !richFindKey.getState(editor.state)?.query) return
     if (!flushRich(editor)) return
-    editor.view.dispatch(setSearchState(editor.state.tr, query))
-    const first = query.valid ? query.findNext(editor.state, 0) : null
+    editor.view.dispatch(setRichFindQuery(editor.state.tr, query))
+    const first = firstRichMatch(editor.state)
     if (!first) return
     editor.view.dispatch(
       editor.state.tr

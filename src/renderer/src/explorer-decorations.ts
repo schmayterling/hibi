@@ -47,7 +47,8 @@ async function refresh(provider: Provider) {
       providers.get(provider.id) === provider &&
       version === provider.version
     ) {
-      provider.result = result
+      // Copies keep the snapshot comparable when a provider mutates and returns the same objects.
+      provider.result = result.map((item) => ({ ...item }))
       publish()
     }
   } catch (error) {

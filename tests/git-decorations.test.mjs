@@ -166,3 +166,60 @@ test('explorer providers publish only changed decorations and keep the last prov
     explorerDecorations.setWorkspace(null)
   }
 })
+
+test('explorer providers may mutate and return the same decoration objects', async () => {
+  const item = {
+    path: 'a.md',
+    label: 'Status 1',
+    badge: '1',
+    color: 'status-warning',
+  }
+  let calls = 0
+  let publications = 0
+  const wait = async (condition) => {
+    const deadline = Date.now() + 2000
+    while (!condition() && Date.now() < deadline) await delay(20)
+    assert.ok(condition())
+  }
+  const unsubscribe = explorerDecorations.subscribe(() => publications++)
+  const remove = explorerDecorations.register('test.reused', {
+    id: 'reused',
+    provide: async () => {
+      calls++
+      return [item]
+    },
+  })
+  const workspace = {
+    id: 'reused',
+    name: 'folder',
+    entries: [],
+    activePath: null,
+  }
+  try {
+    explorerDecorations.setWorkspace(workspace)
+    await wait(() => calls === 1)
+    const published = publications
+    Object.assign(item, {
+      label: 'conflict',
+      badge: '!',
+      color: 'status-danger',
+    })
+    assert.equal(explorerDecorations.snapshot().get('a.md').badge, '1')
+    explorerDecorations.setWorkspace({ ...workspace })
+    await wait(() => calls === 2)
+    assert.equal(publications, published + 1)
+    assert.deepEqual(explorerDecorations.snapshot().get('a.md'), {
+      path: 'a.md',
+      label: 'conflict',
+      badge: '!',
+      color: 'status-danger',
+    })
+    explorerDecorations.setWorkspace({ ...workspace })
+    await wait(() => calls === 3)
+    assert.equal(publications, published + 1)
+  } finally {
+    remove()
+    unsubscribe()
+    explorerDecorations.setWorkspace(null)
+  }
+})

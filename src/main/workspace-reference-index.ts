@@ -75,6 +75,10 @@ export interface GraphPosition {
   readonly nodeEmitted: boolean
 }
 
+// A note's targets are sorted once per build; graph pages that resume inside
+// a note with many links reuse the order instead of sorting it again.
+const sortedTargets = new WeakMap<ReadonlySet<string>, readonly string[]>()
+
 /** Parsed references share the existing workspace page cache; no filesystem scan. */
 export class WorkspaceReferenceIndex {
   private target: WorkspaceTarget | null = null
@@ -394,7 +398,7 @@ export class WorkspaceReferenceIndex {
     let { pathIndex, targetIndex, nodeEmitted } = start
     let bytes = 0
     let targetsPath = ''
-    let targets: string[] = []
+    let targets: readonly string[] = []
     while (pathIndex < this.sortedPaths.length && items.length < limit) {
       const path = this.sortedPaths[pathIndex]
       if (!path) break
@@ -403,9 +407,13 @@ export class WorkspaceReferenceIndex {
       else {
         if (targetsPath !== path) {
           targetsPath = path
-          targets = [...(this.documents.get(path)?.targets ?? [])].sort(
-            (a, b) => a.localeCompare(b),
-          )
+          const links = this.documents.get(path)?.targets
+          let sorted = links && sortedTargets.get(links)
+          if (links && !sorted) {
+            sorted = [...links].sort((a, b) => a.localeCompare(b))
+            sortedTargets.set(links, sorted)
+          }
+          targets = sorted ?? []
         }
         const target = targets[targetIndex]
         if (!target) {

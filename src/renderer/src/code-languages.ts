@@ -149,8 +149,8 @@ const registered = new Map<string, CodeLanguage>()
 const listeners = new Set<(changed: ReadonlySet<string>) => void>()
 let version = 0
 let languages = new Map<string, Language>()
-/** Enabled, loaded parser for each lowercase name or alias. */
-let resolution = new Map<string, Language>()
+/** Each lowercase name's parser, definition still to load, or null while disabled. */
+let resolution = new Map<string, unknown>()
 let definitions = new Map<string, CodeLanguage>()
 let aliases = new Map<string, string>()
 let catalog: readonly {
@@ -204,12 +204,13 @@ function publish() {
       .filter(([alias, id]) => id === entry.id && alias !== entry.id)
       .map(([alias]) => alias),
   }))
-  const next = new Map<string, Language>()
-  for (const [alias, id] of aliases) {
-    const language = disabled.has(id) ? undefined : languages.get(id)
-    if (language) next.set(alias, language)
-  }
-  // Highlighters refresh only names whose parser changed, including aliases.
+  const next = new Map<string, unknown>()
+  for (const [alias, id] of aliases)
+    next.set(
+      alias,
+      disabled.has(id) ? null : (languages.get(id) ?? definitions.get(id)),
+    )
+  // Highlighters refresh only names whose parser or availability changed, including aliases.
   const changed = new Set<string>()
   for (const name of new Set([...resolution.keys(), ...next.keys()]))
     if (resolution.get(name) !== next.get(name)) changed.add(name)
@@ -296,7 +297,7 @@ export const codeLanguages = {
     publish()
     return loading
   },
-  /** Listeners receive the lowercase names whose parser changed. */
+  /** Listeners receive the lowercase names whose parser or availability changed. */
   subscribe(listener: (changed: ReadonlySet<string>) => void) {
     listeners.add(listener)
     return () => {

@@ -263,6 +263,7 @@ test('a language arrival rehighlights only its own blocks, once per frame', asyn
         code('alias', 'arrival-b-alias'),
         code('later', 'arrival-c'),
         code('disabled', 'arrival-d'),
+        code('registered later', 'arrival-e'),
         code('fourth', 'arrival-a'),
       ]),
     }),
@@ -307,6 +308,18 @@ test('a language arrival rehighlights only its own blocks, once per frame', asyn
   view.flush()
   assert.equal(parse.mock.callCount(), 0)
   assert.equal(highlighted().length, 7)
+  verify()
+  // A language registered after opening loads for blocks that already name it.
+  t.after(
+    codeLanguages.register('arrival', {
+      id: 'arrival-e',
+      load: async () => keyword(),
+    }),
+  )
+  view.flush()
+  await codeLanguages.settle()
+  view.flush()
+  assert.ok(highlighted().includes('registered later'))
   verify()
 })
 

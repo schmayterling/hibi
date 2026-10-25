@@ -26,8 +26,11 @@ test('language loading deduplicates aliases and respects disabled preferences du
   codeLanguages.setEnabled('python', false)
   await codeLanguages.settle()
   assert.equal(codeLanguages.resolve('py'), null)
-  // Arrivals name only the changed language; a disabled parser publishes nothing.
-  assert.deepEqual(changes, [['rs', 'rust']])
+  // Arrivals name only the changed language; a parser loaded while disabled publishes nothing.
+  assert.deepEqual(changes, [
+    ['rs', 'rust'],
+    ['py', 'python'],
+  ])
   codeLanguages.setEnabled('python', true)
   assert.ok(codeLanguages.resolve('py'))
   assert.deepEqual(changes.at(-1), ['py', 'python'])

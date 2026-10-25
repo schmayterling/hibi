@@ -308,6 +308,15 @@ export function getOpenDocuments() {
     dirty: updateTabDirty(id, draft),
   }))
 }
+/** Explorer metadata without materializing open document text. */
+export function getOpenDocumentMetadata() {
+  storeTab()
+  return [...tabs].map(([id, draft]) => ({
+    file: draft.path,
+    pendingPath: draft.pendingPath,
+    dirty: updateTabDirty(id, draft),
+  }))
+}
 export function hasOpenDocumentPath(file: string) {
   storeTab()
   for (const draft of tabs.values())

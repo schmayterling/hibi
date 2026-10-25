@@ -6,6 +6,10 @@ import type {
 
 export const WORKSPACE_CHANNELS = {
   get: 'workspace:get',
+  header: 'workspace:header',
+  headerChanged: 'workspace:header-changed',
+  legacySubscribe: 'workspace:legacy-subscribe',
+  viewPage: 'workspace:view-page',
   open: 'workspace:open',
   refresh: 'workspace:refresh',
   openFile: 'workspace:open-file',
@@ -60,6 +64,18 @@ export type WorkspaceState = {
   obsidian?: { externalAddons: boolean }
 }
 
+/** Header and draft revision for a bounded core explorer read. */
+export interface WorkspaceHeader
+  extends Omit<WorkspaceState, 'entries'>,
+    Omit<WorkspaceStreamSnapshot, 'entries'> {
+  readonly draftRevision: number
+}
+
+export interface WorkspaceViewPageRequest extends WorkspaceEntryPageRequest {
+  readonly draftRevision: number
+  readonly drafts?: boolean
+}
+
 /** Workspace-relative paths use forward slashes; null means the changed paths are unknown. */
 export type WorkspaceChange = {
   kind: 'content' | 'tree'
@@ -72,8 +88,9 @@ export interface WorkspaceStreamSnapshot {
   readonly entries: readonly WorkspaceEntry[]
   /** A failed watcher makes this snapshot a point-in-time view only. */
   readonly stale: boolean
-  /** A failed size-capped scan leaves the retained tree incomplete. */
+  /** A failed scan leaves the retained tree incomplete. */
   readonly complete: boolean
+  /** Retained for compatibility; uncapped scans always report false. */
   readonly capReached: boolean
 }
 
@@ -93,6 +110,7 @@ export interface WorkspaceEntryPageRequest {
 }
 
 export interface WorkspaceListedEntry {
+  readonly dirty?: boolean
   readonly path: string
   readonly name: string
   readonly kind: WorkspaceEntry['kind']

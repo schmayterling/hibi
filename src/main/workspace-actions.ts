@@ -81,6 +81,7 @@ async function rethrowPartialCopy(
 export async function workspaceAction(
   window: BrowserWindow,
   input: unknown,
+  includeEntries = true,
 ): Promise<WorkspaceActionResult | null> {
   const base = workspaceRoot()
   if (!base) throw new Error('Open a workspace first.')
@@ -154,7 +155,7 @@ export async function workspaceAction(
         throw new Error('Use a supported file extension.')
       if (source === resultPath)
         return {
-          workspace: getWorkspace(),
+          workspace: getWorkspace(undefined, includeEntries),
           document: getDocument(),
           path: relative(base, source).split(sep).join('/'),
         }
@@ -235,8 +236,8 @@ export async function workspaceAction(
   let workspace: WorkspaceActionResult['workspace']
   try {
     workspace = treeChanged
-      ? await refreshWorkspace(paths)
-      : await notifyWorkspaceContent(paths)
+      ? await refreshWorkspace(paths, includeEntries)
+      : await notifyWorkspaceContent(paths, includeEntries)
   } catch (error) {
     if (!treeChanged) throw error
     throw new Error(

@@ -14,6 +14,71 @@ import test from 'node:test'
 import { electron, waitForAppState } from './electron.mjs'
 import { replaceSourceText } from './keyboard.mjs'
 
+test('20k disk entries open through bounded pages while main timers keep running', {
+  timeout: 60000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-workspace-20k-'))
+  const folder = join(root, 'workspace')
+  await mkdir(folder)
+  let next = 0
+  await Promise.all(
+    Array.from({ length: 8 }, async () => {
+      while (next < 20000) {
+        const index = next++
+        await writeFile(join(folder, `note-${index}.md`), '')
+      }
+    }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.evaluate(() => clearInterval(globalThis.workspaceScanTimer))
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await page.getByRole('textbox', { name: 'Document editor' }).waitFor()
+  await app.evaluate(({ dialog }, folder) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [folder],
+    })
+    const sample = { previous: performance.now(), maxDelay: 0, turns: 0 }
+    globalThis.workspaceScanSample = sample
+    globalThis.workspaceScanTimer = setInterval(() => {
+      const now = performance.now()
+      sample.maxDelay = Math.max(sample.maxDelay, now - sample.previous - 20)
+      sample.previous = now
+      sample.turns++
+    }, 20)
+    globalThis.workspaceScanTimer.unref()
+  }, folder)
+  await page.evaluate(() => window.hibi.openWorkspace(false))
+  await page.getByRole('button', { name: 'Toggle workspace sidebar' }).click()
+  const first = page.getByRole('treeitem', { name: 'note-0.md', exact: true })
+  await first.waitFor()
+  await first.focus()
+  await first.press('End')
+  await page
+    .getByRole('treeitem', { name: 'note-19999.md', exact: true })
+    .waitFor()
+  const sample = await app.evaluate(async () => {
+    await new Promise((resolve) => setImmediate(resolve))
+    await new Promise((resolve) => setImmediate(resolve))
+    clearInterval(globalThis.workspaceScanTimer)
+    return globalThis.workspaceScanSample
+  })
+  assert.ok(sample.turns > 0)
+  t.diagnostic(
+    JSON.stringify({
+      diskEntries: 20000,
+      mainMaxDelayMs: sample.maxDelay,
+      timerTurns: sample.turns,
+    }),
+  )
+})
+
 test('workspace can show all files and opens unsupported text in source only', {
   timeout: 60000,
 }, async (t) => {
@@ -34,6 +99,7 @@ test('workspace can show all files and opens unsupported text in source only', {
     JSON.stringify({
       enabled: false,
       showAllFiles: false,
+      entryLimit: 50000,
       path: null,
       startup: 'empty',
       startupFolder: null,
@@ -69,8 +135,10 @@ test('workspace can show all files and opens unsupported text in source only', {
   await page
     .getByRole('tab', { name: 'Workspace settings', exact: true })
     .click()
-  const limit = page.getByRole('combobox', { name: 'Workspace item limit' })
-  assert.equal(await limit.inputValue(), '20000')
+  assert.equal(
+    await page.getByRole('combobox', { name: 'Workspace item limit' }).count(),
+    0,
+  )
   const toggle = page.getByRole('checkbox', {
     name: 'Show all files in sidebar',
   })
@@ -84,25 +152,19 @@ test('workspace can show all files and opens unsupported text in source only', {
   assert.ok(!shown.some((entry) => entry.name === '.hidden'))
   assert.ok(!shown.some((entry) => entry.name === 'node_modules'))
   assert.ok(!shown.some((entry) => entry.name === 'linked.json'))
-  await limit.selectOption('50000')
-  await waitForAppState(page, () =>
-    window.hibi
-      .getWorkspaceSettings()
-      .then((state) => state.entryLimit === 50000),
+  await assert.rejects(
+    page.evaluate(() =>
+      window.hibi.updateWorkspaceSettings({
+        action: 'entry-limit',
+        limit: 50000,
+      }),
+    ),
+    /Unknown workspace action/,
   )
-  for (const invalid of [20001, '50000', null])
-    await assert.rejects(
-      page.evaluate(
-        (limit) =>
-          window.hibi.updateWorkspaceSettings({ action: 'entry-limit', limit }),
-        invalid,
-      ),
-      /Choose a workspace item limit/,
-    )
   const preferences = JSON.parse(
     await readFile(join(root, 'profile', 'workspace-settings.json'), 'utf8'),
   )
-  assert.equal(preferences.entryLimit, 50000)
+  assert.equal(Object.hasOwn(preferences, 'entryLimit'), false)
   assert.equal(preferences.showAllFiles, true)
   const index = await page.evaluate(() => window.hibi.getWorkspaceIndex())
   assert.deepEqual(
@@ -157,7 +219,7 @@ test('workspace can show all files and opens unsupported text in source only', {
   assert.ok(!(await entries()).some((entry) => entry.name === 'config.json'))
 })
 
-test('workspace scan budgets count unsupported entries and close on cap failures', {
+test('workspace scan accepts uncapped entries and bounded core header responses', {
   timeout: 30000,
 }, async (t) => {
   const root = await realpath(
@@ -174,8 +236,8 @@ test('workspace scan budgets count unsupported entries and close on cap failures
   })
   const page = await app.firstWindow()
   await page.getByRole('textbox', { name: 'Document editor' }).waitFor()
-  // Stream virtual unsupported files instead of creating 100,001 disk fixtures.
-  await app.evaluate(({ dialog }, folder) => {
+  // Stream virtual entries instead of creating 100,001 disk fixtures.
+  await app.evaluate(({ dialog, BrowserWindow }, folder) => {
     dialog.showOpenDialog = async () => ({
       canceled: false,
       filePaths: [folder],
@@ -184,10 +246,18 @@ test('workspace scan budgets count unsupported entries and close on cap failures
     const opendir = fs.opendir
     const host = {
       total: 21000,
+      supported: false,
       read: 0,
       closed: 0,
+      legacyBroadcasts: 0,
     }
     globalThis.workspaceLimitFixture = host
+    const contents = BrowserWindow.getAllWindows()[0].webContents
+    const send = contents.send.bind(contents)
+    contents.send = (channel, ...args) => {
+      if (channel === 'workspace:changed') host.legacyBroadcasts++
+      return send(channel, ...args)
+    }
     fs.opendir = async (path, ...args) => {
       if (path !== folder) return opendir(path, ...args)
       return {
@@ -197,7 +267,7 @@ test('workspace scan budgets count unsupported entries and close on cap failures
             for (let index = 0; index < host.total; index++) {
               host.read++
               yield {
-                name: `file-${index}.unsupported`,
+                name: `file-${index}.${host.supported ? 'md' : 'unsupported'}`,
                 isDirectory: () => false,
                 isSymbolicLink: () => false,
                 isFile: () => true,
@@ -211,44 +281,70 @@ test('workspace scan budgets count unsupported entries and close on cap failures
     }
     process.getBuiltinModule('node:module').syncBuiltinESMExports()
   }, folder)
-  await assert.rejects(
-    page.evaluate(() => window.hibi.openWorkspace()),
-    /more than 20,000 items.*Increase the workspace item limit/,
-  )
-  assert.deepEqual(
-    await app.evaluate(() => ({
-      read: globalThis.workspaceLimitFixture.read,
-      closed: globalThis.workspaceLimitFixture.closed,
-    })),
-    { read: 20001, closed: 1 },
-  )
-  await page.evaluate(() =>
-    window.hibi.updateWorkspaceSettings({
-      action: 'entry-limit',
-      limit: 50000,
-    }),
-  )
-  const opened = await page.evaluate(() => window.hibi.openWorkspace())
+  const opened = await page.evaluate(() => window.hibi.openWorkspace(false))
   assert.deepEqual(opened.entries, [])
   assert.equal(
     await app.evaluate(() => globalThis.workspaceLimitFixture.read),
     21000,
   )
+  const header = await page.evaluate(() => window.hibi.getWorkspaceHeader())
+  assert.equal(Object.hasOwn(header, 'entries'), false)
+  assert.equal(header.complete, true)
+  assert.equal(header.capReached, false)
   await app.evaluate(() => {
     globalThis.workspaceLimitFixture.total = 100001
   })
-  await page.evaluate(() =>
-    window.hibi.updateWorkspaceSettings({
-      action: 'entry-limit',
-      limit: 100000,
-    }),
-  )
-  await assert.rejects(
-    page.evaluate(() => window.hibi.refreshWorkspace()),
-    /more than 100,000 items\. Open a smaller folder\./,
+  await page.evaluate(() => window.hibi.refreshWorkspace(false))
+  assert.equal(
+    await app.evaluate(() => globalThis.workspaceLimitFixture.read),
+    100001,
   )
   assert.equal(
     await app.evaluate(() => globalThis.workspaceLimitFixture.closed),
-    3,
+    2,
+  )
+  await app.evaluate(() => {
+    globalThis.workspaceLimitFixture.total = 20001
+    globalThis.workspaceLimitFixture.supported = true
+  })
+  const refreshed = await page.evaluate(() =>
+    window.hibi.refreshWorkspace(false),
+  )
+  assert.deepEqual(refreshed.entries, [])
+  await page.getByRole('button', { name: 'Toggle workspace sidebar' }).click()
+  const first = page.getByRole('treeitem', { name: 'file-0.md', exact: true })
+  await first.waitFor()
+  await first.focus()
+  await first.press('End')
+  await page
+    .getByRole('treeitem', { name: 'file-20000.md', exact: true })
+    .waitFor()
+  assert.ok(
+    (await page.getByRole('treeitem').count()) < 200,
+    'large explorer stays windowed',
+  )
+  assert.equal(
+    await app.evaluate(() => globalThis.workspaceLimitFixture.legacyBroadcasts),
+    0,
+  )
+  await page.evaluate(() => {
+    globalThis.legacyEntries = null
+    globalThis.stopLegacyWorkspace = window.hibi.onWorkspaceChanged(
+      (workspace) => {
+        globalThis.legacyEntries = workspace.entries.length
+      },
+    )
+  })
+  await page.evaluate(() => window.hibi.refreshWorkspace(false))
+  await waitForAppState(page, () => globalThis.legacyEntries === 20001)
+  assert.equal(
+    await app.evaluate(() => globalThis.workspaceLimitFixture.legacyBroadcasts),
+    1,
+  )
+  await page.evaluate(() => globalThis.stopLegacyWorkspace())
+  await page.evaluate(() => window.hibi.refreshWorkspace(false))
+  assert.equal(
+    await app.evaluate(() => globalThis.workspaceLimitFixture.legacyBroadcasts),
+    1,
   )
 })

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { type FSWatcher, type Stats, watch } from 'node:fs'
-import { lstat, opendir, readFile, realpath, stat } from 'node:fs/promises'
+import { lstat, readFile, realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute, join, parse, relative, sep } from 'node:path'
 import { app, type BrowserWindow, dialog, shell } from 'electron'
 import ignore from 'ignore'
@@ -14,20 +14,20 @@ import type {
   WorkspaceEntry,
   WorkspaceEntryPageRequest,
   WorkspaceEntryPageResult,
+  WorkspaceHeader,
   WorkspaceIndex,
   WorkspaceSnapshot,
   WorkspaceState,
   WorkspaceStreamSnapshot,
+  WorkspaceViewPageRequest,
 } from '../shared/workspace'
-import {
-  WORKSPACE_ENTRY_LIMITS,
-  type WorkspaceManifest,
-} from '../shared/workspace-settings'
+import type { WorkspaceManifest } from '../shared/workspace-settings'
 import {
   closeDeletedDocuments,
   confirmDiscardAll,
   getDocument,
   getDocumentPath,
+  getOpenDocumentMetadata,
   getOpenDocuments,
   loadDocument,
   selectDocumentTab,
@@ -54,10 +54,8 @@ import {
 import { LatestIndexJob } from './workspace-index-job'
 import { workspaceIgnore, workspaceMetadata } from './workspace-metadata'
 import { createScanCoordinator, watchNeedsScan } from './workspace-refresh'
-import {
-  showAllWorkspaceFiles,
-  workspaceEntryLimit,
-} from './workspace-settings'
+import { scanWorkspaceTree } from './workspace-scan'
+import { showAllWorkspaceFiles } from './workspace-settings'
 
 type ScanResult = {
   entries: WorkspaceEntry[]
@@ -85,7 +83,6 @@ let watcherEvents = new Map<string, 'change' | 'rename'>()
 let unknownWatcherEvent = false
 let workspaceScansInFlight = 0
 let watcherFlushesInFlight = 0
-let workspaceScanCapReached = false
 let workspaceScanFailed = false
 let loadGeneration = 0
 const acknowledgedPaths = new Map<
@@ -180,7 +177,7 @@ function workspaceStreamStatus(): WorkspaceStreamStatus {
       unknownWatcherEvent ||
       workspaceScanFailed,
     complete: !workspaceScanFailed,
-    capReached: workspaceScanCapReached,
+    capReached: false,
   }
 }
 
@@ -198,14 +195,70 @@ export function listWorkspaceEntryPage(
   return pageWorkspaceEntries(entries, workspaceChangeCursor(), request)
 }
 
+let viewDrafts: WorkspaceEntry[] = []
+let viewDraftKey = ''
+let viewDraftRevision = 0
+
+export function getWorkspaceHeader(): WorkspaceHeader | null {
+  const state = getWorkspace(undefined, false)
+  if (!state || !root) return null
+  const drafts: WorkspaceEntry[] = []
+  for (const document of getOpenDocumentMetadata()) {
+    if (!document.dirty && !document.pendingPath) continue
+    const nativePath = document.pendingPath ?? document.file
+    if (!nativePath) continue
+    const path = relativePath(root, nativePath)
+    if (path)
+      drafts.push({
+        path,
+        name: basename(path),
+        kind: 'file',
+        dirty: document.dirty,
+      })
+  }
+  const key = JSON.stringify([workspaceTarget, drafts])
+  if (key !== viewDraftKey) {
+    viewDraftKey = key
+    viewDrafts = drafts
+    viewDraftRevision++
+  }
+  const { entries: _entries, ...header } = state
+  return {
+    ...header,
+    ...workspaceChangeCursor(),
+    draftRevision: viewDraftRevision,
+  }
+}
+
+export function readWorkspaceViewPage(
+  request: WorkspaceViewPageRequest,
+): WorkspaceEntryPageResult {
+  if (request?.draftRevision !== viewDraftRevision)
+    return {
+      ok: false,
+      code: 'resync-needed',
+      message: 'open documents changed. start listing again.',
+    }
+  return pageWorkspaceEntries(
+    request.drafts ? viewDrafts : entries,
+    workspaceChangeCursor(),
+    request,
+  )
+}
+
 export function workspaceIndexRevision(): number {
   return indexRevision
 }
 
 export function subscribeWorkspaceChanges(
   listener: (event: WorkspaceChangeEvent) => void,
+  includeEntries = true,
 ): { snapshot: WorkspaceStreamSnapshot; dispose: () => void } {
-  return workspaceStream.subscribe(listener, entries, workspaceStreamStatus())
+  return workspaceStream.subscribe(
+    listener,
+    includeEntries ? entries : [],
+    workspaceStreamStatus(),
+  )
 }
 
 async function obsidianVault(
@@ -243,70 +296,39 @@ function relativePath(base: string, path: string): string | null {
 export async function scanWorkspace(
   base: string,
   showAllFiles = false,
+  signal?: AbortSignal,
 ): Promise<WorkspaceEntry[]> {
-  const [ignored, limit] = await Promise.all([
-    workspaceIgnore(base),
-    workspaceEntryLimit(),
-  ])
-  let count = 0
-  async function walk(directory: string): Promise<WorkspaceEntry[]> {
-    const result: WorkspaceEntry[] = []
-    for await (const child of await opendir(directory)) {
-      if (
-        (child.name.startsWith('.') &&
-          (child.isDirectory() || !showAllFiles)) ||
-        child.name === 'node_modules' ||
-        child.isSymbolicLink()
-      )
-        continue
-      if (++count > limit) {
-        const advice =
-          limit === WORKSPACE_ENTRY_LIMITS[WORKSPACE_ENTRY_LIMITS.length - 1]
-            ? 'Open a smaller folder.'
-            : 'Increase the workspace item limit in Settings → Workspace, or open a smaller folder.'
-        throw Object.assign(
-          new Error(
-            `This folder has more than ${limit.toLocaleString('en-US')} items. ${advice}`,
-          ),
-          { code: 'WORKSPACE_ENTRY_LIMIT' },
-        )
-      }
-      const full = join(directory, child.name)
-      const path = relative(base, full).split(sep).join('/')
-      if (ignored.ignores(path + (child.isDirectory() ? '/' : ''))) continue
-      if (child.isDirectory()) {
-        result.push({
-          path,
-          name: child.name,
-          kind: 'folder',
-        })
-      } else if (
-        child.isFile() &&
-        (showAllFiles || isDocumentName(child.name, true))
-      ) {
-        result.push({ path, name: child.name, kind: 'file' })
-      }
-    }
-    // Close the directory iterator before descending into child folders.
-    for (const entry of result)
-      if (entry.kind === 'folder')
-        entry.children = await walk(join(base, entry.path))
-    return result.sort(
-      (a, b) =>
-        Number(b.kind === 'folder') - Number(a.kind === 'folder') ||
-        a.name.localeCompare(b.name, undefined, { numeric: true }),
-    )
-  }
-  return walk(base)
+  signal?.throwIfAborted()
+  const ignored = await workspaceIgnore(base)
+  signal?.throwIfAborted()
+  return scanWorkspaceTree(
+    base,
+    showAllFiles,
+    ignored,
+    (name) => isDocumentName(name, true),
+    signal,
+  )
 }
 
 export function getWorkspace(
   open?: ReturnType<typeof getOpenDocuments>,
+  includeEntries = true,
 ): WorkspaceState | null {
   if (!root) return null
-  const documents = open ?? getOpenDocuments()
   const path = getDocumentPath()
-  const activePath = path ? relativePath(root, path) : null
+  const header: WorkspaceState = {
+    id: workspaceId()!,
+    ...(workspaceTarget
+      ? { workspaceGeneration: workspaceTarget.workspaceGeneration }
+      : {}),
+    name: manifest?.name ?? basename(root),
+    manifest,
+    ...(obsidian ? { obsidian } : {}),
+    entries: [],
+    activePath: path ? relativePath(root, path) : null,
+  }
+  if (!includeEntries) return header
+  const documents = open ?? getOpenDocuments()
   let visible = entries
   for (const draft of documents) {
     const draftPath = draft.pendingPath && relativePath(root, draft.pendingPath)
@@ -343,15 +365,8 @@ export function getWorkspace(
       ...(item.children ? { children: decorate(item.children) } : {}),
     }))
   return {
-    id: workspaceId()!,
-    ...(workspaceTarget
-      ? { workspaceGeneration: workspaceTarget.workspaceGeneration }
-      : {}),
-    name: manifest?.name ?? basename(root),
-    manifest,
-    ...(obsidian ? { obsidian } : {}),
+    ...header,
     entries: decorate(visible),
-    activePath,
   }
 }
 
@@ -418,10 +433,12 @@ async function acknowledgePaths(
 async function requestWorkspaceScan(
   paths: string[] | null,
   acknowledge = false,
+  includeEntries = false,
 ): Promise<WorkspaceState | null> {
   const selected = root
   const target = workspaceTarget
-  if (!selected || !target || !scanCoordinator) return getWorkspace()
+  if (!selected || !target || !scanCoordinator)
+    return getWorkspace(undefined, includeEntries)
   workspaceScansInFlight++
   try {
     if (acknowledge && paths) await acknowledgePaths(selected, target, paths)
@@ -429,15 +446,11 @@ async function requestWorkspaceScan(
     addTreePaths(paths)
     await scanCoordinator.request()
     if (!isCurrentWorkspaceTarget(target)) return null
-    workspaceScanCapReached = false
     workspaceScanFailed = false
-    return getWorkspace()
+    return getWorkspace(undefined, includeEntries)
   } catch (error) {
     if (isCurrentWorkspaceTarget(target)) {
       workspaceScanFailed = true
-      workspaceScanCapReached =
-        error instanceof Error &&
-        (error as NodeJS.ErrnoException).code === 'WORKSPACE_ENTRY_LIMIT'
       workspaceStream.publish('resync', null)
     }
     throw error
@@ -448,12 +461,14 @@ async function requestWorkspaceScan(
 
 export function refreshWorkspace(
   paths: string[] | null = null,
+  includeEntries = true,
 ): Promise<WorkspaceState | null> {
-  return requestWorkspaceScan(paths, paths !== null)
+  return requestWorkspaceScan(paths, paths !== null, includeEntries)
 }
 
 export async function notifyWorkspaceContent(
   paths: string[] | null,
+  includeEntries = true,
 ): Promise<WorkspaceState | null> {
   const selected = root
   const target = workspaceTarget
@@ -461,7 +476,7 @@ export async function notifyWorkspaceContent(
   if (paths) await acknowledgePaths(selected, target, paths)
   if (!isCurrentWorkspaceTarget(target)) return null
   publishWorkspaceChange({ kind: 'content', paths })
-  return getWorkspace()
+  return getWorkspace(undefined, includeEntries)
 }
 
 export async function documentFileChanged(
@@ -477,8 +492,8 @@ export async function documentFileChanged(
     ),
   ]
   if (!paths.length) return
-  if (treeChanged) await refreshWorkspace(paths)
-  else await notifyWorkspaceContent(paths)
+  if (treeChanged) await refreshWorkspace(paths, false)
+  else await notifyWorkspaceContent(paths, false)
 }
 
 function cachedEntry(path: string): WorkspaceEntry | undefined {
@@ -651,6 +666,7 @@ export function observeWorkspace(
 
 export async function openWorkspace(
   window: BrowserWindow,
+  includeEntries = true,
 ): Promise<WorkspaceState | null> {
   const result = await runFileDialog(() =>
     dialog.showOpenDialog(window, {
@@ -660,23 +676,26 @@ export async function openWorkspace(
   )
   const selected = result.filePaths[0]
   if (result.canceled || !selected) return null
-  return loadWorkspace(selected)
+  return loadWorkspace(selected, includeEntries)
 }
 
 export async function loadWorkspace(
   selected: string,
+  includeEntries = true,
 ): Promise<WorkspaceState | null> {
   const loading = ++loadGeneration
   const nextRoot = await realpath(selected)
-  if (loading !== loadGeneration) return getWorkspace()
+  if (loading !== loadGeneration) return getWorkspace(undefined, includeEntries)
   if (nextRoot === root) {
     const vault = await obsidianVault(nextRoot)
-    if (loading !== loadGeneration) return getWorkspace()
+    if (loading !== loadGeneration)
+      return getWorkspace(undefined, includeEntries)
     obsidian = vault
-    await refreshWorkspace()
-    if (loading !== loadGeneration) return getWorkspace()
+    await refreshWorkspace(null, includeEntries)
+    if (loading !== loadGeneration)
+      return getWorkspace(undefined, includeEntries)
     await rememberWorkspace(nextRoot)
-    return getWorkspace()
+    return getWorkspace(undefined, includeEntries)
   }
   const showAllFiles = await showAllWorkspaceFiles()
   let candidateWatcher: FSWatcher | undefined
@@ -722,7 +741,7 @@ export async function loadWorkspace(
   }
   if (loading !== loadGeneration) {
     candidateWatcher?.close()
-    return getWorkspace()
+    return getWorkspace(undefined, includeEntries)
   }
   watcher?.close()
   watcher = undefined
@@ -734,7 +753,6 @@ export async function loadWorkspace(
   unknownWatcherEvent = false
   workspaceScansInFlight = 0
   watcherFlushesInFlight = 0
-  workspaceScanCapReached = false
   workspaceScanFailed = false
   acknowledgedPaths.clear()
   pendingTreePaths = new Set()
@@ -784,24 +802,26 @@ export async function loadWorkspace(
   let startupScanFailed = false
   if (changedDuringScan)
     startupReconciled =
-      (await requestWorkspaceScan(null).catch((error: unknown) => {
-        console.error('workspace startup rescan failed:', error)
-        startupScanFailed = true
-        return null
-      })) !== null
+      (await requestWorkspaceScan(null, false, includeEntries).catch(
+        (error: unknown) => {
+          console.error('workspace startup rescan failed:', error)
+          startupScanFailed = true
+          return null
+        },
+      )) !== null
   if (loading !== loadGeneration || !isCurrentWorkspaceTarget(selectedTarget))
-    return getWorkspace()
+    return getWorkspace(undefined, includeEntries)
   await rememberWorkspace(nextRoot).catch((error: unknown) =>
     console.error('could not remember workspace:', error),
   )
   if (loading !== loadGeneration || !isCurrentWorkspaceTarget(selectedTarget))
-    return getWorkspace()
+    return getWorkspace(undefined, includeEntries)
   if (!startupReconciled && !startupScanFailed)
     publishWorkspaceChange({ kind: 'tree', paths: null })
-  return getWorkspace()
+  return getWorkspace(undefined, includeEntries)
 }
 
-export async function openRecentWorkspace(id: unknown) {
+export async function openRecentWorkspace(id: unknown, includeEntries = true) {
   const recent = (await getKnownWorkspaces()).find(
     (item) => !item.hidden && item.id === id,
   )
@@ -809,7 +829,7 @@ export async function openRecentWorkspace(id: unknown) {
     throw new Error(
       'This workspace is no longer in the recent list. Open it from its folder.',
     )
-  return loadWorkspace(recent.path)
+  return loadWorkspace(recent.path, includeEntries)
 }
 
 export async function deleteKnownWorkspace(
@@ -847,7 +867,6 @@ export async function deleteKnownWorkspace(
     unknownWatcherEvent = false
     workspaceScansInFlight = 0
     watcherFlushesInFlight = 0
-    workspaceScanCapReached = false
     workspaceScanFailed = false
     acknowledgedPaths.clear()
     pendingTreePaths = new Set()
@@ -921,7 +940,10 @@ export async function openWorkspaceFile(
   if (!root) throw new Error('Open a workspace first.')
   if (target !== undefined && !isCurrentWorkspaceTarget(target))
     throw new Error('The workspace changed, so this file did not open.')
-  if (typeof path === 'string' && getWorkspace()?.activePath === path)
+  if (
+    typeof path === 'string' &&
+    getWorkspace(undefined, false)?.activePath === path
+  )
     return getDocument()
   const draft =
     typeof path === 'string' &&

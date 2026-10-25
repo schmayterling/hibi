@@ -105,10 +105,17 @@ async function openMedia(path: string) {
   }
 }
 
-export async function openDroppedFile(window: BrowserWindow, value: unknown) {
+export async function openDroppedFile(
+  window: BrowserWindow,
+  value: unknown,
+  includeEntries = true,
+) {
   const path = await realpath(filePath(value))
   if ((await lstat(path)).isDirectory())
-    return { workspace: await loadWorkspace(path), document: getDocument() }
+    return {
+      workspace: await loadWorkspace(path, includeEntries),
+      document: getDocument(),
+    }
   if (!isDocumentName(path))
     throw new Error(
       'Drop a supported document or folder to open it. Drop an image or video onto the editor to attach it.',

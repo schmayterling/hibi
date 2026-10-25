@@ -72,7 +72,9 @@ export function documentImage(revision: number) {
           }
         }
         void render()
-        const unsubscribe = window.hibi.onWorkspaceChanged(() => void render())
+        const unsubscribe = window.hibi.onWorkspaceHeaderChanged(
+          () => void render(),
+        )
         return {
           dom: container,
           stopEvent: (event) =>

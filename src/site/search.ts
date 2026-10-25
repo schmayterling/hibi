@@ -1,6 +1,4 @@
-import { marked } from 'marked'
 import MiniSearch from 'minisearch'
-import type { WorkspacePage } from '../shared/workspace'
 import type { SitePage } from './data'
 
 export type SearchEntry = {
@@ -9,19 +7,6 @@ export type SearchEntry = {
   anchor: string
   title: string
   text: string
-}
-
-export function pageTitle(page: WorkspacePage & { title?: string }) {
-  if (page.title) return page.title
-  const heading = marked
-    .lexer(page.markdown)
-    .find((token) => token.type === 'heading')
-  return heading?.type === 'heading'
-    ? heading.text.replace(/[*`]/g, '')
-    : (page.path
-        .split('/')
-        .at(-1)
-        ?.replace(/\.[^./]+$/, '') ?? page.path)
 }
 
 export type SiteSearchResult = Pick<
@@ -52,7 +37,7 @@ export function* searchRecords(
     path: page.path,
     anchor: '',
     title: page.title,
-    text: page.path + ' ' + (data?.text ?? page.markdown),
+    text: page.path + ' ' + page.markdown,
   }
   for (const heading of data?.headings ?? fallback(page)) {
     const anchor = 'anchor' in heading ? heading.anchor : heading.id.slice(4)

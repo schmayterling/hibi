@@ -35,8 +35,8 @@ import { ShortcutKeys } from '../ui/ShortcutKeys'
 import { Sidebar, type SidebarItem } from '../ui/Sidebar'
 import { useSidebarResize } from '../ui/useSidebarResize'
 import { homePage, isMermaidImage, pageRoute, type SiteData } from './data'
-import { pageTitle } from './search'
 import { createSiteSearchWorker } from './search-worker-client'
+import { pageTitle } from './title'
 import './site.css'
 
 export function startSite(workspace: SiteData, root: Root) {
@@ -379,10 +379,12 @@ export function startSite(workspace: SiteData, root: Root) {
     }
     return result
   }
-  const search = createSiteSearchWorker(
-    ordered,
-    (page) => renderMarkdown(page.path, page.markdown, page.html).outline,
-  )
+  let search: ReturnType<typeof createSiteSearchWorker> | undefined
+  const getSearch = () =>
+    (search ??= createSiteSearchWorker(
+      ordered,
+      (page) => renderMarkdown(page.path, page.markdown, page.html).outline,
+    ))
 
   function DocumentationSite() {
     const dialogs = useDialogs()
@@ -610,35 +612,40 @@ export function startSite(workspace: SiteData, root: Root) {
       query: string
       commands: PaletteCommand[]
     }>({ query: '', commands: [] })
-    useEffect(() => {
-      let mounted = true
-      if (ordered.every((page) => page.search?.version === 1))
-        void search.preload().catch((error) => {
-          if (mounted) console.error(error)
-        })
-      return () => {
-        mounted = false
-        search.dispose()
-      }
-    }, [])
+    useEffect(() => () => search?.dispose(), [])
     useEffect(() => {
       let current = true
       const request = new AbortController()
       if (palette && searchQuery.trim())
-        void search.find(searchQuery, request.signal).then(
-          (entries) => {
-            if (current)
-              setMatches({
-                query: searchQuery.trim(),
-                commands: entries.map((result) =>
-                  command(result.path, result.anchor, result.title),
-                ),
-              })
-          },
-          (error) => {
-            if (current) console.error(error)
-          },
+        void getSearch()
+          .find(searchQuery, request.signal)
+          .then(
+            (entries) => {
+              if (current)
+                setMatches({
+                  query: searchQuery.trim(),
+                  commands: entries.map((result) =>
+                    command(result.path, result.anchor, result.title),
+                  ),
+                })
+            },
+            (error) => {
+              if (current) {
+                console.error(error)
+                setMatches({ query: searchQuery.trim(), commands: [] })
+              }
+            },
+          )
+      else if (palette) {
+        setMatches((current) =>
+          current.query ? { query: '', commands: [] } : current,
         )
+        void getSearch()
+          .preload()
+          .catch((error) => {
+            if (current) console.error(error)
+          })
+      }
       return () => {
         current = false
         request.abort()
@@ -878,12 +885,11 @@ export function startSite(workspace: SiteData, root: Root) {
             commands={initialCommands}
             platform={/Mac/.test(navigator.platform) ? 'darwin' : 'linux'}
             onQueryChange={setSearchQuery}
+            pending={(query) =>
+              !!query.trim() && matches.query !== query.trim()
+            }
             searchCommands={(query) =>
-              query.trim()
-                ? matches.query === query.trim()
-                  ? matches.commands
-                  : []
-                : initialCommands
+              query.trim() && matches.query ? matches.commands : initialCommands
             }
             onClose={() => setPalette(false)}
           />

@@ -8,7 +8,6 @@ export type SitePage = WorkspacePage & {
   description: string
   search?: {
     version: 1
-    text: string
     headings: { anchor: string; label: string; depth: number }[]
   }
 }

@@ -60,6 +60,7 @@ export function CommandPalette({
   searchCommands,
   captureContext,
   onQueryChange,
+  pending,
 }: {
   commands: PaletteCommand[]
   onClose: () => void
@@ -67,10 +68,12 @@ export function CommandPalette({
   searchCommands?: (query: string) => PaletteCommand[]
   captureContext?: () => CommandExecutionContext
   onQueryChange?: (query: string) => void
+  pending?: (query: string) => boolean
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const input = useRef<HTMLInputElement>(null)
   const closing = useRef(false)
+  const queuedEnter = useRef<string | null>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   )
@@ -85,6 +88,7 @@ export function CommandPalette({
     null,
   )
   const normalized = query.toLowerCase().trim()
+  const waiting = pending?.(query) ?? false
   const terms = normalized.split(/\s+/)
   const currentCommands = menuPath.reduce(
     (options, menu) =>
@@ -154,6 +158,7 @@ export function CommandPalette({
   function close(after?: () => void) {
     if (closing.current) return
     closing.current = true
+    queuedEnter.current = null
     const finish = () => {
       dialog.current?.close()
       onClose()
@@ -187,6 +192,12 @@ export function CommandPalette({
       close(() => command.run(context))
     }
   }
+
+  useEffect(() => {
+    if (waiting || queuedEnter.current !== normalized || closing.current) return
+    queuedEnter.current = null
+    if (results[0]) execute(results[0])
+  })
 
   return (
     <Modal
@@ -237,6 +248,7 @@ export function CommandPalette({
           spellCheck={false}
           value={query}
           onChange={(event) => {
+            queuedEnter.current = null
             setQuery(event.target.value)
             setSelected(0)
           }}
@@ -254,8 +266,11 @@ export function CommandPalette({
                 )
             } else if (event.key === 'Enter') {
               event.preventDefault()
-              const command = results[active]
-              if (command) execute(command)
+              if (waiting) queuedEnter.current = normalized
+              else {
+                const command = results[active]
+                if (command) execute(command)
+              }
             }
           }}
         />
@@ -274,6 +289,7 @@ export function CommandPalette({
         ref={list}
         className="command-results"
         role="listbox"
+        aria-busy={waiting || undefined}
         aria-label={menuPath.at(-1)?.label ?? 'Commands'}
       >
         {marker && (
@@ -332,7 +348,7 @@ export function CommandPalette({
           )
         })}
       </div>
-      {results.length === 0 && (
+      {!waiting && results.length === 0 && (
         <p className="commands-empty" role="status">
           {menuPath.length && !query
             ? 'No options available.'

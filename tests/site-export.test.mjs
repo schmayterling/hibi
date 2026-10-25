@@ -918,6 +918,11 @@ for (const count of [100, 1000, 2000]) {
       JSON.stringify({
         pages: count,
         sourceBytes,
+        searchRecordBytes: site.pages.reduce(
+          (bytes, page) =>
+            bytes + Buffer.byteLength(JSON.stringify(page.search)),
+          0,
+        ),
         firstSearchMs,
         extraSanitizedPages: counters.sanitized,
         maxObservedTaskMs: await page.evaluate(() =>
@@ -975,5 +980,156 @@ for (const count of [100, 1000, 2000]) {
         'the first page must leave the bounded display cache',
       )
     }
+  })
+}
+
+for (const blocked of [false, true]) {
+  test(blocked
+    ? 'search falls back when CSP blocks workers'
+    : 'pending search keeps rows and queues cold and warm enter', {
+    timeout: 45000,
+  }, async (t) => {
+    const folder = await mkdtemp(join(tmpdir(), 'hibi-search-pending-'))
+    const file = join(folder, 'site.html')
+    const site = prepareSite(
+      {
+        name: 'search',
+        pages: Array.from({ length: 100 }, (_, index) => ({
+          path: index + '.md',
+          markdown: '# Page ' + index + '\n\n## raretarget' + index,
+        })),
+      },
+      exportOptions({ graph: false }),
+    )
+    let html = (
+      await siteFiles(await readFile('out/site/template.html', 'utf8'), site)
+    ).get('index.html')
+    assert.equal((html.match(/worker-src /g) ?? []).length, 1)
+    if (blocked) html = html.replace('worker-src blob:', "worker-src 'none'")
+    await writeFile(file, html)
+    const app = await electron.launch({
+      args: [resolve('.'), '--user-data-dir=' + join(folder, 'profile')],
+    })
+    t.after(async () => {
+      await app.close()
+      await rm(folder, { recursive: true, force: true })
+    })
+    await app.firstWindow()
+    const next = app.waitForEvent('window')
+    await app.evaluate(({ BrowserWindow }, file) => {
+      const viewer = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          backgroundThrottling: false,
+        },
+      })
+      void viewer.loadFile(file)
+    }, file)
+    const page = await next
+    const button = page.getByRole('button', { name: /^search documentation$/i })
+    await button.waitFor()
+    const idleWorkers = page.workers().length
+    await page.evaluate((blocked) => {
+      window.holdSearch = !blocked
+      window.searchMessages = []
+      const post = Worker.prototype.postMessage
+      Worker.prototype.postMessage = function (...args) {
+        window.searchWorker = this
+        if (window.holdSearch) window.searchMessages.push([this, args])
+        else post.apply(this, args)
+      }
+      window.resumeSearch = () => {
+        window.holdSearch = false
+        for (const [worker, args] of window.searchMessages)
+          post.apply(worker, args)
+        window.searchMessages = []
+      }
+      window.emptySearchStatuses = []
+      new MutationObserver(() => {
+        const query = document.querySelector('[role=combobox]')?.value
+        const status = document.querySelector('.commands-empty')
+        if (query && status) window.emptySearchStatuses.push(status.textContent)
+      }).observe(document.body, { childList: true, subtree: true })
+    }, blocked)
+    await button.click()
+    const input = page.getByRole('combobox', { name: /search commands/i })
+    await input.pressSequentially('raretarget99')
+    if (blocked) {
+      await page
+        .getByRole('option', { name: /raretarget99/i })
+        .first()
+        .waitFor()
+      assert.equal(page.workers().length, 0)
+    } else {
+      assert.equal(
+        await page.getByRole('option').count(),
+        50,
+        'keep rows during hydration',
+      )
+      assert.equal(await page.locator('.commands-empty').count(), 0)
+      assert.equal(idleWorkers, 0, 'no worker before search intent')
+    }
+    await input.press('Enter')
+    if (!blocked) await page.evaluate(() => window.resumeSearch())
+    await page.locator('.command-palette').waitFor({ state: 'hidden' })
+    await page.waitForFunction(
+      () => new URLSearchParams(location.hash.slice(1)).get('page') === '99.md',
+    )
+    if (!blocked) {
+      await button.click()
+      await input.fill('raretarget99')
+      await page
+        .getByRole('option', { name: /raretarget99/i })
+        .first()
+        .waitFor()
+      const previous = await page.getByRole('option').allTextContents()
+      await page.evaluate(async () => {
+        window.holdSearch = true
+        const input = document.querySelector('[role=combobox]')
+        Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          'value',
+        ).set.call(input, 'raretarget98')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        await new Promise((resolve) => queueMicrotask(resolve))
+        await Promise.resolve()
+        input.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+        )
+      })
+      assert.deepEqual(
+        await page.getByRole('option').allTextContents(),
+        previous,
+        'keep rows during ranking',
+      )
+      assert.equal(await page.locator('.commands-empty').count(), 0)
+      await page.evaluate(() => window.resumeSearch())
+      await page.locator('.command-palette').waitFor({ state: 'hidden' })
+      await page.waitForFunction(
+        () =>
+          new URLSearchParams(location.hash.slice(1)).get('page') === '98.md',
+      )
+      await button.click()
+      await page.evaluate(() => {
+        window.holdSearch = true
+      })
+      await input.fill('raretarget97')
+      await input.press('Enter')
+      await page.waitForFunction(() =>
+        window.searchMessages.some(([, args]) => args[0]?.job?.kind === 'find'),
+      )
+      await page.evaluate(() =>
+        window.searchWorker.dispatchEvent(new MessageEvent('messageerror')),
+      )
+      await page.locator('.command-palette').waitFor({ state: 'hidden' })
+      await page.waitForFunction(
+        () =>
+          new URLSearchParams(location.hash.slice(1)).get('page') === '97.md',
+      )
+    }
+    assert.deepEqual(await page.evaluate(() => window.emptySearchStatuses), [])
   })
 }

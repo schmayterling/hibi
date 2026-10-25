@@ -25,13 +25,18 @@ export function createSiteSearchWorker(
     { resolve: (value: unknown) => void; reject: (error: unknown) => void }
   >()
   const cache = new Map<string, SiteSearchResult[]>()
+  let local: ReturnType<typeof createSiteSearch> | undefined
   let sequence = 0
   const stop = (error: unknown) => {
-    controller.abort(error)
     worker.terminate()
     for (const request of pending.values()) request.reject(error)
     pending.clear()
     cache.clear()
+  }
+  const recover = (error: unknown) => {
+    if (local || controller.signal.aborted) return
+    local = createSiteSearch(pages, fallback)
+    stop(error)
   }
   worker.onmessage = ({
     data,
@@ -42,11 +47,13 @@ export function createSiteSearchWorker(
     if (data.error !== undefined) request.reject(new Error(data.error))
     else request.resolve(data.result)
   }
-  worker.onerror = (event) => {
+  worker.addEventListener('error', (event) => {
     event.preventDefault()
-    stop(new Error('Could not search this site.'))
-  }
-  worker.onmessageerror = () => stop(new Error('Could not search this site.'))
+    recover(new Error('Could not search this site.'))
+  })
+  worker.addEventListener('messageerror', () =>
+    recover(new Error('Could not search this site.')),
+  )
   const request = <T>(job: SearchJob): Promise<T> => {
     controller.signal.throwIfAborted()
     return new Promise<T>((resolve, reject) => {
@@ -62,6 +69,7 @@ export function createSiteSearchWorker(
   }
   let loading: Promise<void> | undefined
   const preload = () => {
+    if (local) return local.preload()
     loading ??= (async () => {
       let batch: SearchEntry[] = [],
         characters = 0
@@ -88,7 +96,11 @@ export function createSiteSearchWorker(
         if (page.search?.version !== 1) await flush()
       }
       await flush()
-    })()
+    })().catch(async (error) => {
+      controller.signal.throwIfAborted()
+      recover(error)
+      await local!.preload()
+    })
     return loading
   }
   let ranking = Promise.resolve()
@@ -101,33 +113,43 @@ export function createSiteSearchWorker(
       query = query.trim().toLowerCase()
       if (!query) return []
       signal?.throwIfAborted()
-      await preload()
-      controller.signal.throwIfAborted()
-      signal?.throwIfAborted()
-      const result = ranking.then(async () => {
+      try {
+        await preload()
         controller.signal.throwIfAborted()
         signal?.throwIfAborted()
-        let matches = cache.get(query)
-        if (!matches) {
-          matches = await request<SiteSearchResult[]>({ kind: 'find', query })
+        if (local) return await local.find(query, signal)
+        const result = ranking.then(async () => {
           controller.signal.throwIfAborted()
-          cache.set(query, matches)
-          if (cache.size > 20) cache.delete(cache.keys().next().value!)
-        }
+          signal?.throwIfAborted()
+          if (local) return local.find(query, signal)
+          let matches = cache.get(query)
+          if (!matches) {
+            matches = await request<SiteSearchResult[]>({ kind: 'find', query })
+            controller.signal.throwIfAborted()
+            cache.set(query, matches)
+            if (cache.size > 20) cache.delete(cache.keys().next().value!)
+          }
+          return matches
+        })
+        ranking = result.then(
+          () => {},
+          () => {},
+        )
+        const matches = await result
+        controller.signal.throwIfAborted()
+        signal?.throwIfAborted()
         return matches
-      })
-      ranking = result.then(
-        () => {},
-        () => {},
-      )
-      const matches = await result
-      controller.signal.throwIfAborted()
-      signal?.throwIfAborted()
-      return matches
+      } catch (error) {
+        controller.signal.throwIfAborted()
+        signal?.throwIfAborted()
+        recover(error)
+        return local!.find(query, signal)
+      }
     },
     dispose() {
       controller.abort()
       stop(controller.signal.reason)
+      local?.dispose()
     },
   }
 }

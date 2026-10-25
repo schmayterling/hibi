@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import MiniSearch from 'minisearch'
-import { createSiteSearch, pageTitle } from '../src/site/search.ts'
+import { createSiteSearch } from '../src/site/search.ts'
+import { pageTitle } from '../src/site/title.ts'
 
 test('exported titles avoid markdown reads and legacy titles still derive from headings', () => {
   assert.equal(
@@ -29,10 +30,9 @@ test('versioned search never renders pages and memoizes repeated queries', async
     path: `${i}.md`,
     title: `Page ${i}`,
     description: '',
-    markdown: 'raw source',
+    markdown: 'needle body text',
     search: {
       version: 1,
-      text: 'needle body text',
       headings: [{ anchor: '日本語', label: '日本語 label', depth: 2 }],
     },
   }))
@@ -56,6 +56,28 @@ test('versioned search never renders pages and memoizes repeated queries', async
     assert.equal(calls, 2)
   } finally {
     MiniSearch.prototype.search = original
+    search.dispose()
+  }
+})
+
+test('versioned search keeps frontmatter, link targets and image alt matches', async () => {
+  const search = createSiteSearch(
+    [
+      {
+        path: 'beds.md',
+        title: 'Beds',
+        description: '',
+        markdown:
+          '---\ntags: [gardening]\naliases: [raised-beds]\n---\n# Beds\n\n[guide](https://example.com/zebra) ![sunflower](img.png)',
+        search: { version: 1, text: 'Beds guide', headings: [] },
+      },
+    ],
+    () => [],
+  )
+  try {
+    for (const query of ['gardening', 'raised', 'zebra', 'sunflower'])
+      assert.equal((await search.find(query)).length, 1, query)
+  } finally {
     search.dispose()
   }
 })
@@ -105,7 +127,7 @@ test('superseded queries do not rank after shared hydration finishes', async () 
         markdown: 'needle body',
         title: 'Note',
         description: '',
-        search: { version: 1, text: 'needle body', headings: [] },
+        search: { version: 1, headings: [] },
       },
     ],
     () => [],

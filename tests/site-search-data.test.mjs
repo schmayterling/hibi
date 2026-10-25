@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { exportOptions } from '../src/addons/documentation/options.ts'
-import { pageSearch } from '../src/addons/documentation/search.ts'
 import { prepareSite, siteFiles } from '../src/addons/documentation/site.ts'
 
-test('export search data uses sanitized text, unicode labels and canonical heading anchors', () => {
+const pageSearch = (html) =>
+  prepareSite(
+    { name: 'notes', pages: [{ path: 'note.md', markdown: '# top', html }] },
+    exportOptions(),
+  ).pages[0].search
+
+test('export search data uses unicode labels and canonical heading anchors without copying body text', () => {
   const site = prepareSite(
     {
       name: 'notes',
@@ -20,8 +25,7 @@ test('export search data uses sanitized text, unicode labels and canonical headi
   )
   const search = site.pages[0].search
   assert.equal(search.version, 1)
-  assert.match(search.text, /first body words/)
-  assert.doesNotMatch(search.text, /<|privateAttack/)
+  assert.equal('text' in search, false, 'body text is already in markdown')
   assert.deepEqual(search.headings, [
     { depth: 2, label: 'foo_bar', anchor: 'foo_bar' },
     { depth: 2, label: 'foo_bar', anchor: 'foo_bar-1' },
@@ -74,5 +78,8 @@ test('heading attributes do not become search labels or anchors', () => {
   assert.deepEqual(search.headings, [
     { depth: 2, label: 'A x_y', anchor: 'a-x_y' },
   ])
-  assert.match(search.text, /first second line/)
+  assert.deepEqual(
+    pageSearch('<h2>safe<script>bad()</script> heading</h2>').headings,
+    [{ depth: 2, label: 'safe heading', anchor: 'safe-heading' }],
+  )
 })

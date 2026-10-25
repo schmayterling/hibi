@@ -214,19 +214,21 @@ test('pack dialog install, offline definition, profile restart, path rejection a
   page = launched.page
   await app.evaluate(({ ipcMain }) => {
     globalThis.dictionaryStartupQueries = []
-    globalThis.dictionaryPayloadReads = 0
+    globalThis.dictionaryPackWorkers = 0
     const handler = ipcMain._invokeHandlers.get('addons:query')
     ipcMain.removeHandler('addons:query')
     ipcMain.handle('addons:query', (event, id, method, input) => {
       if (id === 'dictionary') globalThis.dictionaryStartupQueries.push(method)
       return handler(event, id, method, input)
     })
-    const fs = process.getBuiltinModule('node:fs')
-    const stream = fs.createReadStream
-    fs.createReadStream = (path, ...args) => {
-      if (/dictionary-packs.*(?:data.jsonl|index.json)$/.test(String(path)))
-        globalThis.dictionaryPayloadReads++
-      return stream(path, ...args)
+    const threads = process.getBuiltinModule('node:worker_threads')
+    const Worker = threads.Worker
+    threads.Worker = class extends Worker {
+      constructor(path, options) {
+        super(path, options)
+        if (String(path).includes('dictionary-pack-worker'))
+          globalThis.dictionaryPackWorkers++
+      }
     }
     const { syncBuiltinESMExports } = process.getBuiltinModule('node:module')
     syncBuiltinESMExports()
@@ -242,13 +244,18 @@ test('pack dialog install, offline definition, profile restart, path rejection a
   assert.deepEqual(
     await app.evaluate(() => ({
       queries: globalThis.dictionaryStartupQueries,
-      reads: globalThis.dictionaryPayloadReads,
+      workers: globalThis.dictionaryPackWorkers,
     })),
-    { queries: [], reads: 0 },
-    'dictionary activation reads no pack payloads',
+    { queries: [], workers: 0 },
+    'dictionary activation starts no pack workers',
   )
   await waitForPack(page, 'installed')
   assert.deepEqual(await lookup(page), entries)
+  assert.equal(
+    await app.evaluate(() => globalThis.dictionaryPackWorkers),
+    1,
+    'first lookup starts the worker measured by the startup counter',
+  )
   assert.deepEqual(
     await app.evaluate(() => globalThis.dictionaryOnlineRequests),
     [],

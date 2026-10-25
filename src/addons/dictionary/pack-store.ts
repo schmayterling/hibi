@@ -80,6 +80,7 @@ async function manifestAt(path: string, id: PackId) {
 /** Main owns downloads; lookup and short-lived conversion workers stay independent. */
 export class PackStore {
   private worker: PackWorker
+  private invalidated = new Set<PackId>()
   private verified = new Map<
     PackId,
     { stamp: string; generation: number; pending: Promise<void> }
@@ -93,8 +94,6 @@ export class PackStore {
   private generation = new Map<PackId, number>()
   private installedCache: Promise<Set<PackId>> | undefined
   private recovered = new Map<PackId, Promise<void>>()
-  private preloadStarted = false
-  private idle: NodeJS.Immediate | undefined
 
   constructor(
     private root: string,
@@ -376,40 +375,6 @@ export class PackStore {
     }
   }
 
-  preloadInstalled(value: unknown): void {
-    if (!Array.isArray(value) || value.length > packIds.length)
-      throw new Error('Invalid dictionary preload languages')
-    const preferred = value.map(packId)
-    this.ensureOpen()
-    if (this.preloadStarted) return
-    this.preloadStarted = true
-    const ids = [...new Set(preferred)]
-    const next = () => {
-      if (this.closed) return
-      const id = ids.shift()
-      if (!id) return
-      this.idle = setImmediate(() => {
-        this.idle = undefined
-        void this.installed(id)
-          .then((installed) => (installed ? this.preload(id) : undefined))
-          .catch((error) => {
-            if (!this.closed)
-              console.error('could not preload dictionary pack:', error)
-          })
-          .finally(next)
-      })
-    }
-    next()
-  }
-
-  async preload(value: unknown): Promise<void> {
-    await this.read(
-      packId(value),
-      (id, path) => this.worker.preload(id, path),
-      undefined,
-    )
-  }
-
   async complete(value: unknown, prefix: string, limit = 8): Promise<string[]> {
     const id = packId(value)
     prefix = completionPrefix(prefix)
@@ -483,18 +448,42 @@ export class PackStore {
         verification?.stamp !== stamp ||
         verification.generation !== generation
       ) {
-        const pending = this.worker.verify(id, path, manifest)
+        const pending = this.worker
+          .verify(id, path, manifest, this.invalidated.has(id))
+          .then(async () => {
+            if (changed()) return
+            this.invalidated.delete(id)
+            await this.worker.unload(id)
+          })
         verification = { stamp, generation, pending }
         const current = verification
         this.verified.set(id, current)
-        void pending.catch(() => {
-          if (this.verified.get(id) === current) this.verified.delete(id)
+        void pending.catch((error) => {
+          if (
+            this.verified.get(id) === current &&
+            !(
+              error instanceof Error &&
+              error.message.includes('failed its checksum.')
+            )
+          )
+            this.verified.delete(id)
         })
       }
       await verification.pending
       if (changed()) return empty
-      const result = await query(id, path)
-      return changed() ? empty : result
+      try {
+        const result = await query(id, path)
+        return changed() ? empty : result
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.name === 'DictionaryPackValidationError'
+        ) {
+          this.invalidated.add(id)
+          if (this.verified.get(id) === verification) this.verified.delete(id)
+        }
+        throw error
+      }
     } catch (error) {
       if (changed()) return empty
       throw error
@@ -503,8 +492,6 @@ export class PackStore {
 
   async close() {
     this.closed = true
-    if (this.idle) clearImmediate(this.idle)
-    this.idle = undefined
     this.installedCache = undefined
     this.active?.controller.abort(
       new Error('Dictionary pack installation canceled.'),

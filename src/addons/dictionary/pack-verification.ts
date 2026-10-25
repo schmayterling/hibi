@@ -1,10 +1,10 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { lstat, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { PackManifest } from './packs'
 
-/** Include ctime so restoring mtime after an edit cannot reuse verification. */
+/** Change time also detects restored modification times on filesystems that track it. */
 export async function packStamp(path: string, manifest: PackManifest) {
   const files = await Promise.all(
     (['data', 'index'] as const).map(async (name) => {
@@ -29,20 +29,26 @@ export async function packStamp(path: string, manifest: PackManifest) {
 }
 
 /** Runs in the pack worker. A missing or damaged cache always costs a rehash. */
-export async function verifyPack(path: string, manifest: PackManifest) {
+export async function verifyPack(
+  path: string,
+  manifest: PackManifest,
+  force = false,
+) {
   const stamp = await packStamp(path, manifest)
   const cache = join(path, '.verified.json')
-  try {
-    const info = await lstat(cache)
-    if (
-      info.isFile() &&
-      !info.isSymbolicLink() &&
-      info.size <= 64 * 1024 &&
-      JSON.parse(await readFile(cache, 'utf8')).stamp === stamp
-    )
-      return
-  } catch {
-    // Verification receipts are disposable; pack integrity is checked below.
+  if (!force) {
+    try {
+      const info = await lstat(cache)
+      if (
+        info.isFile() &&
+        !info.isSymbolicLink() &&
+        info.size <= 64 * 1024 &&
+        JSON.parse(await readFile(cache, 'utf8')).stamp === stamp
+      )
+        return
+    } catch {
+      // Verification receipts are disposable; pack integrity is checked below.
+    }
   }
   for (const name of ['data', 'index'] as const) {
     const file = join(path, name === 'data' ? 'data.jsonl' : 'index.json')
@@ -55,8 +61,10 @@ export async function verifyPack(path: string, manifest: PackManifest) {
   }
   if ((await packStamp(path, manifest)) !== stamp)
     throw new Error('This dictionary pack is damaged. Install it again.')
-  const temporary = join(path, `.verified-${randomUUID()}.tmp`)
+  const temporary = join(path, '.verified.tmp')
   try {
+    // Reclaim a terminated verifier's scratch file without following a symlink.
+    await rm(temporary, { force: true })
     await writeFile(temporary, JSON.stringify({ stamp }), {
       flag: 'wx',
       mode: 0o600,
@@ -65,6 +73,6 @@ export async function verifyPack(path: string, manifest: PackManifest) {
   } catch {
     // A read-only pack still works; the next process will verify it again.
   } finally {
-    await rm(temporary, { force: true })
+    await rm(temporary, { force: true }).catch(() => {})
   }
 }

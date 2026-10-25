@@ -58,6 +58,7 @@ export class PackWorker {
         progress?: number
         result?: unknown
         error?: string
+        invalidPack?: boolean
       }) => {
         if (this.worker !== worker) return
         const pending = this.pending.get(message.seq)
@@ -73,7 +74,14 @@ export class PackWorker {
         this.pending.delete(message.seq)
         pending.cleanup()
         if (message.error !== undefined)
-          pending.reject(new Error(message.error))
+          pending.reject(
+            Object.assign(
+              new Error(message.error),
+              message.invalidPack
+                ? { name: 'DictionaryPackValidationError' }
+                : {},
+            ),
+          )
         else pending.resolve(message.result)
       },
     )
@@ -190,8 +198,13 @@ export class PackWorker {
   lookup(id: PackId, directory: string, word: string): Promise<PackEntry[]> {
     return this.request({ type: 'lookup', id, directory, word })
   }
-  verify(id: PackId, directory: string, manifest: PackManifest): Promise<void> {
-    return this.request({ type: 'verify', id, directory, manifest })
+  verify(
+    id: PackId,
+    directory: string,
+    manifest: PackManifest,
+    force = false,
+  ): Promise<void> {
+    return this.request({ type: 'verify', id, directory, manifest, force })
   }
   preload(id: PackId, directory: string): Promise<void> {
     return this.request({ type: 'preload', id, directory })

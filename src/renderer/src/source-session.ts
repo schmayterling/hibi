@@ -125,7 +125,7 @@ export function createSourceSession(
       transaction.annotation(isolateHistory),
     )
     if (!changes.length) {
-      // A behind replica's selection is replaced by the session's when flushed.
+      // Positions in a replica that is behind cannot become session selections.
       if (
         !pending &&
         transactions.some((transaction) => transaction.selection)

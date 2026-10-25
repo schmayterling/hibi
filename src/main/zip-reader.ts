@@ -1,3 +1,4 @@
+import { addAbortSignal } from 'node:stream'
 import { crc32 } from 'node:zlib'
 import { type CentralDirectory, type File, Open } from 'unzipper'
 
@@ -28,12 +29,18 @@ export async function openBoundedZip(zip: Buffer, entries: number) {
   ) => Promise<CentralDirectory>
   return open(zip, { tailSize: zip.length - end })
 }
-export async function readZipEntry(file: File, limit: number) {
+export async function readZipEntry(
+  file: File,
+  limit: number,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted()
   if (file.uncompressedSize > limit)
     throw new Error('The ZIP file exceeds the import size limit.')
   const parts: Buffer[] = []
   let size = 0
   const stream = file.stream()
+  if (signal) addAbortSignal(signal, stream)
   try {
     for await (const chunk of stream) {
       const part = Buffer.from(chunk)

@@ -33,7 +33,6 @@ import {
   defaultHotkeys,
   type Hotkeys,
 } from '../../shared/hotkeys'
-import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes'
 import { isMediaFile } from '../../shared/media'
 import { startupMark } from '../../shared/startup'
 import { exceedsUtf8Limit } from '../../shared/text-size'
@@ -83,7 +82,7 @@ import {
   documentRuntime,
   observeDocumentErrors,
 } from './document-runtime'
-import { subscribeDocumentShell } from './document-shell'
+import { hasDocumentFootnotes, subscribeDocumentShell } from './document-shell'
 import type { ViewMode } from './Editor'
 import { EditorToolbar } from './EditorToolbar'
 import { isEditorCommandTargetCurrent } from './editor-command-targets'
@@ -996,9 +995,7 @@ function App() {
     }
   const footnoteDocument =
     markdownDocument &&
-    hasFootnoteDefinitions(
-      currentDocument.current?.markdown ?? document?.markdown ?? '',
-    )
+    hasDocumentFootnotes(documentRuntime, currentDocument.current ?? document)
   const availableViews = addonHost.sourceOnly
     ? ['markdown' as const]
     : documentFormats
@@ -2637,7 +2634,7 @@ function App() {
     const paneMarkdown =
       !paneDocument || documentFormats.isMarkdown(paneDocument.name)
     const paneFootnoteDocument =
-      paneMarkdown && hasFootnoteDefinitions(paneDocument?.markdown ?? '')
+      paneMarkdown && hasDocumentFootnotes(documentRuntime, paneDocument)
     const PaneEditor = paneMarkdown
       ? richEditor.Component
       : formatEditor.Component

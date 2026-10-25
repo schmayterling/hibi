@@ -811,9 +811,13 @@ for (const count of [100, 1000, 2000]) {
         '\n\nsanitizer-probe-' +
         index +
         ' ' +
-        'Some unicode prose 日本語. '.repeat(180) +
+        'Some unicode prose 日本語. '.repeat(320) +
         (index === count - 1 ? `\n\n## raretarget${count} **日本語_é**` : ''),
     }))
+    const sourceBytes = pages.reduce(
+      (bytes, page) => bytes + Buffer.byteLength(page.markdown),
+      0,
+    )
     const site = prepareSite(
       { name: 'search fixture', pages },
       exportOptions({ graph: false }),
@@ -905,6 +909,7 @@ for (const count of [100, 1000, 2000]) {
     t.diagnostic(
       JSON.stringify({
         pages: count,
+        sourceBytes,
         firstSearchMs,
         extraSanitizedPages: counters.sanitized,
         maxObservedTaskMs: await page.evaluate(() =>

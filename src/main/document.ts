@@ -38,7 +38,7 @@ import {
   writeMarkdown,
   writeText,
 } from './files'
-import { recordVersion } from './history'
+import { recordVersions } from './history'
 import { isPathInside } from './workspace-paths'
 
 let path: string | null = null
@@ -662,8 +662,10 @@ async function recordSaveHistory(
   content: string,
 ) {
   try {
-    if (previous !== null) await recordVersion(destination, previous)
-    await recordVersion(destination, content)
+    await recordVersions(
+      destination,
+      previous === null ? [content] : [previous, content],
+    )
   } catch (error) {
     console.error('local history failed:', error)
     window.webContents.send(

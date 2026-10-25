@@ -40,6 +40,39 @@ import {
   workspaceTarget,
 } from './workspace-menu'
 
+const ignoreDecorations = () => () => {}
+
+/** Reuses unchanged rows, so a workspace reply with the same tree keeps the sidebar model. */
+function workspaceItems(
+  entries: readonly WorkspaceEntry[],
+  previous: SidebarItem[] | undefined,
+  unsaved: Set<string>,
+): SidebarItem[] {
+  let changed = entries.length !== previous?.length
+  const items = entries.map((entry, index) => {
+    if (entry.dirty) unsaved.add(entry.path)
+    const old = previous?.[index]
+    const icon = entry.kind === 'folder' ? Folder : FileText
+    const children =
+      entry.children && workspaceItems(entry.children, old?.children, unsaved)
+    if (
+      old?.id === entry.path &&
+      old.label === entry.name &&
+      old.icon === icon &&
+      old.children === children
+    )
+      return old
+    changed = true
+    return {
+      id: entry.path,
+      label: entry.name,
+      icon,
+      ...(children ? { children } : {}),
+    }
+  })
+  return changed || !previous ? items : previous
+}
+
 export function WorkspaceSidebar({
   workspace,
   onOpen,
@@ -85,7 +118,8 @@ export function WorkspaceSidebar({
   const [renaming, setRenaming] = useState(false)
   const committing = useRef(false)
   const decorations = useSyncExternalStore(
-    explorerDecorations.subscribe,
+    // A closed explorer skips provider updates and reads the latest result when it opens.
+    open ? explorerDecorations.subscribe : ignoreDecorations,
     explorerDecorations.snapshot,
   )
   const rootDecoration = decorations.get('')
@@ -202,20 +236,25 @@ export function WorkspaceSidebar({
       ],
     })
   }
-  const items = useMemo(() => {
-    const convert = (entries: WorkspaceEntry[]): SidebarItem[] =>
-      entries.map((entry) => ({
-        id: entry.path,
-        label: entry.name,
-        icon: entry.kind === 'folder' ? Folder : FileText,
-        dirty: workspace?.activePath === entry.path ? dirty : !!entry.dirty,
-        ...(decorations.has(entry.path)
-          ? { decoration: decorations.get(entry.path)! }
-          : {}),
-        ...(entry.children ? { children: convert(entry.children) } : {}),
-      }))
-    return convert(workspace?.entries ?? [])
-  }, [workspace?.entries, workspace?.activePath, dirty, decorations])
+  const tree = useRef<SidebarItem[] | undefined>(undefined)
+  const { items, unsaved } = useMemo(() => {
+    const unsaved = new Set<string>()
+    tree.current = workspaceItems(
+      workspace?.entries ?? [],
+      tree.current,
+      unsaved,
+    )
+    return { items: tree.current, unsaved }
+  }, [workspace?.entries])
+  // Status stays outside the tree model, so badges and unsaved dots update only their rows.
+  const status = useMemo(() => {
+    const rows = new Map<string, Pick<SidebarItem, 'dirty' | 'decoration'>>()
+    for (const path of unsaved) rows.set(path, { dirty: true })
+    for (const [path, decoration] of decorations)
+      rows.set(path, { ...rows.get(path), decoration })
+    if (activePath) rows.set(activePath, { ...rows.get(activePath), dirty })
+    return rows
+  }, [unsaved, decorations, activePath, dirty])
   return (
     <Sidebar
       // Another workspace starts with fresh expansion, focus, and range state.
@@ -227,6 +266,7 @@ export function WorkspaceSidebar({
       onDismiss={onDismiss}
       className={`document-sidebar workspace-sidebar ${workspace ? '' : 'workspace-empty'}`}
       items={items}
+      status={status}
       selected={workspace?.activePath ?? null}
       selection={{
         ids: selection,

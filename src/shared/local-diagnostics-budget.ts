@@ -12,6 +12,7 @@ export class DiagnosticAdmission {
   private start = 0
   private used = 0
   private dropped = 0
+  private lastMainStall = -Infinity
   private readonly seen = new Set<DiagnosticCode>()
   private readonly profile: DiagnosticProfile
   constructor(profile: DiagnosticProfile) {
@@ -26,6 +27,9 @@ export class DiagnosticAdmission {
       this.seen.clear()
     }
     if (
+      (code === 'MAIN_LOOP_STALLED' &&
+        now >= this.lastMainStall &&
+        now - this.lastMainStall < 60_000) ||
       this.seen.has(code) ||
       this.used >= diagnosticPolicies[this.profile].detailsPerSecond
     ) {
@@ -33,6 +37,7 @@ export class DiagnosticAdmission {
       return false
     }
     this.used++
+    if (code === 'MAIN_LOOP_STALLED') this.lastMainStall = now
     this.seen.add(code)
     return true
   }

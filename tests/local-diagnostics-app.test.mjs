@@ -43,6 +43,37 @@ async function runRecords(profile) {
   return { marker, records }
 }
 
+async function waitForRecord(app, code) {
+  await waitForAsync(
+    app,
+    async ({ app }, code) => {
+      try {
+        const fs = process.getBuiltinModule('node:fs/promises')
+        const directory = `${app.getPath('userData')}/logs/debug`
+        const marker = JSON.parse(
+          await fs.readFile(`${directory}/run-state.txt`, 'utf8'),
+        )
+        const segments = await Promise.all(
+          (await fs.readdir(directory))
+            .filter((name) => /^segment-\d\.log$/.test(name))
+            .map((name) => fs.readFile(`${directory}/${name}`, 'utf8')),
+        )
+        return segments
+          .join('\n')
+          .split('\n')
+          .filter(Boolean)
+          .some((line) => {
+            const record = JSON.parse(line)
+            return record.run === marker.run && record.code === code
+          })
+      } catch {
+        return false
+      }
+    },
+    code,
+  )
+}
+
 async function launchProfile(t, profile) {
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
@@ -59,30 +90,7 @@ async function launchProfile(t, profile) {
   })
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
-  await waitForAsync(app, async ({ app }) => {
-    try {
-      const fs = process.getBuiltinModule('node:fs/promises')
-      const directory = `${app.getPath('userData')}/logs/debug`
-      const marker = JSON.parse(
-        await fs.readFile(`${directory}/run-state.txt`, 'utf8'),
-      )
-      const segments = await Promise.all(
-        (await fs.readdir(directory))
-          .filter((name) => /^segment-\d\.log$/.test(name))
-          .map((name) => fs.readFile(`${directory}/${name}`, 'utf8')),
-      )
-      return segments
-        .join('\n')
-        .split('\n')
-        .filter(Boolean)
-        .some((line) => {
-          const record = JSON.parse(line)
-          return record.run === marker.run && record.code === 'RUN_STARTED'
-        })
-    } catch {
-      return false
-    }
-  })
+  await waitForRecord(app, 'RUN_STARTED')
   return app
 }
 
@@ -151,6 +159,45 @@ test('a stalled diagnostics finish is entered once and cannot hold repeated quit
   await app.close()
   assert.equal(child.exitCode, 0)
   assert.equal((await runRecords(profile)).marker.state, 'active')
+})
+
+test('main-loop stall persists a bounded warning before quitting', {
+  timeout: 20000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-loop-stall-'))
+  t.after(() => rm(profile, { recursive: true, force: true }))
+  const app = await launchProfile(t, profile)
+  const since = Date.now()
+  await app.evaluate(() => {
+    const end = performance.now() + 2200
+    while (performance.now() < end) {
+      // Deliberately block only this test's main process.
+    }
+  })
+  await waitForRecord(app, 'MAIN_LOOP_STALLED')
+  const records = (await runRecords(profile)).records.filter(
+    ({ code }) => code === 'MAIN_LOOP_STALLED',
+  )
+  assert.equal(records.length, 1)
+  const record = records[0]
+  assert.equal(record.severity, 'warning')
+  assert.equal(record.role, 'main')
+  assert.equal(record.stackStatus, 'unavailable')
+  assert.ok(['1-5s', '5-15s', '15-60s', '60s+'].includes(record.durationBucket))
+  assert.ok(record.time >= since && record.time <= Date.now())
+  assert.deepEqual(Object.keys(record).sort(), [
+    'code',
+    'durationBucket',
+    'label',
+    'profile',
+    'role',
+    'run',
+    'schema',
+    'severity',
+    'stackStatus',
+    'time',
+  ])
+  await app.close()
 })
 
 test('an unavailable unsafe log directory leaves editing, saving and user files intact', {

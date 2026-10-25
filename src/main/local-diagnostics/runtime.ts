@@ -87,7 +87,10 @@ export class LocalDiagnostics {
   report(
     code: DiagnosticCode,
     error?: unknown,
-    metadata: Pick<SafeDiagnostic, 'role' | 'reason' | 'exitCode'> = {},
+    metadata: Pick<
+      SafeDiagnostic,
+      'role' | 'reason' | 'exitCode' | 'durationBucket'
+    > = {},
   ) {
     try {
       if (!this.admission.admit(code, Date.now())) return
@@ -219,9 +222,33 @@ export class LocalDiagnostics {
         installOwnedFailureReporter(null)
         process.removeListener('uncaughtExceptionMonitor', this.mainException)
       })
+      this.observeMainLoop()
     } catch {
       /* Unavailable diagnostics do not affect startup or saving. */
     }
+  }
+
+  private observeMainLoop() {
+    let previous = performance.now()
+    const timer = setInterval(() => {
+      const now = performance.now()
+      const delay = now - previous - 1000
+      previous = now
+      if (delay < 1000) return
+      this.report('MAIN_LOOP_STALLED', undefined, {
+        role: 'main',
+        durationBucket:
+          delay < 5000
+            ? '1-5s'
+            : delay < 15000
+              ? '5-15s'
+              : delay < 60000
+                ? '15-60s'
+                : '60s+',
+      })
+    }, 1000)
+    timer.unref()
+    app.once('will-quit', () => clearInterval(timer))
   }
 
   private async finishBeforeQuit(event: Electron.Event) {

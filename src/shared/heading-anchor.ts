@@ -26,10 +26,10 @@ export function headingAnchors(texts: readonly string[]) {
   return headings.map(({ text, legacy }, index) => {
     const slug = headingAnchor(text)
     let count = counts.get(slug) ?? 0
-    let anchor = headingAnchor(text, count)
+    let anchor = count ? `${slug}-${count}` : slug
     // Keep historical destinations when a canonical slug would claim another heading.
     while (reserved.has(anchor) && reserved.get(anchor) !== index)
-      anchor = headingAnchor(text, ++count)
+      anchor = `${slug}-${++count}`
     counts.set(slug, count + 1)
     reserved.set(anchor, index)
     return { anchor, legacy: reserved.get(legacy) === index ? legacy : null }

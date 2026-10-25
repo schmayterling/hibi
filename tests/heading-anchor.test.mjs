@@ -42,4 +42,24 @@ test('heading enumeration reserves legacy aliases and suffixes duplicate heading
   assert.deepEqual(headingAnchors([' ** hello ** ']), [
     { anchor: '-hello-', legacy: 'hello' },
   ])
+  assert.deepEqual(headingAnchors(['✨ features', 'features']), [
+    { anchor: '-features', legacy: 'features' },
+    { anchor: 'features-1', legacy: 'features-1' },
+  ])
+})
+
+test('heading enumeration normalizes each heading once despite suffix collisions', () => {
+  let scans = 0
+  class HeadingText extends String {
+    trim() {
+      scans++
+      return super.trim()
+    }
+  }
+  const texts = Array.from({ length: 1000 }, () => new HeadingText('title'))
+  texts.push(new HeadingText('title-1'))
+  const anchors = headingAnchors(texts)
+  assert.equal(scans, texts.length)
+  assert.equal(new Set(anchors.map(({ anchor }) => anchor)).size, texts.length)
+  assert.deepEqual(anchors.at(-1), { anchor: 'title-1-1', legacy: null })
 })

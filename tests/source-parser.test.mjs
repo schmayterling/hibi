@@ -141,6 +141,34 @@ test('line chunks report long reads without materializing a multiline document',
   }
 })
 
+test('middle edits in giant paragraphs scan source only once per physical line', () => {
+  const source = 'word '.repeat(100_000).trimEnd()
+  const store = new SourceStore(source, { tabId: 'giant-edit', revision: 0 })
+  const session = new SourceParserSession(
+    store.snapshot(),
+    parser,
+    'commonmark',
+  )
+  try {
+    finish(session)
+    const from = Math.floor(source.length / 2)
+    session.apply(edit(store, [{ from, to: from, insert: 's' }]))
+    store.counters(true)
+    session.counters(true)
+    const tree = finish(session)
+    assert.equal(tree.length, source.length + 1)
+    assert.deepEqual(
+      treeShape(tree),
+      treeShape(parser.parse(`${source.slice(0, from)}s${source.slice(from)}`)),
+    )
+    const work = store.counters()
+    assert.ok(work.unitsScanned <= source.length * 4, JSON.stringify(work))
+    assert.ok(work.sourceUnitsRead <= source.length * 2, JSON.stringify(work))
+  } finally {
+    session.dispose()
+  }
+})
+
 test('ENG14: incremental Markdown trees match full dialect parsers through adversarial source changes', () => {
   let seed = 90411
   const random = (max) => {

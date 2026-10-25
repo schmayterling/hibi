@@ -408,7 +408,20 @@ test('find in document searches rich text and offscreen markdown without editing
     await rich.locator('.ProseMirror-active-search-match').count(),
     1,
   )
-  assert.equal(await rich.locator('.ProseMirror-search-match').count(), 9999)
+  // Only matches near the viewport are highlighted, one frame after a change.
+  const highlighted = async () => {
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    )
+    return rich
+      .locator('.ProseMirror-search-match, .ProseMirror-active-search-match')
+      .count()
+  }
+  const nearby = await highlighted()
+  assert.ok(nearby > 1 && nearby < 1000, `${nearby} highlights`)
   // A move only swaps the classes of two highlights; rewriting text in the
   // paragraph would make the browser lay it out again.
   await page.evaluate(() => {
@@ -474,5 +487,20 @@ test('find in document searches rich text and offscreen markdown without editing
   assert.deepEqual(await selected(), [13, 19])
   await page.evaluate(() => window.restoreFolding())
   await page.getByRole('button', { name: /^close find$/i, exact: true }).click()
+  await bar.waitFor({ state: 'hidden' })
+
+  // Ten times as many matches leave the highlighted count unchanged.
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource('needle word '.repeat(100000).trimEnd())
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  await input.fill('needle')
+  await waitForCount('1/100000')
+  assert.equal(await highlighted(), nearby)
+  await input.press('Escape')
   await bar.waitFor({ state: 'hidden' })
 })

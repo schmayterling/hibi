@@ -623,6 +623,8 @@ test('5,000 custom words keep bounded live rows, skip hidden discovery work, and
   await note(4999).fill('kept after failure')
   await note(4999).blur()
   await words.getByText('Could not save custom words.').waitFor()
+  // Focus moving to another control releases the row; the note stays with its word.
+  await words.getByRole('textbox', { name: 'New custom word' }).focus()
   await scrollList('start')
   await remove(1).waitFor()
   await note(4999).waitFor({ state: 'detached' })

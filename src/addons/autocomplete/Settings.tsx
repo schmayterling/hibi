@@ -5,6 +5,7 @@ import { getControls, onControlsChange } from './runtime'
 import {
   type AutocompletePreferences,
   onPreferencesChange,
+  preferencesSaved,
   readPreferences,
   writePreferences,
 } from './settings'
@@ -32,6 +33,12 @@ export function Settings() {
         <p role="status" className="setting-description">
           Enable Dictionary and thesaurus to use autocomplete. Installed offline
           packs supply the starting vocabulary.
+        </p>
+      )}
+      {!preferencesSaved() && (
+        <p role="alert" className="setting-description">
+          Could not save autocomplete settings. Changes apply until Hibi
+          restarts.
         </p>
       )}
       <div className="settings-group">

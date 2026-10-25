@@ -3,7 +3,8 @@ import type {
   DocumentTarget,
   VersionedDocumentTarget,
 } from './foundation-contracts'
-import { exceedsUtf8Limit } from './text-size.ts'
+import type { SourceSnapshot } from './source-buffer.ts'
+import { highSurrogate, lowSurrogate } from './source-metrics.ts'
 
 /** UTF-16 offsets in the complete, unprojected document source. */
 export type SourceEdit = {
@@ -151,43 +152,93 @@ export function sourceEditMatches(
   )
 }
 
-/** Validate exact ranges before an editor transaction is created. */
+/** Admit exact raw ranges without constructing the edited document. */
+export function validateSourceEdits(
+  snapshot: SourceSnapshot,
+  changes: readonly SourceEdit[],
+  maximumBytes = Infinity,
+):
+  | { status: 'valid'; changed: boolean }
+  | {
+      status: 'invalid' | 'conflict'
+      message: string
+    } {
+  let previous: SourceEdit | undefined,
+    changed = false
+  for (const change of changes) {
+    if (
+      change.to < change.from ||
+      !snapshot.isEditBoundary(change.from) ||
+      !snapshot.isEditBoundary(change.to) ||
+      (previous &&
+        (change.from < previous.to ||
+          (change.from === previous.to &&
+            (change.from === change.to || previous.from === previous.to))))
+    )
+      return {
+        status: 'invalid',
+        message: 'Edit ranges overlap or split a character or line ending.',
+      }
+    const actual = snapshot.sliceRaw(change.from, change.to)
+    if (actual !== change.expectedText)
+      return {
+        status: 'conflict',
+        message: 'The text at the edit range has changed.',
+      }
+    if (actual !== change.insert) changed = true
+    previous = change
+  }
+  if (maximumBytes !== Infinity) {
+    let bytes = 0,
+      last = -1,
+      end = 0
+    const append = (size: number, first: number, final: number) => {
+      bytes += size - (highSurrogate(last) && lowSurrogate(first) ? 2 : 0)
+      last = final
+    }
+    const retain = (from: number, to: number) => {
+      if (from === to) return
+      append(
+        snapshot.rawToByte(to)! - snapshot.rawToByte(from)!,
+        snapshot.sliceRaw(from, from + 1).charCodeAt(0),
+        snapshot.sliceRaw(to - 1, to).charCodeAt(0),
+      )
+    }
+    const encoder = new TextEncoder()
+    for (const change of changes) {
+      retain(end, change.from)
+      if (change.insert.length)
+        append(
+          encoder.encode(change.insert).length,
+          change.insert.charCodeAt(0),
+          change.insert.charCodeAt(change.insert.length - 1),
+        )
+      end = change.to
+    }
+    retain(end, snapshot.utf16Length)
+    if (bytes > maximumBytes)
+      return {
+        status: 'invalid',
+        message: 'The edited document exceeds its size limit.',
+      }
+  }
+  return { status: 'valid', changed }
+}
+
+/** Rich projection proofs still need the complete proposed source. */
 export function editedSource(
-  source: string,
+  snapshot: SourceSnapshot,
   changes: readonly SourceEdit[],
   maximumBytes: number,
 ) {
-  const splitsSurrogate = (position: number) =>
-    /[\uD800-\uDBFF]/.test(source.charAt(position - 1)) &&
-    /[\uDC00-\uDFFF]/.test(source.charAt(position))
-  let previous: SourceEdit | undefined
+  const validation = validateSourceEdits(snapshot, changes, maximumBytes)
+  if (validation.status !== 'valid') throw new Error(validation.message)
   const parts: string[] = []
   let end = 0
   for (const change of changes) {
-    if (
-      change.to > source.length ||
-      splitsSurrogate(change.from) ||
-      splitsSurrogate(change.to)
-    )
-      throw new Error(
-        'The edit range is outside the text or splits a Unicode character.',
-      )
-    if (
-      previous &&
-      (change.from < previous.to ||
-        (change.from === previous.to &&
-          (change.from === change.to || previous.from === previous.to)))
-    )
-      throw new Error('Edit ranges overlap or share an insertion boundary.')
-    if (source.slice(change.from, change.to) !== change.expectedText)
-      throw new Error('The text at the edit range has changed.')
-    parts.push(source.slice(end, change.from), change.insert)
+    parts.push(snapshot.sliceRaw(end, change.from), change.insert)
     end = change.to
-    previous = change
   }
-  parts.push(source.slice(end))
-  const result = parts.join('')
-  if (exceedsUtf8Limit(result, maximumBytes))
-    throw new Error('The edited document exceeds its size limit.')
-  return result
+  parts.push(snapshot.sliceRaw(end, snapshot.utf16Length))
+  return parts.join('')
 }

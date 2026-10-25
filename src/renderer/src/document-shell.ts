@@ -1,8 +1,11 @@
 import type { DocumentState } from '../../shared/desktop.ts'
+import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes.ts'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import type { DocumentRuntime } from './document-runtime.ts'
 
 const certifiedVisualEchoes = new WeakSet<SourceSnapshot>()
+// Weak entries leave with their source snapshot, including when a tab closes.
+const footnoteSources = new WeakMap<SourceSnapshot, boolean>()
 
 /** Internal, one-shot proof from the strict native visual edit path after reconciliation. */
 export function certifyVisualEcho(source: SourceSnapshot) {
@@ -84,6 +87,21 @@ export function subscribeDocumentShell(
     edit(next, changes)
     if (changed) update(next)
   })
+}
+
+/** Shell and pane renders share one full footnote lex per immutable source. */
+export function hasDocumentFootnotes(
+  runtime: Pick<DocumentRuntime, 'sourceFor'>,
+  document: DocumentState | null,
+) {
+  if (!document) return false
+  const source = runtime.sourceFor(document)
+  let found = source && footnoteSources.get(source)
+  if (found === undefined) {
+    found = hasFootnoteDefinitions(document.markdown)
+    if (source) footnoteSources.set(source, found)
+  }
+  return found
 }
 
 /** Content versions belong to the editor; shell consumers only need these fields. */

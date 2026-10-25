@@ -33,6 +33,8 @@ export type SidebarItem = {
 
 export type SidebarProps = {
   items: readonly SidebarItem[]
+  /** Row `dirty` and `decoration` values by id, used before the item's own. Changing them keeps the tree model, expansion, and focus. */
+  status?: ReadonlyMap<string, Pick<SidebarItem, 'dirty' | 'decoration'>>
   selected: string | null
   onSelect: (id: string) => void
   label: string
@@ -132,6 +134,7 @@ function RenameInput({
 
 export function Sidebar({
   items,
+  status,
   selected,
   onSelect,
   label,
@@ -240,7 +243,13 @@ export function Sidebar({
     const key = JSON.stringify([selected, editing?.id, ancestors])
     if (revealed.current === key) return
     revealed.current = key
-    if (ancestors.length) setExpanded((old) => new Set([...old, ...ancestors]))
+    // Selecting inside open folders keeps the row model.
+    if (ancestors.length)
+      setExpanded((old) =>
+        ancestors.every((id) => old.has(id))
+          ? old
+          : new Set([...old, ...ancestors]),
+      )
   }, [parents, selected, mode, editing?.id, collapsible])
   const model = useMemo(
     () => sidebarRows(items, expanded, collapsible),
@@ -252,6 +261,8 @@ export function Sidebar({
   const picked = useMemo(() => {
     if (!selectionIds) return null
     const ids = new Set(selectionIds)
+    // Following the active file needs no ordering pass over the whole tree.
+    if (ids.size < 2) return [...ids].filter((id) => parents.has(id))
     return [...parents.keys()].filter((id) => ids.has(id))
   }, [selectionIds, parents])
   const pickedSet = useMemo(() => picked && new Set(picked), [picked])
@@ -508,6 +519,9 @@ export function Sidebar({
               const { item, depth, parent, position, size, sections } =
                 rows[index]!
               const Icon = item.icon
+              const shown = status?.get(item.id)
+              const dirty = shown?.dirty ?? item.dirty
+              const decoration = shown?.decoration ?? item.decoration
               return (
                 <Fragment key={item.id}>
                   {item.section && (
@@ -653,19 +667,16 @@ export function Sidebar({
                         tabIndex={focusId === item.id ? 0 : -1}
                         style={{
                           paddingLeft: 16 + depth * 14,
-                          color: item.decoration?.color
-                            ? `var(--${item.decoration.color})`
+                          color: decoration?.color
+                            ? `var(--${decoration.color})`
                             : undefined,
                         }}
-                        data-tooltip={[item.label, item.decoration?.label]
+                        data-tooltip={[item.label, decoration?.label]
                           .filter(Boolean)
                           .join(' · ')}
                         data-verbatim={mode === 'tree' || undefined}
                         aria-description={
-                          [
-                            item.dirty ? 'unsaved changes' : '',
-                            item.decoration?.label,
-                          ]
+                          [dirty ? 'unsaved changes' : '', decoration?.label]
                             .filter(Boolean)
                             .join('; ') || undefined
                         }
@@ -794,17 +805,17 @@ export function Sidebar({
                           <Icon size={15} strokeWidth={1.5} aria-hidden />
                         )}
                         <span className="sidebar-label">{item.label}</span>
-                        {item.dirty && (
+                        {dirty && (
                           <span className="sidebar-dirty" aria-hidden="true">
                             ●
                           </span>
                         )}
-                        {item.decoration?.badge && (
+                        {decoration?.badge && (
                           <span
                             className="sidebar-decoration"
                             aria-hidden="true"
                           >
-                            {item.decoration.badge}
+                            {decoration.badge}
                           </span>
                         )}
                       </button>

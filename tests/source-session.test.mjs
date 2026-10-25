@@ -173,25 +173,76 @@ test('a hidden source view coalesces canonical edits and catches up exactly when
   f.session.dispose()
 })
 
-test('a shown source view matches synchronous echoes, including carets the session stops tracking', () => {
-  const run = (hidden) => {
-    const f = fixture('abc\r\ndef\r\nghi')
+test('a shown source view gets the caret immediate echoes would have left', () => {
+  const scenarios = [
+    {
+      source: 'abc\r\ndef\r\nghi',
+      caret: 5,
+      // Without a session selection, each echo maps the view's own caret.
+      steps: [
+        [6, 6, 'X'],
+        [7, 7, 'Y', true],
+        [0, 0, 'Z\r\n'],
+        [0, 1, ''],
+      ],
+      head: 7,
+    },
+    {
+      // Undo restores the untracked selection from before the caret was placed.
+      source: 'abcdef',
+      prefix: 'ZZ',
+      caret: 5,
+      steps: ['undo', [0, 0, 'XY'], [1, 6, '']],
+      head: 1,
+    },
+    {
+      source: 'abcdef',
+      caret: 3,
+      steps: [
+        [2, 4, '', true],
+        [1, 3, 'Y'],
+      ],
+    },
+    {
+      source: 'abcdef',
+      caret: 3,
+      steps: [
+        [1, 5, 'X', true],
+        [0, 1, ''],
+      ],
+    },
+    {
+      source: 'abcdef',
+      caret: 3,
+      steps: [
+        [0, 0, 'X'],
+        [2, 5, '', true],
+        [1, 3, 'Y'],
+      ],
+    },
+  ]
+  const run = ({ source, prefix, caret, steps }, hidden) => {
+    const f = fixture(source)
+    if (prefix)
+      f.session.edit([{ from: 0, to: 0, insert: prefix }], 'visual', 'prefix')
     const surface = f.attach()
-    surface.dispatch({ selection: { anchor: 5 } })
+    surface.dispatch({ selection: { anchor: caret } })
     surface.bridge.setVisible(!hidden)
-    const edit = (from, to, insert, selection) =>
+    for (const step of steps) {
+      if (step === 'undo') {
+        f.session.undo()
+        assert.equal(f.session.selection(), null)
+        continue
+      }
+      const [from, to, insert, clear] = step
       f.session.edit(
         [{ from, to, insert }],
         'visual',
         'step',
         undefined,
-        selection,
+        clear ? () => null : undefined,
       )
-    edit(6, 6, 'X')
-    // Without a session selection, each echo maps the view's own caret.
-    edit(7, 7, 'Y', () => null)
-    edit(0, 0, 'Z\r\n')
-    edit(0, 1, '')
+    }
     surface.bridge.setVisible(true)
     const result = {
       doc: surface.view.state.doc.toString(),
@@ -203,9 +254,12 @@ test('a shown source view matches synchronous echoes, including carets the sessi
     f.session.dispose()
     return result
   }
-  const live = run(false)
-  assert.deepEqual(live.selection.ranges, [{ anchor: 7, head: 7 }])
-  assert.deepEqual(run(true), live)
+  for (const scenario of scenarios) {
+    const live = run(scenario, false)
+    if (scenario.head !== undefined)
+      assert.equal(live.selection.ranges[0].head, scenario.head)
+    assert.deepEqual(run(scenario, true), live, JSON.stringify(scenario.steps))
+  }
 })
 
 test('reads, internal effects and stale input keep a hidden source replica exact', () => {

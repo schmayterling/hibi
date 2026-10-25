@@ -208,13 +208,12 @@ export function createSourceSession(
         redo: () => !!session.redo(),
       })
       rememberSourceHistory(view.state, session.historyDepth())
-      // Like per-operation echoes: the last session selection, mapped by later changes.
+      // A waiting view gets the caret immediate echoes would have left: the
+      // session selection, or its own caret mapped through each operation.
       let echo = '',
-        selected: EditorSelection | null = null,
-        since: ChangeSet | null = null
+        selection: EditorSelection | null = null
       flush = () => {
         if (!pending) return
-        const selection = since ? selected?.map(since) : selected
         const transaction = view.state.update({
           changes: pending,
           ...(selection ? { selection } : {}),
@@ -224,7 +223,7 @@ export function createSourceSession(
           ],
           filter: false,
         })
-        pending = selected = since = null
+        pending = selection = null
         rememberSourceHistory(transaction.state, session.historyDepth())
         view.update([transaction])
       }
@@ -236,15 +235,16 @@ export function createSourceSession(
           editorChangesFromSource(prepared.before, prepared.operation.changes),
           prepared.before.normalizedLength,
         )
-        const selection = editorSelection(
+        const selected = editorSelection(
           prepared.after,
           session.selection(viewId),
         )
+        if (selected) selection = selected
+        else if (pending)
+          selection = (selection ?? view.state.selection.map(pending)).map(
+            changes,
+          )
         pending = pending ? pending.compose(changes) : changes
-        if (selection) {
-          selected = selection
-          since = null
-        } else if (selected) since = since ? since.compose(changes) : changes
         echo = prepared.operation.operationId
         snapshot = prepared.after
         group = ''

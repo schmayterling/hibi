@@ -23,8 +23,15 @@ type FindState = {
 
 const matchStyle = { class: 'ProseMirror-search-match' }
 const activeStyle = { class: 'ProseMirror-active-search-match' }
-const highlight = (from: number, to: number, style = matchStyle) =>
-  Decoration.inline(from, to, style, style)
+// The block offset in the spec keeps neighboring highlights unequal, so the
+// view restyles a match in place instead of reusing a neighbor's equal text
+// node and rewriting the paragraph. Rescanned matches that did not move stay equal.
+const highlight = (
+  from: number,
+  to: number,
+  offset: number,
+  style = matchStyle,
+) => Decoration.inline(from, to, style, { style, offset })
 
 // Offsets match document positions: inline leaves are one character and
 // inline nodes with content gain a space for each boundary token.
@@ -220,16 +227,25 @@ const none: FindState = {
   active: null,
 }
 
+function highlightBlock(
+  decorations: Decoration[],
+  index: MatchIndex,
+  block: Node,
+  pos: number,
+) {
+  const found = index.matches(block)
+  for (let at = 0; at < found.length; at += 2)
+    decorations.push(
+      highlight(pos + 1 + found[at]!, pos + 1 + found[at + 1]!, found[at]!),
+    )
+}
+
 function rebuild(state: EditorState, query: string) {
   const index = new MatchIndex(query)
   const decorations: Decoration[] = []
   state.doc.descendants((node, pos) => {
     if (!node.inlineContent) return true
-    const found = index.matches(node)
-    for (let at = 0; at < found.length; at += 2)
-      decorations.push(
-        highlight(pos + 1 + found[at]!, pos + 1 + found[at + 1]!),
-      )
+    highlightBlock(decorations, index, node, pos)
     return false
   })
   return {
@@ -265,11 +281,7 @@ function update(tr: Transaction, state: EditorState, find: FindState) {
   state.doc.nodesBetween(from, to, (node, pos) => {
     if (!node.inlineContent) return true
     replaced.push(pos, node.nodeSize, node.nodeSize)
-    const found = index.matches(node)
-    for (let at = 0; at < found.length; at += 2)
-      decorations.push(
-        highlight(pos + 1 + found[at]!, pos + 1 + found[at + 1]!),
-      )
+    highlightBlock(decorations, index, node, pos)
     return false
   })
   // Replacing each touched textblock with itself drops its stale highlights in
@@ -295,13 +307,17 @@ function select(state: EditorState, find: FindState): FindState {
   const selected = isMatch(index, state.doc, from, to) ? { from, to } : null
   const stale: Decoration[] = []
   const fresh: Decoration[] = []
-  const restyle = (range: Range, before: object, after: typeof matchStyle) => {
+  const restyle = (
+    range: Range,
+    before: typeof matchStyle,
+    after: typeof matchStyle,
+  ) => {
     const found = find.deco
-      .find(range.from, range.to, (spec) => spec === before)
+      .find(range.from, range.to, (spec) => spec.style === before)
       .filter((deco) => deco.from === range.from && deco.to === range.to)
     if (!found.length) return
     stale.push(...found)
-    fresh.push(highlight(range.from, range.to, after))
+    fresh.push(highlight(range.from, range.to, found[0]!.spec.offset, after))
   }
   if (find.active && (find.active.from !== from || find.active.to !== to))
     restyle(find.active, activeStyle, matchStyle)

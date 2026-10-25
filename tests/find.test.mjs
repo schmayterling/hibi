@@ -404,6 +404,45 @@ test('find in document searches rich text and offscreen markdown without editing
     1,
   )
   assert.equal(await rich.locator('.ProseMirror-search-match').count(), 9999)
+  // A move only swaps the classes of two highlights; rewriting text in the
+  // paragraph would make the browser lay it out again.
+  await page.evaluate(() => {
+    const paragraph = document.querySelector('.rich-pane .tiptap > p')
+    window.findRecords = []
+    window.findMutations = new MutationObserver((records) => {
+      window.findRecords.push(...records)
+    })
+    window.findMutations.observe(paragraph, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    })
+  })
+  await input.press('Enter')
+  await waitForCount('2/10000')
+  assert.deepEqual(
+    await page.evaluate(() => {
+      const records = [
+        ...window.findRecords,
+        ...window.findMutations.takeRecords(),
+      ]
+      window.findMutations.disconnect()
+      return records.map((record) => [
+        record.type,
+        record.attributeName,
+        record.target.className,
+      ])
+    }),
+    [
+      ['attributes', 'class', 'ProseMirror-search-match'],
+      ['attributes', 'class', 'ProseMirror-search-match'],
+      ['attributes', 'class', 'ProseMirror-active-search-match'],
+      ['attributes', 'class', 'ProseMirror-active-search-match'],
+    ],
+  )
+  await input.press('Shift+Enter')
+  await waitForCount('1/10000')
 
   // Replacing the selected match rescans its paragraph once, and undo
   // restores the text and every match.

@@ -180,13 +180,16 @@ export function startMath(context: AddonContext) {
         target.className = 'block-math-inner'
         dom.append(target)
       }
-      // Until then the expression stays readable; display spacing limits the height change.
+      // Until then the expression stays readable; display spacing, or the
+      // height this formula last rendered at, limits the height change.
       const pending = display ? document.createElement('span') : target
       if (display) {
         pending.className = 'katex-display'
         target.append(pending)
       }
       pending.textContent = latex
+      const reserved = display ? formulas.height(latex) : undefined
+      if (reserved) dom.style.minHeight = `${reserved}px`
       const click = (event: MouseEvent) => {
         event.preventDefault()
         event.stopPropagation()
@@ -195,6 +198,7 @@ export function startMath(context: AddonContext) {
       }
       dom.addEventListener('click', click)
       const cancel = formulas.schedule(dom, latex, display, (html) => {
+        if (reserved) dom.removeAttribute('style')
         if (html !== null) {
           // KaTeX builds this markup itself; trust: false admits no author HTML.
           target.innerHTML = html

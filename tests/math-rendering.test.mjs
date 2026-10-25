@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { formulaScheduler } from '../src/addons/math/rendering.ts'
+import { formulaCache, formulaScheduler } from '../src/addons/math/rendering.ts'
 import { electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
@@ -57,7 +57,11 @@ function environment(t) {
   }
 }
 const element = (top) => ({
-  getBoundingClientRect: () => ({ top, bottom: top + 20 }),
+  reads: 0,
+  getBoundingClientRect() {
+    this.reads++
+    return { top, bottom: top + 20, height: 20 }
+  },
 })
 
 test('opening many formulas renders none synchronously, those on screen before paint, and the rest in idle slices', (t) => {
@@ -122,6 +126,61 @@ test('visible formulas render first and destroyed ones never render', (t) => {
   assert.equal(done.length, 99)
   assert.ok(!done.includes(1))
   assert.ok(!renders.includes('y_{1}'))
+})
+
+test('scheduling visits each queued formula a bounded number of times', (t) => {
+  const keys = Map.prototype.keys
+  let visits = 0
+  t.after(() => {
+    Map.prototype.keys = keys
+  })
+  for (const count of [2000, 8000]) {
+    const { scheduler, renders, frame, idle } = environment(t)
+    const elements = Array.from({ length: count }, () => element(5000))
+    for (const [index, target] of elements.entries())
+      scheduler.schedule(target, `z_{${index}}`, false, () => {})
+    visits = 0
+    Map.prototype.keys = function* () {
+      for (const key of keys.call(this)) {
+        if (typeof key === 'object') visits++
+        yield key
+      }
+    }
+    frame()
+    // Formulas below the screen end the first frame's scan.
+    assert.equal(
+      elements.reduce((sum, target) => sum + target.reads, 0),
+      1,
+    )
+    while (idle.length)
+      idle.shift()({ didTimeout: true, timeRemaining: () => 0 })
+    Map.prototype.keys = keys
+    assert.equal(renders.length, count)
+    assert.ok(visits <= count + 1, `${visits} queue visits for ${count}`)
+  }
+})
+
+test('the cache keeps output by size and renders oversized output every time', () => {
+  const renders = []
+  const cache = formulaCache((latex) => {
+    renders.push(latex)
+    return latex.startsWith('huge') ? 'x'.repeat(600_000) : 'x'.repeat(100_000)
+  })
+  for (let index = 0; index < 200; index++) cache.render(`m${index}`, true)
+  renders.length = 0
+  // About 8 million characters hold the latest 79 of these 100,000-character outputs.
+  cache.render('m199', true)
+  cache.render('m121', true)
+  assert.deepEqual(renders, [], 'recent output stays cached')
+  cache.render('m120', true)
+  assert.deepEqual(renders, ['m120'], 'older output was evicted')
+  renders.length = 0
+  cache.render('huge', true)
+  cache.render('huge', true)
+  assert.deepEqual(renders, ['huge', 'huge'])
+  cache.measured('m199', 234)
+  assert.equal(cache.height('m199'), 234)
+  assert.equal(cache.height('huge'), undefined)
 })
 
 test('a formula KaTeX cannot render shows its source', (t) => {
@@ -202,5 +261,75 @@ test('opening 2,000 formulas accepts input before rendering them all', {
       ).length,
     })),
     { inline: 1600, block: 400 },
+  )
+  // Tall formulas rendering around the reading position do not move it.
+  const opening = await page.evaluate(() => {
+    const editor = document.querySelector('.tiptap').editor
+    let source = ''
+    for (let index = 0; index < 80; index++)
+      source += `anchor ${index}\n\n$$\n\\begin{pmatrix} ${index}\\\\b\\\\c\\\\d\\\\e\\\\f\\\\g\\\\h \\end{pmatrix}\n$$\n\n`
+    window.tallSource = source
+    editor.commands.setContent(source, { contentType: 'markdown' })
+    let scroller = document.querySelector('.tiptap').parentElement
+    while (!/auto|scroll/.test(getComputedStyle(scroller).overflowY))
+      scroller = scroller.parentElement
+    const block = document.querySelectorAll(
+      '.tiptap [data-type="block-math"]',
+    )[50]
+    scroller.scrollTop +=
+      block.getBoundingClientRect().top -
+      scroller.getBoundingClientRect().top -
+      120
+    window.tallBlock = block
+    return {
+      rendered: document.querySelectorAll('.tiptap .katex').length,
+      top: block.getBoundingClientRect().top,
+      height: block.getBoundingClientRect().height,
+    }
+  })
+  assert.equal(opening.rendered, 0)
+  await page.waitForFunction(
+    () => document.querySelectorAll('.tiptap .katex').length === 80,
+  )
+  const settled = await page.evaluate(() => ({
+    top: window.tallBlock.getBoundingClientRect().top,
+    height: window.tallBlock.getBoundingClientRect().height,
+  }))
+  assert.ok(
+    settled.height > opening.height + 100,
+    'the matrix grew when rendered',
+  )
+  assert.ok(
+    Math.abs(settled.top - opening.top) < 1,
+    `the block moved from ${opening.top} to ${settled.top}`,
+  )
+  // Remounted formulas reserve the height they rendered at.
+  const remounted = await page.evaluate(() => {
+    const editor = document.querySelector('.tiptap').editor
+    editor.commands.setContent('replaced', { contentType: 'markdown' })
+    editor.commands.setContent(window.tallSource, { contentType: 'markdown' })
+    const block = document.querySelectorAll(
+      '.tiptap [data-type="block-math"]',
+    )[50]
+    return {
+      rendered: document.querySelectorAll('.tiptap .katex').length,
+      height: block.getBoundingClientRect().height,
+    }
+  })
+  assert.equal(remounted.rendered, 0)
+  assert.ok(
+    Math.abs(remounted.height - settled.height) < 1,
+    `pending height ${remounted.height}, rendered ${settled.height}`,
+  )
+  await page.waitForFunction(
+    () => document.querySelectorAll('.tiptap .katex').length === 80,
+  )
+  assert.equal(
+    await page.evaluate(
+      () =>
+        document.querySelectorAll('.tiptap [data-type="block-math"][style]')
+          .length,
+    ),
+    0,
   )
 })

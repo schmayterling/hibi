@@ -15,11 +15,26 @@ const listeners = new Set<() => void>()
 let workspace: WorkspaceState | null = null
 let snapshot = new Map<string, ExplorerDecoration>()
 const publish = () => {
-  snapshot = new Map(
+  const next = new Map(
     [...providers.values()].flatMap((provider) =>
       provider.result.map((item) => [item.path, item] as const),
     ),
   )
+  // Equal results keep the snapshot, so focus refreshes do not rerender the explorer.
+  if (
+    next.size === snapshot.size &&
+    [...next].every(([path, item]) => {
+      const current = snapshot.get(path)
+      return (
+        current !== undefined &&
+        current.label === item.label &&
+        current.badge === item.badge &&
+        current.color === item.color
+      )
+    })
+  )
+    return
+  snapshot = next
   for (const listener of listeners) listener()
 }
 async function refresh(provider: Provider) {

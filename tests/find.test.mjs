@@ -330,4 +330,149 @@ test('find in document searches rich text and offscreen markdown without editing
   })
   await input.press('Escape')
   await bar.waitFor({ state: 'hidden' })
+
+  // Characters that lengthen when lowercased must not shift highlights, and a
+  // final sigma is still the same letter.
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource('İx needle word ΣΣ')
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  await input.fill('needle')
+  await waitForCount('1/1')
+  assert.equal(
+    await rich.locator('.ProseMirror-active-search-match').textContent(),
+    'needle',
+  )
+  await input.fill('Σ')
+  await waitForCount('1/2')
+  await input.press('Enter')
+  await waitForCount('2/2')
+  await input.press('Escape')
+  await bar.waitFor({ state: 'hidden' })
+
+  // A dense paragraph counts every match. Moving between matches restyles
+  // two highlights without case-folding the paragraph again.
+  const dense = 'needle word '.repeat(10000).trimEnd()
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource(dense)
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  await input.fill('NEEDLE')
+  await waitForCount('1/10000')
+  const folded = () =>
+    page.evaluate(() => {
+      const count = window.foldedText
+      window.foldedText = 0
+      return count
+    })
+  await page.evaluate(() => {
+    const lower = String.prototype.toLowerCase
+    window.foldedText = 0
+    window.restoreFolding = () => {
+      String.prototype.toLowerCase = lower
+    }
+    String.prototype.toLowerCase = function () {
+      window.foldedText += this.length
+      return lower.call(this)
+    }
+  })
+  const selected = () =>
+    rich.evaluate((element) => {
+      const { from, to } = element.editor.state.selection
+      return [from, to]
+    })
+  await input.press('Enter')
+  await waitForCount('2/10000')
+  assert.deepEqual(await selected(), [13, 19])
+  await input.press('Shift+Enter')
+  await waitForCount('1/10000')
+  await input.press('Shift+Enter')
+  await waitForCount('10000/10000')
+  assert.deepEqual(await selected(), [dense.length - 10, dense.length - 4])
+  await page.getByRole('button', { name: /^next match$/i, exact: true }).click()
+  await waitForCount('1/10000')
+  assert.deepEqual(await selected(), [1, 7])
+  assert.ok(
+    (await folded()) < dense.length,
+    'selection-only find steps must not rescan the paragraph',
+  )
+  assert.equal(
+    await rich.locator('.ProseMirror-active-search-match').count(),
+    1,
+  )
+  assert.equal(await rich.locator('.ProseMirror-search-match').count(), 9999)
+  // A move only swaps the classes of two highlights; rewriting text in the
+  // paragraph would make the browser lay it out again.
+  await page.evaluate(() => {
+    const paragraph = document.querySelector('.rich-pane .tiptap > p')
+    window.findRecords = []
+    window.findMutations = new MutationObserver((records) => {
+      window.findRecords.push(...records)
+    })
+    window.findMutations.observe(paragraph, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    })
+  })
+  await input.press('Enter')
+  await waitForCount('2/10000')
+  assert.deepEqual(
+    await page.evaluate(() => {
+      const records = [
+        ...window.findRecords,
+        ...window.findMutations.takeRecords(),
+      ]
+      window.findMutations.disconnect()
+      return records.map((record) => [
+        record.type,
+        record.attributeName,
+        record.target.className,
+      ])
+    }),
+    [
+      ['attributes', 'class', 'ProseMirror-search-match'],
+      ['attributes', 'class', 'ProseMirror-search-match'],
+      ['attributes', 'class', 'ProseMirror-active-search-match'],
+      ['attributes', 'class', 'ProseMirror-active-search-match'],
+    ],
+  )
+  await input.press('Shift+Enter')
+  await waitForCount('1/10000')
+
+  // Replacing the selected match rescans its paragraph once, and undo
+  // restores the text and every match.
+  await rich.evaluate((element) => element.editor.commands.insertContent('pin'))
+  await waitForCount('0/9999')
+  assert.ok(
+    (await folded()) < 2 * dense.length,
+    'an edit must rescan only its paragraph, once',
+  )
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    `pin${dense.slice(6)}`,
+  )
+  await rich.evaluate((element) => element.editor.commands.undo())
+  await waitForCount('0/10000')
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    dense,
+  )
+  await input.press('Enter')
+  await waitForCount('2/10000')
+  assert.deepEqual(await selected(), [13, 19])
+  await page.evaluate(() => window.restoreFolding())
+  await page.getByRole('button', { name: /^close find$/i, exact: true }).click()
+  await bar.waitFor({ state: 'hidden' })
 })

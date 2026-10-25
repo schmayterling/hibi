@@ -50,35 +50,53 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
     false,
   )
   await page.evaluate(() => {
-    window.audioTest = { starts: 0, decodes: 0, closed: 0, contexts: 0 }
+    window.audioTest = {
+      starts: 0,
+      decodes: 0,
+      closed: 0,
+      contexts: 0,
+      enumerations: 0,
+      keydownContexts: 0,
+      suspendedStarts: 0,
+    }
+    let keydown = false
+    window.addEventListener(
+      'keydown',
+      () => {
+        keydown = true
+        queueMicrotask(() => {
+          keydown = false
+        })
+      },
+      true,
+    )
     const NativeAudioContext = window.AudioContext
     window.AudioContext = new Proxy(NativeAudioContext, {
       construct(target, args) {
         window.audioTest.contexts++
-        return Reflect.construct(target, args)
+        if (keydown) window.audioTest.keydownContexts++
+        window.keybeatsAudio = Reflect.construct(target, args)
+        return window.keybeatsAudio
       },
     })
-    const enumerate = navigator.mediaDevices.enumerateDevices.bind(
-      navigator.mediaDevices,
-    )
-    navigator.mediaDevices.enumerateDevices = () =>
-      new Promise((resolve) => {
-        window.finishAudioPreparation = () => {
-          // Record when the restart's real device query starts and settles.
-          navigator.mediaDevices.enumerateDevices = () => {
-            window.audioTest.enumerate = [Math.round(performance.now())]
-            return enumerate().finally(() =>
-              window.audioTest.enumerate.push(Math.round(performance.now())),
-            )
-          }
-          resolve([])
-        }
-      })
+    navigator.mediaDevices.enumerateDevices = async () => {
+      window.audioTest.enumerations++
+      return []
+    }
+    const idle = window.requestIdleCallback
+    window.requestIdleCallback = (callback) => {
+      window.finishAudioPreparation = () => {
+        window.requestIdleCallback = idle
+        callback({ didTimeout: false, timeRemaining: () => 50 })
+      }
+      return 0
+    }
     const start = AudioBufferSourceNode.prototype.start
     const decode = AudioContext.prototype.decodeAudioData
     const close = AudioContext.prototype.close
     AudioBufferSourceNode.prototype.start = function (...args) {
       window.audioTest.starts++
+      if (this.context.state !== 'running') window.audioTest.suspendedStarts++
       return start.apply(this, args)
     }
     AudioContext.prototype.decodeAudioData = function (...args) {
@@ -207,9 +225,15 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
     await soundAction.click()
   }
   const sounds = () => page.evaluate(() => window.audioTest.starts)
-  const typeKey = async (editor) => {
+  const typeKey = async (editor, audible = true) => {
+    const before = await sounds()
     await editor.click()
     await page.keyboard.press('a')
+    if (audible)
+      await page.waitForFunction(
+        (before) => window.audioTest.starts >= before + 2,
+        before,
+      )
   }
   await typeKey(rich)
   await page.waitForFunction(() => window.audioTest.starts >= 2)
@@ -220,7 +244,8 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
   assert.equal(await sounds(), count + 2)
   count = await sounds()
   await toggleSound()
-  await typeKey(rich)
+  await page.waitForFunction(() => window.keybeatsAudio.state === 'suspended')
+  await typeKey(rich, false)
   assert.equal(await sounds(), count)
   await toggleSound()
   await page
@@ -281,7 +306,7 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
     await page.getByLabel(/^keyboard$/i, { exact: true }).selectOption(id)
   }
   await page.getByLabel(/^keyboard$/i, { exact: true }).selectOption('mxblue')
-  await page.waitForFunction(() => window.audioTest.decodes >= 150)
+  await page.waitForFunction(() => window.audioTest.decodes >= 156)
   await page.getByRole('tab', { name: /^appearance$/i, exact: true }).click()
   await page
     .getByLabel(/^toolbar labels$/i, { exact: true })
@@ -302,7 +327,10 @@ test('keybeats uses local audio, editor input, toolbar controls, and clean addon
   await page.waitForFunction(() => window.audioTest.closed === 1)
   await page.getByRole('button', { name: /^back to app$/i }).click()
   assert.equal(await soundAction.count(), 0)
-  await typeKey(source)
+  await typeKey(source, false)
   assert.equal(await sounds(), count)
+  assert.equal(await page.evaluate(() => window.audioTest.enumerations), 0)
+  assert.equal(await page.evaluate(() => window.audioTest.keydownContexts), 0)
+  assert.equal(await page.evaluate(() => window.audioTest.suspendedStarts), 0)
   assert.deepEqual(errors, [])
 })

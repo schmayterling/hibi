@@ -12,8 +12,9 @@ import {
 test('app state waits for resolved ipc result within its ten-second default', async (t) => {
   let reads = 0
   let now = 0
-  t.mock.method(Date, 'now', () => now)
-  await waitForAppState(
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.mock.method(performance, 'now', () => now)
+  const pending = waitForAppState(
     {
       evaluate: async () => {
         now = 8000
@@ -22,7 +23,91 @@ test('app state waits for resolved ipc result within its ten-second default', as
     },
     () => {},
   )
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(reads, 1)
+  t.mock.timers.tick(99)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(reads, 1)
+  t.mock.timers.tick(1)
+  await pending
   assert.equal(reads, 2)
+})
+
+test('app state rejects results arriving after the requested timeout', async (t) => {
+  let now = 0
+  t.mock.method(performance, 'now', () => now)
+  t.mock.method(Date, 'now', () => now)
+  await assert.rejects(
+    waitForAppState(
+      {
+        evaluate: async () => {
+          now = 26
+          return true
+        },
+      },
+      () => true,
+      25,
+    ),
+    /async condition did not settle/,
+  )
+})
+
+test('app state times out a pending evaluation before its result arrives', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let release
+  let calls = 0
+  const result = waitForAppState(
+    {
+      evaluate: () => {
+        calls++
+        return new Promise((resolve) => {
+          release = resolve
+        })
+      },
+    },
+    () => true,
+    25,
+  ).then(
+    () => 'success',
+    () => 'timeout',
+  )
+  t.mock.timers.tick(25)
+  await new Promise((resolve) => setImmediate(resolve))
+  const beforeRelease = await Promise.race([result, Promise.resolve('pending')])
+  release(true)
+  assert.equal(await result, 'timeout')
+  assert.equal(beforeRelease, 'timeout')
+  assert.equal(calls, 1)
+})
+
+test('app state rejects an exhausted budget without evaluating and preserves errors', async () => {
+  let calls = 0
+  await assert.rejects(
+    waitForAppState(
+      {
+        evaluate: async () => {
+          calls++
+          return true
+        },
+      },
+      () => true,
+      0,
+    ),
+    /async condition did not settle/,
+  )
+  assert.equal(calls, 0)
+  const error = new Error('page closed')
+  await assert.rejects(
+    waitForAppState(
+      {
+        evaluate: async () => {
+          throw error
+        },
+      },
+      () => true,
+    ),
+    (result) => result === error,
+  )
 })
 
 test('editor readiness requires settled app, addons and editable active pane', {

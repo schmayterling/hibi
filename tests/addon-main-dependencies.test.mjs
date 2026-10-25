@@ -80,7 +80,6 @@ async function host(t, builtins = [details('markdown')]) {
     './appearance': 'export const exportedAppearance=()=>({})',
     './document': `export const clearDocument=()=>{},getDocument=()=>({}),getDocumentPath=()=>null,hasUnsavedDocuments=()=>false,loadDocument=()=>{},newDocument=()=>{},renameDocument=()=>{},updateDocument=()=>{}`,
     './document-types': 'export const setDocumentExtensions=()=>{}',
-    './files': 'export const validateMarkdown=()=>{},writeText=()=>{}',
     './workspace': `export const getWorkspace=()=>null,refreshWorkspace=()=>{},resolveWorkspaceFile=()=>null,snapshotWorkspace=()=>{},workspaceId=()=>null,workspaceRoot=()=>null`,
     './dependencies': 'export const resolveDependency=()=>null',
     './addon-repository':
@@ -214,6 +213,84 @@ test('main admission blocks transitive consumers without changing enabled prefer
     false,
   )
   assert.equal(await h.invokeAddon({}, 'consumer', 'probe', null), 'ok')
+})
+
+test('main rejects import results after disabling and re-enabling the importer', async (t) => {
+  const h = await host(t, [
+    details('markdown'),
+    details('consumer', { importer: { extensions: ['txt'] } }),
+  ])
+  let started, finish
+  const importing = new Promise((resolve) => {
+    started = resolve
+  })
+  h.state.natives.consumer = {
+    id: 'consumer',
+    methods: {},
+    import: () => {
+      started()
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    },
+  }
+  await h.loadAddons()
+  await h.enableAddon('consumer', true)
+  const pending = assert.rejects(
+    h.convertImport('consumer', []),
+    /no longer enabled/,
+  )
+  await importing
+  await h.enableAddon('consumer', false)
+  await h.enableAddon('consumer', true)
+  finish('stale import')
+  await pending
+})
+
+test('compiled streaming importers keep legacy byte-array importers compatible and bounded', async (t) => {
+  const h = await host(t, [
+    details('markdown'),
+    details('consumer', { importer: { extensions: ['txt'] } }),
+  ])
+  const writes = []
+  h.state.natives.consumer = {
+    id: 'consumer',
+    methods: {},
+    import: async (files) => ({ files, warnings: ['legacy'] }),
+    importStream: async (stream) => {
+      await stream.write({ path: 'note.md', data: await stream.read(0) })
+      return ['streamed']
+    },
+  }
+  await h.loadAddons()
+  await h.enableAddon('consumer', true)
+  const stream = {
+    paths: ['note.md'],
+    read: async () => Buffer.from('note'),
+    write: async (entry) => {
+      writes.push(entry)
+    },
+  }
+  assert.deepEqual(await h.convertImport('consumer', [], stream), {
+    files: [],
+    warnings: ['streamed'],
+  })
+  assert.equal(writes.length, 1)
+  delete h.state.natives.consumer.importStream
+  assert.deepEqual((await h.convertImport('consumer', [], stream)).warnings, [
+    'legacy',
+  ])
+  assert.equal(writes.length, 2)
+  const data = new Uint8Array(32 * 1024 * 1024)
+  await assert.rejects(
+    h.convertImport('consumer', [], {
+      paths: Array.from({ length: 9 }, (_, index) => `${index}.png`),
+      read: async () => data,
+      write: async () =>
+        assert.fail('oversized legacy import must not publish'),
+    }),
+    /in-memory export under 256 MiB/,
+  )
 })
 
 test('installed ids matching inherited object properties remain disabled until explicitly enabled', async (t) => {

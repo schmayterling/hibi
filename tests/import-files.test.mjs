@@ -1,13 +1,18 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { constants } from 'node:fs'
 import {
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   rm,
+  stat,
   symlink,
   writeFile,
 } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -15,6 +20,8 @@ import { importBear } from '../src/addons/import-bear/convert.ts'
 import { importNotion } from '../src/addons/import-notion/convert.ts'
 import { importObsidian } from '../src/addons/import-obsidian/convert.ts'
 import {
+  copyImportFile,
+  readImportFile,
   readImportFolder,
   readImportZip,
   validateImportFiles,
@@ -44,13 +51,13 @@ test('imports reject unsafe paths, collisions, archives, and oversized entries',
     'a/../b.md',
     'NUL.md',
   ])
-    assert.throws(() => validateImportFiles([file(path, '')]))
-  assert.throws(
-    () => validateImportFiles([file('A.md', ''), file('a.md', '')]),
+    await assert.rejects(validateImportFiles([file(path, '')]))
+  await assert.rejects(
+    validateImportFiles([file('A.md', ''), file('a.md', '')]),
     /duplicate/,
   )
-  assert.throws(
-    () => validateImportFiles([file('a', ''), file('a/b.md', '')]),
+  await assert.rejects(
+    validateImportFiles([file('a', ''), file('a/b.md', '')]),
     /file and folder/,
   )
   const zip = join(root, 'export.zip')
@@ -87,6 +94,67 @@ test('imports reject unsafe paths, collisions, archives, and oversized entries',
   )
 })
 
+test('folder catalog never buffers attachment bytes or refuses large attachments', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-import-stream-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const handle = await open(join(root, 'video.mov'), 'wx')
+  await handle.truncate(40 * 1024 * 1024)
+  await handle.close()
+  const catalog = await readImportFolder(root)
+  assert.equal(catalog.files.length, 1)
+  assert.equal('data' in catalog.files[0], false)
+  const target = join(root, 'copy.mov')
+  await copyImportFile(catalog.files[0], target)
+  assert.equal((await stat(target)).size, 40 * 1024 * 1024)
+  await assert.rejects(copyImportFile(catalog.files[0], target), {
+    code: 'EEXIST',
+  })
+  await writeFile(join(root, 'video.mov'), 'changed')
+  await assert.rejects(
+    copyImportFile(catalog.files[0], join(root, 'changed.mov')),
+    /changed/,
+  )
+  await rm(join(root, 'video.mov'))
+  await symlink(target, join(root, 'video.mov'))
+  await assert.rejects(
+    copyImportFile(catalog.files[0], join(root, 'linked.mov')),
+  )
+})
+test('source opens reject fifo substitutions without waiting for a writer', {
+  skip: process.platform === 'win32',
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-import-fifo-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const path = join(root, 'source.md')
+  await writeFile(path, 'original')
+  const source = (await readImportFolder(root)).files[0]
+  const fs = process.getBuiltinModule('node:fs/promises')
+  const open = fs.open
+  let opens = 0
+  fs.open = (...args) => {
+    opens++
+    assert.ok(
+      args[1] & constants.O_NONBLOCK,
+      'source opens must be nonblocking',
+    )
+    return open(...args)
+  }
+  syncBuiltinESMExports()
+  try {
+    await copyImportFile(source, join(root, 'copy.md'))
+    assert.ok(opens > 0)
+    await rm(path)
+    execFileSync('mkfifo', [path])
+    await assert.rejects(
+      copyImportFile(source, join(root, 'fifo.md')),
+      /changed/,
+    )
+    await assert.rejects(readImportFile(source), /changed/)
+  } finally {
+    fs.open = open
+    syncBuiltinESMExports()
+  }
+})
 test('workspace settings move into .hibi on save and preserve legacy files', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-metadata-'))
   t.after(() => rm(root, { recursive: true, force: true }))
@@ -190,6 +258,66 @@ test('import converters preserve assets and code while translating links and CSV
   assert.ok(
     bear.files.some((file) => file.path === 'Note.textbundle/assets/a.png'),
   )
+})
+test('folder imports accept more than the former file and total byte caps', async () => {
+  await validateImportFiles(
+    Array.from({ length: 10001 }, (_, index) => file(`notes/${index}.md`, '')),
+  )
+  const data = new Uint8Array(32 * 1024 * 1024)
+  await validateImportFiles(
+    Array.from({ length: 9 }, (_, index) => ({ path: `${index}.png`, data })),
+  )
+})
+test('import validation yields while preserving per-file and archive safety bounds', async (t) => {
+  let validated = false
+  const files = Array.from({ length: 256 }, (_, index) =>
+    file(`${index}.md`, ''),
+  )
+  const validation = validateImportFiles(files).then(() => {
+    validated = true
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(validated, false)
+  await validation
+  await assert.rejects(
+    validateImportFiles([
+      { path: 'large.png', data: new Uint8Array(32 * 1024 * 1024 + 1) },
+    ]),
+    /32 MiB/,
+  )
+  const root = await mkdtemp(join(tmpdir(), 'hibi-import-zip-bound-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const path = join(root, 'many.zip')
+  // Only archives keep an entry bound, before the ZIP parser allocates its directory.
+  await writeFile(
+    path,
+    zipFiles(
+      Array.from({ length: 10001 }, (_, index) => ({ name: `${index}.md` })),
+    ),
+  )
+  await assert.rejects(readImportZip(path), /at most 10,000 entries/)
+})
+test('notion imports remove row and column caps without padding every data row', async () => {
+  const source = `name,value\n${'x,y\n'.repeat(10001)}`
+  const result = await importNotion([file('rows.csv', source)])
+  assert.equal(text(result.files[1]).split('\n').length, 10004)
+  const wide = `${Array(10000).fill('h').join(',')}\n${'v\n'.repeat(1000)}`
+  const ragged = text((await importNotion([file('wide.csv', wide)])).files[1])
+  assert.ok(ragged.length < 200000)
+  assert.match(ragged, /\| v \|\n/)
+})
+test('importer warning policies remain distinct for ambiguous and embedded links', async () => {
+  const files = [
+    file('Start.md', '![[Other]] [[Missing]] bear://note/id'),
+    file('Other.md', ''),
+  ]
+  assert.deepEqual((await importObsidian(files)).warnings, [
+    'Embedded notes become links. Images remain embedded.',
+    'Some wiki links could not be resolved uniquely and were kept unchanged.',
+  ])
+  assert.deepEqual((await importBear(files)).warnings, [
+    'Bear app links were kept. They still open Bear.',
+  ])
 })
 test('workspace metadata validates relative documents and honors gitignore patterns', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-ignore-'))

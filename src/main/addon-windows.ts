@@ -1,4 +1,4 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   app,
@@ -14,7 +14,7 @@ import {
   type AddonWindowOptions,
 } from '../shared/addon-windows'
 import { appearanceColors, titleBarColors } from './appearance'
-import { retryRename } from './atomic-rename'
+import { writeText } from './files'
 import { isTrustedRendererUrl } from './security'
 import { testPause } from './test-pauses'
 
@@ -156,8 +156,7 @@ function rememberBounds(windowKey: string, bounds: Rectangle) {
         [screen.getDisplayMatching(bounds).id]: bounds,
       }
       const path = boundsPath()
-      await writeFile(`${path}.tmp`, JSON.stringify(saved), { mode: 0o600 })
-      await retryRename(() => rename(`${path}.tmp`, path))
+      await writeText(path, JSON.stringify(saved))
     })
     .catch((error: unknown) =>
       console.error('could not remember addon window position:', error),

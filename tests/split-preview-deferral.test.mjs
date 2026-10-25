@@ -7,13 +7,20 @@ import { electron } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-test('math and dictionary split previews parse once per pause or rich flush, not per source key', {
-  timeout: 60000,
-}, async (t) => {
+// Every built-in rich attachment, with math changing the preview grammar.
+const addons = [
+  'math',
+  'dictionary',
+  'block-drag',
+  'word-count',
+  'slash-commands',
+  'tags',
+]
+
+async function openSplit(t, original) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-split-deferral-'))
   const folder = join(profile, 'installed-addons', 'deferral-fixture')
   const file = join(profile, 'math.md')
-  const original = '# notes\n\nalpha $x^2$ beta\n\nomega'
   await mkdir(folder, { recursive: true })
   await writeFile(file, original)
   await writeFile(
@@ -44,15 +51,6 @@ test('math and dictionary split previews parse once per pause or rich flush, not
       source: 'local',
     }),
   )
-  // Every built-in rich attachment, with math changing the preview grammar.
-  const addons = [
-    'math',
-    'dictionary',
-    'block-drag',
-    'word-count',
-    'slash-commands',
-    'tags',
-  ]
   await writeFile(
     join(profile, 'addons.json'),
     JSON.stringify(
@@ -66,9 +64,9 @@ test('math and dictionary split previews parse once per pause or rich flush, not
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  let clockInstalled = false
+  const clock = { installed: false }
   t.after(async () => {
-    if (clockInstalled) await page.clock.resume()
+    if (clock.installed) await page.clock.resume()
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1 })
     })
@@ -110,24 +108,6 @@ test('math and dictionary split previews parse once per pause or rich flush, not
       document.querySelector('.cm-content')?.isContentEditable &&
       document.querySelector('.tiptap')?.editor?.isEditable === false,
   )
-  // A bookmark beside math has no incremental source map; it must still move.
-  const selectBookmark = () =>
-    rich.evaluate((element) => {
-      const editor = element.editor
-      let position
-      editor.state.doc.descendants((node, pos) => {
-        if (node.isText && node.text.includes('beta'))
-          position = pos + node.text.indexOf('beta')
-      })
-      if (position === undefined) throw new Error('missing bookmark text')
-      editor.commands.setTextSelection({ from: position + 1, to: position + 3 })
-    })
-  const bookmark = () =>
-    rich.evaluate((element) => {
-      const { state } = element.editor
-      return state.doc.textBetween(state.selection.from, state.selection.to)
-    })
-  await selectBookmark()
   await page.evaluate(() => {
     const manager = document.querySelector('.tiptap').editor.markdown
     const parse = manager.parse
@@ -151,13 +131,13 @@ test('math and dictionary split previews parse once per pause or rich flush, not
         last: editor.state.doc.lastChild.textContent,
       }
     })
-  await source.focus()
-
   // Paused renderer timers keep the pending preview independent of host speed.
-  const clockStart = Date.now()
-  await page.clock.install({ time: clockStart })
-  clockInstalled = true
-  await page.clock.pauseAt(clockStart + 1000)
+  const pauseClock = async () => {
+    const clockStart = Date.now()
+    await page.clock.install({ time: clockStart })
+    clock.installed = true
+    await page.clock.pauseAt(clockStart + 1000)
+  }
   // Each key is its own renderer task, like native typing.
   const typeSource = async (text, line) => {
     await page.evaluate(() => {
@@ -189,6 +169,64 @@ test('math and dictionary split previews parse once per pause or rich flush, not
       parses: window.deferralParses,
     }))
   }
+  const toNormal = async () => {
+    await page
+      .getByRole('button', { name: /^normal$/i, exact: true })
+      .evaluate((button) => button.click())
+    await page.clock.runFor(1)
+    await waitForAsync(
+      page,
+      () => document.querySelector('.tiptap')?.editor?.isEditable,
+    )
+  }
+  return {
+    app,
+    page,
+    rich,
+    source,
+    file,
+    preview,
+    pauseClock,
+    typeSource,
+    toNormal,
+  }
+}
+
+test('math and dictionary split previews parse once per pause or rich flush, not per source key', {
+  timeout: 60000,
+}, async (t) => {
+  const original = '# notes\n\nalpha $x^2$ beta\n\nomega'
+  const {
+    app,
+    page,
+    rich,
+    source,
+    file,
+    preview,
+    pauseClock,
+    typeSource,
+    toNormal,
+  } = await openSplit(t, original)
+  // A bookmark beside math has no incremental source map; it must still move.
+  const selectBookmark = () =>
+    rich.evaluate((element) => {
+      const editor = element.editor
+      let position
+      editor.state.doc.descendants((node, pos) => {
+        if (node.isText && node.text.includes('beta'))
+          position = pos + node.text.indexOf('beta')
+      })
+      if (position === undefined) throw new Error('missing bookmark text')
+      editor.commands.setTextSelection({ from: position + 1, to: position + 3 })
+    })
+  const bookmark = () =>
+    rich.evaluate((element) => {
+      const { state } = element.editor
+      return state.doc.textBetween(state.selection.from, state.selection.to)
+    })
+  await selectBookmark()
+  await source.focus()
+  await pauseClock()
 
   // Ten source keys, including new math, leave the preview untouched.
   const typed = original.replace('# notes', '# notes and $y^2$')
@@ -260,14 +298,80 @@ test('math and dictionary split previews parse once per pause or rich flush, not
   const pending = await typeSource(' again', 1)
   assert.equal(pending.untouched, true)
   assert.equal(pending.parses, 3)
-  await page
-    .getByRole('button', { name: /^normal$/i, exact: true })
-    .evaluate((button) => button.click())
-  await page.clock.runFor(1)
-  await waitForAsync(
-    page,
-    () => document.querySelector('.tiptap')?.editor?.isEditable,
-  )
+  await toNormal()
   assert.equal((await preview()).exact, true)
   assert.equal(await bookmark(), 'et')
+})
+
+test('split preview catch-up keeps select-all and selected nodes, also across a mode switch', {
+  timeout: 60000,
+}, async (t) => {
+  const original =
+    '![first](https://example.com/a.png)\n\n# notes\n\nalpha $x^2$ beta\n\nomega'
+  const { page, rich, source, preview, pauseClock, typeSource, toNormal } =
+    await openSplit(t, original)
+  const selection = () =>
+    rich.evaluate((element) => {
+      const { selection, doc } = element.editor.state
+      return {
+        type: selection.toJSON().type,
+        from: selection.from,
+        to: selection.to,
+        size: doc.content.size,
+        node: selection.node?.type.name ?? null,
+      }
+    })
+  const selectAll = async () => {
+    await rich.focus()
+    await page.keyboard.press(
+      `${process.platform === 'darwin' ? 'Meta' : 'Control'}+a`,
+    )
+    await source.focus()
+  }
+  await pauseClock()
+
+  // Native select-all includes the boundary image through the timed catch-up.
+  await selectAll()
+  assert.equal((await selection()).type, 'all')
+  assert.equal((await typeSource('!', 7)).untouched, true)
+  await page.clock.runFor(201)
+  assert.equal((await preview()).exact, true)
+  const all = await selection()
+  assert.deepEqual(all, {
+    type: 'all',
+    from: 0,
+    to: all.size,
+    size: all.size,
+    node: null,
+  })
+
+  // A selected boundary image stays selected when the edit is elsewhere.
+  await rich.evaluate((element) => element.editor.commands.setNodeSelection(0))
+  await source.focus()
+  assert.equal((await typeSource('?', 7)).untouched, true)
+  await page.clock.runFor(201)
+  assert.equal((await preview()).exact, true)
+  assert.deepEqual(await selection(), {
+    type: 'node',
+    from: 0,
+    to: 1,
+    size: all.size + 1,
+    node: 'image',
+  })
+
+  // Leaving split view before catch-up keeps select-all on the fresh document,
+  // so deleting it removes the image too.
+  await selectAll()
+  assert.equal((await typeSource(' end', 7)).untouched, true)
+  await toNormal()
+  assert.equal((await preview()).exact, true)
+  const switched = await selection()
+  assert.equal(switched.type, 'all')
+  assert.equal(switched.to, switched.size)
+  await rich.evaluate((element) => element.editor.commands.deleteSelection())
+  const remaining = await page.evaluate(
+    () => window.deferralFixture.context.editor.getDocument().markdown,
+  )
+  assert.equal(remaining.includes('![first]'), false, remaining)
+  assert.equal(remaining.includes('omega'), false, remaining)
 })

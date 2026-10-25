@@ -218,6 +218,7 @@ import {
   startUpdateChecks,
 } from './updates'
 import {
+  cancelWorkspaceSelection,
   currentWorkspaceTarget,
   deleteKnownWorkspace,
   documentFileChanged,
@@ -762,6 +763,25 @@ function runFileOperation<T>(
     if (closing) throw fileOperationUnavailable()
     return operation(trustedWindow(event))
   })
+}
+
+let workspaceOpenIntent = 0
+function runWorkspaceOpen(
+  event: IpcMainInvokeEvent,
+  operation: (
+    window: BrowserWindow,
+  ) => Promise<ReturnType<typeof getWorkspace>>,
+  includeEntries = true,
+) {
+  trustedWindow(event)
+  if (closing || fileOperationHasDialog()) throw fileOperationUnavailable()
+  const intent = ++workspaceOpenIntent
+  cancelWorkspaceSelection()
+  return runFileOperation(event, (window) =>
+    intent === workspaceOpenIntent
+      ? operation(window)
+      : Promise.resolve(getWorkspace(undefined, includeEntries)),
+  )
 }
 
 async function lockFileOperation<T>(
@@ -2207,8 +2227,10 @@ if (!app.requestSingleInstanceLock()) {
           ),
       )
       handle(WORKSPACE_CHANNELS.open, (event, includeEntries: unknown) =>
-        runFileOperation(event, (window) =>
-          openWorkspace(window, includeEntries !== false),
+        runWorkspaceOpen(
+          event,
+          (window) => openWorkspace(window, includeEntries !== false),
+          includeEntries !== false,
         ),
       )
       handle(IMPORT_CHANNELS.list, (event) => {
@@ -2241,8 +2263,10 @@ if (!app.requestSingleInstanceLock()) {
       handle(
         WORKSPACE_CHANNELS.openRecent,
         (event, id: unknown, includeEntries: unknown) =>
-          runFileOperation(event, () =>
-            openRecentWorkspace(id, includeEntries !== false),
+          runWorkspaceOpen(
+            event,
+            () => openRecentWorkspace(id, includeEntries !== false),
+            includeEntries !== false,
           ),
       )
       handle(WORKSPACE_CHANNELS.known, (event) => {

@@ -113,7 +113,7 @@ export async function openDroppedFile(
   const path = await realpath(filePath(value))
   if ((await lstat(path)).isDirectory())
     return {
-      workspace: await loadWorkspace(path, includeEntries),
+      workspace: await loadWorkspace(path, true, includeEntries),
       document: getDocument(),
     }
   if (!isDocumentName(path))

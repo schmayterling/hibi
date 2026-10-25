@@ -1,35 +1,34 @@
 import { Extension } from '@tiptap/core'
 import { Plugin, TextSelection } from '@tiptap/pm/state'
+import { stored } from '../../ui/stored-preference.ts'
 
 const indentUnits = ['\t', '  ', '    '] as const
 type Preferences = { enabled: boolean; unit: (typeof indentUnits)[number] }
 const key = 'hibi:tab-indent'
-let preferences: Preferences = { enabled: true, unit: '\t' }
-try {
-  const stored = JSON.parse(localStorage.getItem(key) ?? '{}')
-  preferences = {
-    enabled: stored.enabled !== false,
-    unit: indentUnits.includes(stored.unit) ? stored.unit : '\t',
-  }
-} catch {
-  /* Use defaults if preferences are unavailable. */
-}
-const listeners = new Set<() => void>()
-export const tabIndent = {
-  snapshot: () => preferences,
-  subscribe(listener: () => void) {
-    listeners.add(listener)
-    return () => {
-      listeners.delete(listener)
+const preferences = stored<Preferences>(
+  key,
+  () => {
+    try {
+      const value = JSON.parse(localStorage.getItem(key) ?? '{}')
+      return {
+        enabled: value.enabled !== false,
+        unit: indentUnits.includes(value.unit) ? value.unit : '\t',
+      }
+    } catch {
+      return { enabled: true, unit: '\t' }
     }
   },
+  JSON.stringify,
+)
+export const tabIndent = {
+  snapshot: preferences.get,
+  subscribe: preferences.subscribe,
   set(next: { enabled?: boolean; unit?: string }) {
-    preferences = {
-      enabled: next.enabled ?? preferences.enabled,
-      unit: indentUnits.find((unit) => unit === next.unit) ?? preferences.unit,
-    }
-    localStorage.setItem(key, JSON.stringify(preferences))
-    for (const listener of listeners) listener()
+    const current = preferences.get()
+    preferences.set({
+      enabled: next.enabled ?? current.enabled,
+      unit: indentUnits.find((unit) => unit === next.unit) ?? current.unit,
+    })
   },
 }
 

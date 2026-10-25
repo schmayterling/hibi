@@ -1,38 +1,36 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { DocumentState } from '../../shared/desktop'
+import { stored } from '../../ui/stored-preference'
 import { documentRuntime } from './document-runtime'
 
 export const autosaveDelays = [1000, 2000, 5000, 10000, 30000] as const
 type Preferences = { enabled: boolean; delay: number }
 const key = 'hibi:autosave'
-let preferences: Preferences = { enabled: false, delay: 2000 }
-try {
-  const stored = JSON.parse(localStorage.getItem(key) ?? '{}')
-  preferences = {
-    enabled: stored.enabled === true,
-    delay: autosaveDelays.includes(stored.delay) ? stored.delay : 2000,
-  }
-} catch {
-  /* Use defaults if preferences are unavailable. */
-}
-const listeners = new Set<() => void>()
-export const autosave = {
-  snapshot: () => preferences,
-  subscribe(listener: () => void) {
-    listeners.add(listener)
-    return () => {
-      listeners.delete(listener)
+const preferences = stored<Preferences>(
+  key,
+  () => {
+    try {
+      const value = JSON.parse(localStorage.getItem(key) ?? '{}')
+      return {
+        enabled: value.enabled === true,
+        delay: autosaveDelays.includes(value.delay) ? value.delay : 2000,
+      }
+    } catch {
+      return { enabled: false, delay: 2000 }
     }
   },
+  JSON.stringify,
+)
+export const autosave = {
+  snapshot: preferences.get,
+  subscribe: preferences.subscribe,
   set(next: Partial<Preferences>) {
-    preferences = {
-      enabled: next.enabled ?? preferences.enabled,
+    const current = preferences.get()
+    preferences.set({
+      enabled: next.enabled ?? current.enabled,
       delay:
-        autosaveDelays.find((delay) => delay === next.delay) ??
-        preferences.delay,
-    }
-    localStorage.setItem(key, JSON.stringify(preferences))
-    for (const listener of listeners) listener()
+        autosaveDelays.find((delay) => delay === next.delay) ?? current.delay,
+    })
   },
 }
 

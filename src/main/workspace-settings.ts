@@ -162,7 +162,7 @@ export async function updateWorkspaceSettings(
   } else if (value.action === 'open') {
     if (!prefs.enabled || !prefs.path)
       throw new Error('Enable your Hibi workspace first.')
-    await loadWorkspace(prefs.path, false)
+    await loadWorkspace(prefs.path, false, false)
   } else if (value.action === 'startup') {
     if (!['empty', 'managed', 'folder'].includes(value.startup))
       throw new Error('Choose a startup option.')
@@ -252,7 +252,7 @@ export async function updateWorkspaceSettings(
       )
     }
     relocateDocument(from, to)
-    if (workspaceRoot() === from) await loadWorkspace(to, false)
+    if (workspaceRoot() === from) await loadWorkspace(to, false, false)
     if (prefs.startupFolder === from) prefs.startupFolder = to
     prefs.path = to
   } else throw new Error('Unknown workspace action.')
@@ -294,7 +294,7 @@ export async function openStartupWorkspace(
     hasExternalFiles
   )
     return
-  await loadWorkspace(path, false)
+  await loadWorkspace(path, false, false)
   const file = getWorkspace(undefined, false)?.manifest?.defaultFile
   if (file) await loadDocument(window, await resolveWorkspaceFile(path, file))
 }

@@ -4,8 +4,7 @@ import { setImmediate } from 'node:timers/promises'
 import type ignore from 'ignore'
 import { sortSteps } from '../shared/cooperative-sort'
 import type { WorkspaceEntry } from '../shared/workspace'
-
-const compareNames = new Intl.Collator(undefined, { numeric: true }).compare
+import { compareWorkspaceEntries } from './workspace-sort'
 
 /** Scan privately and yield between bounded units, including sibling comparisons. */
 export async function scanWorkspaceTree(
@@ -54,12 +53,7 @@ export async function scanWorkspaceTree(
       if (entry.kind === 'folder')
         entry.children = await walk(join(base, entry.path))
     }
-    const sorted = sortSteps(
-      result,
-      (a, b) =>
-        Number(b.kind === 'folder') - Number(a.kind === 'folder') ||
-        compareNames(a.name, b.name),
-    )
+    const sorted = sortSteps(result, compareWorkspaceEntries)
     while (true) {
       const pause = checkpoint()
       if (pause) await pause

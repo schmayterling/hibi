@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
 import { app, type BrowserWindow, dialog, shell } from 'electron'
@@ -11,7 +11,7 @@ import {
   parseDependencies,
 } from '../shared/dependencies'
 import { getAddonManifests, getAddonStates } from './addons'
-import { retryRename } from './atomic-rename'
+import { writeText } from './files'
 import { executableFile, findTool, toolSearchPath } from './tool-paths'
 import { workspaceRoot } from './workspace'
 
@@ -257,8 +257,7 @@ export async function configureDependency(
     if (selected) next[entry.key] = selected
     else delete next[entry.key]
     const file = join(app.getPath('userData'), 'dependencies.json')
-    await writeFile(`${file}.tmp`, JSON.stringify(next), { mode: 0o600 })
-    await retryRename(() => rename(`${file}.tmp`, file))
+    await writeText(file, JSON.stringify(next))
     preferences = Promise.resolve(next)
     checked.delete(entry.key)
   })

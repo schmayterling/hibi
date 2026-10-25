@@ -562,6 +562,79 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
   assert.deepEqual(errors, [])
 })
 
+test('autocomplete warns when exclusions cannot be saved and clears the warning after retry', {
+  timeout: 30000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-autocomplete-quota-'))
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ dictionary: true, autocomplete: true }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(8000)
+  await waitForDocumentEditor(app, page)
+  const openSettings = async () => {
+    await clickMenu(app, 'Settings')
+    await page.getByRole('tab', { name: 'Autocomplete', exact: true }).click()
+  }
+  await openSettings()
+  const alert = page.getByRole('alert').filter({
+    hasText:
+      'Could not save autocomplete settings. Changes apply until Hibi restarts.',
+  })
+  await alert.waitFor({ state: 'hidden' })
+  const documentId = await page.evaluate(
+    async () => (await window.hibi.getDocument()).id,
+  )
+  const excludedDocuments = () =>
+    page.evaluate(
+      () =>
+        JSON.parse(localStorage.getItem('hibi:autocomplete') ?? '{}')
+          .excludedDocuments ?? [],
+    )
+  await page.evaluate(() => {
+    const setItem = Storage.prototype.setItem
+    Storage.prototype.setItem = function (key, value) {
+      if (key === 'hibi:autocomplete')
+        throw new DOMException('storage full', 'QuotaExceededError')
+      return setItem.call(this, key, value)
+    }
+    window.restoreAutocompleteStorage = () => {
+      Storage.prototype.setItem = setItem
+    }
+  })
+  await page.locator('#autocomplete-exclude-document').check()
+  assert.equal(
+    await page.locator('#autocomplete-exclude-document').isChecked(),
+    true,
+  )
+  await alert.waitFor()
+  assert.deepEqual(await excludedDocuments(), [])
+  await page.getByRole('button', { name: /back to app/i }).click()
+  await page.locator('.settings-screen').waitFor({ state: 'hidden' })
+  await openSettings()
+  await alert.waitFor()
+  await page.evaluate(() => window.restoreAutocompleteStorage())
+  await page.locator('#autocomplete-learning').uncheck()
+  await alert.waitFor({ state: 'hidden' })
+  assert.deepEqual(await excludedDocuments(), [documentId])
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  await openSettings()
+  assert.equal(
+    await page.locator('#autocomplete-exclude-document').isChecked(),
+    true,
+  )
+  await alert.waitFor({ state: 'hidden' })
+})
+
 test('legacy dictionary suggestions enable autocomplete at startup while explicit off stays off', {
   timeout: 30000,
 }, async (t) => {

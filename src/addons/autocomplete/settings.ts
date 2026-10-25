@@ -13,6 +13,9 @@ export type AutocompletePreferences = {
 const key = 'hibi:autocomplete'
 const listeners = new Set<() => void>()
 let cached: AutocompletePreferences | undefined
+let unsaved = false
+
+export const preferencesSaved = () => !unsaved
 
 function saved(key: string): Record<string, unknown> | undefined {
   try {
@@ -27,11 +30,13 @@ function saved(key: string): Record<string, unknown> | undefined {
 
 const ids = (value: unknown) =>
   Array.isArray(value)
-    ? value
-        .filter(
-          (id): id is string => typeof id === 'string' && id.length <= 256,
-        )
-        .slice(0, 512)
+    ? [
+        ...new Set(
+          value.filter(
+            (id): id is string => typeof id === 'string' && id.length <= 256,
+          ),
+        ),
+      ]
     : []
 
 /** Run before addon activation so existing suggestions survive the default-off split. */
@@ -73,8 +78,14 @@ export function readPreferences(): AutocompletePreferences {
 
 export function writePreferences(next: AutocompletePreferences) {
   if (!next.languages.some((lang) => latinLangs.includes(lang))) return
-  localStorage.setItem(key, JSON.stringify(next))
   cached = next
+  unsaved = true
+  try {
+    localStorage.setItem(key, JSON.stringify(next))
+    unsaved = false
+  } catch (error) {
+    console.error('Could not save autocomplete preferences:', error)
+  }
   for (const listener of listeners) listener()
 }
 
@@ -84,13 +95,13 @@ function changedInAnotherWindow(event: StorageEvent) {
     (event.key !== key && event.key !== null)
   )
     return
-  cached = undefined
+  if (!unsaved) cached = undefined
   for (const listener of listeners) listener()
 }
 
 export function onPreferencesChange(listener: () => void) {
   if (!listeners.size) {
-    cached = undefined
+    if (!unsaved) cached = undefined
     if (typeof window !== 'undefined')
       window.addEventListener('storage', changedInAnotherWindow)
   }

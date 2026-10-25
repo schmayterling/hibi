@@ -1,8 +1,8 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app } from 'electron'
 import type { UiCase } from '../shared/ui-case'
-import { retryRename } from './atomic-rename'
+import { writeText } from './files'
 
 let value: UiCase = 'sentence'
 let writing: Promise<void> = Promise.resolve()
@@ -25,8 +25,7 @@ export function saveUiCase(input: unknown) {
   writing = writing
     .catch(() => {})
     .then(async () => {
-      await writeFile(`${path()}.tmp`, JSON.stringify(input), { mode: 0o600 })
-      await retryRename(() => rename(`${path()}.tmp`, path()))
+      await writeText(path(), JSON.stringify(input))
     })
   return writing
 }

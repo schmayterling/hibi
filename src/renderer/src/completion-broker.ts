@@ -9,6 +9,7 @@ import {
   type TypingContext,
 } from '../../shared/completions.ts'
 import type { AddonOwner, Dispose } from '../../shared/foundation-contracts'
+import { ProviderLifetime } from './provider-lifetime.ts'
 
 const MAX_PROVIDERS = 16
 const MAX_CONCURRENT = 3
@@ -219,7 +220,7 @@ export class CompletionBroker {
   readonly #inFlight = new Set<number>()
   readonly #stopped = new Map<string, number>()
   #nextId = 0
-  #epoch = 0
+  readonly #lifetime = new ProviderLifetime()
   #running = 0
   #active: Session | null = null
   #visible: Session | null = null
@@ -323,12 +324,12 @@ export class CompletionBroker {
     const job = session.jobs.find((candidate) => candidate.items.includes(item))
     if (!job || !this.#registrations.has(job.registration.id)) return null
     const registration = job.registration
-    const epoch = this.#epoch
+    const epoch = this.#lifetime.token
     return () => {
       if (
         session.accepted ||
         this.#disposed ||
-        this.#epoch !== epoch ||
+        !this.#lifetime.current(epoch) ||
         this.#registrations.get(registration.id) !== registration
       )
         return
@@ -419,13 +420,12 @@ export class CompletionBroker {
     current: () => CompletionRequest | null,
     onUpdate: (update: CompletionUpdate) => void,
   ): Dispose | null {
-    const epoch = ++this.#epoch
-    this.#cancel()
-    if (this.#epoch !== epoch) return null
+    const epoch = this.#lifetime.begin(() => this.#cancel())
+    if (epoch === null) return null
     if (this.#disposed) return null
     if (!this.#registrations.size) return null
     const request = snapshot(capture())
-    if (!request || this.#epoch !== epoch) return null
+    if (!request || !this.#lifetime.current(epoch)) return null
     const jobs: Job[] = [...this.#registrations.values()]
       .sort((a, b) => b.priority - a.priority || a.id - b.id)
       .map((registration) => ({
@@ -448,7 +448,7 @@ export class CompletionBroker {
 
   dispose() {
     this.#disposed = true
-    this.#epoch++
+    this.#lifetime.invalidate()
     this.#cancel()
     this.#registrations.clear()
     this.#stopped.clear()
@@ -546,7 +546,7 @@ export class CompletionBroker {
 
   #finish(session: Session, stale = false) {
     if (this.#active !== session) return
-    const epoch = this.#epoch
+    const epoch = this.#lifetime.token
     clearTimeout(session.timer)
     this.#active = null
     for (const job of session.jobs)
@@ -559,9 +559,9 @@ export class CompletionBroker {
         clearTimeout(job.slotTimer)
         job.state = 'cancelled'
       }
-    if (this.#epoch !== epoch) return
+    if (!this.#lifetime.current(epoch)) return
     const current = !stale && this.#current(session)
-    if (this.#epoch !== epoch) return
+    if (!this.#lifetime.current(epoch)) return
     const items = current ? this.#items(session) : []
     this.#visible = items.length ? session : null
     try {
@@ -673,9 +673,9 @@ export class CompletionBroker {
 
   #publishVisible(session: Session) {
     if (this.#visible !== session) return
-    const epoch = this.#epoch
+    const epoch = this.#lifetime.token
     const current = this.#current(session)
-    if (this.#epoch !== epoch || this.#visible !== session) return
+    if (!this.#lifetime.current(epoch) || this.#visible !== session) return
     const items = current ? this.#items(session) : []
     if (!items.length) this.#visible = null
     try {

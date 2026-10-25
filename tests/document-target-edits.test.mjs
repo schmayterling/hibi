@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { EditorState } from '@codemirror/state'
 import { projectionIdentity } from '../src/renderer/src/document-projection-identity.ts'
 import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
 import { createDocumentTargetEditScope } from '../src/renderer/src/document-target-edits.ts'
 import { mountedDocumentEdits } from '../src/renderer/src/mounted-document-edits.ts'
+import {
+  createSourceSession,
+  sourceEditorText,
+  sourceEditTransaction,
+} from '../src/renderer/src/source-session.ts'
 
 const document = (source, overrides = {}) => ({
   tabId: 'one',
@@ -43,6 +49,81 @@ const request = (target, requestId, changes) => ({
   requestId,
   target,
   changes,
+})
+
+test('mounted and unmounted range admission agree without full-source reads', () => {
+  for (const mounted of [false, true]) {
+    const { runtime, scope, operations } = fixture()
+    runtime.activate(document('a\r\n😀b'.repeat(30000)))
+    const target = scope.listOpen()[0].target
+    const session = runtime.session()
+    let dispose = () => {}
+    if (mounted) {
+      const viewId = runtime.primaryViewId('one')
+      const unmount = runtime.registerView('one', viewId)
+      const view = runtime.captureView(viewId)
+      const bridge = createSourceSession(session)
+      const native = {
+        state: EditorState.create({
+          doc: sourceEditorText(session.snapshot()),
+        }),
+        update(transactions) {
+          this.state = transactions.at(-1).state
+        },
+      }
+      const detach = bridge.attach(native)
+      const unregister = mountedDocumentEdits.register(
+        'one',
+        view,
+        'source',
+        (_view, request) => {
+          try {
+            const transaction = sourceEditTransaction(
+              native.state,
+              bridge.snapshot(),
+              request.changes,
+              1000000,
+            )
+            if (transaction)
+              bridge.dispatch([transaction], native, request.changes)
+            return {
+              status: 'applied',
+              contentVersion: bridge.snapshot().version,
+            }
+          } catch (error) {
+            return { status: 'invalid', message: String(error) }
+          }
+        },
+      )
+      dispose = () => {
+        unregister()
+        detach()
+        unmount()
+      }
+    }
+    session.counters(true)
+    for (const [id, change, status] of [
+      ['crlf', { from: 2, to: 2, insert: 'x', expectedText: '' }, 'invalid'],
+      ['unicode', { from: 4, to: 4, insert: 'x', expectedText: '' }, 'invalid'],
+      [
+        'expected',
+        { from: 5, to: 6, insert: 'B', expectedText: 'wrong' },
+        'conflict',
+      ],
+      ['valid', { from: 5, to: 6, insert: 'B', expectedText: 'b' }, 'applied'],
+    ])
+      assert.equal(
+        scope.applyEdits(request(target, id, [change])).status,
+        status,
+      )
+    assert.equal(operations.length, 1)
+    assert.equal(session.counters().materializations, 0)
+    assert.ok(session.counters().sourceUnitsRead < 1000)
+    assert.equal(session.snapshot().sliceRaw(0, 6), 'a\r\n😀B')
+    dispose()
+    scope.dispose()
+    runtime.dispose()
+  }
 })
 
 test('target edits keep inactive source, history and focus independent', () => {

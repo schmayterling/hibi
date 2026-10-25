@@ -312,14 +312,10 @@ test('blank startup leaves disabled runtimes and closed settings unloaded and so
   )
 })
 
-test('enabled mermaid starts with markdown documents but loads its engine on demand', {
+test('default diagrams start with markdown documents and load pele only for a diagram', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-startup-mermaid-'))
-  await writeFile(
-    join(profile, 'addons.json'),
-    JSON.stringify({ mermaid: true }),
-  )
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -343,12 +339,37 @@ test('enabled mermaid starts with markdown documents but loads its engine on dem
     if (url.startsWith('app://hibi/')) files.add(new URL(url).pathname.slice(1))
   })
   await session.send('Debugger.enable')
-  const loaded = chunks
-    .filter((chunk) => files.has(chunk.file))
+  const loaded = () =>
+    chunks
+      .filter((chunk) => files.has(chunk.file))
+      .flatMap((chunk) => chunk.modules)
+  assert.match(loaded().join('\n'), /src\/addons\/mermaid\/index\.tsx/)
+  assert.doesNotMatch(
+    loaded().join('\n'),
+    /node_modules\/(?:pele|mermaid|@mermaid-js)\/|@codemirror\//,
+  )
+  const note = join(profile, 'diagram.md')
+  await writeFile(note, '```mermaid\nflowchart LR\n  A --> B\n```\n')
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+  }, note)
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
+  )
+  await page.locator('.mermaid-block .mermaid-diagram > svg').waitFor()
+  // Pele's core loads with the first diagram; other diagram types stay unloaded.
+  const pele = chunks
     .flatMap((chunk) => chunk.modules)
-    .join('\n')
-  assert.match(loaded, /src\/addons\/mermaid\/index\.tsx/)
-  assert.doesNotMatch(loaded, /node_modules\/(?:mermaid|@mermaid-js)\//)
+    .filter((module) => module.includes('node_modules/pele/'))
+  const loadedPele = loaded().filter((module) =>
+    module.includes('node_modules/pele/'),
+  )
+  assert.ok(loadedPele.some((module) => module.endsWith('/esm/lazy.js')))
+  assert.ok(
+    loadedPele.length < pele.length / 2,
+    `${loadedPele.length} of ${pele.length} pele modules loaded`,
+  )
 })
 
 test('unrelated enabled formats defer source parsers until first source use', async (t) => {

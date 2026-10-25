@@ -5,12 +5,12 @@ import {
   ReactNodeViewRenderer,
 } from '@tiptap/react'
 import { Pencil } from 'lucide-react'
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { errorMessage } from '../../shared/errors'
 import { fencedBlock, fenceSource } from '../_shared/fenced-block'
 import type { AddonContext } from '../api'
 import { Button, DocumentNotice, IconButton, TextArea } from '../ui'
-import { renderDiagram } from './render'
+import { mountDiagram } from './render'
 
 const tokenize = fencedBlock('mermaid', 'mermaidBlock')
 function Form({
@@ -45,35 +45,46 @@ function Form({
     </form>
   )
 }
+/** Draws one diagram that fits its container's width. */
+export function Diagram({
+  source,
+  emptyText,
+}: {
+  source: string
+  emptyText: string
+}) {
+  const host = useRef<HTMLElement>(null)
+  const [state, setState] = useState({ drawn: false, error: '' })
+  // Loaded diagram types draw before the first paint, without a loading notice.
+  useLayoutEffect(() => {
+    if (!host.current || !source.trim()) return
+    setState({ drawn: false, error: '' })
+    return mountDiagram(host.current, source, {
+      onRender: () => setState({ drawn: true, error: '' }),
+      onError: (reason) =>
+        setState({ drawn: false, error: errorMessage(reason) }),
+    })
+  }, [source])
+  return (
+    <>
+      {!source.trim() ? (
+        <DocumentNotice title="Empty diagram" message={emptyText} />
+      ) : state.error ? (
+        <DocumentNotice title="Diagram unavailable" message={state.error} />
+      ) : (
+        !state.drawn && <DocumentNotice title="Rendering diagram…" busy />
+      )}
+      <figure
+        ref={host}
+        className="mermaid-diagram"
+        aria-label="Mermaid diagram"
+      />
+    </>
+  )
+}
 export function mermaidNode(context: AddonContext) {
   function View({ node, editor, getPos, updateAttributes }: NodeViewProps) {
     const source = String(node.attrs.source ?? '')
-    const scheme = useSyncExternalStore(
-      context.colorschemes.subscribe,
-      context.colorschemes.getActive,
-    )
-    const [image, setImage] = useState('')
-    const [error, setError] = useState('')
-    useEffect(() => {
-      let active = true
-      setImage('')
-      setError('')
-      void renderDiagram(source, scheme)
-        .then((html) => {
-          if (active)
-            setImage(
-              new DOMParser()
-                .parseFromString(html, 'text/html')
-                .querySelector('img')?.src ?? '',
-            )
-        })
-        .catch((reason) => {
-          if (active) setError(errorMessage(reason))
-        })
-      return () => {
-        active = false
-      }
-    }, [source, scheme])
     return (
       <NodeViewWrapper className="mermaid-block" contentEditable={false}>
         <IconButton
@@ -96,13 +107,10 @@ export function mermaidNode(context: AddonContext) {
         >
           <Pencil size={16} />
         </IconButton>
-        {error ? (
-          <DocumentNotice title="Diagram unavailable" message={error} />
-        ) : image ? (
-          <img className="mermaid-diagram" src={image} alt="Mermaid diagram" />
-        ) : (
-          <DocumentNotice title="Rendering diagram…" busy />
-        )}
+        <Diagram
+          source={source}
+          emptyText="Edit this block to add Mermaid source."
+        />
       </NodeViewWrapper>
     )
   }

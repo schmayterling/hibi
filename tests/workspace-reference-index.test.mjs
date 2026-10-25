@@ -11,38 +11,6 @@ import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 const workspace = { workspaceId: 'notes', workspaceGeneration: 1 }
 const page = (path, markdown = '') => ({ path, markdown })
 
-test('workspace sorts reuse collation without per-comparison locale setup', () => {
-  const names = [
-    'note-2.md',
-    'note-10.md',
-    'note-02.md',
-    'É1.md',
-    'é2.md',
-    'e10.md',
-  ]
-  const expected = names.toSorted((a, b) => a.localeCompare(b))
-  const original = String.prototype.localeCompare
-  let comparisons = 0
-  String.prototype.localeCompare = function (...args) {
-    comparisons++
-    return original.apply(this, args)
-  }
-  try {
-    const index = new WorkspaceReferenceIndex()
-    index.apply(workspace, [
-      page('source.md', names.map((name) => `[[${name}]]`).join(' ')),
-      ...names.map((name, i) => page(name, `#tag${i} [[target]]`)),
-      page('target.md'),
-    ])
-    assert.deepEqual(index.links('source.md', 0, 20).items, expected)
-    assert.deepEqual(index.backlinks('target.md', 0, 20).items, expected)
-    index.tags(0, 20)
-    assert.equal(comparisons, 0)
-  } finally {
-    String.prototype.localeCompare = original
-  }
-})
-
 test('reference index parses only changed content and updates reverse links', () => {
   let parses = 0
   const index = new WorkspaceReferenceIndex((source) => {

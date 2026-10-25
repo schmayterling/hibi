@@ -276,16 +276,24 @@ test('git addon stages, commits, switches, pulls and pushes only to a disposable
     animations: 'disabled',
   })
   await page.getByRole('treeitem', { name: /^note\.md$/i, exact: true }).click()
+  const addonManager = page.getByRole('tab', {
+    name: /^addon manager$/i,
+    exact: true,
+  })
   await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
+  await addonManager.click()
   await page.locator('#addon-git').click()
-  await page.waitForFunction(
-    () => !document.querySelector('.workspace-sidebar .sidebar-decoration'),
-  )
   await assert.rejects(
     page.evaluate(() => window.hibi.queryAddon('git', 'decorations')),
     /Enable this addon in Settings → Addons first\./,
   )
+  // The explorer hidden behind settings applies the removal when it returns.
+  await page.getByRole('button', { name: /^back to app$/i }).click()
+  await page.waitForFunction(
+    () => !document.querySelector('.workspace-sidebar .sidebar-decoration'),
+  )
+  await clickMenu(app, 'Settings')
+  await addonManager.click()
   await page.locator('#addon-git').click()
   await page.getByRole('button', { name: /^back to app$/i }).click()
   await nested.locator('.sidebar-decoration').waitFor()

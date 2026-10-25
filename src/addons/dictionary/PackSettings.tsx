@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useContext, useEffect, useState } from 'react'
+import { SettingsPageVisible } from '../../ui/settings-index'
 import { Button, ControlRow, SettingRow } from '../ui'
 import { type PackId, type PackState, packIds, packs } from './packs'
 import './pack-settings.css'
@@ -9,12 +10,15 @@ const running = (state: PackState) =>
   state.phase === 'downloading' || state.phase === 'converting'
 
 export function PackSettings() {
+  // Discovery keeps these rows searchable without native pack reads.
+  const visible = useContext(SettingsPageVisible)
   const [states, setStates] = useState<PackState[]>([])
   const [refresh, setRefresh] = useState(0)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   // biome-ignore lint/correctness/useExhaustiveDependencies: refresh reloads pack state after an action.
   useEffect(() => {
+    if (!visible) return
     let active = true
     let timer: ReturnType<typeof setTimeout>
     async function read() {
@@ -38,7 +42,7 @@ export function PackSettings() {
       active = false
       clearTimeout(timer)
     }
-  }, [refresh])
+  }, [refresh, visible])
   const busy = pending || states.some(running)
   async function act(
     method: 'installPack' | 'uninstallPack' | 'cancelPack',

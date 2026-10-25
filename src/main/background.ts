@@ -1,7 +1,7 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, Menu, Tray } from 'electron'
-import { retryRename } from './atomic-rename'
+import { writeText } from './files'
 import { getUiCase } from './ui-case'
 
 export class BackgroundMode {
@@ -46,10 +46,7 @@ export class BackgroundMode {
       .then(async () => {
         const candidate = input && !this.tray ? this.createTray() : null
         try {
-          await writeFile(`${this.path}.tmp`, JSON.stringify(input), {
-            mode: 0o600,
-          })
-          await retryRename(() => rename(`${this.path}.tmp`, this.path))
+          await writeText(this.path, JSON.stringify(input))
         } catch (error) {
           candidate?.destroy()
           throw error

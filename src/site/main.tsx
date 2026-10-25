@@ -16,6 +16,7 @@ import MiniSearch from 'minisearch'
 import { type CSSProperties, useEffect, useMemo, useState } from 'react'
 import type { Root } from 'react-dom/client'
 import { GraphCanvas } from '../addons/graph/Canvas'
+import GraphLayoutWorker from '../addons/graph/layout.worker.ts?worker&inline'
 import {
   CommandPalette,
   type PaletteCommand,
@@ -30,6 +31,9 @@ import { Sidebar, type SidebarItem } from '../ui/Sidebar'
 import { useSidebarResize } from '../ui/useSidebarResize'
 import { homePage, isMermaidImage, pageRoute, type SiteData } from './data'
 import './site.css'
+
+// Exported sites ship one script, so the layout worker is inlined.
+const layoutWorker = () => new GraphLayoutWorker()
 
 export function startSite(workspace: SiteData, root: Root) {
   const options = workspace.options
@@ -868,6 +872,7 @@ export function startSite(workspace: SiteData, root: Root) {
           active={active}
           open={open}
           resetKey={query}
+          worker={layoutWorker}
         />
       </div>
     )

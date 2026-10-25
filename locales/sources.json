@@ -3840,6 +3840,9 @@
   "c72183682f41": [
     "src/addons/dictionary/CustomWords.tsx"
   ],
+  "8a7525b1492f": [
+    "src/addons/graph/Canvas.tsx"
+  ],
   "8ec5e108fc99": [
     "src/addons/tags/Panel.tsx"
   ],

@@ -78,19 +78,31 @@ export async function resolveDocumentMediaPath(
   source: string,
   documentPath: string | null,
   workspacePath: string | null = null,
+  options: { paths?: Set<string>; signal?: AbortSignal } = {},
 ) {
+  const { paths, signal } = options
+  if (signal?.aborted) return null
   const path = documentMediaPath(source, documentPath)
   if (!path) return null
+  paths?.add(path)
+  if (signal?.aborted) return null
   if (
     await stat(path).then(
       (info) => info.isFile(),
       () => false,
     )
-  )
-    return path
+  ) {
+    if (paths && !signal?.aborted) {
+      const real = await realpath(path).catch(() => null)
+      if (real) paths.add(real)
+    }
+    return signal?.aborted ? null : path
+  }
+  if (signal?.aborted) return null
   const base = workspacePath ?? (documentPath ? dirname(documentPath) : null)
   if (!base || source.startsWith('//')) return null
   const canonicalBase = await realpath(base).catch(() => base)
+  if (signal?.aborted) return null
   let decoded = source
   try {
     decoded = decodeURIComponent(source)
@@ -110,10 +122,15 @@ export async function resolveDocumentMediaPath(
       : []
   if (workspacePath && !source.startsWith('/')) {
     const settings = resolve(workspacePath, '.obsidian', 'app.json')
+    paths?.add(settings)
+    if (signal?.aborted) return null
     const info = await lstat(settings).catch(() => null)
     if (info?.isFile() && !info.isSymbolicLink() && info.size < 65536) {
       try {
-        const saved = JSON.parse(await readFile(settings, 'utf8'))
+        if (signal?.aborted) return null
+        const saved = JSON.parse(
+          await readFile(settings, { encoding: 'utf8', signal }),
+        )
         const folder = saved.attachmentFolderPath
         if (
           typeof folder === 'string' &&
@@ -134,9 +151,13 @@ export async function resolveDocumentMediaPath(
     }
   }
   for (const candidate of candidates) {
+    paths?.add(candidate)
+    if (signal?.aborted) return null
     if (!isPathInside(base, candidate)) continue
     const real = await realpath(candidate).catch(() => null)
     if (!real) continue
+    paths?.add(real)
+    if (signal?.aborted) return null
     if (!isPathInside(canonicalBase, real)) continue
     if (
       await stat(real).then(
@@ -144,7 +165,7 @@ export async function resolveDocumentMediaPath(
         () => false,
       )
     )
-      return candidate
+      return signal?.aborted ? null : candidate
   }
   return null
 }

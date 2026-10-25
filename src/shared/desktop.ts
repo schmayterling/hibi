@@ -214,6 +214,13 @@ export type DesktopApi = {
     source: string,
     revision: number,
   ) => Promise<import('./media').DocumentMedia | null>
+  /** Internal cancellable display resolution; addon byte reads retain their existing bridge. */
+  resolveDocumentMedia: (
+    source: string,
+    revision: number,
+    request: string,
+  ) => Promise<import('./media').DocumentMediaResolution | null>
+  cancelDocumentMedia: (request: string) => Promise<void>
   openDroppedFile: (file: File) => Promise<{
     document: DocumentState | null
     workspace?: WorkspaceState | null

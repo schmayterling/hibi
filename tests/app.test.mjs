@@ -109,6 +109,8 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'onOpenRemote',
         'attachMedia',
         'readDocumentMedia',
+        'resolveDocumentMedia',
+        'cancelDocumentMedia',
         'openDroppedFile',
         'getInstalledAddons',
         'getAddonDirectory',

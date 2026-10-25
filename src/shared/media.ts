@@ -6,9 +6,34 @@ export type AttachmentResult = {
   attachments: MediaAttachment[]
 }
 export type DocumentMedia = { url: string; kind: 'image' | 'video' }
+/** Internal display resolution; paths are workspace-relative invalidation dependencies. */
+export type DocumentMediaResolution = {
+  media: DocumentMedia | null
+  paths: string[]
+}
+
+export function mediaPathsChanged(
+  paths: readonly string[] | null,
+  change?: { kind: string; paths: readonly string[] | null },
+) {
+  return (
+    !change?.paths ||
+    !paths ||
+    change.paths.some((changed) =>
+      paths.some(
+        (path) =>
+          path === changed ||
+          (change.kind !== 'content' &&
+            (!changed || path.startsWith(`${changed}/`))),
+      ),
+    )
+  )
+}
 export const MEDIA_CHANNELS = {
   attach: 'media:attach',
   read: 'media:read',
+  resolve: 'media:resolve',
+  cancel: 'media:cancel',
   open: 'media:open-dropped',
 } as const
 

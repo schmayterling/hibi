@@ -823,7 +823,7 @@
     "src/main/document.ts"
   ],
   "42e3ecb68937": [
-    "src/main/media.ts"
+    "src/main/document-media.ts"
   ],
   "f84eb17965b6": [
     "src/main/addon-hotkeys.ts",
@@ -886,9 +886,6 @@
   ],
   "766db4dda5c6": [
     "src/addons/git/native.ts"
-  ],
-  "8afb17585fb2": [
-    "src/main/media.ts"
   ],
   "c7c709c5d2bb": [
     "src/addons/documentation/native.ts"

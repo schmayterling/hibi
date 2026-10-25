@@ -220,3 +220,22 @@ test('streaming revalidates a fallback symlink instead of serving a replacement 
   await symlink(outside, join(root, 'public', 'uploads'), 'junction')
   assert.equal((await server.serve(new Request(media.url))).status, 404)
 })
+
+test('last subscriber releases a completed URL; late requests do no I/O', async (t) => {
+  const { root, server } = await fixture(t)
+  await writeFile(join(root, 'assets', 'image.gif'), gif)
+  const counts = countIO(t)
+  const [first, second] = await Promise.all([
+    server.resolve('assets/image.gif', 7, 'first-view'),
+    server.resolve('assets/image.gif', 7, 'second-view'),
+  ])
+  assert.equal(first.media.url, second.media.url)
+  server.cancel('first-view')
+  const active = await server.serve(new Request(second.media.url))
+  assert.equal(active.status, 200)
+  await active.body.cancel()
+  server.cancel('second-view')
+  const before = { ...counts }
+  assert.equal((await server.serve(new Request(second.media.url))).status, 404)
+  assert.deepEqual(counts, before)
+})

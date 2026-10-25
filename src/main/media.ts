@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto'
 import {
   type FileHandle,
   lstat,
@@ -56,17 +55,6 @@ function filePath(value: unknown): string {
   return value
 }
 
-async function openAttachment(path: string) {
-  const media = await openMedia(path)
-  if (media.stat.size > 512 * 1024 * 1024) {
-    await media.file.close()
-    throw new Error(
-      'Choose a nonempty image or video file no larger than 512 MiB.',
-    )
-  }
-  return media
-}
-
 export async function openDroppedFile(window: BrowserWindow, value: unknown) {
   const path = await realpath(filePath(value))
   if ((await lstat(path)).isDirectory())
@@ -101,7 +89,7 @@ export async function attachMedia(
     throw new Error('Choose up to 32 images or videos at a time.')
   const paths = values.map(filePath)
   // Validate the whole selection before prompting to save or creating attachments.
-  for (const path of paths) await (await openAttachment(path)).file.close()
+  for (const path of paths) await (await openMedia(path)).file.close()
   if (!getDocumentPath() || getDocument().ephemeral) {
     if (!(await saveDocument(window))) return null
   }
@@ -121,7 +109,7 @@ export async function attachMedia(
   try {
     const attachments = []
     for (const path of paths) {
-      const { file, stat, mime } = await openAttachment(path)
+      const { file, stat, mime } = await openMedia(path)
       try {
         const suffix =
           mime === 'image/svg+xml'
@@ -178,7 +166,8 @@ export async function readDocumentMedia(
   revision: number,
 ): Promise<DocumentMedia | null> {
   return (
-    (await documentMedia.resolve(source, revision, randomUUID()))?.media ?? null
+    (await documentMedia.resolve(source, revision, `legacy:${source}`))
+      ?.media ?? null
   )
 }
 

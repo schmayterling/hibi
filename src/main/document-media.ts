@@ -68,7 +68,6 @@ type Entry = {
   result: Promise<DocumentMediaResolution | null>
   path?: string
   mime?: string
-  settled: boolean
 }
 
 /** One serial header-resolution queue shared by all display callers. */
@@ -116,6 +115,9 @@ export class DocumentMediaServer {
 
   private retire(entry: Entry) {
     entry.controller.abort()
+    for (const client of entry.clients)
+      if (this.requests.get(client) === entry) this.requests.delete(client)
+    entry.clients.clear()
     if (this.entries.get(entry.source) === entry)
       this.entries.delete(entry.source)
     this.tokens.delete(entry.token)
@@ -144,7 +146,6 @@ export class DocumentMediaServer {
         dependencies: new Set(),
         clients: new Set(),
         result: Promise.resolve(null),
-        settled: false,
       }
       const pending = entry
       this.entries.set(source, entry)
@@ -187,25 +188,17 @@ export class DocumentMediaServer {
           return this.live(pending)
             ? { media: null, paths: this.paths(pending) }
             : null
-        } finally {
-          pending.settled = true
         }
       })
     }
     entry.clients.add(request)
     this.requests.set(request, entry)
     const pending = entry
-    return entry.result
-      .then((result) =>
-        this.requests.get(request) === pending && this.live(pending)
-          ? result
-          : null,
-      )
-      .finally(() => {
-        pending.clients.delete(request)
-        if (this.requests.get(request) === pending)
-          this.requests.delete(request)
-      })
+    return entry.result.then((result) =>
+      this.requests.get(request) === pending && this.live(pending)
+        ? result
+        : null,
+    )
   }
 
   cancel(request: string) {
@@ -213,7 +206,7 @@ export class DocumentMediaServer {
     if (!entry) return
     this.requests.delete(request)
     entry.clients.delete(request)
-    if (!entry.clients.size && !entry.settled) this.retire(entry)
+    if (!entry.clients.size) this.retire(entry)
   }
 
   invalidate(change?: { kind: string; paths: readonly string[] | null }) {

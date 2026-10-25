@@ -786,9 +786,6 @@
   "57cb9b1fb62d": [
     "src/addons/documentation/options.ts"
   ],
-  "d4dc94ba2837": [
-    "src/main/media.ts"
-  ],
   "b05315dde820": [
     "src/main/workspace-entry-transfer.ts"
   ],

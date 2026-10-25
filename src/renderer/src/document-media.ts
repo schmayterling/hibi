@@ -27,7 +27,6 @@ function resolve(entry: Entry) {
       .catch(() => null)
       .then((result) => {
         if (!entry.listeners.size || generation !== entry.generation) return
-        entry.request = null
         entry.paths = result?.paths ?? null
         entry.media = result?.media ?? null
         for (const listener of entry.listeners) listener(entry.media)

@@ -252,4 +252,22 @@ test('math and dictionary split previews parse once per pause or rich flush, not
   assert.equal(settled.parses, 3)
   assert.equal(settled.exact, true)
   assert.notEqual(settled.last, 'omega later')
+
+  // Leaving split view while pending carries the rich selection into the
+  // immediate visible catch-up, even without an incremental source map.
+  await selectBookmark()
+  await source.focus()
+  const pending = await typeSource(' again', 1)
+  assert.equal(pending.untouched, true)
+  assert.equal(pending.parses, 3)
+  await page
+    .getByRole('button', { name: /^normal$/i, exact: true })
+    .evaluate((button) => button.click())
+  await page.clock.runFor(1)
+  await waitForAsync(
+    page,
+    () => document.querySelector('.tiptap')?.editor?.isEditable,
+  )
+  assert.equal((await preview()).exact, true)
+  assert.equal(await bookmark(), 'et')
 })

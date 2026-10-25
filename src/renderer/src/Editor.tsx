@@ -60,14 +60,10 @@ import {
 import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import type { SourceSnapshot } from '../../shared/source-buffer'
-import {
-  composeSourceChanges,
-  type RawEdit,
-} from '../../shared/source-operations'
+import { mapSourcePosition, type RawEdit } from '../../shared/source-operations'
 import {
   mapSourceSelection,
   type SourceSelection,
-  sourceSelection,
 } from '../../shared/source-selection'
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
@@ -1974,13 +1970,13 @@ export function MarkdownEditor({
       snapshot: SourceSnapshot
       selection: SourceSelection | null
       // Without an exact incremental map, the untouched rich selection is
-      // mapped through its own source and the composed pending edits on catch-up.
+      // mapped through its own source and each pending edit on catch-up.
       rich?: {
         document: RichNode
         anchor: number
         head: number
         before: SourceSnapshot
-        changes: readonly RawEdit[]
+        changes: (readonly RawEdit[])[]
       }
     } | null =
       retained?.editor === editor &&
@@ -2067,28 +2063,37 @@ export function MarkdownEditor({
       )
     }
     const richBookmark = (rich: NonNullable<typeof preview>['rich']) => {
-      if (!rich || editor.state.doc !== rich.document) return undefined
+      if (!rich || editor.isDestroyed || editor.state.doc !== rich.document)
+        return null
       try {
         const source = rich.before.materialize(),
           projected = projectMarkdown(source, markdownExtensions),
           offset =
             projected.sourceOffset ?? source.lastIndexOf(projected.content),
           map = positions(projected.content, rich.document),
-          anchor = map(rich.anchor, 'rich'),
-          head = map(rich.head, 'rich')
-        if (offset < 0 || anchor === null || head === null) return undefined
+          from = map(rich.anchor, 'rich'),
+          to = map(rich.head, 'rich')
+        if (offset < 0 || from === null || to === null) return null
+        let anchor = offset + from,
+          head = offset + to
+        // Associate like mapSourceSelection; the latest source validates the result.
+        for (const changes of rich.changes) {
+          const empty = anchor === head,
+            forward = anchor < head
+          anchor = mapSourcePosition(
+            anchor,
+            changes,
+            empty || !forward ? 1 : -1,
+          )
+          head = mapSourcePosition(head, changes, empty || forward ? 1 : -1)
+        }
         return mapSourceSelection(
           session.snapshot(),
-          sourceSelection(rich.before, {
-            ranges: [
-              { anchor: offset + anchor, head: offset + head, association: 1 },
-            ],
-            mainIndex: 0,
-          }),
-          rich.changes,
-        )?.ranges[0]
+          { ranges: [{ anchor, head, association: 1 }], mainIndex: 0 },
+          [],
+        )
       } catch {
-        return undefined
+        return null
       }
     }
     const sync = () => {
@@ -2106,7 +2111,8 @@ export function MarkdownEditor({
       const snapshot = session.snapshot(),
         source = snapshot.materialize(),
         projected = projectMarkdown(source, markdownExtensions),
-        bookmark = preview?.selection?.ranges[0] ?? richBookmark(preview?.rich)
+        bookmark = (preview?.selection ?? richBookmark(preview?.rich))
+          ?.ranges[0]
       syncing = true
       try {
         editor
@@ -2182,6 +2188,7 @@ export function MarkdownEditor({
       }
       if (preview) {
         const { rich } = preview
+        rich?.changes.push(prepared.operation.changes)
         preview = {
           snapshot: prepared.after,
           selection: mapSourceSelection(
@@ -2189,18 +2196,7 @@ export function MarkdownEditor({
             preview.selection,
             prepared.operation.changes,
           ),
-          ...(rich
-            ? {
-                rich: {
-                  ...rich,
-                  changes: composeSourceChanges(
-                    rich.changes,
-                    prepared.operation.changes,
-                    rich.before.utf16Length,
-                  ),
-                },
-              }
-            : {}),
+          ...(rich ? { rich } : {}),
         }
       }
       // Hidden rich state stays untouched; only its pending raw selection advances.
@@ -2250,7 +2246,7 @@ export function MarkdownEditor({
                     anchor,
                     head,
                     before: prepared.before,
-                    changes: prepared.operation.changes,
+                    changes: [prepared.operation.changes],
                   },
                 }
         }
@@ -2309,15 +2305,13 @@ export function MarkdownEditor({
       disposed = true
       clearTimeout(timer)
       if (paragraphIdle !== undefined) cancelIdleCallback(paragraphIdle)
-      // An unresolved rich selection belongs to this projection and is dropped.
-      retainedPreview.current = preview?.selection
-        ? {
-            editor,
-            session,
-            snapshot: preview.snapshot,
-            selection: preview.selection,
-          }
-        : null
+      // A rich selection still needs this effect's projection to reach source.
+      const selection =
+        preview && (preview.selection ?? richBookmark(preview.rich))
+      retainedPreview.current =
+        preview && selection
+          ? { editor, session, snapshot: preview.snapshot, selection }
+          : null
       plainSync.current = null
       pendingPlainSync.current = null
       retryRich.current = () => {}

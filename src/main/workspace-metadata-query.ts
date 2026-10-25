@@ -21,6 +21,7 @@ import {
   type TextSearchPosition,
   WorkspaceReferenceIndex,
 } from './workspace-reference-index'
+import { compareWorkspacePaths } from './workspace-sort'
 import { workspaceSyntax } from './workspace-syntax'
 
 const references = new WorkspaceReferenceIndex()
@@ -90,8 +91,8 @@ function versionKey(versions: readonly OpenDocumentVersion[]): string {
       .map(({ file, tabId, contentVersion }) => [file, tabId, contentVersion])
       .sort(
         ([leftPath, leftTab], [rightPath, rightTab]) =>
-          String(leftPath).localeCompare(String(rightPath)) ||
-          String(leftTab).localeCompare(String(rightTab)),
+          compareWorkspacePaths(String(leftPath), String(rightPath)) ||
+          compareWorkspacePaths(String(leftTab), String(rightTab)),
       ),
   )
 }

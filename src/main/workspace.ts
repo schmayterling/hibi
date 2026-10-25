@@ -58,6 +58,7 @@ import {
   showAllWorkspaceFiles,
   workspaceEntryLimit,
 } from './workspace-settings'
+import { compareWorkspaceNames, compareWorkspacePaths } from './workspace-sort'
 
 type ScanResult = {
   entries: WorkspaceEntry[]
@@ -294,7 +295,7 @@ export async function scanWorkspace(
     return result.sort(
       (a, b) =>
         Number(b.kind === 'folder') - Number(a.kind === 'folder') ||
-        a.name.localeCompare(b.name, undefined, { numeric: true }),
+        compareWorkspaceNames(a.name, b.name),
     )
   }
   return walk(base)
@@ -1008,7 +1009,7 @@ function captureIndexRequest(): { key: string; request: IndexRequest } | null {
     revision,
     [...drafts]
       .map(([path, draft]) => [path, draft.tabId, draft.contentVersion])
-      .sort(([a], [b]) => String(a).localeCompare(String(b))),
+      .sort(([a], [b]) => compareWorkspacePaths(String(a), String(b))),
   ])
   return { key, request: { key, selected, workspace, drafts, revision } }
 }

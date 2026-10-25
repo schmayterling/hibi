@@ -21,6 +21,7 @@ import type {
   WorkspaceGraphItem,
   WorkspaceTagSummary,
 } from '../shared/workspace-query.ts'
+import { compareWorkspacePaths } from './workspace-sort.ts'
 import type { PageSyntax } from './workspace-syntax.ts'
 
 type References = ReturnType<typeof noteReferences>
@@ -269,8 +270,7 @@ export class WorkspaceReferenceIndex {
       (document) => document.referenceComplete && document.syntaxComplete,
     )
     this.paths = paths
-    if (pathsChanged)
-      this.sortedPaths = [...paths].sort((a, b) => a.localeCompare(b))
+    if (pathsChanged) this.sortedPaths = [...paths].sort(compareWorkspacePaths)
     this.basenames = basenames
     this.tagPaths = tagPaths
     this.tagCapReached = tagCapReached
@@ -340,7 +340,7 @@ export class WorkspaceReferenceIndex {
       .filter(([tag]) => prefix === undefined || tag.startsWith(prefix))
       .sort(([a, aPaths], [b, bPaths]) =>
         prefix === undefined
-          ? a.localeCompare(b)
+          ? compareWorkspacePaths(a, b)
           : bPaths.size - aPaths.size || (a < b ? -1 : a > b ? 1 : 0),
       )
     const items: WorkspaceTagSummary[] = []
@@ -410,7 +410,7 @@ export class WorkspaceReferenceIndex {
         if (targetsPath !== path) {
           targetsPath = path
           targets = [...(this.documents.get(path)?.targets ?? [])].sort(
-            (a, b) => a.localeCompare(b),
+            compareWorkspacePaths,
           )
         }
         const target = targets[targetIndex]
@@ -695,7 +695,7 @@ export class WorkspaceReferenceIndex {
     offset: number,
     limit: number,
   ): ReferencePage {
-    const sorted = [...values].sort((a, b) => a.localeCompare(b))
+    const sorted = [...values].sort(compareWorkspacePaths)
     const items: string[] = []
     let bytes = 0
     for (

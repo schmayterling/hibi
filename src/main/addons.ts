@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { lstat, readFile, realpath, rename, writeFile } from 'node:fs/promises'
+import { lstat, readFile, realpath } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import catalog from 'virtual:hibi-addon-catalog/main'
 import { app, type BrowserWindow, dialog } from 'electron'
@@ -20,7 +20,6 @@ import { validDocumentExtensions } from '../shared/document-types'
 import type { AddonId, AddonOwner } from '../shared/foundation-contracts'
 import { getAddonRevocation, loadAddonTrust } from './addon-trust'
 import { exportedAppearance } from './appearance'
-import { retryRename } from './atomic-rename'
 import {
   clearDocument,
   getDocument,
@@ -192,8 +191,7 @@ export async function loadAddons(): Promise<void> {
   if (enabledModal.length > 1) {
     for (const manifest of enabledModal) enabled[manifest.id] = false
     const path = join(app.getPath('userData'), 'addons.json')
-    await writeFile(`${path}.tmp`, JSON.stringify(enabled), { mode: 0o600 })
-    await retryRename(() => rename(`${path}.tmp`, path))
+    await writeText(path, JSON.stringify(enabled))
     addonStartupNotices.push(
       'Multiple modal addons were enabled. They were disabled to keep regular editing mode safe.',
     )
@@ -453,8 +451,7 @@ async function commitPreferences(
   // The list already masks revoked states; retain the previous preference for runtime cleanup.
   const before = addonStates(enabled, true)
   const path = join(app.getPath('userData'), 'addons.json')
-  await writeFile(`${path}.tmp`, JSON.stringify(next), { mode: 0o600 })
-  await retryRename(() => rename(`${path}.tmp`, path))
+  await writeText(path, JSON.stringify(next))
   enabled = next
   await deactivateUnavailable(before)
   const states = getAddonStates()

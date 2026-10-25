@@ -1,4 +1,4 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, net } from 'electron'
 import {
@@ -10,8 +10,8 @@ import {
 } from '../shared/addon-directory'
 import { validId } from '../shared/addon-manifest'
 import { MAX_ADDON_FILE_BYTES } from '../shared/addon-package'
-import { retryRename } from './atomic-rename'
 import { download } from './download'
+import { writeText } from './files'
 
 const HOUR = 60 * 60 * 1000
 let cached: AddonDirectory | undefined
@@ -118,8 +118,7 @@ async function refreshDirectory(): Promise<AddonDirectory> {
       fetchedAt: new Date().toISOString(),
     }
     const path = cachePath()
-    await writeFile(`${path}.tmp`, JSON.stringify(next), { mode: 0o600 })
-    await retryRename(() => rename(`${path}.tmp`, path))
+    await writeText(path, JSON.stringify(next))
     cached = next
     return next
   } catch (error) {

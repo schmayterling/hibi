@@ -64,34 +64,43 @@ const keyword = () =>
     },
   })
 
-/** Mounts the plugin view with controllable frames and a block that fills the pane. */
+/**
+ * Mounts the plugin view with controllable frames and line geometry: document
+ * position `origin()` sits at the top of an 800 px pane and `scale` positions fill it.
+ * Hit-testing always misses, as it does in a horizontally scrolled code block.
+ */
 function mount(t, plugin, state, geometry = {}) {
   const frames = new Map()
+  const idle = new Map()
   const listeners = new Map()
+  const observers = []
   let id = 0
   const listen = (target) => ({
     addEventListener: (type, listener) =>
       listeners.set(`${target}${type}`, listener),
     removeEventListener: (type) => listeners.delete(`${target}${type}`),
   })
-  const text = {}
+  const y = (pos) =>
+    ((pos - (geometry.origin?.() ?? -1e6)) * 800) / (geometry.scale ?? 3000)
   const globals = {
     requestAnimationFrame: (callback) => {
       frames.set(++id, callback)
       return id
     },
     cancelAnimationFrame: (frame) => frames.delete(frame),
+    requestIdleCallback: (callback) => {
+      idle.set(++id, callback)
+      return id
+    },
+    cancelIdleCallback: (slice) => idle.delete(slice),
     ResizeObserver: class {
+      constructor(callback) {
+        observers.push(callback)
+      }
       observe() {}
       disconnect() {}
     },
-    document: {
-      ...listen('document:'),
-      caretPositionFromPoint: (_x, y) => ({
-        offsetNode: text,
-        offset: geometry.at(y),
-      }),
-    },
+    document: { ...listen('document:'), caretPositionFromPoint: () => null },
     window: { innerHeight: 800, ...listen('window:') },
   }
   const previous = Object.fromEntries(
@@ -104,30 +113,49 @@ function mount(t, plugin, state, geometry = {}) {
     dispatches: 0,
     dom: {
       parentElement: null,
-      getBoundingClientRect: () => ({ top: 0, bottom: 800 }),
+      contains: () => false,
+      getBoundingClientRect: () =>
+        geometry.hidden ? { top: 0, bottom: 0 } : { top: 0, bottom: 800 },
     },
-    nodeDOM: () => ({
-      getBoundingClientRect: () => ({ top: -1e6, bottom: 1e6 }),
-      contains: (node) => node === text,
+    nodeDOM: (pos) => ({
+      getBoundingClientRect: () => ({
+        top: y(pos + 1),
+        bottom: y(pos + view.state.doc.nodeAt(pos).nodeSize - 1) + 1,
+      }),
     }),
-    coordsAtPos: () => ({ left: 10 }),
-    posAtDOM: (_node, offset) => offset,
+    coordsAtPos: (pos) => ({ left: -5000, top: y(pos), bottom: y(pos) + 1 }),
     dispatch(transaction) {
       const before = view.state
       view.dispatches++
       view.state = before.apply(transaction)
       pluginView.update?.(view, before)
     },
-    /** Runs frames until no more work is scheduled. */
+    /** Runs the next frame. */
+    frame() {
+      const [frame, callback] = frames.entries().next().value
+      frames.delete(frame)
+      callback(performance.now())
+    },
+    /** Runs the next idle slice with `remaining` milliseconds. */
+    idle(remaining = 50) {
+      const [slice, callback] = idle.entries().next().value
+      idle.delete(slice)
+      callback({ didTimeout: false, timeRemaining: () => remaining })
+    },
+    /** Runs frames and idle slices until no more work is scheduled. */
     flush() {
-      for (let count = 0; frames.size; count++) {
-        assert.ok(count < 10000, 'highlighting kept scheduling frames')
-        const [frame, callback] = frames.entries().next().value
-        frames.delete(frame)
-        callback(performance.now())
+      for (let count = 0; frames.size || idle.size; count++) {
+        assert.ok(count < 10000, 'highlighting kept scheduling work')
+        if (frames.size) view.frame()
+        else view.idle()
       }
     },
-    scroll: () => listeners.get('document:scroll')?.(),
+    scroll: () =>
+      listeners.get('document:scroll')?.({ target: { contains: () => true } }),
+    resize: () => {
+      for (const callback of observers) callback()
+    },
+    listeners,
   }
   pluginView = plugin.spec.view(view)
   t.after(() => {
@@ -360,9 +388,8 @@ test('long code blocks parse incrementally and decorate only text near the viewp
       })
       let start = state.doc.firstChild.nodeSize + 1
       let top = start + 50_000
-      const view = mount(t, plugin, state, {
-        at: (y) => Math.round(top + (y / 800) * 3_000),
-      })
+      // Lines start off screen to the left, so only line geometry finds what is visible.
+      const view = mount(t, plugin, state, { origin: () => top })
       assert.equal(plugin.getState(view.state).decorations.find().length, 0)
       view.flush()
       const verify = () => {
@@ -424,4 +451,135 @@ test('long code blocks parse incrementally and decorate only text near the viewp
       assert.ok(verify() * 10 < total)
     })
   }
+})
+
+test('one budget covers every long block in a frame, and refresh transactions do not parse', (t) => {
+  let advances = 0
+  const language = {
+    parser: {
+      parse: () => assert.fail('long blocks parse incrementally'),
+      startParse: () => ({
+        stoppedAt: null,
+        stopAt(to) {
+          this.stoppedAt = to
+        },
+        advance() {
+          advances++
+          return null
+        },
+      }),
+    },
+  }
+  t.after(codeLanguages.register('budget', { id: 'budget-probe', language }))
+  const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+  const view = mount(
+    t,
+    plugin,
+    EditorState.create({
+      schema,
+      plugins: [plugin],
+      doc: schema.nodes.doc.create(
+        null,
+        Array.from({ length: 12 }, () =>
+          code('x'.repeat(11_000), 'budget-probe'),
+        ),
+      ),
+    }),
+    { origin: () => 0, scale: 200_000 },
+  )
+  let clock = 0
+  const now = performance.now
+  performance.now = () => ++clock
+  t.after(() => {
+    performance.now = now
+  })
+  view.frame()
+  // Each check costs 1 ms here: three advances fit in 4 ms, and the other blocks wait.
+  assert.equal(advances, 3)
+  assert.equal(view.dispatches, 1, 'the new range is published')
+  view.frame()
+  assert.equal(advances, 6, 'later frames continue the work')
+  view.idle(4)
+  assert.equal(advances, 9, 'idle periods add more')
+})
+
+test('long-block presence stays exact and scrolling skips document walks', async (t) => {
+  await codeLanguages.ensure('javascript')
+  const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+  let top = 1_000
+  const view = mount(
+    t,
+    plugin,
+    EditorState.create({
+      schema,
+      plugins: [plugin],
+      doc: schema.nodes.doc.create(null, [
+        code('function sample() {\n  return 42;\n}\n'.repeat(1_000)),
+        ...Array.from({ length: 10_000 }, () => paragraph('short')),
+      ]),
+    }),
+    { origin: () => top },
+  )
+  view.flush()
+  assert.deepEqual(plugin.getState(view.state).blocks, [0])
+  assert.ok(plugin.getState(view.state).decorations.find().length)
+  let walks = 0
+  const counted =
+    (visit) =>
+    (...args) => {
+      walks++
+      return visit(...args)
+    }
+  const { doc } = view.state
+  const { descendants, nodesBetween } = doc
+  doc.descendants = (visit) => descendants.call(doc, counted(visit))
+  doc.nodesBetween = (from, to, visit, start) =>
+    nodesBetween.call(doc, from, to, counted(visit), start)
+  top = 20_000
+  view.scroll()
+  view.flush()
+  assert.ok(walks < 100, `scrolling visited ${walks} nodes`)
+  view.dispatch(view.state.tr.delete(0, view.state.doc.firstChild.nodeSize))
+  view.flush()
+  assert.deepEqual(plugin.getState(view.state).blocks, [])
+  assert.ok(!view.listeners.has('document:scroll'))
+})
+
+test('hidden editors keep language changes until they are visible', async (t) => {
+  const language = keyword()
+  const parse = t.mock.method(language.parser, 'parse')
+  let finish
+  t.after(
+    codeLanguages.register('hidden', {
+      id: 'hidden-probe',
+      load: () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    }),
+  )
+  const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+  const geometry = { hidden: true }
+  const view = mount(
+    t,
+    plugin,
+    EditorState.create({
+      schema,
+      plugins: [plugin],
+      doc: schema.nodes.doc.create(null, [code('hidden', 'hidden-probe')]),
+    }),
+    geometry,
+  )
+  await new Promise((resolve) => setImmediate(resolve))
+  finish(language)
+  await codeLanguages.settle()
+  view.flush()
+  assert.equal(view.dispatches, 0)
+  assert.equal(parse.mock.callCount(), 0)
+  geometry.hidden = false
+  view.resize()
+  view.flush()
+  assert.equal(view.dispatches, 1)
+  assert.equal(parse.mock.callCount(), 1)
+  assert.equal(plugin.getState(view.state).decorations.find().length, 1)
 })

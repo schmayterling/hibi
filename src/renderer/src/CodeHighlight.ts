@@ -14,7 +14,7 @@ import {
 
 /** Longer blocks parse incrementally and decorate only text near the viewport. */
 const windowedLength = 10_000
-/** Milliseconds of windowed parsing per transaction or frame. */
+/** Milliseconds of windowed parsing per transaction or frame; idle periods add more. */
 const parseBudget = 4
 
 type Range = { from: number; to: number }
@@ -22,7 +22,8 @@ type HighlightState = {
   decorations: DecorationSet
   /** Document range near the viewport that windowed blocks decorate. */
   viewport: Range | null
-  windowed: boolean
+  /** Positions of windowed blocks, in document order. */
+  blocks: readonly number[]
 }
 type Refresh = { keys?: ReadonlySet<string>; viewport?: Range | null }
 type Edit = { doc: Node; from: number; end: number }
@@ -84,10 +85,11 @@ export const CodeHighlight = Extension.create({
       parsed.set(node, result)
       return result
     }
-    /** Parses up to `to` before `deadline`; incomplete work resumes later. */
+    /** Parses up to `to` until `deadline`; unfinished work resumes later. */
     function parseTo(block: Parsed, node: Node, to: number, deadline: number) {
       try {
         while (block.parsedTo < to) {
+          if (performance.now() >= deadline) return false
           if (!block.parse || (block.parse.stoppedAt ?? Infinity) < to) {
             block.parse = block.language.parser.startParse(
               node.textContent,
@@ -106,7 +108,7 @@ export const CodeHighlight = Extension.create({
             block.tree = tree
             block.parsedTo = stopped ?? node.content.size
             block.parse = null
-          } else if (performance.now() > deadline) return false
+          }
         }
       } catch (error) {
         console.error(
@@ -117,17 +119,19 @@ export const CodeHighlight = Extension.create({
       }
       return true
     }
+    /** Windowed blocks parse until `deadline`, shared by every block in this pass. */
     function decorate(
       doc: Node,
       previous: DecorationSet,
       viewport: Range | null,
+      deadline: number,
       from = 0,
       to = doc.content.size,
       include?: (node: Node) => boolean,
       edit?: Edit,
     ) {
       const decorations: Decoration[] = []
-      let windowed = false
+      const blocks: number[] = []
       doc.nodesBetween(from, to, (node, pos) => {
         if (!node.isTextblock) return
         if (include && !include(node)) return false
@@ -159,7 +163,7 @@ export const CodeHighlight = Extension.create({
             )
           return false
         }
-        windowed = true
+        blocks.push(pos)
         const block = language && parsedBlock(node, pos, language, edit)
         const visibleFrom = Math.max(viewport?.from ?? 0, start) - start
         const visibleTo =
@@ -167,7 +171,7 @@ export const CodeHighlight = Extension.create({
         if (
           block &&
           visibleFrom < visibleTo &&
-          !parseTo(block, node, visibleTo, performance.now() + parseBudget)
+          !parseTo(block, node, visibleTo, deadline)
         ) {
           // Until the edited text is parsed, mapped tokens from the same parser stay visible.
           previous = previous.remove(
@@ -192,10 +196,14 @@ export const CodeHighlight = Extension.create({
             )
         return false
       })
-      return { decorations: previous.add(doc, decorations), windowed }
+      return { decorations: previous.add(doc, decorations), blocks }
     }
     /** Visible text of windowed blocks, widened by about a screen on each side. */
-    function measureViewport(view: EditorView, current: Range | null) {
+    function measureViewport(
+      view: EditorView,
+      current: Range | null,
+      blocks: readonly number[],
+    ) {
       let { top, bottom } = view.dom.getBoundingClientRect()
       // Scrolling panes and other clipping ancestors bound what is visible.
       for (
@@ -210,36 +218,62 @@ export const CodeHighlight = Extension.create({
         }
       top = Math.max(top, 0)
       bottom = Math.min(bottom, window.innerHeight)
+      const shown = blocks.flatMap((pos) => {
+        const node = view.state.doc.nodeAt(pos)
+        const box = (
+          view.nodeDOM(pos) as HTMLElement | null
+        )?.getBoundingClientRect()
+        return node && box && box.top < bottom && box.bottom > top
+          ? [{ start: pos + 1, end: pos + 1 + node.content.size, box }]
+          : []
+      })
+      if (!shown.length) return null
+      // Line geometry ignores horizontal scrolling and overlapping elements, unlike hit-testing.
+      const lineTop = (at: number) => view.coordsAtPos(at).top
+      const lineBottom = (at: number) => view.coordsAtPos(at).bottom
+      if (
+        current &&
+        shown.every(
+          ({ start, end, box }) =>
+            (current.from <= start ||
+              (box.top < top &&
+                current.from < end &&
+                lineTop(current.from) <= top)) &&
+            (current.to >= end ||
+              (box.bottom > bottom &&
+                current.to > start &&
+                lineBottom(current.to) >= bottom)),
+        )
+      )
+        return current
+      const first = (
+        start: number,
+        end: number,
+        after: (at: number) => boolean,
+      ) => {
+        while (start < end) {
+          const middle = (start + end) >> 1
+          if (after(middle)) end = middle
+          else start = middle + 1
+        }
+        return start
+      }
       let from = Number.POSITIVE_INFINITY
       let to = Number.NEGATIVE_INFINITY
-      let missed = false
-      if (top < bottom)
-        view.state.doc.descendants((node, pos) => {
-          if (!windowedBlock(node)) return !node.isTextblock
-          const block = view.nodeDOM(pos) as HTMLElement | null
-          const box = block?.getBoundingClientRect()
-          if (!block || !box || box.top >= bottom || box.bottom <= top)
-            return false
-          // Hit-test at the start of lines: points past a line's end can resolve to the block's end.
-          const left = view.coordsAtPos(pos + 1).left + 1
-          for (const y of [
-            Math.max(box.top, top) + 1,
-            Math.min(box.bottom, bottom) - 1,
-          ]) {
-            const caret = document.caretPositionFromPoint(left, y)
-            if (!caret || !block.contains(caret.offsetNode)) missed = true
-            else {
-              const at = view.posAtDOM(caret.offsetNode, caret.offset)
-              from = Math.min(from, at)
-              to = Math.max(to, at)
-            }
-          }
-          return false
-        })
-      // Covered points keep the previous range until the next measurement.
-      if (missed) return current
-      if (from > to) return null
-      if (current && current.from <= from && to <= current.to) return current
+      for (const { start, end, box } of shown) {
+        from = Math.min(
+          from,
+          box.top >= top
+            ? start
+            : first(start, end, (at) => lineBottom(at) > top),
+        )
+        to = Math.max(
+          to,
+          box.bottom <= bottom
+            ? end
+            : first(start, end, (at) => lineTop(at) >= bottom),
+        )
+      }
       const margin = Math.max(to - from, 2000)
       return {
         from: Math.max(0, from - margin),
@@ -251,15 +285,17 @@ export const CodeHighlight = Extension.create({
         key,
         state: {
           init: (_config, state) => ({
-            ...decorate(state.doc, DecorationSet.empty, null),
+            ...decorate(state.doc, DecorationSet.empty, null, -Infinity),
             viewport: null,
           }),
           apply(transaction, value, oldState) {
             const refresh = transaction.getMeta(key) as Refresh | undefined
             if (!transaction.docChanged && !refresh) return value
             const doc = transaction.doc
-            let { decorations, viewport, windowed } = value
+            let { decorations, viewport, blocks } = value
+            // Edits may parse windowed blocks briefly; refreshes show what frames already parsed.
             const update = (
+              deadline: number,
               from: number,
               to: number,
               include?: (node: Node) => boolean,
@@ -269,16 +305,18 @@ export const CodeHighlight = Extension.create({
                 doc,
                 decorations,
                 viewport,
+                deadline,
                 from,
                 to,
                 include,
                 edit,
               )
               decorations = result.decorations
-              windowed ||= result.windowed
+              return result.blocks
             }
             if (transaction.docChanged) {
               const { mapping } = transaction
+              const deadline = performance.now() + parseBudget
               if (viewport) {
                 // Replaced content clears the range until the view measures again.
                 const from = mapping.mapResult(viewport.from, 1)
@@ -302,88 +340,107 @@ export const CodeHighlight = Extension.create({
                 // Attribute/mark and custom steps can change syntax without moving positions.
                 if (!changed) full = true
               }
-              if (full)
-                ({ decorations, windowed } = decorate(
-                  doc,
-                  DecorationSet.empty,
-                  viewport,
-                ))
-              else {
+              if (full) {
+                decorations = DecorationSet.empty
+                blocks = update(deadline, 0, doc.content.size)
+              } else {
                 decorations = decorations.map(mapping, doc)
-                update(
+                const found = update(
+                  deadline,
                   Math.max(0, from - 1),
                   Math.min(doc.content.size, Math.max(from, end) + 1),
                   undefined,
                   { doc: oldState.doc, from, end },
                 )
+                // Blocks outside the edit keep their mapped positions.
+                const kept = blocks.flatMap((pos) => {
+                  const mapped = mapping.mapResult(pos, 1)
+                  const node = mapped.deleted ? null : doc.nodeAt(mapped.pos)
+                  return node && windowedBlock(node) ? [mapped.pos] : []
+                })
+                blocks = [...new Set([...kept, ...found])].sort((a, b) => a - b)
               }
             }
-            // Windowed blocks in the previous and next ranges gain or drop tokens.
-            const ranges: Range[] = []
-            if (refresh && 'viewport' in refresh) {
-              if (viewport) ranges.push(viewport)
+            const previous = viewport
+            if (refresh && 'viewport' in refresh)
               viewport = refresh.viewport ?? null
-              if (viewport) ranges.push(viewport)
-            }
             const keys = refresh?.keys
             if (keys)
               update(
+                -Infinity,
                 0,
                 doc.content.size,
                 (node) =>
                   node.type.name === 'codeBlock' &&
                   keys.has(codeLanguageKey(String(node.attrs.language ?? ''))),
               )
-            if (ranges.length)
-              update(
-                Math.min(...ranges.map((range) => range.from)),
-                Math.max(...ranges.map((range) => range.to)),
-                windowedBlock,
-              )
-            return { decorations, viewport, windowed }
+            // Windowed blocks in the previous or next range gain or drop tokens.
+            if (refresh && 'viewport' in refresh)
+              for (const pos of blocks) {
+                const end = pos + (doc.nodeAt(pos)?.nodeSize ?? 0)
+                if (
+                  [previous, viewport].some(
+                    (range) => range && pos < range.to && end > range.from,
+                  )
+                )
+                  update(-Infinity, pos, end, windowedBlock)
+              }
+            return { decorations, viewport, blocks }
           },
         },
         props: { decorations: (state) => key.getState(state)?.decorations },
         view(view) {
           let frame = 0
+          let idle = 0
           let measure = true
-          const run = () => {
-            frame = 0
+          let scrolling = false
+          const run = (budget: number) => {
             const state = key.getState(view.state)
             if (!state) return
+            // Hidden editors keep pending work until they have a size again.
+            const box = view.dom.getBoundingClientRect()
+            if (box.bottom <= box.top) return
             const refresh: Refresh = {}
             if (changed.size) {
               refresh.keys = new Set(changed)
               changed.clear()
             }
-            if (state.windowed) {
+            if (state.blocks.length) {
               let next = state.viewport
               if (measure) {
                 measure = false
-                next = measureViewport(view, next)
+                next = measureViewport(view, next, state.blocks)
               }
               let progressed = next !== state.viewport
               let waiting = false
-              const deadline = performance.now() + parseBudget
+              // One budget covers every block; unfinished ones continue later.
+              const deadline = performance.now() + budget
               if (next)
-                view.state.doc.nodesBetween(next.from, next.to, (node, pos) => {
-                  if (!node.isTextblock) return
-                  const block = parsed.get(node)
+                for (const pos of state.blocks) {
+                  const node = view.state.doc.nodeAt(pos)
+                  const block = node && parsed.get(node)
+                  if (!node || !block || pos + node.nodeSize <= next.from)
+                    continue
                   const to = Math.min(next.to - pos - 1, node.content.size)
                   if (
-                    block &&
-                    block.parsedTo < to &&
-                    block.language ===
+                    block.parsedTo >= to ||
+                    block.language !==
                       codeLanguages.resolve(String(node.attrs.language ?? ''))
-                  ) {
-                    const before = block.parsedTo
-                    if (!parseTo(block, node, to, deadline)) waiting = true
-                    progressed ||= block.parsedTo !== before
-                  }
-                  return false
-                })
+                  )
+                    continue
+                  const before = block.parsedTo
+                  if (!parseTo(block, node, to, deadline)) waiting = true
+                  progressed ||= block.parsedTo !== before
+                }
               if (progressed) refresh.viewport = next
-              if (waiting) schedule()
+              // Frames keep progress steady while busy; idle periods finish sooner.
+              if (waiting) {
+                schedule()
+                idle ||= requestIdleCallback((deadline) => {
+                  idle = 0
+                  run(deadline.timeRemaining())
+                })
+              }
             }
             if (refresh.keys || 'viewport' in refresh)
               view.dispatch(
@@ -393,12 +450,33 @@ export const CodeHighlight = Extension.create({
               )
           }
           const schedule = () => {
-            frame ||= requestAnimationFrame(run)
+            frame ||= requestAnimationFrame(() => {
+              frame = 0
+              run(parseBudget)
+            })
           }
           const layout = () => {
-            if (!key.getState(view.state)?.windowed) return
-            measure = true
-            schedule()
+            const blocks = key.getState(view.state)?.blocks.length
+            if (blocks) measure = true
+            if (blocks || changed.size) schedule()
+          }
+          // Only scrolling that moves this editor or its blocks changes what is visible.
+          const scroll = (event: Event) => {
+            // The document stands for the window.
+            const target = event.target as Element | Document
+            if (target.contains(view.dom) || view.dom.contains(target)) layout()
+          }
+          const watchScroll = () => {
+            const active = !!key.getState(view.state)?.blocks.length
+            if (active === scrolling) return
+            scrolling = active
+            if (active)
+              document.addEventListener('scroll', scroll, {
+                capture: true,
+                passive: true,
+              })
+            else
+              document.removeEventListener('scroll', scroll, { capture: true })
           }
           // One refresh per frame covers every language that arrived meanwhile.
           const unsubscribe = codeLanguages.subscribe((names) => {
@@ -407,18 +485,20 @@ export const CodeHighlight = Extension.create({
           })
           const resize = new ResizeObserver(layout)
           resize.observe(view.dom)
-          document.addEventListener('scroll', layout, {
-            capture: true,
-            passive: true,
-          })
           window.addEventListener('resize', layout)
-          if (changed.size || key.getState(view.state)?.windowed) schedule()
+          watchScroll()
+          if (changed.size || key.getState(view.state)?.blocks.length)
+            schedule()
           return {
             update(_view, previous) {
+              watchScroll()
               const state = key.getState(view.state)
               const before = key.getState(previous)
-              if (!state?.windowed || state === before) return
-              if (!before?.windowed || (before.viewport && !state.viewport))
+              if (!state?.blocks.length || state === before) return
+              if (
+                !before?.blocks.length ||
+                (before.viewport && !state.viewport)
+              )
                 measure = true
               // Parsing that a transaction left unfinished continues in the next frame.
               schedule()
@@ -426,8 +506,12 @@ export const CodeHighlight = Extension.create({
             destroy() {
               unsubscribe()
               cancelAnimationFrame(frame)
+              cancelIdleCallback(idle)
               resize.disconnect()
-              document.removeEventListener('scroll', layout, { capture: true })
+              if (scrolling)
+                document.removeEventListener('scroll', scroll, {
+                  capture: true,
+                })
               window.removeEventListener('resize', layout)
             },
           }

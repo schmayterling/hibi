@@ -136,4 +136,44 @@ test('long rich code blocks highlight near the viewport through scrolling and ty
         token.nextSibling.nextSibling?.textContent === 'typed',
     ),
   )
+  // Long lines scroll inside the block; highlighting follows both axes.
+  const wide = join(profile, 'wide-code.md')
+  const row = `${'const horizontal = 42; '.repeat(50)}\n`
+  await writeFile(wide, `# Wide code\n\n\`\`\`js\n${row.repeat(80)}\`\`\`\n`)
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, wide)
+  await clickMenu(app, 'Open…')
+  const block = page.locator('.tiptap:has(h1:text-is("Wide code")) pre')
+  await block.waitFor()
+  await block.evaluate((pre) => {
+    pre.scrollLeft = pre.scrollWidth
+    pre.scrollIntoView({ block: 'end' })
+  })
+  await block.evaluate(
+    (pre) =>
+      new Promise((resolve, reject) => {
+        const started = performance.now()
+        const check = () => {
+          const box = pre.getBoundingClientRect()
+          const pane = pre.closest('.rich-pane').getBoundingClientRect()
+          const shown = [
+            ...pre.querySelectorAll('[class^="hibi-token-"]'),
+          ].some((token) => {
+            const rect = token.getBoundingClientRect()
+            return (
+              rect.right > box.left &&
+              rect.left < box.right &&
+              rect.bottom > pane.top &&
+              rect.top < pane.bottom
+            )
+          })
+          if (shown) resolve()
+          else if (performance.now() - started > 8000)
+            reject(new Error('no highlighted code is visible'))
+          else requestAnimationFrame(check)
+        }
+        check()
+      }),
+  )
 })

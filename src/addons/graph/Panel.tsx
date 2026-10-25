@@ -67,19 +67,18 @@ function ConnectionRows({
       resize.disconnect()
     }
   }, [nodes])
-  const rows: number[] = []
-  for (
-    let index = range.from;
-    index < Math.min(range.to, nodes.length);
-    index++
-  )
-    rows.push(index)
-  // A focused row stays mounted while scrolled away.
+  // Besides rows near the view, the first and last rows and the focused row's
+  // neighbors stay mounted, so Tab and Shift+Tab always reach the next row in
+  // order; focusing it scrolls it into view.
   const focusIndex = nodes.findIndex((node) => node.id === focused)
-  if (focusIndex >= 0 && !rows.includes(focusIndex)) {
-    rows.push(focusIndex)
-    rows.sort((a, b) => a - b)
-  }
+  const mounted = new Set([0, nodes.length - 1])
+  for (let index = range.from; index < range.to; index++) mounted.add(index)
+  if (focusIndex >= 0)
+    for (const index of [focusIndex - 1, focusIndex, focusIndex + 1])
+      mounted.add(index)
+  const rows = [...mounted]
+    .filter((index) => index >= 0 && index < nodes.length)
+    .sort((a, b) => a - b)
   return (
     <div
       ref={list}

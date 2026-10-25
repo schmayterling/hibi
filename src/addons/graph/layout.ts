@@ -43,9 +43,14 @@ export type LayoutFrame = {
   settled: boolean
 }
 
-/** Posts frames only while the renderer has returned a buffer, so a busy page never queues them. */
+/**
+ * Posts frames only while the renderer has returned a buffer, so a busy page
+ * never queues them. `slice` bounds each run of reduced-motion steps; a page
+ * running the layout itself uses a short one so input stays responsive.
+ */
 export function createLayout(
   post: (frame: LayoutFrame, transfer: Transferable[]) => void,
+  slice = 50,
 ) {
   let simulation: Simulation<SimulationNodeDatum, undefined> | null = null
   let nodes: SimulationNodeDatum[] = []
@@ -82,7 +87,7 @@ export function createLayout(
     const started = performance.now()
     if (reduced) {
       // Reduced motion shows only the first and final arrangements.
-      while (remaining > 0 && performance.now() - started < 50) {
+      while (remaining > 0 && performance.now() - started < slice) {
         step(1)
         remaining--
       }

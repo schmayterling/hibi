@@ -97,7 +97,7 @@ export function GraphCanvas({
       revision: number
       index: ReturnType<typeof spatialIndex>
     } | null,
-    port: null as Worker | null,
+    port: null as Pick<Worker, 'postMessage' | 'terminate'> | null,
     frame: 0,
     palette: null as Palette | null,
     metrics: new Map<
@@ -150,26 +150,68 @@ export function GraphCanvas({
     if (animation.current !== null) cancelAnimationFrame(animation.current)
     animation.current = null
   }, [])
+  /** A label's size in graph units, measured once per font. */
+  const measure = useCallback(
+    (index: number) => {
+      const text = state.graph.labels[index]!
+      let value = state.metrics.get(text)
+      const context = canvas.current?.getContext('2d')
+      if (!value && context && state.palette) {
+        context.font = state.palette.font
+        const metrics = context.measureText(text)
+        value = {
+          width: metrics.width,
+          ascent: metrics.fontBoundingBoxAscent,
+          descent: metrics.fontBoundingBoxDescent,
+        }
+        state.metrics.set(text, value)
+      }
+      return value ?? { width: 0, ascent: 0, descent: 0 }
+    },
+    [state],
+  )
   const place = useCallback(
-    (element: HTMLElement | null, id: string | null, position: View) => {
+    (
+      element: HTMLElement | null,
+      id: string | null,
+      position: View,
+      label = false,
+    ) => {
       if (!element) return
       const index = id === null ? undefined : state.graph.index.get(id)
       const x = index === undefined ? NaN : state.positions?.[index * 2]
-      let value = 'translate(-100px, -100px)'
-      let extent = 0
+      let box = [-100, -100, 0, 0]
       if (x !== undefined && !Number.isNaN(x)) {
-        extent =
-          Math.max(state.graph.radii[index!]!, 2.5 / position.scale) *
-          position.scale
-        value = `translate(${state.size.width / 2 + position.x + x * position.scale - extent}px, ${state.size.height / 2 + position.y + state.positions![index! * 2 + 1]! * position.scale - extent}px)`
+        const { scale } = position
+        const centerX = state.size.width / 2 + position.x + x * scale
+        const centerY =
+          state.size.height / 2 +
+          position.y +
+          state.positions![index! * 2 + 1]! * scale
+        const radius = Math.max(state.graph.radii[index!]!, 2.5 / scale) * scale
+        let left = centerX - radius,
+          top = centerY - radius,
+          right = centerX + radius,
+          bottom = centerY + radius
+        // A hint also covers its shown label, as the svg note group did.
+        if (label && showsLabels(state.graph, position)) {
+          const text = measure(index!)
+          const baseline = centerY - 14 * scale
+          left = Math.min(left, centerX - (text.width / 2) * scale)
+          right = Math.max(right, centerX + (text.width / 2) * scale)
+          top = Math.min(top, baseline - text.ascent * scale)
+          bottom = Math.max(bottom, baseline + text.descent * scale)
+        }
+        box = [left, top, right - left, bottom - top]
       }
-      const key = `${value} ${extent}`
+      const key = box.join(' ')
       if (state.placed.get(element) === key) return
       state.placed.set(element, key)
-      element.style.transform = value
-      element.style.width = element.style.height = `${extent * 2}px`
+      element.style.transform = `translate(${box[0]}px, ${box[1]}px)`
+      element.style.width = `${box[2]}px`
+      element.style.height = `${box[3]}px`
     },
-    [state],
+    [state, measure],
   )
   const draw = useCallback(() => {
     state.frame = 0
@@ -201,7 +243,7 @@ export function GraphCanvas({
       highlighted,
       palette: state.palette,
     })
-    place(hover.current, state.hovered, position)
+    place(hover.current, state.hovered, position, true)
     place(option.current, state.option, position)
   }, [state, camera, place])
   const requestDraw = useCallback(() => {
@@ -223,22 +265,7 @@ export function GraphCanvas({
       position,
       (clientX - bounds.left - bounds.width / 2 - position.x) / position.scale,
       (clientY - bounds.top - bounds.height / 2 - position.y) / position.scale,
-      (index) => {
-        const text = state.graph.labels[index]!
-        let value = state.metrics.get(text)
-        const context = canvas.current?.getContext('2d')
-        if (!value && context && state.palette) {
-          context.font = state.palette.font
-          const metrics = context.measureText(text)
-          value = {
-            width: metrics.width,
-            ascent: metrics.fontBoundingBoxAscent,
-            descent: metrics.fontBoundingBoxDescent,
-          }
-          state.metrics.set(text, value)
-        }
-        return value ?? { width: 0, ascent: 0, descent: 0 }
-      },
+      measure,
     )
   }
   const pin = (index: number, x: number, y: number, moved: boolean) => {
@@ -262,7 +289,7 @@ export function GraphCanvas({
     state.active = active
     state.option = currentNode?.id ?? null
     if (state.drawn) {
-      place(hover.current, hovered, state.drawn)
+      place(hover.current, hovered, state.drawn, true)
       place(option.current, state.option, state.drawn)
     }
     requestDraw()
@@ -341,14 +368,37 @@ export function GraphCanvas({
       state.frame = 0
     }
   }, [state, requestDraw])
+  /** Lays out the current graph, starting from the positions shown so far. */
+  const startLayout = useCallback(() => {
+    const port = state.port
+    if (!port) return
+    const count = state.graph.nodes.length * 2
+    const positions =
+      state.positions?.length === count
+        ? state.positions.slice()
+        : new Float32Array(count).fill(Number.NaN)
+    const edges = state.graph.edges.slice()
+    state.version++
+    state.returnable = null
+    state.drag = null
+    port.postMessage(
+      {
+        type: 'graph',
+        version: state.version,
+        edges,
+        positions,
+        reduced: reducedMotion(),
+      } satisfies LayoutMessage,
+      [edges.buffer, positions.buffer],
+    )
+  }, [state])
   useEffect(() => {
-    const port = createWorker.current()
-    state.port = port
-    port.onmessage = (event: MessageEvent<LayoutFrame>) => {
-      const frame = event.data
+    let port: typeof state.port = null
+    let alive = true
+    const receive = (frame: LayoutFrame) => {
       if (frame.version !== state.version) return
       if (state.returnable)
-        port.postMessage(
+        state.port?.postMessage(
           { type: 'buffer', buffer: state.returnable } satisfies LayoutMessage,
           [state.returnable],
         )
@@ -366,14 +416,44 @@ export function GraphCanvas({
       state.revision++
       requestDraw()
     }
+    // A page that cannot start workers (a strict host policy, some file
+    // viewers) runs the same layout itself, in short slices between tasks.
+    const layOutHere = () => {
+      void import('./layout').then(({ createLayout }) => {
+        if (!alive) return
+        const layout = createLayout(
+          (frame) => queueMicrotask(() => receive(frame)),
+          8,
+        )
+        port = state.port = {
+          postMessage: (message: LayoutMessage) => layout.receive(message),
+          terminate: layout.stop,
+        }
+        startLayout()
+      })
+    }
+    try {
+      const started = createWorker.current()
+      started.onmessage = (event: MessageEvent<LayoutFrame>) =>
+        receive(event.data)
+      started.onerror = (event) => {
+        event.preventDefault()
+        started.terminate()
+        if (port !== started) return
+        port = state.port = null
+        layOutHere()
+      }
+      port = state.port = started
+    } catch {
+      layOutHere()
+    }
     return () => {
-      port.terminate()
+      alive = false
+      port?.terminate()
       state.port = null
     }
-  }, [state, requestDraw])
+  }, [state, requestDraw, startLayout])
   useEffect(() => {
-    const port = state.port
-    if (!port) return
     const previous = state.graph,
       old = state.positions
     // Warm start: notes that stay keep their place.
@@ -387,25 +467,12 @@ export function GraphCanvas({
         positions[index * 2] = old[from * 2]!
         positions[index * 2 + 1] = old[from * 2 + 1]!
       })
-    state.version++
     state.graph = topology
-    state.positions = positions.slice()
-    state.returnable = null
-    state.drag = null
+    state.positions = positions
     state.revision++
-    const edges = topology.edges.slice()
-    port.postMessage(
-      {
-        type: 'graph',
-        version: state.version,
-        edges,
-        positions,
-        reduced: reducedMotion(),
-      } satisfies LayoutMessage,
-      [edges.buffer, positions.buffer],
-    )
+    startLayout()
     requestDraw()
-  }, [topology, state, requestDraw])
+  }, [topology, state, startLayout, requestDraw])
   useEffect(() => {
     if (previousResetKey.current === resetKey) return
     previousResetKey.current = resetKey

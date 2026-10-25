@@ -13,6 +13,20 @@ import { preserveInlineHtml } from './RawHtml.ts'
 const richParsers = new WeakSet<object>()
 
 export function richTextParser(parser: Marked) {
+  parser.use({
+    tokenizer: {
+      lheading(source) {
+        // Setext headings need a nonblank second line. Avoid native regex recursion on long prose.
+        const newline = source.indexOf('\n')
+        if (
+          newline < 0 ||
+          /^(?:[\t ]*\n|[\t ]*$)/.test(source.slice(newline + 1))
+        )
+          return
+        return false
+      },
+    },
+  })
   const BaseLexer = parser.Lexer
   class RichLexer<
     ParserOutput = string,

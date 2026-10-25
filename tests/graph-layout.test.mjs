@@ -62,15 +62,18 @@ test('large graphs fit padded sidebars and expanded views, resize, zoom and filt
   })
   await sidebar.getByText(/500 of 500 notes/).waitFor()
   await sidebar.locator('.graph-canvas[data-labels]').waitFor()
-  // The canvas keeps the camera transform of its last frame.
+  // The canvas keeps the camera transform of its last frame; wait for the
+  // frame drawn after the latest input.
   const cameraScale = (view) =>
-    view
-      .locator('canvas')
-      .evaluate(
-        (canvas) =>
-          canvas.getContext('2d').getTransform().a /
-          (canvas.width / canvas.getBoundingClientRect().width),
+    view.locator('canvas').evaluate(async (canvas) => {
+      await new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)),
       )
+      return (
+        canvas.getContext('2d').getTransform().a /
+        (canvas.width / canvas.getBoundingClientRect().width)
+      )
+    })
   const startingScale = await cameraScale(sidebar)
   // Every drawn pixel stays 16 px inside the frame, and the list holds every note.
   const fitted = async (view, count = 500) => {

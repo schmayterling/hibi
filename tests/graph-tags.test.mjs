@@ -200,9 +200,13 @@ test('tags and graph plugins browse/open notes, honor drafts, and clean up when 
   const canvas = await graph.locator('.graph-canvas').boundingBox()
   assert.ok(Math.abs(canvas.width - canvas.height) < 1)
   await graph.getByRole('button', { name: 'Fit graph' }).click()
-  // The canvas keeps the camera transform of its last frame.
+  // The canvas keeps the camera transform of its last frame; wait for the
+  // frame drawn after the latest input.
   const camera = (view) =>
-    view.locator('canvas').evaluate((canvas) => {
+    view.locator('canvas').evaluate(async (canvas) => {
+      await new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)),
+      )
       const { a, e, f } = canvas.getContext('2d').getTransform()
       return `${a} ${e} ${f}`
     })

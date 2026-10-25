@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createReadStream } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { app, BrowserWindow, dialog } from 'electron'
@@ -136,6 +135,18 @@ function validateContributions(input: Record<string, unknown>) {
     return enabled.has(scheme.id.split('.')[0])
   })
   return { css, colorschemes: schemes, addons }
+}
+
+async function* stagedFile(
+  session: Session,
+  relative: string,
+): AsyncGenerator<Uint8Array> {
+  const file = await open(join(session.directory, 'files', relative), 'r')
+  try {
+    yield* file.createReadStream({ autoClose: false })
+  } finally {
+    await file.close()
+  }
 }
 
 async function verifySources(session: Session) {
@@ -377,10 +388,7 @@ export default {
               )
             await verifySources(session)
             validateContributions(input as Record<string, unknown>)
-            await writeText(
-              result.filePath,
-              createReadStream(join(session.directory, 'files', 'index.html')),
-            )
+            await writeText(result.filePath, stagedFile(session, 'index.html'))
             return { path: result.filePath, pages: session.paths.length }
           }
           const result = await runFileDialog(() =>
@@ -420,11 +428,7 @@ export default {
             for (const relative of files) {
               const path = join(destination, relative)
               await mkdir(dirname(path), { recursive: true })
-              await writeText(
-                path,
-                createReadStream(join(session.directory, 'files', relative)),
-                true,
-              )
+              await writeText(path, stagedFile(session, relative), true)
             }
           } catch (error) {
             await rm(destination, { recursive: true, force: true })

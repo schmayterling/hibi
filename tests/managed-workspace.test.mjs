@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -169,6 +177,21 @@ test('managed workspaces stay opt-in, preserve files, import safely, and reopen 
   assert.notEqual(second.folder, imported.folder)
   await writeFile(join(source, 'Start.md'), '[[Target]] ![[Target]]')
   await writeFile(join(source, 'Target.md'), '# Target')
+  const attachment = await open(join(source, 'large.mov'), 'wx')
+  await attachment.truncate(40 * 1024 * 1024)
+  await attachment.close()
+  await app.evaluate(async () => {
+    const { Worker } = await import('node:worker_threads')
+    globalThis.__importTransfers = []
+    const postMessage = Worker.prototype.postMessage
+    Worker.prototype.postMessage = function (message, buffers) {
+      globalThis.__importTransfers.push({
+        type: message.type,
+        count: buffers?.length ?? 0,
+      })
+      return postMessage.call(this, message, buffers)
+    }
+  })
   const converted = await page.evaluate(
     (workspaceId) =>
       window.hibi.importIntoWorkspace({
@@ -178,7 +201,18 @@ test('managed workspaces stay opt-in, preserve files, import safely, and reopen 
       }),
     snapshot.id,
   )
-  assert.equal(converted.files, 2)
+  assert.equal(converted.files, 3)
+  const transfers = await app.evaluate(() => globalThis.__importTransfers)
+  assert.ok(transfers.some((message) => message.type === 'files'))
+  assert.ok(transfers.every((message) => message.count <= 1))
+  assert.equal(
+    (
+      await stat(
+        join(workspace, converted.folder, 'Imported files', 'large.mov'),
+      )
+    ).size,
+    40 * 1024 * 1024,
+  )
   assert.deepEqual(converted.warnings, [
     'Embedded notes become links. Images remain embedded.',
   ])

@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { Worker } from 'node:worker_threads'
+import { importText } from '../src/addons/_shared/import-markdown.ts'
+import {
+  packImportEntries,
+  unpackImportEntries,
+} from '../src/addons/_shared/import-packet.ts'
 import { runImportWorker } from '../src/addons/_shared/import-worker-client.ts'
 import { importBear } from '../src/addons/import-bear/convert.ts'
 import { importNotion } from '../src/addons/import-notion/convert.ts'
@@ -32,6 +38,7 @@ test('import workers preserve converter results, warnings, and original assets',
       file('Tasks.csv', 'Name,Description\nA,B\n'),
       file('Note.textbundle/text.md', '[[Target]]'),
       file('Note.textbundle/info.json', '{}'),
+      file('only-text.txt', 'bear plain text stays intact'),
       file('images/a.png', Buffer.from([0, 255, 1, 2])),
     ]
     const before = snapshot({ files })
@@ -62,6 +69,37 @@ test('import workers keep the main event loop running for a single large note', 
   } finally {
     clearImmediate(immediate)
   }
+})
+test('worker messages use at most one transfer per packet', async (t) => {
+  const transfers = []
+  const postMessage = Worker.prototype.postMessage
+  t.mock.method(Worker.prototype, 'postMessage', function (message, buffers) {
+    transfers.push(buffers?.length ?? 0)
+    return postMessage.call(this, message, buffers)
+  })
+  const files = Array.from({ length: 2500 }, (_, index) =>
+    file(index % 2 ? `assets/${index}.png` : `notes/${index}.md`, ''),
+  )
+  await runImportWorker(workerPath, 'obsidian', files)
+  assert.ok(transfers.length > 2)
+  assert.ok(transfers.every((count) => count <= 1))
+})
+test('packed files share one byte buffer and missing attachment bytes fail closed', () => {
+  const entries = Array.from({ length: 10001 }, (_, index) =>
+    index % 2
+      ? { path: `${index}.png`, original: index }
+      : file(`${index}.md`, 'note'),
+  )
+  const packet = packImportEntries(entries)
+  assert.ok(packet.bytes instanceof ArrayBuffer)
+  const unpacked = unpackImportEntries(packet)
+  for (let index = 0; index < entries.length; index++)
+    if (entries[index].data) {
+      assert.equal(unpacked[index].data.buffer, packet.bytes)
+      assert.equal(Buffer.from(unpacked[index].data).toString(), 'note')
+    } else assert.equal('data' in unpacked[index], false)
+  assert.throws(() => importText({ path: 'missing.md' }), /unsafe/)
+  assert.throws(() => packImportEntries([{ path: 'rewrapped.png' }]), /unsafe/)
 })
 test('import worker failures preserve decoder and format errors', async () => {
   await assert.rejects(

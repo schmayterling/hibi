@@ -18,6 +18,7 @@ import {
 import { parseDependencies } from '../shared/dependencies'
 import { validDocumentExtensions } from '../shared/document-types'
 import type { AddonId, AddonOwner } from '../shared/foundation-contracts'
+import type { ImportFile, ImportStream } from '../shared/imports'
 import { getAddonRevocation, loadAddonTrust } from './addon-trust'
 import { exportedAppearance } from './appearance'
 import { retryRename } from './atomic-rename'
@@ -309,7 +310,8 @@ export function getImporters(): import('../shared/imports').Importer[] {
 }
 export async function convertImport(
   id: string,
-  files: readonly import('../shared/imports').ImportFile[],
+  files: readonly ImportFile[],
+  stream?: ImportStream,
 ) {
   const generation = getAddonActivationGeneration(id)
   if (
@@ -324,7 +326,34 @@ export async function convertImport(
     )
   if (!addon?.import)
     throw new Error('This addon does not provide an importer.')
-  const result = await addon.import(files)
+  const streamConvert = (
+    addon as NativeAddon & {
+      importStream?: (stream: ImportStream) => Promise<string[]>
+    }
+  ).importStream
+  let result: Awaited<ReturnType<NonNullable<NativeAddon['import']>>>
+  if (stream && streamConvert)
+    result = { files: [], warnings: await streamConvert(stream) }
+  else {
+    let input = files
+    if (stream) {
+      // Older compiled importers require all bytes at once; bound that legacy contract.
+      const buffered: ImportFile[] = []
+      let size = 0
+      for (let index = 0; index < stream.paths.length; index++) {
+        const data = await stream.read(index)
+        size += data.byteLength
+        if (size > 256 * 1024 * 1024)
+          throw new Error(
+            'This importer requires an in-memory export under 256 MiB.',
+          )
+        buffered.push({ path: stream.paths[index] as string, data })
+      }
+      input = buffered
+    }
+    result = await addon.import(input)
+    if (stream) for (const file of result.files) await stream.write(file)
+  }
   if (!isAddonActivationCurrent(id, generation))
     throw new Error(
       'This importer is no longer enabled or its required addons are unavailable.',

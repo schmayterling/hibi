@@ -2,9 +2,11 @@ import assert from 'node:assert/strict'
 import {
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   rm,
+  stat,
   symlink,
   writeFile,
 } from 'node:fs/promises'
@@ -15,6 +17,7 @@ import { importBear } from '../src/addons/import-bear/convert.ts'
 import { importNotion } from '../src/addons/import-notion/convert.ts'
 import { importObsidian } from '../src/addons/import-obsidian/convert.ts'
 import {
+  copyImportFile,
   readImportFolder,
   readImportZip,
   validateImportFiles,
@@ -87,6 +90,32 @@ test('imports reject unsafe paths, collisions, archives, and oversized entries',
   )
 })
 
+test('folder catalog never buffers attachment bytes or refuses large attachments', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-import-stream-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const handle = await open(join(root, 'video.mov'), 'wx')
+  await handle.truncate(40 * 1024 * 1024)
+  await handle.close()
+  const catalog = await readImportFolder(root)
+  assert.equal(catalog.files.length, 1)
+  assert.equal('data' in catalog.files[0], false)
+  const target = join(root, 'copy.mov')
+  await copyImportFile(catalog.files[0], target)
+  assert.equal((await stat(target)).size, 40 * 1024 * 1024)
+  await assert.rejects(copyImportFile(catalog.files[0], target), {
+    code: 'EEXIST',
+  })
+  await writeFile(join(root, 'video.mov'), 'changed')
+  await assert.rejects(
+    copyImportFile(catalog.files[0], join(root, 'changed.mov')),
+    /changed/,
+  )
+  await rm(join(root, 'video.mov'))
+  await symlink(target, join(root, 'video.mov'))
+  await assert.rejects(
+    copyImportFile(catalog.files[0], join(root, 'linked.mov')),
+  )
+})
 test('workspace settings move into .hibi on save and preserve legacy files', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-metadata-'))
   t.after(() => rm(root, { recursive: true, force: true }))
@@ -190,29 +219,6 @@ test('import converters preserve assets and code while translating links and CSV
   assert.ok(
     bear.files.some((file) => file.path === 'Note.textbundle/assets/a.png'),
   )
-})
-test('import converters yield to the main event loop between file batches', async () => {
-  for (const convert of [importObsidian, importBear, importNotion]) {
-    let reads = 0,
-      readsAtYield
-    const files = Array.from({ length: 256 }, (_, index) => ({
-      path: `notes/${index}.md`,
-      get data() {
-        reads++
-        return Buffer.from('[[0]]')
-      },
-    }))
-    const yielded = new Promise((resolve) =>
-      setImmediate(() => {
-        readsAtYield = reads
-        resolve()
-      }),
-    )
-    await convert(files)
-    await yielded
-    assert.ok(readsAtYield > 0, convert.name)
-    assert.ok(readsAtYield < files.length, convert.name)
-  }
 })
 test('folder imports accept more than the former file and total byte caps', async () => {
   await validateImportFiles(

@@ -1,8 +1,7 @@
 import { posix } from 'node:path'
-import type { ImportFile } from '../../shared/imports'
+import type { ImportEntry, ImportFile } from '../../shared/imports'
 import {
   importText,
-  mapImportFiles,
   outsideCode,
   textFile,
 } from '../_shared/import-markdown.ts'
@@ -56,21 +55,21 @@ function csvTable(source: string) {
     ].join('\n') + '\n'
   )
 }
-export async function importNotion(files: readonly ImportFile[]) {
-  if (!files.some((file) => /\.(md|csv)$/i.test(file.path)))
+export function createNotionImport(paths: readonly string[]) {
+  if (!paths.some((path) => /\.(md|csv)$/i.test(path)))
     throw new Error('Choose a Notion Markdown & CSV export.')
-  if (files.some((file) => /\.zip$/i.test(file.path)))
+  if (paths.some((path) => /\.zip$/i.test(path)))
     throw new Error(
       'Extract the nested ZIP files in this Notion export, then import the extracted folder.',
     )
-  const databases = new Set(
-    files.filter((file) => /\.csv$/i.test(file.path)).map((file) => file.path),
-  )
-  const converted = (
-    await mapImportFiles(files, (file) => {
+  const databases = new Set(paths.filter((path) => /\.csv$/i.test(path)))
+  const reads = (path: string) => /\.(md|csv)$/i.test(path)
+  return {
+    reads,
+    convert(file: ImportEntry): ImportEntry[] {
       if (databases.has(file.path))
         return [file, textFile(`${file.path}.md`, csvTable(importText(file)))]
-      if (!/\.md$/i.test(file.path)) return [file]
+      if (!reads(file.path)) return [file]
       const text = outsideCode(importText(file), (source) =>
         source.replace(/\]\(([^)\n]+)\)/g, (raw, url: string) => {
           try {
@@ -85,14 +84,19 @@ export async function importNotion(files: readonly ImportFile[]) {
         }),
       )
       return [textFile(file.path, text)]
-    })
-  ).flat()
+    },
+    warnings: () =>
+      databases.size
+        ? [
+            'Database exports become Markdown tables. The original CSV files are included.',
+          ]
+        : [],
+  }
+}
+export async function importNotion(files: readonly ImportFile[]) {
+  const conversion = createNotionImport(files.map((file) => file.path))
   return {
-    files: converted,
-    warnings: databases.size
-      ? [
-          'Database exports become Markdown tables. The original CSV files are included.',
-        ]
-      : [],
+    files: files.flatMap(conversion.convert) as ImportFile[],
+    warnings: conversion.warnings(),
   }
 }

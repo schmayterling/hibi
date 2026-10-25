@@ -248,6 +248,52 @@ test('main rejects import results after disabling and re-enabling the importer',
   await pending
 })
 
+test('compiled streaming importers keep legacy byte-array importers compatible and bounded', async (t) => {
+  const h = await host(t, [
+    details('markdown'),
+    details('consumer', { importer: { extensions: ['txt'] } }),
+  ])
+  const writes = []
+  h.state.natives.consumer = {
+    id: 'consumer',
+    methods: {},
+    import: async (files) => ({ files, warnings: ['legacy'] }),
+    importStream: async (stream) => {
+      await stream.write({ path: 'note.md', data: await stream.read(0) })
+      return ['streamed']
+    },
+  }
+  await h.loadAddons()
+  await h.enableAddon('consumer', true)
+  const stream = {
+    paths: ['note.md'],
+    read: async () => Buffer.from('note'),
+    write: async (entry) => {
+      writes.push(entry)
+    },
+  }
+  assert.deepEqual(await h.convertImport('consumer', [], stream), {
+    files: [],
+    warnings: ['streamed'],
+  })
+  assert.equal(writes.length, 1)
+  delete h.state.natives.consumer.importStream
+  assert.deepEqual((await h.convertImport('consumer', [], stream)).warnings, [
+    'legacy',
+  ])
+  assert.equal(writes.length, 2)
+  const data = new Uint8Array(32 * 1024 * 1024)
+  await assert.rejects(
+    h.convertImport('consumer', [], {
+      paths: Array.from({ length: 9 }, (_, index) => `${index}.png`),
+      read: async () => data,
+      write: async () =>
+        assert.fail('oversized legacy import must not publish'),
+    }),
+    /in-memory export under 256 MiB/,
+  )
+})
+
 test('installed ids matching inherited object properties remain disabled until explicitly enabled', async (t) => {
   const h = await host(t)
   await h.loadAddons()

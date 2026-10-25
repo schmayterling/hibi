@@ -2029,6 +2029,7 @@
   "1f93aa51a306": "This folder has too many notes with that title.",
   "9a8066d604c9": "This image cannot be previewed.",
   "a1a3c01051cc": "This importer is no longer enabled or its required addons are unavailable.",
+  "4275527a00a6": "This importer requires an in-memory export under 256 MiB.",
   "2ff13ca6ab5c": "This includes every file and folder inside it.",
   "196b275af5c3": "This includes every file and folder inside the selected folders.",
   "4955b8400e8f": "This is a preview. Your document is still open.",

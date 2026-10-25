@@ -2741,6 +2741,7 @@
     "src/main/host-selected-io.ts"
   ],
   "27d24ecfb271": [
+    "src/addons/_shared/import-packet.ts",
     "src/main/import-files.ts"
   ],
   "f9e4378d7a08": [
@@ -5818,7 +5819,11 @@
     "src/main/import-files.ts"
   ],
   "d60d1c552b62": [
-    "src/main/import-files.ts"
+    "src/addons/_shared/import-packet.ts",
+    "src/addons/_shared/import-worker-client.ts",
+    "src/main/import-files.ts",
+    "src/main/imports.ts",
+    "src/shared/imports.ts"
   ],
   "c6ba816d86a5": [
     "src/main/import-files.ts"
@@ -6227,7 +6232,7 @@
     "src/addons/dictionary/pack-store.ts"
   ],
   "f70a180e8466": [
-    "src/addons/_shared/import-markdown.ts"
+    "src/shared/imports.ts"
   ],
   "b3e591b2b962": [
     "src/main/files.ts"
@@ -6331,6 +6336,9 @@
     "src/main/addon-documentation.ts"
   ],
   "a1a3c01051cc": [
+    "src/main/addons.ts"
+  ],
+  "4275527a00a6": [
     "src/main/addons.ts"
   ],
   "2ff13ca6ab5c": [

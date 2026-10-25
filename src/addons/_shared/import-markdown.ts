@@ -1,16 +1,14 @@
 import { posix } from 'node:path'
-import { setImmediate } from 'node:timers/promises'
 import { Marked } from 'marked'
-import type { ImportFile } from '../../shared/imports'
+import {
+  type ImportEntry,
+  type ImportFile,
+  importTextData,
+} from '../../shared/imports.ts'
 
 const decoder = new TextDecoder('utf-8', { fatal: true })
-export const importText = (file: ImportFile) => {
-  if (file.data.byteLength > 2 * 1024 * 1024)
-    throw new Error(
-      `This document exceeds the 2 MiB editing limit: ${file.path}`,
-    )
-  return decoder.decode(file.data)
-}
+export const importText = (file: ImportEntry) =>
+  decoder.decode(importTextData(file))
 export const textFile = (path: string, text: string): ImportFile => ({
   path,
   data: new TextEncoder().encode(text),
@@ -45,23 +43,6 @@ export function outsideCode(
   }
   return result + inline(normalized.slice(cursor))
 }
-/** Bound aggregate conversion work; a single large document runs in the native worker. */
-export async function mapImportFiles<T>(
-  files: readonly ImportFile[],
-  convert: (file: ImportFile) => T,
-) {
-  const result: T[] = []
-  let started = performance.now()
-  for (const file of files) {
-    result.push(convert(file))
-    if (result.length % 32 === 0 || performance.now() - started >= 4) {
-      await setImmediate()
-      started = performance.now()
-    }
-  }
-  return result
-}
-
 export function createWikiLinkResolver(paths: readonly string[]) {
   type Match = { path: string; order: number; count: number }
   const exact = new Map<string, Match>(),

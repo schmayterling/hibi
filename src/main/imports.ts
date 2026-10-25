@@ -9,13 +9,23 @@ import {
 } from 'node:fs/promises'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import { type BrowserWindow, dialog } from 'electron'
-import type { Importer, ImportRequest, ImportResult } from '../shared/imports'
+import type {
+  ImportEntry,
+  Importer,
+  ImportFile,
+  ImportRequest,
+  ImportResult,
+  ImportStream,
+} from '../shared/imports'
 import { convertImport, getImporters } from './addons'
 import { runFileDialog } from './file-operation-dialog'
 import {
+  copyImportFile,
+  readImportFile,
   readImportFolder,
   readImportZip,
   validateImportFiles,
+  validateImportPaths,
 } from './import-files'
 import { refreshWorkspace, workspaceId, workspaceRoot } from './workspace'
 import { workspaceMetadata } from './workspace-metadata'
@@ -68,13 +78,6 @@ export async function importIntoWorkspace(
     request.source === 'folder'
       ? await readImportFolder(source)
       : await readImportZip(source)
-  const converted =
-    request.id === 'folder'
-      ? original
-      : await convertImport(request.id, original.files)
-  await validateImportFiles(converted.files)
-  if (!converted.files.length)
-    throw new Error('No files were found in this export.')
   if (workspaceRoot() !== root || request.workspaceId !== workspaceId())
     throw new Error('The workspace changed. Start the import again.')
   const stage = await mkdtemp(join(root, '.hibi-import-'))
@@ -86,11 +89,48 @@ export async function importIntoWorkspace(
       .replace(/[. ]+$/, '') || 'Import'
   let destination: string | undefined
   try {
-    for (const file of converted.files) {
-      const target = join(stage, file.path)
-      await mkdir(dirname(target), { recursive: true })
-      await writeFile(target, file.data, { flag: 'wx' })
+    const written: { path: string }[] = []
+    const stream: ImportStream = {
+      paths: original.files.map((file) => file.path),
+      read: async (index) => {
+        const file = original.files[index]
+        if (!file) throw new Error('The import contains an unsafe file path.')
+        return 'source' in file ? readImportFile(file) : file.data
+      },
+      write: async (entry: ImportEntry) => {
+        await validateImportPaths([entry])
+        const target = join(stage, entry.path)
+        await mkdir(dirname(target), { recursive: true })
+        if ('data' in entry) {
+          const file = entry as ImportFile
+          await validateImportFiles([file])
+          await writeFile(target, file.data, { flag: 'wx' })
+        } else {
+          const file =
+            Number.isSafeInteger(entry.original) && entry.original !== undefined
+              ? original.files[entry.original]
+              : undefined
+          if (!file) throw new Error('The import contains an unsafe file path.')
+          if ('source' in file) await copyImportFile(file, target)
+          else await writeFile(target, file.data, { flag: 'wx' })
+        }
+        written.push({ path: entry.path })
+      },
     }
+    const converted =
+      request.id === 'folder'
+        ? { warnings: [] }
+        : await convertImport(request.id, [], stream)
+    if (request.id === 'folder')
+      for (let index = 0; index < original.files.length; index++)
+        await stream.write({
+          path: stream.paths[index] as string,
+          original: index,
+        })
+    await validateImportPaths(written)
+    if (!written.length) throw new Error('No files were found in this export.')
+    if (workspaceRoot() !== root || request.workspaceId !== workspaceId())
+      throw new Error('The workspace changed. Start the import again.')
     // Reserve a fresh container atomically. Existing files are never overwritten.
     for (let suffix = 1; ; suffix++) {
       const candidate = join(root, suffix === 1 ? name : `${name} ${suffix}`)
@@ -114,7 +154,7 @@ export async function importIntoWorkspace(
     )
     return {
       folder: relative(root, destination).split(sep).join('/'),
-      files: converted.files.length,
+      files: written.length,
       warnings,
     }
   } catch (error) {

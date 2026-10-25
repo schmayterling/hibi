@@ -13,13 +13,23 @@ export function startKeybeats(context: AddonContext) {
   const audio = new AudioContext({ latencyHint: 'interactive' })
   const gain = audio.createGain()
   gain.connect(audio.destination)
-  const cache = new Map<string, Promise<AudioBuffer>>()
   const voices = new Set<AudioBufferSourceNode>()
   const held = new Set<string>()
   let preferences = getPreferences()
   let samples = new Map<string, AudioBuffer>()
   let generation = 0
+  let playback = 0
   let disposed = false
+  let blurred = false
+  let awake = false
+  let idle: ReturnType<typeof setTimeout> | undefined
+  let suspension = Promise.resolve()
+  const eligible = () =>
+    !disposed &&
+    !preferences.muted &&
+    !!preferences.volume &&
+    !document.hidden &&
+    !blurred
   const action = context.toolbar.register({
     id: 'mute',
     label: 'Mute keyboard sounds',
@@ -27,14 +37,21 @@ export function startKeybeats(context: AddonContext) {
     onClick: () => setPreferences({ muted: !getPreferences().muted }),
   })
   const silence = () => {
+    playback++
     held.clear()
     for (const voice of voices) voice.stop()
     voices.clear()
   }
+  function pause() {
+    awake = false
+    clearTimeout(idle)
+    silence()
+    suspension = audio.suspend().catch(() => {})
+  }
   async function load() {
     const run = ++generation
     samples = new Map()
-    silence()
+    pause()
     const profile =
       profiles.find((entry) => entry.id === preferences.profile) ?? profiles[0]
     try {
@@ -46,23 +63,14 @@ export function startKeybeats(context: AddonContext) {
       ]
       const entries = await Promise.all(
         paths.map(async (path) => {
-          let buffer = cache.get(path)
-          if (!buffer) {
-            const url = urls[`./sounds/${path}`]
-            if (!url) throw new Error('Sound unavailable.')
-            buffer = fetch(url)
-              .then((response) => {
-                if (!response.ok) throw new Error('Sound unavailable.')
-                return response.arrayBuffer()
-              })
-              .then((bytes) => audio.decodeAudioData(bytes))
-              .catch((error) => {
-                cache.delete(path)
-                throw error
-              })
-            cache.set(path, buffer)
-          }
-          return [path, await buffer] as const
+          const url = urls[`./sounds/${path}`]
+          if (!url) throw new Error('Sound unavailable.')
+          const response = await fetch(url)
+          if (!response.ok) throw new Error('Sound unavailable.')
+          const buffer = await audio.decodeAudioData(
+            await response.arrayBuffer(),
+          )
+          return [path, buffer] as const
         }),
       )
       if (!disposed && generation === run) samples = new Map(entries)
@@ -77,7 +85,7 @@ export function startKeybeats(context: AddonContext) {
     const previous = preferences.profile
     preferences = getPreferences()
     gain.gain.value = preferences.muted ? 0 : preferences.volume
-    if (preferences.muted) silence()
+    if (preferences.muted || !preferences.volume) pause()
     action.update({
       label: preferences.muted
         ? 'Unmute keyboard sounds'
@@ -87,10 +95,9 @@ export function startKeybeats(context: AddonContext) {
     })
     if (previous !== preferences.profile) void load()
   }
-  function play(event: EditorKeyEvent) {
+  async function play(event: EditorKeyEvent) {
     if (event.phase === 'up' && !held.delete(event.code)) return
-    if (disposed || preferences.muted || !preferences.volume || event.repeat)
-      return
+    if (!eligible() || event.repeat) return
     if (
       event.metaKey ||
       event.ctrlKey ||
@@ -109,7 +116,6 @@ export function startKeybeats(context: AddonContext) {
     if (event.phase === 'down') {
       if (held.has(event.code)) return
       held.add(event.code)
-      if (audio.state === 'suspended') void audio.resume().catch(() => {})
     }
     const profile =
       profiles.find((entry) => entry.id === preferences.profile) ?? profiles[0]
@@ -121,6 +127,20 @@ export function startKeybeats(context: AddonContext) {
       map[key] ?? map[generic[Math.floor(Math.random() * generic.length)] ?? '']
     const buffer = path ? samples.get(path) : undefined
     if (!buffer || audio.state === 'closed') return
+    const run = playback
+    awake = true
+    clearTimeout(idle)
+    idle = setTimeout(pause, 10000)
+    await suspension
+    if (run !== playback || !eligible()) return
+    if (audio.state !== 'running') await audio.resume()
+    if (disposed) return
+    // A resume may settle after mute, blur, or the idle timer.
+    if (!awake) {
+      pause()
+      return
+    }
+    if (run !== playback || !eligible()) return
     if (voices.size >= 32) {
       const oldest = voices.values().next().value
       oldest?.stop()
@@ -136,14 +156,27 @@ export function startKeybeats(context: AddonContext) {
     }
     voice.start()
   }
-  const unsubscribe = context.editor.onKeyEvent(play)
-  const leave = () => silence()
+  const unsubscribe = context.editor.onKeyEvent((event) => {
+    void play(event).catch(() => {})
+  })
+  const leave = () => {
+    blurred = true
+    pause()
+  }
+  const enter = () => {
+    blurred = false
+  }
+  const visibility = () => {
+    if (document.hidden) pause()
+  }
   // Leaving the editor may swallow a keyup (for example Tab into a dialog).
   const focus = () => {
-    if (!document.activeElement?.closest('.tiptap, .cm-content')) held.clear()
+    if (!document.activeElement?.closest('.tiptap, .cm-content')) pause()
   }
   window.addEventListener(settingsEvent, configure)
   window.addEventListener('blur', leave)
+  window.addEventListener('focus', enter)
+  document.addEventListener('visibilitychange', visibility)
   document.addEventListener('focusin', focus)
   configure()
   void load()
@@ -152,12 +185,13 @@ export function startKeybeats(context: AddonContext) {
     generation++
     unsubscribe()
     action.dispose()
-    silence()
+    pause()
     window.removeEventListener(settingsEvent, configure)
     window.removeEventListener('blur', leave)
+    window.removeEventListener('focus', enter)
+    document.removeEventListener('visibilitychange', visibility)
     document.removeEventListener('focusin', focus)
     gain.disconnect()
-    cache.clear()
     samples.clear()
     void audio.close().catch(() => {})
   }

@@ -19,22 +19,36 @@ async function runtime({
       build({
         stdin: {
           contents:
-            "export { writeText } from './src/main/files.ts'; export { createAddonStorage } from './src/main/addon-storage.ts'; export { replaceExistingText } from './src/main/workspace-atomic-update.ts'; export { writeWorkspaceText, WORKSPACE_MANIFEST } from './src/main/workspace-metadata.ts'; export { HostCredentials } from './src/main/host-credentials.ts'; export { LocalDiagnosticSink } from './src/main/local-diagnostics/sink.ts'",
+            "export { loadAppearance, saveAppearance } from './src/main/appearance.ts'; export { rememberWorkspace, setKnownWorkspace, observeKnownWorkspaces } from './src/main/recent-workspaces.ts'; export { saveUiCase, getUiCase } from './src/main/ui-case.ts'; export { writeText } from './src/main/files.ts'; export { createAddonStorage } from './src/main/addon-storage.ts'; export { replaceExistingText } from './src/main/workspace-atomic-update.ts'; export { writeWorkspaceText, WORKSPACE_MANIFEST } from './src/main/workspace-metadata.ts'; export { HostCredentials } from './src/main/host-credentials.ts'; export { LocalDiagnosticSink } from './src/main/local-diagnostics/sink.ts'",
           resolveDir: resolve('.'),
         },
         bundle: true,
         write: false,
         platform: 'node',
+        external: ['electron'],
         format: 'cjs',
         define: { 'process.platform': JSON.stringify(platform) },
       }),
     )
   const { outputFiles } = await bundles.get(platform)
-  const state = { attempts: 0, delays: [], live: true }
+  const state = { attempts: 0, syncs: 0, delays: [], live: true }
   const original = Object.assign(new Error('first rename failure'), { code })
   const mocks = {
+    electron: {
+      app: { getPath: () => state.preferenceRoot },
+      nativeTheme: { themeSource: 'system', shouldUseDarkColors: false },
+    },
     'node:fs/promises': {
       ...fs,
+      open: async (...args) => {
+        const file = await fs.open(...args)
+        const sync = file.sync.bind(file)
+        file.sync = async () => {
+          state.syncs++
+          return sync()
+        }
+        return file
+      },
       rename: async (source, destination) => {
         state.attempts++
         await state.beforeRename?.()
@@ -62,6 +76,89 @@ async function runtime({
   )
   return { module, state, original }
 }
+
+test('migrated casing preference keeps old file and cleans staging on failed commit', async (t) => {
+  const root = await fs.mkdtemp(join(tmpdir(), 'hibi-preference-write-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const file = join(root, 'ui-case.json')
+  await fs.writeFile(file, JSON.stringify('sentence'))
+  const { module, state, original } = await runtime({
+    platform: 'linux',
+    code: 'EACCES',
+    failures: 1,
+  })
+  state.preferenceRoot = root
+  await assert.rejects(
+    module.exports.saveUiCase('lowercase'),
+    (error) => error === original,
+  )
+  assert.equal(await fs.readFile(file, 'utf8'), JSON.stringify('sentence'))
+  assert.deepEqual(await fs.readdir(root), ['ui-case.json'])
+  // Casing intentionally publishes before persistence, including on failure.
+  assert.equal(module.exports.getUiCase(), 'lowercase')
+  await module.exports.saveUiCase('sentence')
+  assert.equal(await fs.readFile(file, 'utf8'), JSON.stringify('sentence'))
+  assert.deepEqual(await fs.readdir(root), ['ui-case.json'])
+})
+
+test('unchanged workspace lists notify listeners without repeating file sync', async (t) => {
+  const root = await fs.mkdtemp(join(tmpdir(), 'hibi-workspace-writes-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const { module, state } = await runtime({ platform: 'linux', failures: 0 })
+  state.preferenceRoot = root
+  const api = module.exports
+  const events = []
+  const stop = api.observeKnownWorkspaces((known) => events.push(known))
+  t.after(stop)
+  await api.rememberWorkspace(root)
+  assert.equal(state.syncs, 1)
+  for (let repeat = 0; repeat < 10; repeat++) await api.rememberWorkspace(root)
+  assert.equal(state.syncs, 1)
+  assert.equal(events.length, 11)
+  const id = events.at(-1)[0].id
+  await api.setKnownWorkspace(id, 'pin')
+  assert.equal(state.syncs, 2)
+  await api.setKnownWorkspace(id, 'pin')
+  await api.rememberWorkspace(root)
+  assert.equal(state.syncs, 2)
+  assert.equal(events.length, 14)
+  assert.equal(events.at(-1)[0].pinned, true)
+  assert.equal(
+    JSON.parse(
+      await fs.readFile(join(root, 'recent-workspaces.json'), 'utf8'),
+    )[0].pinned,
+    true,
+  )
+})
+
+test('unchanged appearance shares the pending save and skips repeat file sync', async (t) => {
+  const root = await fs.mkdtemp(join(tmpdir(), 'hibi-appearance-writes-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const { module, state } = await runtime({ platform: 'linux', failures: 0 })
+  state.preferenceRoot = root
+  const saved = {
+    preferences: { mode: 'system', light: 'hibi-light', dark: 'hibi-dark' },
+    light: { background: '#ffffff', foreground: '#1b2021' },
+    dark: { background: '#181818', foreground: '#e4e9e9' },
+  }
+  const path = join(root, 'appearance.json')
+  await fs.writeFile(path, JSON.stringify(saved))
+  await module.exports.loadAppearance()
+  await module.exports.saveAppearance(saved)
+  assert.equal(state.syncs, 0)
+  const changed = {
+    ...saved,
+    preferences: { ...saved.preferences, mode: 'dark' },
+  }
+  const pending = module.exports.saveAppearance(changed)
+  assert.equal(module.exports.saveAppearance(changed), pending)
+  await pending
+  await module.exports.saveAppearance(changed)
+  assert.equal(state.syncs, 1)
+  assert.deepEqual(JSON.parse(await fs.readFile(path, 'utf8')), changed)
+  await module.exports.saveAppearance(saved)
+  assert.equal(state.syncs, 2)
+})
 
 async function writer(t, kind, options) {
   const { module, state, original } = await runtime(options)

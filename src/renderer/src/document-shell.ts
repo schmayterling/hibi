@@ -89,7 +89,7 @@ export function subscribeDocumentShell(
   })
 }
 
-/** An opening policy, not a content ceiling: larger notes remain fully editable in source view. */
+/** Temporary source-first opening; remove with the CodeMirror formatted view. */
 export function preferSourceOpening(
   runtime: Pick<DocumentRuntime, 'sourceFor'>,
   document: DocumentState | null,

@@ -100,6 +100,33 @@ test('partial, malformed, excessive, out-of-order and duplicate streams cannot f
   assert.throws(() => receiver.finish())
 })
 
+test('malformed checkpoint chunks abort even after the last valid chunk', () => {
+  const store = new SourceStore('kept', { tabId: 'a', revision: 0 }, 0)
+  const verifier = createCheckpointVerifier(() => store)
+  const transfer = { ...journalHead(store), streamId: 'checkpoint', length: 4 }
+  const invalid = [
+    { chunks: [null] },
+    { chunks: ['x'.repeat(65537)] },
+    { chunks: Array(17).fill('x') },
+    { chunks: [], done: false },
+    { sequence: -1 },
+    { done: 'true' },
+  ]
+  for (const patch of invalid) {
+    verifier.begin(transfer)
+    const chunk = {
+      streamId: transfer.streamId,
+      sequence: 0,
+      chunks: ['kept'],
+      done: true,
+    }
+    const ack = verifier.append(chunk)
+    assert.throws(() => verifier.append({ ...chunk, ...patch }))
+    assert.throws(() => verifier.finish(ack), /stale|incomplete/)
+  }
+  assert.equal(store.snapshot().materialize(), 'kept')
+})
+
 test('checkpoint verification is read-only, exact and aborted by a version change', () => {
   const text = '\uFEFFa\r\n😀b'.repeat(20000),
     store = new SourceStore(text, { tabId: 'a', revision: 3 }, 7)

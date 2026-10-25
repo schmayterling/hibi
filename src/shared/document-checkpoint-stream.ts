@@ -1,7 +1,6 @@
 import { type JournalHead, journalHead } from './document-checkpoint.ts'
 import type { SourceStore } from './source-buffer.ts'
 import {
-  parseTransferChunk,
   parseTransferHead,
   parseTransferRequest,
   SourceTransferReceiver,
@@ -50,16 +49,16 @@ export function createCheckpointVerifier(read: (tabId: string) => SourceStore) {
       return journalHead(store)
     },
     append(value: unknown) {
-      const chunk = parseTransferChunk(value),
-        stream = streams.get(chunk.streamId)
+      const streamId = (value as { streamId?: string } | null)?.streamId,
+        stream = streamId ? streams.get(streamId) : undefined
       if (!stream) throw new Error('The document recovery checkpoint is stale.')
       try {
         if (!stream.current())
           throw new Error('The document changed during recovery verification.')
-        stream.receiver.receive(chunk)
+        stream.receiver.receive(value)
         return stream.receiver.request
       } catch (error) {
-        forget(chunk.streamId)
+        forget(stream.receiver.head.streamId)
         throw error
       }
     },

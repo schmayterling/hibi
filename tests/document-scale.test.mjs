@@ -11,7 +11,9 @@ import { waitForAsync } from './poll.mjs'
 const entry = resolve(process.env.HIBI_SCALE_ENTRY ?? '.')
 const baseline = process.env.HIBI_SCALE_BASELINE === '1'
 const sizes = process.env.HIBI_SCALE_MIB
-  ? process.env.HIBI_SCALE_MIB.split(',').map(Number)
+  ? process.env.HIBI_SCALE_MIB.split(',').map((size) =>
+      size === 'unicode' ? size : Number(size),
+    )
   : [2, 8, 32, 50, 'unicode']
 const makeSource = (size) => {
   if (size === 'unicode')

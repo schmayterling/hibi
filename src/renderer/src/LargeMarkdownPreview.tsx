@@ -14,7 +14,7 @@ type PagePosition = {
   previous: PagePosition | null
 }
 
-/** Bounded read-only pages leave canonical editing and recovery in source view. */
+/** Temporary read-only bridge; remove with the CodeMirror formatted view. */
 export function LargeMarkdownPreview({
   session,
   documentId,

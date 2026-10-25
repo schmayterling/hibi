@@ -7,10 +7,15 @@ export const blockStartCounters = { calls: 0, units: 0, max: 0 }
 // one of its paragraph rule's own interruptions matches there.
 const head = '^([^\\n]+(?:\\n(?!'
 const tail = ')[^\\n]+)*)'
+// A gfm table interrupts once its header and delimiter rows match; its body
+// is optional there, so never read it.
+const table = Lexer.rules.block.gfm.table.source.slice(1)
+const body = table.indexOf('(?:\\n((?:(?!')
+const tableStart = body > 0 ? `${table.slice(0, body)}(?:\\n|$)` : table
 function interruptions(paragraph: RegExp) {
   const { source } = paragraph
   return source.startsWith(head) && source.endsWith(tail)
-    ? `|${source.slice(head.length, -tail.length)}`
+    ? `|${source.slice(head.length, -tail.length).replace(table, () => tableStart)}`
     : ''
 }
 

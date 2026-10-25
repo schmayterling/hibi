@@ -69,7 +69,7 @@ test('block start hints read exactly the paragraph marked would read', () => {
   }
 })
 
-test('block start hints read each paragraph once whatever ends it', () => {
+test('block start hints stay linear whatever ends the paragraph', () => {
   const parser = new Marked({ gfm: true }, mathTokens, textExtrasMarkdown, {
     extensions: [alertExtension],
   })
@@ -80,6 +80,8 @@ test('block start hints read each paragraph once whatever ends it', () => {
     divider: (index) => `paragraph ${index} text\n***\n`,
     heading: (index) => `paragraph ${index} text\n## heading\n`,
     html: (index) => `paragraph ${index} text\n<!-- note -->\n`,
+    // Marked rejects this table (column counts differ) after it interrupts.
+    table: (index) => `paragraph ${index}\na | b\n:---:\n`,
   }
   for (const [shape, section] of Object.entries(shapes)) {
     const units = [1000, 2000].map((count) => {
@@ -92,7 +94,8 @@ test('block start hints read each paragraph once whatever ends it', () => {
       assert.equal(tokens.at(-1).type, 'blockMath', shape)
       assert.ok(
         blockStartCounters.calls >= count &&
-          blockStartCounters.units <= hints.length * source.length &&
+          // A rejected stop line, such as a table header, starts the next paragraph.
+          blockStartCounters.units <= 2 * hints.length * source.length &&
           blockStartCounters.max <= 64,
         `${shape} ${JSON.stringify(blockStartCounters)}`,
       )

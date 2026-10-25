@@ -109,6 +109,30 @@ test('relay waits before listen and wakes on listening and stop', async (t) => {
   assert.equal(settled, true)
 })
 
+test('relay wakes on bind failure and recovers on another port', async (t) => {
+  const listener = await occupy(t)
+  const server = new McpServer('test')
+  t.after(() => server.stop())
+  const opening = server.start(preferences(listener.address().port))
+  const failing = server.relay()
+  assert.equal((await opening).state, 'error')
+  assert.equal(await failing, null)
+  let settled = false
+  const waiting = server.relay().then((request) => {
+    settled = true
+    return request
+  })
+  await setImmediate()
+  assert.equal(settled, false)
+  assert.equal((await server.start(preferences(0))).state, 'running')
+  assert.equal(await waiting, null)
+  const relay = server.relay()
+  const edited = server.editOpenDocument('tab', [], () => {})
+  assert.equal((await relay).tabId, 'tab')
+  server.stop()
+  assert.equal((await edited).ok, false)
+})
+
 test('queued edits wake relay once and failed replies never redeliver edits', async (t) => {
   const server = new McpServer('test')
   t.after(() => server.stop())

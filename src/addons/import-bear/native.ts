@@ -1,7 +1,8 @@
+import workerPath from '../_shared/import-worker?modulePath'
+import { runImportWorker } from '../_shared/import-worker-client'
 import type { NativeAddon } from '../api'
-import { importBear } from './convert'
 export default {
   id: 'import-bear',
   methods: {},
-  import: importBear,
+  import: (files) => runImportWorker(workerPath, 'bear', files),
 } satisfies NativeAddon

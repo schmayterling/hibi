@@ -1,7 +1,8 @@
+import workerPath from '../_shared/import-worker?modulePath'
+import { runImportWorker } from '../_shared/import-worker-client'
 import type { NativeAddon } from '../api'
-import { importNotion } from './convert'
 export default {
   id: 'import-notion',
   methods: {},
-  import: importNotion,
+  import: (files) => runImportWorker(workerPath, 'notion', files),
 } satisfies NativeAddon

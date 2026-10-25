@@ -1,14 +1,16 @@
 import { constants } from 'node:fs'
 import { lstat, open, readdir, realpath } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
+import { setImmediate } from 'node:timers/promises'
 import type { ImportFile } from '../shared/imports'
 import { isPathInside } from './workspace-paths.ts'
 import { openBoundedZip, readZipEntry } from './zip-reader.ts'
 
 export const IMPORT_LIMITS = {
-  files: 10000,
   file: 32 * 1024 * 1024,
-  total: 256 * 1024 * 1024,
+  // Archive bounds limit decompression and directory allocation, not folder imports.
+  zipEntries: 10000,
+  zipBytes: 256 * 1024 * 1024,
 }
 export function validImportPath(path: unknown): path is string {
   return (
@@ -36,11 +38,10 @@ const skipPath = (path: string) =>
       (part) =>
         part.startsWith('.') || ['node_modules', '__MACOSX'].includes(part),
     )
-export function validateImportFiles(files: readonly ImportFile[]) {
-  if (!Array.isArray(files) || files.length > IMPORT_LIMITS.files)
-    throw new Error('Import at most 10,000 files at a time.')
+export async function validateImportFiles(files: readonly ImportFile[]) {
+  if (!Array.isArray(files))
+    throw new Error('The import contains an invalid file list.')
   const seen = new Set<string>()
-  let total = 0
   for (const file of files) {
     if (
       !validImportPath(file.path) ||
@@ -52,15 +53,11 @@ export function validateImportFiles(files: readonly ImportFile[]) {
     if (seen.has(key))
       throw new Error(`The import contains duplicate file names: ${file.path}`)
     seen.add(key)
-    total += file.data.byteLength
-    if (
-      file.data.byteLength > IMPORT_LIMITS.file ||
-      total > IMPORT_LIMITS.total
-    )
-      throw new Error(
-        'Import at most 256 MiB at a time, with each file under 32 MiB.',
-      )
+    if (seen.size % 64 === 0) await setImmediate()
+    if (file.data.byteLength > IMPORT_LIMITS.file)
+      throw new Error('Import files must each be under 32 MiB.')
   }
+  let checked = 0
   for (const key of seen) {
     const parts = key.split('/')
     while (parts.length > 1) {
@@ -68,6 +65,7 @@ export function validateImportFiles(files: readonly ImportFile[]) {
       if (seen.has(parts.join('/')))
         throw new Error('The import uses the same name for a file and folder.')
     }
+    if (++checked % 64 === 0) await setImmediate()
   }
 }
 async function boundedFile(path: string, limit: number) {
@@ -95,8 +93,6 @@ export async function readImportFolder(root: string) {
   root = await realpath(root)
   const files: ImportFile[] = [],
     warnings: string[] = []
-  let total = 0,
-    entries = 0
   async function walk(directory: string) {
     const actual = await realpath(directory)
     if (!isPathInside(root, actual))
@@ -106,8 +102,6 @@ export async function readImportFolder(root: string) {
         .split(sep)
         .join('/')
       if (skipPath(path)) continue
-      if (++entries > IMPORT_LIMITS.files)
-        throw new Error('Import at most 10,000 files and folders at a time.')
       if (!validImportPath(path))
         throw new Error(`This file name cannot be imported: ${path}`)
       const full = join(directory, entry.name),
@@ -118,22 +112,18 @@ export async function readImportFolder(root: string) {
       }
       if (stat.isDirectory()) await walk(full)
       else if (stat.isFile()) {
-        const data = await boundedFile(
-          full,
-          Math.min(IMPORT_LIMITS.file, IMPORT_LIMITS.total - total),
-        )
-        total += data.length
+        const data = await boundedFile(full, IMPORT_LIMITS.file)
         files.push({ path, data })
       }
     }
   }
   await walk(root)
-  validateImportFiles(files)
+  await validateImportFiles(files)
   return { files, warnings }
 }
 export async function readImportZip(path: string) {
-  const zip = await boundedFile(path, IMPORT_LIMITS.total)
-  const directory = await openBoundedZip(zip, IMPORT_LIMITS.files)
+  const zip = await boundedFile(path, IMPORT_LIMITS.zipBytes)
+  const directory = await openBoundedZip(zip, IMPORT_LIMITS.zipEntries)
   const files: ImportFile[] = []
   let total = 0
   for (const entry of directory.files) {
@@ -150,11 +140,11 @@ export async function readImportZip(path: string) {
     if (skipPath(path) || entry.type === 'Directory') continue
     const data = await readZipEntry(
       entry,
-      Math.min(IMPORT_LIMITS.file, IMPORT_LIMITS.total - total),
+      Math.min(IMPORT_LIMITS.file, IMPORT_LIMITS.zipBytes - total),
     )
     total += data.length
     files.push({ path, data })
   }
-  validateImportFiles(files)
+  await validateImportFiles(files)
   return { files, warnings: [] as string[] }
 }

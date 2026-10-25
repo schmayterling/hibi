@@ -561,9 +561,6 @@
   "1bce26d66adc": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
-  "cfda0ed6535b": [
-    "src/addons/import-notion/convert.ts"
-  ],
   "b73a5e2ca645": [
     "src/addons/diagnostics/Settings.tsx"
   ],
@@ -2734,20 +2731,17 @@
   "47fa752d5df7": [
     "src/renderer/src/markdown-syntax.ts"
   ],
-  "b7630abc21fb": [
-    "src/main/import-files.ts"
-  ],
-  "c50f362f8855": [
-    "src/main/import-files.ts"
-  ],
-  "23eefd0e1bbc": [
-    "src/main/import-files.ts"
+  "199a7dbf37b9": [
+    "src/addons/_shared/import-worker-client.ts"
   ],
   "0a26f41abd00": [
     "src/renderer/src/ImportDialog.tsx"
   ],
   "6a9e73cf0d42": [
     "src/main/host-selected-io.ts"
+  ],
+  "27d24ecfb271": [
+    "src/main/import-files.ts"
   ],
   "f9e4378d7a08": [
     "src/renderer/src/ImportDialog.tsx"
@@ -5819,6 +5813,9 @@
   ],
   "d84f02a8b4bc": [
     "src/main/workspace-actions.ts"
+  ],
+  "34f17c8d67af": [
+    "src/main/import-files.ts"
   ],
   "d60d1c552b62": [
     "src/main/import-files.ts"

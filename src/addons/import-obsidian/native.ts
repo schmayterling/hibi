@@ -1,7 +1,8 @@
+import workerPath from '../_shared/import-worker?modulePath'
+import { runImportWorker } from '../_shared/import-worker-client'
 import type { NativeAddon } from '../api'
-import { importObsidian } from './convert'
 export default {
   id: 'import-obsidian',
   methods: {},
-  import: importObsidian,
+  import: (files) => runImportWorker(workerPath, 'obsidian', files),
 } satisfies NativeAddon

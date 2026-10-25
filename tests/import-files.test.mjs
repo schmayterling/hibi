@@ -44,13 +44,13 @@ test('imports reject unsafe paths, collisions, archives, and oversized entries',
     'a/../b.md',
     'NUL.md',
   ])
-    assert.throws(() => validateImportFiles([file(path, '')]))
-  assert.throws(
-    () => validateImportFiles([file('A.md', ''), file('a.md', '')]),
+    await assert.rejects(validateImportFiles([file(path, '')]))
+  await assert.rejects(
+    validateImportFiles([file('A.md', ''), file('a.md', '')]),
     /duplicate/,
   )
-  assert.throws(
-    () => validateImportFiles([file('a', ''), file('a/b.md', '')]),
+  await assert.rejects(
+    validateImportFiles([file('a', ''), file('a/b.md', '')]),
     /file and folder/,
   )
   const zip = join(root, 'export.zip')
@@ -190,6 +190,89 @@ test('import converters preserve assets and code while translating links and CSV
   assert.ok(
     bear.files.some((file) => file.path === 'Note.textbundle/assets/a.png'),
   )
+})
+test('import converters yield to the main event loop between file batches', async () => {
+  for (const convert of [importObsidian, importBear, importNotion]) {
+    let reads = 0,
+      readsAtYield
+    const files = Array.from({ length: 256 }, (_, index) => ({
+      path: `notes/${index}.md`,
+      get data() {
+        reads++
+        return Buffer.from('[[0]]')
+      },
+    }))
+    const yielded = new Promise((resolve) =>
+      setImmediate(() => {
+        readsAtYield = reads
+        resolve()
+      }),
+    )
+    await convert(files)
+    await yielded
+    assert.ok(readsAtYield > 0, convert.name)
+    assert.ok(readsAtYield < files.length, convert.name)
+  }
+})
+test('folder imports accept more than the former file and total byte caps', async () => {
+  await validateImportFiles(
+    Array.from({ length: 10001 }, (_, index) => file(`notes/${index}.md`, '')),
+  )
+  const data = new Uint8Array(32 * 1024 * 1024)
+  await validateImportFiles(
+    Array.from({ length: 9 }, (_, index) => ({ path: `${index}.png`, data })),
+  )
+})
+test('import validation yields while preserving per-file and archive safety bounds', async (t) => {
+  let validated = false
+  const files = Array.from({ length: 256 }, (_, index) =>
+    file(`${index}.md`, ''),
+  )
+  const validation = validateImportFiles(files).then(() => {
+    validated = true
+  })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(validated, false)
+  await validation
+  await assert.rejects(
+    validateImportFiles([
+      { path: 'large.png', data: new Uint8Array(32 * 1024 * 1024 + 1) },
+    ]),
+    /32 MiB/,
+  )
+  const root = await mkdtemp(join(tmpdir(), 'hibi-import-zip-bound-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const path = join(root, 'many.zip')
+  // Only archives keep an entry bound, before the ZIP parser allocates its directory.
+  await writeFile(
+    path,
+    zipFiles(
+      Array.from({ length: 10001 }, (_, index) => ({ name: `${index}.md` })),
+    ),
+  )
+  await assert.rejects(readImportZip(path), /at most 10,000 entries/)
+})
+test('notion imports remove row and column caps without padding every data row', async () => {
+  const source = `name,value\n${'x,y\n'.repeat(10001)}`
+  const result = await importNotion([file('rows.csv', source)])
+  assert.equal(text(result.files[1]).split('\n').length, 10004)
+  const wide = `${Array(10000).fill('h').join(',')}\n${'v\n'.repeat(1000)}`
+  const ragged = text((await importNotion([file('wide.csv', wide)])).files[1])
+  assert.ok(ragged.length < 200000)
+  assert.match(ragged, /\| v \|\n/)
+})
+test('importer warning policies remain distinct for ambiguous and embedded links', async () => {
+  const files = [
+    file('Start.md', '![[Other]] [[Missing]] bear://note/id'),
+    file('Other.md', ''),
+  ]
+  assert.deepEqual((await importObsidian(files)).warnings, [
+    'Embedded notes become links. Images remain embedded.',
+    'Some wiki links could not be resolved uniquely and were kept unchanged.',
+  ])
+  assert.deepEqual((await importBear(files)).warnings, [
+    'Bear app links were kept. They still open Bear.',
+  ])
 })
 test('workspace metadata validates relative documents and honors gitignore patterns', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-ignore-'))

@@ -2,6 +2,7 @@ import { posix } from 'node:path'
 import type { ImportFile } from '../../shared/imports'
 import {
   importText,
+  mapImportFiles,
   outsideCode,
   textFile,
 } from '../_shared/import-markdown.ts'
@@ -20,10 +21,6 @@ function csvTable(source: string) {
       } else quoted = !quoted
     } else if (!quoted && (char === ',' || char === '\n' || char === '\r')) {
       row.push(cell)
-      if (row.length > 256 || rows.length >= 10000)
-        throw new Error(
-          'CSV imports support up to 10,000 rows and 256 columns.',
-        )
       cell = ''
       if (char !== ',') {
         rows.push(row)
@@ -37,23 +34,24 @@ function csvTable(source: string) {
       'A CSV export has an unfinished quoted field. Export it again from Notion.',
     )
   if (cell || row.length) rows.push([...row, cell])
-  if (rows.length > 10000 || rows.some((row) => row.length > 256))
-    throw new Error('CSV imports support up to 10,000 rows and 256 columns.')
   if (!rows.length) return ''
   const width = rows.reduce((width, row) => Math.max(width, row.length), 0)
   const line = (row: string[]) =>
-    `| ${Array.from({ length: width }, (_, index) =>
-      (row[index] ?? '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replace(/[\\|`*_[\]]/g, '\\$&')
-        .replace(/\r?\n/g, '<br>'),
-    ).join(' | ')} |`
+    `| ${row
+      .map((cell) =>
+        cell
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replace(/[\\|`*_[\]]/g, '\\$&')
+          .replace(/\r?\n/g, '<br>'),
+      )
+      .join(' | ')} |`
   return (
     [
-      line(rows[0] ?? []),
+      line(Array.from({ length: width }, (_, index) => rows[0]?.[index] ?? '')),
       line(Array(width).fill('---')),
+      // Ragged data rows need no padding; avoid rows × widest-row expansion.
       ...rows.slice(1).map(line),
     ].join('\n') + '\n'
   )
@@ -68,25 +66,27 @@ export async function importNotion(files: readonly ImportFile[]) {
   const databases = new Set(
     files.filter((file) => /\.csv$/i.test(file.path)).map((file) => file.path),
   )
-  const converted = files.flatMap((file) => {
-    if (databases.has(file.path))
-      return [file, textFile(`${file.path}.md`, csvTable(importText(file)))]
-    if (!/\.md$/i.test(file.path)) return [file]
-    const text = outsideCode(importText(file), (source) =>
-      source.replace(/\]\(([^)\n]+)\)/g, (raw, url: string) => {
-        try {
-          const decoded = decodeURIComponent(url)
-          const target = posix.normalize(
-            posix.join(posix.dirname(file.path), decoded),
-          )
-          return databases.has(target) ? `](${url}.md)` : raw
-        } catch {
-          return raw
-        }
-      }),
-    )
-    return [textFile(file.path, text)]
-  })
+  const converted = (
+    await mapImportFiles(files, (file) => {
+      if (databases.has(file.path))
+        return [file, textFile(`${file.path}.md`, csvTable(importText(file)))]
+      if (!/\.md$/i.test(file.path)) return [file]
+      const text = outsideCode(importText(file), (source) =>
+        source.replace(/\]\(([^)\n]+)\)/g, (raw, url: string) => {
+          try {
+            const decoded = decodeURIComponent(url)
+            const target = posix.normalize(
+              posix.join(posix.dirname(file.path), decoded),
+            )
+            return databases.has(target) ? `](${url}.md)` : raw
+          } catch {
+            return raw
+          }
+        }),
+      )
+      return [textFile(file.path, text)]
+    })
+  ).flat()
   return {
     files: converted,
     warnings: databases.size

@@ -324,7 +324,12 @@ export async function convertImport(
     )
   if (!addon?.import)
     throw new Error('This addon does not provide an importer.')
-  return addon.import(files)
+  const result = await addon.import(files)
+  if (!isAddonActivationCurrent(id, generation))
+    throw new Error(
+      'This importer is no longer enabled or its required addons are unavailable.',
+    )
+  return result
 }
 
 /** Name of an enabled addon compiled with Hibi; only these can open addon windows. */

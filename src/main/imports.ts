@@ -72,7 +72,7 @@ export async function importIntoWorkspace(
     request.id === 'folder'
       ? original
       : await convertImport(request.id, original.files)
-  validateImportFiles(converted.files)
+  await validateImportFiles(converted.files)
   if (!converted.files.length)
     throw new Error('No files were found in this export.')
   if (workspaceRoot() !== root || request.workspaceId !== workspaceId())

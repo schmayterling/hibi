@@ -216,6 +216,38 @@ test('main admission blocks transitive consumers without changing enabled prefer
   assert.equal(await h.invokeAddon({}, 'consumer', 'probe', null), 'ok')
 })
 
+test('main rejects import results after disabling and re-enabling the importer', async (t) => {
+  const h = await host(t, [
+    details('markdown'),
+    details('consumer', { importer: { extensions: ['txt'] } }),
+  ])
+  let started, finish
+  const importing = new Promise((resolve) => {
+    started = resolve
+  })
+  h.state.natives.consumer = {
+    id: 'consumer',
+    methods: {},
+    import: () => {
+      started()
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    },
+  }
+  await h.loadAddons()
+  await h.enableAddon('consumer', true)
+  const pending = assert.rejects(
+    h.convertImport('consumer', []),
+    /no longer enabled/,
+  )
+  await importing
+  await h.enableAddon('consumer', false)
+  await h.enableAddon('consumer', true)
+  finish('stale import')
+  await pending
+})
+
 test('installed ids matching inherited object properties remain disabled until explicitly enabled', async (t) => {
   const h = await host(t)
   await h.loadAddons()

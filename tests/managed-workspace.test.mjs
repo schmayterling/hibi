@@ -167,6 +167,28 @@ test('managed workspaces stay opt-in, preserve files, import safely, and reopen 
     snapshot.id,
   )
   assert.notEqual(second.folder, imported.folder)
+  await writeFile(join(source, 'Start.md'), '[[Target]] ![[Target]]')
+  await writeFile(join(source, 'Target.md'), '# Target')
+  const converted = await page.evaluate(
+    (workspaceId) =>
+      window.hibi.importIntoWorkspace({
+        id: 'import-obsidian',
+        source: 'folder',
+        workspaceId,
+      }),
+    snapshot.id,
+  )
+  assert.equal(converted.files, 2)
+  assert.deepEqual(converted.warnings, [
+    'Embedded notes become links. Images remain embedded.',
+  ])
+  assert.equal(
+    await readFile(
+      join(workspace, converted.folder, 'Imported files', 'Start.md'),
+      'utf8',
+    ),
+    '[Target](Target.md) [Target](Target.md)',
+  )
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await pressShortcut(app, `${mod}+,`)
   await page

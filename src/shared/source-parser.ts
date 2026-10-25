@@ -11,6 +11,7 @@ import {
   type SourceSnapshot,
   type SourceStorageChange,
 } from './source-buffer.ts'
+import { safePosition } from './source-operations.ts'
 import {
   editorChangesFromSource,
   normalizedSource,
@@ -44,13 +45,7 @@ export function sourceParserInput(
     lineTo = -1,
     text = ''
   const range = (from: number, to: number) => {
-    if (
-      !Number.isSafeInteger(from) ||
-      !Number.isSafeInteger(to) ||
-      from < 0 ||
-      to < from ||
-      to > length
-    )
+    if (!safePosition(from) || !safePosition(to) || to < from || to > length)
       throw new Error('Parser input range is outside its source snapshot.')
   }
   const lineAt = (from: number) => {
@@ -76,6 +71,8 @@ export function sourceParserInput(
     work.readCalls++
     work.readUnits += to - from
     work.maximumRead = Math.max(work.maximumRead, to - from)
+    // The unit before a cached line start is its normalized line break.
+    if (from === cachedFrom - 1 && to === cachedFrom) return '\n'
     lineAt(from)
     if (to <= cachedTo) return text.slice(from - cachedFrom, to - cachedFrom)
     const rawFrom = source.editorToRaw(from),

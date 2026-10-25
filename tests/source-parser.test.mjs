@@ -162,10 +162,59 @@ test('middle edits in giant paragraphs scan source only once per physical line',
       treeShape(parser.parse(`${source.slice(0, from)}s${source.slice(from)}`)),
     )
     const work = store.counters()
-    assert.ok(work.unitsScanned <= source.length * 4, JSON.stringify(work))
-    assert.ok(work.sourceUnitsRead <= source.length * 2, JSON.stringify(work))
+    assert.ok(work.unitsScanned <= 4096, JSON.stringify(work))
+    assert.ok(
+      work.sourceUnitsRead <= source.length + 1024,
+      JSON.stringify(work),
+    )
   } finally {
     session.dispose()
+  }
+})
+
+test('edits following giant lines do not reload preceding lines for their newline', () => {
+  const giant = 'word '.repeat(100_000).trimEnd()
+  for (const [template, marker] of [
+    [`intro\n\n${giant}\n# heading`, '# heading'],
+    [`intro\n\n\`\`\`\n${giant}\nx\n\`\`\``, 'x'],
+  ]) {
+    for (const ending of ['\n', '\r\n', '\r']) {
+      const source = template.replaceAll('\n', ending)
+      const store = new SourceStore(source, {
+        tabId: 'following-line',
+        revision: 0,
+      })
+      const session = new SourceParserSession(
+        store.snapshot(),
+        parser,
+        'commonmark',
+      )
+      try {
+        finish(session)
+        const from = source.indexOf(marker) + marker.length
+        session.apply(edit(store, [{ from, to: from, insert: 's' }]))
+        store.counters(true)
+        const tree = finish(session)
+        assert.deepEqual(
+          treeShape(tree),
+          treeShape(
+            parser.parse(
+              normalizedSource(
+                `${source.slice(0, from)}s${source.slice(from)}`,
+              ),
+            ),
+          ),
+        )
+        const work = store.counters()
+        assert.ok(work.unitsScanned <= 4096, JSON.stringify(work))
+        assert.ok(
+          work.sourceUnitsRead <= source.length + 1024,
+          JSON.stringify(work),
+        )
+      } finally {
+        session.dispose()
+      }
+    }
   }
 })
 

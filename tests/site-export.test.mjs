@@ -177,6 +177,51 @@ test('site export keeps supported static content and omits addon runtime state',
   }
 })
 
+test('static heading anchors preserve canonical fragments and unique legacy aliases', async () => {
+  const template = await readFile('out/site/template.html', 'utf8')
+  const texts = ['api_v2', 'title', 'title', 'title-1', '✨ features', 'apiv2']
+  for (const singleFile of [true, false]) {
+    const site = prepareSite(
+      {
+        name: 'heading destinations',
+        pages: [
+          {
+            path: 'README.md',
+            markdown: texts.map((text) => `## ${text}`).join('\n\n'),
+          },
+        ],
+      },
+      exportOptions({ singleFile }),
+    )
+    const files = await siteFiles(template, site)
+    for (const [path, html] of files) {
+      if (!path.endsWith('.html')) continue
+      const article = html.match(
+        /<article class="tiptap">([\s\S]*?)<\/article>/,
+      )?.[1]
+      assert.ok(article, path)
+      assert.deepEqual(
+        [...article.matchAll(/<h2[^>]* id="([^"]*)"/g)].map(
+          (match) => match[1],
+        ),
+        ['api_v2', 'title', 'title-1', 'title-1-1', '-features', 'apiv2-1'],
+      )
+      assert.match(
+        article,
+        /<h2 id="api_v2"><span id="apiv2" aria-hidden="true"><\/span>api_v2<\/h2>/,
+      )
+      assert.match(
+        article,
+        /<h2 id="-features"><span id="features" aria-hidden="true"><\/span>✨ features<\/h2>/,
+      )
+      const ids = [...article.matchAll(/\sid="([^"]*)"/g)].map(
+        (match) => match[1],
+      )
+      assert.equal(new Set(ids).size, ids.length, path)
+    }
+  }
+})
+
 test('published sites support direct routes, crawlable HTML, branding, locked themes, graph and encrypted unlock', {
   timeout: 60000,
 }, async (t) => {

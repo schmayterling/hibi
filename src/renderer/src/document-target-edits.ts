@@ -1,5 +1,5 @@
 import type { DocumentsApi } from '../../addons/api'
-import type { DocumentState } from '../../shared/desktop.ts'
+import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop.ts'
 import {
   type DocumentLifecycleEvent,
   type DocumentMetadataResult,
@@ -10,6 +10,7 @@ import {
   type TargetDocumentSaveResult,
   type TargetSourceEditRequest,
   type TargetSourceEditResult,
+  validateSourceEdits,
 } from '../../shared/document-edits.ts'
 import type {
   DocumentId,
@@ -362,31 +363,14 @@ export function createDocumentTargetEditScope(
           status: 'stale',
           message: 'The document changed. Read it again before editing.',
         })
-      let prior: (typeof parsed.changes)[number] | undefined,
-        changed = false
-      for (const edit of parsed.changes) {
-        if (
-          !snapshot.isEditBoundary(edit.from) ||
-          !snapshot.isEditBoundary(edit.to) ||
-          (prior &&
-            (edit.from < prior.to ||
-              (edit.from === prior.to &&
-                (edit.from === edit.to || prior.from === prior.to))))
-        )
-          return remember(
-            parsed.requestId,
-            fingerprint,
-            invalid('Edit ranges overlap or split a character or line ending.'),
-          )
-        const actual = snapshot.sliceRaw(edit.from, edit.to)
-        if (actual !== edit.expectedText)
-          return remember(parsed.requestId, fingerprint, {
-            status: 'conflict',
-            message: 'The text at the edit range has changed.',
-          })
-        if (actual !== edit.insert) changed = true
-        prior = edit
-      }
+      const validation = validateSourceEdits(
+        snapshot,
+        parsed.changes,
+        MAX_DOCUMENT_BYTES,
+      )
+      if (validation.status !== 'valid')
+        return remember(parsed.requestId, fingerprint, validation)
+      const { changed } = validation
       if (!changed && parsed.projectionId === undefined)
         return remember(parsed.requestId, fingerprint, {
           status: 'applied',

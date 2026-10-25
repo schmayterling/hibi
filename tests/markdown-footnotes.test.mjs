@@ -8,6 +8,8 @@ import { Marked } from 'marked'
 import { markedGithubFootnote } from 'marked-github-footnote'
 import { exportOptions } from '../src/addons/documentation/options.ts'
 import { prepareSite, siteFiles } from '../src/addons/documentation/site.ts'
+import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
+import { hasDocumentFootnotes } from '../src/renderer/src/document-shell.ts'
 import { hasFootnoteDefinitions } from '../src/shared/markdown-footnotes.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { pressShortcut, replaceSourceText } from './keyboard.mjs'
@@ -25,6 +27,90 @@ test('footnote definitions are distinguished from code and ordinary links', () =
     false,
   )
   assert.equal(hasFootnoteDefinitions('An unresolved note[^source].'), false)
+})
+
+test('shell renders lex each unchanged source once across panes and unsaved edits', (t) => {
+  let lexes = 0
+  const { lexer } = Marked.prototype
+  Marked.prototype.lexer = function (...input) {
+    lexes++
+    return lexer.apply(this, input)
+  }
+  t.after(() => {
+    Marked.prototype.lexer = lexer
+  })
+  const runtime = new DocumentRuntime({
+    enqueue() {},
+    onError(error) {
+      throw error
+    },
+  })
+  t.after(() => runtime.dispose())
+  const tabs = ['notes', 'example'].map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: false,
+  }))
+  const open = (tabId, markdown) =>
+    runtime.activate({
+      tabId,
+      tabs,
+      tabsEnabled: true,
+      id: `file-${tabId}`,
+      ephemeral: false,
+      markdown,
+      savedMarkdown: markdown,
+      name: `${tabId}.md`,
+      dirty: false,
+      revision: 1,
+      contentVersion: 0,
+      canAutosave: true,
+    })
+  // A fenced example still passes the cheap marker test.
+  open('example', '```md\n[^source]: note\n```')
+  let shell = open('notes', source)
+  // The app checks its latest active source, then each rendered pane.
+  const render = (split) =>
+    [
+      runtime.get(),
+      ...(split ? [runtime.get('notes'), runtime.get('example')] : [shell]),
+    ].map((document) => hasDocumentFootnotes(runtime, document))
+  for (let i = 0; i < 20; i++) assert.deepEqual(render(false), [true, true])
+  assert.equal(lexes, 1)
+  for (let i = 0; i < 20; i++)
+    assert.deepEqual(render(true), [true, true, false])
+  assert.equal(lexes, 2)
+
+  // Unsaved edits keep the disk revision but publish a new source.
+  runtime.replace(`${source.replace('[^source]:', '```\n[^source]:')}\n\`\`\``)
+  assert.equal(runtime.get().revision, 1)
+  assert.equal(runtime.get().dirty, true)
+  assert.deepEqual(render(false), [false, true])
+  shell = runtime.get()
+  for (let i = 0; i < 20; i++) assert.deepEqual(render(false), [false, false])
+  for (let i = 0; i < 20; i++)
+    assert.deepEqual(render(true), [false, false, false])
+  assert.equal(lexes, 3)
+
+  // A save acknowledgment changes shell metadata, not the source.
+  const edited = runtime.get()
+  runtime.acknowledgeSave(
+    { ...edited, savedMarkdown: edited.markdown },
+    runtime.beginSave(),
+  )
+  shell = runtime.get()
+  assert.notEqual(shell, edited)
+  assert.equal(shell.dirty, false)
+  for (let i = 0; i < 20; i++)
+    assert.deepEqual(render(true), [false, false, false])
+  assert.equal(lexes, 3)
+
+  runtime.session().undo()
+  shell = runtime.get()
+  assert.equal(shell.markdown, source)
+  for (let i = 0; i < 20; i++)
+    assert.deepEqual(render(true), [true, true, false])
+  assert.equal(lexes, 4)
 })
 
 test('footnotes render once per reference and retain export anchors', async () => {

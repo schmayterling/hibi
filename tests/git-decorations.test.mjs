@@ -81,3 +81,145 @@ test('explorer providers discard results from previous workspaces and disposed o
     explorerDecorations.setWorkspace(null)
   }
 })
+
+test('explorer providers publish only changed decorations and keep the last provider for a path', async () => {
+  const results = { first: [], second: [] }
+  const calls = { first: 0, second: 0 }
+  let publications = 0
+  const wait = async (condition) => {
+    const deadline = Date.now() + 2000
+    while (!condition() && Date.now() < deadline) await delay(20)
+    assert.ok(condition())
+  }
+  const provider = (id) => ({
+    id,
+    provide: async () => {
+      calls[id]++
+      return results[id].map((item) => ({ ...item }))
+    },
+  })
+  const unsubscribe = explorerDecorations.subscribe(() => publications++)
+  const removeFirst = explorerDecorations.register(
+    'test.first',
+    provider('first'),
+  )
+  const removeSecond = explorerDecorations.register(
+    'test.second',
+    provider('second'),
+  )
+  const workspace = {
+    id: 'same',
+    name: 'folder',
+    entries: [],
+    activePath: null,
+  }
+  try {
+    results.first = [
+      { path: 'a.md', label: 'first a', badge: 'A' },
+      { path: 'b.md', label: 'first b', badge: 'B' },
+    ]
+    results.second = [
+      { path: 'b.md', label: 'second b', badge: '2', color: 'status-warning' },
+    ]
+    explorerDecorations.setWorkspace(workspace)
+    await wait(() => calls.first === 1 && calls.second === 1)
+    const snapshot = explorerDecorations.snapshot()
+    assert.equal(snapshot.get('b.md').label, 'second b')
+    const published = publications
+    // Focus refreshes return equal values in fresh objects.
+    explorerDecorations.setWorkspace({ ...workspace })
+    await wait(() => calls.first === 2 && calls.second === 2)
+    assert.equal(publications, published)
+    assert.equal(explorerDecorations.snapshot(), snapshot)
+
+    results.first = [
+      { path: 'a.md', label: 'first a', badge: 'A2' },
+      { path: 'b.md', label: 'first b', badge: 'B' },
+    ]
+    explorerDecorations.setWorkspace({ ...workspace })
+    await wait(() => calls.first === 3 && calls.second === 3)
+    assert.equal(publications, published + 1)
+    assert.deepEqual(
+      [...explorerDecorations.snapshot()].map(([path, item]) => [
+        path,
+        item.badge,
+      ]),
+      [
+        ['a.md', 'A2'],
+        ['b.md', '2'],
+      ],
+    )
+    results.second = [
+      { path: 'b.md', label: 'second b', badge: '2', color: 'status-danger' },
+    ]
+    explorerDecorations.setWorkspace({ ...workspace })
+    await wait(() => calls.first === 4 && calls.second === 4)
+    assert.equal(publications, published + 2)
+    assert.equal(
+      explorerDecorations.snapshot().get('b.md').color,
+      'status-danger',
+    )
+  } finally {
+    removeFirst()
+    removeSecond()
+    unsubscribe()
+    explorerDecorations.setWorkspace(null)
+  }
+})
+
+test('explorer providers may mutate and return the same decoration objects', async () => {
+  const item = {
+    path: 'a.md',
+    label: 'Status 1',
+    badge: '1',
+    color: 'status-warning',
+  }
+  let calls = 0
+  let publications = 0
+  const wait = async (condition) => {
+    const deadline = Date.now() + 2000
+    while (!condition() && Date.now() < deadline) await delay(20)
+    assert.ok(condition())
+  }
+  const unsubscribe = explorerDecorations.subscribe(() => publications++)
+  const remove = explorerDecorations.register('test.reused', {
+    id: 'reused',
+    provide: async () => {
+      calls++
+      return [item]
+    },
+  })
+  const workspace = {
+    id: 'reused',
+    name: 'folder',
+    entries: [],
+    activePath: null,
+  }
+  try {
+    explorerDecorations.setWorkspace(workspace)
+    await wait(() => calls === 1)
+    const published = publications
+    Object.assign(item, {
+      label: 'conflict',
+      badge: '!',
+      color: 'status-danger',
+    })
+    assert.equal(explorerDecorations.snapshot().get('a.md').badge, '1')
+    explorerDecorations.setWorkspace({ ...workspace })
+    await wait(() => calls === 2)
+    assert.equal(publications, published + 1)
+    assert.deepEqual(explorerDecorations.snapshot().get('a.md'), {
+      path: 'a.md',
+      label: 'conflict',
+      badge: '!',
+      color: 'status-danger',
+    })
+    explorerDecorations.setWorkspace({ ...workspace })
+    await wait(() => calls === 3)
+    assert.equal(publications, published + 1)
+  } finally {
+    remove()
+    unsubscribe()
+    explorerDecorations.setWorkspace(null)
+  }
+})

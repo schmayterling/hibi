@@ -321,7 +321,7 @@
     "src/renderer/src/rich-source-session.ts"
   ],
   "9ab20d9f0486": [
-    "src/renderer/src/SourceEditor.tsx"
+    "src/renderer/src/source-session.ts"
   ],
   "293aad4970e4": [
     "src/renderer/src/Editor.tsx"
@@ -1447,6 +1447,9 @@
   "2a30abd5f2ce": [
     "src/main/dependencies.ts"
   ],
+  "91dcce8f7449": [
+    "src/addons/autocomplete/Settings.tsx"
+  ],
   "98bdb8dbc149": [
     "src/addons/dictionary/SideView.tsx",
     "src/addons/dictionary/custom-words.ts",
@@ -1937,7 +1940,7 @@
   "7bc860ccf5e3": [
     "src/addons/frontmatter/hibi-addon.json"
   ],
-  "0daa134af314": [
+  "c1a90ec7d781": [
     "src/shared/document-edits.ts"
   ],
   "b865e72c0593": [
@@ -2015,7 +2018,7 @@
     "src/renderer/src/addons.ts"
   ],
   "a608f028f460": [
-    "src/renderer/src/SourceEditor.tsx"
+    "src/renderer/src/source-session.ts"
   ],
   "b02278826abb": [
     "src/addons/mcp-server/types.ts"
@@ -5758,9 +5761,6 @@
   "d3a23215018d": [
     "src/main/sideload.ts"
   ],
-  "23b54a5e62e2": [
-    "src/shared/document-edits.ts"
-  ],
   "a6cea19581d6": [
     "src/shared/document-edits.ts"
   ],
@@ -5924,7 +5924,6 @@
     "src/main/addon-directory.ts"
   ],
   "bee50784d023": [
-    "src/renderer/src/document-target-edits.ts",
     "src/shared/document-edits.ts"
   ],
   "6aa88449912f": [

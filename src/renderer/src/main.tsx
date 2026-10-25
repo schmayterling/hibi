@@ -26,13 +26,13 @@ import type {
   WorkspaceId,
   WorkspaceTarget,
 } from '../../shared/foundation-contracts'
+import { headingAnchors } from '../../shared/heading-anchor'
 import {
   type AppCommand,
   actions,
   defaultHotkeys,
   type Hotkeys,
 } from '../../shared/hotkeys'
-import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes'
 import { isMediaFile } from '../../shared/media'
 import { startupMark } from '../../shared/startup'
 import { exceedsUtf8Limit } from '../../shared/text-size'
@@ -82,7 +82,7 @@ import {
   documentRuntime,
   observeDocumentErrors,
 } from './document-runtime'
-import { subscribeDocumentShell } from './document-shell'
+import { hasDocumentFootnotes, subscribeDocumentShell } from './document-shell'
 import type { ViewMode } from './Editor'
 import { EditorToolbar } from './EditorToolbar'
 import { isEditorCommandTargetCurrent } from './editor-command-targets'
@@ -995,9 +995,7 @@ function App() {
     }
   const footnoteDocument =
     markdownDocument &&
-    hasFootnoteDefinitions(
-      currentDocument.current?.markdown ?? document?.markdown ?? '',
-    )
+    hasDocumentFootnotes(documentRuntime, currentDocument.current ?? document)
   const availableViews = addonHost.sourceOnly
     ? ['markdown' as const]
     : documentFormats
@@ -1959,18 +1957,17 @@ function App() {
       const pane = window.document.querySelector<HTMLElement>(
         split ? `.editor-page[data-side="${side}"]` : '#document-editor-panel',
       )
-      const heading = Array.from(
+      const headings = Array.from(
         pane?.querySelectorAll<HTMLElement>('.tiptap :is(h1,h2,h3,h4,h5,h6)') ??
           [],
-      ).find(
-        (element) =>
-          (element.textContent ?? '')
-            .trim()
-            .toLowerCase()
-            .replace(/[^\p{L}\p{N}\s_-]/gu, '')
-            .replace(/\s+/g, '-') === anchor,
       )
-      heading?.scrollIntoView({ block: 'start' })
+      const anchors = headingAnchors(
+        headings.map((heading) => heading.textContent ?? ''),
+      )
+      const index = anchors.findIndex(
+        (heading) => heading.anchor === anchor || heading.legacy === anchor,
+      )
+      headings[index]?.scrollIntoView({ block: 'start' })
       return
     }
     void applyDocumentOperation(() =>
@@ -2637,7 +2634,7 @@ function App() {
     const paneMarkdown =
       !paneDocument || documentFormats.isMarkdown(paneDocument.name)
     const paneFootnoteDocument =
-      paneMarkdown && hasFootnoteDefinitions(paneDocument?.markdown ?? '')
+      paneMarkdown && hasDocumentFootnotes(documentRuntime, paneDocument)
     const PaneEditor = paneMarkdown
       ? richEditor.Component
       : formatEditor.Component

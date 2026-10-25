@@ -2,7 +2,7 @@
 
 Play mechanical keyboard sounds while writing. Turn on **keyBeats** in **Settings → Addons**, then open its settings to choose a keyboard profile and adjust the volume. The toolbar button mutes or unmutes the sounds.
 
-Audio prepares in the background and pauses while muted, hidden, unfocused, or idle. Typing does not wait for sounds to be ready.
+Keyboard sounds may become available shortly after you start writing. Audio pauses while muted, hidden, unfocused, or idle.
 
 ## Credits
 

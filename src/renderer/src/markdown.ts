@@ -3,7 +3,6 @@ import { Placeholder } from '@tiptap/extension-placeholder'
 import { Markdown, type MarkdownExtensionOptions } from '@tiptap/markdown'
 import { StarterKit } from '@tiptap/starter-kit'
 import { Marked } from 'marked'
-import { search } from 'prosemirror-search'
 import type { MarkdownFlavor } from '../../addons/api'
 import { BlockExit } from './BlockExit.ts'
 import { CodeHighlight } from './CodeHighlight.ts'
@@ -25,6 +24,7 @@ import {
 } from './markdown-serialization.ts'
 import { markdownSyntax } from './markdown-syntax.ts'
 import { preserveHtml, rawHtml } from './RawHtml.ts'
+import { richFind } from './rich-find.ts'
 import { installSyntaxPreferences } from './syntax-parser.ts'
 import { TabIndent } from './tab-indent.ts'
 
@@ -122,7 +122,7 @@ export function editorExtensions(
   return [
     Extension.create({
       name: 'findInNote',
-      addProseMirrorPlugins: () => [search()],
+      addProseMirrorPlugins: () => [richFind()],
     }),
     ...core,
     Markdown.extend({

@@ -116,6 +116,7 @@ export default defineConfig({
           'documentation-worker': resolve(
             'src/addons/documentation/site-worker.ts',
           ),
+          'import-worker': resolve('src/addons/_shared/import-worker.ts'),
           'dictionary-pack-worker': resolve(
             'src/addons/dictionary/pack-worker.ts',
           ),

@@ -2,9 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { copyFile, link, open, rename, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { MAX_DOCUMENT_BYTES } from '../shared/desktop'
-import { exceedsUtf8Limit } from '../shared/text-size'
-import { retryRename } from './atomic-rename'
+import { MAX_DOCUMENT_BYTES } from '../shared/desktop.ts'
+import { exceedsUtf8Limit } from '../shared/text-size.ts'
+import { retryRename } from './atomic-rename.ts'
 
 // ponytail: cap documents at 2 MiB; move parsing off-thread before raising this.
 

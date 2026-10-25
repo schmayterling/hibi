@@ -1,7 +1,7 @@
+import { nativeImport } from '../_shared/import-native'
 import type { NativeAddon } from '../api'
-import { importBear } from './convert'
 export default {
   id: 'import-bear',
   methods: {},
-  import: importBear,
+  ...nativeImport('bear'),
 } satisfies NativeAddon

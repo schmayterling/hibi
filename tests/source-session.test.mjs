@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { EditorState, Transaction } from '@codemirror/state'
+import { EditorState, StateEffect, Transaction } from '@codemirror/state'
 import {
   createSourceSession,
   sourceEditorText,
+  sourceEditTransaction,
 } from '../src/renderer/src/source-session.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 
@@ -52,6 +53,115 @@ function fixture(source, options = {}, extensions = []) {
   }
   return { session, operations, errors, observations, attach }
 }
+test('addon admission uses exact ranges and rejects native vetoes without flattening', () => {
+  for (const extensions of [
+    [],
+    [EditorState.changeFilter.of(() => false)],
+    [
+      EditorState.transactionFilter.of((tr) => [
+        tr,
+        { changes: { from: tr.newDoc.length, insert: '!' }, sequential: true },
+      ]),
+    ],
+  ]) {
+    const f = fixture('a\r\n😀b'.repeat(30000), {}, extensions)
+    const view = f.attach()
+    f.session.counters(true)
+    const snapshot = f.session.snapshot()
+    const changes = [{ from: 5, to: 6, insert: 'B', expectedText: 'b' }]
+    if (extensions.length)
+      assert.throws(
+        () =>
+          sourceEditTransaction(view.view.state, snapshot, changes, 1000000),
+        /extension changed/,
+      )
+    else {
+      const transaction = sourceEditTransaction(
+        view.view.state,
+        snapshot,
+        changes,
+        1000000,
+      )
+      assert.ok(transaction)
+      view.bridge.dispatch([transaction], view.view, changes)
+      assert.equal(f.session.snapshot().sliceRaw(0, 6), 'a\r\n😀B')
+      view.bridge.undo()
+      assert.equal(f.session.snapshot().sliceRaw(0, 6), 'a\r\n😀b')
+    }
+    assert.equal(f.session.counters().materializations, 0)
+    assert.ok(f.session.counters().sourceUnitsRead < 1000)
+    view.dispose()
+    f.session.dispose()
+  }
+})
+
+test('addon admission rejects mismatched native lengths before reading source', () => {
+  const f = fixture('a\r\n😀b')
+  const snapshot = f.session.snapshot()
+  f.session.counters(true)
+  for (const doc of ['a', 'a longer native replica'])
+    for (const insert of ['A', 'a'])
+      assert.throws(
+        () =>
+          sourceEditTransaction(
+            EditorState.create({ doc }),
+            snapshot,
+            [{ from: 0, to: 1, insert, expectedText: 'a' }],
+            100,
+          ),
+        /The source editor is synchronizing/,
+      )
+  assert.equal(f.session.counters().sourceUnitsRead, 0)
+  assert.equal(f.session.counters().materializations, 0)
+  assert.equal(f.operations.length, 0)
+  f.session.dispose()
+})
+
+test('addon admission preserves exact byte limits and line-ending-only refusal', () => {
+  for (const [source, changes, maximum, error] of [
+    [
+      'é',
+      [{ from: 0, to: 1, insert: '😀', expectedText: 'é' }],
+      3,
+      /size limit/,
+    ],
+    [
+      'a\r\nb',
+      [{ from: 1, to: 3, insert: '\n', expectedText: '\r\n' }],
+      100,
+      /line-ending pairs/,
+    ],
+    [
+      'a\r\nb',
+      [{ from: 2, to: 2, insert: 'x', expectedText: '' }],
+      100,
+      /split/,
+    ],
+    [
+      'abc',
+      [{ from: 1, to: 2, insert: 'x', expectedText: 'wrong' }],
+      100,
+      /text at/,
+    ],
+  ]) {
+    const f = fixture(source)
+    const view = f.attach()
+    assert.throws(
+      () =>
+        sourceEditTransaction(
+          view.view.state,
+          f.session.snapshot(),
+          changes,
+          maximum,
+        ),
+      error,
+    )
+    assert.equal(f.session.snapshot().version, 0)
+    view.dispose()
+    f.session.dispose()
+  }
+})
+
 const type = (from, insert, time) => ({
   changes: { from, insert },
   selection: { anchor: from + insert.length },
@@ -121,6 +231,207 @@ test('two source views share text and history but keep separate selections', () 
   assert.equal(f.session.selection('right').ranges[0].head, 4)
   left.dispose()
   right.dispose()
+  f.session.dispose()
+})
+
+test('a hidden source view coalesces canonical edits and catches up exactly when shown', () => {
+  const f = fixture('one\r\ntwo\rthree\n')
+  const surface = f.attach()
+  surface.dispatch({ selection: { anchor: 3 } })
+  surface.bridge.setVisible(false)
+  f.observations.length = 0
+  const at = (text) => f.session.snapshot().materialize().indexOf(text)
+  for (const letter of 'abc')
+    f.session.edit(
+      [{ from: at('\r\n'), to: at('\r\n'), insert: letter }],
+      'visual',
+      'typing',
+    )
+  // Joining "\r" with a new "\n" turns two editor lines into one CRLF.
+  f.session.edit(
+    [{ from: at('three'), to: at('three'), insert: '\n' }],
+    'visual',
+    'seam',
+  )
+  f.session.edit([{ from: 0, to: 3, insert: 'ONE' }], 'visual', 'replace')
+  f.session.undo()
+  f.session.edit(
+    [{ from: at('two'), to: at('two') + 3, insert: '' }],
+    'visual',
+    'delete',
+  )
+  assert.equal(f.observations.length, 0)
+  assert.equal(f.operations.length, 7)
+  assert.equal(f.session.snapshot().materialize(), 'oneabc\r\n\r\nthree\n')
+  assert.equal(f.session.state().canUndo, true)
+  surface.bridge.setVisible(true)
+  assert.deepEqual(f.observations, [{ version: 7, operationCount: 7 }])
+  assert.equal(
+    surface.view.state.doc.toString(),
+    sourceEditorText(f.session.snapshot()).toString(),
+  )
+  assert.equal(
+    surface.view.state.selection.main.head,
+    f.session.snapshot().rawToEditor(f.session.selection().ranges[0].head),
+  )
+  surface.dispatch(type(6, '!', 0))
+  assert.equal(f.session.snapshot().materialize(), 'oneabc!\r\n\r\nthree\n')
+  assert.ok(f.session.undo())
+  assert.equal(surface.view.state.doc.toString(), 'oneabc\n\nthree\n')
+  assert.deepEqual(f.errors, [])
+  surface.dispose()
+  f.session.dispose()
+})
+
+test('a shown source view gets the caret immediate echoes would have left', () => {
+  const scenarios = [
+    {
+      source: 'abc\r\ndef\r\nghi',
+      caret: 5,
+      // Without a session selection, each echo maps the view's own caret.
+      steps: [
+        [6, 6, 'X'],
+        [7, 7, 'Y', true],
+        [0, 0, 'Z\r\n'],
+        [0, 1, ''],
+      ],
+      head: 7,
+    },
+    {
+      // Undo restores the untracked selection from before the caret was placed.
+      source: 'abcdef',
+      prefix: 'ZZ',
+      caret: 5,
+      steps: ['undo', [0, 0, 'XY'], [1, 6, '']],
+      head: 1,
+    },
+    {
+      source: 'abcdef',
+      caret: 3,
+      steps: [
+        [2, 4, '', true],
+        [1, 3, 'Y'],
+      ],
+    },
+    {
+      source: 'abcdef',
+      caret: 3,
+      steps: [
+        [1, 5, 'X', true],
+        [0, 1, ''],
+      ],
+    },
+    {
+      source: 'abcdef',
+      caret: 3,
+      steps: [
+        [0, 0, 'X'],
+        [2, 5, '', true],
+        [1, 3, 'Y'],
+      ],
+    },
+  ]
+  const run = ({ source, prefix, caret, steps }, hidden) => {
+    const f = fixture(source)
+    if (prefix)
+      f.session.edit([{ from: 0, to: 0, insert: prefix }], 'visual', 'prefix')
+    const surface = f.attach()
+    surface.dispatch({ selection: { anchor: caret } })
+    surface.bridge.setVisible(!hidden)
+    for (const step of steps) {
+      if (step === 'undo') {
+        f.session.undo()
+        assert.equal(f.session.selection(), null)
+        continue
+      }
+      const [from, to, insert, clear] = step
+      f.session.edit(
+        [{ from, to, insert }],
+        'visual',
+        'step',
+        undefined,
+        clear ? () => null : undefined,
+      )
+    }
+    surface.bridge.setVisible(true)
+    const result = {
+      doc: surface.view.state.doc.toString(),
+      selection: surface.view.state.selection.toJSON(),
+      source: f.session.snapshot().materialize(),
+      errors: f.errors,
+    }
+    surface.dispose()
+    f.session.dispose()
+    return result
+  }
+  for (const scenario of scenarios) {
+    const live = run(scenario, false)
+    if (scenario.head !== undefined)
+      assert.equal(live.selection.ranges[0].head, scenario.head)
+    assert.deepEqual(run(scenario, true), live, JSON.stringify(scenario.steps))
+  }
+})
+
+test('reads, internal effects and stale input keep a hidden source replica exact', () => {
+  const f = fixture('alpha\r\nbeta')
+  const surface = f.attach()
+  surface.dispatch({ selection: { anchor: 5 } })
+  surface.bridge.setVisible(false)
+  f.session.edit([{ from: 0, to: 0, insert: '# ' }], 'visual', 'heading')
+  f.observations.length = 0
+  // Parser and configuration effects apply to the replica without catching up.
+  const effect = StateEffect.define()
+  surface.bridge.dispatch(
+    [surface.view.state.update({ effects: effect.of(1) })],
+    surface.view,
+  )
+  assert.equal(surface.view.state.doc.toString(), 'alpha\nbeta')
+  const selection = f.session.selection()
+  surface.dispatch({ selection: { anchor: 1 } })
+  assert.equal(f.session.selection(), selection)
+  assert.throws(() => surface.dispatch(type(0, 'x', 0)), /synchronizing/)
+  assert.equal(f.session.snapshot().materialize(), '# alpha\r\nbeta')
+  assert.equal(surface.view.state.doc.toString(), '# alpha\nbeta')
+  assert.equal(f.observations.length, 3)
+  f.session.edit([{ from: 2, to: 7, insert: 'ALPHA' }], 'visual', 'caps')
+  assert.equal(surface.bridge.snapshot(), f.session.snapshot())
+  assert.equal(surface.view.state.doc.toString(), '# ALPHA\nbeta')
+  assert.equal(f.operations.length, 2)
+  assert.deepEqual(f.errors, [])
+  surface.dispose()
+  f.session.dispose()
+})
+
+test('storage compaction while source is hidden keeps the pending replica', async () => {
+  const chunk = 65536
+  const f = fixture('keep\r\nthis', { chunkUnits: chunk })
+  const surface = f.attach()
+  surface.bridge.setVisible(false)
+  // One retained character per arena chunk leaves reclaimable storage.
+  f.session.edit(
+    [{ from: 4, to: 4, insert: 'x'.repeat(5 * chunk) }],
+    'visual',
+    'paste',
+  )
+  f.session.edit(
+    Array.from({ length: 5 }, (_, index) => ({
+      from: 5 + index * chunk,
+      to: 4 + (index + 1) * chunk,
+      insert: '',
+    })),
+    'visual',
+    'cut',
+  )
+  f.session.edit([{ from: 0, to: 0, insert: '> ' }], 'visual', 'quote')
+  const before = f.session.snapshot()
+  await f.session.maintainStorage()
+  assert.notEqual(f.session.snapshot(), before)
+  f.session.edit([{ from: 17, to: 17, insert: '!' }], 'visual', 'mark')
+  surface.bridge.setVisible(true)
+  assert.equal(surface.view.state.doc.toString(), '> keepxxxxx\nthis!')
+  assert.equal(f.session.snapshot().materialize(), '> keepxxxxx\r\nthis!')
+  assert.deepEqual(f.errors, [])
+  surface.dispose()
   f.session.dispose()
 })
 

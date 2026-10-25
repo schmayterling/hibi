@@ -1,4 +1,4 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, BrowserWindow } from 'electron'
 import type { AddonManifest } from '../addons/api'
@@ -12,7 +12,7 @@ import {
   type AddonTrustSettings,
 } from '../shared/addon-trust'
 import { parseAddonRevocations, revokedAddon } from './addon-trust-crypto'
-import { retryRename } from './atomic-rename'
+import { writeText } from './files'
 import { isTrustedRendererUrl } from './security'
 
 const DAY = 24 * 60 * 60 * 1000
@@ -56,8 +56,7 @@ function parseSettings(value: unknown): AddonTrustSettings {
 
 async function save(file: string, value: unknown) {
   const target = path(file)
-  await writeFile(`${target}.tmp`, JSON.stringify(value), { mode: 0o600 })
-  await retryRename(() => rename(`${target}.tmp`, target))
+  await writeText(target, JSON.stringify(value))
 }
 
 export async function loadAddonTrust() {

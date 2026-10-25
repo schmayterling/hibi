@@ -45,7 +45,7 @@ function Form({
     </form>
   )
 }
-/** Draws one diagram that fits its container's width. */
+/** One diagram that fits its container's width. CSS hides the loading notice once it draws. */
 export function Diagram({
   source,
   emptyText,
@@ -54,31 +54,28 @@ export function Diagram({
   emptyText: string
 }) {
   const host = useRef<HTMLElement>(null)
-  const [state, setState] = useState({ drawn: false, error: '' })
-  // Loaded diagram types draw before the first paint, without a loading notice.
+  const [error, setError] = useState({ source: '', message: '' })
+  // Visible diagrams of loaded types draw before the first paint.
   useLayoutEffect(() => {
-    if (!host.current || !source.trim()) return
-    setState({ drawn: false, error: '' })
-    return mountDiagram(host.current, source, {
-      onRender: () => setState({ drawn: true, error: '' }),
-      onError: (reason) =>
-        setState({ drawn: false, error: errorMessage(reason) }),
-    })
+    if (host.current)
+      return mountDiagram(host.current, source, (reason) =>
+        setError({ source, message: errorMessage(reason) }),
+      )
   }, [source])
+  if (!source.trim())
+    return <DocumentNotice title="Empty diagram" message={emptyText} />
   return (
     <>
-      {!source.trim() ? (
-        <DocumentNotice title="Empty diagram" message={emptyText} />
-      ) : state.error ? (
-        <DocumentNotice title="Diagram unavailable" message={state.error} />
-      ) : (
-        !state.drawn && <DocumentNotice title="Rendering diagram…" busy />
-      )}
       <figure
         ref={host}
         className="mermaid-diagram"
         aria-label="Mermaid diagram"
       />
+      {error.source === source ? (
+        <DocumentNotice title="Diagram unavailable" message={error.message} />
+      ) : (
+        <DocumentNotice title="Rendering diagram…" busy />
+      )}
     </>
   )
 }

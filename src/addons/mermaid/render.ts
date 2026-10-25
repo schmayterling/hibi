@@ -1,5 +1,5 @@
 import DOMPurify from 'dompurify'
-import type { Mounted, RenderOptions } from 'pele'
+import type { ParsedDiagramModel, RenderOptions, RenderResult } from 'pele'
 import type { Colorscheme, ColorToken } from '../../shared/colorschemes'
 
 type Engine = typeof import('pele/lazy')
@@ -51,33 +51,190 @@ function readyEngine(source: string) {
   return type === null || loaded.registered(type) ? loaded : undefined
 }
 
-/** Draws now when this diagram type is loaded, otherwise after it loads. The cleanup cancels both. */
+type Diagram = {
+  element: HTMLElement
+  source: string
+  onError: (error: unknown) => void
+  idPrefix: string
+  ready: boolean
+  queued: boolean
+  model?: ParsedDiagramModel
+  natural?: RenderResult
+  adapts?: boolean
+  width?: number
+}
+type Fonts = { fontFamily: string; fontFamilyMono: string }
+const diagrams = new Map<Element, Diagram>()
+let resizes: ResizeObserver | undefined
+let sequence = 0
+let soon = false
+let frame = 0
+let idle = 0
+// Each pass stays short so typing, scrolling, closing the note, or disabling
+// diagrams never waits long behind a note full of diagrams.
+const budget = 8
+
+function request(when: 'now' | 'frame' | 'idle') {
+  if (when === 'now') {
+    if (soon) return
+    soon = true
+    queueMicrotask(() => {
+      soon = false
+      drain()
+    })
+  } else if (when === 'frame') {
+    if (frame) return
+    frame = requestAnimationFrame(() => {
+      frame = 0
+      drain()
+    })
+  } else {
+    if (idle) return
+    idle = requestIdleCallback(
+      () => {
+        idle = 0
+        drain(true)
+      },
+      { timeout: 1000 },
+    )
+  }
+}
+
+// Matches Pele's mount(): fit narrower containers when the layout can adapt.
+function layout(
+  engine: Engine,
+  diagram: Diagram,
+  width: number,
+  fonts: Fonts,
+): { svg?: DocumentFragment; error?: unknown } {
+  try {
+    diagram.model ??= engine.parse(diagram.source, options)
+    const model = diagram.model
+    const render = (maxWidth?: number) =>
+      engine.render(model, {
+        ...options,
+        ...fonts,
+        idPrefix: diagram.idPrefix,
+        ...(maxWidth ? { maxWidth } : {}),
+      })
+    diagram.natural ??= render()
+    const natural = diagram.natural
+    let result = natural
+    if (width < natural.width) {
+      diagram.adapts ??= render(1).svg !== natural.svg
+      if (diagram.adapts) result = render(width)
+    }
+    diagram.width = width
+    return { svg: sanitize(result.svg) }
+  } catch (error) {
+    return { error }
+  }
+}
+
+/** Draws within one budget: reads, then layouts, then DOM writes. Off-screen diagrams wait for idle time. */
+function drain(idleTime = false) {
+  const engine = loaded
+  if (!engine) return
+  if (document.fonts.status === 'loading') {
+    void document.fonts.ready.then(() => request('frame'))
+    return
+  }
+  const start = performance.now()
+  const queue: { diagram: Diagram; box: DOMRect }[] = []
+  for (const diagram of diagrams.values()) {
+    if (!diagram.queued || !diagram.ready) continue
+    const box = diagram.element.getBoundingClientRect()
+    // Hidden diagrams wait for the resize observer to report a width.
+    if (box.width > 0) queue.push({ diagram, box })
+  }
+  const first = queue[0]
+  if (!first) return
+  const style = getComputedStyle(first.diagram.element)
+  const fonts = {
+    fontFamily:
+      style.getPropertyValue('--pele-font').trim() || style.fontFamily,
+    fontFamilyMono:
+      style.getPropertyValue('--pele-font-mono').trim() || 'monospace',
+  }
+  const distance = ({ box }: { box: DOMRect }) =>
+    Math.max(0, box.top - innerHeight, -box.bottom)
+  queue.sort((a, b) => distance(a) - distance(b))
+  const drawn: ({ diagram: Diagram } & ReturnType<typeof layout>)[] = []
+  let visible = false
+  for (const entry of queue) {
+    if (!idleTime && distance(entry)) break
+    if (drawn.length && performance.now() - start > budget) break
+    visible ||= !distance(entry)
+    drawn.push({
+      diagram: entry.diagram,
+      ...layout(engine, entry.diagram, Math.floor(entry.box.width), fonts),
+    })
+  }
+  for (const { diagram, svg, error } of drawn) {
+    diagram.queued = false
+    diagram.element.replaceChildren(...(svg ? [svg] : []))
+    if (!svg) diagram.onError(error)
+  }
+  const next = queue[drawn.length]
+  // New heights can move more diagrams into view, so look again next frame.
+  if (next) request(visible || !distance(next) ? 'frame' : 'idle')
+}
+
+function resized(entries: ResizeObserverEntry[]) {
+  let queued = false
+  for (const { target, contentRect } of entries) {
+    const diagram = diagrams.get(target)
+    const width = Math.floor(contentRect.width)
+    if (!diagram?.ready || !width) continue
+    if (diagram.queued) queued = true
+    else if (
+      diagram.natural &&
+      diagram.adapts !== false &&
+      width !== diagram.width &&
+      Math.min(width, diagram.width ?? 0) < diagram.natural.width
+    ) {
+      diagram.queued = true
+      queued = true
+    }
+  }
+  if (queued) request('frame')
+}
+
+/** Queues a diagram that fits its container's width; the cleanup cancels it and every later redraw. */
 export function mountDiagram(
   element: HTMLElement,
   source: string,
-  events: { onRender: () => void; onError: (error: unknown) => void },
+  onError: (error: unknown) => void,
 ) {
-  let active = true
-  let diagram: Mounted | undefined
-  const draw = (engine: Engine) => {
-    if (active)
-      diagram = engine.mount(element, source, {
-        ...options,
-        ...events,
-        sanitize,
-        zoom: false,
-      })
+  const diagram: Diagram = {
+    element,
+    source,
+    onError,
+    idPrefix: `mermaid-${++sequence}`,
+    ready: !!readyEngine(source),
+    queued: true,
   }
-  const ready = readyEngine(source)
-  if (ready) draw(ready)
+  diagrams.set(element, diagram)
+  resizes ??= new ResizeObserver(resized)
+  resizes.observe(element)
+  if (diagram.ready) request('now')
   else
-    loadEngine(source).then(draw, (error) => {
-      if (active) events.onError(error)
-    })
+    loadEngine(source).then(
+      () => {
+        diagram.ready = true
+        if (diagrams.get(element) === diagram) request('now')
+      },
+      (error) => {
+        if (diagrams.get(element) !== diagram) return
+        diagram.queued = false
+        element.replaceChildren()
+        onError(error)
+      },
+    )
   return () => {
-    active = false
-    diagram?.destroy()
-    element.replaceChildren()
+    if (diagrams.get(element) !== diagram) return
+    diagrams.delete(element)
+    resizes?.unobserve(element)
   }
 }
 

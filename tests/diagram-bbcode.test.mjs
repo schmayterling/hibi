@@ -145,7 +145,9 @@ test('Mermaid and BBCode edit, preview, and export without executing content', {
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   assert.deepEqual(
-    await page.locator('.format-preview .document-notice').allTextContents(),
+    await page
+      .locator('.format-preview .document-notice:visible')
+      .allTextContents(),
     [],
   )
   const exportedHtml = await readFile(exported, 'utf8')
@@ -235,7 +237,7 @@ test('Mermaid and BBCode edit, preview, and export without executing content', {
   )
 })
 
-const launchWithNote = async (t, prefix, addons, markdown) => {
+const launchWithNote = async (t, prefix, addons, markdown, prepare) => {
   const temp = await mkdtemp(join(tmpdir(), prefix))
   const profile = join(temp, 'profile')
   await mkdir(profile)
@@ -254,6 +256,7 @@ const launchWithNote = async (t, prefix, addons, markdown) => {
   const page = await app.firstWindow()
   page.setDefaultTimeout(15000)
   await waitForDocumentEditor(app, page)
+  await prepare?.(page)
   const note = join(temp, 'note.md')
   await writeFile(note, markdown)
   await app.evaluate(({ dialog }, path) => {
@@ -265,8 +268,6 @@ const launchWithNote = async (t, prefix, addons, markdown) => {
   )
   return { app, page }
 }
-const drawn = '.mermaid-block :is(img.mermaid-diagram, .mermaid-diagram > svg)'
-
 test('Mermaid is on by default and keeps diagram links, images, and markup inert', {
   timeout: 60000,
 }, async (t) => {
@@ -305,24 +306,94 @@ flowchart LR
   assert.equal(await page.evaluate(() => window.compromised), undefined)
 })
 
-test('disabling Mermaid stops every pending diagram from drawing', {
-  timeout: 60000,
+test('a note full of diagrams draws visible ones first, then idle slices that stop when Mermaid is disabled', {
+  timeout: 90000,
 }, async (t) => {
+  const count = 120
   const diagrams = Array.from(
-    { length: 24 },
+    { length: count },
     (_, index) =>
-      `\`\`\`mermaid\nflowchart TD\n${Array.from(
-        { length: 30 },
+      `\`\`\`mermaid\nflowchart LR\n${Array.from(
+        { length: 20 },
         (_, step) => `  N${step}[Probe ${index}-${step}] --> N${step + 1}`,
       ).join('\n')}\n\`\`\`\n`,
   ).join('\n')
   const { app, page } = await launchWithNote(
     t,
-    'hibi-diagram-disable-',
+    'hibi-diagram-burst-',
     { mermaid: true },
     diagrams,
+    (page) =>
+      // Hold idle work so the test decides when each background pass runs.
+      page.evaluate(() => {
+        window.heldIdle = []
+        window.requestIdleCallback = (callback) =>
+          window.heldIdle.push(callback)
+        window.releaseIdle = () => {
+          for (const callback of window.heldIdle.splice(0))
+            callback({ didTimeout: false, timeRemaining: () => 50 })
+        }
+        window.diagramDraws = 0
+        new MutationObserver((records) => {
+          for (const record of records)
+            if (record.target.matches?.('.mermaid-diagram'))
+              window.diagramDraws += [...record.addedNodes].filter(
+                (node) => node.nodeName === 'svg',
+              ).length
+        }).observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+        })
+      }),
   )
-  await page.locator(drawn).first().waitFor()
+  const progress = () =>
+    page.evaluate(() => {
+      const figures = [
+        ...document.querySelectorAll('.mermaid-block .mermaid-diagram'),
+      ]
+      const visible = figures.filter((figure) => {
+        const box = figure.getBoundingClientRect()
+        return box.bottom > 0 && box.top < innerHeight
+      })
+      return {
+        drawn: figures.filter((figure) => figure.firstChild).length,
+        visible: visible.length,
+        pending: visible.filter((figure) => !figure.firstChild).length,
+      }
+    })
+  await page.waitForFunction(
+    (count) => document.querySelectorAll('.mermaid-block').length === count,
+    count,
+  )
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll('.mermaid-block .mermaid-diagram')].every(
+      (figure) => {
+        const box = figure.getBoundingClientRect()
+        return figure.firstChild || box.bottom <= 0 || box.top >= innerHeight
+      },
+    ),
+  )
+  // Without idle time, only the diagrams on screen have drawn.
+  const first = await progress()
+  assert.ok(first.visible > 0 && first.drawn > 0, JSON.stringify(first))
+  assert.equal(first.pending, 0)
+  assert.ok(first.drawn < count, JSON.stringify(first))
+  // One idle pass draws a slice within its budget, not the rest of the note.
+  // The pass is requested after the next frame confirms nothing else is on screen.
+  let second = first
+  for (let turn = 0; turn < 20 && second.drawn === first.drawn; turn++) {
+    await page.evaluate(() => {
+      window.releaseIdle()
+      return new Promise((resolve) => requestAnimationFrame(resolve))
+    })
+    await page.evaluate(() => window.releaseIdle())
+    second = await progress()
+  }
+  assert.ok(
+    second.drawn > first.drawn && second.drawn < count,
+    JSON.stringify(second),
+  )
+  // Disabling Mermaid mid-way cancels every diagram still waiting to draw.
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-mermaid').click()
@@ -330,24 +401,15 @@ test('disabling Mermaid stops every pending diagram from drawing', {
     () => !document.querySelector('#addon-mermaid').checked,
   )
   await page.locator('.mermaid-block').first().waitFor({ state: 'detached' })
-  // Diagrams that are no longer shown must not draw anywhere, even off-screen.
-  await page.evaluate(() => {
-    window.drawnAfterDisable = 0
-    new MutationObserver((records) => {
-      for (const record of records)
-        for (const node of record.addedNodes)
-          if (node.nodeType === 1)
-            window.drawnAfterDisable += [
-              ...(node.matches('svg') ? [node] : node.querySelectorAll('svg')),
-            ].filter((svg) => !svg.matches('.lucide')).length
-    }).observe(document.documentElement, { childList: true, subtree: true })
-  })
+  const draws = await page.evaluate(() => window.diagramDraws)
   await page.getByRole('button', { name: /^back to app$/i }).click()
-  // Idle time comes after queued renders and their effects.
-  for (let turn = 0; turn < 5; turn++)
-    await page.evaluate(
-      () => new Promise((resolve) => requestIdleCallback(resolve)),
-    )
-  assert.equal(await page.evaluate(() => window.drawnAfterDisable), 0)
-  assert.equal(await page.locator('.tiptap pre').count(), 24)
+  for (let turn = 0; turn < 3; turn++)
+    await page.evaluate(() => {
+      window.releaseIdle()
+      return new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      )
+    })
+  assert.equal(await page.evaluate(() => window.diagramDraws), draws)
+  assert.equal(await page.locator('.tiptap pre').count(), count)
 })

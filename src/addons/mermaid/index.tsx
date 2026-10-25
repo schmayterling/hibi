@@ -14,7 +14,7 @@ const previewCss = () => {
 img.mermaid-diagram{display:block;width:auto;height:auto;max-width:100%;max-height:${height}px;margin:auto}
 .mermaid-diagram{margin:0;${theme};--pele-font:var(--font-ui);--pele-font-mono:var(--font-mono);--pele-radius:var(--radius-control)}
 .mermaid-diagram>svg{display:block;margin:auto;max-height:${height}px}
-.mermaid-diagram>.pele-error{display:none}
+.mermaid-diagram:not(:empty)+.document-notice{display:none}
 .mermaid-block{position:relative;margin:1em 0;padding:16px;border:1px solid var(--border);border-radius:var(--radius-control)}
 .mermaid-block>button{position:absolute;right:8px;top:8px}`
 }

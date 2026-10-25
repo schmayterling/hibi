@@ -9,7 +9,7 @@ flowchart LR
 
 Open a `.mmd` or `.mermaid` file to work on a diagram by itself. Use side-by-side view to see your diagram as you write, then choose **Export HTML** to save it.
 
-Diagrams fit the width of the editor pane, and wide flowcharts can switch to a vertical layout in narrow panes. Open **Settings → Mermaid** to set the maximum diagram height. Taller diagrams scale down to fit the editor pane and exported HTML.
+Diagrams fit the width of the editor pane, and wide flowcharts can switch to a vertical layout in narrow panes. In long notes, the diagrams on screen draw first and the rest fill in while Hibi is idle. Open **Settings → Mermaid** to set the maximum diagram height. Taller diagrams scale down to fit the editor pane and exported HTML.
 
 Diagram colors and fonts follow the active colorscheme, including system light and dark mode. HTML exports keep the colorscheme active when you export them. Colors set with `style` or `classDef` in a diagram stay fixed, while Mermaid themes and theme variables don't apply.
 

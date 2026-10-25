@@ -232,29 +232,31 @@ export class EditorInteractionBroker<T> {
     const session = this.#active ?? this.#visible
     if (!session) return
     let changed = false
+    const controllers: AbortController[] = []
     for (const job of session.jobs) {
       if (!ids.includes(job.registration.id)) continue
       job.items = []
       job.state = 'cancelled'
-      job.controller.abort()
+      controllers.push(job.controller)
       changed = true
     }
     if (!changed) return
     if (this.#visible === session) {
       const epoch = this.#lifetime.token
       const current = this.#current(session)
-      if (!this.#lifetime.current(epoch) || this.#visible !== session) return
-      const items = current ? this.#items(session) : []
-      if (!items.length) this.#visible = null
-      try {
-        session.update(items, true)
-      } catch {
-        if (this.#visible === session) this.#visible = null
+      if (this.#lifetime.current(epoch) && this.#visible === session) {
+        const items = current ? this.#items(session) : []
+        if (!items.length) this.#visible = null
+        try {
+          session.update(items, true)
+        } catch {
+          this.#visible = null
+        }
       }
-    } else {
-      this.#publish(session, false)
-      this.#pump()
-    }
+    } else if (this.#active === session) this.#publish(session, false)
+    for (const controller of controllers) controller.abort()
+    if (this.#active !== session) return
+    this.#pump()
   }
 
   #current(session: Session<T>) {
@@ -304,7 +306,7 @@ export class EditorInteractionBroker<T> {
     try {
       session.update(items, true)
     } catch {
-      if (this.#visible === session) this.#visible = null
+      this.#visible = null
     }
   }
 

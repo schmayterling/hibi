@@ -378,6 +378,14 @@ test('published sites support direct routes, crawlable HTML, branding, locked th
     await page.locator('meta[name="description"]').getAttribute('content'),
     'Build something useful.',
   )
+  await page.getByRole('button', { name: /^search documentation$/i }).click()
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('getting started')
+  await page.getByRole('option', { name: /getting started/i }).click()
+  await page.waitForFunction(() => location.hash === '#getting-started')
+  await page.locator('article #doc-getting-started').waitFor()
+  await page.goto(`${base}development/README.md/`)
   await page.reload()
   await page.getByRole('button', { name: /^open graph$/i }).click()
   const graph = page.getByRole('dialog', { name: /^graph$/i })

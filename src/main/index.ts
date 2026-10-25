@@ -171,6 +171,7 @@ import { HostNetwork } from './host-network'
 import { HostSelectedIoService } from './host-selected-io'
 import { hotkeys, loadHotkeys, saveHotkeys } from './hotkeys'
 import { readDocumentImage } from './images'
+import { cancelImport, runCancellableImport } from './import-cancellation'
 import { listLicenses, readLicense } from './licenses'
 import {
   openDocumentLink,
@@ -1027,6 +1028,7 @@ function createWindow(): void {
   }
   window.on('close', (event) => {
     if (allowClose) return
+    cancelImport(window.id)
     event.preventDefault()
     if (confirmingClose) return
     if (background.enabled && !quitting) {
@@ -2237,10 +2239,15 @@ if (!app.requestSingleInstanceLock()) {
         trustedWindow(event)
         return import('./imports').then((module) => module.listImporters())
       })
+      handle(IMPORT_CHANNELS.cancel, (event) => {
+        cancelImport(trustedWindow(event).id)
+      })
       handle(IMPORT_CHANNELS.run, (event, request: unknown) =>
-        runFileOperation(event, (window) =>
-          import('./imports').then((module) =>
-            module.importIntoWorkspace(window, request),
+        runCancellableImport(trustedWindow(event).id, (signal) =>
+          runFileOperation(event, (window) =>
+            import('./imports').then((module) =>
+              module.importIntoWorkspace(window, request, signal),
+            ),
           ),
         ),
       )

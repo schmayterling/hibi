@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import {
   launchBenchmarkApp,
+  switchToSource,
   waitForEditor,
 } from '../scripts/benchmark-flows.mjs'
 import {
@@ -12,7 +13,7 @@ import {
   showTestWindows,
   waitForDocumentEditor,
 } from './electron.mjs'
-import { clickMenu } from './keyboard.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
 
 test('typing coalesces formatting checks without delaying document changes or undo', {
@@ -67,6 +68,71 @@ test('typing coalesces formatting checks without delaying document changes or un
   assert.equal(result.persisted, 'hello')
   assert.equal(result.undone, '')
   assert.equal(result.redone, 'hello')
+})
+
+test('visual typing after a source visit defers the hidden source and toolbar checks', {
+  timeout: 30000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-hidden-source-'))
+  const app = await launchBenchmarkApp(profile)
+  t.after(async () => {
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForEditor(page)
+  await switchToSource(app, page)
+  await pressShortcut(
+    app,
+    `${process.platform === 'darwin' ? 'Meta' : 'Control'}+Shift+[`,
+  )
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.editor-panes.mode-normal') &&
+      document.querySelector('.source-pane .cm-content')?.closest('[inert]'),
+  )
+  await waitForEditor(page)
+  const result = await page.evaluate(async () => {
+    const editor = document.querySelector('.tiptap').editor
+    const source = document.querySelector('.cm-content').cmTile.root.view
+    editor.commands.focus('end')
+    await new Promise(requestAnimationFrame)
+    const visibleActions = document.querySelectorAll(
+      '.editor-toolbar [data-toolbar-id^="format."]',
+    ).length
+    let updates = 0,
+      checks = 0
+    const update = source.update.bind(source)
+    source.update = (...args) => {
+      updates++
+      return update(...args)
+    }
+    const can = editor.can.bind(editor)
+    editor.can = (...args) => {
+      checks++
+      return can(...args)
+    }
+    for (const letter of 'hello') editor.commands.insertContent(letter)
+    const immediate = { updates, checks, text: editor.getText() }
+    while (!checks) await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+    return { immediate, afterFrame: { updates, checks }, visibleActions }
+  })
+  // One toolbar refresh after paint; the hidden source waits until shown.
+  assert.deepEqual(result.immediate, { updates: 0, checks: 0, text: 'hello' })
+  assert.deepEqual(result.afterFrame, {
+    updates: 0,
+    checks: result.visibleActions,
+  })
+  await switchToSource(app, page)
+  const shown = await page.evaluate(async () => {
+    const source = document.querySelector('.cm-content').cmTile.root.view
+    return {
+      text: source.state.doc.toString(),
+      persisted: (await window.hibi.getDocument()).markdown,
+    }
+  })
+  assert.deepEqual(shown, { text: 'hello', persisted: 'hello' })
 })
 
 test('formatting toolbar states match each action check across selections, typing and history', {

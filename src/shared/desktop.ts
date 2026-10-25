@@ -184,6 +184,7 @@ export type DesktopApi = {
     recentWorkspaces: () => Promise<import('./workspace').RecentWorkspace[]>
     knownWorkspaces: () => Promise<import('./workspace').KnownWorkspace[]>
   }
+  cancelWorkspaceImport: () => Promise<void>
   listImporters: () => Promise<import('./imports').Importer[]>
   importIntoWorkspace: (
     request: import('./imports').ImportRequest,

@@ -321,7 +321,7 @@
     "src/renderer/src/rich-source-session.ts"
   ],
   "9ab20d9f0486": [
-    "src/renderer/src/SourceEditor.tsx"
+    "src/renderer/src/source-session.ts"
   ],
   "293aad4970e4": [
     "src/renderer/src/Editor.tsx"
@@ -560,9 +560,6 @@
   ],
   "1bce26d66adc": [
     "src/addons/documentation/ExportDialog.tsx"
-  ],
-  "cfda0ed6535b": [
-    "src/addons/import-notion/convert.ts"
   ],
   "b73a5e2ca645": [
     "src/addons/diagnostics/Settings.tsx"
@@ -1450,6 +1447,9 @@
   "2a30abd5f2ce": [
     "src/main/dependencies.ts"
   ],
+  "91dcce8f7449": [
+    "src/addons/autocomplete/Settings.tsx"
+  ],
   "98bdb8dbc149": [
     "src/addons/dictionary/SideView.tsx",
     "src/addons/dictionary/custom-words.ts",
@@ -1940,7 +1940,7 @@
   "7bc860ccf5e3": [
     "src/addons/frontmatter/hibi-addon.json"
   ],
-  "0daa134af314": [
+  "c1a90ec7d781": [
     "src/shared/document-edits.ts"
   ],
   "b865e72c0593": [
@@ -2018,7 +2018,7 @@
     "src/renderer/src/addons.ts"
   ],
   "a608f028f460": [
-    "src/renderer/src/SourceEditor.tsx"
+    "src/renderer/src/source-session.ts"
   ],
   "b02278826abb": [
     "src/addons/mcp-server/types.ts"
@@ -2732,20 +2732,21 @@
   "47fa752d5df7": [
     "src/renderer/src/markdown-syntax.ts"
   ],
-  "b7630abc21fb": [
-    "src/main/import-files.ts"
+  "33ffe414fe4e": [
+    "src/addons/_shared/import-worker-client.ts"
   ],
-  "c50f362f8855": [
-    "src/main/import-files.ts"
-  ],
-  "23eefd0e1bbc": [
-    "src/main/import-files.ts"
+  "199a7dbf37b9": [
+    "src/addons/_shared/import-worker-client.ts"
   ],
   "0a26f41abd00": [
     "src/renderer/src/ImportDialog.tsx"
   ],
   "6a9e73cf0d42": [
     "src/main/host-selected-io.ts"
+  ],
+  "27d24ecfb271": [
+    "src/addons/_shared/import-packet.ts",
+    "src/main/import-files.ts"
   ],
   "f9e4378d7a08": [
     "src/renderer/src/ImportDialog.tsx"
@@ -5758,9 +5759,6 @@
   "d3a23215018d": [
     "src/main/sideload.ts"
   ],
-  "23b54a5e62e2": [
-    "src/shared/document-edits.ts"
-  ],
   "a6cea19581d6": [
     "src/shared/document-edits.ts"
   ],
@@ -5815,11 +5813,19 @@
   "d84f02a8b4bc": [
     "src/main/workspace-actions.ts"
   ],
-  "d60d1c552b62": [
+  "34f17c8d67af": [
     "src/main/import-files.ts"
   ],
+  "d60d1c552b62": [
+    "src/addons/_shared/import-packet.ts",
+    "src/addons/_shared/import-worker-client.ts",
+    "src/main/import-files.ts",
+    "src/main/imports.ts",
+    "src/shared/imports.ts"
+  ],
   "c6ba816d86a5": [
-    "src/main/import-files.ts"
+    "src/main/import-files.ts",
+    "src/main/imports.ts"
   ],
   "23aa870889ee": [
     "src/main/import-files.ts"
@@ -5924,7 +5930,6 @@
     "src/main/addon-directory.ts"
   ],
   "bee50784d023": [
-    "src/renderer/src/document-target-edits.ts",
     "src/shared/document-edits.ts"
   ],
   "6aa88449912f": [
@@ -6222,7 +6227,7 @@
     "src/addons/dictionary/pack-store.ts"
   ],
   "f70a180e8466": [
-    "src/addons/_shared/import-markdown.ts"
+    "src/shared/imports.ts"
   ],
   "b3e591b2b962": [
     "src/main/files.ts"
@@ -6323,6 +6328,9 @@
     "src/main/addon-documentation.ts"
   ],
   "a1a3c01051cc": [
+    "src/main/addons.ts"
+  ],
+  "4275527a00a6": [
     "src/main/addons.ts"
   ],
   "2ff13ca6ab5c": [

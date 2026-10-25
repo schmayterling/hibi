@@ -6,7 +6,6 @@ import {
   realpath,
   rename,
   rm,
-  writeFile,
 } from 'node:fs/promises'
 import { basename, isAbsolute, join } from 'node:path'
 import { app, type BrowserWindow, dialog } from 'electron'
@@ -15,7 +14,6 @@ import type {
   WorkspaceSettings,
   WorkspaceSettingsAction,
 } from '../shared/workspace-settings'
-import { retryRename } from './atomic-rename'
 import {
   getDocument,
   getDocumentPath,
@@ -24,6 +22,7 @@ import {
   relocateDocument,
 } from './document'
 import { runFileDialog } from './file-operation-dialog'
+import { writeText } from './files'
 import {
   getWorkspace,
   loadWorkspace,
@@ -84,8 +83,7 @@ export async function showAllWorkspaceFiles() {
   return (await preferences()).showAllFiles
 }
 async function savePreferences(value: WorkspacePreferences) {
-  await writeFile(`${location()}.tmp`, JSON.stringify(value), { mode: 0o600 })
-  await retryRename(() => rename(`${location()}.tmp`, location()))
+  await writeText(location(), JSON.stringify(value))
 }
 export async function getWorkspaceSettings(): Promise<WorkspaceSettings> {
   const currentPath = workspaceRoot()

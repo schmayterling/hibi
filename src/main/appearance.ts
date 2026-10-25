@@ -1,4 +1,4 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, nativeTheme } from 'electron'
 import {
@@ -6,7 +6,7 @@ import {
   type NativeAppearance,
   themePreferences,
 } from '../shared/colorschemes'
-import { retryRename } from './atomic-rename'
+import { writeText } from './files'
 
 let appearance: NativeAppearance = {
   preferences: DEFAULT_THEME,
@@ -91,8 +91,7 @@ export function saveAppearance(value: unknown) {
   writing = writing
     .catch(() => {})
     .then(async () => {
-      await writeFile(`${path}.tmp`, JSON.stringify(next), { mode: 0o600 })
-      await retryRename(() => rename(`${path}.tmp`, path))
+      await writeText(path, JSON.stringify(next))
     })
   return writing
 }

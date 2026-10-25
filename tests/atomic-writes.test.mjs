@@ -19,12 +19,13 @@ async function runtime({
       build({
         stdin: {
           contents:
-            "export { writeText } from './src/main/files.ts'; export { createAddonStorage } from './src/main/addon-storage.ts'; export { replaceExistingText } from './src/main/workspace-atomic-update.ts'; export { writeWorkspaceText, WORKSPACE_MANIFEST } from './src/main/workspace-metadata.ts'; export { HostCredentials } from './src/main/host-credentials.ts'; export { LocalDiagnosticSink } from './src/main/local-diagnostics/sink.ts'",
+            "export { saveUiCase, getUiCase } from './src/main/ui-case.ts'; export { writeText } from './src/main/files.ts'; export { createAddonStorage } from './src/main/addon-storage.ts'; export { replaceExistingText } from './src/main/workspace-atomic-update.ts'; export { writeWorkspaceText, WORKSPACE_MANIFEST } from './src/main/workspace-metadata.ts'; export { HostCredentials } from './src/main/host-credentials.ts'; export { LocalDiagnosticSink } from './src/main/local-diagnostics/sink.ts'",
           resolveDir: resolve('.'),
         },
         bundle: true,
         write: false,
         platform: 'node',
+        external: ['electron'],
         format: 'cjs',
         define: { 'process.platform': JSON.stringify(platform) },
       }),
@@ -33,6 +34,7 @@ async function runtime({
   const state = { attempts: 0, delays: [], live: true }
   const original = Object.assign(new Error('first rename failure'), { code })
   const mocks = {
+    electron: { app: { getPath: () => state.preferenceRoot } },
     'node:fs/promises': {
       ...fs,
       rename: async (source, destination) => {
@@ -62,6 +64,30 @@ async function runtime({
   )
   return { module, state, original }
 }
+
+test('migrated casing preference keeps old file and cleans staging on failed commit', async (t) => {
+  const root = await fs.mkdtemp(join(tmpdir(), 'hibi-preference-write-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const file = join(root, 'ui-case.json')
+  await fs.writeFile(file, JSON.stringify('sentence'))
+  const { module, state, original } = await runtime({
+    platform: 'linux',
+    code: 'EACCES',
+    failures: 1,
+  })
+  state.preferenceRoot = root
+  await assert.rejects(
+    module.exports.saveUiCase('lowercase'),
+    (error) => error === original,
+  )
+  assert.equal(await fs.readFile(file, 'utf8'), JSON.stringify('sentence'))
+  assert.deepEqual(await fs.readdir(root), ['ui-case.json'])
+  // Casing intentionally publishes before persistence, including on failure.
+  assert.equal(module.exports.getUiCase(), 'lowercase')
+  await module.exports.saveUiCase('sentence')
+  assert.equal(await fs.readFile(file, 'utf8'), JSON.stringify('sentence'))
+  assert.deepEqual(await fs.readdir(root), ['ui-case.json'])
+})
 
 async function writer(t, kind, options) {
   const { module, state, original } = await runtime(options)

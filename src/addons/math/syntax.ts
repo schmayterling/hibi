@@ -10,8 +10,12 @@ export function inlineMath(source: string) {
 export function blockMathStart(source: string) {
   // Marked probes after dropping the first character; only a real newline
   // proves a block boundary. The tokenizer handles the current line itself.
-  const match = /\n {0,3}\$\$/.exec(source)
-  return match ? match.index + 1 : -1
+  // Marked only uses this to end the paragraph it is reading, so stop at a
+  // blank line or heading, which ends it anyway, instead of the note's end.
+  const match = /\n(?: {0,3}(\$\$)|[ \t]*\n| {0,3}#{1,6}(?:[ \t\n]|$))/.exec(
+    source,
+  )
+  return match?.[1] ? match.index + 1 : -1
 }
 export function blockMath(source: string) {
   const match =

@@ -267,3 +267,106 @@ test('math round-trips preserve bytes through unrelated rich edits', () => {
     }
   }
 })
+
+test('display math start hints stop at the paragraph marked is reading', () => {
+  const start = mathTokens.extensions.find(
+    ({ name }) => name === 'blockMath',
+  ).start
+  // Count only the units this hint's own probe reads.
+  const exec = RegExp.prototype.exec
+  let scanned = 0
+  RegExp.prototype.exec = function (input) {
+    const match = exec.call(this, input)
+    if (this.source.includes('(\\$\\$)'))
+      scanned += match ? match.index + match[0].length : input.length
+    return match
+  }
+  try {
+    const filler = 'words '.repeat(50_000)
+    assert.equal(start(`ext\n\n${filler}\n$$x$$`), -1)
+    assert.equal(scanned, 'ext\n\n'.length)
+    scanned = 0
+    assert.equal(start(`ext\n \t\n${filler}\n$$x$$`), -1)
+    assert.equal(scanned, 'ext\n \t\n'.length)
+    scanned = 0
+    assert.equal(start(`ext\n## heading\n${filler}\n$$x$$`), -1)
+    assert.equal(scanned, 'ext\n## '.length)
+    // Display math inside the paragraph still ends it.
+    assert.equal(start(`ext\n   $$x$$\n\n${filler}`), 4)
+    // A note costs one linear pass, not a rest-of-note scan per paragraph.
+    scanned = 0
+    const note = `${Array.from(
+      { length: 2000 },
+      (_, index) => `paragraph ${index} text`,
+    ).join('\n\n')}\n\n$$x$$`
+    const tokens = new Marked(mathTokens).lexer(note)
+    assert.equal(tokens.filter(({ type }) => type === 'blockMath').length, 1)
+    assert.ok(scanned > 0 && scanned <= note.length, `${scanned}`)
+  } finally {
+    RegExp.prototype.exec = exec
+  }
+})
+
+test('bounded display math hints keep marked tokens on a fuzzed corpus', () => {
+  const unbounded = (source) => {
+    const match = /\n {0,3}\$\$/.exec(source)
+    return match ? match.index + 1 : -1
+  }
+  const lines = [
+    ...['text', 'more words', 'x\\', '$a$', 'text $$x$$ more', '\\$$'],
+    ...['$$', '$$x$$', ' $$y$$', '   $$z$$', '    $$code$$', '\t$$t$$'],
+    ...['$$\\frac{1}{2}$$', '$$ a', 'b $$'],
+    ...['# heading', '#', '##x', '###### six', '####### seven', '#\ttab'],
+    ...['> quote', '> $$q$$', '- item', '* item', '1. item', '2) item'],
+    ...['  - nested', '    indented', '```', '```tex', '~~~'],
+    ...['| a | b |', '|---|---|', '<div>', '</div>', '---', '***', '==='],
+    ...['', '', ' ', '  ', '\t', ' \t '],
+  ]
+  let seed = 0x9e3779b9
+  const random = () => {
+    seed ^= seed << 13
+    seed ^= seed >>> 17
+    seed ^= seed << 5
+    return (seed >>> 0) / 2 ** 32
+  }
+  for (const gfm of [false, true]) {
+    const before = new Marked(
+      { gfm },
+      {
+        extensions: mathTokens.extensions.map((extension) =>
+          extension.name === 'blockMath'
+            ? { ...extension, start: unbounded }
+            : extension,
+        ),
+      },
+    )
+    const after = new Marked({ gfm }, mathTokens)
+    for (let index = 0; index < 5000; index++) {
+      const source =
+        Array.from(
+          { length: 1 + Math.floor(random() * 12) },
+          () => lines[Math.floor(random() * lines.length)],
+        ).join(random() < 0.1 ? '\r\n' : '\n') + (random() < 0.5 ? '\n' : '')
+      const previous = before.lexer(source)
+      const current = after.lexer(source)
+      // A `$$` line past a blank line or heading no longer marks the paragraph
+      // as clipped, so marked stops merging the next adjacent paragraph into it.
+      let at = 0
+      for (const token of previous) {
+        const span = [current[at++]]
+        while (span.map(({ raw }) => raw).join('').length < token.raw.length)
+          span.push(current[at++])
+        if (span.length === 1) assert.deepEqual(span[0], token, source)
+        else {
+          assert.equal(token.type, 'paragraph', source)
+          assert.ok(
+            span.every((part) => part?.type === 'paragraph'),
+            source,
+          )
+          assert.equal(span.map(({ raw }) => raw).join(''), token.raw, source)
+        }
+      }
+      assert.equal(at, current.length, source)
+    }
+  }
+})

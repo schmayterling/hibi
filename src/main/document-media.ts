@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { constants } from 'node:fs'
-import { open, realpath } from 'node:fs/promises'
+import { constants, type Stats } from 'node:fs'
+import { open, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, relative, sep } from 'node:path'
 import { Readable } from 'node:stream'
 import {
@@ -58,34 +58,89 @@ export async function openMedia(path: string, signal?: AbortSignal) {
 }
 
 type Scope = { note: string | null; revision: number; workspace: string | null }
+type Version = {
+  path: string
+  mime: string
+  stat: Stats
+  token: string
+  controller: AbortController
+}
 type Entry = {
   source: string
   scope: Scope
-  token: string
   controller: AbortController
   dependencies: Set<string>
   clients: Set<string>
-  result: Promise<DocumentMediaResolution | null>
-  path?: string
-  mime?: string
+  result: Promise<DocumentMediaResolution | null> | null
+  resolution?: AbortController
+  version?: Version
 }
 
-/** One serial header-resolution queue shared by all display callers. */
+function sameFile(
+  left: Pick<Version, 'path' | 'mime' | 'stat'>,
+  right: Pick<Version, 'path' | 'mime' | 'stat'>,
+) {
+  return (
+    left.path === right.path &&
+    left.mime === right.mime &&
+    left.stat.dev === right.stat.dev &&
+    left.stat.ino === right.stat.ino &&
+    left.stat.size === right.stat.size &&
+    left.stat.mtimeMs === right.stat.mtimeMs
+  )
+}
+
+/** Share and admit resolution work; already-issued streams never wait behind it. */
 export class DocumentMediaServer {
   private entries = new Map<string, Entry>()
-  private tokens = new Map<string, Entry>()
+  private tokens = new Map<string, { entry: Entry; version: Version }>()
   private requests = new Map<string, Entry>()
-  private tail: Promise<unknown> = Promise.resolve()
+  private waiting = new Set<() => void>()
+  private active = 0
   private scope = ''
   private current: () => Scope
   constructor(current: () => Scope) {
     this.current = current
   }
 
-  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.tail.then(operation)
-    this.tail = result.catch(() => undefined)
-    return result
+  private drain() {
+    for (const start of this.waiting) {
+      if (this.active >= 4) break
+      this.waiting.delete(start)
+      start()
+    }
+  }
+
+  private enqueue<T>(
+    operation: () => Promise<T>,
+    signal: AbortSignal,
+  ): Promise<T | null> {
+    return new Promise((resolve) => {
+      let started = false,
+        settled = false
+      const finish = (result: T | null) => {
+        if (settled) return
+        settled = true
+        signal.removeEventListener('abort', abort)
+        this.waiting.delete(start)
+        if (started) this.active--
+        resolve(result)
+        this.drain()
+      }
+      const abort = () => finish(null)
+      const start = () => {
+        if (settled) return
+        started = true
+        this.active++
+        void operation().then(finish, () => finish(null))
+      }
+      signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) abort()
+      else {
+        this.waiting.add(start)
+        queueMicrotask(() => this.drain())
+      }
+    })
   }
 
   private live(entry: Entry) {
@@ -98,7 +153,8 @@ export class DocumentMediaServer {
     )
   }
 
-  private paths(entry: Entry) {
+  private paths(entry: Entry): string[] | null {
+    if (!entry.dependencies.size) return null
     const root = entry.scope.workspace
     return root
       ? [...entry.dependencies].flatMap((path) => {
@@ -113,14 +169,93 @@ export class DocumentMediaServer {
       : []
   }
 
+  private revoke(entry: Entry) {
+    if (!entry.version) return
+    entry.version.controller.abort()
+    this.tokens.delete(entry.version.token)
+    delete entry.version
+  }
+
   private retire(entry: Entry) {
     entry.controller.abort()
+    this.revoke(entry)
     for (const client of entry.clients)
       if (this.requests.get(client) === entry) this.requests.delete(client)
     entry.clients.clear()
     if (this.entries.get(entry.source) === entry)
       this.entries.delete(entry.source)
-    this.tokens.delete(entry.token)
+  }
+
+  private async load(entry: Entry, signal: AbortSignal, paths?: Set<string>) {
+    signal.throwIfAborted()
+    if (!this.live(entry)) return null
+    const source = await resolveDocumentMediaPath(
+      entry.source,
+      entry.scope.note,
+      entry.scope.workspace,
+      paths ? { paths, signal } : { signal },
+    )
+    if (!source || !this.live(entry) || signal.aborted) return null
+    const path = await realpath(source)
+    paths?.add(path)
+    signal.throwIfAborted()
+    const expected = await stat(path)
+    signal.throwIfAborted()
+    const opened = await openMedia(path, signal)
+    try {
+      // Bind validation to the opened inode, including a symlink replaced during open.
+      if (
+        opened.stat.dev !== expected.dev ||
+        opened.stat.ino !== expected.ino ||
+        (await realpath(source)) !== path ||
+        !this.live(entry) ||
+        signal.aborted
+      ) {
+        await opened.file.close()
+        return null
+      }
+      return { ...opened, path }
+    } catch (error) {
+      await opened.file.close()
+      throw error
+    }
+  }
+
+  private async inspect(
+    entry: Entry,
+    signal: AbortSignal,
+  ): Promise<DocumentMediaResolution | null> {
+    const dependencies = new Set<string>()
+    const opened = await this.load(entry, signal, dependencies).catch(
+      () => null,
+    )
+    try {
+      if (!this.live(entry) || signal.aborted) return null
+      entry.dependencies = dependencies
+      if (!opened) this.revoke(entry)
+      else if (!entry.version || !sameFile(entry.version, opened)) {
+        this.revoke(entry)
+        entry.version = {
+          path: opened.path,
+          mime: opened.mime,
+          stat: opened.stat,
+          token: randomUUID(),
+          controller: new AbortController(),
+        }
+        this.tokens.set(entry.version.token, { entry, version: entry.version })
+      }
+      return {
+        media: entry.version
+          ? {
+              kind: entry.version.mime.startsWith('image/') ? 'image' : 'video',
+              url: `app://hibi/document-media/${entry.version.token}`,
+            }
+          : null,
+        paths: this.paths(entry),
+      }
+    } finally {
+      await opened?.file.close()
+    }
   }
 
   resolve(
@@ -141,58 +276,30 @@ export class DocumentMediaServer {
       entry = {
         source,
         scope,
-        token: randomUUID(),
         controller: new AbortController(),
         dependencies: new Set(),
         clients: new Set(),
-        result: Promise.resolve(null),
+        result: null,
       }
-      const pending = entry
       this.entries.set(source, entry)
-      entry.result = this.enqueue(async () => {
-        try {
-          if (!this.live(pending)) return null
-          const path = await resolveDocumentMediaPath(
-            source,
-            scope.note,
-            scope.workspace,
-            {
-              paths: pending.dependencies,
-              signal: pending.controller.signal,
-            },
-          )
-          if (!this.live(pending)) return null
-          if (path) {
-            pending.path = await realpath(path)
-            pending.dependencies.add(pending.path)
-            if (!this.live(pending)) return null
-            const { file, mime } = await openMedia(
-              pending.path,
-              pending.controller.signal,
-            )
-            await file.close()
-            if (!this.live(pending)) return null
-            pending.mime = mime
-            this.tokens.set(pending.token, pending)
-          }
-          return {
-            media: pending.mime
-              ? {
-                  kind: pending.mime.startsWith('image/') ? 'image' : 'video',
-                  url: `app://hibi/document-media/${pending.token}`,
-                }
-              : null,
-            paths: this.paths(pending),
-          }
-        } catch {
-          return this.live(pending)
-            ? { media: null, paths: this.paths(pending) }
-            : null
-        }
-      })
     }
     entry.clients.add(request)
     this.requests.set(request, entry)
+    if (!entry.result) {
+      const controller = new AbortController()
+      entry.resolution = controller
+      const pending = entry
+      const signal = AbortSignal.any([
+        entry.controller.signal,
+        controller.signal,
+      ])
+      entry.result = this.enqueue(
+        () => this.inspect(pending, signal),
+        signal,
+      ).finally(() => {
+        if (pending.resolution === controller) delete pending.resolution
+      })
+    }
     const pending = entry
     return entry.result.then((result) =>
       this.requests.get(request) === pending && this.live(pending)
@@ -210,45 +317,32 @@ export class DocumentMediaServer {
   }
 
   invalidate(change?: { kind: string; paths: readonly string[] | null }) {
-    for (const entry of this.entries.values())
-      if (
-        mediaPathsChanged(
-          entry.dependencies.size ? this.paths(entry) : null,
-          change,
-        )
-      )
-        this.retire(entry)
+    for (const entry of this.entries.values()) {
+      if (!this.live(entry)) this.retire(entry)
+      else if (mediaPathsChanged(this.paths(entry), change)) {
+        entry.resolution?.abort()
+        entry.result = null
+      }
+    }
   }
 
   async serve(request: Request): Promise<Response> {
-    const entry = this.tokens.get(
+    const issued = this.tokens.get(
       new URL(request.url).pathname.slice('/document-media/'.length),
     )
     if (request.method !== 'GET') return new Response(null, { status: 405 })
-    if (!entry || !this.live(entry) || request.signal.aborted)
+    if (!issued || !this.live(issued.entry) || request.signal.aborted)
       return new Response(null, { status: 404 })
-    const signal = AbortSignal.any([request.signal, entry.controller.signal])
-    // Revalidate fallback containment and symlinks before opening an issued URL.
-    const opened = await this.enqueue(async () => {
-      if (!this.live(entry) || signal.aborted) return null
-      const path = await resolveDocumentMediaPath(
-        entry.source,
-        entry.scope.note,
-        entry.scope.workspace,
-        { signal },
-      )
-      if (
-        !path ||
-        !this.live(entry) ||
-        signal.aborted ||
-        (await realpath(path)) !== entry.path
-      )
-        return null
-      return openMedia(entry.path, signal)
-    }).catch(() => null)
+    const { entry, version } = issued
+    const signal = AbortSignal.any([
+      request.signal,
+      entry.controller.signal,
+      version.controller.signal,
+    ])
+    const opened = await this.load(entry, signal).catch(() => null)
     if (!opened) return new Response(null, { status: 404 })
     const { file, stat, mime } = opened
-    if (!this.live(entry) || signal.aborted || mime !== entry.mime) {
+    if (!this.live(entry) || signal.aborted || !sameFile(version, opened)) {
       await file.close()
       return new Response(null, { status: 404 })
     }

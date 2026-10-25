@@ -63,6 +63,7 @@ test('20 displayed images ignore 100 unrelated workspace events and refresh only
         paths: [source],
       }),
       cancelDocumentMedia: async () => {},
+      onDocumentMediaScopeChanged: () => () => {},
       onWorkspaceChanged(callback) {
         listeners.add(callback)
         return () => listeners.delete(callback)
@@ -140,6 +141,7 @@ test('same-path views share resolution and unmount cancels obsolete work before 
         cancels++
       },
       onWorkspaceChanged: () => () => {},
+      onDocumentMediaScopeChanged: () => () => {},
     },
   }
   const never = observeDocumentMedia('never.png', 1, (media) =>

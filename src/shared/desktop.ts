@@ -221,6 +221,7 @@ export type DesktopApi = {
     request: string,
   ) => Promise<import('./media').DocumentMediaResolution | null>
   cancelDocumentMedia: (request: string) => Promise<void>
+  onDocumentMediaScopeChanged: (callback: () => void) => () => void
   openDroppedFile: (file: File) => Promise<{
     document: DocumentState | null
     workspace?: WorkspaceState | null

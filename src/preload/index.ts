@@ -320,6 +320,8 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(MEDIA_CHANNELS.resolve, source, revision, request),
     cancelDocumentMedia: (request) =>
       ipcRenderer.invoke(MEDIA_CHANNELS.cancel, request),
+    onDocumentMediaScopeChanged: (callback) =>
+      subscribe(MEDIA_CHANNELS.scopeChanged, callback),
     openDroppedFile: (file) =>
       ipcRenderer.invoke(MEDIA_CHANNELS.open, webUtils.getPathForFile(file)),
     getInstalledAddons: () => ipcRenderer.invoke(SIDELOAD_CHANNELS.list),

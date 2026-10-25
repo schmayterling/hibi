@@ -87,6 +87,10 @@ test('main shares concurrent resolutions; 20 images x 100 unrelated changes do z
       extraBytes: counts.bytes - before.bytes,
     }),
   )
+  await writeFile(
+    join(root, 'assets', '3.gif'),
+    Buffer.concat([gif, Buffer.from([0])]),
+  )
   server.invalidate({ kind: 'content', paths: ['assets/3.gif'] })
   const refreshed = await Promise.all(
     Array.from({ length: 20 }, (_, i) =>

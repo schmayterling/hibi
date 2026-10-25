@@ -11,25 +11,35 @@ type Entry = {
 }
 const entries = new Map<string, Entry>()
 let unsubscribe: (() => void) | undefined
+let unsubscribeScope: (() => void) | undefined
 
 function resolve(entry: Entry) {
   const generation = ++entry.generation
-  if (entry.request)
-    void window.hibi.cancelDocumentMedia(entry.request).catch(() => {})
-  entry.request = null
   // A node removed in the same update must never start native I/O.
   queueMicrotask(() => {
     if (!entry.listeners.size || generation !== entry.generation) return
+    const previous = entry.request
     const request = crypto.randomUUID()
     entry.request = request
-    void window.hibi
-      .resolveDocumentMedia(entry.source, entry.revision, request)
+    const result = window.hibi.resolveDocumentMedia(
+      entry.source,
+      entry.revision,
+      request,
+    )
+    // Acquire the replacement lease before releasing an open stream's token.
+    if (previous) void window.hibi.cancelDocumentMedia(previous).catch(() => {})
+    void result
       .catch(() => null)
       .then((result) => {
         if (!entry.listeners.size || generation !== entry.generation) return
         entry.paths = result?.paths ?? null
-        entry.media = result?.media ?? null
-        for (const listener of entry.listeners) listener(entry.media)
+        const media = result?.media ?? null
+        const changed =
+          entry.media === undefined ||
+          entry.media?.url !== media?.url ||
+          entry.media?.kind !== media?.kind
+        entry.media = media
+        if (changed) for (const listener of entry.listeners) listener(media)
       })
   })
 }
@@ -63,6 +73,13 @@ export function observeDocumentMedia(
       for (const entry of entries.values())
         if (mediaPathsChanged(entry.paths, change)) resolve(entry)
     })
+  if (!unsubscribeScope)
+    unsubscribeScope = window.hibi.onDocumentMediaScopeChanged(() => {
+      for (const entry of entries.values()) {
+        delete entry.media
+        resolve(entry)
+      }
+    })
   if ('media' in entry) listener(entry.media ?? null)
   else if (entry.listeners.size === 1) resolve(entry)
   return () => {
@@ -75,6 +92,8 @@ export function observeDocumentMedia(
     if (!entries.size) {
       unsubscribe?.()
       unsubscribe = undefined
+      unsubscribeScope?.()
+      unsubscribeScope = undefined
     }
   }
 }

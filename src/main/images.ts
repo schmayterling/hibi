@@ -109,12 +109,7 @@ export async function resolveDocumentMediaPath(
   } catch {
     /* Literal percent in filename. */
   }
-  if (
-    decoded.includes('\0') ||
-    decoded.includes('\\') ||
-    decoded.startsWith('//')
-  )
-    return null
+  if (decoded.includes('\\') || !isLocalMediaPath(decoded)) return null
   const candidates = source.startsWith('/')
     ? [resolve(base, `.${decoded}`), resolve(base, 'public', `.${decoded}`)]
     : workspacePath
@@ -170,6 +165,10 @@ export async function resolveDocumentMediaPath(
   return null
 }
 
+export function isLocalMediaPath(path: string): boolean {
+  return !path.includes('\0') && !path.replaceAll('\\', '/').startsWith('//')
+}
+
 export function documentMediaPath(
   source: string,
   documentPath: string | null,
@@ -177,29 +176,31 @@ export function documentMediaPath(
   if (!source || source.length > 8192 || source.includes('\0')) return null
   let path: string
   try {
-    if (/^file:/i.test(source)) path = fileURLToPath(source)
-    else {
+    if (/^file:/i.test(source)) {
+      const url = new URL(source)
+      // url parsing erases localhost hosts, so check original authority too.
+      if (
+        url.hostname ||
+        /^file:[/\\]{2}[^/\\]/i.test(source.replace(/[\t\r\n]/g, ''))
+      )
+        return null
+      path = fileURLToPath(url)
+    } else {
       if (/^[a-z][a-z\d+.-]*:/i.test(source) && !/^[a-z]:[/\\]/i.test(source))
         return null
-      if (source.startsWith('//') || source.startsWith('\\\\')) return null
       let decoded = source
       try {
         decoded = decodeURIComponent(source)
       } catch {
         /* Literal percent in a filename. */
       }
-      if (
-        decoded.includes('\0') ||
-        decoded.startsWith('//') ||
-        decoded.startsWith('\\\\')
-      )
-        return null
+      if (!isLocalMediaPath(decoded)) return null
       if (!isAbsolute(decoded) && !documentPath) return null
       path = isAbsolute(decoded)
         ? decoded
         : resolve(dirname(documentPath as string), decoded)
     }
-    return path
+    return isLocalMediaPath(path) ? path : null
   } catch {
     return null
   }

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { link, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import { pressShortcut, replaceSourceText } from './keyboard.mjs'
 
 const gif = Buffer.from(
   'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
@@ -135,7 +136,85 @@ test('large local images stream; external changes refresh one image and svg rema
     await page.evaluate(async (url) => (await fetch(url)).status, urls[1]),
     404,
   )
-  await page.evaluate(() => window.hibi.newDocument())
+  // A resync must not replace otherwise unchanged display URLs.
+  await page.evaluate(() => window.hibi.refreshWorkspace())
+  assert.deepEqual(
+    await images.evaluateAll((items) => items.map((image) => image.src)),
+    next,
+  )
+  const revision = await page.evaluate(
+    async () => (await window.hibi.getDocument()).revision,
+  )
+  async function changedScope(operation) {
+    const previous = await images.evaluateAll((items) =>
+      items.map((image) => image.src),
+    )
+    await operation()
+    await page.waitForFunction(
+      (previous) =>
+        [...document.querySelectorAll('.tiptap img')].length === 3 &&
+        [...document.querySelectorAll('.tiptap img')].every(
+          (image, index) =>
+            image.src !== previous[index] &&
+            image.complete &&
+            image.naturalWidth > 0,
+        ),
+      previous,
+    )
+    assert.equal(
+      await page.evaluate(
+        async () => (await window.hibi.getDocument()).revision,
+      ),
+      revision,
+    )
+  }
+  await changedScope(() =>
+    page.evaluate(() => window.hibi.renameDocument('renamed.md')),
+  )
+  await app.evaluate(
+    ({ dialog }, path) => {
+      dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })
+    },
+    join(workspace, 'saved-as.md'),
+  )
+  await changedScope(() => page.evaluate(() => window.hibi.saveDocument(true)))
+  await mkdir(join(workspace, 'folder', 'assets'), { recursive: true })
+  for (const name of ['large.gif', 'active.svg', 'stable.gif'])
+    await link(
+      join(workspace, 'assets', name),
+      join(workspace, 'folder', 'assets', name),
+    )
+  await changedScope(() =>
+    page.evaluate(() =>
+      window.hibi.workspaceAction({
+        action: 'move',
+        path: 'saved-as.md',
+        destination: 'folder/saved-as.md',
+      }),
+    ),
+  )
+
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await pressShortcut(app, mod + '+n')
+  await pressShortcut(app, mod + '+Shift+]')
+  const source = page.getByRole('textbox', { name: /markdown editor/i })
+  await source.waitFor()
+  await replaceSourceText(page, source, '![first save](assets/stable.gif)')
+  await pressShortcut(app, mod + '+Shift+[')
+  await page
+    .locator('.tiptap img[alt="first save"]')
+    .waitFor({ state: 'attached' })
+  await app.evaluate(
+    ({ dialog }, path) => {
+      dialog.showSaveDialog = async () => ({ canceled: false, filePath: path })
+    },
+    join(workspace, 'first-save.md'),
+  )
+  await page.evaluate(() => window.hibi.saveDocument(false))
+  await page.waitForFunction(() => {
+    const image = document.querySelector('.tiptap img[alt="first save"]')
+    return image?.complete && image.naturalWidth === 1
+  })
   assert.equal(
     await page.evaluate(async (url) => (await fetch(url)).status, next[1]),
     404,

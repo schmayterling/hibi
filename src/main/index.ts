@@ -797,8 +797,11 @@ async function lockFileOperation<T>(
       const running = fileOperation.catch(() => undefined)
       await Promise.race([running, fileOperationDialogOpened() ?? running])
     }
+    const mediaPath = getDocumentPath()
     const pending = withinFileOperation(() => operation(window)).finally(() => {
       fileOperation = null
+      if (mediaPath !== getDocumentPath())
+        mainWindow?.webContents.send(MEDIA_CHANNELS.scopeChanged)
     })
     fileOperation = pending
     return await pending

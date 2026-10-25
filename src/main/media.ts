@@ -19,7 +19,7 @@ import {
 import { DocumentMediaServer, openMedia } from './document-media'
 import { isDocumentName } from './document-types'
 import { runFileDialog } from './file-operation-dialog'
-import { resolveDocumentMediaPath } from './images'
+import { isLocalMediaPath, resolveDocumentMediaPath } from './images'
 import { loadWorkspace, workspaceRoot } from './workspace'
 
 const extensions = [
@@ -48,11 +48,27 @@ function filePath(value: unknown): string {
     !isAbsolute(value) ||
     value.length > 8192 ||
     /[\0\r\n]/.test(value) ||
-    value.startsWith('\\\\') ||
-    value.startsWith('//')
+    !isLocalMediaPath(value)
   )
     throw new Error('Drag a file here from your file manager.')
   return value
+}
+
+// Attachment copies and embedded exports retain their byte limits; display streams do not.
+async function openBoundedMedia(path: string) {
+  const media = await openMedia(path)
+  try {
+    if (!media.stat.size || media.stat.size > 512 * 1024 * 1024)
+      throw new Error(
+        'Choose a nonempty image or video file no larger than 512 MiB.',
+      )
+    if (media.mime.startsWith('image/') && media.stat.size > 8 * 1024 * 1024)
+      throw new Error('Choose an image no larger than 8 MiB.')
+    return media
+  } catch (error) {
+    await media.file.close()
+    throw error
+  }
 }
 
 export async function openDroppedFile(window: BrowserWindow, value: unknown) {
@@ -89,7 +105,7 @@ export async function attachMedia(
     throw new Error('Choose up to 32 images or videos at a time.')
   const paths = values.map(filePath)
   // Validate the whole selection before prompting to save or creating attachments.
-  for (const path of paths) await (await openMedia(path)).file.close()
+  for (const path of paths) await (await openBoundedMedia(path)).file.close()
   if (!getDocumentPath() || getDocument().ephemeral) {
     if (!(await saveDocument(window))) return null
   }
@@ -109,7 +125,7 @@ export async function attachMedia(
   try {
     const attachments = []
     for (const path of paths) {
-      const { file, stat, mime } = await openMedia(path)
+      const { file, stat, mime } = await openBoundedMedia(path)
       try {
         const suffix =
           mime === 'image/svg+xml'
@@ -183,7 +199,7 @@ export async function exportDocumentMedia(
   const path = await resolveDocumentMediaPath(source, note, workspacePath)
   if (!path) return null
   try {
-    const { file, stat, mime } = await openMedia(path)
+    const { file, stat, mime } = await openBoundedMedia(path)
     try {
       if (stat.size > 14 * 1024 * 1024)
         throw new Error(

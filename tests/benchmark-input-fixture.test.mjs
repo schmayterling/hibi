@@ -1,9 +1,26 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import test from 'node:test'
-import { writeInputProfile } from '../scripts/benchmark-input-fixture.mjs'
+import { writeInputProfile } from '../scripts/benchmark-flows.mjs'
+
+test('comparison samplers carry every local helper they import', async () => {
+  const workflow = await readFile('.github/workflows/benchmarks.yml', 'utf8')
+  const copied = new Set(workflow.match(/for file in (.+); do/)[1].split(/\s+/))
+  for (const file of copied) {
+    const source = await readFile(file, 'utf8')
+    for (const [, dependency] of source.matchAll(/from ['"](\.[^'"]+)['"]/g)) {
+      const target = posix.normalize(
+        posix.join(posix.dirname(file), dependency),
+      )
+      assert.ok(
+        copied.has(target),
+        `Comparison sampler imports uncopied helper: ${target}`,
+      )
+    }
+  }
+})
 
 for (const [name, requested, analysisLoad, expected] of [
   [

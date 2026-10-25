@@ -26,7 +26,7 @@ test('app state waits for resolved ipc result within its ten-second default', as
   await new Promise((resolve) => setImmediate(resolve))
   assert.equal(reads, 1)
   t.mock.timers.tick(99)
-  await Promise.resolve()
+  await new Promise((resolve) => setImmediate(resolve))
   assert.equal(reads, 1)
   t.mock.timers.tick(1)
   await pending

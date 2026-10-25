@@ -11,8 +11,8 @@ import {
   selectBenchmarkFile,
   typeCharacter,
   waitForEditor,
+  writeInputProfile,
 } from './benchmark-flows.mjs'
-import { writeInputProfile } from './benchmark-input-fixture.mjs'
 
 const runs = Number(process.env.HIBI_INPUT_RUNS ?? 5)
 if (!Number.isInteger(runs) || runs < 1 || runs > 50)
@@ -90,7 +90,7 @@ try {
         const effectiveAddons = (
           await page.evaluate(() => window.hibi.getAddonStates())
         )
-          .filter(({ enabled }) => enabled)
+          .filter(({ enabled, blockedBy }) => enabled && !blockedBy?.length)
           .map(({ id }) => id)
           .sort()
         for (const id of Object.keys(requestedAddons))

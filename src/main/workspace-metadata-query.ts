@@ -112,7 +112,7 @@ const failure = (
   message: string,
 ): OperationResult<never, QueryFailure> => ({ ok: false, code, message })
 
-/** Main-process queries reuse indexWorkspace's pages and dirty document overlay. */
+/** Main-process queries share a metadata stream and the dirty document overlay. */
 export async function queryWorkspaceReferences(
   input: unknown,
   getOpenDocumentVersions: () => readonly OpenDocumentVersion[],

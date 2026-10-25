@@ -73,6 +73,26 @@ test('watcher invalidation during a scan suppresses its stale result', async () 
   assert.deepEqual(published, ['after change'])
 })
 
+test('new scan requests and closure abort stale traversal signals', async () => {
+  const scans = []
+  const coordinator = createScanCoordinator(
+    (signal) => new Promise((resolve) => scans.push({ signal, resolve })),
+    () => {},
+  )
+  const pending = coordinator.request()
+  const first = scans[0]
+  coordinator.request()
+  assert.equal(first.signal?.aborted, true)
+  first.resolve('stale')
+  await new Promise((resolve) => setImmediate(resolve))
+  const next = scans[1]
+  assert.equal(next.signal.aborted, false)
+  coordinator.close()
+  assert.equal(next.signal.aborted, true)
+  next.resolve('closed')
+  assert.equal(await pending, null)
+})
+
 test('watcher rescans new, removed, and parent directory changes', () => {
   assert.equal(watchNeedsScan(null, 'file'), true)
   assert.equal(watchNeedsScan('file', null), true)

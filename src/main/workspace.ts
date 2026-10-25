@@ -63,6 +63,7 @@ import {
   showAllWorkspaceFiles,
   workspaceEntryLimit,
 } from './workspace-settings'
+import { compareWorkspaceEntries } from './workspace-sort'
 import type { WorkspaceSyntax } from './workspace-syntax'
 
 type ScanResult = {
@@ -94,6 +95,8 @@ let watcherFlushesInFlight = 0
 let workspaceScanCapReached = false
 let workspaceScanFailed = false
 let loadGeneration = 0
+let loadController: AbortController | undefined
+let selectionController: AbortController | undefined
 const acknowledgedPaths = new Map<
   string,
   { fingerprint: string | null; expires: number }
@@ -251,15 +254,20 @@ function relativePath(base: string, path: string): string | null {
 export async function scanWorkspace(
   base: string,
   showAllFiles = false,
+  signal?: AbortSignal,
 ): Promise<WorkspaceEntry[]> {
+  signal?.throwIfAborted()
   const [ignored, limit] = await Promise.all([
     workspaceIgnore(base),
     workspaceEntryLimit(),
   ])
+  signal?.throwIfAborted()
   let count = 0
   async function walk(directory: string): Promise<WorkspaceEntry[]> {
     const result: WorkspaceEntry[] = []
+    signal?.throwIfAborted()
     for await (const child of await opendir(directory)) {
+      signal?.throwIfAborted()
       if (
         (child.name.startsWith('.') &&
           (child.isDirectory() || !showAllFiles)) ||
@@ -296,14 +304,13 @@ export async function scanWorkspace(
       }
     }
     // Close the directory iterator before descending into child folders.
-    for (const entry of result)
+    for (const entry of result) {
+      signal?.throwIfAborted()
       if (entry.kind === 'folder')
         entry.children = await walk(join(base, entry.path))
-    return result.sort(
-      (a, b) =>
-        Number(b.kind === 'folder') - Number(a.kind === 'folder') ||
-        a.name.localeCompare(b.name, undefined, { numeric: true }),
-    )
+    }
+    signal?.throwIfAborted()
+    return result.sort(compareWorkspaceEntries)
   }
   return walk(base)
 }
@@ -668,25 +675,49 @@ export async function openWorkspace(
   )
   const selected = result.filePaths[0]
   if (result.canceled || !selected) return null
-  return loadWorkspace(selected)
+  return loadWorkspace(selected, true)
+}
+
+export function cancelWorkspaceSelection(): void {
+  selectionController?.abort()
+  selectionController = undefined
+}
+
+function cancelWorkspaceLoad(): void {
+  selectionController = undefined
+  loadGeneration++
+  loadController?.abort()
+  loadController = undefined
 }
 
 export async function loadWorkspace(
   selected: string,
+  selection = false,
 ): Promise<WorkspaceState | null> {
-  const loading = ++loadGeneration
+  cancelWorkspaceLoad()
+  const loading = loadGeneration
+  const controller = new AbortController()
+  loadController = controller
+  if (selection) selectionController = controller
+  const signal = controller.signal
+  const detach = () => {
+    if (loadController === controller) loadController = undefined
+    if (selectionController === controller) selectionController = undefined
+  }
   const nextRoot = await realpath(selected)
-  if (loading !== loadGeneration) return getWorkspace()
+  if (loading !== loadGeneration || signal.aborted) return getWorkspace()
   if (nextRoot === root) {
+    detach()
     const vault = await obsidianVault(nextRoot)
-    if (loading !== loadGeneration) return getWorkspace()
+    if (loading !== loadGeneration || signal.aborted) return getWorkspace()
     obsidian = vault
     await refreshWorkspace()
-    if (loading !== loadGeneration) return getWorkspace()
+    if (loading !== loadGeneration || signal.aborted) return getWorkspace()
     await rememberWorkspace(nextRoot)
     return getWorkspace()
   }
   const showAllFiles = await showAllWorkspaceFiles()
+  if (loading !== loadGeneration || signal.aborted) return getWorkspace()
   let candidateWatcher: FSWatcher | undefined
   let candidateTarget: WorkspaceTarget | null = null
   let changedDuringScan = false
@@ -715,20 +746,25 @@ export async function loadWorkspace(
   } catch (error) {
     console.error('workspace watcher unavailable:', error)
   }
+  const cancelCandidate = () => candidateWatcher?.close()
+  signal.addEventListener('abort', cancelCandidate, { once: true })
   let nextEntries: WorkspaceEntry[]
   let metadata: Awaited<ReturnType<typeof workspaceMetadata>>
   let vault: WorkspaceState['obsidian']
   try {
     ;[nextEntries, metadata, vault] = await Promise.all([
-      scanWorkspace(nextRoot, showAllFiles),
+      scanWorkspace(nextRoot, showAllFiles, signal),
       workspaceMetadata(nextRoot),
       obsidianVault(nextRoot),
     ])
   } catch (error) {
     candidateWatcher?.close()
+    if (signal.aborted) return getWorkspace()
     throw error
+  } finally {
+    signal.removeEventListener('abort', cancelCandidate)
   }
-  if (loading !== loadGeneration) {
+  if (loading !== loadGeneration || signal.aborted) {
     candidateWatcher?.close()
     return getWorkspace()
   }
@@ -762,11 +798,12 @@ export async function loadWorkspace(
   showingAllFiles = showAllFiles
   ignoredPaths = ignore().add(metadata.ignore)
   workspaceStream.replace(workspaceTarget)
+  detach()
   scanCoordinator = createScanCoordinator(
-    async () => {
+    async (signal) => {
       const showAllFiles = await showAllWorkspaceFiles()
       const [next, metadata] = await Promise.all([
-        scanWorkspace(nextRoot, showAllFiles),
+        scanWorkspace(nextRoot, showAllFiles, signal),
         workspaceMetadata(nextRoot),
       ])
       return {
@@ -816,7 +853,7 @@ export async function openRecentWorkspace(id: unknown) {
     throw new Error(
       'This workspace is no longer in the recent list. Open it from its folder.',
     )
-  return loadWorkspace(recent.path)
+  return loadWorkspace(recent.path, true)
 }
 
 export async function deleteKnownWorkspace(
@@ -843,7 +880,7 @@ export async function deleteKnownWorkspace(
   await shell.trashItem(item.path)
   closeDeletedDocuments(window, item.path)
   if (root === item.path || root?.startsWith(`${item.path}${sep}`)) {
-    loadGeneration += 1
+    cancelWorkspaceLoad()
     watcher?.close()
     clearTimeout(refreshTimer)
     indexJob.reset()

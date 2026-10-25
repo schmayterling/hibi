@@ -2,6 +2,7 @@ import { execFile, spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { _electron } from 'playwright'
+import { waitForAsync } from './poll.mjs'
 
 const execute = promisify(execFile)
 
@@ -900,14 +901,8 @@ export async function waitForDocumentEditor(
   }
 }
 
-// Playwright's waitForFunction treats a returned Promise as truthy before it settles.
-export async function waitForAppState(page, check, timeout = 10000) {
-  const deadline = Date.now() + timeout
-  do {
-    if (await page.evaluate(check)) return
-    await new Promise((resolve) => setTimeout(resolve, 100))
-  } while (Date.now() < deadline)
-  throw new Error('Timed out waiting for app state')
+export function waitForAppState(page, check, timeout = 10000) {
+  return waitForAsync(page, check, undefined, { timeout, polling: 100 })
 }
 
 export async function crashAndReload(application) {

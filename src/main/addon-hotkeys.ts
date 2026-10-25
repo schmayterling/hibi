@@ -1,4 +1,4 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile, rename } from 'node:fs/promises'
 import type {
   AddonCommandInvocation,
   AddonHotkeyBinding,
@@ -12,7 +12,7 @@ import {
   shortcutError,
   validateHotkeys,
 } from '../shared/hotkeys.ts'
-import { retryRename } from './atomic-rename.ts'
+import { writeText } from './files.ts'
 
 const idPattern = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/
 const savedVersion = 1
@@ -297,12 +297,10 @@ export class AddonHotkeys {
 
   private async persist(value: Map<string, string>): Promise<void> {
     const overrides = Object.fromEntries(value)
-    await writeFile(
-      `${this.file}.tmp`,
+    await writeText(
+      this.file,
       JSON.stringify({ version: savedVersion, overrides }),
-      { mode: 0o600 },
     )
-    await retryRename(() => rename(`${this.file}.tmp`, this.file))
   }
 
   private queueWrite<T>(write: () => Promise<T>): Promise<T> {

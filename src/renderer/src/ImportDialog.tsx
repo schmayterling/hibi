@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { errorMessage } from '../../shared/errors'
 import type { Importer, ImportResult, ImportSource } from '../../shared/imports'
 import type { WorkspaceState } from '../../shared/workspace'
@@ -18,6 +18,9 @@ function ImportDialog({
   const [id, setId] = useState('folder')
   const [source, setSource] = useState<ImportSource>('folder')
   const [busy, setBusy] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const cancelRequested = useRef(false)
+  const importing = useRef(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState<ImportResult | null>(null)
   useEffect(() => {
@@ -34,6 +37,8 @@ function ImportDialog({
       })
     return () => {
       active = false
+      if (importing.current)
+        void window.hibi.cancelWorkspaceImport().catch(() => {})
     }
   }, [])
   const importer = importers.find((item) => item.id === id)
@@ -114,7 +119,21 @@ function ImportDialog({
       {error && <DocumentNotice title="Import failed" message={error} />}
       {busy && <DocumentNotice title="Importing files…" busy />}
       <div className="dialog-actions">
-        <Button disabled={busy} onClick={close}>
+        <Button
+          disabled={cancelling}
+          onClick={async () => {
+            if (!busy) return close()
+            cancelRequested.current = true
+            setCancelling(true)
+            try {
+              await window.hibi.cancelWorkspaceImport()
+            } catch (error) {
+              cancelRequested.current = false
+              setCancelling(false)
+              setError(errorMessage(error))
+            }
+          }}
+        >
           {result ? 'Done' : 'Cancel'}
         </Button>
         {!result && (
@@ -122,20 +141,24 @@ function ImportDialog({
             disabled={busy || !workspace?.manifest || !importer}
             onClick={async () => {
               if (!workspace?.id) return
+              cancelRequested.current = false
+              importing.current = true
               setBusy(true)
               setError('')
               try {
-                setResult(
-                  await window.hibi.importIntoWorkspace({
-                    id,
-                    source,
-                    workspaceId: workspace.id,
-                  }),
-                )
+                const imported = await window.hibi.importIntoWorkspace({
+                  id,
+                  source,
+                  workspaceId: workspace.id,
+                })
+                if (!imported && cancelRequested.current) close()
+                else setResult(imported)
               } catch (error) {
                 setError(errorMessage(error))
               } finally {
+                importing.current = false
                 setBusy(false)
+                setCancelling(false)
               }
             }}
           >

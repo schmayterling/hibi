@@ -1,7 +1,7 @@
+import { nativeImport } from '../_shared/import-native'
 import type { NativeAddon } from '../api'
-import { importObsidian } from './convert'
 export default {
   id: 'import-obsidian',
   methods: {},
-  import: importObsidian,
+  ...nativeImport('obsidian'),
 } satisfies NativeAddon

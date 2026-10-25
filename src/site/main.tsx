@@ -20,6 +20,7 @@ import {
   CommandPalette,
   type PaletteCommand,
 } from '../renderer/src/CommandPalette'
+import { headingAnchors } from '../shared/heading-anchor'
 import '../addons/graph/style.css'
 import { ColorschemeSettings } from '../ui/ColorschemeSettings'
 import { IconButton, TextInput } from '../ui/Controls'
@@ -255,18 +256,22 @@ export function startSite(workspace: SiteData, root: Root) {
         continue
       element.removeAttribute('id')
     }
-    const slugs = new Map<string, number>()
+    const headings = [...fragment.querySelectorAll('h1,h2,h3,h4,h5,h6')].filter(
+      (heading) => heading.id !== 'footnote-label',
+    )
+    const anchors = headingAnchors(
+      headings.map((heading) => heading.textContent ?? ''),
+    )
     const outline: { id: string; label: string; depth: number }[] = []
-    for (const heading of fragment.querySelectorAll('h1,h2,h3,h4,h5,h6')) {
-      if (heading.id === 'footnote-label') continue
-      const slug = (heading.textContent ?? '')
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s-]/gu, '')
-        .trim()
-        .replace(/\s+/g, '-')
-      const count = slugs.get(slug) ?? 0
-      slugs.set(slug, count + 1)
-      heading.id = `doc-${slug}${count ? `-${count}` : ''}`
+    for (const [index, heading] of headings.entries()) {
+      const { anchor, legacy } = anchors[index]!
+      heading.id = `doc-${anchor}`
+      if (legacy !== null && legacy !== anchor) {
+        const alias = document.createElement('span')
+        alias.id = `doc-${legacy}`
+        alias.setAttribute('aria-hidden', 'true')
+        heading.prepend(alias)
+      }
       if (heading.tagName !== 'H1' && heading.textContent?.trim())
         outline.push({
           id: heading.id,
@@ -507,12 +512,12 @@ export function startSite(workspace: SiteData, root: Root) {
             },
           })
       }
-      if (current.anchor)
-        (
+      if (current.anchor) {
+        const target =
           document.getElementById(`doc-${current.anchor}`) ??
           document.getElementById(current.anchor)
-        )?.scrollIntoView()
-      else document.querySelector('.site-content')?.scrollTo(0, 0)
+        ;(target?.closest('h1,h2,h3,h4,h5,h6') ?? target)?.scrollIntoView()
+      } else document.querySelector('.site-content')?.scrollTo(0, 0)
     }, [page, current.path, current.anchor])
     useEffect(() => {
       const scroller = document.querySelector('.site-content')

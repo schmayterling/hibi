@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,6 +11,7 @@ import {
   selectBenchmarkFile,
   typeCharacter,
   waitForEditor,
+  writeInputProfile,
 } from './benchmark-flows.mjs'
 
 const runs = Number(process.env.HIBI_INPUT_RUNS ?? 5)
@@ -63,52 +65,11 @@ try {
     for (let run = 0; run < runs; run++) {
       const profile = join(directory, `${fixture.name}-${run}`)
       await mkdir(profile)
-      if (enabledAddons.length)
-        await writeFile(
-          join(profile, 'addons.json'),
-          JSON.stringify(
-            Object.fromEntries(enabledAddons.map((id) => [id, true])),
-          ),
-        )
-      if (analysisLoad) {
-        const addon = join(profile, 'installed-addons', 'analysis-load')
-        await mkdir(addon, { recursive: true })
-        await writeFile(
-          join(profile, 'addons.json'),
-          JSON.stringify({ 'analysis-load': true }),
-        )
-        await writeFile(
-          join(addon, 'hibi-addon.json'),
-          JSON.stringify({
-            id: 'analysis-load',
-            name: 'Analysis benchmark',
-            description: 'Benchmark-only analysis load',
-            kind: 'extension',
-            apiVersion: 2,
-            version: '1.0.0',
-            authors: [{ displayName: 'Hibi benchmark' }],
-            capabilities: [],
-            entry: 'index.js',
-            analysis: { entry: 'analysis.js' },
-          }),
-        )
-        await writeFile(
-          join(addon, '.hibi-install.json'),
-          JSON.stringify({
-            hash: 'a'.repeat(64),
-            files: ['index.js', 'analysis.js', 'hibi-addon.json'],
-            source: 'local',
-          }),
-        )
-        await writeFile(
-          join(addon, 'index.js'),
-          'export default () => ({start(context) { window.__hibiAnalysisBenchmark = context; }})',
-        )
-        await writeFile(
-          join(addon, 'analysis.js'),
-          'export function analyze() { const end = performance.now() + 2000; while (performance.now() < end) {} return null; }',
-        )
-      }
+      const requestedAddons = await writeInputProfile(
+        profile,
+        enabledAddons,
+        analysisLoad,
+      )
       const app = await launchBenchmarkApp(profile)
       try {
         const page = await app.firstWindow()
@@ -126,6 +87,17 @@ try {
             enabled: true,
           })
         await waitForEditor(page)
+        const effectiveAddons = (
+          await page.evaluate(() => window.hibi.getAddonStates())
+        )
+          .filter(({ enabled, blockedBy }) => enabled && !blockedBy?.length)
+          .map(({ id }) => id)
+          .sort()
+        for (const id of Object.keys(requestedAddons))
+          assert.ok(
+            effectiveAddons.includes(id),
+            `Requested benchmark addon is not enabled: ${id}`,
+          )
         if (foreground)
           await page.waitForFunction(() => document.hasFocus(), undefined, {
             timeout: 5000,
@@ -295,6 +267,7 @@ try {
         const sample = {
           fixture: fixture.name,
           run,
+          effectiveAddons,
           driver,
           mainThreadPerKey: perKey(typingStart, await readMetrics(session), 20),
           ...measured,

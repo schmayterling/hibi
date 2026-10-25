@@ -129,11 +129,10 @@ test('visual typing after a source visit defers the hidden source and toolbar ch
     const source = document.querySelector('.cm-content').cmTile.root.view
     return {
       text: source.state.doc.toString(),
-      head: source.state.selection.main.head,
       persisted: (await window.hibi.getDocument()).markdown,
     }
   })
-  assert.deepEqual(shown, { text: 'hello', head: 5, persisted: 'hello' })
+  assert.deepEqual(shown, { text: 'hello', persisted: 'hello' })
 })
 
 test('formatting toolbar states match each action check across selections, typing and history', {

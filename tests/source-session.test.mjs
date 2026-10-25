@@ -173,6 +173,41 @@ test('a hidden source view coalesces canonical edits and catches up exactly when
   f.session.dispose()
 })
 
+test('a shown source view matches synchronous echoes, including carets the session stops tracking', () => {
+  const run = (hidden) => {
+    const f = fixture('abc\r\ndef\r\nghi')
+    const surface = f.attach()
+    surface.dispatch({ selection: { anchor: 5 } })
+    surface.bridge.setVisible(!hidden)
+    const edit = (from, to, insert, selection) =>
+      f.session.edit(
+        [{ from, to, insert }],
+        'visual',
+        'step',
+        undefined,
+        selection,
+      )
+    edit(6, 6, 'X')
+    // Without a session selection, each echo maps the view's own caret.
+    edit(7, 7, 'Y', () => null)
+    edit(0, 0, 'Z\r\n')
+    edit(0, 1, '')
+    surface.bridge.setVisible(true)
+    const result = {
+      doc: surface.view.state.doc.toString(),
+      selection: surface.view.state.selection.toJSON(),
+      source: f.session.snapshot().materialize(),
+      errors: f.errors,
+    }
+    surface.dispose()
+    f.session.dispose()
+    return result
+  }
+  const live = run(false)
+  assert.deepEqual(live.selection.ranges, [{ anchor: 7, head: 7 }])
+  assert.deepEqual(run(true), live)
+})
+
 test('reads, internal effects and stale input keep a hidden source replica exact', () => {
   const f = fixture('alpha\r\nbeta')
   const surface = f.attach()

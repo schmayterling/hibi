@@ -463,6 +463,7 @@
   "c9379c9895e4": "Could not restore document focus. Editing is paused to protect unsent changes.",
   "5dc1e07e8c69": "Could not run this command.",
   "2a30abd5f2ce": "Could not run {value1}: {value2}",
+  "91dcce8f7449": "Could not save autocomplete settings. Changes apply until Hibi restarts.",
   "98bdb8dbc149": "Could not save custom words.",
   "b8d93c6a0c27": "Could not save learned words. Try again.",
   "a4c30f907288": "Could not save quick note settings.",

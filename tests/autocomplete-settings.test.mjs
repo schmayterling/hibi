@@ -124,6 +124,7 @@ test('failed storage writes keep exclusions active through resubscription and st
     delete globalThis.window
   })
   const error = t.mock.method(console, 'error', () => {})
+  assert.equal(settings.preferencesSaved(), true)
   const initial = settings.readPreferences()
   const stored = localStorage.getItem('hibi:autocomplete')
   const set = localStorage.setItem
@@ -141,6 +142,7 @@ test('failed storage writes keep exclusions active through resubscription and st
   assert.equal(settings.readPreferences(), next)
   assert.equal(changes, 1)
   assert.equal(error.mock.callCount(), 1)
+  assert.equal(settings.preferencesSaved(), false)
   assert.equal(localStorage.getItem('hibi:autocomplete'), stored)
   stop()
   const again = settings.onPreferencesChange(() => changes++)
@@ -153,9 +155,11 @@ test('failed storage writes keep exclusions active through resubscription and st
     assert.equal(settings.readPreferences(), next)
   }
   assert.equal(changes, 3)
+  assert.equal(settings.preferencesSaved(), false)
   localStorage.setItem = set
   settings.writePreferences(next)
   assert.equal(changes, 4)
+  assert.equal(settings.preferencesSaved(), true)
   const reloaded = await import(
     `../src/addons/autocomplete/settings.ts?test=${serial++}`
   )

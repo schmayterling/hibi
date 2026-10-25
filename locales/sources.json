@@ -1453,6 +1453,9 @@
   "2a30abd5f2ce": [
     "src/main/dependencies.ts"
   ],
+  "91dcce8f7449": [
+    "src/addons/autocomplete/Settings.tsx"
+  ],
   "98bdb8dbc149": [
     "src/addons/dictionary/SideView.tsx",
     "src/addons/dictionary/custom-words.ts",

@@ -15,6 +15,8 @@ const listeners = new Set<() => void>()
 let cached: AutocompletePreferences | undefined
 let unsaved = false
 
+export const preferencesSaved = () => !unsaved
+
 function saved(key: string): Record<string, unknown> | undefined {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(key) ?? 'null')

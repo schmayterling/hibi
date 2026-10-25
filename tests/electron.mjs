@@ -900,14 +900,49 @@ export async function waitForDocumentEditor(
   }
 }
 
-// Playwright's waitForFunction treats a returned Promise as truthy before it settles.
-export async function waitForAppState(page, check, timeout = 10000) {
-  const deadline = Date.now() + timeout
-  do {
-    if (await page.evaluate(check)) return
-    await new Promise((resolve) => setTimeout(resolve, 100))
-  } while (Date.now() < deadline)
-  throw new Error('Timed out waiting for app state')
+export const APP_STATE_TIMEOUT = 7000
+// This Playwright build treats Promise-valued waitForFunction predicates as
+// truthy before they resolve. Evaluate and await async checks in the host.
+export async function waitForAsync(
+  page,
+  predicate,
+  arg,
+  { timeout = APP_STATE_TIMEOUT, polling = 30 } = {},
+) {
+  const started = performance.now()
+  const deadline = started + timeout
+  let attempts = 0
+  let deadlineTimer
+  let pollTimer
+  const timedOut = () =>
+    new Error(
+      `async condition did not settle after ${Math.round(performance.now() - started)} ms (${attempts} checks): ${predicate}`,
+    )
+  const expired = new Promise((_, reject) => {
+    deadlineTimer = setTimeout(() => reject(timedOut()), timeout)
+  })
+  try {
+    for (;;) {
+      if (performance.now() >= deadline) throw timedOut()
+      attempts++
+      const ready = await Promise.race([page.evaluate(predicate, arg), expired])
+      if (performance.now() >= deadline) throw timedOut()
+      if (ready) return
+      await Promise.race([
+        new Promise((resolve) => {
+          pollTimer = setTimeout(resolve, polling)
+        }),
+        expired,
+      ])
+    }
+  } finally {
+    clearTimeout(deadlineTimer)
+    clearTimeout(pollTimer)
+  }
+}
+
+export function waitForAppState(page, check, timeout = 10000) {
+  return waitForAsync(page, check, undefined, { timeout, polling: 100 })
 }
 
 export async function crashAndReload(application) {

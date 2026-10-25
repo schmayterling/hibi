@@ -3,23 +3,7 @@ import { readFile, stat, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import Markdoc from '@markdoc/markdoc'
-import { compile as compileMdx, createProcessor } from '@mdx-js/mdx'
-import { build, stop } from 'esbuild'
-import { toHtml } from 'hast-util-to-html'
-import { toHast } from 'mdast-util-to-hast'
-import { compile as compileMdsvex } from 'mdsvex'
-import * as React from 'react'
-import * as jsxRuntime from 'react/jsx-runtime'
-import { renderToStaticMarkup } from 'react-dom/server'
-import remarkGfm from 'remark-gfm'
-import * as svelteRuntime from 'svelte'
-import 'svelte/internal/flags/legacy'
-import { compile as compileSvelte } from 'svelte/compiler'
-// @ts-expect-error Svelte's generated server runtime has no declaration file.
-import * as svelteInternal from 'svelte/internal/server'
-import { render as renderSvelte } from 'svelte/server'
-import { type LatexPackageTask, latexPackages } from '../math/packages'
+import type { LatexPackageTask } from '../math/packages'
 import type { FormatResult, FormatSpec } from './format-specs'
 
 export type FormatJob = {
@@ -45,6 +29,7 @@ const searchPath = [
 ].filter(isAbsolute)
 
 let toolPaths: Record<string, string | null> = {}
+let stopEsbuild: (() => void) | undefined
 async function tool(name: string) {
   const path = toolPaths[name]
   if (path) return path
@@ -129,6 +114,17 @@ async function preview(job: FormatJob): Promise<FormatResult> {
   const { source, spec } = job
   if (spec.reader === 'html') return { html: source }
   if (spec.reader === 'mdx') {
+    const [
+      { createProcessor },
+      { default: remarkGfm },
+      { toHtml },
+      { toHast },
+    ] = await Promise.all([
+      import('@mdx-js/mdx'),
+      import('remark-gfm'),
+      import('hast-util-to-html'),
+      import('mdast-util-to-hast'),
+    ])
     const tree = createProcessor({ remarkPlugins: [remarkGfm] }).parse(source)
     type Node = {
       type: string
@@ -157,6 +153,7 @@ async function preview(job: FormatJob): Promise<FormatResult> {
     return { html: toHtml(toHast(tree)!) }
   }
   if (spec.reader === 'mdsvex') {
+    const { compile: compileMdsvex } = await import('mdsvex')
     const result = await compileMdsvex(source, {
       filename: job.entry,
       highlight: false,
@@ -165,6 +162,7 @@ async function preview(job: FormatJob): Promise<FormatResult> {
     return { html: result.code }
   }
   if (spec.reader === 'markdoc') {
+    const { default: Markdoc } = await import('@markdoc/markdoc')
     const ast = Markdoc.parse(source)
     const errors = Markdoc.validate(ast).filter(
       (item) => item.error.level === 'critical',
@@ -194,11 +192,16 @@ async function preview(job: FormatJob): Promise<FormatResult> {
 }
 
 async function componentSource(source: string, path: string) {
-  if (/\.mdx$/i.test(path))
+  if (/\.mdx$/i.test(path)) {
+    const [{ compile: compileMdx }, { default: remarkGfm }] = await Promise.all(
+      [import('@mdx-js/mdx'), import('remark-gfm')],
+    )
     return String(
       await compileMdx({ value: source, path }, { remarkPlugins: [remarkGfm] }),
     )
+  }
   if (/\.svx$/i.test(path)) {
+    const { compile: compileMdsvex } = await import('mdsvex')
     const result = await compileMdsvex(source, {
       filename: path,
       highlight: false,
@@ -206,6 +209,11 @@ async function componentSource(source: string, path: string) {
     if (!result) throw new Error('MDsveX could not compile this document.')
     source = result.code
   }
+  const [{ compile: compileSvelte }] = await Promise.all([
+    import('svelte/compiler'),
+    // @ts-expect-error Svelte's legacy flag module has no declaration file.
+    import('svelte/internal/flags/legacy'),
+  ])
   return compileSvelte(source, {
     filename: path,
     generate: 'server',
@@ -216,13 +224,19 @@ async function componentSource(source: string, path: string) {
 async function runComponent(job: FormatJob): Promise<FormatResult> {
   // Only explicit Run reaches this function. No document code executes during preview.
   process.chdir(dirname(job.entry))
-  const runtimes: Record<string, object> = {
-    react: React,
-    'react/jsx-runtime': jsxRuntime,
-    svelte: svelteRuntime,
-    'svelte/internal/server': svelteInternal,
-    'svelte/server': { render: renderSvelte },
+  const { build, stop } = await import('esbuild')
+  stopEsbuild = stop
+  const runtimeImports = {
+    react: () => import('react'),
+    'react/jsx-runtime': () => import('react/jsx-runtime'),
+    svelte: () => import('svelte'),
+    // @ts-expect-error Svelte's generated server runtime has no declaration file.
+    'svelte/internal/server': () => import('svelte/internal/server'),
+    'svelte/server': async () => ({
+      render: (await import('svelte/server')).render,
+    }),
   }
+  const runtimes: Record<string, object> = {}
   Object.assign(globalThis, { __hibiDocumentRuntime: runtimes })
   const bundled = await build({
     stdin: {
@@ -246,7 +260,11 @@ async function runComponent(job: FormatJob): Promise<FormatResult> {
               filter:
                 /^(react(?:\/jsx-runtime)?|svelte(?:\/internal\/server|\/server)?)$/,
             },
-            (args) => ({ path: args.path, namespace: 'hibi-runtime' }),
+            async (args) => {
+              runtimes[args.path] ??=
+                await runtimeImports[args.path as keyof typeof runtimeImports]()
+              return { path: args.path, namespace: 'hibi-runtime' }
+            },
           )
           builder.onLoad(
             { filter: /.*/, namespace: 'hibi-runtime' },
@@ -295,8 +313,14 @@ async function runComponent(job: FormatJob): Promise<FormatResult> {
   const modulePath = join(job.scratch, 'document.mjs')
   await writeFile(modulePath, bundled.outputFiles[0]!.text)
   const module = await import(/* @vite-ignore */ pathToFileURL(modulePath).href)
-  if (job.spec.engine === 'mdx')
+  if (job.spec.engine === 'mdx') {
+    const [React, { renderToStaticMarkup }] = await Promise.all([
+      import('react'),
+      import('react-dom/server'),
+    ])
     return { html: renderToStaticMarkup(React.createElement(module.default)) }
+  }
+  const { render: renderSvelte } = await import('svelte/server')
   const rendered = renderSvelte(module.default)
   return { html: rendered.head + rendered.body }
 }
@@ -372,6 +396,7 @@ process.parentPort.once(
           .map(dirname),
       )
       if (job.packages) {
+        const { latexPackages } = await import('../math/packages')
         const environment = latexEnvironment(job)
         const packages = await latexPackages(
           job.packages,
@@ -411,7 +436,7 @@ process.parentPort.once(
         error: error instanceof Error ? error.message : String(error),
       })
     } finally {
-      stop()
+      stopEsbuild?.()
     }
   },
 )

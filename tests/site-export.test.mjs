@@ -434,6 +434,19 @@ test('published sites support direct routes, crawlable HTML, branding, locked th
     await locked.locator('article').innerText(),
     /private-sentinel-9742/,
   )
+  await locked.getByRole('button', { name: /^search documentation$/i }).click()
+  const protectedSearch = locked.getByRole('combobox', {
+    name: /search commands/i,
+  })
+  await protectedSearch.fill('getting started')
+  await locked.getByRole('option', { name: /getting started/i }).waitFor()
+  await protectedSearch.press('Enter')
+  await locked.waitForFunction(
+    () =>
+      new URLSearchParams(location.hash.slice(1)).get('anchor') ===
+      'getting-started',
+  )
+  await locked.locator('article #doc-getting-started').waitFor()
   assert.equal(
     await locked.evaluate(() =>
       JSON.stringify(localStorage).includes('unit-export-password-482'),
@@ -781,3 +794,173 @@ test('command-palette export opens options and writes a configured static folder
   )
   await page.keyboard.press('Escape')
 })
+
+for (const count of [100, 1000, 2000]) {
+  test(`exported search indexes ${count} pages without rendering them`, {
+    timeout: 90000,
+  }, async (t) => {
+    const folder = await mkdtemp(join(tmpdir(), 'hibi-site-search-'))
+    const file = join(folder, 'site.html')
+    const pages = Array.from({ length: count }, (_, index) => ({
+      path: `${index}.md`,
+      markdown:
+        '# Page ' +
+        index +
+        '\n\n## Section ' +
+        index +
+        '\n\nsanitizer-probe-' +
+        index +
+        ' ' +
+        'Some unicode prose 日本語. '.repeat(180) +
+        (index === count - 1 ? `\n\n## raretarget${count} **日本語_é**` : ''),
+    }))
+    const site = prepareSite(
+      { name: 'search fixture', pages },
+      exportOptions({ graph: false }),
+    )
+    const files = await siteFiles(
+      await readFile('out/site/template.html', 'utf8'),
+      site,
+    )
+    await writeFile(file, files.get('index.html'))
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+    })
+    t.after(async () => {
+      await app.close()
+      await rm(folder, { recursive: true, force: true })
+    })
+    await app.firstWindow()
+    const next = app.waitForEvent('window')
+    await app.evaluate(({ BrowserWindow }, file) => {
+      const viewer = new BrowserWindow({
+        show: false,
+        width: 1200,
+        height: 850,
+        webPreferences: {
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          backgroundThrottling: false,
+        },
+      })
+      void viewer.loadFile(file)
+    }, file)
+    const page = await next
+    await page
+      .getByRole('button', { name: /^search documentation$/i })
+      .waitFor()
+    await page.evaluate(() => {
+      window.siteSearchCounters = { sanitized: 0, rendered: 0 }
+      window.siteSearchRankings = 0
+      const post = Worker.prototype.postMessage
+      Worker.prototype.postMessage = function (message, ...args) {
+        if (message?.job?.kind === 'find') window.siteSearchRankings++
+        return post.call(this, message, ...args)
+      }
+      window.siteSearchTasks = []
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries())
+          window.siteSearchTasks.push(entry.duration)
+      }).observe({ type: 'longtask' })
+      const parse = DOMParser.prototype.parseFromString
+      DOMParser.prototype.parseFromString = function (source, ...args) {
+        if (String(source).includes('sanitizer-probe-'))
+          window.siteSearchCounters.sanitized++
+        return parse.call(this, source, ...args)
+      }
+      const query = DocumentFragment.prototype.querySelectorAll
+      DocumentFragment.prototype.querySelectorAll = function (selector) {
+        if (selector === 'h1,h2,h3,h4,h5,h6')
+          window.siteSearchCounters.rendered++
+        return query.call(this, selector)
+      }
+    })
+    await page.getByRole('button', { name: /^search documentation$/i }).click()
+    const input = page.getByRole('combobox', { name: /search commands/i })
+    await input.waitFor()
+    assert.equal(await page.getByRole('option').count(), 50)
+    const started = performance.now()
+    await input.fill(`raretarget${count}`)
+    await page
+      .getByRole('option', { name: new RegExp(`raretarget${count}`, 'i') })
+      .waitFor()
+    const counters = await page.evaluate(() => window.siteSearchCounters)
+    assert.deepEqual(counters, { sanitized: 0, rendered: 0 })
+    assert.equal(
+      page.workers().length,
+      1,
+      'one inline search worker owns the index',
+    )
+    assert.equal(await page.evaluate(() => window.siteSearchRankings), 1)
+    const firstSearchMs = performance.now() - started
+    for (let index = 0; index < 10; index++) await input.press('ArrowDown')
+    assert.deepEqual(
+      await page.evaluate(() => window.siteSearchCounters),
+      counters,
+    )
+    await page.getByRole('option').nth(0).hover()
+    await page.getByRole('option').nth(1).hover()
+    assert.equal(await page.evaluate(() => window.siteSearchRankings), 1)
+    t.diagnostic(
+      JSON.stringify({
+        pages: count,
+        firstSearchMs,
+        extraSanitizedPages: counters.sanitized,
+        maxObservedTaskMs: await page.evaluate(() =>
+          Math.max(0, ...window.siteSearchTasks),
+        ),
+      }),
+    )
+    if (count === 100) {
+      const heading = { name: /raretarget100 日本語_é/i }
+      await page.getByRole('option', heading).hover()
+      await page.getByRole('option', { ...heading, selected: true }).waitFor()
+      await input.press('Enter')
+    } else await input.press('Escape')
+    await page.locator('.command-palette').waitFor({ state: 'hidden' })
+    if (count === 100) {
+      await page
+        .locator('article h2')
+        .filter({ hasText: /raretarget100 日本語_é/ })
+        .waitFor()
+      assert.equal(
+        await page.evaluate(() =>
+          new URLSearchParams(location.hash.slice(1)).get('anchor'),
+        ),
+        'raretarget100-日本語_é',
+      )
+      assert.equal(
+        await page
+          .locator('article h2')
+          .filter({ hasText: /raretarget100 日本語_é/ })
+          .getAttribute('id'),
+        'doc-raretarget100-日本語_é',
+      )
+      for (let index = 1; index <= 10; index++) {
+        await page.evaluate((index) => {
+          location.hash = `page=${index}.md`
+        }, index)
+        await page
+          .locator('article h1')
+          .filter({ hasText: new RegExp(`^Page ${index}$`) })
+          .waitFor()
+      }
+      const before = await page.evaluate(
+        () => window.siteSearchCounters.sanitized,
+      )
+      await page.evaluate(() => {
+        location.hash = 'page=0.md'
+      })
+      await page
+        .locator('article h1')
+        .filter({ hasText: /^Page 0$/ })
+        .waitFor()
+      assert.equal(
+        await page.evaluate(() => window.siteSearchCounters.sanitized),
+        before + 1,
+        'the first page must leave the bounded display cache',
+      )
+    }
+  })
+}

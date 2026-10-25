@@ -59,12 +59,14 @@ export function CommandPalette({
   platform,
   searchCommands,
   captureContext,
+  onQueryChange,
 }: {
   commands: PaletteCommand[]
   onClose: () => void
   platform: string
   searchCommands?: (query: string) => PaletteCommand[]
   captureContext?: () => CommandExecutionContext
+  onQueryChange?: (query: string) => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const input = useRef<HTMLInputElement>(null)
@@ -73,6 +75,9 @@ export function CommandPalette({
     undefined,
   )
   const [query, setQuery] = useState('')
+  useEffect(() => {
+    onQueryChange?.(query)
+  }, [query, onQueryChange])
   const [selected, setSelected] = useState(0)
   const [menuPath, setMenuPath] = useState<{ id: string; label: string }[]>([])
   const list = useRef<HTMLDivElement>(null)

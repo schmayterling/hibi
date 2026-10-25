@@ -66,3 +66,13 @@ test('versioned records travel in static and single-file output', async () => {
     assert.match(data, /needle prose/)
   }
 })
+
+test('heading attributes do not become search labels or anchors', () => {
+  const search = pageSearch(
+    '<h2 title="1>0">A <code>x_y</code></h2><p>first</p><p>second<br>line</p>',
+  )
+  assert.deepEqual(search.headings, [
+    { depth: 2, label: 'A x_y', anchor: 'a-x_y' },
+  ])
+  assert.match(search.text, /first second line/)
+})

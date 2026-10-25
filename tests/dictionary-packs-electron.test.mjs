@@ -212,7 +212,7 @@ test('pack dialog install, offline definition, profile restart, path rejection a
   launched = await launch(profile)
   app = launched.app
   page = launched.page
-  await app.evaluate(async ({ ipcMain }) => {
+  await app.evaluate(({ ipcMain }) => {
     globalThis.dictionaryStartupQueries = []
     globalThis.dictionaryPayloadReads = 0
     const handler = ipcMain._invokeHandlers.get('addons:query')
@@ -221,17 +221,19 @@ test('pack dialog install, offline definition, profile restart, path rejection a
       if (id === 'dictionary') globalThis.dictionaryStartupQueries.push(method)
       return handler(event, id, method, input)
     })
-    const fs = (await import('node:fs')).default
+    const fs = process.getBuiltinModule('node:fs')
     const stream = fs.createReadStream
     fs.createReadStream = (path, ...args) => {
       if (/dictionary-packs.*(?:data.jsonl|index.json)$/.test(String(path)))
         globalThis.dictionaryPayloadReads++
       return stream(path, ...args)
     }
-    const { syncBuiltinESMExports } = await import('node:module')
+    const { syncBuiltinESMExports } = process.getBuiltinModule('node:module')
     syncBuiltinESMExports()
   })
   await page.evaluate(() => window.hibi.setAddonEnabled('dictionary', true))
+  await page.reload()
+  await waitForDocumentEditor(app, page)
   await waitForAsync(page, () =>
     performance
       .getEntriesByName('hibi:addon:dictionary', 'measure')

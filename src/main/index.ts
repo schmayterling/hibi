@@ -218,6 +218,7 @@ import {
   startUpdateChecks,
 } from './updates'
 import {
+  cancelWorkspaceSelection,
   currentWorkspaceTarget,
   deleteKnownWorkspace,
   documentFileChanged,
@@ -760,6 +761,24 @@ function runFileOperation<T>(
     if (closing) throw fileOperationUnavailable()
     return operation(trustedWindow(event))
   })
+}
+
+let workspaceOpenIntent = 0
+function runWorkspaceOpen(
+  event: IpcMainInvokeEvent,
+  operation: (
+    window: BrowserWindow,
+  ) => Promise<ReturnType<typeof getWorkspace>>,
+) {
+  trustedWindow(event)
+  if (closing || fileOperationHasDialog()) throw fileOperationUnavailable()
+  const intent = ++workspaceOpenIntent
+  cancelWorkspaceSelection()
+  return runFileOperation(event, (window) =>
+    intent === workspaceOpenIntent
+      ? operation(window)
+      : Promise.resolve(getWorkspace()),
+  )
 }
 
 async function lockFileOperation<T>(
@@ -2181,7 +2200,7 @@ if (!app.requestSingleInstanceLock()) {
         runFileOperation(event, (window) => workspaceAction(window, input)),
       )
       handle(WORKSPACE_CHANNELS.open, (event) =>
-        runFileOperation(event, openWorkspace),
+        runWorkspaceOpen(event, openWorkspace),
       )
       handle(IMPORT_CHANNELS.list, (event) => {
         trustedWindow(event)
@@ -2211,7 +2230,7 @@ if (!app.requestSingleInstanceLock()) {
         Promise.resolve(),
       )
       handle(WORKSPACE_CHANNELS.openRecent, (event, id: unknown) =>
-        runFileOperation(event, () => openRecentWorkspace(id)),
+        runWorkspaceOpen(event, () => openRecentWorkspace(id)),
       )
       handle(WORKSPACE_CHANNELS.known, (event) => {
         trustedWindow(event)

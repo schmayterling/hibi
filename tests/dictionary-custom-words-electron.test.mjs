@@ -571,14 +571,16 @@ test('5,000 custom words keep bounded live rows, skip hidden discovery work, and
   const scrollList = (edge) =>
     page.evaluate((edge) => {
       const scroller = document.querySelector('.settings-content')
+      // Spacers around the mounted rows hold the full list height.
       const list = document
         .querySelector('.dictionary-custom-words ul')
-        .getBoundingClientRect()
+        .parentElement.getBoundingClientRect()
       const view = scroller.getBoundingClientRect()
       scroller.scrollTop +=
         edge === 'end' ? list.bottom - view.bottom : list.top - view.top
     }, edge)
-  // Rows within one viewport above and below stay live; the rest only keep their height.
+  // Rows within one viewport above and below stay live, plus a focused row and
+  // its neighbors; the rest only keep their height.
   const live = () =>
     page.evaluate(() => {
       const section = document.querySelector('.dictionary-custom-words')
@@ -591,7 +593,7 @@ test('5,000 custom words keep bounded live rows, skip hidden discovery work, and
             (3 * document.querySelector('.settings-content').clientHeight) /
               rows[0].offsetHeight,
           ) + 2,
-        height: section.querySelector('ul').offsetHeight,
+        height: section.querySelector('ul').parentElement.offsetHeight,
         expected: 5000 * rows[0].offsetHeight,
       }
     })
@@ -612,9 +614,9 @@ test('5,000 custom words keep bounded live rows, skip hidden discovery work, and
     `Note for “${name(0)}”`,
   )
   shown = await live()
-  assert.ok(shown.rows <= shown.bound + 1, JSON.stringify(shown))
+  assert.ok(shown.rows <= shown.bound + 3, JSON.stringify(shown))
 
-  // A note whose save failed keeps its text while its row is far off screen.
+  // A note whose save failed keeps its text after its row unmounts far off screen.
   await app.evaluate(() => {
     globalThis.failNextWrite = true
   })
@@ -623,12 +625,11 @@ test('5,000 custom words keep bounded live rows, skip hidden discovery work, and
   await words.getByText('Could not save custom words.').waitFor()
   await scrollList('start')
   await remove(1).waitFor()
-  await remove(4998).waitFor({ state: 'detached' })
-  assert.equal(await note(4999).inputValue(), 'kept after failure')
+  await note(4999).waitFor({ state: 'detached' })
   shown = await live()
-  assert.ok(shown.rows <= shown.bound + 1, JSON.stringify(shown))
+  assert.ok(shown.rows <= shown.bound, JSON.stringify(shown))
   await scrollList('end')
-  await remove(4998).waitFor()
+  await remove(4999).waitFor()
   assert.equal(await note(4999).inputValue(), 'kept after failure')
 
   // Palette discovery finds the page's settings without its list or pack reads.

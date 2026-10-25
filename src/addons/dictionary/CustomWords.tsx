@@ -2,7 +2,6 @@ import {
   type ReactNode,
   useCallback,
   useContext,
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -30,45 +29,54 @@ import { languageNames } from './settings'
 const failed = (error: unknown) =>
   error instanceof Error ? error.message : 'Could not save custom words.'
 const utf8 = new TextDecoder('utf-8', { fatal: true })
-type Retain = (id: string | undefined) => () => void
+type NoteDraft = { text: string }
+type Drafts = ReadonlyMap<string | undefined, NoteDraft>
+type ChangeDraft = (
+  id: string | undefined,
+  change: (current: NoteDraft | undefined) => NoteDraft | undefined,
+) => void
+// Rows are never shorter than a setting row; this only spaces rows not yet measured.
+const rowEstimate = 68
 
 /** Shows the saved note until the user types; only a changed note is saved, and the typed one stays if saving fails. */
 function NoteInput({
   item,
+  draft,
+  changeDraft,
+  saving,
   save,
-  retain,
 }: {
   item: CustomWord
+  draft: NoteDraft | undefined
+  changeDraft: ChangeDraft
+  saving: Map<string | undefined, number>
   save: (note: string) => Promise<boolean>
-  retain: Retain
 }) {
   const saved = item.note ?? ''
-  // One object per keystroke, so a finished save clears only the text it saved.
-  const [draft, setDraft] = useState<{ text: string } | null>(null)
-  const saving = useRef(0)
-  const drafting = draft !== null
-  // A typed or failed note keeps its row mounted while the list scrolls.
-  useEffect(
-    () => (drafting ? retain(item.id) : undefined),
-    [drafting, item.id, retain],
-  )
   return (
     <TextInput
       aria-label={`Note for “${item.word}”`}
       placeholder="Note or definition"
       maxLength={2000}
       value={draft?.text ?? saved}
-      onChange={(event) => setDraft({ text: event.target.value })}
+      onChange={(event) => {
+        // One object per keystroke, so a finished save clears only the text it saved.
+        const typed = { text: event.target.value }
+        changeDraft(item.id, () => typed)
+      }}
       onBlur={() => {
         if (!draft) return
         const note = draft.text.trim()
         const done = () =>
-          setDraft((current) => (current === draft ? null : current))
+          changeDraft(item.id, (current) =>
+            current === draft ? undefined : current,
+          )
+        const pending = saving.get(item.id) ?? 0
         // Queue it anyway while saves are pending, so the last note typed wins.
-        if (note === saved && !saving.current) return done()
-        saving.current++
+        if (note === saved && !pending) return done()
+        saving.set(item.id, pending + 1)
         void save(note).then((ok) => {
-          saving.current--
+          saving.set(item.id, (saving.get(item.id) ?? 1) - 1)
           if (ok) done()
         })
       }}
@@ -76,76 +84,104 @@ function NoteInput({
   )
 }
 
-/** Mounts rows within one viewport of the visible area, plus focused rows and unsaved notes; padding keeps the full height. */
+/** First row whose bottom edge is below `offset`. */
+function rowAt(offsets: Float64Array, offset: number) {
+  let low = 0,
+    high = offsets.length - 1
+  while (low < high) {
+    const middle = (low + high) >> 1
+    if ((offsets[middle + 1] ?? 0) <= offset) low = middle + 1
+    else high = middle
+  }
+  return low
+}
+
+/**
+ * Mounts rows within one viewport of the visible area, plus the focused row and
+ * its neighbors so Tab order stays intact. Spacers hold the measured height of
+ * the rest; they sit outside the list so native scroll anchoring keeps visible
+ * rows still while new rows are measured.
+ */
 function WordList({
   words,
   row,
 }: {
   words: readonly CustomWord[]
-  row: (item: CustomWord, retain: Retain) => ReactNode
+  row: (item: CustomWord) => ReactNode
 }) {
+  const frame = useRef<HTMLDivElement>(null)
   const list = useRef<HTMLUListElement>(null)
   const scroller = useRef<HTMLElement | null>(null)
-  const [range, setRange] = useState({ from: 0, to: 0, size: 68 })
+  const heights = useRef(new Map<string | undefined, number>())
+  const [measured, setMeasured] = useState(0)
+  const [range, setRange] = useState({ from: 0, to: 0 })
   const [focused, setFocused] = useState<string>()
-  const [drafts, setDrafts] = useState<ReadonlySet<string | undefined>>(
-    () => new Set(),
-  )
   const count = words.length
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `measured` counts changes to the height map.
+  const offsets = useMemo(() => {
+    const result = new Float64Array(count + 1)
+    for (let index = 0; index < count; index++)
+      result[index + 1] =
+        (result[index] ?? 0) +
+        (heights.current.get(words[index]?.id) ?? rowEstimate)
+    return result
+  }, [words, count, measured])
+  const layout = useRef(offsets)
+  layout.current = offsets
   const update = useCallback(() => {
     const element = list.current
-    if (!element) return
-    let size = Number.POSITIVE_INFINITY
-    for (const item of element.children)
-      if (item instanceof HTMLElement && item.offsetHeight)
-        size = Math.min(size, item.offsetHeight)
-    const box = element.getBoundingClientRect()
+    const origin = frame.current?.getBoundingClientRect().top
+    if (!element || origin === undefined) return
+    let changed = false
+    for (const item of element.children) {
+      if (!(item instanceof HTMLElement)) continue
+      const height = item.getBoundingClientRect().height
+      const known = heights.current.get(item.dataset.word)
+      // Ignore subpixel rounding so measurements settle.
+      if (!height || (known !== undefined && Math.abs(known - height) < 0.5))
+        continue
+      heights.current.set(item.dataset.word, height)
+      changed = true
+    }
+    // New heights move later rows; the next render recomputes the window from them.
+    if (changed) return setMeasured((value) => value + 1)
     const view = scroller.current?.getBoundingClientRect() ?? {
       top: 0,
       bottom: innerHeight,
     }
     const margin = view.bottom - view.top
-    setRange((current) => {
-      const height = Number.isFinite(size) ? size : current.size
-      const from = Math.min(
-        count,
-        Math.max(0, Math.floor((view.top - margin - box.top) / height)),
-      )
-      const to = Math.min(
-        count,
-        Math.max(from, Math.ceil((view.bottom + margin - box.top) / height)),
-      )
-      return from === current.from &&
-        to === current.to &&
-        height === current.size
-        ? current
-        : { from, to, size: height }
-    })
-  }, [count])
+    const latest = layout.current
+    const from = rowAt(latest, view.top - origin - margin)
+    const to = Math.min(
+      latest.length - 1,
+      rowAt(latest, view.bottom - origin + margin) + 1,
+    )
+    setRange((current) =>
+      current.from === from && current.to === to ? current : { from, to },
+    )
+  }, [])
   useLayoutEffect(() => {
-    let node = list.current?.parentElement ?? null
+    const element = list.current
+    if (!element) return
+    let node = element.parentElement
     while (node && !/auto|scroll/.test(getComputedStyle(node).overflowY))
       node = node.parentElement
     scroller.current = node
     const target = node ?? window
+    // Zoom and width changes rewrap words: mounted rows are measured again, and
+    // earlier heights stay as estimates for the rest.
+    const resized = new ResizeObserver(update)
+    resized.observe(element)
     target.addEventListener('scroll', update, { passive: true })
     window.addEventListener('resize', update)
     return () => {
+      resized.disconnect()
       target.removeEventListener('scroll', update)
       window.removeEventListener('resize', update)
     }
   }, [update])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: rows mounted for a new range are measured again; an equal range stops here.
-  useLayoutEffect(update, [update, range.from, range.to])
-  const retain = useCallback<Retain>((id) => {
-    setDrafts((current) => new Set(current).add(id))
-    return () =>
-      setDrafts((current) => {
-        const next = new Set(current)
-        next.delete(id)
-        return next
-      })
-  }, [])
+  // Every render can mount rows; equal heights and ranges stop here.
+  useLayoutEffect(update)
   const indices = useMemo(
     () => new Map(words.map((item, index) => [item.id, index])),
     [words],
@@ -153,46 +189,57 @@ function WordList({
   const shown = new Set<number>()
   for (let index = range.from; index < Math.min(range.to, count); index++)
     shown.add(index)
-  for (const id of [focused, ...drafts]) {
-    const index = indices.get(id)
-    if (index !== undefined) shown.add(index)
-  }
+  const at = indices.get(focused)
+  if (at !== undefined)
+    for (
+      let index = Math.max(0, at - 1);
+      index <= Math.min(count - 1, at + 1);
+      index++
+    )
+      shown.add(index)
   const rows = [...shown].sort((a, b) => a - b)
   const first = rows[0] ?? count
   const last = rows.at(-1) ?? count - 1
   return (
-    <ul
-      ref={list}
-      style={{
-        paddingTop: first * range.size,
-        paddingBottom: (count - last - 1) * range.size,
-      }}
-      onFocus={(event) =>
-        setFocused((event.target as HTMLElement).closest('li')?.dataset.word)
-      }
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null))
-          setFocused(undefined)
-      }}
-    >
-      {rows.map((index, position) => {
-        const item = words[index]
-        if (!item) return null
-        const gap = index - (rows[position - 1] ?? index - 1) - 1
-        return (
-          <li
-            key={item.id}
-            className="setting-row"
-            data-word={item.id}
-            aria-posinset={index + 1}
-            aria-setsize={count}
-            style={gap ? { marginTop: gap * range.size } : undefined}
-          >
-            {row(item, retain)}
-          </li>
-        )
-      })}
-    </ul>
+    <div ref={frame}>
+      <div aria-hidden="true" style={{ height: offsets[first] }} />
+      <ul
+        ref={list}
+        onFocus={(event) =>
+          setFocused((event.target as HTMLElement).closest('li')?.dataset.word)
+        }
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+            setFocused(undefined)
+        }}
+      >
+        {rows.map((index, position) => {
+          const item = words[index]
+          if (!item) return null
+          const previous = rows[position - 1]
+          const gap =
+            previous === undefined
+              ? 0
+              : (offsets[index] ?? 0) - (offsets[previous + 1] ?? 0)
+          return (
+            <li
+              key={item.id}
+              className="setting-row"
+              data-word={item.id}
+              aria-posinset={index + 1}
+              aria-setsize={count}
+              style={gap ? { marginTop: gap } : undefined}
+            >
+              {row(item)}
+            </li>
+          )
+        })}
+      </ul>
+      <div
+        aria-hidden="true"
+        style={{ height: (offsets[count] ?? 0) - (offsets[last + 1] ?? 0) }}
+      />
+    </div>
   )
 }
 
@@ -200,6 +247,22 @@ export function CustomWords() {
   // Hidden discovery and search still register this section's setting rows.
   const visible = useContext(SettingsPageVisible)
   const words = useSyncExternalStore(onCustomWordsChanged, listCustomWords)
+  // Typed notes outlive hidden pages and offscreen rows; only a save clears them.
+  const [drafts, setDrafts] = useState<Drafts>(() => new Map())
+  const saving = useRef(new Map<string | undefined, number>())
+  const changeDraft = useCallback<ChangeDraft>(
+    (id, change) =>
+      setDrafts((current) => {
+        const before = current.get(id)
+        const after = change(before)
+        if (after === before) return current
+        const next = new Map(current)
+        if (after) next.set(id, after)
+        else next.delete(id)
+        return next
+      }),
+    [],
+  )
   const [draft, setDraft] = useState('')
   const [text, setText] = useState('')
   const [message, setMessage] = useState('')
@@ -277,7 +340,7 @@ export function CustomWords() {
         {!visible ? null : words.length ? (
           <WordList
             words={words}
-            row={(item, retain) => (
+            row={(item) => (
               <>
                 <span className="dictionary-custom-word" lang={item.lang}>
                   {item.word}
@@ -301,7 +364,9 @@ export function CustomWords() {
                 </Select>
                 <NoteInput
                   item={item}
-                  retain={retain}
+                  draft={drafts.get(item.id)}
+                  changeDraft={changeDraft}
+                  saving={saving.current}
                   save={(note) =>
                     edit(item, ({ note: _old, ...rest }) =>
                       note ? { ...rest, note } : rest,

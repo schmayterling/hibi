@@ -111,8 +111,8 @@ import { observeRichAnnotations } from './rich-annotations'
 import {
   findNext,
   findPrev,
-  firstRichMatch,
   richFindKey,
+  scanRichFind,
   setRichFindQuery,
 } from './rich-find'
 import { createRichParagraphProof } from './rich-paragraph-proof'
@@ -3114,18 +3114,21 @@ export function MarkdownEditor({
   useEffect(() => {
     if (!editor || !findOpen || findTarget !== 'rich') return
     const report = () => {
-      const { total, current } = richFindKey.getState(editor.state) ?? {
-        total: 0,
-        current: 0,
-      }
+      const find = richFindKey.getState(editor.state)
+      // The total is pending until every textblock has been scanned.
+      const pending = find?.total === null
+      const total = find?.total ?? 0
+      const current = find?.current ?? 0
       // Keep the status object when matches and the current match are unchanged, so selection moves do not re-render the editor.
       setFindStatus((status) =>
         status.total === total &&
         status.current === current &&
-        !status.pending &&
+        !status.pending === !pending &&
         !status.error
           ? status
-          : { total, current },
+          : pending
+            ? { total, current, pending }
+            : { total, current },
       )
     }
     editor.on('transaction', report)
@@ -3141,16 +3144,19 @@ export function MarkdownEditor({
     if (!query && !richFindKey.getState(editor.state)?.query) return
     if (!flushRich(editor)) return
     editor.view.dispatch(setRichFindQuery(editor.state.tr, query))
-    const first = firstRichMatch(editor.state)
-    if (!first) return
-    editor.view.dispatch(
-      editor.state.tr
-        .setSelection(
-          TextSelection.create(editor.state.doc, first.from, first.to),
-        )
-        .scrollIntoView(),
-    )
-    revealRichRange(editor, first.from, first.to)
+    const selection = editor.state.selection
+    return scanRichFind(editor.view, (first) => {
+      // A long scan must not take over a selection made while it ran.
+      if (!editor.state.selection.eq(selection)) return
+      editor.view.dispatch(
+        editor.state.tr
+          .setSelection(
+            TextSelection.create(editor.state.doc, first.from, first.to),
+          )
+          .scrollIntoView(),
+      )
+      revealRichRange(editor, first.from, first.to)
+    })
   }, [editor, findQuery, findOpen, findTarget])
 
   useEffect(() => {

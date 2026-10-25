@@ -88,6 +88,7 @@ let watcherFlushesInFlight = 0
 let workspaceScanCapReached = false
 let workspaceScanFailed = false
 let loadGeneration = 0
+let loadController: AbortController | undefined
 const acknowledgedPaths = new Map<
   string,
   { fingerprint: string | null; expires: number }
@@ -243,15 +244,20 @@ function relativePath(base: string, path: string): string | null {
 export async function scanWorkspace(
   base: string,
   showAllFiles = false,
+  signal?: AbortSignal,
 ): Promise<WorkspaceEntry[]> {
+  signal?.throwIfAborted()
   const [ignored, limit] = await Promise.all([
     workspaceIgnore(base),
     workspaceEntryLimit(),
   ])
+  signal?.throwIfAborted()
   let count = 0
   async function walk(directory: string): Promise<WorkspaceEntry[]> {
     const result: WorkspaceEntry[] = []
+    signal?.throwIfAborted()
     for await (const child of await opendir(directory)) {
+      signal?.throwIfAborted()
       if (
         (child.name.startsWith('.') &&
           (child.isDirectory() || !showAllFiles)) ||
@@ -288,9 +294,12 @@ export async function scanWorkspace(
       }
     }
     // Close the directory iterator before descending into child folders.
-    for (const entry of result)
+    for (const entry of result) {
+      signal?.throwIfAborted()
       if (entry.kind === 'folder')
         entry.children = await walk(join(base, entry.path))
+    }
+    signal?.throwIfAborted()
     return result.sort(
       (a, b) =>
         Number(b.kind === 'folder') - Number(a.kind === 'folder') ||
@@ -663,10 +672,19 @@ export async function openWorkspace(
   return loadWorkspace(selected)
 }
 
+export function cancelWorkspaceLoad(): void {
+  loadGeneration++
+  loadController?.abort()
+  loadController = undefined
+}
+
 export async function loadWorkspace(
   selected: string,
 ): Promise<WorkspaceState | null> {
-  const loading = ++loadGeneration
+  cancelWorkspaceLoad()
+  const loading = loadGeneration
+  loadController = new AbortController()
+  const signal = loadController.signal
   const nextRoot = await realpath(selected)
   if (loading !== loadGeneration) return getWorkspace()
   if (nextRoot === root) {
@@ -679,6 +697,7 @@ export async function loadWorkspace(
     return getWorkspace()
   }
   const showAllFiles = await showAllWorkspaceFiles()
+  if (loading !== loadGeneration) return getWorkspace()
   let candidateWatcher: FSWatcher | undefined
   let candidateTarget: WorkspaceTarget | null = null
   let changedDuringScan = false
@@ -707,18 +726,23 @@ export async function loadWorkspace(
   } catch (error) {
     console.error('workspace watcher unavailable:', error)
   }
+  const cancelCandidate = () => candidateWatcher?.close()
+  signal.addEventListener('abort', cancelCandidate, { once: true })
   let nextEntries: WorkspaceEntry[]
   let metadata: Awaited<ReturnType<typeof workspaceMetadata>>
   let vault: WorkspaceState['obsidian']
   try {
     ;[nextEntries, metadata, vault] = await Promise.all([
-      scanWorkspace(nextRoot, showAllFiles),
+      scanWorkspace(nextRoot, showAllFiles, signal),
       workspaceMetadata(nextRoot),
       obsidianVault(nextRoot),
     ])
   } catch (error) {
     candidateWatcher?.close()
+    if (signal.aborted) return getWorkspace()
     throw error
+  } finally {
+    signal.removeEventListener('abort', cancelCandidate)
   }
   if (loading !== loadGeneration) {
     candidateWatcher?.close()
@@ -756,10 +780,10 @@ export async function loadWorkspace(
   ignoredPaths = ignore().add(metadata.ignore)
   workspaceStream.replace(workspaceTarget)
   scanCoordinator = createScanCoordinator(
-    async () => {
+    async (signal) => {
       const showAllFiles = await showAllWorkspaceFiles()
       const [next, metadata] = await Promise.all([
-        scanWorkspace(nextRoot, showAllFiles),
+        scanWorkspace(nextRoot, showAllFiles, signal),
         workspaceMetadata(nextRoot),
       ])
       return {
@@ -836,7 +860,7 @@ export async function deleteKnownWorkspace(
   await shell.trashItem(item.path)
   closeDeletedDocuments(window, item.path)
   if (root === item.path || root?.startsWith(`${item.path}${sep}`)) {
-    loadGeneration += 1
+    cancelWorkspaceLoad()
     watcher?.close()
     clearTimeout(refreshTimer)
     indexJob.reset()
@@ -1088,6 +1112,7 @@ async function collectIndexPages(
         } else {
           const path =
             draft?.file ?? (await resolveWorkspaceFile(selected, item.path))
+          if (!current()) return
           let version: string
           if (draft) {
             version = `draft:${draft.tabId}:${draft.contentVersion}`
@@ -1095,6 +1120,7 @@ async function collectIndexPages(
             const file = await stat(path, { bigint: true })
             version = diskIndexVersion(file)
           }
+          if (!current()) return
           cached = await readIndexPage(
             existing,
             version,
@@ -1104,6 +1130,7 @@ async function collectIndexPages(
             () => draft?.markdown ?? readMarkdown(path),
           )
         }
+        if (!current()) return
         bytes += cached.bytes
         if (pages.length >= 2000 || bytes > 20 * 1024 * 1024)
           throw new Error(

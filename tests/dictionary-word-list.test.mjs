@@ -10,6 +10,29 @@ const short = (index) => `w${String(index).padStart(4, '0')}`
 // Valid 64-character words wrap, so their rows are taller than one-line rows.
 const long = (index) => `${String(index).padStart(4, '0')}${'W'.repeat(60)}`
 let app, root, page, errors
+// Test builds expose the list's per-word caches so churn can be counted.
+const exposeCaches = {
+  name: 'expose-custom-word-caches',
+  enforce: 'pre',
+  transform(code, id) {
+    if (!id.endsWith('/src/addons/dictionary/CustomWords.tsx')) return
+    const patches = [
+      [
+        "  const [draft, setDraft] = useState('')\n",
+        '  Object.assign(window, { wordCaches: { drafts, saving: saving.current } })\n',
+      ],
+      [
+        '  const [measured, setMeasured] = useState(0)\n',
+        '  Object.assign(window, { wordHeights: heights.current })\n',
+      ],
+    ]
+    for (const [anchor, line] of patches) {
+      if (!code.includes(anchor)) throw new Error(`Missing anchor: ${anchor}`)
+      code = code.replace(anchor, line + anchor)
+    }
+    return code
+  },
+}
 
 before(
   async () => {
@@ -19,6 +42,7 @@ before(
       logLevel: 'silent',
       define: { 'process.env.NODE_ENV': '"production"' },
       esbuild: { jsx: 'automatic' },
+      plugins: [exposeCaches],
       build: {
         outDir: root,
         emptyOutDir: false,
@@ -222,5 +246,82 @@ test('a failed note survives a hidden page and an unmounted row until it saves',
   await note.blur()
   await failure.waitFor({ state: 'detached' })
   assert.equal(await note.inputValue(), 'failed draft')
+  assert.deepEqual(errors, [])
+})
+
+test('removing the focused row keeps Tab and Shift+Tab on its neighbors', {
+  timeout: 45000,
+}, async () => {
+  const words = Array.from({ length: 1000 }, (_, index) => short(index))
+  await open(words)
+  // Removed from its own button after the row scrolled away.
+  await button('Remove “w0000”').focus()
+  await scrollToEnd('Remove “w0999”')
+  await page.keyboard.press('Enter')
+  await button('Remove “w0000”').waitFor({ state: 'detached' })
+  await page.keyboard.press('Tab')
+  assert.equal(await active(), 'Language of “w0001”')
+  // Removed by another window while focused and scrolled away.
+  const height = await page.evaluate(
+    () => document.querySelector('.dictionary-custom-words li').offsetHeight,
+  )
+  await scrollTo(499 * height)
+  await button('Remove “w0500”').focus()
+  await scrollTo(0)
+  await settled()
+  await page.evaluate(
+    (words) => window.wordHarness.setWords(words),
+    words.slice(1).filter((word) => word !== 'w0500'),
+  )
+  await button('Remove “w0500”').waitFor({ state: 'detached' })
+  await page.keyboard.press('Tab')
+  assert.equal(await active(), 'Language of “w0501”')
+  await page.keyboard.press('Shift+Tab')
+  assert.equal(await active(), 'Remove “w0499”')
+  assert.deepEqual(errors, [])
+})
+
+test('removed words release their notes, save counts and heights', {
+  timeout: 45000,
+}, async () => {
+  await open(['keeper'])
+  const failure = page.getByText('Could not save custom words.', {
+    exact: true,
+  })
+  for (let index = 0; index < 20; index++) {
+    const name = `removed${index}`
+    await page.evaluate(
+      (name) => window.wordHarness.setWords(['keeper', name]),
+      name,
+    )
+    const note = page.getByRole('textbox', {
+      name: `Note for “${name}”`,
+      exact: true,
+    })
+    await page.evaluate(() => window.wordHarness.fail(true))
+    await note.fill('x'.repeat(2000))
+    await note.blur()
+    await failure.waitFor()
+    await page.evaluate(() => window.wordHarness.fail(false))
+    await button(`Remove “${name}”`).click()
+    await button(`Remove “${name}”`).waitFor({ state: 'detached' })
+    await failure.waitFor({ state: 'detached' })
+  }
+  assert.deepEqual(
+    await page.evaluate(() => ({
+      drafts: window.wordCaches.drafts.size,
+      saving: window.wordCaches.saving.size,
+      heights: window.wordHeights.size,
+    })),
+    { drafts: 0, saving: 0, heights: 1 },
+  )
+  // A word that returns with a removed ID starts without the old note.
+  await page.evaluate(() => window.wordHarness.setWords(['keeper', 'removed0']))
+  assert.equal(
+    await page
+      .getByRole('textbox', { name: 'Note for “removed0”', exact: true })
+      .inputValue(),
+    '',
+  )
   assert.deepEqual(errors, [])
 })

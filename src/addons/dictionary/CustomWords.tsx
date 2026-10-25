@@ -2,6 +2,7 @@ import {
   type ReactNode,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -76,7 +77,9 @@ function NoteInput({
         if (note === saved && !pending) return done()
         saving.set(item.id, pending + 1)
         void save(note).then((ok) => {
-          saving.set(item.id, (saving.get(item.id) ?? 1) - 1)
+          const left = (saving.get(item.id) ?? 1) - 1
+          if (left > 0) saving.set(item.id, left)
+          else saving.delete(item.id)
           if (ok) done()
         })
       }}
@@ -186,10 +189,41 @@ function WordList({
     () => new Map(words.map((item, index) => [item.id, index])),
     [words],
   )
+  useLayoutEffect(() => {
+    for (const id of heights.current.keys())
+      if (!indices.has(id)) heights.current.delete(id)
+  }, [indices])
+  // The last committed list locates a focused word that was just removed. The
+  // word that takes its place keeps the position, so Tab and Shift+Tab
+  // continue from there.
+  const committed = useRef(words)
+  let at = indices.get(focused)
+  if (at === undefined && focused !== undefined && count) {
+    const before = committed.current
+    const index = before.findIndex((item) => item.id === focused)
+    if (index >= 0)
+      at = Math.min(
+        before.slice(0, index).filter((item) => indices.has(item.id)).length,
+        count - 1,
+      )
+  }
+  const anchor = at === undefined ? undefined : words[at]?.id
+  useLayoutEffect(() => {
+    committed.current = words
+    if (anchor !== focused) setFocused(anchor)
+  })
+  useEffect(() => {
+    // Leaving the window or deleting the focused row keeps the anchor; focus
+    // moving to another control releases it.
+    const moved = (event: FocusEvent) => {
+      if (!list.current?.contains(event.target as Node)) setFocused(undefined)
+    }
+    document.addEventListener('focusin', moved)
+    return () => document.removeEventListener('focusin', moved)
+  }, [])
   const shown = new Set<number>()
   for (let index = range.from; index < Math.min(range.to, count); index++)
     shown.add(index)
-  const at = indices.get(focused)
   if (at !== undefined)
     for (
       let index = Math.max(0, at - 1);
@@ -208,10 +242,6 @@ function WordList({
         onFocus={(event) =>
           setFocused((event.target as HTMLElement).closest('li')?.dataset.word)
         }
-        onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null))
-            setFocused(undefined)
-        }}
       >
         {rows.map((index, position) => {
           const item = words[index]
@@ -263,6 +293,17 @@ export function CustomWords() {
       }),
     [],
   )
+  // Confirmed removals take their unsaved notes and save counts with them.
+  useEffect(() => {
+    const live = new Set(words.map((item) => item.id))
+    for (const id of saving.current.keys())
+      if (!live.has(id)) saving.current.delete(id)
+    setDrafts((current) =>
+      [...current.keys()].every((id) => live.has(id))
+        ? current
+        : new Map([...current].filter(([id]) => live.has(id))),
+    )
+  }, [words])
   const [draft, setDraft] = useState('')
   const [text, setText] = useState('')
   const [message, setMessage] = useState('')

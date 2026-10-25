@@ -16,6 +16,7 @@ import {
   workspaceChangeCursor,
   workspaceIndexRevision,
 } from './workspace'
+import { LatestIndexJob } from './workspace-index-job'
 import {
   type GraphPosition,
   type TextSearchPosition,
@@ -44,6 +45,12 @@ let indexedRevision = -1
 let indexedSourceVersions = ''
 let indexedSyntaxFingerprint = ''
 let requestedSyntaxFingerprint = ''
+type ReferenceBuild = (current: () => boolean) => Promise<boolean>
+let latestBuild: { key: string; request: ReferenceBuild } | null = null
+const referenceJob = new LatestIndexJob(
+  () => latestBuild,
+  (build: ReferenceBuild, current) => build(current),
+)
 
 function hasIndexedSnapshot(
   target: WorkspaceTarget,
@@ -63,6 +70,8 @@ function hasIndexedSnapshot(
 }
 
 function clearCache(): void {
+  referenceJob.reset()
+  latestBuild = null
   references.clear()
   searchCursors.clear()
   graphCursors.clear()
@@ -243,10 +252,72 @@ export async function queryWorkspaceReferences(
     sourceVersions,
     syntax.fingerprint,
   )
-  let index: Awaited<ReturnType<typeof indexWorkspace>> = null
-  if (refresh)
+  const sourceCurrent = () => {
+    const current = workspaceChangeCursor()
+    return (
+      isCurrentWorkspaceTarget(target) &&
+      current.target?.workspaceId === target.workspaceId &&
+      current.target.workspaceGeneration === target.workspaceGeneration &&
+      current.sequence === before.sequence &&
+      workspaceIndexRevision() === revision &&
+      versionKey(getOpenDocumentVersions()) === sourceVersions &&
+      requestedSyntaxFingerprint === syntax.fingerprint
+    )
+  }
+  if (refresh) {
+    latestBuild = {
+      key: JSON.stringify([
+        target.workspaceId,
+        target.workspaceGeneration,
+        before.sequence,
+        revision,
+        sourceVersions,
+        syntax.fingerprint,
+      ]),
+      request: async (current) => {
+        const index = await indexWorkspace()
+        if (
+          !current() ||
+          !sourceCurrent() ||
+          index?.workspace.id !== target.workspaceId
+        )
+          return false
+        if (
+          hasIndexedSnapshot(
+            target,
+            before.sequence,
+            revision,
+            sourceVersions,
+            syntax.fingerprint,
+          )
+        )
+          return true
+        const sourceChanged =
+          indexedTarget?.workspaceId !== target.workspaceId ||
+          indexedTarget.workspaceGeneration !== target.workspaceGeneration ||
+          indexedSequence !== before.sequence ||
+          indexedRevision !== revision ||
+          indexedSourceVersions !== sourceVersions
+        const applied = await references.applyCooperatively(
+          target,
+          index.pages,
+          syntax.page,
+          () => current() && sourceCurrent(),
+        )
+        if (!applied) return false
+        if (sourceChanged) searchCursors.clear()
+        graphCursors.clear()
+        indexedTarget = target
+        indexedSequence = before.sequence
+        indexedRevision = revision
+        indexedSourceVersions = sourceVersions
+        indexedSyntaxFingerprint = syntax.fingerprint
+        return true
+      },
+    }
     try {
-      index = await indexWorkspace()
+      if (!(await referenceJob.request(latestBuild)))
+        return failure('stale', 'This workspace changed. Try again.')
     } catch (error) {
       if (
         error instanceof Error &&
@@ -255,74 +326,10 @@ export async function queryWorkspaceReferences(
         return failure('limit-exceeded', error.message)
       throw error
     }
+  }
   const after = workspaceChangeCursor()
-  if (
-    !isCurrentWorkspaceTarget(target) ||
-    after.target?.workspaceId !== target.workspaceId ||
-    after.target.workspaceGeneration !== target.workspaceGeneration ||
-    before.sequence !== after.sequence ||
-    revision !== workspaceIndexRevision() ||
-    sourceVersions !== versionKey(getOpenDocumentVersions()) ||
-    requestedSyntaxFingerprint !== syntax.fingerprint ||
-    (refresh && index?.workspace.id !== target.workspaceId)
-  )
+  if (!sourceCurrent())
     return failure('stale', 'This workspace changed. Try again.')
-  const sourceCurrent = () => {
-    const current = workspaceChangeCursor()
-    return (
-      isCurrentWorkspaceTarget(target) &&
-      current.target?.workspaceId === target.workspaceId &&
-      current.target.workspaceGeneration === target.workspaceGeneration &&
-      current.sequence === after.sequence &&
-      workspaceIndexRevision() === revision &&
-      versionKey(getOpenDocumentVersions()) === sourceVersions &&
-      requestedSyntaxFingerprint === syntax.fingerprint
-    )
-  }
-  if (
-    index &&
-    !hasIndexedSnapshot(
-      target,
-      after.sequence,
-      revision,
-      sourceVersions,
-      syntax.fingerprint,
-    )
-  ) {
-    const sourceChanged =
-      indexedTarget?.workspaceId !== target.workspaceId ||
-      indexedTarget.workspaceGeneration !== target.workspaceGeneration ||
-      indexedSequence !== after.sequence ||
-      indexedRevision !== revision ||
-      indexedSourceVersions !== sourceVersions
-    if (sourceChanged) searchCursors.clear()
-    graphCursors.clear()
-    const applied = await references.applyCooperatively(
-      target,
-      index.pages,
-      syntax.page,
-      sourceCurrent,
-    )
-    if (!applied) {
-      if (
-        !sourceCurrent() ||
-        !hasIndexedSnapshot(
-          target,
-          after.sequence,
-          revision,
-          sourceVersions,
-          syntax.fingerprint,
-        )
-      )
-        return failure('stale', 'This workspace changed. Try again.')
-    } else {
-      indexedTarget = target
-      indexedSequence = after.sequence
-      indexedRevision = revision
-      indexedSourceVersions = sourceVersions
-      indexedSyntaxFingerprint = syntax.fingerprint
-    }
-  }
   const cacheCurrent = () => {
     return (
       sourceCurrent() &&

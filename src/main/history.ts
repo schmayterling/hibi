@@ -65,21 +65,28 @@ export async function recordVersions(
   const current = await versions(path)
   const folder = directory(path)
   const next = [...current]
-  for (const markdown of markdowns) {
-    const hash = createHash('sha256').update(markdown).digest('hex')
-    if (next.at(-1)?.hash === hash) continue
-    if (next.length === current.length)
-      await mkdir(folder, { recursive: true, mode: 0o700 })
-    const id = randomUUID()
-    await writeText(join(folder, `${id}.md`), markdown)
-    next.push({
-      id,
-      hash,
-      savedAt: Date.now(),
-      bytes: Buffer.byteLength(markdown),
-    })
+  let copyFailure: { error: unknown } | undefined
+  try {
+    for (const markdown of markdowns) {
+      const hash = createHash('sha256').update(markdown).digest('hex')
+      if (next.at(-1)?.hash === hash) continue
+      if (next.length === current.length)
+        await mkdir(folder, { recursive: true, mode: 0o700 })
+      const id = randomUUID()
+      await writeText(join(folder, `${id}.md`), markdown)
+      next.push({
+        id,
+        hash,
+        savedAt: Date.now(),
+        bytes: Buffer.byteLength(markdown),
+      })
+    }
+  } catch (error) {
+    if (next.length === current.length) throw error
+    copyFailure = { error }
   }
   if (next.length === current.length) return
+  const added = next.slice(current.length)
   let bytes = next.reduce((sum, version) => sum + version.bytes, 0)
   const expired: Version[] = []
   while (next.length > 1 && (next.length > 100 || bytes > 20 * 1024 * 1024)) {
@@ -89,7 +96,20 @@ export async function recordVersions(
       bytes -= version.bytes
     }
   }
-  await writeText(join(folder, 'index.json'), JSON.stringify(next))
+  try {
+    await writeText(join(folder, 'index.json'), JSON.stringify(next))
+  } catch (error) {
+    const published = await versions(path).catch(() => null)
+    if (published) {
+      const indexed = new Set(published.map(({ id }) => id))
+      await Promise.all(
+        added
+          .filter(({ id }) => !indexed.has(id))
+          .map(({ id }) => unlink(join(folder, `${id}.md`)).catch(() => {})),
+      )
+    }
+    throw error
+  }
   await Promise.all(
     expired.map((version) =>
       unlink(join(folder, `${version.id}.md`)).catch(
@@ -99,4 +119,5 @@ export async function recordVersions(
       ),
     ),
   )
+  if (copyFailure) throw copyFailure.error
 }

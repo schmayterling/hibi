@@ -1,5 +1,10 @@
 import { ChevronRight, Image, X } from 'lucide-react'
-import { useLayoutEffect, useState } from 'react'
+import {
+  type ComponentProps,
+  useEffect,
+  useLayoutEffect,
+  useState,
+} from 'react'
 import { createPortal } from 'react-dom'
 import { bundledColorschemes } from '../../shared/color-palettes'
 import type { Colorscheme, ThemePreferences } from '../../shared/colorschemes'
@@ -10,6 +15,7 @@ import {
   ControlRow,
   DocumentNotice,
   IconButton,
+  PanelMessage,
   Select,
   SettingRow,
   TextArea,
@@ -19,6 +25,54 @@ import {
 import { type ExportOptions, validateExportOptions } from './options'
 import './style.css'
 
+type ExportSetup = Omit<
+  ComponentProps<typeof ExportDialog>,
+  'formId' | 'context' | 'signal'
+>
+
+export function LoadingExportDialog({
+  setup,
+  close,
+  ...props
+}: {
+  setup: Promise<ExportSetup>
+  close: () => void
+  formId: string
+  context: AddonContext
+  signal: AbortSignal
+}) {
+  const [loaded, setLoaded] = useState<ExportSetup | null>(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let active = true
+    void setup.then(
+      (value) => {
+        if (active) setLoaded(value)
+      },
+      (error) => {
+        if (active) setError(errorMessage(error))
+      },
+    )
+    return () => {
+      active = false
+    }
+  }, [setup])
+  if (error) return <DocumentNotice title="Could not export" message={error} />
+  if (!loaded)
+    return <PanelMessage icon={null} title="Loading export options…" loading />
+  return (
+    <ExportDialog
+      {...props}
+      {...loaded}
+      save={async (...args) => {
+        const saved = await loaded.save(...args)
+        if (saved) close()
+        return saved
+      }}
+    />
+  )
+}
+
 export function ExportDialog({
   formId,
   context,
@@ -26,6 +80,7 @@ export function ExportDialog({
   graph,
   warning,
   save,
+  signal,
   pages = [],
   colorschemes = [],
   contributions = [],
@@ -35,7 +90,12 @@ export function ExportDialog({
   initial: ExportOptions
   graph: boolean
   warning: string | null
-  save: (options: ExportOptions, password: string) => Promise<boolean>
+  signal?: AbortSignal
+  save: (
+    options: ExportOptions,
+    password: string,
+    signal?: AbortSignal,
+  ) => Promise<boolean>
   pages?: readonly { path: string }[]
   /** Enabled addon colorschemes; bundled schemes are always listed. */
   colorschemes?: readonly Colorscheme[]
@@ -116,9 +176,9 @@ export function ExportDialog({
           const selected = validateExportOptions(options)
           if (locked && password.length < 8)
             throw new Error('Use a password of at least 8 characters.')
-          await save(selected, locked ? password : '')
+          await save(selected, locked ? password : '', signal)
         } catch (error) {
-          setError(errorMessage(error))
+          if (!signal?.aborted) setError(errorMessage(error))
         } finally {
           setBusy(false)
         }

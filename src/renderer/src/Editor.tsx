@@ -61,8 +61,13 @@ import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import type { SourceSnapshot } from '../../shared/source-buffer'
 import {
+  composeSourceChanges,
+  type RawEdit,
+} from '../../shared/source-operations'
+import {
   mapSourceSelection,
   type SourceSelection,
+  sourceSelection,
 } from '../../shared/source-selection'
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
@@ -1967,7 +1972,16 @@ export function MarkdownEditor({
     let paragraphIdle: number | undefined
     let preview: {
       snapshot: SourceSnapshot
-      selection: SourceSelection
+      selection: SourceSelection | null
+      // Without an exact incremental map, the untouched rich selection is
+      // mapped through its own source and the composed pending edits on catch-up.
+      rich?: {
+        document: RichNode
+        anchor: number
+        head: number
+        before: SourceSnapshot
+        changes: readonly RawEdit[]
+      }
     } | null =
       retained?.editor === editor &&
       retained.session === session &&
@@ -1976,17 +1990,14 @@ export function MarkdownEditor({
       retained.snapshot.version === session.snapshot().version
         ? retained
         : null
+    // A read-only split preview may lag behind source typing when its rich
+    // attachments accept that. An incremental codec only makes catch-up cheaper.
     const canWait =
       paneMode === 'side-by-side' &&
-      plainSyncEligible &&
       !projectionReadOnly &&
       !disabled &&
       !richExtensionError &&
-      richExtensions.every((extension) =>
-        ['word-count.text', 'slash-commands.menu', 'tags.highlights'].includes(
-          extension.id,
-        ),
-      )
+      richExtensions.every((extension) => extension.preview === 'deferred')
     plainSync.current = null
     pendingPlainSync.current = null
     const matches = (snapshot: SourceSnapshot) => {
@@ -2000,7 +2011,9 @@ export function MarkdownEditor({
     const certify = (snapshot: SourceSnapshot) => {
       if (paragraphIdle !== undefined) cancelIdleCallback(paragraphIdle)
       paragraphIdle = undefined
+      // Only visual editing uses this proof; the read-only split preview never does.
       if (
+        paneMode === 'normal' &&
         outlineSyntax?.math &&
         editor.markdown &&
         markdownSyntax.version() === syntaxVersion
@@ -2053,6 +2066,31 @@ export function MarkdownEditor({
         serialize(editor.state.doc),
       )
     }
+    const richBookmark = (rich: NonNullable<typeof preview>['rich']) => {
+      if (!rich || editor.state.doc !== rich.document) return undefined
+      try {
+        const source = rich.before.materialize(),
+          projected = projectMarkdown(source, markdownExtensions),
+          offset =
+            projected.sourceOffset ?? source.lastIndexOf(projected.content),
+          map = positions(projected.content, rich.document),
+          anchor = map(rich.anchor, 'rich'),
+          head = map(rich.head, 'rich')
+        if (offset < 0 || anchor === null || head === null) return undefined
+        return mapSourceSelection(
+          session.snapshot(),
+          sourceSelection(rich.before, {
+            ranges: [
+              { anchor: offset + anchor, head: offset + head, association: 1 },
+            ],
+            mainIndex: 0,
+          }),
+          rich.changes,
+        )?.ranges[0]
+      } catch {
+        return undefined
+      }
+    }
     const sync = () => {
       clearTimeout(timer)
       timer = undefined
@@ -2068,7 +2106,7 @@ export function MarkdownEditor({
       const snapshot = session.snapshot(),
         source = snapshot.materialize(),
         projected = projectMarkdown(source, markdownExtensions),
-        bookmark = preview?.selection.ranges[0]
+        bookmark = preview?.selection?.ranges[0] ?? richBookmark(preview?.rich)
       syncing = true
       try {
         editor
@@ -2143,13 +2181,26 @@ export function MarkdownEditor({
         return
       }
       if (preview) {
+        const { rich } = preview
         preview = {
           snapshot: prepared.after,
           selection: mapSourceSelection(
             prepared.after,
             preview.selection,
             prepared.operation.changes,
-          )!,
+          ),
+          ...(rich
+            ? {
+                rich: {
+                  ...rich,
+                  changes: composeSourceChanges(
+                    rich.changes,
+                    prepared.operation.changes,
+                    rich.before.utf16Length,
+                  ),
+                },
+              }
+            : {}),
         }
       }
       // Hidden rich state stays untouched; only its pending raw selection advances.
@@ -2157,45 +2208,57 @@ export function MarkdownEditor({
       const active = window.document.activeElement
       if (
         canWait &&
-        (prepared.operation.origin === 'source' ||
-          prepared.operation.origin === 'composition') &&
+        ['source', 'composition', 'undo', 'redo'].includes(
+          prepared.operation.origin,
+        ) &&
         active instanceof HTMLElement &&
         active.classList.contains('cm-content') &&
         content.current?.contains(active)
       ) {
-        if (!preview && editor.state.selection instanceof TextSelection) {
-          const selection = editor.state.selection
-          const anchor = plainSync.current?.map(
+        if (!preview) {
+          const { anchor, head } = editor.state.selection
+          const from = plainSync.current?.map(
             prepared.before,
             editor.state.doc,
-            selection.anchor,
+            anchor,
             'rich',
           )
-          const head = plainSync.current?.map(
+          const to = plainSync.current?.map(
             prepared.before,
             editor.state.doc,
-            selection.head,
+            head,
             'rich',
           )
-          if (anchor != null && head != null)
-            preview = {
-              snapshot: prepared.after,
-              selection: mapSourceSelection(
-                prepared.after,
-                {
-                  ranges: [{ anchor, head, association: 1 }],
-                  mainIndex: 0,
-                },
-                prepared.operation.changes,
-              )!,
-            }
+          preview =
+            from != null && to != null
+              ? {
+                  snapshot: prepared.after,
+                  selection: mapSourceSelection(
+                    prepared.after,
+                    {
+                      ranges: [{ anchor: from, head: to, association: 1 }],
+                      mainIndex: 0,
+                    },
+                    prepared.operation.changes,
+                  ),
+                }
+              : {
+                  snapshot: prepared.after,
+                  selection: null,
+                  rich: {
+                    document: editor.state.doc,
+                    anchor,
+                    head,
+                    before: prepared.before,
+                    changes: prepared.operation.changes,
+                  },
+                }
         }
-        if (preview) {
-          plainSync.current = null
-          clearTimeout(timer)
-          timer = setTimeout(sync, 200)
-          return
-        }
+        // One coalesced catch-up after typing pauses; interaction flushes it sooner.
+        plainSync.current = null
+        clearTimeout(timer)
+        timer = setTimeout(sync, 200)
+        return
       }
       if (preview) {
         sync()
@@ -2246,7 +2309,15 @@ export function MarkdownEditor({
       disposed = true
       clearTimeout(timer)
       if (paragraphIdle !== undefined) cancelIdleCallback(paragraphIdle)
-      retainedPreview.current = preview ? { editor, session, ...preview } : null
+      // An unresolved rich selection belongs to this projection and is dropped.
+      retainedPreview.current = preview?.selection
+        ? {
+            editor,
+            session,
+            snapshot: preview.snapshot,
+            selection: preview.selection,
+          }
+        : null
       plainSync.current = null
       pendingPlainSync.current = null
       retryRich.current = () => {}

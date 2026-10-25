@@ -384,6 +384,7 @@ export default defineAddon({
     const sourceViews = new Map<EditorView, ViewId>()
     context.editor.registerRich({
       id: 'lookup',
+      preview: 'deferred',
       attach(editor, editorContext) {
         if (!editorContext) return () => {}
         richEditors.set(editor, editorContext.viewId)

@@ -14,7 +14,7 @@ UI fonts, sizes, spacing, icons, radii, and motion durations use tokens. Duratio
 
 CSS owns the editor caret's blink animation, including reduced motion. Moving the caret must not query or reset animations: animation discovery and state access can flush pending document layout. Keep its position updates immediate while the existing CSS animation continues naturally.
 
-In split view, audited Markdown configurations may refresh the inactive formatted pane after 200 ms of source inactivity. Canonical edits, history, recovery, and saving remain synchronous. Rich interaction and host formatting flush pending content before reading selections or building transactions; unknown rich attachments keep their existing synchronization. Linked scrolling and the mirrored caret require matching canonical, rich, and published projection versions.
+In split view, the inactive formatted pane refreshes once after 200 ms of source inactivity when every rich attachment declares `preview: 'deferred'`, whatever the document grammar. Canonical edits, history, recovery, and saving remain synchronous. Rich interaction and host formatting flush pending content before reading selections or building transactions; attachments without the declaration keep their existing synchronization. Linked scrolling and the mirrored caret require matching canonical, rich, and published projection versions.
 
 Rectangular controls share the input's 6 px `--radius-control`; popover, panel, pill, shortcut-key, and outer-button tokens alias it. Full-width navigation rows remain square. Switches and range thumbs use `--radius-round`.
 

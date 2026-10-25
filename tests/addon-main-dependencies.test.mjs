@@ -80,7 +80,6 @@ async function host(t, builtins = [details('markdown')]) {
     './appearance': 'export const exportedAppearance=()=>({})',
     './document': `export const clearDocument=()=>{},getDocument=()=>({}),getDocumentPath=()=>null,hasUnsavedDocuments=()=>false,loadDocument=()=>{},newDocument=()=>{},renameDocument=()=>{},updateDocument=()=>{}`,
     './document-types': 'export const setDocumentExtensions=()=>{}',
-    './files': 'export const validateMarkdown=()=>{},writeText=()=>{}',
     './workspace': `export const getWorkspace=()=>null,refreshWorkspace=()=>{},resolveWorkspaceFile=()=>null,snapshotWorkspace=()=>{},workspaceId=()=>null,workspaceRoot=()=>null`,
     './dependencies': 'export const resolveDependency=()=>null',
     './addon-repository':

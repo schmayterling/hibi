@@ -348,6 +348,7 @@ for (const profile of ['release', 'debug']) {
 
   test(`${profile}: short writes finish correctly; write failures retire the sink without recursive logging`, async (t) => {
     let failed = false
+    let retired = 0
     const storage = faultyOpen((handle, key) =>
       key === 'write'
         ? async (buffer, offset, length, position) => {
@@ -357,7 +358,13 @@ for (const profile of ['release', 'debug']) {
           }
         : null,
     )
-    const { sink } = await fixture(t, profile, { filesystem: storage })
+    const { sink } = await fixture(t, profile, {
+      filesystem: storage,
+      onFailure: () => {
+        retired++
+        throw new Error('PRIVATE_OBSERVER')
+      },
+    })
     assert.equal(sink.status.state, 'ready')
     sink.enqueue(event())
     await sink.flush()
@@ -373,6 +380,8 @@ for (const profile of ['release', 'debug']) {
     await sink.flush()
     await sink.finish()
     assert.equal(sink.status.failures, 1)
+    assert.equal(retired, 1)
+    assert.ok(!sink.report().includes('PRIVATE_OBSERVER'))
     assert.ok(!sink.report().includes('PRIVATE_PATH'))
   })
 

@@ -7,9 +7,7 @@ import test from 'node:test'
 import { build } from 'esbuild'
 import { electron, stopElectronTree } from './electron.mjs'
 
-test('pinned Electron exposes exact utility identity and passive JS observation preserves fatal policy', {
-  timeout: 30000,
-}, async (t) => {
+async function launchFixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'hibi-diagnostic-native-'))
   await mkdir(join(root, 'profile'))
   await writeFile(
@@ -48,6 +46,13 @@ test('pinned Electron exposes exact utility identity and passive JS observation 
     await rm(root, { recursive: true, force: true })
   })
   await app.firstWindow()
+  return { root, app }
+}
+
+test('pinned Electron exposes exact utility identity and passive JS observation preserves fatal policy', {
+  timeout: 30000,
+}, async (t) => {
+  const { root, app } = await launchFixture(t)
   const policy = await app.evaluate(() => globalThis.diagnosticFixture.policy())
   assert.equal(policy.after.uncaught, policy.before.uncaught)
   assert.equal(policy.after.rejection, policy.before.rejection)
@@ -118,4 +123,48 @@ test('pinned Electron exposes exact utility identity and passive JS observation 
     // This profile cannot be removed until Playwright has closed its transport.
     await restarted.close({ waitForTransport: true })
   }
+})
+
+test('main-loop sampling stops while hidden, minimized, suspended or failed', {
+  timeout: 10000,
+}, async (t) => {
+  const { app } = await launchFixture(t)
+  await app.evaluate(() => globalThis.diagnosticFixture.report())
+  const sampling = () =>
+    app.evaluate(() => globalThis.diagnosticFixture.sampling())
+  assert.deepEqual(await sampling(), { armedBeforeReady: false, armed: false })
+  assert.equal(
+    await app.evaluate(() => globalThis.diagnosticFixture.visibility(true)),
+    true,
+  )
+  assert.equal(
+    await app.evaluate(() => globalThis.diagnosticFixture.visibility(false)),
+    false,
+  )
+  assert.equal(
+    await app.evaluate(() =>
+      globalThis.diagnosticFixture.visibility(true, true),
+    ),
+    false,
+  )
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    window.isMinimized = () => false
+    window.emit('restore')
+  })
+  assert.equal((await sampling()).armed, true)
+  await app.evaluate(({ powerMonitor }) => powerMonitor.emit('suspend'))
+  assert.equal((await sampling()).armed, false)
+  await app.evaluate(({ powerMonitor }) => powerMonitor.emit('resume'))
+  assert.equal((await sampling()).armed, true)
+  assert.equal(
+    await app.evaluate(() => globalThis.diagnosticFixture.failSink()),
+    'failed',
+  )
+  assert.equal((await sampling()).armed, false)
+  await app.evaluate(({ powerMonitor }) => {
+    globalThis.diagnosticFixture.visibility(true)
+    powerMonitor.emit('resume')
+  })
+  assert.equal((await sampling()).armed, false)
 })

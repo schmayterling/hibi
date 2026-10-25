@@ -4,11 +4,12 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
   app,
-  type BrowserWindow,
+  BrowserWindow,
   dialog,
   type IpcMainInvokeEvent,
   ipcMain,
   type MenuItemConstructorOptions,
+  powerMonitor,
   shell,
   type WebContents,
 } from 'electron'
@@ -52,6 +53,7 @@ export class LocalDiagnostics {
   private started = false
   private finishing = false
   private finished = false
+  private stallTimer: ReturnType<typeof setInterval> | undefined
 
   constructor() {
     try {
@@ -128,6 +130,7 @@ export class LocalDiagnostics {
       this.sink = new LocalDiagnosticSink({
         userData: options.userData,
         profile: this.profile,
+        onFailure: () => this.stopMainLoop(),
         identity: {
           app: app.getVersion(),
           build:
@@ -222,33 +225,93 @@ export class LocalDiagnostics {
         installOwnedFailureReporter(null)
         process.removeListener('uncaughtExceptionMonitor', this.mainException)
       })
-      this.observeMainLoop()
+      void Promise.all([app.whenReady(), this.sink.ready])
+        .then(() => this.observeMainLoop())
+        .catch(() => {})
     } catch {
       /* Unavailable diagnostics do not affect startup or saving. */
     }
   }
 
+  private stopMainLoop() {
+    clearInterval(this.stallTimer)
+    this.stallTimer = undefined
+  }
+
   private observeMainLoop() {
-    let previous = performance.now()
-    const timer = setInterval(() => {
-      const now = performance.now()
-      const delay = now - previous - 1000
-      previous = now
-      if (delay < 1000) return
-      this.report('MAIN_LOOP_STALLED', undefined, {
-        role: 'main',
-        durationBucket:
-          delay < 5000
-            ? '1-5s'
-            : delay < 15000
-              ? '5-15s'
-              : delay < 60000
-                ? '15-60s'
-                : '60s+',
+    if (this.finishing || this.sink?.status.state !== 'ready') return
+    let suspended = false
+    const refresh = () => {
+      if (
+        this.finishing ||
+        suspended ||
+        this.sink?.status.state !== 'ready' ||
+        !BrowserWindow.getAllWindows().some(
+          (window) =>
+            !window.isDestroyed() &&
+            window.isVisible() &&
+            !window.isMinimized(),
+        )
+      ) {
+        this.stopMainLoop()
+        return
+      }
+      if (this.stallTimer) return
+      let previous = performance.now()
+      this.stallTimer = setInterval(() => {
+        const now = performance.now()
+        const gap = now - previous
+        previous = now
+        if (gap < 2000) return
+        this.report('MAIN_LOOP_STALLED', undefined, {
+          role: 'main',
+          durationBucket:
+            gap < 5000
+              ? '1-5s'
+              : gap < 15000
+                ? '5-15s'
+                : gap < 60000
+                  ? '15-60s'
+                  : '60s+',
+        })
+      }, 1000)
+      this.stallTimer.unref()
+    }
+    const suspend = () => {
+      suspended = true
+      this.stopMainLoop()
+    }
+    const resume = () => {
+      suspended = false
+      this.stopMainLoop()
+      refresh()
+    }
+    const watch = (window: BrowserWindow) => {
+      window.on('show', refresh)
+      window.on('hide', refresh)
+      window.on('minimize', refresh)
+      window.on('restore', refresh)
+      window.once('closed', () => {
+        window.removeListener('show', refresh)
+        window.removeListener('hide', refresh)
+        window.removeListener('minimize', refresh)
+        window.removeListener('restore', refresh)
+        refresh()
       })
-    }, 1000)
-    timer.unref()
-    app.once('will-quit', () => clearInterval(timer))
+      refresh()
+    }
+    const created = (_event: Electron.Event, window: BrowserWindow) =>
+      watch(window)
+    powerMonitor.on('suspend', suspend)
+    powerMonitor.on('resume', resume)
+    app.on('browser-window-created', created)
+    for (const window of BrowserWindow.getAllWindows()) watch(window)
+    app.once('will-quit', () => {
+      this.stopMainLoop()
+      powerMonitor.removeListener('suspend', suspend)
+      powerMonitor.removeListener('resume', resume)
+      app.removeListener('browser-window-created', created)
+    })
   }
 
   private async finishBeforeQuit(event: Electron.Event) {

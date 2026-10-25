@@ -70,6 +70,7 @@ export class LocalDiagnosticSink {
   readonly profile: DiagnosticProfile
   private readonly fs: typeof filesystem
   private readonly identity: DiagnosticIdentity
+  private readonly onFailure: (() => void) | undefined
   private readonly run = randomUUID()
   private readonly queue: DiagnosticQueue
   private directory = ''
@@ -92,9 +93,11 @@ export class LocalDiagnosticSink {
     profile: DiagnosticProfile
     identity: DiagnosticIdentity
     filesystem?: typeof filesystem
+    onFailure?: () => void
   }) {
     this.profile = options.profile
     this.identity = diagnosticIdentity(options.identity)
+    this.onFailure = options.onFailure
     this.fs = options.filesystem ?? filesystem
     this.queue = new DiagnosticQueue(this.profile, 'main')
     this.ready = this.initialize(options.userData).catch(() => this.fail())
@@ -495,6 +498,11 @@ export class LocalDiagnosticSink {
 
   private async fail() {
     this.state = 'failed'
+    try {
+      this.onFailure?.()
+    } catch {
+      /* Observers cannot interrupt sink retirement. */
+    }
     this.failures = incrementDiagnosticCount(this.failures)
     if (this.timer) clearTimeout(this.timer)
     this.timer = undefined

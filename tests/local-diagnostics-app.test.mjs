@@ -161,44 +161,84 @@ test('a stalled diagnostics finish is entered once and cannot hold repeated quit
   assert.equal((await runRecords(profile)).marker.state, 'active')
 })
 
-test('main-loop stall persists a bounded warning before quitting', {
-  timeout: 20000,
-}, async (t) => {
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-loop-stall-'))
-  t.after(() => rm(profile, { recursive: true, force: true }))
-  const app = await launchProfile(t, profile)
-  const since = Date.now()
-  await app.evaluate(() => {
-    const end = performance.now() + 2200
-    while (performance.now() < end) {
-      // Deliberately block only this test's main process.
-    }
+for (const duration of [2200, 5500])
+  test(`main-loop stall of ${duration} ms persists a bounded warning before quitting`, {
+    timeout: 20000,
+  }, async (t) => {
+    const profile = await mkdtemp(join(tmpdir(), 'hibi-loop-stall-'))
+    t.after(() => rm(profile, { recursive: true, force: true }))
+    const app = await launchProfile(t, profile)
+    await app.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      window.isVisible = () => true
+      window.emit('show')
+    })
+    const since = Date.now()
+    await app.evaluate((_, duration) => {
+      const end = performance.now() + duration
+      while (performance.now() < end) {
+        // Deliberately block only this test's main process.
+      }
+    }, duration)
+    await waitForRecord(app, 'MAIN_LOOP_STALLED')
+    const records = (await runRecords(profile)).records.filter(
+      ({ code }) => code === 'MAIN_LOOP_STALLED',
+    )
+    assert.equal(records.length, 1)
+    const record = records[0]
+    assert.equal(record.severity, 'warning')
+    assert.equal(record.role, 'main')
+    assert.equal(record.stackStatus, 'unavailable')
+    assert.ok(
+      ['1-5s', '5-15s', '15-60s', '60s+'].includes(record.durationBucket),
+    )
+    if (duration >= 5000) assert.notEqual(record.durationBucket, '1-5s')
+    assert.ok(record.time >= since && record.time <= Date.now())
+    assert.deepEqual(Object.keys(record).sort(), [
+      'code',
+      'durationBucket',
+      'label',
+      'profile',
+      'role',
+      'run',
+      'schema',
+      'severity',
+      'stackStatus',
+      'time',
+    ])
+    await app.close()
   })
-  await waitForRecord(app, 'MAIN_LOOP_STALLED')
-  const records = (await runRecords(profile)).records.filter(
-    ({ code }) => code === 'MAIN_LOOP_STALLED',
-  )
-  assert.equal(records.length, 1)
-  const record = records[0]
-  assert.equal(record.severity, 'warning')
-  assert.equal(record.role, 'main')
-  assert.equal(record.stackStatus, 'unavailable')
-  assert.ok(['1-5s', '5-15s', '15-60s', '60s+'].includes(record.durationBucket))
-  assert.ok(record.time >= since && record.time <= Date.now())
-  assert.deepEqual(Object.keys(record).sort(), [
-    'code',
-    'durationBucket',
-    'label',
-    'profile',
-    'role',
-    'run',
-    'schema',
-    'severity',
-    'stackStatus',
-    'time',
-  ])
-  await app.close()
-})
+
+for (const hidden of [false, true])
+  test(`${hidden ? 'all windows hidden' : 'sleep and lid close'} do not become main-loop stalls after resume`, {
+    timeout: 20000,
+  }, async (t) => {
+    const profile = await mkdtemp(join(tmpdir(), 'hibi-loop-suspend-'))
+    t.after(() => rm(profile, { recursive: true, force: true }))
+    const app = await launchProfile(t, profile)
+    await app.evaluate(async ({ BrowserWindow, powerMonitor }, hidden) => {
+      const window = BrowserWindow.getAllWindows()[0]
+      window.isVisible = () => true
+      window.emit('show')
+      if (hidden) {
+        window.isVisible = () => false
+        window.emit('hide')
+      } else powerMonitor.emit('suspend')
+      const end = performance.now() + 2200
+      while (performance.now() < end) {
+        // Model an unobserved interval without suspending the shared machine.
+      }
+      if (hidden) {
+        window.isVisible = () => true
+        window.emit('show')
+      } else powerMonitor.emit('resume')
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }, hidden)
+    await app.close()
+    const { marker, records } = await runRecords(profile)
+    assert.equal(marker.state, 'clean')
+    assert.ok(!records.some(({ code }) => code === 'MAIN_LOOP_STALLED'))
+  })
 
 test('an unavailable unsafe log directory leaves editing, saving and user files intact', {
   timeout: 20000,

@@ -7,6 +7,7 @@ import {
   sameInteraction,
 } from '../../shared/editor-interactions.ts'
 import type { AddonOwner, Dispose } from '../../shared/foundation-contracts'
+import { ProviderLifetime } from './provider-lifetime.ts'
 
 const MAX_PROVIDERS = 16
 const MAX_CONCURRENT = 3
@@ -133,6 +134,7 @@ export class EditorInteractionBroker<T> {
   readonly #registrations = new Map<number, Registration<T>>()
   readonly #stopped = new Map<string, number>()
   #nextId = 0
+  readonly #lifetime = new ProviderLifetime()
   #inFlight = 0
   readonly #busyOwners = new Map<string, number>()
   #active: Session<T> | null = null
@@ -193,10 +195,10 @@ export class EditorInteractionBroker<T> {
     current: () => EditorInteractionRequest | null,
     update: (items: readonly T[], done: boolean) => void,
   ): Dispose | null {
-    this.#cancel()
-    if (!this.hasProviders()) return null
+    const epoch = this.#lifetime.begin(() => this.#cancel())
+    if (epoch === null || !this.hasProviders()) return null
     const request = snapshot(capture())
-    if (!request) return null
+    if (!request || !this.#lifetime.current(epoch)) return null
     const jobs: Job<T>[] = [...this.#registrations.values()].map(
       (registration) => ({
         registration,
@@ -219,6 +221,7 @@ export class EditorInteractionBroker<T> {
 
   dispose() {
     this.#disposed = true
+    this.#lifetime.invalidate()
     this.#cancel()
     this.#registrations.clear()
     this.#stopped.clear()
@@ -229,26 +232,31 @@ export class EditorInteractionBroker<T> {
     const session = this.#active ?? this.#visible
     if (!session) return
     let changed = false
+    const controllers: AbortController[] = []
     for (const job of session.jobs) {
       if (!ids.includes(job.registration.id)) continue
       job.items = []
       job.state = 'cancelled'
-      job.controller.abort()
+      controllers.push(job.controller)
       changed = true
     }
     if (!changed) return
     if (this.#visible === session) {
-      const items = this.#current(session) ? this.#items(session) : []
-      if (!items.length) this.#visible = null
-      try {
-        session.update(items, true)
-      } catch {
-        this.#visible = null
+      const epoch = this.#lifetime.token
+      const current = this.#current(session)
+      if (this.#lifetime.current(epoch) && this.#visible === session) {
+        const items = current ? this.#items(session) : []
+        if (!items.length) this.#visible = null
+        try {
+          session.update(items, true)
+        } catch {
+          this.#visible = null
+        }
       }
-    } else {
-      this.#publish(session, false)
-      this.#pump()
-    }
+    } else if (this.#active === session) this.#publish(session, false)
+    for (const controller of controllers) controller.abort()
+    if (this.#active !== session) return
+    this.#pump()
   }
 
   #current(session: Session<T>) {
@@ -272,6 +280,7 @@ export class EditorInteractionBroker<T> {
       this.#finish(session, true)
       return
     }
+    if (this.#active !== session) return
     try {
       session.update(this.#items(session), done)
     } catch {
@@ -281,6 +290,7 @@ export class EditorInteractionBroker<T> {
 
   #finish(session: Session<T>, stale = false) {
     if (this.#active !== session) return
+    const epoch = this.#lifetime.token
     clearTimeout(session.timer)
     this.#active = null
     for (const job of session.jobs) {
@@ -288,7 +298,10 @@ export class EditorInteractionBroker<T> {
       job.state = 'cancelled'
       job.controller.abort()
     }
-    const items = !stale && this.#current(session) ? this.#items(session) : []
+    if (!this.#lifetime.current(epoch)) return
+    const current = !stale && this.#current(session)
+    if (!this.#lifetime.current(epoch)) return
+    const items = current ? this.#items(session) : []
     this.#visible = items.length ? session : null
     try {
       session.update(items, true)

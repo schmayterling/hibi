@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   contextActionBroker,
+  EditorInteractionBroker,
   hoverBroker,
   registerContextActionProvider,
   registerHoverProvider,
@@ -53,6 +54,60 @@ const collect = (broker, captured, current = () => captured) => {
   )
   return { updates, final, cancel }
 }
+
+for (const transition of ['replace', 'timeout']) {
+  test(`abort listener keeps newest request during ${transition}`, async (t) => {
+    const broker = new EditorInteractionBroker((value) => value, 3)
+    t.after(() => broker.dispose())
+    const started = deferred()
+    let nested
+    let calls = 0
+    broker.register(owner(), (_input, signal) => {
+      if (++calls !== 1) return [{ label: 'nested-newest' }]
+      return new Promise((resolve) =>
+        signal.addEventListener(
+          'abort',
+          () => {
+            nested = collect(broker, request({ contentVersion: 4 }))
+            started.resolve()
+            resolve([])
+          },
+          { once: true },
+        ),
+      )
+    })
+    const initial = collect(broker, request())
+    await tick()
+    if (transition === 'replace') {
+      const outer = collect(broker, request())
+      assert.equal(outer.cancel, null)
+      assert.deepEqual(outer.updates, [])
+    }
+    await started.promise
+    assert.deepEqual(await nested.final, [{ label: 'nested-newest' }])
+    assert.equal(calls, 2)
+    assert.deepEqual(initial.updates, [])
+  })
+}
+
+test('capture callback cannot replace a newer request', async (t) => {
+  const broker = new EditorInteractionBroker((value) => value, 3)
+  t.after(() => broker.dispose())
+  broker.register(owner(), () => [{ label: 'newest' }])
+  let nested
+  const updates = []
+  const cancel = broker.request(
+    () => {
+      nested = collect(broker, request({ contentVersion: 4 }))
+      return request()
+    },
+    () => request(),
+    (...update) => updates.push(update),
+  )
+  assert.equal(cancel, null)
+  assert.deepEqual(await nested.final, [{ label: 'newest' }])
+  assert.deepEqual(updates, [])
+})
 
 test('hover follows one target and aborts superseded work', async () => {
   const id = owner()

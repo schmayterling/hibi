@@ -133,6 +133,7 @@ export class EditorInteractionBroker<T> {
   readonly #registrations = new Map<number, Registration<T>>()
   readonly #stopped = new Map<string, number>()
   #nextId = 0
+  #epoch = 0
   #inFlight = 0
   readonly #busyOwners = new Map<string, number>()
   #active: Session<T> | null = null
@@ -193,10 +194,11 @@ export class EditorInteractionBroker<T> {
     current: () => EditorInteractionRequest | null,
     update: (items: readonly T[], done: boolean) => void,
   ): Dispose | null {
+    const epoch = ++this.#epoch
     this.#cancel()
-    if (!this.hasProviders()) return null
+    if (this.#epoch !== epoch || !this.hasProviders()) return null
     const request = snapshot(capture())
-    if (!request) return null
+    if (!request || this.#epoch !== epoch) return null
     const jobs: Job<T>[] = [...this.#registrations.values()].map(
       (registration) => ({
         registration,
@@ -219,6 +221,7 @@ export class EditorInteractionBroker<T> {
 
   dispose() {
     this.#disposed = true
+    this.#epoch++
     this.#cancel()
     this.#registrations.clear()
     this.#stopped.clear()
@@ -238,12 +241,15 @@ export class EditorInteractionBroker<T> {
     }
     if (!changed) return
     if (this.#visible === session) {
-      const items = this.#current(session) ? this.#items(session) : []
+      const epoch = this.#epoch
+      const current = this.#current(session)
+      if (this.#epoch !== epoch || this.#visible !== session) return
+      const items = current ? this.#items(session) : []
       if (!items.length) this.#visible = null
       try {
         session.update(items, true)
       } catch {
-        this.#visible = null
+        if (this.#visible === session) this.#visible = null
       }
     } else {
       this.#publish(session, false)
@@ -272,6 +278,7 @@ export class EditorInteractionBroker<T> {
       this.#finish(session, true)
       return
     }
+    if (this.#active !== session) return
     try {
       session.update(this.#items(session), done)
     } catch {
@@ -281,6 +288,7 @@ export class EditorInteractionBroker<T> {
 
   #finish(session: Session<T>, stale = false) {
     if (this.#active !== session) return
+    const epoch = this.#epoch
     clearTimeout(session.timer)
     this.#active = null
     for (const job of session.jobs) {
@@ -288,12 +296,15 @@ export class EditorInteractionBroker<T> {
       job.state = 'cancelled'
       job.controller.abort()
     }
-    const items = !stale && this.#current(session) ? this.#items(session) : []
+    if (this.#epoch !== epoch) return
+    const current = !stale && this.#current(session)
+    if (this.#epoch !== epoch) return
+    const items = current ? this.#items(session) : []
     this.#visible = items.length ? session : null
     try {
       session.update(items, true)
     } catch {
-      this.#visible = null
+      if (this.#visible === session) this.#visible = null
     }
   }
 

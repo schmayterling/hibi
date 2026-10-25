@@ -22,6 +22,7 @@ import {
 } from '../../site/data.ts'
 import { noteGraph } from '../graph/model.ts'
 import { type ExportOptions, exportOptions } from './options.ts'
+import { pageSearch } from './search.ts'
 
 const escapeHtml = (value: string) =>
   value
@@ -277,12 +278,16 @@ export function prepareSite(
         ? plain(paragraph.text).slice(0, 160)
         : '') ||
       options.description
+    const html = renderedHtml(
+      page.html ?? marked.parse(source, { async: false }),
+    )
     return {
       path: page.path,
       markdown: page.markdown,
       title: title.slice(0, 200),
       description: description.slice(0, 500),
-      html: renderedHtml(page.html ?? marked.parse(source, { async: false })),
+      html,
+      search: pageSearch(html),
       ...(Object.keys(images).length ? { images } : {}),
     }
   })

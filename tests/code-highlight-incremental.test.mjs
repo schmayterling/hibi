@@ -66,22 +66,27 @@ const keyword = () =>
 
 /**
  * Mounts the plugin view with controllable frames and line geometry: document
- * position `origin()` sits at the top of an 800 px pane and `scale` positions fill it.
- * Hit-testing always misses, as it does in a horizontally scrolled code block.
+ * position `origin()` sits at the top of an 800 px pane and `scale` positions
+ * fill it, unless `y` and `x` place positions directly. Without `x`, lines
+ * start far off screen to the left and have no measurable width.
  */
 function mount(t, plugin, state, geometry = {}) {
   const frames = new Map()
   const idle = new Map()
   const listeners = new Map()
   const observers = []
+  const mutations = []
   let id = 0
   const listen = (target) => ({
     addEventListener: (type, listener) =>
       listeners.set(`${target}${type}`, listener),
     removeEventListener: (type) => listeners.delete(`${target}${type}`),
   })
-  const y = (pos) =>
-    ((pos - (geometry.origin?.() ?? -1e6)) * 800) / (geometry.scale ?? 3000)
+  const y =
+    geometry.y ??
+    ((pos) =>
+      ((pos - (geometry.origin?.() ?? -1e6)) * 800) / (geometry.scale ?? 3000))
+  const x = geometry.x ?? (() => -5000)
   const globals = {
     requestAnimationFrame: (callback) => {
       frames.set(++id, callback)
@@ -100,8 +105,24 @@ function mount(t, plugin, state, geometry = {}) {
       observe() {}
       disconnect() {}
     },
-    document: { ...listen('document:'), caretPositionFromPoint: () => null },
-    window: { innerHeight: 800, ...listen('window:') },
+    MutationObserver: class {
+      constructor(callback) {
+        this.callback = callback
+      }
+      observe() {
+        mutations.push(this.callback)
+      }
+      disconnect() {
+        mutations.length = 0
+      }
+    },
+    getComputedStyle: () => ({
+      visibility: geometry.hidden === 'style' ? 'hidden' : 'visible',
+      overflowX: 'visible',
+      overflowY: 'visible',
+    }),
+    document: listen('document:'),
+    window: { innerHeight: 800, innerWidth: 800, ...listen('window:') },
   }
   const previous = Object.fromEntries(
     Object.keys(globals).map((name) => [name, globalThis[name]]),
@@ -112,18 +133,22 @@ function mount(t, plugin, state, geometry = {}) {
     state,
     dispatches: 0,
     dom: {
-      parentElement: null,
+      parentElement: { parentElement: null },
       contains: () => false,
       getBoundingClientRect: () =>
-        geometry.hidden ? { top: 0, bottom: 0 } : { top: 0, bottom: 800 },
+        geometry.hidden === 'size'
+          ? { top: 0, bottom: 0, left: 0, right: 0 }
+          : { top: 0, bottom: 800, left: 0, right: 800 },
     },
     nodeDOM: (pos) => ({
       getBoundingClientRect: () => ({
         top: y(pos + 1),
         bottom: y(pos + view.state.doc.nodeAt(pos).nodeSize - 1) + 1,
+        left: 0,
+        right: 800,
       }),
     }),
-    coordsAtPos: (pos) => ({ left: -5000, top: y(pos), bottom: y(pos) + 1 }),
+    coordsAtPos: (pos) => ({ left: x(pos), top: y(pos), bottom: y(pos) + 1 }),
     dispatch(transaction) {
       const before = view.state
       view.dispatches++
@@ -155,6 +180,10 @@ function mount(t, plugin, state, geometry = {}) {
     resize: () => {
       for (const callback of observers) callback()
     },
+    /** Reports a class or style change on an ancestor. */
+    mutate: () => {
+      for (const callback of [...mutations]) callback([])
+    },
     listeners,
   }
   pluginView = plugin.spec.view(view)
@@ -164,6 +193,15 @@ function mount(t, plugin, state, geometry = {}) {
   })
   return view
 }
+/** Joins tokens split where decoration pieces meet. */
+const joined = (values) =>
+  values.reduce((result, token) => {
+    const last = result.at(-1)
+    if (last && last.to === token.from && last.classes === token.classes)
+      last.to = token.to
+    else result.push({ ...token })
+    return result
+  }, [])
 
 test('mapped code decorations match full highlighting through text, block, and language changes', async (t) => {
   await codeLanguages.ensure('javascript')
@@ -404,7 +442,7 @@ test('long code blocks parse incrementally and decorate only text near the viewp
         // A parse stopped at the range end may still be inside its last token.
         const settled = (token) => token.to < start + to - line.length
         assert.deepEqual(
-          tokens(decorations).filter(settled),
+          joined(tokens(decorations)).filter(settled),
           codeSpans(full, from, to)
             .map((span) => ({
               from: start + span.from,
@@ -453,7 +491,7 @@ test('long code blocks parse incrementally and decorate only text near the viewp
   }
 })
 
-test('one budget covers every long block in a frame, and refresh transactions do not parse', (t) => {
+test('one budget covers parsing every long block in a frame', (t) => {
   let advances = 0
   const language = {
     parser: {
@@ -559,7 +597,8 @@ test('hidden editors keep language changes until they are visible', async (t) =>
     }),
   )
   const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
-  const geometry = { hidden: true }
+  // Source mode hides the rich pane with its style while it keeps its size.
+  const geometry = { hidden: 'style' }
   const view = mount(
     t,
     plugin,
@@ -577,9 +616,132 @@ test('hidden editors keep language changes until they are visible', async (t) =>
   assert.equal(view.dispatches, 0)
   assert.equal(parse.mock.callCount(), 0)
   geometry.hidden = false
-  view.resize()
+  view.mutate()
   view.flush()
   assert.equal(view.dispatches, 1)
   assert.equal(parse.mock.callCount(), 1)
   assert.equal(plugin.getState(view.state).decorations.find().length, 1)
+})
+
+test('a single long line decorates only the columns near the visible ones', async (t) => {
+  await codeLanguages.ensure('javascript')
+  const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+  const text = 'const horizontal = 42; '.repeat(5000)
+  let scrolled = 0
+  const view = mount(
+    t,
+    plugin,
+    EditorState.create({
+      schema,
+      plugins: [plugin],
+      doc: schema.nodes.doc.create(null, [code(text)]),
+    }),
+    // One 8 px wide character per column, scrolled `scrolled` px to the right.
+    { y: () => 100, x: (pos) => (pos - 1) * 8 - scrolled },
+  )
+  view.flush()
+  const columns = () =>
+    plugin
+      .getState(view.state)
+      .decorations.find()
+      .map((token) => token.from - 1)
+  let shown = columns()
+  assert.ok(shown.length > 20 && shown.length < 200, `${shown.length} tokens`)
+  assert.ok(Math.max(...shown) < 400)
+  view.dispatch(view.state.tr.insertText(' ', 50))
+  view.flush()
+  shown = columns()
+  assert.ok(shown.length < 200, `${shown.length} tokens after typing`)
+  scrolled = 80_000
+  view.scroll()
+  view.flush()
+  shown = columns()
+  assert.ok(shown.length > 20 && shown.length < 200, `${shown.length} tokens`)
+  assert.ok(Math.min(...shown) > 9_000 && Math.max(...shown) < 10_400)
+})
+
+test('decorating long blocks stops at the budget and continues in later frames', async (t) => {
+  await codeLanguages.ensure('javascript')
+  const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+  const text =
+    'function sample(value) {\n  return value * 42 + "text";\n}\n'.repeat(2_000)
+  // Reading near the end parses everything before it.
+  let origin = 100_000
+  let scale = 3_000
+  const view = mount(
+    t,
+    plugin,
+    EditorState.create({
+      schema,
+      plugins: [plugin],
+      doc: schema.nodes.doc.create(null, [code(text)]),
+    }),
+    { y: (pos) => ((pos - origin) * 800) / scale },
+  )
+  view.flush()
+  const full = codeLanguages.resolve('javascript').parser.parse(text)
+  const expected = () => {
+    const { viewport } = plugin.getState(view.state)
+    return codeSpans(full, viewport.from - 1, viewport.to - 1).map((span) => ({
+      from: 1 + span.from,
+      to: 1 + span.to,
+      classes: span.classes,
+    }))
+  }
+  assert.deepEqual(
+    joined(tokens(plugin.getState(view.state).decorations)),
+    expected(),
+  )
+  // Each clock read costs 1 ms: one frame decorates a few pieces, visible ones first.
+  origin = 40_000
+  scale = 20_000
+  let clock = 0
+  const now = performance.now
+  performance.now = () => ++clock
+  t.after(() => {
+    performance.now = now
+  })
+  view.scroll()
+  view.frame()
+  const { progress, viewport } = plugin.getState(view.state)
+  assert.ok(viewport.from < 40_000 && viewport.to > 60_000)
+  const done = progress?.get(0)
+  assert.ok(done > 0 && done < 10, `${done} pieces in one frame`)
+  performance.now = now
+  view.flush()
+  assert.equal(plugin.getState(view.state).progress, null)
+  assert.deepEqual(
+    joined(tokens(plugin.getState(view.state).decorations)),
+    expected(),
+  )
+})
+
+test('a wrapped long line decorates the rows on screen', async (t) => {
+  await codeLanguages.ensure('javascript')
+  const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+  const text = 'const wrapped = 42; '.repeat(5000)
+  let scrolled = 0
+  // 100 characters per 20 px row.
+  const view = mount(
+    t,
+    plugin,
+    EditorState.create({
+      schema,
+      plugins: [plugin],
+      doc: schema.nodes.doc.create(null, [code(text)]),
+    }),
+    {
+      y: (pos) => Math.floor((pos - 1) / 100) * 20 - scrolled,
+      x: (pos) => ((pos - 1) % 100) * 8,
+    },
+  )
+  scrolled = 20 * 500
+  view.flush()
+  const shown = plugin
+    .getState(view.state)
+    .decorations.find()
+    .map((token) => token.from - 1)
+  assert.ok(shown.length > 100 && shown.length < 5000, `${shown.length} tokens`)
+  assert.ok(shown.some((at) => at >= 50_000 && at < 54_000))
+  assert.ok(shown.every((at) => at > 40_000 && at < 64_000))
 })

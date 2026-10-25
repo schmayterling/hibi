@@ -14,18 +14,33 @@ import {
 
 /** Longer blocks parse incrementally and decorate only text near the viewport. */
 const windowedLength = 10_000
-/** Milliseconds of windowed parsing per transaction or frame; idle periods add more. */
+/** Milliseconds of windowed parsing and decoration per transaction or frame; idle periods add more. */
 const parseBudget = 4
+/** Characters decorated together, so the budget can stop between pieces. */
+const pieceLength = 2_000
 
 type Range = { from: number; to: number }
+/** Line columns worth decorating in one windowed block, from its horizontal scroll position. */
+type Columns = { pos: number; from: number; to: number }
+type Viewport = Range & {
+  /** Text on screen, decorated before the margin around it. */
+  visible: Range
+  columns: readonly Columns[]
+}
 type HighlightState = {
   decorations: DecorationSet
   /** Document range near the viewport that windowed blocks decorate. */
-  viewport: Range | null
+  viewport: Viewport | null
   /** Positions of windowed blocks, in document order. */
   blocks: readonly number[]
+  /** Pieces decorated so far in windowed blocks that ran out of time. */
+  progress: ReadonlyMap<number, number> | null
 }
-type Refresh = { keys?: ReadonlySet<string>; viewport?: Range | null }
+type Refresh = {
+  keys?: ReadonlySet<string>
+  viewport?: Viewport | null
+  deadline: number
+}
 type Edit = { doc: Node; from: number; end: number }
 type Parsed = {
   language: Language
@@ -38,6 +53,40 @@ type Parsed = {
 
 const windowedBlock = (node: Node) =>
   node.type.name === 'codeBlock' && node.content.size > windowedLength
+
+/** Pieces of the lines in `from`..`to`, limited to `columns`, those on screen first. */
+function pieces(
+  text: string,
+  from: number,
+  to: number,
+  columns?: Columns,
+  visible?: Range,
+) {
+  const all: Range[] = []
+  const add = (start: number, end: number) => {
+    const last = all.at(-1)
+    // Neighbouring lines share a piece, up to its length.
+    if (last && start - last.to <= 1 && end - last.from <= pieceLength)
+      last.to = end
+    else
+      for (let at = start; at < end; at += pieceLength)
+        all.push({ from: at, to: Math.min(end, at + pieceLength) })
+  }
+  if (!columns) add(from, to)
+  else
+    for (let line = from && text.lastIndexOf('\n', from - 1) + 1; line < to; ) {
+      const newline = text.indexOf('\n', line)
+      const end = newline < 0 ? text.length : newline
+      const start = Math.max(from, line + columns.from)
+      const stop = Math.min(to, end, line + columns.to)
+      if (start < stop) add(start, stop)
+      if (newline < 0) break
+      line = newline + 1
+    }
+  const shown = (piece: Range) =>
+    !!visible && piece.from < visible.to && piece.to > visible.from
+  return [...all.filter(shown), ...all.filter((piece) => !shown(piece))]
+}
 
 /** Decorations never change the document, Markdown serialization, selection, or history. */
 export const CodeHighlight = Extension.create({
@@ -119,22 +168,27 @@ export const CodeHighlight = Extension.create({
       }
       return true
     }
-    /** Windowed blocks parse until `deadline`, shared by every block in this pass. */
+    /**
+     * Windowed blocks parse and decorate until `deadline`, shared by every
+     * block in this pass; `resume` holds pieces they already decorated.
+     */
     function decorate(
       doc: Node,
       previous: DecorationSet,
-      viewport: Range | null,
+      viewport: Viewport | null,
       deadline: number,
       from = 0,
       to = doc.content.size,
-      include?: (node: Node) => boolean,
+      include?: (node: Node, pos: number) => boolean,
       edit?: Edit,
+      resume?: ReadonlyMap<number, number>,
     ) {
       const decorations: Decoration[] = []
       const blocks: number[] = []
+      const unfinished = new Map<number, number>()
       doc.nodesBetween(from, to, (node, pos) => {
         if (!node.isTextblock) return
-        if (include && !include(node)) return false
+        if (include && !include(node, pos)) return false
         const start = pos + 1
         const existing = previous.find(start, start + node.content.size)
         if (node.type.name !== 'codeBlock') {
@@ -165,27 +219,53 @@ export const CodeHighlight = Extension.create({
         }
         blocks.push(pos)
         const block = language && parsedBlock(node, pos, language, edit)
+        const size = node.content.size
         const visibleFrom = Math.max(viewport?.from ?? 0, start) - start
-        const visibleTo =
-          Math.min(viewport?.to ?? 0, start + node.content.size) - start
-        if (
-          block &&
-          visibleFrom < visibleTo &&
-          !parseTo(block, node, visibleTo, deadline)
-        ) {
-          // Until the edited text is parsed, mapped tokens from the same parser stay visible.
-          previous = previous.remove(
-            existing.filter((token) => token.spec.language !== language),
-          )
+        const visibleTo = Math.min(viewport?.to ?? 0, start + size) - start
+        if (!block || visibleFrom >= visibleTo) {
+          previous = previous.remove(existing)
           return false
         }
-        previous = previous.remove(existing)
-        if (block?.tree && visibleFrom < visibleTo)
-          for (const span of codeSpans(
-            block.tree,
-            visibleFrom,
-            Math.min(visibleTo, block.parsedTo),
-          ))
+        // Mapped tokens from the same parser stay visible until replaced.
+        previous = previous.remove(
+          existing.filter((token) => token.spec.language !== language),
+        )
+        const first = resume?.get(pos) ?? 0
+        if (!parseTo(block, node, visibleTo, deadline)) {
+          unfinished.set(pos, first)
+          return false
+        }
+        const tree = block.tree
+        if (!tree) {
+          previous = previous.remove(previous.find(start, start + size))
+          return false
+        }
+        const list = pieces(
+          node.textContent,
+          visibleFrom,
+          Math.min(visibleTo, block.parsedTo),
+          viewport?.columns.find((columns) => columns.pos === pos),
+          viewport
+            ? {
+                from: viewport.visible.from - start,
+                to: viewport.visible.to - start,
+              }
+            : undefined,
+        )
+        let index = first
+        for (const piece of list.slice(first)) {
+          if (index > first && performance.now() >= deadline) break
+          index++
+          previous = previous.remove(
+            previous
+              .find(start + piece.from, start + piece.to)
+              .filter(
+                (token) =>
+                  token.from < start + piece.to &&
+                  token.to > start + piece.from,
+              ),
+          )
+          for (const span of codeSpans(tree, piece.from, piece.to))
             decorations.push(
               Decoration.inline(
                 start + span.from,
@@ -194,58 +274,81 @@ export const CodeHighlight = Extension.create({
                 spec,
               ),
             )
+        }
+        if (index < list.length) unfinished.set(pos, index)
+        // Once the range is complete, tokens left from earlier ranges or versions go.
+        else
+          previous = previous.remove(
+            previous
+              .find(start, start + size)
+              .filter(
+                (token) =>
+                  !list.some(
+                    (piece) =>
+                      start + piece.from <= token.from &&
+                      token.to <= start + piece.to,
+                  ),
+              ),
+          )
         return false
       })
-      return { decorations: previous.add(doc, decorations), blocks }
+      return {
+        decorations: previous.add(doc, decorations),
+        blocks,
+        unfinished,
+      }
     }
-    /** Visible text of windowed blocks, widened by about a screen on each side. */
+    /** Visible text of windowed blocks, widened by about a screen in each direction. */
     function measureViewport(
       view: EditorView,
-      current: Range | null,
+      current: Viewport | null,
       blocks: readonly number[],
-    ) {
-      let { top, bottom } = view.dom.getBoundingClientRect()
+    ): Viewport | null {
+      let { top, bottom, left, right } = view.dom.getBoundingClientRect()
       // Scrolling panes and other clipping ancestors bound what is visible.
       for (
         let element = view.dom.parentElement;
         element;
         element = element.parentElement
-      )
-        if (getComputedStyle(element).overflowY !== 'visible') {
-          const box = element.getBoundingClientRect()
-          top = Math.max(top, box.top)
-          bottom = Math.min(bottom, box.bottom)
-        }
+      ) {
+        const style = getComputedStyle(element)
+        if (style.overflowX === 'visible' && style.overflowY === 'visible')
+          continue
+        const box = element.getBoundingClientRect()
+        top = Math.max(top, box.top)
+        bottom = Math.min(bottom, box.bottom)
+        left = Math.max(left, box.left)
+        right = Math.min(right, box.right)
+      }
       top = Math.max(top, 0)
       bottom = Math.min(bottom, window.innerHeight)
+      left = Math.max(left, 0)
+      right = Math.min(right, window.innerWidth)
       const shown = blocks.flatMap((pos) => {
         const node = view.state.doc.nodeAt(pos)
         const box = (
           view.nodeDOM(pos) as HTMLElement | null
         )?.getBoundingClientRect()
-        return node && box && box.top < bottom && box.bottom > top
-          ? [{ start: pos + 1, end: pos + 1 + node.content.size, box }]
+        return node &&
+          box &&
+          box.top < bottom &&
+          box.bottom > top &&
+          box.left < right &&
+          box.right > left
+          ? [
+              {
+                pos,
+                node,
+                start: pos + 1,
+                end: pos + 1 + node.content.size,
+                box,
+              },
+            ]
           : []
       })
       if (!shown.length) return null
       // Line geometry ignores horizontal scrolling and overlapping elements, unlike hit-testing.
-      const lineTop = (at: number) => view.coordsAtPos(at).top
-      const lineBottom = (at: number) => view.coordsAtPos(at).bottom
-      if (
-        current &&
-        shown.every(
-          ({ start, end, box }) =>
-            (current.from <= start ||
-              (box.top < top &&
-                current.from < end &&
-                lineTop(current.from) <= top)) &&
-            (current.to >= end ||
-              (box.bottom > bottom &&
-                current.to > start &&
-                lineBottom(current.to) >= bottom)),
-        )
-      )
-        return current
+      const coords = (at: number) => view.coordsAtPos(at)
       const first = (
         start: number,
         end: number,
@@ -258,6 +361,54 @@ export const CodeHighlight = Extension.create({
         }
         return start
       }
+      // Lines in a code block start at one x, so one line's character width gives every line's visible columns.
+      const columns = shown.flatMap(({ pos, node, start, box }) => {
+        const text = node.textContent
+        for (let line = 0, lines = 0; lines < 64; lines++) {
+          const newline = text.indexOf('\n', line)
+          const length = (newline < 0 ? text.length : newline) - line
+          if (length >= 16 || newline < 0) {
+            const count = Math.min(length, 256)
+            const head = coords(start + line)
+            const tail = coords(start + line + count)
+            const x = head.left
+            const width = count > 0 ? (tail.left - x) / count : 0
+            // Wrapped lines fit the pane; their rows are found vertically.
+            if (width <= 0 || Math.abs(tail.top - head.top) >= 1) return []
+            return [
+              {
+                pos,
+                from: Math.max(
+                  0,
+                  Math.floor((Math.max(left, box.left) - x) / width),
+                ),
+                to: Math.ceil((Math.min(right, box.right) - x) / width),
+              },
+            ]
+          }
+          line = newline + 1
+        }
+        return []
+      })
+      if (
+        current &&
+        shown.every(
+          ({ start, end, box }) =>
+            (current.from <= start ||
+              (box.top < top &&
+                current.from < end &&
+                coords(current.from).top <= top)) &&
+            (current.to >= end ||
+              (box.bottom > bottom &&
+                current.to > start &&
+                coords(current.to).bottom >= bottom)),
+        ) &&
+        columns.every((needed) => {
+          const kept = current.columns.find(({ pos }) => pos === needed.pos)
+          return !!kept && kept.from <= needed.from && needed.to <= kept.to
+        })
+      )
+        return current
       let from = Number.POSITIVE_INFINITY
       let to = Number.NEGATIVE_INFINITY
       for (const { start, end, box } of shown) {
@@ -265,41 +416,54 @@ export const CodeHighlight = Extension.create({
           from,
           box.top >= top
             ? start
-            : first(start, end, (at) => lineBottom(at) > top),
+            : first(start, end, (at) => coords(at).bottom > top),
         )
         to = Math.max(
           to,
           box.bottom <= bottom
             ? end
-            : first(start, end, (at) => lineTop(at) >= bottom),
+            : first(start, end, (at) => coords(at).top >= bottom),
         )
       }
       const margin = Math.max(to - from, 2000)
       return {
         from: Math.max(0, from - margin),
         to: Math.min(view.state.doc.content.size, to + margin),
+        visible: { from, to },
+        // A visible width on each side keeps short horizontal scrolls covered.
+        columns: columns.map(({ pos, from, to }) => {
+          const width = Math.max(to - from, 40)
+          return { pos, from: Math.max(0, from - width), to: to + width }
+        }),
       }
     }
     return [
       new Plugin<HighlightState>({
         key,
         state: {
-          init: (_config, state) => ({
-            ...decorate(state.doc, DecorationSet.empty, null, -Infinity),
-            viewport: null,
-          }),
+          init: (_config, state) => {
+            const { decorations, blocks } = decorate(
+              state.doc,
+              DecorationSet.empty,
+              null,
+              -Infinity,
+            )
+            return { decorations, blocks, viewport: null, progress: null }
+          },
           apply(transaction, value, oldState) {
             const refresh = transaction.getMeta(key) as Refresh | undefined
             if (!transaction.docChanged && !refresh) return value
             const doc = transaction.doc
             let { decorations, viewport, blocks } = value
-            // Edits may parse windowed blocks briefly; refreshes show what frames already parsed.
+            let progress = new Map(value.progress ?? [])
+            const deadline =
+              refresh?.deadline ?? performance.now() + parseBudget
             const update = (
-              deadline: number,
               from: number,
               to: number,
-              include?: (node: Node) => boolean,
+              include?: (node: Node, pos: number) => boolean,
               edit?: Edit,
+              resume?: ReadonlyMap<number, number>,
             ) => {
               const result = decorate(
                 doc,
@@ -310,13 +474,16 @@ export const CodeHighlight = Extension.create({
                 to,
                 include,
                 edit,
+                resume,
               )
               decorations = result.decorations
+              for (const pos of result.blocks) progress.delete(pos)
+              for (const [pos, done] of result.unfinished)
+                progress.set(pos, done)
               return result.blocks
             }
             if (transaction.docChanged) {
               const { mapping } = transaction
-              const deadline = performance.now() + parseBudget
               if (viewport) {
                 // Replaced content clears the range until the view measures again.
                 const from = mapping.mapResult(viewport.from, 1)
@@ -324,8 +491,27 @@ export const CodeHighlight = Extension.create({
                 viewport =
                   from.deletedAfter || to.deletedBefore || from.pos >= to.pos
                     ? null
-                    : { from: from.pos, to: to.pos }
+                    : {
+                        from: from.pos,
+                        to: to.pos,
+                        visible: {
+                          from: mapping.map(viewport.visible.from, 1),
+                          to: mapping.map(viewport.visible.to, -1),
+                        },
+                        columns: viewport.columns.flatMap((columns) => {
+                          const mapped = mapping.mapResult(columns.pos, 1)
+                          return mapped.deleted
+                            ? []
+                            : [{ ...columns, pos: mapped.pos }]
+                        }),
+                      }
               }
+              progress = new Map(
+                [...progress].flatMap(([pos, done]) => {
+                  const mapped = mapping.mapResult(pos, 1)
+                  return mapped.deleted ? [] : [[mapped.pos, done] as const]
+                }),
+              )
               let from = doc.content.size
               let end = 0
               let full = false
@@ -342,11 +528,11 @@ export const CodeHighlight = Extension.create({
               }
               if (full) {
                 decorations = DecorationSet.empty
-                blocks = update(deadline, 0, doc.content.size)
+                progress = new Map()
+                blocks = update(0, doc.content.size)
               } else {
                 decorations = decorations.map(mapping, doc)
                 const found = update(
-                  deadline,
                   Math.max(0, from - 1),
                   Math.min(doc.content.size, Math.max(from, end) + 1),
                   undefined,
@@ -361,31 +547,47 @@ export const CodeHighlight = Extension.create({
                 blocks = [...new Set([...kept, ...found])].sort((a, b) => a - b)
               }
             }
-            const previous = viewport
-            if (refresh && 'viewport' in refresh)
-              viewport = refresh.viewport ?? null
             const keys = refresh?.keys
             if (keys)
               update(
-                -Infinity,
                 0,
                 doc.content.size,
                 (node) =>
                   node.type.name === 'codeBlock' &&
                   keys.has(codeLanguageKey(String(node.attrs.language ?? ''))),
               )
-            // Windowed blocks in the previous or next range gain or drop tokens.
-            if (refresh && 'viewport' in refresh)
+            if (refresh && 'viewport' in refresh) {
+              const previous = viewport
+              viewport = refresh.viewport ?? null
+              const resumed = previous === viewport
+              // A new range starts every windowed block in the old or new range afresh;
+              // the same range resumes blocks that ran out of time.
+              const active = resumed ? progress : null
+              if (!resumed) progress = new Map()
               for (const pos of blocks) {
                 const end = pos + (doc.nodeAt(pos)?.nodeSize ?? 0)
                 if (
-                  [previous, viewport].some(
-                    (range) => range && pos < range.to && end > range.from,
-                  )
+                  active
+                    ? active.has(pos)
+                    : [previous, viewport].some(
+                        (range) => range && pos < range.to && end > range.from,
+                      )
                 )
-                  update(-Infinity, pos, end, windowedBlock)
+                  update(
+                    pos,
+                    end,
+                    (node) => windowedBlock(node),
+                    undefined,
+                    active ?? undefined,
+                  )
               }
-            return { decorations, viewport, blocks }
+            }
+            return {
+              decorations,
+              viewport,
+              blocks,
+              progress: progress.size ? progress : null,
+            }
           },
         },
         props: { decorations: (state) => key.getState(state)?.decorations },
@@ -394,13 +596,41 @@ export const CodeHighlight = Extension.create({
           let idle = 0
           let measure = true
           let scrolling = false
+          let revealing = false
+          // Hidden panes keep their layout, so their visibility comes from the style.
+          const hidden = () => {
+            const box = view.dom.getBoundingClientRect()
+            return (
+              box.bottom <= box.top ||
+              getComputedStyle(view.dom).visibility === 'hidden'
+            )
+          }
+          const reveal = new MutationObserver(() => schedule())
           const run = (budget: number) => {
             const state = key.getState(view.state)
             if (!state) return
-            // Hidden editors keep pending work until they have a size again.
-            const box = view.dom.getBoundingClientRect()
-            if (box.bottom <= box.top) return
-            const refresh: Refresh = {}
+            if (hidden()) {
+              // Pending work waits for a pane class, style, or attribute change that shows the editor.
+              if (!revealing)
+                for (
+                  let element = view.dom.parentElement;
+                  element;
+                  element = element.parentElement
+                )
+                  reveal.observe(element, {
+                    attributes: true,
+                    attributeFilter: ['class', 'style', 'hidden', 'inert'],
+                  })
+              revealing = true
+              return
+            }
+            if (revealing) {
+              revealing = false
+              reveal.disconnect()
+            }
+            // One budget covers parsing and decoration; unfinished work continues later.
+            const deadline = performance.now() + budget
+            const refresh: Refresh = { deadline }
             if (changed.size) {
               refresh.keys = new Set(changed)
               changed.clear()
@@ -411,10 +641,8 @@ export const CodeHighlight = Extension.create({
                 measure = false
                 next = measureViewport(view, next, state.blocks)
               }
-              let progressed = next !== state.viewport
-              let waiting = false
-              // One budget covers every block; unfinished ones continue later.
-              const deadline = performance.now() + budget
+              let progressed = next !== state.viewport || !!state.progress
+              let waiting = !!state.progress
               if (next)
                 for (const pos of state.blocks) {
                   const node = view.state.doc.nodeAt(pos)
@@ -500,7 +728,7 @@ export const CodeHighlight = Extension.create({
                 (before.viewport && !state.viewport)
               )
                 measure = true
-              // Parsing that a transaction left unfinished continues in the next frame.
+              // Parsing or decoration that a transaction left unfinished continues in the next frame.
               schedule()
             },
             destroy() {
@@ -508,6 +736,7 @@ export const CodeHighlight = Extension.create({
               cancelAnimationFrame(frame)
               cancelIdleCallback(idle)
               resize.disconnect()
+              reveal.disconnect()
               if (scrolling)
                 document.removeEventListener('scroll', scroll, {
                   capture: true,

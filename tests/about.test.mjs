@@ -44,14 +44,29 @@ test('main builds keep fresh licenses, bundled production workers and dev extern
   )
   const worker = parse(
     await readFile('src/addons/_shared/format-worker.ts', 'utf8'),
-    { sourceType: 'module', plugins: ['typescript'] },
+    {
+      sourceType: 'module',
+      plugins: ['typescript'],
+      createImportExpressions: true,
+    },
   )
   const { devDependencies } = JSON.parse(await readFile('package.json', 'utf8'))
-  const dependencies = worker.program.body
-    .filter(
-      (node) => node.type === 'ImportDeclaration' && node.importKind !== 'type',
+  const imports = []
+  function visit(node) {
+    if (
+      (node.type === 'ImportDeclaration' && node.importKind !== 'type') ||
+      (node.type === 'ImportExpression' && node.source.type === 'StringLiteral')
     )
-    .map((node) => node.source.value.match(/^(@[^/]+\/[^/]+|[^/]+)/)[0])
+      imports.push(node.source.value)
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        for (const child of value) if (child?.type) visit(child)
+      } else if (value?.type) visit(value)
+    }
+  }
+  visit(worker)
+  const dependencies = imports
+    .map((source) => source.match(/^(@[^/]+\/[^/]+|[^/]+)/)[0])
     .filter((name) => Object.hasOwn(devDependencies, name))
   assert.equal(
     externalize({ env: {} }),

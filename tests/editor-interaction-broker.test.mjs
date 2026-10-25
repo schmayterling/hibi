@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   contextActionBroker,
+  EditorInteractionBroker,
   hoverBroker,
   registerContextActionProvider,
   registerHoverProvider,
@@ -53,6 +54,250 @@ const collect = (broker, captured, current = () => captured) => {
   )
   return { updates, final, cancel }
 }
+
+for (const transition of ['replace', 'timeout']) {
+  test(`abort listener keeps newest request during ${transition}`, {
+    timeout: 3000,
+  }, async (t) => {
+    const broker = new EditorInteractionBroker((value) => value, 3)
+    t.after(() => broker.dispose())
+    const started = deferred()
+    let nested
+    let calls = 0
+    let newerStarted = false
+    let staleCurrentCalls = 0
+    broker.register(owner(), (_input, signal) => {
+      if (++calls !== 1) return []
+      return new Promise((resolve) =>
+        signal.addEventListener(
+          'abort',
+          () => {
+            nested = collect(broker, request({ contentVersion: 4 }))
+            newerStarted = true
+            started.resolve()
+            resolve([])
+          },
+          { once: true },
+        ),
+      )
+    })
+    broker.register(owner(), (input) => [
+      {
+        label: input.contentVersion === 4 ? 'nested-newest' : 'outer-older',
+      },
+    ])
+    const captured = request()
+    const initial = collect(broker, captured, () => {
+      if (newerStarted) staleCurrentCalls++
+      return captured
+    })
+    await tick()
+    assert.deepEqual(initial.updates, [
+      {
+        items: [{ label: 'outer-older' }],
+        finished: false,
+      },
+    ])
+    if (transition === 'replace') {
+      let captures = 0
+      const updates = []
+      const cancel = broker.request(
+        () => {
+          captures++
+          return request()
+        },
+        () => request(),
+        (...update) => updates.push(update),
+      )
+      assert.equal(cancel, null)
+      assert.equal(captures, 0)
+      assert.deepEqual(updates, [])
+    }
+    await started.promise
+    assert.deepEqual(await nested.final, [{ label: 'nested-newest' }])
+    assert.equal(calls, 2)
+    assert.equal(staleCurrentCalls, 0)
+    assert.equal(
+      initial.updates.some(({ finished }) => finished),
+      false,
+    )
+  })
+}
+
+test('capture callback cannot replace a newer request', {
+  timeout: 3000,
+}, async (t) => {
+  const broker = new EditorInteractionBroker((value) => value, 3)
+  t.after(() => broker.dispose())
+  broker.register(owner(), () => [{ label: 'newest' }])
+  let nested
+  const updates = []
+  const cancel = broker.request(
+    () => {
+      nested = collect(broker, request({ contentVersion: 4 }))
+      return request()
+    },
+    () => request(),
+    (...update) => updates.push(update),
+  )
+  assert.equal(cancel, null)
+  assert.deepEqual(await nested.final, [{ label: 'newest' }])
+  assert.deepEqual(updates, [])
+})
+
+for (const survivor of [false, true]) {
+  test(`completed owner retracts before abort reentry with survivor ${survivor}`, {
+    timeout: 3000,
+  }, async (t) => {
+    const broker = new EditorInteractionBroker((value) => value, 3)
+    t.after(() => broker.dispose())
+    const retired = owner()
+    let result
+    let updateAtAbort
+    let nestedReturn
+    let nestedCaptures = 0
+    let nestedCurrents = 0
+    broker.register(retired, (_input, signal) => {
+      signal.addEventListener(
+        'abort',
+        () => {
+          updateAtAbort = result.updates.at(-1)
+          nestedReturn = broker.request(
+            () => {
+              nestedCaptures++
+              return request()
+            },
+            () => {
+              nestedCurrents++
+              return request()
+            },
+            () => {},
+          )
+        },
+        { once: true },
+      )
+      return [{ label: 'retired-action' }]
+    })
+    if (survivor) broker.register(owner(), () => [{ label: 'survivor' }])
+    result = collect(broker, request())
+    assert.deepEqual(await result.final, [
+      { label: 'retired-action' },
+      ...(survivor ? [{ label: 'survivor' }] : []),
+    ])
+    const count = result.updates.length
+    broker.stopOwner(retired)
+    assert.deepEqual(updateAtAbort, {
+      items: survivor ? [{ label: 'survivor' }] : [],
+      finished: true,
+    })
+    assert.deepEqual(result.updates.at(-1), updateAtAbort)
+    assert.equal(result.updates.length, count + 1)
+    assert.equal(nestedCaptures, survivor ? 1 : 0)
+    assert.equal(nestedCurrents, survivor ? 1 : 0)
+    assert.equal(typeof nestedReturn, survivor ? 'function' : 'object')
+    if (!survivor) assert.equal(nestedReturn, null)
+  })
+}
+
+for (const transition of ['publish', 'finish', 'retract']) {
+  test(`current callback reentry suppresses older ${transition}`, {
+    timeout: 3000,
+  }, async (t) => {
+    const broker = new EditorInteractionBroker((value) => value, 3)
+    t.after(() => broker.dispose())
+    const ready = deferred()
+    const firstOwner = owner()
+    const captured = request()
+    let nested
+    let reenter = false
+    broker.register(firstOwner, (input) =>
+      input.contentVersion === 4 ? [{ label: 'newest' }] : ready.promise,
+    )
+    if (transition === 'publish')
+      broker.register(owner(), (input) =>
+        input.contentVersion === 4 ? [] : new Promise(() => {}),
+      )
+    if (transition === 'retract')
+      broker.register(owner(), () => [{ label: 'survivor' }])
+    const result = collect(broker, captured, () => {
+      if (reenter) {
+        reenter = false
+        nested = collect(broker, request({ contentVersion: 4 }))
+      }
+      return captured
+    })
+    await tick()
+    if (transition === 'retract') {
+      ready.resolve([{ label: 'retired' }])
+      await result.final
+      reenter = true
+      const count = result.updates.length
+      broker.stopOwner(firstOwner)
+      assert.equal(result.updates.length, count)
+      assert.deepEqual(await nested.final, [{ label: 'survivor' }])
+    } else {
+      reenter = true
+      ready.resolve([{ label: 'outer-older' }])
+      await tick()
+      assert.deepEqual(await nested.final, [{ label: 'newest' }])
+      assert.deepEqual(result.updates, [])
+    }
+  })
+}
+
+test('dispose inside a timeout abort prevents further current reads and publication', {
+  timeout: 3000,
+}, async (t) => {
+  const broker = new EditorInteractionBroker((value) => value, 3)
+  t.after(() => broker.dispose())
+  const disposed = deferred()
+  let stopped = false
+  let staleCurrentCalls = 0
+  broker.register(
+    owner(),
+    (_input, signal) =>
+      new Promise((resolve) => {
+        signal.addEventListener(
+          'abort',
+          () => {
+            broker.dispose()
+            stopped = true
+            disposed.resolve()
+            resolve([])
+          },
+          { once: true },
+        )
+      }),
+  )
+  broker.register(owner(), () => [{ label: 'outer-older' }])
+  const captured = request()
+  const result = collect(broker, captured, () => {
+    if (stopped) staleCurrentCalls++
+    return captured
+  })
+  await disposed.promise
+  await tick()
+  assert.equal(staleCurrentCalls, 0)
+  assert.deepEqual(result.updates, [
+    {
+      items: [{ label: 'outer-older' }],
+      finished: false,
+    },
+  ])
+  let captures = 0
+  assert.equal(
+    broker.request(
+      () => {
+        captures++
+        return request()
+      },
+      () => request(),
+      () => assert.fail('disposed broker published'),
+    ),
+    null,
+  )
+  assert.equal(captures, 0)
+})
 
 test('hover follows one target and aborts superseded work', async () => {
   const id = owner()

@@ -34,7 +34,7 @@ The report records first-visible-frame latency and animation-frame gaps for 800 
 
 `out/renderer/startup-bundle.json` lists chunk sizes, static/dynamic imports, and modules. Follow static imports from entry chunks; a separate output chunk alone does not prove lazy loading.
 
-Renderer `hibi:addon:<id>` spans include import and startup. A long span can include another addon's blocking work, so use a CPU profile to identify the caller. For example, cold `AudioContext` creation can synchronously query the device. Keybeats begins asynchronous [device discovery](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/enumerateDevices) first, keeping preparation off the editing path. It uses existing permissions, requests no capture permission, and stores no device details.
+Renderer `hibi:addon:<id>` spans include import and startup. A long span can include another addon's blocking work, so use a CPU profile to identify the caller. For example, cold `AudioContext` creation can synchronously query the output device. Keybeats first preloads a short silent `data:audio/wav` through an `Audio` element, preparing output asynchronously without enumerating capture devices. After `canplaythrough` or `error`, it clears the media source and constructs the context during idle. Engine import overlaps preparation; generation checks cancel both pending preparation and idle construction when disabled. It suspends output until eligible playback and after mute, blur, hiding, or ten seconds without input. Resuming is asynchronous. Idle scheduling alone does not prevent a cold output-device query from blocking input; keep the media preload before context construction.
 
 ## Native startup rules
 

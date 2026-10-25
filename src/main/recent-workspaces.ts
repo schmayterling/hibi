@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { app } from 'electron'
 import {
@@ -7,7 +7,7 @@ import {
   type RecentWorkspace,
   toRecentWorkspaces,
 } from '../shared/workspace'
-import { retryRename } from './atomic-rename'
+import { writeText } from './files'
 
 type SavedWorkspace = { path: string; pinned: boolean; hidden: boolean }
 
@@ -74,9 +74,11 @@ function writeWorkspaces(
     .catch(() => {})
     .then(async () => {
       const file = location()
-      const saved = update(await readWorkspaces())
-      await writeFile(`${file}.tmp`, JSON.stringify(saved), { mode: 0o600 })
-      await retryRename(() => rename(`${file}.tmp`, file))
+      const current = await readWorkspaces()
+      const before = JSON.stringify(current)
+      const saved = update(current)
+      const text = JSON.stringify(saved)
+      if (text !== before) await writeText(file, text)
       const known = asKnown(saved)
       for (const listener of listeners) listener(known)
       return known

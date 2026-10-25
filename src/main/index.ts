@@ -171,6 +171,7 @@ import { HostNetwork } from './host-network'
 import { HostSelectedIoService } from './host-selected-io'
 import { hotkeys, loadHotkeys, saveHotkeys } from './hotkeys'
 import { readDocumentImage } from './images'
+import { cancelImport, runCancellableImport } from './import-cancellation'
 import { listLicenses, readLicense } from './licenses'
 import {
   openDocumentLink,
@@ -218,6 +219,7 @@ import {
   startUpdateChecks,
 } from './updates'
 import {
+  cancelWorkspaceSelection,
   currentWorkspaceTarget,
   deleteKnownWorkspace,
   documentFileChanged,
@@ -762,6 +764,24 @@ function runFileOperation<T>(
   })
 }
 
+let workspaceOpenIntent = 0
+function runWorkspaceOpen(
+  event: IpcMainInvokeEvent,
+  operation: (
+    window: BrowserWindow,
+  ) => Promise<ReturnType<typeof getWorkspace>>,
+) {
+  trustedWindow(event)
+  if (closing || fileOperationHasDialog()) throw fileOperationUnavailable()
+  const intent = ++workspaceOpenIntent
+  cancelWorkspaceSelection()
+  return runFileOperation(event, (window) =>
+    intent === workspaceOpenIntent
+      ? operation(window)
+      : Promise.resolve(getWorkspace()),
+  )
+}
+
 async function lockFileOperation<T>(
   window: BrowserWindow,
   operation: (window: BrowserWindow) => Promise<T>,
@@ -1005,6 +1025,7 @@ function createWindow(): void {
   }
   window.on('close', (event) => {
     if (allowClose) return
+    cancelImport(window.id)
     event.preventDefault()
     if (confirmingClose) return
     if (background.enabled && !quitting) {
@@ -2181,16 +2202,21 @@ if (!app.requestSingleInstanceLock()) {
         runFileOperation(event, (window) => workspaceAction(window, input)),
       )
       handle(WORKSPACE_CHANNELS.open, (event) =>
-        runFileOperation(event, openWorkspace),
+        runWorkspaceOpen(event, openWorkspace),
       )
       handle(IMPORT_CHANNELS.list, (event) => {
         trustedWindow(event)
         return import('./imports').then((module) => module.listImporters())
       })
+      handle(IMPORT_CHANNELS.cancel, (event) => {
+        cancelImport(trustedWindow(event).id)
+      })
       handle(IMPORT_CHANNELS.run, (event, request: unknown) =>
-        runFileOperation(event, (window) =>
-          import('./imports').then((module) =>
-            module.importIntoWorkspace(window, request),
+        runCancellableImport(trustedWindow(event).id, (signal) =>
+          runFileOperation(event, (window) =>
+            import('./imports').then((module) =>
+              module.importIntoWorkspace(window, request, signal),
+            ),
           ),
         ),
       )
@@ -2211,7 +2237,7 @@ if (!app.requestSingleInstanceLock()) {
         Promise.resolve(),
       )
       handle(WORKSPACE_CHANNELS.openRecent, (event, id: unknown) =>
-        runFileOperation(event, () => openRecentWorkspace(id)),
+        runWorkspaceOpen(event, () => openRecentWorkspace(id)),
       )
       handle(WORKSPACE_CHANNELS.known, (event) => {
         trustedWindow(event)

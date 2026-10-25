@@ -1,4 +1,4 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app } from 'electron'
 import {
@@ -8,7 +8,7 @@ import {
   restoreHotkeys,
   validateHotkeys,
 } from '../shared/hotkeys'
-import { retryRename } from './atomic-rename'
+import { writeText } from './files'
 
 export let hotkeys = defaultHotkeys(process.platform)
 let saving = false
@@ -35,12 +35,10 @@ export async function saveHotkeys(value: unknown): Promise<Hotkeys> {
   saving = true
   try {
     const path = join(app.getPath('userData'), 'hotkeys.json')
-    await writeFile(
-      `${path}.tmp`,
+    await writeText(
+      path,
       JSON.stringify({ ...next, _version: HOTKEYS_VERSION }),
-      { mode: 0o600 },
     )
-    await retryRename(() => rename(`${path}.tmp`, path))
     hotkeys = next
     return hotkeys
   } finally {

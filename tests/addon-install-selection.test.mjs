@@ -116,6 +116,7 @@ async function fixture(t) {
     allowUnsigned: true,
     checkRevocations: false,
   })
+  opened.length = 0
   const sessions = []
   const kept = []
   const disable = async (id, keep) => {

@@ -331,11 +331,12 @@ test('find in document searches rich text and offscreen markdown without editing
   await input.press('Escape')
   await bar.waitFor({ state: 'hidden' })
 
-  // Characters that lengthen when lowercased must not shift highlights.
+  // Characters that lengthen when lowercased must not shift highlights, and a
+  // final sigma is still the same letter.
   await page
     .getByRole('button', { name: /^source view$/i, exact: true })
     .click()
-  await replaceSource('İx needle word')
+  await replaceSource('İx needle word ΣΣ')
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
   await rich.waitFor()
   await rich.focus()
@@ -346,6 +347,10 @@ test('find in document searches rich text and offscreen markdown without editing
     await rich.locator('.ProseMirror-active-search-match').textContent(),
     'needle',
   )
+  await input.fill('Σ')
+  await waitForCount('1/2')
+  await input.press('Enter')
+  await waitForCount('2/2')
   await input.press('Escape')
   await bar.waitFor({ state: 'hidden' })
 

@@ -47,9 +47,14 @@ function blockText(node: Node): string {
   return text
 }
 
+// Fold each character the same way wherever it appears. Greek final sigma is
+// the only lowercase mapping that depends on neighboring letters, so σ and ς
+// compare equal instead of hiding a match behind its context.
+const fold = (text: string) => text.toLowerCase().replaceAll('ς', 'σ')
+
 /** Non-overlapping, case-insensitive literal matches as [from, to] offset pairs. */
 function scan(text: string, needle: string) {
-  const folded = text.toLowerCase()
+  const folded = fold(text)
   const found: number[] = []
   if (folded.length === text.length) {
     for (
@@ -88,7 +93,7 @@ class MatchIndex {
   readonly #blocks = new WeakMap<Node, number[]>()
   readonly #counts = new WeakMap<Node, number>()
   constructor(query: string) {
-    this.#needle = query.toLowerCase()
+    this.#needle = fold(query)
   }
   matches(block: Node) {
     let found = this.#blocks.get(block)

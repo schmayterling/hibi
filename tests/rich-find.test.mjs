@@ -40,9 +40,12 @@ const create = (blocks, plugins = []) =>
     doc: schema.nodes.doc.create(null, blocks),
   })
 
-// Reference: lowercase every character, match anywhere, and report whole source characters.
+// Fold each character alone, so σ and ς are the same letter in any context.
+const fold = (text) => text.toLowerCase().replaceAll('ς', 'σ')
+
+// Reference: fold every character, match anywhere, and report whole source characters.
 function expectedMatches(doc, query) {
-  const needle = query.toLowerCase()
+  const needle = fold(query)
   const text = (node) => {
     let value = ''
     node.forEach((child) => {
@@ -60,7 +63,7 @@ function expectedMatches(doc, query) {
     const units = []
     let offset = 0
     for (const character of text(node)) {
-      for (const code of character.toLowerCase().split(''))
+      for (const code of fold(character).split(''))
         units.push({ code, start: offset, end: offset + character.length })
       offset += character.length
     }
@@ -405,6 +408,50 @@ test('rich find unselects a shifted match when the selection leaves it', () => {
   const tr = state.tr.insertText('x', 1)
   state = state.apply(tr.setSelection(TextSelection.create(tr.doc, 1)))
   verify(state, 'needle')
+})
+
+test('rich find matches Greek sigma in every position of a word', () => {
+  let state = create([
+    paragraph('ΣΣ'),
+    paragraph('ΟΔΟΣ οδος οδοσ'),
+    paragraph('ΣΣΣΣ'),
+  ])
+  for (const [query, total] of [
+    ['Σ', 9],
+    ['σ', 9],
+    ['ς', 9],
+    ['ΟΔΟΣ', 3],
+    ['οδος', 3],
+  ]) {
+    state = state.apply(setRichFindQuery(state.tr, query))
+    assert.equal(verify(state, query).length, total)
+  }
+  // Every occurrence is reachable in order, and both directions wrap.
+  state = state.apply(setRichFindQuery(state.tr, 'Σ'))
+  const expected = verify(state, 'Σ')
+  for (const match of [...expected, expected[0]]) {
+    assert.deepEqual(target(state, findNext), match)
+    findNext(state, (tr) => {
+      state = state.apply(tr)
+    })
+    verify(state, 'Σ')
+  }
+  assert.deepEqual(target(state, findPrev), expected.at(-1))
+})
+
+test('lowercasing depends on neighboring letters only for Greek final sigma', () => {
+  // rich-find folds whole textblocks at once, so every other character must
+  // lowercase the same in context as alone.
+  for (let code = 0; code <= 0x10ffff; code++) {
+    if (code >= 0xd800 && code <= 0xdfff) continue
+    const character = String.fromCodePoint(code)
+    const alone = fold(character)
+    assert.equal(
+      fold(`Α${character}Α${character}`),
+      `α${alone}α${alone}`,
+      `U+${code.toString(16)}`,
+    )
+  }
 })
 
 test('rich find maps lengthened lowercase characters to whole source characters', () => {

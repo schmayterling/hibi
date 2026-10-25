@@ -211,11 +211,19 @@ export function TooltipHost() {
       )
         tooltipStore.hide(active)
     }
-    const observer = new MutationObserver((records) => {
+    // Changes that can move the anchor share one check before the next frame.
+    let frame = 0
+    const schedule = () => {
+      frame ||= requestAnimationFrame(() => {
+        frame = 0
+        validate()
+      })
+    }
+    // Attributes of the anchor, its siblings, and its ancestors can hide or move it.
+    const attributes = new MutationObserver((records) => {
       if (
         records.some(
           (record) =>
-            record.type === 'attributes' &&
             [
               'hidden',
               'inert',
@@ -230,17 +238,32 @@ export function TooltipHost() {
         )
       ) {
         tooltipStore.hide(active)
-      } else validate()
+      } else schedule()
     })
-    observer.observe(document.documentElement, {
-      childList: true,
-      attributes: true,
-      subtree: true,
+    const container = anchor.closest('dialog[open]') ?? document.body
+    const local =
+      anchor.parentElement && anchor.parentElement !== container
+        ? anchor.parentElement
+        : anchor
+    attributes.observe(local, { attributes: true, subtree: true })
+    for (
+      let parent = local.parentElement;
+      parent;
+      parent = parent.parentElement
+    )
+      attributes.observe(parent, { attributes: true })
+    // Removal anywhere in the tooltip's container detaches the anchor; other structure changes can move it.
+    const structure = new MutationObserver(() => {
+      if (!anchor.isConnected) tooltipStore.hide(active)
+      else schedule()
     })
+    structure.observe(container, { childList: true, subtree: true })
     const resize = new ResizeObserver(validate)
     resize.observe(anchor)
     return () => {
-      observer.disconnect()
+      cancelAnimationFrame(frame)
+      attributes.disconnect()
+      structure.disconnect()
       resize.disconnect()
       const remaining = (anchor.getAttribute('aria-describedby') ?? '')
         .split(/\s+/)

@@ -90,6 +90,92 @@ export async function checkTooltips(page) {
   })
   assert.equal(await tip.count(), 0)
 
+  // Unrelated mutations share one geometry check per frame; nearby changes still dismiss help.
+  await target.evaluate((node) => {
+    const read = node.getBoundingClientRect
+    window.anchorReads = 0
+    node.getBoundingClientRect = function () {
+      window.anchorReads++
+      return read.call(this)
+    }
+    const unrelated = document.createElement('div')
+    unrelated.id = 'tooltip-unrelated'
+    document.body.append(unrelated)
+    const spacer = document.createElement('div')
+    spacer.id = 'tooltip-spacer'
+    node.before(spacer)
+  })
+  const burst = () =>
+    page.evaluate(async () => {
+      const unrelated = document.querySelector('#tooltip-unrelated')
+      const reads = window.anchorReads
+      for (let index = 0; index < 200; index++) {
+        unrelated.dataset.tick = String(index)
+        unrelated.append(document.createElement('span'))
+        unrelated.firstChild.remove()
+        await Promise.resolve()
+      }
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      )
+      return window.anchorReads - reads
+    })
+  await hover()
+  // One check reads the anchor twice: its bounds and its visibility.
+  const reads = await burst()
+  assert.ok(reads <= 2, `${reads} anchor reads`)
+  assert.equal(await tip.count(), 1)
+  for (const change of [
+    'parent',
+    'ancestor',
+    'sibling style',
+    'sibling child',
+  ]) {
+    await hover()
+    await target.evaluate((node, change) => {
+      const spacer = document.querySelector('#tooltip-spacer')
+      if (change === 'parent') node.parentElement.hidden = true
+      if (change === 'ancestor')
+        node.parentElement.parentElement.style.visibility = 'hidden'
+      if (change === 'sibling style') spacer.style.height = '40px'
+      if (change === 'sibling child')
+        spacer.append(document.createElement('div'), 'shifted')
+    }, change)
+    await hidden()
+    await target.evaluate((node) => {
+      node.parentElement.hidden = false
+      node.parentElement.parentElement.style.removeProperty('visibility')
+      const spacer = document.querySelector('#tooltip-spacer')
+      spacer.removeAttribute('style')
+      spacer.replaceChildren()
+    })
+  }
+  await page.evaluate(() => {
+    const removable = document.createElement('button')
+    removable.id = 'tooltip-removable'
+    removable.textContent = 'removable'
+    removable.dataset.tooltip = 'removable help'
+    removable.style.cssText = 'position:fixed;left:12px;bottom:12px'
+    document.body.append(removable)
+  })
+  await other.hover()
+  await page.locator('#tooltip-removable').hover()
+  await tip.waitFor()
+  await page.evaluate(() =>
+    document.querySelector('#tooltip-removable').remove(),
+  )
+  await hidden()
+  // Closed help stops observing its anchor.
+  await hover()
+  await page.keyboard.press('Escape')
+  await hidden()
+  assert.equal(await burst(), 0)
+  assert.equal(await target.getAttribute('aria-describedby'), 'existing-help')
+  await page.evaluate(() => {
+    document.querySelector('#tooltip-unrelated').remove()
+    document.querySelector('#tooltip-spacer').remove()
+  })
+
   // Imperative addon hints stay open while the pointer moves inside their anchor.
   await other.hover()
   await other.evaluate((anchor) => {

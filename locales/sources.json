@@ -3074,6 +3074,15 @@
     "src/main/index.ts",
     "src/shared/document-checkpoint.ts"
   ],
+  "01fa401e3bf6": [
+    "src/shared/source-transfer.ts"
+  ],
+  "dc0dc106489e": [
+    "src/shared/source-transfer.ts"
+  ],
+  "c2e3add49974": [
+    "src/shared/source-transfer.ts"
+  ],
   "e24a669abcf1": [
     "src/shared/document-worker-service.ts"
   ],
@@ -5165,6 +5174,9 @@
   "8a2bc7e0aed9": [
     "src/shared/source-buffer.ts"
   ],
+  "c9df32f0a2c5": [
+    "src/shared/source-buffer.ts"
+  ],
   "aa0061415476": [
     "src/shared/source-buffer.ts"
   ],
@@ -5194,6 +5206,9 @@
   ],
   "a59c5fc9e739": [
     "src/renderer/src/source-outline.ts"
+  ],
+  "3300f213fd9e": [
+    "src/shared/source-buffer.ts"
   ],
   "2fc5a26b7c5b": [
     "src/shared/source-operations.ts"
@@ -5681,6 +5696,8 @@
     "src/main/analysis.ts"
   ],
   "33848694bf6a": [
+    "src/renderer/src/main.tsx",
+    "src/shared/document-checkpoint-stream.ts",
     "src/shared/document-checkpoint.ts"
   ],
   "4f933c48f0a0": [
@@ -5735,10 +5752,21 @@
     "src/main/index.ts"
   ],
   "8ea97b4e248c": [
+    "src/shared/document-checkpoint-stream.ts",
     "src/shared/document-checkpoint.ts"
   ],
   "ee76fd92b752": [
+    "src/shared/document-checkpoint-stream.ts",
     "src/shared/document-checkpoint.ts"
+  ],
+  "1272f967b3e4": [
+    "src/shared/source-transfer.ts"
+  ],
+  "9dc071e43d04": [
+    "src/shared/source-transfer.ts"
+  ],
+  "bc01d897e63b": [
+    "src/shared/source-transfer.ts"
   ],
   "53a9d03e9663": [
     "src/main/addon-documentation.ts"

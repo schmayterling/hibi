@@ -9,6 +9,9 @@ export const DOCUMENT_CHANNELS = {
   append: 'document:append',
   recoveryHead: 'document:recovery-head',
   verifyCheckpoint: 'document:verify-checkpoint',
+  checkpointChunk: 'document:checkpoint-chunk',
+  checkpointFinish: 'document:checkpoint-finish',
+  checkpointAbort: 'document:checkpoint-abort',
   flush: 'document:flush',
   flushed: 'document:flushed',
   open: 'document:open',
@@ -507,6 +510,12 @@ export type DesktopApi = {
     callback: (
       tabId: string,
     ) => import('./document-checkpoint').JournalCheckpoint,
+    read?: (
+      request: import('./source-transfer').SourceTransferRequest,
+    ) => import('./source-transfer').SourceTransferChunk,
+    close?: (
+      request: import('./source-transfer').SourceTransferRequest,
+    ) => void,
   ) => () => void
   getDocumentRecoveryState: () => ReturnType<
     ReturnType<

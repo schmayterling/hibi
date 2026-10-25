@@ -5,7 +5,11 @@ export type JournalHead = Readonly<{
   revision: number
   contentVersion: number
 }>
-export type JournalCheckpoint = JournalHead & Readonly<{ source: string }>
+export type JournalCheckpoint = JournalHead &
+  (
+    | Readonly<{ source: string }>
+    | Readonly<{ streamId: string; length: number }>
+  )
 
 export function parseJournalHead(value: unknown): JournalHead {
   if (!value || typeof value !== 'object')
@@ -31,8 +35,22 @@ export function parseJournalCheckpoint(
   value: unknown,
   maximumUnits: number,
 ): JournalCheckpoint {
-  const head = parseJournalHead(value),
-    source = (value as JournalCheckpoint).source
+  const head = parseJournalHead(value)
+  if ('streamId' in (value as JournalCheckpoint)) {
+    const { streamId, length } = value as JournalHead & {
+      streamId: string
+      length: number
+    }
+    if (
+      typeof streamId !== 'string' ||
+      !/^[\w.:-]{1,128}$/.test(streamId) ||
+      !Number.isSafeInteger(length) ||
+      length < 0
+    )
+      throw new Error('Invalid document recovery checkpoint.')
+    return { ...head, streamId, length }
+  }
+  const source = (value as { source?: unknown }).source
   if (typeof source !== 'string' || source.length > maximumUnits)
     throw new Error('Invalid document recovery checkpoint.')
   return { ...head, source }
@@ -53,8 +71,10 @@ export async function verifyJournalCheckpoint(
   value: unknown,
   maximumUnits: number,
 ): Promise<JournalHead> {
-  const checkpoint = parseJournalCheckpoint(value, maximumUnits),
-    snapshot = read().snapshot()
+  const checkpoint = parseJournalCheckpoint(value, maximumUnits)
+  if (!('source' in checkpoint))
+    throw new Error('Invalid document recovery checkpoint.')
+  const snapshot = read().snapshot()
   if (
     snapshot.document.tabId !== checkpoint.tabId ||
     snapshot.document.revision !== checkpoint.revision ||

@@ -34,6 +34,7 @@ import {
 } from '../../shared/hotkeys'
 import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes'
 import { isMediaFile } from '../../shared/media'
+import { SourceTransferSender } from '../../shared/source-transfer'
 import { startupMark } from '../../shared/startup'
 import { exceedsUtf8Limit } from '../../shared/text-size'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
@@ -354,21 +355,49 @@ function App() {
   const shellDocument = useRef(document)
   shellDocument.current = document
   currentDocument.current = documentRuntime.get() ?? document
-  useLayoutEffect(
-    () =>
-      window.hibi.onDocumentCheckpoint((tabId) => {
-        const source = documentRuntime.session(tabId)?.snapshot()
-        if (!source)
+  useLayoutEffect(() => {
+    const checkpoints = new Map<
+      string,
+      { sender: SourceTransferSender; current: () => boolean }
+    >()
+    const tabs = new Map<string, string>()
+    return window.hibi.onDocumentCheckpoint(
+      (tabId) => {
+        const session = documentRuntime.session(tabId),
+          source = session?.snapshot()
+        if (!session || !source)
           throw new Error('No retained document recovery checkpoint.')
-        return {
+        const previous = tabs.get(tabId)
+        if (previous) {
+          checkpoints.get(previous)?.sender.close()
+          checkpoints.delete(previous)
+        }
+        const head = {
           tabId: source.document.tabId,
           revision: source.document.revision,
           contentVersion: source.version,
-          source: source.materialize(),
+          streamId: crypto.randomUUID(),
+          length: source.utf16Length,
         }
-      }),
-    [],
-  )
+        checkpoints.set(head.streamId, {
+          sender: new SourceTransferSender(head, source.chunks()),
+          current: () => session.ownsCurrentSnapshot(source),
+        })
+        tabs.set(tabId, head.streamId)
+        return head
+      },
+      (request) => {
+        const checkpoint = checkpoints.get(request.streamId)
+        if (!checkpoint?.current())
+          throw new Error('The document changed during recovery verification.')
+        return checkpoint.sender.read(request)
+      },
+      (request) => {
+        checkpoints.get(request.streamId)?.sender.close()
+        checkpoints.delete(request.streamId)
+      },
+    )
+  }, [])
   useLayoutEffect(
     () =>
       subscribeDocumentShell(

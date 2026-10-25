@@ -34,6 +34,10 @@ import { DIAGNOSTIC_CHANNEL } from '../shared/local-diagnostics'
 import { MEDIA_CHANNELS } from '../shared/media'
 import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
+import type {
+  SourceTransferChunk,
+  SourceTransferRequest,
+} from '../shared/source-transfer'
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
 import { UPDATE_CHANNELS } from '../shared/updates'
@@ -62,6 +66,10 @@ if (process.isMainFrame) {
     /* Diagnostics cannot prevent the document bridge from starting. */
   }
   let checkpoint: ((tabId: string) => JournalCheckpoint) | undefined
+  let checkpointRead:
+    | ((request: SourceTransferRequest) => SourceTransferChunk)
+    | undefined
+  let checkpointClose: ((request: SourceTransferRequest) => void) | undefined
   const journal = createDocumentJournal(
     (change) => transport.invoke(DOCUMENT_CHANNELS.append, change),
     {
@@ -74,8 +82,36 @@ if (process.isMainFrame) {
         return checkpoint(tabId)
       },
       head: (tabId) => transport.invoke(DOCUMENT_CHANNELS.recoveryHead, tabId),
-      verify: (snapshot) =>
-        transport.invoke(DOCUMENT_CHANNELS.verifyCheckpoint, snapshot),
+      verify: async (snapshot) => {
+        if ('source' in snapshot)
+          return transport.invoke(DOCUMENT_CHANNELS.verifyCheckpoint, snapshot)
+        if (!checkpointRead)
+          throw new Error('Document recovery is not ready. Retry saving.')
+        let request: SourceTransferRequest = {
+          streamId: snapshot.streamId,
+          sequence: 0,
+        }
+        try {
+          await transport.invoke(DOCUMENT_CHANNELS.verifyCheckpoint, snapshot)
+          for (;;) {
+            const chunk = checkpointRead(request)
+            request = await transport.invoke(
+              DOCUMENT_CHANNELS.checkpointChunk,
+              chunk,
+            )
+            if (chunk.done) break
+          }
+          return await transport.invoke(
+            DOCUMENT_CHANNELS.checkpointFinish,
+            request,
+          )
+        } finally {
+          checkpointClose?.(request)
+          await transport
+            .invoke(DOCUMENT_CHANNELS.checkpointAbort, request)
+            .catch(() => {})
+        }
+      },
     },
   )
   const invoke: typeof transport.invoke = (channel, ...args) =>
@@ -273,10 +309,15 @@ if (process.isMainFrame) {
     appendSourceOperation: journal.appendOperation,
     admitSourceOperation: journal.assertCapacity,
     getDocumentRecoveryState: journal.state,
-    onDocumentCheckpoint: (callback) => {
+    onDocumentCheckpoint: (callback, read, close) => {
       checkpoint = callback
+      checkpointRead = read
+      checkpointClose = close
       return () => {
-        if (checkpoint === callback) checkpoint = undefined
+        if (checkpoint !== callback) return
+        checkpoint = undefined
+        checkpointRead = undefined
+        checkpointClose = undefined
       }
     },
     flushDocumentChanges: journal.flush,

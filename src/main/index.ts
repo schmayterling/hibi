@@ -48,6 +48,7 @@ import {
   parseJournalCheckpoint,
   verifyJournalCheckpoint,
 } from '../shared/document-checkpoint'
+import { createCheckpointVerifier } from '../shared/document-checkpoint-stream'
 import { createJournalReceiver } from '../shared/document-journal'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
 import type { AddonId, WorkspaceTarget } from '../shared/foundation-contracts'
@@ -865,6 +866,7 @@ function showStartupError(window: BrowserWindow | null = mainWindow): void {
 
 let windowSetupReady = false
 const appendDocumentChange = createJournalReceiver(getDocumentSourceFor)
+const checkpointVerifier = createCheckpointVerifier(getDocumentSourceFor)
 function createWindow(): void {
   if (!windowSetupReady) return
   closing = false
@@ -908,7 +910,10 @@ function createWindow(): void {
     addonHotkeys.clearRegistrations()
     installMenu()
   })
-  window.webContents.on('did-start-loading', () => analysisService.cancel())
+  window.webContents.on('did-start-loading', () => {
+    analysisService.cancel()
+    checkpointVerifier.clear()
+  })
   window.webContents.on('render-process-gone', () => {
     backgroundSettingsReady = false
     stopRecording()
@@ -2295,6 +2300,7 @@ if (!app.requestSingleInstanceLock()) {
         (event, checkpoint: unknown) => {
           trustedWindow(event)
           const parsed = parseJournalCheckpoint(checkpoint, MAX_DOCUMENT_BYTES)
+          if ('streamId' in parsed) return checkpointVerifier.begin(parsed)
           return verifyJournalCheckpoint(
             () => getDocumentSourceFor(parsed.tabId),
             parsed,
@@ -2302,6 +2308,18 @@ if (!app.requestSingleInstanceLock()) {
           )
         },
       )
+      handle(DOCUMENT_CHANNELS.checkpointChunk, (event, chunk: unknown) => {
+        trustedWindow(event)
+        return checkpointVerifier.append(chunk)
+      })
+      handle(DOCUMENT_CHANNELS.checkpointFinish, (event, request: unknown) => {
+        trustedWindow(event)
+        return checkpointVerifier.finish(request)
+      })
+      handle(DOCUMENT_CHANNELS.checkpointAbort, (event, request: unknown) => {
+        trustedWindow(event)
+        checkpointVerifier.abort(request)
+      })
       handle(DOCUMENT_CHANNELS.open, (event) =>
         runFileOperation(event, openDocument),
       )

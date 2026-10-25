@@ -405,7 +405,6 @@ test('graph pages contain every node and resolved link without another parse', (
     pathIndex: 0,
     targetIndex: 0,
     nodeEmitted: false,
-    emitted: 0,
   }
   let result
   do {
@@ -421,10 +420,6 @@ test('graph pages contain every node and resolved link without another parse', (
     { kind: 'node', path: 'plain.txt' },
   ])
   assert.equal(parses, 2)
-  assert.equal(result.capReached, false)
-  const capped = index.graph({ ...position, pathIndex: 0, emitted: 9999 }, 2)
-  assert.equal(capped.capReached, true)
-  assert.equal(capped.hasMore, false)
 })
 
 test('tag summaries cap distinct names while exact queries still find later tags', () => {

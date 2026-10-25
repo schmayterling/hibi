@@ -73,7 +73,6 @@ export interface GraphPosition {
   readonly pathIndex: number
   readonly targetIndex: number
   readonly nodeEmitted: boolean
-  readonly emitted: number
 }
 
 /** Parsed references share the existing workspace page cache; no filesystem scan. */
@@ -390,18 +389,13 @@ export class WorkspaceReferenceIndex {
     items: readonly WorkspaceGraphItem[]
     position: GraphPosition
     hasMore: boolean
-    capReached: boolean
   } {
     const items: WorkspaceGraphItem[] = []
-    let { pathIndex, targetIndex, nodeEmitted, emitted } = start
+    let { pathIndex, targetIndex, nodeEmitted } = start
     let bytes = 0
     let targetsPath = ''
     let targets: string[] = []
-    while (
-      pathIndex < this.sortedPaths.length &&
-      items.length < limit &&
-      emitted < 10_000
-    ) {
+    while (pathIndex < this.sortedPaths.length && items.length < limit) {
       const path = this.sortedPaths[pathIndex]
       if (!path) break
       let item: WorkspaceGraphItem
@@ -429,16 +423,13 @@ export class WorkspaceReferenceIndex {
       if (bytes + size > 32 * 1024) break
       items.push(item)
       bytes += size
-      emitted++
       if (item.kind === 'node') nodeEmitted = true
       else targetIndex++
     }
-    const hasMore = pathIndex < this.sortedPaths.length && emitted < 10_000
     return {
       items,
-      position: { pathIndex, targetIndex, nodeEmitted, emitted },
-      hasMore,
-      capReached: pathIndex < this.sortedPaths.length && emitted >= 10_000,
+      position: { pathIndex, targetIndex, nodeEmitted },
+      hasMore: pathIndex < this.sortedPaths.length,
     }
   }
 

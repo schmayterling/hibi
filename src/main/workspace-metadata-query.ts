@@ -406,7 +406,6 @@ export async function queryWorkspaceReferences(
       pathIndex: 0,
       targetIndex: 0,
       nodeEmitted: false,
-      emitted: 0,
     }
     if (request.cursor !== undefined) {
       const old = graphCursors.get(request.cursor as string)
@@ -446,8 +445,7 @@ export async function queryWorkspaceReferences(
         items: result.items,
         hasMore: result.hasMore,
         nextCursor,
-        complete: base.complete && !result.hasMore && !result.capReached,
-        capReached: base.capReached || result.capReached,
+        complete: base.complete && !result.hasMore,
       },
     }
   }

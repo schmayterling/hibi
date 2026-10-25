@@ -846,9 +846,9 @@ export function startSite(workspace: SiteData, root: Root) {
     const [query, setQuery] = useState('')
     const graph = useMemo(() => {
       const nodes =
-        workspace.graph?.nodes
-          .filter((node) => node.id.toLowerCase().includes(query.toLowerCase()))
-          .slice(0, 500) ?? []
+        workspace.graph?.nodes.filter((node) =>
+          node.id.toLowerCase().includes(query.toLowerCase()),
+        ) ?? []
       const ids = new Set(nodes.map((node) => node.id))
       return {
         nodes,

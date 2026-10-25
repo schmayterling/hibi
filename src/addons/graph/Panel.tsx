@@ -229,18 +229,16 @@ export function GraphPanel({
     return full.nodes.filter((node) => neighbors.has(node.id))
   }, [full, workspace?.activePath])
   const graph = useMemo(() => {
-    const matching = full.nodes.filter((node) =>
-      node.id.toLowerCase().includes(query.trim().toLowerCase()),
+    const filter = query.trim().toLowerCase()
+    const nodes = full.nodes.filter((node) =>
+      node.id.toLowerCase().includes(filter),
     )
-    // ponytail: SVG caps at 500 visible notes; use a canvas renderer for larger simultaneous graphs.
-    const nodes = matching.slice(0, 500),
-      ids = new Set(nodes.map((node) => node.id))
+    const ids = new Set(nodes.map((node) => node.id))
     return {
       nodes,
       edges: full.edges.filter(
         (edge) => ids.has(edge.source) && ids.has(edge.target),
       ),
-      total: matching.length,
     }
   }, [full, query])
   const open = (path: string) => {
@@ -282,9 +280,9 @@ export function GraphPanel({
       ) : (
         <>
           <p className="graph-summary" role="status">
-            {graph.nodes.length} of {graph.total} notes · {graph.edges.length}{' '}
+            {graph.nodes.length} of {full.nodes.length} notes ·{' '}
+            {graph.edges.length}{' '}
             {graph.edges.length === 1 ? 'connection' : 'connections'}
-            {graph.total > 500 ? ' · filter to see more notes' : ''}
             {current && !current.complete ? ' · graph index incomplete' : ''}
           </p>
           {graph.nodes.length ? (

@@ -28,41 +28,81 @@ export default defineAddon({
       password = '',
       signal?: AbortSignal,
     ) => {
-      await requireWorkspace(workspace)
-      const snapshot = await context.workspace.snapshot()
+      const target = await requireWorkspace(workspace)
+      signal?.throwIfAborted()
       const version = siteContributions.version()
       const contributions = siteContributions
         .snapshot()
         .filter((entry) => options.addons[entry.id] !== false)
       const colorschemes = [...context.colorschemes.list()]
-      const pages: (typeof snapshot.pages)[number][] = []
-      const css = await preparePages(
-        snapshot.pages,
-        async (page) =>
-          siteContributions.render(
-            await context.editor.renderDocument(
+      const session = await context.native.query<{
+        token: string
+        paths: string[]
+      }>('begin', {
+        target: {
+          workspaceId: target.id,
+          workspaceGeneration: target.workspaceGeneration,
+        },
+        options,
+      })
+      const cancel = () =>
+        context.native.query('cancel', { token: session.token })
+      const abort = () => {
+        void cancel().catch(console.error)
+      }
+      signal?.addEventListener('abort', abort, { once: true })
+      try {
+        async function* sources() {
+          for (const _path of session.paths) {
+            signal?.throwIfAborted()
+            yield await context.native.query<
+              import('../../shared/workspace').WorkspacePage
+            >('page', { token: session.token })
+          }
+        }
+        const css = await preparePages(
+          sources(),
+          async (page) => {
+            const rendered = await context.editor.renderDocument(
               page.markdown,
               page.path,
               page.id,
-            ),
-            page,
-            contributions,
-          ),
-        async (page) => {
-          pages.push(page)
-        },
-        signal,
-      )
-      await requireWorkspace(workspace)
-      if (version !== siteContributions.version())
-        throw new Error('Enabled addons changed during export. Export again.')
-      return {
-        pages,
-        css,
-        colorschemes,
-        addons: contributions.map(({ id, name, css }) => ({ id, name, css })),
-        options,
-        password,
+            )
+            signal?.throwIfAborted()
+            return siteContributions.render(
+              rendered,
+              page,
+              contributions,
+              signal,
+            )
+          },
+          async (page) => {
+            await context.native.query('stage', { token: session.token, page })
+          },
+          signal,
+        )
+        await requireWorkspace(workspace)
+        signal?.throwIfAborted()
+        if (version !== siteContributions.version())
+          throw new Error('Enabled addons changed during export. Export again.')
+        const prepared = {
+          token: session.token,
+          css,
+          colorschemes,
+          addons: contributions.map(({ id, name, css }) => ({ id, name, css })),
+          password,
+        }
+        await context.native.query('seal', prepared)
+        signal?.throwIfAborted()
+        await requireWorkspace(workspace)
+        if (version !== siteContributions.version())
+          throw new Error('Enabled addons changed during export. Export again.')
+        return prepared
+      } catch (error) {
+        await cancel()
+        throw error
+      } finally {
+        signal?.removeEventListener('abort', abort)
       }
     }
     context.exports.provide({
@@ -86,10 +126,15 @@ export default defineAddon({
           context.colorschemes.getPreferences(),
           input,
         )
-        return context.native.query<SiteExportArtifact>(
-          'build',
-          await prepare(workspace, options),
-        )
+        const prepared = await prepare(workspace, options)
+        try {
+          return await context.native.query<SiteExportArtifact>(
+            'build',
+            prepared,
+          )
+        } finally {
+          await context.native.query('cancel', { token: prepared.token })
+        }
       },
     })
     context.commands.register({
@@ -143,11 +188,16 @@ export default defineAddon({
                 password,
                 signal,
               )
-              signal?.throwIfAborted()
-              const result = await context.native.invoke<ExportResult | null>(
-                'export',
-                prepared,
-              )
+              let result: ExportResult | null
+              try {
+                signal?.throwIfAborted()
+                result = await context.native.invoke<ExportResult | null>(
+                  'export',
+                  prepared,
+                )
+              } finally {
+                await context.native.query('cancel', { token: prepared.token })
+              }
               if (!result) return false
               let preferencesSaved = false
               if (canSave)
@@ -164,6 +214,7 @@ export default defineAddon({
             },
           }
         })()
+        void setup.catch(() => {})
         const formId = `export-${crypto.randomUUID()}`
         const dialog = context.dialogs.open({
           title: 'Export workspace',

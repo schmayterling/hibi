@@ -617,6 +617,32 @@ test('command-palette export opens options and writes a configured static folder
   const built = await page.evaluate(() => window.siteProbe.buildSite())
   assert.equal(built.version, 1)
   assert.equal(built.pages, 2)
+  const draft = await page.evaluate(() =>
+    window.hibi.workspaceAction({ action: 'new-file', path: '' }),
+  )
+  const unsaved = '# Unsaved export draft\n\nExact unsaved text 日本語.'
+  await page.evaluate((source) => window.hibi.updateDocument(source), unsaved)
+  const withDraft = await page.evaluate(() => window.siteProbe.buildSite())
+  assert.equal(withDraft.pages, 3)
+  assert.match(
+    withDraft.files.find((file) => file.path.endsWith('/workspace.js')).content,
+    /Exact unsaved text 日本語/,
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    unsaved,
+  )
+  await assert.rejects(readFile(join(workspace, draft.path)), /ENOENT/)
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({
+      response: 1,
+      checkboxChecked: false,
+    })
+  })
+  await page.evaluate(
+    (id) => window.hibi.closeDocumentTab(id),
+    draft.document.tabId,
+  )
   const customCss = built.files.find((file) =>
     file.path.endsWith('/custom.css'),
   ).content

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -79,5 +79,61 @@ test('code highlighting controls update both panes, persist, and discover addon 
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     original,
+  )
+})
+
+test('long rich code blocks highlight near the viewport through scrolling and typing', {
+  timeout: 30000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-code-viewport-'))
+  const file = join(profile, 'long-code.md')
+  const line = 'function sample(value) {\n  return value * 42 + "text";\n}\n'
+  await writeFile(file, `# Long code\n\n\`\`\`js\n${line.repeat(4000)}\`\`\`\n`)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(10000)
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  await clickMenu(app, 'Open…')
+  await page.locator('.tiptap h1', { hasText: 'Long code' }).waitFor()
+  const tokens = page.locator('.tiptap pre [class^="hibi-token-"]')
+  await tokens.first().waitFor({ state: 'attached' })
+  // The block has about 40,000 tokens; only text near the viewport is decorated.
+  assert.ok((await tokens.count()) < 4000)
+  await page
+    .locator('.tiptap pre')
+    .evaluate((pre) => pre.scrollIntoView({ block: 'end' }))
+  await page.waitForFunction(() => {
+    const pre = document.querySelector('.tiptap pre')
+    const last = [...pre.querySelectorAll('[class^="hibi-token-"]')].at(-1)
+    return (
+      last &&
+      pre.getBoundingClientRect().bottom - last.getBoundingClientRect().bottom <
+        100
+    )
+  })
+  assert.ok((await tokens.count()) < 4000)
+  await tokens.last().click()
+  await page.keyboard.press('End')
+  await page.keyboard.press('Enter')
+  await page.keyboard.insertText('const typed = 1')
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll('.tiptap pre .hibi-token-keyword')].some(
+      (token) =>
+        token.textContent === 'const' &&
+        token.nextSibling?.textContent === ' ' &&
+        token.nextSibling.nextSibling?.textContent === 'typed',
+    ),
   )
 })

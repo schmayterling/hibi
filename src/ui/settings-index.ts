@@ -1,6 +1,8 @@
 import { createContext } from 'react'
 
 export const SettingsDiscovery = createContext(false)
+/** False while discovery or search keeps a hidden settings page mounted. */
+export const SettingsPageVisible = createContext(true)
 type Setting = { id: string; label: string; category: string; keywords: string }
 const rows = new Map<string, Setting>()
 const listeners = new Set<() => void>()

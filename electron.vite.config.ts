@@ -111,6 +111,9 @@ export default defineConfig({
         },
         input: {
           index: resolve('src/main/index.ts'),
+          'workspace-metadata-worker': resolve(
+            'src/main/workspace-metadata-worker.ts',
+          ),
           'typst-worker': resolve('src/addons/typst/compiler-worker.ts'),
           'format-worker': resolve('src/addons/_shared/format-worker.ts'),
           'dictionary-pack-worker': resolve(

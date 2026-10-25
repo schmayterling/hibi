@@ -2599,9 +2599,6 @@
     "src/renderer/src/SettingsScreen.tsx",
     "src/renderer/src/Titlebar.tsx"
   ],
-  "cc05d3346ee5": [
-    "src/main/workspace.ts"
-  ],
   "3e1b6a32663d": [
     "src/renderer/src/AddonSettings.tsx"
   ],
@@ -6330,6 +6327,9 @@
   "1f93aa51a306": [
     "src/addons/quick-note/native.ts"
   ],
+  "5811e6e1d87e": [
+    "src/main/workspace-metadata-query.ts"
+  ],
   "9a8066d604c9": [
     "src/main/addon-documentation.ts"
   ],
@@ -6423,6 +6423,9 @@
   "a6da99875af4": [
     "src/main/document.ts",
     "src/renderer/src/main.tsx"
+  ],
+  "f69975021d91": [
+    "src/main/workspace-metadata-query.ts"
   ],
   "e8983dab4298": [
     "src/renderer/src/Introduction.tsx"
@@ -6998,14 +7001,17 @@
   "8ebd7fbef943": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
-  "cfac7c431f69": [
-    "src/main/workspace-reference-index.ts"
+  "18a2d5510948": [
+    "src/main/workspace-metadata-parser.ts"
   ],
   "80298932a272": [
     "src/main/workspace-reference-index.ts"
   ],
   "03efeb5aa9aa": [
     "src/main/workspace-reference-index.ts"
+  ],
+  "a741ce8b69a7": [
+    "src/main/workspace-metadata-parser.ts"
   ],
   "9619649d8dc1": [
     "src/renderer/src/WorkspaceSettings.tsx"

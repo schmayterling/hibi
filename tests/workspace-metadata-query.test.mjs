@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
+import { resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
 
@@ -8,6 +9,7 @@ const host = {
   sequence: 1,
   revision: 1,
   indexReads: 0,
+  parses: 0,
   listener: null,
   stale: false,
   changeDuringRead: false,
@@ -54,7 +56,9 @@ const bundle = await build({
             : null,
         )
         build.onLoad({ filter: /.*/, namespace: 'metadata-host' }, () => ({
-          contents: `const host = () => globalThis.__hibiMetadataTestHost
+          contents: `import { parseWorkspaceMetadata, sourceIndexVersion } from ${JSON.stringify(resolve('src/main/workspace-index-metadata.ts'))}
+          import { noteReferences } from ${JSON.stringify(resolve('src/shared/note-links.ts'))}
+          const host = () => globalThis.__hibiMetadataTestHost
           export const isCurrentWorkspaceTarget = (target) =>
             target?.workspaceId === host().target.workspaceId &&
             target?.workspaceGeneration === host().target.workspaceGeneration
@@ -67,13 +71,28 @@ const bundle = await build({
             host().listener = listener
             return { snapshot: {}, dispose: () => { host().listener = null } }
           }
-          export const indexWorkspace = async () => {
+          export const readWorkspaceIndexSource = async (path) =>
+            host().pages.find((page) => page.path === path)?.markdown ?? ''
+          export async function* workspaceMetadataPages(syntax, current) {
             host().indexReads++
             if (host().changeDuringRead) host().sequence++
             if (host().editDuringRead) host().versions[0].contentVersion++
-            return { workspace: { id: host().target.workspaceId }, pages: host().pages }
+            for (const page of host().pages) {
+              if (!current()) return
+              const profile = syntax.page(page)
+              yield {
+                path: page.path,
+                version: sourceIndexVersion(page.markdown),
+                syntax: profile,
+                metadata: parseWorkspaceMetadata(page, profile, (...args) => {
+                  host().parses++
+                  return noteReferences(...args)
+                }),
+              }
+            }
           }`,
           loader: 'js',
+          resolveDir: resolve('.'),
         }))
       },
     },
@@ -91,6 +110,33 @@ const query = (request) =>
     { syntaxSnapshot: host.syntaxSnapshot, ...request },
     () => host.versions,
   )
+
+test('ten concurrent metadata consumers share one build and parse each page once', async () => {
+  const pages = host.pages
+  host.pages = Array.from({ length: 64 }, (_, i) => ({
+    path: `note-${i}.md`,
+    markdown: `# page ${i}\n#work [[note-0]]`,
+  }))
+  host.revision++
+  host.listener({ kind: 'resync' })
+  const reads = host.indexReads
+  const parses = host.parses
+  try {
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        query({ target: host.target, kind: 'links', path: 'note-1.md' }),
+      ),
+    )
+    assert.ok(results.every((result) => result.ok))
+    assert.equal(host.parses - parses, 64)
+    assert.equal(host.indexReads - reads, 1)
+  } finally {
+    host.pages = pages
+    host.indexReads = reads
+    host.revision++
+    host.listener({ kind: 'resync' })
+  }
+})
 
 test('metadata queries return bounded links and backlinks from shared pages', async () => {
   const target = host.target
@@ -476,4 +522,71 @@ test('frontmatter projection changes property results without a source edit', as
   host.pages = previousPages
   host.syntaxSnapshot = previousSyntax
   host.revision++
+})
+
+test('query pages reach offsets beyond 2100 and preserve large metadata fields', async () => {
+  const original = host.pages
+  const originalSyntax = host.syntaxSnapshot
+  host.syntaxSnapshot = {
+    ...host.syntaxSnapshot,
+    complete: true,
+    projections: [{ id: 'frontmatter.metadata', parserVersion: '1' }],
+  }
+  const key = 'key'.repeat(60)
+  const value = 'value'.repeat(1000)
+  const tag = 'tag'.repeat(60)
+  const title = 'heading'.repeat(800)
+  host.pages = Array.from({ length: 2102 }, (_, i) => ({
+    path: `note-${String(i).padStart(5, '0')}.md`,
+    markdown: '#work [[target]]',
+  }))
+  host.pages[0].markdown = `---\n${key}: ${value}\nlist: [${Array.from({ length: 40 }, (_, i) => `member${i}`).join(', ')}]\n---\n#work [[target]]\n\n${Array.from({ length: 299 }, (_, i) => `# h${i}`).join('\n\n')}\n\n# ${title}`
+  host.pages[1].markdown += ` #${tag}`
+  host.pages.push({ path: 'target.md', markdown: '' })
+  host.revision++
+  host.listener({ kind: 'resync' })
+  try {
+    const target = host.target
+    const tail = await query({
+      target,
+      kind: 'backlinks',
+      path: 'target.md',
+      offset: 2100,
+      limit: 100,
+    })
+    assert.equal(tail.ok, true)
+    assert.deepEqual(tail.value.items, ['note-02100.md', 'note-02101.md'])
+    assert.equal(tail.value.hasMore, false)
+    assert.deepEqual(
+      (await query({ target, kind: 'property', key, value })).value.items,
+      ['note-00000.md'],
+    )
+    assert.deepEqual(
+      (
+        await query({
+          target,
+          kind: 'property',
+          key: 'list',
+          value: 'member39',
+        })
+      ).value.items,
+      ['note-00000.md'],
+    )
+    assert.deepEqual((await query({ target, kind: 'tag', tag })).value.items, [
+      'note-00001.md',
+    ])
+    const headings = await query({
+      target,
+      kind: 'headings',
+      path: 'note-00000.md',
+      offset: 299,
+    })
+    assert.equal(headings.value.complete, true)
+    assert.deepEqual(headings.value.items, [{ depth: 1, text: title }])
+  } finally {
+    host.pages = original
+    host.syntaxSnapshot = originalSyntax
+    host.revision++
+    host.listener({ kind: 'resync' })
+  }
 })

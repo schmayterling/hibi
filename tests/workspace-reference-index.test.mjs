@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { parseWorkspaceMetadata } from '../src/main/workspace-index-metadata.ts'
 import { WorkspaceReferenceIndex } from '../src/main/workspace-reference-index.ts'
 import {
+  localTarget,
   noteBasenames,
   noteReferences,
   wikiTarget,
@@ -204,12 +206,7 @@ test('cooperative metadata work yields between batches and publishes whole snaps
   assert.deepEqual(await applying, { parsed: 128, resolved: 128 })
   assert.deepEqual(index.backlinks('target.md', 0, 200).items, [])
 
-  let tagSettled = false
-  const tagged = index
-    .taggedCooperatively('work', 0, 200)
-    .finally(() => (tagSettled = true))
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(tagSettled, false)
+  const tagged = index.taggedCooperatively('work', 0, 200)
   assert.deepEqual((await tagged)?.items, pages.map((item) => item.path).sort())
 
   let propertySettled = false
@@ -301,7 +298,8 @@ for (const replacing of [false, true]) {
   })
 }
 
-test('cooperative metadata cancels stale caches and cannot overwrite an overlapping apply', async () => {
+test('cooperative metadata cancels stale caches and cannot overwrite an overlapping apply', async (t) => {
+  t.mock.method(performance, 'now', () => 0)
   const pages = Array.from({ length: 128 }, (_, number) =>
     page(`notes/${number}.md`, `---\nbucket: 1\n---\n#new [[target]]`),
   )
@@ -320,12 +318,7 @@ test('cooperative metadata cancels stale caches and cannot overwrite an overlapp
 
   const staleTags = new WorkspaceReferenceIndex()
   staleTags.apply(workspace, pages)
-  let staleSettled = false
-  const stale = staleTags
-    .taggedCooperatively('new', 0, 200)
-    .finally(() => (staleSettled = true))
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(staleSettled, false)
+  const stale = staleTags.taggedCooperatively('new', 0, 200)
   staleTags.apply(workspace, [page('replacement.md', '#replacement')])
   assert.equal(await stale, null)
   assert.deepEqual(staleTags.tagged('replacement', 0, 10).items, [
@@ -427,13 +420,13 @@ test('graph pages contain every node and resolved link without another parse', (
   assert.equal(capped.hasMore, false)
 })
 
-test('tag summaries cap distinct names while exact queries still find later tags', () => {
+test('tag summaries retain distinct names beyond the former cap', () => {
   const index = new WorkspaceReferenceIndex()
   index.apply(workspace, [
     page('a.md', Array.from({ length: 2001 }, (_, i) => `#tag${i}`).join(' ')),
   ])
   const summary = index.tags(0, 100)
-  assert.equal(summary.capReached, true)
+  assert.equal(summary.capReached, false)
   assert.equal(summary.hasMore, true)
   assert.deepEqual(index.tagged('tag2000', 0, 10).items, ['a.md'])
 })
@@ -460,18 +453,21 @@ test('tag suggestions match prefixes and rank by note count then name', () => {
   assert.deepEqual(index.tags(0, 10, 'idea').items, [])
 })
 
-test('unqueryable long tags do not block bounded tag pages', () => {
+test('long tags remain in the index and bounded summary pages', () => {
   const index = new WorkspaceReferenceIndex()
   index.apply(workspace, [page('a.md', `#${'a'.repeat(129)} #work`)])
   assert.deepEqual(index.tags(0, 10), {
-    items: [{ tag: 'work', count: 1 }],
+    items: [
+      { tag: 'a'.repeat(129), count: 1 },
+      { tag: 'work', count: 1 },
+    ],
     hasMore: false,
-    nextOffset: 1,
-    capReached: true,
+    nextOffset: 2,
+    capReached: false,
   })
 })
 
-test('oversized frontmatter never reaches reference or tag parsers', () => {
+test('large frontmatter preserves references, tags, properties, and headings', () => {
   let parses = 0
   const index = new WorkspaceReferenceIndex((source) => {
     parses++
@@ -484,12 +480,17 @@ test('oversized frontmatter never reaches reference or tag parsers', () => {
     ),
     page('b.md'),
   ])
-  assert.equal(parses, 1)
-  assert.equal(index.isComplete(), false)
-  assert.deepEqual(index.links('a.md', 0, 10).items, [])
-  assert.deepEqual(index.tagged('work', 0, 10).items, [])
-  assert.equal(index.property('long', 'x', 0, 10).complete, false)
-  assert.equal(index.headings('a.md', 0, 10).complete, false)
+  assert.equal(parses, 2)
+  assert.equal(index.isComplete(), true)
+  assert.deepEqual(index.links('a.md', 0, 10).items, ['b.md'])
+  assert.deepEqual(index.tagged('work', 0, 10).items, ['a.md'])
+  assert.equal(
+    index.property('long', 'x'.repeat(100_000), 0, 10).items[0],
+    'a.md',
+  )
+  assert.deepEqual(index.headings('a.md', 0, 10).items, [
+    { depth: 1, text: 'Heading b #work' },
+  ])
   index.apply(workspace, [page('a.md', '# Heading [[b]] #work'), page('b.md')])
   assert.equal(index.isComplete(), true)
   assert.deepEqual(index.links('a.md', 0, 10).items, ['b.md'])
@@ -498,16 +499,140 @@ test('oversized frontmatter never reaches reference or tag parsers', () => {
   assert.deepEqual(index.links('a.md', 0, 10).items, ['b.md'])
 })
 
-test('text search resumes long notes and finds boundary-spanning matches', () => {
+test('text search resumes long notes and finds boundary-spanning matches', async () => {
   const index = new WorkspaceReferenceIndex()
-  index.apply(workspace, [
+  const pages = [
     page('a.md', `${'x'.repeat(65_534)}needle${'y'.repeat(1_100_000)}`),
     page('b.md', 'needle'),
-  ])
-  let result = index.searchText('NEEDLE', { pathIndex: 0, sourceOffset: 0 }, 1)
+  ]
+  index.apply(workspace, pages)
+  const read = (path) => pages.find((page) => page.path === path).markdown
+  let result = await index.searchText(
+    'NEEDLE',
+    { pathIndex: 0, sourceOffset: 0 },
+    1,
+    read,
+  )
   assert.deepEqual(result.items, ['a.md'])
   assert.equal(result.hasMore, true)
-  result = index.searchText('NEEDLE', result.position, 1)
+  result = await index.searchText('NEEDLE', result.position, 1, read)
   assert.deepEqual(result.items, ['b.md'])
   assert.equal(result.hasMore, false)
+})
+
+test('workspace metadata indexes more than 2000 documents and continues past offset 2100', async () => {
+  const index = new WorkspaceReferenceIndex()
+  const pages = Array.from({ length: 2101 }, (_, i) =>
+    page(`note-${String(i).padStart(5, '0')}.md`, '#work [[target]]'),
+  )
+  await index.applyCooperatively(workspace, [...pages, page('target.md')])
+  assert.deepEqual(index.backlinks('target.md', 2100, 100), {
+    items: ['note-02100.md'],
+    hasMore: false,
+    nextOffset: 2101,
+  })
+  assert.equal(index.isComplete(), true)
+})
+
+test('resident reference index retains derived metadata without full source text', () => {
+  const source = `# heading\n\n#work [[target]]\n\n${'body '.repeat(20000)}`
+  const index = new WorkspaceReferenceIndex()
+  index.apply(workspace, [page('source.md', source), page('target.md')])
+  const retained = JSON.stringify(
+    [...index.documents.values()],
+    (_key, value) => (value instanceof Set ? [...value] : value),
+  )
+  assert.ok(retained.length < source.length / 10)
+  assert.equal(retained.includes('body body body'), false)
+  assert.deepEqual(index.backlinks('target.md', 0, 10).items, ['source.md'])
+})
+
+test('continuation pages reuse sorted reference and property views', (t) => {
+  const index = new WorkspaceReferenceIndex()
+  const pages = Array.from({ length: 1000 }, (_, i) =>
+    page(
+      `note-${String(i).padStart(4, '0')}.md`,
+      '---\nbucket: 1\n---\n[[target]]',
+    ),
+  )
+  index.apply(workspace, [...pages, page('target.md')])
+  let comparisons = 0
+  const original = String.prototype.localeCompare
+  t.mock.method(String.prototype, 'localeCompare', function (...args) {
+    comparisons++
+    return original.apply(this, args)
+  })
+  index.backlinks('target.md', 0, 100)
+  assert.ok(comparisons > 0)
+  comparisons = 0
+  assert.equal(index.backlinks('target.md', 900, 100).items.length, 100)
+  assert.equal(comparisons, 0)
+  index.property('bucket', 1, 0, 100)
+  comparisons = 0
+  assert.equal(index.property('bucket', 1, 900, 100).items.length, 100)
+  assert.equal(comparisons, 0)
+})
+
+test('concurrent tag consumers reuse one prepared tag index', async () => {
+  const syntax = {
+    settings: defaultNoteSyntax,
+    key: 'default',
+    complete: true,
+    unsupported: false,
+  }
+  let traversals = 0
+  const pages = Array.from({ length: 64 }, (_, i) => {
+    const source = page(`note-${i}.md`, '#work')
+    const metadata = parseWorkspaceMetadata(source, syntax)
+    const iterate = metadata.tags[Symbol.iterator]
+    Object.defineProperty(metadata.tags, Symbol.iterator, {
+      value: function* () {
+        traversals++
+        yield* iterate.call(this)
+      },
+    })
+    return { path: source.path, version: 'one', syntax, metadata }
+  })
+  const index = new WorkspaceReferenceIndex()
+  const stream = async function* () {
+    yield* pages
+  }
+  await index.applyMetadataCooperatively(workspace, stream())
+  const results = await Promise.all(
+    Array.from({ length: 10 }, () => index.taggedCooperatively('work', 0, 100)),
+  )
+  assert.ok(results.every((result) => result.items.length === 64))
+  assert.equal(traversals, 64)
+  await index.applyMetadataCooperatively(workspace, stream())
+  assert.equal(traversals, 64)
+})
+
+test('link normalization preserves root, encoded filenames and wiki heading semantics', () => {
+  const paths = new Set([
+    'docs/from.md',
+    'docs/next.md',
+    'root.md',
+    'a#b.md',
+    'percent%.md',
+    '.md',
+  ])
+  for (const [href, expected] of [
+    ['../root.md#heading', 'root.md'],
+    ['./next.md?view=source', 'docs/next.md'],
+    ['/a%23b.md', 'a#b.md'],
+    ['/percent%25.md', 'percent%.md'],
+    ['../../../root.md', null],
+    ['https://example.com/root.md', null],
+    ['/', '.md'],
+  ])
+    assert.equal(localTarget('docs/from.md', href, paths), expected)
+  for (const [href, expected] of [
+    ['next', 'docs/next.md'],
+    [' /root#heading ', 'root.md'],
+    ['#heading', 'docs/from.md'],
+    ['../root', null],
+    ['./next', null],
+    ['/', '.md'],
+  ])
+    assert.equal(wikiTarget('docs/from.md', href, paths), expected)
 })

@@ -1,14 +1,17 @@
-import { constants } from 'node:fs'
+import { constants, createWriteStream, type Stats } from 'node:fs'
 import { lstat, open, readdir, realpath } from 'node:fs/promises'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, sep } from 'node:path'
+import { pipeline } from 'node:stream/promises'
+import { setImmediate } from 'node:timers/promises'
 import type { ImportFile } from '../shared/imports'
 import { isPathInside } from './workspace-paths.ts'
 import { openBoundedZip, readZipEntry } from './zip-reader.ts'
 
 export const IMPORT_LIMITS = {
-  files: 10000,
   file: 32 * 1024 * 1024,
-  total: 256 * 1024 * 1024,
+  // Archive bounds limit decompression and directory allocation, not folder imports.
+  zipEntries: 10000,
+  zipBytes: 256 * 1024 * 1024,
 }
 export function validImportPath(path: unknown): path is string {
   return (
@@ -36,78 +39,161 @@ const skipPath = (path: string) =>
       (part) =>
         part.startsWith('.') || ['node_modules', '__MACOSX'].includes(part),
     )
-export function validateImportFiles(files: readonly ImportFile[]) {
-  if (!Array.isArray(files) || files.length > IMPORT_LIMITS.files)
-    throw new Error('Import at most 10,000 files at a time.')
+export async function validateImportPaths(
+  files: readonly { path: string }[],
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted()
+  if (!Array.isArray(files))
+    throw new Error('The import contains an invalid file list.')
   const seen = new Set<string>()
-  let total = 0
   for (const file of files) {
-    if (
-      !validImportPath(file.path) ||
-      skipPath(file.path) ||
-      !(file.data instanceof Uint8Array)
-    )
+    signal?.throwIfAborted()
+    if (!validImportPath(file.path) || skipPath(file.path))
       throw new Error('The import contains an unsafe file path.')
     const key = file.path.normalize('NFC').toLowerCase()
     if (seen.has(key))
       throw new Error(`The import contains duplicate file names: ${file.path}`)
     seen.add(key)
-    total += file.data.byteLength
-    if (
-      file.data.byteLength > IMPORT_LIMITS.file ||
-      total > IMPORT_LIMITS.total
-    )
-      throw new Error(
-        'Import at most 256 MiB at a time, with each file under 32 MiB.',
-      )
+    if (seen.size % 64 === 0) await setImmediate()
   }
+  let checked = 0
   for (const key of seen) {
+    signal?.throwIfAborted()
     const parts = key.split('/')
     while (parts.length > 1) {
       parts.pop()
       if (seen.has(parts.join('/')))
         throw new Error('The import uses the same name for a file and folder.')
     }
+    if (++checked % 64 === 0) await setImmediate()
   }
 }
-async function boundedFile(path: string, limit: number) {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+export async function validateImportFiles(
+  files: readonly ImportFile[],
+  signal?: AbortSignal,
+) {
+  await validateImportPaths(files, signal)
+  let checked = 0
+  for (const file of files) {
+    signal?.throwIfAborted()
+    if (!(file.data instanceof Uint8Array))
+      throw new Error('The import contains an unsafe file path.')
+    if (file.data.byteLength > IMPORT_LIMITS.file)
+      throw new Error('Import files must each be under 32 MiB.')
+    if (++checked % 64 === 0) await setImmediate()
+  }
+}
+export type ImportSourceFile = {
+  path: string
+  source: string
+  root: string
+  stat: Pick<Stats, 'size' | 'mtimeMs' | 'ino' | 'dev'>
+}
+function checkSource(file: ImportSourceFile, stat: Stats) {
+  if (
+    !stat.isFile() ||
+    (['size', 'mtimeMs', 'ino', 'dev'] as const).some(
+      (key) => stat[key] !== file.stat[key],
+    )
+  )
+    throw new Error('An import file changed while being read. Try again.')
+}
+async function checkSourceParent(file: ImportSourceFile) {
+  const parent = await realpath(dirname(file.source))
+  if (parent !== dirname(file.source) || !isPathInside(file.root, parent))
+    throw new Error('An import folder points outside the selected folder.')
+}
+async function boundedFile(
+  path: string,
+  limit: number,
+  expected?: ImportSourceFile,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted()
+  if (expected) await checkSourceParent(expected)
+  const handle = await open(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0),
+  )
   try {
     const stat = await handle.stat()
+    if (expected) checkSource(expected, stat)
     if (!stat.isFile() || stat.size > limit)
       throw new Error('A file exceeds the import size limit.')
     // One extra byte catches files that grow while being read without unbounded allocation.
     const bytes = Buffer.alloc(Math.min(stat.size + 1, limit + 1))
     let size = 0
     while (size < bytes.length) {
+      signal?.throwIfAborted()
       const result = await handle.read(bytes, size, bytes.length - size, size)
       if (!result.bytesRead) break
       size += result.bytesRead
     }
+    signal?.throwIfAborted()
     if (size !== stat.size || (await handle.stat()).mtimeMs !== stat.mtimeMs)
       throw new Error('An import file changed while being read. Try again.')
+    if (expected) checkSource(expected, await handle.stat())
     return bytes.subarray(0, size)
   } finally {
     await handle.close()
   }
 }
-export async function readImportFolder(root: string) {
+export function readImportFile(file: ImportSourceFile, signal?: AbortSignal) {
+  return boundedFile(file.source, IMPORT_LIMITS.file, file, signal)
+}
+export async function copyImportFile(
+  file: ImportSourceFile,
+  target: string,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted()
+  await checkSourceParent(file)
+  const handle = await open(
+    file.source,
+    constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0),
+  )
+  try {
+    checkSource(file, await handle.stat())
+    let size = 0
+    await pipeline(
+      handle.createReadStream({
+        autoClose: false,
+        start: 0,
+        end: file.stat.size,
+      }),
+      async function* (chunks) {
+        for await (const chunk of chunks) {
+          size += chunk.length
+          yield chunk
+        }
+      },
+      createWriteStream(target, { flags: 'wx' }),
+      { signal },
+    )
+    if (size !== file.stat.size)
+      throw new Error('An import file changed while being read. Try again.')
+    checkSource(file, await handle.stat())
+  } finally {
+    await handle.close()
+  }
+}
+export async function readImportFolder(root: string, signal?: AbortSignal) {
+  signal?.throwIfAborted()
   root = await realpath(root)
-  const files: ImportFile[] = [],
+  const files: ImportSourceFile[] = [],
     warnings: string[] = []
-  let total = 0,
-    entries = 0
   async function walk(directory: string) {
+    signal?.throwIfAborted()
     const actual = await realpath(directory)
     if (!isPathInside(root, actual))
       throw new Error('An import folder points outside the selected folder.')
     for (const entry of await readdir(directory, { withFileTypes: true })) {
+      signal?.throwIfAborted()
       const path = relative(root, join(directory, entry.name))
         .split(sep)
         .join('/')
       if (skipPath(path)) continue
-      if (++entries > IMPORT_LIMITS.files)
-        throw new Error('Import at most 10,000 files and folders at a time.')
       if (!validImportPath(path))
         throw new Error(`This file name cannot be imported: ${path}`)
       const full = join(directory, entry.name),
@@ -118,25 +204,31 @@ export async function readImportFolder(root: string) {
       }
       if (stat.isDirectory()) await walk(full)
       else if (stat.isFile()) {
-        const data = await boundedFile(
-          full,
-          Math.min(IMPORT_LIMITS.file, IMPORT_LIMITS.total - total),
-        )
-        total += data.length
-        files.push({ path, data })
+        files.push({
+          path,
+          source: join(actual, entry.name),
+          root,
+          stat: {
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
+            ino: stat.ino,
+            dev: stat.dev,
+          },
+        })
       }
     }
   }
   await walk(root)
-  validateImportFiles(files)
+  await validateImportPaths(files, signal)
   return { files, warnings }
 }
-export async function readImportZip(path: string) {
-  const zip = await boundedFile(path, IMPORT_LIMITS.total)
-  const directory = await openBoundedZip(zip, IMPORT_LIMITS.files)
+export async function readImportZip(path: string, signal?: AbortSignal) {
+  const zip = await boundedFile(path, IMPORT_LIMITS.zipBytes, undefined, signal)
+  const directory = await openBoundedZip(zip, IMPORT_LIMITS.zipEntries)
   const files: ImportFile[] = []
   let total = 0
   for (const entry of directory.files) {
+    signal?.throwIfAborted()
     const path = entry.path.replace(/\/$/, '')
     const mode = (entry.externalFileAttributes >>> 16) & 0xf000
     if (
@@ -150,11 +242,12 @@ export async function readImportZip(path: string) {
     if (skipPath(path) || entry.type === 'Directory') continue
     const data = await readZipEntry(
       entry,
-      Math.min(IMPORT_LIMITS.file, IMPORT_LIMITS.total - total),
+      Math.min(IMPORT_LIMITS.file, IMPORT_LIMITS.zipBytes - total),
+      signal,
     )
     total += data.length
     files.push({ path, data })
   }
-  validateImportFiles(files)
+  await validateImportFiles(files, signal)
   return { files, warnings: [] as string[] }
 }

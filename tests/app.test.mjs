@@ -167,6 +167,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'readTableLayout',
         'writeTableLayout',
         'queryWorkspaceReferences',
+        'cancelWorkspaceImport',
         'listImporters',
         'importIntoWorkspace',
         'getWorkspaceSettings',

@@ -1,7 +1,7 @@
+import { nativeImport } from '../_shared/import-native'
 import type { NativeAddon } from '../api'
-import { importNotion } from './convert'
 export default {
   id: 'import-notion',
   methods: {},
-  import: importNotion,
+  ...nativeImport('notion'),
 } satisfies NativeAddon

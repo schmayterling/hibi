@@ -34,7 +34,7 @@ export type DocumentSaveToken = Readonly<{
   sequence: number
   epoch: number
 }>
-const sameTabs = (a: DocumentState['tabs'], b: DocumentState['tabs']) =>
+export const sameTabs = (a: DocumentState['tabs'], b: DocumentState['tabs']) =>
   a.length === b.length &&
   a.every(
     (tab, index) =>

@@ -3,12 +3,14 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react'
 import type { DocumentState } from '../../shared/desktop'
 import { IconButton } from '../../ui/Controls'
 import type { ViewEntry } from './addon-views'
+import { retainClosingTabs } from './retained-tabs'
 
 export function DocumentTabs({
   document,
@@ -52,28 +54,29 @@ export function DocumentTabs({
   } | null>(null)
   const [rendered, setRendered] = useState(document.tabs)
   const tabIds = document.tabs.map((tab) => tab.id).join(',')
+  // One membership set per tab-list change serves retention, closing rows, and cleanup.
+  const currentIds = useMemo(() => new Set(tabIds.split(',')), [tabIds])
   const ordered = [
     ...document.tabs.map((tab) => ({ id: tab.id, addon: false })),
     ...addonTabs.map((tab) => ({ id: tab.id, addon: true })),
   ]
   useLayoutEffect(() => {
-    setRendered((previous) => {
-      const next = [...document.tabs]
-      previous.forEach((tab, index) => {
-        if (!document.tabs.some((current) => current.id === tab.id))
-          next.splice(Math.min(index, next.length), 0, tab)
-      })
-      return next
-    })
-  }, [document.tabs])
+    setRendered((previous) =>
+      retainClosingTabs(previous, document.tabs, currentIds),
+    )
+  }, [document.tabs, currentIds])
   useEffect(() => {
-    const ids = new Set(tabIds.split(','))
     const timer = setTimeout(
-      () => setRendered((tabs) => tabs.filter((tab) => ids.has(tab.id))),
+      () =>
+        setRendered((tabs) =>
+          tabs.every((tab) => currentIds.has(tab.id))
+            ? tabs
+            : tabs.filter((tab) => currentIds.has(tab.id)),
+        ),
       matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 200,
     )
     return () => clearTimeout(timer)
-  }, [tabIds])
+  }, [currentIds])
   const revealActive = useCallback(() => {
     const container = strip.current,
       tab = active.current
@@ -104,14 +107,18 @@ export function DocumentTabs({
   useLayoutEffect(() => {
     const next = new Map<string, number>()
     const closing = !!strip.current?.querySelector('[data-closing="true"]')
-    for (const tab of strip.current?.querySelectorAll<HTMLElement>(
-      '[data-tab-key]',
-    ) ?? []) {
+    // Read every tab before writing widths or starting animations, so the strip lays out once.
+    const geometry = [
+      ...(strip.current?.querySelectorAll<HTMLElement>('[data-tab-key]') ?? []),
+    ].map((tab) => ({
+      tab,
+      left: tab.offsetLeft,
+      width: tab.dataset.closing === 'true' ? null : tab.offsetWidth,
+    }))
+    for (const { tab, left, width } of geometry) {
       const id = tab.dataset.tabKey!
       const previous = positions.current.get(id)
-      const left = tab.offsetLeft
-      if (tab.dataset.closing !== 'true')
-        tab.style.setProperty('--tab-width', `${tab.offsetWidth}px`)
+      if (width !== null) tab.style.setProperty('--tab-width', `${width}px`)
       next.set(id, left)
       if (
         previous !== undefined &&
@@ -236,7 +243,7 @@ export function DocumentTabs({
       }}
     >
       {rendered.map((tab) => {
-        const closing = !document.tabs.some((current) => current.id === tab.id)
+        const closing = !currentIds.has(tab.id)
         const selected = !activeAddonTab && tab.id === document.tabId
         const name = selected ? document.name : tab.name
         const dirty = selected ? document.dirty : tab.dirty

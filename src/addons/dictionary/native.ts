@@ -9,8 +9,11 @@ import { lookupInput, packId } from './packs'
 
 let current: PackStore | undefined
 let closing = Promise.resolve()
+let generation = 0
 async function store() {
+  const captured = generation
   await closing
+  if (captured !== generation) throw new Error('Dictionary packs are closed.')
   current ??= new PackStore(
     join(app.getPath('userData'), 'dictionary-packs'),
     join(app.getAppPath(), 'out/main/dictionary-pack-worker.js'),
@@ -18,6 +21,7 @@ async function store() {
   return current
 }
 function stop() {
+  generation++
   if (!current) return
   closing = current
     .close()

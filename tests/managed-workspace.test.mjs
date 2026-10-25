@@ -181,7 +181,7 @@ test('managed workspaces stay opt-in, preserve files, import safely, and reopen 
   await attachment.truncate(40 * 1024 * 1024)
   await attachment.close()
   await app.evaluate(async () => {
-    const { Worker } = await import('node:worker_threads')
+    const { Worker } = process.getBuiltinModule('node:worker_threads')
     globalThis.__importTransfers = []
     const postMessage = Worker.prototype.postMessage
     Worker.prototype.postMessage = function (message, buffers) {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -50,11 +50,66 @@ test('local history snapshots on save, previews, and restores without overwritin
     const document = await window.hibi.getDocument()
     return document.dirty && document.markdown === 'saved change'
   })
+  await app.evaluate(
+    async (_electron, { profile, file }) => {
+      const fs = process.getBuiltinModule('node:fs/promises')
+      const { syncBuiltinESMExports } = process.getBuiltinModule('node:module')
+      const { dirname, basename, join } = process.getBuiltinModule('node:path')
+      const open = fs.open
+      const counts = { syncs: [], indexWrites: 0 }
+      fs.open = async (...args) => {
+        const handle = await open(...args)
+        const path = String(args[0])
+        if (
+          args[1] === 'wx' &&
+          (path.startsWith(join(profile, 'history')) ||
+            (dirname(path) === dirname(file) &&
+              basename(path).startsWith(`.${basename(file)}.`)))
+        ) {
+          const kind = basename(path).startsWith('.index.json.')
+            ? 'index'
+            : path.startsWith(join(profile, 'history'))
+              ? 'version'
+              : 'document'
+          const sync = handle.sync
+          handle.sync = async () => {
+            counts.syncs.push(kind)
+            return sync.call(handle)
+          }
+          if (kind === 'index') {
+            const write = handle.writeFile
+            handle.writeFile = async (...args) => {
+              counts.indexWrites++
+              return write.apply(handle, args)
+            }
+          }
+        }
+        return handle
+      }
+      syncBuiltinESMExports()
+      globalThis.historyWriteCounts = counts
+    },
+    { profile, file: await realpath(file) },
+  )
+  const takeWrites = () =>
+    app.evaluate(() => {
+      const counts = globalThis.historyWriteCounts
+      const result = {
+        syncs: counts.syncs.splice(0),
+        indexWrites: counts.indexWrites,
+      }
+      counts.indexWrites = 0
+      return result
+    })
   await pressShortcut(app, `${mod}+s`)
   await waitForAsync(
     page,
     async () => (await window.hibi.listVersions()).length === 2,
   )
+  assert.deepEqual(await takeWrites(), {
+    syncs: ['document', 'version', 'version', 'index'],
+    indexWrites: 1,
+  })
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   assert.equal(await readFile(file, 'utf8'), 'saved change')
   const versions = await page.evaluate(() => window.hibi.listVersions())
@@ -70,6 +125,10 @@ test('local history snapshots on save, previews, and restores without overwritin
     (await page.evaluate(() => window.hibi.listVersions())).length,
     2,
   )
+  assert.deepEqual(await takeWrites(), {
+    syncs: ['document'],
+    indexWrites: 0,
+  })
   await assert.rejects(
     page.evaluate(() => window.hibi.previewVersion('../../note.md')),
     /This saved version is no longer available\./,
@@ -199,6 +258,10 @@ test('local history snapshots on save, previews, and restores without overwritin
   )
   assert.equal(savedVersions.length, 3)
   assert.equal(preview, 'original')
+  assert.deepEqual(await takeWrites(), {
+    syncs: ['document', 'version', 'index'],
+    indexWrites: 1,
+  })
 
   await t.test('history failure still saves and notifies', async () => {
     await rm(join(profile, 'history'), { recursive: true })

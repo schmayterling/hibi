@@ -58,21 +58,28 @@ export async function previewVersion(
     throw new Error('This saved version is no longer available.')
   return readMarkdown(join(directory(path), `${id}.md`))
 }
-export async function recordVersion(
+export async function recordVersions(
   path: string,
-  markdown: string,
+  markdowns: string[],
 ): Promise<void> {
   const current = await versions(path)
-  const hash = createHash('sha256').update(markdown).digest('hex')
-  if (current.at(-1)?.hash === hash) return
   const folder = directory(path)
-  await mkdir(folder, { recursive: true, mode: 0o700 })
-  const id = randomUUID()
-  await writeText(join(folder, `${id}.md`), markdown)
-  const next = [
-    ...current,
-    { id, hash, savedAt: Date.now(), bytes: Buffer.byteLength(markdown) },
-  ]
+  const next = [...current]
+  for (const markdown of markdowns) {
+    const hash = createHash('sha256').update(markdown).digest('hex')
+    if (next.at(-1)?.hash === hash) continue
+    if (next.length === current.length)
+      await mkdir(folder, { recursive: true, mode: 0o700 })
+    const id = randomUUID()
+    await writeText(join(folder, `${id}.md`), markdown)
+    next.push({
+      id,
+      hash,
+      savedAt: Date.now(),
+      bytes: Buffer.byteLength(markdown),
+    })
+  }
+  if (next.length === current.length) return
   let bytes = next.reduce((sum, version) => sum + version.bytes, 0)
   const expired: Version[] = []
   while (next.length > 1 && (next.length > 100 || bytes > 20 * 1024 * 1024)) {

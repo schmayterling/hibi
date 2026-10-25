@@ -74,8 +74,9 @@ export function observeDocumentMedia(
         if (mediaPathsChanged(entry.paths, change)) resolve(entry)
     })
   if (!unsubscribeScope)
-    unsubscribeScope = window.hibi.onDocumentMediaScopeChanged(() => {
+    unsubscribeScope = window.hibi.onDocumentMediaScopeChanged((revision) => {
       for (const entry of entries.values()) {
+        if (entry.revision !== revision) continue
         delete entry.media
         resolve(entry)
       }

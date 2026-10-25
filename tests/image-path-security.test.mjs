@@ -12,13 +12,14 @@ const source = stripTypeScriptTypes(
   .replace(/^import[\s\S]*?from '[^']+'\n/gm, '')
   .replace(/^export /gm, '')
 
-function harness(paths) {
+function harness(paths, files = {}) {
   const calls = []
   const bindings = {
     constants,
     dirname: paths.dirname,
     isAbsolute: paths.isAbsolute,
     resolve: paths.resolve,
+    win32,
     fileURLToPath: (url) => fileURLToPath(url, { windows: paths === win32 }),
     isPathInside: (base, path) => {
       const relative = paths.relative(base, path)
@@ -32,6 +33,7 @@ function harness(paths) {
   for (const name of ['lstat', 'open', 'readFile', 'realpath', 'stat'])
     bindings[name] = async (...args) => {
       calls.push([name, ...args])
+      if (files[name]) return files[name](...args)
       throw new Error('unexpected filesystem access')
     }
   const api = new Function(
@@ -144,15 +146,49 @@ for (const paths of [posix, win32]) {
   })
 }
 
-test('win32: paths resolving onto unc documents reject before filesystem access', async () => {
+test('win32: relative media on a trusted document share resolve and read normally', async () => {
+  const bytes = Buffer.from('GIF89a')
+  const h = harness(win32, {
+    stat: async () => ({ isFile: () => true }),
+    realpath: async (path) => path,
+    open: async () => ({
+      stat: async () => ({ isFile: () => true, size: bytes.length }),
+      read: async (buffer) => ({ bytesRead: bytes.copy(buffer) }),
+      close: async () => {},
+    }),
+  })
+  for (const note of [
+    String.raw`\\server\share\notes\note.md`,
+    '//server/share/notes/note.md',
+  ]) {
+    for (const input of [
+      'image.png',
+      '../image.png',
+      'assets/image%20one.png',
+    ]) {
+      const expected = win32.resolve(
+        win32.dirname(note),
+        decodeURIComponent(input),
+      )
+      assert.equal(h.documentMediaPath(input, note), expected, input)
+      assert.equal(
+        await h.resolveDocumentMediaPath(input, note, win32.dirname(note)),
+        expected,
+        input,
+      )
+      assert.equal(
+        await h.readDocumentImage(input, note),
+        `data:image/gif;base64,${bytes.toString('base64')}`,
+        input,
+      )
+    }
+  }
+})
+
+test('win32: explicit unc sources and hosted file urls stay blocked even on the same share', async () => {
   const h = harness(win32)
   const note = String.raw`\\server\share\notes\note.md`
-  for (const input of ['image.png', '../image.png', 'assets/image%20one.png']) {
-    assert.ok(
-      win32
-        .resolve(win32.dirname(note), decodeURIComponent(input))
-        .startsWith('\\\\'),
-    )
+  for (const input of [...uncSources, ...hostedFileSources]) {
     assert.equal(h.documentMediaPath(input, note), null, input)
     assert.equal(
       await h.resolveDocumentMediaPath(input, note, win32.dirname(note)),

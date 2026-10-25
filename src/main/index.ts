@@ -802,7 +802,10 @@ async function lockFileOperation<T>(
     const pending = withinFileOperation(() => operation(window)).finally(() => {
       fileOperation = null
       if (mediaPath !== getDocumentPath())
-        mainWindow?.webContents.send(MEDIA_CHANNELS.scopeChanged)
+        mainWindow?.webContents.send(
+          MEDIA_CHANNELS.scopeChanged,
+          getDocument().revision,
+        )
     })
     fileOperation = pending
     return await pending

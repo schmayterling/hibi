@@ -58,7 +58,7 @@ function filePath(value: unknown): string {
 async function openBoundedMedia(path: string) {
   const media = await openMedia(path)
   try {
-    if (!media.stat.size || media.stat.size > 512 * 1024 * 1024)
+    if (media.stat.size > 512 * 1024 * 1024)
       throw new Error(
         'Choose a nonempty image or video file no larger than 512 MiB.',
       )

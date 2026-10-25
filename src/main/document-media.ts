@@ -72,6 +72,7 @@ type Entry = {
   dependencies: Set<string>
   clients: Set<string>
   result: Promise<DocumentMediaResolution | null> | null
+  running?: Promise<DocumentMediaResolution | null>
   resolution?: AbortController
   version?: Version
 }
@@ -105,7 +106,8 @@ export class DocumentMediaServer {
 
   private drain() {
     for (const start of this.waiting) {
-      if (this.active >= 4) break
+      // Leave two of libuv's default four threads available for saves and other I/O.
+      if (this.active >= 2) break
       this.waiting.delete(start)
       start()
     }
@@ -114,32 +116,38 @@ export class DocumentMediaServer {
   private enqueue<T>(
     operation: () => Promise<T>,
     signal: AbortSignal,
+    previous?: Promise<unknown>,
   ): Promise<T | null> {
     return new Promise((resolve) => {
-      let started = false,
-        settled = false
+      let settled = false
       const finish = (result: T | null) => {
         if (settled) return
         settled = true
         signal.removeEventListener('abort', abort)
         this.waiting.delete(start)
-        if (started) this.active--
         resolve(result)
-        this.drain()
       }
       const abort = () => finish(null)
       const start = () => {
         if (settled) return
-        started = true
         this.active++
-        void operation().then(finish, () => finish(null))
+        void operation()
+          .then(finish, () => finish(null))
+          .finally(() => {
+            // Aborting the caller cannot interrupt a running filesystem call.
+            this.active--
+            this.drain()
+          })
       }
-      signal.addEventListener('abort', abort, { once: true })
-      if (signal.aborted) abort()
-      else {
+      const admit = () => {
+        if (settled) return
         this.waiting.add(start)
         queueMicrotask(() => this.drain())
       }
+      signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) abort()
+      else if (previous) void previous.then(admit, admit)
+      else admit()
     })
   }
 
@@ -294,8 +302,15 @@ export class DocumentMediaServer {
         controller.signal,
       ])
       entry.result = this.enqueue(
-        () => this.inspect(pending, signal),
+        () => {
+          const running = this.inspect(pending, signal).finally(() => {
+            delete pending.running
+          })
+          pending.running = running
+          return running
+        },
         signal,
+        pending.running,
       ).finally(() => {
         if (pending.resolution === controller) delete pending.resolution
       })

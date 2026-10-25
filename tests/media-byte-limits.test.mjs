@@ -102,7 +102,7 @@ async function fixture(t, absolute = isAbsolute) {
 for (const [name, header, size, error] of [
   ['large.gif', gif, 8 * mib + 1, /8 MiB/],
   ['large.mp4', video, 512 * mib + 1, /512 MiB/],
-  ['empty.gif', gif, 0, /supported|nonempty/],
+  ['empty.gif', gif, 0, /Choose a supported image or video file\./],
 ]) {
   test(`attachment preflight rejects ${name} before saving or creating assets`, async (t) => {
     const f = await fixture(t)

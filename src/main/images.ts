@@ -1,6 +1,6 @@
 import { constants } from 'node:fs'
 import { lstat, open, readFile, realpath, stat } from 'node:fs/promises'
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { dirname, isAbsolute, resolve, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { marked } from 'marked'
 import { isPathInside } from './workspace-paths.ts'
@@ -82,7 +82,7 @@ export async function resolveDocumentMediaPath(
 ) {
   const { paths, signal } = options
   if (signal?.aborted) return null
-  const path = documentMediaPath(source, documentPath)
+  const path = documentMediaPath(source, documentPath, workspacePath)
   if (!path) return null
   paths?.add(path)
   if (signal?.aborted) return null
@@ -172,6 +172,7 @@ export function isLocalMediaPath(path: string): boolean {
 export function documentMediaPath(
   source: string,
   documentPath: string | null,
+  workspacePath: string | null = null,
 ): string | null {
   if (!source || source.length > 8192 || source.includes('\0')) return null
   let path: string
@@ -185,6 +186,7 @@ export function documentMediaPath(
       )
         return null
       path = fileURLToPath(url)
+      if (!isLocalMediaPath(path)) return null
     } else {
       if (/^[a-z][a-z\d+.-]*:/i.test(source) && !/^[a-z]:[/\\]/i.test(source))
         return null
@@ -200,7 +202,16 @@ export function documentMediaPath(
         ? decoded
         : resolve(dirname(documentPath as string), decoded)
     }
-    return isLocalMediaPath(path) ? path : null
+    if (isLocalMediaPath(path)) return path
+    // Relative references may inherit a share already opened through the native filesystem.
+    const root = win32.parse(path).root.replaceAll('\\', '/').toLowerCase()
+    return [documentPath, workspacePath].some(
+      (base) =>
+        base &&
+        win32.parse(base).root.replaceAll('\\', '/').toLowerCase() === root,
+    )
+      ? path
+      : null
   } catch {
     return null
   }

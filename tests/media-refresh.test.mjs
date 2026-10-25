@@ -65,7 +65,7 @@ async function fixture(t) {
       for (const callback of changes) callback({}, change)
     },
     relocated() {
-      for (const callback of scopes) callback()
+      for (const callback of scopes) callback(scope.revision)
     },
   }
 }
@@ -183,7 +183,7 @@ test('watcher paths match case and unicode variants and scan each batch once', (
   assert.equal(reads, 1000)
 })
 
-test('stalled resolution and serve never block other tokens; cancellation releases a pool slot', async (t) => {
+test('stalled serve stays isolated and canceled resolutions retain their two pool slots until I/O finishes', async (t) => {
   const root = join(tmpdir(), 'virtual-media')
   const scope = { note: join(root, 'a.md'), revision: 7, workspace: root }
   const server = new DocumentMediaServer(() => scope)
@@ -199,11 +199,15 @@ test('stalled resolution and serve never block other tokens; cancellation releas
     ctimeMs: 1,
     isFile: () => true,
   }
-  const blocked = new Set()
+  const blocked = new Set(),
+    started = new Set()
   t.mock.method(fs, 'realpath', async (path) => path)
   t.mock.method(fs, 'stat', async () => info)
   t.mock.method(fs, 'open', async (path) => {
-    if (blocked.has(path)) await gate
+    if (blocked.has(path)) {
+      started.add(path)
+      await gate
+    }
     return {
       stat: async () => info,
       read: async (buffer) => ({ bytesRead: gif.copy(buffer), buffer }),
@@ -233,33 +237,101 @@ test('stalled resolution and serve never block other tokens; cancellation releas
       resolved = result
     })
   const jobs = []
+  let afterCancel
   try {
     for (let i = 0; i < 100; i++) await Promise.resolve()
     assert.equal(served, 200)
     assert.equal(resolved.media.kind, 'image')
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 3; i++) {
       blocked.add(join(root, 'assets', 'blocked-' + i + '.gif'))
       jobs.push(
         server.resolve('assets/blocked-' + i + '.gif', 7, 'blocked-' + i),
       )
     }
     for (let i = 0; i < 40; i++) await Promise.resolve()
-    let releasedSlot
-    const admitted = server
-      .resolve('assets/after-cancel.gif', 7, 'after-cancel')
-      .then((result) => {
-        releasedSlot = result
-      })
+    assert.equal(started.size, 3) // One issued stream and two resolutions.
+    jobs.push(
+      server
+        .resolve('assets/after-cancel.gif', 7, 'after-cancel')
+        .then((result) => {
+          afterCancel = result
+        }),
+    )
     server.cancel('blocked-0')
+    server.cancel('blocked-2')
+    assert.equal(await jobs[0], null)
+    assert.equal(await jobs[2], null)
     for (let i = 0; i < 100; i++) await Promise.resolve()
-    assert.equal(releasedSlot.media.kind, 'image')
-    jobs.push(admitted)
+    assert.equal(afterCancel, undefined)
+    assert.equal(started.size, 3)
+    assert.ok(!started.has(join(root, 'assets', 'blocked-2.gif')))
   } finally {
     release()
     const response = await heldServe
     await response.body?.cancel()
     await Promise.all([...jobs, healthyServe, healthyResolve])
   }
+  assert.equal(afterCancel.media.kind, 'image')
+})
+
+test('ten autosaves during one stalled first resolution keep one real filesystem call and rerun once', async (t) => {
+  const f = await fixture(t)
+  const stat = fs.stat
+  let release,
+    calls = 0,
+    active = 0,
+    peak = 0
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  t.mock.method(fs, 'stat', async (...args) => {
+    calls++
+    active++
+    peak = Math.max(peak, active)
+    try {
+      await gate
+      return await stat(...args)
+    } finally {
+      active--
+    }
+  })
+  syncBuiltinESMExports()
+  t.after(() => {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  })
+  const updates = []
+  f.observe('assets/x.gif', (media) => updates.push(media))
+  try {
+    for (let i = 0; i < 100; i++) await Promise.resolve()
+    assert.equal(calls, 1)
+    for (let event = 0; event < 10; event++) {
+      f.emit({ kind: 'content', paths: ['a.md'] })
+      for (let i = 0; i < 100; i++) await Promise.resolve()
+    }
+    assert.equal(calls, 1)
+    assert.equal(peak, 1)
+  } finally {
+    release()
+    await f.flush()
+  }
+  assert.equal(updates.length, 1)
+  assert.equal(updates[0].kind, 'image')
+  assert.equal(calls, 3) // One canceled stat, then one resolution's two validation stats.
+  assert.equal(peak, 1)
+})
+
+test('scope changes during document open leave old-revision views alone', async (t) => {
+  const f = await fixture(t)
+  const updates = []
+  f.observe('assets/x.gif', (media) => updates.push(media))
+  await f.flush()
+  const before = updates[0]
+  f.scope.note = join(f.root, 'other.md')
+  f.scope.revision++
+  f.relocated()
+  await f.flush()
+  assert.deepEqual(updates, [before])
 })
 
 test('opened inode must match validation when a symlink changes during open', async (t) => {

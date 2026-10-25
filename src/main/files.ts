@@ -3,7 +3,7 @@ import { constants } from 'node:fs'
 import { copyFile, link, open, rename, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type { SourceSnapshot } from '../shared/source-buffer'
-import { retryRename } from './atomic-rename'
+import { retryRename } from './atomic-rename.ts'
 
 export function validateMarkdown(value: unknown): asserts value is string {
   if (typeof value !== 'string')

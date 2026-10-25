@@ -1,4 +1,4 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { app, BrowserWindow, net } from 'electron'
 import type { AppUpdater } from 'electron-updater'
@@ -13,7 +13,7 @@ import {
   updateCheckFrequency,
   updateRelease,
 } from '../shared/updates'
-import { retryRename } from './atomic-rename'
+import { writeText } from './files'
 
 let state: UpdateState = {
   channel: 'beta',
@@ -80,10 +80,7 @@ async function run(action: () => Promise<void>) {
 }
 
 async function saveChannel(channel: UpdateState['channel']) {
-  await writeFile(`${preferencePath()}.tmp`, JSON.stringify(channel), {
-    mode: 0o600,
-  })
-  await retryRename(() => rename(`${preferencePath()}.tmp`, preferencePath()))
+  await writeText(preferencePath(), JSON.stringify(channel))
 }
 
 export async function loadUpdates() {
@@ -159,12 +156,7 @@ export function setUpdateStartupCheck(input: unknown) {
   if (typeof input !== 'boolean')
     throw new Error('Choose whether to check for updates on startup.')
   return run(async () => {
-    await writeFile(`${startupPreferencePath()}.tmp`, JSON.stringify(input), {
-      mode: 0o600,
-    })
-    await retryRename(() =>
-      rename(`${startupPreferencePath()}.tmp`, startupPreferencePath()),
-    )
+    await writeText(startupPreferencePath(), JSON.stringify(input))
     publish({ checkOnStartup: input })
   })
 }
@@ -172,12 +164,7 @@ export function setUpdateStartupCheck(input: unknown) {
 export function setUpdateCheckFrequency(input: unknown) {
   const hours = updateCheckFrequency(input)
   return run(async () => {
-    await writeFile(`${frequencyPreferencePath()}.tmp`, JSON.stringify(hours), {
-      mode: 0o600,
-    })
-    await retryRename(() =>
-      rename(`${frequencyPreferencePath()}.tmp`, frequencyPreferencePath()),
-    )
+    await writeText(frequencyPreferencePath(), JSON.stringify(hours))
     publish({ checkFrequency: hours })
     if (periodicCheck) schedulePeriodicChecks()
   })

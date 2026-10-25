@@ -1,15 +1,14 @@
 import { posix } from 'node:path'
 import { Marked } from 'marked'
-import type { ImportFile } from '../../shared/imports'
+import {
+  type ImportEntry,
+  type ImportFile,
+  importTextData,
+} from '../../shared/imports.ts'
 
 const decoder = new TextDecoder('utf-8', { fatal: true })
-export const importText = (file: ImportFile) => {
-  if (file.data.byteLength > 2 * 1024 * 1024)
-    throw new Error(
-      `This document exceeds the 2 MiB editing limit: ${file.path}`,
-    )
-  return decoder.decode(file.data)
-}
+export const importText = (file: ImportEntry) =>
+  decoder.decode(importTextData(file))
 export const textFile = (path: string, text: string): ImportFile => ({
   path,
   data: new TextEncoder().encode(text),
@@ -44,45 +43,66 @@ export function outsideCode(
   }
   return result + inline(normalized.slice(cursor))
 }
+export function createWikiLinkResolver(paths: readonly string[]) {
+  type Match = { path: string; order: number; count: number }
+  const exact = new Map<string, Match>(),
+    names = new Map<string, Match>()
+  const add = (index: Map<string, Match>, key: string, match: Match) => {
+    const previous = index.get(key)
+    if (previous) previous.count++
+    else index.set(key, { ...match })
+  }
+  paths.forEach((path, order) => {
+    const match = { path, order, count: 1 }
+    add(exact, path, match)
+    const keys = new Set([posix.basename(path), posix.basename(path, '.md')])
+    if (/\.textbundle\/text\.md$/i.test(path))
+      keys.add(posix.basename(posix.dirname(path), '.textbundle'))
+    for (const key of keys) add(names, key, match)
+  })
+  return (file: string, directory: string) => {
+    let first: Match | undefined,
+      count = 0
+    for (const key of new Set([
+      file,
+      `${file}.md`,
+      posix.join(directory, file),
+      posix.join(directory, `${file}.md`),
+    ])) {
+      const match = exact.get(key)
+      if (!match) continue
+      count += match.count
+      if (!first || match.order < first.order) first = match
+    }
+    return count
+      ? { path: first?.path, count }
+      : (names.get(file) ?? { path: undefined, count: 0 })
+  }
+}
 export function wikiLinks(
   source: string,
   path: string,
-  paths: readonly string[],
+  resolve: ReturnType<typeof createWikiLinkResolver>,
 ) {
   let embeddedNotes = false,
     unresolved = false
+  const directory = posix.dirname(path)
   const converted = outsideCode(source, (text) =>
     text.replace(
       /(!?)\[\[([^\]\n]+)\]\]/g,
       (raw, embed: string, body: string) => {
         const [target = '', alias] = body.split('|')
         const [file = '', heading] = target.split('#')
-        const candidates = paths.filter(
-          (candidate) =>
-            candidate === file ||
-            candidate === `${file}.md` ||
-            candidate === posix.join(posix.dirname(path), file) ||
-            candidate === posix.join(posix.dirname(path), `${file}.md`),
-        )
-        const matches = candidates.length
-          ? candidates
-          : paths.filter(
-              (candidate) =>
-                posix.basename(candidate) === file ||
-                posix.basename(candidate, '.md') === file ||
-                (/\.textbundle\/text\.md$/i.test(candidate) &&
-                  posix.basename(posix.dirname(candidate), '.textbundle') ===
-                    file),
-            )
-        if (file && matches.length !== 1) {
+        const match = resolve(file, directory)
+        if (file && match.count !== 1) {
           unresolved = true
           return raw
         }
-        const resolved = matches[0] ?? path
+        const resolved = match.path ?? path
         if (embed && /\.(md|markdown)$/i.test(resolved)) embeddedNotes = true
         const url =
           posix
-            .relative(posix.dirname(path), resolved)
+            .relative(directory, resolved)
             .split('/')
             .map(encodeURIComponent)
             .join('/') + (heading ? `#${encodeURIComponent(heading)}` : '')

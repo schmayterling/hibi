@@ -76,7 +76,7 @@ function NoteInput({
   )
 }
 
-/** Mounts rows within a viewport of the visible list, plus focused rows and unsaved notes. */
+/** Mounts rows within one viewport of the visible area, plus focused rows and unsaved notes; padding keeps the full height. */
 function WordList({
   words,
   row,
@@ -197,7 +197,7 @@ function WordList({
 }
 
 export function CustomWords() {
-  // Discovery and search find the rows above and below without the list.
+  // Hidden discovery and search still register this section's setting rows.
   const visible = useContext(SettingsPageVisible)
   const words = useSyncExternalStore(onCustomWordsChanged, listCustomWords)
   const [draft, setDraft] = useState('')

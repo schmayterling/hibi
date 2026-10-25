@@ -90,6 +90,7 @@ let workspaceScanCapReached = false
 let workspaceScanFailed = false
 let loadGeneration = 0
 let loadController: AbortController | undefined
+let selectionController: AbortController | undefined
 const acknowledgedPaths = new Map<
   string,
   { fingerprint: string | null; expires: number }
@@ -666,10 +667,16 @@ export async function openWorkspace(
   )
   const selected = result.filePaths[0]
   if (result.canceled || !selected) return null
-  return loadWorkspace(selected)
+  return loadWorkspace(selected, true)
 }
 
-export function cancelWorkspaceLoad(): void {
+export function cancelWorkspaceSelection(): void {
+  selectionController?.abort()
+  selectionController = undefined
+}
+
+function cancelWorkspaceLoad(): void {
+  selectionController = undefined
   loadGeneration++
   loadController?.abort()
   loadController = undefined
@@ -677,24 +684,32 @@ export function cancelWorkspaceLoad(): void {
 
 export async function loadWorkspace(
   selected: string,
+  selection = false,
 ): Promise<WorkspaceState | null> {
   cancelWorkspaceLoad()
   const loading = loadGeneration
-  loadController = new AbortController()
-  const signal = loadController.signal
+  const controller = new AbortController()
+  loadController = controller
+  if (selection) selectionController = controller
+  const signal = controller.signal
+  const detach = () => {
+    if (loadController === controller) loadController = undefined
+    if (selectionController === controller) selectionController = undefined
+  }
   const nextRoot = await realpath(selected)
-  if (loading !== loadGeneration) return getWorkspace()
+  if (loading !== loadGeneration || signal.aborted) return getWorkspace()
   if (nextRoot === root) {
+    detach()
     const vault = await obsidianVault(nextRoot)
-    if (loading !== loadGeneration) return getWorkspace()
+    if (loading !== loadGeneration || signal.aborted) return getWorkspace()
     obsidian = vault
     await refreshWorkspace()
-    if (loading !== loadGeneration) return getWorkspace()
+    if (loading !== loadGeneration || signal.aborted) return getWorkspace()
     await rememberWorkspace(nextRoot)
     return getWorkspace()
   }
   const showAllFiles = await showAllWorkspaceFiles()
-  if (loading !== loadGeneration) return getWorkspace()
+  if (loading !== loadGeneration || signal.aborted) return getWorkspace()
   let candidateWatcher: FSWatcher | undefined
   let candidateTarget: WorkspaceTarget | null = null
   let changedDuringScan = false
@@ -741,7 +756,7 @@ export async function loadWorkspace(
   } finally {
     signal.removeEventListener('abort', cancelCandidate)
   }
-  if (loading !== loadGeneration) {
+  if (loading !== loadGeneration || signal.aborted) {
     candidateWatcher?.close()
     return getWorkspace()
   }
@@ -776,6 +791,7 @@ export async function loadWorkspace(
   showingAllFiles = showAllFiles
   ignoredPaths = ignore().add(metadata.ignore)
   workspaceStream.replace(workspaceTarget)
+  detach()
   scanCoordinator = createScanCoordinator(
     async (signal) => {
       const showAllFiles = await showAllWorkspaceFiles()
@@ -830,7 +846,7 @@ export async function openRecentWorkspace(id: unknown) {
     throw new Error(
       'This workspace is no longer in the recent list. Open it from its folder.',
     )
-  return loadWorkspace(recent.path)
+  return loadWorkspace(recent.path, true)
 }
 
 export async function deleteKnownWorkspace(

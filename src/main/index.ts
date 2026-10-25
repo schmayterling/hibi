@@ -218,7 +218,7 @@ import {
   startUpdateChecks,
 } from './updates'
 import {
-  cancelWorkspaceLoad,
+  cancelWorkspaceSelection,
   currentWorkspaceTarget,
   deleteKnownWorkspace,
   documentFileChanged,
@@ -773,7 +773,7 @@ function runWorkspaceOpen(
   trustedWindow(event)
   if (closing || fileOperationHasDialog()) throw fileOperationUnavailable()
   const intent = ++workspaceOpenIntent
-  cancelWorkspaceLoad()
+  cancelWorkspaceSelection()
   return runFileOperation(event, (window) =>
     intent === workspaceOpenIntent
       ? operation(window)

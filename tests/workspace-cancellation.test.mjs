@@ -36,8 +36,14 @@ new Function('module', 'exports', 'require', bundle.outputFiles[0].text)(
   module.exports,
   createRequire(import.meta.url),
 )
-const { scanWorkspace, loadWorkspace, cancelWorkspaceLoad, indexWorkspace } =
-  module.exports
+const {
+  scanWorkspace,
+  loadWorkspace,
+  cancelWorkspaceSelection,
+  indexWorkspace,
+  observeWorkspace,
+  workspaceRoot,
+} = module.exports
 const fs = process.getBuiltinModule('node:fs/promises')
 
 test('aborting traversal closes its directory iterator before reading later entries', async (t) => {
@@ -82,32 +88,81 @@ test('aborting traversal closes its directory iterator before reading later entr
   }
 })
 
-test('superseding a workspace stops its index collection after the pending read', async (t) => {
+for (const phase of ['realpath', 'stat']) {
+  test(`superseding during ${phase} starts no markdown read`, async (t) => {
+    const base = await realpath(
+      await mkdtemp(join(tmpdir(), 'hibi-index-cancel-')),
+    )
+    globalThis.__workspaceProfile = base
+    const notes = join(base, 'notes')
+    const next = join(base, 'next')
+    await mkdir(notes)
+    await mkdir(next)
+    await writeFile(join(notes, 'one.md'), '# one')
+    await writeFile(join(notes, 'two.md'), '# two')
+    t.after(() => rm(base, { recursive: true, force: true }))
+    await loadWorkspace(notes)
+    const original = fs[phase]
+    const open = fs.open
+    let release
+    let started
+    const reading = new Promise((resolve) => {
+      started = resolve
+    })
+    const held = new Promise((resolve) => {
+      release = resolve
+    })
+    let reads = 0
+    fs[phase] = async (path, ...args) => {
+      if (String(path).startsWith(notes) && String(path).endsWith('.md')) {
+        started()
+        await held
+      }
+      return original(path, ...args)
+    }
+    fs.open = (...args) => {
+      if (String(args[0]).startsWith(notes) && String(args[0]).endsWith('.md'))
+        reads++
+      return open(...args)
+    }
+    syncBuiltinESMExports()
+    try {
+      const pending = indexWorkspace()
+      await reading
+      await loadWorkspace(next)
+      release()
+      assert.equal(await pending, null)
+      assert.equal(reads, 0)
+    } finally {
+      release()
+      fs[phase] = original
+      fs.open = open
+      syncBuiltinESMExports()
+    }
+  })
+}
+
+test('a committed selection still remembers and publishes when another open intent arrives', async (t) => {
   const base = await realpath(
-    await mkdtemp(join(tmpdir(), 'hibi-index-cancel-')),
+    await mkdtemp(join(tmpdir(), 'hibi-committed-open-')),
   )
   globalThis.__workspaceProfile = base
   const notes = join(base, 'notes')
-  const next = join(base, 'next')
   await mkdir(notes)
-  await mkdir(next)
-  await writeFile(join(notes, 'one.md'), '# one')
-  await writeFile(join(notes, 'two.md'), '# two')
   t.after(() => rm(base, { recursive: true, force: true }))
-  await loadWorkspace(notes)
-  const original = fs.open
+  const original = fs.writeFile
   let release
   let started
-  const reading = new Promise((resolve) => {
+  const writing = new Promise((resolve) => {
     started = resolve
   })
   const held = new Promise((resolve) => {
     release = resolve
   })
-  let reads = 0
-  fs.open = async (path, ...args) => {
-    if (String(path).startsWith(notes) && String(path).endsWith('.md')) {
-      reads++
+  const changes = []
+  observeWorkspace((change) => changes.push(change))
+  fs.writeFile = async (path, ...args) => {
+    if (path === join(base, 'recent-workspaces.json.tmp')) {
       started()
       await held
     }
@@ -115,16 +170,17 @@ test('superseding a workspace stops its index collection after the pending read'
   }
   syncBuiltinESMExports()
   try {
-    const pending = indexWorkspace()
-    await reading
-    await loadWorkspace(next)
+    const pending = loadWorkspace(notes, true)
+    await writing
+    cancelWorkspaceSelection()
     release()
-    assert.equal(await pending, null)
-    assert.equal(reads, 1)
+    assert.equal((await pending).name, 'notes')
+    assert.equal(workspaceRoot(), notes)
+    assert.equal(changes.filter((change) => change.kind === 'tree').length, 1)
   } finally {
     release()
-    cancelWorkspaceLoad()
-    fs.open = original
+    observeWorkspace(() => {})
+    fs.writeFile = original
     syncBuiltinESMExports()
   }
 })

@@ -47,14 +47,17 @@ export function GraphPanel({
   } | null>(null)
   const [queryError, setQueryError] = useState('')
   const read = useSerialRead()
+  const latest = useRef(target)
   useEffect(() => {
     void revision
+    latest.current = target
     if (!target) {
       setResult(null)
       return
     }
-    setQueryError('')
-    read(async (alive) => {
+    read(async (alive, retry) => {
+      // Each read reports its own outcome; a read for an older workspace stays quiet.
+      setQueryError('')
       try {
         const items: WorkspaceGraphItem[] = []
         let cursor: string | undefined
@@ -66,8 +69,8 @@ export function GraphPanel({
             ...(cursor ? { cursor } : {}),
             limit: 100,
           })
-          // Whatever outdated this read also requested a newer one.
-          if (!response.ok && response.code === 'stale') return
+          // The workspace changed while paging, such as opening a note.
+          if (!response.ok && response.code === 'stale') return retry()
           if (!response.ok) throw new Error(response.message)
           if (response.value.kind !== 'graph')
             throw new Error('Invalid graph query.')
@@ -104,7 +107,7 @@ export function GraphPanel({
           complete,
         })
       } catch (error) {
-        if (alive())
+        if (alive() && latest.current === target)
           setQueryError(error instanceof Error ? error.message : String(error))
       }
     })

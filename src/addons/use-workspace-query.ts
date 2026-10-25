@@ -71,22 +71,36 @@ export function useWorkspaceQueryTarget(
       clearTimeout(timer)
       timer = setTimeout(() => void read(), 150)
     }
-    // Text edits can change links and tags, including unsaved ones. Opening or
-    // switching notes loads a new document revision and only moves the
-    // current-note highlight, unless that note arrives with unsaved edits.
-    const versions = new Map<string, number>()
-    let activeDocument: string | undefined
+    // Per open tab: whether it holds unsaved edits and, once shown, its loaded
+    // note and text version. Text edits can change links and tags, unsaved
+    // ones included, and dropping unsaved edits (closing, reverting, or
+    // replacing the note) takes them away again. Opening or switching notes
+    // only moves the current-note highlight. Closed tabs are forgotten.
+    type Tab = { dirty: boolean; loaded?: string; content?: number }
+    let tabs = new Map<string, Tab>()
+    let activeTab: string | undefined
     let registering = true
     const removeDocument = context.editor.onDocumentChange((document) => {
-      const key = `${document.tabId}:${document.id}:${document.revision}`
-      const previous = versions.get(key)
-      versions.set(key, document.contentVersion)
-      const edited =
-        previous === undefined
-          ? document.dirty
-          : previous !== document.contentVersion
-      const switched = key !== activeDocument
-      activeDocument = key
+      const loaded = `${document.id}:${document.revision}`
+      const previous = tabs.get(document.tabId)
+      let edited =
+        previous?.loaded === loaded
+          ? previous.content !== document.contentVersion
+          : document.dirty
+      const next = new Map<string, Tab>()
+      for (const tab of document.tabs)
+        next.set(tab.id, { ...tabs.get(tab.id), dirty: tab.dirty })
+      next.set(document.tabId, {
+        dirty: document.dirty,
+        loaded,
+        content: document.contentVersion,
+      })
+      for (const [id, tab] of tabs)
+        if (tab.dirty && !next.get(id)?.dirty) edited = true
+      const switched =
+        document.tabId !== activeTab || previous?.loaded !== loaded
+      tabs = next
+      activeTab = document.tabId
       if (!registering && (edited || switched)) schedule(edited)
     })
     registering = false
@@ -120,38 +134,49 @@ export function useWorkspaceQueryTarget(
 /**
  * Runs reads one at a time. A read requested meanwhile waits for the current
  * one and replaces any older waiting read, so a burst of changes costs at most
- * one more read. Reads receive `alive`, which turns false on unmount.
+ * one more read. Reads receive `alive`, which turns false on unmount, and
+ * `retry`, which runs them again shortly unless a newer read was requested.
  */
 export function useSerialRead() {
   const [reads] = useState(() => {
+    type Read = (alive: () => boolean, retry: () => void) => Promise<void>
     let running = false
     let mounted = true
-    let waiting: ((alive: () => boolean) => Promise<void>) | null = null
+    let requested = 0
+    let waiting: Read | null = null
     const alive = () => mounted
+    const run = (read: Read) => {
+      if (!mounted) return
+      requested++
+      waiting = read
+      if (running) return
+      running = true
+      void (async () => {
+        try {
+          while (waiting) {
+            const next = waiting
+            waiting = null
+            const asked = requested
+            // Paced like the change notices, so a busy workspace is not polled.
+            await next(alive, () => {
+              setTimeout(() => {
+                if (requested === asked) run(next)
+              }, 150)
+            })
+          }
+        } finally {
+          running = false
+        }
+      })()
+    }
     return {
+      run,
       mount() {
         mounted = true
         return () => {
           mounted = false
           waiting = null
         }
-      },
-      run(read: (alive: () => boolean) => Promise<void>) {
-        if (!mounted) return
-        waiting = read
-        if (running) return
-        running = true
-        void (async () => {
-          try {
-            while (waiting) {
-              const next = waiting
-              waiting = null
-              await next(alive)
-            }
-          } finally {
-            running = false
-          }
-        })()
       },
     }
   })

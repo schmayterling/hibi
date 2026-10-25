@@ -14,11 +14,19 @@ const source = `${stripTypeScriptTypes(
   .replaceAll('export function', 'function')}
 return { useWorkspaceQueryTarget, useSerialRead }`
 
+// Maps the hooks create, so tests can see how much they remember.
+const maps = []
+class TrackedMap extends Map {
+  constructor(...entries) {
+    super(...entries)
+    maps.push(this)
+  }
+}
 // Exercise request scheduling without mounting a renderer or replacing the hooks.
 function hooks() {
   let value, stop
   const { useWorkspaceQueryTarget: queryTarget, useSerialRead: serialRead } =
-    new Function('useEffect', 'useState', 'errorMessage', source)(
+    new Function('useEffect', 'useState', 'errorMessage', 'Map', source)(
       (effect) => {
         stop = effect()
       },
@@ -30,6 +38,7 @@ function hooks() {
         ]
       },
       errorMessage,
+      TrackedMap,
     )
   return {
     target(context) {
@@ -51,12 +60,24 @@ const workspace = (generation, activePath = 'draft.md') => ({
   entries: [],
   activePath,
 })
-const note = (tabId, contentVersion, dirty = false) => ({
+// The active tab's notice; `open` lists every open tab and `unsaved` the others with edits.
+const note = (
+  tabId,
+  contentVersion,
+  dirty = false,
+  open = [tabId],
+  unsaved = [],
+) => ({
   tabId,
   id: `${tabId}-file`,
   revision: 1,
   contentVersion,
   dirty,
+  tabs: open.map((id) => ({
+    id,
+    name: `${id}.md`,
+    dirty: id === tabId ? dirty : unsaved.includes(id),
+  })),
 })
 
 test('metadata panels use one workspace read per debounced refresh and capture its generation', async (t) => {
@@ -143,7 +164,7 @@ test('switching notes refreshes the current note without invalidating metadata',
     editor: {
       onDocumentChange(listener) {
         documentChanged = listener
-        listener(note('a', 1))
+        listener(note('a', 1, false, ['a', 'b']))
         return () => {}
       },
     },
@@ -159,41 +180,95 @@ test('switching notes refreshes the current note without invalidating metadata',
   })
   await settle()
   const { target, revision } = query.read()
-  // Repeated notices for the same text, such as saving, read nothing.
-  documentChanged(note('a', 1))
-  documentChanged({ ...note('a', 1), dirty: true })
+  // Repeated notices for the same text read nothing.
+  documentChanged(note('a', 1, false, ['a', 'b']))
   t.mock.timers.tick(150)
   await settle()
   assert.equal(reads, 1)
-  // A clean note opened in another tab moves only the highlight.
+  // A clean note in another tab moves only the highlight.
   current = workspace(1, 'b.md')
-  documentChanged(note('b', 7))
+  documentChanged(note('b', 7, false, ['a', 'b']))
   t.mock.timers.tick(150)
   await settle()
   assert.equal(reads, 2)
   assert.equal(query.read().workspace.activePath, 'b.md')
   assert.equal(query.read().target, target)
   assert.equal(query.read().revision, revision)
-  // Opening another note in the same tab loads a new revision: no invalidation.
-  documentChanged({ ...note('b', 0), id: 'other-file', revision: 2 })
+  // Opening another clean note in the same tab loads a new revision.
+  documentChanged({
+    ...note('b', 0, false, ['a', 'b']),
+    id: 'other-file',
+    revision: 2,
+  })
   t.mock.timers.tick(150)
   await settle()
   assert.equal(query.read().revision, revision)
   // Coming back to an unchanged tab does not invalidate either.
-  documentChanged(note('a', 1))
+  documentChanged(note('a', 1, false, ['a', 'b']))
   t.mock.timers.tick(150)
   await settle()
   assert.equal(query.read().revision, revision)
   // Unsaved edits, and a tab that arrives with unsaved edits, do.
-  documentChanged(note('a', 2))
+  documentChanged(note('a', 2, true, ['a', 'b']))
   t.mock.timers.tick(150)
   await settle()
   const edited = query.read().revision
   assert.notEqual(edited, revision)
-  documentChanged(note('c', 1, true))
+  documentChanged(note('c', 1, true, ['a', 'b', 'c'], ['a']))
   t.mock.timers.tick(150)
   await settle()
   assert.notEqual(query.read().revision, edited)
+  query.stop()
+})
+
+test('dropping unsaved edits invalidates metadata, and only open tabs are remembered', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let documentChanged
+  const query = mount({
+    editor: {
+      onDocumentChange(listener) {
+        documentChanged = listener
+        listener(note('a', 1, false, ['a', 'b']))
+        return () => {}
+      },
+    },
+    workspace: {
+      get: async () => workspace(1),
+      subscribeChanges: async () => ({ dispose() {} }),
+    },
+  })
+  await settle()
+  const step = async (document) => {
+    documentChanged(document)
+    t.mock.timers.tick(150)
+    await settle()
+    return query.read().revision
+  }
+  // An unsaved edit in a, then closing a without saving it.
+  const edited = await step(note('a', 2, true, ['a', 'b']))
+  const closed = await step(note('b', 1, false, ['b']))
+  assert.notEqual(closed, edited)
+  // Reverting unsaved edits in place.
+  const unsaved = await step(note('b', 2, true, ['b']))
+  assert.notEqual(await step(note('b', 2, false, ['b'])), unsaved)
+  // Replacing an edited note in the same tab.
+  const replacing = await step(note('b', 3, true, ['b']))
+  assert.notEqual(
+    await step({
+      ...note('b', 0, false, ['b']),
+      id: 'other-file',
+      revision: 2,
+    }),
+    replacing,
+  )
+  // Showing 20,000 notes in two tabs remembers two tabs, not 20,000 notes.
+  maps.length = 0
+  for (let shown = 0; shown < 20000; shown++)
+    documentChanged({
+      ...note(shown % 2 ? 'a' : 'b', 0, false, ['a', 'b']),
+      revision: shown + 10,
+    })
+  assert.ok(Math.max(...maps.map((map) => map.size)) <= 2)
   query.stop()
 })
 
@@ -269,4 +344,29 @@ test('serial reads run one at a time and keep only the newest waiting read', asy
   finish.shift()()
   await settle()
   assert.deepEqual(started, ['first', 'third', 'third stopped'])
+})
+
+test('a stale read runs again shortly unless a newer read was requested', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { run, stop } = hooks().serial()
+  const runs = []
+  const read = (name, retries) => async (_alive, retry) => {
+    runs.push(name)
+    if (runs.filter((entry) => entry === name).length <= retries) retry()
+  }
+  run(read('first', 1))
+  await settle()
+  assert.deepEqual(runs, ['first'])
+  t.mock.timers.tick(150)
+  await settle()
+  assert.deepEqual(runs, ['first', 'first'])
+  // A newer request replaces a pending retry.
+  run(read('second', 1))
+  await settle()
+  run(read('third', 0))
+  await settle()
+  t.mock.timers.tick(150)
+  await settle()
+  assert.deepEqual(runs, ['first', 'first', 'second', 'third'])
+  stop()
 })

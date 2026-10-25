@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
-import { pressShortcut, replaceSourceText } from './keyboard.mjs'
+import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('unsaved link edits update the graph while switching notes keeps it', {
@@ -87,5 +87,193 @@ test('unsaved link edits update the graph while switching notes keeps it', {
   await graph
     .getByText('3 of 3 notes · 1 connection', { exact: true })
     .waitFor()
+  assert.deepEqual(errors, [])
+})
+
+test('discarded edits, stale graph pages, and superseded failures leave current panels', {
+  timeout: 90000,
+}, async (t) => {
+  const temp = await mkdtemp(join(tmpdir(), 'hibi-graph-discard-'))
+  const root = join(temp, 'notes'),
+    profile = join(temp, 'profile')
+  await mkdir(root)
+  await mkdir(profile)
+  const alpha = '# alpha\n\n[next](b.md)\n\n#work'
+  await writeFile(join(root, 'a.md'), alpha)
+  await writeFile(join(root, 'b.md'), '# beta\n\n[back](a.md)\n\n#work')
+  await writeFile(join(root, 'c.md'), '# gamma')
+  // Sixty linked notes make every graph read take two pages.
+  const filler = (index) => `f${String(index % 60).padStart(2, '0')}`
+  for (let index = 0; index < 60; index++)
+    await writeFile(
+      join(root, `${filler(index)}.md`),
+      `[next](${filler(index + 1)}.md)`,
+    )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ graph: true, tags: true }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(temp, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(10000)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  const errors = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await app.evaluate(({ dialog }, root) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] })
+    // Closing an edited note discards it.
+    dialog.showMessageBox = async () => ({ response: 1 })
+  }, root)
+  await pressShortcut(app, `${mod}+Shift+o`)
+  await page
+    .getByRole('tree', { name: /workspace files/i })
+    .getByRole('treeitem', { name: 'b.md', exact: true })
+    .waitFor()
+  const open = async (name) => {
+    await app.evaluate(
+      ({ dialog }, file) => {
+        dialog.showOpenDialog = async () => ({
+          canceled: false,
+          filePaths: [file],
+        })
+      },
+      join(root, name),
+    )
+    await page.locator('.titlebar[aria-busy="false"]').waitFor()
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      name,
+    )
+  }
+  const choose = async (name) => {
+    await pressShortcut(app, `${mod}+k`)
+    await page.getByRole('combobox', { name: /search commands/i }).fill(name)
+    await page.getByRole('option').first().click()
+  }
+  const edit = async (text) => {
+    const source = page.getByRole('textbox', { name: /markdown editor/i })
+    if (!(await source.isVisible())) await pressShortcut(app, `${mod}+Shift+]`)
+    await replaceSourceText(page, source, text)
+  }
+  const discard = async (name) => {
+    await page
+      .getByRole('button', { name: `Close ${name}`, exact: true })
+      .click()
+    await waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name !== name,
+      name,
+    )
+  }
+  const graph = page.getByRole('complementary', {
+    name: /^workspace graph$/i,
+    exact: true,
+  })
+  const tags = page.getByRole('complementary', { name: /^tags$/i, exact: true })
+  const summary = (connections) =>
+    graph
+      .getByText(`63 of 63 notes · ${connections} connections`, { exact: true })
+      .waitFor()
+  await open('b.md')
+  await open('a.md')
+  await choose('Open workspace graph')
+  await summary(61)
+  // Closing an edited note without saving takes its unsaved link away.
+  await edit(`${alpha} [gamma](c.md)`)
+  await summary(62)
+  await discard('a.md')
+  await summary(61)
+  assert.equal(await readFile(join(root, 'a.md'), 'utf8'), alpha)
+  // Likewise for an unsaved tag.
+  await open('a.md')
+  await edit(`${alpha} #new`)
+  await choose('Browse tags')
+  const added = tags.getByRole('button', { name: /^#new 1$/i, exact: true })
+  await added.waitFor()
+  await discard('a.md')
+  await added.waitFor({ state: 'detached' })
+  // Holds the next graph read's first page in the main process.
+  const hold = (failure) =>
+    app.evaluate(({ ipcMain }, failure) => {
+      const handlers = ipcMain._invokeHandlers
+      globalThis.graphQuery ??= handlers.get('workspace:query-references')
+      globalThis.graphReads = 0
+      globalThis.workspaceReads = 0
+      globalThis.workspaceRead ??= handlers.get('workspace:get')
+      handlers.set('workspace:get', async (...args) => {
+        globalThis.workspaceReads++
+        return globalThis.workspaceRead(...args)
+      })
+      const state = { held: false, release: null }
+      globalThis.graphHold = state
+      handlers.set('workspace:query-references', async (event, request) => {
+        const result = await globalThis.graphQuery(event, request)
+        if (request?.kind !== 'graph' || request.cursor) return result
+        globalThis.graphReads++
+        if (state.held || state.release === undefined) return result
+        state.held = true
+        await new Promise((resolve) => {
+          state.release = resolve
+        })
+        state.release = undefined
+        return failure
+          ? { ok: false, code: 'unsupported', message: failure }
+          : result
+      })
+    }, failure)
+  const inMain = async (check, arg) => {
+    const deadline = performance.now() + 10000
+    while (!(await app.evaluate(check, arg))) {
+      assert.ok(performance.now() < deadline, String(check))
+      await page.evaluate(
+        () => new Promise((done) => requestAnimationFrame(done)),
+      )
+    }
+  }
+  // A clean note opened while the graph pages makes its cursor stale; the
+  // graph reads again instead of waiting for an edit.
+  await hold()
+  await choose('Open workspace graph')
+  await inMain(() => globalThis.graphHold.held)
+  await open('c.md')
+  await app.evaluate(() => globalThis.graphHold.release())
+  await summary(61)
+  assert.ok((await app.evaluate(() => globalThis.graphReads)) >= 2)
+  // A read that fails after a newer one was queued leaves no error behind.
+  await hold('This test failed an older read.')
+  await edit('# gamma\n\nfirst')
+  await inMain(() => globalThis.graphHold.held)
+  const reads = await app.evaluate(() => [
+    globalThis.graphReads,
+    globalThis.workspaceReads,
+  ])
+  // The next edit queues a newer read behind the held one before it fails.
+  await edit('# gamma\n\nsecond')
+  await inMain((_, [, gets]) => globalThis.workspaceReads > gets, reads)
+  await page.evaluate(
+    () =>
+      new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)),
+      ),
+  )
+  await app.evaluate(() => globalThis.graphHold.release())
+  await inMain((_, [graphs]) => globalThis.graphReads > graphs, reads)
+  await summary(61)
+  await page.waitForFunction(
+    () => !document.querySelector('.graph-panel [role="alert"]'),
+  )
   assert.deepEqual(errors, [])
 })

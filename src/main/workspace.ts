@@ -58,6 +58,7 @@ import {
   showAllWorkspaceFiles,
   workspaceEntryLimit,
 } from './workspace-settings'
+import { compareWorkspaceEntries } from './workspace-sort'
 
 type ScanResult = {
   entries: WorkspaceEntry[]
@@ -300,11 +301,7 @@ export async function scanWorkspace(
         entry.children = await walk(join(base, entry.path))
     }
     signal?.throwIfAborted()
-    return result.sort(
-      (a, b) =>
-        Number(b.kind === 'folder') - Number(a.kind === 'folder') ||
-        a.name.localeCompare(b.name, undefined, { numeric: true }),
-    )
+    return result.sort(compareWorkspaceEntries)
   }
   return walk(base)
 }

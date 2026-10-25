@@ -2380,8 +2380,14 @@ export function MarkdownEditor({
         }
       if (request.changes.length > 32) return unsupported
       try {
+        const snapshot = documentRuntime.session(current.tabId)?.snapshot()
+        if (!snapshot || snapshot.version !== current.contentVersion)
+          return {
+            status: 'stale',
+            message: 'The document changed. Review the edits again.',
+          }
         const source = editedSource(
-          current.markdown,
+          snapshot,
           request.changes,
           MAX_DOCUMENT_BYTES,
         )

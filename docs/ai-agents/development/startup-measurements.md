@@ -23,7 +23,7 @@ The changes reduced these measured costs:
 
 - Setting the full-size macOS dock icon cost about 67–71ms per call in an isolated probe. Installed apps now use their bundle icon; development uses a 256px dock icon and omits redundant macOS window-icon assignment.
 - Addon archive dependencies no longer load on launch. The main entry fell from 561,033 to 194,401 bytes at that change.
-- A CPU profile attributed about 122ms to keybeats' cold `AudioContext` creation. Asynchronous device discovery moved service preparation off the editor thread's critical path; an isolated follow-up constructor probe took about 4ms. Discovery itself took about 858ms asynchronously. Sounds can arrive after editing is ready; typing does not wait for them.
+- A CPU profile attributed about 122ms to keybeats' cold `AudioContext` creation. At that historical revision, asynchronous device discovery prepared the service first; an isolated follow-up constructor probe took about 4ms. Discovery itself took about 858ms asynchronously. Current preparation uses an audio-only media preload instead; see [finding startup work](performance.md#finding-startup-work).
 - The recent-workspace read now overlaps initial document and addon loading. Unchanged interface casing no longer rewrites preferences or reconstructs the menu.
 - Format activation waits for the document name before choosing required engines. Keyboard sounds start in the existing background lane. Required Markdown schemas, serializers, and input features remain gated.
 

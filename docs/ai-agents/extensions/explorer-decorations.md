@@ -27,6 +27,8 @@ Return a complete replacement set, including any parent-folder decorations. If p
 
 The host debounces workspace changes and refreshes on window focus. Each provider runs one request at a time; outdated workspace results and disposed-provider results are discarded. Compare the opaque `WorkspaceState.id` to identify a folder, not its display name.
 
+Equal results do not notify the explorer. It passes decorations and unsaved dots to the shared sidebar's `status` map, so status changes keep the tree model, and a closed explorer applies the latest results when it opens.
+
 ## Native reads
 
 Trusted native addons can export `queries` alongside `methods`. `context.native.query(method, input?)` calls only explicitly exported queries in the same enabled addon. Queries wait for an active file operation, then read without taking the mutation lock. They must not write documents/repositories or show dialogs. Use `native.invoke` for changes. Installed renderer extensions cannot add native code.

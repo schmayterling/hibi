@@ -7,6 +7,7 @@ import { parseDocument } from 'yaml'
 import { bundledColorschemes } from '../../shared/color-palettes.ts'
 import { COLOR_TOKENS, defineColorscheme } from '../../shared/colorschemes.ts'
 import { readFrontmatter } from '../../shared/frontmatter.ts'
+import { headingAnchors } from '../../shared/heading-anchor.ts'
 import type { WorkspaceSnapshot } from '../../shared/workspace'
 import {
   homePage,
@@ -384,19 +385,22 @@ function content(site: SiteData, page: SitePage, prefix: string) {
       },
     }),
   })
-  const slugs = new Map<string, number>()
+  const headings = /<(h[1-6])([^>]*)>([\s\S]*?)<\/\1>/g
+  const bodies = [...html.matchAll(headings)]
+    .filter(([, , attrs = '']) => !/\sid="[^"]+"/.test(attrs))
+    .map(([, , , body = '']) => body)
+  const anchors = headingAnchors(bodies.map(plain))
+  let headingIndex = 0
   html = html.replace(
-    /<(h[1-6])([^>]*)>([\s\S]*?)<\/\1>/g,
+    headings,
     (_match, tag: string, attrs: string, body: string) => {
       if (/\sid="[^"]+"/.test(attrs)) return `<${tag}${attrs}>${body}</${tag}>`
-      const slug = plain(body)
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s-]/gu, '')
-        .trim()
-        .replace(/\s+/g, '-')
-      const count = slugs.get(slug) ?? 0
-      slugs.set(slug, count + 1)
-      return `<${tag}${attrs} id="${escapeHtml(slug)}${count ? `-${count}` : ''}">${body}</${tag}>`
+      const { anchor, legacy } = anchors[headingIndex++]!
+      const alias =
+        legacy !== null && legacy !== anchor
+          ? `<span id="${escapeHtml(legacy)}" aria-hidden="true"></span>`
+          : ''
+      return `<${tag}${attrs} id="${escapeHtml(anchor)}">${alias}${body}</${tag}>`
     },
   )
   const home = homePage(site.pages, site.options.homePage)

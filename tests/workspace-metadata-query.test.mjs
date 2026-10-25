@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
+import { resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
 
@@ -8,6 +9,7 @@ const host = {
   sequence: 1,
   revision: 1,
   indexReads: 0,
+  parses: 0,
   listener: null,
   stale: false,
   changeDuringRead: false,
@@ -48,6 +50,21 @@ const bundle = await build({
     {
       name: 'metadata-host',
       setup(build) {
+        build.onResolve({ filter: /note-links\.ts$/ }, (args) =>
+          /[/\\]workspace-reference-index\.ts$/.test(args.importer)
+            ? { path: args.path, namespace: 'metadata-parser' }
+            : null,
+        )
+        build.onLoad({ filter: /.*/, namespace: 'metadata-parser' }, () => ({
+          contents: `import * as actual from ${JSON.stringify(resolve('src/shared/note-links.ts'))}
+            export const { localTarget, noteBasenames, noteTargets, wikiTarget } = actual
+            export const noteReferences = (...args) => {
+              globalThis.__hibiMetadataTestHost.parses++
+              return actual.noteReferences(...args)
+            }`,
+          loader: 'js',
+          resolveDir: resolve('.'),
+        }))
         build.onResolve({ filter: /^\.\/workspace$/ }, (args) =>
           /[/\\]workspace-metadata-query\.ts$/.test(args.importer)
             ? { path: args.path, namespace: 'metadata-host' }
@@ -91,6 +108,33 @@ const query = (request) =>
     { syntaxSnapshot: host.syntaxSnapshot, ...request },
     () => host.versions,
   )
+
+test('ten concurrent metadata consumers share one build and parse each page once', async () => {
+  const pages = host.pages
+  host.pages = Array.from({ length: 64 }, (_, i) => ({
+    path: `note-${i}.md`,
+    markdown: `# page ${i}\n#work [[note-0]]`,
+  }))
+  host.revision++
+  host.listener({ kind: 'resync' })
+  const reads = host.indexReads
+  const parses = host.parses
+  try {
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        query({ target: host.target, kind: 'links', path: 'note-1.md' }),
+      ),
+    )
+    assert.ok(results.every((result) => result.ok))
+    assert.equal(host.parses - parses, 64)
+    assert.equal(host.indexReads - reads, 1)
+  } finally {
+    host.pages = pages
+    host.indexReads = reads
+    host.revision++
+    host.listener({ kind: 'resync' })
+  }
+})
 
 test('metadata queries return bounded links and backlinks from shared pages', async () => {
   const target = host.target

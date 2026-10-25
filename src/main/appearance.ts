@@ -84,6 +84,7 @@ export function exportedAppearance() {
 }
 export function saveAppearance(value: unknown) {
   const next = validate(value)
+  if (JSON.stringify(next) === JSON.stringify(appearance)) return writing
   appearance = next
   if (nativeTheme.themeSource !== next.preferences.mode)
     nativeTheme.themeSource = next.preferences.mode

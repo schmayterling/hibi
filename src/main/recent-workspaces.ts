@@ -74,8 +74,11 @@ function writeWorkspaces(
     .catch(() => {})
     .then(async () => {
       const file = location()
-      const saved = update(await readWorkspaces())
-      await writeText(file, JSON.stringify(saved))
+      const current = await readWorkspaces()
+      const before = JSON.stringify(current)
+      const saved = update(current)
+      const text = JSON.stringify(saved)
+      if (text !== before) await writeText(file, text)
       const known = asKnown(saved)
       for (const listener of listeners) listener(known)
       return known

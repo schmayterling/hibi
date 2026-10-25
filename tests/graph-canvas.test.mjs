@@ -65,7 +65,7 @@ function countingContext(width, height) {
   return { context, counts }
 }
 
-test('5,000 notes and 20,000 links draw with a constant number of calls', () => {
+test('5,000 notes and 20,000 links draw in a few paths', () => {
   const graph = graphTopology(denseGraph(5000, 20000))
   const positions = new Float32Array(10000)
   // A square grid 40 units apart, like a settled layout.
@@ -73,43 +73,93 @@ test('5,000 notes and 20,000 links draw with a constant number of calls', () => 
     positions[index * 2] = (index % 71) * 40 - 1400
     positions[index * 2 + 1] = Math.floor(index / 71) * 40 - 1400
   }
-  const size = { width: 400, height: 400 }
-  const view = cameraPosition(null, graph, positions, size, null, 8)
-  const fitted = countingContext(800, 800)
-  drawGraph(fitted.context, {
-    graph,
-    positions,
-    view,
-    size,
-    ratio: 2,
-    highlighted: [3, 3, 9],
-    palette,
-  })
-  // One edge path, then one path for plain and one for highlighted notes.
+  const draw = (view, size) => {
+    const { context, counts } = countingContext(size.width * 2, size.height * 2)
+    drawGraph(context, {
+      graph,
+      positions,
+      view,
+      size,
+      ratio: 2,
+      highlighted: [3, 3, 9],
+      palette,
+    })
+    return counts
+  }
+  // Every note in view and none touching: one edge path and two dot paths.
+  const spread = draw(
+    { x: 0, y: 0, scale: 0.2, centered: null },
+    { width: 600, height: 600 },
+  )
   assert.deepEqual(
-    {
-      fill: fitted.counts.fill,
-      stroke: fitted.counts.stroke,
-      fillText: fitted.counts.fillText,
-    },
+    { fill: spread.fill, stroke: spread.stroke, fillText: spread.fillText },
     { fill: 2, stroke: 3, fillText: 0 },
   )
-  assert.ok(fitted.counts.path > 20000)
+  assert.ok(spread.path > 20000)
+  // Fitted into 400 px every dot touches its row and column neighbors; two
+  // alternating groups keep touching dots apart, so paths stay few.
+  const size = { width: 400, height: 400 }
+  const packed = draw(
+    cameraPosition(null, graph, positions, size, null, 8),
+    size,
+  )
+  assert.equal(packed.fillText, 0)
+  assert.equal(packed.fill, 3)
+  assert.equal(packed.stroke, 4)
   // Zoomed in, labels appear only for notes near the view.
-  const zoomed = countingContext(800, 800)
-  drawGraph(zoomed.context, {
+  const zoomed = draw({ x: 0, y: 0, scale: 1, centered: null }, size)
+  assert.ok(zoomed.fillText > 0)
+  assert.ok(zoomed.fillText < 300, `${zoomed.fillText} labels`)
+  assert.equal(zoomed.fill, zoomed.fillText)
+  assert.ok(zoomed.path < spread.path)
+})
+
+test('touching dots never share a path, so each border sits under the dots above it', () => {
+  const graph = graphTopology({
+    nodes: Array.from({ length: 100 }, (_, index) => ({
+      id: `${index}.md`,
+      label: String(index),
+      degree: 0,
+    })),
+    edges: [],
+  })
+  // At half scale 0 and 2 each touch 1 but not each other; the rest are apart.
+  const positions = new Float32Array(200)
+  positions.set([0, 0, 8, 0, 16, 0])
+  for (let index = 3; index < 100; index++) {
+    positions[index * 2] = -350 + (index % 18) * 40
+    positions[index * 2 + 1] = 100 + Math.floor(index / 18) * 40
+  }
+  const paths = []
+  let current = []
+  const context = {
+    ...countingContext(400, 400).context,
+    beginPath() {
+      current = []
+    },
+    arc(x) {
+      current.push(x)
+    },
+    fill() {
+      paths.push(current)
+    },
+  }
+  drawGraph(context, {
     graph,
     positions,
-    view: { x: 0, y: 0, scale: 1, centered: null },
-    size,
-    ratio: 2,
+    view: { x: 0, y: 0, scale: 0.5, centered: null },
+    size: { width: 400, height: 400 },
+    ratio: 1,
     highlighted: [],
     palette,
   })
-  assert.ok(zoomed.counts.fillText > 0)
-  assert.ok(zoomed.counts.fillText < 300, `${zoomed.counts.fillText} labels`)
-  assert.equal(zoomed.counts.fill, zoomed.counts.fillText)
-  assert.ok(zoomed.counts.path < fitted.counts.path)
+  // 0 and 2 do not touch and share the first path with the separate dots.
+  assert.deepEqual(
+    paths.map((path) => path.length),
+    [99, 1],
+  )
+  assert.deepEqual(paths[0].slice(0, 2), [0, 16])
+  assert.deepEqual(paths[1], [8])
 })
 
 test('hit-testing finds the closest dot or its label through the grid', () => {

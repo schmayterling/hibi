@@ -150,9 +150,10 @@ test('a 2,000-note workspace with 10,000 links shows every note and lays out off
   await page.waitForFunction(() =>
     window.graphDraws.frames.some((count) => count > 0),
   )
-  // A redraw of 2,000 notes is one edge path and two dot paths.
+  // One edge path, then one path per group of dots that touch at this zoom:
+  // a few dozen calls a frame for 2,000 notes, not one per note.
   assert.ok(
-    Math.max(...(await page.evaluate(() => window.graphDraws.frames))) <= 5,
+    Math.max(...(await page.evaluate(() => window.graphDraws.frames))) < 64,
   )
   assert.deepEqual(errors, [])
 })
@@ -234,7 +235,7 @@ test('an exported 5,000-note, 20,000-link graph renders in bounded calls from an
     window.graphDraws.frames.some((count) => count > 0),
   )
   assert.ok(
-    Math.max(...(await page.evaluate(() => window.graphDraws.frames))) <= 5,
+    Math.max(...(await page.evaluate(() => window.graphDraws.frames))) < 64,
   )
   assert.deepEqual(errors, [])
 })

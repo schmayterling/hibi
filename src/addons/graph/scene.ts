@@ -142,9 +142,77 @@ export type Scene = {
 }
 
 /**
- * One frame: edges share one path and unlabeled notes two, so draw calls stay
- * constant however many notes are visible. Labeled frames keep the svg order
- * (each label after its own dot) and only exist while zoomed in or small.
+ * Groups visible dots so that no two touching dots share a path: each dot's
+ * border is then painted over its own fill and under the dots stacked above
+ * it, as separately painted svg circles were. Separated dots share the first
+ * group, so groups follow how many dots overlap in one place, not their total.
+ */
+function paintLayers(
+  graph: Topology,
+  positions: Float32Array,
+  view: View,
+  size: Size,
+  visible: (index: number) => boolean,
+) {
+  const nodes: number[] = []
+  let largest = 0
+  for (let index = 0; index < graph.nodes.length; index++)
+    if (visible(index)) {
+      nodes.push(index)
+      largest = Math.max(largest, graph.radii[index]!)
+    }
+  // Screen pixels; strokes and edge smoothing reach about a pixel past a dot.
+  const reach = Math.max(largest * view.scale, 2.5) * 2 + 2
+  const columns = Math.ceil(size.width / reach) + 2
+  const rows = Math.ceil(size.height / reach) + 2
+  const heads = new Int32Array(columns * rows).fill(-1)
+  const next = new Int32Array(nodes.length)
+  const depth = new Int32Array(nodes.length)
+  const placed = new Float32Array(nodes.length * 3)
+  const layers: number[][] = []
+  const taken: number[] = []
+  nodes.forEach((index, position) => {
+    const x = size.width / 2 + view.x + positions[index * 2]! * view.scale
+    const y = size.height / 2 + view.y + positions[index * 2 + 1]! * view.scale
+    const radius = Math.max(graph.radii[index]!, 2.5 / view.scale) * view.scale
+    const column = Math.max(0, Math.min(columns - 1, Math.floor(x / reach) + 1))
+    const row = Math.max(0, Math.min(rows - 1, Math.floor(y / reach) + 1))
+    for (let r = Math.max(0, row - 1); r <= Math.min(rows - 1, row + 1); r++)
+      for (
+        let c = Math.max(0, column - 1);
+        c <= Math.min(columns - 1, column + 1);
+        c++
+      ) {
+        let other = heads[c + r * columns]!
+        while (other >= 0) {
+          const dx = placed[other * 3]! - x,
+            dy = placed[other * 3 + 1]! - y,
+            touch = placed[other * 3 + 2]! + radius + 1
+          if (dx * dx + dy * dy < touch * touch)
+            taken[depth[other]!] = position + 1
+          other = next[other]!
+        }
+      }
+    // The lowest group none of its touching neighbors use.
+    let level = 0
+    while (taken[level] === position + 1) level++
+    depth[position] = level
+    placed[position * 3] = x
+    placed[position * 3 + 1] = y
+    placed[position * 3 + 2] = radius
+    next[position] = heads[column + row * columns]!
+    heads[column + row * columns] = position
+    if (level === layers.length) layers.push([])
+    layers[level]!.push(index)
+  })
+  return layers
+}
+
+/**
+ * One frame: edges share one path and dots one path per paint layer, so draw
+ * calls follow how deeply dots overlap, not how many notes there are. Labeled
+ * frames keep the svg order (each label after its own dot) and only exist
+ * while zoomed in or small.
  */
 export function drawGraph(context: CanvasRenderingContext2D, scene: Scene) {
   const { graph, positions, view, size, ratio, highlighted, palette } = scene
@@ -229,19 +297,20 @@ export function drawGraph(context: CanvasRenderingContext2D, scene: Scene) {
     }
     return
   }
-  context.beginPath()
-  for (let index = 0; index < graph.nodes.length; index++)
-    if (!highlighted.includes(index) && visible(index)) dot(index)
-  context.fillStyle = palette.node
-  context.fill()
-  context.strokeStyle = palette.border
-  context.stroke()
-  context.beginPath()
-  for (const index of new Set(highlighted)) if (visible(index)) dot(index)
-  context.fillStyle = palette.activeNode
-  context.fill()
-  context.strokeStyle = palette.activeBorder
-  context.stroke()
+  for (const layer of paintLayers(graph, positions, view, size, visible)) {
+    for (const active of [false, true]) {
+      const dots = layer.filter(
+        (index) => highlighted.includes(index) === active,
+      )
+      if (!dots.length) continue
+      context.beginPath()
+      for (const index of dots) dot(index)
+      context.fillStyle = active ? palette.activeNode : palette.node
+      context.fill()
+      context.strokeStyle = active ? palette.activeBorder : palette.border
+      context.stroke()
+    }
+  }
 }
 
 /** Uniform grid over node positions; rebuilt only when positions change. */

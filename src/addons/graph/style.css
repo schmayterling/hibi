@@ -116,6 +116,13 @@
 .graph-canvas .graph-label {
   font: var(--text-xs) var(--font-ui);
 }
+/* The fit icon keeps the filled center dot it had beside the svg graph. */
+.graph-zoom circle {
+  fill: var(--muted);
+  stroke: var(--background);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
 .graph-zoom {
   position: absolute;
   right: var(--space-2);

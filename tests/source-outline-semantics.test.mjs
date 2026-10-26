@@ -272,6 +272,55 @@ test('definition-only edits invalidate cached heading labels and missing referen
   }
 })
 
+test('body reuse preserves definition edits, queued edits, removals and undo', () => {
+  for (const ending of ['\n', '\r\n']) {
+    let source = [
+      '# [visible][ref] and [later][missing]',
+      'body text',
+      '[ref]: /one',
+      'tail',
+    ].join(ending + ending)
+    const { store, model } = setup(source)
+    const apply = (from, to, insert) => {
+      edit(store, model, [{ from, to, insert }])
+      source = source.slice(0, from) + insert + source.slice(to)
+    }
+    const expectNative = () =>
+      assert.deepEqual(
+        finish(model.read(), referenceOracle(source)).map(
+          ({ label, level }) => ({ label, level }),
+        ),
+        nativeHeadings(source),
+      )
+    try {
+      expectNative()
+      const body = source.indexOf('body')
+      apply(body, body + 1, 'B')
+      expectNative()
+      const href = source.indexOf('/one')
+      apply(href, href + 4, '/two')
+      expectNative()
+      const ref = source.indexOf('[ref]:')
+      apply(ref, ref + 5, '[gone]')
+      expectNative()
+      apply(ref, ref + 6, '[ref]')
+      expectNative()
+      // Queue a definition change and a body edit before the next outline read.
+      const tail = source.indexOf('tail')
+      apply(tail, tail + 4, '[missing]: /later')
+      apply(body, body + 1, 'b')
+      expectNative()
+      const definition = source.indexOf('[missing]:')
+      apply(definition, source.length, 'tail')
+      expectNative()
+      apply(definition, source.length, '[missing]: /later')
+      expectNative()
+    } finally {
+      model.dispose()
+    }
+  }
+})
+
 test('source outline labels preserve native inline math atoms', () => {
   check('# before $x^2$ after and **$y$**', { math: true })
 })

@@ -208,6 +208,44 @@ test('behind the switch, the formatted view reports, follows and navigates the r
     await expectSelected(label)
     assert.equal(await selected.textContent(), label)
   }
+
+  // A refreshed file revision must discard the previous reference resolution.
+  let previous = await page.evaluate(() => window.hibi.getDocument())
+  const original = await readFile(file, 'utf8')
+  for (const text of [original.replace('[ref]:', '[gone]:'), original]) {
+    await writeFile(file, text)
+    await clickMenu(app, 'Open…')
+    await page.waitForFunction(
+      async (revision) => (await window.hibi.getDocument()).revision > revision,
+      previous.revision,
+    )
+    const expected = rich.map((heading) => ({
+      ...heading,
+      label:
+        text === original || heading.label !== 'Reference label'
+          ? heading.label
+          : 'Reference [label][ref]',
+    }))
+    await page.waitForFunction(
+      (expected) =>
+        JSON.stringify(
+          [
+            ...document.querySelectorAll(
+              '.outline-sidebar[data-side="right"] [role="treeitem"]',
+            ),
+          ].map((item) => ({
+            label: item.querySelector('.sidebar-label')?.textContent,
+            depth: item.getAttribute('aria-level'),
+          })),
+        ) === JSON.stringify(expected),
+      expected,
+    )
+    assert.deepEqual(
+      (await entries()).map(({ label, depth }) => ({ label, depth })),
+      expected,
+    )
+    previous = await page.evaluate(() => window.hibi.getDocument())
+  }
 })
 
 test('an open outline on a 50 MiB formatted note reuses headings after body edits', {
@@ -215,10 +253,15 @@ test('an open outline on a 50 MiB formatted note reuses headings after body edit
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-outline-50m-'))
   const file = join(folder, 'large.md')
-  const block = `## heading\n\n${`${'plain text body '.repeat(15)}\n`.repeat(16)}\n\n`
-  const source = block
-    .repeat(Math.ceil((50 * 1024 * 1024) / block.length))
-    .slice(0, 50 * 1024 * 1024)
+  const block = `## [heading][ref]\n\n${`${'plain text body '.repeat(15)}\n`.repeat(16)}\n\n`
+  const prefix = '[ref]: /target\n\n'
+  const headingCount = Math.floor(
+    (50 * 1024 * 1024 - prefix.length) / block.length,
+  )
+  const source = (prefix + block.repeat(headingCount)).padEnd(
+    50 * 1024 * 1024,
+    ' ',
+  )
   await writeFile(file, source)
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
@@ -257,7 +300,8 @@ test('an open outline on a 50 MiB formatted note reuses headings after body edit
     model.prototype.read = function* () {
       const iterator = read.call(this)
       let value,
-        steps = 0
+        steps = 0,
+        references = 0
       try {
         for (;;) {
           const step = iterator.next(value)
@@ -265,12 +309,14 @@ test('an open outline on a 50 MiB formatted note reuses headings after body edit
             window.outlineReads.push({
               ...this.counters(true),
               steps,
+              references,
               headings: step.value.headings.length,
               tail: step.value.position(step.value.headings.length - 1),
             })
             return step.value
           }
           steps++
+          if (step.value) references++
           value = yield step.value
         }
       } finally {
@@ -290,10 +336,11 @@ test('an open outline on a 50 MiB formatted note reuses headings after body edit
     .click()
   await page.waitForFunction(() => window.outlineReads.length > 0)
   const initial = await page.evaluate(() => window.outlineReads.at(-1))
-  assert.equal(initial.headings, 13548)
-  assert.equal(initial.labelsRead, 13548)
+  assert.equal(initial.headings, headingCount)
+  assert.equal(initial.labelsRead, headingCount)
+  assert.equal(initial.references, 1)
   const from = source.indexOf('body', Math.floor(source.length / 2))
-  let tail = source.lastIndexOf('## heading')
+  let tail = source.lastIndexOf('## [heading]')
   for (const insert of ['B', 'b', 'text']) {
     const count = await page.evaluate(() => window.outlineReads.length)
     await page.locator('.rich-pane .cm-content').evaluate(
@@ -309,7 +356,8 @@ test('an open outline on a 50 MiB formatted note reuses headings after body edit
       count,
     )
     const work = await page.evaluate(() => window.outlineReads.at(-1))
-    assert.equal(work.headings, 13548)
+    assert.equal(work.headings, headingCount)
+    assert.equal(work.references, 0)
     tail += insert.length - 1
     assert.equal(work.tail, tail)
     assert.equal(work.labelsRead, 0, JSON.stringify(work))

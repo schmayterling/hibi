@@ -230,6 +230,13 @@ export class SourceOutlineModel {
     current()
     const tree = this.#session.state().tree
     if (!tree) throw new Error('Source outline requires a completed tree.')
+    // Unchanged paragraph boundaries also exclude reference definitions.
+    // Prove that before scheduling reference lookups for every cached label.
+    if (yield* this.#mapBody(tree, current)) {
+      this.#tree = tree
+      this.#pending = []
+      return this.#publish(source)
+    }
     const references = new Map<string, ReferenceValue | null>(),
       changed = new Set<string>()
     // Definitions may change outside a reused heading's subtree. Revalidate only
@@ -240,11 +247,6 @@ export class SourceOutlineModel {
       references.set(reference, value)
       if (value?.href !== previous?.href || value?.title !== previous?.title)
         changed.add(reference)
-    }
-    if (!changed.size && (yield* this.#mapBody(tree, current))) {
-      this.#tree = tree
-      this.#pending = []
-      return this.#publish(source)
     }
     const cursor = tree.cursor(),
       headings: SourceOutlineHeading[] = [],

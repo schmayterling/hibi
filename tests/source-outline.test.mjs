@@ -229,6 +229,62 @@ test('source outline preserves nested heading levels and exact CRLF raw offsets'
   model.dispose()
 })
 
+test('body edits do not resolve unchanged heading references', (t) => {
+  const source =
+    Array.from(
+      { length: 1000 },
+      (_, i) => `## [heading ${i}][ref${i}]\n\nbody ${i}\n\n`,
+    ).join('') +
+    Array.from({ length: 1000 }, (_, i) => `[ref${i}]: /target/${i}\n`).join('')
+  const { store, model } = setup(source, { frontmatter: false })
+  const drain = () => {
+    const work = model.read()
+    let value,
+      steps = 0,
+      references = 0
+    for (;;) {
+      const step = work.next(value)
+      steps++
+      if (step.done) return { outline: step.value, steps, references }
+      references += Number(!!step.value)
+      value = step.value
+        ? { href: `/target/${step.value.reference}` }
+        : undefined
+    }
+  }
+  try {
+    const before = drain()
+    assert.equal(before.outline.headings.length, 1000)
+    assert.equal(before.references, 1000)
+    model.counters(true)
+    const from = source.indexOf('body 500')
+    for (const insert of ['B', 'body', 'X']) {
+      edit(store, model, [{ from, to: from + 1, insert }])
+      const after = drain()
+      const work = model.counters(true)
+      assert.equal(after.outline.headings, before.outline.headings)
+      assert.equal(
+        after.references,
+        0,
+        'unchanged references need no worker requests',
+      )
+      assert.ok(after.steps < 100, JSON.stringify(after))
+      assert.equal(work.labelsRead, 0)
+      assert.equal(work.published, 0)
+      assert.ok(work.indexVisits < 100, JSON.stringify(work))
+      t.diagnostic(
+        JSON.stringify({
+          steps: after.steps,
+          references: after.references,
+          ...work,
+        }),
+      )
+    }
+  } finally {
+    model.dispose()
+  }
+})
+
 test('source outline treats valid frontmatter as opaque even when YAML contains fences', () => {
   const header = [
     '---',

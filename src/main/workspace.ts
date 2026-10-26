@@ -470,9 +470,11 @@ export function getWorkspace(
     visible = addDraft(visible, 0)
   }
   const dirty = new Set(
-    documents
-      .filter((draft) => draft.dirty && draft.file)
-      .map((draft) => relativePath(root!, draft.file!)),
+    documents.flatMap((draft) => {
+      const file = draft.pendingPath ?? draft.file
+      const path = draft.dirty && file ? relativePath(root!, file) : null
+      return path ? [path] : []
+    }),
   )
   const decorate = (items: WorkspaceEntry[]): WorkspaceEntry[] =>
     items.map((item) => ({

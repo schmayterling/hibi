@@ -286,6 +286,7 @@ test('license catalog retains dependency and palette notices, excluding build to
     'electron',
     'geist',
     'dompurify',
+    'pele',
     '@codemirror/view',
     '@tiptap/core',
     '@tiptap/extension-drag-handle',
@@ -322,6 +323,12 @@ test('license catalog retains dependency and palette notices, excluding build to
       .text.includes(
         await readFile('node_modules/dompurify/LICENSE-MPL', 'utf8'),
       ),
+  )
+  // Pele's notice also covers the Lucide icon it bundles.
+  assert.ok(
+    entries
+      .find((entry) => entry.name === 'pele')
+      .text.includes(await readFile('node_modules/pele/LICENSE', 'utf8')),
   )
 })
 

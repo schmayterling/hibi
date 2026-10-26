@@ -88,6 +88,18 @@ const markers = `# Marker lines
    one under its marker
 2. two
 
+> -
+>   quoted under its marker
+> - quoted second
+
+> 1.
+>    quoted one under its marker
+> 2. quoted two
+
+> > -
+> >   deep under its marker
+> > - deep second
+
 closing paragraph.
 `
 
@@ -466,6 +478,27 @@ test('list markers alone on their lines sit beside the item text as in the rich 
       second: { selector: '.tiptap li', text: 'second item' },
       one: { selector: '.tiptap ol li', text: 'one under its marker' },
       two: { selector: '.tiptap ol li', text: 'two' },
+      quoted: {
+        selector: '.tiptap blockquote li',
+        text: 'quoted under its marker',
+      },
+      quotedSecond: {
+        selector: '.tiptap blockquote li',
+        text: 'quoted second',
+      },
+      quotedOne: {
+        selector: '.tiptap blockquote ol li',
+        text: 'quoted one under its marker',
+      },
+      quotedTwo: { selector: '.tiptap blockquote ol li', text: 'quoted two' },
+      deep: {
+        selector: '.tiptap blockquote blockquote li',
+        text: 'deep under its marker',
+      },
+      deepSecond: {
+        selector: '.tiptap blockquote blockquote li',
+        text: 'deep second',
+      },
       closing: { selector: '.tiptap p', text: 'closing paragraph' },
     },
     {
@@ -474,6 +507,18 @@ test('list markers alone on their lines sit beside the item text as in the rich 
       second: { selector: '.hibi-lp-list-item', text: 'second item' },
       one: { selector: '.hibi-lp-list-ordered', text: 'one under its marker' },
       two: { selector: '.hibi-lp-list-ordered', text: 'two' },
+      quoted: {
+        selector: '.hibi-lp-list-item',
+        text: 'quoted under its marker',
+      },
+      quotedSecond: { selector: '.hibi-lp-list-item', text: 'quoted second' },
+      quotedOne: {
+        selector: '.hibi-lp-list-ordered',
+        text: 'quoted one under its marker',
+      },
+      quotedTwo: { selector: '.hibi-lp-list-ordered', text: 'quoted two' },
+      deep: { selector: '.hibi-lp-list-item', text: 'deep under its marker' },
+      deepSecond: { selector: '.hibi-lp-list-item', text: 'deep second' },
       closing: { selector: '.cm-line', text: 'closing paragraph' },
     },
     'markers',

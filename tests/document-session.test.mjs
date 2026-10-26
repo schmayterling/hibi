@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DocumentSession } from '../src/shared/document-session.ts'
-import { composeSourceChanges } from '../src/shared/source-operations.ts'
+import {
+  composeSourceBatches,
+  composeSourceChanges,
+} from '../src/shared/source-operations.ts'
 
 const replace = (source, edits) => {
   for (let index = edits.length - 1; index >= 0; index--) {
@@ -340,5 +343,64 @@ test('saved-content verification retains one scheduled job and resolves canceled
   } finally {
     globalThis.setTimeout = schedule
     globalThis.clearTimeout = cancel
+  }
+})
+
+test('edit batches compose in pairs to the same edits as one after another', () => {
+  const replace = (source, changes) =>
+    changes.reduceRight(
+      (text, change) =>
+        text.slice(0, change.from) + change.insert + text.slice(change.to),
+      source,
+    )
+  let seed = 4021
+  const random = (max) => {
+    seed ^= seed << 13
+    seed ^= seed >>> 17
+    seed ^= seed << 5
+    return (seed >>> 0) % max
+  }
+  for (let run = 0; run < 500; run++) {
+    const original = 'abcdefghijklmnop'
+    const batches = []
+    let source = original
+    for (let count = 1 + random(9); count > 0; count--) {
+      const changes = []
+      let offset = 0
+      for (let edit = 0; edit < 3 && offset <= source.length; edit++) {
+        const from = offset + random(source.length - offset + 1),
+          to = from + random(Math.min(3, source.length - from) + 1)
+        changes.push({ from, to, insert: 'xyz'.slice(0, random(4)) })
+        offset = to + 1
+      }
+      batches.push({ changes, length: source.length })
+      source = replace(source, changes)
+    }
+    assert.equal(replace(original, composeSourceBatches(batches)), source)
+  }
+  // A large insertion is copied once per pairing level, not once per later edit.
+  const clone = globalThis.structuredClone
+  let units = 0
+  globalThis.structuredClone = (value, ...rest) => {
+    if (typeof value === 'string') units += value.length
+    return clone(value, ...rest)
+  }
+  try {
+    const large = 'a'.repeat(100000)
+    const batches = [
+      { changes: [{ from: 0, to: 0, insert: large }], length: 0 },
+    ]
+    for (let key = 0; key < 30; key++)
+      batches.push({
+        changes: [
+          { from: large.length + key, to: large.length + key, insert: 'z' },
+        ],
+        length: large.length + key,
+      })
+    const [composed] = composeSourceBatches(batches)
+    assert.equal(composed.insert, large + 'z'.repeat(30))
+    assert.ok(units <= large.length * 6, String(units))
+  } finally {
+    globalThis.structuredClone = clone
   }
 })

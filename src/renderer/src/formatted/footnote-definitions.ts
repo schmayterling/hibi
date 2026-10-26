@@ -49,7 +49,9 @@ type Stretch = { readonly length: number; readonly labels: readonly string[] }
 type Group = { readonly length: number; readonly stretches: readonly Stretch[] }
 /** Label counts in a hash trie: a change copies the nodes and leaves on its labels' paths. */
 type Leaf = Map<string, number>
-type Labels = (Labels | Leaf | undefined)[]
+/** Labels whose hashes are equal, sorted, in chunks of up to 16: a change copies one chunk and the list of chunks. */
+type Collisions = { chunks: (readonly [label: string, count: number])[][] }
+type Labels = (Labels | Leaf | Collisions | undefined)[]
 /** Children per node, picked by this many bits of a label's hash. */
 const fanOut = 32
 const bits = 5
@@ -131,21 +133,80 @@ function hashOf(label: string) {
   return hash
 }
 
+/** The chunk that holds or would hold a label: the last one starting at or before it. */
+function chunkOf({ chunks }: Collisions, label: string) {
+  let low = 0,
+    high = chunks.length - 1
+  while (low < high) {
+    const middle = (low + high + 1) >> 1
+    if ((chunks[middle]?.[0]?.[0] ?? '') <= label) low = middle
+    else high = middle - 1
+  }
+  return low
+}
+
 /** How many times the note defines a label. */
 function countOf(labels: Labels, label: string) {
   const hash = hashOf(label)
-  let node: Labels | Leaf | undefined = labels
+  let node: Labels | Leaf | Collisions | undefined = labels
   for (let shift = 0; Array.isArray(node); shift += bits)
     node = node[(hash >>> shift) & (fanOut - 1)]
-  return node?.get(label) ?? 0
+  if (!node || node instanceof Map) return node?.get(label) ?? 0
+  const chunk = node.chunks[chunkOf(node, label)]
+  return chunk?.find(([key]) => key === label)?.[1] ?? 0
+}
+
+/** Change a label's count among labels whose hashes are equal, copying its chunk once. */
+function collide(
+  slot: Collisions | undefined,
+  label: string,
+  delta: number,
+  copies: Set<object>,
+) {
+  let collisions = slot
+  if (!collisions || !copies.has(collisions)) {
+    collisions = { chunks: slot ? slot.chunks.slice() : [] }
+    copies.add(collisions)
+  }
+  const { chunks } = collisions
+  const at = chunkOf(collisions, label)
+  let chunk = chunks[at] ?? []
+  if (!copies.has(chunk)) {
+    footnoteScan.copied += chunk.length
+    chunk = chunk.slice()
+    copies.add(chunk)
+  }
+  const found = chunk.findIndex(([key]) => key >= label)
+  const index = found < 0 ? chunk.length : found
+  const count = (chunk[index]?.[0] === label ? chunk[index][1] : 0) + delta
+  chunk.splice(index, chunk[index]?.[0] === label ? 1 : 0)
+  if (count > 0) chunk.splice(index, 0, [label, count])
+  if (chunk.length > leafSize) {
+    const halves = [chunk.slice(0, leafSize >> 1), chunk.slice(leafSize >> 1)]
+    footnoteScan.copied += chunk.length
+    for (const half of halves) copies.add(half)
+    chunks.splice(at, 1, ...halves)
+  } else if (chunk.length) chunks[at] = chunk
+  else chunks.splice(at, 1)
+  return chunks.length ? collisions : undefined
 }
 
 /** A node holding a full leaf's labels, by the next bits of their hashes. */
-function split(leaf: Leaf, shift: number, copies: Set<Labels | Leaf>) {
+function split(leaf: Leaf, shift: number, copies: Set<object>) {
   const node: Labels = new Array(fanOut)
   copies.add(node)
   for (const [label, count] of leaf) {
     const index = (hashOf(label) >>> shift) & (fanOut - 1)
+    // Hashes have 32 bits; past them, labels are told apart in sorted chunks.
+    if (shift + bits >= 32) {
+      node[index] = collide(
+        node[index] as Collisions | undefined,
+        label,
+        count,
+        copies,
+      )
+      continue
+    }
     let child = node[index] as Leaf | undefined
     if (!child) {
       child = new Map()
@@ -163,7 +224,7 @@ function split(leaf: Leaf, shift: number, copies: Set<Labels | Leaf>) {
  * on their paths is copied once, then changed in place.
  */
 function apply(labels: Labels, deltas: ReadonlyMap<string, number>): Labels {
-  const copies = new Set<Labels | Leaf>()
+  const copies = new Set<object>()
   let root = labels
   for (const [label, delta] of deltas) {
     if (!delta) continue
@@ -183,7 +244,16 @@ function apply(labels: Labels, deltas: ReadonlyMap<string, number>): Labels {
         node = copy
         continue
       }
-      let leaf = child
+      if (shift + bits >= 32) {
+        node[index] = collide(
+          child as Collisions | undefined,
+          label,
+          delta,
+          copies,
+        )
+        break
+      }
+      let leaf = child as Leaf | undefined
       if (!leaf || !copies.has(leaf)) {
         footnoteScan.copied += leaf?.size ?? 0
         leaf = new Map(leaf)
@@ -192,9 +262,8 @@ function apply(labels: Labels, deltas: ReadonlyMap<string, number>): Labels {
       const count = (leaf.get(label) ?? 0) + delta
       if (count > 0) leaf.set(label, count)
       else leaf.delete(label)
-      // Hashes have 32 bits, so the deepest leaves grow instead.
       node[index] =
-        leaf.size > leafSize && shift + bits < 32
+        leaf.size > leafSize
           ? split(leaf, shift + bits, copies)
           : leaf.size
             ? leaf

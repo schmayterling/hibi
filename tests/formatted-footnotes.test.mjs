@@ -37,8 +37,10 @@ function indexed(state) {
   const walk = (node) => {
     if (Array.isArray(node)) node.forEach(walk)
     else if (node)
-      for (const [label, count] of node) {
+      // A leaf, or the sorted chunks of labels whose hashes are equal.
+      for (const [label, count] of node.chunks?.flat() ?? node) {
         assert.ok(count > 0, label)
+        assert.equal(counts[label], undefined, label)
         counts[label] = count
       }
   }
@@ -407,6 +409,44 @@ test('label counts copied stay with the labels changed: none when typing in a de
   state = state.update({ changes: { from: end, to: state.doc.length } }).state
   assert.equal(indexed(state).fresh, undefined)
   assert.ok(footnoteScan.copied <= 2 * 16, `${footnoteScan.copied}`)
+})
+
+test('labels whose hashes are equal copy one chunk of counts per change', () => {
+  // `an` and `c0` hash alike, so all 1,024 labels of ten of them collide.
+  const labels = Array.from({ length: 1024 }, (_, n) =>
+    Array.from({ length: 10 }, (_, bit) => ((n >> bit) & 1 ? 'c0' : 'an')).join(
+      '',
+    ),
+  )
+  const [last] = labels.splice(700, 1)
+  let state = settle(
+    create(labels.map((label) => `[^${label}]: note`).join('\n\n')),
+  )
+  assert.equal(Object.keys(indexed(state)).length, 1023)
+  // A chunk of at most 16 counts, and its halves when it splits.
+  footnoteScan.copied = 0
+  const end = state.doc.length
+  state = state.update({
+    changes: { from: end, insert: `\n\n[^${last}]: note` },
+  }).state
+  assert.ok(footnoteScan.copied <= 16 + 17, `${footnoteScan.copied}`)
+  assert.equal(indexed(state)[last], 1)
+  footnoteScan.copied = 0
+  const first = state.doc.toString().indexOf('\n\n') + 2
+  state = state.update({ changes: { from: 0, to: first } }).state
+  state = state.update({
+    changes: { from: end - first, to: state.doc.length },
+  }).state
+  assert.ok(footnoteScan.copied <= 2 * 16, `${footnoteScan.copied}`)
+  assert.deepEqual(indexed(state), parsed(state.doc.toString()))
+  // They share one hash, so all of them sit in sorted chunks.
+  const chunks = []
+  const walk = (node) =>
+    Array.isArray(node)
+      ? node.forEach(walk)
+      : chunks.push(...(node?.chunks ?? []))
+  walk(state.field(footnoteDefinitions).labels)
+  assert.equal(chunks.flat().length, 1022)
 })
 
 test('opening a long note reads one slice; idle slices read the rest', () => {

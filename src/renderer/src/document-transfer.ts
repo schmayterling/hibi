@@ -14,23 +14,73 @@ import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 const loaded = new WeakMap<DocumentState, LoadedDocument>()
 export const loadedDocument = (document: DocumentState) => loaded.get(document)
 
+/** A document state read after its tab closed; its source is gone. */
+export class StaleDocumentError extends Error {
+  override name = 'StaleDocumentError'
+}
+
+type Source = {
+  current: SourceSnapshot
+  saved: SourceSnapshot
+  text?: string
+  savedText: { value?: string }
+}
+// Closures from old renders can hold a state long after its tab closes, so a
+// state reaches its source only through this map, which closing the tab clears.
+const sources = new WeakMap<DocumentState, Source>()
+const tabStates = new Map<string, Set<WeakRef<DocumentState>>>()
+
+const sourceOf = (document: DocumentState) => {
+  const source = sources.get(document)
+  if (!source) throw new StaleDocumentError('This tab is closed.')
+  return source
+}
+
+/** The source of a state whose tab is still open. */
+export const documentSnapshot = (document: DocumentState) =>
+  sources.get(document)?.current
+
 export function sourceDocument(
   metadata: DocumentFocus,
   current: SourceSnapshot,
   saved: SourceSnapshot,
+  savedText: { value?: string } = {},
 ): DocumentState {
-  let text: string | undefined, savedText: string | undefined
-  return Object.freeze({
+  const document: DocumentState = Object.freeze({
     ...metadata,
     get markdown() {
-      text ??= current.materialize()
-      return text
+      const source = sourceOf(document)
+      source.text ??= source.current.materialize()
+      return source.text
     },
     get savedMarkdown() {
-      savedText ??= saved.materialize()
-      return savedText
+      const source = sourceOf(document)
+      source.savedText.value ??= source.saved.materialize()
+      return source.savedText.value
     },
   })
+  sources.set(document, { current, saved, savedText })
+  let states = tabStates.get(metadata.tabId)
+  if (!states) {
+    states = new Set()
+    tabStates.set(metadata.tabId, states)
+  }
+  states.add(new WeakRef(document))
+  // Forget collected states at each doubling; a long session makes many.
+  if (states.size >= 64 && !(states.size & (states.size - 1)))
+    for (const state of states) if (!state.deref()) states.delete(state)
+  return document
+}
+
+/** Release a closed tab's sources: its states throw `StaleDocumentError` when read. */
+export function releaseDocuments(tabId: string) {
+  for (const state of tabStates.get(tabId) ?? []) {
+    const document = state.deref()
+    if (!document) continue
+    sources.delete(document)
+    loaded.delete(document)
+  }
+  tabStates.delete(tabId)
 }
 
 /** Hydrate inside the renderer: neither IPC nor contextBridge copies a complete note. */

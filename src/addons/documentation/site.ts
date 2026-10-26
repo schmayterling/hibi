@@ -568,13 +568,23 @@ async function* siteData(
   yield '}'
 }
 
-async function* encryptedData(data: AsyncIterable<string>, password: string) {
+async function siteEncryption(password: string) {
   if (password.length < 8 || password.length > 1024)
     throw new Error('Use a password between 8 and 1,024 characters.')
   const salt = randomBytes(16),
-    iv = randomBytes(12),
     iterations = 600_000
   const key = await promisify(pbkdf2)(password, salt, iterations, 32, 'sha256')
+  return { salt, iterations, key }
+}
+
+async function* encryptedData(
+  data: AsyncIterable<string>,
+  password: string,
+  encryption?: Awaited<ReturnType<typeof siteEncryption>>,
+) {
+  const { salt, iterations, key } =
+    encryption ?? (await siteEncryption(password))
+  const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', key, iv)
   yield `${JSON.stringify({
     encrypted: true,
@@ -606,6 +616,7 @@ export async function* siteOutput(
   readPage: (page: SitePage) => Promise<SitePage> = async (page) => page,
   readAsset?: (path: string) => AsyncIterable<Uint8Array>,
   inlineAssets = false,
+  mediaPaths?: readonly string[],
 ): AsyncGenerator<readonly [string, AsyncIterable<string>]> {
   const locked = !!password
   const inlineMedia = site.options.singleFile || locked || inlineAssets
@@ -617,13 +628,64 @@ export async function* siteOutput(
       routing: 'hash',
       options: { ...site.options, passwordProtected: true },
     }
+  const inline =
+    readAsset && !inlineAssets
+      ? [
+          ...new Set(
+            mediaPaths ??
+              site.pages.flatMap((page) => Object.values(page.images ?? {})),
+          ),
+        ].filter(
+          (path) =>
+            siteMediaType(path) &&
+            (inlineMedia || siteMediaType(path) === 'image/svg+xml'),
+        )
+      : []
+  if (inline.length) site = { ...site, inlineMedia: inline }
+  const encryption =
+    locked && inline.length ? await siteEncryption(password) : undefined
   const data = () =>
     locked
       ? encryptedData(
-          siteData(site, readPage, JSON.stringify, readAsset, inlineMedia),
+          siteData(
+            site,
+            readPage,
+            JSON.stringify,
+            inline.length ? undefined : readAsset,
+            inlineMedia,
+          ),
           password,
+          encryption,
         )
-      : siteData(site, readPage, siteJson, readAsset, inlineMedia)
+      : siteData(
+          site,
+          readPage,
+          siteJson,
+          inline.length ? undefined : readAsset,
+          inlineMedia,
+        )
+  async function* records() {
+    const encode = (record: unknown) => {
+      if (!encryption) return siteJson(record)
+      const iv = randomBytes(12)
+      const cipher = createCipheriv('aes-256-gcm', encryption.key, iv)
+      const ciphertext = Buffer.concat([
+        cipher.update(JSON.stringify(record), 'utf8'),
+        cipher.final(),
+        cipher.getAuthTag(),
+      ])
+      return siteJson({
+        iv: iv.toString('base64'),
+        ciphertext: ciphertext.toString('base64'),
+      })
+    }
+    for (const path of inline) {
+      let index = 0
+      for await (const data of base64Chunks(readAsset!(path)))
+        yield encode({ path, index: index++, data, last: false })
+      yield encode({ path, index, data: '', last: true })
+    }
+  }
   const home = homePage(site.pages, site.options.homePage) as
     | SitePage
     | undefined
@@ -667,17 +729,25 @@ export async function* siteOutput(
       )
   if (site.options.singleFile) {
     const marker = randomBytes(16).toString('hex')
-    const html = decorate(
-      template.replace('__HIBI_WORKSPACE_DATA__', marker),
-      homeContent,
-      './',
-      site.options.url,
-    )
+    const mediaMarker = randomBytes(16).toString('hex')
+    let source = template.replace('__HIBI_WORKSPACE_DATA__', marker)
+    let script = source.indexOf('<script>')
+    if (script < 0) script = source.indexOf('</body>')
+    if (script < 0) script = source.length
+    source = source.slice(0, script) + mediaMarker + source.slice(script)
+    const html = decorate(source, homeContent, './', site.options.url)
     const offset = html.indexOf(marker)
     async function* document() {
       yield html.slice(0, offset)
       yield* data()
-      yield html.slice(offset + marker.length)
+      const after = html.slice(offset + marker.length)
+      const mediaOffset = after.indexOf(mediaMarker)
+      yield after.slice(0, mediaOffset)
+      for await (const record of records())
+        yield '<script type="application/json" data-site-media>' +
+          record +
+          '</script>'
+      yield after.slice(mediaOffset + mediaMarker.length)
     }
     yield ['index.html', document()]
     return
@@ -691,10 +761,21 @@ export async function* siteOutput(
   yield [`${assets}/site.js`, textChunks(scripts)]
   yield [`${assets}/site.css`, textChunks(css)]
   if (!locked) yield [`${assets}/custom.css`, textChunks(customCss)]
+  const mediaFiles: string[] = []
+  for await (const record of records()) {
+    const path = assets + '/inline-media/' + mediaFiles.length + '.js'
+    mediaFiles.push(path)
+    yield [
+      path,
+      textChunks('window.__HIBI_MEDIA_CHUNK__(' + siteJson(record) + ');'),
+    ]
+  }
   async function* workspace() {
     yield 'window.__HIBI_WORKSPACE__='
     yield* data()
     yield ';'
+    if (mediaFiles.length)
+      yield 'window.__HIBI_MEDIA_FILES__=' + siteJson(mediaFiles) + ';'
   }
   yield [`${assets}/workspace.js`, workspace()]
   const shell = (prefix: string) =>

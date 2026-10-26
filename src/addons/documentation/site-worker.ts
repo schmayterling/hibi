@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
-import { constants } from 'node:fs'
-import { copyFile, type FileHandle, mkdir, open, stat } from 'node:fs/promises'
+import { type FileHandle, mkdir, open } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parentPort } from 'node:worker_threads'
 import { imageSources } from '../../main/images'
@@ -11,6 +10,7 @@ import { type SiteData, type SitePage, siteMediaType } from '../../site/data'
 import { createNoteGraph } from '../graph/model'
 import type { ExportOptions } from './options'
 import { prepareSite, siteOutput } from './site'
+import { readSiteAsset, type SiteAsset } from './site-media'
 import { type SiteFile, validateSiteFiles } from './site-runtime'
 
 export type SiteWorkerRequest =
@@ -33,6 +33,7 @@ export type SiteWorkerRequest =
       colorschemes: unknown
       addons: unknown
       password: string
+      assets?: SiteAsset[]
     }
 
 let directory = ''
@@ -43,17 +44,16 @@ let scratch: FileHandle
 let offset = 0
 let inMemory = false
 const assets = new Map<string, number>()
+let mediaSources: Map<string, SiteAsset>
 const pages = new Map<string, { offset: number; bytes: number; hash: string }>()
 const sourceHash = (source: string) =>
   createHash('sha256').update(source, 'utf16le').digest('hex')
 
 async function* readAsset(path: string): AsyncGenerator<Uint8Array> {
-  const file = await open(join(directory, 'assets', path), 'r')
-  try {
-    yield* file.createReadStream({ autoClose: false })
-  } finally {
-    await file.close()
-  }
+  const asset = mediaSources.get(path)
+  if (!asset)
+    throw new Error('The attachment changed while copying. Try again.')
+  yield* readSiteAsset(asset)
 }
 
 async function readPage(page: SitePage): Promise<SitePage> {
@@ -152,12 +152,14 @@ async function request(job: SiteWorkerRequest) {
   site = { ...metadata, pages: site.pages, options: site.options }
   if (site.options.graph) site.graph = graph.finish()
   const files: SiteFile[] = []
+  mediaSources = new Map((job.assets ?? []).map((asset) => [asset.path, asset]))
   const media: SiteFile[] = []
-  for (const path of assets.keys())
-    media.push({
-      path,
-      bytes: (await stat(join(directory, 'assets', path))).size,
-    })
+  for (const path of assets.keys()) {
+    const source = mediaSources.get(path)
+    if (!source)
+      throw new Error('The attachment changed while copying. Try again.')
+    media.push({ path, bytes: source.bytes })
+  }
   if (inMemory)
     validateSiteFiles(
       media.map((file) => ({
@@ -174,6 +176,7 @@ async function request(job: SiteWorkerRequest) {
       readPage,
       readAsset,
       inMemory,
+      [...assets.keys()],
     )) {
       const path = join(directory, 'files', relative)
       await mkdir(dirname(path), { recursive: true })
@@ -203,13 +206,6 @@ async function request(job: SiteWorkerRequest) {
       for (const asset of media) {
         // SVG stays an inert image data URL, never a standalone active document.
         if (siteMediaType(asset.path) === 'image/svg+xml') continue
-        const destination = join(directory, 'files', asset.path)
-        await mkdir(dirname(destination), { recursive: true })
-        await copyFile(
-          join(directory, 'assets', asset.path),
-          destination,
-          constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE,
-        )
         files.push(asset)
       }
   } finally {

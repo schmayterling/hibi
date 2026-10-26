@@ -2,25 +2,27 @@ import assert from 'node:assert/strict'
 import { createDecipheriv, pbkdf2Sync } from 'node:crypto'
 import { once } from 'node:events'
 import {
-  mkdir,
   mkdtemp,
   open,
   readdir,
   readFile,
   rename,
   rm,
+  stat,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { pathToFileURL } from 'node:url'
+import { runInNewContext } from 'node:vm'
 import { Worker } from 'node:worker_threads'
 import { exportOptions } from '../src/addons/documentation/options.ts'
 import {
   readSiteFiles,
   SiteWorker,
 } from '../src/addons/documentation/site-runtime.ts'
+import { decodeSiteMedia } from '../src/site/media.ts'
 
 const template =
   '<html lang="en"><head><title>site</title><style>body{}</style></head><body><div id="root"></div><script id="workspace-data" type="application/json">__HIBI_WORKSPACE_DATA__</script><script>void 0</script></body></html>'
@@ -186,7 +188,7 @@ for (const mode of [
   'memory',
 ]) {
   test(
-    'worker streams staged media for ' + mode + ' without encrypted sidecars',
+    'worker streams bounded media for ' + mode + ' without plaintext sidecars',
     async () => {
       const directory = await mkdtemp(join(tmpdir(), 'hibi-site-worker-media-'))
       const worker = new SiteWorker(resolve('out/main/documentation-worker.js'))
@@ -203,6 +205,7 @@ for (const mode of [
         Buffer.from('PRIVATE-ASSET-SENTINEL-9153'.repeat(2000)),
         ...(mode === 'protected-single' ? [Buffer.alloc(8 * 1024 * 1024)] : []),
       ])
+      const urls = []
       try {
         await worker.request({
           kind: 'start',
@@ -212,11 +215,16 @@ for (const mode of [
           options: exportOptions({ singleFile }),
           inMemory,
         })
-        await mkdir(join(directory, 'assets', 'hibi-assets', 'media'), {
-          recursive: true,
-        })
-        await writeFile(join(directory, 'assets', asset), bytes)
-        await writeFile(join(directory, 'assets', svg), vector)
+        const sources = [
+          { path: asset, source: join(directory, 'source.png'), value: bytes },
+          { path: svg, source: join(directory, 'source.svg'), value: vector },
+        ]
+        const assets = []
+        for (const { path, source, value } of sources) {
+          await writeFile(source, value)
+          const info = await stat(source)
+          assets.push({ path, source, bytes: info.size, mtimeMs: info.mtimeMs })
+        }
         await worker.request({
           kind: 'page',
           page: {
@@ -233,6 +241,7 @@ for (const mode of [
           colorschemes: [],
           addons: [],
           password: protectedSite ? 'private-export-password' : '',
+          assets,
         })
         assert.equal(
           files.some((file) => file.path === asset),
@@ -246,13 +255,41 @@ for (const mode of [
           ),
           'utf8',
         )
-        let payload = JSON.parse(
-          singleFile
-            ? text.match(
-                /<script id="workspace-data" type="application\/json">([\s\S]*?)<\/script>/,
-              )[1]
-            : text.slice('window.__HIBI_WORKSPACE__='.length, -1),
-        )
+        let payload
+        const blocks = []
+        if (singleFile) {
+          for (const block of text.matchAll(
+            /<script[^>]*type="application\/json"[^>]*>([\s\S]*?)<\/script>/g,
+          ))
+            assert.ok(
+              block[1].length <= 128 * 1024,
+              'every inline JSON block stays bounded',
+            )
+          payload = JSON.parse(
+            text.match(
+              /<script id="workspace-data" type="application\/json">([\s\S]*?)<\/script>/,
+            )[1],
+          )
+          for (const block of text.matchAll(
+            /<script[^>]*data-site-media[^>]*>([\s\S]*?)<\/script>/g,
+          ))
+            blocks.push(block[1])
+        } else {
+          const window = {}
+          runInNewContext(text, { window })
+          payload = window.__HIBI_WORKSPACE__
+          for (const path of window.__HIBI_MEDIA_FILES__ ?? []) {
+            const script = await readFile(
+              join(directory, 'files', path),
+              'utf8',
+            )
+            assert.ok(script.length < 128 * 1024)
+            runInNewContext(script, {
+              window: { __HIBI_MEDIA_CHUNK__: (record) => blocks.push(record) },
+            })
+          }
+        }
+        let decryptionKey
         if (protectedSite) {
           const ciphertext = Buffer.from(payload.ciphertext, 'base64')
           const key = pbkdf2Sync(
@@ -274,48 +311,73 @@ for (const mode of [
               cipher.final(),
             ]).toString('utf8'),
           )
-          assert.equal(text.includes('PRIVATE-ASSET-SENTINEL-9153'), false)
-          await assert.rejects(
-            readFile(join(directory, 'files', asset)),
-            /ENOENT/,
+          decryptionKey = await crypto.subtle.importKey(
+            'raw',
+            key,
+            'AES-GCM',
+            false,
+            ['decrypt'],
           )
+          assert.equal(text.includes('PRIVATE-ASSET-SENTINEL-9153'), false)
         }
-        assert.equal(
-          Buffer.from(
-            payload.pages[0].images['vector.svg'].split(',')[1],
-            'base64',
-          ).toString('utf8'),
-          vector,
-        )
+        async function* records() {
+          yield* blocks
+        }
+        await decodeSiteMedia(payload, records(), decryptionKey)
+        urls.push(...Object.values(payload.media))
+        if (inMemory) {
+          assert.equal(
+            Buffer.from(
+              payload.pages[0].images['vector.svg'].split(',')[1],
+              'base64',
+            ).toString('utf8'),
+            vector,
+          )
+          assert.deepEqual(
+            Buffer.from(
+              payload.pages[0].images['image.png'].split(',')[1],
+              'base64',
+            ),
+            bytes,
+          )
+          assert.equal(
+            (await readSiteFiles(join(directory, 'files'), files)).length,
+            files.length,
+          )
+        } else {
+          assert.equal(await (await fetch(payload.media[svg])).text(), vector)
+          if (inline)
+            assert.deepEqual(
+              Buffer.from(
+                await (await fetch(payload.media[asset])).arrayBuffer(),
+              ),
+              bytes,
+            )
+          else {
+            assert.equal(payload.pages[0].images['image.png'], asset)
+            assert.ok(
+              (
+                await readFile(
+                  join(directory, 'files/note.md/index.html'),
+                  'utf8',
+                )
+              ).includes('../' + asset),
+            )
+          }
+          assert.equal(payload.pages[0].images['vector.svg'], svg)
+        }
         assert.equal(
           files.some((file) => file.path === svg),
           false,
         )
         await assert.rejects(readFile(join(directory, 'files', svg)), /ENOENT/)
-        const image = payload.pages[0].images['image.png']
-        if (inline)
-          assert.deepEqual(Buffer.from(image.split(',')[1], 'base64'), bytes)
-        else {
-          assert.equal(image, asset)
-          assert.deepEqual(
-            await readFile(join(directory, 'files', asset)),
-            bytes,
-          )
-          assert.ok(
-            (
-              await readFile(
-                join(directory, 'files', 'note.md/index.html'),
-                'utf8',
-              )
-            ).includes('../' + asset),
-          )
-        }
-        if (inMemory)
-          assert.equal(
-            (await readSiteFiles(join(directory, 'files'), files)).length,
-            files.length,
-          )
+        await assert.rejects(
+          readFile(join(directory, 'files', asset)),
+          /ENOENT/,
+        )
+        await assert.rejects(readdir(join(directory, 'assets')), /ENOENT/)
       } finally {
+        for (const url of urls) URL.revokeObjectURL(url)
         await worker.close()
         await rm(directory, { recursive: true, force: true })
       }
@@ -337,8 +399,9 @@ test('worker coalesces small output chunks while keeping exact UTF-8 bytes', asy
       const open = fs.open
       fs.open = async (path, ...args) => {
         const file = await open(path, ...args)
-        if (path.endsWith('/pages.jsonl')) counters.scratchFiles++
-        if (path.endsWith('/files/index.html')) {
+        const normalized = path.split(String.fromCharCode(92)).join('/')
+        if (normalized.endsWith('/pages.jsonl')) counters.scratchFiles++
+        if (normalized.endsWith('/files/index.html')) {
           const write = file.writeFile.bind(file)
           file.writeFile = (chunk, ...args) => {
             const bytes = Buffer.byteLength(chunk)

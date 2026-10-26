@@ -16,6 +16,10 @@ export type SiteData = Omit<WorkspaceSnapshot, 'pages'> & {
   options: ExportOptions
   routing: 'hash' | 'paths'
   graph?: ReturnType<typeof noteGraph>
+  /** Assets transported as bounded inline records, separate from document JSON. */
+  inlineMedia?: string[]
+  /** Blob URLs created locally after inline records have been authenticated. */
+  media?: Record<string, string>
   /** Addon colorschemes available to the site; bundled schemes are always present. */
   colorschemes?: Colorscheme[]
   /** Included addon contributions; CSS is data only and never runs addon code. */

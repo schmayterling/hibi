@@ -9,7 +9,7 @@ import { build } from 'esbuild'
 const path = 'src/addons/documentation/native.ts'
 const stubs = {
   electron:
-    'export const app = { getAppPath: () => process.cwd() }; export const BrowserWindow = {}; export const dialog = {}',
+    'export const app = { getAppPath: () => process.cwd(), getPath: () => process.cwd() + "/test-results/native-profile" }; export const BrowserWindow = {}; export const dialog = {}',
   '../../main/addons':
     'export const getAddonStates = () => []; export const getAddonManifests = () => []',
   '../../main/appearance': 'export const exportedAppearance = () => ({})',

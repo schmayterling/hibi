@@ -25,7 +25,7 @@ for (const [name, size, header] of [
   ],
 ])
   test(
-    'asset staging streams ' + name + ' beyond the old embedded limit',
+    'asset publication copies ' + name + ' once without staging media bytes',
     async (t) => {
       const directory = await mkdtemp(join(tmpdir(), 'hibi-site-media-'))
       t.after(() => rm(directory, { recursive: true, force: true }))
@@ -39,7 +39,6 @@ for (const [name, size, header] of [
         await file.close()
       }
       const media = new SiteMedia(
-        directory,
         'hibi-assets',
         false,
         new AbortController().signal,
@@ -47,19 +46,27 @@ for (const [name, size, header] of [
       const path = await media.stage(name, note, directory)
       assert.match(path, /^hibi-assets\/media\/[a-f0-9]{64}\.(png|mp4)$/)
       assert.equal(await media.stage('./' + name, note, directory), path)
+      assert.equal(media.files().length, 1)
       assert.deepEqual(
-        await readFile(join(directory, 'assets', path)),
+        (await readdir(directory)).sort(),
+        [name, 'note.md'].sort(),
+      )
+      const output = join(directory, 'published')
+      assert.equal(await media.publish(path, output), true)
+      assert.deepEqual(
+        await readFile(output),
         await readFile(join(directory, name)),
       )
-      assert.equal(
-        (await readdir(join(directory, 'assets', 'hibi-assets', 'media')))
-          .length,
-        1,
+      assert.equal(await media.publish('missing', output), false)
+      await writeFile(join(directory, name), header)
+      await assert.rejects(
+        media.publish(path, join(directory, 'changed')),
+        /attachment changed/,
       )
     },
   )
 
-test('memory asset budget rejects before creating a staged copy; cancellation closes readers', async (t) => {
+test('memory media budget refuses before reading asset bodies; cancellation closes readers', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'hibi-site-media-memory-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const note = join(directory, 'note.md')
@@ -72,19 +79,19 @@ test('memory asset budget rejects before creating a staged copy; cancellation cl
     await file.close()
   }
   const controller = new AbortController()
-  const media = new SiteMedia(directory, 'hibi-assets', true, controller.signal)
+  const media = new SiteMedia('hibi-assets', true, controller.signal)
   await assert.rejects(
     media.stage('large.png', note, directory),
     /Export to disk instead/,
   )
-  await assert.rejects(readdir(join(directory, 'assets')), /ENOENT/)
+  assert.deepEqual((await readdir(directory)).sort(), ['large.png', 'note.md'])
   controller.abort()
   await assert.rejects(media.stage('large.png', note, directory), {
     name: 'AbortError',
   })
 })
 
-test('base64 streaming carries incomplete triples without accumulating the asset', async () => {
+test('base64 chunks carry incomplete triples and stay bounded for oversized reader chunks', async () => {
   const bytes = Buffer.from('日本語 and arbitrary binary\0\xff', 'utf8')
   for (const width of [1, 2, 3, 4, 17]) {
     async function* input() {
@@ -92,15 +99,21 @@ test('base64 streaming carries incomplete triples without accumulating the asset
         yield bytes.subarray(at, at + width)
     }
     const chunks = []
-    for await (const chunk of base64Chunks(input())) {
-      assert.ok(chunk.length <= 4 * Math.ceil((width + 2) / 3))
-      chunks.push(chunk)
-    }
+    for await (const chunk of base64Chunks(input())) chunks.push(chunk)
     assert.equal(chunks.join(''), bytes.toString('base64'))
   }
+  async function* large() {
+    yield Buffer.alloc(2 * 1024 * 1024, 0xa7)
+  }
+  let size = 0
+  for await (const chunk of base64Chunks(large())) {
+    assert.ok(chunk.length <= 64 * 1024)
+    size += Buffer.from(chunk, 'base64').length
+  }
+  assert.equal(size, 2 * 1024 * 1024)
 })
 
-test('cancelling during an asset copy closes its input and exclusive output', async (t) => {
+test('cancelling publication closes source and exclusive destination after the first chunk', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'hibi-site-media-cancel-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const note = join(directory, 'note.md')
@@ -112,13 +125,16 @@ test('cancelling during an asset copy closes its input and exclusive output', as
   } finally {
     await file.close()
   }
+  const controller = new AbortController()
+  const media = new SiteMedia('hibi-assets', false, controller.signal)
+  const path = await media.stage('image.png', note, directory)
+  const output = join(directory, 'published')
   const fs = process.getBuiltinModule('node:fs/promises')
   const original = fs.open
-  const controller = new AbortController()
   let reads = 0
   fs.open = async (path, ...args) => {
     const file = await original(path, ...args)
-    if (String(path).includes(join(directory, 'assets'))) {
+    if (path === output) {
       const write = file.writeFile.bind(file)
       file.writeFile = (chunks) =>
         write(
@@ -135,17 +151,10 @@ test('cancelling during an asset copy closes its input and exclusive output', as
   }
   syncBuiltinESMExports()
   try {
-    const media = new SiteMedia(
-      directory,
-      'hibi-assets',
-      false,
-      controller.signal,
-    )
-    await assert.rejects(media.stage('image.png', note, directory), {
-      name: 'AbortError',
-    })
+    await assert.rejects(media.publish(path, output), { name: 'AbortError' })
     assert.equal(reads, 1)
-    await rm(join(directory, 'assets'), { recursive: true })
+    await rm(output)
+    await rm(join(directory, 'image.png'))
   } finally {
     fs.open = original
     syncBuiltinESMExports()

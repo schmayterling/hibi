@@ -1374,7 +1374,8 @@
     "src/addons/documentation/native.ts",
     "src/addons/documentation/prepare.ts",
     "src/addons/documentation/site-runtime.ts",
-    "src/addons/documentation/site-worker.ts"
+    "src/addons/documentation/site-worker.ts",
+    "src/main/export-scratch.ts"
   ],
   "283432fdadc1": [
     "src/addons/dictionary/index.tsx"
@@ -5651,6 +5652,7 @@
   ],
   "f54320f2a651": [
     "src/addons/documentation/site-media.ts",
+    "src/addons/documentation/site-worker.ts",
     "src/main/media.ts"
   ],
   "96c5ae0b5065": [
@@ -6208,6 +6210,9 @@
   "92382357bcdf": [
     "src/main/workspace-files.ts"
   ],
+  "7da80d73d733": [
+    "src/site/media.ts"
+  ],
   "27f866079733": [
     "src/shared/document-journal.ts"
   ],
@@ -6297,6 +6302,10 @@
   ],
   "7a5592fe56ea": [
     "src/addons/documentation/site.ts"
+  ],
+  "de4804e48ed8": [
+    "src/site/bootstrap.tsx",
+    "src/site/media.ts"
   ],
   "160f0858f2bd": [
     "src/main/workspace-files.ts"

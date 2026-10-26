@@ -303,8 +303,10 @@ export function startSite(workspace: SiteData, root: Root) {
         byPath.get(path)?.images?.[image.getAttribute('src') ?? '']
       const type =
         typeof embedded === 'string' ? siteMediaType(embedded) : undefined
-      const assetType = type === 'image/svg+xml' ? undefined : type
-      const media = assetType ? new URL(embedded!, siteRoot).href : embedded
+      const blob = type && workspace.media?.[embedded!]
+      const assetType = blob || type !== 'image/svg+xml' ? type : undefined
+      const media =
+        blob || (assetType ? new URL(embedded!, siteRoot).href : embedded)
       if (
         typeof media === 'string' &&
         (assetType?.startsWith('video/') ||

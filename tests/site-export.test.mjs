@@ -12,7 +12,11 @@ import {
   exportOptions,
   validateExportOptions,
 } from '../src/addons/documentation/options.ts'
-import { prepareSite, siteFiles } from '../src/addons/documentation/site.ts'
+import {
+  prepareSite,
+  siteFiles,
+  siteOutput,
+} from '../src/addons/documentation/site.ts'
 import { electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
@@ -1318,3 +1322,149 @@ for (const blocked of [false, true]) {
     assert.deepEqual(await page.evaluate(() => window.emptySearchStatuses), [])
   })
 }
+
+test('chunked images and video load offline in single and protected exports with opaque SVG images', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-inline-site-'))
+  const app = await electron.launch({
+    args: [resolve('.'), '--user-data-dir=' + join(root, 'profile')],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  await app.firstWindow()
+  const assets = new Map([
+    [
+      'hibi-assets/media/' + 'a'.repeat(64) + '.png',
+      Buffer.concat([
+        Buffer.from(pixel.split(',')[1], 'base64'),
+        Buffer.alloc(131072),
+      ]),
+    ],
+    [
+      'hibi-assets/media/' + 'b'.repeat(64) + '.svg',
+      Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><script>window.svgScriptRan=true;try{window.svgStorageAccess=!!localStorage}catch{window.svgStorageAccess=false}</script><rect width="2" height="2"/></svg>',
+      ),
+    ],
+    [
+      'hibi-assets/media/' + 'c'.repeat(64) + '.mp4',
+      Buffer.concat([
+        Buffer.from('000000206674797069736f6d', 'hex'),
+        Buffer.alloc(131072),
+      ]),
+    ],
+  ])
+  const [png, svg, video] = assets.keys()
+  const source =
+    '# Home\n\n![chunked PNG](image.png)\n\n![chunked SVG](vector.svg)\n\n![chunked video](clip.mp4)'
+  const template = await readFile('out/site/template.html', 'utf8')
+  for (const mode of [
+    'single',
+    'protected-single',
+    'protected-folder',
+    'folder',
+  ]) {
+    const directory = join(root, mode)
+    await mkdir(directory)
+    const singleFile = mode === 'single' || mode === 'protected-single'
+    const password = mode.startsWith('protected')
+      ? 'chunked-site-password-845'
+      : ''
+    const site = prepareSite(
+      {
+        name: 'Chunked site',
+        pages: [
+          {
+            path: 'README.md',
+            markdown: source,
+            html: marked.parse(source),
+            images: { 'image.png': png, 'vector.svg': svg, 'clip.mp4': video },
+          },
+        ],
+      },
+      exportOptions({ singleFile }),
+    )
+    async function* readAsset(path) {
+      const bytes = assets.get(path)
+      for (let offset = 0; offset < bytes.length; offset += 100001)
+        yield bytes.subarray(offset, offset + 100001)
+    }
+    for await (const [path, chunks] of siteOutput(
+      template,
+      site,
+      password,
+      async (page) => page,
+      readAsset,
+    )) {
+      await mkdir(join(directory, path, '..'), { recursive: true })
+      let content = ''
+      for await (const chunk of chunks) content += chunk
+      await writeFile(join(directory, path), content)
+    }
+    if (!singleFile && !password)
+      for (const path of [png, video]) {
+        await mkdir(join(directory, path, '..'), { recursive: true })
+        await writeFile(join(directory, path), assets.get(path))
+      }
+    const next = app.waitForEvent('window')
+    await app.evaluate(
+      ({ BrowserWindow }, path) => {
+        const window = new BrowserWindow({
+          show: false,
+          webPreferences: {
+            sandbox: true,
+            contextIsolation: true,
+            nodeIntegration: false,
+            backgroundThrottling: false,
+          },
+        })
+        void window.loadFile(path)
+      },
+      join(directory, 'index.html'),
+    )
+    const page = await next
+    if (password) {
+      await page.getByLabel('Password', { exact: true }).fill('wrong-password')
+      await page.getByRole('button', { name: 'Unlock', exact: true }).click()
+      await page.getByRole('alert').waitFor()
+      await page.getByLabel('Password', { exact: true }).fill(password)
+      await page.getByRole('button', { name: 'Unlock', exact: true }).click()
+    }
+    await page.getByRole('button', { name: /^toggle navigation$/i }).waitFor()
+    await page.waitForFunction(() =>
+      ['chunked PNG', 'chunked SVG'].every((alt) => {
+        const image = document.querySelector('img[alt="' + alt + '"]')
+        return image?.complete && image.naturalWidth > 0
+      }),
+    )
+    const videoSrc = await page
+      .locator('video[aria-label="chunked video"]')
+      .getAttribute('src')
+    assert.ok(videoSrc.startsWith('blob:') || mode === 'folder', videoSrc)
+    assert.equal(await page.evaluate(() => window.svgScriptRan), undefined)
+    if (mode === 'single') {
+      const svgUrl = await page
+        .locator('img[alt="chunked SVG"]')
+        .getAttribute('src')
+      assert.match(svgUrl, /^data:image\/svg\+xml;base64,/)
+      const nextSvg = app.waitForEvent('window')
+      await app.evaluate(({ BrowserWindow }, src) => {
+        const window = new BrowserWindow({
+          show: false,
+          webPreferences: {
+            sandbox: true,
+            contextIsolation: true,
+            nodeIntegration: false,
+          },
+        })
+        void window.loadURL(src)
+      }, svgUrl)
+      const opened = await nextSvg
+      await opened.waitForLoadState('domcontentloaded')
+      assert.equal(await opened.evaluate(() => window.svgStorageAccess), false)
+      await opened.close()
+    }
+    await page.close()
+  }
+})

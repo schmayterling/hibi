@@ -1,13 +1,11 @@
 import { randomUUID } from 'node:crypto'
-import { constants } from 'node:fs'
-import { copyFile, mkdir, mkdtemp, open, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { mkdir, readFile, rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import { app, BrowserWindow, dialog } from 'electron'
 import { getAddonManifests, getAddonStates } from '../../main/addons'
 import { exportedAppearance } from '../../main/appearance'
+import { createSiteScratch } from '../../main/export-scratch'
 import { runFileDialog } from '../../main/file-operation-dialog'
-import { writeText } from '../../main/files'
 import { readDocumentImage } from '../../main/images'
 import {
   currentWorkspaceTarget,
@@ -25,6 +23,7 @@ import type { NativeAddon, SiteExportArtifact } from '../api'
 import manifest from './manifest'
 import { type ExportOptions, validateExportOptions } from './options'
 import { SiteMedia } from './site-media'
+import { publishSiteFolder, readSiteFile } from './site-publish'
 import {
   readSiteFiles,
   type SiteFile,
@@ -54,12 +53,14 @@ type Session = {
     { source: WorkspacePage; images: Promise<WorkspacePage> }
   >
   busy: boolean
+  operation?: Promise<unknown>
   committing: boolean
   timer?: ReturnType<typeof setTimeout>
   closing?: Promise<void>
   files?: SiteFile[]
 }
 let active: Session | undefined
+let starting: Promise<void> | undefined
 const invalid = () => new Error('Could not prepare the documentation export.')
 
 function dispose(session: Session): Promise<void> {
@@ -119,12 +120,15 @@ async function withSession<T>(
   if (session.busy) throw new Error('Another export is already in progress.')
   session.busy = true
   try {
-    return await action(session)
+    const operation = action(session)
+    session.operation = operation
+    return await operation
   } catch (error) {
     if (!session.committing) await dispose(session)
     throw error
   } finally {
     session.busy = false
+    delete session.operation
   }
 }
 
@@ -159,18 +163,6 @@ function validateContributions(input: Record<string, unknown>) {
     return enabled.has(scheme.id.split('.')[0])
   })
   return { css, colorschemes: schemes, addons }
-}
-
-async function* stagedFile(
-  session: Session,
-  relative: string,
-): AsyncGenerator<Uint8Array> {
-  const file = await open(join(session.directory, 'files', relative), 'r')
-  try {
-    yield* file.createReadStream({ autoClose: false })
-  } finally {
-    await file.close()
-  }
 }
 
 async function verifySources(session: Session) {
@@ -227,6 +219,7 @@ async function finish(session: Session, input: unknown) {
     ),
     ...contributions,
     password,
+    assets: session.media.files(),
   })
   if (!isCurrentWorkspaceTarget(session.target))
     throw new Error('The workspace changed during export. Export again.')
@@ -237,8 +230,12 @@ async function finish(session: Session, input: unknown) {
 
 export default {
   id: manifest.id,
-  stop() {
-    if (active && !active.committing) void dispose(active).catch(console.error)
+  async stop() {
+    await starting
+    if (!active) return
+    const session = active
+    if (session.committing) await session.operation?.catch(() => {})
+    else await dispose(session)
   },
   queries: {
     async options() {
@@ -249,73 +246,84 @@ export default {
       }
     },
     async begin(input) {
-      if (active) throw new Error('Another export is already in progress.')
-      const value = input as {
-        target?: unknown
-        options?: unknown
-        inMemory?: unknown
-      }
-      const target = currentWorkspaceTarget()
-      if (!target || !isCurrentWorkspaceTarget(value?.target))
-        throw new Error('The workspace changed during export. Export again.')
-      await refreshWorkspace()
-      const workspace = getWorkspace(undefined, true)
-      if (!workspace || !isCurrentWorkspaceTarget(target))
-        throw new Error('The workspace changed during export. Export again.')
-      const options = validateExportOptions(value.options)
-      options.graph = options.graph && graphEnabled()
-      const paths = exportPaths(workspace.entries).map((page) => page.path)
-      if (!paths.length)
-        throw new Error('This workspace has no supported documents to export.')
-      // Recheck ownership after scratch allocation before starting a worker.
-      const directory = await mkdtemp(join(tmpdir(), 'hibi-site-'))
-      if (active) {
-        await rm(directory, { recursive: true, force: true })
+      if (active || starting)
         throw new Error('Another export is already in progress.')
-      }
-      const worker = new SiteWorker(
-        join(app.getAppPath(), 'out/main/documentation-worker.js'),
-      )
-      const controller = new AbortController()
-      const inMemory = value.inMemory === true
-      const session: Session = {
-        token: randomUUID(),
-        target,
-        name: workspace.name,
-        paths,
-        options,
-        directory,
-        worker,
-        controller,
-        inMemory,
-        media: new SiteMedia(
-          directory,
-          siteAssetDirectory(paths.map((path) => ({ path }))),
-          inMemory,
-          controller.signal,
-        ),
-        index: 0,
-        readIndex: 0,
-        pending: new Map(),
-        busy: true,
-        committing: false,
-      }
-      active = session
+      let ready!: () => void
+      starting = new Promise<void>((resolve) => {
+        ready = resolve
+      })
       try {
-        await worker.request({
-          kind: 'start',
-          directory,
-          name: session.name,
+        const value = input as {
+          target?: unknown
+          options?: unknown
+          inMemory?: unknown
+        }
+        const target = currentWorkspaceTarget()
+        if (!target || !isCurrentWorkspaceTarget(value?.target))
+          throw new Error('The workspace changed during export. Export again.')
+        await refreshWorkspace()
+        const workspace = getWorkspace(undefined, true)
+        if (!workspace || !isCurrentWorkspaceTarget(target))
+          throw new Error('The workspace changed during export. Export again.')
+        const options = validateExportOptions(value.options)
+        options.graph = options.graph && graphEnabled()
+        const paths = exportPaths(workspace.entries).map((page) => page.path)
+        if (!paths.length)
+          throw new Error(
+            'This workspace has no supported documents to export.',
+          )
+        // Recheck ownership after scratch allocation before starting a worker.
+        const directory = await createSiteScratch(app.getPath('userData'))
+        if (active) {
+          await rm(directory, { recursive: true, force: true })
+          throw new Error('Another export is already in progress.')
+        }
+        const worker = new SiteWorker(
+          join(app.getAppPath(), 'out/main/documentation-worker.js'),
+        )
+        const controller = new AbortController()
+        const inMemory = value.inMemory === true
+        const session: Session = {
+          token: randomUUID(),
+          target,
+          name: workspace.name,
           paths,
           options,
+          directory,
+          worker,
+          controller,
           inMemory,
-        })
-        session.busy = false
-        sessionFor({ token: session.token })
-        return { token: session.token, paths }
-      } catch (error) {
-        await dispose(session)
-        throw error
+          media: new SiteMedia(
+            siteAssetDirectory(paths.map((path) => ({ path }))),
+            inMemory,
+            controller.signal,
+          ),
+          index: 0,
+          readIndex: 0,
+          pending: new Map(),
+          busy: true,
+          committing: false,
+        }
+        active = session
+        try {
+          await worker.request({
+            kind: 'start',
+            directory,
+            name: session.name,
+            paths,
+            options,
+            inMemory,
+          })
+          session.busy = false
+          sessionFor({ token: session.token })
+          return { token: session.token, paths }
+        } catch (error) {
+          await dispose(session)
+          throw error
+        }
+      } finally {
+        starting = undefined
+        ready()
       }
     },
     async page(input) {
@@ -466,7 +474,10 @@ export default {
             async function* document() {
               await verifySources(session)
               validateContributions(input as Record<string, unknown>)
-              yield* stagedFile(session, 'index.html')
+              yield* readSiteFile(
+                join(session.directory, 'files'),
+                'index.html',
+              )
               if (!isCurrentWorkspaceTarget(session.target))
                 throw new Error(
                   'The workspace changed during export. Export again.',
@@ -512,21 +523,11 @@ export default {
             }
           }
           try {
-            for (const { path: relative } of files) {
-              if (relative === 'index.html') continue
-              const path = join(destination, relative)
-              await mkdir(dirname(path), { recursive: true })
-              await copyFile(
-                join(session.directory, 'files', relative),
-                path,
-                constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE,
-              )
-            }
-            // Publish the entrypoint last, with one sync for this new export.
-            await writeText(
-              join(destination, 'index.html'),
-              stagedFile(session, 'index.html'),
-              true,
+            await publishSiteFolder(
+              join(session.directory, 'files'),
+              destination,
+              files,
+              session.media,
             )
           } catch (error) {
             await rm(destination, { recursive: true, force: true })

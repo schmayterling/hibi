@@ -65,9 +65,12 @@ function fixture(current, baseline = current) {
     },
     immediate: () => true,
   }
-  const api = documentTransferApi(native)
+  let api
   return {
-    api,
+    get api() {
+      api ??= documentTransferApi(native)
+      return api
+    },
     native,
     wire,
     messages,
@@ -242,6 +245,15 @@ test('completed bootstrap hydration is reused without reopening its consumed str
   assert.equal(second.info, 'unchanged')
   assert.equal(calls, 1)
   assert.equal(f.messages.length, reads)
+  assert.deepEqual(f.state(), { aborted: 1, finished: true })
+})
+
+test('a document read before bootstrap does not consume the startup snapshot', async () => {
+  const f = fixture('startup source')
+  assert.equal((await f.api.getDocument()).markdown, 'startup source')
+  const startup = await f.api.bootstrap.document()
+  assert.equal(startup.document.markdown, 'startup source')
+  assert.equal(f.messages.length, 1)
   assert.deepEqual(f.state(), { aborted: 1, finished: true })
 })
 

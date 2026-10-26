@@ -64,3 +64,50 @@
 .hibi-formatted .hibi-lp-table .cm-editor.hibi-lp-cell-editor .cm-line {
   padding: 0;
 }
+/* Column widths and row heights set by dragging a cell edge, like the rich editor's. */
+.hibi-formatted .hibi-lp-table[data-columns-sized="all"] > table {
+  width: auto;
+}
+.hibi-formatted .hibi-lp-table :is(th, td)[data-resize-handle]::after {
+  content: "";
+  position: absolute;
+  background: var(--accent);
+  opacity: 0.65;
+  pointer-events: none;
+}
+.hibi-formatted .hibi-lp-table :is(th, td)[data-resize-handle="column"]::after {
+  inset: -1px -2px -1px auto;
+  width: 3px;
+}
+.hibi-formatted .hibi-lp-table :is(th, td)[data-resize-handle="row"]::after {
+  inset: auto -1px -2px;
+  height: 3px;
+}
+/* Keyboard size handles on cell edges, shown while focused. */
+.hibi-formatted .hibi-lp-table-resizer {
+  position: absolute;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  background: var(--accent);
+  opacity: 0;
+}
+.hibi-formatted .hibi-lp-table-resizer[data-axis="column"] {
+  inset: 0 0 0 auto;
+  width: 3px;
+  height: auto;
+}
+.hibi-formatted .hibi-lp-table-resizer[data-axis="row"] {
+  inset: auto 0 0;
+  height: 3px;
+}
+.hibi-formatted .hibi-lp-table-resizer:focus-visible {
+  opacity: 0.65;
+  outline: none;
+}
+.hibi-formatted .hibi-lp-table[data-table-resize="column"] {
+  cursor: col-resize;
+}
+.hibi-formatted .hibi-lp-table[data-table-resize="row"] {
+  cursor: row-resize;
+}

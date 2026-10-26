@@ -323,15 +323,42 @@ export function deleteColumn(
   for (let index = 0; index < table.lines; index++) {
     const row = line(table, index)
     if (columns === 2) {
-      // One column needs outer pipes, or its header and delimiter read as a heading.
-      const rest = row.cells
-        .filter((_, at) => at !== column)
-        .map(({ from, to }) => row.text.slice(from - row.from, to - row.from))
-      changes.push({
-        from: row.start,
-        to: row.end,
-        insert: rest.length ? `| ${rest.join(' | ')} |` : '|',
-      })
+      // One column needs outer pipes, or its header and delimiter read as a
+      // heading. The column is deleted as in wider tables and only missing
+      // pipes are added, so the cell left, even an empty one, keeps its
+      // place and its sizes follow it.
+      const cell = row.cells[column]
+      let removed: TableChange | null = null
+      if (cell) {
+        const { left, right } = pipesAround(row, cell)
+        removed =
+          left >= 0
+            ? { from: left, to: right >= 0 ? right : row.end, insert: '' }
+            : {
+                from: row.start,
+                to: right >= 0 ? right + 1 : row.end,
+                insert: '',
+              }
+      }
+      const text = (from: number, to: number) =>
+        row.text.slice(from - row.from, to - row.from)
+      const rest = removed
+        ? text(row.start, removed.from) + text(removed.to, row.end)
+        : text(row.start, row.end)
+      if (!rest.trim()) {
+        changes.push({ from: row.start, to: row.end, insert: '|' })
+        continue
+      }
+      const added: TableChange[] = []
+      if (!rest.trimStart().startsWith('|')) {
+        if (removed?.from === row.start) removed.insert = '|'
+        else added.push({ from: row.start, to: row.start, insert: '| ' })
+      }
+      if (!rest.trimEnd().endsWith('|')) {
+        if (removed?.to === row.end) removed.insert += '|'
+        else added.push({ from: row.end, to: row.end, insert: ' |' })
+      }
+      changes.push(...(removed ? [removed] : []), ...added)
       continue
     }
     const cell = row.cells[column]
@@ -455,4 +482,109 @@ export function planInline<W>(
   }
   while (open.pop()) ops.push({ type: 'close' })
   return ops
+}
+
+const delimiterRow = /^\|?(?:[ \t]*:?-+:?[ \t]*\|)+(?:[ \t]*:?-+:?[ \t]*)?$/
+const quoteMarker = /^ {0,3}>[ \t]?/
+const heading = /^#{1,6}(?:[ \t]|$)/
+const listMarker = /^(?:[-+*]|\d{1,9}[.)])(?:[ \t]+|$)/
+
+/**
+ * How many GFM tables start in these lines: a line with a pipe, then a
+ * delimiter row with as many cells, outside fenced code. Like the formatted
+ * view's parser, a table may start after quote and list markers, and a
+ * fence ends with its closing marker or with the quote or list item around
+ * it. A table's count of the tables before it is its ordinal, part of the
+ * key its stored sizes have.
+ */
+export function countTables(lines: Iterable<string>) {
+  let count = 0,
+    fence: { marker: string; quotes: number; indent: number } | null = null,
+    previous: string | null = null,
+    // The container (quote depth and list column) of the table the lines are in.
+    table: string | null = null,
+    // The content column of the list item the lines are in, 0 outside lists.
+    list = 0
+  for (const raw of lines) {
+    const lead = raw.length - raw.trimStart().length
+    let quotes = 0,
+      at = 0
+    for (
+      let marker = quoteMarker.exec(raw);
+      marker;
+      marker = quoteMarker.exec(raw.slice(at))
+    ) {
+      quotes++
+      at += marker[0].length
+    }
+    const text = raw.slice(at)
+    const indent = text.length - text.trimStart().length
+    const line = text.slice(indent)
+    if (fence) {
+      if (quotes >= fence.quotes && (!line || indent >= fence.indent)) {
+        const marker = /^(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1]
+        if (
+          marker &&
+          marker[0] === fence.marker[0] &&
+          marker.length >= fence.marker.length
+        )
+          fence = null
+        continue
+      }
+      // Its quote or list item ended, and the fence with it.
+      fence = null
+    }
+    const item = listMarker.exec(line)?.[0]
+    if (item) list = indent + item.length
+    else if (line && Math.max(lead, indent) < list) list = 0
+    // Quotes inside the list item come after its marker.
+    let content = item ? line.slice(item.length) : line
+    for (
+      let marker = quoteMarker.exec(content);
+      marker && item;
+      marker = quoteMarker.exec(content)
+    ) {
+      quotes++
+      content = content.slice(marker[0].length)
+    }
+    const marker = /^(`{3,}|~{3,})/.exec(content)?.[1]
+    if (marker) {
+      fence = { marker, quotes, indent: list }
+      previous = null
+      table = null
+      continue
+    }
+    if (!content.trim()) {
+      previous = null
+      table = null
+      continue
+    }
+    // A new list item, a heading or another container ends a table, and
+    // its rows head no table there.
+    const container = `${quotes}:${list}`
+    if (
+      table !== null &&
+      (item || heading.test(content) || container !== table)
+    ) {
+      table = null
+      previous = null
+    }
+    if (table !== null) continue
+    if (heading.test(content)) {
+      previous = null
+      continue
+    }
+    if (
+      previous !== null &&
+      !item &&
+      delimiterRow.test(content.trimEnd()) &&
+      parseRow(previous).cells.length === parseRow(content).cells.length &&
+      parseRow(previous).pipes.length > 0
+    ) {
+      count++
+      table = container
+    }
+    previous = content
+  }
+  return count
 }

@@ -4789,8 +4789,14 @@
   "46f6013774d6": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
+  "3d807d150cc8": [
+    "src/renderer/src/formatted/tables.ts"
+  ],
   "78f6821c3cf6": [
     "src/ui/Sidebar.tsx"
+  ],
+  "132b0bccb67f": [
+    "src/renderer/src/formatted/tables.ts"
   ],
   "243854b4d0c7": [
     "src/ui/Sidebar.tsx"

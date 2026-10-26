@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test, { after, before } from 'node:test'
 import { build } from 'vite'
 import { parseRow } from '../src/renderer/src/formatted/table-source.ts'
+import { tableKey } from '../src/renderer/src/table-layout-store.ts'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
@@ -742,6 +743,637 @@ test('tab extends a table of only a header, and leaving a table at the end adds 
   const now = await state()
   assert.equal(now.doc, 'before\n\n| a | b |\n| - | - |\n| c |  |\n\nAFTER')
   assert.equal(now.editor, null)
+})
+
+/** Mount `doc` editable in a view of tab `tabId`, or in a second view of it beside the first. */
+const mountTab = (doc, tabId, add = false) =>
+  harness.evaluate(
+    ({ doc, tabId, add }) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 800 },
+        { editable: true, tabId, add },
+      ),
+    { doc, tabId, add },
+  )
+/** Drag a cell's right edge by `distance` pixels, once the resize handle shows. */
+const dragEdge = async (cell, distance) => {
+  const box = await cell.boundingBox()
+  const x = box.x + box.width - 2,
+    y = box.y + box.height / 2
+  await harness.mouse.move(x, y)
+  await harness
+    .locator('.hibi-lp-table[data-table-resize="column"]')
+    .first()
+    .waitFor()
+  await harness.mouse.down()
+  for (let step = 1; step <= 4; step++)
+    await harness.mouse.move(x + (distance * step) / 4, y)
+  await harness.mouse.up()
+}
+const layouts = (tabId) =>
+  harness.evaluate((tabId) => window.tables.layouts(tabId), tabId)
+
+test('tables with the same header keep their own stored sizes', {
+  timeout: 30000,
+}, async () => {
+  const doc =
+    '| h | g |\n| - | - |\n| a | b |\n\nbetween\n\n| h | g |\n| - | - |\n| c | d |\n'
+  const first = tableKey(0, ['h', 'g']),
+    second = tableKey(1, ['h', 'g'])
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('same', [{ key, columns: [200, 0], rows: null }]),
+    first,
+  )
+  await mountTab(doc, 'same')
+  const widths = () =>
+    harness.evaluate(() =>
+      [...document.querySelectorAll('.hibi-lp-table')].map(
+        (table) => table.querySelector('th').style.width,
+      ),
+    )
+  // Only the first table has sizes; the second shows its own, none.
+  assert.deepEqual(await widths(), ['200px', ''])
+  await dragEdge(
+    harness.locator('.hibi-lp-table').nth(1).locator('th').first(),
+    40,
+  )
+  await harness.waitForFunction(
+    (key) => window.tables.layouts('same').some((table) => table.key === key),
+    second,
+  )
+  const stored = await layouts('same')
+  assert.deepEqual(
+    stored.find((table) => table.key === first)?.columns,
+    [200, 0],
+  )
+  assert.ok(stored.find((table) => table.key === second)?.columns?.[0] > 0)
+})
+
+test('two views of a tab keep the table sizes each other stores', {
+  timeout: 30000,
+}, async () => {
+  const doc =
+    '| a | b |\n| - | - |\n| 1 | 2 |\n\n| c | d |\n| - | - |\n| 3 | 4 |\n'
+  await harness.evaluate(() => window.tables.layouts('two', []))
+  await mountTab(doc, 'two')
+  await mountTab(doc, 'two', true)
+  const editors = harness.locator('.rich-editor-host > .cm-editor')
+  await dragEdge(
+    editors.nth(0).locator('.hibi-lp-table').nth(0).locator('th').first(),
+    40,
+  )
+  await dragEdge(
+    editors.nth(1).locator('.hibi-lp-table').nth(1).locator('th').first(),
+    60,
+  )
+  const keys = [tableKey(0, ['a', 'b']), tableKey(1, ['c', 'd'])]
+  await harness
+    .waitForFunction(
+      (keys) =>
+        keys.every((key) =>
+          window.tables.layouts('two').some((table) => table.key === key),
+        ),
+      keys,
+      { timeout: 3000 },
+    )
+    .catch(() => {})
+  assert.deepEqual(
+    (await layouts('two')).map((table) => table.key).sort(),
+    [...keys].sort(),
+  )
+  // The other view shows the size the first one stored.
+  const width = await harness.evaluate(
+    () =>
+      document
+        .querySelectorAll('.rich-editor-host > .cm-editor')[1]
+        .querySelector('.hibi-lp-table th').style.width,
+  )
+  assert.notEqual(width, '')
+})
+
+test('table sizes follow their columns and rows through table actions and undo', {
+  timeout: 30000,
+}, async () => {
+  const doc = '| a | b |\n| - | - |\n| 1 | 2 |\n| 3 | 4 |\n\nafter'
+  const key = tableKey(0, ['a', 'b'])
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('follow', [
+        { key, columns: [200, 180], rows: [0, 0, 90] },
+      ]),
+    key,
+  )
+  await mountTab(doc, 'follow')
+  const sizes = () =>
+    harness.evaluate(() => {
+      const table = document.querySelector('.hibi-lp-table table')
+      return {
+        columns: [...table.rows[0].cells].map((cell) => cell.style.width),
+        rows: [...table.rows].map((row) => row.style.height),
+      }
+    })
+  const action = (id, at) =>
+    harness.evaluate(
+      ({ id, at }) => {
+        const view = window.tables.view()
+        view.dispatch({ selection: { anchor: at } })
+        return window.tables.runTableAction(id)
+      },
+      { id, at },
+    )
+  assert.deepEqual(await sizes(), {
+    columns: ['200px', '180px'],
+    rows: ['', '', '90px'],
+  })
+  // A row above the sized one and a column before the first shift them.
+  assert.equal(await action('row-before', doc.indexOf('| 3') + 2), true)
+  assert.equal(await action('column-before', 2), true)
+  assert.deepEqual(await sizes(), {
+    columns: ['', '200px', '180px'],
+    rows: ['', '', '', '90px'],
+  })
+  // Undo puts the sizes back with the columns and rows.
+  await harness.keyboard.press(undoKey)
+  await harness.keyboard.press(undoKey)
+  assert.equal((await state()).doc, doc)
+  assert.deepEqual(await sizes(), {
+    columns: ['200px', '180px'],
+    rows: ['', '', '90px'],
+  })
+  await harness.waitForFunction(
+    () =>
+      JSON.stringify(window.tables.layouts('follow')[0]?.columns) ===
+      '[200,180]',
+  )
+})
+
+test('stored sizes apply to header cells that render again and rows that scroll in', {
+  timeout: 30000,
+}, async () => {
+  const key = tableKey(0, ['a', 'b'])
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('mount', [{ key, columns: [200, 0], rows: null }]),
+    key,
+  )
+  await mountTab('| a | b |\n| - | - |\n| 1 | 2 |\n\nafter', 'mount')
+  // Leaving an edited header cell renders it again, at its stored width.
+  await harness.locator('.hibi-lp-table th', { hasText: 'a' }).click()
+  await harness.keyboard.press('Escape')
+  assert.equal(
+    await harness.evaluate(
+      () => document.querySelector('.hibi-lp-table th').style.width,
+    ),
+    '200px',
+  )
+  // A sized row of a long table gets its height when its window renders it.
+  const rows = Array.from({ length: 300 }, (_, i) => `| r${i} | x |`)
+  const long = `| a | b |\n| - | - |\n${rows.join('\n')}\n\nafter`
+  const stored = Array(252).fill(0)
+  stored[251] = 120
+  await harness.evaluate(
+    ({ key, stored }) =>
+      window.tables.layouts('long', [{ key, columns: null, rows: stored }]),
+    { key, stored },
+  )
+  await mountTab(long, 'long')
+  await harness.evaluate((at) => {
+    const view = window.tables.view()
+    view.focus()
+    view.dispatch({ selection: { anchor: at } })
+  }, long.indexOf('| r250 |') + 3)
+  await harness.evaluate(() => window.tables.settle())
+  const row = await harness.evaluate(() => {
+    const tr = document.querySelector('.hibi-lp-table tr[data-line="252"]')
+    return tr && [tr.style.height, tr.getBoundingClientRect().height >= 119]
+  })
+  assert.deepEqual(row, ['120px', true])
+})
+
+test('keyboard size handles resize and reset columns and rows', {
+  timeout: 30000,
+}, async () => {
+  await harness.evaluate(() => window.tables.layouts('keys', []))
+  await mountTab('| a | b |\n| - | - |\n| 1 | 2 |\n\nafter', 'keys')
+  const key = tableKey(0, ['a', 'b'])
+  const stored = () =>
+    harness.evaluate(
+      (key) => window.tables.layouts('keys').find((table) => table.key === key),
+      key,
+    )
+  const column = harness
+    .locator('.hibi-lp-table th')
+    .first()
+    .locator('.hibi-lp-table-resizer[data-axis="column"]')
+  assert.equal(await column.getAttribute('aria-label'), 'Resize column')
+  const width = await harness.evaluate(() =>
+    Math.round(
+      document.querySelector('.hibi-lp-table th').getBoundingClientRect().width,
+    ),
+  )
+  await column.focus()
+  await harness.keyboard.press('ArrowRight')
+  await harness.keyboard.press('Shift+ArrowRight')
+  await harness.waitForFunction(
+    ({ key, width }) =>
+      window.tables.layouts('keys').find((table) => table.key === key)
+        ?.columns?.[0] ===
+      width + 32,
+    { key, width },
+  )
+  // A row's handle is in its first cell.
+  const row = harness
+    .locator('.hibi-lp-table tr[data-line="2"] td')
+    .first()
+    .locator('.hibi-lp-table-resizer[data-axis="row"]')
+  assert.equal(await row.getAttribute('aria-label'), 'Resize row')
+  await row.focus()
+  await harness.keyboard.press('ArrowDown')
+  await harness.waitForFunction(
+    (key) =>
+      (window.tables.layouts('keys').find((table) => table.key === key)
+        ?.rows?.[1] ?? 0) > 0,
+    key,
+  )
+  // Enter makes each automatic again.
+  await harness.keyboard.press('Enter')
+  await column.focus()
+  await harness.keyboard.press('Enter')
+  await harness.waitForFunction(() => !window.tables.layouts('keys').length)
+  assert.equal(await stored(), undefined)
+})
+
+test('typing in a long table maps only its sized rows', {
+  timeout: 60000,
+}, async () => {
+  const rows = Array.from({ length: 10000 }, (_, i) => `| r${i} | x |`)
+  const doc = `| a | b |\n| - | - |\n${rows.join('\n')}\n\nafter`
+  const stored = Array(5001).fill(0)
+  stored[5000] = 120
+  await harness.evaluate(
+    ({ key, stored }) =>
+      window.tables.layouts('sparse', [{ key, columns: null, rows: stored }]),
+    { key: tableKey(0, ['a', 'b']), stored },
+  )
+  await mountTab(doc, 'sparse')
+  await harness.evaluate(async () => {
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await window.tables.settle()
+  })
+  await harness.locator('.hibi-lp-table td', { hasText: 'r3' }).first().click()
+  await harness.keyboard.press('End')
+  const mapped = await harness.evaluate(async () => {
+    const probe = window.tables.sizeProbe()
+    const before = probe.mapped
+    document.execCommand('insertText', false, 'y')
+    await window.tables.settle()
+    return probe.mapped - before
+  })
+  // One sized row of 10,000: one keystroke maps that row's position only.
+  assert.equal(mapped, 1)
+  assert.match((await state()).doc, /^\| r3y \| x \|$/m)
+})
+
+test('a sized table keeps its sizes when a table is inserted before it', {
+  timeout: 30000,
+}, async () => {
+  const doc = 'intro\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\nafter'
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('insert', [{ key, columns: [200, 0], rows: null }]),
+    tableKey(0, ['a', 'b']),
+  )
+  await mountTab(doc, 'insert')
+  await harness.evaluate(async (at) => {
+    window.tables
+      .view()
+      .dispatch({ changes: { from: at, insert: '| x | y |\n| - | - |\n\n' } })
+    await window.tables.settle()
+  }, doc.indexOf('| a'))
+  const widths = () =>
+    harness.evaluate(() =>
+      [...document.querySelectorAll('.hibi-lp-table')].map((table) => {
+        const cell = table.querySelector('th')
+        return [cell.innerText.trim(), cell.style.width]
+      }),
+    )
+  assert.deepEqual(await widths(), [
+    ['x', ''],
+    ['a', '200px'],
+  ])
+  // Its ordinal changed: the sizes move to the new key, and stay after the view closes.
+  const key = tableKey(1, ['a', 'b'])
+  await harness.waitForFunction(
+    (key) => window.tables.layouts('insert').some((table) => table.key === key),
+    key,
+  )
+  await mountTab('closed', 'other')
+  const stored = await layouts('insert')
+  assert.deepEqual(
+    stored.map((table) => [table.key, table.columns[0]]),
+    [[key, 200]],
+  )
+})
+
+test('a long table column made automatic again drops its fixed width', {
+  timeout: 30000,
+}, async () => {
+  const rows = Array.from({ length: 300 }, (_, i) => `| r${i} | x |`)
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('fixed', [{ key, columns: [320, 0], rows: null }]),
+    tableKey(0, ['a', 'b']),
+  )
+  await mountTab(`| a | b |\n| - | - |\n${rows.join('\n')}\n\nafter`, 'fixed')
+  await harness.evaluate(() => window.tables.settle())
+  const column = () =>
+    harness.evaluate(
+      () => document.querySelector('.hibi-lp-table col').style.width,
+    )
+  const handle = harness
+    .locator('.hibi-lp-table th')
+    .first()
+    .locator('.hibi-lp-table-resizer[data-axis="column"]')
+  await handle.focus()
+  await harness.keyboard.press('ArrowRight')
+  assert.equal(await column(), '328px')
+  await harness.keyboard.press('Enter')
+  assert.match(await column(), /%$/)
+})
+
+test('deleting the first of two sized columns keeps the other, and undo brings both back', {
+  timeout: 30000,
+}, async () => {
+  const doc = '| a | b |\n| - | - |\n| 1 | 2 |\n\nafter'
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('delete', [
+        { key, columns: [200, 180], rows: null },
+      ]),
+    tableKey(0, ['a', 'b']),
+  )
+  await mountTab(doc, 'delete')
+  const widths = () =>
+    harness.evaluate(() =>
+      [...document.querySelector('.hibi-lp-table tr').cells].map(
+        (cell) => cell.style.width,
+      ),
+    )
+  assert.deepEqual(await widths(), ['200px', '180px'])
+  // The one column left is written with outer pipes: its cell is rewritten.
+  assert.equal(
+    await harness.evaluate(() => {
+      window.tables.view().dispatch({ selection: { anchor: 2 } })
+      return window.tables.runTableAction('column-delete')
+    }),
+    true,
+  )
+  assert.deepEqual(await widths(), ['180px'])
+  await harness.keyboard.press(undoKey)
+  assert.equal((await state()).doc, doc)
+  assert.deepEqual(await widths(), ['200px', '180px'])
+})
+
+test('a resize stores only the size it changed', {
+  timeout: 30000,
+}, async () => {
+  const key = tableKey(0, ['a', 'b'])
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('axis', [
+        { key, columns: [200, 0], rows: [0, 50] },
+      ]),
+    key,
+  )
+  await mountTab('| a | b |\n| - | - |\n| 1 | 2 |\n\nafter', 'axis')
+  await harness
+    .locator('.hibi-lp-table th')
+    .first()
+    .locator('.hibi-lp-table-resizer[data-axis="column"]')
+    .focus()
+  await harness.keyboard.press('ArrowRight')
+  await harness.waitForFunction(() => window.tables.writes('axis').length > 0)
+  assert.deepEqual(await harness.evaluate(() => window.tables.writes('axis')), [
+    {
+      remove: [],
+      put: [],
+      set: [{ key, axis: 'column', index: 0, size: 208 }],
+    },
+  ])
+  assert.deepEqual((await layouts('axis'))[0].rows, [0, 50])
+})
+
+test('the first resize of a table stores only that size', {
+  timeout: 30000,
+}, async () => {
+  await harness.evaluate(() => window.tables.layouts('first', []))
+  await mountTab('| a | b |\n| - | - |\n| 1 | 2 |\n\nafter', 'first')
+  await harness
+    .locator('.hibi-lp-table th')
+    .first()
+    .locator('.hibi-lp-table-resizer[data-axis="column"]')
+    .focus()
+  await harness.keyboard.press('ArrowRight')
+  await harness.waitForFunction(() => window.tables.writes('first').length > 0)
+  const [write] = await harness.evaluate(() => window.tables.writes('first'))
+  // Another window's first sizes for the table merge with this one.
+  assert.deepEqual(
+    [
+      write.remove,
+      write.put,
+      write.set.map(({ axis, index }) => [axis, index]),
+    ],
+    [[], [], [['column', 0]]],
+  )
+})
+
+test('moving 1,000 sized rows stores their heights in batches the workspace accepts', {
+  timeout: 60000,
+}, async () => {
+  const rows = Array.from({ length: 1001 }, (_, i) => `| r${i} | x |`)
+  const doc = `| a | b |\n| - | - |\n${rows.join('\n')}\n\nafter`
+  // Every row a different height, so moving them all down changes each.
+  const heights = [0, ...rows.map((_, i) => 24 + i)]
+  await harness.evaluate(
+    ({ key, heights }) =>
+      window.tables.layouts('batches', [{ key, columns: null, rows: heights }]),
+    { key: tableKey(0, ['a', 'b']), heights },
+  )
+  await mountTab(doc, 'batches')
+  await harness.evaluate(async () => {
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await window.tables.settle()
+  })
+  assert.equal(
+    await harness.evaluate((at) => {
+      window.tables.view().dispatch({ selection: { anchor: at } })
+      return window.tables.runTableAction('row-before')
+    }, doc.indexOf('| r0') + 2),
+    true,
+  )
+  await harness.waitForFunction(
+    () =>
+      window.tables.layouts('batches')[0]?.rows?.[2] === 24 &&
+      window.tables.layouts('batches')[0]?.rows?.length === 1003,
+  )
+  const writes = await harness.evaluate(() => window.tables.writes('batches'))
+  assert.ok(writes.length > 1, `${writes.length} writes`)
+  assert.ok(
+    writes.every((write) => (write.set?.length ?? 0) <= 1000),
+    JSON.stringify(writes.map((write) => write.set?.length)),
+  )
+  assert.equal((await layouts('batches'))[0].rows[1], 0)
+})
+
+test('columns with the same header keep their own widths through a column delete and undo', {
+  timeout: 30000,
+}, async () => {
+  const doc = '| Name | Name |\n| - | - |\n| 1 | 2 |\n\nafter'
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('twins', [
+        { key, columns: [200, 180], rows: null },
+      ]),
+    tableKey(0, ['Name', 'Name']),
+  )
+  await mountTab(doc, 'twins')
+  const widths = () =>
+    harness.evaluate(() =>
+      [...document.querySelector('.hibi-lp-table tr').cells].map(
+        (cell) => cell.style.width,
+      ),
+    )
+  assert.equal(
+    await harness.evaluate(
+      (at) => {
+        window.tables.view().dispatch({ selection: { anchor: at } })
+        return window.tables.runTableAction('column-delete')
+      },
+      doc.indexOf('Name |') + 'Name | '.length + 1,
+    ),
+    true,
+  )
+  assert.deepEqual(await widths(), ['200px'])
+  await harness.keyboard.press(undoKey)
+  assert.equal((await state()).doc, doc)
+  assert.deepEqual(await widths(), ['200px', '180px'])
+})
+
+test('empty headers keep their own widths through a column delete and undo', {
+  timeout: 30000,
+}, async () => {
+  const doc = '|  |  |\n| - | - |\n| 1 | 2 |\n\nafter'
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('empty', [
+        { key, columns: [200, 180], rows: null },
+      ]),
+    tableKey(0, ['', '']),
+  )
+  await mountTab(doc, 'empty')
+  const widths = () =>
+    harness.evaluate(() =>
+      [...document.querySelector('.hibi-lp-table tr').cells].map(
+        (cell) => cell.style.width,
+      ),
+    )
+  assert.deepEqual(await widths(), ['200px', '180px'])
+  assert.equal(
+    await harness.evaluate(() => {
+      window.tables.view().dispatch({ selection: { anchor: 5 } })
+      return window.tables.runTableAction('column-delete')
+    }),
+    true,
+  )
+  assert.deepEqual(await widths(), ['200px'])
+  await harness.keyboard.press(undoKey)
+  assert.equal((await state()).doc, doc)
+  assert.deepEqual(await widths(), ['200px', '180px'])
+})
+
+test('moving rows stored by index stays within the workspace bound in every batch', {
+  timeout: 60000,
+}, async () => {
+  const rows = Array.from({ length: 2001 }, (_, i) => `| r${i} | x |`)
+  const doc = `| a | b |\n| - | - |\n${rows.join('\n')}\n\nafter`
+  // Rows 1,001 to 2,000 sized, each differently: all stored by index.
+  const heights = Array.from({ length: 2001 }, (_, i) =>
+    i > 1000 ? 24 + (i % 900) : 0,
+  )
+  await harness.evaluate(
+    ({ key, heights }) =>
+      window.tables.layouts('bound', [{ key, columns: null, rows: heights }]),
+    { key: tableKey(0, ['a', 'b']), heights },
+  )
+  await mountTab(doc, 'bound')
+  await harness.evaluate(async () => {
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await window.tables.settle()
+  })
+  // Deleting a row above moves each sized row up by one.
+  assert.equal(
+    await harness.evaluate((at) => {
+      window.tables.view().dispatch({ selection: { anchor: at } })
+      return window.tables.runTableAction('row-delete')
+    }, doc.indexOf('| r0') + 2),
+    true,
+  )
+  await harness.waitForFunction(
+    (expected) => window.tables.layouts('bound')[0]?.rows?.[1999] === expected,
+    24 + (2000 % 900),
+  )
+  const stored = (await layouts('bound'))[0].rows
+  assert.deepEqual(
+    [stored[1000], stored[1999], stored[2000] ?? 0],
+    [24 + (1001 % 900), 24 + (2000 % 900), 0],
+  )
+})
+
+test('a save that waits for the workspace stays ahead of the next one', {
+  timeout: 60000,
+}, async () => {
+  const rows = Array.from({ length: 1001 }, (_, i) => `| r${i} | x |`)
+  const doc = `| a | b |\n| - | - |\n${rows.join('\n')}\n\nafter`
+  const heights = [0, ...rows.map((_, i) => 24 + i)]
+  await harness.evaluate(
+    ({ key, heights }) =>
+      window.tables.layouts('queue', [{ key, columns: null, rows: heights }]),
+    { key: tableKey(0, ['a', 'b']), heights },
+  )
+  await mountTab(doc, 'queue')
+  await harness.evaluate(async () => {
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await window.tables.settle()
+    window.tables.holdWrites(true)
+  })
+  // A row inserted above every sized row: a save of two batches, the first waiting.
+  assert.equal(
+    await harness.evaluate((at) => {
+      window.tables.view().dispatch({ selection: { anchor: at } })
+      return window.tables.runTableAction('row-before')
+    }, doc.indexOf('| r0') + 2),
+    true,
+  )
+  await harness.waitForFunction(() => window.tables.writes('queue').length > 0)
+  // Undo saves the heights back while the first save still waits.
+  await harness.keyboard.press(undoKey)
+  assert.equal((await state()).doc, doc)
+  await harness.evaluate(async () => {
+    for (let i = 0; i < 10; i++) await window.tables.settle()
+    window.tables.holdWrites(false)
+  })
+  await harness.waitForFunction(
+    (expected) =>
+      JSON.stringify(window.tables.layouts('queue')[0]?.rows) === expected,
+    JSON.stringify(heights),
+    { timeout: 5000 },
+  )
 })
 
 test('typing in a cell writes escaped source into that cell only', {

@@ -1,5 +1,10 @@
 import { isolateHistory } from '@codemirror/commands'
-import { type ChangeDesc, type Text, Transaction } from '@codemirror/state'
+import {
+  type ChangeDesc,
+  MapMode,
+  type Text,
+  Transaction,
+} from '@codemirror/state'
 import {
   type EditorView,
   ViewPlugin,
@@ -8,13 +13,25 @@ import {
 } from '@codemirror/view'
 import { type MarkdownConfig, Table } from '@lezer/markdown'
 import {
+  type TableLayout,
+  tableSizeChanges,
+} from '../../../shared/table-layout.ts'
+import {
   type FormattedContribution,
   type FormattedNodeView,
+  formattedDocument,
   formattedLiteral,
   formattedMarkdown,
   formattedViews,
 } from '../formatted-contributions.ts'
 import { tableActions } from '../source-formatting.ts'
+import {
+  readTableLayouts,
+  storedTableLayouts,
+  subscribeTableLayouts,
+  tableKey,
+  updateTableLayouts,
+} from '../table-layout-store.ts'
 import {
   CellEditor,
   type CellHost,
@@ -29,6 +46,7 @@ import {
   alignments,
   cellContent,
   cellSpan,
+  countTables,
   deleteColumn,
   deleteRow,
   insertColumn,
@@ -202,6 +220,86 @@ function visibleBand(element: HTMLElement) {
   return { top, bottom }
 }
 
+/** Pointer distance from a cell edge that resizes its column or row, and the smallest sizes. */
+const EDGE = 5
+const MIN = { column: 40, row: 24 }
+
+/** Counts the column and row positions size tracking maps, for tests. */
+export const tableSizeProbe = { mapped: 0 }
+
+/** A focusable size handle on a cell's edge, for keyboard resizing. */
+const resizers = {
+  column: { 'aria-label': 'Resize column', 'aria-orientation': 'vertical' },
+  row: { 'aria-label': 'Resize row', 'aria-orientation': 'horizontal' },
+}
+function resizer(axis: 'column' | 'row') {
+  const handle = document.createElement('hr')
+  handle.className = 'hibi-lp-table-resizer'
+  handle.dataset.axis = axis
+  handle.tabIndex = 0
+  for (const [name, value] of Object.entries(resizers[axis]))
+    handle.setAttribute(name, value)
+  return handle
+}
+
+/** The tab a formatted view shows and the table sizes read for it, shared with the rich editor. */
+type Store = { tabId: string; loaded: TableLayout[] | null }
+const stores = new WeakMap<EditorView, Store>()
+function store(view: EditorView): Store | null {
+  const { tabId } = view.state.facet(formattedDocument)
+  if (!tabId) return null
+  const found = stores.get(view)
+  if (found?.tabId === tabId) return found
+  const entry: Store = { tabId, loaded: null }
+  stores.set(view, entry)
+  const loaded = (tables: TableLayout[] | null) => {
+    if (stores.get(view) !== entry) return
+    entry.loaded = tables ?? []
+    for (const table of mounted.get(view) ?? []) table.sized()
+  }
+  const read = readTableLayouts(tabId)
+  if (Array.isArray(read)) entry.loaded = read
+  else
+    void read.then(loaded, (error: unknown) =>
+      console.error('table sizes could not be read:', error),
+    )
+  return entry
+}
+/** The sizes stored for a view's tab now: this window's, once it stored any. */
+const storedTables = (entry: Store | null) =>
+  entry && (storedTableLayouts(entry.tabId) ?? entry.loaded)
+
+/** A table's sizes as a view holds them, and their positions through changes since the last redraw. */
+type SizeState = {
+  sizes: { key: string | null; columns: number[]; rows: Map<number, number> }
+  header: string[]
+  moved: Moved | null
+  /** What the store has for the table, as last bound or saved. */
+  stored: string | null
+}
+type Moved = {
+  columns: (number | null)[]
+  /** The header cells' text, which finds columns whose cells a change rewrote. */
+  texts: string[]
+  rows: { index: number; size: number; pos: number | null }[]
+  sizes: { columns: number[] }
+  count: number
+  lines: number
+}
+/** Where a table may start and end after a change: text inserted at its edges may or may not join it. */
+type Place = { from: number[]; to: number[] }
+const placed = (place: Place, widget: TableWidget) =>
+  place.from.includes(widget.from) && place.to.includes(widget.to)
+/**
+ * Size state of the tables an update changes, by where each table is after
+ * it: CodeMirror may show a table in another table's view after an edit, so
+ * state follows the table, not the view.
+ */
+const handoffs = new WeakMap<
+  EditorView,
+  { place: Place; state: SizeState; owner: TableView }[]
+>()
+
 const tableViews = new WeakMap<HTMLElement, TableView>()
 /** Mounted tables per editor, for row windows, entering tables and table actions. */
 const mounted = new WeakMap<EditorView, Set<TableView>>()
@@ -230,6 +328,8 @@ class TableView {
   private before: HTMLTableRowElement | null = null
   private after: HTMLTableRowElement | null = null
   private fixed = false
+  /** The column widths fixed from the first rows shown, which automatic columns go back to. */
+  private fixedWidths: string[] = []
   /** The cell being edited, with its row's line in the document now. */
   private editing:
     | (Cell & {
@@ -239,6 +339,27 @@ class TableView {
         to: number
       })
     | null = null
+  /** Header cells' text, part of the table's key in the size store. */
+  private header: string[] = []
+  /** Column widths by index, 0 for automatic, and the heights of sized rows by index, counting the header. */
+  private sizes: {
+    key: string | null
+    columns: number[]
+    rows: Map<number, number>
+  } = { key: null, columns: [], rows: new Map() }
+  /** The column or row edge under the pointer, and whether it is being dragged. */
+  private handle: { axis: 'column' | 'row'; index: number } | null = null
+  private dragging = false
+  private saving: ReturnType<typeof setTimeout> | undefined
+  private unsubscribe: (() => void) | null = null
+  /** Sized columns' header cells and sized rows' lines through changes since the last redraw, null where deleted. */
+  private moved: Moved | null = null
+  /** Sizes of columns edits removed, with their index and header text, for when a column comes back there. */
+  private dropped: { index: number; size: number; text: string }[] = []
+  /** The stored entry as last bound or saved, so saves that change nothing write nothing. */
+  private stored: string | null = null
+  /** Where the table is after the change being applied, while its state is handed over. */
+  private place: Place | null = null
 
   readonly view: EditorView
   private widget: TableWidget
@@ -247,6 +368,10 @@ class TableView {
     this.widget = widget
     this.dom.className = 'tableWrapper hibi-lp-table'
     this.dom.addEventListener('mousedown', this.select)
+    this.dom.addEventListener('mousemove', this.hover)
+    this.dom.addEventListener('mouseleave', this.leaveHandle)
+    this.dom.addEventListener('dblclick', this.reset)
+    this.dom.addEventListener('keydown', this.key)
     this.table.append(this.columns, this.body)
     this.dom.append(this.table)
     this.body.append(this.head)
@@ -267,7 +392,9 @@ class TableView {
   update(widget: TableWidget) {
     const previous = this.widget
     this.widget = widget
+    this.takeOver()
     this.relocate()
+    this.followSizes()
     this.dom.classList.toggle('hibi-lp-table-inline', widget.inline)
     if (!sameConfig(previous.config, widget.config)) {
       // Other syntax or renderers: every cell renders again.
@@ -298,6 +425,13 @@ class TableView {
       if (this.editing?.line === 0) this.refresh(this.head, 0, this.headText)
       else this.renderHead(header)
       this.headText = header.text
+      const texts = this.headerTexts()
+      const renamed =
+        this.header.length > 0 && texts.join('\t') !== this.header.join('\t')
+      this.header = texts
+      // Sized tables keep their sizes under the new header; others look theirs up.
+      if (!this.sizes.key) this.sized()
+      else if (renamed) this.save(500)
     }
     const windowed = widget.rows > ALL_ROWS
     if (
@@ -312,8 +446,10 @@ class TableView {
           this.rendered.delete(index)
         }
       this.heights = windowed ? new Heights(widget.rows) : null
+      this.seedHeights()
       this.start = this.end = 0
       this.fixed = false
+      this.fixedWidths = []
       this.table.style.tableLayout = ''
       for (const column of this.columns.children)
         (column as HTMLElement).style.width = ''
@@ -331,6 +467,7 @@ class TableView {
       this.after?.remove()
       this.show(0, widget.rows)
     }
+    this.applySizes()
     this.syncEditor()
   }
 
@@ -376,6 +513,9 @@ class TableView {
     const element = document.createElement(tag)
     const align = this.aligned[column]
     if (align) element.style.textAlign = align
+    // Header cells carry their column's width, also when they render again.
+    const width = tag === 'th' ? this.sizes.columns[column] : 0
+    if (width) element.style.width = `${width}px`
     const paragraph = document.createElement('p')
     const content = cell
       ? cellContent(line.text.slice(cell.from, cell.to))
@@ -383,6 +523,9 @@ class TableView {
     if (content?.text) renderInline(this.view, content.text, paragraph)
     else paragraph.append(document.createElement('br'))
     element.append(paragraph)
+    // Keyboard handles for the column's width and the row's height.
+    if (tag === 'th') element.append(resizer('column'))
+    if (column === 0) element.append(resizer('row'))
     return element
   }
 
@@ -427,6 +570,8 @@ class TableView {
         const element = document.createElement('tr')
         element.dataset.line = String(index + 2)
         element.setAttribute('aria-rowindex', String(index + 2))
+        const height = this.sizes.rows.get(index + 1)
+        if (height) element.style.height = `${height}px`
         // Missing cells render empty; cells past the header's count are not shown.
         const cells = widget.row(index + 2).cells
         for (let column = 0; column < this.aligned.length; column++)
@@ -493,9 +638,12 @@ class TableView {
       if (total > 0) {
         this.fixed = true
         this.table.style.tableLayout = 'fixed'
-        measured.widths.forEach((width, index) => {
+        this.fixedWidths = measured.widths.map(
+          (width) => `${(width / total) * 100}%`,
+        )
+        this.fixedWidths.forEach((width, index) => {
           const column = this.columns.children[index] as HTMLElement | undefined
-          if (column) column.style.width = `${(width / total) * 100}%`
+          if (column) column.style.width = width
         })
       }
     }
@@ -794,11 +942,193 @@ class TableView {
 
   /** Follow the edited row through the formatted view's changes; the edited cell when its row was deleted. */
   map(changes: ChangeDesc): Cell | null {
+    this.track(changes)
+    this.handOver(changes)
     const editing = this.editing
     if (!editing) return null
     editing.from = changes.mapPos(editing.from, 1)
     editing.to = changes.mapPos(editing.to, -1)
     return editing.to > editing.from ? null : editing
+  }
+
+  /** Offer this table's size state to the view that shows the table after a change. */
+  private handOver(changes: ChangeDesc) {
+    const { from, to } = this.range()
+    const sized =
+      this.sizes.key !== null ||
+      this.sizes.rows.size > 0 ||
+      this.sizes.columns.some(Boolean)
+    // A table or line added or removed above may change its ordinal: check its key once edits pause.
+    if (sized && changes.touchesRange(0, Math.max(0, from - 1))) this.save(500)
+    if (!sized) return
+    const place = {
+      from: [changes.mapPos(from, -1), changes.mapPos(from, 1)],
+      to: [changes.mapPos(to, -1), changes.mapPos(to, 1)],
+    }
+    this.place = place
+    let entries = handoffs.get(this.view)
+    if (!entries) {
+      const created: { place: Place; state: SizeState; owner: TableView }[] = []
+      handoffs.set(this.view, created)
+      // Only for the redraw of this update.
+      queueMicrotask(() => {
+        if (handoffs.get(this.view) === created) handoffs.delete(this.view)
+      })
+      entries = created
+    }
+    entries.push({
+      place,
+      owner: this,
+      state: {
+        sizes: this.sizes,
+        header: this.header,
+        moved: this.moved,
+        stored: this.stored,
+      },
+    })
+    queueMicrotask(() => {
+      if (this.place === place) this.place = null
+    })
+  }
+
+  /** Take the size state of the table this view shows now, which another view may have held. */
+  private takeOver() {
+    const { widget } = this
+    const place = this.place
+    this.place = null
+    if (widget.doc !== this.view.state.doc) return
+    if (place && placed(place, widget)) return
+    const state = handoffs
+      .get(this.view)
+      ?.find(
+        (entry) => entry.owner !== this && placed(entry.place, widget),
+      )?.state
+    if (!place && !state) return
+    // Another table than before: its own state, or none until it is looked up.
+    clearTimeout(this.saving)
+    this.saving = undefined
+    this.stopEditing()
+    this.sizes = state?.sizes ?? { key: null, columns: [], rows: new Map() }
+    this.header = state?.header ?? []
+    this.moved = state?.moved ?? null
+    this.stored = state?.stored ?? null
+    // Taken over after a change: its ordinal may have changed with it.
+    if (state) this.save(500)
+  }
+
+  /**
+   * Map the header cells of sized columns and the lines of sized rows
+   * through a change of the table, any change (table actions, typing, undo
+   * and redo), so that sizes follow their columns and rows as in the rich
+   * editor. A column or row whose position the change deleted drops, unless
+   * the table kept as many: then it was replaced and keeps its index.
+   */
+  private track(changes: ChangeDesc) {
+    const { columns, rows } = this.sizes
+    if (!rows.size && !columns.some(Boolean)) return
+    if (!this.moved) {
+      const { from, to } = this.range()
+      if (!changes.touchesRange(from, to)) return
+      const header = this.widget.line(0),
+        cells = this.widget.row(0).cells
+      this.moved = {
+        columns: columns.map((size, index) => {
+          const cell = cells[index]
+          return size && cell ? this.now(header.from + cell.from) : null
+        }),
+        // Only sized rows: a long table with a few sized rows maps a few.
+        rows: [...rows].flatMap(([index, size]) => {
+          const line = index ? index + 1 : 0
+          return line < this.lines
+            ? [{ index, size, pos: this.now(this.widget.line(line).from) }]
+            : []
+        }),
+        texts: cells.map(({ from, to }) => header.text.slice(from, to)),
+        sizes: { columns: [...columns] },
+        count: this.aligned.length,
+        lines: this.lines,
+      }
+    }
+    const map = (pos: number | null) =>
+      pos === null ? null : changes.mapPos(pos, 1, MapMode.TrackAfter)
+    this.moved.columns = this.moved.columns.map(map)
+    for (const row of this.moved.rows) row.pos = map(row.pos)
+    tableSizeProbe.mapped += this.moved.columns.length + this.moved.rows.length
+  }
+
+  /** Give sized columns and rows the cells and lines they moved to, after the table changed. */
+  private followSizes() {
+    const moved = this.moved
+    if (!moved) return
+    this.moved = null
+    const { widget } = this
+    const { doc } = widget
+    if (doc !== this.view.state.doc) return
+    const header = widget.line(0),
+      row = widget.row(0)
+    const columns: number[] = [],
+      rows = new Map<number, number>()
+    const texts = row.cells.map(({ from, to }) => header.text.slice(from, to))
+    /** The one new column with this header text, for a column whose cell the change rewrote: only a text no other column had or has. */
+    const unique = (list: string[], text: string) =>
+      list.indexOf(text) >= 0 && list.indexOf(text) === list.lastIndexOf(text)
+    const byText = (text: string | undefined) =>
+      text !== undefined && unique(texts, text) && unique(moved.texts, text)
+        ? texts.indexOf(text)
+        : -1
+    moved.columns.forEach((pos, index) => {
+      const size = moved.sizes.columns[index]
+      if (!size) return
+      let target = pos === null ? byText(moved.texts[index]) : -1
+      if (target < 0 && pos === null && row.cells.length >= moved.count)
+        target = index
+      for (
+        let column = 0;
+        pos !== null && column < row.cells.length;
+        column++
+      ) {
+        const span = cellSpan(row, column, header.text.length)
+        if (
+          span &&
+          pos >= header.from + span.from &&
+          pos <= header.from + span.to
+        ) {
+          target = column
+          break
+        }
+      }
+      if (target >= 0) columns[target] = size
+      // A dropped column's size comes back with its column, as after undo.
+      else this.dropped.push({ index, size, text: moved.texts[index] ?? '' })
+    })
+    for (const { index, size, pos } of moved.rows) {
+      let target = pos === null && this.lines >= moved.lines ? index : -1
+      if (pos !== null) {
+        const line = doc.lineAt(pos).number - widget.first
+        if (line >= 0 && line < this.lines && line !== 1)
+          target = line ? line - 1 : 0
+      }
+      if (target >= 0) rows.set(target, size)
+    }
+    if (row.cells.length > moved.count)
+      this.dropped = this.dropped.filter(({ index, size, text }) => {
+        if (columns[index] !== undefined || texts[index] !== text) return true
+        columns[index] = size
+        return false
+      })
+    const next = Array.from(columns, (size) => size ?? 0)
+    if (
+      next.length === moved.sizes.columns.length &&
+      next.every((size, index) => size === moved.sizes.columns[index]) &&
+      rows.size === moved.rows.length &&
+      moved.rows.every(({ index, size }) => rows.get(index) === size)
+    )
+      return
+    this.sizes.columns = next
+    this.sizes.rows = rows
+    this.seedHeights()
+    // Saved after the redraw, which the table's position needs.
+    this.save(1)
   }
 
   /** Edit the same cell where its row is now, after rows were added or removed around it. */
@@ -973,9 +1303,323 @@ class TableView {
     return this.edit(line, column, down ? 'start' : 'end')
   }
 
+  /** Header cells' text as the rich editor reads it, from their rendered Markdown. */
+  private headerTexts() {
+    const header = this.widget.line(0)
+    return this.widget.row(0).cells.map((cell) => {
+      const element = document.createElement('p')
+      renderInline(
+        this.view,
+        cellContent(header.text.slice(cell.from, cell.to)).text,
+        element,
+      )
+      return element.textContent ?? ''
+    })
+  }
+
+  /** The number of tables before this one in the note. */
+  private ordinal() {
+    const { doc } = this.view.state
+    return countTables(doc.iterLines(1, doc.lineAt(this.range().from).number))
+  }
+
+  /** Find the table's stored sizes by its key: its ordinal and header, so each entry binds one table, as in the rich editor. */
+  sized() {
+    const entry = store(this.view)
+    const tables = storedTables(entry)
+    if (!entry || !tables) return
+    this.unsubscribe ??= subscribeTableLayouts(entry.tabId, this.refreshed)
+    const hash = tableKey(0, this.header).split(':')[1]
+    // The ordinal needs the note before the table: only look for a stored header.
+    const key = tables.some((table) => table.key.endsWith(`:${hash}`))
+      ? tableKey(this.ordinal(), this.header)
+      : null
+    const found = key ? tables.find((table) => table.key === key) : undefined
+    const rows = new Map<number, number>()
+    found?.rows?.forEach((size, index) => {
+      if (size) rows.set(index, size)
+    })
+    this.sizes = {
+      key: found?.key ?? null,
+      columns: [...(found?.columns ?? [])],
+      rows,
+    }
+    this.stored = found
+      ? JSON.stringify({
+          key: found.key,
+          columns: found.columns,
+          rows: found.rows,
+        })
+      : null
+    this.seedHeights()
+    this.applySizes()
+  }
+
+  /** Another table or view changed the stored sizes: bind them again, unless this table is changing its own. */
+  private refreshed = () => {
+    if (!this.dragging && this.saving === undefined) this.sized()
+  }
+
+  /** Rows with a stored height count it before they render, so the row window and spacers place them. */
+  private seedHeights() {
+    const { heights } = this
+    if (!heights) return
+    for (const [index, size] of this.sizes.rows)
+      if (index && index - 1 < heights.length) heights.set(index - 1, size)
+  }
+
+  /** Show the column widths and row heights, as the rich editor's table decorations do. */
+  private applySizes() {
+    const { columns, rows } = this.sizes
+    const count = this.aligned.length
+    const sized = columns.slice(0, count).filter(Boolean).length
+    if (sized) this.dom.dataset.columnsSized = sized === count ? 'all' : 'some'
+    else delete this.dom.dataset.columnsSized
+    for (const [index, cell] of [...this.head.cells].entries())
+      cell.style.width = columns[index] ? `${columns[index]}px` : ''
+    for (const [index, column] of [...this.columns.children].entries())
+      if (this.fixed)
+        (column as HTMLElement).style.width = columns[index]
+          ? `${columns[index]}px`
+          : (this.fixedWidths[index] ?? '')
+    const height = (row: HTMLElement, index: number) => {
+      const size = rows.get(index)
+      row.style.height = size ? `${size}px` : ''
+    }
+    height(this.head, 0)
+    for (const [index, row] of this.rendered) height(row.element, index + 1)
+  }
+
+  /** Store the sizes under the table's key, now or after `delay` ms. */
+  private save(delay = 0) {
+    clearTimeout(this.saving)
+    this.saving = undefined
+    if (delay) {
+      this.saving = setTimeout(() => this.save(), delay)
+      return
+    }
+    const entry = store(this.view)
+    const tables = storedTables(entry)
+    if (!entry || !tables || !this.dom.isConnected) return
+    const key = tableKey(this.ordinal(), this.header)
+    const columns = this.sizes.columns.slice(0, this.aligned.length)
+    let last = -1
+    for (const [index] of this.sizes.rows)
+      if (index < this.lines - 1) last = Math.max(last, index)
+    const rows = Array.from(
+      { length: last + 1 },
+      (_, index) => this.sizes.rows.get(index) ?? 0,
+    )
+    const some = (sizes: number[]) => (sizes.some(Boolean) ? sizes : null)
+    const put =
+      some(columns) || some(rows)
+        ? [{ key, columns: some(columns), rows: some(rows) }]
+        : []
+    const json = put.length ? JSON.stringify(put[0]) : null
+    if (json === this.stored && (put.length || !this.sizes.key)) return
+    // Only the sizes that changed, from none for a table without an entry,
+    // so that other views' and windows' changes to the table stay; a table
+    // whose key changed moves its whole entry.
+    const moving = this.sizes.key !== null && this.sizes.key !== key
+    const previous =
+      this.stored && !moving
+        ? (JSON.parse(this.stored) as TableLayout)
+        : { key, columns: null, rows: null }
+    const remove = moving ? [key, this.sizes.key as string] : []
+    this.sizes.key = put.length ? key : null
+    this.stored = json
+    updateTableLayouts(
+      entry.tabId,
+      tables,
+      moving
+        ? { remove, put }
+        : {
+            remove: [],
+            put: [],
+            set: tableSizeChanges(
+              previous,
+              put[0] ?? { key, columns: null, rows: null },
+            ),
+          },
+    )
+  }
+
+  /** The column or row edge within reach of the pointer. */
+  private edgeAt(event: MouseEvent) {
+    const cell = (event.target as Element).closest?.('th, td')
+    if (!(cell instanceof HTMLTableCellElement) || !this.dom.contains(cell))
+      return null
+    const row = cell.parentElement as HTMLTableRowElement
+    if (row.classList.contains('hibi-lp-table-spacer')) return null
+    const box = cell.getBoundingClientRect()
+    const index = row === this.head ? 0 : Number(row.dataset.line) - 1
+    if (box.right - event.clientX <= EDGE)
+      return { axis: 'column' as const, index: cell.cellIndex }
+    if (event.clientX - box.left <= EDGE && cell.cellIndex > 0)
+      return { axis: 'column' as const, index: cell.cellIndex - 1 }
+    if (box.bottom - event.clientY <= EDGE)
+      return { axis: 'row' as const, index }
+    if (event.clientY - box.top <= EDGE && index > 0)
+      return { axis: 'row' as const, index: index === 1 ? 0 : index - 1 }
+    return null
+  }
+
+  /** Mark the cells along a resize handle, like the rich editor. */
+  private mark(handle: TableView['handle']) {
+    for (const cell of this.dom.querySelectorAll('[data-resize-handle]'))
+      cell.removeAttribute('data-resize-handle')
+    this.handle = handle
+    if (!handle) {
+      delete this.dom.dataset.tableResize
+      return
+    }
+    this.dom.dataset.tableResize = handle.axis
+    const rows = [
+      this.head,
+      ...[...this.rendered.values()].map((row) => row.element),
+    ]
+    for (const row of rows) {
+      const index = row === this.head ? 0 : Number(row.dataset.line) - 1
+      const cells =
+        handle.axis === 'column'
+          ? [row.cells[handle.index]]
+          : index === handle.index
+            ? [...row.cells]
+            : []
+      for (const cell of cells)
+        cell?.setAttribute('data-resize-handle', handle.axis)
+    }
+  }
+
+  private hover = (event: MouseEvent) => {
+    if (this.dragging || this.view.state.readOnly) return
+    const edge = this.edgeAt(event)
+    if (edge?.axis !== this.handle?.axis || edge?.index !== this.handle?.index)
+      this.mark(edge)
+  }
+
+  private leaveHandle = () => {
+    if (!this.dragging) this.mark(null)
+  }
+
+  /** Set a column width or row height, 0 for automatic. */
+  private resize(axis: 'column' | 'row', index: number, size: number) {
+    if (axis === 'column') {
+      const { columns } = this.sizes
+      while (columns.length <= index) columns.push(0)
+      columns[index] = size
+    } else if (size) this.sizes.rows.set(index, size)
+    else this.sizes.rows.delete(index)
+    if (
+      axis === 'row' &&
+      index &&
+      this.heights &&
+      index - 1 < this.heights.length
+    )
+      this.heights.set(index - 1, size || ROW_HEIGHT)
+    this.applySizes()
+  }
+
+  /** Drag a handle to resize; a click without movement keeps the size. */
+  private drag(event: MouseEvent) {
+    const handle = this.handle!
+    const element =
+      handle.axis === 'column'
+        ? this.head.cells[handle.index]
+        : handle.index === 0
+          ? this.head
+          : this.rendered.get(handle.index - 1)?.element
+    if (!element) return
+    const start = handle.axis === 'column' ? event.clientX : event.clientY
+    const box = element.getBoundingClientRect()
+    const initial = handle.axis === 'column' ? box.width : box.height
+    const frames = this.dom.ownerDocument.defaultView!
+    let size: number | null = null
+    const move = (moved: MouseEvent) => {
+      const offset =
+        (handle.axis === 'column' ? moved.clientX : moved.clientY) - start
+      size = Math.min(
+        10000,
+        Math.max(MIN[handle.axis], Math.round(initial + offset)),
+      )
+      this.resize(handle.axis, handle.index, size)
+    }
+    const finish = () => {
+      frames.removeEventListener('mousemove', move)
+      frames.removeEventListener('mouseup', finish)
+      this.dragging = false
+      if (size !== null) this.save()
+    }
+    this.dragging = true
+    frames.addEventListener('mousemove', move)
+    frames.addEventListener('mouseup', finish)
+  }
+
+  /** Arrow keys on a size handle resize its column or row; Home makes it smallest, Enter automatic. */
+  private key = (event: KeyboardEvent) => {
+    const handle = event.target
+    if (
+      !(handle instanceof HTMLElement) ||
+      !handle.classList.contains('hibi-lp-table-resizer') ||
+      !writable(this.view.state)
+    )
+      return
+    const cell = handle.parentElement as HTMLTableCellElement
+    const row = cell.parentElement as HTMLTableRowElement
+    const axis = handle.dataset.axis === 'row' ? 'row' : 'column'
+    const index =
+      axis === 'column'
+        ? cell.cellIndex
+        : row === this.head
+          ? 0
+          : Number(row.dataset.line) - 1
+    const box = (axis === 'column' ? cell : row).getBoundingClientRect()
+    const current =
+      (axis === 'column'
+        ? this.sizes.columns[index]
+        : this.sizes.rows.get(index)) ||
+      Math.round(axis === 'column' ? box.width : box.height)
+    const step = event.shiftKey ? 24 : 8
+    let size: number
+    switch (event.key) {
+      case axis === 'column' ? 'ArrowLeft' : 'ArrowUp':
+        size = current - step
+        break
+      case axis === 'column' ? 'ArrowRight' : 'ArrowDown':
+        size = current + step
+        break
+      case 'Home':
+        size = MIN[axis]
+        break
+      case 'Enter':
+        size = 0
+        break
+      default:
+        return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    this.resize(axis, index, size && Math.min(10000, Math.max(MIN[axis], size)))
+    this.save(300)
+  }
+
+  /** Double-clicking a handle makes the column or row automatic again. */
+  private reset = (event: MouseEvent) => {
+    const handle = this.handle
+    if (!handle || this.view.state.readOnly) return
+    event.preventDefault()
+    this.resize(handle.axis, handle.index, 0)
+    this.save()
+  }
+
   /** A click edits the clicked cell at the clicked place; shift-click extends the selection. */
   private select = (event: MouseEvent) => {
     if (event.button !== 0 || !writable(this.view.state)) return
+    if (this.handle) {
+      event.preventDefault()
+      this.drag(event)
+      return
+    }
     const target = event.target as Element
     if (this.editing?.editor.view.dom.contains(target)) return
     const cell = target.closest('th, td')
@@ -1021,8 +1665,14 @@ class TableView {
 
   destroy() {
     this.stopEditing()
+    if (this.saving) this.save()
+    this.unsubscribe?.()
     mounted.get(this.view)?.delete(this)
     this.dom.removeEventListener('mousedown', this.select)
+    this.dom.removeEventListener('mousemove', this.hover)
+    this.dom.removeEventListener('mouseleave', this.leaveHandle)
+    this.dom.removeEventListener('dblclick', this.reset)
+    this.dom.removeEventListener('keydown', this.key)
   }
 }
 

@@ -411,9 +411,12 @@ export type DesktopApi = {
   readTableLayout: (
     tabId: string,
   ) => Promise<import('./table-layout').TableLayout[] | null>
+  /** All of a note's tables, or an update of some of them. */
   writeTableLayout: (
     tabId: string,
-    tables: import('./table-layout').TableLayout[],
+    tables:
+      | import('./table-layout').TableLayout[]
+      | import('./table-layout').TableLayoutUpdate,
   ) => Promise<void>
   readWorkspaceText: (
     owner: string,

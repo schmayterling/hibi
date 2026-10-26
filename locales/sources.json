@@ -5418,6 +5418,9 @@
   "16d1c9050a0b": [
     "src/renderer/src/FormattingToolbar.tsx"
   ],
+  "9a1f4654d0eb": [
+    "src/renderer/src/formatted/table-cells.ts"
+  ],
   "8e5ea509893e": [
     "src/renderer/src/SettingsScreen.tsx"
   ],

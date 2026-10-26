@@ -1728,6 +1728,7 @@
   "9b910110596f": "Tab accepts a suggestion when enabled. Enter accepts a highlighted word completion and starts a new paragraph for next-word suggestions. Without suggestions, Tab works as usual.",
   "70a91037b87d": "Tab key indents",
   "16d1c9050a0b": "Table",
+  "9a1f4654d0eb": "Table cell",
   "8e5ea509893e": "Tabs",
   "ba4c743a7c81": "Tag count may be incomplete.",
   "47a6a75ccb73": "Tag index incomplete.",

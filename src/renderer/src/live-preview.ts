@@ -351,6 +351,7 @@ function inline(
   blocks = { literal, views, shapes }
   const decorations: Range<Decoration>[] = []
   const lines = new Map<number, LineInfo>()
+  const headings = new Set<number>()
   const line = (pos: number) => {
     let info = lines.get(pos)
     if (!info) {
@@ -537,6 +538,14 @@ function inline(
     }
     const heading = /^(ATX|Setext)Heading(\d)$/.exec(name)
     if (heading) {
+      if (!headings.has(ref.from)) {
+        headings.add(ref.from)
+        decorations.push(
+          Decoration.mark({
+            attributes: { role: 'heading', 'aria-level': name.slice(-1) },
+          }).range(ref.from, ref.to),
+        )
+      }
       eachLine(doc, ref.from, ref.to, range, (current) => {
         // A setext underline line is hidden by the layout field.
         if (

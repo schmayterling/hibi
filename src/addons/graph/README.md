@@ -8,6 +8,8 @@ Click a dot to open its note. The graph moves smoothly to the selected note; red
 
 Hover over a dot for its full note path and connection count. Connection rows also show the full path on hover. Hints close when you move away or move the graph.
 
+With the keyboard, use the arrow keys to move the graph. Press Tab to reach its notes, starting at the current note. Then use the arrow keys or type the start of a note's name to move between notes, and press Enter to open one. A note out of view moves to the center when you reach it.
+
 Save new notes inside the workspace before expecting them to appear. Connections use relative Markdown links and Obsidian `[[wikilinks]]`.
 
 ## Credits

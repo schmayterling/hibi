@@ -458,9 +458,12 @@ test('published sites support direct routes, crawlable HTML, branding, locked th
   await page.reload()
   await page.getByRole('button', { name: /^open graph$/i }).click()
   const graph = page.getByRole('dialog', { name: /^graph$/i })
+  // The graph's keyboard note starts on this page; type-ahead reaches the home page.
+  await graph.getByRole('option', { name: /^open /i }).focus()
+  await page.keyboard.press('r')
   await graph
-    .getByRole('button', { name: 'Open README.md', exact: true })
-    .focus()
+    .getByRole('option', { name: 'Open README.md', exact: true })
+    .waitFor()
   await page.keyboard.press('Enter')
   await graph.waitFor({ state: 'hidden' })
   assert.equal(page.url(), base)

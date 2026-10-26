@@ -150,11 +150,13 @@ test('raw html stays editable source: chips, line breaks and typing inside a tag
 }, async () => {
   const note = '<span>chip</span> text<br>next\n'
   await open('html.md', note, 'chip')
-  assert.deepEqual(
-    await pane('.hibi-lp-html').evaluateAll((all) =>
-      all.map((chip) => chip.textContent),
-    ),
-    ['<span>', '</span>'],
+  // Chips can draw a frame after the text.
+  await waitForAsync(
+    page,
+    () =>
+      [...document.querySelectorAll('.rich-pane:not([inert]) .hibi-lp-html')]
+        .map((chip) => chip.textContent)
+        .join() === '<span>,</span>',
   )
   assert.equal(await pane('.hibi-lp-html-break br').count(), 1)
   // The line wraps at <br>; its first row starts with the chip.

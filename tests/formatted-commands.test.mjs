@@ -112,7 +112,7 @@ test('typing on the blank line between two blocks starts its own paragraph', () 
     const at = doc.indexOf('|')
     const plain = doc.replace('|', '')
     const state = EditorState.create({ doc: plain })
-    const spec = gapInput(state, at, at, text)
+    const spec = gapInput(state, markdown.parse(plain), at, at, text)
     if (!spec) return null
     const next = state.update(spec).state
     const head = next.selection.main.head
@@ -120,6 +120,8 @@ test('typing on the blank line between two blocks starts its own paragraph', () 
   }
   assert.equal(type('one\n|\ntwo', 'x'), 'one\n\nx|\n\ntwo')
   assert.equal(type('one\n\n|\n\ntwo', 'x'), null)
+  // Before, a blank line inside a fence was taken for a gap between blocks.
+  assert.equal(type('```\na\n|\nb\n```', 'x'), null)
 })
 
 test('tab on selected code lines indents each line, and delete never joins a fence line', () => {
@@ -182,4 +184,27 @@ test('enter in a numbered list keeps nested blocks under their item and counts o
   )
   // A gap in the numbers ends the renumbering.
   assert.equal(run('1. one|\n5. five', blockBreak), '1. one\n2. |\n5. five')
+})
+
+test('enter and backspace keep list numbers, quoted fences and formatting edges intact', () => {
+  // Before, renumbering wrote into the replaced selection: `1. \n2. 3\n4. three`.
+  assert.equal(
+    run('1. ^one\n2. two|\n3. three', blockBreak),
+    '1. \n2. |\n3. three',
+  )
+  // Before, a bare newline split the quote and the closing fence opened code.
+  assert.equal(
+    run('> ```\n> code|\n> ```\n\n> after', blockBreak),
+    '> ```\n> code\n> |\n> ```\n\n> after',
+  )
+  // At the edges of formatting the break moves outside it.
+  assert.equal(run('**bold|**', blockBreak), '**bold**\n\n|')
+  assert.equal(run('**|bold**', blockBreak), '\n\n|**bold**')
+  // Lifting the first item keeps the items after it a list.
+  assert.equal(
+    run('⟦1. ⟧|one\n2. two\n3. three', deleteBackward),
+    '|one\n\n2. two\n3. three',
+  )
+  // An empty item's enter replaces the whole selection.
+  assert.equal(run('- one\n- ^\n- two|', blockBreak), '- one\n\n|')
 })

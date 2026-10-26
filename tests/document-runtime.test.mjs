@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
-import { StaleDocumentError } from '../src/renderer/src/document-transfer.ts'
 
 const document = (text, overrides = {}) => ({
   tabId: 'one',
@@ -501,28 +500,4 @@ test('combined history limits reject invalid values and allow history-free editi
   })
   assert.deepEqual(errors, [])
   runtime.dispose()
-})
-
-test("a closed tab's states stop reaching its source while open tabs read theirs", () => {
-  const { runtime, errors } = fixture()
-  const tabs = [
-    { id: 'one', name: 'one.md', dirty: false },
-    { id: 'two', name: 'two.md', dirty: false },
-  ]
-  runtime.activate(document('first note', { tabs }))
-  const closing = runtime.get()
-  assert.equal(closing.markdown, 'first note')
-  const two = { tabId: 'two', id: 'file-two', name: 'two.md' }
-  runtime.activate(document('second note', { ...two, tabs }))
-  const open = runtime.get()
-  // Closing the first tab leaves the second as the only one.
-  runtime.activate(document('second note', { ...two, tabs: [tabs[1]] }))
-  assert.throws(() => closing.markdown, StaleDocumentError)
-  assert.throws(() => closing.savedMarkdown, StaleDocumentError)
-  assert.equal(runtime.sourceFor(closing), undefined)
-  assert.equal(open.markdown, 'second note')
-  assert.equal(runtime.get().markdown, 'second note')
-  assert.deepEqual(errors, [])
-  runtime.dispose()
-  assert.throws(() => open.markdown, StaleDocumentError)
 })

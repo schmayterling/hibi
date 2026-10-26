@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { TreeFragment } from '@lezer/common'
-import { GFM, parser } from '@lezer/markdown'
+import { GFM, parser, Table } from '@lezer/markdown'
 import {
   ChunkedMarkdownParser,
   listWindow,
@@ -925,4 +925,74 @@ test('the search after a stuck block reads a long line once, in bounded steps, a
   // The work counters include the search's reads.
   assert.ok(counts.scannedUnits >= 65536, `${counts.scannedUnits}`)
   assert.equal(chain(tree, at + 2), 'ATXHeading1>Document')
+})
+
+test('a giant window evicted by a far viewport keeps the read-ahead reach of its decisions', () => {
+  // Tables here form only when the note says ENABLE at its end, so every
+  // table decision reads the whole note.
+  let input = null
+  const original = Table.parseBlock[0]
+  const enabled = () => {
+    readAhead(input, input.length)
+    return input.read(0, input.length).includes('ENABLE')
+  }
+  const conditional = parser.configure({
+    ...Table,
+    wrap(inner, outer) {
+      input = outer
+      return inner
+    },
+    parseBlock: [
+      {
+        ...original,
+        name: 'ConditionalTable',
+        leaf: (cx, leaf) =>
+          leaf.content.includes('|') && enabled()
+            ? original.leaf(cx, leaf)
+            : null,
+        endLeaf: (cx, line, leaf) =>
+          line.text.includes('|') &&
+          enabled() &&
+          original.endLeaf(cx, line, leaf),
+      },
+    ],
+  })
+  const run = (text, fragments, demand) => {
+    const parse = new ChunkedMarkdownParser(conditional, conditional, {
+      chunkSize: 64,
+      giantBlock: 512,
+      groupSize: 4,
+      opaque: new Set(['Table']),
+    }).startChunkedParse(stringInput(text), fragments, demand)
+    for (;;) {
+      const tree = parse.advance()
+      if (tree) return tree
+    }
+  }
+  // Top-level blocks starting in the viewport near the table.
+  const top = (tree) => {
+    const out = []
+    for (let node = tree.topNode.firstChild; node; node = node.nextSibling)
+      if (node.from < 2000) out.push(`${node.name}:${node.from}-${node.to}`)
+    return out
+  }
+  const text = `${'intro text '.repeat(40)}\n| a | b |\n| - | - |\n${Array.from({ length: 500 }, (_, i) => `| ${i} | cell |`).join('\n')}\n\n${'padding\n\n'.repeat(1000)}ENABLE\n`
+  const first = run(text, [], { from: 0, to: text.length })
+  // Scroll to the end, edit there, and scroll back to the table.
+  const away = run(text, TreeFragment.addTree(first), {
+    from: text.length - 200,
+    to: text.length,
+  })
+  const at = text.indexOf('ENABLE')
+  const edited = `${text.slice(0, at)}DISABLE${text.slice(at + 6)}`
+  const changed = run(
+    edited,
+    TreeFragment.applyChanges(TreeFragment.addTree(away), [
+      { fromA: at, toA: at + 6, fromB: at, toB: at + 7 },
+    ]),
+    { from: edited.length - 200, to: edited.length },
+  )
+  const back = run(edited, TreeFragment.addTree(changed), { from: 0, to: 2000 })
+  // Before, the evicted window lost its reach and kept the stale table.
+  assert.deepEqual(top(back), top(conditional.parse(edited)))
 })

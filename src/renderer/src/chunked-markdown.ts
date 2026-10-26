@@ -906,7 +906,11 @@ class ChunkedParse implements ChunkedPartialParse {
     }
     this.addChunk(
       info.window && this.far(from, end)
-        ? this.giantLeaf(block, chunk.length)
+        ? // Read-ahead decisions in the window still hold the block's place.
+          this.giantLeaf(block, chunk.length, {
+            ...(info.reach === undefined ? {} : { reach: info.reach }),
+            ...(info.edge === undefined ? {} : { edge: info.edge }),
+          })
         : chunk,
     )
     const probe = this.parser.options.probe

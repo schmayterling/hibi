@@ -25,7 +25,7 @@ export class WorkspaceLiteralMatcher {
     const prefix = this.nativeTail.length
     const source = this.nativeTail + lower
     const aligned = lower.length === text.length
-    let lineCursor = 0
+    let nextLine = text.indexOf('\n')
     this.units += lower.length
     let raw = 0,
       folded = 0,
@@ -40,13 +40,9 @@ export class WorkspaceLiteralMatcher {
       const end = match + this.needle.length - prefix
       if (aligned) {
         raw = Math.max(0, end - 1)
-        for (
-          let next = text.indexOf('\n', lineCursor);
-          next >= 0 && next < raw;
-          next = text.indexOf('\n', lineCursor)
-        ) {
+        while (nextLine >= 0 && nextLine < raw) {
           line++
-          lineCursor = next + 1
+          nextLine = text.indexOf('\n', nextLine + 1)
         }
       }
       while (!aligned && raw < text.length) {

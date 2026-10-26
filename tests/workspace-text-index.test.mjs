@@ -181,6 +181,35 @@ test('streaming search fold agrees with whole-string search at scalar and sigma 
   assert.deepEqual(workspaceQueryGrams('a\0b'), [])
 })
 
+test('same-line matches scan newline tails only linearly', (t) => {
+  const indexOf = String.prototype.indexOf
+  let scanned = 0
+  t.mock.method(String.prototype, 'indexOf', function (needle, from = 0) {
+    const at = indexOf.call(this, needle, from)
+    if (needle === '\n')
+      scanned += Math.max(0, (at < 0 ? this.length : at) - from)
+    return at
+  })
+  for (const size of [16384, 32768, 65536]) {
+    const text = 'η οδός της πόλης είναι στενή. '
+      .repeat(Math.ceil(size / 28))
+      .slice(0, size)
+    scanned = 0
+    const matcher = new WorkspaceLiteralMatcher('σ')
+    matcher.push(text)
+    matcher.finish()
+    assert.deepEqual(
+      matcher.lines.map(({ line }) => line),
+      [1],
+    )
+    assert.ok(
+      scanned <= text.length * 4,
+      `${scanned} newline units for ${size}`,
+    )
+    t.diagnostic(JSON.stringify({ units: size, newlineUnits: scanned }))
+  }
+})
+
 test('persistent candidate filtering preserves literal, cjk, code, unicode and long-query matches', async (t) => {
   const long = `unique start ${'abcdEF'.repeat(12_000)} unique end`
   const pages = {

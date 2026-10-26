@@ -436,9 +436,9 @@ export function SourceEditor({
           navigatingFind.current = false
           find.current.report({ current: 0, total: 0, error: message })
         },
-        result: (location, action) => {
+        result: (location, action, highlightStarts, query) => {
           const current = view.current
-          if (!current || !find.current.active) return
+          if (!current || !find.current.active || query !== find.current.query) return
           findCoverage.current = {
             query: find.current.query,
             version: session.snapshot().version,
@@ -450,12 +450,28 @@ export function SourceEditor({
               : action
                 ? location.next
                 : null
-          if (target) {
+          if (target || highlightStarts) {
             applyingFind.current = true
             try {
               current.dispatch({
-                selection: { anchor: target.match.from, head: target.match.to },
-                scrollIntoView: true,
+                ...(target
+                  ? {
+                      selection: {
+                        anchor: target.match.from,
+                        head: target.match.to,
+                      },
+                      scrollIntoView: true,
+                    }
+                  : {}),
+                effects: highlightStarts
+                  ? findHighlights.current.reconfigure(
+                      sourceFindHighlights(
+                        find.current.query,
+                        current.state.doc,
+                        highlightStarts,
+                      ),
+                    )
+                  : [],
               })
             } finally {
               applyingFind.current = false
@@ -2014,7 +2030,7 @@ export function SourceEditor({
     editor.dispatch({
       effects: [
         setSearchQuery.of(query),
-        findHighlights.current.reconfigure(sourceFindHighlights(findQuery)),
+        findHighlights.current.reconfigure([]),
       ],
     })
     findActions.current = []

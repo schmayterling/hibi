@@ -54,6 +54,7 @@ export type DocumentWorkerRequest =
       id: number
       version: number
       query: string
+      highlights?: boolean
       from: number
       to: number
     }
@@ -94,6 +95,7 @@ export type DocumentWorkerReply =
       id: number
       version: number
       location: SearchLocation
+      highlightStarts?: readonly number[]
     }
   | {
       type: 'error'

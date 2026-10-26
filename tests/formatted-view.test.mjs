@@ -298,3 +298,64 @@ test('behind the switch, frontmatter properties above the formatted view edit th
     return markdown === '---\ntitle: Two\n---\n\n# Title\n\nBody text.\n'
   })
 })
+
+test('behind the switch, properties edit notes with crlf line breaks and a byte order mark', {
+  timeout: 120000,
+}, async (t) => {
+  for (const [label, prefix, eol] of [
+    ['crlf', '', '\r\n'],
+    ['bom crlf', '\uFEFF', '\r\n'],
+  ]) {
+    const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-properties-'))
+    const file = join(folder, 'notes', 'note.md')
+    await mkdir(join(folder, 'notes'))
+    const note = (title) =>
+      `${prefix}---${eol}title: ${title}${eol}---${eol}${eol}# Title${eol}`
+    await writeFile(file, note('A'))
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+    })
+    t.after(async () => {
+      await app.close()
+      await rm(folder, { recursive: true, force: true })
+    })
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    const page = await app.firstWindow()
+    await waitForDocumentEditor(app, page)
+    await page.evaluate(() =>
+      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+    )
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, file)
+    await pressShortcut(app, `${mod}+o`)
+    await page.locator('.rich-pane .hibi-lp-h1', { hasText: 'Title' }).waitFor()
+    const title = page
+      .locator('.rich-pane .frontmatter')
+      .getByRole('textbox', { name: 'title', exact: true })
+    await title.waitFor()
+    // Before, offsets of the source text landed one line late in the view:
+    // `title: A` became `title: A` and `B---`.
+    await title.fill('AB')
+    const expected = note('AB')
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      expected,
+    ).catch(async () =>
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        expected,
+        label,
+      ),
+    )
+  }
+})

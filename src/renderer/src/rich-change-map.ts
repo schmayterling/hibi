@@ -66,49 +66,90 @@ export function richEditMap(
     shift = next
     previous = edit.to
   }
-  const slices = [slicer(before), slicer(after)] as const
   return rangeMap(
     before,
     after,
-    slices,
-    windows.flatMap((window) => narrow(slices, window)),
+    windows.flatMap((window) => narrow(before, after, window)),
   )
 }
 
-type Slicer = (from: number, to: number) => Slice
-
-// Slices of one document cut from just the top-level blocks they cover. A
-// whole-document slice resolves both ends by walking every earlier block, so
-// slicing per edit would read the document once per edit.
-function slicer(doc: Node): Slicer {
-  const nodes: Node[] = [],
-    starts: number[] = []
-  doc.forEach((node, offset) => {
-    nodes.push(node)
-    starts.push(offset)
+// Child start offsets of each fragment, built when first needed. Resolving or
+// cutting a position walks every earlier sibling, so doing that once per edit
+// in a long document or list would read it once per edit.
+const childStarts = new WeakMap<Fragment, number[]>()
+function startsOf(fragment: Fragment) {
+  const cached = childStarts.get(fragment)
+  if (cached) return cached
+  const starts: number[] = []
+  let at = 0
+  fragment.forEach((child) => {
+    starts.push(at)
+    at += child.nodeSize
   })
-  return (from, to) => {
-    // The first block that ends after `from`, then each one starting before `to`.
-    let low = 0,
-      high = nodes.length
-    while (low < high) {
-      const middle = (low + high) >>> 1
-      if (starts[middle]! + nodes[middle]!.nodeSize <= from) low = middle + 1
-      else high = middle
-    }
-    let end = low
-    while (end < nodes.length && starts[end]! < to) end++
-    const base = starts[low] ?? doc.content.size
-    return doc.type
-      .create(doc.attrs, nodes.slice(low, end))
-      .slice(from - base, to - base)
+  childStarts.set(fragment, starts)
+  return starts
+}
+// The first child of `fragment` that ends after `position`.
+function childAfter(fragment: Fragment, position: number) {
+  const list = startsOf(fragment)
+  let low = 0,
+    high = list.length
+  while (low < high) {
+    const middle = (low + high) >>> 1
+    if ((list[middle + 1] ?? fragment.size) <= position) low = middle + 1
+    else high = middle
+  }
+  return low
+}
+
+// A copy of `node` holding only the children that [from, to) reaches, at
+// every depth, and how far that moves the positions it keeps.
+function prune(node: Node, from: number, to: number): [Node, number] {
+  const list = startsOf(node.content),
+    first = childAfter(node.content, from)
+  let last = first,
+    high = list.length
+  while (last < high) {
+    const middle = (last + high) >>> 1
+    if (list[middle]! < to) last = middle + 1
+    else high = middle
+  }
+  const children = node.content.content.slice(first, last),
+    head = children[0],
+    start = list[first]
+  let moved = start ?? node.content.size
+  if (head && start !== undefined && from > start && !head.isLeaf) {
+    const [inner, shift] = prune(head, from - start - 1, to - start - 1)
+    children[0] = inner
+    moved += shift
+  }
+  return [node.type.create(node.attrs, children, node.marks), moved]
+}
+const sliceOf = (doc: Node, from: number, to: number) => {
+  const [local, moved] = prune(doc, from, to)
+  return local.slice(from - moved, to - moved)
+}
+
+// The containers around `position`, outermost first, each with the position
+// just before it.
+function containers(doc: Node, position: number) {
+  const found: { node: Node; before: number }[] = []
+  for (let node = doc, offset = 0; ; ) {
+    const index = childAfter(node.content, position - offset),
+      start = startsOf(node.content)[index]
+    if (start === undefined || start >= position - offset) return found
+    const child = node.child(index)
+    if (child.isText || child.isLeaf) return found
+    found.push({ node: child, before: offset + start })
+    node = child
+    offset += start + 1
   }
 }
 
 // The part of matching windows where the documents differ, if any.
-function narrow(slices: readonly [Slicer, Slicer], window: Span): Span[] {
-  const left = slices[0](window.a, window.b),
-    right = slices[1](window.c, window.d)
+function narrow(before: Node, after: Node, window: Span): Span[] {
+  const left = sliceOf(before, window.a, window.b),
+    right = sliceOf(after, window.c, window.d)
   if (left.openStart !== right.openStart || left.openEnd !== right.openEnd)
     return [window]
   const start = left.content.findDiffStart(right.content)
@@ -165,12 +206,29 @@ function same(left: Slice, right: Slice) {
  * ranges must match exactly; where a change had wider effects, the ranges
  * around the differing content merge.
  */
-function rangeMap(
-  before: Node,
-  after: Node,
-  slices: readonly [Slicer, Slicer],
-  ranges: readonly Span[],
-) {
+function rangeMap(before: Node, after: Node, ranges: readonly Span[]) {
+  const fits = (b: number, d: number, a: number, c: number) =>
+    a >= b &&
+    c >= d &&
+    a - b === c - d &&
+    same(sliceOf(before, b, a), sliceOf(after, d, c))
+  // Where the containers at a gap's edge differ, as when `> ` wraps a paragraph
+  // in a quote, the gap starts after the outermost differing one and ends
+  // before it, so unchanged siblings still anchor the ranges beside it.
+  const edge = (position: number, next: number, end: boolean) => {
+    const left = containers(before, position),
+      right = containers(after, next)
+    for (let depth = 0; depth < Math.max(left.length, right.length); depth++) {
+      const a = left[depth],
+        b = right[depth]
+      if (a && b && a.node.hasMarkup(b.node.type, b.node.attrs, b.node.marks))
+        continue
+      const side = (found: typeof a, at: number) =>
+        found ? found.before + (end ? 0 : found.node.nodeSize) : at
+      return [side(a, position), side(b, next)] as const
+    }
+    return [position, next] as const
+  }
   const kept: Span[] = [{ a: 0, b: 0, c: 0, d: 0 }]
   for (const range of [
     ...ranges,
@@ -182,14 +240,17 @@ function rangeMap(
     },
   ]) {
     const last = kept.at(-1)!
-    if (
-      range.a >= last.b &&
-      range.c >= last.d &&
-      range.a - last.b === range.c - last.d &&
-      same(slices[0](last.b, range.a), slices[1](last.d, range.c))
-    )
+    if (fits(last.b, last.d, range.a, range.c)) {
       kept.push({ ...range })
-    else {
+      continue
+    }
+    const [b, d] = edge(last.b, last.d, false),
+      [a, c] = edge(range.a, range.c, true)
+    if (fits(b, d, a, c)) {
+      last.b = b
+      last.d = d
+      kept.push({ ...range, a, c })
+    } else {
       last.b = Math.max(last.b, range.b)
       last.d = Math.max(last.d, range.d)
     }

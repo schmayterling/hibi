@@ -784,3 +784,20 @@ test('split preview catch-up keeps selections when a replacement retypes the fro
     ],
   )
 })
+
+test('split preview catch-up keeps selections after a block is wrapped or unwrapped', {
+  timeout: 120000,
+}, async (t) => {
+  // The container around the first block changes; the blocks after it do not.
+  for (const [prefix, insert] of [
+    ['', '> '],
+    ['', '- '],
+    ['> ', ''],
+    ['- ', ''],
+  ])
+    await editAroundBeta(
+      t,
+      `${prefix}alpha\n\nbeta gamma\n\nmath $x^2$\n\nomega`,
+      () => [{ from: 0, to: prefix.length, insert }],
+    )
+})

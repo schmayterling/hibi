@@ -245,63 +245,104 @@ test('edits with wider effects still map the content they leave alone', () => {
   assert.equal(joined.after.textBetween(kept.from, kept.to), 'three')
 })
 
-test('edits spread through a long document read each block a bounded number of times', () => {
-  const plainSchema = new Schema({
+test('wrapping or unwrapping a block keeps selections in the blocks after it', () => {
+  for (const [prefix, insert, moved] of [
+    ['', '> ', 2],
+    ['', '- ', 4],
+    ['> ', '', -2],
+    ['- ', '', -4],
+  ]) {
+    const source = `${prefix}alpha\n\nbeta gamma\n\nomega`
+    const { before, after, map } = edited(source, [
+      { from: 0, to: prefix.length, insert },
+    ])
+    const beta = at(before, (node) => node.isText && node.text === 'beta gamma')
+    const mapped = TextSelection.create(before, beta, beta + 4).map(after, map)
+    assert.equal(after.textBetween(mapped.from, mapped.to), 'beta', source)
+    assert.equal(mapped.from - beta, moved, source)
+  }
+})
+
+test('edits spread through a long document or list read each block a bounded number of times', () => {
+  const nestedSchema = new Schema({
     nodes: {
-      doc: { content: 'paragraph+' },
-      paragraph: { content: 'text*' },
+      doc: { content: 'block+' },
+      paragraph: { content: 'text*', group: 'block' },
+      bullet_list: { content: 'list_item+', group: 'block' },
+      list_item: { content: 'paragraph' },
       text: {},
     },
   })
-  const build = (rows) =>
-    plainSchema.node(
-      'doc',
-      null,
-      rows.map((row) =>
-        plainSchema.node('paragraph', null, plainSchema.text(row)),
-      ),
-    )
   const lines = Array.from(
     { length: 50000 },
     (_, index) => `row ${index} alpha beta omega`,
   )
-  const source = lines.join('\n\n')
-  const before = build(lines)
-  const starts = [0]
-  for (const line of lines) starts.push(starts.at(-1) + line.length + 2)
-  const oldMap = markdownPositions(source, before)
-  // ProseMirror reads children one by one when it resolves or cuts positions.
-  const reads = (count) => {
-    const rows = lines.slice(),
-      edits = []
-    for (let edit = 0; edit < count; edit++) {
-      const row = Math.floor(((edit + 1) * lines.length) / (count + 1))
-      edits.push({ from: starts[row], to: starts[row], insert: '!' })
-      rows[row] = `!${rows[row]}`
+  for (const list of [false, true]) {
+    const paragraph = (row) =>
+      nestedSchema.node('paragraph', null, nestedSchema.text(row))
+    const build = (rows) =>
+      nestedSchema.node(
+        'doc',
+        null,
+        list
+          ? nestedSchema.node(
+              'bullet_list',
+              null,
+              rows.map((row) =>
+                nestedSchema.node('list_item', null, paragraph(row)),
+              ),
+            )
+          : rows.map(paragraph),
+      )
+    const prefix = list ? '- ' : '',
+      separator = list ? '\n' : '\n\n'
+    const join = (rows) => rows.map((row) => prefix + row).join(separator)
+    const source = join(lines),
+      before = build(lines)
+    const starts = [0]
+    for (const line of lines)
+      starts.push(
+        starts.at(-1) + prefix.length + line.length + separator.length,
+      )
+    const oldMap = markdownPositions(source, before)
+    // ProseMirror reads children one by one when it resolves or cuts positions.
+    const reads = (count) => {
+      const rows = lines.slice(),
+        edits = []
+      for (let edit = 0; edit < count; edit++) {
+        const row = Math.floor(((edit + 1) * lines.length) / (count + 1)),
+          at = starts[row] + prefix.length
+        edits.push({ from: at, to: at, insert: '!' })
+        rows[row] = `!${rows[row]}`
+      }
+      const after = build(rows)
+      const lookups = [oldMap, markdownPositions(join(rows), after)]
+      const child = Fragment.prototype.child
+      let total = 0
+      Fragment.prototype.child = function (index) {
+        total++
+        return child.call(this, index)
+      }
+      let map
+      try {
+        map = richEditMap(before, after, edits, source.length, lookups)
+      } finally {
+        Fragment.prototype.child = child
+      }
+      // Row 12,345 is never edited; its `beta` keeps its text.
+      let from
+      before.descendants((node, position) => {
+        if (node.isText && node.text === lines[12345])
+          from = position + node.text.indexOf('beta')
+      })
+      const mapped = map.map(from)
+      assert.equal(after.textBetween(mapped, mapped + 4), 'beta')
+      return total
     }
-    const after = build(rows)
-    const lookups = [oldMap, markdownPositions(rows.join('\n\n'), after)]
-    const child = Fragment.prototype.child
-    let total = 0
-    Fragment.prototype.child = function (index) {
-      total++
-      return child.call(this, index)
-    }
-    let map
-    try {
-      map = richEditMap(before, after, edits, source.length, lookups)
-    } finally {
-      Fragment.prototype.child = child
-    }
-    // Row 12,345 is never edited; its `beta` keeps its text.
-    const from = starts[12345] + 1 + lines[12345].indexOf('beta')
-    const mapped = map.map(from)
-    assert.equal(after.textBetween(mapped, mapped + 4), 'beta')
-    return total
+    const few = reads(100),
+      many = reads(1000)
+    // Linear in the document and the edits, never their product.
+    assert.ok(many < few * 1.5, `${few} reads for 100 edits, ${many} for 1,000`)
+    assert.ok(many < 5 * lines.length, String(many))
   }
-  const few = reads(100),
-    many = reads(1000)
-  // Linear in the document and the edits, never their product.
-  assert.ok(many < few * 1.5, `${few} reads for 100 edits, ${many} for 1,000`)
-  assert.ok(many < 5 * lines.length, String(many))
 })

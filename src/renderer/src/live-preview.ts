@@ -585,14 +585,17 @@ function itemLine(
   info.classes.push('hibi-lp-list-item')
   const list = item.parent!
   if (list.name === 'OrderedList') {
-    const window = list.tree?.prop(listWindow)
     const first = list.getChild('ListItem')?.getChild('ListMark')
-    const start =
-      window?.start ??
-      (first ? Number.parseInt(doc.sliceString(first.from, first.to), 10) : 1)
+    const start = first
+      ? Number.parseInt(doc.sliceString(first.from, first.to), 10)
+      : 1
+    // A window into a giant block lacks the items before it.
+    let top: SyntaxNode = list
+    while (top.parent && top.parent.name !== 'Document') top = top.parent
+    const skipped = top.tree?.prop(listWindow)?.get(list.from - top.from) ?? 0
     info.classes.push('hibi-lp-list-ordered')
     info.style.push(
-      `counter-set: list-item ${(Number.isFinite(start) ? start : 1) + (window?.items ?? 0) + ordinal(list, item, ordinals)}`,
+      `counter-set: list-item ${(Number.isFinite(start) ? start : 1) + skipped + ordinal(list, item, ordinals)}`,
     )
   } else
     info.style.push(
@@ -809,7 +812,9 @@ export function livePreview(syntax: FormattedSyntax): Extension {
     create: (state) => layoutDecorations(state, syntax.tree(state)),
     update(value, transaction) {
       const tree = syntax.tree(transaction.state)
-      return tree === syntax.tree(transaction.startState)
+      // An edit's unfinished reparse keeps the layout it replaces, mapped.
+      return tree === syntax.tree(transaction.startState) ||
+        syntax.settling(transaction.state)
         ? value.map(transaction.changes)
         : layoutDecorations(transaction.state, tree)
     },
@@ -845,7 +850,11 @@ export function livePreview(syntax: FormattedSyntax): Extension {
               range.to !== this.reveal[index]?.to,
           )
         this.reveal = reveal
-        if (
+        // An edit's unfinished reparse keeps what was drawn, mapped through it.
+        if (syntax.settling(update.state)) {
+          this.decorations = this.decorations.map(update.changes)
+          this.atomic = this.atomic.map(update.changes)
+        } else if (
           update.docChanged ||
           update.viewportChanged ||
           changedReveal ||

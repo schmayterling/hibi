@@ -80,7 +80,7 @@ async function host(t, builtins = [details('markdown')]) {
     './appearance': 'export const exportedAppearance=()=>({})',
     './document': `export const clearDocument=()=>{},getDocument=()=>({}),getDocumentPath=()=>null,hasUnsavedDocuments=()=>false,loadDocument=()=>{},newDocument=()=>{},renameDocument=()=>{},updateDocument=()=>{}`,
     './document-types': 'export const setDocumentExtensions=()=>{}',
-    './workspace': `export const getWorkspace=()=>null,refreshWorkspace=()=>{},resolveWorkspaceFile=()=>null,snapshotWorkspace=()=>{},workspaceId=()=>null,workspaceRoot=()=>null`,
+    './workspace': `export const getWorkspace=()=>null,refreshWorkspace=()=>{},resolveWorkspaceFile=()=>null,snapshotWorkspace=()=>{},workspaceEntries=()=>[],workspaceId=()=>null,workspaceRoot=()=>null`,
     './dependencies': 'export const resolveDependency=()=>null',
     './addon-repository':
       'export const repositoryUrl=()=>false,downloadRepository=()=>{throw new Error("No downloads in this test")}',

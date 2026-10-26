@@ -32,6 +32,11 @@ type Syntax = {
   complete: boolean
   /** The unfinished parse of this document, continued by the next slice. */
   parse: ChunkedPartialParse | null
+  /**
+   * The parse is an edit's reparse that did not finish: its tree lacks the
+   * edited chunks' nodes until it does.
+   */
+  settling: boolean
 }
 
 const setDemand = StateEffect.define<Demand>()
@@ -67,7 +72,11 @@ const mapDemand = (demand: Demand, changes: ChangeDesc) => ({
 function syntaxField(options: FormattedSyntaxOptions) {
   const chunked = markdownParser(options)
   const slice = options.slice ?? 8
-  const run = (parse: ChunkedPartialParse, demand: Demand): Syntax => {
+  const run = (
+    parse: ChunkedPartialParse,
+    demand: Demand,
+    settling: boolean,
+  ): Syntax => {
     const end = performance.now() + slice
     for (;;) {
       const tree = parse.advance()
@@ -77,31 +86,48 @@ function syntaxField(options: FormattedSyntaxOptions) {
           demand,
           complete: !uncovered(tree, demand.from, demand.to),
           parse: null,
+          settling: false,
         }
       // Keep the verified progress; the driver resumes in an idle slice.
       if (performance.now() >= end)
-        return { tree: parse.snapshot(), demand, complete: false, parse }
+        return {
+          tree: parse.snapshot(),
+          demand,
+          complete: false,
+          parse,
+          settling,
+        }
     }
   }
   const start = (
     doc: Text,
     fragments: readonly TreeFragment[],
     demand: Demand,
+    settling: boolean,
   ) =>
-    run(chunked.startChunkedParse(new DocInput(doc), fragments, demand), demand)
+    run(
+      chunked.startChunkedParse(new DocInput(doc), fragments, demand),
+      demand,
+      settling,
+    )
   return StateField.define<Syntax>({
     create(state) {
-      return start(state.doc, [], {
-        from: 0,
-        to: Math.min(state.doc.length, 8192),
-      })
+      return start(
+        state.doc,
+        [],
+        { from: 0, to: Math.min(state.doc.length, 8192) },
+        false,
+      )
     },
     update(value, transaction) {
       let demand = value.demand,
-        resumed = false
+        resumed = false,
+        moved = false
       for (const effect of transaction.effects) {
-        if (effect.is(setDemand)) demand = effect.value
-        else if (effect.is(resume)) resumed = true
+        if (effect.is(setDemand)) {
+          demand = effect.value
+          moved = true
+        } else if (effect.is(resume)) resumed = true
       }
       if (transaction.docChanged) {
         demand = mapDemand(demand, transaction.changes)
@@ -119,12 +145,13 @@ function syntaxField(options: FormattedSyntaxOptions) {
           TreeFragment.addTree(value.tree),
           ranges,
         )
-        return start(transaction.state.doc, fragments, demand)
+        return start(transaction.state.doc, fragments, demand, true)
       }
       if (demand === value.demand && !resumed) return value
       if (value.parse) {
         value.parse.setDemand(demand)
-        return run(value.parse, demand)
+        // A new viewport shows chunks as they are parsed.
+        return run(value.parse, demand, value.settling && !moved)
       }
       if (!uncovered(value.tree, demand.from, demand.to))
         return { ...value, demand, complete: true }
@@ -132,6 +159,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
         transaction.state.doc,
         TreeFragment.addTree(value.tree),
         demand,
+        false,
       )
     },
   })
@@ -182,6 +210,11 @@ export type FormattedSyntax = {
   extension: Extension
   /** The formatted view's syntax tree for a state that includes this extension. */
   tree: (state: EditorState) => Tree
+  /**
+   * An edit's reparse has not finished, so renderers keep what they drew,
+   * mapped through the edit, instead of rendering the edited chunks bare.
+   */
+  settling: (state: EditorState) => boolean
 }
 
 /** Chunked Markdown syntax for one formatted editor configuration. */
@@ -192,5 +225,6 @@ export function formattedSyntax(
   return {
     extension: [field, driver(field)],
     tree: (state) => state.field(field).tree,
+    settling: (state) => state.field(field).settling,
   }
 }

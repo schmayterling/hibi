@@ -18,7 +18,6 @@ import type {
   DocumentCommand,
   DocumentState,
 } from '../../shared/desktop'
-import { MAX_DOCUMENT_BYTES } from '../../shared/desktop'
 import type {
   CommandExecutionContext,
   FileId,
@@ -34,8 +33,8 @@ import {
   type Hotkeys,
 } from '../../shared/hotkeys'
 import { isMediaFile } from '../../shared/media'
+import type { SourceTransferSender } from '../../shared/source-transfer'
 import { startupMark } from '../../shared/startup'
-import { exceedsUtf8Limit } from '../../shared/text-size'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { DialogProvider, useDialogs } from '../../ui/DialogProvider'
 import { MenuHost } from '../../ui/MenuHost'
@@ -62,10 +61,7 @@ import {
   SIDEBAR_OVERLAY_WIDTH,
   useSidebarResize,
 } from '../../ui/useSidebarResize'
-import {
-  ActiveDocumentEditor,
-  type DocumentFlavorStatus,
-} from './ActiveDocumentEditor'
+import type { DocumentFlavorStatus } from './ActiveDocumentEditor'
 import { AddonPanel } from './AddonPanel'
 import type { AddonRequest } from './AddonSettings'
 import { AddonSidebar, builtInViews, viewShortcut } from './AddonSidebar'
@@ -83,7 +79,11 @@ import {
   documentRuntime,
   observeDocumentErrors,
 } from './document-runtime'
-import { hasDocumentFootnotes, subscribeDocumentShell } from './document-shell'
+import {
+  hasDocumentFootnotes,
+  preferSourceOpening,
+  subscribeDocumentShell,
+} from './document-shell'
 import type { ViewMode } from './Editor'
 import { EditorToolbar } from './EditorToolbar'
 import { isEditorCommandTargetCurrent } from './editor-command-targets'
@@ -105,7 +105,7 @@ import {
   type OutlineRequest,
   OutlineSidebar,
 } from './OutlineSidebar'
-import { RecoveryBoundary } from './RecoveryScreen'
+import { RecoveryBoundary } from './RecoveryBoundary'
 import { StartupPlaceholder } from './StartupPlaceholder'
 import { StatusBar, type StatusBarVisibility } from './StatusBar'
 import { settingsCategories } from './settings-categories'
@@ -301,6 +301,7 @@ function App() {
     !document || documentFormats.isMarkdown(document.name)
   const [richEditor, setRichEditor] = useState<{
     Component?: typeof import('./Editor').MarkdownEditor
+    Adapter?: typeof import('./ActiveDocumentEditor').ActiveDocumentEditor
     error?: Error
   }>({})
   const needsRichEditor =
@@ -314,13 +315,25 @@ function App() {
         })
       ))
   useEffect(() => {
-    if (!needsRichEditor || richEditor.Component || richEditor.error) return
+    if (
+      !needsRichEditor ||
+      (richEditor.Component && richEditor.Adapter) ||
+      richEditor.error
+    )
+      return
     let active = true
     // Publish the demanded module as ordinary state: a first Suspense retry can
     // otherwise hold an already loaded editor behind React's reveal throttle.
-    void import('./Editor').then(
-      ({ MarkdownEditor }) => {
-        if (active) setRichEditor({ Component: MarkdownEditor })
+    void Promise.all([
+      import('./Editor'),
+      import('./ActiveDocumentEditor'),
+    ]).then(
+      ([{ MarkdownEditor }, { ActiveDocumentEditor }]) => {
+        if (active)
+          setRichEditor({
+            Component: MarkdownEditor,
+            Adapter: ActiveDocumentEditor,
+          })
       },
       (error: Error) => {
         if (active) setRichEditor({ error })
@@ -332,6 +345,7 @@ function App() {
   }, [needsRichEditor, richEditor])
   const [formatEditor, setFormatEditor] = useState<{
     Component?: typeof import('./FormatEditor').FormatEditor
+    Adapter?: typeof import('./ActiveDocumentEditor').ActiveDocumentEditor
     error?: Error
   }>({})
   const needsFormatEditor =
@@ -355,21 +369,54 @@ function App() {
   const shellDocument = useRef(document)
   shellDocument.current = document
   currentDocument.current = documentRuntime.get() ?? document
-  useLayoutEffect(
-    () =>
-      window.hibi.onDocumentCheckpoint((tabId) => {
-        const source = documentRuntime.session(tabId)?.snapshot()
-        if (!source)
+  useLayoutEffect(() => {
+    const checkpoints = new Map<
+      string,
+      { sender: SourceTransferSender; current: () => boolean }
+    >()
+    const tabs = new Map<string, string>()
+    return window.hibi.onDocumentCheckpoint(
+      async (tabId) => {
+        const session = documentRuntime.session(tabId),
+          source = session?.snapshot()
+        if (!session || !source)
           throw new Error('No retained document recovery checkpoint.')
-        return {
+        const { SourceTransferSender } = await import(
+          '../../shared/source-transfer'
+        )
+        if (!session.ownsCurrentSnapshot(source))
+          throw new Error('The document changed during recovery verification.')
+        const previous = tabs.get(tabId)
+        if (previous) {
+          checkpoints.get(previous)?.sender.close()
+          checkpoints.delete(previous)
+        }
+        const head = {
           tabId: source.document.tabId,
           revision: source.document.revision,
           contentVersion: source.version,
-          source: source.materialize(),
+          streamId: crypto.randomUUID(),
+          length: source.utf16Length,
         }
-      }),
-    [],
-  )
+        checkpoints.set(head.streamId, {
+          sender: new SourceTransferSender(head, source.chunks()),
+          current: () => session.ownsCurrentSnapshot(source),
+        })
+        tabs.set(tabId, head.streamId)
+        return head
+      },
+      (request) => {
+        const checkpoint = checkpoints.get(request.streamId)
+        if (!checkpoint?.current())
+          throw new Error('The document changed during recovery verification.')
+        return checkpoint.sender.read(request)
+      },
+      (request) => {
+        checkpoints.get(request.streamId)?.sender.close()
+        checkpoints.delete(request.streamId)
+      },
+    )
+  }, [])
   useLayoutEffect(
     () =>
       subscribeDocumentShell(
@@ -532,7 +579,11 @@ function App() {
     }
   }, [busy, DocumentEditor, splitTabs?.active])
   const acknowledgeSave = useCallback(
-    (saved: DocumentState, token: DocumentSaveToken, expectedId?: string) => {
+    (
+      saved: import('../../shared/desktop').DocumentSaveReply,
+      token: DocumentSaveToken,
+      expectedId?: string,
+    ) => {
       const previous = documentRuntime.get(saved.tabId)
       const acknowledged = documentRuntime.acknowledgeSave(
         saved,
@@ -559,7 +610,19 @@ function App() {
     return saved && isDocumentView(saved) ? saved : 'normal'
   })
   const [selectedMode, setSelectedMode] = useState<ViewMode>(defaultView)
+  const [richRequests, setRichRequests] = useState<ReadonlyMap<string, number>>(
+    new Map(),
+  )
   const setMode = useCallback((view: ViewMode) => {
+    const document = currentDocument.current
+    if (document)
+      setRichRequests((current) => {
+        const open = new Set(document.tabs.map((tab) => tab.id))
+        const next = new Map([...current].filter(([id]) => open.has(id)))
+        if (view === 'markdown') next.delete(document.tabId)
+        else next.set(document.tabId, document.revision)
+        return next
+      })
     setSelectedMode(view)
     setSplitTabs((current) =>
       current
@@ -883,6 +946,10 @@ function App() {
           context.view.viewGeneration === current.view.viewGeneration))
     )
   }
+  const sourceFirst =
+    markdownDocument &&
+    preferSourceOpening(documentRuntime, currentDocument.current ?? document) &&
+    richRequests.get(document?.tabId ?? '') !== document?.revision
   const addonHost = useAddons(
     {
       captureCommandContext: captureAddonCommandContext,
@@ -964,24 +1031,34 @@ function App() {
         ),
     },
     document?.name,
-    documentFormat?.views && !documentFormat.views.includes(selectedMode)
-      ? documentFormat.views.includes('side-by-side')
-        ? 'side-by-side'
-        : 'markdown'
-      : selectedMode,
+    markdownDocument &&
+      preferSourceOpening(documentRuntime, currentDocument.current ?? document)
+      ? 'markdown'
+      : documentFormat?.views && !documentFormat.views.includes(selectedMode)
+        ? documentFormat.views.includes('side-by-side')
+          ? 'side-by-side'
+          : 'markdown'
+        : selectedMode,
   )
   useEffect(() => {
     if (
       !addonHost.ready ||
       !needsFormatEditor ||
-      formatEditor.Component ||
+      (formatEditor.Component && formatEditor.Adapter) ||
       formatEditor.error
     )
       return
     let active = true
-    void import('./FormatEditor').then(
-      ({ FormatEditor }) => {
-        if (active) setFormatEditor({ Component: FormatEditor })
+    void Promise.all([
+      import('./FormatEditor'),
+      import('./ActiveDocumentEditor'),
+    ]).then(
+      ([{ FormatEditor }, { ActiveDocumentEditor }]) => {
+        if (active)
+          setFormatEditor({
+            Component: FormatEditor,
+            Adapter: ActiveDocumentEditor,
+          })
       },
       (error: Error) => {
         if (active) setFormatEditor({ error })
@@ -1018,11 +1095,13 @@ function App() {
     : documentFormats
         .views(document?.name ?? 'untitled.md')
         .filter((view) => !footnoteDocument || view !== 'normal')
-  const mode: ViewMode = availableViews.includes(selectedMode)
-    ? selectedMode
-    : availableViews.includes('side-by-side')
-      ? 'side-by-side'
-      : 'markdown'
+  const mode: ViewMode = sourceFirst
+    ? 'markdown'
+    : availableViews.includes(selectedMode)
+      ? selectedMode
+      : availableViews.includes('side-by-side')
+        ? 'side-by-side'
+        : 'markdown'
   useLayoutEffect(() => {
     if (settingsOpen || !settingsFocus.current) return
     const { intent, previous } = settingsFocus.current
@@ -1404,7 +1483,7 @@ function App() {
         if (saving) saveCancellation.current.canceled = !next
         if (next) {
           if (saving && token) acknowledgeSave(next, token, expectedId)
-          else
+          else if (!('saveReceipt' in next))
             await acceptOperationDocument(
               next,
               command === 'new' || command === 'open',
@@ -1421,6 +1500,7 @@ function App() {
         )
         return false
       } finally {
+        documentRuntime.endSave(token)
         if (source) flushSync(endBusy)
         else endBusy()
         setSavingTab(null)
@@ -1606,13 +1686,6 @@ function App() {
     tabId?: string,
     viewId?: string,
   ) {
-    if (exceedsUtf8Limit(markdown, MAX_DOCUMENT_BYTES)) {
-      setError(
-        'This edit would exceed the 2 MiB document limit, so it was not applied.',
-      )
-      setResetEditor((value) => value + 1)
-      return
-    }
     try {
       documentRuntime.replace(markdown, 'visual', historyGroup, tabId, viewId)
     } catch (error) {
@@ -2640,11 +2713,16 @@ function App() {
       : undefined
     const paneMarkdown =
       !paneDocument || documentFormats.isMarkdown(paneDocument.name)
+    const paneSourceFirst =
+      paneMarkdown &&
+      preferSourceOpening(documentRuntime, paneDocument) &&
+      richRequests.get(paneDocument?.tabId ?? '') !== paneDocument?.revision
     const paneFootnoteDocument =
       paneMarkdown && hasDocumentFootnotes(documentRuntime, paneDocument)
     const PaneEditor = paneMarkdown
       ? richEditor.Component
       : formatEditor.Component
+    const PaneAdapter = paneMarkdown ? richEditor.Adapter : formatEditor.Adapter
     const requestedMode = splitTabs
       ? side === 'left'
         ? splitTabs.leftMode
@@ -2655,11 +2733,13 @@ function App() {
       : documentFormats
           .views(paneDocument?.name ?? 'untitled.md')
           .filter((view) => !paneFootnoteDocument || view !== 'normal')
-    const paneMode: ViewMode = paneViews.includes(requestedMode)
-      ? requestedMode
-      : paneViews.includes('side-by-side')
-        ? 'side-by-side'
-        : 'markdown'
+    const paneMode: ViewMode = paneSourceFirst
+      ? 'markdown'
+      : paneViews.includes(requestedMode)
+        ? requestedMode
+        : paneViews.includes('side-by-side')
+          ? 'side-by-side'
+          : 'markdown'
     const paneChoice = splitFlavors?.[side].choice ?? flavorChoice
     const paneChosen = splitFlavors?.[side].selected ?? chosenFlavors
     const paneSourceName =
@@ -2732,10 +2812,18 @@ function App() {
             )}
           </header>
         )}
-        {(!editorStarted.current || !PaneEditor) && <LoadingScreen />}
-        {paneDocument && editorStarted.current && PaneEditor && (
+        {paneSourceFirst && selectedMode !== 'markdown' && (
+          <DocumentNotice
+            title="Opened in source view"
+            message="This note opens in source view to keep editing responsive. Choose Normal to prepare its formatted view."
+          />
+        )}
+        {(!editorStarted.current || !PaneEditor || !PaneAdapter) && (
+          <LoadingScreen />
+        )}
+        {paneDocument && editorStarted.current && PaneEditor && PaneAdapter && (
           <Suspense fallback={<LoadingScreen />}>
-            <ActiveDocumentEditor
+            <PaneAdapter
               Component={PaneEditor}
               {...(splitTabs ? { viewId: side } : {})}
               focused={active}

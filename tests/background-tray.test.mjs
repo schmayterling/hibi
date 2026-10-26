@@ -376,6 +376,20 @@ test('tray preserves drafts, restores the same renderer and cancels unsafe quits
   assert.equal(await readFile(file, 'utf8'), 'external change')
 })
 
+test('a tray click opens the main window on Windows and Linux', {
+  timeout: 30000,
+}, async (t) => {
+  if (process.platform === 'darwin')
+    return t.skip('macOS opens the menu on click')
+  const { app, child, page } = await launch(t)
+  await page.evaluate(() => window.hibi.setBackgroundMode(true))
+  await closeMain(app)
+  await waitVisible(app, false)
+  await app.evaluate(() => globalThis.backgroundTestTray.emit('click'))
+  await waitVisible(app, true)
+  await quitFromTray(app, child)
+})
+
 test('tray quick note follows UI registration and opens capture without the main window', {
   timeout: 30000,
 }, async (t) => {

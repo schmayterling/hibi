@@ -19,7 +19,7 @@ export type SourceBufferOptions = Readonly<{
   fanout?: number
   leafCapacity?: number
   chunkUnits?: number
-  maximumBytes?: number
+  maximumBytes?: number | undefined
 }>
 export type SourceBufferCounters = {
   nodeVisits: number
@@ -35,6 +35,10 @@ export type SourceBufferCounters = {
   arenaWrittenUnits: number
   storageNodesVisited: number
   storagePiecesVisited: number
+  loadAppends: number
+  maxLoadInputUnits: number
+  maxLoadUnitsScanned: number
+  maxLoadTreeWork: number
 }
 const newCounters = (): SourceBufferCounters => ({
   nodeVisits: 0,
@@ -50,6 +54,10 @@ const newCounters = (): SourceBufferCounters => ({
   arenaWrittenUnits: 0,
   storageNodesVisited: 0,
   storagePiecesVisited: 0,
+  loadAppends: 0,
+  maxLoadInputUnits: 0,
+  maxLoadUnitsScanned: 0,
+  maxLoadTreeWork: 0,
 })
 type Piece = Readonly<{
   chunk: SourceChunk
@@ -71,10 +79,11 @@ type Config = Readonly<{
   fanout: number
   leafCapacity: number
   chunkUnits: number
-  maximumBytes: number
+  maximumBytes: number | undefined
 }>
 type Axis = 'rawUnits' | 'normalizedUnits' | 'utf8Bytes' | 'breaks'
 const roots = new WeakMap<SourceSnapshot, Node>()
+const trees = new WeakMap<SourceSnapshot, PieceTree>()
 const increment = (value: number) => {
   if (!Number.isSafeInteger(value + 1))
     throw new Error('Source generation exhausted.')
@@ -94,12 +103,13 @@ class PieceTree {
       fanout: options.fanout ?? 32,
       leafCapacity: options.leafCapacity ?? 64,
       chunkUnits: options.chunkUnits ?? 4096,
-      maximumBytes: options.maximumBytes ?? 16 * 1024 * 1024,
+      maximumBytes: options.maximumBytes,
     })
     for (const [key, value] of Object.entries(this.config))
       if (
-        !Number.isSafeInteger(value) ||
-        value < (key === 'maximumBytes' ? 0 : 4)
+        value !== undefined &&
+        (!Number.isSafeInteger(value) ||
+          value < (key === 'maximumBytes' ? 0 : 4))
       )
         throw new Error('Invalid source buffer configuration.')
     if (
@@ -551,6 +561,7 @@ export class SourceSnapshot {
     this.storageEpoch = storageEpoch
     this.rootId = rootId
     roots.set(this, root)
+    trees.set(this, tree)
     Object.freeze(this)
   }
 
@@ -833,7 +844,10 @@ export class SourceStore {
     const root = this.#tree.build(
       typeof source === 'string' ? [source] : source,
     )
-    if (root.metrics.utf8Bytes > this.#tree.config.maximumBytes)
+    if (
+      this.#tree.config.maximumBytes !== undefined &&
+      root.metrics.utf8Bytes > this.#tree.config.maximumBytes
+    )
       throw new Error('Source exceeds the document size limit.')
     this.#current = new SourceSnapshot(
       this.#tree,
@@ -847,6 +861,117 @@ export class SourceStore {
       this.#rootId,
     )
     this.#accepted.add(this.#current)
+  }
+  /** Fork an immutable generation without reading its source or rebuilding its indexes. */
+  static fromSnapshot(
+    snapshot: SourceSnapshot,
+    document = snapshot.document,
+    version = snapshot.version,
+    limits: Pick<SourceBufferOptions, 'maximumBytes'> = {},
+  ) {
+    const store = new SourceStore('', document, version, {
+      ...trees.get(snapshot)!.config,
+      ...limits,
+    })
+    if (
+      store.#tree.config.maximumBytes !== undefined &&
+      snapshot.utf8Bytes > store.#tree.config.maximumBytes
+    )
+      throw new Error('Source exceeds the document size limit.')
+    store.#current = new SourceSnapshot(
+      store.#tree,
+      roots.get(snapshot)!,
+      store.#current.document,
+      version,
+      0,
+      0,
+    )
+    store.#accepted.add(store.#current)
+    return store
+  }
+  /** Unpublished construction; callers yield or acknowledge between bounded appends. */
+  static loader(
+    document: DocumentKey,
+    version = 0,
+    options: SourceBufferOptions = {},
+  ): Readonly<{ append(chunk: string): void; finish(): SourceStore }> {
+    const store = new SourceStore('', document, version, options),
+      tree = store.#tree,
+      counters = tree.counters
+    let root = roots.get(store.#current)!,
+      closed = false
+    return Object.freeze({
+      append(chunk: string) {
+        if (closed) throw new Error('Source loader is closed.')
+        try {
+          if (typeof chunk !== 'string')
+            throw new Error('Source chunks must be strings.')
+          if (chunk.length > 65536)
+            throw new Error('Source chunk exceeds the transfer limit.')
+          if (
+            tree.config.maximumBytes !== undefined &&
+            root.metrics.rawUnits + chunk.length > tree.config.maximumBytes
+          )
+            throw new Error('Source exceeds the document size limit.')
+          const scanned = counters.unitsScanned,
+            work =
+              counters.nodeVisits +
+              counters.metricSlotsCopied +
+              counters.pieceDescriptorsCopied
+          const next = chunk ? tree.join(root, tree.insert(chunk)) : root
+          if (
+            tree.config.maximumBytes !== undefined &&
+            next.metrics.utf8Bytes > tree.config.maximumBytes
+          )
+            throw new Error('Source exceeds the document size limit.')
+          root = next
+          counters.loadAppends++
+          counters.maxLoadInputUnits = Math.max(
+            counters.maxLoadInputUnits,
+            chunk.length,
+          )
+          counters.maxLoadUnitsScanned = Math.max(
+            counters.maxLoadUnitsScanned,
+            counters.unitsScanned - scanned,
+          )
+          counters.maxLoadTreeWork = Math.max(
+            counters.maxLoadTreeWork,
+            counters.nodeVisits +
+              counters.metricSlotsCopied +
+              counters.pieceDescriptorsCopied -
+              work,
+          )
+        } catch (error) {
+          closed = true
+          throw error
+        }
+      },
+      finish() {
+        if (closed) throw new Error('Source loader is closed.')
+        closed = true
+        store.#current = new SourceSnapshot(
+          tree,
+          root,
+          store.#current.document,
+          version,
+          0,
+          store.#rootId,
+        )
+        store.#accepted.add(store.#current)
+        return store
+      },
+    })
+  }
+  /** Pack fragmented input into bounded slices, yielding even for empty chunks. */
+  static async load(
+    chunks: AsyncIterable<string> | Iterable<string>,
+    document: DocumentKey,
+    version = 0,
+    options: SourceBufferOptions = {},
+  ): Promise<SourceStore> {
+    const loader = SourceStore.loader(document, version, options)
+    const { loadSource } = await import('./source-load.ts')
+    return loadSource(loader, chunks)
   }
   snapshot() {
     return this.#current
@@ -927,12 +1052,18 @@ export class SourceStore {
     if (!changed) throw new Error('Source operation is empty.')
     // Every encoded UTF-16 unit needs at least one byte. Reject definitely
     // oversized bulk input before allocating its chunk indexes and tree paths.
-    if (before.utf16Length + shift > this.#tree.config.maximumBytes)
+    if (
+      this.#tree.config.maximumBytes !== undefined &&
+      before.utf16Length + shift > this.#tree.config.maximumBytes
+    )
       throw new Error('Edited source exceeds the document size limit.')
     let root = roots.get(before)!
     for (let index = operation.changes.length - 1; index >= 0; index--)
       root = this.#tree.replace(root, operation.changes[index]!)
-    if (root.metrics.utf8Bytes > this.#tree.config.maximumBytes)
+    if (
+      this.#tree.config.maximumBytes !== undefined &&
+      root.metrics.utf8Bytes > this.#tree.config.maximumBytes
+    )
       throw new Error('Edited source exceeds the document size limit.')
     this.#rootId = increment(this.#rootId)
     const after = new SourceSnapshot(

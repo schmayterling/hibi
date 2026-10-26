@@ -3,10 +3,10 @@ import test from 'node:test'
 import { EditorState, StateEffect, Transaction } from '@codemirror/state'
 import {
   createSourceSession,
-  sourceEditorText,
   sourceEditTransaction,
 } from '../src/renderer/src/source-session.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
+import { sourceEditorText } from './source-editor-text.mjs'
 
 function fixture(source, options = {}, extensions = []) {
   const operations = [],

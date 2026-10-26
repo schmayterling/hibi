@@ -2,15 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import { parser } from '@lezer/markdown'
-import {
-  createSourceSession,
-  sourceEditorText,
-} from '../src/renderer/src/source-session.ts'
+import { createSourceSession } from '../src/renderer/src/source-session.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { MarkdownSourceModel } from '../src/shared/markdown-source-model.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { SourceMaintenance } from '../src/shared/source-maintenance.ts'
 import { SourceParserSession } from '../src/shared/source-parser.ts'
+import { sourceEditorText } from './source-editor-text.mjs'
 
 const source = 'a'.repeat(80 * 4096)
 const holes = Array.from({ length: 80 }, (_, n) => ({

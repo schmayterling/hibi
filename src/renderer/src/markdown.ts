@@ -40,6 +40,15 @@ export function markdownConfiguration(
     ...flavors.map((flavor) => flavor.markedOptions),
   )
   const parser = richTextParser(installSyntaxPreferences(new Marked(options)))
+  const use = parser.use.bind(parser)
+  parser.use = (...extensions) => {
+    const result = use(...extensions)
+    // Native and export tokenizers can share the same pure start hint.
+    const hints = parser.defaults.extensions
+    if (hints?.startBlock) hints.startBlock = [...new Set(hints.startBlock)]
+    if (hints?.startInline) hints.startInline = [...new Set(hints.startInline)]
+    return result
+  }
   for (const flavor of flavors)
     for (const extension of flavor.export?.extensions ?? [])
       parser.use(extension)

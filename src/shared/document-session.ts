@@ -84,13 +84,27 @@ export class DocumentSession {
   readonly #viewSelections = new Map<string, SourceSelection | null>()
 
   constructor(
-    source: string,
+    source: string | SourceStore,
     document: DocumentKey,
     version: number,
     options: SessionOptions,
   ) {
     this.#options = Object.freeze({ ...options })
-    this.#store = new SourceStore(source, document, version, options)
+    this.#store =
+      source instanceof SourceStore
+        ? options.maximumBytes === undefined
+          ? source
+          : SourceStore.fromSnapshot(source.snapshot(), document, version, {
+              maximumBytes: options.maximumBytes,
+            })
+        : new SourceStore(source, document, version, options)
+    const initial = this.#store.snapshot()
+    if (
+      initial.document.tabId !== document.tabId ||
+      initial.document.revision !== document.revision ||
+      initial.version !== version
+    )
+      throw new Error('Source operation is stale.')
     this.#saved = this.#store.snapshot()
     this.#identities.set(this.#saved, this.#contentIdentity)
     this.#state = Object.freeze({
@@ -554,8 +568,19 @@ export class DocumentSession {
     this.#verifySaved()
   }
   /** Explicit native save/bootstrap boundary, never called for ordinary input. */
-  importSaved(source: string) {
+  importSaved(source: string | SourceSnapshot) {
     const current = this.snapshot()
+    if (typeof source !== 'string') {
+      if (current.sharesRoot(source)) {
+        this.markSaved(current)
+        return
+      }
+      this.#saved = source
+      this.#savedIdentity = {}
+      this.#publish()
+      this.#verifySaved()
+      return
+    }
     if (current.materialize() === source) {
       this.markSaved(current)
       return

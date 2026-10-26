@@ -8,11 +8,13 @@ export function MarkdownFootnotePreview({
   documentId,
   revision,
   version,
+  onReady,
 }: {
   source: string
   documentId: string
   revision: number
   version: string
+  onReady?: () => void
 }) {
   const host = useRef<HTMLDivElement>(null)
   // biome-ignore lint/correctness/useExhaustiveDependencies: syntax and flavor changes invalidate rendered Markdown.
@@ -51,6 +53,7 @@ export function MarkdownFootnotePreview({
             return { image, path }
           })
           host.current.replaceChildren(fragment)
+          onReady?.()
           for (const { image, path } of images) {
             if (!path) continue
             let video: HTMLVideoElement | null = null
@@ -90,9 +93,11 @@ export function MarkdownFootnotePreview({
           }
         })
         .catch(() => {
-          if (active && host.current)
+          if (active && host.current) {
             host.current.textContent =
               'Preview unavailable. Source is unchanged.'
+            onReady?.()
+          }
         })
     }, 120)
     return () => {
@@ -100,6 +105,6 @@ export function MarkdownFootnotePreview({
       clearTimeout(timer)
       for (const dispose of disposers) dispose()
     }
-  }, [source, documentId, revision, version])
+  }, [source, documentId, revision, version, onReady])
   return <div className="format-content markdown-footnote-preview" ref={host} />
 }

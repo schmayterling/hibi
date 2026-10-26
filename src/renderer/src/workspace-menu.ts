@@ -76,7 +76,14 @@ export function workspaceMenuItems(
     {
       id: 'copy-path',
       label: 'Copy relative path',
-      onSelect: () => navigator.clipboard.writeText(path),
+      onSelect: () =>
+        window.hibi.copyWorkspacePaths([path], { absolute: false }),
+    },
+    {
+      id: 'copy-absolute-path',
+      label: 'Copy absolute path',
+      onSelect: () =>
+        window.hibi.copyWorkspacePaths([path], { absolute: true }),
     },
     {
       id: 'delete',
@@ -218,8 +225,18 @@ export function workspaceGroupMenuItems(
       id: 'copy-path',
       label: 'Copy relative paths',
       onSelect: () =>
-        navigator.clipboard.writeText(
-          entries.map((entry) => entry.path).join('\n'),
+        window.hibi.copyWorkspacePaths(
+          entries.map((entry) => entry.path),
+          { absolute: false, target },
+        ),
+    },
+    {
+      id: 'copy-absolute-path',
+      label: 'Copy absolute paths',
+      onSelect: () =>
+        window.hibi.copyWorkspacePaths(
+          entries.map((entry) => entry.path),
+          { absolute: true, target },
         ),
     },
     {

@@ -551,11 +551,9 @@ export function useFormattingToolbar(
         const codeMirror = inSource() ? source.current : rich.current
         const useSource = inSource() || !!codeMirror
         const sourceState = useSource ? codeMirror?.inspect() : null
-        const inTable =
-          !useSource &&
-          !!editor &&
-          !editor.isDestroyed &&
-          editor.isActive('table')
+        const inTable = useSource
+          ? !!sourceState?.table
+          : !!editor && !editor.isDestroyed && editor.isActive('table')
         const canFormat = (action: Action, editor: Editor) => {
           try {
             return action.rich(editor.can().chain(), editor).run()

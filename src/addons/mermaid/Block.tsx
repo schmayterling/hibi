@@ -78,19 +78,43 @@ export function Diagram({
     </>
   )
 }
+/** Ask for changed diagram source; resolves to null when canceled. */
+export function editMermaidSource(context: AddonContext, source: string) {
+  return context.dialogs.open<string>({
+    title: 'Edit Mermaid diagram',
+    size: 'wide',
+    content: ({ close }) => <Form source={source} close={close} />,
+  }).result
+}
+/** A diagram block's edit action and drawing, in either formatted view. */
+export function MermaidBlockContent({
+  source,
+  onEdit,
+}: {
+  source: string
+  onEdit: () => void
+}) {
+  return (
+    <>
+      <IconButton aria-label="Edit Mermaid diagram" onClick={onEdit}>
+        <Pencil size={16} />
+      </IconButton>
+      <Diagram
+        source={source}
+        emptyText="Edit this block to add Mermaid source."
+      />
+    </>
+  )
+}
 export function mermaidNode(context: AddonContext) {
   function View({ node, editor, getPos, updateAttributes }: NodeViewProps) {
     const source = String(node.attrs.source ?? '')
     return (
       <NodeViewWrapper className="mermaid-block" contentEditable={false}>
-        <IconButton
-          aria-label="Edit Mermaid diagram"
-          onClick={async () => {
-            const value = await context.dialogs.open<string>({
-              title: 'Edit Mermaid diagram',
-              size: 'wide',
-              content: ({ close }) => <Form source={source} close={close} />,
-            }).result
+        <MermaidBlockContent
+          source={source}
+          onEdit={async () => {
+            const value = await editMermaidSource(context, source)
             const position = getPos()
             if (
               value !== null &&
@@ -100,12 +124,6 @@ export function mermaidNode(context: AddonContext) {
             )
               updateAttributes({ source: value })
           }}
-        >
-          <Pencil size={16} />
-        </IconButton>
-        <Diagram
-          source={source}
-          emptyText="Edit this block to add Mermaid source."
         />
       </NodeViewWrapper>
     )

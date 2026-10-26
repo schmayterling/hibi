@@ -40,9 +40,16 @@ const subtext: FormattedContribution = {
       // A paragraph's `0 0 1em` margins at the addon's 0.85em size.
       space: { top: 0, bottom: 13.6 },
       decorate(node, out, { state }) {
-        out.line(state.doc.lineAt(node.from).from, {
-          class: 'markdown-subtext',
-        })
+        const line = state.doc.lineAt(node.from)
+        const item = node.node.parent
+        // Beside a list bullet, only the text is small: the rich view's
+        // marker keeps its size and the line its height.
+        if (
+          item?.name === 'ListItem' &&
+          state.doc.lineAt(item.from).number === line.number
+        )
+          out.mark(node.from + 3, node.to, { class: 'markdown-subtext' })
+        else out.line(line.from, { class: 'markdown-subtext' })
         out.syntax(node.from, node.from + 3)
         return undefined
       },

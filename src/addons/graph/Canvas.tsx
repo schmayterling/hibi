@@ -1,163 +1,327 @@
-/** biome-ignore-all lint/a11y/useSemanticElements: SVG graph nodes implement keyboard-accessible buttons within the SVG coordinate system. */
-/** biome-ignore-all lint/a11y/noNoninteractiveTabindex: the SVG canvas supports keyboard panning and must be focusable. */
-import {
-  forceCenter,
-  forceCollide,
-  forceLink,
-  forceManyBody,
-  forceSimulation,
-  type Simulation,
-  type SimulationNodeDatum,
-} from 'd3-force'
+/** biome-ignore-all lint/a11y/noNoninteractiveTabindex: the graph view supports keyboard panning and must be focusable. */
 import { Focus, Maximize2, Minus, Plus } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { IconButton } from '../../ui/Controls'
+import type { LayoutFrame, LayoutMessage } from './layout'
 import type { noteGraph } from './model'
 import { defaultZoom } from './preferences'
+import {
+  type Camera,
+  cameraPosition,
+  drawGraph,
+  graphTopology,
+  nodeAt,
+  type Palette,
+  type Size,
+  showsLabels,
+  spatialIndex,
+  type View,
+} from './scene'
 
-type Node = ReturnType<typeof noteGraph>['nodes'][number] & SimulationNodeDatum
-type Edge = { source: Node; target: Node }
-type View = { x: number; y: number; scale: number; centered: string | null }
-type Camera = View | 'default' | null
-type Size = { width: number; height: number }
-const radius = (node: Node) => 5 + Math.min(7, Math.sqrt(node.degree) * 2)
-const label = (node: Node) => {
-  const characters = Array.from(node.label)
-  return characters.length > 32
-    ? `${characters.slice(0, 31).join('')}…`
-    : node.label
-}
+const reducedMotion = () =>
+  matchMedia('(prefers-reduced-motion: reduce)').matches
 
-function cameraPosition(
-  view: Camera,
-  nodes: Node[],
-  size: Size,
-  focus: string | null,
-  zoom: number,
-): View {
-  if (!view || view === 'default') {
-    if (!nodes.length) return { x: 0, y: 0, scale: 1, centered: null }
-    let left = Infinity,
-      right = -Infinity,
-      top = Infinity,
-      bottom = -Infinity
-    for (const node of nodes) {
-      const extent =
-        nodes.length <= 80
-          ? Math.max(
-              radius(node),
-              Array.from(label(node)).reduce(
-                (width, character) =>
-                  width + (character.charCodeAt(0) > 127 ? 12 : 8),
-                0,
-              ) / 2,
-            )
-          : radius(node)
-      left = Math.min(left, (node.x ?? 0) - extent)
-      right = Math.max(right, (node.x ?? 0) + extent)
-      top = Math.min(
-        top,
-        (node.y ?? 0) - (nodes.length <= 80 ? 28 : radius(node)),
-      )
-      bottom = Math.max(bottom, (node.y ?? 0) + radius(node))
-    }
-    const scale = Math.min(
-      1,
-      Math.max(1, size.width - 64) / Math.max(1, right - left),
-      Math.max(1, size.height - 64) / Math.max(1, bottom - top),
-    )
-    const fitted = {
-      scale,
-      centered: null,
-      x: (-(left + right) / 2) * scale,
-      y: (-(top + bottom) / 2) * scale,
-    }
-    if (view !== 'default') return fitted
-    const closeScale = Math.min(4, scale * zoom)
-    const node = nodes.find((item) => item.id === focus)
-    return {
-      scale: closeScale,
-      centered: node?.id ?? null,
-      x: node ? -(node.x ?? 0) * closeScale : (fitted.x * closeScale) / scale,
-      y: node ? -(node.y ?? 0) * closeScale : (fitted.y * closeScale) / scale,
-    }
+/** Canvas colors and label font come from the stylesheet's graph tokens. */
+function readPalette(probe: HTMLElement): Palette {
+  const style = getComputedStyle(probe)
+  const color = (name: string) => {
+    probe.style.color = `var(${name})`
+    return style.color
   }
-  const node = nodes.find((node) => node.id === view.centered)
-  return node
-    ? {
-        ...view,
-        x: -(node.x ?? 0) * view.scale,
-        y: -(node.y ?? 0) * view.scale,
-      }
-    : view
+  const palette = {
+    edge: color('--graph-edge'),
+    node: color('--graph-node'),
+    border: color('--graph-node-border'),
+    activeNode: color('--graph-node-active'),
+    activeBorder: color('--graph-node-active-border'),
+    label: color('--graph-label'),
+    activeLabel: color('--graph-label-active'),
+    font: `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`,
+  }
+  probe.style.color = ''
+  return palette
 }
+
 export function GraphCanvas({
   graph,
   active,
   open,
   expand,
   resetKey,
+  worker,
 }: {
   graph: ReturnType<typeof noteGraph>
   active: string | null
   open: (path: string) => void
   expand?: (() => void) | undefined
   resetKey: string
+  /** Starts a layout worker; the app and exported sites bundle it differently. */
+  worker: () => Worker
 }) {
-  const svg = useRef<SVGSVGElement>(null)
-  const simulation = useRef<Simulation<Node, undefined> | null>(null)
-  const [size, setSize] = useState({ width: 640, height: 400 })
-  // Null is the fitted overview; 'default' applies the saved starting zoom.
+  const root = useRef<HTMLDivElement>(null)
+  const host = useRef<HTMLDivElement>(null)
+  const canvas = useRef<HTMLCanvasElement>(null)
+  const hover = useRef<HTMLDivElement>(null)
+  const option = useRef<HTMLDivElement>(null)
+  const probe = useRef<HTMLSpanElement>(null)
   const [view, setView] = useState<Camera>('default')
   const [initialZoom] = useState(defaultZoom)
+  const [hovered, setHovered] = useState<string | null>(null)
+  const [focused, setFocused] = useState<string | null>(null)
+  const [focusVisible, setFocusVisible] = useState(false)
+  const topology = useMemo(() => graphTopology(graph), [graph])
+  const nodes = topology.nodes
+  const activeIndex = active === null ? undefined : topology.index.get(active)
+  const current =
+    (focused === null ? undefined : topology.index.get(focused)) ??
+    activeIndex ??
+    0
+  const currentNode = nodes[current]
+  const hoveredNode =
+    hovered === null ? undefined : nodes[topology.index.get(hovered) ?? -1]
+  // Worker frames, pointer input, and drawing share this without rendering.
+  const [state] = useState(() => ({
+    graph: topology,
+    positions: null as Float32Array | null,
+    returnable: null as ArrayBuffer | null,
+    version: 0,
+    revision: 0,
+    grid: null as {
+      revision: number
+      index: ReturnType<typeof spatialIndex>
+    } | null,
+    port: null as Pick<Worker, 'postMessage' | 'terminate'> | null,
+    frame: 0,
+    palette: null as Palette | null,
+    metrics: new Map<
+      string,
+      { width: number; ascent: number; descent: number }
+    >(),
+    placed: new WeakMap<HTMLElement, string>(),
+    sequence: 0,
+    drag: null as { index: number; x: number; y: number; seq: number } | null,
+    pointer: null as {
+      id: number
+      x: number
+      y: number
+      startX: number
+      startY: number
+      moved: boolean
+      node: number
+    } | null,
+    view: view as Camera,
+    // CSS pixels of the canvas, kept by its resize observer.
+    size: { width: 640, height: 400 } as Size,
+    drawn: null as View | null,
+    hovered,
+    focused: null as string | null,
+    option: null as string | null,
+    focusVisible,
+    active,
+  }))
   const initialTarget = useRef(active)
-  const currentView = useRef(view)
-  currentView.current = view
   const animation = useRef<number | null>(null)
   const previousSelection = useRef(active)
   const previousResetKey = useRef(resetKey)
+  const focusOption = useRef(false)
+  const typed = useRef({ text: '', at: 0 })
+  // One layout worker serves this view for its whole lifetime.
+  const createWorker = useRef(worker)
   const camera = useCallback(
-    (value: Camera, nodes: Node[], dimensions: Size) =>
+    (value: Camera) =>
       cameraPosition(
         value,
-        nodes,
-        dimensions,
+        state.graph,
+        state.positions,
+        state.size,
         initialTarget.current,
         initialZoom,
       ),
-    [initialZoom],
+    [state, initialZoom],
   )
   const stopAnimation = useCallback(() => {
     if (animation.current !== null) cancelAnimationFrame(animation.current)
     animation.current = null
   }, [])
-  const [layout, setLayout] = useState<{ nodes: Node[]; edges: Edge[] }>({
-    nodes: [],
-    edges: [],
-  })
-  const drag = useRef<{
-    pointer: number
-    x: number
-    y: number
-    startX: number
-    startY: number
-    moved: boolean
-    node: Node | undefined
-  } | null>(null)
-  useEffect(() => {
-    const element = svg.current
-    if (!element) return
-    const resize = new ResizeObserver(() => {
-      const width = element.clientWidth,
-        height = element.clientHeight
-      if (width && height)
-        setSize((old) =>
-          old.width === width && old.height === height
-            ? old
-            : { width, height },
-        )
+  /** A label's size in graph units, measured once per font. */
+  const measure = useCallback(
+    (index: number) => {
+      const text = state.graph.labels[index]!
+      let value = state.metrics.get(text)
+      const context = canvas.current?.getContext('2d')
+      if (!value && context && state.palette) {
+        context.font = state.palette.font
+        const metrics = context.measureText(text)
+        value = {
+          width: metrics.width,
+          ascent: metrics.fontBoundingBoxAscent,
+          descent: metrics.fontBoundingBoxDescent,
+        }
+        state.metrics.set(text, value)
+      }
+      return value ?? { width: 0, ascent: 0, descent: 0 }
+    },
+    [state],
+  )
+  const place = useCallback(
+    (
+      element: HTMLElement | null,
+      id: string | null,
+      position: View,
+      label = false,
+    ) => {
+      if (!element) return
+      const index = id === null ? undefined : state.graph.index.get(id)
+      const x = index === undefined ? NaN : state.positions?.[index * 2]
+      let box = [-100, -100, 0, 0]
+      if (x !== undefined && !Number.isNaN(x)) {
+        const { scale } = position
+        const centerX = state.size.width / 2 + position.x + x * scale
+        const centerY =
+          state.size.height / 2 +
+          position.y +
+          state.positions![index! * 2 + 1]! * scale
+        const radius = Math.max(state.graph.radii[index!]!, 2.5 / scale) * scale
+        let left = centerX - radius,
+          top = centerY - radius,
+          right = centerX + radius,
+          bottom = centerY + radius
+        // A hint also covers its shown label, as the svg note group did.
+        if (label && showsLabels(state.graph, position)) {
+          const text = measure(index!)
+          const baseline = centerY - 14 * scale
+          left = Math.min(left, centerX - (text.width / 2) * scale)
+          right = Math.max(right, centerX + (text.width / 2) * scale)
+          top = Math.min(top, baseline - text.ascent * scale)
+          bottom = Math.max(bottom, baseline + text.descent * scale)
+        }
+        box = [left, top, right - left, bottom - top]
+      }
+      const key = box.join(' ')
+      if (state.placed.get(element) === key) return
+      state.placed.set(element, key)
+      element.style.transform = `translate(${box[0]}px, ${box[1]}px)`
+      element.style.width = `${box[2]}px`
+      element.style.height = `${box[3]}px`
+    },
+    [state, measure],
+  )
+  const draw = useCallback(() => {
+    state.frame = 0
+    const element = canvas.current
+    const context = element?.getContext('2d')
+    if (!element || !context || !probe.current) return
+    state.palette ??= readPalette(probe.current)
+    const positions = state.positions
+    if (!positions) return
+    const position = camera(state.view)
+    state.drawn = position
+    const labels = String(showsLabels(state.graph, position))
+    if (root.current && root.current.dataset.labels !== labels)
+      root.current.dataset.labels = labels
+    const highlighted = [
+      state.hovered,
+      state.focusVisible ? state.focused : null,
+      state.active,
+    ].flatMap((id) => {
+      const index = id === null ? undefined : state.graph.index.get(id)
+      return index === undefined ? [] : [index]
     })
-    resize.observe(element)
+    drawGraph(context, {
+      graph: state.graph,
+      positions,
+      view: position,
+      size: state.size,
+      ratio: element.width / Math.max(1, state.size.width),
+      highlighted,
+      palette: state.palette,
+    })
+    place(hover.current, state.hovered, position, true)
+    place(option.current, state.option, position)
+  }, [state, camera, place])
+  const requestDraw = useCallback(() => {
+    if (!state.frame) state.frame = requestAnimationFrame(draw)
+  }, [state, draw])
+  /** Graph coordinates of a pointer, or null before the first frame. */
+  const pick = (clientX: number, clientY: number) => {
+    const element = host.current,
+      positions = state.positions,
+      position = state.drawn
+    if (!element || !positions || !position) return -1
+    const bounds = element.getBoundingClientRect()
+    if (state.grid?.revision !== state.revision)
+      state.grid = { revision: state.revision, index: spatialIndex(positions) }
+    return nodeAt(
+      state.graph,
+      positions,
+      state.grid.index,
+      position,
+      (clientX - bounds.left - bounds.width / 2 - position.x) / position.scale,
+      (clientY - bounds.top - bounds.height / 2 - position.y) / position.scale,
+      measure,
+    )
+  }
+  const pin = (index: number, x: number, y: number, moved: boolean) => {
+    state.drag = { index, x, y, seq: ++state.sequence }
+    state.port?.postMessage({
+      type: 'pin',
+      version: state.version,
+      index,
+      x,
+      y,
+      drag: state.sequence,
+      moved,
+      reduced: reducedMotion(),
+    } satisfies LayoutMessage)
+  }
+  useLayoutEffect(() => {
+    state.view = view
+    state.hovered = hovered
+    state.focused = focused
+    state.focusVisible = focusVisible
+    state.active = active
+    state.option = currentNode?.id ?? null
+    if (state.drawn) {
+      place(hover.current, hovered, state.drawn, true)
+      place(option.current, state.option, state.drawn)
+    }
+    requestDraw()
+  })
+  useLayoutEffect(() => {
+    const element = canvas.current
+    if (!element) return
+    const resize = new ResizeObserver(([entry]) => {
+      const width = entry?.contentRect.width,
+        height = entry?.contentRect.height
+      if (!entry || !width || !height) return
+      const device = entry.devicePixelContentBoxSize?.[0]
+      const deviceWidth =
+        device?.inlineSize ?? Math.round(width * devicePixelRatio)
+      const deviceHeight =
+        device?.blockSize ?? Math.round(height * devicePixelRatio)
+      if (element.width !== deviceWidth) element.width = deviceWidth
+      if (element.height !== deviceHeight) element.height = deviceHeight
+      state.size = { width, height }
+      // Resizing clears the backing store; repaint before this frame shows.
+      draw()
+    })
+    try {
+      resize.observe(element, { box: 'device-pixel-content-box' })
+    } catch {
+      resize.observe(element)
+    }
+    return () => resize.disconnect()
+  }, [state, draw])
+  useEffect(() => {
+    const element = host.current
+    if (!element) return
     const wheel = (event: WheelEvent) => {
       event.preventDefault()
       stopAnimation()
@@ -165,10 +329,7 @@ export function GraphCanvas({
       const x = event.clientX - bounds.left - bounds.width / 2
       const y = event.clientY - bounds.top - bounds.height / 2
       setView((old) => {
-        const position = camera(old, simulation.current?.nodes() ?? [], {
-          width: element.clientWidth,
-          height: element.clientHeight,
-        })
+        const position = camera(old)
         const scale = Math.max(
           Math.min(0.01, position.scale),
           Math.min(4, position.scale * Math.exp(-event.deltaY * 0.002)),
@@ -182,61 +343,139 @@ export function GraphCanvas({
       })
     }
     element.addEventListener('wheel', wheel, { passive: false })
-    return () => {
-      resize.disconnect()
-      element.removeEventListener('wheel', wheel)
-    }
+    return () => element.removeEventListener('wheel', wheel)
   }, [camera, stopAnimation])
   useEffect(() => {
-    const nodes: Node[] = graph.nodes.map((node) => ({ ...node }))
-    const links = graph.edges.map((edge) => ({ ...edge }))
-    const engine = forceSimulation(nodes)
-      .force(
-        'links',
-        forceLink<Node, { source: string; target: string }>(links)
-          .id((node) => node.id)
-          .distance(85),
+    const refresh = () => {
+      state.palette = null
+      state.metrics.clear()
+      requestDraw()
+    }
+    let alive = true
+    const theme = new MutationObserver(refresh)
+    theme.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-appearance', 'data-colorscheme'],
+    })
+    // Canvas text does not repaint itself when a web font finishes loading.
+    void document.fonts.ready.then(() => {
+      if (alive) refresh()
+    })
+    return () => {
+      alive = false
+      theme.disconnect()
+      cancelAnimationFrame(state.frame)
+      state.frame = 0
+    }
+  }, [state, requestDraw])
+  /** Lays out the current graph, starting from the positions shown so far. */
+  const startLayout = useCallback(() => {
+    const port = state.port
+    if (!port) return
+    const count = state.graph.nodes.length * 2
+    const positions =
+      state.positions?.length === count
+        ? state.positions.slice()
+        : new Float32Array(count).fill(Number.NaN)
+    const edges = state.graph.edges.slice()
+    state.version++
+    state.returnable = null
+    state.drag = null
+    port.postMessage(
+      {
+        type: 'graph',
+        version: state.version,
+        edges,
+        positions,
+        reduced: reducedMotion(),
+      } satisfies LayoutMessage,
+      [edges.buffer, positions.buffer],
+    )
+  }, [state])
+  useEffect(() => {
+    let port: typeof state.port = null
+    let alive = true
+    const receive = (frame: LayoutFrame) => {
+      if (frame.version !== state.version) return
+      if (state.returnable)
+        state.port?.postMessage(
+          { type: 'buffer', buffer: state.returnable } satisfies LayoutMessage,
+          [state.returnable],
+        )
+      state.returnable = frame.positions.buffer as ArrayBuffer
+      // Keep a dragged note under the pointer until the layout catches up.
+      const drag = state.drag
+      if (
+        drag &&
+        (state.pointer?.node === drag.index || frame.drag < drag.seq)
+      ) {
+        frame.positions[drag.index * 2] = drag.x
+        frame.positions[drag.index * 2 + 1] = drag.y
+      } else state.drag = null
+      state.positions = frame.positions
+      state.revision++
+      requestDraw()
+    }
+    // A page that cannot start workers (a strict host policy, some file
+    // viewers) runs the same layout itself, in short slices between tasks.
+    const layOutHere = () => {
+      void Promise.all([import('./layout'), import('./page-step')]).then(
+        ([{ createLayout }, { pageSteps }]) => {
+          if (!alive) return
+          const layout = createLayout(
+            (frame) => queueMicrotask(() => receive(frame)),
+            8,
+            pageSteps,
+          )
+          port = state.port = {
+            postMessage: (message: LayoutMessage) => layout.receive(message),
+            terminate: layout.stop,
+          }
+          startLayout()
+        },
       )
-      .force('charge', forceManyBody().strength(-180))
-      .force('collide', forceCollide(22))
-      .force('center', forceCenter())
-    simulation.current = engine
-    const publish = () =>
-      setLayout({ nodes: [...nodes], edges: links as unknown as Edge[] })
-    let frame: number | null = null
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      engine.stop()
-      publish()
-      if (nodes.length > 80) {
-        let ticks = 0
-        const settle = () => {
-          engine.tick(2)
-          ticks += 2
-          if (ticks < 160) frame = requestAnimationFrame(settle)
-          else publish()
-        }
-        frame = requestAnimationFrame(settle)
-      } else {
-        engine.tick(160)
-        publish()
+    }
+    try {
+      const started = createWorker.current()
+      started.onmessage = (event: MessageEvent<LayoutFrame>) =>
+        receive(event.data)
+      started.onerror = (event) => {
+        event.preventDefault()
+        started.terminate()
+        if (port !== started) return
+        port = state.port = null
+        layOutHere()
       }
-    } else {
-      let lastPublish = performance.now()
-      engine.on('tick', () => {
-        const now = performance.now()
-        if (nodes.length > 80 && now - lastPublish < 50) return
-        lastPublish = now
-        publish()
-      })
-      engine.on('end', publish)
-      publish()
+      port = state.port = started
+    } catch {
+      layOutHere()
     }
     return () => {
-      if (frame !== null) cancelAnimationFrame(frame)
-      engine.stop()
-      simulation.current = null
+      alive = false
+      port?.terminate()
+      state.port = null
     }
-  }, [graph])
+  }, [state, requestDraw, startLayout])
+  useEffect(() => {
+    const previous = state.graph,
+      old = state.positions
+    // Warm start: notes that stay keep their place.
+    const positions = new Float32Array(topology.nodes.length * 2).fill(
+      Number.NaN,
+    )
+    if (old)
+      topology.nodes.forEach((node, index) => {
+        const from = previous.index.get(node.id)
+        if (from === undefined) return
+        positions[index * 2] = old[from * 2]!
+        positions[index * 2 + 1] = old[from * 2 + 1]!
+      })
+    state.graph = topology
+    state.positions = positions
+    state.revision++
+    startLayout()
+    requestDraw()
+  }, [topology, state, startLayout, requestDraw])
   useEffect(() => {
     if (previousResetKey.current === resetKey) return
     previousResetKey.current = resetKey
@@ -247,18 +486,22 @@ export function GraphCanvas({
   useEffect(() => {
     if (previousSelection.current === active) return
     previousSelection.current = active
-    const nodes = simulation.current?.nodes() ?? []
-    if (!active || !nodes.some((node) => node.id === active)) return
-    const from = camera(currentView.current, nodes, size)
-    const target = () =>
-      simulation.current?.nodes().find((node) => node.id === active)
+    const target = () => {
+      const index = active === null ? undefined : state.graph.index.get(active)
+      const x = index === undefined ? NaN : state.positions?.[index * 2]
+      return x === undefined || Number.isNaN(x)
+        ? null
+        : { x, y: state.positions![index! * 2 + 1]! }
+    }
+    const node = target()
+    if (!node) return
+    const from = camera(state.view)
     stopAnimation()
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      const node = target()!
+    if (reducedMotion()) {
       setView({
         ...from,
-        x: -(node.x ?? 0) * from.scale,
-        y: -(node.y ?? 0) * from.scale,
+        x: -node.x * from.scale,
+        y: -node.y * from.scale,
         centered: active,
       })
       return
@@ -271,24 +514,49 @@ export function GraphCanvas({
       const eased = 1 - (1 - progress) ** 3
       setView({
         ...from,
-        x: from.x + (-(node.x ?? 0) * from.scale - from.x) * eased,
-        y: from.y + (-(node.y ?? 0) * from.scale - from.y) * eased,
+        x: from.x + (-node.x * from.scale - from.x) * eased,
+        y: from.y + (-node.y * from.scale - from.y) * eased,
         centered: progress === 1 ? active : null,
       })
       animation.current = progress < 1 ? requestAnimationFrame(step) : null
     }
     animation.current = requestAnimationFrame(step)
-  }, [active, size, camera, stopAnimation])
+  }, [active, state, camera, stopAnimation])
   useEffect(() => () => stopAnimation(), [stopAnimation])
-  const position = camera(view, layout.nodes, size)
-  function activate(node: Node) {
-    if (node.id === active) setView({ ...position, centered: node.id })
-    open(node.id)
+  useLayoutEffect(() => {
+    if (!focusOption.current) return
+    focusOption.current = false
+    option.current?.focus({ preventScroll: true })
+  })
+  function activate(id: string) {
+    if (id === active) setView({ ...camera(state.view), centered: id })
+    open(id)
+  }
+  /** Centers a note reached from the keyboard when it is out of view. */
+  function reveal(id: string) {
+    const index = state.graph.index.get(id)
+    const position = state.drawn
+    const x = index === undefined ? NaN : state.positions?.[index * 2]
+    if (!position || x === undefined || Number.isNaN(x)) return
+    const left = state.size.width / 2 + position.x + x * position.scale
+    const top =
+      state.size.height / 2 +
+      position.y +
+      state.positions![index! * 2 + 1]! * position.scale
+    if (
+      left < 0 ||
+      top < 0 ||
+      left > state.size.width ||
+      top > state.size.height
+    ) {
+      stopAnimation()
+      setView({ ...position, centered: id })
+    }
   }
   function zoom(factor: number) {
     stopAnimation()
     setView((old) => {
-      const current = camera(old, layout.nodes, size)
+      const current = camera(old)
       const scale = Math.max(
         Math.min(0.01, current.scale),
         Math.min(4, current.scale * factor),
@@ -301,45 +569,8 @@ export function GraphCanvas({
       }
     })
   }
-  const graphItems = useMemo(
-    () => (
-      <>
-        {layout.edges.map((edge) => (
-          <line
-            key={JSON.stringify([edge.source.id, edge.target.id])}
-            x1={edge.source.x}
-            y1={edge.source.y}
-            x2={edge.target.x}
-            y2={edge.target.y}
-          />
-        ))}
-        {layout.nodes.map((node) => (
-          <g
-            key={node.id}
-            data-node={node.id}
-            data-tooltip={`${node.id} · ${node.degree} connections`}
-            data-verbatim="true"
-            data-active={node.id === active}
-            transform={`translate(${node.x ?? 0} ${node.y ?? 0})`}
-            role="button"
-            tabIndex={0}
-            aria-label={`Open ${node.id}`}
-          >
-            <circle r={Math.max(radius(node), 2.5 / position.scale)} />
-            <text y={-14} textAnchor="middle">
-              {label(node)}
-            </text>
-          </g>
-        ))}
-      </>
-    ),
-    [layout, active, position.scale],
-  )
   return (
-    <div
-      className="graph-canvas"
-      data-labels={layout.nodes.length <= 80 || position.scale >= 0.8}
-    >
+    <div ref={root} className="graph-canvas">
       {expand && (
         <IconButton
           className="graph-expand"
@@ -349,27 +580,14 @@ export function GraphCanvas({
           <Maximize2 size={14} />
         </IconButton>
       )}
-      <svg
-        ref={svg}
+      <div
+        ref={host}
+        className="graph-view"
         role="application"
         aria-label="Workspace graph"
         tabIndex={0}
-        viewBox={`${-size.width / 2} ${-size.height / 2} ${size.width} ${size.height}`}
         onKeyDown={(event) => {
-          if (event.target !== event.currentTarget) {
-            if (event.key !== 'Enter' && event.key !== ' ') return
-            const id =
-              event.target instanceof Element
-                ? event.target.closest('[data-node]')?.getAttribute('data-node')
-                : null
-            const node = layout.nodes.find((node) => node.id === id)
-            if (node) {
-              event.preventDefault()
-              event.stopPropagation()
-              activate(node)
-            }
-            return
-          }
+          if (event.target !== event.currentTarget) return
           const steps: Record<string, [number, number]> = {
             ArrowLeft: [30, 0],
             ArrowRight: [-30, 0],
@@ -380,6 +598,7 @@ export function GraphCanvas({
           if (step) {
             event.preventDefault()
             stopAnimation()
+            const position = camera(state.view)
             setView({
               ...position,
               centered: null,
@@ -392,14 +611,10 @@ export function GraphCanvas({
           if (event.button !== 0) return
           event.preventDefault()
           stopAnimation()
-          setView({ ...position, centered: null })
-          const id =
-            event.target instanceof Element
-              ? event.target.closest('[data-node]')?.getAttribute('data-node')
-              : null
-          const node = layout.nodes.find((node) => node.id === id)
-          drag.current = {
-            pointer: event.pointerId,
+          setView({ ...camera(state.view), centered: null })
+          const node = pick(event.clientX, event.clientY)
+          state.pointer = {
+            id: event.pointerId,
             x: event.clientX,
             y: event.clientY,
             startX: event.clientX,
@@ -407,15 +622,23 @@ export function GraphCanvas({
             moved: false,
             node,
           }
-          if (node) {
-            node.fx = node.x
-            node.fy = node.y
-          }
+          if (node >= 0 && state.positions)
+            pin(
+              node,
+              state.positions[node * 2]!,
+              state.positions[node * 2 + 1]!,
+              false,
+            )
           event.currentTarget.setPointerCapture(event.pointerId)
         }}
         onPointerMove={(event) => {
-          const current = drag.current
-          if (!current || current.pointer !== event.pointerId) return
+          const current = state.pointer
+          if (!current) {
+            const node = pick(event.clientX, event.clientY)
+            setHovered(node < 0 ? null : (state.graph.nodes[node]?.id ?? null))
+            return
+          }
+          if (current.id !== event.pointerId) return
           const dx = event.clientX - current.x,
             dy = event.clientY - current.y
           if (
@@ -427,38 +650,120 @@ export function GraphCanvas({
             current.moved = true
           current.x = event.clientX
           current.y = event.clientY
-          if (current.node) {
-            current.node.fx = (current.node.fx ?? 0) + dx / position.scale
-            current.node.fy = (current.node.fy ?? 0) + dy / position.scale
-            current.node.x = current.node.fx
-            current.node.y = current.node.fy
-            if (matchMedia('(prefers-reduced-motion: reduce)').matches)
-              simulation.current?.tick(layout.nodes.length > 80 ? 2 : 30)
-            else simulation.current?.alpha(0.15).restart()
-            setLayout((old) => ({ ...old }))
-          } else
+          const drag = state.drag
+          if (current.node >= 0 && drag && state.positions) {
+            const scale = camera(state.view).scale
+            pin(drag.index, drag.x + dx / scale, drag.y + dy / scale, true)
+            state.positions[drag.index * 2] = state.drag!.x
+            state.positions[drag.index * 2 + 1] = state.drag!.y
+            state.revision++
+            requestDraw()
+          } else if (current.node < 0)
             setView((old) => {
-              const current = camera(old, layout.nodes, size)
-              return { ...current, x: current.x + dx, y: current.y + dy }
+              const position = camera(old)
+              return { ...position, x: position.x + dx, y: position.y + dy }
             })
         }}
         onPointerUp={(event) => {
-          const current = drag.current
-          if (!current || current.pointer !== event.pointerId) return
-          drag.current = null
+          const current = state.pointer
+          if (!current || current.id !== event.pointerId) return
+          state.pointer = null
           event.currentTarget.releasePointerCapture(event.pointerId)
-          if (current.node && !current.moved) activate(current.node)
+          const id = state.graph.nodes[current.node]?.id
+          if (id !== undefined && !current.moved) activate(id)
         }}
         onPointerCancel={() => {
-          drag.current = null
+          state.pointer = null
+        }}
+        onPointerLeave={() => {
+          if (!state.pointer) setHovered(null)
         }}
       >
-        <g
-          transform={`translate(${position.x} ${position.y}) scale(${position.scale})`}
-        >
-          {graphItems}
-        </g>
-      </svg>
+        <canvas ref={canvas} />
+        {hoveredNode && (
+          <div
+            ref={hover}
+            className="graph-node"
+            data-node={hoveredNode.id}
+            data-tooltip={`${hoveredNode.id} · ${hoveredNode.degree} connections`}
+            data-verbatim="true"
+          />
+        )}
+      </div>
+      {currentNode && (
+        <div className="graph-nodes" role="listbox" aria-label="Notes">
+          <div
+            key={currentNode.id}
+            ref={option}
+            role="option"
+            className="graph-node"
+            tabIndex={0}
+            data-node={currentNode.id}
+            data-tooltip={`${currentNode.id} · ${currentNode.degree} connections`}
+            data-verbatim="true"
+            aria-label={`Open ${currentNode.id}`}
+            aria-selected={currentNode.id === active}
+            aria-setsize={nodes.length}
+            aria-posinset={current + 1}
+            onFocus={(event) => {
+              setFocused(currentNode.id)
+              setFocusVisible(event.currentTarget.matches(':focus-visible'))
+              reveal(currentNode.id)
+            }}
+            onBlur={() => {
+              // Coming back starts from the current note again.
+              setFocused(null)
+              setFocusVisible(false)
+              typed.current = { text: '', at: 0 }
+            }}
+            onKeyDown={(event) => {
+              let next = -1
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                event.stopPropagation()
+                activate(currentNode.id)
+                return
+              }
+              if (event.key === 'ArrowDown' || event.key === 'ArrowRight')
+                next = Math.min(nodes.length - 1, current + 1)
+              else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft')
+                next = Math.max(0, current - 1)
+              else if (event.key === 'Home') next = 0
+              else if (event.key === 'End') next = nodes.length - 1
+              else if (
+                event.key.length === 1 &&
+                !event.ctrlKey &&
+                !event.metaKey &&
+                !event.altKey
+              ) {
+                // Type a name to jump to it, like other lists.
+                const now = performance.now()
+                const text =
+                  (now - typed.current.at < 500 ? typed.current.text : '') +
+                  event.key.toLowerCase()
+                typed.current = { text, at: now }
+                for (
+                  let step = text.length === 1 ? 1 : 0;
+                  step <= nodes.length;
+                  step++
+                ) {
+                  const index = (current + step) % nodes.length
+                  if (nodes[index]!.label.toLowerCase().startsWith(text)) {
+                    next = index
+                    break
+                  }
+                }
+              }
+              if (next < 0) return
+              event.preventDefault()
+              if (next === current) return
+              focusOption.current = true
+              setFocused(nodes[next]!.id)
+            }}
+          />
+        </div>
+      )}
+      <span ref={probe} className="graph-label" hidden />
       <div className="graph-zoom">
         <IconButton aria-label="Zoom in" onClick={() => zoom(1.25)}>
           <Plus size={16} />

@@ -41,8 +41,12 @@ for (const existingBounds of [false, true]) {
         changes: { from: state.doc.length, insert: 'x' },
         userEvent: 'input.type',
       }).state
-      assert.equal(state.doc.toString(), before + 'x')
-      state = state.update({ effects: slot.reconfigure([]) }).state
+      assert.equal(state.doc.toString(), `${before}x`)
+      state = state.update({
+        effects: slot.reconfigure([]),
+        changes: { from: state.doc.length, insert: 'y' },
+      }).state
+      assert.equal(state.doc.toString(), `${before}xy`)
       assert.equal(state.field(frontmatterField, false), undefined)
     }
   })

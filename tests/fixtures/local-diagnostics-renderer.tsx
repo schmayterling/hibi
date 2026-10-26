@@ -4,7 +4,7 @@ import {
   installRendererDiagnostics,
   reportRendererFailure,
 } from '../../src/renderer/src/local-diagnostics'
-import { RecoveryBoundary } from '../../src/renderer/src/RecoveryScreen'
+import { RecoveryBoundary } from '../../src/renderer/src/RecoveryBoundary'
 
 const records: string[] = []
 let reads = 0

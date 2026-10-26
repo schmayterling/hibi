@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -96,6 +96,7 @@ test('installed addon edits inactive documents and guards deferred legacy comman
   })
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
+      globalThis.releaseTargetSelection?.()
       dialog.showMessageBox = async () => ({ response: 1 })
     })
     await app.close()
@@ -199,10 +200,46 @@ test('installed addon edits inactive documents and guards deferred legacy comman
     '# ONE',
   )
 
+  await app.evaluate(({ ipcMain }) => {
+    const channel = 'document:select-tab'
+    const select = ipcMain._invokeHandlers.get(channel)
+    ipcMain._invokeHandlers.set(channel, async (...args) => {
+      ipcMain._invokeHandlers.set(channel, select)
+      await new Promise((resolve) => {
+        globalThis.releaseTargetSelection = resolve
+      })
+      return select(...args)
+    })
+  })
   await page.evaluate(() => window.targetProbe.begin())
   await page.waitForFunction(() => window.targetProbe.started)
   await page.getByRole('tab', { name: 'second.md' }).click()
-  await page.evaluate(() => window.targetProbe.release())
+  await waitForAsync(app, () => !!globalThis.releaseTargetSelection)
+  const resumed = (async () => {
+    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+    await page.evaluate(() => window.targetProbe.release())
+  })()
+  try {
+    // The old source editor stays visible while the target tab is pending.
+    await page
+      .getByRole('textbox', { name: 'Markdown editor', exact: true })
+      .waitFor()
+    assert.equal(await page.locator('.app').getAttribute('aria-busy'), 'true')
+    const pending = await page.evaluate(async () => ({
+      document: await window.hibi.getDocument(),
+      result: window.targetProbe.result,
+    }))
+    assert.equal(pending.document.name, 'first.md')
+    assert.equal(pending.document.markdown, '# ONE')
+    assert.equal(pending.result, null)
+  } finally {
+    await app.evaluate(() => globalThis.releaseTargetSelection())
+    await resumed
+  }
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).name,
+    'second.md',
+  )
   await page.waitForFunction(() => window.targetProbe.result !== null)
   assert.match(
     await page.evaluate(() => window.targetProbe.result),

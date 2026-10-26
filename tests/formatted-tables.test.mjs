@@ -1190,6 +1190,45 @@ test('the first resize of a table stores only that size', {
   )
 })
 
+test('moving 1,000 sized rows stores their heights in batches the workspace accepts', {
+  timeout: 60000,
+}, async () => {
+  const rows = Array.from({ length: 1001 }, (_, i) => `| r${i} | x |`)
+  const doc = `| a | b |\n| - | - |\n${rows.join('\n')}\n\nafter`
+  // Every row a different height, so moving them all down changes each.
+  const heights = [0, ...rows.map((_, i) => 24 + i)]
+  await harness.evaluate(
+    ({ key, heights }) =>
+      window.tables.layouts('batches', [{ key, columns: null, rows: heights }]),
+    { key: tableKey(0, ['a', 'b']), heights },
+  )
+  await mountTab(doc, 'batches')
+  await harness.evaluate(async () => {
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await window.tables.settle()
+  })
+  assert.equal(
+    await harness.evaluate((at) => {
+      window.tables.view().dispatch({ selection: { anchor: at } })
+      return window.tables.runTableAction('row-before')
+    }, doc.indexOf('| r0') + 2),
+    true,
+  )
+  await harness.waitForFunction(
+    () =>
+      window.tables.layouts('batches')[0]?.rows?.[2] === 24 &&
+      window.tables.layouts('batches')[0]?.rows?.length === 1003,
+  )
+  const writes = await harness.evaluate(() => window.tables.writes('batches'))
+  assert.ok(writes.length > 1, `${writes.length} writes`)
+  assert.ok(
+    writes.every((write) => (write.set?.length ?? 0) <= 1000),
+    JSON.stringify(writes.map((write) => write.set?.length)),
+  )
+  assert.equal((await layouts('batches'))[0].rows[1], 0)
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {

@@ -71,14 +71,24 @@ export function subscribeTableLayouts(tabId: string, listener: () => void) {
   }
 }
 
-/** Rows past the first 1,000 are stored by index, so long tables stay within the workspace's bounds. */
+/**
+ * Rows past the first 1,000 are stored by index, and size changes go in
+ * batches of at most 1,000, so long tables stay within the workspace's
+ * bounds. The workspace applies the batches in order.
+ */
 function save(tabId: string, update: TableLayoutUpdate) {
-  void window.hibi
-    .writeTableLayout(tabId, {
-      ...update,
-      put: update.put.map(storedTableLayout),
-    })
-    .catch((error: unknown) =>
-      console.error('table sizes could not be saved:', error),
-    )
+  const write = (part: TableLayoutUpdate) =>
+    void window.hibi
+      .writeTableLayout(tabId, part)
+      .catch((error: unknown) =>
+        console.error('table sizes could not be saved:', error),
+      )
+  const set = update.set ?? []
+  write({
+    ...update,
+    put: update.put.map(storedTableLayout),
+    set: set.slice(0, 1000),
+  })
+  for (let at = 1000; at < set.length; at += 1000)
+    write({ remove: [], put: [], set: set.slice(at, at + 1000) })
 }

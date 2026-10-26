@@ -9,6 +9,7 @@ import {
 } from 'react'
 import type { DocumentState } from '../../shared/desktop'
 import { IconButton } from '../../ui/Controls'
+import type { MenuApi } from '../../ui/menus'
 import type { ViewEntry } from './addon-views'
 import { retainClosingTabs } from './retained-tabs'
 
@@ -17,7 +18,9 @@ export function DocumentTabs({
   busy,
   onSelect,
   onClose,
+  onCloseTabs,
   onMove,
+  menus,
   addonTabs,
   activeAddonTab,
   onSelectAddon,
@@ -28,7 +31,9 @@ export function DocumentTabs({
   busy: boolean
   onSelect: (id: string) => void
   onClose: (id: string) => void
+  onCloseTabs: (ids: string[], preferredTab: string) => void
   onMove: (id: string, beforeId: string | null) => void
+  menus: MenuApi
   addonTabs: ViewEntry[]
   activeAddonTab: string | null
   onSelectAddon: (id: string) => void
@@ -177,6 +182,43 @@ export function DocumentTabs({
     addonTabs,
     activeAddonTab,
   ])
+  const openTabMenu = (
+    id: string,
+    anchor: HTMLElement | { x: number; y: number },
+  ) => {
+    if (busy || !currentIds.has(id)) return
+    const ids = document.tabs.map((tab) => tab.id)
+    const index = ids.indexOf(id)
+    if (index < 0) return
+    const left = ids.slice(0, index)
+    const right = ids.slice(index + 1)
+    menus.open({
+      label: 'Tab actions',
+      anchor,
+      items: [
+        { id: 'close', label: 'Close tab', onSelect: () => onClose(id) },
+        {
+          id: 'close-others',
+          label: 'Close other tabs',
+          separatorBefore: true,
+          disabled: ids.length === 1,
+          onSelect: () => onCloseTabs([...left, ...right], id),
+        },
+        {
+          id: 'close-right',
+          label: 'Close tabs to the right',
+          disabled: right.length === 0,
+          onSelect: () => onCloseTabs(right, id),
+        },
+        {
+          id: 'close-left',
+          label: 'Close tabs to the left',
+          disabled: left.length === 0,
+          onSelect: () => onCloseTabs(left, id),
+        },
+      ],
+    })
+  }
   return (
     <div
       className="document-tabs"
@@ -193,6 +235,23 @@ export function DocumentTabs({
           return
         const focusedId = event.target.getAttribute('data-tab-id')
         const index = ordered.findIndex((tab) => tab.id === focusedId)
+        if (
+          event.key === 'ContextMenu' ||
+          (event.shiftKey && event.key === 'F10')
+        ) {
+          const tab = ordered[index]
+          if (!tab || tab.addon) return
+          event.preventDefault()
+          event.stopPropagation()
+          const anchor = event.currentTarget.querySelector<HTMLElement>(
+            `[data-tab-id="${CSS.escape(tab.id)}"]`,
+          )
+          if (anchor) {
+            cancelNavigationFocus()
+            openTabMenu(tab.id, anchor)
+          }
+          return
+        }
         if (
           event.altKey &&
           event.shiftKey &&
@@ -331,12 +390,27 @@ export function DocumentTabs({
               data-tooltip={name}
               data-verbatim="true"
               onMouseDown={(event) => {
+                if (event.button === 1) event.preventDefault()
                 if (event.button === 0)
                   event.currentTarget.focus({ preventScroll: true })
+              }}
+              onAuxClick={(event) => {
+                if (event.button !== 1) return
+                event.preventDefault()
+                if (!busy && !closing) onClose(tab.id)
               }}
               onClick={() => {
                 cancelNavigationFocus()
                 if (!busy && !selected) onSelect(tab.id)
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                if (busy || closing) return
+                event.currentTarget.focus({ preventScroll: true })
+                openTabMenu(tab.id, {
+                  x: event.clientX,
+                  y: event.clientY,
+                })
               }}
             >
               <span>{name}</span>

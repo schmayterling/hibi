@@ -19,36 +19,29 @@ const space = /\s/
 const isSpace = (code: number) =>
   code < 0 || space.test(String.fromCharCode(code))
 
-/** No `~` or line break in `[from, stop)`; `stop` is one, or the end. */
-const stops = new WeakMap<InlineContext, { from: number; stop: number }>()
-
 /**
- * The first `~`, line break or section end at or after `pos`. Openers come
- * in document order, so a position inside the last scanned span shares its
- * answer and no text is read twice.
+ * The first `~`, line break or section end at or after `pos`. A scan from
+ * an opener ends at the next tilde, where the next opener can be, so scans
+ * never read the same text.
  */
 function tildeStop(cx: InlineContext, pos: number) {
-  let cache = stops.get(cx)
-  if (!cache) {
-    cache = { from: -1, stop: -2 }
-    stops.set(cx, cache)
-  }
-  if (pos >= cache.from && pos <= cache.stop) return cache.stop
   let at = pos
   for (; at < cx.end; at++) {
     subscriptWork.reads++
     const code = cx.char(at)
     if (code === 126 || code === 10 || code === 13) break
   }
-  cache.from = pos
-  cache.stop = at
   return at
 }
 
 /** Each inline section's last scan for a strikethrough closer. */
 const doubles = new WeakMap<InlineContext, { from: number; at: number }>()
 
-/** The first `~~` at or after `from` that could close a strikethrough, or -1; cached like `tildeStop`. */
+/**
+ * The first `~~` at or after `from` that could close a strikethrough, or -1.
+ * Openers come in document order, so the last scan's answer serves every
+ * position up to it and no text is read twice.
+ */
 function closingDouble(cx: InlineContext, from: number) {
   let cache = doubles.get(cx)
   if (!cache) {

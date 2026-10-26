@@ -1110,7 +1110,7 @@ export async function snapshotWorkspace(): Promise<WorkspaceSnapshot> {
   await refreshWorkspace()
   if (!isCurrentWorkspaceTarget(target))
     throw new Error('The workspace changed during export. Export again.')
-  const workspace = getWorkspace()
+  const workspace = getWorkspace(undefined, true)
   if (!workspace) throw new Error('Open a workspace first.')
   const pages: WorkspaceSnapshot['pages'] = []
   for (const { path } of exportPaths(workspace.entries))

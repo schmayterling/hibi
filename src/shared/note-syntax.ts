@@ -1,4 +1,4 @@
-import { Marked, type Token } from 'marked'
+import { Lexer, Marked, type Token } from 'marked'
 import { readFrontmatter } from './frontmatter.ts'
 import { defaultNoteSyntax, type NoteSyntax } from './note-syntax-config.ts'
 
@@ -8,22 +8,51 @@ export {
   type NoteSyntax,
 } from './note-syntax-config.ts'
 
-const wiki = /^(!?)\[\[([^\]\r\n]+)\]\]/
 const parsers = new Map<string, Marked>()
+// Each inline run owns its token array, including nested labels/emphasis.
+const wikiEnds = new WeakMap<Token[], number>()
 
-function wikiToken(source: string, embed: boolean) {
-  const match = wiki.exec(source)
-  if (!match || !!match[1] !== embed) return
-  const [target, alias] = (match[2] ?? '').split('|', 2)
+function wikiToken(source: string, embed: boolean, tokens: Token[]) {
+  const prefix = embed ? '![[' : '[['
+  if (!source.startsWith(prefix)) return
+  // Suffix lengths keep the same terminator valid as this inline run advances.
+  let remaining = wikiEnds.get(tokens)
+  if (remaining === undefined || source.length <= remaining) {
+    let end = prefix.length
+    while (end < source.length) {
+      const code = source.charCodeAt(end)
+      if (code === 93 || code === 13 || code === 10) break
+      end++
+    }
+    remaining = source.length - end
+    wikiEnds.set(tokens, remaining)
+  }
+  const end = source.length - remaining
+  if (end <= prefix.length || source.slice(end, end + 2) !== ']]') return
+  const [target, alias] = source.slice(prefix.length, end).split('|', 2)
   if (!target?.trim()) return
   const label = alias?.trim() || target.trim()
   return {
     type: embed ? 'obsidianEmbed' : 'obsidianWikiLink',
-    raw: match[0],
+    raw: source.slice(0, end + 2),
     text: label,
     target: target.trim(),
     tokens: [{ type: 'text', raw: label, text: label }],
   }
+}
+
+function inlineStart(source: string, gfm: boolean) {
+  // Marked cannot consume past its next text run. Searching the whole suffix
+  // for absent extensions repeats that work for every ordinary link/tag.
+  const rules = gfm ? Lexer.rules.inline.gfm : Lexer.rules.inline.normal
+  const text = rules.text.exec(source)?.[0] ?? ''
+  const embed = source.slice(0, text.length + 2).indexOf('![[')
+  const highlight = text.indexOf('==')
+  return embed < 0
+    ? highlight
+    : highlight < 0
+      ? embed
+      : Math.min(embed, highlight)
 }
 
 function highlightToken(source: string) {
@@ -98,28 +127,21 @@ export function noteLexer(
           {
             name: 'obsidianEmbed',
             level: 'inline',
-            start: (text) => text.indexOf('![['),
-            tokenizer: (text) => wikiToken(text, true),
+            tokenizer: (text, tokens) => wikiToken(text, true, tokens),
           },
           {
             name: 'obsidianWikiLink',
             level: 'inline',
-            start: (text) => text.indexOf('[['),
-            tokenizer: (text) => wikiToken(text, false),
+            tokenizer: (text, tokens) => wikiToken(text, false, tokens),
           },
           {
             name: 'obsidianHighlight',
             level: 'inline',
-            start: (text) => text.indexOf('=='),
+            start: (text) => inlineStart(text, syntax.gfm),
             tokenizer: highlightToken,
           },
         ],
       })
-    // Parser variants are disposable; eviction never omits note metadata.
-    if (parsers.size >= 64) {
-      const oldest = parsers.keys().next().value
-      if (oldest !== undefined) parsers.delete(oldest)
-    }
     parsers.set(key, parser)
   }
   const tokens = parser.lexer(

@@ -23,6 +23,24 @@ const sizes = (value: unknown) =>
     value.length <= 1000 &&
     value.every((size) => Number.isInteger(size) && size >= 0 && size <= 10000))
 
+/** Sized rows past the listed ones: at most 1,000 index and size pairs, in order. */
+const rowsAfter = (value: unknown) =>
+  value === undefined ||
+  (Array.isArray(value) &&
+    value.length <= 1000 &&
+    value.every(
+      (pair, at) =>
+        Array.isArray(pair) &&
+        pair.length === 2 &&
+        Number.isInteger(pair[0]) &&
+        pair[0] >= 1000 &&
+        pair[0] < 10_000_000 &&
+        (at === 0 || pair[0] > value[at - 1][0]) &&
+        Number.isInteger(pair[1]) &&
+        pair[1] >= 0 &&
+        pair[1] <= 10000,
+    ))
+
 export function validateTableLayout(input: unknown): TableLayout[] {
   if (
     !Array.isArray(input) ||
@@ -34,11 +52,24 @@ export function validateTableLayout(input: unknown): TableLayout[] {
         typeof table.key === 'string' &&
         table.key.length <= 64 &&
         sizes(table.columns) &&
-        sizes(table.rows),
+        sizes(table.rows) &&
+        rowsAfter(table.rowsAfter),
     )
   )
     throw new Error('The table layout is invalid.')
-  return input.map(({ key, columns, rows }) => ({ key, columns, rows }))
+  return input.map(({ key, columns, rows, rowsAfter }) => ({
+    key,
+    columns,
+    rows,
+    ...(rowsAfter
+      ? {
+          rowsAfter: rowsAfter.map(
+            ([index, size]: [number, number]) =>
+              [index, size] as [number, number],
+          ),
+        }
+      : {}),
+  }))
 }
 
 function validateTableLayoutUpdate(input: unknown): TableLayoutUpdate {
@@ -152,7 +183,9 @@ export async function writeTableLayout(
 ): Promise<void> {
   if (!documentPath(path)) throw new Error('Choose a file in this workspace.')
   const sized = (table: TableLayout) =>
-    table.columns?.some(Boolean) || table.rows?.some(Boolean)
+    table.columns?.some(Boolean) ||
+    table.rows?.some(Boolean) ||
+    table.rowsAfter?.some(([, size]) => size)
   const replace = Array.isArray(input)
     ? validateTableLayout(input).filter(sized)
     : null

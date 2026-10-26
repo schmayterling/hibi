@@ -1,4 +1,6 @@
 import {
+  listedTableLayout,
+  storedTableLayout,
   type TableLayout,
   type TableLayoutUpdate,
   updateTableLayout,
@@ -31,7 +33,12 @@ export const storedTableLayouts = (tabId: string) => session.get(tabId)
 export function readTableLayouts(
   tabId: string,
 ): TableLayout[] | Promise<TableLayout[] | null> {
-  return session.get(tabId) ?? window.hibi.readTableLayout(tabId)
+  return (
+    session.get(tabId) ??
+    window.hibi
+      .readTableLayout(tabId)
+      .then((tables) => tables?.map(listedTableLayout) ?? null)
+  )
 }
 
 const changed = (tabId: string) => {
@@ -71,9 +78,15 @@ export function subscribeTableLayouts(tabId: string, listener: () => void) {
   }
 }
 
+/** Rows past the first 1,000 are stored by index, so long tables stay within the workspace's bounds. */
 function save(tabId: string, tables: TableLayout[] | TableLayoutUpdate) {
   void window.hibi
-    .writeTableLayout(tabId, tables)
+    .writeTableLayout(
+      tabId,
+      Array.isArray(tables)
+        ? tables.map(storedTableLayout)
+        : { ...tables, put: tables.put.map(storedTableLayout) },
+    )
     .catch((error: unknown) =>
       console.error('table sizes could not be saved:', error),
     )

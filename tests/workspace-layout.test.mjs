@@ -15,6 +15,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
+import {
+  listedTableLayout,
+  storedTableLayout,
+} from '../src/shared/table-layout.ts'
 
 const bundle = await build({
   entryPoints: ['src/main/workspace-layout.ts'],
@@ -95,6 +99,44 @@ test('table layout updates change only their tables, on what is stored when they
     await assert.rejects(writeTableLayout(root, 'a.md', bad), {
       message: 'The table layout is invalid.',
     })
+})
+
+test('long tables store rows past the first 1,000 by index, within bounds', async (t) => {
+  const root = await workspace(t)
+  // A table sized at row 1,500 of a long table, as the editors keep it.
+  const rows = Array(1501).fill(0)
+  rows[1] = 40
+  rows[1500] = 90
+  const stored = storedTableLayout({ key: '0:long', columns: null, rows })
+  assert.equal(stored.rows.length, 1000)
+  assert.deepEqual(stored.rowsAfter, [[1500, 90]])
+  await writeTableLayout(root, 'a.md', [stored])
+  const [read] = await readTableLayout(root, 'a.md')
+  assert.deepEqual(listedTableLayout(read).rows, rows)
+  // Only sized rows past the listed ones are stored.
+  assert.deepEqual(
+    storedTableLayout({
+      key: 'x',
+      columns: null,
+      rows: [...Array(5000).fill(0)],
+    }),
+    { key: 'x', columns: null, rows: null },
+  )
+  for (const rowsAfter of [
+    [[999, 10]],
+    [
+      [1001, 10],
+      [1000, 10],
+    ],
+    [[1000, 10001]],
+    Array.from({ length: 1001 }, (_, i) => [1000 + i, 10]),
+  ])
+    await assert.rejects(
+      writeTableLayout(root, 'a.md', [
+        { key: 'x', columns: null, rows: null, rowsAfter },
+      ]),
+      { message: 'The table layout is invalid.' },
+    )
 })
 
 test('table layout is created lazily, read back, and pruned', async (t) => {

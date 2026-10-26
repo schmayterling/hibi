@@ -717,3 +717,109 @@ test('after a block that no replay can continue, formatting resumes at the next 
     nodes(raw.parse(text), at, text.length),
   )
 })
+
+/** A list or quote whose paragraph no replay can reopen: its first line also opens a fence. */
+const stuckBlock = (container, lines) => {
+  const pad = container === '>' ? '> ' : ' '.repeat(container.length + 1)
+  return `${container} > ~~~\n${pad}> code\n${pad}> ~~~\n${pad}>\n${`${pad}> quoted words *em*\n`.repeat(lines)}`
+}
+
+test('after a stuck block, formatting resumes only at a line that starts a top-level block in every reading', () => {
+  // A one-space fence after the list holds the rest of the note.
+  const text = `${stuckBlock('-', 5000)}\n ~~~\nraw code\n\n# inside\n\nstill code\n`
+  const at = text.indexOf('# inside')
+  const counts = probe()
+  const { tree } = steps(
+    new ChunkedMarkdownParser(full, base, { probe: counts }).startChunkedParse(
+      stringInput(text),
+      [],
+      { from: at, to: text.length },
+    ),
+    counts,
+  )
+  assert.equal(chain(tree, at + 2), chain(full.parse(text), at + 2))
+  // Lines after a stuck block show as written or as the whole note parses.
+  const lines = [
+    ...['', '', '', ' ~~~', '~~~', '  ~~~', '   ```', '```js', '  > ~~~'],
+    ...['<!--', '-->', '<script>', '</script>', '<div>', '# inside', '---'],
+    ...['text *em*', '  text', '   text', '    code', '\ttab', '==='],
+    ...['> quote', '  > quote', '> > q', '- item', '  - item', '+ plus'],
+    ...['1. one', '2. two', '2) two', '* star'],
+  ]
+  for (const container of ['-', '1.', '>']) {
+    let resumed = 0
+    for (let seed = 1; seed <= 300; seed++) {
+      const r = random(seed)
+      const prefix = stuckBlock(container, 60)
+      const text = `${prefix}${Array.from({ length: 24 }, () => lines[Math.floor(r() * lines.length)]).join('\n')}\n`
+      const exact = full.parse(text)
+      const counts = probe()
+      const { tree } = steps(
+        tiny({
+          chunkSize: 32,
+          groupSize: 4,
+          giantBlock: 512,
+          probe: counts,
+        }).startChunkedParse(stringInput(text), [], {
+          from: prefix.length,
+          to: text.length,
+        }),
+        counts,
+      )
+      const covered = parsedChunks(tree).flatMap((chunk) => chunk.covered)
+      let shown = false
+      for (
+        let pos = prefix.length;
+        pos < text.length;
+        pos = text.indexOf('\n', pos) + 1
+      ) {
+        if (!covered.some((range) => range.from <= pos && pos < range.to))
+          continue
+        shown = true
+        assert.equal(
+          chain(tree, pos),
+          chain(exact, pos),
+          `${container} seed ${seed} at ${pos}: ${JSON.stringify(text.slice(prefix.length))}`,
+        )
+      }
+      if (shown) resumed++
+    }
+    // Most notes still format the text after the stuck block.
+    assert.ok(resumed > 150, `${container}: ${resumed}`)
+  }
+})
+
+test('the search after a stuck block reads a long line once, in bounded steps, and counts its reads', () => {
+  const text = `${stuckBlock('-', 60)}  > ${'x'.repeat(65536)}\n\n# after\n`
+  const at = text.indexOf('# after')
+  let reads = 0
+  const input = {
+    ...stringInput(text),
+    read: (from, to) => {
+      reads += to - from
+      return text.slice(from, to)
+    },
+  }
+  const counts = probe()
+  const parse = tiny({
+    chunkSize: 32,
+    groupSize: 4,
+    giantBlock: 512,
+    probe: counts,
+  }).startChunkedParse(input, [], { from: at, to: text.length })
+  let tree = null,
+    advances = 0,
+    largest = 0
+  // Before, a window ending inside the line moved the search one unit a step.
+  for (; !tree && advances < 1000; advances++) {
+    const before = reads
+    tree = parse.advance()
+    largest = Math.max(largest, reads - before)
+  }
+  assert.ok(tree, `unfinished after ${advances} steps`)
+  assert.ok(reads < 2 * text.length, `${reads}`)
+  assert.ok(largest <= 16 * 512, `${largest}`)
+  // The work counters include the search's reads.
+  assert.ok(counts.scannedUnits >= 65536, `${counts.scannedUnits}`)
+  assert.equal(chain(tree, at + 2), 'ATXHeading1>Document')
+})

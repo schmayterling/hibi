@@ -1,6 +1,12 @@
 import { lstat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
-import type { TableLayout } from '../shared/table-layout'
+import {
+  listedTableLayout,
+  storedTableLayout,
+  type TableLayout,
+  type TableLayoutUpdate,
+  updateTableLayout,
+} from '../shared/table-layout'
 import {
   readWorkspaceLayoutText,
   WORKSPACE_LAYOUT,
@@ -19,6 +25,24 @@ const sizes = (value: unknown) =>
     value.length <= 1000 &&
     value.every((size) => Number.isInteger(size) && size >= 0 && size <= 10000))
 
+/** Sized rows past the listed ones: at most 1,000 index and size pairs, in order. */
+const rowsAfter = (value: unknown) =>
+  value === undefined ||
+  (Array.isArray(value) &&
+    value.length <= 1000 &&
+    value.every(
+      (pair, at) =>
+        Array.isArray(pair) &&
+        pair.length === 2 &&
+        Number.isInteger(pair[0]) &&
+        pair[0] >= 1000 &&
+        pair[0] < 10_000_000 &&
+        (at === 0 || pair[0] > value[at - 1][0]) &&
+        Number.isInteger(pair[1]) &&
+        pair[1] >= 0 &&
+        pair[1] <= 10000,
+    ))
+
 export function validateTableLayout(input: unknown): TableLayout[] {
   if (
     !Array.isArray(input) ||
@@ -30,11 +54,59 @@ export function validateTableLayout(input: unknown): TableLayout[] {
         typeof table.key === 'string' &&
         table.key.length <= 64 &&
         sizes(table.columns) &&
-        sizes(table.rows),
+        sizes(table.rows) &&
+        rowsAfter(table.rowsAfter),
     )
   )
     throw new Error('The table layout is invalid.')
-  return input.map(({ key, columns, rows }) => ({ key, columns, rows }))
+  return input.map(({ key, columns, rows, rowsAfter }) => ({
+    key,
+    columns,
+    rows,
+    ...(rowsAfter
+      ? {
+          rowsAfter: rowsAfter.map(
+            ([index, size]: [number, number]) =>
+              [index, size] as [number, number],
+          ),
+        }
+      : {}),
+  }))
+}
+
+function validateTableLayoutUpdate(input: unknown): TableLayoutUpdate {
+  const {
+    remove,
+    put,
+    set = [],
+  } = (input ?? {}) as { remove?: unknown; put?: unknown; set?: unknown }
+  if (
+    !Array.isArray(remove) ||
+    remove.length > 1000 ||
+    !remove.every((key) => typeof key === 'string' && key.length <= 64) ||
+    !Array.isArray(set) ||
+    set.length > 1000 ||
+    !set.every(
+      (change) =>
+        change &&
+        typeof change === 'object' &&
+        typeof change.key === 'string' &&
+        change.key.length <= 64 &&
+        (change.axis === 'column' || change.axis === 'row') &&
+        Number.isInteger(change.index) &&
+        change.index >= 0 &&
+        change.index < (change.axis === 'column' ? 1000 : 10_000_000) &&
+        Number.isInteger(change.size) &&
+        change.size >= 0 &&
+        change.size <= 10000,
+    )
+  )
+    throw new Error('The table layout is invalid.')
+  return {
+    remove: [...remove],
+    put: validateTableLayout(put),
+    set: set.map(({ key, axis, index, size }) => ({ key, axis, index, size })),
+  }
 }
 
 const documentPath = (path: string) =>
@@ -125,16 +197,25 @@ export async function readTableLayout(
   return (await readLayout(root)).documents[path]?.tables ?? []
 }
 
-/** Replace one document's tables and prune entries whose files are gone. */
+/**
+ * Replace one document's tables, or update some of them on the sizes stored
+ * now (so windows never write back each other's stale copies), and prune
+ * entries whose files are gone.
+ */
 export async function writeTableLayout(
   root: string,
   path: string,
   input: unknown,
 ): Promise<void> {
   if (!documentPath(path)) throw new Error('Choose a file in this workspace.')
-  const tables = validateTableLayout(input).filter(
-    (table) => table.columns?.some(Boolean) || table.rows?.some(Boolean),
-  )
+  const sized = (table: TableLayout) =>
+    table.columns?.some(Boolean) ||
+    table.rows?.some(Boolean) ||
+    table.rowsAfter?.some(([, size]) => size)
+  const replace = Array.isArray(input)
+    ? validateTableLayout(input).filter(sized)
+    : null
+  const change = replace ? null : validateTableLayoutUpdate(input)
   await update(
     root,
     async (layout) => {
@@ -144,6 +225,17 @@ export async function writeTableLayout(
           delete layout.documents[entry]
           changed = true
         }
+      // Updates apply with every row listed; rows past 1,000 are stored by index again.
+      const tables =
+        replace ??
+        validateTableLayout(
+          updateTableLayout(layout.documents[path]?.tables ?? [], {
+            ...(change as TableLayoutUpdate),
+            put: (change as TableLayoutUpdate).put.map(listedTableLayout),
+          })
+            .map(storedTableLayout)
+            .filter(sized),
+        )
       if (
         JSON.stringify(layout.documents[path]?.tables ?? []) ===
         JSON.stringify(tables)

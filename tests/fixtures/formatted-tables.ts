@@ -1,12 +1,23 @@
-import { defaultKeymap, history } from '@codemirror/commands'
-import { EditorState } from '@codemirror/state'
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
+import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import '../../src/renderer/src/styles.css'
 import type { ChunkedMarkdownProbe } from '../../src/renderer/src/chunked-markdown'
-import { showMarkdownMarkers } from '../../src/renderer/src/formatted-contributions'
+import * as formattedTables from '../../src/renderer/src/formatted/tables'
+import {
+  formattedDocument,
+  showMarkdownMarkers,
+} from '../../src/renderer/src/formatted-contributions'
 import { formattedSyntax } from '../../src/renderer/src/formatted-syntax'
 import { livePreview } from '../../src/renderer/src/live-preview'
 import { markdownSyntax } from '../../src/renderer/src/markdown-syntax'
+import { tableActions } from '../../src/renderer/src/source-formatting'
+import {
+  storedTableLayout,
+  type TableLayout,
+  type TableLayoutUpdate,
+  updateTableLayout,
+} from '../../src/shared/table-layout'
 
 /** Table harness: the app's pane layout around a formatted view that can be read-only or editable. */
 const probe: ChunkedMarkdownProbe = {
@@ -17,6 +28,42 @@ const probe: ChunkedMarkdownProbe = {
   builtGroups: 0,
 }
 let view: EditorView | null = null
+/** A second view of the same document, as another pane of the tab would be. */
+let second: EditorView | null = null
+// The workspace's table sizes, as the main process keeps and updates them.
+const layouts = new Map<string, TableLayout[]>()
+const writes: { tabId: string; input: TableLayout[] | TableLayoutUpdate }[] = []
+/** While set, writes are applied but answered only when released, as a busy workspace would. */
+let holding = false
+const held: (() => void)[] = []
+Object.assign(window, {
+  hibi: {
+    readTableLayout: async (tabId: string) => layouts.get(tabId) ?? [],
+    writeTableLayout: async (
+      tabId: string,
+      input: TableLayout[] | TableLayoutUpdate,
+    ) => {
+      writes.push({ tabId, input: structuredClone(input) })
+      const next = Array.isArray(input)
+        ? input
+        : updateTableLayout(layouts.get(tabId) ?? [], input)
+      // The workspace's bound: at most 1,000 rows stored by index.
+      if (
+        next.some(
+          (table) => (storedTableLayout(table).rowsAfter?.length ?? 0) > 1000,
+        )
+      )
+        throw new Error('The table layout is invalid.')
+      layouts.set(tabId, next)
+      if (holding) await new Promise<void>((done) => held.push(done))
+    },
+  },
+})
+const editable = new Compartment()
+const access = (on: boolean) => [
+  EditorState.readOnly.of(!on),
+  EditorView.editable.of(on),
+]
 
 // The GitHub flavor's strikethrough setting, which the Markdown addon registers in the app.
 markdownSyntax.register('markdown', {
@@ -43,7 +90,8 @@ Object.assign(window, {
     async mount(
       doc: string,
       size?: { width: number; height: number },
-      options: { editable?: boolean } = {},
+      /** `tabId` gives the view a tab with table sizes; `add` mounts a second view of the tab beside the first. */
+      options: { editable?: boolean; tabId?: string; add?: boolean } = {},
     ) {
       if (size)
         Object.assign(panes.style, {
@@ -53,26 +101,67 @@ Object.assign(window, {
           width: `${size.width}px`,
           height: `${size.height}px`,
         })
-      view?.destroy()
+      if (!options.add) {
+        view?.destroy()
+        second?.destroy()
+        second = null
+      }
       document.querySelector<HTMLElement>('.rich-pane')!.scrollTop = 0
-      view = new EditorView({
+      const mounted = new EditorView({
         parent: host,
         state: EditorState.create({
           doc,
           extensions: [
             livePreview(formattedSyntax({ probe })),
             options.editable
-              ? [history(), keymap.of(defaultKeymap)]
-              : [EditorState.readOnly.of(true), EditorView.editable.of(false)],
+              ? [history(), keymap.of([...defaultKeymap, ...historyKeymap])]
+              : [],
+            editable.of(access(!!options.editable)),
             showMarkdownMarkers.of(true),
+            options.tabId
+              ? formattedDocument.of({ revision: 0, tabId: options.tabId })
+              : [],
           ],
         }),
       })
+      if (options.add) second = mounted
+      else view = mounted
       await document.fonts.ready
-      view.requestMeasure()
+      mounted.requestMeasure()
       await settle()
     },
     view: () => view,
+    second: () => second,
+    /** How many column and row positions table size tracking mapped. */
+    sizeProbe: () =>
+      (formattedTables as { tableSizeProbe?: { mapped: number } })
+        .tableSizeProbe,
+    /** Hold the workspace's answers to writes, or answer every held one and stop holding. */
+    holdWrites(hold: boolean) {
+      holding = hold
+      if (!hold) for (const done of held.splice(0)) done()
+    },
+    /** What views wrote to the workspace's table sizes for a tab, in order. */
+    writes: (tabId: string) =>
+      writes.filter((write) => write.tabId === tabId).map(({ input }) => input),
+    /** The table sizes the workspace stores for a tab, or sets them. */
+    layouts: (tabId: string, tables?: TableLayout[]) => {
+      if (tables) layouts.set(tabId, tables)
+      return layouts.get(tabId) ?? []
+    },
+    /** Run a toolbar table action at the selection, as the toolbar does. */
+    runTableAction(id: string) {
+      const current = view
+      return (
+        !!current &&
+        current.state
+          .facet(tableActions)
+          .some((actions) => actions.run(current, id))
+      )
+    },
+    /** Make the mounted editor read-only and not editable, or editable again. */
+    setEditable: (on: boolean) =>
+      view?.dispatch({ effects: editable.reconfigure(access(on)) }),
     setEnabled: (id: string, enabled: boolean) =>
       markdownSyntax.setEnabled(id, enabled),
     reset() {

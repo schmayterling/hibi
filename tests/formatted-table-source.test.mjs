@@ -6,6 +6,13 @@ import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import {
   alignments,
   cellContent,
+  cellFixes,
+  cellSpan,
+  countTables,
+  deleteColumn,
+  deleteRow,
+  insertColumn,
+  insertRow,
   parseRow,
   planInline,
   rowStart,
@@ -244,4 +251,359 @@ test('cell decorations nest as spans in one sweep, linear in their number', () =
     large = reads(1024)
   // Quadratic scans read 64 times as much for 8 times the spans.
   assert.ok(large < small * 12, `${small} → ${large}`)
+})
+
+/** A table in `doc` as transforms read it, from its first line to its last. */
+function table(doc, quotes = 0, start = 0) {
+  const lines = doc.split('\n')
+  const starts = []
+  let at = 0
+  for (const text of lines) {
+    starts.push(at)
+    at += text.length + 1
+  }
+  return {
+    lines: lines.length,
+    line: (index) => ({ from: starts[index], text: lines[index] }),
+    start,
+    quotes,
+  }
+}
+const apply = (doc, edit) => {
+  assert.ok(edit, 'an edit')
+  let text = doc
+  for (const { from, to, insert } of [...edit.changes].sort(
+    (a, b) => b.from - a.from,
+  ))
+    text = text.slice(0, from) + insert + text.slice(to)
+  return text
+}
+const grid = (doc) =>
+  doc
+    .split('\n')
+    .map((text) =>
+      parseRow(text).cells.map(({ from, to }) => text.slice(from, to)),
+    )
+
+const base = '| a | b |\n| --- | :-: |\n| 1 | 2 |\n| 3 | 4 |'
+
+test('rows insert and delete as single lines', () => {
+  assert.equal(
+    apply(base, insertRow(table(base), 2, true)),
+    '| a | b |\n| --- | :-: |\n| 1 | 2 |\n|  |  |\n| 3 | 4 |',
+  )
+  assert.equal(
+    apply(base, insertRow(table(base), 2, false)),
+    '| a | b |\n| --- | :-: |\n|  |  |\n| 1 | 2 |\n| 3 | 4 |',
+  )
+  // Below the header is the first row; above it, a new header.
+  assert.equal(
+    apply(base, insertRow(table(base), 0, true)),
+    '| a | b |\n| --- | :-: |\n|  |  |\n| 1 | 2 |\n| 3 | 4 |',
+  )
+  assert.equal(
+    apply(base, insertRow(table(base), 0, false)),
+    '|  |  |\n| --- | :-: |\n| a | b |\n| 1 | 2 |\n| 3 | 4 |',
+  )
+  assert.equal(
+    apply(base, deleteRow(table(base), 3)),
+    '| a | b |\n| --- | :-: |\n| 1 | 2 |',
+  )
+  assert.equal(
+    apply(base, deleteRow(table(base), 0)),
+    '| 1 | 2 |\n| --- | :-: |\n| 3 | 4 |',
+  )
+  assert.equal(deleteRow(table('| a |\n| - |'), 0), null)
+  // A promoted row takes the delimiter row's width, or it is no header.
+  const short = '| a | b |\n| --- | :-: |\n| 1 |\n| 3 | 4 |'
+  assert.equal(
+    apply(short, deleteRow(table(short), 0)),
+    '| 1 |  |\n| --- | :-: |\n| 3 | 4 |',
+  )
+  const long = '| a | b |\n| - | - |\n| 1 | 2 | 3 |'
+  assert.equal(
+    apply(long, deleteRow(table(long), 0)),
+    '| 1 | 2 | 3 |\n| - | - | --- |',
+  )
+  // New rows take the continuation prefix of quotes and list items.
+  const quoted = '> | a | b |\n> | - | - |\n> | 1 | 2 |'
+  assert.equal(
+    apply(quoted, insertRow(table(quoted, 1, 2), 2, true)),
+    '> | a | b |\n> | - | - |\n> | 1 | 2 |\n> |  |  |',
+  )
+  const item = '- | a |\n  | - |\n  | 1 |'
+  assert.equal(
+    apply(item, insertRow(table(item, 0, 2), 0, false)),
+    '- |  |\n  | - |\n  | a |\n  | 1 |',
+  )
+  assert.equal(
+    apply(item, insertRow(table(item, 0, 2), 2, false)),
+    '- | a |\n  | - |\n  |  |\n  | 1 |',
+  )
+})
+
+test('columns insert and delete in every row, ragged and bare rows included', () => {
+  const ragged = '| a | b |\n| --- | :-: |\n| 1 |\n| 3 | 4 | 5 |\nx \\| y'
+  assert.deepEqual(grid(apply(ragged, insertColumn(table(ragged), 0, false))), [
+    ['', 'a', 'b'],
+    ['---', '---', ':-:'],
+    ['', '1'],
+    ['', '3', '4', '5'],
+    ['', 'x \\| y'],
+  ])
+  assert.deepEqual(grid(apply(ragged, insertColumn(table(ragged), 1, true))), [
+    ['a', 'b', ''],
+    ['---', ':-:', '---'],
+    ['1'],
+    ['3', '4', '', '5'],
+    ['x \\| y'],
+  ])
+  assert.deepEqual(grid(apply(ragged, deleteColumn(table(ragged), 0))), [
+    ['b'],
+    [':-:'],
+    [],
+    ['4', '5'],
+    [],
+  ])
+  assert.equal(deleteColumn(table('| a |\n| - |'), 0), null)
+  const bare = 'a | b\n--- | ---\n1 | 2'
+  assert.deepEqual(grid(apply(bare, insertColumn(table(bare), 0, false))), [
+    ['', 'a', 'b'],
+    ['---', '---', '---'],
+    ['', '1', '2'],
+  ])
+  assert.deepEqual(grid(apply(bare, insertColumn(table(bare), 1, true))), [
+    ['a', 'b', ''],
+    ['---', '---', '---'],
+    ['1', '2', ''],
+  ])
+  // One column keeps outer pipes, or its header and delimiter read as a heading.
+  assert.equal(
+    apply(bare, deleteColumn(table(bare), 1)),
+    '| a |\n| --- |\n| 1 |',
+  )
+  assert.equal(
+    apply(bare, deleteColumn(table(bare), 0)),
+    '| b |\n| --- |\n| 2 |',
+  )
+  // Deleting a row's only cell keeps the row in the table.
+  const lone = '| a | b |\n| - | - |\nonly'
+  assert.equal(apply(lone, deleteColumn(table(lone), 0)), '| b |\n| - |\n|')
+  // A list item's table keeps its marker.
+  const item = '- | a | b |\n  | - | - |'
+  assert.equal(
+    apply(item, insertColumn(table(item, 0, 2), 0, false)),
+    '- |  | a | b |\n  | --- | - | - |',
+  )
+})
+
+test('row and column edits keep generated tables parsing as tables', () => {
+  let seed = 11
+  const random = (n) => {
+    seed = (seed * 16807) % 2147483647
+    return seed % n
+  }
+  const cell = () => ['x', '', 'a \\| b', '`c`', '**d**'][random(5)]
+  for (let round = 0; round < 300; round++) {
+    const columns = 1 + random(4)
+    const row = () =>
+      `| ${Array.from({ length: random(columns + 2) }, cell).join(' | ')} |`
+    // Header and delimiter rows with or without outer pipes.
+    const outer = columns < 2 || random(2) === 0
+    const head = (cells) =>
+      outer ? `| ${cells.join(' | ')} |` : cells.join(' | ')
+    const doc = [
+      head(Array.from({ length: columns }, (_, i) => `h${i}`)),
+      head(Array.from({ length: columns }, () => '---')),
+      ...Array.from({ length: 1 + random(4) }, row),
+    ].join('\n')
+    const source = table(doc)
+    const at = random(source.lines)
+    const edits = [
+      insertRow(source, at === 1 ? 0 : at, random(2) === 0),
+      at !== 1 ? deleteRow(source, at) : null,
+      insertColumn(source, random(columns), random(2) === 0),
+      deleteColumn(source, random(columns)),
+    ]
+    for (const edit of edits) {
+      if (!edit) continue
+      const next = apply(doc, edit)
+      const tree = markdown.parse(next)
+      const lines = []
+      tree.iterate({
+        enter(node) {
+          if (node.name === 'Table')
+            lines.push(next.slice(node.from, node.to).split('\n').length)
+        },
+      })
+      assert.deepEqual(lines, [next.split('\n').length], `${doc}\n→\n${next}`)
+    }
+  }
+})
+
+test('cell spans run between delimiters, padding included', () => {
+  const text = '| a ||  x | b'
+  const row = parseRow(text)
+  const spans = [0, 1, 2, 3, 4].map((index) => {
+    const span = cellSpan(row, index, text.length)
+    return span && [text.slice(span.from, span.to), span.closed]
+  })
+  assert.deepEqual(spans, [
+    [' a ', true],
+    ['', true],
+    ['  x ', true],
+    [' b', false],
+    null,
+  ])
+  const bare = 'a | b'
+  assert.deepEqual(cellSpan(parseRow(bare), 0, bare.length), {
+    from: 0,
+    to: 2,
+    closed: true,
+  })
+})
+
+test('typed cell text stays in its cell', () => {
+  const fixed = (text, closed = true) =>
+    apply(text, { changes: cellFixes(text, closed) })
+  assert.equal(fixed('a|b'), 'a\\|b')
+  assert.equal(fixed('a\\|b'), 'a\\|b', 'an escaped pipe stays')
+  assert.equal(
+    fixed('a\\\\|b'),
+    'a\\\\\\|b',
+    'an escaped backslash does not escape the pipe',
+  )
+  assert.equal(fixed('`x|y`'), '`x\\|y`', 'pipes in code are escaped too')
+  assert.equal(fixed('one\ntwo\r\n'), 'one<br>two<br>')
+  assert.equal(
+    fixed('end\\'),
+    'end\\ ',
+    'a last backslash would escape the delimiter',
+  )
+  assert.equal(fixed('end\\', false), 'end\\')
+  assert.equal(fixed('end\\\\'), 'end\\\\')
+})
+
+test('tables before a position are counted for their stored sizes', () => {
+  const doc = [
+    '# Notes',
+    '',
+    '| a | b |',
+    '| - | - |',
+    '| 1 | 2 |',
+    '',
+    '```',
+    '| not | a table |',
+    '| --- | --- |',
+    '```',
+    '',
+    'paragraph | with pipe',
+    'plain',
+    '',
+    '> | q |',
+    '> | - |',
+    '',
+    '- item',
+    '',
+    '  | c | d |',
+    '  |---|---|',
+    '',
+    '| only header |',
+    '| - | - |',
+    '',
+    'a | b',
+    ':-- | --:',
+  ]
+  assert.equal(countTables(doc), 4)
+  assert.equal(countTables(doc.slice(0, 5)), 1)
+  assert.equal(countTables(doc.slice(0, 16)), 2)
+  assert.equal(countTables([]), 0)
+})
+
+test('table ordinals count tables as the formatted view parser finds them in lists, quotes and fences', () => {
+  const parsed = (doc) => {
+    let found = 0
+    markdown.parse(doc).iterate({
+      enter(node) {
+        if (node.name === 'Table') found++
+      },
+    })
+    return found
+  }
+  // Tables on list markers, and fences that end with their quote or list item.
+  for (const doc of [
+    '- | a | b |\n  | - | - |\n  | 1 | 2 |',
+    '> ```\n> code\n\n| a | b |\n| - | - |',
+    '- ```\n  code\n\n| a | b |\n| - | - |',
+    '> - | a |\n>   | - |',
+    '1. | a |\n   | - |',
+  ])
+    assert.equal(countTables(doc.split('\n')), parsed(doc), doc)
+  let seed = 7
+  const random = (n) => {
+    seed = (seed * 16807) % 2147483647
+    return seed % n
+  }
+  const blocks = [
+    '| a | b |\n| - | - |\n| 1 | 2 |',
+    '- | a | b |\n  | - | - |',
+    '> | a | b |\n> | - | - |',
+    '> ```\n> | x | y |\n> | - | - |',
+    '- ```\n  | x | y |\n  | - | - |',
+    '```\n| x | y |\n| - | - |\n```',
+    '- item',
+    'paragraph | pipe',
+    '> quote',
+    '1. | a |\n   | - |',
+  ]
+  for (let round = 0; round < 300; round++) {
+    const doc = Array.from(
+      { length: 1 + random(6) },
+      () => blocks[random(blocks.length)],
+    ).join('\n\n')
+    assert.equal(countTables(doc.split('\n')), parsed(doc), doc)
+  }
+})
+
+test('table ordinals end tables where list items, headings and quotes start, as the parser does', () => {
+  const parsed = (doc) => {
+    let found = 0
+    markdown.parse(doc).iterate({
+      enter(node) {
+        if (node.name === 'Table') found++
+      },
+    })
+    return found
+  }
+  for (const doc of [
+    '- | a |\n  | - |\n- | b |\n  | - |',
+    '| a |\n| - |\n# H\n| b |\n| - |',
+    '- > | a |\n  > | - |',
+    '> | a |\n> | - |\n- | b |\n  | - |',
+    '| a |\n| - |\n> | b |\n> | - |',
+    '| a |\n| - |\n> | - |',
+  ])
+    assert.equal(countTables(doc.split('\n')), parsed(doc), doc)
+  // Blocks that start new blocks, without blank lines between them.
+  let seed = 3
+  const random = (n) => {
+    seed = (seed * 16807) % 2147483647
+    return seed % n
+  }
+  const blocks = [
+    '- | a | b |\n  | - | - |',
+    '# Heading',
+    '> | a | b |\n> | - | - |',
+    '- > | x |\n  > | - |',
+    '- item',
+    '> quote',
+    '1. | a |\n   | - |',
+  ]
+  for (let round = 0; round < 300; round++) {
+    const doc = Array.from(
+      { length: 2 + random(5) },
+      () => blocks[random(blocks.length)],
+    ).join('\n')
+    assert.equal(countTables(doc.split('\n')), parsed(doc), doc)
+  }
 })

@@ -113,7 +113,7 @@ const protect = EditorState.transactionFilter.of((transaction) => {
   if (inside) return []
   // Selections end at the note's text, also when an edit just closed the frontmatter.
   const end = transaction.docChanged
-    ? transaction.state.field(frontmatterField).end
+    ? (transaction.state.field(frontmatterField, false)?.end ?? 0)
     : start
   const selection =
     transaction.selection ??

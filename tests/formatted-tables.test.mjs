@@ -717,11 +717,12 @@ test('navigation out of a read-only table writes nothing', {
 }, async () => {
   const doc = '| a | b |\n| - | - |\n| x | y |'
   await mount(doc)
-  // Tab in the last cell would add a row; escape at the end a paragraph.
+  // Tab in the last cell would add a row; escape or a move down past the
+  // end a paragraph.
   for (const [cell, key] of [
     ['y', 'Tab'],
     ['x', 'Escape'],
-    ['x', process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter'],
+    ['x', 'ArrowDown'],
   ]) {
     await harness.evaluate(() => window.tables.setEditable(true))
     await harness.locator('.hibi-lp-table td', { hasText: cell }).click()
@@ -731,6 +732,14 @@ test('navigation out of a read-only table writes nothing', {
     const now = await state()
     assert.equal(now.doc, doc, key)
     assert.equal(now.editor, null, key)
+  }
+  // Nor do the keys that break a line in a cell.
+  await harness.evaluate(() => window.tables.setEditable(true))
+  await harness.locator('.hibi-lp-table td', { hasText: 'x' }).click()
+  await harness.evaluate(() => window.tables.setEditable(false))
+  for (const key of ['Enter', 'Shift+Enter', 'ControlOrMeta+Enter']) {
+    await harness.keyboard.press(key)
+    assert.equal((await state()).doc, doc, key)
   }
   // Nor do the toolbar's table actions.
   assert.equal(
@@ -807,9 +816,7 @@ test('tab extends a table of only a header, and leaving a table at the end adds 
   assert.equal((await state()).cell, '2:0')
   await harness.keyboard.type('c')
   assert.equal((await state()).doc, 'before\n\n| a | b |\n| - | - |\n| c |  |')
-  await harness.keyboard.press(
-    process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter',
-  )
+  await harness.keyboard.press('ArrowDown')
   await harness.keyboard.type('AFTER')
   const now = await state()
   assert.equal(now.doc, 'before\n\n| a | b |\n| - | - |\n| c |  |\n\nAFTER')

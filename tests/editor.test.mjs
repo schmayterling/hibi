@@ -5,6 +5,10 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
+  selectFormattedEngine,
+  testFormattedEngines,
+} from './formatted-engine.mjs'
+import {
   clickMenu,
   pressShortcut,
   replaceRichText,
@@ -31,6 +35,7 @@ test('empty entry, three views, and lossless source switching', {
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   await page.emulateMedia({ reducedMotion: 'reduce' })
+  await selectFormattedEngine(app, page, 'tiptap')
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await waitForDocumentEditor(app, page)
   assert.equal((await rich.innerText()).trim(), '')
@@ -212,59 +217,61 @@ test('empty entry, three views, and lossless source switching', {
   )
 })
 
-test('rich find status follows matches and selection while typing', {
-  timeout: 30000,
-}, async (t) => {
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-find-status-'))
-  const file = join(profile, 'find.md')
-  await writeFile(file, 'alpha beta alpha\n')
-  const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${profile}`, file],
-  })
-  t.after(async () => {
-    await app.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async () => ({ response: 1 })
+testFormattedEngines(
+  'rich find status follows matches and selection while typing',
+  {
+    timeout: 30000,
+  },
+  async (t) => {
+    const engine = t.formattedEngine
+    const profile = await mkdtemp(join(tmpdir(), 'hibi-find-status-'))
+    const file = join(profile, 'find.md')
+    await writeFile(file, 'alpha beta alpha\n')
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${profile}`, file],
     })
-    await app.close()
-    await rm(profile, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  await waitForDocumentEditor(app, page)
-  const count = (text) =>
-    page.waitForFunction(
-      (text) => document.querySelector('.find-count')?.textContent === text,
-      text,
+    t.after(async () => {
+      await app.evaluate(({ dialog }) => {
+        dialog.showMessageBox = async () => ({ response: 1 })
+      })
+      await app.close()
+      await rm(profile, { recursive: true, force: true })
+    })
+    const page = await app.firstWindow()
+    const rich = await selectFormattedEngine(app, page, engine)
+    const count = (text) =>
+      page.waitForFunction(
+        (text) => document.querySelector('.find-count')?.textContent === text,
+        text,
+      )
+    const edit = async (change) => {
+      if (change === 'append' || change === 'last') {
+        await rich.press('End')
+        if (change === 'append') await page.keyboard.insertText(' alpha')
+        else
+          for (let i = 0; i < 5; i++)
+            await page.keyboard.press('Shift+ArrowLeft')
+      } else {
+        await rich.press('Home')
+        for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowRight')
+        if (change === 'type') await page.keyboard.insertText('x')
+      }
+    }
+    await pressShortcut(
+      app,
+      process.platform === 'darwin' ? 'Meta+f' : 'Control+f',
     )
-  const edit = (change) =>
-    page.evaluate((change) => {
-      const editor = document.querySelector('.tiptap').editor
-      const text = editor.state.doc.textContent
-      const at = (index) => index + 1
-      if (change === 'beta')
-        editor.commands.setTextSelection(at(text.indexOf('beta')))
-      else if (change === 'append')
-        editor.commands.insertContentAt(at(text.length), ' alpha')
-      else if (change === 'last')
-        editor.commands.setTextSelection({
-          from: at(text.lastIndexOf('alpha')),
-          to: at(text.lastIndexOf('alpha') + 5),
-        })
-      else editor.commands.insertContentAt(at(text.indexOf('beta')), 'x')
-    }, change)
-  await pressShortcut(
-    app,
-    process.platform === 'darwin' ? 'Meta+f' : 'Control+f',
-  )
-  await page
-    .getByRole('textbox', { name: 'Find in document', exact: true })
-    .fill('alpha')
-  await count('1/2')
-  await edit('beta')
-  await count('0/2')
-  await edit('append')
-  await count('0/3')
-  await edit('last')
-  await count('3/3')
-  await edit('type')
-  await count('0/3')
-})
+    await page
+      .getByRole('textbox', { name: 'Find in document', exact: true })
+      .fill('alpha')
+    await count('1/2')
+    await edit('beta')
+    await count('0/2')
+    await edit('append')
+    await count('0/3')
+    await edit('last')
+    await count('3/3')
+    await edit('type')
+    await count('0/3')
+  },
+)

@@ -2,9 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
-import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import {
   clickMenu,
   replaceRichText,
@@ -16,6 +19,7 @@ import { waitForAsync } from './poll.mjs'
 test('split panes keep both editors mounted, edit both files, and share one document session', {
   timeout: 90000,
 }, async (t) => {
+  const engine = t.formattedEngine
   const root = await mkdtemp(join(tmpdir(), 'hibi-split-tabs-'))
   const a = join(root, 'a.md')
   const b = join(root, 'b.md')
@@ -37,7 +41,7 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7500)
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, engine)
   await page.locator('[data-status-id="autosave"]').click()
   await page.getByRole('checkbox', { name: /^autosave$/i }).check()
   await page.getByLabel(/^save after$/i).selectOption('1000')
@@ -149,8 +153,12 @@ test('split panes keep both editors mounted, edit both files, and share one docu
     aId,
   )
   await splitTab(app, page, bId)
-  const left = page.locator('.editor-page[data-side="left"] .tiptap')
-  const right = page.locator('.editor-page[data-side="right"] .tiptap')
+  const left = page.locator(
+    '.editor-page[data-side="left"] [aria-label="Document editor"]',
+  )
+  const right = page.locator(
+    '.editor-page[data-side="right"] [aria-label="Document editor"]',
+  )
   await left.waitFor()
   await right.waitFor()
   assert.equal(await page.locator('.editor-page[data-side]').count(), 2)
@@ -230,8 +238,12 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   assert.equal(await app.evaluate(() => globalThis.splitAttachCalls), 0)
   await page.evaluate(() => {
     window.splitNodes = {
-      left: document.querySelector('.editor-page[data-side="left"] .tiptap'),
-      right: document.querySelector('.editor-page[data-side="right"] .tiptap'),
+      left: document.querySelector(
+        '.editor-page[data-side="left"] [aria-label="Document editor"]',
+      ),
+      right: document.querySelector(
+        '.editor-page[data-side="right"] [aria-label="Document editor"]',
+      ),
     }
   })
   await left.click()
@@ -463,9 +475,13 @@ test('split panes keep both editors mounted, edit both files, and share one docu
     await page.evaluate(
       () =>
         window.splitNodes.left ===
-          document.querySelector('.editor-page[data-side="left"] .tiptap') &&
+          document.querySelector(
+            '.editor-page[data-side="left"] [aria-label="Document editor"]',
+          ) &&
         window.splitNodes.right ===
-          document.querySelector('.editor-page[data-side="right"] .tiptap'),
+          document.querySelector(
+            '.editor-page[data-side="right"] [aria-label="Document editor"]',
+          ),
     ),
     true,
   )
@@ -474,18 +490,22 @@ test('split panes keep both editors mounted, edit both files, and share one docu
 
   await left.click()
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
-  await page.locator('.editor-page[data-side="left"] .cm-content').waitFor()
+  await page
+    .locator('.editor-page[data-side="left"] .source-pane .cm-content')
+    .waitFor()
   assert.equal(await right.isVisible(), true)
   await right.click()
   assert.equal(
     await page
-      .locator('.editor-page[data-side="left"] .cm-content')
+      .locator('.editor-page[data-side="left"] .source-pane .cm-content')
       .isVisible(),
     true,
   )
   await page.evaluate(() => window.hibi.saveDocument(false))
   assert.equal(await readFile(b, 'utf8'), 'edited b')
-  await page.locator('.editor-page[data-side="left"] .cm-content').click()
+  await page
+    .locator('.editor-page[data-side="left"] .source-pane .cm-content')
+    .click()
   await waitForAsync(
     page,
     async (id) => (await window.hibi.getDocument()).tabId === id,
@@ -504,9 +524,11 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   await page.locator('.app[data-screen="editor"]').waitFor()
   await splitTab(app, page, aId)
   await page.locator('.split-tab-pages[data-split="true"]').waitFor()
-  const leftSource = page.locator('.editor-page[data-side="left"] .cm-content')
+  const leftSource = page.locator(
+    '.editor-page[data-side="left"] .source-pane .cm-content',
+  )
   const rightSource = page.locator(
-    '.editor-page[data-side="right"] .cm-content',
+    '.editor-page[data-side="right"] .source-pane .cm-content',
   )
   await leftSource.waitFor()
   await rightSource.waitFor()
@@ -516,19 +538,21 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   await page.keyboard.type('!')
   await page.waitForFunction(() =>
     document
-      .querySelector('.editor-page[data-side="left"] .cm-content')
+      .querySelector('.editor-page[data-side="left"] .source-pane .cm-content')
       ?.textContent?.includes('edited a!'),
   )
   const long = `edited a!\n${Array.from({ length: 100 }, (_, index) => `line ${index}`).join('\n')}`
   await replaceSourceText(page, rightSource, long)
   await page.waitForFunction(() =>
     document
-      .querySelector('.editor-page[data-side="left"] .cm-content')
+      .querySelector('.editor-page[data-side="left"] .source-pane .cm-content')
       ?.textContent?.includes('line 99'),
   )
-  const leftScroll = page.locator('.editor-page[data-side="left"] .cm-scroller')
+  const leftScroll = page.locator(
+    '.editor-page[data-side="left"] .source-pane .cm-scroller',
+  )
   const rightScroll = page.locator(
-    '.editor-page[data-side="right"] .cm-scroller',
+    '.editor-page[data-side="right"] .source-pane .cm-scroller',
   )
   const leftBefore = await leftScroll.evaluate((element) => element.scrollTop)
   await rightScroll.evaluate((element) => {

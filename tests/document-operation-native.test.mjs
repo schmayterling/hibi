@@ -2,13 +2,17 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { replaceRichText } from './keyboard.mjs'
 
 test('atomic source operations cross preload barriers, save exact text and recover after reload', {
   timeout: 30_000,
 }, async (t) => {
+  const engine = t.formattedEngine
   const profile = await mkdtemp(join(tmpdir(), 'hibi-atomic-native-'))
   const destination = join(profile, 'saved.md')
   const app = await electron.launch({
@@ -26,7 +30,7 @@ test('atomic source operations cross preload barriers, save exact text and recov
     dialog.showMessageBox = async () => ({ response: 1 })
   }, destination)
   const page = await app.firstWindow()
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, engine)
   await replaceRichText(
     page,
     page.getByRole('textbox', { name: /document editor/i }),

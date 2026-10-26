@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -96,6 +97,7 @@ test('rich completions replace exact plain text in one undo step and retract on 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, 'tiptap')
   page.setDefaultTimeout(8000)
   const rich = page.locator('.rich-pane .tiptap[contenteditable="true"]')
   await rich.waitFor()

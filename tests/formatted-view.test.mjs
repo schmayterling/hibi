@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -29,6 +30,7 @@ test('behind the switch, notes open in the codemirror formatted view and edit th
   })
   const page = await app.firstWindow()
   await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, 'tiptap')
   // The switch is a local-storage flag for tests and development profiles.
   assert.equal(await page.locator('.rich-pane .hibi-formatted').count(), 0)
   await page.evaluate(() =>

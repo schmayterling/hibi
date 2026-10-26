@@ -13,6 +13,7 @@ import {
   showTestWindows,
   waitForDocumentEditor,
 } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
 
@@ -26,6 +27,7 @@ test('typing coalesces formatting checks without delaying document changes or un
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, 'tiptap')
   await waitForEditor(page)
   const result = await page.evaluate(async () => {
     const editor = document.querySelector('.tiptap').editor
@@ -80,6 +82,7 @@ test('multi-line text input in the visual editor makes the browser edit in one s
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, 'tiptap')
   await waitForEditor(page)
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
@@ -318,6 +321,7 @@ test('multi-line text input work in the visual editor stays linear in the lines'
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, 'tiptap')
   await waitForEditor(page)
   const rich = page.getByRole('textbox', {
     name: 'Document editor',
@@ -406,6 +410,7 @@ test('visual typing after a source visit defers the hidden source and toolbar ch
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, 'tiptap')
   await waitForEditor(page)
   await switchToSource(app, page)
   await pressShortcut(
@@ -472,6 +477,7 @@ test('multi-line text input reaches source view in one edit, without native para
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, 'tiptap')
   await waitForEditor(page)
   await switchToSource(app, page)
   const source = page.getByRole('textbox', { name: /markdown editor/i })
@@ -589,6 +595,7 @@ test('source input handlers see multi-line text input with normalized line break
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, 'tiptap')
   await waitForEditor(page)
   await switchToSource(app, page)
   await page.waitForFunction(() => {
@@ -659,6 +666,7 @@ test('formatting toolbar states match each action check across selections, typin
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, 'tiptap')
   await waitForDocumentEditor(app, page)
   await page.evaluate(() => {
     // The same capability and active checks FormattingToolbar runs for each rich action.
@@ -871,6 +879,7 @@ test('blank paragraphs and typed spaces survive tab switches without nonbreaking
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, 'tiptap')
   await waitForDocumentEditor(app, page)
   await page.waitForFunction(
     () => document.querySelector('.tiptap')?.isContentEditable,
@@ -920,6 +929,7 @@ for (const spaces of [1, 2]) {
       await rm(profile, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
+    await selectFormattedEngine(app, page, 'tiptap')
     const whitespaceWarnings = []
     page.on('console', (message) => {
       if (/white-space/.test(message.text()))
@@ -981,6 +991,7 @@ test('long documents with HTML and reference syntax stay visually editable throu
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, 'tiptap')
   page.setDefaultTimeout(15000)
   const editable = () =>
     page.waitForFunction(

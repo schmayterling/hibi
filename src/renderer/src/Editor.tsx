@@ -36,7 +36,6 @@ import {
   type TypingContext,
 } from '../../shared/completions'
 import type { DocumentState } from '../../shared/desktop'
-import { MAX_DOCUMENT_BYTES } from '../../shared/desktop'
 import {
   editedSource,
   type SourceEditRequest,
@@ -84,7 +83,7 @@ import { editorDocument } from './document-formats'
 import { documentHistory } from './document-history'
 import { documentProjections } from './document-projections'
 import { documentRuntime } from './document-runtime'
-import { certifyVisualEcho } from './document-shell'
+import { certifyVisualEcho, preferSourceOpening } from './document-shell'
 import { type CursorSettings, EditorCursor } from './EditorCursor'
 import { registerEditorSelectionCapture } from './editor-command-targets'
 import { emitEditorKeyEvent } from './editor-events'
@@ -96,6 +95,7 @@ import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
 import { flavors as flavorRegistry } from './flavors'
+import { LargeMarkdownPreview } from './LargeMarkdownPreview'
 import { LoadingScreen } from './LoadingScreen'
 import { linkScroll } from './linked-scroll'
 import { MarkdownFootnotePreview } from './MarkdownFootnotePreview'
@@ -268,6 +268,8 @@ export function MarkdownEditor({
   documentRevision,
   flavors,
   footnoteDocument,
+  largePreview = false,
+  previewSupported = false,
   onAttach,
   onLink,
   onOutline,
@@ -298,6 +300,8 @@ export function MarkdownEditor({
   documentRevision: number
   flavors: readonly MarkdownFlavor[]
   footnoteDocument: boolean
+  largePreview?: boolean
+  previewSupported?: boolean
   onAttach: (
     files: File[] | null,
   ) => Promise<import('../../shared/media').MediaAttachment[] | null>
@@ -513,7 +517,11 @@ export function MarkdownEditor({
     setSourceReady,
     setSourceSettled,
     focusOwnedByEditor,
-  } = useEditorPanes(mode, markdownDocument)
+  } = useEditorPanes(
+    mode,
+    markdownDocument,
+    mode === 'markdown' && preferSourceOpening(documentRuntime, documentState),
+  )
   // Temporarily disable split visual editing while its typing performance is
   // unresolved. Keep preview synchronization and the performance work intact.
   const splitReadOnly = mode === 'side-by-side' || paneMode === 'side-by-side'
@@ -2548,11 +2556,7 @@ export function MarkdownEditor({
             status: 'stale',
             message: 'The document changed. Review the edits again.',
           }
-        const source = editedSource(
-          snapshot,
-          request.changes,
-          MAX_DOCUMENT_BYTES,
-        )
+        const source = editedSource(snapshot, request.changes)
         if (source === current.markdown)
           return { status: 'applied', contentVersion: current.contentVersion }
         const offset = projection.sourceOffset!
@@ -3397,7 +3401,7 @@ export function MarkdownEditor({
         }}
       />
       <main
-        className={`editor-panes mode-${paneMode}`}
+        className={`editor-panes mode-${largePreview ? 'side-by-side' : paneMode}`}
         data-source-ready={sourceReady}
         onClickCapture={followClickedLink}
         onContextMenuCapture={(event) => {
@@ -3436,15 +3440,17 @@ export function MarkdownEditor({
           <section
             className="rich-pane"
             onFocusCapture={() => {
+              if (largePreview) return
               setFocusedPane('rich')
               editorViewRegistry.setActive(viewId as ViewId, 'rich')
               documentRuntime.focusView(viewId as ViewId)
             }}
             aria-label="Formatted document"
-            aria-hidden={paneMode === 'markdown'}
-            inert={paneMode === 'markdown'}
+            aria-hidden={!largePreview && paneMode === 'markdown'}
+            inert={!largePreview && paneMode === 'markdown'}
           >
-            {markdownDocument &&
+            {!largePreview &&
+              markdownDocument &&
               markdownExtensions.map(({ id, Editor }) =>
                 Editor ? (
                   <Editor
@@ -3459,7 +3465,7 @@ export function MarkdownEditor({
               )}
             <div
               className="rich-editor-host"
-              hidden={!markdownDocument || footnoteDocument}
+              hidden={!markdownDocument || footnoteDocument || largePreview}
             >
               {(richExtensionError || projectionReadOnly) && (
                 <DocumentNotice
@@ -3485,6 +3491,14 @@ export function MarkdownEditor({
               )}
               <EditorContent editor={editor} />
             </div>
+            {largePreview && documentRuntime.session(documentState.tabId) && (
+              <LargeMarkdownPreview
+                session={documentRuntime.session(documentState.tabId)!}
+                documentId={documentState.id}
+                version={`${syntaxVersion}:${flavors.map((flavor) => flavor.id).join(',')}`}
+                supported={previewSupported}
+              />
+            )}
             {footnoteDocument && paneMode !== 'markdown' && (
               <MarkdownFootnotePreview
                 source={projection.content}

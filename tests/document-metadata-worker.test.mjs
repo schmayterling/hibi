@@ -77,11 +77,38 @@ test('native module worker loads metadata lazily, shares find, and releases pars
     const source = '# one\r\n\r\none paragraph\r\n',
       epoch = 'native-probe',
       document = { tabId: 'probe', revision: 0 }
-    try {
+    const load = async (epoch, source) => {
+      const streamId = crypto.randomUUID(),
+        head = {
+          ...document,
+          contentVersion: 0,
+          streamId,
+          length: source.length,
+        }
+      let reply = await request({ type: 'load-start', epoch, head }, 'load-ack')
+      for (let from = 0; from < source.length || from === 0; from += 65536) {
+        const done = from + 65536 >= source.length
+        reply = await request(
+          {
+            type: 'load-chunk',
+            epoch,
+            chunk: {
+              ...reply.request,
+              chunks: [source.slice(from, from + 65536)],
+              done,
+            },
+          },
+          'load-ack',
+        )
+        if (done) break
+      }
       await request(
-        { type: 'load', epoch, document, version: 0, chunks: [source] },
+        { type: 'load-finish', epoch, request: reply.request },
         'ack',
       )
+    }
+    try {
+      await load(epoch, source)
       const first = await request(
         {
           type: 'metadata',
@@ -154,16 +181,7 @@ test('native module worker loads metadata lazily, shares find, and releases pars
         'metadata',
       )
       const projected = header + '# body\r\n'
-      await request(
-        {
-          type: 'load',
-          epoch: 'frontmatter',
-          document,
-          version: 0,
-          chunks: [projected],
-        },
-        'ack',
-      )
+      await load('frontmatter', projected)
       const frontmatter = await request(
         {
           type: 'metadata',

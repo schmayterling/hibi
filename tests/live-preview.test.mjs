@@ -77,6 +77,32 @@ words after a rule
 closing paragraph.
 `
 
+/** List markers alone on their lines: the rich view draws them beside the item's first block. */
+const markers = `# Marker lines
+
+-
+  first under its marker
+- second item
+
+1.
+   one under its marker
+2. two
+
+> -
+>   quoted under its marker
+> - quoted second
+
+> 1.
+>    quoted one under its marker
+> 2. quoted two
+
+> > -
+> >   deep under its marker
+> > - deep second
+
+closing paragraph.
+`
+
 let app, folder, page, harness
 
 const palette = (id) => {
@@ -129,6 +155,7 @@ before(
     await mkdir(join(folder, 'notes'))
     await writeFile(file, note)
     await writeFile(join(folder, 'notes', 'nested.md'), nested)
+    await writeFile(join(folder, 'notes', 'markers.md'), markers)
     app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
     })
@@ -436,6 +463,134 @@ test('blocks inside quotes and lists match the rich view in light and dark', {
     'const child = 7',
     'const deep = 1',
   ])
+})
+
+test('list markers alone on their lines sit beside the item text as in the rich view', {
+  timeout: 60000,
+}, async () => {
+  await open(join(folder, 'notes', 'markers.md'), 'Marker lines')
+  await parity(
+    'Marker lines',
+    markers,
+    {
+      title: { selector: '.tiptap h1', text: 'Marker lines' },
+      first: { selector: '.tiptap li', text: 'first under its marker' },
+      second: { selector: '.tiptap li', text: 'second item' },
+      one: { selector: '.tiptap ol li', text: 'one under its marker' },
+      two: { selector: '.tiptap ol li', text: 'two' },
+      quoted: {
+        selector: '.tiptap blockquote li',
+        text: 'quoted under its marker',
+      },
+      quotedSecond: {
+        selector: '.tiptap blockquote li',
+        text: 'quoted second',
+      },
+      quotedOne: {
+        selector: '.tiptap blockquote ol li',
+        text: 'quoted one under its marker',
+      },
+      quotedTwo: { selector: '.tiptap blockquote ol li', text: 'quoted two' },
+      deep: {
+        selector: '.tiptap blockquote blockquote li',
+        text: 'deep under its marker',
+      },
+      deepSecond: {
+        selector: '.tiptap blockquote blockquote li',
+        text: 'deep second',
+      },
+      closing: { selector: '.tiptap p', text: 'closing paragraph' },
+    },
+    {
+      title: { selector: '.hibi-lp-h1', text: 'Marker lines' },
+      first: { selector: '.hibi-lp-list-item', text: 'first under its marker' },
+      second: { selector: '.hibi-lp-list-item', text: 'second item' },
+      one: { selector: '.hibi-lp-list-ordered', text: 'one under its marker' },
+      two: { selector: '.hibi-lp-list-ordered', text: 'two' },
+      quoted: {
+        selector: '.hibi-lp-list-item',
+        text: 'quoted under its marker',
+      },
+      quotedSecond: { selector: '.hibi-lp-list-item', text: 'quoted second' },
+      quotedOne: {
+        selector: '.hibi-lp-list-ordered',
+        text: 'quoted one under its marker',
+      },
+      quotedTwo: { selector: '.hibi-lp-list-ordered', text: 'quoted two' },
+      deep: { selector: '.hibi-lp-list-item', text: 'deep under its marker' },
+      deepSecond: { selector: '.hibi-lp-list-item', text: 'deep second' },
+      closing: { selector: '.cm-line', text: 'closing paragraph' },
+    },
+    'markers',
+  )
+})
+
+test('typing beside a multi-line link destination edits the text', {
+  timeout: 60000,
+}, async () => {
+  const errors = []
+  const listen = (error) => errors.push(error.message)
+  harness.on('pageerror', listen)
+  const session = await harness.context().newCDPSession(harness)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const typed = []
+  for (const [doc, at] of [
+    ['[label](\nhttps://example.com/\n)', 31],
+    ['[label](\nhttps://example.com/\n)\n\nend', 31],
+  ]) {
+    await harness.evaluate(
+      async ({ doc, at }) => {
+        await window.livePreview.mount(doc, undefined, { editable: true })
+        const view = window.livePreview.view()
+        view.focus()
+        view.dispatch({ selection: { anchor: at } })
+        await window.livePreview.settle()
+      },
+      { doc, at },
+    )
+    await harness.keyboard.type('X')
+    typed.push(
+      await harness.evaluate(async () => {
+        await window.livePreview.settle()
+        return window.livePreview.view().state.doc.toString()
+      }),
+    )
+  }
+  harness.off('pageerror', listen)
+  // Before, the input showed in the page but threw on mapping, leaving the
+  // text unchanged, or landed in the paragraph after the link.
+  assert.deepEqual(typed, [
+    '[label](\nhttps://example.com/\n)X',
+    '[label](\nhttps://example.com/\n)X\n\nend',
+  ])
+  assert.deepEqual(errors, [])
+})
+
+test('contributed layouts follow the document revision', {
+  timeout: 60000,
+}, async () => {
+  const shown = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    const remove = preview.showRevisions()
+    try {
+      await preview.mount('first paragraph\n\nsecond paragraph\n', {
+        width: 800,
+        height: 600,
+      })
+      const read = () =>
+        [...document.querySelectorAll('.test-revision')].map(
+          (node) => node.textContent,
+        )
+      const before = read()
+      preview.setRevision(1)
+      await preview.settle()
+      return { before, after: read() }
+    } finally {
+      remove()
+    }
+  })
+  // Before, the layout kept its widgets from the old revision.
+  assert.deepEqual(shown, { before: ['0', '0'], after: ['1', '1'] })
 })
 
 test('a 50 MiB note renders and edits with viewport-bounded work', {

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { RecoveryBoundary } from '../../src/renderer/src/RecoveryScreen'
+import { RecoveryBoundary } from '../../src/renderer/src/RecoveryBoundary'
 import { Button } from '../../src/ui/Controls'
 import '../../src/renderer/src/styles.css'
 
@@ -14,6 +14,9 @@ Object.assign(window, {
     saveDocument: async () => {
       document.body.dataset.copySaved = 'true'
       return { name: 'copy.md', markdown: 'keep this draft', dirty: false }
+    },
+    writeClipboardText: async (text: string) => {
+      document.body.dataset.copiedError = text
     },
   },
 })

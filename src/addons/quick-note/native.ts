@@ -23,12 +23,13 @@ import {
   workspaceId,
 } from '../../main/workspace'
 import { validateWorkspaceName } from '../../main/workspace-actions'
-import { MAX_DOCUMENT_BYTES } from '../../shared/desktop'
 import type { WorkspaceEntry } from '../../shared/workspace'
 import type { NativeAddon, NativeAddonContext } from '../api'
 import { captureWindow } from './capture'
 import manifest from './manifest'
 
+// Capture and draft persistence share one bounded native request.
+const MAX_CAPTURE_BYTES = 2 * 1024 * 1024
 type Draft = { markdown: string }
 const draftPath = () => join(app.getPath('userData'), 'quick-note-draft.json')
 let draftWrites: Promise<unknown> = Promise.resolve()
@@ -42,7 +43,7 @@ function parseDraft(value: unknown): Draft | null {
     !input ||
     typeof input !== 'object' ||
     typeof input.markdown !== 'string' ||
-    Buffer.byteLength(input.markdown) > MAX_DOCUMENT_BYTES
+    Buffer.byteLength(input.markdown) > MAX_CAPTURE_BYTES
   )
     return null
   return { markdown: input.markdown }

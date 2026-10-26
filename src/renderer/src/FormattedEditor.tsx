@@ -12,6 +12,7 @@ import type { SourceExtension } from '../../addons/api'
 import { sourceChange } from '../../shared/document-journal'
 import type { ViewId } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
+import { normalizedSource } from '../../shared/source-projection'
 import { documentRuntime } from './document-runtime'
 import type { MarkdownEditor as RichMarkdownEditor } from './Editor'
 import { EditorCursor } from './EditorCursor'
@@ -22,7 +23,7 @@ import { useFormattingToolbar } from './FormattingToolbar'
 import { LoadingScreen } from './LoadingScreen'
 import { markdownSyntax } from './markdown-syntax'
 import { SourceEditor } from './SourceEditor'
-import { sourceView } from './source-view'
+import { editorPosition, sourceView } from './source-view'
 import { useEditorPanes } from './use-editor-panes'
 
 const MarkdownSourceEditor = lazy(() =>
@@ -33,6 +34,16 @@ const MarkdownSourceEditor = lazy(() =>
 
 /** Source extensions such as Vim belong to the source pane only. */
 const formattedExtensions: readonly SourceExtension[] = []
+/** A properties editor above the text shows the frontmatter instead. */
+const propertiesExtensions: readonly SourceExtension[] = [
+  {
+    id: 'formatted.frontmatter',
+    create: () =>
+      import('./formatted-frontmatter').then(
+        (module) => module.formattedFrontmatter,
+      ),
+  },
+]
 
 /**
  * Markdown notes on the CodeMirror formatted view, behind the temporary
@@ -185,17 +196,22 @@ export function MarkdownEditor({
     )
     const view = element && sourceView(element)
     const change = sourceChange(value, markdown)
+    if (!view || !change) return
+    // The change is in source coordinates; the view's text has normalized
+    // line breaks and no byte order mark.
+    const from = editorPosition(view, change.from),
+      to = editorPosition(view, change.to)
     // A change to text edited since the properties rendered is dropped.
     if (
-      !view ||
-      !change ||
-      change.to > view.state.doc.length ||
-      view.state.sliceDoc(change.from, change.to) !==
-        value.slice(change.from, change.to)
+      from === null ||
+      to === null ||
+      view.state.doc.length !== normalizedSource(value).length ||
+      view.state.sliceDoc(from, to) !==
+        normalizedSource(value.slice(change.from, change.to))
     )
       return
     view.dispatch({
-      changes: change,
+      changes: { from, to, insert: normalizedSource(change.insert) },
       userEvent: 'input.addon',
       annotations: isolateHistory.of('full'),
     })
@@ -282,7 +298,14 @@ export function MarkdownEditor({
                 waitForFont
                 onLink={onLink}
                 onFormatting={attachRich}
-                sourceExtensions={formattedExtensions}
+                sourceExtensions={
+                  markdownDocument &&
+                  markdownExtensions.some(
+                    ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
+                  )
+                    ? propertiesExtensions
+                    : formattedExtensions
+                }
                 showLineNumbers={false}
                 onReady={(status) => setFormattedReady(status === 'ready')}
                 disabled={disabled}

@@ -31,6 +31,7 @@ export function BacklinksSidebar({
 }) {
   const [links, setLinks] = useState<string[]>([])
   const [incomplete, setIncomplete] = useState(false)
+  const [incompletePaths, setIncompletePaths] = useState<readonly string[]>([])
   const syntaxRevision = useSyncExternalStore(
     workspaceSyntaxEvents.subscribe,
     workspaceSyntaxEvents.snapshot,
@@ -42,6 +43,7 @@ export function BacklinksSidebar({
     const workspaceId = workspace?.id
     setLinks([])
     setIncomplete(false)
+    setIncompletePaths([])
     if (!open || !current || !workspaceId) return
     let active = true
     const timer = setTimeout(() => {
@@ -57,6 +59,7 @@ export function BacklinksSidebar({
           )
           let offset = 0
           let complete = true
+          let partialPaths: readonly string[] = []
           while (active) {
             const response = await window.hibi.queryWorkspaceReferences({
               target: snapshot.target,
@@ -71,6 +74,7 @@ export function BacklinksSidebar({
               return
             }
             complete &&= response.value.complete
+            partialPaths = response.value.incompletePaths ?? []
             paths.push(...response.value.items)
             if (!response.value.hasMore) break
             if (response.value.nextOffset <= offset) return
@@ -79,6 +83,7 @@ export function BacklinksSidebar({
           if (active) {
             setLinks(paths.filter((path) => path !== current))
             setIncomplete(!complete)
+            setIncompletePaths(partialPaths)
           }
         } catch {
           if (active) setIncomplete(true)
@@ -99,7 +104,11 @@ export function BacklinksSidebar({
       header={side === 'left' ? <span>Backlinks</span> : null}
       footer={
         incomplete ? (
-          <span role="status">Backlinks may be incomplete.</span>
+          <span role="status">
+            {incompletePaths.length
+              ? `Backlinks may be incomplete: ${incompletePaths.join(', ')}.`
+              : 'Backlinks may be incomplete.'}
+          </span>
         ) : null
       }
       items={links.map((path) => ({ id: path, label: path, icon: FileText }))}

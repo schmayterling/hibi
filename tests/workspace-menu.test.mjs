@@ -4,6 +4,7 @@ import {
   runEach,
   selectedRoots,
   workspaceGroupMenuItems,
+  workspaceMenuItems,
 } from '../src/renderer/src/workspace-menu.ts'
 
 test('group actions skip selected descendants and stop at cancellation or errors', async () => {
@@ -11,13 +12,19 @@ test('group actions skip selected descendants and stop at cancellation or errors
     selectedRoots(['docs', 'docs/a.md', 'docs-old/b.md', 'docs/sub/c.md']),
     ['docs', 'docs-old/b.md'],
   )
-  const copied = []
-  Object.defineProperty(globalThis, 'navigator', {
+  const calls = []
+  Object.defineProperty(globalThis, 'window', {
     configurable: true,
-    value: { clipboard: { writeText: async (text) => copied.push(text) } },
+    value: {
+      hibi: {
+        copyWorkspacePaths: async (paths, options) =>
+          calls.push([paths, options]),
+      },
+    },
   })
+  const target = { workspaceId: 'workspace', workspaceGeneration: 1 }
   const items = workspaceGroupMenuItems(
-    { workspaceId: 'workspace', workspaceGeneration: 1 },
+    target,
     [
       { path: 'docs', name: 'docs', kind: 'folder' },
       { path: 'docs/a.md', name: 'a.md', kind: 'file' },
@@ -25,7 +32,27 @@ test('group actions skip selected descendants and stop at cancellation or errors
     { dialogs: {}, onAction: async () => null },
   )
   await items.find((item) => item.id === 'copy-path').onSelect()
-  assert.deepEqual(copied, ['docs\ndocs/a.md'])
+  assert.deepEqual(calls, [
+    [['docs', 'docs/a.md'], { absolute: false, target }],
+  ])
+  calls.length = 0
+  await items.find((item) => item.id === 'copy-absolute-path').onSelect()
+  assert.deepEqual(calls, [[['docs', 'docs/a.md'], { absolute: true, target }]])
+
+  const single = workspaceMenuItems(
+    { path: 'a.md', name: 'a.md', kind: 'file' },
+    {
+      dialogs: {},
+      onAction: async () => null,
+      create: async () => {},
+      rename: () => {},
+    },
+  )
+  const copyIndex = single.findIndex((item) => item.id === 'copy-path')
+  const absoluteIndex = single.findIndex(
+    (item) => item.id === 'copy-absolute-path',
+  )
+  assert.equal(absoluteIndex, copyIndex + 1)
 
   const ran = []
   await runEach(['a', 'b', 'c'], 'moved', async (path) => {

@@ -964,9 +964,11 @@ test('long documents with HTML and reference syntax stay visually editable throu
     '# Editable document',
     '<div>HTML content</div>',
     '[reference][target]\n\n[target]: https://example.com',
-    ...Array(200).fill('alpha beta '.repeat(500)),
+    ...Array(40).fill('alpha beta '.repeat(500)),
   ].join('\n\n')
-  assert.ok(original.length > 1000000)
+  // Keep visual coverage below the current source-first opening threshold.
+  assert.ok(original.length > 200000)
+  assert.ok(original.length <= 256 * 1024)
   await writeFile(file, original)
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`, file],
@@ -989,7 +991,7 @@ test('long documents with HTML and reference syntax stay visually editable throu
   assert.match(opened, /^# Editable document/)
   assert.match(opened, /HTML content/)
   assert.match(opened, /reference/)
-  assert.ok(opened.length > 1000000)
+  assert.ok(opened.length > 200000)
   await page
     .waitForFunction(() => {
       const editor = document.querySelector('.tiptap')

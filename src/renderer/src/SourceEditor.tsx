@@ -42,6 +42,7 @@ import {
   EditorSelection,
   EditorState,
   Prec,
+  type Text,
   Transaction,
 } from '@codemirror/state'
 import {
@@ -69,7 +70,7 @@ import {
   sourceProseAllowed,
   type TypingContext,
 } from '../../shared/completions'
-import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop'
+import type { DocumentState } from '../../shared/desktop'
 import {
   type SourceEditRequest,
   type SourceEditResult,
@@ -88,6 +89,7 @@ import type { RawEdit } from '../../shared/source-operations'
 import { editorChangesFromSource } from '../../shared/source-projection'
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
+import { uncovered } from './chunked-markdown'
 import { codeHighlighter, codeLanguages } from './code-languages'
 import {
   completionBroker,
@@ -130,7 +132,7 @@ import {
 import { sourceIndentation } from './source-indent'
 import {
   createSourceSession,
-  sourceEditorText,
+  sourceEditorTextCooperatively,
   sourceEditTransaction,
 } from './source-session'
 import {
@@ -296,12 +298,17 @@ export function SourceEditor({
   // biome-ignore lint/correctness/useExhaustiveDependencies: retry refreshes a bridge whose snapshot went stale before attachment.
   const bridge = useMemo(
     () => createSourceSession(session, viewId),
-    [session, viewId, bridgeRetry],
+    [session, viewId, bridgeRetry, document.tabId, document.revision],
   )
+  const [preparedText, setPreparedText] = useState<{
+    bridge: ReturnType<typeof createSourceSession>
+    text: Text
+  } | null>(null)
   const [fontReadyBridge, setFontReadyBridge] = useState<ReturnType<
     typeof createSourceSession
   > | null>(null)
   const inputReady =
+    preparedText?.bridge === bridge &&
     installedExtensions?.bridge === bridge &&
     installedExtensions.extensions === sourceExtensions &&
     languageReady
@@ -558,7 +565,35 @@ export function SourceEditor({
   repeatFind.current = requestFind
 
   useEffect(() => {
-    if (!host.current) return
+    const controller = new AbortController()
+    setPreparedText(null)
+    const current = () =>
+      documentRuntime.session(document.tabId) === session &&
+      session.ownsCurrentSnapshot(bridge.snapshot())
+    void sourceEditorTextCooperatively(bridge.snapshot(), {
+      signal: controller.signal,
+      isCurrent: current,
+    })
+      .then((text) => {
+        if (
+          controller.signal.aborted ||
+          documentRuntime.session(document.tabId) !== session
+        )
+          return
+        if (!text || !current()) {
+          retryBridge((retry) => retry + 1)
+          return
+        }
+        setPreparedText({ bridge, text })
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) setExtensionError(String(error))
+      })
+    return () => controller.abort()
+  }, [bridge, session, document.tabId])
+
+  useEffect(() => {
+    if (!host.current || preparedText?.bridge !== bridge) return
     const active = documentRuntime.get(document.tabId)
     if (
       !active ||
@@ -677,8 +712,11 @@ export function SourceEditor({
       const pos = state.selection.main.head
       if (
         !markdownMode ||
-        pos > 16384 ||
-        !sourceProseAllowed(state.sliceDoc(0, pos))
+        // The formatted view's tree knows the blocks around the caret past
+        // the prefix the source view reads as text.
+        (formatted
+          ? pos <= 16384 && !sourceProseAllowed(state.sliceDoc(0, pos))
+          : pos > 16384 || !sourceProseAllowed(state.sliceDoc(0, pos)))
       )
         return null
       const line = state.doc.lineAt(pos)
@@ -691,7 +729,11 @@ export function SourceEditor({
       const parsed = formatted
         ? tree(state)
         : ensureSyntaxTree(state, line.to, 2)
-      if (parsed?.type.name !== 'Document') return null
+      if (
+        parsed?.type.name !== 'Document' ||
+        (formatted && uncovered(parsed, line.from, line.to))
+      )
+        return null
       let from = line.from,
         to = line.to,
         excluded = false
@@ -1016,7 +1058,7 @@ export function SourceEditor({
         }
       },
       state: EditorState.create({
-        doc: sourceEditorText(bridge.snapshot()),
+        doc: preparedText.text,
         ...(selection ? { selection } : {}),
         extensions: [
           addons.current.of([]),
@@ -1555,7 +1597,6 @@ export function SourceEditor({
           editor.state,
           snapshot,
           request.changes,
-          MAX_DOCUMENT_BYTES,
         )
         if (!transaction)
           return { status: 'applied', contentVersion: current.contentVersion }
@@ -1810,6 +1851,7 @@ export function SourceEditor({
     }
   }, [
     bridge,
+    preparedText,
     session,
     document.tabId,
     document.revision,
@@ -1837,7 +1879,7 @@ export function SourceEditor({
   useEffect(() => {
     const editor = view.current
     setExtensionError('')
-    if (!editor) return
+    if (!editor || preparedText?.bridge !== bridge) return
     let canceled = false
     const context = Object.freeze({ viewId: viewId as ViewId })
     void Promise.all(
@@ -1857,7 +1899,7 @@ export function SourceEditor({
     return () => {
       canceled = true
     }
-  }, [bridge, sourceExtensions, viewId])
+  }, [bridge, preparedText, sourceExtensions, viewId])
   useEffect(
     () =>
       tabIndent.subscribe(() =>

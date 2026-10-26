@@ -7,9 +7,9 @@ import { createDocumentTargetEditScope } from '../src/renderer/src/document-targ
 import { mountedDocumentEdits } from '../src/renderer/src/mounted-document-edits.ts'
 import {
   createSourceSession,
-  sourceEditorText,
   sourceEditTransaction,
 } from '../src/renderer/src/source-session.ts'
+import { sourceEditorText } from './source-editor-text.mjs'
 
 const document = (source, overrides = {}) => ({
   tabId: 'one',

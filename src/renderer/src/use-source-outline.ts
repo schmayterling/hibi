@@ -15,8 +15,11 @@ import { documentRuntime } from './document-runtime'
 import { flavors as flavorRegistry } from './flavors'
 import { markdownSyntax } from './markdown-syntax'
 import type { OutlineHeading } from './OutlineSidebar'
-import { outlineHeadingAt } from './outline-position'
-import type { SourceOutlineHeading, SourceOutlineModel } from './source-outline'
+import type {
+  SourceOutline,
+  SourceOutlineHeading,
+  SourceOutlineModel,
+} from './source-outline'
 import {
   resolveSourceReference,
   revealSourcePosition,
@@ -114,7 +117,9 @@ export function useSourceOutline({
 }) {
   const sourceOutline = useRef<{
     version: number
-    headings: readonly SourceOutlineHeading[]
+    generation: number
+    outline: SourceOutline
+    headings: readonly OutlineHeading[]
   } | null>(null)
   const latest = useRef({ tabId, currentView })
   latest.current = { tabId, currentView }
@@ -186,19 +191,22 @@ export function useSourceOutline({
         idle: number | null = null,
         work: ReturnType<SourceOutlineModel['read']> | null = null,
         referenceValue: ReferenceValue | null | undefined,
-        referenceAbort = new AbortController()
+        referenceAbort = new AbortController(),
+        previous: readonly SourceOutlineHeading[] | null = null,
+        headings: OutlineHeading[] = [],
+        generation = 0
       const root = content.current
       const reportActiveHeading = () => {
         const current = sourceOutline.current,
           view = latest.current.currentView()
-        onActiveOutline(
+        const heading =
           current?.version === session.snapshot().version && view
-            ? (outlineHeadingAt(
-                current.headings,
+            ? current.outline.at(
                 sourcePosition(view, view.state.selection.main.head),
-                (heading) => heading.from,
-              )?.id ?? null)
-            : null,
+              )
+            : undefined
+        onActiveOutline(
+          heading && current ? `${heading.id}:${current.generation}` : null,
         )
       }
       const cancel = () => {
@@ -208,7 +216,7 @@ export function useSourceOutline({
         if (timer !== null) clearTimeout(timer)
         if (idle !== null) cancelIdleCallback(idle)
         timer = idle = null
-        work?.return([])
+        work?.return(undefined as never)
         work = null
       }
       const queue = () => {
@@ -229,13 +237,23 @@ export function useSourceOutline({
             if (step.done) {
               work = null
               if (version !== session.snapshot().version) return
-              const headings = step.value.map((heading) => ({
-                ...heading,
-                id: `${heading.id}:${version}`,
-              }))
-              sourceOutline.current = { version, headings }
+              const changed = previous !== step.value.headings
+              if (changed) {
+                previous = step.value.headings
+                generation = version
+                headings = previous.map((heading) => ({
+                  ...heading,
+                  id: `${heading.id}:${generation}`,
+                }))
+              }
+              sourceOutline.current = {
+                version,
+                generation,
+                headings,
+                outline: step.value,
+              }
               onOutlineUnavailable?.(null)
-              onOutline(headings)
+              if (changed) onOutline(headings)
               reportActiveHeading()
               return
             }
@@ -277,6 +295,7 @@ export function useSourceOutline({
           timer = setTimeout(read, 0)
         } catch (error) {
           work = null
+          previous = null
           sourceOutline.current = null
           onOutline([])
           onActiveOutline(null)
@@ -340,16 +359,16 @@ export function useSourceOutline({
     reveal: (id: string) => {
       const current = sourceOutline.current,
         session = documentRuntime.session(latest.current.tabId),
-        heading = current?.headings.find((item) => item.id === id),
+        index = current?.headings.findIndex((item) => item.id === id) ?? -1,
         view = latest.current.currentView()
       if (
         !session ||
         current?.version !== session.snapshot().version ||
-        !heading ||
+        index < 0 ||
         !view
       )
         return false
-      revealSourcePosition(view, heading.from)
+      revealSourcePosition(view, current.outline.position(index))
       view.focus()
       return true
     },

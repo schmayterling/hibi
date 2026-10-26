@@ -98,7 +98,7 @@ function finish(work, resolve) {
   let value
   for (let steps = 0; steps < 100_000; steps++) {
     const step = work.next(value)
-    if (step.done) return step.value
+    if (step.done) return step.value.headings
     value = step.value ? resolve(step.value.reference) : undefined
   }
   assert.fail('Outline work must converge.')
@@ -175,6 +175,20 @@ test('source outline labels match native reference links before and after declar
     '# [constructor] and [toString] and [__proto__]',
   ])
     check(source)
+})
+
+test('ordered first-item blocks agree with rich headings', () => {
+  for (const source of [
+    '1. #### ordered\n',
+    '2. #### ordered\n',
+    '1) ## one\n2) ### two\n',
+    '1. first\n\n   #### nested\n',
+    '1. setext\n   ===\n',
+    '1. > ## quoted\n',
+    '1. first\n   1. ### nested\n',
+    '- ### bullet\n\n1. #### ordered\n',
+  ])
+    for (const ending of ['\n', '\r\n']) check(source.replaceAll('\n', ending))
 })
 
 test('source outline labels ignore declarations inside fences and frontmatter', () => {

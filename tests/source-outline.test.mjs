@@ -3,11 +3,26 @@ import test from 'node:test'
 import { SourceOutlineModel } from '../src/renderer/src/source-outline.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
+const snapshots = new WeakMap()
 const finish = (work) => {
   let yields = 0
   for (;;) {
     const step = work.next()
-    if (step.done) return { value: step.value, yields }
+    if (step.done) {
+      if (!step.value?.headings) return { value: step.value, yields }
+      let value = snapshots.get(step.value)
+      if (!value) {
+        value = Object.freeze(
+          step.value.headings.map((heading, index) => {
+            const from = step.value.position(index)
+            assert.equal(step.value.at(from), heading)
+            return { ...heading, id: `source:${from}`, from }
+          }),
+        )
+        snapshots.set(step.value, value)
+      }
+      return { value, yields, snapshot: step.value }
+    }
     assert.ok(++yields < 100_000, 'Outline work must converge.')
   }
 }
@@ -102,6 +117,75 @@ test('source outline reuses parser fragments after a local edit', () => {
   assert.ok(warm.readUnits < cold.readUnits / 2, JSON.stringify({ cold, warm }))
   assert.equal(store.counters().materializations, 0)
   model.dispose()
+})
+
+test('50 MiB body edits reuse unchanged heading labels and bounded index work', (t) => {
+  const block = `## heading\n\n${`${'plain text body '.repeat(15)}\n`.repeat(16)}\n\n`
+  const source = block
+    .repeat(Math.ceil((50 * 1024 * 1024) / block.length))
+    .slice(0, 50 * 1024 * 1024)
+  let labels = 0
+  const { store, model } = setup(source, {
+    frontmatter: false,
+    renderLabel: () => {
+      labels++
+      return 'heading'
+    },
+  })
+  try {
+    let { value: headings, snapshot } = finish(model.read())
+    assert.equal(headings.length, 13548)
+    model.counters(true)
+    for (const insert of ['B', 'body', 'X']) {
+      labels = 0
+      const from = source.indexOf('body', Math.floor(source.length / 2))
+      edit(store, model, [{ from, to: from + 1, insert }])
+      const { value, yields, snapshot: next } = finish(model.read())
+      const work = model.counters(true)
+      assert.equal(labels, 0, 'body edits must not relabel unchanged headings')
+      assert.ok(work.indexVisits < 100, JSON.stringify(work))
+      assert.ok(yields < 200, `body edit yielded ${yields} times`)
+      assert.equal(value.length, headings.length)
+      assert.equal(work.published, 0)
+      t.diagnostic(JSON.stringify({ insert, yields, ...work }))
+      assert.equal(next.headings, snapshot.headings)
+      assert.equal(value[0].from, headings[0].from)
+      assert.equal(value.at(-1).from - headings.at(-1).from, insert.length - 1)
+      headings = value
+      snapshot = next
+    }
+    assert.equal(store.counters().materializations, 0)
+  } finally {
+    model.dispose()
+  }
+})
+
+test('paragraph boundary and nested edits shift positions without replacing labels', () => {
+  for (const prefix of ['', '> ', '- '])
+    for (const eol of ['\n', '\r\n'])
+      for (const atEnd of [false, true]) {
+        const source = ['# top', '', prefix + 'body 🌿', '', '## tail'].join(
+          eol,
+        )
+        const { store, model } = setup(source, { math: true })
+        const before = finish(model.read()).snapshot
+        model.counters(true)
+        const from = source.indexOf('body') + (atEnd ? 'body 🌿'.length : 0)
+        edit(store, model, [{ from, to: from, insert: 'more ' }])
+        const after = finish(model.read()).snapshot
+        const work = model.counters()
+        assert.equal(
+          after.headings,
+          before.headings,
+          JSON.stringify({ prefix, eol, atEnd, work }),
+        )
+        assert.equal(after.position(1), before.position(1) + 5)
+        assert.equal(before.position(1), source.indexOf('## tail'))
+        assert.equal(work.labelsRead, 0)
+        assert.equal(work.published, 0)
+        assert.ok(work.indexVisits < 30, JSON.stringify(work))
+        model.dispose()
+      }
 })
 
 test('source outline preserves nested heading levels and exact CRLF raw offsets', () => {
@@ -221,7 +305,7 @@ test('source outline retains completed results across trusted storage compaction
   assert.throws(() => model.adoptStorage(change), /untrusted/)
   store.commitCompaction(change)
   model.adoptStorage(change)
-  assert.equal(finish(model.read()).value, headings)
+  assert.deepEqual(finish(model.read()).value, headings)
   edit(store, model, [{ from: 2, to: 7, insert: 'edited' }])
   assert.equal(finish(model.read()).value[0].label, 'edited')
   model.dispose()

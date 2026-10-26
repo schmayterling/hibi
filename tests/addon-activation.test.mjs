@@ -2,9 +2,13 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('capability SDKs defer irrelevant entries, activate command descriptors, and gate source attachments', {
   timeout: 30000,
@@ -62,7 +66,7 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await page.locator('.tiptap[contenteditable="true"]').waitFor()
+  const rich = await selectFormattedEngine(app, page, t.formattedEngine)
   const assetHeaders = await page.evaluate(async () => {
     const addon = (await window.hibi.getInstalledAddons()).find(
       (entry) => entry.manifest.id === 'deferred-command',
@@ -80,10 +84,23 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
   assert.equal(assetHeaders.origin, 'app://hibi')
   assert.equal(assetHeaders.noSniff, 'nosniff')
   page.setDefaultTimeout(8000)
-  assert.deepEqual(await page.evaluate(() => window.richAttachments), [
-    'alpha',
-    'zeta',
-  ])
+  // API 2 RichExtension attachment order is a Tiptap implementation contract.
+  if (t.formattedEngine === 'tiptap')
+    assert.deepEqual(await page.evaluate(() => window.richAttachments), [
+      'alpha',
+      'zeta',
+    ])
+  else {
+    assert.equal(await page.evaluate(() => window.richAttachments), undefined)
+    await rich.press('ControlOrMeta+a')
+    await page.keyboard.insertText('formatted activation draft')
+    await waitForAsync(
+      page,
+      async () =>
+        (await window.hibi.getDocument()).markdown ===
+        'formatted activation draft',
+    )
+  }
   assert.equal(await page.evaluate(() => window.commandEvaluations), undefined)
   assert.equal(await page.evaluate(() => window.sourceEvaluations), undefined)
   assert.equal(
@@ -132,7 +149,10 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
       .filter((chunk) => files.has(chunk.file))
       .flatMap((chunk) => chunk.modules)
       .join('\n')
-  assert.doesNotMatch(loaded(), /@codemirror\//)
+  // The opt-in formatted engine loads CodeMirror; default Tiptap startup must not.
+  if (t.formattedEngine === 'tiptap')
+    assert.doesNotMatch(loaded(), /@codemirror\//)
+  else assert.match(loaded(), /@codemirror\//)
   await clickMenu(app, 'Command palette')
   const search = page.getByRole('combobox', { name: /search commands/i })
   await search.fill('Deferred hello')
@@ -165,7 +185,10 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
   assert.deepEqual(await page.evaluate(() => window.commandSdkKeys), [
     'documents',
   ])
-  assert.doesNotMatch(loaded(), /src\/addons\/sdk\.ts|@codemirror\//)
+  assert.doesNotMatch(loaded(), /src\/addons\/sdk\.ts/)
+  if (t.formattedEngine === 'tiptap')
+    assert.doesNotMatch(loaded(), /src\/addons\/sdk\.ts|@codemirror\//)
+  else assert.match(loaded(), /@codemirror\//)
   await page.evaluate(() => {
     const load = document.fonts.load.bind(document.fonts)
     const pending = []
@@ -187,7 +210,7 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
   // Source input can be editable before the font-gated pane switch finishes.
   await page.waitForFunction(
     () =>
-      document.querySelector('.cm-content')?.isContentEditable &&
+      document.querySelector('.source-pane .cm-content')?.isContentEditable &&
       window.sourceFontsHeld > 0,
     undefined,
     { polling: 100 },
@@ -204,31 +227,47 @@ test('capability SDKs defer irrelevant entries, activate command descriptors, an
   assert.equal(await page.evaluate(() => window.richDetachments), undefined)
   await page.evaluate(() => window.releaseSourceFonts())
   await page.waitForFunction(
-    () =>
+    (engine) =>
       document.querySelector('.editor-panes.mode-markdown') &&
-      window.richDetachments?.join(',') === 'alpha,zeta',
-    undefined,
+      (engine === 'codemirror' ||
+        window.richDetachments?.join(',') === 'alpha,zeta'),
+    t.formattedEngine,
     { polling: 100 },
   )
   assert.equal(
     await page.locator('.source-pane').evaluate((pane) => pane.inert),
     false,
   )
-  assert.deepEqual(await page.evaluate(() => window.richDetachments), [
-    'alpha',
-    'zeta',
-  ])
-  await page.locator('.cm-content').press('F8')
+  if (t.formattedEngine === 'tiptap')
+    assert.deepEqual(await page.evaluate(() => window.richDetachments), [
+      'alpha',
+      'zeta',
+    ])
+  else
+    assert.equal(await page.evaluate(() => window.richDetachments), undefined)
+  await page.locator('.source-pane .cm-content').press('F8')
   assert.equal(await page.evaluate(() => window.sourceKeyHandled), true)
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
   await page.waitForFunction(() => window.sourceStops === 1)
   assert.equal(await page.evaluate(() => window.sourceEvaluations), 1)
-  assert.deepEqual(await page.evaluate(() => window.richAttachments), [
-    'alpha',
-    'zeta',
-    'alpha',
-    'zeta',
-  ])
+  if (t.formattedEngine === 'tiptap')
+    assert.deepEqual(await page.evaluate(() => window.richAttachments), [
+      'alpha',
+      'zeta',
+      'alpha',
+      'zeta',
+    ])
+  else {
+    await rich.waitFor()
+    assert.equal(await rich.getAttribute('contenteditable'), 'true')
+    assert.equal(
+      await page.evaluate(
+        async () => (await window.hibi.getDocument()).markdown,
+      ),
+      'formatted activation draft',
+    )
+    assert.equal(await page.evaluate(() => window.richAttachments), undefined)
+  }
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-disabled-background').click()
@@ -277,7 +316,7 @@ test('a cancelled stale attempt keeps a committed failure from starting the addo
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await page.locator('.tiptap[contenteditable="true"]').waitFor()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(8000)
   await page.waitForFunction(
     () => window.staleFailureArmed && window.releaseStalePeer,

@@ -7,7 +7,11 @@ import {
 import { Pencil } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { errorMessage } from '../../shared/errors'
-import { fencedBlock, fenceSource } from '../_shared/fenced-block'
+import {
+  fencedBlock,
+  fencedBlockStart,
+  fenceSource,
+} from '../_shared/fenced-block'
 import type { AddonContext } from '../api'
 import { Button, DocumentNotice, IconButton, TextArea } from '../ui'
 import { mountDiagram } from './render'
@@ -132,8 +136,7 @@ export function mermaidNode(context: AddonContext) {
     markdownTokenizer: {
       name: 'mermaidBlock',
       level: 'block',
-      start: (source) =>
-        source.search(/^ {0,3}(?:`{3,}|~{3,})mermaid[ \t]*\r?$/im),
+      start: fencedBlockStart,
       tokenize,
     },
     parseMarkdown: (token, helpers) =>

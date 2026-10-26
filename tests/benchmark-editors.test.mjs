@@ -247,7 +247,9 @@ test('source-first tiptap requests formatted view, then measures from initial op
     true,
   )
   assert.equal(switches, 1)
-  assert.deepEqual(opened, { path: 'source-first', method: 'open+switch' })
+  assert.equal(opened.path, 'source-first')
+  assert.equal(opened.method, 'open+switch')
+  assert.equal(opened.afterSwitch.editable, true)
   const events = [
     mark('open:start', 1000),
     mark('switch:start', 8000),
@@ -265,6 +267,37 @@ test('source-first tiptap requests formatted view, then measures from initial op
   )
 })
 
+test('source-first read-only preview is unavailable, not editable readiness', async () => {
+  const preview = {
+    mode: 'side-by-side',
+    engine: 'tiptap',
+    editable: false,
+    preview: true,
+    sourceReady: true,
+    modelLength: 2,
+  }
+  const open = await ensureFormattedEditor(
+    'tiptap',
+    { mode: 'markdown' },
+    async () => preview,
+  )
+  assert.equal(open.method, 'n/a')
+  assert.equal(open.path, 'source-first')
+  assert.equal(open.afterSwitch, preview)
+  assert.match(open.unavailable, /read-only preview/)
+  const sample = await captureEditorSample({}, async () => ({
+    status: 'unavailable',
+    open,
+  }))
+  assert.equal(sample.status, 'unavailable')
+  const row = summarizeEditors([sample])[0]
+  assert.equal(row.runs, 0)
+  assert.equal(row.failed, 0)
+  assert.equal(row.unavailable, 1)
+  assert.equal(row.metrics.openReadyMs.n, 0)
+  assert.equal(row.metrics.keyTaskMs.n, 0)
+})
+
 test('source-first codemirror and other sample failures do not abort later sizes', async () => {
   const samples = []
   const plan = editorBenchmarkPlan(['575kb', '2mb'], 2, ['prose'])
@@ -278,12 +311,16 @@ test('source-first codemirror and other sample failures do not abort later sizes
           { mode: 'markdown' },
           async () => ({ mode: 'normal', engine: 'tiptap', editable: true }),
         )
-        return { open }
+        return { open, status: open.unavailable ? 'unavailable' : 'complete' }
       }),
     )
   }
   assert.equal(samples.length, 8)
-  assert.equal(samples.filter((sample) => sample.status === 'failed').length, 6)
+  assert.equal(samples.filter((sample) => sample.status === 'failed').length, 2)
+  assert.equal(
+    samples.filter((sample) => sample.status === 'unavailable').length,
+    4,
+  )
   assert.equal(samples.at(-1).size, '2mb')
   assert.equal(samples.at(-1).status, 'complete')
   assert.equal(samples.at(-1).open.path, 'source-first')
@@ -292,7 +329,7 @@ test('source-first codemirror and other sample failures do not abort later sizes
     assert.ok(sample.loadAverage.every(Number.isFinite))
     assert.ok(sample.startedAt)
     if (sample.engine === 'codemirror')
-      assert.match(sample.error, /codemirror source-first.*#450/)
+      assert.match(sample.open.unavailable, /codemirror source-first.*#450/)
   }
 })
 

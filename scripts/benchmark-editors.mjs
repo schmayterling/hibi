@@ -157,16 +157,30 @@ export async function ensureFormattedEditor(
   mixed = false,
 ) {
   const path = state.mode === 'markdown' ? 'source-first' : 'formatted'
-  if (path === 'source-first') {
-    assert.equal(
-      engine,
-      'tiptap',
-      'codemirror source-first: large-note formatted opening needs #450; sample failed',
-    )
-    state = await switchView()
+  const open = {
+    path,
+    method: path === 'source-first' ? 'open+switch' : 'open',
   }
+  if (path === 'source-first') {
+    if (engine === 'codemirror')
+      return {
+        ...open,
+        method: 'n/a',
+        unavailable:
+          'codemirror source-first: large-note formatted opening needs #450',
+        dependency: '#450',
+      }
+    state = await switchView()
+    open.afterSwitch = state
+  }
+  if (state.mode === 'side-by-side' && state.preview && !state.editable)
+    return {
+      ...open,
+      method: 'n/a',
+      unavailable: 'formatted editing unavailable: observed read-only preview',
+    }
   requireFormattedEditor(engine, state, mixed)
-  return { path, method: path === 'source-first' ? 'open+switch' : 'open' }
+  return open
 }
 
 export async function captureEditorSample(config, measure) {
@@ -176,7 +190,7 @@ export async function captureEditorSample(config, measure) {
     loadAverage: loadavg(),
   }
   try {
-    return { ...sample, ...(await measure()), status: 'complete' }
+    return { ...sample, status: 'complete', ...(await measure()) }
   } catch (error) {
     return {
       ...sample,
@@ -205,14 +219,16 @@ export function summarizeEditors(samples) {
     groups.get(key).push(sample)
   }
   return [...groups.values()].map((attempts) => {
-    const group = attempts.filter((sample) => sample.status !== 'failed')
+    const group = attempts.filter((sample) => sample.status === 'complete')
     const keys = group.flatMap((sample) => sample.keys)
     return {
       size: attempts[0].size,
       fixture: attempts[0].fixture,
       engine: attempts[0].engine,
       runs: group.length,
-      failed: attempts.length - group.length,
+      failed: attempts.filter((sample) => sample.status === 'failed').length,
+      unavailable: attempts.filter((sample) => sample.status === 'unavailable')
+        .length,
       openMethods: [...new Set(group.map((sample) => sample.open.method))],
       keyPaintCoverage: {
         observed: keys.filter((key) => Number.isFinite(key.paintMs)).length,
@@ -261,6 +277,10 @@ function installProbe({ fileName, sourceLength, engine, fixture }) {
       formatted: !!document.querySelector(
         '.rich-pane .tiptap h1, .rich-pane .hibi-lp-h1',
       ),
+      preview: !!document.querySelector('.rich-pane .large-markdown-preview'),
+      sourceReady:
+        document.querySelector('.editor-panes')?.dataset.sourceReady === 'true',
+      modelLength: length(),
     }
   }
   const probe = { pending: null, state }
@@ -272,28 +292,41 @@ function installProbe({ fileName, sourceLength, engine, fixture }) {
   }
   const check = () => {
     const pending = probe.pending
-    if (!pending?.started || pending.ready) return
+    if (!pending?.started || pending.ready || pending.done) return
     let ready = false
     const count = document.querySelector('.find-count')?.textContent ?? ''
     if (pending.kind === 'open' || pending.kind === 'switch') {
       const tab = document.querySelector(
         '.document-tabs [role="tab"][aria-selected="true"]',
       )
-      ready =
+      const observed = state()
+      const settled =
         tab?.getAttribute('aria-label') === fileName &&
         document.querySelector('.app')?.getAttribute('aria-busy') === 'false' &&
         document
           .querySelector('#document-editor-panel')
           ?.getAttribute('aria-busy') === 'false' &&
-        document.fonts.status === 'loaded' &&
-        (state().mode === 'markdown' && pending.kind === 'open'
-          ? document.querySelector('.editor-panes')?.dataset.sourceReady ===
-            'true'
-          : state().mode === 'normal' &&
-            state().engine === engine &&
-            state().editable &&
+        document.fonts.status === 'loaded'
+      if (
+        settled &&
+        observed.mode === 'side-by-side' &&
+        observed.preview &&
+        !observed.editable &&
+        observed.sourceReady
+      ) {
+        performance.mark(`${pending.label}:unavailable`)
+        pending.done = true
+        return
+      }
+      ready =
+        settled &&
+        (observed.mode === 'markdown' && pending.kind === 'open'
+          ? observed.sourceReady
+          : observed.mode === 'normal' &&
+            observed.engine === engine &&
+            observed.editable &&
             (fixture === 'mixed'
-              ? state().formatted && length() > 0
+              ? observed.formatted && length() > 0
               : length() === sourceLength + (engine === 'tiptap' ? 2 : 0)))
     } else if (pending.kind === 'key')
       ready = length() === pending.beforeLength + 1
@@ -499,66 +532,82 @@ async function runSample(config, directory, file, out) {
         config.sourceHash,
         'opened source differs from fixture',
       )
-      await page.evaluate(() => {
-        const element = document.querySelector(
-          '.rich-pane .tiptap, .rich-pane .cm-content',
-        )
-        if (element.editor) {
-          element.editor.commands.setTextSelection(1)
-          element.editor.view.focus()
-        } else {
-          const view = element.cmTile.root.view
-          view.dispatch({ selection: { anchor: 0 }, scrollIntoView: true })
-          view.focus()
-        }
-      })
-      await arm(page, 'warmup', 'key')
-      await page.keyboard.press('x')
-      await finish(page, 'warmup')
-      const keys = []
-      for (let index = 0; index < config.keys; index++) {
-        const label = `key-${index}`
-        await arm(page, label, 'key')
-        const before = await metrics(session)
-        await page.keyboard.press('x')
-        await finish(page, label)
-        const after = await metrics(session)
-        keys.push({
-          label,
-          taskMs: (after.TaskDuration - before.TaskDuration) * 1000,
-          mainThreadMs: Object.fromEntries(
-            metricNames.map((name) => [
-              name,
-              (after[name] - before[name]) * 1000,
-            ]),
-          ),
-        })
+      sample.integrity = {
+        expectedHash: config.sourceHash,
+        actualHash: hash(opened.markdown),
       }
-      const canonical = await page.evaluate(() => window.hibi.getDocument())
-      assert.equal(
-        hash(canonical.markdown),
-        config.expectedHash,
-        'typed source differs from expected bytes',
-      )
-      const findShortcut =
-        process.platform === 'darwin' ? 'Meta+f' : 'Control+f'
-      await pressShortcut(app, findShortcut)
-      const findInput = page.getByRole('textbox', {
-        name: 'Find in document',
-        exact: true,
-      })
-      await findInput.waitFor()
-      await arm(page, 'find-first', 'find-first')
-      await findInput.fill(size === 'blank' ? 'x' : 'alpha')
-      await finish(page, 'find-first')
-      const firstCount = await page.locator('.find-count').textContent()
-      await arm(page, 'find-next', 'find-next')
-      await findInput.press('Enter')
-      await finish(page, 'find-next')
-      const nextCount = await page.locator('.find-count').textContent()
-      await findInput.press('Escape')
-      await page.locator('.find-bar').waitFor({ state: 'hidden' })
-      const scroll = await scrollFrames(page, session, config.scrollFrames)
+      if (!sample.open.unavailable) {
+        await page.evaluate(() => {
+          const element = document.querySelector(
+            '.rich-pane .tiptap, .rich-pane .cm-content',
+          )
+          if (element.editor) {
+            element.editor.commands.setTextSelection(1)
+            element.editor.view.focus()
+          } else {
+            const view = element.cmTile.root.view
+            view.dispatch({ selection: { anchor: 0 }, scrollIntoView: true })
+            view.focus()
+          }
+        })
+        await arm(page, 'warmup', 'key')
+        await page.keyboard.press('x')
+        await finish(page, 'warmup')
+        const keys = []
+        for (let index = 0; index < config.keys; index++) {
+          const label = `key-${index}`
+          await arm(page, label, 'key')
+          const before = await metrics(session)
+          await page.keyboard.press('x')
+          await finish(page, label)
+          const after = await metrics(session)
+          keys.push({
+            label,
+            taskMs: (after.TaskDuration - before.TaskDuration) * 1000,
+            mainThreadMs: Object.fromEntries(
+              metricNames.map((name) => [
+                name,
+                (after[name] - before[name]) * 1000,
+              ]),
+            ),
+          })
+        }
+        const canonical = await page.evaluate(() => window.hibi.getDocument())
+        assert.equal(
+          hash(canonical.markdown),
+          config.expectedHash,
+          'typed source differs from expected bytes',
+        )
+        const findShortcut =
+          process.platform === 'darwin' ? 'Meta+f' : 'Control+f'
+        await pressShortcut(app, findShortcut)
+        const findInput = page.getByRole('textbox', {
+          name: 'Find in document',
+          exact: true,
+        })
+        await findInput.waitFor()
+        await arm(page, 'find-first', 'find-first')
+        await findInput.fill(size === 'blank' ? 'x' : 'alpha')
+        await finish(page, 'find-first')
+        const firstCount = await page.locator('.find-count').textContent()
+        await arm(page, 'find-next', 'find-next')
+        await findInput.press('Enter')
+        await finish(page, 'find-next')
+        const nextCount = await page.locator('.find-count').textContent()
+        await findInput.press('Escape')
+        await page.locator('.find-bar').waitFor({ state: 'hidden' })
+        sample.scroll = await scrollFrames(page, session, config.scrollFrames)
+        sample.keys = keys
+        sample.find = {
+          query: size === 'blank' ? 'x' : 'alpha',
+          firstCount,
+          nextCount,
+        }
+        sample.integrity = {
+          expectedHash: config.expectedHash,
+          actualHash: hash(canonical.markdown),
+        }
+      } else sample.status = 'unavailable'
       const traceCollection = await finishTrace()
       tracing = false
       const events = JSON.parse(
@@ -582,36 +631,33 @@ async function runSample(config, directory, file, out) {
         })),
         open: {
           ...sample.open,
-          ...operationPaint(
-            events,
-            sample.open.method === 'open+switch' ? 'switch' : 'open',
-            'open',
-          ),
+          ...(sample.open.unavailable
+            ? { readyMs: null, paintMs: null, tracePaintUs: null }
+            : operationPaint(
+                events,
+                sample.open.method === 'open+switch' ? 'switch' : 'open',
+                'open',
+              )),
           source:
             sample.open.path === 'source-first'
               ? operationPaint(events, 'open')
               : null,
-          switch:
-            sample.open.path === 'source-first'
-              ? operationPaint(events, 'switch')
-              : null,
+          switch: sample.open.afterSwitch
+            ? operationPaint(events, 'switch')
+            : null,
         },
-        keys: keys.map((key) => ({
+        keys: (sample.keys ?? []).map((key) => ({
           ...key,
           ...operationPaint(events, key.label),
         })),
-        find: {
-          query: size === 'blank' ? 'x' : 'alpha',
-          firstCount,
-          nextCount,
-          first: operationPaint(events, 'find-first'),
-          next: operationPaint(events, 'find-next'),
-        },
-        scroll,
-        integrity: {
-          expectedHash: config.expectedHash,
-          actualHash: hash(canonical.markdown),
-        },
+        find: sample.find
+          ? {
+              ...sample.find,
+              first: operationPaint(events, 'find-first'),
+              next: operationPaint(events, 'find-next'),
+            }
+          : null,
+        scroll: sample.scroll ?? null,
       }
     } finally {
       if (tracing) await finishTrace().catch(() => {})
@@ -648,15 +694,15 @@ function markdownReport(report) {
     '',
     `status: ${report.status}. all timings in ms; cells are median [min–max], or nearest-rank p95 where named. key statistics pool measured keys across launches; other statistics summarize launches.`,
     '',
-    `| size | fixture | engine | passed/failed | open method | key paints | ${columns.map(([name]) => name).join(' | ')} |`,
+    `| size | fixture | engine | passed/failed/unavailable | open method | key paints | ${columns.map(([name]) => name).join(' | ')} |`,
     `| --- | --- | --- | ---: | --- | ---: | ${columns.map(() => '---:').join(' | ')} |`,
     ...report.summary.map(
       (row) =>
-        `| ${row.size} | ${row.fixture} | ${row.engine} | ${row.runs}/${row.failed} | ${row.openMethods.join(', ') || 'n/a'} | ${row.keyPaintCoverage.observed}/${row.keyPaintCoverage.total} | ${columns.map(([, name, value]) => cell(row.metrics[name], value)).join(' | ')} |`,
+        `| ${row.size} | ${row.fixture} | ${row.engine} | ${row.runs}/${row.failed}/${row.unavailable} | ${row.openMethods.join(', ') || 'n/a'} | ${row.keyPaintCoverage.observed}/${row.keyPaintCoverage.total} | ${columns.map(([, name, value]) => cell(row.metrics[name], value)).join(' | ')} |`,
     ),
     '',
     'hidden windows, focus emulation, fresh profiles; engine order alternates within balanced pairs (ab, ba). startup and engine-selection reload are excluded. no os cache clearing.',
-    'open readyMs ends at editable formatted DOM with loaded fonts; mixed fixtures also require a rendered heading. open paint is the first subsequent renderer Paint. source-first tiptap records the source open, then clicks normal view; open+switch runs from the initial open through the first formatted paint, with switch-only timings retained. codemirror source fallback fails that sample with a #450 label and the matrix continues.',
+    'open readyMs ends at editable formatted DOM with loaded fonts; mixed fixtures also require a rendered heading. open paint is the first subsequent renderer Paint. source-first tiptap attempts normal view; open+switch is reported only if an editable formatted view becomes ready. an observed read-only preview, or codemirror source fallback needing #450, records unavailable formatted metrics while retaining source-open timing, capability state, source hash and traces. unavailable samples make the report partial; unexpected errors fail it. the matrix continues in both cases.',
     'one untimed warm-up key precedes measured keys. key processing is keydown → model-ready (readyMs); cdp task deltas also include observer/driver work and two-frame settlement. key → paint is mostly next-frame wait (0.6–14.8 ms in prior input traces); it is not a processing-time metric.',
     'Paint is a same-thread temporal trace match within the operation, not proof of glyph presentation or physical keyboard latency. missing paint is n/a, never zero. full frame, layout, gc and User Timing evidence is retained in traces.',
     'scroll requests 3600 css px over a fixed number of animation frames after resetting and settling at the top. main/frame is the CDP TaskDuration delta divided by measured scroll frames; it includes the scroll driver and final settlement. short documents clamp distance; documents that fit have no scroll sample. raw task deltas, distances and frame intervals are in results.json.',
@@ -665,10 +711,10 @@ function markdownReport(report) {
       ? 'smoke numbers validate the sampler under shared load; they establish no performance ranking or full-matrix pass.'
       : 'compare complete pairs on a quiet machine; this report does not enforce a speed threshold.',
     ...report.samples
-      .filter((sample) => sample.status === 'failed')
+      .filter((sample) => sample.status !== 'complete')
       .map(
         (sample) =>
-          `failure: ${sample.size}/${sample.fixture}/${sample.engine} run ${sample.run + 1}: ${sample.error}`,
+          `${sample.status}: ${sample.size}/${sample.fixture}/${sample.engine} run ${sample.run + 1}: ${sample.error ?? sample.open.unavailable}`,
       ),
     ...(report.error ? ['', `failure: ${report.error}`] : []),
     '',
@@ -856,15 +902,19 @@ async function main() {
             return sample
           })
           report.samples.push(sample)
-          if (sample.status === 'failed')
-            console.error(`sample failed: ${sample.error}`)
+          if (sample.status !== 'complete')
+            console.error(
+              `sample ${sample.status}: ${sample.error ?? sample.open.unavailable}`,
+            )
           await save()
         }
       }
     }
     report.status = report.samples.some((sample) => sample.status === 'failed')
       ? 'failed'
-      : 'complete'
+      : report.samples.some((sample) => sample.status === 'unavailable')
+        ? 'partial'
+        : 'complete'
     if (report.status === 'failed') process.exitCode = 1
   } catch (error) {
     report.status = 'failed'

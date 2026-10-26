@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 
-test('a timed-out note keeps useful backlinks and paged headings and is named in the sidebar', {
+test('a timed-out note keeps useful backlinks, tags and paged headings and is named in the sidebar', {
   timeout: 30000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-metadata-fallback-'))
@@ -123,6 +123,19 @@ test('a timed-out note keeps useful backlinks and paged headings and is named in
     { depth: 2, text: 'later' },
   ])
   assert.deepEqual(headings.value.incompletePaths, ['slow.md'])
+  const tags = await page.evaluate(async (syntaxSnapshot) => {
+    const header = await window.hibi.getWorkspaceHeader()
+    return window.hibi.queryWorkspaceReferences({
+      target: header.target,
+      kind: 'tags',
+      syntaxSnapshot,
+      limit: 100,
+    })
+  }, before.syntax)
+  assert.equal(tags.ok, true)
+  assert.equal(tags.value.complete, false)
+  assert.deepEqual(tags.value.items, [{ tag: 'retained', count: 1 }])
+  assert.deepEqual(tags.value.incompletePaths, ['slow.md'])
   assert.equal(
     await app.evaluate(() => globalThis.fallbackProbe.fallback),
     before.fallback,

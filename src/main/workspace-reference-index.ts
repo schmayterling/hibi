@@ -869,7 +869,7 @@ export class WorkspaceReferenceIndex {
     let index = 0
     let started = performance.now()
     for (const [path, document] of documents) {
-      if (isMarkdownDocument(path) && document.referenceComplete) {
+      if (isMarkdownDocument(path)) {
         const tags = document.tags
         for (const name of tags) {
           let paths = next.get(name)

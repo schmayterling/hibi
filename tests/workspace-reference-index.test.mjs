@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { parseWorkspaceMetadata } from '../src/main/workspace-index-metadata.ts'
+import { parseWorkspaceMetadataFallback } from '../src/main/workspace-metadata-fallback.ts'
 import { WorkspaceReferenceIndex } from '../src/main/workspace-reference-index.ts'
 import {
   localTarget,
@@ -672,6 +673,45 @@ test('oversized tag fields advance their offsets and leave later records reachab
   }
   assert.deepEqual(tags, ['aaa', 'ccc', 'ddd'])
   assert.equal(incomplete, true)
+})
+
+test('fallback tags agree across delta and full builds', async () => {
+  const index = new WorkspaceReferenceIndex()
+  const input = {
+    id: 'a'.repeat(64),
+    path: 'slow.md',
+    version: 'one',
+    fingerprint: 'syntax',
+    syntax: {
+      settings: defaultNoteSyntax,
+      key: 'default',
+      complete: true,
+      unsupported: false,
+    },
+  }
+  const initial = parseWorkspaceMetadataFallback(input, ['#old'], () => {})
+  const changed = parseWorkspaceMetadataFallback(
+    { ...input, version: 'two' },
+    ['#retained'],
+    () => {},
+  )
+  const stream = async function* (item) {
+    yield item
+  }
+  await index.applyMetadataCooperatively(workspace, stream(initial))
+  await index.tagsCooperatively(0, 10)
+  await index.applyDeltaCooperatively(workspace, [changed])
+  const delta = await index.tagsCooperatively(0, 10)
+  assert.deepEqual(delta.items, [{ tag: 'retained', count: 1 }])
+  assert.deepEqual(index.tagged('old', 0, 10).items, [])
+  assert.deepEqual(index.tagged('retained', 0, 10).items, ['slow.md'])
+  assert.equal(index.isComplete(), false)
+  assert.deepEqual(index.incompletePaths(), ['slow.md'])
+  const full = new WorkspaceReferenceIndex()
+  await full.applyMetadataCooperatively(workspace, stream(changed))
+  assert.deepEqual(await full.tagsCooperatively(0, 10), delta)
+  assert.deepEqual(full.tagged('retained', 0, 10).items, ['slow.md'])
+  assert.equal(full.isComplete(), false)
 })
 
 test('draft deltas retain untouched documents and cached path views without walking the workspace', async () => {

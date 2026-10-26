@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, mkdtemp, open, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { app, BrowserWindow, dialog } from 'electron'
 import { getAddonManifests, getAddonStates } from '../../main/addons'
 import { exportedAppearance } from '../../main/appearance'
@@ -10,6 +10,7 @@ import { writeText } from '../../main/files'
 import { readDocumentImage } from '../../main/images'
 import {
   currentWorkspaceTarget,
+  exportPaths,
   getWorkspace,
   isCurrentWorkspaceTarget,
   readWorkspaceExportPage,
@@ -20,8 +21,7 @@ import type { WorkspacePage } from '../../shared/workspace'
 import type { NativeAddon, SiteExportArtifact } from '../api'
 import manifest from './manifest'
 import { type ExportOptions, validateExportOptions } from './options'
-import { exportPaths } from './prepare'
-import { SiteWorker } from './site-runtime'
+import { readSiteFiles, SiteWorker } from './site-runtime'
 
 const graphEnabled = () =>
   getAddonStates().some((addon) => addon.id === 'graph' && addon.enabled)
@@ -195,7 +195,11 @@ export default {
   },
   queries: {
     async options() {
-      return { theme: exportedAppearance(), graph: graphEnabled() }
+      return {
+        theme: exportedAppearance(),
+        graph: graphEnabled(),
+        pages: exportPaths(getWorkspace()?.entries ?? []),
+      }
     },
     async begin(input) {
       if (active) throw new Error('Another export is already in progress.')
@@ -315,20 +319,11 @@ export default {
           if (!files) throw invalid()
           await verifySources(session)
           validateContributions(input as Record<string, unknown>)
-          const artifact: SiteExportArtifact = {
+          return {
             version: 1,
             pages: session.paths.length,
-            files: [],
+            files: await readSiteFiles(join(session.directory, 'files'), files),
           }
-          for (const path of files)
-            artifact.files.push({
-              path,
-              content: await readFile(
-                join(session.directory, 'files', path),
-                'utf8',
-              ),
-            })
-          return artifact
         } finally {
           await dispose(session)
         }
@@ -367,29 +362,27 @@ export default {
         throw new Error('Choose an image smaller than 3 MiB.')
       return image
     },
-    async export(input) {
+    async export(input, context) {
       return withSession(input, async (session) => {
         session.committing = true
         try {
           const files = session.files
           if (!files) throw invalid()
           if (session.options.singleFile) {
-            const result = await runFileDialog(() =>
-              dialog.showSaveDialog({
-                title: 'Export workspace to HTML',
-                defaultPath: `${basename(session.name)}.html`,
-                filters: [{ name: 'HTML', extensions: ['html'] }],
-              }),
+            async function* document() {
+              await verifySources(session)
+              validateContributions(input as Record<string, unknown>)
+              yield* stagedFile(session, 'index.html')
+              if (!isCurrentWorkspaceTarget(session.target))
+                throw new Error(
+                  'The workspace changed during export. Export again.',
+                )
+            }
+            return await context.exportHtml(
+              document(),
+              `${session.name}.html`,
+              session.paths.length,
             )
-            if (result.canceled || !result.filePath) return null
-            if (!isCurrentWorkspaceTarget(session.target))
-              throw new Error(
-                'The workspace changed during export. Export again.',
-              )
-            await verifySources(session)
-            validateContributions(input as Record<string, unknown>)
-            await writeText(result.filePath, stagedFile(session, 'index.html'))
-            return { path: result.filePath, pages: session.paths.length }
           }
           const result = await runFileDialog(() =>
             dialog.showOpenDialog({

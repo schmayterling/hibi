@@ -1010,6 +1010,18 @@ export async function readWorkspaceExportPage(
   }
 }
 
+export function exportPaths(
+  entries: readonly WorkspaceEntry[],
+): { path: string }[] {
+  return entries.flatMap((entry) =>
+    entry.children
+      ? exportPaths(entry.children)
+      : entry.kind === 'file' && isDocumentName(entry.name, true)
+        ? [{ path: entry.path }]
+        : [],
+  )
+}
+
 export async function snapshotWorkspace(): Promise<WorkspaceSnapshot> {
   const target = currentWorkspaceTarget()
   if (!target) throw new Error('Open a workspace first.')
@@ -1019,12 +1031,8 @@ export async function snapshotWorkspace(): Promise<WorkspaceSnapshot> {
   const workspace = getWorkspace()
   if (!workspace) throw new Error('Open a workspace first.')
   const pages: WorkspaceSnapshot['pages'] = []
-  async function collect(items: WorkspaceEntry[], target: WorkspaceTarget) {
-    for (const item of items)
-      if (item.kind === 'folder') await collect(item.children ?? [], target)
-      else pages.push(await readWorkspaceExportPage(item.path, target))
-  }
-  await collect(workspace.entries, target)
+  for (const { path } of exportPaths(workspace.entries))
+    pages.push(await readWorkspaceExportPage(path, target))
   if (!pages.length)
     throw new Error('This workspace has no supported documents to export.')
   return { name: workspace.name, pages }

@@ -298,8 +298,13 @@ export function prepareSite(
   }
 }
 
-function content(site: SiteData, page: SitePage, prefix: string) {
-  const paths = new Set(site.pages.map((page) => page.path))
+function content(
+  site: SiteData,
+  page: SitePage,
+  prefix: string,
+  paths: ReadonlySet<string>,
+  navigation: readonly SitePage[],
+) {
   let html = renderedHtml(page.html ?? '', {
     blockquote: (_tag, attrs) => ({
       tagName: 'blockquote',
@@ -402,14 +407,6 @@ function content(site: SiteData, page: SitePage, prefix: string) {
       return `<${tag}${attrs} id="${escapeHtml(anchor)}">${alias}${body}</${tag}>`
     },
   )
-  const home = homePage(site.pages, site.options.homePage)
-  const index = site.pages.findIndex((entry) => entry.path === page.path)
-  const navigation =
-    page.path === home?.path
-      ? site.pages
-      : [home, site.pages[index - 1], site.pages[index + 1]].filter(
-          (entry): entry is SitePage => !!entry,
-        )
   return `<div class="documentation-site" data-width="${site.options.contentWidth}"><header class="site-header">${escapeHtml(site.name)}</header><div class="site-layout"><main class="site-content"><div class="site-document-layout"><article class="tiptap">${html}</article><nav aria-label="Pages">${[...new Set(navigation)].map((entry) => `<a href="${escapeHtml(site.routing === 'hash' ? `#${new URLSearchParams({ page: entry.path })}` : `${prefix}${pageRoute(entry.path)}`)}">${escapeHtml(entry.title)}</a>`).join(' ')}</nav>${site.options.footer ? `<footer class="site-footer">${escapeHtml(site.options.footer)}</footer>` : ''}</div></main></div></div>`
 }
 
@@ -455,14 +452,24 @@ function siteHead(
 async function* siteData(
   site: SiteData,
   readPage: (page: SitePage) => Promise<SitePage>,
+  serialize = siteJson,
 ) {
-  const { pages, ...metadata } = site
-  yield `${siteJson(metadata).slice(0, -1)},"pages":[`
-  for (const [index, page] of pages.entries()) {
-    if (index) yield ','
-    yield siteJson(await readPage(page))
+  yield '{'
+  let separator = ''
+  for (const key of Object.keys(site) as (keyof SiteData)[]) {
+    if (site[key] === undefined) continue
+    yield separator + serialize(key) + ':'
+    separator = ','
+    if (key === 'pages') {
+      yield '['
+      for (const [index, page] of site.pages.entries()) {
+        if (index) yield ','
+        yield serialize(await readPage(page))
+      }
+      yield ']'
+    } else yield serialize(site[key])
   }
-  yield ']}'
+  yield '}'
 }
 
 async function* encryptedData(data: AsyncIterable<string>, password: string) {
@@ -513,26 +520,28 @@ export async function* siteOutput(
     }
   const data = () =>
     locked
-      ? encryptedData(siteData(site, readPage), password)
+      ? encryptedData(siteData(site, readPage, JSON.stringify), password)
       : siteData(site, readPage)
   const home = homePage(site.pages, site.options.homePage) as
     | SitePage
     | undefined
+  const paths = new Set(site.pages.map((page) => page.path))
+  const positions = new Map(site.pages.map((page, index) => [page.path, index]))
+  const neighbors = (page: SitePage) => {
+    const index = positions.get(page.path)!
+    return page.path === home?.path
+      ? site.pages
+      : [home, site.pages[index - 1], site.pages[index + 1]].filter(
+          (entry): entry is SitePage => !!entry,
+        )
+  }
   const homeContent = home && !locked ? await readPage(home) : undefined
   let assets = 'hibi-assets'
   const roots = new Set(
     site.pages.map((page) => page.path.toLowerCase().split('/')[0]),
   )
   while (roots.has(assets)) assets += '-site'
-  const customCss =
-    '@layer hibi-theme {' +
-    themeCss(site) +
-    '}\n' +
-    (site.css ?? '') +
-    '\n' +
-    (site.addons ?? []).map((addon) => addon.css ?? '').join('\n') +
-    '\n' +
-    site.options.css
+  const customCss = `@layer hibi-theme {${themeCss(site)}}\n${site.css ?? ''}\n${(site.addons ?? []).map((addon) => addon.css ?? '').join('\n')}\n${site.options.css}`
   const safeStyle = (css: string) => css.replace(/<\/style/gi, '<\\/style')
   const decorate = (
     html: string,
@@ -543,9 +552,7 @@ export async function* siteOutput(
     html
       .replace(
         '<html lang="en">',
-        '<html lang="' +
-          escapeHtml(locked ? 'en' : site.options.language) +
-          '">',
+        `<html lang="${escapeHtml(locked ? 'en' : site.options.language)}">`,
       )
       .replace(/<title>[^<]*<\/title>/, () =>
         siteHead(site, page, canonical, locked),
@@ -553,31 +560,12 @@ export async function* siteOutput(
       .replace(
         '</head>',
         () =>
-          '<meta name="hibi-root" content="' +
-          prefix +
-          '">' +
-          (locked
-            ? ''
-            : site.options.singleFile
-              ? '<style id="site-overrides">' +
-                safeStyle(customCss) +
-                '</style>'
-              : '<link id="site-overrides" rel="stylesheet" href="' +
-                prefix +
-                assets +
-                '/custom.css">') +
-          '</head>',
+          `<meta name="hibi-root" content="${prefix}">${locked ? '' : site.options.singleFile ? `<style id="site-overrides">${safeStyle(customCss)}</style>` : `<link id="site-overrides" rel="stylesheet" href="${prefix}${assets}/custom.css">`}</head>`,
       )
       .replace(
         '<div id="root"></div>',
         () =>
-          '<div id="root">' +
-          (locked
-            ? '<main class="site-unlock"><h1>Protected site</h1><noscript>Enable JavaScript to unlock this site.</noscript></main>'
-            : page
-              ? content(site, page, prefix)
-              : '') +
-          '</div>',
+          `<div id="root">${locked ? '<main class="site-unlock"><h1>Protected site</h1><noscript>Enable JavaScript to unlock this site.</noscript></main>' : page ? content(site, page, prefix, paths, neighbors(page)) : ''}</div>`,
       )
   if (site.options.singleFile) {
     const marker = randomBytes(16).toString('hex')

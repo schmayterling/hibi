@@ -1,11 +1,12 @@
+import { createHash } from 'node:crypto'
 import { mkdir, open, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parentPort } from 'node:worker_threads'
 import { imageSources } from '../../main/images'
 import { isMarkdownDocument } from '../../shared/document-types'
-import { noteBasenames, noteTargets } from '../../shared/note-links'
 import type { WorkspacePage } from '../../shared/workspace'
 import type { SiteData, SitePage } from '../../site/data'
+import { createNoteGraph } from '../graph/model'
 import type { ExportOptions } from './options'
 import { prepareSite, siteOutput } from './site'
 
@@ -32,15 +33,16 @@ export type SiteWorkerRequest =
 let directory = ''
 let site: SiteData
 let paths: Set<string>
-let basenames: ReturnType<typeof noteBasenames>
-const pages = new Map<string, number>()
-const edges = new Map<string, { source: string; target: string }>()
+let graph: ReturnType<typeof createNoteGraph>
+const pages = new Map<string, { index: number; hash: string }>()
+const sourceHash = (source: string) =>
+  createHash('sha256').update(source, 'utf16le').digest('hex')
 
 async function request(job: SiteWorkerRequest) {
   if (job.kind === 'start') {
     directory = job.directory
     paths = new Set(job.paths)
-    basenames = noteBasenames(paths)
+    graph = createNoteGraph(job.paths)
     site = prepareSite(
       {
         name: job.name,
@@ -58,13 +60,7 @@ async function request(job: SiteWorkerRequest) {
       ? [...imageSources(job.page.markdown)]
       : []
   if (job.kind === 'verify') {
-    const staged = JSON.parse(
-      await readFile(
-        join(directory, 'pages', String(pages.get(job.page.path))),
-        'utf8',
-      ),
-    ) as SitePage
-    if (staged.markdown !== job.page.markdown)
+    if (pages.get(job.page.path)?.hash !== sourceHash(job.page.markdown))
       throw new Error('The workspace changed during export. Export again.')
     return
   }
@@ -85,28 +81,14 @@ async function request(job: SiteWorkerRequest) {
       JSON.stringify(page),
       { flag: 'wx', mode: 0o600 },
     )
-    pages.set(page.path, index)
+    pages.set(page.path, { index, hash: sourceHash(page.markdown) })
     site.pages[index] = {
       path: page.path,
       title: page.title,
       description: page.description,
       markdown: '',
     }
-    if (site.options.graph && isMarkdownDocument(page.path))
-      for (const target of noteTargets(
-        page.markdown,
-        page.path,
-        paths,
-        undefined,
-        basenames,
-      )) {
-        const source = page.path < target ? page.path : target
-        const destination = page.path < target ? target : page.path
-        edges.set(JSON.stringify([source, destination]), {
-          source,
-          target: destination,
-        })
-      }
+    if (site.options.graph) graph.add(page)
     return
   }
   if (pages.size !== paths.size)
@@ -122,23 +104,7 @@ async function request(job: SiteWorkerRequest) {
     { ...site.options, homePage: '', graph: false },
   )
   site = { ...metadata, pages: site.pages, options: site.options }
-  if (site.options.graph) {
-    const degree = new Map<string, number>()
-    for (const edge of edges.values())
-      for (const path of [edge.source, edge.target])
-        degree.set(path, (degree.get(path) ?? 0) + 1)
-    site.graph = {
-      nodes: site.pages.map((page) => ({
-        id: page.path,
-        label: (page.path.split('/').at(-1) ?? page.path).replace(
-          /\.[^.]+$/,
-          '',
-        ),
-        degree: degree.get(page.path) ?? 0,
-      })),
-      edges: [...edges.values()],
-    }
-  }
+  if (site.options.graph) site.graph = graph.finish()
   const files: string[] = []
   for await (const [relative, chunks] of siteOutput(
     job.template,
@@ -147,7 +113,7 @@ async function request(job: SiteWorkerRequest) {
     async (page) =>
       JSON.parse(
         await readFile(
-          join(directory, 'pages', String(pages.get(page.path)!)),
+          join(directory, 'pages', String(pages.get(page.path)!.index)),
           'utf8',
         ),
       ) as SitePage,
@@ -157,7 +123,6 @@ async function request(job: SiteWorkerRequest) {
     const file = await open(path, 'wx', 0o600)
     try {
       for await (const chunk of chunks) await file.writeFile(chunk, 'utf8')
-      await file.sync()
     } finally {
       await file.close()
     }

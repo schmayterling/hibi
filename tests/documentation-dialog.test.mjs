@@ -110,7 +110,7 @@ test('export dialog opens while defaults load without reading document text', as
       'options must open before native defaults resolve',
     )
   } finally {
-    finishDefaults({ graph: false })
+    finishDefaults({ graph: false, pages: [{ path: 'note.md' }] })
     await running
     delete globalThis.localStorage
   }

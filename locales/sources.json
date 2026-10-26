@@ -2283,7 +2283,6 @@
   ],
   "c48ede563ddf": [
     "src/addons/documentation/index.tsx",
-    "src/addons/documentation/native.ts",
     "src/main/addons.ts"
   ],
   "bbb399c5f459": [
@@ -6428,6 +6427,9 @@
   ],
   "3ec61208f558": [
     "src/main/global-shortcuts.ts"
+  ],
+  "53101e1d982a": [
+    "src/addons/documentation/site-runtime.ts"
   ],
   "f876c831e537": [
     "src/renderer/src/document-runtime.ts"

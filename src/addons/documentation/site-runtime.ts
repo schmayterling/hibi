@@ -1,5 +1,30 @@
+import { readFile, stat } from 'node:fs/promises'
+import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 import type { SiteWorkerRequest } from './site-worker'
+
+/** Version-1 artifacts cross IPC; disk exports stream instead. */
+export async function readSiteFiles(
+  directory: string,
+  files: readonly string[],
+) {
+  let bytes = 0
+  for (const path of files) {
+    bytes +=
+      (await stat(join(directory, path))).size + Buffer.byteLength(path) + 64
+    if (bytes > 40 * 1024 * 1024)
+      throw new Error(
+        'This site is too large to return in memory. Export to disk instead.',
+      )
+  }
+  const result: { path: string; content: string }[] = []
+  for (const path of files)
+    result.push({
+      path,
+      content: await readFile(join(directory, path), 'utf8'),
+    })
+  return result
+}
 
 /** One owned worker and one acknowledged page at a time. */
 export class SiteWorker {

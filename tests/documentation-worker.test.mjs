@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, open, readFile, rename, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { exportOptions } from '../src/addons/documentation/options.ts'
-import { SiteWorker } from '../src/addons/documentation/site-runtime.ts'
+import {
+  readSiteFiles,
+  SiteWorker,
+} from '../src/addons/documentation/site-runtime.ts'
 
 const template =
   '<html lang="en"><head><title>site</title><style>body{}</style></head><body><div id="root"></div><script id="workspace-data" type="application/json">__HIBI_WORKSPACE_DATA__</script><script>void 0</script></body></html>'
@@ -66,9 +69,39 @@ test('owned export worker stages pages and yields main task turns while streamin
     )
     assert.match(html, /<h1 id="note">Note<\/h1>/)
     assert.match(html, /98.md\//)
+    await rename(join(directory, 'pages'), join(directory, 'saved-pages'))
+    await worker.request({
+      kind: 'verify',
+      page: { path: '99.md', markdown: '# Note\n\n[next](1.md)' },
+    })
+    await assert.rejects(
+      worker.request({
+        kind: 'verify',
+        page: { path: '99.md', markdown: '# Changed' },
+      }),
+      /workspace changed/,
+    )
   } finally {
     running = false
     await worker.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('version-1 artifacts refuse oversized IPC payloads before reading content', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'hibi-site-artifact-'))
+  try {
+    const file = await open(join(directory, 'large.html'), 'wx')
+    try {
+      await file.truncate(41 * 1024 * 1024)
+    } finally {
+      await file.close()
+    }
+    await assert.rejects(
+      readSiteFiles(directory, ['large.html']),
+      /Export to disk instead/,
+    )
+  } finally {
     await rm(directory, { recursive: true, force: true })
   }
 })

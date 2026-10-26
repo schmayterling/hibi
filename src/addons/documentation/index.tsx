@@ -3,7 +3,7 @@ import type { WorkspaceState } from '../../shared/workspace'
 import { defineAddon, type ExportResult, type SiteExportArtifact } from '../api'
 import manifest from './manifest'
 import type { ExportOptions } from './options'
-import { exportPaths, preparePages } from './prepare'
+import { preparePages } from './prepare'
 
 export default defineAddon({
   manifest,
@@ -149,7 +149,9 @@ export default defineAddon({
         const setup = (async () => {
           const [{ loadExportOptions }, defaults] = await Promise.all([
             import('./saved-options'),
-            context.native.query<{ graph: boolean }>('options'),
+            context.native.query<{ graph: boolean; pages: { path: string }[] }>(
+              'options',
+            ),
           ])
           const legacyKey = `hibi:export:${workspace.id}`
           let legacyText: string | null = null
@@ -173,7 +175,7 @@ export default defineAddon({
           return {
             initial,
             graph: defaults.graph,
-            pages: exportPaths(workspace.entries),
+            pages: defaults.pages,
             colorschemes: context.colorschemes.list(),
             contributions: siteContributions.snapshot(),
             warning,

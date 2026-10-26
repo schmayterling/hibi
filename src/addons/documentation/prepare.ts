@@ -1,16 +1,4 @@
-import type { WorkspaceEntry, WorkspacePage } from '../../shared/workspace'
-
-export function exportPaths(
-  entries: readonly WorkspaceEntry[],
-): { path: string }[] {
-  return entries.flatMap((entry) =>
-    entry.children
-      ? exportPaths(entry.children)
-      : entry.kind === 'file'
-        ? [{ path: entry.path }]
-        : [],
-  )
-}
+import type { WorkspacePage } from '../../shared/workspace'
 
 export async function preparePages(
   pages: Iterable<WorkspacePage> | AsyncIterable<WorkspacePage>,

@@ -1,4 +1,4 @@
-/** Temporary single-string preview; replace with a streamed viewport. */
+/** ponytail: 2 MiB string previews until the dialog uses a streamed viewport. */
 export const HISTORY_PREVIEW_BYTES = 2 * 1024 * 1024
 
 export type DocumentVersion = { id: string; savedAt: number; bytes: number }

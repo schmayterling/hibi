@@ -17,7 +17,8 @@ export { parseTransferHead }
 export async function loadDocumentTransfer(
   native: DocumentTransferApi,
   wire: DocumentTransfer,
-): Promise<{ document: DocumentState; source: LoadedDocument }> {
+  loaded: WeakMap<DocumentState, LoadedDocument>,
+): Promise<DocumentState> {
   const head = parseTransferHead(wire.documentTransfer)
   if (
     head.tabId !== wire.tabId ||
@@ -65,14 +66,12 @@ export async function loadDocumentTransfer(
       ...metadata
     } = wire
     const document = sourceDocument(metadata, snapshot, baseline)
-    return {
-      document,
-      source: {
-        store: source,
-        current: snapshot,
-        saved: baseline,
-      },
-    }
+    loaded.set(document, {
+      store: source,
+      current: snapshot,
+      saved: baseline,
+    })
+    return document
   } finally {
     await native.abortDocumentTransfer(receiver.request).catch(() => {})
   }

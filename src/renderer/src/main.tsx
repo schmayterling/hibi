@@ -61,10 +61,7 @@ import {
   SIDEBAR_OVERLAY_WIDTH,
   useSidebarResize,
 } from '../../ui/useSidebarResize'
-import {
-  ActiveDocumentEditor,
-  type DocumentFlavorStatus,
-} from './ActiveDocumentEditor'
+import type { DocumentFlavorStatus } from './ActiveDocumentEditor'
 import { AddonPanel } from './AddonPanel'
 import type { AddonRequest } from './AddonSettings'
 import { AddonSidebar, builtInViews, viewShortcut } from './AddonSidebar'
@@ -304,6 +301,7 @@ function App() {
     !document || documentFormats.isMarkdown(document.name)
   const [richEditor, setRichEditor] = useState<{
     Component?: typeof import('./Editor').MarkdownEditor
+    Adapter?: typeof import('./ActiveDocumentEditor').ActiveDocumentEditor
     error?: Error
   }>({})
   const needsRichEditor =
@@ -317,13 +315,25 @@ function App() {
         })
       ))
   useEffect(() => {
-    if (!needsRichEditor || richEditor.Component || richEditor.error) return
+    if (
+      !needsRichEditor ||
+      (richEditor.Component && richEditor.Adapter) ||
+      richEditor.error
+    )
+      return
     let active = true
     // Publish the demanded module as ordinary state: a first Suspense retry can
     // otherwise hold an already loaded editor behind React's reveal throttle.
-    void import('./Editor').then(
-      ({ MarkdownEditor }) => {
-        if (active) setRichEditor({ Component: MarkdownEditor })
+    void Promise.all([
+      import('./Editor'),
+      import('./ActiveDocumentEditor'),
+    ]).then(
+      ([{ MarkdownEditor }, { ActiveDocumentEditor }]) => {
+        if (active)
+          setRichEditor({
+            Component: MarkdownEditor,
+            Adapter: ActiveDocumentEditor,
+          })
       },
       (error: Error) => {
         if (active) setRichEditor({ error })
@@ -335,6 +345,7 @@ function App() {
   }, [needsRichEditor, richEditor])
   const [formatEditor, setFormatEditor] = useState<{
     Component?: typeof import('./FormatEditor').FormatEditor
+    Adapter?: typeof import('./ActiveDocumentEditor').ActiveDocumentEditor
     error?: Error
   }>({})
   const needsFormatEditor =
@@ -1033,14 +1044,21 @@ function App() {
     if (
       !addonHost.ready ||
       !needsFormatEditor ||
-      formatEditor.Component ||
+      (formatEditor.Component && formatEditor.Adapter) ||
       formatEditor.error
     )
       return
     let active = true
-    void import('./FormatEditor').then(
-      ({ FormatEditor }) => {
-        if (active) setFormatEditor({ Component: FormatEditor })
+    void Promise.all([
+      import('./FormatEditor'),
+      import('./ActiveDocumentEditor'),
+    ]).then(
+      ([{ FormatEditor }, { ActiveDocumentEditor }]) => {
+        if (active)
+          setFormatEditor({
+            Component: FormatEditor,
+            Adapter: ActiveDocumentEditor,
+          })
       },
       (error: Error) => {
         if (active) setFormatEditor({ error })
@@ -2704,6 +2722,7 @@ function App() {
     const PaneEditor = paneMarkdown
       ? richEditor.Component
       : formatEditor.Component
+    const PaneAdapter = paneMarkdown ? richEditor.Adapter : formatEditor.Adapter
     const requestedMode = splitTabs
       ? side === 'left'
         ? splitTabs.leftMode
@@ -2799,10 +2818,12 @@ function App() {
             message="This note opens in source view to keep editing responsive. Choose Normal to prepare its formatted view."
           />
         )}
-        {(!editorStarted.current || !PaneEditor) && <LoadingScreen />}
-        {paneDocument && editorStarted.current && PaneEditor && (
+        {(!editorStarted.current || !PaneEditor || !PaneAdapter) && (
+          <LoadingScreen />
+        )}
+        {paneDocument && editorStarted.current && PaneEditor && PaneAdapter && (
           <Suspense fallback={<LoadingScreen />}>
-            <ActiveDocumentEditor
+            <PaneAdapter
               Component={PaneEditor}
               {...(splitTabs ? { viewId: side } : {})}
               focused={active}

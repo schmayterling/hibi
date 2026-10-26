@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { DocumentRuntime } from '../src/renderer/src/document-runtime.ts'
 import {
@@ -76,6 +77,34 @@ function fixture(current, baseline = current) {
     state: () => ({ aborted, finished }),
   }
 }
+
+test('bridge initialization keeps transfer controls private before hydration', async () => {
+  const methods = [
+    'abortDocumentTransfer',
+    'finishDocumentTransfer',
+    'openDocumentTransfer',
+    'readDocumentTransfer',
+  ]
+  const native = {
+    setAppearance: () => 'appearance',
+    ...Object.fromEntries(methods.map((name) => [name, () => name])),
+  }
+  const window = { hibiTransport: native }
+  const source = await readFile(
+    new URL('../src/renderer/src/desktop-bridge.ts', import.meta.url),
+    'utf8',
+  )
+  const before = source.indexOf('const { documentTransferApi } = await import')
+  assert.ok(before > 0)
+  new Function('window', source.slice(0, before).replace('export {}', ''))(
+    window,
+  )
+  assert.equal(window.hibi.setAppearance(), 'appearance')
+  for (const name of methods) {
+    assert.equal(Object.hasOwn(window.hibi, name), false, name)
+    assert.equal(native[name](), name)
+  }
+})
 
 test('deferred transfer loading retains the received metadata before yielding', async () => {
   const f = fixture('captured transfer\r\n😀')

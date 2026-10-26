@@ -49,12 +49,9 @@ export function documentTransferApi(
     const head = parseTransferHead(transfer.documentTransfer),
       previous = pending.get(head.streamId)
     if (previous) return previous
-    const work = loadDocumentTransfer(native, transfer)
-      .then(({ document, source }) => {
-        loaded.set(document, source)
-        return document
-      })
-      .finally(() => pending.delete(head.streamId))
+    const work = loadDocumentTransfer(native, transfer, loaded).finally(() =>
+      pending.delete(head.streamId),
+    )
     pending.set(head.streamId, work)
     return work
   }

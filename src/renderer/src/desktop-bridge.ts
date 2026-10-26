@@ -2,7 +2,11 @@ export {}
 
 // Native appearance subscriptions may start while shared modules load.
 Object.defineProperty(window, 'hibi', {
-  value: window.hibiTransport,
+  value: Object.fromEntries(
+    Object.entries(window.hibiTransport).filter(
+      ([name]) => !name.endsWith('DocumentTransfer'),
+    ),
+  ),
   configurable: true,
 })
 const { documentTransferApi } = await import('./document-transfer')

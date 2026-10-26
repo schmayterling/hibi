@@ -375,15 +375,20 @@ for (const size of sizes)
               !content.closest('[data-source-ready="true"]') ||
               document.querySelector('.app')?.getAttribute('aria-busy') !==
                 'false'
-            ) {
-              requestAnimationFrame(ready)
+            )
               return
-            }
+            observer.disconnect()
             resolve({
               prefix: view.state.doc.sliceString(0, 32),
               length: view.state.doc.length,
             })
           }
+          const observer = new MutationObserver(ready)
+          observer.observe(document.documentElement, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+          })
           ready()
         }),
     )
@@ -404,12 +409,16 @@ for (const size of sizes)
     const stats = await app.evaluate(() => globalThis.scaleProbe)
     if (!baseline)
       assert.ok(stats.maxMessageUnits <= 65536, JSON.stringify(stats))
-    const closing = performance.now(),
-      closed = new Promise((resolve) => page.once('close', resolve))
-    await app.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0].close(),
+    const closing = performance.now()
+    // Renderer recovery can replace Playwright's page; observe the native window.
+    await app.evaluate(
+      ({ BrowserWindow }) =>
+        new Promise((resolve) => {
+          const window = BrowserWindow.getAllWindows()[0]
+          window.once('closed', () => resolve())
+          window.close()
+        }),
     )
-    await closed
     const closeMs = performance.now() - closing
     assert.deepEqual(await readFile(file), Buffer.from(expected('X')))
     t.diagnostic(

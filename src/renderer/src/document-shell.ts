@@ -89,7 +89,7 @@ export function subscribeDocumentShell(
   })
 }
 
-/** Temporary source-first opening; remove with the CodeMirror formatted view (#402). */
+/** ponytail: source-first above 262,144 units until the formatted view in #402. */
 export function preferSourceOpening(
   runtime: Pick<DocumentRuntime, 'openingLength'>,
   document: DocumentState | null,

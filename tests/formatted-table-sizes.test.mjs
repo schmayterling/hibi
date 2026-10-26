@@ -229,7 +229,18 @@ test('the rich editor stores only the tables it changes', {
       put: [{ key, columns: [180, 0], rows: null }],
     })
   }, first)
-  // The rich editor resizes the second table: its save keeps the first's width.
+  // Another window gives the second, unsized table its first size, a row height.
+  const second = tableKey(1, ['C', 'D'])
+  await page.evaluate(async (key) => {
+    const { tabId } = await window.hibi.getDocument()
+    await window.hibi.writeTableLayout(tabId, {
+      remove: [],
+      put: [],
+      set: [{ key, axis: 'row', index: 1, size: 90 }],
+    })
+  }, second)
+  // The rich editor resizes the second table: its save keeps the first's
+  // width and the second's row height.
   await drag(
     page,
     rich.nth(1).locator('th').first(),
@@ -237,7 +248,6 @@ test('the rich editor stores only the tables it changes', {
     40,
     (axis) => `.tiptap[data-table-resize="${axis}"]`,
   )
-  const second = tableKey(1, ['C', 'D'])
   await waitForAsync(
     page,
     async (key) =>
@@ -247,7 +257,7 @@ test('the rich editor stores only the tables it changes', {
             await window.hibi.getDocument()
           ).tabId,
         )
-      )?.some((table) => table.key === key),
+      )?.find((table) => table.key === key)?.columns?.[0] > 0,
     second,
   )
   const tables = await stored(layout)
@@ -256,4 +266,5 @@ test('the rich editor stores only the tables it changes', {
     [180, 0],
   )
   assert.ok(tables.find((table) => table.key === second)?.columns?.[0] > 0)
+  assert.equal(tables.find((table) => table.key === second)?.rows?.[1], 90)
 })

@@ -580,18 +580,23 @@ export const tableLayout = Extension.create<{ tabId: string }>({
             // windows stored since stay as they are.
             const before = new Map(previous.map((table) => [table.key, table]))
             const keys = new Set(tables.map((table) => table.key))
-            const put: TableLayout[] = [],
-              set: TableSize[] = []
-            for (const table of tables) {
-              const old = before.get(table.key)
-              if (old) set.push(...tableSizeChanges(old, table))
-              else put.push(table)
-            }
+            const set: TableSize[] = []
+            for (const table of tables)
+              set.push(
+                ...tableSizeChanges(
+                  before.get(table.key) ?? {
+                    key: table.key,
+                    columns: null,
+                    rows: null,
+                  },
+                  table,
+                ),
+              )
             updateTableLayouts(tabId, previous, {
               remove: previous
                 .filter((table) => !keys.has(table.key))
                 .map((table) => table.key),
-              put,
+              put: [],
               set,
             })
           }

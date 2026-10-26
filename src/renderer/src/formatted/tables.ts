@@ -1399,29 +1399,30 @@ class TableView {
         : []
     const json = put.length ? JSON.stringify(put[0]) : null
     if (json === this.stored && (put.length || !this.sizes.key)) return
-    // Under the same key only the sizes that changed, so that other views'
-    // and windows' changes to the table stay; else only this table's entries.
+    // Only the sizes that changed, from none for a table without an entry,
+    // so that other views' and windows' changes to the table stay; a table
+    // whose key changed moves its whole entry.
+    const moving = this.sizes.key !== null && this.sizes.key !== key
     const previous =
-      this.stored && key === this.sizes.key
+      this.stored && !moving
         ? (JSON.parse(this.stored) as TableLayout)
-        : null
-    const remove = [key]
-    if (this.sizes.key && this.sizes.key !== key) remove.push(this.sizes.key)
+        : { key, columns: null, rows: null }
+    const remove = moving ? [key, this.sizes.key as string] : []
     this.sizes.key = put.length ? key : null
     this.stored = json
     updateTableLayouts(
       entry.tabId,
       tables,
-      previous
-        ? {
+      moving
+        ? { remove, put }
+        : {
             remove: [],
             put: [],
             set: tableSizeChanges(
               previous,
               put[0] ?? { key, columns: null, rows: null },
             ),
-          }
-        : { remove, put },
+          },
     )
   }
 

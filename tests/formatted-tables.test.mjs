@@ -1166,6 +1166,30 @@ test('a resize stores only the size it changed', {
   assert.deepEqual((await layouts('axis'))[0].rows, [0, 50])
 })
 
+test('the first resize of a table stores only that size', {
+  timeout: 30000,
+}, async () => {
+  await harness.evaluate(() => window.tables.layouts('first', []))
+  await mountTab('| a | b |\n| - | - |\n| 1 | 2 |\n\nafter', 'first')
+  await harness
+    .locator('.hibi-lp-table th')
+    .first()
+    .locator('.hibi-lp-table-resizer[data-axis="column"]')
+    .focus()
+  await harness.keyboard.press('ArrowRight')
+  await harness.waitForFunction(() => window.tables.writes('first').length > 0)
+  const [write] = await harness.evaluate(() => window.tables.writes('first'))
+  // Another window's first sizes for the table merge with this one.
+  assert.deepEqual(
+    [
+      write.remove,
+      write.put,
+      write.set.map(({ axis, index }) => [axis, index]),
+    ],
+    [[], [], [['column', 0]]],
+  )
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {

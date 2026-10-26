@@ -1,5 +1,6 @@
 import { Marked } from 'marked'
 import type { MarkdownFlavor, RenderedMarkdown } from '../../addons/api'
+import { blockMarkdown } from '../../shared/marked-blocks.ts'
 import { validatePreservation } from '../../shared/preservation'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import literalStyles from '../../ui/markdown-literal.css?raw'
@@ -130,7 +131,7 @@ export function renderMarkdown(
 ): RenderedMarkdown {
   const selected = selectedFlavors(loadFlavor(documentId), snapshot)
   const parser = installSyntaxPreferences(
-    new Marked({ gfm: false, breaks: false }),
+    new Marked({ gfm: false, breaks: false }, blockMarkdown),
   )
   parser.use({
     renderer: {

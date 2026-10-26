@@ -73,8 +73,11 @@ export interface GraphPosition {
   readonly pathIndex: number
   readonly targetIndex: number
   readonly nodeEmitted: boolean
-  readonly emitted: number
 }
+
+// A note's targets are sorted once per build; graph pages that resume inside
+// a note with many links reuse the order instead of sorting it again.
+const sortedTargets = new WeakMap<ReadonlySet<string>, readonly string[]>()
 
 /** Parsed references share the existing workspace page cache; no filesystem scan. */
 export class WorkspaceReferenceIndex {
@@ -390,18 +393,13 @@ export class WorkspaceReferenceIndex {
     items: readonly WorkspaceGraphItem[]
     position: GraphPosition
     hasMore: boolean
-    capReached: boolean
   } {
     const items: WorkspaceGraphItem[] = []
-    let { pathIndex, targetIndex, nodeEmitted, emitted } = start
+    let { pathIndex, targetIndex, nodeEmitted } = start
     let bytes = 0
     let targetsPath = ''
-    let targets: string[] = []
-    while (
-      pathIndex < this.sortedPaths.length &&
-      items.length < limit &&
-      emitted < 10_000
-    ) {
+    let targets: readonly string[] = []
+    while (pathIndex < this.sortedPaths.length && items.length < limit) {
       const path = this.sortedPaths[pathIndex]
       if (!path) break
       let item: WorkspaceGraphItem
@@ -409,9 +407,13 @@ export class WorkspaceReferenceIndex {
       else {
         if (targetsPath !== path) {
           targetsPath = path
-          targets = [...(this.documents.get(path)?.targets ?? [])].sort(
-            (a, b) => a.localeCompare(b),
-          )
+          const links = this.documents.get(path)?.targets
+          let sorted = links && sortedTargets.get(links)
+          if (links && !sorted) {
+            sorted = [...links].sort((a, b) => a.localeCompare(b))
+            sortedTargets.set(links, sorted)
+          }
+          targets = sorted ?? []
         }
         const target = targets[targetIndex]
         if (!target) {
@@ -429,16 +431,13 @@ export class WorkspaceReferenceIndex {
       if (bytes + size > 32 * 1024) break
       items.push(item)
       bytes += size
-      emitted++
       if (item.kind === 'node') nodeEmitted = true
       else targetIndex++
     }
-    const hasMore = pathIndex < this.sortedPaths.length && emitted < 10_000
     return {
       items,
-      position: { pathIndex, targetIndex, nodeEmitted, emitted },
-      hasMore,
-      capReached: pathIndex < this.sortedPaths.length && emitted >= 10_000,
+      position: { pathIndex, targetIndex, nodeEmitted },
+      hasMore: pathIndex < this.sortedPaths.length,
     }
   }
 

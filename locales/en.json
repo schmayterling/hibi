@@ -1232,6 +1232,7 @@
   "d8da2c49df39": "Note",
   "93d42bd40fc0": "Note for “{value1}”",
   "c72183682f41": "Note or definition",
+  "8a7525b1492f": "Notes",
   "8ec5e108fc99": "Notes tagged #{selected}",
   "f55642ddb45f": "Nothing was found for “{word}”. Check the spelling or try another form of the word.",
   "6887944c3369": "Notification preview",
@@ -2384,7 +2385,6 @@
   "9bf22c3ffed2": "{value1}. Spaces and line breaks count as characters; each emoji counts as one.",
   "da55d16fc16f": "~subscript~ and -# small text.",
   "3ca172ad5570": "· async",
-  "abfda98c8bbd": "· filter to see more notes",
   "20eac6938637": "· graph index incomplete",
   "57aea1c5dbe7": "· license and credits"
 }

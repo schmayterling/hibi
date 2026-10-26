@@ -1,6 +1,7 @@
 import { CircleAlert, FileText, Network } from 'lucide-react'
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -13,6 +14,97 @@ import { Button, ControlRow, Panel, PanelMessage, TextInput } from '../ui'
 import { useSerialRead, useWorkspaceQueryTarget } from '../use-workspace-query'
 import { GraphCanvas } from './Canvas'
 import { metadataGraph } from './model'
+
+const layoutWorker = () =>
+  new Worker(new URL('./layout.worker.ts', import.meta.url), { type: 'module' })
+
+/** Renders only rows near the scrolled view so hub notes stay cheap. */
+function ConnectionRows({
+  nodes,
+  open,
+}: {
+  nodes: readonly { id: string }[]
+  open: (path: string) => void
+}) {
+  const list = useRef<HTMLDivElement>(null)
+  const [range, setRange] = useState({ from: 0, to: 40 })
+  const [focused, setFocused] = useState<string | null>(null)
+  useLayoutEffect(() => {
+    const element = list.current
+    let scroller = element?.parentElement ?? null
+    while (
+      scroller &&
+      !/auto|scroll/.test(getComputedStyle(scroller).overflowY)
+    )
+      scroller = scroller.parentElement
+    if (!element || !scroller) {
+      setRange({ from: 0, to: nodes.length })
+      return
+    }
+    const view = scroller
+    const update = () => {
+      const row =
+        Number.parseFloat(
+          getComputedStyle(element).getPropertyValue('--sidebar-row-height'),
+        ) || 28
+      const top =
+        view.getBoundingClientRect().top - element.getBoundingClientRect().top
+      const from = Math.max(0, Math.floor(top / row) - 8)
+      const to = Math.min(
+        nodes.length,
+        Math.ceil((top + view.clientHeight) / row) + 8,
+      )
+      setRange((old) =>
+        old.from === from && old.to === to ? old : { from, to },
+      )
+    }
+    update()
+    view.addEventListener('scroll', update, { passive: true })
+    const resize = new ResizeObserver(update)
+    resize.observe(view)
+    return () => {
+      view.removeEventListener('scroll', update)
+      resize.disconnect()
+    }
+  }, [nodes])
+  // Besides rows near the view, the first and last rows and the focused row's
+  // neighbors stay mounted, so Tab and Shift+Tab always reach the next row in
+  // order; focusing it scrolls it into view.
+  const focusIndex = nodes.findIndex((node) => node.id === focused)
+  const mounted = new Set([0, nodes.length - 1])
+  for (let index = range.from; index < range.to; index++) mounted.add(index)
+  if (focusIndex >= 0)
+    for (const index of [focusIndex - 1, focusIndex, focusIndex + 1])
+      mounted.add(index)
+  const rows = [...mounted]
+    .filter((index) => index >= 0 && index < nodes.length)
+    .sort((a, b) => a - b)
+  return (
+    <div
+      ref={list}
+      className="graph-connection-rows"
+      style={{ height: `calc(${nodes.length} * var(--sidebar-row-height))` }}
+    >
+      {rows.map((index) => {
+        const node = nodes[index]!
+        return (
+          <Button
+            key={node.id}
+            variant="row"
+            style={{ top: `calc(${index} * var(--sidebar-row-height))` }}
+            onFocus={() => setFocused(node.id)}
+            onClick={() => open(node.id)}
+          >
+            <FileText size={14} aria-hidden="true" />
+            <span data-tooltip={node.id} data-verbatim="true">
+              {node.id}
+            </span>
+          </Button>
+        )
+      })}
+    </div>
+  )
+}
 
 export function GraphPanel({
   context,
@@ -135,18 +227,16 @@ export function GraphPanel({
     return full.nodes.filter((node) => neighbors.has(node.id))
   }, [full, workspace?.activePath])
   const graph = useMemo(() => {
-    const matching = full.nodes.filter((node) =>
-      node.id.toLowerCase().includes(query.trim().toLowerCase()),
+    const filter = query.trim().toLowerCase()
+    const nodes = full.nodes.filter((node) =>
+      node.id.toLowerCase().includes(filter),
     )
-    // ponytail: SVG caps at 500 visible notes; use a canvas renderer for larger simultaneous graphs.
-    const nodes = matching.slice(0, 500),
-      ids = new Set(nodes.map((node) => node.id))
+    const ids = new Set(nodes.map((node) => node.id))
     return {
       nodes,
       edges: full.edges.filter(
         (edge) => ids.has(edge.source) && ids.has(edge.target),
       ),
-      total: matching.length,
     }
   }, [full, query])
   const open = (path: string) => {
@@ -188,9 +278,9 @@ export function GraphPanel({
       ) : (
         <>
           <p className="graph-summary" role="status">
-            {graph.nodes.length} of {graph.total} notes · {graph.edges.length}{' '}
+            {graph.nodes.length} of {full.nodes.length} notes ·{' '}
+            {graph.edges.length}{' '}
             {graph.edges.length === 1 ? 'connection' : 'connections'}
-            {graph.total > 500 ? ' · filter to see more notes' : ''}
             {current && !current.complete ? ' · graph index incomplete' : ''}
           </p>
           {graph.nodes.length ? (
@@ -200,6 +290,7 @@ export function GraphPanel({
               open={open}
               resetKey={`${workspace.id ?? workspace.name}:${query}`}
               expand={onExpand ? () => onExpand(query) : undefined}
+              worker={layoutWorker}
             />
           ) : (
             <PanelMessage
@@ -213,18 +304,7 @@ export function GraphPanel({
             <section className="graph-connections" aria-label="Connections">
               <h3>Connections</h3>
               {connections.length ? (
-                connections.map((node) => (
-                  <Button
-                    key={node.id}
-                    variant="row"
-                    onClick={() => open(node.id)}
-                  >
-                    <FileText size={14} aria-hidden="true" />
-                    <span data-tooltip={node.id} data-verbatim="true">
-                      {node.id}
-                    </span>
-                  </Button>
-                ))
+                <ConnectionRows nodes={connections} open={open} />
               ) : (
                 <p>
                   {workspace.activePath

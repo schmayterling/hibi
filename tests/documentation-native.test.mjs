@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
+import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
@@ -26,7 +26,7 @@ const stubs = {
   './site-runtime': `export { readSiteFiles, validateSiteFiles } from ${JSON.stringify(resolve('src/addons/documentation/site-runtime.ts'))}
     export class SiteWorker {
       request(job) { return globalThis.__exportNative.request(job) }
-      async close() { globalThis.__exportNative.close() }
+      async close() { return globalThis.__exportNative.close() }
     }`,
 }
 const bundle = await build({
@@ -66,10 +66,51 @@ new Function('require', 'module', 'exports', bundle.outputFiles[0].text)(
   module,
   module.exports,
 )
-const native = module.exports.default.queries
+const addon = module.exports.default
+const native = addon.queries
 const target = { workspaceId: 'notes', workspaceGeneration: 1 }
 const source = { path: 'note.md', markdown: '# Note\n\n![image](a.png)' }
 const contributions = { css: '', colorschemes: [], addons: [], password: '' }
+
+test('native stop awaits worker shutdown before removing private scratch', async (t) => {
+  let release
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  globalThis.__exportNative = {
+    target,
+    source,
+    request: async () => {},
+    close: () => held,
+  }
+  await native.begin({ target, options: {} })
+  const fs = process.getBuiltinModule('node:fs/promises')
+  const original = fs.rm
+  let removed = false
+  fs.rm = async (...args) => {
+    removed = true
+    return original(...args)
+  }
+  syncBuiltinESMExports()
+  t.after(() => {
+    fs.rm = original
+    syncBuiltinESMExports()
+    delete globalThis.__exportNative
+  })
+  const stopping = addon.stop()
+  try {
+    await new Promise(setImmediate)
+    assert.equal(
+      removed,
+      false,
+      'readers close before the scratch directory is removed',
+    )
+  } finally {
+    release()
+    await stopping
+  }
+  assert.equal(removed, true)
+})
 
 for (const mode of ['disk', 'memory', 'cancel']) {
   test(`native export overlaps image discovery and handles ${mode} completion`, async () => {

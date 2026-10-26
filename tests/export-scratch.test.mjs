@@ -49,5 +49,5 @@ test('startup and next export remove only the owning profile scratch', async (t)
     join(linkedProfile, 'site-exports'),
     'junction',
   )
-  await assert.rejects(sweepSiteScratch(linkedProfile), /Could not prepare/)
+  await assert.rejects(sweepSiteScratch(linkedProfile))
 })

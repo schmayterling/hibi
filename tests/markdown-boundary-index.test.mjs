@@ -219,6 +219,23 @@ test('frontmatter prefixes and empty notes transfer without syntax nodes', () =>
   }
 })
 
+test('short-line boundary scans amortize normalized rope lookups across bounded ranges', () => {
+  const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
+  const text = unit.repeat(Math.ceil((1024 * 1024) / unit.length))
+  const store = new SourceStore(text, { tabId: 'cached-input', revision: 0 })
+  store.counters(true)
+  const worker = new MarkdownBoundaryIndex(
+    store.snapshot(),
+    configuration({ chunkSize: 4096, groupSize: 64, giantBlock: 65536 }),
+  )
+  drain(worker)
+  const work = store.counters()
+  assert.ok(work.nodeVisits < text.length, JSON.stringify(work))
+  assert.ok(work.unitsScanned < text.length, JSON.stringify(work))
+  assert.ok(work.sourceUnitsRead < text.length * 8, JSON.stringify(work))
+  assert.equal(work.materializations, 0)
+})
+
 test('edits during a scan preserve its verified prefix and rescan only damaged ranges', () => {
   const text = '# heading\n\nparagraph text\n\n'.repeat(40000)
   const store = new SourceStore(text, { tabId: 'incremental', revision: 0 })

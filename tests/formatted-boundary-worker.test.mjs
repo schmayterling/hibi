@@ -90,13 +90,25 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
       { worker: true },
     )
   })
-  await page.waitForFunction(
-    () =>
-      window.livePreview.workerState.ready ||
-      window.livePreview.workerState.errors.length,
-    undefined,
-    { timeout: 120000 },
-  )
+  await page
+    .waitForFunction(
+      () =>
+        window.livePreview.workerState.ready ||
+        window.livePreview.workerState.errors.length,
+      undefined,
+      { timeout: 120000 },
+    )
+    .catch(async (error) => {
+      t.diagnostic(
+        JSON.stringify(
+          await page.evaluate(() => ({
+            ...window.livePreview.workerState,
+            ...window.livePreview.probe,
+          })),
+        ),
+      )
+      throw error
+    })
   assert.deepEqual(
     await page.evaluate(() => window.livePreview.workerState.errors),
     [],

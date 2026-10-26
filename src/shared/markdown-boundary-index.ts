@@ -1,4 +1,4 @@
-import { type Tree, TreeFragment } from '@lezer/common'
+import { type Input, type Tree, TreeFragment } from '@lezer/common'
 import {
   boundaryRecords,
   ChunkedMarkdownParser,
@@ -16,6 +16,30 @@ import type {
 } from './source-buffer.ts'
 import { sourceParserInput } from './source-parser.ts'
 import { editorChangesFromSource } from './source-projection.ts'
+
+/** Cache normalized ranges so short lines do not each seek the rope. */
+function boundaryInput(source: SourceSnapshot): Input {
+  const input = sourceParserInput(source)
+  let from = -1,
+    text = ''
+  const read = (start: number, end: number) => {
+    if (end - start > 16384) return input.read(start, end)
+    if (start < from || end > from + text.length) {
+      from = Math.max(0, start - 4096)
+      text = input.read(
+        from,
+        Math.min(input.length, Math.max(end, from + 16384)),
+      )
+    }
+    return text.slice(start - from, end - from)
+  }
+  return {
+    length: input.length,
+    lineChunks: false,
+    chunk: (start) => read(start, Math.min(input.length, start + 4096)),
+    read,
+  }
+}
 
 /** A metadata-only index of the canonical normalized rope, using the formatted view's scanner. */
 export class MarkdownBoundaryIndex {
@@ -44,7 +68,7 @@ export class MarkdownBoundaryIndex {
     })
     this.source = source
     this.parse = this.parser.startBoundaryParse(
-      sourceParserInput(source),
+      boundaryInput(source),
       [],
       config.prefix,
     )
@@ -82,7 +106,7 @@ export class MarkdownBoundaryIndex {
     this.source = prepared.after
     this.tree = null
     this.parse = this.parser.startBoundaryParse(
-      sourceParserInput(prepared.after),
+      boundaryInput(prepared.after),
       fragments,
       this.config.prefix,
     )

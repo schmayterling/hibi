@@ -387,7 +387,11 @@ function preservesBlocks(
       for (let child = node.firstChild; child; child = child.nextSibling)
         if (child.type.is('Block'))
           children.push({ node: child, value: describe(child) })
-      if (children.length) {
+      if (
+        children.length ||
+        node.name === 'Document' ||
+        node.type.is('BlockContext')
+      ) {
         if (reorder) {
           const moving = children.findIndex(
             ({ node }) =>

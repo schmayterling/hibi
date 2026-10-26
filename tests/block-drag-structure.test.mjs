@@ -69,6 +69,11 @@ test('quoted items leave trailing quote-only lines between blocks', () => {
     assert.equal(moved(doc, 'a', 'ListItem', 1), expected)
     assert.equal(moved(doc, 'b', 'ListItem', -1), expected)
   }
+  assert.equal(moved('1.\n2. two\n', '1.', 'ListItem', 1), '1. two\n2.\n')
+  assert.equal(
+    moved('> -\n>   a\n> - b\n>\n> after\n', 'a', 'ListItem', 1),
+    '> - b\n> -\n>   a\n>\n> after\n',
+  )
   let doc = '> before\n>\n> - a\n> - b\n>\n> after\n'
   const original = doc
   for (let i = 0; i < 3; i++) {

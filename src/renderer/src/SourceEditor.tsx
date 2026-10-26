@@ -687,6 +687,7 @@ export function SourceEditor({
       options: Map<CompletionItem, Completion>
     }
     let completion: PendingCompletion | null = null
+    let pendingSyntax: { update: () => void; cancel: () => void } | null = null
     let typed: {
       doc: EditorState['doc']
       pos: number
@@ -730,6 +731,12 @@ export function SourceEditor({
         },
         kind,
       )
+    }
+    const completionParsed = () => {
+      if (!formatted || !parserOptions.current.markdownMode) return true
+      const state = editor.state
+      const line = state.doc.lineAt(state.selection.main.head)
+      return line.length > 16384 || !uncovered(tree(state), line.from, line.to)
     }
     const proseAt = (
       state: EditorState,
@@ -885,6 +892,7 @@ export function SourceEditor({
       }
     }
     const cancelCompletion = () => {
+      pendingSyntax?.cancel()
       const pending = completion
       completion = null
       if (!pending) return
@@ -997,7 +1005,7 @@ export function SourceEditor({
         }
       }, 0)
     }
-    const sourceCompletions = (context: CompletionContext) => {
+    const sourceCompletions = async (context: CompletionContext) => {
       if (!completionBroker.hasProviders()) return null
       const trigger: CompletionRequest['trigger'] | null = context.explicit
         ? { kind: 'explicit' }
@@ -1005,8 +1013,37 @@ export function SourceEditor({
           ? { kind: 'input', character: typed.character }
           : null
       if (!trigger) return null
-      const request = captureCompletion(trigger)
-      if (!request) return null
+      const initial = captureCompletion(trigger)
+      if (!initial) return null
+      // A jump can reach a chunk before its idle parse. Wait for that parse,
+      // then capture the current tree instead of caching missing prose.
+      const request = completionParsed()
+        ? initial
+        : await new Promise<CompletionRequest | null>((resolve) => {
+            cancelCompletion()
+            const finish = (request: CompletionRequest | null) => {
+              if (pendingSyntax !== pending) return
+              pendingSyntax = null
+              resolve(request)
+            }
+            const pending = {
+              cancel: () => finish(null),
+              update: () => {
+                if (context.aborted) finish(null)
+                else if (completionParsed()) {
+                  const current = captureCompletion(trigger)
+                  finish(
+                    sameCompletionContext(initial, current) ? current : null,
+                  )
+                }
+              },
+            }
+            pendingSyntax = pending
+            context.addEventListener('abort', pending.cancel, {
+              onDocChange: true,
+            })
+          })
+      if (!request || context.aborted) return null
       const current = completion
       if (current && sameCompletionContext(current.request, request))
         return current.items.length
@@ -1455,6 +1492,7 @@ export function SourceEditor({
               completionStatus(update.state) === null
             )
               cancelCompletion()
+            pendingSyntax?.update()
             if (update.docChanged || update.selectionSet || update.focusChanged)
               update.view.contentDOM.dispatchEvent(
                 new Event('hibi:source-caret', { bubbles: true }),

@@ -44,6 +44,10 @@ function harness(paths, files = {}) {
 }
 
 const uncSources = [
+  String.raw`\??\UNC\server\share\image.png`,
+  String.raw`\??\C:\photos\image.png`,
+  String.raw`/??\UNC/server/share/image.png`,
+  '%5c%3f%3f%5cUNC%5cserver%5cshare%5cimage.png',
   '//server/share/image.png',
   String.raw`\\server\share\image.png`,
   String.raw`/\server/share/image.png`,

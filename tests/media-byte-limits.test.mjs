@@ -253,6 +253,8 @@ test('display opener remains uncapped while copy and export stay bounded', async
 test('windows drops and attachments reject mixed UNC prefixes before opening files', async (t) => {
   const f = await fixture(t, win32.isAbsolute)
   for (const path of [
+    String.raw`\??\UNC\server\share\x.gif`,
+    String.raw`\??\C:\notes\x.gif`,
     String.raw`\/server/share/x.gif`,
     String.raw`/\server/share/x.gif`,
   ]) {

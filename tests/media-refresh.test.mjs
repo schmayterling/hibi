@@ -274,6 +274,92 @@ test('stalled serve stays isolated and canceled resolutions retain their two poo
   assert.equal(afterCancel.media.kind, 'image')
 })
 
+test('two slow files admit local images after one second while real filesystem work stays capped at three', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const root = join(tmpdir(), 'virtual-media')
+  const scope = { note: join(root, 'a.md'), revision: 7, workspace: root }
+  const server = new DocumentMediaServer(() => scope)
+  const info = {
+    dev: 1,
+    ino: 1,
+    size: gif.length,
+    mtimeMs: 1,
+    isFile: () => true,
+  }
+  let releaseSlow, releaseLocal, startedSlow
+  const slowGate = new Promise((resolve) => {
+    releaseSlow = resolve
+  })
+  const localGate = new Promise((resolve) => {
+    releaseLocal = resolve
+  })
+  const slowStarted = new Promise((resolve) => {
+    startedSlow = resolve
+  })
+  let active = 0,
+    peak = 0,
+    slow = 0,
+    localStarts = 0
+  t.mock.method(fs, 'stat', async (path) => {
+    active++
+    peak = Math.max(peak, active)
+    try {
+      if (path.startsWith('/Volumes/NAS/')) {
+        if (++slow === 2) startedSlow()
+        await slowGate
+        throw new Error('unavailable mount')
+      }
+      localStarts++
+      await localGate
+      return info
+    } finally {
+      active--
+    }
+  })
+  t.mock.method(fs, 'realpath', async (path) => path)
+  t.mock.method(fs, 'open', async () => ({
+    stat: async () => info,
+    read: async (buffer) => ({ bytesRead: gif.copy(buffer), buffer }),
+    close: async () => {},
+  }))
+  syncBuiltinESMExports()
+  t.after(() => {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  })
+  const remote = ['a', 'b'].map((name) =>
+    server.resolve(`/Volumes/NAS/${name}.jpg`, 7, name),
+  )
+  const local = Array.from({ length: 10 }, (_, i) =>
+    server.resolve(`assets/${i}.gif`, 7, `local-${i}`),
+  )
+  try {
+    await slowStarted
+    assert.equal(active, 2)
+    t.mock.timers.tick(999)
+    assert.equal(localStarts, 0)
+    t.mock.timers.tick(1)
+    assert.equal(localStarts, 1)
+    assert.equal(active, 3)
+    t.mock.timers.tick(5000)
+    assert.equal(localStarts, 1)
+    assert.equal(peak, 3)
+    releaseLocal()
+    const shown = await Promise.all(local)
+    assert.equal(
+      shown.filter((result) => result.media?.kind === 'image').length,
+      10,
+    )
+    assert.equal(active, 2)
+    assert.equal(slow, 2)
+    assert.equal(peak, 3)
+  } finally {
+    releaseSlow()
+    releaseLocal()
+    await Promise.all([...remote, ...local])
+  }
+})
+
 test('ten autosaves during one stalled first resolution keep one real filesystem call and rerun once', async (t) => {
   const f = await fixture(t)
   const stat = fs.stat

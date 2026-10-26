@@ -166,7 +166,12 @@ export async function resolveDocumentMediaPath(
 }
 
 export function isLocalMediaPath(path: string): boolean {
-  return !path.includes('\0') && !path.replaceAll('\\', '/').startsWith('//')
+  const normalized = path.replaceAll('\\', '/')
+  return (
+    !path.includes('\0') &&
+    !normalized.startsWith('//') &&
+    !normalized.startsWith('/??/')
+  )
 }
 
 export function documentMediaPath(

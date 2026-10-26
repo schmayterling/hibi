@@ -98,6 +98,7 @@ export class DocumentMediaServer {
   private requests = new Map<string, Entry>()
   private waiting = new Set<() => void>()
   private active = 0
+  private slow = 0
   private scope = ''
   private current: () => Scope
   constructor(current: () => Scope) {
@@ -106,8 +107,8 @@ export class DocumentMediaServer {
 
   private drain() {
     for (const start of this.waiting) {
-      // Leave two of libuv's default four threads available for saves and other I/O.
-      if (this.active >= 2) break
+      // Slow files can borrow one slot while leaving a libuv thread free for saves.
+      if (this.active >= (this.slow ? 3 : 2)) break
       this.waiting.delete(start)
       start()
     }
@@ -131,10 +132,19 @@ export class DocumentMediaServer {
       const start = () => {
         if (settled) return
         this.active++
+        let slow = false
+        const timer = setTimeout(() => {
+          slow = true
+          this.slow++
+          this.drain()
+        }, 1000)
+        timer.unref()
         void operation()
           .then(finish, () => finish(null))
           .finally(() => {
             // Aborting the caller cannot interrupt a running filesystem call.
+            clearTimeout(timer)
+            if (slow) this.slow--
             this.active--
             this.drain()
           })

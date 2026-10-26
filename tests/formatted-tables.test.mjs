@@ -1005,6 +1005,38 @@ test('keyboard size handles resize and reset columns and rows', {
   assert.equal(await stored(), undefined)
 })
 
+test('typing in a long table maps only its sized rows', {
+  timeout: 60000,
+}, async () => {
+  const rows = Array.from({ length: 10000 }, (_, i) => `| r${i} | x |`)
+  const doc = `| a | b |\n| - | - |\n${rows.join('\n')}\n\nafter`
+  const stored = Array(5001).fill(0)
+  stored[5000] = 120
+  await harness.evaluate(
+    ({ key, stored }) =>
+      window.tables.layouts('sparse', [{ key, columns: null, rows: stored }]),
+    { key: tableKey(0, ['a', 'b']), stored },
+  )
+  await mountTab(doc, 'sparse')
+  await harness.evaluate(async () => {
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await window.tables.settle()
+  })
+  await harness.locator('.hibi-lp-table td', { hasText: 'r3' }).first().click()
+  await harness.keyboard.press('End')
+  const mapped = await harness.evaluate(async () => {
+    const probe = window.tables.sizeProbe()
+    const before = probe.mapped
+    document.execCommand('insertText', false, 'y')
+    await window.tables.settle()
+    return probe.mapped - before
+  })
+  // One sized row of 10,000: one keystroke maps that row's position only.
+  assert.equal(mapped, 1)
+  assert.match((await state()).doc, /^\| r3y \| x \|$/m)
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {

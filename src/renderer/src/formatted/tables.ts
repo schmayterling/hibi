@@ -201,6 +201,9 @@ function visibleBand(element: HTMLElement) {
 const EDGE = 5
 const MIN = { column: 40, row: 24 }
 
+/** Counts the column and row positions size tracking maps, for tests. */
+export const tableSizeProbe = { mapped: 0 }
+
 /** A focusable size handle on a cell's edge, for keyboard resizing. */
 const resizers = {
   column: { 'aria-label': 'Resize column', 'aria-orientation': 'vertical' },
@@ -282,12 +285,12 @@ class TableView {
     | null = null
   /** Header cells' text, part of the table's key in the size store. */
   private header: string[] = []
-  /** Column widths and row heights in px by index, 0 for automatic; rows count the header. */
-  private sizes: { key: string | null; columns: number[]; rows: number[] } = {
-    key: null,
-    columns: [],
-    rows: [],
-  }
+  /** Column widths by index, 0 for automatic, and the heights of sized rows by index, counting the header. */
+  private sizes: {
+    key: string | null
+    columns: number[]
+    rows: Map<number, number>
+  } = { key: null, columns: [], rows: new Map() }
   /** The column or row edge under the pointer, and whether it is being dragged. */
   private handle: { axis: 'column' | 'row'; index: number } | null = null
   private dragging = false
@@ -296,8 +299,8 @@ class TableView {
   /** Sized columns' header cells and sized rows' lines through changes since the last redraw, null where deleted. */
   private moved: {
     columns: (number | null)[]
-    rows: (number | null)[]
-    sizes: { columns: number[]; rows: number[] }
+    rows: { index: number; size: number; pos: number | null }[]
+    sizes: { columns: number[] }
     count: number
     lines: number
   } | null = null
@@ -507,7 +510,7 @@ class TableView {
         const element = document.createElement('tr')
         element.dataset.line = String(index + 2)
         element.setAttribute('aria-rowindex', String(index + 2))
-        const height = this.sizes.rows[index + 1]
+        const height = this.sizes.rows.get(index + 1)
         if (height) element.style.height = `${height}px`
         // Missing cells render empty; cells past the header's count are not shown.
         const cells = widget.row(index + 2).cells
@@ -893,7 +896,7 @@ class TableView {
    */
   private track(changes: ChangeDesc) {
     const { columns, rows } = this.sizes
-    if (!columns.some(Boolean) && !rows.some(Boolean)) return
+    if (!rows.size && !columns.some(Boolean)) return
     if (!this.moved) {
       const { from, to } = this.range()
       if (!changes.touchesRange(from, to)) return
@@ -904,13 +907,14 @@ class TableView {
           const cell = cells[index]
           return size && cell ? this.now(header.from + cell.from) : null
         }),
-        rows: rows.map((size, index) => {
+        // Only sized rows: a long table with a few sized rows maps a few.
+        rows: [...rows].flatMap(([index, size]) => {
           const line = index ? index + 1 : 0
-          return size && line < this.lines
-            ? this.now(this.widget.line(line).from)
-            : null
+          return line < this.lines
+            ? [{ index, size, pos: this.now(this.widget.line(line).from) }]
+            : []
         }),
-        sizes: { columns: [...columns], rows: [...rows] },
+        sizes: { columns: [...columns] },
         count: this.aligned.length,
         lines: this.lines,
       }
@@ -918,7 +922,8 @@ class TableView {
     const map = (pos: number | null) =>
       pos === null ? null : changes.mapPos(pos, 1, MapMode.TrackAfter)
     this.moved.columns = this.moved.columns.map(map)
-    this.moved.rows = this.moved.rows.map(map)
+    for (const row of this.moved.rows) row.pos = map(row.pos)
+    tableSizeProbe.mapped += this.moved.columns.length + this.moved.rows.length
   }
 
   /** Give sized columns and rows the cells and lines they moved to, after the table changed. */
@@ -932,7 +937,7 @@ class TableView {
     const header = widget.line(0),
       row = widget.row(0)
     const columns: number[] = [],
-      rows: number[] = []
+      rows = new Map<number, number>()
     moved.columns.forEach((pos, index) => {
       const size = moved.sizes.columns[index]
       if (!size) return
@@ -954,30 +959,25 @@ class TableView {
       }
       if (target >= 0) columns[target] = size
     })
-    moved.rows.forEach((pos, index) => {
-      const size = moved.sizes.rows[index]
-      if (!size) return
+    for (const { index, size, pos } of moved.rows) {
       let target = pos === null && this.lines >= moved.lines ? index : -1
       if (pos !== null) {
         const line = doc.lineAt(pos).number - widget.first
         if (line >= 0 && line < this.lines && line !== 1)
           target = line ? line - 1 : 0
       }
-      if (target >= 0) rows[target] = size
-    })
-    const next = {
-      columns: Array.from(columns, (size) => size ?? 0),
-      rows: Array.from(rows, (size) => size ?? 0),
+      if (target >= 0) rows.set(target, size)
     }
-    const same = (a: number[], b: number[]) =>
-      a.length === b.length && a.every((size, index) => size === b[index])
+    const next = Array.from(columns, (size) => size ?? 0)
     if (
-      same(next.columns, moved.sizes.columns) &&
-      same(next.rows, moved.sizes.rows)
+      next.length === moved.sizes.columns.length &&
+      next.every((size, index) => size === moved.sizes.columns[index]) &&
+      rows.size === moved.rows.length &&
+      moved.rows.every(({ index, size }) => rows.get(index) === size)
     )
       return
-    this.sizes.columns = next.columns
-    this.sizes.rows = next.rows
+    this.sizes.columns = next
+    this.sizes.rows = rows
     this.seedHeights()
     // Saved after the redraw, which the table's position needs.
     this.save(1)
@@ -1187,10 +1187,14 @@ class TableView {
       ? tableKey(this.ordinal(), this.header)
       : null
     const found = key ? tables.find((table) => table.key === key) : undefined
+    const rows = new Map<number, number>()
+    found?.rows?.forEach((size, index) => {
+      if (size) rows.set(index, size)
+    })
     this.sizes = {
       key: found?.key ?? null,
       columns: [...(found?.columns ?? [])],
-      rows: [...(found?.rows ?? [])],
+      rows,
     }
     this.seedHeights()
     this.applySizes()
@@ -1205,10 +1209,8 @@ class TableView {
   private seedHeights() {
     const { heights } = this
     if (!heights) return
-    this.sizes.rows.forEach((size, index) => {
-      if (index && size && index - 1 < heights.length)
-        heights.set(index - 1, size)
-    })
+    for (const [index, size] of this.sizes.rows)
+      if (index && index - 1 < heights.length) heights.set(index - 1, size)
   }
 
   /** Show the column widths and row heights, as the rich editor's table decorations do. */
@@ -1224,7 +1226,8 @@ class TableView {
       if (this.fixed && columns[index])
         (column as HTMLElement).style.width = `${columns[index]}px`
     const height = (row: HTMLElement, index: number) => {
-      row.style.height = rows[index] ? `${rows[index]}px` : ''
+      const size = rows.get(index)
+      row.style.height = size ? `${size}px` : ''
     }
     height(this.head, 0)
     for (const [index, row] of this.rendered) height(row.element, index + 1)
@@ -1243,7 +1246,13 @@ class TableView {
     if (!entry || !tables || !this.dom.isConnected) return
     const key = tableKey(this.ordinal(), this.header)
     const columns = this.sizes.columns.slice(0, this.aligned.length)
-    const rows = this.sizes.rows.slice(0, this.lines - 1)
+    let last = -1
+    for (const [index] of this.sizes.rows)
+      if (index < this.lines - 1) last = Math.max(last, index)
+    const rows = Array.from(
+      { length: last + 1 },
+      (_, index) => this.sizes.rows.get(index) ?? 0,
+    )
     const some = (sizes: number[]) => (sizes.some(Boolean) ? sizes : null)
     const put =
       some(columns) || some(rows)
@@ -1316,9 +1325,12 @@ class TableView {
 
   /** Set a column width or row height, 0 for automatic. */
   private resize(axis: 'column' | 'row', index: number, size: number) {
-    const sizes = axis === 'column' ? this.sizes.columns : this.sizes.rows
-    while (sizes.length <= index) sizes.push(0)
-    sizes[index] = size
+    if (axis === 'column') {
+      const { columns } = this.sizes
+      while (columns.length <= index) columns.push(0)
+      columns[index] = size
+    } else if (size) this.sizes.rows.set(index, size)
+    else this.sizes.rows.delete(index)
     if (
       axis === 'row' &&
       index &&
@@ -1382,10 +1394,12 @@ class TableView {
         : row === this.head
           ? 0
           : Number(row.dataset.line) - 1
-    const sizes = axis === 'column' ? this.sizes.columns : this.sizes.rows
     const box = (axis === 'column' ? cell : row).getBoundingClientRect()
     const current =
-      sizes[index] || Math.round(axis === 'column' ? box.width : box.height)
+      (axis === 'column'
+        ? this.sizes.columns[index]
+        : this.sizes.rows.get(index)) ||
+      Math.round(axis === 'column' ? box.width : box.height)
     const step = event.shiftKey ? 24 : 8
     let size: number
     switch (event.key) {

@@ -3,6 +3,7 @@ import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import '../../src/renderer/src/styles.css'
 import type { ChunkedMarkdownProbe } from '../../src/renderer/src/chunked-markdown'
+import * as formattedTables from '../../src/renderer/src/formatted/tables'
 import {
   formattedDocument,
   showMarkdownMarkers,
@@ -119,6 +120,10 @@ Object.assign(window, {
     },
     view: () => view,
     second: () => second,
+    /** How many column and row positions table size tracking mapped. */
+    sizeProbe: () =>
+      (formattedTables as { tableSizeProbe?: { mapped: number } })
+        .tableSizeProbe,
     /** The table sizes the workspace stores for a tab, or sets them. */
     layouts: (tabId: string, tables?: TableLayout[]) => {
       if (tables) layouts.set(tabId, tables)

@@ -347,18 +347,39 @@ test('bundled MCP server serves a real HTTP client and preserves workspace edits
         ).matches,
         [],
       )
-      const invalidCursor = await request({
-        jsonrpc: '2.0',
-        id: ++nextId,
-        method: 'tools/call',
-        params: {
-          name: 'search_documents',
-          arguments: { query: 'NEEDLE', cursor: cancelled.nextCursor },
-        },
-      })
-      const invalidReply = await invalidCursor.json()
-      assert.equal(invalidReply.error.code, -32602)
-      assert.match(invalidReply.error.message, /valid search cursor/)
+      const stale = jsonOf(
+        await tool('search_documents', {
+          query: 'NEEDLE',
+          cursor: cancelled.nextCursor,
+        }),
+      )
+      assert.equal(stale.stale, true)
+      assert.equal(stale.truncated, true)
+      assert.deepEqual(stale.matches, [])
+      const savedPage = await searchFirst({ query: 'NEEDLE', limit: 1 })
+      assert.ok(savedPage.nextCursor)
+      const sequence = await page.evaluate(
+        async () => (await window.hibi.getWorkspaceChangeSnapshot()).sequence,
+      )
+      await writeFile(
+        join(workspace, 'notes/topic.md'),
+        `${files['notes/topic.md']}\n`,
+      )
+      await waitForAsync(
+        page,
+        async (before) =>
+          (await window.hibi.getWorkspaceChangeSnapshot()).sequence > before,
+        sequence,
+      )
+      const afterSave = jsonOf(
+        await tool('search_documents', {
+          query: 'NEEDLE',
+          cursor: savedPage.nextCursor,
+        }),
+      )
+      assert.equal(afterSave.stale, true)
+      assert.equal(afterSave.truncated, true)
+      assert.deepEqual(afterSave.matches, [])
       assert.deepEqual(
         search.matches.sort((a, b) => a.path.localeCompare(b.path)),
         [

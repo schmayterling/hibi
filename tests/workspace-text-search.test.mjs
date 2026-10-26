@@ -511,6 +511,54 @@ test('mcp rejects unknown and reused cursors as invalid parameters', async () =>
   )
 })
 
+test('mcp cursors invalidated by saves remain stale only for their original caller and query', async () => {
+  const request = {
+    target: host.target,
+    kind: 'search-text',
+    query: 'needle',
+    limit: 1,
+  }
+  const first = await queryWorkspaceText(request, versions, 'mcp', true)
+  assert.equal(first.ok, true)
+  assert.ok(first.value.nextCursor)
+  notify(['a.md'])
+  const continued = { ...request, cursor: first.value.nextCursor }
+  assert.equal(
+    (await queryWorkspaceText(continued, versions, 'other', true)).code,
+    'unsupported',
+  )
+  assert.equal(
+    (
+      await queryWorkspaceText(
+        { ...continued, query: 'different' },
+        versions,
+        'mcp',
+        true,
+      )
+    ).code,
+    'unsupported',
+  )
+  assert.equal(
+    (await queryWorkspaceText(continued, versions, 'mcp', true)).code,
+    'stale',
+  )
+  notify()
+  assert.equal(
+    (await queryWorkspaceText(continued, versions, 'mcp', true)).code,
+    'stale',
+  )
+  const now = Date.now
+  try {
+    Date.now = () => now() + 16 * 60_000
+    assert.equal(
+      (await queryWorkspaceText(continued, versions, 'mcp', true)).code,
+      'unsupported',
+    )
+  } finally {
+    Date.now = now
+  }
+})
+
 test('closing draft during pull yields stale reply and leaves next query usable', async () => {
   const source = new SourceStore(`${'a'.repeat(500_000)} needle tail`, {
     tabId: 'draft-a',

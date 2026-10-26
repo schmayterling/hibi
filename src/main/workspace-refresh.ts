@@ -2,54 +2,61 @@ export function createScanCoordinator<T>(
   scan: (signal: AbortSignal) => Promise<T>,
   publish: (result: T) => void,
 ) {
-  let generation = 0
   let closed = false
-  let task: Promise<T | null> | undefined
+  let running = false
   let controller: AbortController | undefined
+  let queued: Promise<T | null> | undefined
+  let pending:
+    | {
+        resolve: (result: T | null) => void
+        reject: (error: unknown) => void
+      }
+    | undefined
+
+  async function run() {
+    running = true
+    try {
+      while (!closed && pending) {
+        // Requests arriving during this scan belong to the next scan.
+        const waiting = pending
+        pending = undefined
+        queued = undefined
+        controller = new AbortController()
+        try {
+          const result = await scan(controller.signal)
+          // Same-root changes queue a follow-up; only closure makes this result obsolete.
+          if (!closed) publish(result)
+          waiting.resolve(closed ? null : result)
+        } catch (error) {
+          if (closed) waiting.resolve(null)
+          else waiting.reject(error)
+        }
+      }
+    } finally {
+      running = false
+      controller = undefined
+    }
+  }
+
+  function request(): Promise<T | null> {
+    if (closed) return Promise.resolve(null)
+    if (!queued)
+      queued = new Promise<T | null>((resolve, reject) => {
+        pending = { resolve, reject }
+      })
+    const task = queued
+    if (!running) void run()
+    return task
+  }
 
   return {
-    request(): Promise<T | null> {
-      if (closed) return Promise.resolve(null)
-      generation += 1
-      controller?.abort()
-      if (!task) {
-        const next = (async () => {
-          while (!closed) {
-            const current = generation
-            let result: T
-            try {
-              controller = new AbortController()
-              result = await scan(controller.signal)
-            } catch (error) {
-              if (current !== generation) continue
-              throw error
-            }
-            if (current !== generation) continue
-            if (closed) break
-            publish(result)
-            return result
-          }
-          return null
-        })().finally(() => {
-          if (task === next) {
-            task = undefined
-            controller = undefined
-          }
-        })
-        task = next
-      }
-      return task
-    },
-    invalidate() {
-      if (!closed && task) {
-        generation += 1
-        controller?.abort()
-      }
-    },
+    request,
     close() {
       closed = true
-      generation += 1
       controller?.abort()
+      pending?.resolve(null)
+      pending = undefined
+      queued = undefined
     },
   }
 }

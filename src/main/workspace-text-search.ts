@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
@@ -62,6 +62,19 @@ type Session = {
 }
 const sessions = new Map<string, Session>()
 const cursors = new Map<string, Session>()
+const staleCursors = new Map<string, { scope: string; used: number }>()
+const mcpCursorMs = 15 * 60_000
+const cursorScope = (owner: string, query: string, target: WorkspaceTarget) =>
+  createHash('sha256')
+    .update(
+      JSON.stringify([
+        owner,
+        query,
+        target.workspaceId,
+        target.workspaceGeneration,
+      ]),
+    )
+    .digest('hex')
 const groups = new Map<string, Session>()
 const latestGroups = new Map<string, number>()
 let requestGeneration = 0
@@ -215,7 +228,14 @@ function release(session: Session) {
     latestGroups.delete(session.group)
   }
   for (const [cursor, current] of cursors)
-    if (current === session) cursors.delete(cursor)
+    if (current === session) {
+      cursors.delete(cursor)
+      if (session.includePaths)
+        staleCursors.set(cursor, {
+          scope: cursorScope(session.owner, session.query, session.target),
+          used: session.used,
+        })
+    }
   if (session.id)
     void session.client.call('cancel', { queryId: session.id }).catch(() => {})
   session.drafts.clear()
@@ -258,9 +278,11 @@ const expiry = setInterval(() => {
   for (const session of sessions.values())
     if (
       Date.now() - session.used >
-      (session.includePaths ? 15 * 60_000 : 60_000)
+      (session.includePaths ? mcpCursorMs : 60_000)
     )
       release(session)
+  for (const [cursor, old] of staleCursors)
+    if (Date.now() - old.used > mcpCursorMs) staleCursors.delete(cursor)
 }, 30_000)
 expiry.unref()
 
@@ -349,6 +371,15 @@ export async function queryWorkspaceText(
   let session: Session | undefined
   if (request.cursor !== undefined) {
     session = cursors.get(request.cursor)
+    if (!session && includePaths) {
+      const old = staleCursors.get(request.cursor)
+      if (
+        old &&
+        Date.now() - old.used <= mcpCursorMs &&
+        old.scope === cursorScope(owner, request.query, request.target)
+      )
+        return failure('stale', 'This search changed. Start again.')
+    }
     if (
       includePaths &&
       (!session ||
@@ -371,7 +402,7 @@ export async function queryWorkspaceText(
       session.sequence !== before.sequence ||
       session.revision !== revision ||
       (!includePaths && session.versions !== versions) ||
-      Date.now() - session.used > (session.includePaths ? 15 * 60_000 : 60_000)
+      Date.now() - session.used > (session.includePaths ? mcpCursorMs : 60_000)
     ) {
       if (session?.owner === owner) release(session)
       return failure('stale', 'This search changed. Start again.')

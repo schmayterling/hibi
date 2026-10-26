@@ -131,6 +131,26 @@ export async function fixtureVault(root, settings = {}) {
     await mkdir(dirname(join(root, path)), { recursive: true })
     await writeFile(join(root, path), bytes, { flag: 'wx' })
   }
+  // Footnote notes currently disable normal view; keep separate editable probes.
+  for (const path of [
+    'syntax.md',
+    'crlf.md',
+    'bom.md',
+    'mixed-eol.md',
+    'no-final-newline.md',
+  ]) {
+    const source = files[path]
+    const editable = source.replace(
+      /A footnote\[\^note\]\.\r?\n\r?\n\[\^note\]: keep {2}spacing\r?\n {4}continuation\r?\n\r?\n/,
+      '',
+    )
+    await writeFile(join(root, `editable-${path}`), editable, { flag: 'wx' })
+  }
+  await writeFile(
+    join(root, 'table.md'),
+    '| left | right |\n| --- | --- |\n| one | two |\n',
+    { flag: 'wx' },
+  )
   const capabilities = { caseSensitive: false, distinctNormalization: false }
   for (const [path, key] of [
     ['case/case.md', 'caseSensitive'],

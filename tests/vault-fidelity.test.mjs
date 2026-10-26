@@ -29,6 +29,20 @@ test('fixture generation is deterministic for this filesystem', async (t) => {
     snapshotManifest(await snapshotVault(first)),
     snapshotManifest(await snapshotVault(second)),
   )
+  const snapshot = await snapshotVault(first)
+  assert.equal(
+    snapshot.get('bom.md').bytes.subarray(0, 3).toString('hex'),
+    'efbbbf',
+  )
+  assert.ok(snapshot.get('crlf.md').bytes.includes(Buffer.from('\r\n')))
+  assert.ok(snapshot.get('syntax.md').bytes.toString().includes('cafe\u0301'))
+  assert.ok(
+    !snapshot.get('editable-syntax.md').bytes.toString().includes('[^note]'),
+  )
+  assert.equal(
+    snapshot.get('no-final-newline.md').bytes.at(-1),
+    'stay'.charCodeAt(3),
+  )
   t.diagnostic(JSON.stringify(capabilities))
 })
 

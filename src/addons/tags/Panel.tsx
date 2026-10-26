@@ -60,6 +60,7 @@ export function TagsPanel({
     latest.current = target
     if (!target) {
       setSummary(null)
+      readTags(null)
       return
     }
     readTags(async (alive, retry) => {
@@ -106,6 +107,7 @@ export function TagsPanel({
     void revision
     if (!target || !selected) {
       setSelectedFiles(null)
+      readFiles(null)
       return
     }
     readFiles(async (alive, retry) => {

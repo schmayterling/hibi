@@ -14,12 +14,21 @@ const source = `${stripTypeScriptTypes(
   .replaceAll('export function', 'function')}
 return { useWorkspaceQueryTarget, useSerialRead }`
 
-// Maps the hooks create, so tests can see how much they remember.
+// Maps the hooks create, so tests can see how much they remember and touch.
 const maps = []
+let operations = 0
 class TrackedMap extends Map {
   constructor(...entries) {
     super(...entries)
     maps.push(this)
+  }
+  get(key) {
+    operations++
+    return super.get(key)
+  }
+  set(key, value) {
+    operations++
+    return super.set(key, value)
   }
 }
 // Exercise request scheduling without mounting a renderer or replacing the hooks.
@@ -272,6 +281,39 @@ test('dropping unsaved edits invalidates metadata, and only open tabs are rememb
   query.stop()
 })
 
+test('typing in one of 10,000 open tabs touches only that tab', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let documentChanged
+  const query = mount({
+    editor: {
+      onDocumentChange(listener) {
+        documentChanged = listener
+        return () => {}
+      },
+    },
+    workspace: {
+      get: async () => workspace(1),
+      subscribeChanges: async () => ({ dispose() {} }),
+    },
+  })
+  await settle()
+  const open = Array.from({ length: 10000 }, (_, index) => `t${index}`)
+  const typing = note('t0', 1, true, open)
+  documentChanged(typing)
+  t.mock.timers.tick(150)
+  await settle()
+  const revision = query.read().revision
+  // The editor keeps the same tab list while only the text changes.
+  operations = 0
+  for (let version = 2; version <= 101; version++)
+    documentChanged({ ...typing, contentVersion: version })
+  assert.ok(operations <= 200, `${operations} map operations for 100 keys`)
+  t.mock.timers.tick(150)
+  await settle()
+  assert.notEqual(query.read().revision, revision)
+  query.stop()
+})
+
 test('older or disposed workspace reads cannot replace the latest generation or drop an edit', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const pending = []
@@ -368,5 +410,38 @@ test('a stale read runs again shortly unless a newer read was requested', async 
   t.mock.timers.tick(150)
   await settle()
   assert.deepEqual(runs, ['first', 'first', 'second', 'third'])
+  stop()
+})
+
+test('cancelled reads stop paging, drop the waiting read, and skip retries', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { run, stop } = hooks().serial()
+  const runs = []
+  run(async (_alive, retry) => {
+    runs.push('stale')
+    retry()
+  })
+  await settle()
+  // No workspace: the stale read's retry must not query the old one.
+  run(null)
+  t.mock.timers.tick(150)
+  await settle()
+  assert.deepEqual(runs, ['stale'])
+  let finish, paging
+  run(async (alive) => {
+    await new Promise((resolve) => {
+      finish = resolve
+    })
+    paging = alive()
+  })
+  run(async () => {
+    runs.push('waiting')
+  })
+  await settle()
+  run(null)
+  finish()
+  await settle()
+  assert.equal(paging, false)
+  assert.deepEqual(runs, ['stale'])
   stop()
 })

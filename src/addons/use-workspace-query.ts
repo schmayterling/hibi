@@ -78,28 +78,41 @@ export function useWorkspaceQueryTarget(
     // only moves the current-note highlight. Closed tabs are forgotten.
     type Tab = { dirty: boolean; loaded?: string; content?: number }
     let tabs = new Map<string, Tab>()
+    // The editor keeps one tab list until a tab opens, closes, or changes its
+    // unsaved state, so typing updates only the current tab's entry.
+    let listed: unknown
     let activeTab: string | undefined
     let registering = true
     const removeDocument = context.editor.onDocumentChange((document) => {
       const loaded = `${document.id}:${document.revision}`
       const previous = tabs.get(document.tabId)
       let edited =
-        previous?.loaded === loaded
+        (previous?.loaded === loaded
           ? previous.content !== document.contentVersion
-          : document.dirty
-      const next = new Map<string, Tab>()
-      for (const tab of document.tabs)
-        next.set(tab.id, { ...tabs.get(tab.id), dirty: tab.dirty })
-      next.set(document.tabId, {
+          : document.dirty) ||
+        (!!previous?.dirty && !document.dirty)
+      if (document.tabs !== listed || !previous) {
+        listed = document.tabs
+        const next = new Map<string, Tab>()
+        for (const tab of document.tabs) {
+          const known = tabs.get(tab.id)
+          next.set(
+            tab.id,
+            known?.dirty === tab.dirty ? known : { ...known, dirty: tab.dirty },
+          )
+        }
+        for (const [id, tab] of tabs)
+          if (id !== document.tabId && tab.dirty && !next.get(id)?.dirty)
+            edited = true
+        tabs = next
+      }
+      tabs.set(document.tabId, {
         dirty: document.dirty,
         loaded,
         content: document.contentVersion,
       })
-      for (const [id, tab] of tabs)
-        if (tab.dirty && !next.get(id)?.dirty) edited = true
       const switched =
         document.tabId !== activeTab || previous?.loaded !== loaded
-      tabs = next
       activeTab = document.tabId
       if (!registering && (edited || switched)) schedule(edited)
     })
@@ -134,8 +147,10 @@ export function useWorkspaceQueryTarget(
 /**
  * Runs reads one at a time. A read requested meanwhile waits for the current
  * one and replaces any older waiting read, so a burst of changes costs at most
- * one more read. Reads receive `alive`, which turns false on unmount, and
- * `retry`, which runs them again shortly unless a newer read was requested.
+ * one more read. Reads receive `alive`, which turns false on unmount or when
+ * reads are cancelled, and `retry`, which runs them again shortly unless a
+ * newer read was requested. `null` cancels the current, waiting, and retried
+ * reads, as when no workspace is open.
  */
 export function useSerialRead() {
   const [reads] = useState(() => {
@@ -143,13 +158,14 @@ export function useSerialRead() {
     let running = false
     let mounted = true
     let requested = 0
+    let cancelled = 0
     let waiting: Read | null = null
-    const alive = () => mounted
-    const run = (read: Read) => {
+    const run = (read: Read | null) => {
       if (!mounted) return
       requested++
       waiting = read
-      if (running) return
+      if (!read) cancelled++
+      if (running || !read) return
       running = true
       void (async () => {
         try {
@@ -157,12 +173,16 @@ export function useSerialRead() {
             const next = waiting
             waiting = null
             const asked = requested
+            const current = cancelled
             // Paced like the change notices, so a busy workspace is not polled.
-            await next(alive, () => {
-              setTimeout(() => {
-                if (requested === asked) run(next)
-              }, 150)
-            })
+            await next(
+              () => mounted && current === cancelled,
+              () => {
+                setTimeout(() => {
+                  if (requested === asked) run(next)
+                }, 150)
+              },
+            )
           }
         } finally {
           running = false

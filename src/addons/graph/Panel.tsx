@@ -53,6 +53,7 @@ export function GraphPanel({
     latest.current = target
     if (!target) {
       setResult(null)
+      read(null)
       return
     }
     read(async (alive, retry) => {

@@ -277,3 +277,161 @@ test('discarded edits, stale graph pages, and superseded failures leave current 
   )
   assert.deepEqual(errors, [])
 })
+
+test('graph and tag reads stop when the workspace goes away, retries included', {
+  timeout: 90000,
+}, async (t) => {
+  const temp = await mkdtemp(join(tmpdir(), 'hibi-graph-gone-'))
+  const root = join(temp, 'notes'),
+    profile = join(temp, 'profile')
+  await mkdir(root)
+  await mkdir(profile)
+  const alpha = '# alpha\n\n[next](b.md)\n\n#work'
+  await writeFile(join(root, 'a.md'), alpha)
+  await writeFile(join(root, 'b.md'), '# beta\n\n[back](a.md)\n\n#work')
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ graph: true, tags: true }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(temp, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(10000)
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  const errors = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await app.evaluate(({ dialog }, root) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] })
+  }, root)
+  await pressShortcut(app, `${mod}+Shift+o`)
+  await page
+    .getByRole('tree', { name: /workspace files/i })
+    .getByRole('treeitem', { name: /^a\.md$/i, exact: true })
+    .click()
+  const choose = async (name) => {
+    await pressShortcut(app, `${mod}+k`)
+    await page.getByRole('combobox', { name: /search commands/i }).fill(name)
+    await page.getByRole('option').first().click()
+  }
+  await choose('Open workspace graph')
+  const graph = page.getByRole('complementary', {
+    name: /^workspace graph$/i,
+    exact: true,
+  })
+  await graph
+    .getByText('2 of 2 notes · 1 connection', { exact: true })
+    .waitFor()
+  // The main process counts metadata reads; while `gone`, the workspace
+  // reads as closed, and held queries answer stale once released.
+  await app.evaluate(({ ipcMain }) => {
+    const handlers = ipcMain._invokeHandlers
+    const query = handlers.get('workspace:query-references')
+    const get = handlers.get('workspace:get')
+    globalThis.reads = { graph: 0, tags: 0, tag: 0 }
+    globalThis.gets = 0
+    globalThis.held = []
+    globalThis.gone = false
+    handlers.set('workspace:get', async (...args) => {
+      globalThis.gets++
+      return globalThis.gone ? null : get(...args)
+    })
+    handlers.set('workspace:query-references', async (event, request) => {
+      if (request?.kind in globalThis.reads) globalThis.reads[request.kind]++
+      if (!globalThis.holding) return query(event, request)
+      await new Promise((resolve) => globalThis.held.push(resolve))
+      return { ok: false, code: 'stale', message: 'The workspace changed.' }
+    })
+  })
+  // Change refreshes and retries wait 150 ms; the test runs them itself.
+  await page.evaluate(() => {
+    const schedule = window.setTimeout,
+      cancel = window.clearTimeout,
+      waiting = new Map()
+    let key = 1e9
+    window.setTimeout = (callback, delay, ...args) => {
+      if (delay !== 150) return schedule(callback, delay, ...args)
+      waiting.set(++key, () => callback(...args))
+      return key
+    }
+    window.clearTimeout = (id) => {
+      if (!waiting.delete(id)) cancel(id)
+    }
+    window.waiting = () => waiting.size
+    window.runWaiting = () => {
+      const runs = [...waiting.values()]
+      waiting.clear()
+      for (const run of runs) run()
+    }
+  })
+  const inMain = async (check) => {
+    const deadline = performance.now() + 10000
+    while (!(await app.evaluate(check))) {
+      assert.ok(performance.now() < deadline, String(check))
+      await page.evaluate(
+        () => new Promise((done) => requestAnimationFrame(done)),
+      )
+    }
+  }
+  const source = page.getByRole('textbox', { name: /markdown editor/i })
+  // Each edit runs what waits 150 ms until the change refresh reads the workspace.
+  const edit = async (text) => {
+    const gets = await app.evaluate(() => globalThis.gets)
+    if (!(await source.isVisible())) await pressShortcut(app, `${mod}+Shift+]`)
+    await replaceSourceText(page, source, text)
+    while ((await app.evaluate(() => globalThis.gets)) === gets) {
+      await page.waitForFunction(() => window.waiting() > 0)
+      await page.evaluate(() => window.runWaiting())
+      await page.evaluate(() => window.hibi.getDocument())
+    }
+  }
+  // An edit starts a read that waits in the main process; the workspace then
+  // goes away, and the read comes back stale, which would retry.
+  const goneWhileReading = async (panel, kinds, text) => {
+    await app.evaluate(() => {
+      globalThis.holding = true
+    })
+    await edit(`${alpha} ${text}`)
+    await inMain(() => globalThis.held.length > 0)
+    await app.evaluate(() => {
+      globalThis.gone = true
+    })
+    await edit(`${alpha} ${text} again`)
+    await panel.getByText('No workspace open', { exact: true }).waitFor()
+    const before = await app.evaluate(() => ({ ...globalThis.reads }))
+    await app.evaluate(() => {
+      globalThis.holding = false
+      for (const release of globalThis.held.splice(0)) release()
+    })
+    await page.waitForFunction(
+      (count) => window.waiting() >= count,
+      kinds.length,
+    )
+    await page.evaluate(() => window.runWaiting())
+    // Queries sent by those retries reach the main process before this read.
+    await page.evaluate(() => window.hibi.getDocument())
+    const after = await app.evaluate(() => ({ ...globalThis.reads }))
+    for (const kind of kinds) assert.equal(after[kind], before[kind], kind)
+    await app.evaluate(() => {
+      globalThis.gone = false
+    })
+  }
+  await goneWhileReading(graph, ['graph'], '[back](b.md)')
+  // The tags panel's summary and its selected tag's notes stop as well.
+  await edit(alpha)
+  await choose('Browse tags')
+  const tags = page.getByRole('complementary', { name: /^tags$/i, exact: true })
+  await tags.getByRole('button', { name: /^#work 2$/i, exact: true }).click()
+  await tags.getByText('#work · 2 notes', { exact: true }).waitFor()
+  await goneWhileReading(tags, ['tags', 'tag'], '#more')
+  assert.deepEqual(errors, [])
+})

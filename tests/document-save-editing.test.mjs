@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -30,6 +33,7 @@ test('typing stays available and unsaved while a save finishes', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await waitForDocumentEditor(app, page)
@@ -122,6 +126,7 @@ test('a save leaves other split panes read-only until it finishes', {
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await waitForDocumentEditor(app, page)
@@ -151,16 +156,18 @@ test('a save leaves other split panes read-only until it finishes', {
     ids['a.md'],
   )
   await splitTab(app, page, ids['b.md'])
-  const pane = (side, editor) =>
-    page.locator(`.editor-page[data-side="${side}"] ${editor}`)
-  await pane('right', '.tiptap[contenteditable="true"]').waitFor()
-  await pane('left', '.tiptap').click()
+  const pane = (side, editable) =>
+    page.locator(
+      `.editor-page[data-side="${side}"] .rich-pane [aria-label="Document editor"]${editable === undefined ? '' : `[contenteditable="${editable}"]`}`,
+    )
+  await pane('right', true).waitFor()
+  await pane('left').click()
   await waitForAsync(
     page,
     async (id) => (await window.hibi.getDocument()).tabId === id,
     ids['a.md'],
   )
-  await pane('left', '.tiptap[contenteditable="true"]').waitFor()
+  await pane('left', true).waitFor()
   await page.keyboard.type(' edited')
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.includes('edited'),
@@ -180,9 +187,9 @@ test('a save leaves other split panes read-only until it finishes', {
   await pressShortcut(app, `${mod}+s`)
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   // Only the document being saved stays editable; focus cannot move to b.md yet.
-  await pane('left', '.tiptap[contenteditable="true"]').waitFor()
-  await pane('right', '.tiptap[contenteditable="false"]').waitFor()
-  await pane('right', '.tiptap').click({ force: true })
+  await pane('left', true).waitFor()
+  await pane('right', false).waitFor()
+  await pane('right').click({ force: true })
   await page.keyboard.type(' stranded')
   await app.evaluate(() => globalThis.releaseSave())
   await page.waitForFunction(
@@ -213,6 +220,7 @@ test('a save ends busy before its workspace refresh, so addon actions run', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await waitForDocumentEditor(app, page)
@@ -300,6 +308,7 @@ for (const outcome of ['saved', 'first-fails', 'both-fail', 'clean']) {
       await rm(profile, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
+    await selectFormattedEngine(app, page, t.formattedEngine)
     page.setDefaultTimeout(7000)
     await waitForDocumentEditor(app, page)
     await page.getByRole('button', { name: 'Source view', exact: true }).click()
@@ -449,6 +458,7 @@ for (const canceled of [true, false]) {
       await rm(profile, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
+    await selectFormattedEngine(app, page, t.formattedEngine)
     page.setDefaultTimeout(7000)
     await waitForDocumentEditor(app, page)
     await replaceRichText(

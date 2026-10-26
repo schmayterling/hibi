@@ -996,6 +996,8 @@ export type Addon = {
 
 /** Native modules are trusted application code, never loaded from a workspace. */
 export type NativeAddonContext = {
+  /** Whether the activation that started this request is still current. Check before queued writes. */
+  isCurrent: () => boolean
   /** Resolve declared tools, including user-selected paths. Native modules must not bypass this for managed dependencies. */
   dependencies: { resolve: (id: string) => Promise<string | null> }
   document: {

@@ -88,8 +88,8 @@ export default {
   },
   profileMethods: {
     ...wordQueries,
-    changeCustomWords: async (input) =>
-      (await wordStore()).request('change', input),
+    changeCustomWords: async (input, context) =>
+      (await wordStore()).request('change', input, context.isCurrent),
   },
   methods: {
     async copyCustomWords(input) {

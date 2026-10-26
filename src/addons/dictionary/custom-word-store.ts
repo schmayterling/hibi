@@ -1,5 +1,7 @@
 import { Worker } from 'node:worker_threads'
 
+type WordMethod = 'metadata' | 'get' | 'page' | 'lookup' | 'complete' | 'change'
+
 /** One serialized database worker per enabled dictionary; never a renderer path. */
 export class CustomWordStore {
   private worker: Worker | undefined
@@ -9,17 +11,22 @@ export class CustomWordStore {
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
   >()
-  constructor(
-    private path: string | URL,
-    private profile: string,
-  ) {}
+  private path: string | URL
+  private profile: string
+  private queue: Promise<unknown> = Promise.resolve()
+  private queued = 0
+  constructor(path: string | URL, profile: string) {
+    this.path = path
+    this.profile = profile
+  }
   request(
-    method: 'metadata' | 'get' | 'page' | 'lookup' | 'complete' | 'change',
+    method: WordMethod,
     input?: unknown,
+    isCurrent = () => true,
   ): Promise<unknown> {
     if (this.closed)
       return Promise.reject(new Error('Dictionary packs are closed.'))
-    if (this.pending.size >= 64)
+    if (this.queued >= 64)
       return Promise.reject(new Error('Dictionary worker queue full'))
     // Bound each IPC/worker allocation, never the number or length of stored words.
     if (
@@ -29,6 +36,23 @@ export class CustomWordStore {
       return Promise.reject(
         new Error('This custom word exceeds the storage request size.'),
       )
+    this.queued++
+    const operation = this.queue
+      .catch(() => {})
+      .then(() => {
+        if (this.closed) throw new Error('Dictionary packs are closed.')
+        if (!isCurrent())
+          throw new Error(
+            'This addon was disabled. Enable it in Settings → Addons to continue.',
+          )
+        return this.send(method, input)
+      })
+    this.queue = operation
+    return operation.finally(() => {
+      this.queued--
+    })
+  }
+  private send(method: WordMethod, input?: unknown): Promise<unknown> {
     if (!this.worker) {
       const worker = new Worker(this.path, {
         workerData: { profile: this.profile },

@@ -6220,6 +6220,7 @@
     "src/shared/addon-manifest.ts"
   ],
   "2d715c5a75aa": [
+    "src/addons/dictionary/custom-word-store.ts",
     "src/main/addons.ts",
     "src/main/index.ts"
   ],

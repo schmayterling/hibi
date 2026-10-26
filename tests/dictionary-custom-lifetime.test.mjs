@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { CustomWordDatabase } from '../src/addons/dictionary/custom-word-database.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
@@ -272,4 +273,92 @@ test('renderer loss discards staging and window close drains a pending profile c
     next,
   )
   assert.equal((await metadata(page)).count, 3)
+})
+
+test('large custom lists load only visible pages and keep row edits keyed', async (t) => {
+  const fixtureState = await fixture(t)
+  const store = await CustomWordDatabase.open(fixtureState.profile)
+  try {
+    const { token } = store.change({
+      type: 'begin',
+      revision: store.revision(),
+    })
+    for (let start = 0; start < 10050; start += 256)
+      store.change({
+        type: 'stage',
+        token,
+        remove: [],
+        upsert: Array.from(
+          { length: Math.min(256, 10050 - start) },
+          (_, index) => ({
+            id: `id-${start + index}`,
+            word: `paged${String(start + index).padStart(5, '0')}`,
+            note: 'old note',
+          }),
+        ),
+      })
+    store.change({ type: 'commit', token })
+  } finally {
+    store.close()
+  }
+  const { app, page } = await fixtureState.launch()
+  await app.evaluate(({ ipcMain }) => {
+    const invoke = ipcMain._invokeHandlers.get('addons:profile')
+    globalThis.wordPageReads = 0
+    ipcMain.removeHandler('addons:profile')
+    ipcMain.handle('addons:profile', (event, id, method, input) => {
+      if (method === 'customWords') globalThis.wordPageReads++
+      return invoke(event, id, method, input)
+    })
+  })
+  await clickMenu(app, 'Settings')
+  assert.equal(
+    await app.evaluate(() => globalThis.wordPageReads),
+    0,
+    'hidden settings never read word pages',
+  )
+  await page
+    .getByRole('tab', { name: 'Dictionary and thesaurus', exact: true })
+    .click()
+  const words = page.getByRole('region', { name: 'Custom words' })
+  await words.getByRole('button', { name: 'Remove “paged00000”' }).waitFor()
+  const chooser = words.getByRole('spinbutton', { name: 'Word list page' })
+  await chooser.fill('2')
+  const note = words.getByRole('textbox', { name: 'Note for “paged10000”' })
+  await note.waitFor()
+  const row = words
+    .getByRole('listitem')
+    .filter({
+      has: page.getByRole('textbox', { name: 'Note for “paged10000”' }),
+    })
+  assert.equal(await row.getAttribute('aria-posinset'), '10001')
+  assert.equal(await row.getAttribute('aria-setsize'), '10050')
+  assert.ok((await words.getByRole('listitem').count()) < 80)
+  const reads = await app.evaluate(() => globalThis.wordPageReads)
+  await note.fill('tail note')
+  await note.blur()
+  await waitForAsync(
+    page,
+    async () =>
+      (
+        await window.hibi.invokeAddonProfile('dictionary', 'customWordsGet', {
+          id: 'id-10000',
+        })
+      ).word.note === 'tail note',
+  )
+  assert.equal(
+    await app.evaluate(() => globalThis.wordPageReads),
+    reads,
+    'one row edit never reloads pages',
+  )
+  await chooser.fill('1')
+  await words.getByRole('button', { name: 'Remove “paged00000”' }).waitFor()
+  await chooser.fill('2')
+  await words.getByRole('textbox', { name: 'Note for “paged10000”' }).waitFor()
+  assert.equal(
+    await words
+      .getByRole('textbox', { name: 'Note for “paged10000”' })
+      .inputValue(),
+    'tail note',
+  )
 })

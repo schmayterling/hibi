@@ -194,3 +194,41 @@ test('active-note syntax changes count key when Frontmatter is disabled', () => 
   assert.equal(enabled.complete, true)
   assert.equal(disabled.complete, true)
 })
+
+test('built-in mermaid diagrams keep active-note tag counts complete', () => {
+  values.clear()
+  const removals = [
+    flavors.register('mermaid', {
+      id: 'blocks',
+      name: 'Mermaid diagrams',
+      kind: 'syntax',
+      description: 'Render Mermaid code blocks.',
+      detect: () => false,
+    }),
+    markdownSyntax.register('mermaid', {
+      id: 'preview',
+      label: 'Mermaid preview',
+      group: 'Mermaid',
+      level: 'block',
+      scope: 'document',
+    }),
+    markdownSyntax.register('mermaid', {
+      id: 'blocks',
+      label: 'Mermaid diagrams',
+      group: 'Mermaid',
+      level: 'block',
+      matches: () => false,
+    }),
+  ]
+  try {
+    const syntax = activeNoteMetadataSyntax(
+      'a'.repeat(64),
+      '# Note\n\n#work\n\n```mermaid\ngraph TD\n```',
+      true,
+      [],
+    )
+    assert.equal(syntax.complete, true)
+  } finally {
+    for (const remove of removals) remove()
+  }
+})

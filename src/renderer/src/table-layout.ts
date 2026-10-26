@@ -5,6 +5,12 @@ import { type Mappable, ReplaceStep } from '@tiptap/pm/transform'
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view'
 import type { TableLayout } from '../../shared/table-layout'
 import { richSourceEcho } from './rich-source-session'
+import {
+  tableKey as layoutKey,
+  readTableLayouts,
+  storedTableLayouts,
+  writeTableLayouts,
+} from './table-layout-store'
 
 type Axis = 'column' | 'row'
 type Handle = { table: number; axis: Axis; index: number }
@@ -32,8 +38,6 @@ type Meta = {
 const key = new PluginKey<State>('tableLayout')
 const EDGE = 5
 const MIN = { column: 40, row: 24 }
-// Sizes are view state, not Markdown: they survive tab switches in this window.
-const session = new Map<string, TableLayout[]>()
 
 function tablesIn(doc: Node) {
   const found: { pos: number; node: Node }[] = []
@@ -51,14 +55,11 @@ const columnCount = (table: Node) => table.firstChild?.childCount ?? 0
 
 /** Ordinal plus a hash of the header row, so edits elsewhere keep sizes. */
 function tableKey(index: number, table: Node) {
-  let text = String(columnCount(table))
+  const header: string[] = []
   table.firstChild?.forEach((cell) => {
-    text += `\t${cell.textContent}`
+    header.push(cell.textContent)
   })
-  let hash = 0x811c9dc5
-  for (let i = 0; i < text.length; i++)
-    hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193)
-  return `${index}:${(hash >>> 0).toString(36)}`
+  return layoutKey(index, header)
 }
 
 function bind(doc: Node, stored: TableLayout[], tracked: Sized[]): Sized[] {
@@ -560,7 +561,7 @@ export const tableLayout = Extension.create<{ tabId: string }>({
         },
         view(view) {
           let timer: ReturnType<typeof setTimeout> | undefined
-          let written = JSON.stringify(session.get(tabId) ?? [])
+          let written = JSON.stringify(storedTableLayouts(tabId) ?? [])
           const save = () => {
             clearTimeout(timer)
             timer = undefined
@@ -570,16 +571,9 @@ export const tableLayout = Extension.create<{ tabId: string }>({
             const json = JSON.stringify(tables)
             if (json === written) return
             written = json
-            session.set(tabId, tables)
-            void window.hibi
-              .writeTableLayout(tabId, tables)
-              .catch((error: unknown) =>
-                console.error('table sizes could not be saved:', error),
-              )
+            writeTableLayouts(tabId, tables)
           }
-          void Promise.resolve(
-            session.get(tabId) ?? window.hibi.readTableLayout(tabId),
-          ).then(
+          void Promise.resolve(readTableLayouts(tabId)).then(
             (tables) => {
               if (!tables?.length || view.isDestroyed) return
               written = JSON.stringify(tables)

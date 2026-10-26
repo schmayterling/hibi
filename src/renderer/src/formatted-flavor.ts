@@ -1,4 +1,5 @@
 import type { FormattedNodeView, MarkdownFlavor } from '../../addons/api'
+import { flavorSyntax } from './flavor-syntax'
 import { formattedRegistry } from './formatted-registry'
 
 /** Public flavors use the same lazy contribution registry as bundled features. */
@@ -7,7 +8,10 @@ export function registerFormattedFlavor(
   flavor: MarkdownFlavor,
   onError: (error: unknown) => void,
 ) {
-  const id = `${addonId}.${flavor.id}`
+  const id = flavor.id.startsWith(`${addonId}.`)
+    ? flavor.id
+    : `${addonId}.${flavor.id}`
+  const syntax = flavorSyntax(flavor)
   let failed = false
   let remove = () => {}
   const guard =
@@ -29,7 +33,7 @@ export function registerFormattedFlavor(
     load: () => ({
       id,
       flavor: id,
-      ...(flavor.syntax ? { syntax: flavor.syntax } : {}),
+      ...(syntax ? { syntax } : {}),
       views:
         flavor.render?.map((view): FormattedNodeView => {
           const container = view.container && guard(view.container)

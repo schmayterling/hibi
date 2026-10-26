@@ -8,6 +8,7 @@ import {
   type TransactionSpec,
 } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
+import { formattedFormatting } from './formatted-contributions.ts'
 
 /*
  * Structure keys for the formatted view. They edit the Markdown source the
@@ -78,7 +79,8 @@ function formatting(state: EditorState, tree: Tree, pos: number) {
     else if (
       !['Emphasis', 'StrongEmphasis', 'Strikethrough', 'InlineCode'].includes(
         node.name,
-      )
+      ) &&
+      !state.facet(formattedFormatting).includes(node.name)
     )
       continue
     if (first && last && first !== last) out.push({ node, first, last })

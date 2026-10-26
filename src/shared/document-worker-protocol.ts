@@ -1,4 +1,24 @@
 import type { Token } from 'marked'
+import type { BoundaryRecord } from './chunked-markdown.ts'
+import type { BoundaryConfig } from './markdown-boundary-syntax.ts'
+
+export type BoundaryPage = {
+  type: 'boundaries'
+  epoch: string
+  id: number
+  version: number
+  key: string
+  sequence: number
+  length: number
+  from?: number
+  records: BoundaryRecord[]
+  done: boolean
+}
+export type BoundaryReceive = (
+  page: BoundaryPage,
+  acknowledge: () => void,
+) => void
+
 import type { SourceOwnerPage } from './markdown-source-model.ts'
 import type { SourceOperation } from './source-operations.ts'
 import type { ReferenceValue } from './source-references.ts'
@@ -44,6 +64,23 @@ export type MarkdownSemanticResult =
     }>
 
 export type DocumentWorkerRequest =
+  | {
+      type: 'boundaries'
+      epoch: string
+      id: number
+      version: number
+      config: BoundaryConfig
+      from?: number
+    }
+  | {
+      type: 'boundary-ack'
+      epoch: string
+      id: number
+      version: number
+      key: string
+      sequence: number
+    }
+  | { type: 'cancel-boundaries'; epoch: string; retain?: boolean }
   | { type: 'load-start'; epoch: string; head: SourceTransferHead }
   | { type: 'load-chunk'; epoch: string; chunk: SourceTransferChunk }
   | { type: 'load-finish'; epoch: string; request: SourceTransferRequest }
@@ -54,6 +91,7 @@ export type DocumentWorkerRequest =
       id: number
       version: number
       query: string
+      highlights?: boolean
       from: number
       to: number
     }
@@ -74,9 +112,18 @@ export type DocumentWorkerRequest =
   | { type: 'cancel-metadata'; epoch: string; id: number; release: boolean }
 
 export type DocumentWorkerReply =
+  | BoundaryPage
+  | {
+      type: 'boundary-declined'
+      epoch: string
+      id: number
+      version: number
+      key: string
+    }
   | { type: 'load-ack'; epoch: string; request: SourceTransferRequest }
   | { type: 'ack'; epoch: string; version: number }
   | { type: 'find-progress'; epoch: string; id: number; version: number }
+  | { type: 'metadata-progress'; epoch: string; id: number; version: number }
   | { type: 'canceled'; epoch: string; id: number }
   | { type: 'metadata-canceled'; epoch: string; id: number; release: boolean }
   | {
@@ -94,6 +141,7 @@ export type DocumentWorkerReply =
       id: number
       version: number
       location: SearchLocation
+      highlightStarts?: readonly number[]
     }
   | {
       type: 'error'

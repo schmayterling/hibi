@@ -61,10 +61,10 @@ test('addon catalog export keeps metadata, markdown, and relative images without
   const declaration = parse(manifest, { sourceType: 'module' }).program.body[0]
   assert.equal(declaration.type, 'ExportDefaultDeclaration')
   assert.equal(declaration.declaration.type, 'ObjectExpression')
-  assert.deepEqual(
-    JSON.parse(manifest.slice('export default '.length)),
-    metadata,
-  )
+  assert.deepEqual(JSON.parse(manifest.slice('export default '.length)), {
+    ...metadata,
+    apiVersion: 3,
+  })
   assert.equal(
     await readFile(join(source, 'sample/manifest.ts'), 'utf8'),
     'throw new Error("never execute the shim")',
@@ -158,7 +158,7 @@ test('all 41 canonical manifests export website object literals with frozen meta
     assert.equal(body[0].type, 'ExportDefaultDeclaration', id)
     assert.equal(body[0].declaration.type, 'ObjectExpression', id)
     const value = JSON.parse(exported.slice('export default '.length))
-    assert.deepEqual(value, metadata, id)
+    assert.deepEqual(value, { ...metadata, apiVersion: 3 }, id)
     assert.equal(
       createHash('sha256')
         .update(JSON.stringify(stable(value)))

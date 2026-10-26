@@ -12,6 +12,7 @@ import {
   type MarkdownParser,
   parser,
 } from '@lezer/markdown'
+import { protectMarkdownParser } from '../../../shared/markdown-flavor-guard.ts'
 import { ChunkedMarkdownParser } from '../chunked-markdown.ts'
 import {
   formattedMarkdown,
@@ -340,7 +341,7 @@ const scanners = new WeakMap<readonly MarkdownConfig[], MarkdownParser>()
 function scanner(configs: readonly MarkdownConfig[]) {
   let scan = scanners.get(configs)
   if (!scan) {
-    const base = parser.configure([...configs])
+    const base = protectMarkdownParser(parser, configs)
     scan = new ChunkedMarkdownParser(base, base).scan
     scanners.set(configs, scan)
   }
@@ -719,10 +720,12 @@ export const footnoteDefinitions = StateField.define<Index>({
   create,
   update(index, transaction) {
     const { state } = transaction
+    const prefix = prefixOf(state)
     // Other syntax, or a prefix that appeared or went away, reads the note again.
     if (
       state.facet(formattedMarkdown) !== index.configs ||
-      prefixOf(state) !== transaction.changes.mapPos(index.start, -1)
+      prefix !== index.start ||
+      prefix !== transaction.changes.mapPos(index.start, -1)
     )
       return create(state)
     let next = index

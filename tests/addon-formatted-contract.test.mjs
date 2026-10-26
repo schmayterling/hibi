@@ -26,12 +26,7 @@ test('bundled rich-only addons remain on an explicit migration allowlist', async
       missing.push(entry.name)
   }
   // This allowlist must be empty before the CodeMirror formatted view becomes the default.
-  assert.deepEqual(missing.sort(), [
-    'dictionary',
-    'slash-commands',
-    'tags',
-    'text-extras',
-  ])
+  assert.deepEqual(missing.sort(), ['dictionary', 'slash-commands'])
 })
 
 test('legacy compatibility follows registrations, including dual-engine updates and cleanup', () => {

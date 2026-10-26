@@ -30,6 +30,18 @@ import { markdownSyntax } from './markdown-syntax.ts'
  * This is the internal shape of addon API 3.
  */
 
+/** Parent output owns an exact replacement range before child renderers visit it. */
+export function claimFormattedReplacement(
+  ranges: Set<string>,
+  from: number,
+  to: number,
+) {
+  const key = `${from}:${to}`
+  if (ranges.has(key)) return false
+  ranges.add(key)
+  return true
+}
+
 export type FormattedContribution = {
   id: string
   /**
@@ -63,11 +75,22 @@ export type FormattedContribution = {
 /** Markdown extensions of the active contributions, read by the formatted syntax. */
 export const formattedMarkdown = Facet.define<MarkdownConfig>()
 
+/** The view's active flavor ids also identify worker boundary configurations. */
+export const formattedFlavors = Facet.define<
+  readonly string[],
+  readonly string[]
+>({
+  combine: (values) => values.at(-1) ?? [],
+})
+
 /** Node views of the active contributions, read by the live preview. */
 export const formattedViews = Facet.define<FormattedNodeView>()
 
 /** Opaque node names of the active contributions, read by the formatted syntax. */
 export const formattedOpaque = Facet.define<string>()
+
+/** Inline formatting nodes of the active contributions, read by the formatted view's Enter. */
+export const formattedFormatting = Facet.define<string>()
 
 /** Nodes of syntax settings that are off: they and their children show as written. */
 export const formattedLiteral = Facet.define<string>()
@@ -209,6 +232,7 @@ export const formattedContributions = {
           : [],
       )
     return [
+      formattedFlavors.of(flavors ?? []),
       literal.map((name) => formattedLiteral.of(name)),
       formattedRegistry.entries().flatMap((entry) => {
         load(entry)

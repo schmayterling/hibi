@@ -28,6 +28,7 @@ const bundle = await build({
   outdir: 'out',
 })
 const failedReads = new Set()
+const fold = (text) => text.toLowerCase().replaceAll('ς', 'σ')
 function load(name) {
   const module = { exports: {} }
   const output = bundle.outputFiles.find((file) =>
@@ -141,7 +142,7 @@ test('query cleanup preserves unsafe FTS last-insert metadata as bigint', async 
   }
 })
 
-test('streaming lowercase agrees with whole-string search at scalar and sigma boundaries', () => {
+test('streaming search fold agrees with whole-string search at scalar and sigma boundaries', () => {
   let checks = 0
   for (const text of [
     'ΟΣ ΟΣΑ',
@@ -170,7 +171,7 @@ test('streaming lowercase agrees with whole-string search at scalar and sigma bo
         for (let offset = 0; offset < text.length && !found; offset += size)
           found = matcher.push(text.slice(offset, offset + size))
         found ||= matcher.finish()
-        assert.equal(!!found, text.toLowerCase().includes(query.toLowerCase()))
+        assert.equal(!!found, fold(text).includes(fold(query)))
         assert.ok(matcher.units <= text.length * 4)
         checks++
       }
@@ -178,6 +179,35 @@ test('streaming lowercase agrees with whole-string search at scalar and sigma bo
   assert.equal(checks, 330)
   assert.deepEqual(workspaceQueryGrams('\ude00x'), [])
   assert.deepEqual(workspaceQueryGrams('a\0b'), [])
+})
+
+test('same-line matches scan newline tails only linearly', (t) => {
+  const indexOf = String.prototype.indexOf
+  let scanned = 0
+  t.mock.method(String.prototype, 'indexOf', function (needle, from = 0) {
+    const at = indexOf.call(this, needle, from)
+    if (needle === '\n')
+      scanned += Math.max(0, (at < 0 ? this.length : at) - from)
+    return at
+  })
+  for (const size of [16384, 32768, 65536]) {
+    const text = 'η οδός της πόλης είναι στενή. '
+      .repeat(Math.ceil(size / 28))
+      .slice(0, size)
+    scanned = 0
+    const matcher = new WorkspaceLiteralMatcher('σ')
+    matcher.push(text)
+    matcher.finish()
+    assert.deepEqual(
+      matcher.lines.map(({ line }) => line),
+      [1],
+    )
+    assert.ok(
+      scanned <= text.length * 4,
+      `${scanned} newline units for ${size}`,
+    )
+    t.diagnostic(JSON.stringify({ units: size, newlineUnits: scanned }))
+  }
 })
 
 test('persistent candidate filtering preserves literal, cjk, code, unicode and long-query matches', async (t) => {
@@ -221,8 +251,7 @@ test('persistent candidate filtering preserves literal, cjk, code, unicode and l
     const expected = Object.entries(pages)
       .filter(
         ([path, text]) =>
-          !path.startsWith('.') &&
-          text.toLowerCase().includes(query.toLowerCase()),
+          !path.startsWith('.') && fold(text).includes(fold(query)),
       )
       .map(([path]) => path)
       .sort()
@@ -234,6 +263,59 @@ test('persistent candidate filtering preserves literal, cjk, code, unicode and l
   const result = await search(f.store, 'cache.get')
   assert.equal(result.matches[0].lines[0].line, 5)
   assert.match(result.matches[0].lines[0].text, /cache\.get/)
+})
+
+test('sigma search agrees for indexed text, path matches, draft overlays and retained postings', async (t) => {
+  const words = ['ΟΔΟΣ', 'οδος', 'οδοσ']
+  const paths = words.map((word, index) => `form-${index}/${word}.md`)
+  const text = `${'x'.repeat(65533)}😀ΟΔΟΣ;οδος οδοσ\nİ e\u0301 ß ẞ\nΑΣΑ ΑςΑ ΑσΑ`
+  const f = await fixture(
+    t,
+    Object.fromEntries([
+      ...paths.map((path) => [path, 'path only']),
+      ['body.md', text],
+    ]),
+    {
+      readDraft: async function* () {
+        for (const character of '😀ΟΔΟΣ;οδος οδοσ\nΑΣΑ ΑςΑ ΑσΑ') yield character
+      },
+    },
+  )
+  await f.store.idle()
+  for (const query of words) {
+    assert.deepEqual((await search(f.store, query)).paths, ['body.md'])
+    const result = await search(f.store, query, [], true)
+    assert.deepEqual(result.paths, ['body.md', ...paths].sort())
+    assert.equal(
+      result.matches.find((match) => match.path === 'body.md').lines[0].line,
+      1,
+    )
+    assert.ok(
+      result.matches
+        .filter((match) => match.path !== 'body.md')
+        .every((match) => match.score === 2),
+    )
+    const drafts = await search(f.store, query, ['body.md'], true)
+    assert.deepEqual(drafts.paths, result.paths)
+    assert.equal(
+      drafts.matches.find((match) => match.path === 'body.md').lines[0].line,
+      1,
+    )
+  }
+  assert.deepEqual((await search(f.store, 'ΑςΑ')).paths, ['body.md'])
+  // Candidate encoding already equated sigma, so retained postings need no rebuild.
+  assert.equal(
+    workspaceCandidateText(text),
+    text.toLowerCase().replaceAll('ς', 'σ'),
+  )
+  await f.restart()
+  await f.store.idle()
+  assert.equal(f.store.counters.filesIndexed, 0)
+  for (const query of words)
+    assert.deepEqual(
+      (await search(f.store, query, [], true)).paths,
+      ['body.md', ...paths].sort(),
+    )
 })
 
 test('edits, atomic replacement, rename, removal and external writes update one shared index', async (t) => {

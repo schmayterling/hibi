@@ -6,7 +6,7 @@ import type {
   Line,
   MarkdownConfig,
 } from '@lezer/markdown'
-import { readAhead } from '../../renderer/src/chunked-markdown.ts'
+import { readAhead } from '../../shared/chunked-markdown.ts'
 import { blockMath } from './syntax.ts'
 
 /*

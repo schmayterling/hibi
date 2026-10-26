@@ -31,7 +31,6 @@ import {
 } from '@codemirror/language'
 import {
   closeSearchPanel,
-  openSearchPanel,
   SearchQuery,
   search,
   setSearchQuery,
@@ -53,6 +52,7 @@ import {
   placeholder,
 } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
+import type { MarkdownParser } from '@lezer/markdown'
 import {
   useCallback,
   useEffect,
@@ -83,6 +83,7 @@ import {
   sameInteraction,
 } from '../../shared/editor-interactions'
 import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
+import { protectMarkdownParser } from '../../shared/markdown-flavor-guard'
 import { markdownLink } from '../../shared/markdown-link'
 import { wikiHref } from '../../shared/note-links'
 import type { RawEdit } from '../../shared/source-operations'
@@ -113,9 +114,11 @@ import {
 } from './editor-interaction-presence'
 import { editorViewRegistry } from './editor-view-api'
 import type { FindMove, FindStatus } from './FindBar'
+import { flavorSyntax } from './flavor-syntax'
 import { flavors as markdownFlavors } from './flavors'
 import {
   formattedDocument,
+  formattedRenderInputs,
   showMarkdownMarkers,
 } from './formatted-contributions'
 import { formattedSyntax } from './formatted-syntax'
@@ -125,6 +128,7 @@ import {
   observeSourceAnnotations,
   sourceAnnotationExtension,
 } from './source-annotations'
+import { sourceFindHighlights } from './source-find'
 import {
   formattingKeymap,
   type SourceFormatting,
@@ -205,6 +209,7 @@ export function SourceEditor({
   spellCheck = false,
   flavors,
   documentRevision = 0,
+  keepPlace = false,
 }: {
   document: DocumentState
   viewId?: string
@@ -242,6 +247,8 @@ export function SourceEditor({
   flavors?: readonly string[]
   /** Formatted view: the document revision for widgets such as media. */
   documentRevision?: number
+  /** A view that unmounts keeps its selection and scroll position, mapped through edits, for the next. */
+  keepPlace?: boolean
 }) {
   const formatted = presentation === 'formatted'
   const kind = formatted ? 'rich' : 'source'
@@ -286,6 +293,8 @@ export function SourceEditor({
   ])
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
+  const keepingPlace = useRef(keepPlace)
+  keepingPlace.current = keepPlace
   // Effects follow the actual view, which mounts after source preparation.
   const [mountedView, setMountedView] = useState<EditorView | null>(null)
   const [installedExtensions, setInstalledExtensions] = useState<{
@@ -337,6 +346,7 @@ export function SourceEditor({
   const addons = useRef(new Compartment())
   const indentation = useRef(new Compartment())
   const display = useRef(new Compartment())
+  const findHighlights = useRef(new Compartment())
   // Later changes reconfigure the display compartment without a new editor.
   const displayOptions = useRef({ markers, spellCheck, documentRevision })
   displayOptions.current = { markers, spellCheck, documentRevision }
@@ -436,9 +446,10 @@ export function SourceEditor({
           navigatingFind.current = false
           find.current.report({ current: 0, total: 0, error: message })
         },
-        result: (location, action) => {
+        result: (location, action, highlightStarts, query) => {
           const current = view.current
-          if (!current || !find.current.active) return
+          if (!current || !find.current.active || query !== find.current.query)
+            return
           findCoverage.current = {
             query: find.current.query,
             version: session.snapshot().version,
@@ -450,12 +461,28 @@ export function SourceEditor({
               : action
                 ? location.next
                 : null
-          if (target) {
+          if (target || highlightStarts) {
             applyingFind.current = true
             try {
               current.dispatch({
-                selection: { anchor: target.match.from, head: target.match.to },
-                scrollIntoView: true,
+                ...(target
+                  ? {
+                      selection: {
+                        anchor: target.match.from,
+                        head: target.match.to,
+                      },
+                      scrollIntoView: true,
+                    }
+                  : {}),
+                effects: highlightStarts
+                  ? findHighlights.current.reconfigure(
+                      sourceFindHighlights(
+                        find.current.query,
+                        current.state.doc,
+                        highlightStarts,
+                      ),
+                    )
+                  : [],
               })
             } finally {
               applyingFind.current = false
@@ -613,7 +640,21 @@ export function SourceEditor({
     }
     const language = new Compartment()
     // The formatted view owns its syntax tree, kept across language reconfigurations.
-    const syntax = formattedSyntax()
+    const syntax = formattedSyntax(
+      formatted
+        ? {
+            boundaries: {
+              request: (config, receive, declined, from) => {
+                if (bridge.isCurrent())
+                  getWorker().boundaries(config, receive, declined, from)
+                else declined('stale')
+              },
+              release: (retain) =>
+                sourceFind.current?.releaseBoundaries(retain),
+            },
+          }
+        : {},
+    )
     const tree = (state: EditorState) =>
       formatted ? syntax.tree(state) : syntaxTree(state)
     const markdown = () => {
@@ -642,15 +683,21 @@ export function SourceEditor({
             !parserOptions.current.flavors ||
             parserOptions.current.flavors.includes(flavor.id),
         )
-        .flatMap((flavor) => flavor.syntax ?? [])
+        .flatMap((flavor) => flavorSyntax(flavor) ?? [])
+      const support =
+        markdownMode && !(codeLanguage && !codeLanguages.resolve(codeLanguage))
+          ? markdownLanguage?.({
+              codeLanguages: codeLanguages.resolve,
+            })
+          : undefined
+      if (support)
+        support.language.parser = protectMarkdownParser(
+          support.language.parser as MarkdownParser,
+          extensions,
+        )
       return [
         markdownMode
-          ? codeLanguage && !codeLanguages.resolve(codeLanguage)
-            ? []
-            : (markdownLanguage?.({
-                codeLanguages: codeLanguages.resolve,
-                ...(extensions.length ? { extensions } : {}),
-              }) ?? [])
+          ? (support ?? [])
           : codeLanguage
             ? (codeLanguages.resolve(codeLanguage) ?? [])
             : (sourceLanguage ?? []),
@@ -663,7 +710,8 @@ export function SourceEditor({
         }),
       ]
     }
-    const selection = bridge.selection()
+    const place = keepingPlace.current ? bridge.place() : null
+    const selection = place?.selection ?? bridge.selection()
     type PendingCompletion = {
       request: CompletionRequest
       items: readonly CompletionItem[]
@@ -674,6 +722,7 @@ export function SourceEditor({
       options: Map<CompletionItem, Completion>
     }
     let completion: PendingCompletion | null = null
+    let pendingSyntax: { update: () => void; cancel: () => void } | null = null
     let typed: {
       doc: EditorState['doc']
       pos: number
@@ -717,6 +766,12 @@ export function SourceEditor({
         },
         kind,
       )
+    }
+    const completionParsed = () => {
+      if (!formatted || !parserOptions.current.markdownMode) return true
+      const state = editor.state
+      const line = state.doc.lineAt(state.selection.main.head)
+      return line.length > 16384 || !uncovered(tree(state), line.from, line.to)
     }
     const proseAt = (
       state: EditorState,
@@ -872,6 +927,7 @@ export function SourceEditor({
       }
     }
     const cancelCompletion = () => {
+      pendingSyntax?.cancel()
       const pending = completion
       completion = null
       if (!pending) return
@@ -984,7 +1040,7 @@ export function SourceEditor({
         }
       }, 0)
     }
-    const sourceCompletions = (context: CompletionContext) => {
+    const sourceCompletions = async (context: CompletionContext) => {
       if (!completionBroker.hasProviders()) return null
       const trigger: CompletionRequest['trigger'] | null = context.explicit
         ? { kind: 'explicit' }
@@ -992,8 +1048,37 @@ export function SourceEditor({
           ? { kind: 'input', character: typed.character }
           : null
       if (!trigger) return null
-      const request = captureCompletion(trigger)
-      if (!request) return null
+      const initial = captureCompletion(trigger)
+      if (!initial) return null
+      // A jump can reach a chunk before its idle parse. Wait for that parse,
+      // then capture the current tree instead of caching missing prose.
+      const request = completionParsed()
+        ? initial
+        : await new Promise<CompletionRequest | null>((resolve) => {
+            cancelCompletion()
+            const finish = (request: CompletionRequest | null) => {
+              if (pendingSyntax !== pending) return
+              pendingSyntax = null
+              resolve(request)
+            }
+            const pending = {
+              cancel: () => finish(null),
+              update: () => {
+                if (context.aborted) finish(null)
+                else if (completionParsed()) {
+                  const current = captureCompletion(trigger)
+                  finish(
+                    sameCompletionContext(initial, current) ? current : null,
+                  )
+                }
+              },
+            }
+            pendingSyntax = pending
+            context.addEventListener('abort', pending.cancel, {
+              onDocChange: true,
+            })
+          })
+      if (!request || context.aborted) return null
       const current = completion
       if (current && sameCompletionContext(current.request, request))
         return current.items.length
@@ -1061,6 +1146,14 @@ export function SourceEditor({
     }
     const editor = new EditorView({
       parent: host.current,
+      ...(place
+        ? {
+            scrollTo: EditorView.scrollIntoView(place.top, {
+              y: 'start',
+              yMargin: place.margin,
+            }),
+          }
+        : {}),
       dispatchTransactions(transactions, editor) {
         try {
           bridge.dispatch(transactions, editor, exactChanges.current)
@@ -1075,6 +1168,7 @@ export function SourceEditor({
         ...(selection ? { selection } : {}),
         extensions: [
           addons.current.of([]),
+          findHighlights.current.of([]),
           search({
             createPanel: () => {
               const dom = window.document.createElement('div')
@@ -1229,6 +1323,21 @@ export function SourceEditor({
                     selection.mainIndex,
                   ),
                 })
+            },
+            mousedown(event) {
+              if (
+                !formatted ||
+                !event.shiftKey ||
+                !parserOptions.current.markdownMode ||
+                !parserOptions.current.linksEnabled ||
+                !(event.target instanceof Element) ||
+                !event.target.closest('.hibi-lp-link')
+              )
+                return false
+              // Following a link must not first extend the selection: revealing
+              // intervening embeds moves the target before its click arrives.
+              event.preventDefault()
+              return true
             },
             click(event, view) {
               if (
@@ -1418,6 +1527,7 @@ export function SourceEditor({
               completionStatus(update.state) === null
             )
               cancelCompletion()
+            pendingSyntax?.update()
             if (update.docChanged || update.selectionSet || update.focusChanged)
               update.view.contentDOM.dispatchEvent(
                 new Event('hibi:source-caret', { bubbles: true }),
@@ -1877,6 +1987,7 @@ export function SourceEditor({
     requestFind,
     requestReference,
     resolveReference,
+    getWorker,
     clearReferences,
     viewId,
     formatted,
@@ -1894,6 +2005,20 @@ export function SourceEditor({
     bridge.setVisible(sourceVisible || editTarget)
   }, [bridge, sourceVisible, editTarget])
 
+  // A view keeps its place while its pane still lays out: the cleanup that
+  // destroys it runs after the pane has left the page.
+  useLayoutEffect(
+    () => () => {
+      const editor = view.current
+      if (!keepingPlace.current || !editor) return
+      const height =
+        editor.scrollDOM.getBoundingClientRect().top - editor.documentTop
+      const line = editor.lineBlockAtHeight(height)
+      bridge.keepPlace(editor, line.from, line.top - height)
+    },
+    [bridge],
+  )
+
   useEffect(() => {
     const editor = view.current
     setExtensionError('')
@@ -1905,7 +2030,13 @@ export function SourceEditor({
     )
       .then((extensions) => {
         if (!canceled) {
-          editor.dispatch({ effects: addons.current.reconfigure(extensions) })
+          editor.dispatch({
+            effects: addons.current.reconfigure([
+              extensions,
+              // Cached renderers must see the fields installed with their input.
+              formatted ? formattedRenderInputs.of(extensions) : [],
+            ]),
+          })
           setInstalledExtensions({ bridge, extensions: sourceExtensions })
         }
       })
@@ -1917,7 +2048,7 @@ export function SourceEditor({
     return () => {
       canceled = true
     }
-  }, [bridge, preparedText, sourceExtensions, viewId])
+  }, [bridge, preparedText, sourceExtensions, viewId, formatted])
   useEffect(
     () =>
       tabIndent.subscribe(() =>
@@ -2009,7 +2140,7 @@ export function SourceEditor({
     const editor = mountedView
     if (!editor || editor !== view.current) return
     const stopFind = () => {
-      if (referenceUsed.current) sourceFind.current?.cancelFind()
+      if (referenceUsed.current || formatted) sourceFind.current?.cancelFind()
       else {
         sourceFind.current?.dispose()
         sourceFind.current = null
@@ -2017,14 +2148,19 @@ export function SourceEditor({
     }
     if (!findActive) {
       closeSearchPanel(editor)
+      editor.dispatch({ effects: findHighlights.current.reconfigure([]) })
       stopFind()
       findActions.current = []
       navigatingFind.current = false
       return
     }
-    openSearchPanel(editor)
     const query = new SearchQuery({ search: findQuery, literal: true })
-    editor.dispatch({ effects: setSearchQuery.of(query) })
+    editor.dispatch({
+      effects: [
+        setSearchQuery.of(query),
+        findHighlights.current.reconfigure([]),
+      ],
+    })
     findActions.current = []
     navigatingFind.current = query.valid
     if (query.valid) requestFind('first')
@@ -2032,7 +2168,7 @@ export function SourceEditor({
       stopFind()
       find.current.report({ current: 0, total: 0 })
     }
-  }, [mountedView, findActive, findQuery, requestFind])
+  }, [mountedView, formatted, findActive, findQuery, requestFind])
 
   useEffect(() => {
     if (

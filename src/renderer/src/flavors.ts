@@ -5,6 +5,7 @@ import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import literalStyles from '../../ui/markdown-literal.css?raw'
 import syntaxStyles from '../../ui/syntax.css?raw'
 import { codeHtml, codeLanguages, escapeCode } from './code-languages'
+import { flavorRegistrations } from './flavor-registrations'
 import { installSyntaxPreferences } from './syntax-parser'
 
 export async function renderMarkdownAsync(source: string, documentId?: string) {
@@ -49,6 +50,7 @@ export const flavors = {
     addonId: string,
     flavor: MarkdownFlavor,
     onError: (error: unknown) => void = console.error,
+    external = true,
   ) {
     validatePreservation(flavor.preservation)
     if (
@@ -61,24 +63,30 @@ export const flavors = {
     const id = `${addonId}.${flavor.id}`
     if (!/^[a-z][a-z0-9-]*$/.test(flavor.id) || registry.has(id))
       throw new Error(`invalid or duplicate flavor: ${id}`)
-    const item = { ...flavor, id, addonId }
     let active = true
     let removeFormatted: (() => void) | undefined
+    const item = { ...flavor, id, addonId }
+    const remove = () => {
+      if (registry.get(id) !== item) return
+      active = false
+      registry.delete(id)
+      removeFormatted?.()
+      publish()
+    }
+    flavorRegistrations.set(item, {
+      external,
+      active: () => active,
+      remove,
+      onError,
+    })
     if (flavor.syntax || flavor.render)
       void import('./formatted-flavor').then(({ registerFormattedFlavor }) => {
         if (active)
-          removeFormatted = registerFormattedFlavor(addonId, flavor, onError)
+          removeFormatted = registerFormattedFlavor(addonId, item, onError)
       })
     registry.set(id, item)
     publish()
-    return () => {
-      if (registry.get(id) === item) {
-        active = false
-        registry.delete(id)
-        removeFormatted?.()
-        publish()
-      }
-    }
+    return remove
   },
 }
 export function parseFlavorChoice(raw: string | null): FlavorChoice {

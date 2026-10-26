@@ -18,6 +18,7 @@ import {
   useState,
 } from 'react'
 import type { CommandExecutionContext } from '../../shared/foundation-contracts'
+import { foldSearchText } from '../../shared/search-fold'
 import { sentenceCase } from '../../shared/ui-case'
 import { IconButton, TextInput } from '../../ui/Controls'
 import { Modal } from '../../ui/Modal'
@@ -155,7 +156,7 @@ export function CommandPalette({
   const [marker, setMarker] = useState<{ top: number; height: number } | null>(
     null,
   )
-  const normalized = query.toLowerCase().trim()
+  const normalized = foldSearchText(query).trim()
   const waiting = pending?.(query) ?? false
   // Arrow keys and hover reuse these results until the query, menu or commands change.
   const results = useMemo(() => {
@@ -166,7 +167,7 @@ export function CommandPalette({
       commands,
     )
     const rank = (command: PaletteCommand) => {
-      const label = command.label.toLowerCase()
+      const label = foldSearchText(command.label)
       if (label === normalized) return 0
       if (label.startsWith(normalized)) return 1
       return terms.every((term) => label.includes(term)) ? 2 : 3
@@ -180,9 +181,9 @@ export function CommandPalette({
         ? searchCommands(query)
         : searchableCommands.filter((command) =>
             terms.every((term) =>
-              `${command.category} ${command.label} ${command.keywords ?? ''}`
-                .toLowerCase()
-                .includes(term),
+              foldSearchText(
+                `${command.category} ${command.label} ${command.keywords ?? ''}`,
+              ).includes(term),
             ),
           )
     if ((!searchCommands || menuPath.length) && normalized)

@@ -525,7 +525,14 @@ class TableView {
     const content = cell
       ? cellContent(line.text.slice(cell.from, cell.to))
       : null
-    if (content?.text) renderInline(this.view, content.text, paragraph)
+    if (content?.text && cell)
+      renderInline(
+        this.view,
+        content.text,
+        paragraph,
+        this.now(line.from + cell.from),
+        content.source,
+      )
     else paragraph.append(document.createElement('br'))
     element.append(paragraph)
     // Keyboard handles for the column's width and the row's height.
@@ -702,7 +709,9 @@ class TableView {
 
   /** A position of the widget's text snapshot, where it is now. */
   private now(snapshot: number) {
-    return this.range().from - this.widget.from + snapshot
+    return this.dom.isConnected
+      ? this.range().from - this.widget.from + snapshot
+      : snapshot
   }
 
   /** The cell at a position of the formatted view's document, with the offset in its text. */
@@ -1319,10 +1328,13 @@ class TableView {
     const header = this.widget.line(0)
     return this.widget.row(0).cells.map((cell) => {
       const element = document.createElement('p')
+      const content = cellContent(header.text.slice(cell.from, cell.to))
       renderInline(
         this.view,
-        cellContent(header.text.slice(cell.from, cell.to)).text,
+        content.text,
         element,
+        this.now(header.from + cell.from),
+        content.source,
       )
       return element.textContent ?? ''
     })

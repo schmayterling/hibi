@@ -625,3 +625,36 @@ test('opening a note reads none of it; idle slices read the rest', () => {
     footnoteScan.slice = slice
   }
 })
+
+for (const replacement of [
+  '/h2',
+  '[^new]: replacement\n',
+  '---\ntitle: longer exact\n---\n\n[^new]: replacement\n',
+  '---\ntitle: other\n---\n\n[^new]: replacement\n',
+]) {
+  test(`metadata replacement keeps footnote offsets current: ${JSON.stringify(replacement)}`, async () => {
+    const { contribution: frontmatter } = await import(
+      '../src/addons/frontmatter/formatted.ts'
+    )
+    let state = settle(
+      EditorState.create({
+        doc: '---\ntitle: exact\n---\n\n[^old]: previous\n',
+        extensions: [
+          frontmatter.extension,
+          contributionExtension(contribution),
+        ],
+      }),
+    )
+    assert.deepEqual(indexed(state), { old: 1 })
+    state = state.update({
+      changes: { from: 0, to: state.doc.length, insert: replacement },
+      selection: { anchor: replacement.length },
+      userEvent: 'input.addon',
+    }).state
+    state = state.update({ selection: { anchor: replacement.length } }).state
+    state = settle(state)
+    assert.equal(state.doc.toString(), replacement)
+    assert.equal(state.selection.main.head, replacement.length)
+    assert.deepEqual(indexed(state), parsed(replacement))
+  })
+}

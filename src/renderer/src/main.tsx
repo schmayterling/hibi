@@ -33,7 +33,7 @@ import {
   type Hotkeys,
 } from '../../shared/hotkeys'
 import { isMediaFile } from '../../shared/media'
-import { SourceTransferSender } from '../../shared/source-transfer'
+import type { SourceTransferSender } from '../../shared/source-transfer'
 import { startupMark } from '../../shared/startup'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import { DialogProvider, useDialogs } from '../../ui/DialogProvider'
@@ -365,11 +365,16 @@ function App() {
     >()
     const tabs = new Map<string, string>()
     return window.hibi.onDocumentCheckpoint(
-      (tabId) => {
+      async (tabId) => {
         const session = documentRuntime.session(tabId),
           source = session?.snapshot()
         if (!session || !source)
           throw new Error('No retained document recovery checkpoint.')
+        const { SourceTransferSender } = await import(
+          '../../shared/source-transfer'
+        )
+        if (!session.ownsCurrentSnapshot(source))
+          throw new Error('The document changed during recovery verification.')
         const previous = tabs.get(tabId)
         if (previous) {
           checkpoints.get(previous)?.sender.close()

@@ -16,6 +16,9 @@ export function VersionHistory({
   const [preview, setPreview] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const previewTooLarge =
+    (versions.find((version) => version.id === selected)?.bytes ?? 0) >
+    HISTORY_PREVIEW_BYTES
   useEffect(() => {
     let active = true
     void window.hibi
@@ -38,9 +41,10 @@ export function VersionHistory({
   }, [])
   useEffect(() => {
     if (!selected) return
-    let active = true
     setPreview(null)
     setError('')
+    if (previewTooLarge) return
+    let active = true
     void window.hibi
       .previewVersion(selected)
       .then((text) => {
@@ -52,7 +56,7 @@ export function VersionHistory({
     return () => {
       active = false
     }
-  }, [selected])
+  }, [selected, previewTooLarge])
   return (
     <>
       {loading ? (
@@ -77,7 +81,14 @@ export function VersionHistory({
             ))}
           </nav>
           <section aria-label="Version preview">
-            <pre>{preview ?? 'Loading preview…'}</pre>
+            {previewTooLarge ? (
+              <p role="status">
+                This saved version is too large to preview. You can still
+                restore it to the editor.
+              </p>
+            ) : (
+              <pre>{preview ?? 'Loading preview…'}</pre>
+            )}
           </section>
         </div>
       )}
@@ -88,10 +99,7 @@ export function VersionHistory({
           className="dialog-primary"
           onClick={() => close(selected)}
           disabled={
-            !selected ||
-            ((preview === null || !!error) &&
-              (versions.find((version) => version.id === selected)?.bytes ??
-                0) <= HISTORY_PREVIEW_BYTES)
+            !selected || (!previewTooLarge && (preview === null || !!error))
           }
         >
           Restore to editor

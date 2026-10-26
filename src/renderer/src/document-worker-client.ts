@@ -82,6 +82,8 @@ export class DocumentWorkerClient {
   #sentMetadata = 0
   #metadataDeadline: ReturnType<typeof setTimeout> | undefined
   #findDeadline: ReturnType<typeof setTimeout> | undefined
+  #findTimer: ReturnType<typeof setTimeout> | undefined
+  #findQuietUntil = 0
   constructor(session: DocumentSession, options: ClientOptions) {
     this.#session = session
     this.#options = options
@@ -90,6 +92,7 @@ export class DocumentWorkerClient {
       session.subscribeOperations((prepared) => {
         if (this.#disposed || this.#failed) return
         const operation = prepared.operation
+        this.#deferFind()
         if (this.#bootstrap || this.#loaded) {
           const bytes = journalMessageBytes(operation)
           if (
@@ -125,6 +128,7 @@ export class DocumentWorkerClient {
           this.#failed = false
           this.#restarts = 0
           this.#latest = null
+          this.#findQuietUntil = 0
           this.#metadata = null
           this.#restart()
           options.changed()
@@ -176,6 +180,9 @@ export class DocumentWorkerClient {
     this.#flushMetadata()
   }
   cancelFind() {
+    clearTimeout(this.#findTimer)
+    this.#findTimer = undefined
+    this.#findQuietUntil = 0
     this.#latest = null
     this.#sentRequest = 0
     if (this.#flight === null || this.#canceling !== null) return
@@ -252,12 +259,26 @@ export class DocumentWorkerClient {
     this.#post({ type: 'edit', epoch: this.#epoch, operation })
     this.#watch()
   }
+  #deferFind(until = Date.now() + 300) {
+    clearTimeout(this.#findTimer)
+    this.#findQuietUntil = until
+    const remaining = until - Date.now()
+    // Edits cancel worker work immediately; rebuild only after input settles.
+    this.#findTimer =
+      remaining > 0
+        ? setTimeout(() => {
+            this.#findTimer = undefined
+            this.#flushQuery()
+          }, remaining)
+        : undefined
+  }
   #flushQuery() {
     const request = this.#latest
     if (
       !request ||
       !this.#loaded ||
       this.#ack !== this.#session.snapshot().version ||
+      this.#findTimer !== undefined ||
       this.#canceling !== null
     )
       return
@@ -474,6 +495,8 @@ export class DocumentWorkerClient {
     this.#watch()
   }
   #stop() {
+    clearTimeout(this.#findTimer)
+    this.#findTimer = undefined
     clearTimeout(this.#startTimer)
     clearTimeout(this.#deadline)
     clearTimeout(this.#findDeadline)
@@ -497,6 +520,7 @@ export class DocumentWorkerClient {
   }
   #restart() {
     this.#stop()
+    this.#deferFind(this.#findQuietUntil)
     this.#epoch = crypto.randomUUID()
     this.#requestId = 0
     if (this.#latest)

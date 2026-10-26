@@ -77,6 +77,34 @@ function fixture(current, baseline = current) {
   }
 }
 
+test('deferred transfer loading retains the received metadata before yielding', async () => {
+  const f = fixture('captured transfer\r\n😀')
+  const pending = f.api.getDocument()
+  queueMicrotask(() => {
+    f.wire.sourceLength = 999
+    f.wire.contentVersion = 8
+  })
+  const document = await pending
+  assert.equal(document.contentVersion, 7)
+  assert.equal(document.markdown, 'captured transfer\r\n😀')
+  assert.equal(loadedDocument(document).current.version, 7)
+})
+
+test('document transfer controls stay private to the transport', async () => {
+  const f = fixture('private transfer\r\n😀')
+  f.native.openDocumentTransfer = async () => f.wire
+  const api = documentTransferApi(f.native)
+  for (const name of [
+    'abortDocumentTransfer',
+    'finishDocumentTransfer',
+    'openDocumentTransfer',
+    'readDocumentTransfer',
+  ])
+    assert.equal(Object.hasOwn(api, name), false, name)
+  assert.equal((await api.getDocument()).markdown, 'private transfer\r\n😀')
+  assert.equal(f.state().finished, true)
+})
+
 test('metadata without a runtime owner requests an explicit source stream', async () => {
   const f = fixture('retained outside runtime\r\n😀')
   let requested

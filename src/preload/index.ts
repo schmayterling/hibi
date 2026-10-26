@@ -65,7 +65,9 @@ if (process.isMainFrame) {
   } catch {
     /* Diagnostics cannot prevent the document bridge from starting. */
   }
-  let checkpoint: ((tabId: string) => JournalCheckpoint) | undefined
+  let checkpoint:
+    | ((tabId: string) => JournalCheckpoint | Promise<JournalCheckpoint>)
+    | undefined
   let checkpointRead:
     | ((request: SourceTransferRequest) => SourceTransferChunk)
     | undefined

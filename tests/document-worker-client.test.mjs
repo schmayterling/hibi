@@ -4,6 +4,7 @@ import { DocumentWorkerClient } from '../src/renderer/src/document-worker-client
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
+import { SourceSearchIndex } from '../src/shared/source-search-index.ts'
 
 const wait = async (predicate) => {
   const end = Date.now() + 3000
@@ -82,6 +83,281 @@ function fixture(t, source = 'one two one', extra = {}) {
   }
   return { client, session, workers, results, errors, find, append }
 }
+
+function queuedFixture(t, source = 'one two one', extra = {}) {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const tasks = [],
+    channels = [],
+    builds = t.mock.method(SourceSearchIndex.prototype, 'build')
+  let clock = 0
+  // One real generator advance per channel task, independent of machine speed.
+  t.mock.method(performance, 'now', () => clock++)
+  t.mock.method(
+    globalThis,
+    'MessageChannel',
+    class {
+      port1 = { onmessage: null, close: t.mock.fn() }
+      port2 = {
+        close: t.mock.fn(),
+        postMessage: () => tasks.push(() => this.port1.onmessage?.()),
+      }
+      constructor() {
+        channels.push(this)
+      }
+    },
+  )
+  const f = fixture(t, source, {
+    timeoutMs: 100,
+    ...extra,
+    worker: () => {
+      const worker = new TestWorker()
+      worker.service = new DocumentWorkerService((reply) => {
+        worker.replies.push(reply)
+        tasks.push(() => {
+          if (!worker.terminated) worker.onmessage?.({ data: reply })
+        })
+      })
+      worker.postMessage = (message) => {
+        const copy = structuredClone(message)
+        worker.messages.push(copy)
+        if (!worker.blocked)
+          tasks.push(() => {
+            if (!worker.terminated) worker.service.receive(copy)
+          })
+      }
+      f.workers.push(worker)
+      return worker
+    },
+  })
+  const drain = () => {
+    while (tasks.length) tasks.shift()()
+  }
+  const step = () => {
+    assert.ok(tasks.length, 'expected a queued worker task')
+    tasks.shift()()
+  }
+  return { ...f, tasks, channels, builds, drain, step }
+}
+
+test('typing burst rebuilds once after quiet time with exact latest query and version', (t) => {
+  const f = queuedFixture(t, 'one two '.repeat(10000))
+  f.find('one')
+  t.mock.timers.tick(0)
+  f.drain()
+  assert.equal(f.results.at(-1).location.total, 10000)
+  assert.equal(f.builds.mock.callCount(), 1)
+
+  // Leave a real build in flight when the first edit arrives.
+  f.find('two')
+  f.step()
+  f.step()
+  f.step()
+  assert.equal(f.builds.mock.callCount(), 2)
+  const stale = f.workers[0].messages.at(-1),
+    activeChannel = f.channels.at(-1),
+    before = f.results.length
+  for (let n = 0; n < 29; n++) {
+    f.append(' two')
+    f.find(n % 2 ? 'absent' : 'two', 0, 0, 'first')
+    f.drain()
+    assert.equal(activeChannel.port1.close.mock.callCount(), 1)
+    assert.equal(activeChannel.port2.close.mock.callCount(), 1)
+    t.mock.timers.tick(250)
+    f.drain()
+  }
+  t.diagnostic(
+    JSON.stringify({
+      keys: 29,
+      initialBuilds: 2,
+      buildsDuringBurst: f.builds.mock.callCount() - 2,
+    }),
+  )
+  assert.equal(
+    f.builds.mock.callCount(),
+    2,
+    'no index builds during typing burst',
+  )
+  assert.equal(f.results.length, before)
+  assert.equal(
+    f.workers.length,
+    1,
+    'quiet time must not consume a find timeout',
+  )
+
+  const worker = f.workers[0]
+  worker.onmessage({ data: { ...stale, type: 'find-progress' } })
+  worker.onmessage({
+    data: {
+      type: 'find',
+      epoch: stale.epoch,
+      id: stale.id,
+      version: stale.version,
+      location: f.results[0].location,
+    },
+  })
+  assert.equal(f.results.length, before)
+  t.mock.timers.tick(49)
+  f.drain()
+  assert.equal(f.builds.mock.callCount(), 2)
+  t.mock.timers.tick(1)
+  f.drain()
+  assert.equal(f.builds.mock.callCount(), 3, 'one rebuild after typing pauses')
+  const request = worker.messages.at(-1)
+  assert.equal(request.type, 'find')
+  assert.equal(request.version, 29)
+  assert.equal(request.query, 'two')
+  assert.equal(f.results.at(-1).location.total, 10029)
+  assert.equal(f.results.at(-1).action, 'first')
+  assert.deepEqual(
+    worker.messages
+      .filter((message) => message.type === 'edit')
+      .map((message) => message.operation.contentVersion),
+    Array.from({ length: 29 }, (_, n) => n + 1),
+  )
+  assert.ok(
+    f.channels.every(
+      (channel) =>
+        channel.port1.close.mock.callCount() === 1 &&
+        channel.port2.close.mock.callCount() === 1,
+    ),
+  )
+  assert.deepEqual(f.errors, [])
+  t.diagnostic(
+    JSON.stringify({
+      rebuildsAfterPause: 1,
+      version: request.version,
+      total: 10029,
+    }),
+  )
+})
+
+test('quiet time starts the find deadline only on dispatch and rejects stale progress', (t) => {
+  const f = queuedFixture(t)
+  f.find('one')
+  t.mock.timers.tick(0)
+  f.drain()
+  const worker = f.workers[0],
+    stale = worker.messages.at(-1)
+  f.append(' two')
+  f.drain()
+  worker.blocked = true
+  t.mock.timers.tick(299)
+  assert.equal(worker.terminated, false)
+  assert.equal(f.builds.mock.callCount(), 1)
+  t.mock.timers.tick(1)
+  assert.equal(worker.messages.at(-1).type, 'find')
+  assert.equal(worker.messages.at(-1).version, 1)
+  t.mock.timers.tick(60)
+  worker.onmessage({ data: { ...stale, type: 'find-progress' } })
+  t.mock.timers.tick(39)
+  assert.equal(worker.terminated, false)
+  t.mock.timers.tick(1)
+  assert.equal(worker.terminated, true)
+})
+
+test('cancel and dispose clear quiet timers and close in-flight channel ports', (t) => {
+  const f = queuedFixture(t),
+    timers = t.mock.method(globalThis, 'setTimeout'),
+    cleared = t.mock.method(globalThis, 'clearTimeout')
+  f.find('one')
+  t.mock.timers.tick(0)
+  f.drain()
+  f.append(' two')
+  f.drain()
+  const quiet = timers.mock.calls.findLast(
+    (call) => call.arguments[1] === 300,
+  ).result
+  f.client.cancelFind()
+  assert.ok(cleared.mock.calls.some((call) => call.arguments[0] === quiet))
+  t.mock.timers.tick(300)
+  f.drain()
+  assert.equal(f.builds.mock.callCount(), 1)
+
+  f.find('two')
+  f.step()
+  const channel = f.channels.at(-1)
+  assert.equal(channel.port1.close.mock.callCount(), 0)
+  f.client.dispose()
+  assert.equal(channel.port1.close.mock.callCount(), 1)
+  assert.equal(channel.port2.close.mock.callCount(), 1)
+  f.drain()
+  assert.equal(f.results.length, 1)
+
+  // A second client disposed during quiet time must cancel that timer too.
+  const pending = fixture(t)
+  pending.append('x')
+  const pendingQuiet = timers.mock.calls.findLast(
+    (call) => call.arguments[1] === 300,
+  ).result
+  pending.client.dispose()
+  assert.ok(
+    cleared.mock.calls.some((call) => call.arguments[0] === pendingQuiet),
+  )
+  const builds = f.builds.mock.callCount()
+  t.mock.timers.tick(1000)
+  f.drain()
+  assert.equal(f.builds.mock.callCount(), builds)
+  assert.equal(pending.workers.length, 0)
+  assert.deepEqual(f.errors, [])
+})
+
+test('quiet time spans immutable bootstrap, ordered suffix and the remaining restart interval', (t) => {
+  const f = queuedFixture(t, 'one two '.repeat(10000), { timeoutMs: 1000 })
+  f.find('two')
+  t.mock.timers.tick(0)
+  f.step()
+  f.step()
+  f.append(' two')
+  t.mock.timers.tick(200)
+  f.drain()
+  const first = f.workers[0]
+  assert.equal(first.messages[0].head.contentVersion, 0)
+  assert.deepEqual(
+    first.messages
+      .filter((message) => message.type === 'edit')
+      .map((message) => message.operation.contentVersion),
+    [1],
+  )
+  assert.equal(f.builds.mock.callCount(), 0)
+  first.onerror({ preventDefault() {} })
+  t.mock.timers.tick(0)
+  f.drain()
+  assert.equal(f.workers.length, 2)
+  assert.equal(f.workers[1].messages[0].head.contentVersion, 1)
+  t.mock.timers.tick(99)
+  f.drain()
+  assert.equal(f.builds.mock.callCount(), 0)
+  t.mock.timers.tick(1)
+  f.drain()
+  assert.equal(f.builds.mock.callCount(), 1)
+  assert.equal(f.results.at(-1).location.total, 10001)
+  assert.deepEqual(f.errors, [])
+})
+
+test('operation overflow restart preserves quiet time before rebuilding the latest snapshot', (t) => {
+  const f = queuedFixture(t, 'one two one', { maximumPendingBytes: 700 })
+  f.find('two')
+  t.mock.timers.tick(0)
+  f.drain()
+  const first = f.workers[0]
+  first.blocked = true
+  for (let n = 0; n < 8; n++) f.append(' two')
+  assert.equal(first.terminated, true)
+  // Delay the scheduled replacement's start without consuming the quiet interval.
+  t.mock.timers.tick(100)
+  f.drain()
+  assert.equal(f.workers.length, 2)
+  assert.equal(f.workers[1].messages[0].head.contentVersion, 8)
+  assert.equal(f.builds.mock.callCount(), 1)
+  t.mock.timers.tick(199)
+  f.drain()
+  assert.equal(f.builds.mock.callCount(), 1)
+  t.mock.timers.tick(1)
+  f.drain()
+  assert.equal(f.builds.mock.callCount(), 2)
+  assert.equal(f.results.at(-1).location.total, 9)
+  assert.deepEqual(f.errors, [])
+})
 
 test('32 mib real find build completes with progress on one worker', {
   timeout: 60000,

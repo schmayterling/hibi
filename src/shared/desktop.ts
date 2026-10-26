@@ -548,7 +548,9 @@ export type DesktopApi = {
   onDocumentCheckpoint: (
     callback: (
       tabId: string,
-    ) => import('./document-checkpoint').JournalCheckpoint,
+    ) =>
+      | import('./document-checkpoint').JournalCheckpoint
+      | Promise<import('./document-checkpoint').JournalCheckpoint>,
     read?: (
       request: import('./source-transfer').SourceTransferRequest,
     ) => import('./source-transfer').SourceTransferChunk,

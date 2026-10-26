@@ -33,7 +33,7 @@ test('garden startup requests survive an immediately disposed subscription', asy
     }),
     { isMainFrame: true },
   )
-  const api = exposed.get('hibi')
+  const api = exposed.get('hibiTransport')
   const discarded = [],
     received = []
   const stop = api.onAddonGardenRequest((value) => discarded.push(value))
@@ -78,7 +78,7 @@ for (const [method, channel, arity = 1] of [
     const api =
       method === 'onStates'
         ? exposed.get('hibiAddonWindow').seal()
-        : exposed.get('hibi')
+        : exposed.get('hibiTransport')
     const initialListeners = transport.listenerCount(channel)
     const calls = []
     const callback = (...args) => calls.push(args)

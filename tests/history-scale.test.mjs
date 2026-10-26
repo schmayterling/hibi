@@ -53,6 +53,14 @@ test('history above its retention budget keeps a distinct version restorable thr
   )
   const savedText = text.slice(0, 1) + 'Z' + text.slice(2)
   assert.equal(await readFile(file, 'utf8'), savedText)
+  await page.evaluate(() => {
+    const preview = window.hibi.previewVersion
+    globalThis.historyScalePreviewCalls = 0
+    window.hibi.previewVersion = (...args) => {
+      globalThis.historyScalePreviewCalls++
+      return preview(...args)
+    }
+  })
   await pressShortcut(
     app,
     process.platform === 'darwin' ? 'Meta+k' : 'Control+k',
@@ -68,10 +76,20 @@ test('history above its retention budget keeps a distinct version restorable thr
     .getByRole('button')
     .last()
     .click()
+  assert.equal(
+    await page.evaluate(() => globalThis.historyScalePreviewCalls),
+    0,
+  )
   await dialog
-    .getByRole('alert')
+    .getByRole('region', { name: 'Version preview' })
+    .getByRole('status')
     .filter({ hasText: /too large to preview.*still restore/i })
     .waitFor()
+  assert.equal(await dialog.getByRole('alert').count(), 0)
+  assert.equal(
+    await dialog.getByText('Loading preview…', { exact: true }).count(),
+    0,
+  )
   const restore = dialog.getByRole('button', { name: /restore to editor/i })
   assert.equal(await restore.isEnabled(), true)
   await restore.click()

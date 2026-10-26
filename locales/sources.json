@@ -3088,7 +3088,7 @@
     "src/main/index.ts"
   ],
   "dc0dc106489e": [
-    "src/renderer/src/document-transfer.ts",
+    "src/renderer/src/document-transfer-load.ts",
     "src/shared/source-transfer.ts"
   ],
   "c2e3add49974": [
@@ -5735,7 +5735,7 @@
   ],
   "f8848b91279e": [
     "src/main/document-transfer.ts",
-    "src/renderer/src/document-transfer.ts"
+    "src/renderer/src/document-transfer-load.ts"
   ],
   "4f933c48f0a0": [
     "src/renderer/src/document-target-edits.ts"
@@ -6490,7 +6490,8 @@
     "src/main/history.ts"
   ],
   "81236bae92f9": [
-    "src/main/history.ts"
+    "src/main/history.ts",
+    "src/renderer/src/VersionHistory.tsx"
   ],
   "ffebf17d6560": [
     "src/addons/mcp-server/tools.ts",

@@ -1307,6 +1307,13 @@ async function collectIndexPages(
         next.set(item.path, cached)
         pages.push(cached.page)
       } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === 'This text is too large to read in one request.'
+        )
+          throw new Error(
+            'Hibi can index up to 2,000 documents and 20 MiB of text. Open a smaller workspace.',
+          )
         // A concurrent rename/delete can remove a cached entry; the watcher refreshes it.
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       }

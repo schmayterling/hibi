@@ -1116,6 +1116,29 @@ for (const blocked of [false, true]) {
       await page.evaluate(() => {
         window.holdSearch = true
       })
+      await input.fill('raretarget96')
+      await input.press('ArrowDown')
+      const highlighted = (
+        await page.getByRole('option', { selected: true }).getAttribute('id')
+      )
+        .slice('command-'.length)
+        .split('#')[0]
+      assert.equal(
+        await page.getByRole('listbox').getAttribute('aria-busy'),
+        'true',
+      )
+      await input.press('Enter')
+      await page.locator('.command-palette').waitFor({ state: 'hidden' })
+      await page.waitForFunction(
+        (path) =>
+          new URLSearchParams(location.hash.slice(1)).get('page') === path,
+        highlighted,
+      )
+      await page.evaluate(() => window.resumeSearch())
+      await button.click()
+      await page.evaluate(() => {
+        window.holdSearch = true
+      })
       await input.fill('raretarget97')
       await input.press('Enter')
       await page.waitForFunction(() =>

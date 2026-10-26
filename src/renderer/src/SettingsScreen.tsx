@@ -27,7 +27,11 @@ import {
 } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
 import { Sidebar, type SidebarItem, type SidebarProps } from '../../ui/Sidebar'
-import { SettingsDiscovery, settingsIndex } from '../../ui/settings-index'
+import {
+  SettingsDiscovery,
+  SettingsPageVisible,
+  settingsIndex,
+} from '../../ui/settings-index'
 import { uiCase } from '../../ui/ui-case'
 import {
   type AddonInstallTarget,
@@ -442,9 +446,8 @@ export function SettingsScreen({
             )}
           </SettingsPanel>
           <SettingsPanel id="licenses" label="Credits" category={category}>
-            {(discover || (open && category === 'licenses')) && (
-              <LicenseSettings />
-            )}
+            {/* License rows are not settings, so discovery skips their catalog read. */}
+            {open && category === 'licenses' && <LicenseSettings />}
           </SettingsPanel>
           <SettingsPanel id="editor" label="Editor" category={category}>
             <h1>Editor</h1>
@@ -788,15 +791,17 @@ export function SettingsScreen({
                 <AddonUpdating />
               ) : (
                 (discover || (open && (searching || category === id))) && (
-                  <PluginSettingsBoundary key={id}>
-                    <Suspense
-                      fallback={
-                        <DocumentNotice title="Loading settings…" busy />
-                      }
-                    >
-                      <Content />
-                    </Suspense>
-                  </PluginSettingsBoundary>
+                  <SettingsPageVisible value={open && category === id}>
+                    <PluginSettingsBoundary key={id}>
+                      <Suspense
+                        fallback={
+                          <DocumentNotice title="Loading settings…" busy />
+                        }
+                      >
+                        <Content />
+                      </Suspense>
+                    </PluginSettingsBoundary>
+                  </SettingsPageVisible>
                 )
               )}
             </SettingsPanel>
@@ -879,15 +884,19 @@ export function SettingsScreen({
                 (discover ||
                   (open &&
                     (searching || category === `plugin-${manifest.id}`))) && (
-                  <PluginSettingsBoundary key={manifest.id}>
-                    <Suspense
-                      fallback={
-                        <DocumentNotice title="Loading settings…" busy />
-                      }
-                    >
-                      <Settings />
-                    </Suspense>
-                  </PluginSettingsBoundary>
+                  <SettingsPageVisible
+                    value={open && category === `plugin-${manifest.id}`}
+                  >
+                    <PluginSettingsBoundary key={manifest.id}>
+                      <Suspense
+                        fallback={
+                          <DocumentNotice title="Loading settings…" busy />
+                        }
+                      >
+                        <Settings />
+                      </Suspense>
+                    </PluginSettingsBoundary>
+                  </SettingsPageVisible>
                 )
               )}
             </SettingsPanel>

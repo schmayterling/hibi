@@ -522,7 +522,7 @@ test('turning tags off shows them as text in the formatted view, and on styles t
     .waitFor()
 })
 
-test('typing renders the same tags in a note four times as long: visible text only', {
+test('typing scans only rendered tagged paragraphs in notes of different sizes', {
   timeout: 180000,
 }, async () => {
   await engine(true)
@@ -560,6 +560,24 @@ test('typing renders the same tags in a note four times as long: visible text on
     }
     return page.evaluate(() => window.tagScan)
   }
+  const visibleWorkload = () =>
+    page.evaluate(() => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      const text = view.visibleRanges
+        .map(({ from, to }) => view.state.doc.sliceString(from, to))
+        .join('\n')
+      return {
+        paragraphs: text.match(/^p\d{5}(?= )/gm) ?? [],
+        expectedTags: (text.match(/(?<!\w)#[tb]\d+/g) ?? []).map((tag) =>
+          tag.slice(1),
+        ),
+        tags: [...view.dom.querySelectorAll('.hibi-tag')].map(
+          (tag) => tag.dataset.tag,
+        ),
+        heading: text.startsWith('# Tagged\n\n'),
+      }
+    })
   const measure = async (name, count) => {
     await open(name)
     await page.locator('.rich-pane .hibi-formatted .hibi-tag').first().waitFor()
@@ -572,17 +590,25 @@ test('typing renders the same tags in a note four times as long: visible text on
         view.focus()
         view.dispatch({ selection: { anchor: at }, scrollIntoView: true })
       }, text)
-    // Typing in a paragraph on the first screen, which both notes show alike.
+    // CodeMirror may buffer different numbers of paragraphs in the two notes.
+    // Record the actual source window independently of the rendered tags.
     await caret('p00020 ')
     await settled()
-    const shown = await page
-      .locator('.rich-pane .hibi-formatted .hibi-tag')
-      .count()
+    const visible = await visibleWorkload()
+    assert.ok(visible.heading && visible.paragraphs.length > 0)
+    assert.deepEqual(visible.tags, visible.expectedTags)
+    assert.equal(visible.tags.length, 2 * visible.paragraphs.length)
     const typed = []
     for (const key of 'typed') {
       await reset()
       await page.keyboard.type(key)
-      typed.push(await settled())
+      const work = await settled()
+      const next = await visibleWorkload()
+      assert.deepEqual(next.paragraphs, visible.paragraphs)
+      assert.deepEqual(next.tags, next.expectedTags)
+      // Typing directly before #t20 joins it to the preceding word.
+      assert.equal(next.tags.length, 2 * next.paragraphs.length - 1)
+      typed.push({ ...work, paragraphs: next.paragraphs.length })
     }
     await waitForAsync(page, async () =>
       (await window.hibi.getDocument()).markdown.includes('p00020 typed'),
@@ -600,7 +626,8 @@ test('typing renders the same tags in a note four times as long: visible text on
       length: await page.evaluate(
         async () => (await window.hibi.getDocument()).markdown.length,
       ),
-      shown,
+      shown: visible.tags.length,
+      paragraphs: visible.paragraphs.length,
       typed,
       jumped: await settled(),
     }
@@ -610,15 +637,26 @@ test('typing renders the same tags in a note four times as long: visible text on
   console.log(JSON.stringify({ short, long }))
   // Both open in the formatted view, below the source-first opening size.
   assert.ok(long.length < 256 * 1024 && long.length > 3.9 * short.length)
-  // The same text is in view, so each keystroke scans the same characters
-  // in both notes: what is visible, never the note.
-  assert.equal(long.shown, short.shown)
-  assert.deepEqual(long.typed, short.typed)
-  for (const key of long.typed)
-    assert.ok(
-      key.calls > 0 && key.characters < long.length / 50,
-      JSON.stringify(key),
+  // Each visible paragraph has two tagged runs (15 characters total); the
+  // heading adds one seven-character run, and each typed key adds one unit.
+  const normalized = (sample) =>
+    sample.typed.map(({ calls, characters, paragraphs }, index) => ({
+      calls: calls - 2 * paragraphs,
+      characters: characters - 15 * paragraphs - (index + 1),
+    }))
+  assert.deepEqual(normalized(long), normalized(short))
+  for (const sample of [short, long]) {
+    assert.equal(sample.shown, 2 * sample.paragraphs)
+    assert.deepEqual(
+      normalized(sample),
+      [...'typed'].map(() => ({ calls: 1, characters: 7 })),
     )
+    for (const key of sample.typed)
+      assert.ok(
+        key.calls > 0 && key.characters < sample.length / 50,
+        JSON.stringify(key),
+      )
+  }
   for (const { jumped, length } of [short, long])
     assert.ok(
       jumped.calls > 0 && jumped.characters < length / 10,

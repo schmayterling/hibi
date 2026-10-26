@@ -134,6 +134,7 @@ before(
       configFile: false,
       logLevel: 'silent',
       define: { 'process.env.NODE_ENV': '"production"' },
+      worker: { format: 'es' },
       build: {
         outDir: bundle,
         assetsInlineLimit: 0,

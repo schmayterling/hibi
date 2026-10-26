@@ -22,9 +22,7 @@ import {
 import {
   languageNames,
   readPreferences,
-  readRecentPack,
   writePreferences,
-  writeRecentPack,
 } from '../src/addons/dictionary/settings.ts'
 
 const fixture = (name) =>
@@ -215,8 +213,6 @@ test('dictionary keeps German preferences and recent pack language', (t) => {
   assert.equal(languageNames.de, 'German')
   writePreferences({ han: 'zh', latin: 'de' })
   assert.deepEqual(readPreferences(), { han: 'zh', latin: 'de' })
-  writeRecentPack('de')
-  assert.equal(readRecentPack(), 'de')
   saved.set('hibi:dictionary', '{"latin":"unsupported"}')
   assert.deepEqual(readPreferences(), preferences)
 })

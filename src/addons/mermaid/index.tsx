@@ -70,9 +70,7 @@ export default defineAddon({
       group: 'Mermaid',
       level: 'block',
       extensions: ['mermaidBlock'],
-      matches: (token) =>
-        token.type === 'mermaidBlock' ||
-        (token.type === 'code' && token.lang === 'mermaid'),
+      matches: (token) => token.type === 'code' && token.lang === 'mermaid',
       slash: {
         markdown: '```mermaid\n\n```',
         cursor: 11,

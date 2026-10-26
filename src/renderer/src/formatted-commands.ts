@@ -57,10 +57,8 @@ function continuation(state: EditorState, tree: Tree, pos: number) {
  * Inline formatting around `pos` to close before a break and open again
  * after it, innermost first, so a split keeps its formatting.
  */
-function reopened(state: EditorState, tree: Tree, pos: number) {
-  let close = '',
-    open = '',
-    at = pos
+function formatting(state: EditorState, tree: Tree, pos: number) {
+  const out: { node: SyntaxNode; first: SyntaxNode; last: SyntaxNode }[] = []
   for (
     let node: SyntaxNode | null = tree.resolveInner(pos, -1);
     node && !node.type.is('Block');
@@ -79,18 +77,56 @@ function reopened(state: EditorState, tree: Tree, pos: number) {
       )
     )
       continue
-    if (!first || !last || first === last || at < first.to || at > last.from)
-      continue
+    if (first && last && first !== last) out.push({ node, first, last })
+  }
+  return out
+}
+
+type Formatting = ReturnType<typeof formatting>[number]
+
+/** The marker that closes formatting before a break. */
+const closer = (state: EditorState, { node, last }: Formatting) =>
+  state.sliceDoc(last.from, node.name === 'Link' ? node.to : last.to)
+
+/** The marker that opens formatting again after a break. */
+const opener = (state: EditorState, { first }: Formatting) =>
+  state.sliceDoc(first.from, first.to)
+
+/**
+ * For a selection replaced by a break: formatting around its start closes
+ * before the break, and formatting around its end opens again after it.
+ */
+function spanned(state: EditorState, tree: Tree, from: number, to: number) {
+  const inside = (pos: number) =>
+    formatting(state, tree, pos).filter(
+      ({ first, last }) => first.to <= pos && pos <= last.from,
+    )
+  return {
+    close: inside(from)
+      .map((found) => closer(state, found))
+      .join(''),
+    open: inside(to)
+      .map((found) => opener(state, found))
+      .reverse()
+      .join(''),
+    at: from,
+  }
+}
+
+function reopened(state: EditorState, tree: Tree, pos: number) {
+  let close = '',
+    open = '',
+    at = pos
+  for (const found of formatting(state, tree, pos)) {
+    const { node, first, last } = found
+    if (at < first.to || at > last.from) continue
     // At either end of its text the break moves outside it, so no empty
     // formatting is left behind.
     if (at === first.to) at = node.from
     else if (at === last.from) at = node.to
     else {
-      close += state.sliceDoc(
-        last.from,
-        node.name === 'Link' ? node.to : last.to,
-      )
-      open = state.sliceDoc(first.from, first.to) + open
+      close += closer(state, found)
+      open = opener(state, found) + open
     }
   }
   return { close, open, at }
@@ -155,9 +191,19 @@ export function blockBreak(
       range: EditorSelection.cursor(from + text.length),
     })
     if (around(tree, pos, ['FencedCode', 'CodeBlock'])) {
-      // Quote markers and indentation before the code continue on the new line.
-      const prefix = /^(?:[ \t]*>[ \t]?)*[ \t]*/.exec(line.text)?.[0] ?? ''
-      return insert(`\n${prefix}`)
+      // The markers of the quotes around the code, then the line's
+      // indentation, continue on the new line; a `>` in the code is text.
+      let quotes = 0
+      for (
+        let node: SyntaxNode | null = tree.resolveInner(pos, -1);
+        node;
+        node = node.parent
+      )
+        if (node.name === 'Blockquote') quotes++
+      const markers =
+        new RegExp(`^(?:[ \\t]*>[ \\t]?){${quotes}}`).exec(line.text)?.[0] ?? ''
+      const indent = /^[ \t]*/.exec(line.text.slice(markers.length))![0]
+      return insert(`\n${markers}${indent}`)
     }
     const item = around(tree, pos, ['ListItem'])
     if (item) {
@@ -168,13 +214,21 @@ export function blockBreak(
             .sliceDoc(mark.to, markerLine!.to)
             .replace(/^\s*(\[[ xX]\]\s*)?/, '')
         : ''
-      // An empty item leaves the list, as in the rich editor.
-      if (mark && markerLine?.number === line.number && !content.trim())
+      // An empty item moves up a level, and leaves the list at the top, as
+      // in the rich editor.
+      if (mark && markerLine?.number === line.number && !content.trim()) {
+        const parent = item.parent?.parent
+        const outer =
+          range.empty && parent?.name === 'ListItem'
+            ? nextMarker(state, parent)
+            : null
+        if (outer) return insert(outer, markerLine.from, markerLine.to)
         return insert('\n', markerLine.from, Math.max(markerLine.to, range.to))
+      }
       const marker = nextMarker(state, item)
       const { close, open, at } = range.empty
         ? reopened(state, tree, pos)
-        : { close: '', open: '', at: range.from }
+        : spanned(state, tree, range.from, range.to)
       if (marker) {
         const text = `${close}\n${marker}${open}`
         const width = itemWidth(state, item)
@@ -230,7 +284,7 @@ export function blockBreak(
         return insert('\n', line.from, line.to)
       const { close, open, at } = range.empty
         ? reopened(state, tree, pos)
-        : { close: '', open: '', at: range.from }
+        : spanned(state, tree, range.from, range.to)
       return insert(
         `${close}\n${prefix}${open}`,
         at,
@@ -241,7 +295,7 @@ export function blockBreak(
     if (blank(line.text)) return insert('\n')
     const { close, open, at } = range.empty
       ? reopened(state, tree, pos)
-      : { close: '', open: '', at: range.from }
+      : spanned(state, tree, range.from, range.to)
     return insert(
       `${close}\n\n${open}`,
       at,

@@ -1,8 +1,10 @@
-import { EditorState } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
+import { Compartment, EditorState } from '@codemirror/state'
+import { EditorView, WidgetType } from '@codemirror/view'
 import '../../src/renderer/src/styles.css'
 import type { ChunkedMarkdownProbe } from '../../src/renderer/src/chunked-markdown'
 import { codeLanguages } from '../../src/renderer/src/code-languages'
+import { formattedDocument } from '../../src/renderer/src/formatted-contributions'
+import { formattedRegistry } from '../../src/renderer/src/formatted-registry'
 import { formattedSyntax } from '../../src/renderer/src/formatted-syntax'
 import { livePreview } from '../../src/renderer/src/live-preview'
 
@@ -15,6 +17,25 @@ const probe: ChunkedMarkdownProbe = {
   builtGroups: 0,
 }
 let view: EditorView | null = null
+const documentRevision = new Compartment()
+const revisionOf = (revision: number) =>
+  formattedDocument.of({ revision, tabId: null })
+
+/** Shows the document revision a contributed layout saw. */
+class RevisionWidget extends WidgetType {
+  constructor(readonly revision: number) {
+    super()
+  }
+  override eq(other: RevisionWidget) {
+    return other.revision === this.revision
+  }
+  toDOM() {
+    const span = document.createElement('span')
+    span.className = 'test-revision'
+    span.textContent = String(this.revision)
+    return span
+  }
+}
 let syntax = formattedSyntax({ probe })
 
 document.body.innerHTML =
@@ -51,6 +72,7 @@ Object.assign(window, {
           doc,
           extensions: [
             livePreview(syntax),
+            documentRevision.of(revisionOf(0)),
             editable
               ? []
               : [EditorState.readOnly.of(true), EditorView.editable.of(false)],
@@ -63,6 +85,31 @@ Object.assign(window, {
       await new Promise(requestAnimationFrame)
     },
     view: () => view,
+    /** A contributed layout that shows the document revision before each paragraph; returns its removal. */
+    showRevisions: () =>
+      formattedRegistry.register({
+        id: 'test.revision',
+        load: () => ({
+          id: 'test.revision',
+          views: [
+            {
+              nodes: ['Paragraph'],
+              layout(node, out, { state }) {
+                out.widget(
+                  node.from,
+                  new RevisionWidget(state.facet(formattedDocument).revision),
+                )
+              },
+            },
+          ],
+        }),
+      }),
+    /** The note's files or media changed. */
+    setRevision(revision: number) {
+      view?.dispatch({
+        effects: documentRevision.reconfigure(revisionOf(revision)),
+      })
+    },
     /** Scroll a position to the top of the viewport. */
     scrollTo(pos: number) {
       view?.dispatch({

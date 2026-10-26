@@ -44,6 +44,7 @@ import {
   type FormattedLayout,
   type FormattedNodeView,
   formattedContributions,
+  formattedDocument,
   formattedLiteral,
   formattedRefresh,
   formattedTree,
@@ -1065,20 +1066,27 @@ type ChunkLayout = ReturnType<typeof chunkLayout>
  */
 const chunkCache = new WeakMap<
   readonly FormattedNodeView[],
-  WeakMap<readonly string[], WeakMap<Tree, ChunkLayout>>
+  WeakMap<readonly string[], WeakMap<object, WeakMap<Tree, ChunkLayout>>>
 >()
 function cacheFor(state: EditorState) {
   const views = state.facet(formattedViews),
-    literal = state.facet(formattedLiteral)
+    literal = state.facet(formattedLiteral),
+    // Contributed layouts may show the note's files and media.
+    document = state.facet(formattedDocument)
   let byLiteral = chunkCache.get(views)
   if (!byLiteral) {
     byLiteral = new WeakMap()
     chunkCache.set(views, byLiteral)
   }
-  let cache = byLiteral.get(literal)
+  let byDocument = byLiteral.get(literal)
+  if (!byDocument) {
+    byDocument = new WeakMap()
+    byLiteral.set(literal, byDocument)
+  }
+  let cache = byDocument.get(document)
   if (!cache) {
     cache = new WeakMap()
-    byLiteral.set(literal, cache)
+    byDocument.set(document, cache)
   }
   return cache
 }
@@ -1204,6 +1212,8 @@ export function livePreview(
           state.facet(formattedViews) === startState.facet(formattedViews) &&
           state.facet(formattedLiteral) ===
             startState.facet(formattedLiteral) &&
+          state.facet(formattedDocument) ===
+            startState.facet(formattedDocument) &&
           (sameRanges(reveal, revealedIn(startState)) ||
             (!revealMatters(state, tree, reveal) &&
               !revealMatters(state, tree, revealedIn(startState)))))
@@ -1257,6 +1267,8 @@ export function livePreview(
             update.startState.facet(formattedViews) ||
           update.state.facet(formattedLiteral) !==
             update.startState.facet(formattedLiteral) ||
+          update.state.facet(formattedDocument) !==
+            update.startState.facet(formattedDocument) ||
           update.transactions.some((transaction) =>
             transaction.effects.some((effect) => effect.is(formattedRefresh)),
           )

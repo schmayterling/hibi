@@ -566,6 +566,33 @@ test('typing beside a multi-line link destination edits the text', {
   assert.deepEqual(errors, [])
 })
 
+test('contributed layouts follow the document revision', {
+  timeout: 60000,
+}, async () => {
+  const shown = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    const remove = preview.showRevisions()
+    try {
+      await preview.mount('first paragraph\n\nsecond paragraph\n', {
+        width: 800,
+        height: 600,
+      })
+      const read = () =>
+        [...document.querySelectorAll('.test-revision')].map(
+          (node) => node.textContent,
+        )
+      const before = read()
+      preview.setRevision(1)
+      await preview.settle()
+      return { before, after: read() }
+    } finally {
+      remove()
+    }
+  })
+  // Before, the layout kept its widgets from the old revision.
+  assert.deepEqual(shown, { before: ['0', '0'], after: ['1', '1'] })
+})
+
 test('a 50 MiB note renders and edits with viewport-bounded work', {
   timeout: 120000,
 }, async () => {

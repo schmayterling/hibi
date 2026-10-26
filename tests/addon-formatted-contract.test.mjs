@@ -29,7 +29,6 @@ test('bundled rich-only addons remain on an explicit migration allowlist', async
   assert.deepEqual(missing.sort(), [
     'dictionary',
     'slash-commands',
-    'text-extras',
     'word-count',
   ])
 })

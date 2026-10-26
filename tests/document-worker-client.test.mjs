@@ -492,6 +492,72 @@ test('canceled find progress cannot renew missing cancellation acknowledgement',
   assert.equal(worker.terminated, true)
 })
 
+test('only current active metadata progress keeps a lookup alive', async (t) => {
+  const f = fixture(t, '# one', { timeoutMs: 100 })
+  f.find('one')
+  await wait(() => f.results.length)
+  const worker = f.workers[0]
+  worker.blocked = true
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  f.client.metadata('commonmark', 0, 0, 1, false, {
+    label: 'ref',
+    gfm: false,
+    alerts: false,
+    textExtras: false,
+  })
+  const request = worker.messages.at(-1),
+    progress = {
+      type: 'metadata-progress',
+      epoch: request.epoch,
+      id: request.id,
+      version: request.version,
+    }
+  for (let n = 0; n < 10; n++) {
+    t.mock.timers.tick(60)
+    worker.onmessage({ data: progress })
+    assert.equal(worker.terminated, false)
+  }
+  for (const change of [
+    { epoch: 'stale' },
+    { id: request.id - 1 },
+    { version: request.version + 1 },
+    { id: String(request.id) },
+    { version: String(request.version) },
+  ]) {
+    t.mock.timers.tick(10)
+    worker.onmessage({ data: { ...progress, ...change } })
+  }
+  t.mock.timers.tick(51)
+  assert.equal(
+    worker.terminated,
+    true,
+    'stale or malformed metadata progress cannot keep a lookup alive',
+  )
+})
+
+test('canceled metadata progress cannot keep missing owner release alive', async (t) => {
+  const f = fixture(t, '# one', { timeoutMs: 100 })
+  f.find('one')
+  await wait(() => f.results.length)
+  const worker = f.workers[0]
+  worker.blocked = true
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  f.client.metadata('commonmark', 0, 0, 1)
+  const request = worker.messages.at(-1)
+  t.mock.timers.tick(60)
+  f.client.releaseMetadata()
+  worker.onmessage({
+    data: {
+      type: 'metadata-progress',
+      epoch: request.epoch,
+      id: request.id,
+      version: request.version,
+    },
+  })
+  t.mock.timers.tick(41)
+  assert.equal(worker.terminated, true)
+})
+
 test('reference lookup shares find replica, cancels find independently and drops stale replies', async (t) => {
   const pages = []
   const f = fixture(t, '[ref]: /one\n\n[ref]', {

@@ -329,12 +329,15 @@ export class DocumentWorkerClient {
       return
     this.#metadataFlight = this.#sentMetadata = request.id
     this.#post(request)
-    if (this.#metadataFlight === request.id)
-      this.#metadataDeadline = setTimeout(
-        () =>
-          this.#fail(new Error('Document metadata worker stopped responding.')),
-        this.#options.timeoutMs ?? 5000,
-      )
+    if (this.#metadataFlight === request.id) this.#watchMetadata()
+  }
+  #watchMetadata() {
+    clearTimeout(this.#metadataDeadline)
+    this.#metadataDeadline = setTimeout(
+      () =>
+        this.#fail(new Error('Document metadata worker stopped responding.')),
+      this.#options.timeoutMs ?? 5000,
+    )
   }
   #post(message: DocumentWorkerRequest) {
     if (!this.#worker) return false
@@ -596,6 +599,17 @@ export class DocumentWorkerClient {
           request.query,
         )
       }
+    } else if (reply.type === 'metadata-progress') {
+      const request = this.#metadata
+      if (
+        request?.id === reply.id &&
+        this.#metadataFlight === reply.id &&
+        this.#metadataCanceling === null &&
+        request.version === reply.version &&
+        reply.version === this.#ack &&
+        reply.version === this.#session.snapshot().version
+      )
+        this.#watchMetadata()
     } else if (reply.type === 'metadata-canceled') {
       if (
         reply.id !== this.#metadataCanceling ||

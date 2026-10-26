@@ -2,6 +2,7 @@ import {
   type AnyExtension,
   getExtensionField,
   type JSONContent,
+  type MarkdownToken,
   type MarkdownTokenizer,
   parseIndentedBlocks,
 } from '@tiptap/core'
@@ -194,7 +195,31 @@ export function guardNativeListTokenizer(extension: AnyExtension) {
       ...tokenizer,
       tokenize(...args: Parameters<MarkdownTokenizer['tokenize']>) {
         if (!prefix.test(args[0])) return undefined
-        return tokenize(...args)
+        const token = tokenize(...args) as MarkdownToken | undefined
+        if (tokenizer === ordered && token) {
+          const lists = [token]
+          for (const list of lists)
+            for (const item of list.items ?? []) {
+              const first = item.tokens?.[0]
+              if (first?.type === 'paragraph' && first.raw) {
+                // Native ordered lists force their first block into a paragraph.
+                // Use the same block lexer as subsequent blocks and bullet lists.
+                const blocks = args[2].blockTokens(first.raw)
+                if (blocks.length !== 1 || blocks[0]?.type !== 'paragraph') {
+                  item.tokens = blocks.concat(item.tokens?.slice(1) ?? [])
+                  if (item.tokens[0]?.type !== 'paragraph')
+                    item.tokens.unshift({
+                      type: 'paragraph',
+                      raw: '',
+                      tokens: [],
+                    })
+                }
+              }
+              for (const nested of item.tokens ?? [])
+                if (nested.type === 'list' && nested.ordered) lists.push(nested)
+            }
+        }
+        return token
       },
     },
   })

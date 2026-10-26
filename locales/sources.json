@@ -5355,7 +5355,7 @@
     "src/renderer/src/source-outline.ts"
   ],
   "b44730f5bd1a": [
-    "src/renderer/src/Editor.tsx"
+    "src/renderer/src/use-source-outline.ts"
   ],
   "f98206e187b9": [
     "src/renderer/src/source-outline.ts"

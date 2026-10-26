@@ -98,7 +98,7 @@ function finish(work, resolve) {
   let value
   for (let steps = 0; steps < 100_000; steps++) {
     const step = work.next(value)
-    if (step.done) return step.value
+    if (step.done) return step.value.headings
     value = step.value ? resolve(step.value.reference) : undefined
   }
   assert.fail('Outline work must converge.')
@@ -175,6 +175,20 @@ test('source outline labels match native reference links before and after declar
     '# [constructor] and [toString] and [__proto__]',
   ])
     check(source)
+})
+
+test('ordered first-item blocks agree with rich headings', () => {
+  for (const source of [
+    '1. #### ordered\n',
+    '2. #### ordered\n',
+    '1) ## one\n2) ### two\n',
+    '1. first\n\n   #### nested\n',
+    '1. setext\n   ===\n',
+    '1. > ## quoted\n',
+    '1. first\n   1. ### nested\n',
+    '- ### bullet\n\n1. #### ordered\n',
+  ])
+    for (const ending of ['\n', '\r\n']) check(source.replaceAll('\n', ending))
 })
 
 test('source outline labels ignore declarations inside fences and frontmatter', () => {
@@ -255,6 +269,55 @@ test('definition-only edits invalidate cached heading labels and missing referen
     )
   } finally {
     model.dispose()
+  }
+})
+
+test('body reuse preserves definition edits, queued edits, removals and undo', () => {
+  for (const ending of ['\n', '\r\n']) {
+    let source = [
+      '# [visible][ref] and [later][missing]',
+      'body text',
+      '[ref]: /one',
+      'tail',
+    ].join(ending + ending)
+    const { store, model } = setup(source)
+    const apply = (from, to, insert) => {
+      edit(store, model, [{ from, to, insert }])
+      source = source.slice(0, from) + insert + source.slice(to)
+    }
+    const expectNative = () =>
+      assert.deepEqual(
+        finish(model.read(), referenceOracle(source)).map(
+          ({ label, level }) => ({ label, level }),
+        ),
+        nativeHeadings(source),
+      )
+    try {
+      expectNative()
+      const body = source.indexOf('body')
+      apply(body, body + 1, 'B')
+      expectNative()
+      const href = source.indexOf('/one')
+      apply(href, href + 4, '/two')
+      expectNative()
+      const ref = source.indexOf('[ref]:')
+      apply(ref, ref + 5, '[gone]')
+      expectNative()
+      apply(ref, ref + 6, '[ref]')
+      expectNative()
+      // Queue a definition change and a body edit before the next outline read.
+      const tail = source.indexOf('tail')
+      apply(tail, tail + 4, '[missing]: /later')
+      apply(body, body + 1, 'b')
+      expectNative()
+      const definition = source.indexOf('[missing]:')
+      apply(definition, source.length, 'tail')
+      expectNative()
+      apply(definition, source.length, '[missing]: /later')
+      expectNative()
+    } finally {
+      model.dispose()
+    }
   }
 })
 

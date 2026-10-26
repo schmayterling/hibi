@@ -1,0 +1,368 @@
+import assert from 'node:assert/strict'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import test from 'node:test'
+import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
+
+const filler = (name) =>
+  Array.from({ length: 30 }, (_, i) => `${name} paragraph ${i}.`).join('\n\n')
+
+test('behind the switch, the formatted view reports, follows and navigates the rich outline', {
+  timeout: 90000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-outline-'))
+  const file = join(folder, 'outline.md')
+  await writeFile(
+    file,
+    [
+      '# Title',
+      'Intro.',
+      '## Section *one* with [a link](https://example.com)',
+      filler('first'),
+      'Setext two\n----------',
+      filler('second'),
+      '### Deep `code` &amp; heading',
+      filler('deep'),
+      'Setext top\n==========',
+      '## Reference [label][ref]',
+      '[ref]: /target',
+      filler('reference'),
+      '1. #### Ordered heading',
+      '#### Last **bold**',
+      'End.\n',
+    ].join('\n\n'),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(15000)
+  await page.setViewportSize({ width: 1100, height: 700 })
+  await waitForDocumentEditor(app, page)
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+  }, file)
+  const outline = page.locator(
+    '.outline-sidebar[data-side="right"][data-open="true"]',
+  )
+  const openOutline = async () => {
+    if (await outline.count()) return
+    await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+    await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+    await page
+      .getByRole('menuitem', { name: 'On this page', exact: true })
+      .click()
+    await outline.waitFor()
+  }
+  const entries = () =>
+    page.evaluate(() =>
+      [
+        ...document.querySelectorAll(
+          '.outline-sidebar[data-side="right"] [role="treeitem"]',
+        ),
+      ].map((item) => ({
+        prefix: item.id.split(':')[0],
+        label: item.querySelector('.sidebar-label')?.textContent,
+        depth: item.getAttribute('aria-level'),
+      })),
+    )
+
+  // The rich view's outline is the reference for the same note.
+  await clickMenu(app, 'Open…')
+  await page.locator('.tiptap h4', { hasText: 'Last' }).waitFor()
+  await openOutline()
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll(
+        '.outline-sidebar[data-side="right"] [role="treeitem"]',
+      ).length === 8,
+  )
+  const rich = (await entries()).map(({ label, depth }) => ({ label, depth }))
+  assert.deepEqual(
+    rich.map(({ label }) => label),
+    [
+      'Title',
+      'Section one with a link',
+      'Setext two',
+      'Deep code & heading',
+      'Setext top',
+      'Reference label',
+      'Ordered heading',
+      'Last bold',
+    ],
+  )
+
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  await clickMenu(app, 'Open…')
+  await page.locator('.rich-pane .hibi-lp-h1', { hasText: 'Title' }).waitFor()
+  assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
+  // Hidden windows have no focus; the outline focuses the view it moves.
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await openOutline()
+
+  // (1) The same entries, read from the note's source.
+  await page.waitForFunction(
+    (expected) =>
+      JSON.stringify(
+        [
+          ...document.querySelectorAll(
+            '.outline-sidebar[data-side="right"] [role="treeitem"]',
+          ),
+        ].map((item) => ({
+          label: item.querySelector('.sidebar-label')?.textContent,
+          depth: item.getAttribute('aria-level'),
+        })),
+      ) === expected,
+    JSON.stringify(rich),
+  )
+  assert.ok(
+    (await entries()).every(({ prefix }) => prefix === 'right-outline-source'),
+  )
+
+  const caret = () =>
+    page.evaluate(() => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      const head = view.state.selection.main.head,
+        line = view.coordsAtPos(head),
+        scroller = view.scrollDOM.getBoundingClientRect()
+      return {
+        line: view.state.doc.lineAt(head).text,
+        visible:
+          !!line && line.top >= scroller.top && line.bottom <= scroller.bottom,
+        focused: view.hasFocus,
+      }
+    })
+  const selected = outline.locator(
+    '[role="treeitem"][aria-selected="true"] .sidebar-label',
+  )
+  const expectSelected = (label) =>
+    page.waitForFunction(
+      (label) =>
+        document.querySelector(
+          '.outline-sidebar[data-side="right"] [role="treeitem"][aria-selected="true"] .sidebar-label',
+        )?.textContent === label,
+      label,
+    )
+
+  // (2) Choosing an entry moves the formatted view's caret to the heading and
+  // scrolls it into view.
+  assert.equal((await caret()).visible, true)
+  assert.notEqual((await caret()).line, '#### Last **bold**')
+  await outline
+    .getByRole('treeitem', { name: 'Last bold', exact: true })
+    .click()
+  await page.waitForFunction(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    return (
+      view.state.doc.lineAt(view.state.selection.main.head).text ===
+      '#### Last **bold**'
+    )
+  })
+  assert.deepEqual(await caret(), {
+    line: '#### Last **bold**',
+    visible: true,
+    focused: true,
+  })
+  await expectSelected('Last bold')
+  await outline
+    .getByRole('treeitem', { name: 'Setext two', exact: true })
+    .click()
+  await page.waitForFunction(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    return (
+      view.state.doc.lineAt(view.state.selection.main.head).text ===
+      'Setext two'
+    )
+  })
+  assert.equal((await caret()).visible, true)
+
+  // (3) The active heading follows the caret through the note.
+  for (const [text, label] of [
+    ['deep paragraph 3.', 'Deep code & heading'],
+    ['Intro.', 'Title'],
+    ['reference paragraph 0.', 'Reference label'],
+    ['second paragraph 29.', 'Setext two'],
+  ]) {
+    await page.evaluate((text) => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.dispatch({
+        selection: { anchor: view.state.doc.toString().indexOf(text) + 2 },
+        scrollIntoView: true,
+      })
+    }, text)
+    await expectSelected(label)
+    assert.equal(await selected.textContent(), label)
+  }
+
+  // A refreshed file revision must discard the previous reference resolution.
+  let previous = await page.evaluate(() => window.hibi.getDocument())
+  const original = await readFile(file, 'utf8')
+  for (const text of [original.replace('[ref]:', '[gone]:'), original]) {
+    await writeFile(file, text)
+    await clickMenu(app, 'Open…')
+    await waitForAsync(
+      page,
+      async (revision) => (await window.hibi.getDocument()).revision > revision,
+      previous.revision,
+    )
+    const expected = rich.map((heading) => ({
+      ...heading,
+      label:
+        text === original || heading.label !== 'Reference label'
+          ? heading.label
+          : 'Reference [label][ref]',
+    }))
+    await page.waitForFunction(
+      (expected) =>
+        JSON.stringify(
+          [
+            ...document.querySelectorAll(
+              '.outline-sidebar[data-side="right"] [role="treeitem"]',
+            ),
+          ].map((item) => ({
+            label: item.querySelector('.sidebar-label')?.textContent,
+            depth: item.getAttribute('aria-level'),
+          })),
+        ) === JSON.stringify(expected),
+      expected,
+    )
+    assert.deepEqual(
+      (await entries()).map(({ label, depth }) => ({ label, depth })),
+      expected,
+    )
+    previous = await page.evaluate(() => window.hibi.getDocument())
+  }
+})
+
+test('an open outline on a 50 MiB formatted note reuses headings after body edits', {
+  timeout: 120000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-outline-50m-'))
+  const file = join(folder, 'large.md')
+  const block = `## heading\n\n${`${'plain text body '.repeat(15)}\n`.repeat(16)}\n\n`
+  const source = block
+    .repeat(Math.ceil((50 * 1024 * 1024) / block.length))
+    .slice(0, 50 * 1024 * 1024)
+  await writeFile(file, source)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(60000)
+  await waitForDocumentEditor(app, page)
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  const chunks = JSON.parse(
+    await readFile('out/renderer/startup-bundle.json', 'utf8'),
+  )
+  const chunk = chunks.find((chunk) =>
+    chunk.modules.some((path) =>
+      path.endsWith('src/renderer/src/source-outline.ts'),
+    ),
+  )
+  assert.ok(chunk)
+  await page.evaluate(async (file) => {
+    const module = await import(`app://hibi/${file}`)
+    const model = Object.values(module).find(
+      (value) => value?.prototype?.read && value.prototype.counters,
+    )
+    const read = model.prototype.read
+    window.outlineReads = []
+    model.prototype.read = function* () {
+      const iterator = read.call(this)
+      let value,
+        steps = 0
+      try {
+        for (;;) {
+          const step = iterator.next(value)
+          if (step.done) {
+            window.outlineReads.push({
+              ...this.counters(true),
+              steps,
+              headings: step.value.headings.length,
+              tail: step.value.position(step.value.headings.length - 1),
+            })
+            return step.value
+          }
+          steps++
+          value = yield step.value
+        }
+      } finally {
+        iterator.return()
+      }
+    }
+  }, chunk.file)
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  await clickMenu(app, 'Open…')
+  await page.locator('.rich-pane .cm-content').waitFor()
+  await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+  await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+  await page
+    .getByRole('menuitem', { name: 'On this page', exact: true })
+    .click()
+  await page.waitForFunction(() => window.outlineReads.length > 0)
+  const initial = await page.evaluate(() => window.outlineReads.at(-1))
+  assert.equal(initial.headings, 13548)
+  assert.equal(initial.labelsRead, 13548)
+  const from = source.indexOf('body', Math.floor(source.length / 2))
+  let tail = source.lastIndexOf('## heading')
+  for (const insert of ['B', 'b', 'text']) {
+    const count = await page.evaluate(() => window.outlineReads.length)
+    await page.locator('.rich-pane .cm-content').evaluate(
+      (element, { from, insert }) => {
+        element.cmTile.root.view.dispatch({
+          changes: { from, to: from + 1, insert },
+        })
+      },
+      { from, insert },
+    )
+    await page.waitForFunction(
+      (count) => window.outlineReads.length > count,
+      count,
+    )
+    const work = await page.evaluate(() => window.outlineReads.at(-1))
+    assert.equal(work.headings, 13548)
+    tail += insert.length - 1
+    assert.equal(work.tail, tail)
+    assert.equal(work.labelsRead, 0, JSON.stringify(work))
+    assert.equal(work.published, 0)
+    assert.ok(work.steps < 100, JSON.stringify(work))
+    assert.ok(work.indexVisits < 100, JSON.stringify(work))
+    assert.ok(
+      (await page.locator('.outline-sidebar .sidebar-row').count()) < 65,
+    )
+  }
+  assert.deepEqual(
+    await page
+      .pageErrors()
+      .then((errors) => errors.map((error) => error.message)),
+    [],
+  )
+})

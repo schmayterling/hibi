@@ -6,7 +6,7 @@ import {
   StateEffect,
 } from '@codemirror/state'
 import { type KeyBinding, keymap, type WidgetType } from '@codemirror/view'
-import type { SyntaxNodeRef } from '@lezer/common'
+import type { SyntaxNodeRef, Tree } from '@lezer/common'
 import type { MarkdownConfig } from '@lezer/markdown'
 import { type FormattedEntry, formattedRegistry } from './formatted-registry.ts'
 import { markdownSyntax } from './markdown-syntax.ts'
@@ -169,6 +169,17 @@ export const formattedDocument = Facet.define<
   { revision: number; tabId: string | null },
   { revision: number; tabId: string | null }
 >({ combine: (values) => values.at(-1) ?? { revision: 0, tabId: null } })
+
+/** How a formatted view reads its syntax tree, which it parses near the viewport. */
+export const formattedTree = Facet.define<
+  (state: EditorState) => Tree,
+  ((state: EditorState) => Tree) | null
+>({ combine: (values) => values.at(-1) ?? null })
+
+/** The formatted view's syntax tree for commands, or null outside one. */
+export function formattedSyntaxTree(state: EditorState): Tree | null {
+  return state.facet(formattedTree)?.(state) ?? null
+}
 
 /**
  * Render the visible ranges again, for renderers whose output depends on

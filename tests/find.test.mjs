@@ -482,6 +482,8 @@ test('find in document searches rich text and offscreen markdown without editing
     async (expected) => (await window.hibi.getDocument()).markdown === expected,
     dense,
   )
+  // Moves continue from wherever the cursor is.
+  await rich.evaluate((element) => element.editor.commands.setTextSelection(7))
   await input.press('Enter')
   await waitForCount('2/10000')
   assert.deepEqual(await selected(), [13, 19])

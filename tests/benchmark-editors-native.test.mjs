@@ -81,7 +81,10 @@ test('575 kb source-first samples record real capability and continue to editabl
             Number.isFinite(taskMs) && Number.isFinite(readyMs),
         ),
       )
-      assert.equal(sample.scroll.actualPx, 3600)
+      assert.equal(sample.scroll.requestedPx, 3600)
+      assert.ok(sample.scroll.actualPx > 0)
+      assert.equal(sample.scroll.frames.length, 2)
+      assert.equal(sample.scroll.mainThreadPerFrameMs, sample.scroll.taskMs / 2)
     }
   }
   const table = await readFile(join(directory, 'table.md'), 'utf8')

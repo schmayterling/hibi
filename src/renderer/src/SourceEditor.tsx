@@ -438,7 +438,8 @@ export function SourceEditor({
         },
         result: (location, action, highlightStarts, query) => {
           const current = view.current
-          if (!current || !find.current.active || query !== find.current.query) return
+          if (!current || !find.current.active || query !== find.current.query)
+            return
           findCoverage.current = {
             query: find.current.query,
             version: session.snapshot().version,

@@ -8,7 +8,7 @@ import {
   stopElectronTree,
   waitForDocumentEditor,
 } from './electron.mjs'
-import { replaceRichText } from './keyboard.mjs'
+import { clickMenu, replaceRichText } from './keyboard.mjs'
 
 test('native module worker loads metadata lazily, shares find, and releases parser owners', {
   timeout: 30000,
@@ -235,4 +235,61 @@ test('native module worker loads metadata lazily, shares find, and releases pars
       headingFrom: header.length,
     },
   })
+})
+
+test('a cold reference lookup resolves the outline of a 50 MiB source note', {
+  timeout: 120000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-cold-reference-'))
+  const file = join(folder, 'linked.md')
+  const block = `## [heading][ref]\n\n${`${'plain text body '.repeat(15)}\n`.repeat(16)}\n\n`
+  const prefix = '[ref]: /target\n\n'
+  const source = (
+    prefix +
+    block.repeat(Math.floor((50 * 1024 * 1024 - prefix.length) / block.length))
+  ).padEnd(50 * 1024 * 1024, ' ')
+  await writeFile(file, source)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(60000)
+  await page.setViewportSize({ width: 1100, height: 800 })
+  await waitForDocumentEditor(app, page)
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  await clickMenu(app, 'Open…')
+  await page
+    .getByRole('textbox', { name: 'Markdown editor', exact: true })
+    .waitFor()
+  await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+  await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+  await page
+    .getByRole('menuitem', { name: 'On this page', exact: true })
+    .click()
+  const handle = await page.waitForFunction(() => {
+    const outline = document.querySelector(
+      '.outline-sidebar[data-side="right"][data-open="true"]',
+    )
+    const labels = [...(outline?.querySelectorAll('.sidebar-label') ?? [])].map(
+      (node) => node.textContent,
+    )
+    const text = outline?.textContent ?? ''
+    if (labels.length || text.includes('could not')) return { labels, text }
+  })
+  const result = await handle.jsonValue()
+  assert.ok(result.labels.length, result.text)
+  assert.ok(result.labels.every((label) => label === 'heading'))
+  const canonical = await page.evaluate(
+    async () => (await window.hibi.getDocument()).markdown,
+  )
+  assert.ok(canonical === source, 'reference lookup preserves exact source')
 })

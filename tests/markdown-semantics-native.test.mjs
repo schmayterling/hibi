@@ -126,6 +126,7 @@ export async function run(cases) {
     let lastReply
     const worker = new DocumentWorkerService(reply => {
       lastReply = reply
+      if (reply.type !== 'metadata' && reply.type !== 'error') return
       const request = pending.get(reply.id)
       if (!request) return
       pending.delete(reply.id)

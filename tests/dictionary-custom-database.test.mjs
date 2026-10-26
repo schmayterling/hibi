@@ -761,7 +761,7 @@ test('duplicate language/key has its own error and leaves both records intact', 
   )
 })
 
-test('completion races covering indexes with bounded visits at one million words', async (t) => {
+test('completion races indexed ranges without full sorting at one million same-length words', async (t) => {
   const ctx = await fixture(t)
   const store = await ctx.open()
   const raw = new DatabaseSync(ctx.path)
@@ -774,50 +774,34 @@ test('completion races covering indexes with bounded visits at one million words
     UPDATE state SET count = 1000000 WHERE id = 1;
     COMMIT;
   `)
-  let visits = 0
-  let openIterators = 0
-  const plans = []
-  const prepare = DatabaseSync.prototype.prepare
-  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql) {
-    const statement = prepare.call(this, sql)
-    if (!/SELECT ordinal, id,/.test(sql)) return statement
-    plans.push(
-      ...prepare
-        .call(this, `EXPLAIN QUERY PLAN ${sql}`)
-        .all('', ...(/term >/.test(sql) ? ['a', 'b'] : [])),
-    )
-    const iterate = statement.iterate.bind(statement)
-    statement.iterate = function* (...args) {
-      openIterators++
-      try {
-        for (const row of iterate(...args)) {
-          visits++
-          yield row
-        }
-      } finally {
-        openIterators--
-      }
-    }
-    return statement
-  })
+  const work = completionWork(t)
   const start = performance.now()
   assert.deepEqual(
     store.complete({ prefix: 'a', langs: [], limit: 5 }).map(({ id }) => id),
     ['id0', 'id1', 'id2', 'id3', 'id4'],
   )
   t.diagnostic(
-    `1m broad-prefix completion: ${visits} indexed row visits, ${(performance.now() - start).toFixed(2)} ms`,
+    `1m same-length broad prefix: ${work.visits} indexed row visits, ${work.records} full records, ${(performance.now() - start).toFixed(2)} ms`,
   )
-  assert.equal(visits, 10)
-  assert.equal(openIterators, 0)
+  assert.equal(work.visits, 11)
+  assert.equal(work.records, 5)
+  assert.equal(work.openIterators, 0)
   assert.ok(
-    plans.some(({ detail }) => detail.includes('COVERING INDEX words_prefix')),
+    [...work.plans].some(
+      (detail) =>
+        detail.includes('words_length_prefix') &&
+        detail.includes('term>? AND term<?'),
+    ),
   )
+  assert.ok([...work.plans].some((detail) => detail.includes('words_rank')))
   assert.ok(
-    plans.some(({ detail }) => detail.includes('COVERING INDEX words_rank')),
+    [...work.plans].every(
+      (detail) =>
+        detail.startsWith('SEARCH') && !detail.includes('TEMP B-TREE'),
+    ),
   )
-  assert.ok(plans.every(({ detail }) => !detail.includes('TEMP B-TREE')))
-  visits = 0
+  t.diagnostic([...work.plans].join('\n'))
+  work.visits = 0
   assert.deepEqual(
     store
       .complete({ prefix: 'a099999', langs: [], limit: 5 })
@@ -825,17 +809,288 @@ test('completion races covering indexes with bounded visits at one million words
     ['id999990', 'id999991', 'id999992', 'id999993', 'id999994'],
   )
   assert.equal(
-    visits,
-    20,
+    work.visits,
+    21,
     'sparse prefix finishes without scanning rank index to its tail',
   )
-  assert.equal(openIterators, 0)
-  visits = 0
+  assert.equal(work.openIterators, 0)
+  work.visits = 0
   assert.deepEqual(
     store.complete({ prefix: 'missing', langs: [], limit: 5 }),
     [],
   )
-  assert.equal(visits, 0)
+  assert.equal(work.visits, 1, 'one length seek, no prefix matches')
+})
+
+function completionWork(t) {
+  const work = {
+    steps: 0,
+    visits: 0,
+    records: 0,
+    openIterators: 0,
+    plans: new Set(),
+  }
+  const prepare = DatabaseSync.prototype.prepare
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql) {
+    const statement = prepare.call(this, sql)
+    if (/^SELECT \* FROM words WHERE (?:id|ordinal) =/.test(sql)) {
+      const get = statement.get.bind(statement)
+      statement.get = (...args) => {
+        work.records++
+        return get(...args)
+      }
+    }
+    if (!/FROM words INDEXED BY/.test(sql)) return statement
+    const plan = (...args) => {
+      for (const { detail } of prepare
+        .call(this, `EXPLAIN QUERY PLAN ${sql}`)
+        .all(...args))
+        work.plans.add(detail)
+    }
+    const get = statement.get.bind(statement)
+    statement.get = (...args) => {
+      plan(...args)
+      work.steps++
+      const row = get(...args)
+      if (row) work.visits++
+      return row
+    }
+    const iterate = statement.iterate.bind(statement)
+    statement.iterate = function* (...args) {
+      plan(...args)
+      work.openIterators++
+      const rows = iterate(...args)
+      try {
+        for (;;) {
+          work.steps++
+          const row = rows.next()
+          if (row.done) break
+          work.visits++
+          yield row.value
+        }
+      } finally {
+        rows.return?.()
+        work.openIterators--
+      }
+    }
+    return statement
+  })
+  return work
+}
+
+test('completion skips unrelated lengths at one million skewed words', async (t) => {
+  const ctx = await fixture(t)
+  const store = await ctx.open()
+  const raw = new DatabaseSync(ctx.path)
+  try {
+    raw.function('base36', (n) => n.toString(36))
+    raw.exec(`
+      BEGIN;
+      WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < 999999)
+      INSERT INTO words (id, word, term, lang)
+      SELECT 'id' || i,
+        CASE WHEN i % 2 THEN 'b' || base36(i) ELSE 'con' || base36(i) || 'xxxxxxxxxxxxxxxxxxxx' END,
+        CASE WHEN i % 2 THEN 'b' || base36(i) ELSE 'con' || base36(i) || 'xxxxxxxxxxxxxxxxxxxx' END, '' FROM n;
+      UPDATE state SET count = 1000000 WHERE id = 1;
+      COMMIT;
+    `)
+  } finally {
+    raw.close()
+  }
+  const work = completionWork(t)
+  for (const prefix of ['con', 'con1']) {
+    const expected = []
+    // Numeric order is length then source ordinal for this base36 fixture.
+    for (let n = 0; n < 1_000_000 && expected.length < 64; n += 2)
+      if (`con${n.toString(36)}${'x'.repeat(20)}`.startsWith(prefix))
+        expected.push(`id${n}`)
+    work.steps = 0
+    work.visits = 0
+    work.records = 0
+    const start = performance.now()
+    assert.deepEqual(
+      store.complete({ prefix, langs: ['en'], limit: 64 }).map(({ id }) => id),
+      expected,
+    )
+    t.diagnostic(
+      `1m skewed '${prefix}': ${work.steps} read steps, ${work.visits} indexed row visits, ${work.records} full records, ${(performance.now() - start).toFixed(2)} ms`,
+    )
+    assert.ok(
+      work.steps < 4096,
+      `used ${work.steps} read steps for '${prefix}'`,
+    )
+    assert.equal(work.records, 64)
+    assert.equal(work.openIterators, 0)
+  }
+  t.diagnostic([...work.plans].join('\n'))
+  assert.ok([...work.plans].every((detail) => !detail.includes('TEMP B-TREE')))
+})
+
+test('completion bounds all bucket and iterator steps across languages on same-length skew', async (t) => {
+  const ctx = await fixture(t, [
+    { id: 'selected', word: 'con000000', lang: 'en' },
+  ])
+  const store = await ctx.open()
+  const raw = new DatabaseSync(ctx.path)
+  try {
+    raw.exec(`
+      BEGIN;
+      WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < 11999)
+      INSERT INTO words (id, word, term, lang)
+      SELECT 'id' || i,
+        CASE WHEN i < 6000 THEN 'bad' || printf('%06d', i) ELSE 'con' || printf('%06d', 11999 - i) END,
+        CASE WHEN i < 6000 THEN 'bad' || printf('%06d', i) ELSE 'con' || printf('%06d', 11999 - i) END, '' FROM n;
+      UPDATE state SET count = 12001 WHERE id = 1;
+      COMMIT;
+    `)
+  } finally {
+    raw.close()
+  }
+  const work = completionWork(t)
+  const start = performance.now()
+  const got = store.complete({
+    prefix: 'con',
+    langs: ['en', 'de', 'fr'],
+    limit: 64,
+  })
+  t.diagnostic(
+    `same-length skew guard: ${work.steps} total read steps, ${work.visits} indexed row visits, ${work.records} full records, ${(performance.now() - start).toFixed(2)} ms`,
+  )
+  assert.equal(
+    work.steps,
+    4096,
+    'one shared budget includes length seeks and both iterators',
+  )
+  assert.equal(work.visits, 4096)
+  assert.equal(work.openIterators, 0)
+  assert.equal(work.records, 64, 'only final results materialize full records')
+  assert.deepEqual(
+    got.map(({ id }) => id),
+    Array.from({ length: 64 }, (_, i) => `id${9952 + i}`),
+  )
+  assert.ok(
+    !got.some(({ id }) => id === 'selected'),
+    'exhaustion can omit a better unseen language/source match',
+  )
+  assert.ok(got.every(({ word }) => word.startsWith('con')))
+  assert.ok(
+    [...work.plans].every(
+      (detail) =>
+        detail.startsWith('SEARCH') && !detail.includes('TEMP B-TREE'),
+    ),
+  )
+  assert.equal(store.metadata().count, 12001)
+  assert.equal(
+    store.lookup({ term: 'con000000', lang: 'en' })[0].id,
+    'selected',
+  )
+})
+
+test('completion matches seeded brute-force top-k through edits and index upgrade', async (t) => {
+  let seed = 7
+  const rand = () => {
+    seed = (Math.imul(seed, 1103515245) + 12345) >>> 0
+    return seed / 2 ** 32
+  }
+  const alphabet = ['a', 'b', 'c', 'é', 'É', 'ß', '😀', 'İ', 'ﬁ', 'x']
+  const languages = ['', 'en', 'de', 'fr']
+  const seen = new Set()
+  const words = [
+    { id: 'expanded', word: 'İx' },
+    { id: 'boundary', word: '\uD7FFx' },
+    { id: 'max', word: '\u{10FFFF}x' },
+    { id: 'nested', word: 'a\u{10FFFF}x' },
+  ]
+  for (const row of words)
+    seen.add(JSON.stringify([row.word.toLowerCase(), '']))
+  while (words.length < 6000) {
+    let spelling = ''
+    const size = 1 + Math.floor(rand() * 7)
+    for (let i = 0; i < size; i++)
+      spelling += alphabet[Math.floor(rand() * alphabet.length)]
+    const word = spelling.normalize('NFC')
+    const lang = languages[Math.floor(rand() * languages.length)]
+    const key = JSON.stringify([word.toLowerCase(), lang])
+    if (seen.has(key)) continue
+    seen.add(key)
+    words.push({ id: `id${words.length}`, word, ...(lang ? { lang } : {}) })
+  }
+  const ctx = await fixture(t)
+  let store = await ctx.open()
+  save(store, words)
+  const raw = new DatabaseSync(ctx.path)
+  t.after(() => raw.close())
+  const prefixes = [
+    'a',
+    'b',
+    'é',
+    'É',
+    'ß',
+    'ss',
+    '😀',
+    'i',
+    'İ',
+    'ﬁ',
+    'fi',
+    'ab',
+    'ca',
+    'x',
+    'xa',
+    'aé',
+    'zz',
+    '\uD7FF',
+    '\u{10FFFF}',
+    'a\u{10FFFF}',
+  ]
+  let comparisons = 0
+  const check = () => {
+    const rows = raw
+      .prepare('SELECT ordinal, id, word, term, lang FROM words')
+      .all()
+    for (const prefix of prefixes)
+      for (const langs of [[], ['en'], ['de', 'fr'], ['en', 'de', 'fr', 'en']])
+        for (const limit of [1, 5, 64]) {
+          const term = prefix.normalize('NFC').toLowerCase()
+          const expected = rows
+            .filter(
+              (row) =>
+                (row.lang === '' || langs.includes(row.lang)) &&
+                row.term !== term &&
+                row.term.startsWith(term),
+            )
+            .sort(
+              (a, b) =>
+                [...a.word].length - [...b.word].length ||
+                a.ordinal - b.ordinal,
+            )
+            .slice(0, limit)
+            .map(({ id }) => id)
+          assert.deepEqual(
+            store.complete({ prefix, langs, limit }).map(({ id }) => id),
+            expected,
+            JSON.stringify({ prefix, langs, limit }),
+          )
+          comparisons++
+        }
+  }
+  check()
+  save(
+    store,
+    words.slice(0, 300).map((word) => ({ ...word, word: `${word.word}q` })),
+    words.slice(300, 400).map(({ id }) => id),
+  )
+  save(store, words.slice(300, 350))
+  const before = store.metadata()
+  const base = raw.prepare('SELECT * FROM legacy_base').all()
+  store.close()
+  // Simulate the previous schema: a new expression index must not recover or migrate data.
+  raw.exec('DROP INDEX IF EXISTS words_length_prefix')
+  store = await ctx.open()
+  assert.deepEqual(store.metadata(), before)
+  assert.deepEqual(raw.prepare('SELECT * FROM legacy_base').all(), base)
+  assert.equal(await readFile(ctx.file, 'utf8'), ctx.original)
+  check()
+  t.diagnostic(`seeded brute-force top-k: ${comparisons}/${comparisons} equal`)
 })
 
 test('completion keeps codepoint boundaries and exact exclusion in the ranked path', async (t) => {

@@ -134,6 +134,7 @@ export class CustomWordDatabase {
         UNIQUE (term, lang)
       );
       CREATE INDEX IF NOT EXISTS words_prefix ON words (lang, term, length(word), id);
+      CREATE INDEX IF NOT EXISTS words_length_prefix ON words (lang, length(word), term);
       CREATE INDEX IF NOT EXISTS words_rank ON words (lang, length(word), ordinal, term, id);
       CREATE TABLE IF NOT EXISTS legacy_base (
         id TEXT NOT NULL, source_id TEXT, word TEXT NOT NULL,
@@ -499,51 +500,84 @@ export class CustomWordDatabase {
       ) =>
         Number(a.length) - Number(b.length) ||
         Number(a.ordinal) - Number(b.ordinal)
+      const lengths = this.db.prepare(
+        'SELECT length(word) AS length FROM words INDEXED BY words_length_prefix WHERE lang = ? AND length(word) > ? ORDER BY length(word) LIMIT 1',
+      )
       const range = this.db.prepare(
         upper === null
-          ? 'SELECT ordinal, id, length(word) AS length FROM words INDEXED BY words_prefix WHERE lang = ? AND term > ?'
-          : 'SELECT ordinal, id, length(word) AS length FROM words INDEXED BY words_prefix WHERE lang = ? AND term > ? AND term < ?',
+          ? 'SELECT ordinal, length(word) AS length FROM words INDEXED BY words_length_prefix WHERE lang = ? AND length(word) = ? AND term > ?'
+          : 'SELECT ordinal, length(word) AS length FROM words INDEXED BY words_length_prefix WHERE lang = ? AND length(word) = ? AND term > ? AND term < ?',
       )
       const rank = this.db.prepare(
-        'SELECT ordinal, id, term, length(word) AS length FROM words INDEXED BY words_rank WHERE lang = ? ORDER BY length(word), ordinal',
+        'SELECT ordinal, term, length(word) AS length FROM words INDEXED BY words_rank WHERE lang = ? AND length(word) = ? ORDER BY ordinal',
       )
+      let steps = 0
       const best = [...new Set(['', ...langs])]
         .flatMap((lang) => {
-          // Race sparse prefix ranges against dense ranked matches. Neither
-          // stream sorts the range; only the bounded candidate list is ranked.
-          const matches = range.iterate(
-            lang,
-            term,
-            ...(upper === null ? [] : [upper]),
-          )
-          const ranked = rank.iterate(lang)
-          const candidates: ReturnType<typeof range.all> = []
-          const winners: ReturnType<typeof rank.all> = []
-          try {
-            for (;;) {
-              const match = matches.next()
-              if (match.done) return candidates
-              candidates.push(match.value)
-              candidates.sort(compare)
-              if (candidates.length > Number(limit)) candidates.pop()
-              const row = ranked.next()
-              if (row.done) return candidates
-              if (
-                String(row.value.term) !== term &&
-                String(row.value.term).startsWith(term)
+          const result: ReturnType<typeof range.all> = []
+          let length = -1
+          // ponytail: 4096 candidate reads across all languages bound bucket
+          // skew; exhaustion returns best seen. Exact worst-case top-k needs a
+          // prefix/rank range index beyond these two B-trees.
+          while (result.length < Number(limit) && steps < 4096) {
+            steps++
+            const bucket = lengths.get(lang, length)
+            if (!bucket) break
+            length = Number(bucket.length)
+            const needed = Number(limit) - result.length
+            const candidates: ReturnType<typeof range.all> = []
+            const insert = (row: (typeof candidates)[number]) => {
+              let i = 0
+              while (
+                i < candidates.length &&
+                Number(candidates[i]?.ordinal) < Number(row.ordinal)
               )
-                winners.push(row.value)
-              if (winners.length === Number(limit)) return winners
+                i++
+              if (candidates[i]?.ordinal === row.ordinal || i >= needed) return
+              candidates.splice(i, 0, row)
+              if (candidates.length > needed) candidates.pop()
             }
-          } finally {
-            matches.return?.()
-            ranked.return?.()
+            // Seek distinct lengths instead of scanning duplicate index keys.
+            // Within a length, race sparse prefix and dense ordinal streams;
+            // neither query sorts the complete prefix range.
+            const matches = range.iterate(
+              lang,
+              length,
+              term,
+              ...(upper === null ? [] : [upper]),
+            )
+            const ranked = rank.iterate(lang, length)
+            let winners = 0
+            try {
+              while (steps < 4096) {
+                steps++
+                const match = matches.next()
+                if (match.done) break
+                insert(match.value)
+                if (steps === 4096) break
+                steps++
+                const row = ranked.next()
+                if (row.done) break
+                if (
+                  String(row.value.term) !== term &&
+                  String(row.value.term).startsWith(term)
+                ) {
+                  insert(row.value)
+                  if (++winners === needed) break
+                }
+              }
+            } finally {
+              matches.return?.()
+              ranked.return?.()
+            }
+            result.push(...candidates)
           }
+          return result
         })
         .sort(compare)
         .slice(0, Number(limit))
-      const find = this.db.prepare('SELECT * FROM words WHERE id = ?')
-      return best.map((row) => entry(find.get(String(row.id)) as Row))
+      const find = this.db.prepare('SELECT * FROM words WHERE ordinal = ?')
+      return best.map((row) => entry(find.get(Number(row.ordinal)) as Row))
     } catch (error) {
       throw friendly(error)
     }

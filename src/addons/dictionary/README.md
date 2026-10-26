@@ -49,7 +49,7 @@ if (api.version === 1 || api.version === 2) {
 }
 ```
 
-Use `api.customCompletions(...)` for indexed prefix suggestions instead of loading the full vocabulary on activation.
+Use `api.customCompletions(...)` for indexed prefix suggestions instead of loading the full vocabulary on activation. Completion work stops after 4,096 indexed steps per request so lookups cannot wait behind a large suggestion scan. If that budget is reached, the result contains the best matches found so far and can omit a shorter or earlier match. Narrowing the prefix can reveal other matches; saved words and exact lookups are unaffected.
 
 ## Languages
 

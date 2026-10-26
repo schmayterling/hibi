@@ -151,6 +151,6 @@ test('legacy index budget refusal keeps workspace guidance', async (t) => {
   await page.evaluate(() => window.hibi.openWorkspace())
   await assert.rejects(
     page.evaluate(() => window.hibi.getWorkspaceIndex()),
-    /Hibi can index up to 2,000 documents and 20 MiB of text/,
+    /legacy workspace index exceeds the 20 MiB message limit/,
   )
 })

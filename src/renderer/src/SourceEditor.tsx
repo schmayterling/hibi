@@ -52,6 +52,7 @@ import {
   placeholder,
 } from '@codemirror/view'
 import { tags } from '@lezer/highlight'
+import type { MarkdownParser } from '@lezer/markdown'
 import {
   useCallback,
   useEffect,
@@ -82,6 +83,7 @@ import {
   sameInteraction,
 } from '../../shared/editor-interactions'
 import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
+import { protectMarkdownParser } from '../../shared/markdown-flavor-guard'
 import { markdownLink } from '../../shared/markdown-link'
 import { wikiHref } from '../../shared/note-links'
 import type { RawEdit } from '../../shared/source-operations'
@@ -112,6 +114,7 @@ import {
 } from './editor-interaction-presence'
 import { editorViewRegistry } from './editor-view-api'
 import type { FindMove, FindStatus } from './FindBar'
+import { flavorSyntax } from './flavor-syntax'
 import { flavors as markdownFlavors } from './flavors'
 import {
   formattedDocument,
@@ -679,15 +682,21 @@ export function SourceEditor({
             !parserOptions.current.flavors ||
             parserOptions.current.flavors.includes(flavor.id),
         )
-        .flatMap((flavor) => flavor.syntax ?? [])
+        .flatMap((flavor) => flavorSyntax(flavor) ?? [])
+      const support =
+        markdownMode && !(codeLanguage && !codeLanguages.resolve(codeLanguage))
+          ? markdownLanguage?.({
+              codeLanguages: codeLanguages.resolve,
+            })
+          : undefined
+      if (support)
+        support.language.parser = protectMarkdownParser(
+          support.language.parser as MarkdownParser,
+          extensions,
+        )
       return [
         markdownMode
-          ? codeLanguage && !codeLanguages.resolve(codeLanguage)
-            ? []
-            : (markdownLanguage?.({
-                codeLanguages: codeLanguages.resolve,
-                ...(extensions.length ? { extensions } : {}),
-              }) ?? [])
+          ? (support ?? [])
           : codeLanguage
             ? (codeLanguages.resolve(codeLanguage) ?? [])
             : (sourceLanguage ?? []),

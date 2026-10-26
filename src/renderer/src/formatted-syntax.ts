@@ -20,6 +20,7 @@ import {
   boundaryKey,
   boundarySyntaxIds,
 } from '../../shared/markdown-boundary-syntax.ts'
+import { protectMarkdownParser } from '../../shared/markdown-flavor-guard.ts'
 import { createPlainTextRunExtension } from '../../shared/markdown-plain-text-runs.ts'
 import {
   BoundaryTree,
@@ -95,7 +96,7 @@ function markdownParser(
   contributed: readonly MarkdownConfig[],
   opaque: readonly string[],
 ) {
-  const base = parser.configure([
+  const base = protectMarkdownParser(parser, [
     { defineNodes: [{ name: 'Frontmatter', block: true }] },
     ...contributed,
     options.extensions ?? [],

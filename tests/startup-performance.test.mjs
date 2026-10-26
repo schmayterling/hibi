@@ -96,12 +96,15 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // plus 34 bytes for shared context-free search folding (#399).
   // API 3 adds 713 bytes for formatted registrations, publication and lazy compatibility dispatch.
   // Its render-error route adds 22 bytes; callback guards stay in the lazy flavor module.
+  // Syntax ownership adds 115 bytes for synchronous registration identity and cleanup;
+  // parser callbacks and recovery stay behind editor imports.
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
-    bytes <= 691114 + 713 + 22,
+    bytes <= 691114 + 713 + 22 + 115,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
+  assert.doesNotMatch(modules, /markdown-flavor-guard\.ts|flavor-syntax\.ts/)
   assert.doesNotMatch(
     modules,
     /addons\/authors\.ts|addons\/[^/]+\/(?:manifest\.ts|hibi-addon\.json)|docs\/licenses\//,

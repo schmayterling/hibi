@@ -25,6 +25,7 @@ import {
   type MarkdownParser,
   parser,
 } from '@lezer/markdown'
+import { protectMarkdownParser } from '../../../shared/markdown-flavor-guard.ts'
 import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
   type FormattedDecorations,
@@ -55,7 +56,7 @@ function cellParser(state: EditorState) {
   const contributed = state.facet(formattedMarkdown)
   let found = cellParsers.get(contributed)
   if (!found) {
-    const inline = parser.configure(contributed)
+    const inline = protectMarkdownParser(parser, contributed)
     const blocks =
       (inline as unknown as { blockNames?: readonly string[] }).blockNames ?? []
     found = inline.configure({ remove: [...blocks] })

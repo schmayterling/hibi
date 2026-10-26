@@ -1716,8 +1716,11 @@ export function useAddons(
                 if (disposed) return () => {}
                 assertSchemaActivation()
                 const remove = batch.register(`flavor:${flavor.id}`, () => {
-                  const removeFlavor = flavors.register(id, flavor, (error) =>
-                    latest.current.error(error),
+                  const removeFlavor = flavors.register(
+                    id,
+                    flavor,
+                    (error) => latest.current.error(error),
+                    addonRegistry.origin(id) !== 'built-in',
                   )
                   const removeCompatibility =
                     flavor.syntax || flavor.render

@@ -231,3 +231,17 @@ test('enter keeps formatting around a replaced selection, quotes from syntax, an
   )
   assert.equal(run('- one\n- |', blockBreak), '- one\n\n|')
 })
+
+test('enter with a selection at the edges of formatting leaves no empty markers, and a lifted item counts on', () => {
+  // Before, `bo` selected in bold left `****` and `**ld**`.
+  assert.equal(run('**^bo|ld**', blockBreak), '\n\n**|ld**')
+  assert.equal(run('**bo^ld|**', blockBreak), '**bo**\n\n|')
+  assert.equal(run('**^bold|**', blockBreak), '\n\n|')
+  assert.equal(run('[^la|bel](/u)', blockBreak), '\n\n[|bel](/u)')
+  assert.equal(run('`^code|`', blockBreak), '\n\n|')
+  // Before, the lifted item and the next one were both `2.`.
+  assert.equal(
+    run('1. parent\n   - child\n   - |\n2. after', blockBreak),
+    '1. parent\n   - child\n2. |\n3. after',
+  )
+})

@@ -93,24 +93,29 @@ const opener = (state: EditorState, { first }: Formatting) =>
   state.sliceDoc(first.from, first.to)
 
 /**
- * For a selection replaced by a break: formatting around its start closes
- * before the break, and formatting around its end opens again after it.
+ * For a selection replaced by a break: formatting with text kept before the
+ * selection closes before the break, and formatting with text kept after it
+ * opens again after the break. Markers of formatting whose text the
+ * selection takes from one side are replaced with it.
  */
 function spanned(state: EditorState, tree: Tree, from: number, to: number) {
-  const inside = (pos: number) =>
-    formatting(state, tree, pos).filter(
-      ({ first, last }) => first.to <= pos && pos <= last.from,
-    )
-  return {
-    close: inside(from)
-      .map((found) => closer(state, found))
-      .join(''),
-    open: inside(to)
-      .map((found) => opener(state, found))
-      .reverse()
-      .join(''),
-    at: from,
+  let close = '',
+    open = '',
+    at = from,
+    end = to
+  for (const found of formatting(state, tree, from)) {
+    const { node, first, last } = found
+    if (at < first.to || at > last.from) continue
+    if (at === first.to) at = node.from
+    else close += closer(state, found)
   }
+  for (const found of formatting(state, tree, to)) {
+    const { node, first, last } = found
+    if (end < first.to || end > last.from) continue
+    if (end === last.from) end = node.to
+    else open = opener(state, found) + open
+  }
+  return { close, open, at, end }
 }
 
 function reopened(state: EditorState, tree: Tree, pos: number) {
@@ -129,7 +134,46 @@ function reopened(state: EditorState, tree: Tree, pos: number) {
       open = opener(state, found) + open
     }
   }
-  return { close, open, at }
+  return { close, open, at, end: at }
+}
+
+/**
+ * Numbered items after `item` count on from `marker`, past items replaced
+ * up to `end`, and their lines follow markers that changed width.
+ */
+function renumbered(
+  state: EditorState,
+  item: SyntaxNode,
+  marker: string,
+  end: number,
+) {
+  const changes: { from: number; to?: number; insert?: string }[] = []
+  let number = Number(/^\s*(\d+)/.exec(marker)?.[1])
+  for (
+    let next = item.nextSibling;
+    Number.isFinite(number) && next?.name === 'ListItem';
+    next = next.nextSibling
+  ) {
+    const mark = next.getChild('ListMark')
+    if (mark && mark.from < end) continue
+    const current =
+      mark && Number.parseInt(state.sliceDoc(mark.from, mark.to), 10)
+    if (!mark || !(current! <= number)) break
+    number++
+    const digits = String(number)
+    const old = state.sliceDoc(mark.from, mark.to).length - 1
+    changes.push({ from: mark.from, to: mark.to - 1, insert: digits })
+    changes.push(
+      ...shiftContent(
+        state,
+        next,
+        state.doc.lineAt(next.from).number,
+        itemWidth(state, next),
+        digits.length - old,
+      ),
+    )
+  }
+  return changes
 }
 
 /** The content column of a list item's first line, as its marker sets it. */
@@ -222,17 +266,23 @@ export function blockBreak(
           range.empty && parent?.name === 'ListItem'
             ? nextMarker(state, parent)
             : null
-        if (outer) return insert(outer, markerLine.from, markerLine.to)
+        if (outer)
+          return {
+            changes: [
+              { from: markerLine.from, to: markerLine.to, insert: outer },
+              ...renumbered(state, parent!, outer, markerLine.to),
+            ],
+            range: EditorSelection.cursor(markerLine.from + outer.length),
+          }
         return insert('\n', markerLine.from, Math.max(markerLine.to, range.to))
       }
       const marker = nextMarker(state, item)
-      const { close, open, at } = range.empty
+      const { close, open, at, end } = range.empty
         ? reopened(state, tree, pos)
         : spanned(state, tree, range.from, range.to)
       if (marker) {
         const text = `${close}\n${marker}${open}`
         const width = itemWidth(state, item)
-        const end = range.empty ? at : Math.max(at, range.to)
         // The item's lines after the break follow the new marker's width;
         // replaced lines and items are gone.
         const changes = [
@@ -246,31 +296,7 @@ export function blockBreak(
           ),
         ]
         // Numbered items after it count on from the new one.
-        let number = Number(/^\s*(\d+)/.exec(marker)?.[1])
-        for (
-          let next = item.nextSibling;
-          Number.isFinite(number) && next?.name === 'ListItem';
-          next = next.nextSibling
-        ) {
-          const mark = next.getChild('ListMark')
-          if (mark && mark.from < end) continue
-          const current =
-            mark && Number.parseInt(state.sliceDoc(mark.from, mark.to), 10)
-          if (!mark || !(current! <= number)) break
-          number++
-          const digits = String(number)
-          const old = state.sliceDoc(mark.from, mark.to).length - 1
-          changes.push({ from: mark.from, to: mark.to - 1, insert: digits })
-          changes.push(
-            ...shiftContent(
-              state,
-              next,
-              state.doc.lineAt(next.from).number,
-              itemWidth(state, next),
-              digits.length - old,
-            ),
-          )
-        }
+        changes.push(...renumbered(state, item, marker, end))
         return {
           changes,
           range: EditorSelection.cursor(at + text.length),
@@ -282,25 +308,17 @@ export function blockBreak(
       const prefix = continuation(state, tree, pos)
       if (blank(line.text.replace(/^(\s*>)+/, '')))
         return insert('\n', line.from, line.to)
-      const { close, open, at } = range.empty
+      const { close, open, at, end } = range.empty
         ? reopened(state, tree, pos)
         : spanned(state, tree, range.from, range.to)
-      return insert(
-        `${close}\n${prefix}${open}`,
-        at,
-        range.empty ? at : Math.max(at, range.to),
-      )
+      return insert(`${close}\n${prefix}${open}`, at, end)
     }
     // A blank line between blocks gains another empty line.
     if (blank(line.text)) return insert('\n')
-    const { close, open, at } = range.empty
+    const { close, open, at, end } = range.empty
       ? reopened(state, tree, pos)
       : spanned(state, tree, range.from, range.to)
-    return insert(
-      `${close}\n\n${open}`,
-      at,
-      range.empty ? at : Math.max(at, range.to),
-    )
+    return insert(`${close}\n\n${open}`, at, end)
   })
 }
 

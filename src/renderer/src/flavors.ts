@@ -45,7 +45,11 @@ export const flavors = {
       listeners.delete(listener)
     }
   },
-  register(addonId: string, flavor: MarkdownFlavor) {
+  register(
+    addonId: string,
+    flavor: MarkdownFlavor,
+    onError: (error: unknown) => void = console.error,
+  ) {
     validatePreservation(flavor.preservation)
     if (
       flavor.preservation &&
@@ -62,7 +66,8 @@ export const flavors = {
     let removeFormatted: (() => void) | undefined
     if (flavor.syntax || flavor.render)
       void import('./formatted-flavor').then(({ registerFormattedFlavor }) => {
-        if (active) removeFormatted = registerFormattedFlavor(addonId, flavor)
+        if (active)
+          removeFormatted = registerFormattedFlavor(addonId, flavor, onError)
       })
     registry.set(id, item)
     publish()

@@ -282,6 +282,86 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
   )
 })
 
+for (const hook of ['decorate', 'layout', 'container']) {
+  test(`a failing formatted ${hook} leaves core formatting and edits working`, async (t) => {
+    const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-failure-'))
+    const profile = join(folder, 'profile')
+    const file = join(folder, 'note.md')
+    const source = '# Title\r\n\r\n> **strong**\r\n\r\n==proof==\r\n'
+    await writeFile(file, source)
+    await install(
+      profile,
+      'failure-proof',
+      3,
+      ['formatted'],
+      `
+      export default () => ({ start(context) {
+        const delimiter = { resolve: 'Proof', mark: 'ProofMark' }
+        context.editor.registerFlavor({
+          id: 'proof', name: 'Proof', kind: 'syntax', description: 'Proof', detect: () => true,
+          syntax: { defineNodes: ['Proof', 'ProofMark'], parseInline: [{
+            name: 'Proof', parse(cx, next, pos) {
+              if (next !== 61 || cx.char(pos + 1) !== 61) return -1
+              return cx.addDelimiter(delimiter, pos, pos + 2, true, true)
+            }
+          }] },
+          render: [{ nodes: ['${hook === 'container' ? 'Blockquote' : 'Proof'}'], ${hook}() {
+            window.proofCalls = (window.proofCalls || 0) + 1
+            if (window.failProof) throw Error('Formatted proof failed')
+          } }]
+        })
+      } })
+    `,
+    )
+    await writeFile(
+      join(profile, 'addons.json'),
+      JSON.stringify({ 'failure-proof': true }),
+    )
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${profile}`, file],
+    })
+    t.after(async () => {
+      await app.close()
+      await rm(folder, { recursive: true, force: true })
+    })
+    const page = await app.firstWindow()
+    await waitForDocumentEditor(app, page)
+    await page.evaluate(() =>
+      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+    )
+    await page.reload()
+    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+    await page.waitForFunction(() => window.proofCalls > 0)
+    const strong = page.locator('.rich-pane .hibi-lp-strong')
+    assert.equal(await strong.count(), 1)
+    await page.evaluate(() => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      window.failProof = true
+      view.dispatch({ changes: { from: view.state.doc.length, insert: 'z' } })
+    })
+    await waitForAsync(page, async () =>
+      (await window.hibi.getDocument()).markdown.endsWith('z'),
+    )
+    assert.equal(await strong.count(), 1)
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      `${source}z`,
+    )
+    const calls = await page.evaluate(() => window.proofCalls)
+    await page.evaluate(() => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.dispatch({ changes: { from: view.state.doc.length, insert: 'w' } })
+    })
+    await waitForAsync(page, async () =>
+      (await window.hibi.getDocument()).markdown.endsWith('zw'),
+    )
+    assert.equal(await page.evaluate(() => window.proofCalls), calls)
+    assert.equal(await strong.count(), 1)
+  })
+}
+
 async function install(profile, id, apiVersion, capabilities, code) {
   const folder = join(profile, 'installed-addons', id)
   await mkdir(folder, { recursive: true })

@@ -6,7 +6,6 @@ import { CustomWordDatabase } from '../src/addons/dictionary/custom-word-databas
 import {
   customWordsView,
   editCustomWord,
-  listCustomWords,
   openCustomWords,
 } from '../src/addons/dictionary/custom-words.ts'
 
@@ -70,7 +69,6 @@ try {
     ({ method }) => method === 'customWords',
   ).length
   assert.equal(activationPages, 0)
-  assert.equal(listCustomWords().length, 0)
   const middle = Math.floor(count / 2)
   const model = customWordsView().indexed
   await model.ensure([{ from: middle, to: Math.min(count, middle + 40) }])

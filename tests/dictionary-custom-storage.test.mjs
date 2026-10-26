@@ -12,7 +12,6 @@ import { openCustomWordStorage } from '../src/addons/dictionary/custom-word-stor
 import {
   customWordsView,
   editCustomWord,
-  listCustomWords,
   openCustomWords,
 } from '../src/addons/dictionary/custom-words.ts'
 import { waitForAsync } from './poll.mjs'
@@ -237,11 +236,6 @@ test('100,000 native records use an indexed exact lookup', async (t) => {
     host: { selectedIo: {} },
   })
   ctx.own(close)
-  assert.equal(
-    listCustomWords().length,
-    0,
-    'activation never loads the full list',
-  )
   assert.equal(calls.filter(({ method }) => method === 'customWords').length, 0)
   assert.equal(customWordsView().count, 100000)
   const target = store.get({ id: 'id-99999' }).word
@@ -261,11 +255,6 @@ test('100,000 native records use an indexed exact lookup', async (t) => {
   await customWordsView().indexed.ensure([{ from: 50000, to: 50040 }])
   assert.equal(calls.filter(({ method }) => method === 'customWords').length, 1)
   assert.equal(customWordsView().indexed.at(50000).word, 'word50000')
-  assert.equal(
-    listCustomWords().length,
-    0,
-    'viewport reads never create a full snapshot',
-  )
   t.diagnostic(
     '100,000 native records: activation reads 0 pages; one keyed edit reads/writes 1 record; viewport reads 1 page',
   )

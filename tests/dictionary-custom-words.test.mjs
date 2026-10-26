@@ -1,24 +1,28 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { stripTypeScriptTypes } from 'node:module'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 import { createPersonalModel } from '../src/addons/autocomplete/model.ts'
 import { autocompleteCompletions } from '../src/addons/autocomplete/suggestions.ts'
+import { CustomWordDatabase } from '../src/addons/dictionary/custom-word-database.ts'
+import { IndexedCustomWords } from '../src/addons/dictionary/custom-word-storage.ts'
 import {
   addCustomWord,
   customWords,
   customWordsFileIo,
   customWordsProvider,
+  customWordsView,
   editCustomWord,
   exportCustomWords,
   exportSavedCustomWords,
   importCustomWords,
   importSavedCustomWords,
-  listCustomWords,
-  mergeCustomWords,
   onCustomWordsChanged,
   openCustomWords as openWords,
-  updateCustomWords,
+  readCustomWords,
+  removeCustomWord,
 } from '../src/addons/dictionary/custom-words.ts'
 import {
   datamuseProvider,
@@ -26,11 +30,9 @@ import {
 } from '../src/addons/dictionary/online.ts'
 import { createRegistry, gather } from '../src/addons/dictionary/providers.ts'
 import { HostSelectedIoService } from '../src/main/host-selected-io.ts'
-import { createAddonStorageScope } from '../src/renderer/src/addon-storage.ts'
 import { HOST_SELECTED_IO_MAX_BYTES } from '../src/shared/host-selected-io.ts'
 
-const openCustomWords = async (context) =>
-  openWords(context, await context.storage.global('custom-words', 1))
+const openCustomWords = (context) => openWords(context, context.indexed)
 function profileWindow(t, invoke) {
   const prior = globalThis.window
   globalThis.window = {
@@ -45,35 +47,45 @@ const signal = new AbortController().signal
 /** Words without their ids. */
 const plain = (list) => list.map(({ id: _id, ...item }) => item)
 
-/** In-memory global storage with the handle's compare-and-set contract. */
-function storage(initial) {
-  let current =
-    initial === undefined
-      ? { status: 'missing', revision: 0 }
-      : { status: 'ready', revision: 1, value: initial }
-  const listeners = new Set()
-  const handle = {
-    snapshot: () => current,
-    subscribe(listener) {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
+/** Real profile database behind the renderer's asynchronous native boundary. */
+async function storage(t, initial = []) {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-custom-words-'))
+  const db = await CustomWordDatabase.open(profile)
+  const calls = []
+  const native = {
+    commit: async (input) => db.change(input),
+    async invoke(method, input) {
+      calls.push({ method, input })
+      if (method === 'customWordsMetadata') return db.metadata()
+      if (method === 'customWordsGet') return db.get(input)
+      if (method === 'customWords') return db.page(input)
+      if (method === 'customWordsLookup') return db.lookup(input)
+      assert.equal(method, 'changeCustomWords')
+      return input.type === 'commit' ? native.commit(input) : db.change(input)
     },
-    async set(value) {
-      current = { status: 'ready', revision: current.revision + 1, value }
-      return { status: 'saved', revision: current.revision, value }
-    },
-    /** Another window saves. */
-    external(value) {
-      current = { status: 'ready', revision: current.revision + 1, value }
-      for (const listener of listeners) listener()
-    },
+    query: (method, input) => native.invoke(method, input),
   }
+  const indexed = new IndexedCustomWords((method, input) =>
+    native.invoke(method, input),
+  )
+  t.after(async () => {
+    indexed.close()
+    db.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  await indexed.refresh()
+  if (initial.length)
+    await indexed.change(async (stage) => {
+      await stage({ upsert: initial, merge: true })
+    })
+  calls.length = 0
   return {
-    handle,
-    context: {
-      storage: { global: async () => handle },
-      host: { selectedIo: {} },
-    },
+    db,
+    indexed,
+    native,
+    calls,
+    profile,
+    context: { indexed, native, host: { selectedIo: {} } },
   }
 }
 
@@ -95,13 +107,6 @@ test('custom words keep valid entries once per word and language', () => {
     ],
   )
   assert.deepEqual(customWords({ word: 'one' }), [])
-  assert.deepEqual(
-    mergeCustomWords(
-      [{ word: 'kilig' }, { word: 'Hibi' }],
-      [{ word: 'hibi', note: 'renamed' }, { word: 'gigil' }],
-    ),
-    [{ word: 'kilig' }, { word: 'hibi', note: 'renamed' }, { word: 'gigil' }],
-  )
 })
 
 test('custom words round-trip through plain text', () => {
@@ -183,16 +188,16 @@ test('imports preserve first entries and keep every distinct word and full note'
   const imported = importCustomWords(input)
   assert.equal(imported.length, 50001)
   assert.equal(imported.at(-1).word, 'tail')
-  const { handle, context } = storage([{ word: 'kept', note: 'unchanged' }])
+  const { context } = await storage(t, [{ word: 'kept', note: 'unchanged' }])
   const close = await openCustomWords(context)
   t.after(close)
-  await updateCustomWords((current) => mergeCustomWords(current, imported))
-  assert.equal(handle.snapshot().value.length, 50002)
-  assert.equal(listCustomWords()[0].note, 'unchanged')
+  await importSavedCustomWords(input)
+  assert.equal((await readCustomWords()).length, 50002)
+  assert.equal((await readCustomWords())[0].note, 'unchanged')
 })
 
 test('large text imports yield to input tasks and exports join the whole save', async (t) => {
-  const { context } = storage([])
+  const { context } = await storage(t)
   const close = await openCustomWords(context)
   t.after(close)
   const text = Array.from({ length: 50000 }, (_, i) => `word${i}`).join('\n')
@@ -207,56 +212,75 @@ test('large text imports yield to input tasks and exports join the whole save', 
   assert.equal(yielded, true)
 })
 
-test('custom words load, save, follow other windows, and clear on stop', async () => {
-  const { handle, context } = storage([{ word: 'kilig', lang: 'tl' }])
+test('custom words load metadata, save, follow other windows, and clear on stop', async (t) => {
+  const { context, indexed, calls, profile } = await storage(t, [
+    { word: 'kilig', lang: 'tl' },
+  ])
   let changes = 0
-  const stopListening = onCustomWordsChanged(() => changes++)
+  t.after(onCustomWordsChanged(() => changes++))
   await assert.rejects(addCustomWord({ word: 'early' }), /Turn on/)
   assert.equal(customWordsFileIo(), null)
   const close = await openCustomWords(context)
+  t.after(close)
   assert.equal(customWordsFileIo(), context.host.selectedIo)
-  assert.deepEqual(plain(listCustomWords()), [{ word: 'kilig', lang: 'tl' }])
+  assert.deepEqual(Object.keys(customWordsView()).sort(), [
+    'count',
+    'indexed',
+    'revision',
+    'version',
+  ])
+  assert.equal(customWordsView().indexed, indexed)
+  assert.equal(customWordsView().count, 1)
+  assert.equal(calls.filter(({ method }) => method === 'customWords').length, 0)
+  const [kilig] = await readCustomWords()
   await addCustomWord({ word: 'Hibi', note: 'an editor' })
   await assert.rejects(addCustomWord({ word: '  ' }), /Enter a word/)
-  assert.deepEqual(plain(handle.snapshot().value), [
-    { word: 'kilig', lang: 'tl' },
-    { word: 'Hibi', note: 'an editor' },
-  ])
-  // Queued changes each see the list the previous one saved.
   await Promise.all([
-    updateCustomWords((current) => current.slice(1)),
+    removeCustomWord(kilig),
     addCustomWord({ word: 'kilig', note: 'giddy' }),
-    updateCustomWords((current) => current.filter((item) => !item.lang)),
   ])
-  assert.deepEqual(plain(listCustomWords()), [
+  const [hibi, added] = await readCustomWords()
+  assert.deepEqual(plain([hibi, added]), [
     { word: 'Hibi', note: 'an editor' },
     { word: 'kilig', note: 'giddy' },
   ])
-  await updateCustomWords((current) => current.slice(0, 1))
-  assert.deepEqual(plain(listCustomWords()), [
-    { word: 'Hibi', note: 'an editor' },
-  ])
-  handle.external([{ word: 'gigil' }])
-  assert.deepEqual(plain(listCustomWords()), [{ word: 'gigil' }])
-  assert.ok(Object.isFrozen(listCustomWords()))
+  await removeCustomWord(added)
+  const peer = await CustomWordDatabase.open(profile)
+  t.after(() => peer.close())
+  const { token } = peer.change({ type: 'begin', revision: peer.revision() })
+  peer.change({
+    type: 'stage',
+    token,
+    upsert: [{ id: 'gigil', word: 'gigil' }],
+    remove: [hibi.id],
+  })
+  peer.change({ type: 'commit', token })
+  await indexed.refresh()
+  assert.deepEqual(plain(await readCustomWords()), [{ word: 'gigil' }])
+  assert.ok(Object.isFrozen(await readCustomWords()))
   close()
-  assert.deepEqual(plain(listCustomWords()), [])
+  assert.deepEqual(await readCustomWords(), [])
+  assert.equal(customWordsView().count, 0)
+  assert.equal(customWordsView().indexed, null)
   assert.equal(customWordsFileIo(), null)
+  assert.deepEqual(
+    await customWordsProvider(() => 'en').lookup('gigil', 'en'),
+    [],
+  )
   assert.ok(changes >= 5)
-  stopListening()
 })
 
 test('export waits for all queued notes, reads the latest words, and never writes', async (t) => {
-  const { handle, context } = storage([{ word: 'zorp', note: 'old' }])
-  const set = handle.set
+  const { native, context } = await storage(t, [{ word: 'zorp', note: 'old' }])
+  const commit = native.commit
   const gates = [Promise.withResolvers(), Promise.withResolvers()]
   let writes = 0
-  handle.set = async (value) => {
+  native.commit = async (value) => {
     await gates[writes++].promise
-    return set(value)
+    return commit(value)
   }
   const close = await openCustomWords(context)
-  const [item] = listCustomWords()
+  const [item] = await readCustomWords()
   const first = editCustomWord(item, (current) => ({
     ...current,
     note: 'first',
@@ -316,15 +340,16 @@ test('clipboard export waits for saves and native acknowledgement without browse
     .slice(start + 'onClick={'.length, end)
     .trimEnd()
     .slice(0, -1)
-  const { handle, context } = storage([{ word: 'zorp', note: 'old' }])
-  const set = handle.set
+  const { native, context } = await storage(t, [{ word: 'zorp', note: 'old' }])
+  const commit = native.commit
   const save = Promise.withResolvers()
   const copy = Promise.withResolvers()
   let failSave = false
   let failCopy = false
-  handle.set = async (value) => {
+  native.commit = async (value) => {
     await save.promise
-    return failSave ? { status: 'unavailable', reason: 'corrupt' } : set(value)
+    if (failSave) throw new Error('disk full')
+    return commit(value)
   }
   const close = await openCustomWords(context)
   const calls = []
@@ -383,7 +408,7 @@ test('clipboard export waits for saves and native acknowledgement without browse
     await Promise.allSettled([saving, exporting])
     close()
   })
-  saving = editCustomWord(listCustomWords()[0], (item) => ({
+  saving = editCustomWord((await readCustomWords())[0], (item) => ({
     ...item,
     note: 'copied note',
   })).then(() => {
@@ -422,7 +447,7 @@ test('clipboard export waits for saves and native acknowledgement without browse
   failSave = true
   text = 'keep pasted draft'
   saving = assert.rejects(
-    editCustomWord(listCustomWords()[0], (item) => ({
+    editCustomWord((await readCustomWords())[0], (item) => ({
       ...item,
       note: 'unsaved',
     })),
@@ -454,88 +479,52 @@ test('native clipboard bounds encoded bytes and preserves Unicode exports within
   assert.deepEqual(writes, [text])
 })
 
-test('export keeps a pending note conflict after a queued language save recovers', async (t) => {
+test('export keeps an indexed commit conflict after a queued language save recovers', async (t) => {
+  const { context, native, profile } = await storage(t, [
+    { word: 'zorp', lang: 'en', note: 'old' },
+  ])
+  const commit = native.commit
   const gates = [Promise.withResolvers(), Promise.withResolvers()]
-  const listeners = new Set()
-  let state = {
-    status: 'ready',
-    revision: 1,
-    value: [{ word: 'zorp', lang: 'en', note: 'old' }],
-  }
   let writes = 0
-  const notify = () => {
-    for (const listener of listeners)
-      listener({
-        owner: 'dictionary',
-        key: 'custom-words',
-        scope: { kind: 'global' },
-        version: 1,
-        current: structuredClone(state),
-      })
+  native.commit = async (input) => {
+    const gate = gates[writes++]
+    if (gate) await gate.promise
+    return commit(input)
   }
-  const scope = createAddonStorageScope('dictionary', () => true, {
-    readAddonStorage: async () => structuredClone(state),
-    writeAddonStorage: async ({ baseRevision, value }) => {
-      const gate = gates[writes++]
-      if (gate) await gate.promise
-      if (baseRevision !== state.revision)
-        return { status: 'conflict', current: structuredClone(state) }
-      state = {
-        status: 'ready',
-        revision: state.revision + 1,
-        value: structuredClone(value),
-      }
-      notify()
-      return {
-        status: 'saved',
-        revision: state.revision,
-        value: structuredClone(state.value),
-      }
-    },
-    onAddonStorageChanged(listener) {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-  })
-  const close = await openCustomWords({
-    storage: scope.api,
-    host: { selectedIo: {} },
-  })
-  const [item] = listCustomWords()
-  const note = editCustomWord(item, (current) => ({
-    ...current,
-    note: 'unsaved note',
-  }))
-  const noteFailed = assert.rejects(note, /changed in another window/)
+  const close = await openCustomWords(context)
+  const [item] = await readCustomWords()
+  const noteFailed = assert.rejects(
+    editCustomWord(item, (current) => ({ ...current, note: 'unsaved note' })),
+    /changed in another window/,
+  )
   let language
   let exporting
   t.after(async () => {
     for (const gate of gates) gate.resolve()
     await Promise.allSettled([noteFailed, language, exporting])
     close()
-    scope.dispose()
   })
   await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(writes, 1)
   language = editCustomWord(item, (current) => ({ ...current, lang: 'tl' }))
   let done = false
   exporting = assert.rejects(
     exportSavedCustomWords(),
     /changed in another window/,
   )
-  void exporting.then(
-    () => {
-      done = true
-    },
-    () => {
-      done = true
-    },
-  )
-  state = {
-    status: 'ready',
-    revision: 2,
-    value: [{ ...item }, { word: 'other window' }],
-  }
-  notify()
+  void exporting.then(() => {
+    done = true
+  })
+  const peer = await CustomWordDatabase.open(profile)
+  t.after(() => peer.close())
+  const { token } = peer.change({ type: 'begin', revision: peer.revision() })
+  peer.change({
+    type: 'stage',
+    token,
+    upsert: [{ id: 'peer', word: 'other window' }],
+    remove: [],
+  })
+  peer.change({ type: 'commit', token })
   gates[0].resolve()
   await noteFailed
   await new Promise((resolve) => setImmediate(resolve))
@@ -544,10 +533,9 @@ test('export keeps a pending note conflict after a queued language save recovers
   gates[1].resolve()
   await language
   await exporting
-  assert.equal(listCustomWords()[0].note, 'old')
-  assert.equal(listCustomWords()[0].lang, 'tl')
-  assert.equal(writes, 2)
-  await editCustomWord(listCustomWords()[0], (current) => ({
+  assert.equal((await readCustomWords())[0].note, 'old')
+  assert.equal((await readCustomWords())[0].lang, 'tl')
+  await editCustomWord(item, (current) => ({
     ...current,
     note: 'unsaved note',
   }))
@@ -559,21 +547,21 @@ test('export keeps a pending note conflict after a queued language save recovers
 })
 
 test('file export keeps a joining failure after its job settles before the picker', async (t) => {
-  const { handle, context } = storage([
+  const { native, context } = await storage(t, [
     { word: 'zorp', lang: 'en', note: 'old' },
   ])
-  const set = handle.set
+  const commit = native.commit
   const gate = Promise.withResolvers()
   const picker = Promise.withResolvers()
   let writes = 0
-  handle.set = async (value) => {
+  native.commit = async (value) => {
     writes++
     if (writes === 1) await gate.promise
-    if (writes === 2) return { status: 'unavailable', reason: 'corrupt' }
-    return set(value)
+    if (writes === 2) throw new Error('disk full')
+    return commit(value)
   }
   const close = await openCustomWords(context)
-  const [item] = listCustomWords()
+  const [item] = await readCustomWords()
   const first = editCustomWord(item, (current) => ({
     ...current,
     note: 'first',
@@ -613,20 +601,20 @@ test('file export keeps a joining failure after its job settles before the picke
 })
 
 test('cancelled or failed file selection releases export before a held save finishes', async (t) => {
-  const { handle, context } = storage([{ word: 'zorp', note: 'old' }])
+  const { native, context } = await storage(t, [{ word: 'zorp', note: 'old' }])
   const gate = Promise.withResolvers()
   const failure = new Error('save failed')
   let writes = 0
-  handle.set = async () => {
+  native.commit = async () => {
     writes++
     await gate.promise
     throw failure
   }
   const close = await openCustomWords(context)
-  const [item] = listCustomWords()
+  const [item] = await readCustomWords()
   const saving = assert.rejects(
     editCustomWord(item, (current) => ({ ...current, note: 'new' })),
-    (error) => error === failure,
+    /Could not save custom words/,
   )
   let cancelled = false
   const cancelling = exportSavedCustomWords(Promise.resolve(false)).then(
@@ -655,7 +643,7 @@ test('cancelled or failed file selection releases export before a held save fini
   assert.equal(writes, 1)
   gate.resolve()
   await saving
-  assert.equal(listCustomWords()[0].note, 'old')
+  assert.equal((await readCustomWords())[0].note, 'old')
 })
 
 test('failed export snapshots cancel accepted grants before finishing without masking the save error', async (t) => {
@@ -666,7 +654,7 @@ test('failed export snapshots cancel accepted grants before finishing without ma
   // Exercise the real file-export callback without a renderer or physical file IO.
   const start = source.indexOf(
     'withFile(async (io) => {',
-    source.indexOf('disabled={busy || !words.length}'),
+    source.indexOf('disabled={busy || !count}'),
   )
   const end = source.indexOf('\n            })', start)
   assert.ok(start >= 0 && end > start)
@@ -726,14 +714,14 @@ test('failed export snapshots cancel accepted grants before finishing without ma
       return result
     },
   }
-  const { handle, context } = storage([{ word: 'zorp', note: 'old' }])
-  const set = handle.set
+  const { native, context } = await storage(t, [{ word: 'zorp', note: 'old' }])
+  const commit = native.commit
   const failure = new Error('note save failed')
   let fail = true
   let storageWrites = 0
-  handle.set = (value) => {
+  native.commit = (value) => {
     storageWrites++
-    return fail ? Promise.reject(failure) : set(value)
+    return fail ? Promise.reject(failure) : commit(value)
   }
   context.host.selectedIo = io
   const close = await openCustomWords(context)
@@ -745,15 +733,15 @@ test('failed export snapshots cancel accepted grants before finishing without ma
     service.clear()
   })
   await assert.rejects(
-    editCustomWord(listCustomWords()[0], (item) => ({
+    editCustomWord((await readCustomWords())[0], (item) => ({
       ...item,
       note: 'unsaved',
     })),
-    (error) => error === failure,
+    /Could not save custom words/,
   )
   let finished = false
   first = assert
-    .rejects(exportFile(io), (error) => error === failure)
+    .rejects(exportFile(io), /Could not save custom words/)
     .then(() => {
       finished = true
     })
@@ -767,12 +755,12 @@ test('failed export snapshots cancel accepted grants before finishing without ma
   await first
   assert.equal(service.grants.size, 0)
   for (let index = 1; index < 16; index++) {
-    await assert.rejects(exportFile(io), (error) => error === failure)
+    await assert.rejects(exportFile(io), /Could not save custom words/)
     assert.equal(service.grants.size, 0)
   }
   assert.equal(cancels, 16)
   cancelReplyFails = true
-  await assert.rejects(exportFile(io), (error) => error === failure)
+  await assert.rejects(exportFile(io), /Could not save custom words/)
   assert.equal(cancels, 17)
   assert.equal(service.grants.size, 0)
   assert.equal(exportWrites, 0)
@@ -787,7 +775,7 @@ test('failed export snapshots cancel accepted grants before finishing without ma
   assert.equal(cancels, 17)
   io.selectExport = select
   fail = false
-  await editCustomWord(listCustomWords()[0], (item) => ({
+  await editCustomWord((await readCustomWords())[0], (item) => ({
     ...item,
     note: 'recovered',
   }))
@@ -802,23 +790,23 @@ test('failed export snapshots cancel accepted grants before finishing without ma
 })
 
 test('export keeps a pending save failure, and the next edit can still save', async (t) => {
-  const { handle, context } = storage([{ word: 'zorp', note: 'old' }])
-  const set = handle.set
+  const { native, context } = await storage(t, [{ word: 'zorp', note: 'old' }])
+  const commit = native.commit
   const gate = Promise.withResolvers()
   const failure = new Error('disk full')
   let writes = 0
-  handle.set = async () => {
+  native.commit = async () => {
     writes++
     await gate.promise
     throw failure
   }
   const close = await openCustomWords(context)
-  const [item] = listCustomWords()
+  const [item] = await readCustomWords()
   const save = editCustomWord(item, (current) => ({ ...current, note: 'new' }))
-  const saving = assert.rejects(save, (error) => error === failure)
+  const saving = assert.rejects(save, /Could not save custom words/)
   const exporting = assert.rejects(
     exportSavedCustomWords(),
-    (error) => error === failure,
+    /Could not save custom words/,
   )
   t.after(async () => {
     gate.resolve()
@@ -829,10 +817,10 @@ test('export keeps a pending save failure, and the next edit can still save', as
   assert.equal(writes, 1)
   gate.resolve()
   await Promise.all([saving, exporting])
-  assert.equal(listCustomWords()[0].note, 'old')
-  handle.set = (value) => {
+  assert.equal((await readCustomWords())[0].note, 'old')
+  native.commit = (value) => {
     writes++
-    return set(value)
+    return commit(value)
   }
   await editCustomWord(item, (current) => ({ ...current, note: 'new' }))
   assert.equal(await exportSavedCustomWords(), 'zorp\t\tnew')
@@ -840,17 +828,18 @@ test('export keeps a pending save failure, and the next edit can still save', as
 })
 
 test('export rejects if the addon closes while a note save is held', async (t) => {
-  const { handle, context } = storage([{ word: 'zorp', note: 'old' }])
-  const set = handle.set
+  const { native, context } = await storage(t, [{ word: 'zorp', note: 'old' }])
+  const commit = native.commit
   const gate = Promise.withResolvers()
   let writes = 0
-  handle.set = async (value) => {
+  native.commit = async (value) => {
     writes++
+    const result = await commit(value)
     await gate.promise
-    return set(value)
+    return result
   }
   const close = await openCustomWords(context)
-  const [item] = listCustomWords()
+  const [item] = await readCustomWords()
   const save = assert.rejects(
     editCustomWord(item, (current) => ({ ...current, note: 'new' })),
     /Turn on/,
@@ -867,20 +856,21 @@ test('export rejects if the addon closes while a note save is held', async (t) =
   await save
   await exporting
   assert.equal(writes, 1)
-  assert.deepEqual(listCustomWords(), [])
+  assert.deepEqual(await readCustomWords(), [])
   assert.equal(customWordsFileIo(), null)
 })
 
 test('exports and queued edits stay in their dictionary activation', async (t) => {
-  const old = storage([{ word: 'zorp', note: 'old' }])
-  const set = old.handle.set
+  const old = await storage(t, [{ word: 'zorp', note: 'old' }])
+  const commit = old.native.commit
   const gate = Promise.withResolvers()
-  old.handle.set = async (value) => {
+  old.native.commit = async (value) => {
+    const result = await commit(value)
     await gate.promise
-    return set(value)
+    return result
   }
   const closeOld = await openCustomWords(old.context)
-  const [item] = listCustomWords()
+  const [item] = await readCustomWords()
   const save = assert.rejects(
     editCustomWord(item, (current) => ({ ...current, note: 'new' })),
     /Turn on/,
@@ -900,10 +890,10 @@ test('exports and queued edits stay in their dictionary activation', async (t) =
   })
   await new Promise((resolve) => setImmediate(resolve))
   closeOld()
-  const reopened = storage([{ word: 'zorp', note: 'reopened' }])
-  const setNew = reopened.handle.set
+  const reopened = await storage(t, [{ word: 'zorp', note: 'reopened' }])
+  const setNew = reopened.native.commit
   let writes = 0
-  reopened.handle.set = (value) => {
+  reopened.native.commit = (value) => {
     writes++
     return setNew(value)
   }
@@ -922,40 +912,120 @@ test('exports and queued edits stay in their dictionary activation', async (t) =
   await save
   await queued
   await exporting
-  assert.deepEqual(plain(listCustomWords()), [
+  assert.deepEqual(plain(await readCustomWords()), [
     { word: 'zorp', note: 'reopened' },
   ])
   assert.equal(writes, 0)
   assert.equal(changes, 0)
 })
 
-test('queued field edits apply to the word as it is saved, in either order', async () => {
+test('a pending provider reply stays in its activation when the same native object is reused', async (t) => {
+  const { context, native } = await storage(t, [
+    { word: 'kilig', note: 'kept locally' },
+  ])
+  const gate = Promise.withResolvers()
+  const entered = Promise.withResolvers()
+  const query = native.query
+  let holding = true
+  let queries = 0
+  native.query = async (method, input) => {
+    const rows = await query(method, input)
+    if (holding) {
+      if (++queries === 2) entered.resolve()
+      await gate.promise
+    }
+    return rows
+  }
+  const closeOld = await openCustomWords(context)
+  const provider = customWordsProvider(() => 'en')
+  const pending = provider.lookup('kilig', 'en')
+  let closeNew
+  t.after(async () => {
+    gate.resolve()
+    await Promise.allSettled([pending])
+    if (closeNew) closeNew()
+    else closeOld()
+  })
+  await entered.promise
+  closeOld()
+  context.indexed = new IndexedCustomWords((method, input) =>
+    native.invoke(method, input),
+  )
+  t.after(() => context.indexed.close())
+  await context.indexed.refresh()
+  closeNew = await openCustomWords(context)
+  holding = false
+  gate.resolve()
+  assert.deepEqual(await pending, [])
+  assert.equal(
+    (await provider.lookup('kilig', 'en'))[0].senses[0].gloss,
+    'kept locally',
+  )
+})
+
+test('queued field edits apply to the word as it is saved, in either order', async (t) => {
   const note = (current) => ({ ...current, note: 'new' })
   const lang = (current) => ({ ...current, lang: 'tl' })
   for (const edits of [
     [note, lang],
     [lang, note],
   ]) {
-    const { handle, context } = storage([{ word: 'kilig', note: 'old' }])
+    const { context } = await storage(t, [{ word: 'kilig', note: 'old' }])
     const close = await openCustomWords(context)
-    const [item] = listCustomWords()
+    const [item] = await readCustomWords()
     // Words saved before ids existed get one that is kept from then on.
     assert.equal(typeof item.id, 'string')
     await Promise.all(edits.map((change) => editCustomWord(item, change)))
-    assert.deepEqual(handle.snapshot().value, [
+    assert.deepEqual(await readCustomWords(), [
       { id: item.id, word: 'kilig', note: 'new', lang: 'tl' },
     ])
     close()
   }
 })
 
-test('an edit to a word that is gone rejects instead of saving nothing', async () => {
-  const { handle, context } = storage([{ word: 'kilig' }, { word: 'gigil' }])
+test('an indexed edit cannot resurrect a word removed before commit', async (t) => {
+  const { context, native, profile } = await storage(t, [
+    { word: 'kilig', note: 'old' },
+  ])
+  const gate = Promise.withResolvers()
+  const entered = Promise.withResolvers()
+  const commit = native.commit
+  native.commit = async (input) => {
+    entered.resolve()
+    await gate.promise
+    return commit(input)
+  }
   const close = await openCustomWords(context)
-  const [kilig, gigil] = listCustomWords()
-  const removed = updateCustomWords((current) =>
-    current.filter((other) => other.id !== kilig.id),
+  const [item] = await readCustomWords()
+  const saving = assert.rejects(
+    editCustomWord(item, (current) => ({ ...current, note: 'new' })),
+    /changed in another window/,
   )
+  t.after(async () => {
+    gate.resolve()
+    await saving
+    close()
+  })
+  await entered.promise
+  const peer = await CustomWordDatabase.open(profile)
+  t.after(() => peer.close())
+  const { token } = peer.change({ type: 'begin', revision: peer.revision() })
+  peer.change({ type: 'stage', token, upsert: [], remove: [item.id] })
+  peer.change({ type: 'commit', token })
+  gate.resolve()
+  await saving
+  assert.deepEqual(await readCustomWords(), [])
+  await assert.rejects(
+    editCustomWord(item, (current) => current),
+    /removed or changed/,
+  )
+})
+
+test('an edit to a word that is gone rejects instead of saving nothing', async (t) => {
+  const { context } = await storage(t, [{ word: 'kilig' }, { word: 'gigil' }])
+  const close = await openCustomWords(context)
+  const [kilig, gigil] = await readCustomWords()
+  const removed = removeCustomWord(kilig)
   await assert.rejects(
     editCustomWord(kilig, (current) => ({ ...current, note: 'new' })),
     /removed or changed in another window/,
@@ -964,35 +1034,37 @@ test('an edit to a word that is gone rejects instead of saving nothing', async (
   // Re-adding the same word gives it a new row, not the removed one's id.
   await addCustomWord({ word: 'gigil', note: 'cute' })
   await addCustomWord({ word: 'kilig' })
-  const [, again] = listCustomWords()
+  const [, again] = await readCustomWords()
   assert.notEqual(again.id, kilig.id)
-  assert.equal(listCustomWords()[0].id, gigil.id)
-  assert.equal(handle.snapshot().value[0].note, 'cute')
+  assert.equal((await readCustomWords())[0].id, gigil.id)
+  assert.equal((await readCustomWords())[0].note, 'cute')
   await assert.rejects(
     editCustomWord({ word: 'kilig' }, (current) => current),
     /removed or changed/,
   )
   await editCustomWord(again, (current) => ({ ...current, lang: 'tl' }))
-  assert.deepEqual(plain(listCustomWords()), [
+  assert.deepEqual(plain(await readCustomWords()), [
     { word: 'gigil', note: 'cute' },
     { word: 'kilig', lang: 'tl' },
   ])
   close()
 })
 
-test('adding a listed word keeps its note unless a note is given, while import replaces it', async () => {
-  const { context } = storage([{ word: 'kilig', lang: 'tl', note: 'giddy' }])
+test('adding a listed word keeps its note unless a note is given, while import replaces it', async (t) => {
+  const { context } = await storage(t, [
+    { word: 'kilig', lang: 'tl', note: 'giddy' },
+  ])
   const close = await openCustomWords(context)
   await addCustomWord({ word: 'Kilig', lang: 'tl' })
-  assert.deepEqual(plain(listCustomWords()), [
+  assert.deepEqual(plain(await readCustomWords()), [
     { word: 'Kilig', lang: 'tl', note: 'giddy' },
   ])
   await addCustomWord({ word: 'kilig', lang: 'tl', note: 'thrill' })
-  assert.equal(listCustomWords()[0].note, 'thrill')
-  await updateCustomWords((current) =>
-    mergeCustomWords(current, importCustomWords('kilig\ttl')),
-  )
-  assert.deepEqual(plain(listCustomWords()), [{ word: 'kilig', lang: 'tl' }])
+  assert.equal((await readCustomWords())[0].note, 'thrill')
+  await importSavedCustomWords('kilig\ttl')
+  assert.deepEqual(plain(await readCustomWords()), [
+    { word: 'kilig', lang: 'tl' },
+  ])
   close()
 })
 
@@ -1007,12 +1079,12 @@ test('custom words preserve 50,000 words and long terms and notes', async (t) =>
   assert.deepEqual(importCustomWords(`${term}\tde\t${note}`), [
     { word: term, lang: 'de', note },
   ])
-  const { handle, context } = storage(list)
+  const { context } = await storage(t, list)
   const close = await openCustomWords(context)
   t.after(close)
   await addCustomWord({ word: term, note })
-  assert.equal(handle.snapshot().value.length, 50001)
-  assert.equal(listCustomWords().at(-1).note, note)
+  assert.equal((await readCustomWords()).length, 50001)
+  assert.equal((await readCustomWords()).at(-1).note, note)
   assert.equal(
     (await customWordsProvider(() => 'en').lookup(term, 'en'))[0].senses[0]
       .gloss,
@@ -1021,7 +1093,8 @@ test('custom words preserve 50,000 words and long terms and notes', async (t) =>
 })
 
 test('100,000 custom words use constant lookup work', async (t) => {
-  const { context } = storage(
+  const { context, calls } = await storage(
+    t,
     Array.from({ length: 100000 }, (_, index) => ({ word: `word${index}` })),
   )
   const close = await openCustomWords(context)
@@ -1030,9 +1103,14 @@ test('100,000 custom words use constant lookup work', async (t) => {
   const found = await customWordsProvider(() => 'en').lookup('WORD99999', 'en')
   assert.equal(found[0].term, 'word99999')
   assert.equal(
-    lower.mock.callCount(),
+    calls.filter(({ method }) => method === 'customWordsLookup').length,
     2,
-    'normalize query and matching row only',
+  )
+  assert.equal(calls.filter(({ method }) => method === 'customWords').length, 0)
+  assert.equal(
+    lower.mock.callCount(),
+    4,
+    'normalize provider query, two native indexed keys, and matching row only',
   )
   t.diagnostic(
     `100,000 words: ${lower.mock.callCount()} normalization calls per lookup`,
@@ -1044,58 +1122,71 @@ test('a language collision never silently removes either word or its note', asyn
     { word: 'word', lang: 'en', note: 'english note' },
     { word: 'word', lang: 'fr', note: 'french note' },
   ]
-  const { handle, context } = storage(original)
+  const { native, context } = await storage(t, original)
   const close = await openCustomWords(context)
   t.after(close)
-  const writes = t.mock.method(handle, 'set')
+  const writes = t.mock.method(native, 'commit')
   await assert.rejects(
-    editCustomWord(listCustomWords()[0], (word) => ({ ...word, lang: 'fr' })),
-    /Could not save/,
+    editCustomWord((await readCustomWords())[0], (word) => ({
+      ...word,
+      lang: 'fr',
+    })),
+    /already exists in that language/,
   )
-  assert.deepEqual(plain(listCustomWords()), original)
+  assert.deepEqual(plain(await readCustomWords()), original)
   assert.equal(writes.mock.callCount(), 0)
 })
 
-test('custom words keep a newer revision over a late save reply or notification', async () => {
-  // A held save reply, as the storage handle delivers it: its snapshot keeps
-  // the newer revision that arrived first.
-  let current = { status: 'ready', revision: 1, value: [{ word: 'kilig' }] }
+test('custom words keep newer indexed metadata over a late commit reply or refresh', async (t) => {
+  const { context, native, indexed, profile } = await storage(t, [
+    { word: 'kilig' },
+  ])
+  const gate = Promise.withResolvers()
+  const entered = Promise.withResolvers()
+  const commit = native.commit
   let reply
-  const listeners = new Set()
-  const notify = (next) => {
-    current = next
-    for (const listener of listeners) listener()
+  native.commit = async (input) => {
+    reply = await commit(input)
+    entered.resolve()
+    await gate.promise
+    return reply
   }
-  const handle = {
-    snapshot: () => current,
-    subscribe(listener) {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-    set: (value) =>
-      new Promise((resolve) => {
-        reply = () => resolve({ status: 'saved', revision: 2, value })
-      }),
-  }
-  const close = await openCustomWords({
-    storage: { global: async () => handle },
-    host: { selectedIo: {} },
-  })
+  const close = await openCustomWords(context)
   const saving = addCustomWord({ word: 'gigil' })
-  await new Promise((resolve) => setImmediate(resolve))
-  const newer = [{ word: 'kilig' }, { word: 'gigil' }, { word: 'Hibi' }]
-  notify({ status: 'ready', revision: 3, value: newer })
-  reply()
+  t.after(async () => {
+    gate.resolve()
+    await Promise.allSettled([saving])
+    close()
+  })
+  await entered.promise
+  const peer = await CustomWordDatabase.open(profile)
+  t.after(() => peer.close())
+  const { token } = peer.change({ type: 'begin', revision: peer.revision() })
+  peer.change({
+    type: 'stage',
+    token,
+    upsert: [{ id: 'hibi', word: 'Hibi' }],
+    remove: [],
+  })
+  peer.change({ type: 'commit', token })
+  await indexed.refresh()
+  const newerRevision = customWordsView().revision
+  gate.resolve()
   await saving
-  assert.deepEqual(plain(listCustomWords()), newer)
-  // A notification for an older revision arriving late is ignored too.
-  notify({ status: 'ready', revision: 2, value: [{ word: 'kilig' }] })
-  assert.deepEqual(plain(listCustomWords()), newer)
-  close()
+  assert.equal(customWordsView().revision, newerRevision)
+  const newer = [{ word: 'kilig' }, { word: 'gigil' }, { word: 'Hibi' }]
+  assert.deepEqual(plain(await readCustomWords()), newer)
+  const invoke = native.invoke
+  native.invoke = async (method, input) =>
+    method === 'customWordsMetadata' ? reply : invoke(method, input)
+  await indexed.refresh()
+  assert.equal(customWordsView().revision, newerRevision)
+  assert.equal(customWordsView().count, 3)
+  assert.deepEqual(plain(await readCustomWords()), newer)
 })
 
-test('custom words are looked up as the user’s own without going online', async () => {
-  const { context } = storage([
+test('custom words are looked up as the user’s own without going online', async (t) => {
+  const { context } = await storage(t, [
     { word: 'Hibi', note: 'a markdown editor' },
     { word: 'kilig', lang: 'tl' },
   ])
@@ -1137,7 +1228,7 @@ test('custom words are looked up as the user’s own without going online', asyn
   close()
 })
 
-test('cold custom lookup answers locally while the settings snapshot is still loading', async (t) => {
+test('cold custom lookup answers locally while metadata is still loading', async (t) => {
   const gate = Promise.withResolvers()
   const word = { id: 'cold', word: 'cold', lang: 'en', note: 'kept locally' }
   profileWindow(t, async (method) => {
@@ -1176,7 +1267,8 @@ test('cold custom lookup answers locally while the settings snapshot is still lo
   )
   assert.equal(result.found[0].value[0].senses[0].gloss, 'kept locally')
   assert.equal(online, 0)
-  assert.deepEqual(listCustomWords(), [], 'whole-list load remains held')
+  assert.equal(customWordsView().indexed, null, 'metadata load remains held')
+  assert.equal(customWordsView().count, 0)
 })
 
 test('a late initial load cannot replace a newer dictionary activation', async (t) => {
@@ -1200,12 +1292,12 @@ test('a late initial load cannot replace a newer dictionary activation', async (
     },
     host: { selectedIo: {} },
   })
-  const { context } = storage([{ word: 'new' }])
+  const { context } = await storage(t, [{ word: 'new' }])
   const close = await openCustomWords(context)
   t.after(close)
   gate.resolve()
   ;(await old)()
-  assert.deepEqual(plain(listCustomWords()), [{ word: 'new' }])
+  assert.deepEqual(plain(await readCustomWords()), [{ word: 'new' }])
 })
 
 test('custom words come before pack words in suggestions', async () => {

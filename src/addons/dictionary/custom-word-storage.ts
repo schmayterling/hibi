@@ -1,4 +1,3 @@
-import type { AddonStorageHandle } from '../../shared/addon-storage'
 import type { AddonContext } from '../api'
 import {
   type CustomWord,
@@ -6,9 +5,6 @@ import {
   customWords,
 } from './custom-word-data.ts'
 
-export type CustomWordStorage = AddonStorageHandle<unknown> & {
-  close?: () => void
-}
 export type WordMetadata = { revision: number; count: number; notice?: string }
 export type WordPage = {
   revision: number

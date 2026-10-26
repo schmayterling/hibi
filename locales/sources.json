@@ -1560,8 +1560,7 @@
   ],
   "b27f46ebffcf": [
     "src/addons/dictionary/custom-word-database.ts",
-    "src/addons/dictionary/custom-word-storage.ts",
-    "src/addons/dictionary/custom-words.ts"
+    "src/addons/dictionary/custom-word-storage.ts"
   ],
   "020405ad0651": [
     "src/addons/documentation/hibi-addon.json"

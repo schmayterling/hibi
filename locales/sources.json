@@ -1940,6 +1940,9 @@
   "a9ccbf1ab39f": [
     "src/shared/addon-manifest.ts"
   ],
+  "464c4ffd019e": [
+    "src/main/index.ts"
+  ],
   "ed4b5895642d": [
     "src/addons/mermaid/Block.tsx"
   ],
@@ -4568,6 +4571,7 @@
     "src/renderer/src/RecoveryScreen.tsx"
   ],
   "74273989b096": [
+    "src/main/index.ts",
     "src/renderer/src/FormattingToolbar.tsx"
   ],
   "9c241dc5ee9d": [
@@ -5384,6 +5388,9 @@
   ],
   "55260a7157b3": [
     "src/renderer/src/AddonInstallChooser.tsx"
+  ],
+  "3565fcc6c17d": [
+    "src/main/index.ts"
   ],
   "c75049813154": [
     "src/renderer/src/Introduction.tsx",
@@ -6859,6 +6866,7 @@
     "src/addons/ui-preview/index.tsx"
   ],
   "a8283ade3185": [
+    "src/main/index.ts",
     "src/renderer/src/FormattingToolbar.tsx"
   ],
   "fe199528850a": [

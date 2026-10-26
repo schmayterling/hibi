@@ -32,6 +32,7 @@ import {
   startsInWindow,
 } from '../../shared/addon-dependencies'
 import type { AddonHotkeyRegistration } from '../../shared/addon-hotkeys'
+import type { DocumentState } from '../../shared/desktop'
 import {
   documentExtension,
   isMarkdownDocument,
@@ -83,6 +84,7 @@ import { markdownSyntax } from './markdown-syntax'
 import { registrationBatch } from './registration-batch'
 import { settingsPages } from './settings-pages'
 import { siteContributions } from './site-contributions'
+import { availableSlashCommands } from './slash-availability'
 import { toolbar } from './toolbar'
 import { viewNotifications } from './view-notifications'
 import {
@@ -185,7 +187,8 @@ type Environment = Omit<
   updateMarkdown: AddonContext['editor']['updateMarkdown']
   runCommand: AddonContext['editor']['runCommand']
   runAction: AddonApp['runAction']
-  getMarkdown: () => string
+  /** The note slash commands act on, read in parts by their checks. */
+  getEditorDocument: () => Readonly<DocumentState> | null
   openSidebar: (id: string, input?: unknown, side?: 'left' | 'right') => void
   closeSidebar: (side: 'left' | 'right') => void
   openTab: () => void
@@ -1881,11 +1884,9 @@ export function useAddons(
               execute: (command) => live(() => executeCommand(id, command)),
               getSlashCommands() {
                 if (disposed) return []
-                const source = latest.current.getMarkdown()
-                return [...registered.values()].flatMap(({ id, slash }) =>
-                  slash && (!slash.when || slash.when(source))
-                    ? [{ ...slash, id }]
-                    : [],
+                return availableSlashCommands(
+                  registered.values(),
+                  latest.current.getEditorDocument(),
                 )
               },
               register(command) {
@@ -1913,6 +1914,18 @@ export function useAddons(
                     return false
                   }
                 }
+                /** A slash check: false once the command stops, and on errors, which it reports. */
+                const check =
+                  <T>(predicate: (input: T) => boolean) =>
+                  (input: T) => {
+                    if (!active || disposed) return false
+                    try {
+                      return predicate(input)
+                    } catch (error) {
+                      latest.current.error(error)
+                      return false
+                    }
+                  }
                 const entry: RegisteredCommand = {
                   ...command,
                   id: key,
@@ -1922,15 +1935,12 @@ export function useAddons(
                     ? {
                         slash: {
                           ...command.slash,
-                          when(source) {
-                            if (!active || disposed) return false
-                            try {
-                              return command.slash?.when?.(source) ?? true
-                            } catch (error) {
-                              latest.current.error(error)
-                              return false
-                            }
-                          },
+                          ...(command.slash.when && {
+                            when: check(command.slash.when),
+                          }),
+                          ...(command.slash.available && {
+                            available: check(command.slash.available),
+                          }),
                           transform(source) {
                             if (!active || disposed) return null
                             try {

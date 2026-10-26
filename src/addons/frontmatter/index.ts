@@ -2,7 +2,7 @@ import { lazy } from 'react'
 import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { defineAddon } from '../api'
 import manifest from './manifest'
-import { addFrontmatter, parseFrontmatter } from './markdown'
+import { addFrontmatter, hasFrontmatter, parseFrontmatter } from './markdown'
 import { Properties } from './Properties'
 
 let removeFormatted: (() => void) | undefined
@@ -32,7 +32,7 @@ export default defineAddon({
         label: 'Frontmatter',
         description: 'Add page properties',
         keywords: 'properties metadata yaml',
-        when: (source) => !parseFrontmatter(source),
+        available: (note) => !hasFrontmatter(note),
         transform: addFrontmatter,
       },
       run: () => context.editor.updateMarkdown(addFrontmatter),

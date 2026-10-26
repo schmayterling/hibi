@@ -8,6 +8,7 @@ import {
   maximumSlashQueryUnits,
   slashQuery,
 } from '../src/addons/slash-commands/commands.ts'
+import { frontmatterEnd, readFrontmatter } from '../src/shared/frontmatter.ts'
 
 async function load(file, name, bindings) {
   const source = stripTypeScriptTypes(
@@ -194,4 +195,59 @@ test('source reads only a possible slash prefix, even near the start of a long l
   ])
   assert.equal(match(`/${astral}\u{10400}`), null)
   assert.deepEqual(ranges, [])
+})
+
+test('source frontmatter checks read a 50 mib note only up to the closing line', async () => {
+  const current = await load('source', 'current', {
+    EditorView: { editable: Symbol('editable') },
+    syntaxTree: () => ({ resolveInner: () => null }),
+    slashQuery,
+    maximumSlashQueryUnits,
+    frontmatterEnd,
+    readFrontmatter,
+  })
+  const body = 'ordinary words in a paragraph\n\n'.repeat(
+    Math.ceil((50 * 1024 * 1024) / 31),
+  )
+  // A slash query between `before` and `after`, and the units the check read.
+  const check = (before, after) => {
+    const text = Text.of(`${before}/h2${after}`.split('\n'))
+    let units = 0
+    const match = current({
+      hasFocus: true,
+      scrollDOM: { classList: { contains: () => false } },
+      state: {
+        readOnly: false,
+        facet: () => true,
+        selection: {
+          main: { head: before.length + 3, empty: true },
+          ranges: [{}],
+        },
+        doc: {
+          length: text.length,
+          lineAt: (pos) => text.lineAt(pos),
+          sliceString(from, to) {
+            const read = text.sliceString(from, to)
+            units += read.length
+            return read
+          },
+          toString() {
+            units += text.length
+            return text.toString()
+          },
+        },
+      },
+    })
+    return { query: match?.query ?? null, units, length: text.length }
+  }
+  const after = check('---\ntitle: Long note\n---\n\n', `\n\n${body}`)
+  assert.equal(after.query, 'h2')
+  assert.ok(after.units <= 3 * 4096, String(after.units))
+  const inside = check('---\ntitle: Long note\n', `\n---\n\n${body}`)
+  assert.equal(inside.query, null)
+  assert.ok(inside.units <= 3 * 4096, String(inside.units))
+  // A divider at the top with no closing line is read once, in pieces.
+  const divider = check('---\n\n', `\n\n${body}`)
+  assert.equal(divider.query, 'h2')
+  assert.ok(divider.units <= divider.length + 3 * 4096, String(divider.units))
 })

@@ -981,7 +981,7 @@ function App() {
       },
       focusDocument,
       isBusy: () => busyRef.current,
-      getMarkdown: () => editorDocument.get()?.markdown ?? '',
+      getEditorDocument: () => editorDocument.get(),
       runAction: (command) => runAction(command),
       runCommand: (command) => runCommand(command),
       updateMarkdown(transform, options) {

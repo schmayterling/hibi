@@ -323,6 +323,33 @@ test('large custom lists load only visible pages and keep row edits keyed', asyn
   const words = page.getByRole('region', { name: 'Custom words' })
   await words.getByRole('button', { name: 'Remove “paged00000”' }).waitFor()
   const chooser = words.getByRole('spinbutton', { name: 'Word list page' })
+  const navigation = words.getByRole('navigation', {
+    name: 'Custom word pages',
+  })
+  await navigation.scrollIntoViewIfNeeded()
+  for (const colorScheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme })
+    const layout = await navigation.evaluate((nav) => ({
+      centers: [...nav.children].map((item) => {
+        const rect = item.getBoundingClientRect()
+        return rect.y + rect.height / 2
+      }),
+      inputWidth: nav.querySelector('input').getBoundingClientRect().width,
+      counterFont: getComputedStyle(nav.querySelector('.setting-description'))
+        .fontSize,
+      descriptionFont: getComputedStyle(
+        document.querySelector(
+          '[data-setting-id="dictionary-new-word"] .setting-description',
+        ),
+      ).fontSize,
+    }))
+    assert.ok(Math.max(...layout.centers) - Math.min(...layout.centers) < 1)
+    assert.ok(layout.inputWidth < 100)
+    assert.equal(layout.counterFont, layout.descriptionFont)
+    await page.screenshot({
+      path: `test-results/dictionary-pages-${colorScheme}.png`,
+    })
+  }
   await chooser.fill('2')
   const note = words.getByRole('textbox', { name: 'Note for “paged10000”' })
   await note.waitFor()

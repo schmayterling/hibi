@@ -4,7 +4,6 @@ import {
   lstat,
   mkdir,
   open,
-  readdir,
   readFile,
   realpath,
   unlink,
@@ -20,6 +19,7 @@ const damaged = () =>
   )
 const conflict = () =>
   new Error('Custom words changed in another window. Try again.')
+const duplicate = () => new Error('This word already exists in that language.')
 const invalid = () => new Error('Invalid custom words request.')
 const recovered =
   'Custom words were recovered from the older snapshot. Newer changes may remain in the quarantined database.'
@@ -133,7 +133,13 @@ export class CustomWordDatabase {
         word TEXT NOT NULL, term TEXT NOT NULL, lang TEXT NOT NULL, note TEXT,
         UNIQUE (term, lang)
       );
-      CREATE INDEX IF NOT EXISTS words_prefix ON words (lang, term);
+      CREATE INDEX IF NOT EXISTS words_prefix ON words (lang, term, length(word), id);
+      CREATE INDEX IF NOT EXISTS words_rank ON words (lang, length(word), ordinal, term, id);
+      CREATE TABLE IF NOT EXISTS legacy_base (
+        id TEXT NOT NULL, source_id TEXT, word TEXT NOT NULL,
+        term TEXT NOT NULL, lang TEXT NOT NULL, note TEXT,
+        PRIMARY KEY (term, lang)
+      );
       CREATE TABLE IF NOT EXISTS state (
         id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL,
         count INTEGER NOT NULL, legacy_revision INTEGER, notice TEXT
@@ -143,22 +149,6 @@ export class CustomWordDatabase {
         UNIQUE (term, lang)
       );
     `)
-    const columns = db.prepare('PRAGMA table_info(state)').all()
-    if (!columns.some((column) => column.name === 'count')) {
-      db.exec('BEGIN IMMEDIATE')
-      try {
-        db.exec(`
-          ALTER TABLE state ADD COLUMN count INTEGER NOT NULL DEFAULT 0;
-          ALTER TABLE state ADD COLUMN legacy_revision INTEGER DEFAULT -1;
-          ALTER TABLE state ADD COLUMN notice TEXT;
-          UPDATE state SET count = (SELECT count(*) FROM words);
-          COMMIT;
-        `)
-      } catch (error) {
-        db.exec('ROLLBACK')
-        throw error
-      }
-    }
     // Prepare the state read here so malformed schemas also enter open's recovery.
     db.prepare(
       'SELECT revision, count, legacy_revision, notice FROM state WHERE id = 1',
@@ -187,11 +177,7 @@ export class CustomWordDatabase {
       }
       const invalidHeader =
         bytesRead > 0 && header.toString('binary') !== 'SQLite format 3\u0000'
-      let notice = (await readdir(canonical)).some((name) =>
-        name.startsWith('quarantine-'),
-      )
-        ? recovered
-        : undefined
+      let notice: string | undefined
       try {
         // Reject a torn/non-SQLite header before SQLite can rewrite sidecars.
         if (invalidHeader) throw Object.assign(damaged(), { errcode: 26 })
@@ -224,26 +210,16 @@ export class CustomWordDatabase {
           'SELECT revision, legacy_revision, notice FROM state WHERE id = 1',
         )
         .get()
+      let saved: Awaited<ReturnType<typeof legacy>>
       try {
-        const saved = await legacy(profile)
-        if (!state) store.migrate(saved.words, saved.revision, notice)
-        else if (state.legacy_revision !== saved.revision)
-          store.migrate(
-            saved.words,
-            saved.revision,
-            notice ?? merged,
-            state.legacy_revision === -1,
-          )
-        else if (notice && !state.notice)
-          store.db
-            .prepare('UPDATE state SET notice = ? WHERE id = 1')
-            .run(notice)
+        saved = await legacy(profile)
       } catch {
         if (!state) throw damaged()
-        store.db
-          .prepare('UPDATE state SET notice = ? WHERE id = 1')
-          .run(notice ?? damaged().message)
+        return store
       }
+      if (!state) store.migrate(saved.words, saved.revision, notice)
+      else if (state.legacy_revision !== saved.revision)
+        store.migrate(saved.words, saved.revision, notice ?? merged)
       return store
     } catch {
       db?.close()
@@ -254,7 +230,6 @@ export class CustomWordDatabase {
     value: unknown[],
     legacyRevision: number | null = null,
     notice?: string,
-    keepExisting = false,
   ) {
     const words = customWords(value)
     // Never publish a filtered subset of a damaged legacy value.
@@ -262,13 +237,39 @@ export class CustomWordDatabase {
     this.db.exec('BEGIN IMMEDIATE')
     try {
       const state = this.db
-        .prepare('SELECT revision, count FROM state WHERE id = 1')
+        .prepare(
+          'SELECT revision, count, legacy_revision FROM state WHERE id = 1',
+        )
         .get()
+      if (state && state.legacy_revision === legacyRevision) {
+        this.db.exec('COMMIT')
+        return
+      }
+      type Base = Row & { source_id: string | null }
+      const baseRows = this.db
+        .prepare('SELECT * FROM legacy_base')
+        .all() as Base[]
+      const key = (word: { term: string; lang: string }) =>
+        JSON.stringify([word.term, word.lang])
+      const bases = new Map(baseRows.map((row) => [key(row), row]))
+      const sources = new Map<string, Base | null>()
+      const sourceCounts = new Map<string, number>()
+      for (const word of words)
+        if (word.id)
+          sourceCounts.set(word.id, (sourceCounts.get(word.id) ?? 0) + 1)
+      for (const row of baseRows) {
+        if (row.source_id)
+          sources.set(row.source_id, sources.has(row.source_id) ? null : row)
+      }
+      this.db.exec('DELETE FROM legacy_base')
+      const remember = this.db.prepare(
+        'INSERT INTO legacy_base (id, source_id, word, term, lang, note) VALUES (?, ?, ?, ?, ?, ?)',
+      )
       const insert = this.db.prepare(
         'INSERT INTO words (id, word, term, lang, note) VALUES (?, ?, ?, ?, ?)',
       )
       const update = this.db.prepare(
-        'UPDATE words SET word = ?, note = ? WHERE id = ?',
+        'UPDATE words SET word = ?, term = ?, lang = ?, note = ? WHERE id = ?',
       )
       const byKey = this.db.prepare(
         'SELECT * FROM words WHERE term = ? AND lang = ?',
@@ -277,29 +278,68 @@ export class CustomWordDatabase {
       let count = Number(state?.count ?? 0)
       for (const word of words) {
         const term = word.word.toLowerCase()
-        const match = byKey.get(term, word.lang ?? '') as Row | undefined
-        // Earlier database versions did not track the retained legacy revision.
-        if (keepExisting && match) continue
-        let id = match?.id ?? (validId(word.id) ? word.id : randomUUID())
-        if (!match && byId.get(id)) id = randomUUID()
-        if (match) update.run(word.word, noteValue(word.note ?? null), id)
-        else {
-          insert.run(
+        const lang = word.lang ?? ''
+        const note = word.note ?? null
+        const base =
+          bases.get(key({ term, lang })) ??
+          (word.id && sourceCounts.get(word.id) === 1
+            ? sources.get(word.id)
+            : undefined)
+        const current = (base ? byId.get(base.id) : byKey.get(term, lang)) as
+          | Row
+          | undefined
+        let id =
+          current?.id ?? base?.id ?? (validId(word.id) ? word.id : randomUUID())
+        if (!base && !current && byId.get(id)) id = randomUUID()
+        let expected:
+          | { word: string; lang: string; note: Row['note'] }
+          | undefined
+        if (base && current) {
+          // Only legacy deltas apply. Current wins when both sides changed a field.
+          const spelling = current.word === base.word ? word.word : current.word
+          const language = current.lang === base.lang ? lang : current.lang
+          const collision = byKey.get(spelling.toLowerCase(), language) as
+            | Row
+            | undefined
+          expected = {
+            word: collision && collision.id !== id ? current.word : spelling,
+            lang: collision && collision.id !== id ? current.lang : language,
+            note:
+              noteText(current.note) === noteText(base.note)
+                ? note
+                : current.note,
+          }
+          update.run(
+            expected.word,
+            expected.word.toLowerCase(),
+            expected.lang,
+            noteValue(expected.note),
             id,
-            word.word,
-            term,
-            word.lang ?? '',
-            noteValue(word.note ?? null),
           )
+        } else if (!base && !current) {
+          expected = { word: word.word, lang, note }
+          insert.run(id, word.word, term, lang, noteValue(note))
           count++
         }
-        const saved = byId.get(id) as Row
-        if (
-          saved.word !== word.word ||
-          saved.lang !== (word.lang ?? '') ||
-          noteText(saved.note) !== (word.note ?? null)
+        // A missing current base record was deleted in the newer build.
+        // Absence from the older snapshot never deletes a current record.
+        remember.run(
+          id,
+          word.id ?? null,
+          word.word,
+          term,
+          lang,
+          noteValue(note),
         )
-          throw damaged()
+        if (expected) {
+          const saved = byId.get(id) as Row
+          if (
+            saved.word !== expected.word ||
+            saved.lang !== expected.lang ||
+            noteText(saved.note) !== noteText(expected.note)
+          )
+            throw damaged()
+        }
       }
       this.db
         .prepare(`
@@ -453,27 +493,54 @@ export class CustomWordDatabase {
       ? points.join('') + String.fromCodePoint(next === 0xd800 ? 0xe000 : next)
       : null
     try {
-      // SQLite ranks the entire indexed range before returning bounded candidates.
-      // Use its character count for both rankings; notes load only for winners.
-      const query = this.db.prepare(
+      const compare = (
+        a: Record<string, unknown>,
+        b: Record<string, unknown>,
+      ) =>
+        Number(a.length) - Number(b.length) ||
+        Number(a.ordinal) - Number(b.ordinal)
+      const range = this.db.prepare(
         upper === null
-          ? 'SELECT ordinal, id, length(word) AS length FROM words WHERE lang = ? AND term > ? ORDER BY length(word), ordinal LIMIT ?'
-          : 'SELECT ordinal, id, length(word) AS length FROM words WHERE lang = ? AND term > ? AND term < ? ORDER BY length(word), ordinal LIMIT ?',
+          ? 'SELECT ordinal, id, length(word) AS length FROM words INDEXED BY words_prefix WHERE lang = ? AND term > ?'
+          : 'SELECT ordinal, id, length(word) AS length FROM words INDEXED BY words_prefix WHERE lang = ? AND term > ? AND term < ?',
+      )
+      const rank = this.db.prepare(
+        'SELECT ordinal, id, term, length(word) AS length FROM words INDEXED BY words_rank WHERE lang = ? ORDER BY length(word), ordinal',
       )
       const best = [...new Set(['', ...langs])]
-        .flatMap((lang) =>
-          query.all(
+        .flatMap((lang) => {
+          // Race sparse prefix ranges against dense ranked matches. Neither
+          // stream sorts the range; only the bounded candidate list is ranked.
+          const matches = range.iterate(
             lang,
             term,
             ...(upper === null ? [] : [upper]),
-            Number(limit),
-          ),
-        )
-        .sort(
-          (a, b) =>
-            Number(a.length) - Number(b.length) ||
-            Number(a.ordinal) - Number(b.ordinal),
-        )
+          )
+          const ranked = rank.iterate(lang)
+          const candidates: ReturnType<typeof range.all> = []
+          const winners: ReturnType<typeof rank.all> = []
+          try {
+            for (;;) {
+              const match = matches.next()
+              if (match.done) return candidates
+              candidates.push(match.value)
+              candidates.sort(compare)
+              if (candidates.length > Number(limit)) candidates.pop()
+              const row = ranked.next()
+              if (row.done) return candidates
+              if (
+                String(row.value.term) !== term &&
+                String(row.value.term).startsWith(term)
+              )
+                winners.push(row.value)
+              if (winners.length === Number(limit)) return winners
+            }
+          } finally {
+            matches.return?.()
+            ranked.return?.()
+          }
+        })
+        .sort(compare)
         .slice(0, Number(limit))
       const find = this.db.prepare('SELECT * FROM words WHERE id = ?')
       return best.map((row) => entry(find.get(String(row.id)) as Row))
@@ -492,6 +559,14 @@ export class CustomWordDatabase {
       keepNote = false,
       first = false,
     } = request(input)
+    if (type === 'dismissNotice') {
+      try {
+        this.db.prepare('UPDATE state SET notice = NULL WHERE id = 1').run()
+        return this.metadata()
+      } catch (error) {
+        throw friendly(error)
+      }
+    }
     if (type === 'begin') {
       this.clear()
       if (revision !== this.revision()) throw conflict()
@@ -556,8 +631,8 @@ export class CustomWordDatabase {
               | Row
               | undefined
             // OR REPLACE must never evict a different word's normalized key.
-            if ((match && match.id !== id) || (merge && !match && prior?.word))
-              throw conflict()
+            if (match && match.id !== id) throw duplicate()
+            if (merge && !match && prior?.word) throw conflict()
             const ordinal = prior?.ordinal ?? match?.ordinal ?? ++this.ordinal
             const note =
               merge && keepNote && request(item).note === undefined

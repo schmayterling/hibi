@@ -204,7 +204,7 @@ test('merge retains ids and ordinal, last duplicate wins, add keeps absent note,
   assert.equal(store.lookup({ term: 'supplied', lang: '' })[0].id, 'supplied')
   assert.throws(
     () => save(store, [{ id: 'supplied', word: 'new' }]),
-    /changed in another window|Invalid custom words/,
+    /This word already exists in that language/,
   )
   assert.equal(store.get({ id: 'supplied' }).word.word, 'supplied')
   assert.equal(store.metadata().count, 3)
@@ -300,33 +300,6 @@ test('first merge streams across batches with cumulative unique counts and commi
     note: 'first',
   })
   assert.equal(all(store)[1].word, 'beta')
-})
-
-test('old state schema upgrades once without replacing newer keyed data from untracked legacy', async (t) => {
-  const ctx = await fixture(t, [
-    { id: 'a', word: 'alpha', note: 'legacy' },
-    { id: 'b', word: 'beta' },
-  ])
-  await mkdir(join(ctx.profile, 'dictionary-custom-words'), { recursive: true })
-  const raw = new DatabaseSync(ctx.path)
-  raw.exec(`
-    CREATE TABLE words (
-      ordinal INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE,
-      word TEXT NOT NULL, term TEXT NOT NULL, lang TEXT NOT NULL, note TEXT,
-      UNIQUE (term, lang)
-    );
-    CREATE TABLE state (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL);
-    INSERT INTO state VALUES (1, 7);
-    INSERT INTO words VALUES (1, 'a', 'alpha', 'alpha', '', 'newer');
-  `)
-  raw.close()
-  let store = await ctx.open()
-  assert.equal(store.metadata().count, 2)
-  assert.equal(store.get({ id: 'a' }).word.note, 'newer')
-  store.close()
-  store = await ctx.open()
-  assert.equal(store.metadata().count, 2)
-  assert.equal(store.metadata().revision, 8)
 })
 
 test('failed commit rolls back and clears token; close discards staging', async (t) => {
@@ -496,6 +469,18 @@ test('malformed database is quarantined with bytes and sidecars preserved; warni
   store.close()
   store = await ctx.open()
   assert.ok(store.metadata().notice)
+  const revision = store.revision()
+  assert.deepEqual(store.change({ type: 'dismissNotice' }), {
+    revision,
+    count: 1,
+  })
+  store.close()
+  store = await ctx.open()
+  assert.equal(
+    store.metadata().notice,
+    undefined,
+    'quarantine does not recreate dismissed notice',
+  )
 })
 
 test('invalid legacy never publishes a filtered migration; valid database survives invalid legacy', async (t) => {
@@ -509,7 +494,7 @@ test('invalid legacy never publishes a filtered migration; valid database surviv
   const reopened = await ctx.open()
   assert.equal(reopened.metadata().count, 1)
   assert.equal(reopened.page({}).words[0].word, 'valid')
-  assert.ok(reopened.metadata().notice)
+  assert.equal(reopened.metadata().notice, undefined)
 })
 
 test('symlinked database, sidecars and legacy path are refused without following links', async (t) => {
@@ -611,4 +596,344 @@ test('interrupted commit rolls back on reopen without losing original words or r
   assert.equal(store.get({ id: 'a' }).word.note, 'original')
   save(store, [{ id: 'a', word: 'alpha', note: 'recovered' }])
   assert.equal(store.get({ id: 'a' }).word.note, 'recovered')
+})
+
+test('legacy three-way merge preserves newer fields and deletions across re-upgrades', async (t) => {
+  const old = [
+    { id: 'z', word: 'zorp', note: 'old note' },
+    { id: 'k', word: 'kilig' },
+    { id: 'd', word: 'deleteme' },
+    { id: 'independent', word: 'mixed', note: 'base' },
+    { id: 'language', word: 'language', lang: 'en', note: 'base' },
+  ]
+  const ctx = await fixture(t, old)
+  let store = await ctx.open()
+  save(
+    store,
+    [
+      { id: 'z', word: 'Zorp', note: 'NEWER note' },
+      { id: 'independent', word: 'Mixed', note: 'base' },
+      { id: 'language', word: 'language', lang: 'de', note: 'base' },
+    ],
+    ['d'],
+  )
+  store.close()
+  await ctx.legacy(
+    [
+      ...old.slice(0, 3),
+      { id: 'independent', word: 'mixed', note: 'legacy\u0000delta' },
+      { id: 'language', word: 'language', lang: 'fr', note: 'legacy note' },
+      { id: 'o', word: 'oldbuild' },
+    ],
+    5,
+  )
+  store = await ctx.open()
+  assert.deepEqual(
+    store.get({ id: 'z' }).word,
+    {
+      id: 'z',
+      word: 'Zorp',
+      note: 'NEWER note',
+    },
+    'reviewer probe: unchanged legacy fields cannot overwrite newer edits',
+  )
+  assert.equal(store.get({ id: 'd' }).word, null)
+  assert.deepEqual(store.get({ id: 'independent' }).word, {
+    id: 'independent',
+    word: 'Mixed',
+    note: 'legacy\u0000delta',
+  })
+  assert.deepEqual(store.get({ id: 'language' }).word, {
+    id: 'language',
+    word: 'language',
+    lang: 'de',
+    note: 'legacy note',
+  })
+  assert.equal(store.get({ id: 'o' }).word.word, 'oldbuild')
+  store.close()
+  await ctx.legacy(
+    [
+      { id: 'z', word: 'ZORP', note: 'legacy conflicting note' },
+      { id: 'd', word: 'DELETEME', note: 'still deleted' },
+      { id: 'independent', word: 'mixed', note: 'second delta' },
+    ],
+    6,
+  )
+  store = await ctx.open()
+  assert.equal(store.get({ id: 'z' }).word.word, 'Zorp')
+  assert.equal(store.get({ id: 'z' }).word.note, 'NEWER note')
+  assert.equal(store.get({ id: 'd' }).word, null)
+  assert.equal(
+    store.get({ id: 'k' }).word.word,
+    'kilig',
+    'legacy absence never implies deletion',
+  )
+  assert.equal(store.get({ id: 'independent' }).word.note, 'second delta')
+  const revision = store.revision()
+  store.close()
+  store = await ctx.open()
+  assert.equal(store.revision(), revision)
+})
+
+test('legacy merge preserves current key collisions and does not alias reused legacy ids', async (t) => {
+  const ctx = await fixture(t, [
+    { id: 'a', word: 'alpha', lang: 'en', note: 'base' },
+  ])
+  let store = await ctx.open()
+  save(store, [{ id: 'b', word: 'alpha', lang: 'de', note: 'newer' }])
+  store.close()
+  await ctx.legacy([{ id: 'a', word: 'alpha', lang: 'de', note: 'legacy' }], 5)
+  store = await ctx.open()
+  assert.deepEqual(store.get({ id: 'a' }).word, {
+    id: 'a',
+    word: 'alpha',
+    lang: 'en',
+    note: 'legacy',
+  })
+  assert.equal(store.get({ id: 'b' }).word.note, 'newer')
+  store.close()
+  await ctx.legacy(
+    [
+      { id: 'a', word: 'alpha', lang: 'de', note: 'next' },
+      { id: 'a', word: 'different' },
+    ],
+    6,
+  )
+  store = await ctx.open()
+  assert.equal(store.metadata().count, 3)
+  assert.equal(store.get({ id: 'a' }).word.note, 'next')
+  assert.equal(store.lookup({ term: 'different', lang: '' }).length, 1)
+  assert.notEqual(store.lookup({ term: 'different', lang: '' })[0].id, 'a')
+})
+
+test('notice dismissal persists without a token, revision change or discarded staging', async (t) => {
+  const ctx = await fixture(t, [{ id: 'a', word: 'alpha' }])
+  let store = await ctx.open()
+  store.close()
+  await ctx.legacy(
+    [
+      { id: 'a', word: 'alpha' },
+      { id: 'b', word: 'beta' },
+    ],
+    5,
+  )
+  store = await ctx.open()
+  assert.ok(store.metadata().notice)
+  const before = store.metadata()
+  const { token } = store.change({ type: 'begin', revision: before.revision })
+  store.change({
+    type: 'stage',
+    token,
+    upsert: [{ id: 'c', word: 'gamma' }],
+    remove: [],
+  })
+  assert.deepEqual(store.change({ type: 'dismissNotice' }), {
+    revision: before.revision,
+    count: before.count,
+  })
+  store.change({ type: 'commit', token })
+  store.close()
+  store = await ctx.open()
+  assert.equal(store.metadata().notice, undefined)
+  assert.equal(store.get({ id: 'c' }).word.word, 'gamma')
+  store.close()
+  await writeFile(ctx.file, '{broken')
+  store = await ctx.open()
+  assert.equal(
+    store.metadata().notice,
+    undefined,
+    'unreadable legacy does not stamp healthy store',
+  )
+})
+
+test('duplicate language/key has its own error and leaves both records intact', async (t) => {
+  const ctx = await fixture(t, [
+    { id: 'en', word: 'same', lang: 'en' },
+    { id: 'de', word: 'same', lang: 'de' },
+  ])
+  const store = await ctx.open()
+  assert.throws(() => save(store, [{ id: 'en', word: 'same', lang: 'de' }]), {
+    message: 'This word already exists in that language.',
+  })
+  assert.deepEqual(
+    all(store).map(({ lang }) => lang),
+    ['en', 'de'],
+  )
+})
+
+test('completion races covering indexes with bounded visits at one million words', async (t) => {
+  const ctx = await fixture(t)
+  const store = await ctx.open()
+  const raw = new DatabaseSync(ctx.path)
+  t.after(() => raw.close())
+  raw.exec(`
+    BEGIN;
+    WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < 999999)
+    INSERT INTO words (id, word, term, lang)
+    SELECT 'id' || i, 'a' || printf('%07d', i), 'a' || printf('%07d', i), '' FROM n;
+    UPDATE state SET count = 1000000 WHERE id = 1;
+    COMMIT;
+  `)
+  let visits = 0
+  let openIterators = 0
+  const plans = []
+  const prepare = DatabaseSync.prototype.prepare
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql) {
+    const statement = prepare.call(this, sql)
+    if (!/SELECT ordinal, id,/.test(sql)) return statement
+    plans.push(
+      ...prepare
+        .call(this, `EXPLAIN QUERY PLAN ${sql}`)
+        .all('', ...(/term >/.test(sql) ? ['a', 'b'] : [])),
+    )
+    const iterate = statement.iterate.bind(statement)
+    statement.iterate = function* (...args) {
+      openIterators++
+      try {
+        for (const row of iterate(...args)) {
+          visits++
+          yield row
+        }
+      } finally {
+        openIterators--
+      }
+    }
+    return statement
+  })
+  const start = performance.now()
+  assert.deepEqual(
+    store.complete({ prefix: 'a', langs: [], limit: 5 }).map(({ id }) => id),
+    ['id0', 'id1', 'id2', 'id3', 'id4'],
+  )
+  t.diagnostic(
+    `1m broad-prefix completion: ${visits} indexed row visits, ${(performance.now() - start).toFixed(2)} ms`,
+  )
+  assert.equal(visits, 10)
+  assert.equal(openIterators, 0)
+  assert.ok(
+    plans.some(({ detail }) => detail.includes('COVERING INDEX words_prefix')),
+  )
+  assert.ok(
+    plans.some(({ detail }) => detail.includes('COVERING INDEX words_rank')),
+  )
+  assert.ok(plans.every(({ detail }) => !detail.includes('TEMP B-TREE')))
+  visits = 0
+  assert.deepEqual(
+    store
+      .complete({ prefix: 'a099999', langs: [], limit: 5 })
+      .map(({ id }) => id),
+    ['id999990', 'id999991', 'id999992', 'id999993', 'id999994'],
+  )
+  assert.equal(
+    visits,
+    20,
+    'sparse prefix finishes without scanning rank index to its tail',
+  )
+  assert.equal(openIterators, 0)
+  visits = 0
+  assert.deepEqual(
+    store.complete({ prefix: 'missing', langs: [], limit: 5 }),
+    [],
+  )
+  assert.equal(visits, 0)
+})
+
+test('completion keeps codepoint boundaries and exact exclusion in the ranked path', async (t) => {
+  const words = [
+    { id: 'exact', word: '\u{10FFFF}' },
+    ...Array.from({ length: 80 }, (_, i) => ({
+      id: `max${i}`,
+      word: `\u{10FFFF}${i}`,
+    })),
+    { id: 'wrong', word: '\uE000wrong' },
+    { id: 'nested', word: `a\u{10FFFF}x` },
+  ]
+  const ctx = await fixture(t, words)
+  const store = await ctx.open()
+  assert.deepEqual(
+    store
+      .complete({ prefix: '\u{10FFFF}', langs: [], limit: 3 })
+      .map(({ id }) => id),
+    ['max0', 'max1', 'max2'],
+  )
+  assert.deepEqual(
+    store
+      .complete({ prefix: `a\u{10FFFF}`, langs: [], limit: 3 })
+      .map(({ id }) => id),
+    ['nested'],
+  )
+})
+
+test('killed legacy merge rolls back words, durable base and legacy revision together', async (t) => {
+  const old = [{ id: 'a', word: 'alpha', note: 'base' }]
+  const ctx = await fixture(t, old)
+  const first = await ctx.open()
+  save(first, [{ id: 'new', word: 'newer only' }])
+  first.close()
+  await ctx.legacy([{ id: 'a', word: 'ALPHA', note: 'legacy\u0000delta' }], 5)
+  const worker = new Worker(
+    `
+    const { parentPort, workerData } = require('node:worker_threads')
+    const { DatabaseSync } = require('node:sqlite')
+    const prepare = DatabaseSync.prototype.prepare
+    DatabaseSync.prototype.prepare = function(sql) {
+      const statement = prepare.call(this, sql)
+      if (sql.startsWith('INSERT INTO legacy_base')) {
+        const run = statement.run.bind(statement)
+        statement.run = (...args) => {
+          const result = run(...args)
+          parentPort.postMessage('base-held')
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0)
+          return result
+        }
+      }
+      return statement
+    }
+    import(workerData.module).then(({ CustomWordDatabase }) => CustomWordDatabase.open(workerData.profile))
+  `,
+    {
+      eval: true,
+      workerData: {
+        profile: ctx.profile,
+        module: new URL(
+          '../src/addons/dictionary/custom-word-database.ts',
+          import.meta.url,
+        ).href,
+      },
+    },
+  )
+  ctx.workers.push(worker)
+  await new Promise((resolve, reject) => {
+    worker.once('message', resolve)
+    worker.once('error', reject)
+    worker.once('exit', (code) =>
+      reject(new Error(`worker exited early: ${code}`)),
+    )
+  })
+  await worker.terminate()
+  const raw = new DatabaseSync(ctx.path)
+  try {
+    assert.equal(
+      raw.prepare('SELECT legacy_revision FROM state').get().legacy_revision,
+      4,
+    )
+    assert.equal(
+      raw.prepare('SELECT word FROM legacy_base').get().word,
+      'alpha',
+    )
+    assert.equal(
+      raw.prepare("SELECT word FROM words WHERE id = 'a'").get().word,
+      'alpha',
+    )
+  } finally {
+    raw.close()
+  }
+  let store = await ctx.open()
+  assert.equal(store.get({ id: 'a' }).word.word, 'ALPHA')
+  assert.equal(store.get({ id: 'a' }).word.note, 'legacy\u0000delta')
+  assert.equal(store.get({ id: 'new' }).word.word, 'newer only')
+  const revision = store.revision()
+  store.close()
+  store = await ctx.open()
+  assert.equal(store.revision(), revision)
 })

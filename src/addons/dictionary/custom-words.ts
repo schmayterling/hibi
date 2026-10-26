@@ -50,9 +50,7 @@ let wordNative: AddonContext['native'] | null = null
 let opening = 0
 let failure = ''
 let byTerm = new Map<string, CustomWord[]>()
-export const customWordsFailure = () =>
-  failure ||
-  (handle instanceof IndexedCustomWords ? (handle.snapshot().notice ?? '') : '')
+export const customWordsFailure = () => failure
 let fileIo: HostSelectedIoHostApi | null = null
 let revision = 0
 const listeners = new Set<() => void>()
@@ -119,7 +117,7 @@ export function customWordsFileIo() {
 /** Loads the saved words and follows changes made in other windows. */
 export async function openCustomWords(
   context: AddonContext,
-  storage?: CustomWordStorage,
+  storage?: CustomWordStorage | IndexedCustomWords,
 ) {
   const captured = ++opening
   if (handle) {

@@ -357,7 +357,7 @@ test('corrupt legacy values fail visibly without publishing a partial migration'
   assert.deepEqual(all(store), [])
 })
 
-test('a viewport discards old pages when another window commits between reads', async (t) => {
+test('a viewport keeps mounted rows until the new revision replaces them', async (t) => {
   let metadataCalls = 0,
     pages = 0
   const handle = await openCustomWordStorage({
@@ -391,9 +391,18 @@ test('a viewport discards old pages when another window commits between reads', 
   t.after(() => handle.close())
   await handle.ensure([{ from: 0, to: 300 }])
   assert.equal(handle.snapshot().revision, 2)
-  assert.equal(handle.at(0), undefined)
+  assert.deepEqual(
+    handle.at(0),
+    { id: 'old', word: 'old' },
+    'mounted rows keep their Tab position while loading',
+  )
   await handle.ensure([{ from: 0, to: 1 }])
   assert.deepEqual(handle.at(0), { id: 'new', word: 'new' })
+  assert.equal(
+    pages,
+    3,
+    'stale rows must be replaced, never mistaken for a fresh cache',
+  )
 })
 
 test('abandoned changes roll back, revision conflicts refresh, and other windows follow commits', async (t) => {
@@ -507,4 +516,55 @@ test('a late commit reply never replaces a newer profile revision', async (t) =>
   assert.equal(handle.snapshot().revision, 3)
   await handle.ensure([{ from: 0, to: 1 }])
   assert.equal(handle.at(0).note, 'newer')
+})
+
+test('duplicate language changes show their own message and leave both words intact', async (t) => {
+  const ctx = await fixture(t, [
+    { id: 'a', word: 'zorp' },
+    { id: 'b', word: 'zorp', lang: 'en', note: 'kept' },
+  ])
+  const store = await ctx.open()
+  const handle = await openCustomWordStorage(native(store))
+  ctx.own(() => handle.close())
+  const close = await openCustomWords({ host: { selectedIo: {} } }, handle)
+  ctx.own(close)
+  await assert.rejects(
+    editCustomWord({ id: 'a', word: 'zorp' }, (word) => ({
+      ...word,
+      lang: 'en',
+    })),
+    /This word already exists in that language\./,
+  )
+  assert.deepEqual(all(store), [
+    { id: 'a', word: 'zorp' },
+    { id: 'b', word: 'zorp', lang: 'en', note: 'kept' },
+  ])
+})
+
+test('dismissed notices refresh other indexed clients without reading word pages', async (t) => {
+  const ctx = await fixture(t)
+  const store = await ctx.open()
+  const db = new DatabaseSync(
+    join(ctx.profile, 'dictionary-custom-words', 'words.sqlite'),
+  )
+  try {
+    db.prepare('UPDATE state SET notice = ? WHERE id = 1').run(
+      'Recovered words.',
+    )
+  } finally {
+    db.close()
+  }
+  const calls = []
+  const first = await openCustomWordStorage(native(store, calls))
+  const second = await openCustomWordStorage(native(store))
+  ctx.own(() => first.close())
+  ctx.own(() => second.close())
+  assert.equal(first.snapshot().notice, 'Recovered words.')
+  await first.dismissNotice()
+  await waitForAsync(
+    { evaluate: (check) => check() },
+    () => second.snapshot().notice === undefined,
+  )
+  assert.equal(first.snapshot().notice, undefined)
+  assert.equal(calls.filter(({ method }) => method === 'customWords').length, 0)
 })

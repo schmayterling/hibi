@@ -106,14 +106,12 @@ function rowAt(count: number, edge: (index: number) => number, offset: number) {
  * rows still while new rows are measured.
  */
 function WordList({
-  words,
   paged,
   revision,
   version,
   row,
 }: {
-  words: readonly CustomWord[]
-  paged?: IndexedCustomWords
+  paged: IndexedCustomWords
   revision: number
   version: number
   row: (item: CustomWord) => ReactNode
@@ -127,7 +125,7 @@ function WordList({
   const [focused, setFocused] = useState<string>()
   // Browser scroll heights are finite; every window remains reachable by page.
   const [selectedPage, setPage] = useState(0)
-  const total = paged?.snapshot().count ?? words.length
+  const total = paged.snapshot().count
   const pages = Math.max(1, Math.ceil(total / 10000))
   const page = Math.min(selectedPage, pages - 1)
   const base = page * 10000
@@ -140,15 +138,13 @@ function WordList({
     setRange({ from: 0, to: 0 })
     frame.current?.scrollIntoView({ block: 'start' })
   }, [page])
-  const get = (index: number) =>
-    paged ? paged.at(base + index) : words[base + index]
+  const get = (index: number) => paged.at(base + index)
   // A native cache version changes only when its loaded rows change.
   // biome-ignore lint/correctness/useExhaustiveDependencies: version invalidates the bounded native index.
-  const position = useMemo(() => {
-    if (paged) return (id: string | undefined) => paged.indexOf(id)
-    const indices = new Map(words.map((word, index) => [word.id, index]))
-    return (id: string | undefined) => indices.get(id)
-  }, [words, paged, version])
+  const position = useMemo(
+    () => (id: string | undefined) => paged.indexOf(id),
+    [paged, version],
+  )
   // Prefix sums contain measured rows only, never one entry for every saved word.
   // biome-ignore lint/correctness/useExhaustiveDependencies: measured invalidates the height map.
   const edge = useMemo(() => {
@@ -228,7 +224,6 @@ function WordList({
     for (const id of heights.current.keys())
       if (position(id) === undefined) heights.current.delete(id)
   }, [position])
-  const committed = useRef(words)
   const previousFocus = useRef<{ id: string; index: number } | undefined>(
     undefined,
   )
@@ -237,30 +232,21 @@ function WordList({
     found === undefined || found < base || found >= base + count
       ? undefined
       : found - base
-  if (at === undefined && focused !== undefined && count) {
-    if (paged && previousFocus.current?.id === focused)
-      at = Math.max(0, Math.min(previousFocus.current.index - base, count - 1))
-    else {
-      const before = committed.current
-      const index = before.findIndex((item) => item.id === focused)
-      if (index >= 0)
-        at = Math.min(
-          before
-            .slice(0, index)
-            .filter((item) => position(item.id) !== undefined).length,
-          count - 1,
-        )
-    }
-  }
+  if (
+    at === undefined &&
+    focused !== undefined &&
+    count &&
+    previousFocus.current?.id === focused
+  )
+    at = Math.max(0, Math.min(previousFocus.current.index - base, count - 1))
   const anchor = at === undefined ? undefined : (get(at)?.id ?? focused)
   useLayoutEffect(() => {
-    committed.current = words
     if (anchor && at !== undefined)
       previousFocus.current = { id: anchor, index: base + at }
     if (anchor !== focused) setFocused(anchor)
   })
   useEffect(() => {
-    if (!paged || paged.snapshot().revision !== revision) return
+    if (paged.snapshot().revision !== revision) return
     const ranges = [{ from: base + range.from, to: base + range.to }]
     if (at !== undefined)
       ranges.push({
@@ -292,12 +278,13 @@ function WordList({
   return (
     <>
       {pages > 1 && (
-        <nav
-          className="workspace-setting-actions"
-          aria-label="Custom word pages"
-        >
-          <Button disabled={!page} onClick={() => setPage(page - 1)}>
-            Previous words
+        <nav className="dictionary-word-pages" aria-label="Custom word pages">
+          <Button
+            aria-label="Previous words"
+            disabled={!page}
+            onClick={() => setPage(page - 1)}
+          >
+            Previous
           </Button>
           <TextInput
             type="number"
@@ -317,12 +304,13 @@ function WordList({
               )
             }
           />
-          <span>{`Page ${page + 1} of ${pages}`}</span>
+          <span className="setting-description">{`Page ${page + 1} of ${pages}`}</span>
           <Button
+            aria-label="Next words"
             disabled={page + 1 === pages}
             onClick={() => setPage(page + 1)}
           >
-            Next words
+            Next
           </Button>
         </nav>
       )}
@@ -376,7 +364,7 @@ export function CustomWords() {
   // Hidden discovery and search still register this section's setting rows.
   const visible = useContext(SettingsPageVisible)
   const view = useSyncExternalStore(onCustomWordsChanged, customWordsView)
-  const { words, indexed, count } = view
+  const { indexed, count } = view
   // Typed notes outlive hidden pages and offscreen rows; only a save clears them.
   const [drafts, setDrafts] = useState<Drafts>(() => new Map())
   const saving = useRef(new Map<string | undefined, number>())
@@ -411,15 +399,7 @@ export function CustomWords() {
         active = false
       }
     }
-    const live = new Set(words.map((item) => item.id))
-    for (const id of saving.current.keys())
-      if (!live.has(id)) saving.current.delete(id)
-    setDrafts((current) =>
-      [...current.keys()].every((id) => live.has(id))
-        ? current
-        : new Map([...current].filter(([id]) => live.has(id))),
-    )
-  }, [words, indexed, view.revision, changeDraft])
+  }, [indexed, view.revision, changeDraft])
   const [draft, setDraft] = useState('')
   const [text, setText] = useState('')
   const [message, setMessage] = useState('')
@@ -492,10 +472,9 @@ export function CustomWords() {
             </Button>
           </form>
         </SettingRow>
-        {!visible ? null : count ? (
+        {!visible ? null : count && indexed ? (
           <WordList
-            words={words}
-            paged={indexed ?? undefined}
+            paged={indexed}
             revision={view.revision}
             version={view.version}
             row={(item) => (
@@ -647,6 +626,23 @@ export function CustomWords() {
           Import from file…
         </Button>
       </div>
+      {indexed?.snapshot().notice && (
+        <div className="dictionary-word-notice">
+          <p role="status" className="setting-description">
+            {indexed.snapshot().notice}
+          </p>
+          <Button
+            variant="ghost"
+            onClick={() =>
+              void indexed
+                .dismissNotice()
+                .catch((error) => setMessage(failed(error)))
+            }
+          >
+            Dismiss
+          </Button>
+        </div>
+      )}
       {(message || customWordsFailure()) && (
         <p role="status" className="setting-description">
           {message || customWordsFailure()}

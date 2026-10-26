@@ -41,6 +41,7 @@ export class IndexedCustomWords {
     version: 0,
   }
   private rows = new Map<number, CustomWord>()
+  private loaded = new Set<number>()
   private indices = new Map<string, number>()
   private listeners = new Set<() => void>()
   private channel = new BroadcastChannel('hibi-dictionary-custom-words')
@@ -79,10 +80,19 @@ export class IndexedCustomWords {
     if (this.closed || metadata.revision < this.state.revision) return
     if (metadata.revision !== this.state.revision) {
       this.loading++
-      this.rows.clear()
-      this.indices.clear()
+      // Keep mounted rows until their replacements arrive, preserving browser Tab order.
+      this.loaded.clear()
+      for (const index of this.rows.keys())
+        if (index >= metadata.count) this.rows.delete(index)
+      this.reindex()
     }
     this.publish(metadata)
+  }
+  async dismissNotice() {
+    if (this.closed) throw unavailable()
+    await this.call('changeCustomWords', { type: 'dismissNotice' })
+    await this.refresh()
+    this.channel.postMessage(this.state.revision)
   }
   async get(id: string) {
     if (this.closed) throw unavailable()
@@ -108,8 +118,10 @@ export class IndexedCustomWords {
     for (const index of this.rows.keys())
       if (
         !ranges.some(({ from, to }) => index >= from - 256 && index < to + 256)
-      )
+      ) {
         this.rows.delete(index)
+        this.loaded.delete(index)
+      }
     this.reindex()
     try {
       for (const { from, to } of ranges) {
@@ -117,14 +129,17 @@ export class IndexedCustomWords {
           let index = Math.max(0, from);
           index < Math.min(to, this.state.count);
         ) {
-          if (this.rows.has(index)) {
+          if (this.loaded.has(index)) {
             index++
             continue
           }
           const page = await this.page({ offset: index, revision })
           if (this.closed || loading !== this.loading) return
           if (!page.words.length) break
-          for (const word of page.words) this.rows.set(index++, word)
+          for (const word of page.words) {
+            this.rows.set(index, word)
+            this.loaded.add(index++)
+          }
           this.reindex()
           this.publish()
         }
@@ -241,11 +256,18 @@ export class IndexedCustomWords {
             for (const [index, word] of this.rows)
               if (index !== removed)
                 rows.set(index > removed ? index - 1 : index, word)
+            this.loaded = new Set(
+              [...this.loaded].flatMap((index) =>
+                index === removed ? [] : [index > removed ? index - 1 : index],
+              ),
+            )
             this.rows = rows
           }
         } else if (retainRows) {
           for (const [index, word] of changedRows) this.rows.set(index, word)
         } else this.rows.clear()
+        for (const index of this.loaded)
+          if (!this.rows.has(index)) this.loaded.delete(index)
         this.reindex()
         this.publish(result)
         this.channel.postMessage(result.revision)
@@ -256,6 +278,11 @@ export class IndexedCustomWords {
         await this.refresh()
         throw new Error('Custom words changed in another window. Try again.')
       }
+      if (
+        error instanceof Error &&
+        error.message.includes('This word already exists in that language.')
+      )
+        throw new Error('This word already exists in that language.')
       if (
         error instanceof Error &&
         error.message.includes('storage request size.')
@@ -275,6 +302,7 @@ export class IndexedCustomWords {
     this.loading++
     this.channel.close()
     this.rows.clear()
+    this.loaded.clear()
     this.indices.clear()
     this.listeners.clear()
     if (this.token)

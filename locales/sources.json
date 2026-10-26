@@ -1747,6 +1747,9 @@
     "src/addons/discord-presence/rpc.ts",
     "src/renderer/src/AddonSettings.tsx"
   ],
+  "48845bff334a": [
+    "src/addons/dictionary/CustomWords.tsx"
+  ],
   "f5b084a14162": [
     "src/renderer/src/NotificationSettings.tsx"
   ],
@@ -3693,6 +3696,7 @@
     "src/addons/_shared/format-renderer.tsx"
   ],
   "1ff57a29d7c9": [
+    "src/addons/dictionary/CustomWords.tsx",
     "src/site/main.tsx"
   ],
   "825e5abd0762": [
@@ -4353,6 +4357,7 @@
     "src/addons/typst/Preview.tsx"
   ],
   "a57b08a480b8": [
+    "src/addons/dictionary/CustomWords.tsx",
     "src/site/main.tsx"
   ],
   "daa2f8c3fc89": [
@@ -6515,6 +6520,10 @@
   ],
   "c04f0fb5e9da": [
     "src/addons/ui-preview/index.tsx"
+  ],
+  "dc943d8ef9e4": [
+    "src/addons/dictionary/custom-word-database.ts",
+    "src/addons/dictionary/custom-word-storage.ts"
   ],
   "f716923c808e": [
     "src/addons/dictionary/custom-words.ts"

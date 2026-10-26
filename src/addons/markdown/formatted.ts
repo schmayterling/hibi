@@ -40,6 +40,8 @@ class EmbedWidget extends WidgetType {
     const file = this.target.split('#')[0] ?? ''
     if (!image.test(file)) {
       const link = document.createElement('a')
+      // The formatted view's link styles, which the rich view's links have.
+      link.className = 'hibi-lp-link'
       link.href = wikiHref(this.target)
       link.textContent = this.label
       dom.append(link)

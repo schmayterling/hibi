@@ -376,6 +376,131 @@ for (const hook of ['decorate', 'layout', 'container']) {
   })
 }
 
+test('installed flavor state stays current in static and editable table cells', {
+  timeout: 90000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-cell-state-'))
+  const profile = join(folder, 'profile')
+  const file = join(folder, 'note.md')
+  const source = '# Title\n\n**body**\n'
+  await writeFile(file, source)
+  await install(
+    profile,
+    'cell-state',
+    3,
+    ['formatted'],
+    `
+    export default sdk => {
+      const length = sdk.codeMirror.state.StateField.define({
+        create: state => state.doc.length,
+        update: (_, transaction) => transaction.newDoc.length
+      })
+      return { start(context) {
+        context.editor.registerFormatted({
+          id: 'field',
+          create: () => [length, sdk.codeMirror.view.EditorView.editorAttributes.of({ 'data-field-ready': 'yes' })]
+        })
+        context.editor.registerFlavor({
+          id: 'cells', name: 'Cells', kind: 'syntax', description: 'Cell state', detect: () => true,
+          render: [{
+            nodes: ['Paragraph', 'StrongEmphasis'],
+            decorate(node, out, { state, visible }) {
+              if (!window.enforceCellState) return
+              try {
+                const size = state.field(length)
+                const source = state.sliceDoc(node.from, node.to)
+                if (size !== state.doc.length) throw Error('Stale field')
+                if (node.name === 'StrongEmphasis' && !source.startsWith('**')) throw Error('Wrong source positions')
+                if (visible.from > node.from || visible.to < node.to) throw Error('Wrong visible range')
+                out.mark(node.from, node.to, { class: 'cell-state-proof', 'data-length': String(size) })
+              } catch (error) {
+                window.cellStateError = String(error)
+                throw error
+              }
+            }
+          }]
+        })
+      } }
+    }
+  `,
+  )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'cell-state': true }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  const page = await app.firstWindow()
+  await waitForDocumentEditor(app, page)
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+  }, file)
+  await pressShortcut(app, `${mod}+o`)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    source,
+  )
+  await page.locator('.rich-pane [data-field-ready="yes"]').waitFor()
+  await page.evaluate(() => {
+    window.enforceCellState = true
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({ selection: { anchor: 0 } })
+  })
+  await page.locator('.rich-pane .cell-state-proof').first().waitFor()
+  const addition = '\n| **head** |\n| --- |\n| **a\\|b** |\n'
+  await page.evaluate((text) => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({ changes: { from: view.state.doc.length, insert: text } })
+  }, addition)
+  const cell = page.locator('.rich-pane table tbody td').first()
+  await cell.locator('.cell-state-proof').first().waitFor()
+  assert.equal(await cell.textContent(), 'a|b')
+  assert.equal(await page.evaluate(() => window.cellStateError), undefined)
+  await cell.click()
+  const input = cell.locator('.cm-content')
+  await input.waitFor()
+  const before = (await page.evaluate(() => window.hibi.getDocument())).markdown
+  await input.press('End')
+  await input.type('x')
+  await waitForAsync(
+    page,
+    async (size) => (await window.hibi.getDocument()).markdown.length === size,
+    before.length + 1,
+  )
+  await cell
+    .locator(`.cell-state-proof[data-length="${before.length + 1}"]`)
+    .first()
+    .waitFor()
+  assert.equal(await page.evaluate(() => window.cellStateError), undefined)
+  await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    before,
+  )
+  await cell
+    .locator(`.cell-state-proof[data-length="${before.length}"]`)
+    .first()
+    .waitFor()
+  assert.equal(await page.evaluate(() => window.cellStateError), undefined)
+})
+
 async function install(profile, id, apiVersion, capabilities, code) {
   const folder = join(profile, 'installed-addons', id)
   await mkdir(folder, { recursive: true })

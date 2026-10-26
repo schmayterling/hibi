@@ -6,7 +6,7 @@ import {
   type Text,
 } from '@codemirror/state'
 import { type EditorView, ViewPlugin } from '@codemirror/view'
-import type { Tree } from '@lezer/common'
+import type { SyntaxNode, Tree } from '@lezer/common'
 import {
   type MarkdownConfig,
   type MarkdownParser,
@@ -38,7 +38,7 @@ export const footnoteScan = {
   slice: 1 << 20,
   /** Characters per millisecond a first idle slice assumes; later slices use the rate they measured. */
   rate: 4096,
-  /** Characters a reading window covers, doubled while one block fills it. */
+  /** Characters a reading window covers, past three more lines. */
   window: 4096,
   /** Characters parsed. */
   parsed: 0,
@@ -299,9 +299,26 @@ type Index = {
   read: number
   /** Stretches to read again: from this stretch start until blocks start where they did, at or after `to`. */
   stale: { from: number; to: number } | null
-  /** The next window's size. */
-  window: number
+  /** A stretch whose block runs past the windows read so far. */
+  pending: Pending | null
   labels: Labels
+}
+
+type Lines = readonly { from: number; to: number }[]
+/**
+ * The stretch from `from` continues at line start `at`: parsing the lines in
+ * `head`, the opening lines of the blocks open there, and then the text from
+ * `at` should recreate the blocks open there, `chain`. When it did not,
+ * `whole` reads from `from` again, twice as far each time. `labels` were
+ * defined since `from`.
+ */
+type Pending = {
+  from: number
+  at: number
+  head: Lines
+  chain: string
+  whole: boolean
+  labels: readonly string[]
 }
 
 const scanners = new WeakMap<readonly MarkdownConfig[], MarkdownParser>()
@@ -347,13 +364,58 @@ function labelsIn(
   return labels
 }
 
+/** The blocks open at line start `pos` of a tree parsed from `base`, innermost first. */
+function* openAt(tree: Tree, doc: Text, base: number, pos: number) {
+  for (
+    let node: SyntaxNode | null = tree.resolveInner(pos - base, 1);
+    node;
+    node = node.parent
+  )
+    if (
+      !node.type.isTop &&
+      node.type.is('Block') &&
+      doc.lineAt(base + node.from).from < pos
+    )
+      yield node
+}
+
+const chainAt = (tree: Tree, doc: Text, base: number, pos: number) =>
+  [...openAt(tree, doc, base, pos)].map((node) => node.name).join('/')
+
+/**
+ * The opening lines of the blocks open at line start `pos`, and the blank
+ * line before it that closed a paragraph there, in document order.
+ */
+function openingLines(tree: Tree, doc: Text, base: number, pos: number) {
+  const lines: { from: number; to: number }[] = []
+  const before = pos > 0 ? doc.lineAt(pos - 1) : null
+  if (before && /^[ \t>]*$/.test(before.text))
+    lines.push({ from: before.from, to: pos })
+  for (const node of openAt(tree, doc, base, pos)) {
+    const first = doc.lineAt(base + node.from)
+    // A table stays one with its delimiter row.
+    const count = node.name === 'Table' ? 2 : 1
+    for (let n = first.number; n < first.number + count; n++) {
+      const line = doc.line(n)
+      if (line.from >= pos) break
+      if (!lines.some((open) => open.from === line.from))
+        lines.push({ from: line.from, to: Math.min(doc.length, line.to + 1) })
+    }
+  }
+  return lines.sort((a, b) => a.from - b.from)
+}
+
 /**
  * Read for up to `budget` characters: stale stretches first, then the unread
  * rest. Blocks that start two lines before a window's end are where a
- * whole-note parse puts them, so reading continues at the last of them.
+ * whole-note parse puts them, so reading cuts at the last of them, or at the
+ * line after one that ended. A block that runs past a window goes on in the
+ * next from its last lines, after the opening lines of the blocks open there,
+ * so no text is parsed twice and lines longer than a window are the only
+ * reads longer than one.
  */
 function step(index: Index, doc: Text, budget: number): Index {
-  let { groups, read, stale, window } = index
+  let { groups, read, stale, pending } = index
   const { start } = index
   const scan = scanner(index.configs)
   const deltas = new Map<string, number>()
@@ -373,44 +435,84 @@ function step(index: Index, doc: Text, budget: number): Index {
       }
       read = doc.length
       stale = null
+      pending = null
       break
     }
-    const end = doc.lineAt(Math.min(doc.length, from + window)).to
+    const going = pending?.from === from ? pending : null
+    const replay = going && !going.whole ? going : null
+    const at = replay?.at ?? from
+    const head = replay?.head ?? []
+    const reach = going?.whole
+      ? from + Math.max(footnoteScan.window, 2 * (going.at - from))
+      : at + footnoteScan.window
+    const window = doc.lineAt(Math.min(doc.length, reach))
+    const end = doc.line(Math.min(doc.lines, window.number + 3)).to
     const last = end >= doc.length
-    footnoteScan.parsed += end - from
-    spent += end - from
-    const tree = scan.parse(new DocInput(doc), [], [{ from, to: end }])
+    const units = head.reduce(
+      (sum, line) => sum + line.to - line.from,
+      end - at,
+    )
+    footnoteScan.parsed += units
+    spent += units
+    const ranges = [...head, { from: at, to: end }]
+    // The tree's positions start at its first range.
+    const base = ranges[0]!.from
+    const tree = scan.parse(new DocInput(doc), [], ranges)
+    if (replay && chainAt(tree, doc, base, at) !== replay.chain) {
+      // The opening lines did not recreate the blocks open there.
+      pending = { ...replay, whole: true }
+      continue
+    }
     const limit = last
       ? doc.length
       : doc.line(Math.max(1, doc.lineAt(end).number - 2)).from
     let cut = last ? doc.length : -1
     let resync = false
-    // The window's tree starts at the window. Stretches start at a block's
-    // line, since indentation before it can decide what it is.
+    // Stretches start at a block's line, since indentation before it can
+    // decide what it is, or between blocks.
+    const lowest = replay ? at : from + 1
     for (
       let child = tree.topNode.firstChild;
-      child;
+      child && !resync;
       child = child.nextSibling
     ) {
-      const at = doc.lineAt(from + child.from).from
-      if (at <= from || at > limit) continue
-      if (!last) cut = at
-      // Blocks start where a stretch read before starts: the rest is as it was.
-      if (stale && at >= stale.to && at < read) {
-        if (locate(groups, start, at)?.from === at) {
-          cut = at
+      const after = doc.lineAt(base + child.to).to + 1
+      for (const point of [doc.lineAt(base + child.from).from, after]) {
+        if (point < lowest || point > limit) continue
+        if (!last) cut = point
+        // Blocks start where a stretch read before starts: the rest is as it was.
+        if (
+          stale &&
+          point >= stale.to &&
+          point < read &&
+          locate(groups, start, point)?.from === point
+        ) {
+          cut = point
           resync = true
           break
         }
       }
     }
-    if (cut <= from) {
-      // One block fills the window.
-      window *= 2
+    if (cut < 0) {
+      // The block goes on past the window.
+      pending = {
+        from,
+        at: limit,
+        head: openingLines(tree, doc, base, limit),
+        chain: chainAt(tree, doc, base, limit),
+        whole: false,
+        labels: [
+          ...(replay?.labels ?? []),
+          ...labelsIn(tree, doc, base, at, limit),
+        ],
+      }
       continue
     }
-    window = footnoteScan.window
-    const labels = labelsIn(tree, doc, from, from, cut)
+    pending = null
+    const labels = [
+      ...(replay?.labels ?? []),
+      ...labelsIn(tree, doc, base, at, cut),
+    ]
     count(labels, 1)
     if (from < read) {
       // A stretch running past the cut keeps its labels until it is read again.
@@ -448,7 +550,7 @@ function step(index: Index, doc: Text, budget: number): Index {
     groups: appended.length ? append(groups, appended) : groups,
     read,
     stale,
-    window,
+    pending,
     labels: apply(index.labels, deltas),
   }
 }
@@ -465,19 +567,21 @@ function create(state: EditorState): Index {
     groups: [],
     read: start,
     stale: null,
-    window: footnoteScan.window,
+    pending: null,
     labels: new Array(fanOut),
   }
 }
 
 /** One stretch stands for the edited text and the stretches it touched, keeping their labels until read again. */
 function edit(index: Index, state: EditorState, changes: EditorStateChanges) {
-  let { groups, read, stale } = index
+  let { groups, read, stale, pending } = index
   const { start } = index
   const doc = state.doc
   let offset = 0
   for (const { fromA, toA, fromB, toB } of changes) {
     const size = toB - fromB - (toA - fromA)
+    // A block read on past windows holds while edits come after its last read line.
+    if (pending && fromA + offset < pending.at) pending = null
     // Positions in this note's terms; later text still has the old offset.
     const from = fromA + offset,
       to = toA + offset
@@ -525,7 +629,7 @@ function edit(index: Index, state: EditorState, changes: EditorStateChanges) {
       ? { from: Math.min(stale.from, first.from), to: Math.max(stale.to, end) }
       : { from: first.from, to: end }
   }
-  return { ...index, groups, read, stale }
+  return { ...index, groups, read, stale, pending }
 }
 
 type EditorStateChanges = readonly {

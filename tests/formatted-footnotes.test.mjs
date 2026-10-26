@@ -455,6 +455,39 @@ test('labels whose hashes are equal copy one chunk of counts per change', () => 
   assert.equal(chunks.flat().length, 1022)
 })
 
+test('a long line is parsed once, and a long block in reads near the budget from where the last stopped', () => {
+  for (const [kind, body] of [
+    ['line', 'x'.repeat(1 << 20)],
+    ['fence', `~~~\n${'code line words\n'.repeat(70000)}~~~`],
+    [
+      'list',
+      Array.from(
+        { length: 30000 },
+        (_, i) => `- item ${i}\n\n  [^d${i}]: note`,
+      ).join('\n'),
+    ],
+  ]) {
+    let state = create(`read[^far]\n\n${body}\n\n[^far]: defined`)
+    footnoteScan.parsed = 0
+    const reads = []
+    while (!definitionsRead(state)) {
+      const parsed = footnoteScan.parsed
+      state = state.update({ effects: readDefinitions.of(4096) }).state
+      reads.push(footnoteScan.parsed - parsed)
+    }
+    // Before, a window that one block filled doubled and parsed it again
+    // from its start: twelve parses of the line, reads of up to the fence.
+    assert.ok(
+      footnoteScan.parsed <= state.doc.length * 1.05,
+      `${kind}: ${footnoteScan.parsed} of ${state.doc.length}`,
+    )
+    if (kind !== 'line')
+      for (const read of reads)
+        assert.ok(read <= 4096 + 3 * footnoteScan.window, `${kind}: ${read}`)
+    assert.deepEqual(indexed(state), parsed(state.doc.toString()), kind)
+  }
+})
+
 test('opening a note reads none of it; idle slices read the rest', () => {
   const slice = footnoteScan.slice
   footnoteScan.slice = 4096

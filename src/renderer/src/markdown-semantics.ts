@@ -40,6 +40,7 @@ export function createMarkdownSemantics(
           'github-markdown.github',
           'text-extras.text-extras',
           'math.latex',
+          'mermaid.blocks',
         ].includes(flavor.id),
     )
   )

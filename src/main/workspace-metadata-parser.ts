@@ -166,6 +166,8 @@ export class WorkspaceMetadataParser {
   private canonical = (value: string): string => {
     const existing = this.propertyHashes.get(value)
     if (existing !== undefined) return existing
+    // Interning is optional; old edits must not keep unused hashes alive forever.
+    if (this.propertyHashes.size >= 4096) this.propertyHashes.clear()
     this.propertyHashes.set(value, value)
     return value
   }

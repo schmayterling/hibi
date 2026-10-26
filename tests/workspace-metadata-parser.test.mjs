@@ -656,6 +656,20 @@ test('main parser canonicalizes repeated property hashes and clears its pool on 
   assert.equal(parser.propertyHashes.size, 0)
 })
 
+test('property hash interning stays bounded across obsolete edit values without dropping fields', async () => {
+  const parser = new WorkspaceMetadataParser(() => ({ entry }))
+  const key = 'a'.repeat(64)
+  for (let edit = 0; edit < 8192; edit++) {
+    const value = createHash('sha256').update(String(edit)).digest('hex')
+    const reader = new RecordReader(parser.canonical)
+    reader.write([...recordTokens({ values: { [key]: [value] } })])
+    assert.deepEqual(reader.finish(), { values: { [key]: [value] } })
+  }
+  assert.ok(parser.propertyHashes.size <= 4096)
+  await parser.close()
+  assert.equal(parser.propertyHashes.size, 0)
+})
+
 const input = (path = 'note.md') => {
   const { kind, ...note } = descriptor(path)
   return { ...note, syntax }

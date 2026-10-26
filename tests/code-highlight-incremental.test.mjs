@@ -1003,6 +1003,37 @@ test('moved and restored long blocks decorate again', async (t) => {
   verify()
 })
 
+test('text typed at either end of the decorated range is decorated', async (t) => {
+  await codeLanguages.ensure('javascript')
+  const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+  // The whole block is on screen, so the range starts and ends with it.
+  const view = mount(
+    t,
+    plugin,
+    EditorState.create({
+      schema,
+      plugins: [plugin],
+      doc: schema.nodes.doc.create(null, [
+        code('let value = 1;\n'.repeat(1_000)),
+      ]),
+    }),
+    { origin: () => 0, scale: 100_000 },
+  )
+  view.flush()
+  view.dispatch(
+    view.state.tr.insertText(
+      '\nconst last = 1',
+      view.state.doc.content.size - 1,
+    ),
+  )
+  view.dispatch(view.state.tr.insertText('const first = 1\n', 1))
+  view.flush()
+  assert.deepEqual(
+    joined(tokens(plugin.getState(view.state).decorations)),
+    joined(expected(view.state.doc)),
+  )
+})
+
 test('line planning measures a few lines per frame, about a screen past the visible ones', async (t) => {
   await codeLanguages.ensure('javascript')
   const [plugin] = CodeHighlight.config.addProseMirrorPlugins()

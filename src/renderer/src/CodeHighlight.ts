@@ -352,9 +352,9 @@ export const CodeHighlight = Extension.create({
               const { mapping } = transaction
               decorations = decorations.map(mapping, doc)
               if (viewport) {
-                // Replaced content clears the range until the view measures again.
-                const from = mapping.mapResult(viewport.from, 1)
-                const to = mapping.mapResult(viewport.to, -1)
+                // Text typed at either end joins the range; replaced content clears it until the view measures again.
+                const from = mapping.mapResult(viewport.from, -1)
+                const to = mapping.mapResult(viewport.to, 1)
                 viewport =
                   from.deletedAfter || to.deletedBefore || from.pos >= to.pos
                     ? null

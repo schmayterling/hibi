@@ -234,8 +234,20 @@ export function deleteBackward(
     // The first Backspace turns the block into plain text, as in the rich editor.
     if (start > line.from && (heading || item || quote)) {
       const mark = item?.getChild('ListMark')
-      if (item && mark && state.doc.lineAt(mark.from).number === line.number)
+      if (item && mark && state.doc.lineAt(mark.from).number === line.number) {
+        // A nested item moves up a level, as in the rich editor.
+        if (item.parent?.parent?.name === 'ListItem')
+          return indent(state, tree, true, hidden)
+        // A top-level item becomes a paragraph of its own, not lazy text of
+        // the block above.
+        if (line.number > 1 && !blank(state.doc.line(line.number - 1).text))
+          return {
+            changes: { from: line.from, to: start, insert: '\n' },
+            selection: EditorSelection.cursor(line.from + 1),
+            userEvent: 'delete.backward',
+          }
         return remove(line.from, start)
+      }
       if (heading && state.doc.lineAt(heading.from).number === line.number)
         return remove(line.from, start)
       if (quote) {

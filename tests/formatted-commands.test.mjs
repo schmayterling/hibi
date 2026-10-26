@@ -159,3 +159,13 @@ test('enter inside formatting closes it before the break and opens it again afte
   // At the edge of formatting the break stays outside it.
   assert.equal(run('**bold**|', blockBreak), '**bold**\n\n|')
 })
+
+test('backspace at the start of an item lifts it a level or ends the list before it', () => {
+  // Before, the marker went and the item became lazy text of the item above.
+  assert.equal(
+    run('- parent\n⟦  - ⟧|child', deleteBackward),
+    '- parent\n- |child',
+  )
+  assert.equal(run('- one\n⟦- ⟧|two', deleteBackward), '- one\n\n|two')
+  assert.equal(run('⟦- ⟧|item', deleteBackward), '|item')
+})

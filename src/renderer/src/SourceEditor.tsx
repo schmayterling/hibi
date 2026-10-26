@@ -564,8 +564,8 @@ export function SourceEditor({
       return
     }
     const language = new Compartment()
-    // The formatted view owns its syntax tree; a language change rebuilds it.
-    let syntax = formattedSyntax()
+    // The formatted view owns its syntax tree, kept across language reconfigurations.
+    const syntax = formattedSyntax()
     const tree = (state: EditorState) =>
       formatted ? syntax.tree(state) : syntaxTree(state)
     const markdown = () => {
@@ -576,8 +576,7 @@ export function SourceEditor({
         codeLanguage,
         label,
       } = parserOptions.current
-      if (formatted) {
-        syntax = formattedSyntax()
+      if (formatted)
         return [
           livePreview(syntax),
           keymap.of(
@@ -588,7 +587,6 @@ export function SourceEditor({
             'aria-description': 'Press Escape, then Tab, to leave the editor.',
           }),
         ]
-      }
       return [
         markdownMode
           ? codeLanguage && !codeLanguages.resolve(codeLanguage)

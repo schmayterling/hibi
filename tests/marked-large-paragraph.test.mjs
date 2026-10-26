@@ -5,21 +5,31 @@ import { pathToFileURL } from 'node:url'
 import { parser } from '@lezer/markdown'
 import { build } from 'esbuild'
 import { Lexer, Marked, Tokenizer } from 'marked'
+import { exportOptions } from '../src/addons/documentation/options.ts'
+import { prepareSite } from '../src/addons/documentation/site.ts'
+import { imageSources } from '../src/main/images.ts'
 import { parseWorkspaceMetadata } from '../src/main/workspace-index-metadata.ts'
 import { WorkspaceMetadataParser } from '../src/main/workspace-metadata-parser.ts'
 import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
 import { MarkdownSourceModel } from '../src/shared/markdown-source-model.ts'
 import { MarkdownSourceReferences } from '../src/shared/markdown-source-references.ts'
-import { BlockTokenizer, blockMarkdown } from '../src/shared/marked-blocks.ts'
+import {
+  BlockTokenizer,
+  blockMarkdown,
+  lexMarkdown,
+  parseMarkdown,
+} from '../src/shared/marked-blocks.ts'
 import { noteHeadings } from '../src/shared/note-metadata.ts'
 import { defaultNoteSyntax, noteLexer } from '../src/shared/note-syntax.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
+import { pageTitle } from '../src/site/title.ts'
 import { loadWorker } from './document-worker-transfer.mjs'
 
 const bundle = await build({
   stdin: {
     contents: `
       export { renderMarkdown, flavors } from './src/renderer/src/flavors.ts'
+      export { textProjection } from './src/renderer/src/text-projection.ts'
       export { BlockTokenizer } from './src/shared/marked-blocks.ts'
       export { Tokenizer } from 'marked'
     `,
@@ -54,6 +64,7 @@ new Function('module', 'exports', 'require', bundle.outputFiles[0].text)(
 const {
   renderMarkdown,
   flavors,
+  textProjection,
   BlockTokenizer: ExportBlockTokenizer,
   Tokenizer: ExportTokenizer,
 } = module.exports
@@ -111,6 +122,28 @@ test('note headings lex an entire 50 mib ordinary paragraph', () => {
 
 test('default full-flavor export preserves an entire 50 mib ordinary paragraph', () => {
   assert.equal(renderMarkdown(paragraph).html, `<p>${paragraph}</p>\n`)
+})
+
+test('native export collects images from an entire 50 mib ordinary paragraph', () => {
+  assert.deepEqual([...imageSources(paragraph)], [])
+})
+
+test('native site generation preserves an entire 50 mib ordinary paragraph', () => {
+  const site = prepareSite(
+    { name: 'notes', pages: [{ path: 'note.md', markdown: paragraph }] },
+    exportOptions(),
+  )
+  assert.equal(site.pages[0].markdown, paragraph)
+  assert.equal(site.pages[0].html, `<p>${paragraph}</p>\n`)
+})
+
+test('source projection and legacy page titles lex an entire 50 mib ordinary paragraph', () => {
+  const result = textProjection(paragraph, true)
+  assert.equal(result.text, paragraph)
+  assert.deepEqual(result.spans, [
+    { from: 0, to: size, sourceFrom: 0, sourceTo: size },
+  ])
+  assert.equal(pageTitle({ path: 'note.md', markdown: paragraph }), 'note')
 })
 
 const corpus = [
@@ -178,6 +211,7 @@ test('tokens, references, headings, metadata and full export match unpatched mar
           reference?.title ?? null,
           expected.links.ref?.title ?? null,
         )
+        const projection = JSON.stringify(textProjection(source, true))
         const html = renderMarkdown(source).html
         const exportFallback = t.mock.method(
           ExportBlockTokenizer.prototype,
@@ -186,12 +220,21 @@ test('tokens, references, headings, metadata and full export match unpatched mar
         )
         try {
           assert.equal(html, renderMarkdown(source).html)
+          assert.equal(projection, JSON.stringify(textProjection(source, true)))
         } finally {
           exportFallback.mock.restore()
         }
         const page = { path: 'note.md', markdown: source }
         const profile = { ...syntax, settings }
         const actual = JSON.stringify(parseWorkspaceMetadata(page, profile))
+        const site = JSON.stringify(
+          prepareSite({ name: 'notes', pages: [page] }, exportOptions()),
+        )
+        const images = JSON.stringify([...imageSources(source)])
+        const title = pageTitle(page)
+        const defaults = new Marked({ gfm: true, breaks: false })
+        assert.deepEqual(lexMarkdown(source), defaults.lexer(source))
+        assert.equal(parseMarkdown(source), defaults.parse(source))
         const fallback = t.mock.method(
           BlockTokenizer.prototype,
           'lheading',
@@ -203,6 +246,14 @@ test('tokens, references, headings, metadata and full export match unpatched mar
             JSON.stringify(parseWorkspaceMetadata(page, profile)),
             `metadata: ${gfm}: ${source}`,
           )
+          assert.equal(
+            site,
+            JSON.stringify(
+              prepareSite({ name: 'notes', pages: [page] }, exportOptions()),
+            ),
+          )
+          assert.equal(images, JSON.stringify([...imageSources(source)]))
+          assert.equal(title, pageTitle(page))
           assert.equal(
             JSON.stringify(reference),
             JSON.stringify(references(source, gfm)),

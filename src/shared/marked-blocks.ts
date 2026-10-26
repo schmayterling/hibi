@@ -1,4 +1,4 @@
-import { type MarkedExtension, Tokenizer } from 'marked'
+import { type MarkedExtension, marked, Tokenizer } from 'marked'
 
 // Keep each parser's start, interruption and underline grammar, but replace its
 // per-character (.|newline)+? backtracking with an iterative line scan.
@@ -7,6 +7,20 @@ const setextRules = new WeakMap<
   RegExp,
   { start: RegExp; interrupt: RegExp; underline: RegExp }
 >()
+
+export function lexMarkdown(source: string) {
+  return marked.lexer(source, {
+    ...marked.defaults,
+    tokenizer: new BlockTokenizer(),
+  })
+}
+
+export function parseMarkdown(source: string) {
+  return marked.parse(source, {
+    async: false,
+    tokenizer: new BlockTokenizer(),
+  })
+}
 
 export const blockMarkdown: MarkedExtension = {
   tokenizer: {

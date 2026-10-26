@@ -808,8 +808,10 @@ export const CodeHighlight = Extension.create({
               const live = new Set(state.blocks.map(({ id }) => id))
               for (const id of works.keys()) if (!live.has(id)) drop(id)
               if (!state.blocks.length) return
+              // Blocks that became long, moved, or left change what the range must cover.
               if (
-                !before?.blocks.length ||
+                before?.blocks.length !== state.blocks.length ||
+                before.blocks.some(({ id }) => !live.has(id)) ||
                 (before.viewport && !state.viewport)
               )
                 measure = true

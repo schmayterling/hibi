@@ -1034,6 +1034,52 @@ test('text typed at either end of the decorated range is decorated', async (t) =
   )
 })
 
+for (const [name, change] of [
+  [
+    'typing makes a block long',
+    (state) =>
+      state.tr.insertText('const more = 2;\n', state.doc.content.size - 1),
+  ],
+  [
+    'a long block is inserted',
+    (state) =>
+      state.tr.insert(
+        state.doc.content.size,
+        code('const inserted = 3;\n'.repeat(600)),
+      ),
+  ],
+]) {
+  test(`decoration follows without a layout change when ${name}`, async (t) => {
+    await codeLanguages.ensure('javascript')
+    const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+    const line = 'let value = 1;\n'
+    const short = code(line.repeat(666))
+    assert.ok(short.content.size <= 10_000)
+    // Every block stays on screen and the editor never resizes.
+    const view = mount(
+      t,
+      plugin,
+      EditorState.create({
+        schema,
+        plugins: [plugin],
+        doc: schema.nodes.doc.create(null, [code(line.repeat(1_000)), short]),
+      }),
+      { origin: () => 0, scale: 100_000 },
+    )
+    view.flush()
+    const verify = () =>
+      assert.deepEqual(
+        joined(tokens(plugin.getState(view.state).decorations)),
+        joined(expected(view.state.doc)),
+      )
+    verify()
+    view.dispatch(change(view.state))
+    view.flush()
+    assert.equal(plugin.getState(view.state).blocks.length, 2)
+    verify()
+  })
+}
+
 test('line planning measures a few lines per frame, about a screen past the visible ones', async (t) => {
   await codeLanguages.ensure('javascript')
   const [plugin] = CodeHighlight.config.addProseMirrorPlugins()

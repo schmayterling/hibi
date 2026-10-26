@@ -100,9 +100,9 @@ export class TaskWidget extends WidgetType {
 
 /** The item's first block, which a task marker must start. */
 function firstBlock(item: SyntaxNode) {
-  for (let child = item.firstChild; child; child = child.nextSibling)
-    if (child.type.is('Block')) return child
-  return null
+  // A lookup after the list marker, not a walk over the item's children.
+  const mark = item.firstChild
+  return mark ? item.childAfter(mark.to) : null
 }
 const isTaskItem = (item: SyntaxNode) => firstBlock(item)?.name === 'Task'
 

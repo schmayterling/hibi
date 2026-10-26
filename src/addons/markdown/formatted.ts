@@ -86,9 +86,9 @@ export function titleOf(source: string) {
 
 /** The quote's first block. */
 function firstBlock(quote: SyntaxNode) {
-  for (let child = quote.firstChild; child; child = child.nextSibling)
-    if (child.type.is('Block')) return child
-  return null
+  // A lookup after the first quote marker, not a walk over the quote's children.
+  const mark = quote.firstChild
+  return mark ? quote.childAfter(mark.to) : null
 }
 
 export const contribution: FormattedContribution = {

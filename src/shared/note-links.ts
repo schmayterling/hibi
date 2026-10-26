@@ -6,11 +6,7 @@ export function wikiHref(target: string) {
   return `obsidian-wiki:${encodeURIComponent(target)}`
 }
 
-export function localTarget(
-  from: string,
-  href: string,
-  paths: ReadonlySet<string>,
-) {
+export function localTargetPath(from: string, href: string): string | null {
   if (/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(href)) return null
   let path: string
   try {
@@ -27,26 +23,42 @@ export function localTarget(
       parts.pop()
     } else parts.push(part)
   }
-  const target = parts.join('/')
+  return parts.join('/')
+}
+
+export function resolveLocalTarget(target: string, paths: ReadonlySet<string>) {
   if (paths.has(target)) return target
   const markdown = `${target}.md`
   return paths.has(markdown) ? markdown : null
 }
 
-export function wikiTarget(
+export function localTarget(
   from: string,
-  target: string,
+  href: string,
   paths: ReadonlySet<string>,
-  basenames?: ReadonlyMap<string, readonly string[]>,
 ) {
-  const file = target.split('#')[0]?.trim() ?? ''
-  if (!file) return from
+  const target = localTargetPath(from, href)
+  return target === null ? null : resolveLocalTarget(target, paths)
+}
+
+export function wikiTargetName(target: string): string | null {
+  const file = target.split('#', 1)[0]?.trim() ?? ''
   if (
     file.includes('\\') ||
     file.includes('\0') ||
     file.split('/').includes('..')
   )
     return null
+  return file
+}
+
+export function resolveWikiTarget(
+  from: string,
+  file: string,
+  paths: ReadonlySet<string>,
+  basenames?: ReadonlyMap<string, readonly string[]>,
+) {
+  if (!file) return from
   const name = file.replace(/^\//, '')
   const candidates = name.endsWith('.md') ? [name] : [name, `${name}.md`]
   const parent = from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : ''
@@ -64,6 +76,16 @@ export function wikiTarget(
   return matches.length === 1 ? (matches[0] ?? null) : null
 }
 
+export function wikiTarget(
+  from: string,
+  target: string,
+  paths: ReadonlySet<string>,
+  basenames?: ReadonlyMap<string, readonly string[]>,
+) {
+  const name = wikiTargetName(target)
+  return name === null ? null : resolveWikiTarget(from, name, paths, basenames)
+}
+
 export function noteBasenames(paths: ReadonlySet<string>) {
   const basenames = new Map<string, string[]>()
   for (const path of paths) {
@@ -78,10 +100,11 @@ export function noteBasenames(paths: ReadonlySet<string>) {
 export function noteReferences(
   source: string,
   syntax: NoteSyntax = defaultNoteSyntax,
+  lexed?: ReturnType<typeof noteLexer>,
 ) {
   const links: string[] = []
   const wikilinks: string[] = []
-  const { parser, tokens } = noteLexer(source, syntax)
+  const { parser, tokens } = lexed ?? noteLexer(source, syntax)
   parser.walkTokens(tokens, (token) => {
     if (token.type === 'link') links.push(token.href)
     if (token.type === 'obsidianWikiLink' || token.type === 'obsidianEmbed')

@@ -63,6 +63,7 @@ const {
   indexWorkspace,
   observeWorkspace,
   workspaceRoot,
+  workspaceMetadataPages,
 } = module.exports
 const fs = process.getBuiltinModule('node:fs/promises')
 
@@ -147,7 +148,17 @@ for (const phase of ['realpath', 'stat']) {
     }
     syncBuiltinESMExports()
     try {
-      const pending = indexWorkspace()
+      const pending =
+        phase === 'stat'
+          ? (async () => {
+              for await (const _page of workspaceMetadataPages(
+                { fingerprint: 'default', page: () => ({}) },
+                () => true,
+              ).pages) {
+              }
+              return null
+            })()
+          : indexWorkspace()
       await waitForOperation(
         reading,
         `The workspace ${phase} hook was not reached.`,

@@ -60,6 +60,7 @@ function splitsSurrogate(source: string, position: number) {
     /[\uDC00-\uDFFF]/.test(source.charAt(position))
   )
 }
+export const MAX_JOURNAL_INSERT_UNITS = 2 * 1024 * 1024
 const parsedChanges = new WeakSet<DocumentChange>()
 export function parseDocumentChange(value: unknown): DocumentChange {
   if (!value || typeof value !== 'object')
@@ -80,7 +81,7 @@ export function parseDocumentChange(value: unknown): DocumentChange {
     change.contentVersion !== change.baseVersion + 1 ||
     change.to < change.from ||
     typeof change.insert !== 'string' ||
-    change.insert.length > 2 * 1024 * 1024 ||
+    change.insert.length > MAX_JOURNAL_INSERT_UNITS ||
     /[\uD800-\uDFFF]/u.test(change.insert)
   )
     throw new Error('Invalid document change.')
@@ -212,8 +213,10 @@ type JournalOptions = {
   retryDelays?: readonly number[]
   checkpoint?: (tabId: string) => JournalCheckpoint | Promise<JournalCheckpoint>
   head?: (tabId: string) => Promise<JournalHead>
-  verify?: (checkpoint: JournalCheckpoint) => Promise<JournalHead>
-  maximumCheckpointUnits?: number
+  verify?: (
+    checkpoint: JournalCheckpoint,
+    progress: () => void,
+  ) => Promise<JournalHead>
 }
 
 /** One lossless queue for legacy and atomic edits; failed delivery never forgets an edit. */
@@ -244,26 +247,37 @@ export function createDocumentJournal(
   let lastMemoryAck: DocumentAcknowledgment | null = null
   let lastError: string | null = null
   let controlPending = false
-  const withinDeadline = <T>(work: () => Promise<T>): Promise<T> => {
-    let timer: ReturnType<typeof setTimeout> | undefined
+  const withinDeadline = <T>(
+    work: (progress: () => void) => Promise<T>,
+  ): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined,
+      settled = false
     const result = new Promise<T>((resolve, reject) => {
-      if (options.timeoutMs)
-        timer = setTimeout(
-          () =>
-            reject(
-              new Error(
-                'Document recovery timed out. Your pending edits are kept; retry saving.',
+      const progress = () => {
+        if (settled) return
+        clearTimeout(timer)
+        if (options.timeoutMs)
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  'Document recovery timed out. Your pending edits are kept; retry saving.',
+                ),
               ),
-            ),
-          options.timeoutMs,
-        )
+            options.timeoutMs,
+          )
+      }
+      progress()
       try {
-        Promise.resolve(work()).then(resolve, reject)
+        Promise.resolve(work(progress)).then(resolve, reject)
       } catch (error) {
         reject(error)
       }
     })
-    return result.finally(() => clearTimeout(timer))
+    return result.finally(() => {
+      settled = true
+      clearTimeout(timer)
+    })
   }
   const forget = (id: string, entry: PendingChange) => {
     if (pending.get(id) !== entry) return
@@ -391,7 +405,9 @@ export function createDocumentJournal(
       return Promise.reject(error)
     }
   }
-  const control = <T>(work: () => Promise<T>): Promise<T> => {
+  const control = <T>(
+    work: (progress: () => void) => Promise<T>,
+  ): Promise<T> => {
     if (controlPending)
       return Promise.reject(
         new Error(
@@ -399,12 +415,16 @@ export function createDocumentJournal(
         ),
       )
     controlPending = true
+    let notify = () => {}
     const request = Promise.resolve()
-      .then(work)
+      .then(() => work(() => notify()))
       .finally(() => {
         controlPending = false
       })
-    return withinDeadline(() => request)
+    return withinDeadline((progress) => {
+      notify = progress
+      return request
+    })
   }
   const reconcile = async () => {
     const { checkpoint: checkpointFor, head: headFor, verify } = options
@@ -431,7 +451,6 @@ export function createDocumentJournal(
       for (const { document, entries } of groups.values()) {
         const checkpoint = parseJournalCheckpoint(
           await control(async () => checkpointFor(document.tabId)),
-          options.maximumCheckpointUnits ?? 16 * 1024 * 1024,
         )
         if (
           document.tabId !== checkpoint.tabId ||
@@ -476,7 +495,7 @@ export function createDocumentJournal(
             'Document recovery is missing an operation. Your pending edits are kept.',
           )
         const verified = parseJournalHead(
-          await control(() => verify(checkpoint)),
+          await control((progress) => verify(checkpoint, progress)),
         )
         if (
           verified.tabId !== checkpoint.tabId ||

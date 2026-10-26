@@ -45,7 +45,7 @@ const encodedUnitBytes = (unit: number, previous: number) =>
 
 /** Private storage; published pieces freeze their readable [from, to) extent. */
 export class SourceChunk {
-  readonly #text: string
+  #text: string
   #units: Uint16Array | null = null
   #length: number
   readonly #stride = 32
@@ -121,6 +121,10 @@ export class SourceChunk {
           }
         }
         chunk.#length = to
+        if (chunk.#units && to === capacity) {
+          chunk.#text = Reflect.apply(String.fromCharCode, null, chunk.#units)
+          chunk.#units = null
+        }
         scanned(text.length)
         return Object.freeze({ from, to })
       },
@@ -146,7 +150,7 @@ export class SourceChunk {
   slice(from: number, to: number) {
     this.#range(from, to)
     return this.#units
-      ? String.fromCharCode(...this.#units.subarray(from, to))
+      ? Reflect.apply(String.fromCharCode, null, this.#units.subarray(from, to))
       : this.#text.slice(from, to)
   }
   #range(from: number, to: number) {

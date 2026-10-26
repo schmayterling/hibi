@@ -66,7 +66,8 @@ for (const math of [false, true]) {
     const page = await app.firstWindow()
     await waitForAsync(
       page,
-      async () => (await window.hibi.getDocument()).name === 'note.md',
+      async () =>
+        !!window.hibi && (await window.hibi.getDocument()).name === 'note.md',
     )
     await waitForDocumentEditor(app, page)
     assert.equal(

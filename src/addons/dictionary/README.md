@@ -32,9 +32,24 @@ The dictionary keeps lookups and the side view. Autocomplete never requests an o
 
 Add your own words, such as names, slang, or terms from your field, so lookups and suggestions know them. Choose **Add to dictionary** when the side view or **Define word** finds no entry, or run **Add word to dictionary** from the command palette or the editor's right-click menu to add the word at the cursor.
 
-**Settings → Dictionary and thesaurus → Custom words** lists your words. Give a word a language and a note, such as its meaning, or remove it. A word without a language belongs to the first language Hibi tries for it. **Export as text** copies your words with one word per line, followed by a tab, the language code, and the note when they have them. A word starting with `#` is written with a backslash before it, since lines starting with `#` are skipped as comments on import. Paste that text and choose **Import text** to add the words on another computer; imported words update matching ones. Both export options wait for changed notes to finish saving. **Export to file…** saves the same text as a new `.txt` file and never replaces an existing file, and **Import from file…** adds the words from a UTF-8 text file in this format. You can keep up to 5,000 words; a change that would go over is not saved, and the text or word you entered stays so you can trim it.
+**Settings → Dictionary and thesaurus → Custom words** lists your words. Give a word a language and a note, such as its meaning, or remove it. A word without a language belongs to the first language Hibi tries for it. **Export as text** copies your words with one word per line, followed by a tab, the language code, and the note when they have them. A word starting with `#` is written with a backslash before it, since lines starting with `#` are skipped as comments on import. Paste that text and choose **Import text** to add the words on another computer; imported words update matching ones. Both export options wait for changed notes to finish saving. **Export to file…** saves the same text as a new `.txt` file and never replaces an existing file, and **Import from file…** adds the words from a UTF-8 text file in this format. There is no fixed word count, word length, or note length limit. Available disk space and limits on individual transfers still apply.
+
+Hibi copies and verifies an existing custom-word list before using the new store. The old list is kept for older builds. Those builds show the original list; later words and edits stay in the new store. When you upgrade again, Hibi compares older-version changes with the original snapshot. Newer edits win when both versions change the same field, and words removed in the newer build stay removed. Words missing from the older snapshot stay in the newer list. Recovery and merge notices can be dismissed.
 
 Custom words are shown as **Your word** in lookups, with your note as the definition. An entry from an installed pack for the same word and language comes first. Custom words are kept with your Hibi settings on this computer, not in a workspace, and are never sent online.
+
+## Vocabulary export for addons
+
+The `vocabulary` export now uses version 2. A consumer that accepts only `api.version === 1` skips the integration until it accepts version 2. Calling `api.customWords().filter(...)` without awaiting version 2 throws because `customWords()` returns a promise. Read the full list only when needed:
+
+```ts
+if (api.version === 1 || api.version === 2) {
+  const words = await api.customWords()
+  const matches = words.filter((word) => word.lang === 'en')
+}
+```
+
+Use `api.customCompletions(...)` for indexed prefix suggestions instead of loading the full vocabulary on activation. Completion work stops after 4,096 indexed steps per request so lookups cannot wait behind a large suggestion scan. If that budget is reached, the result contains the best matches found so far and can omit a shorter or earlier match. Narrowing the prefix can reveal other matches; saved words and exact lookups are unaffected.
 
 ## Languages
 

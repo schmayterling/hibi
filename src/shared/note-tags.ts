@@ -21,6 +21,7 @@ export function tagMatches(text: string) {
 export function noteTags(
   source: string,
   syntax: NoteSyntax = defaultNoteSyntax,
+  lexed?: ReturnType<typeof noteLexer>,
 ): string[] {
   if (!syntax.hashtags) return []
   const found = new Set<string>()
@@ -50,6 +51,6 @@ export function noteTags(
           visit(cell.tokens)
     }
   }
-  visit(noteLexer(source, syntax).tokens)
+  visit((lexed ?? noteLexer(source, syntax)).tokens)
   return [...found].sort()
 }

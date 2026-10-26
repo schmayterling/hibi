@@ -1,21 +1,23 @@
-import {
-  type DocumentFocus,
-  type DocumentState,
-  MAX_DOCUMENT_BYTES,
+import type {
+  DocumentFocus,
+  DocumentSaveReply,
+  DocumentState,
 } from '../../shared/desktop.ts'
 import { sourceChange } from '../../shared/document-journal.ts'
 import { DocumentSession } from '../../shared/document-session.ts'
+import type { DocumentMetadata } from '../../shared/document-transfer.ts'
 import type {
   DocumentId,
   DocumentTarget,
   ViewId,
   ViewTarget,
 } from '../../shared/foundation-contracts.ts'
-import type { SourceSnapshot } from '../../shared/source-buffer.ts'
+import { type SourceSnapshot, SourceStore } from '../../shared/source-buffer.ts'
 import type {
   RawEdit,
   SourceOperation,
 } from '../../shared/source-operations.ts'
+import { loadedDocument, sourceDocument } from './document-transfer.ts'
 
 type RuntimeOptions = {
   /** Combined retained history across open tabs; payload bytes are estimated. */
@@ -51,7 +53,12 @@ export class DocumentRuntime {
   readonly #primaryViewIds = new Map<string, ViewId>()
   readonly #saves = new Map<
     string,
-    { next: number; acknowledged: number; epoch: number }
+    {
+      next: number
+      acknowledged: number
+      epoch: number
+      pending: Map<number, Map<number, SourceSnapshot>>
+    }
   >()
   readonly #views = new Map<ViewId, ViewTarget>()
   #generation = 0
@@ -76,6 +83,10 @@ export class DocumentRuntime {
     Omit<DocumentState, 'markdown' | 'savedMarkdown'>
   >()
   readonly #cached = new Map<string, DocumentState>()
+  readonly #openingLengths = new Map<
+    string,
+    { revision: number; units: number }
+  >()
   readonly #cachedState = new Map<
     string,
     ReturnType<DocumentSession['state']>
@@ -112,11 +123,17 @@ export class DocumentRuntime {
     const target = this.captureDocument(id),
       progress = id ? this.#saves.get(id) : null
     if (!target || !progress) return null
-    return Object.freeze({
-      target,
-      sequence: ++progress.next,
-      epoch: progress.epoch,
-    })
+    const sequence = ++progress.next
+    const snapshot = this.session(id)!.snapshot()
+    progress.pending.set(sequence, new Map([[snapshot.version, snapshot]]))
+    return Object.freeze({ target, sequence, epoch: progress.epoch })
+  }
+  endSave(token: DocumentSaveToken | null) {
+    if (!token) return
+    const session = this.resolveDocument(token.target)
+    const progress =
+      session && this.#saves.get(session.snapshot().document.tabId)
+    if (progress?.epoch === token.epoch) progress.pending.delete(token.sequence)
   }
   resolveDocument = (target: DocumentTarget) => {
     const session = this.#targetSessions.get(target.documentId)
@@ -231,6 +248,7 @@ export class DocumentRuntime {
     this.#documentTargets.delete(id)
     this.#primaryViewIds.delete(id)
     this.#saves.delete(id)
+    this.#openingLengths.delete(id)
     for (const detach of this.#detach.get(id) ?? []) detach()
     this.#detach.delete(id)
     this.#metadata.delete(id)
@@ -279,6 +297,12 @@ export class DocumentRuntime {
     }
   }
   sourceFor = (document: DocumentState) => this.#sources.get(document)
+  openingLength = (document: DocumentState) => {
+    const opening = this.#openingLengths.get(document.tabId)
+    return opening?.revision === document.revision
+      ? opening.units
+      : (this.sourceFor(document)?.utf16Length ?? 0)
+  }
   subscribe = (listener: Listener) => {
     this.#listeners.add(listener)
     return () => {
@@ -381,17 +405,94 @@ export class DocumentRuntime {
         for (const listener of [...this.#listeners]) listener(active, null)
     }
   }
-  activate(document: DocumentState, replaceLocal = false) {
+  ownsMetadata(metadata: DocumentFocus) {
+    const source = this.session(metadata.tabId)?.snapshot()
+    return (
+      !!source &&
+      this.#metadata.get(metadata.tabId)?.sourceId === metadata.sourceId &&
+      source.version === metadata.contentVersion &&
+      source.document.revision <= metadata.revision
+    )
+  }
+  metadataDocument(metadata: DocumentMetadata): DocumentState {
+    const session = this.session(metadata.tabId)
+    if (!session || metadata.replaced !== false)
+      throw new Error('The document source is not loaded. Try again.')
+    const current = session.snapshot()
+    if (!this.ownsMetadata(metadata))
+      throw new Error(
+        'This tab has local edits waiting to synchronize. Try again.',
+      )
+    let saved = session.savedSnapshot()
+    if (!metadata.dirty) saved = current
+    else
+      for (const versions of this.#saves
+        .get(metadata.tabId)
+        ?.pending.values() ?? []) {
+        const owned = versions.get(metadata.savedVersion)
+        if (owned) {
+          saved = owned
+          break
+        }
+      }
+    const document = sourceDocument(metadata, current, saved)
+    this.#sources.set(document, current)
+    return document
+  }
+  activate(document: DocumentState | DocumentMetadata, replaceLocal = false) {
+    const metadataOnly = 'documentMetadata' in document
+    if (
+      !metadataOnly &&
+      document === this.get(document.tabId) &&
+      this.#activeId === document.tabId
+    )
+      return document
     this.#updating = true
     try {
-      const { markdown, savedMarkdown, ...metadata } = document
+      const prepared = metadataOnly ? undefined : loadedDocument(document)
+      const {
+        tabId,
+        tabs,
+        tabsEnabled,
+        id,
+        ephemeral,
+        name,
+        dirty,
+        revision,
+        contentVersion,
+        canAutosave,
+        sourceId,
+      } = document
+      const metadata = {
+        sourceId,
+        tabId,
+        tabs,
+        tabsEnabled,
+        id,
+        ephemeral,
+        name,
+        dirty,
+        revision,
+        contentVersion,
+        canAutosave,
+      }
       let session = this.#sessions.get(document.tabId)
       const local = session?.snapshot()
       if (
+        (metadataOnly &&
+          (document.replaced !== false || !this.ownsMetadata(document))) ||
+        (session && prepared && document.replaced !== true)
+      )
+        throw new Error(
+          'This tab has local edits waiting to synchronize. Try again.',
+        )
+      if (
         session &&
         local &&
-        (local.version !== document.contentVersion ||
-          local.materialize() !== markdown)
+        (document.replaced === true ||
+          (!metadataOnly &&
+            (local.version !== document.contentVersion ||
+              (!prepared && local.materialize() !== document.markdown))))
       ) {
         const retained = session.state()
         if (
@@ -408,15 +509,24 @@ export class DocumentRuntime {
         session = undefined
       }
       if (!session) {
+        if (metadataOnly)
+          throw new Error('The document source is not loaded. Try again.')
         session = new DocumentSession(
-          markdown,
+          prepared
+            ? prepared.store.ownsCurrentSnapshot(prepared.current)
+              ? prepared.store
+              : SourceStore.fromSnapshot(
+                  prepared.current,
+                  document,
+                  document.contentVersion,
+                )
+            : document.markdown,
           document,
           document.contentVersion,
           {
             ...this.#options,
             historyBytes: Math.min(8 * 1024 * 1024, this.#historyLimits.bytes),
             historyGroups: Math.min(128, this.#historyLimits.groups),
-            maximumBytes: MAX_DOCUMENT_BYTES,
           },
         )
         this.#sessions.set(document.tabId, session)
@@ -431,6 +541,7 @@ export class DocumentRuntime {
           next: 0,
           acknowledged: 0,
           epoch: 0,
+          pending: new Map(),
         })
         const retained = session
         this.#historySubscriptions.set(
@@ -441,6 +552,8 @@ export class DocumentRuntime {
         this.#detach.set(id, [
           session.subscribeOperations((prepared) => {
             this.#changes.set(id, prepared.operation.changes)
+            for (const versions of this.#saves.get(id)?.pending.values() ?? [])
+              versions.set(prepared.after.version, prepared.after)
           }),
           session.subscribe(() => this.#publish(id)),
           session.subscribeStorage(() => {
@@ -449,12 +562,30 @@ export class DocumentRuntime {
             this.#savedText.delete(id)
           }),
         ])
+        session.importSaved(
+          prepared
+            ? prepared.saved === prepared.current
+              ? session.snapshot()
+              : prepared.saved
+            : document.savedMarkdown,
+        )
       } else {
-        session.reidentify(document)
+        if (session.snapshot().document.revision !== document.revision)
+          session.reidentify(document)
         const progress = this.#saves.get(document.tabId)
-        if (progress) progress.epoch++
+        if (progress && !metadataOnly) {
+          progress.epoch++
+          progress.pending.clear()
+        }
       }
-      session.importSaved(savedMarkdown)
+      if (
+        this.#activeId !== document.tabId ||
+        this.#openingLengths.get(document.tabId)?.revision !== document.revision
+      )
+        this.#openingLengths.set(document.tabId, {
+          revision: document.revision,
+          units: session.snapshot().utf16Length,
+        })
       this.#active = session
       this.#activeId = document.tabId
       this.#metadata.set(document.tabId, metadata)
@@ -499,13 +630,16 @@ export class DocumentRuntime {
     this.#active = session
     this.#activeId = document.tabId
     if (!unchanged) {
-      this.#metadata.set(document.tabId, document)
+      this.#metadata.set(document.tabId, {
+        ...document,
+        sourceId: document.sourceId ?? previous?.sourceId,
+      })
       this.#cached.delete(document.tabId)
     }
     return this.get()!
   }
   acknowledgeSave(
-    document: DocumentState,
+    document: DocumentSaveReply,
     token?: DocumentSaveToken,
     expectedId?: string,
   ) {
@@ -526,7 +660,20 @@ export class DocumentRuntime {
       return null
     this.#updating = true
     try {
-      session.importSaved(document.savedMarkdown)
+      if ('saveReceipt' in document) {
+        const saved = progress.pending
+          .get(token.sequence)
+          ?.get(document.savedVersion)
+        if (!saved || saved.document.tabId !== document.tabId)
+          throw new Error(
+            'The saved document version is not owned by this request.',
+          )
+        session.markSaved(saved)
+      } else {
+        const prepared = loadedDocument(document)
+        session.importSaved(prepared ? prepared.saved : document.savedMarkdown)
+      }
+      progress.pending.delete(token.sequence)
       progress.acknowledged = token.sequence
       if (expectedId !== undefined && current.id === expectedId)
         this.#metadata.set(document.tabId, {

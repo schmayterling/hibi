@@ -16,6 +16,10 @@ export type SiteData = Omit<WorkspaceSnapshot, 'pages'> & {
   options: ExportOptions
   routing: 'hash' | 'paths'
   graph?: ReturnType<typeof noteGraph>
+  /** Assets transported as bounded inline records, separate from document JSON. */
+  inlineMedia?: string[]
+  /** Blob URLs created locally after inline records have been authenticated. */
+  media?: Record<string, string>
   /** Addon colorschemes available to the site; bundled schemes are always present. */
   colorschemes?: Colorscheme[]
   /** Included addon contributions; CSS is data only and never runs addon code. */
@@ -34,6 +38,35 @@ export const siteJson = (value: unknown) =>
     .replaceAll('<', '\\u003c')
     .replaceAll('\u2028', '\\u2028')
     .replaceAll('\u2029', '\\u2029')
+export function siteAssetDirectory(pages: readonly { path: string }[]) {
+  const roots = new Set(
+    pages.map((page) => page.path.toLowerCase().split('/')[0]),
+  )
+  let directory = 'hibi-assets'
+  while (roots.has(directory)) directory += '-site'
+  return directory
+}
+
+const mediaTypes = {
+  png: 'image/png',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  avif: 'image/avif',
+  svg: 'image/svg+xml',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  ogg: 'video/ogg',
+} as const
+
+export function siteMediaType(path: string) {
+  const match =
+    /^hibi-assets(?:-site)*\/media\/[a-f0-9]{64}\.(png|jpeg|gif|webp|avif|svg|mp4|webm|ogg)$/.exec(
+      path,
+    )
+  return match ? mediaTypes[match[1] as keyof typeof mediaTypes] : undefined
+}
+
 export const pageRoute = (path: string) =>
   path.split('/').map(encodeURIComponent).join('/') + '/'
 export const homePage = <Page extends WorkspacePage>(

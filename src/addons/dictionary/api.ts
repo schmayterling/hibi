@@ -6,8 +6,7 @@ import type { Lang } from './providers.ts'
 export type DictionaryWords = { lang: Lang; words: readonly string[] }
 
 /** Local vocabulary only. Explicit dictionary lookups are a separate feature. */
-export interface DictionaryApi {
-  readonly version: 1
+type DictionaryBase = {
   complete: (
     prefix: string,
     langs: readonly Lang[],
@@ -15,18 +14,40 @@ export interface DictionaryApi {
     signal?: AbortSignal,
   ) => Promise<readonly DictionaryWords[]>
   suggestionLanguages: () => readonly Lang[]
-  customWords: () => readonly CustomWord[]
+  customCompletions?: (
+    prefix: string,
+    langs: readonly Lang[],
+    limit: number,
+    signal?: AbortSignal,
+  ) => Promise<readonly CustomWord[]>
 }
+
+/** Version 2 reads the complete custom list asynchronously, only on request. */
+export type DictionaryApi = DictionaryBase &
+  (
+    | { readonly version: 1; customWords: () => readonly CustomWord[] }
+    | { readonly version: 2; customWords: () => Promise<readonly CustomWord[]> }
+  )
 
 export function createDictionaryApi(
   native: AddonContext['native'],
   suggestionLanguages: DictionaryApi['suggestionLanguages'],
-  customWords: DictionaryApi['customWords'],
+  customWords: () => readonly CustomWord[] | Promise<readonly CustomWord[]>,
 ): DictionaryApi {
   return {
-    version: 1,
+    version: 2,
     suggestionLanguages,
-    customWords,
+    customWords: async () => customWords(),
+    async customCompletions(prefix, langs, limit, signal) {
+      signal?.throwIfAborted()
+      const words = await native.query<CustomWord[]>('customWordsComplete', {
+        prefix,
+        langs,
+        limit,
+      })
+      signal?.throwIfAborted()
+      return words
+    },
     async complete(
       prefix,
       langs,

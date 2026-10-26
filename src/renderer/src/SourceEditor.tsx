@@ -42,6 +42,7 @@ import {
   EditorSelection,
   EditorState,
   Prec,
+  type Text,
   Transaction,
 } from '@codemirror/state'
 import {
@@ -69,7 +70,7 @@ import {
   sourceProseAllowed,
   type TypingContext,
 } from '../../shared/completions'
-import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop'
+import type { DocumentState } from '../../shared/desktop'
 import {
   type SourceEditRequest,
   type SourceEditResult,
@@ -130,7 +131,7 @@ import {
 import { sourceIndentation } from './source-indent'
 import {
   createSourceSession,
-  sourceEditorText,
+  sourceEditorTextCooperatively,
   sourceEditTransaction,
 } from './source-session'
 import {
@@ -296,12 +297,17 @@ export function SourceEditor({
   // biome-ignore lint/correctness/useExhaustiveDependencies: retry refreshes a bridge whose snapshot went stale before attachment.
   const bridge = useMemo(
     () => createSourceSession(session, viewId),
-    [session, viewId, bridgeRetry],
+    [session, viewId, bridgeRetry, document.tabId, document.revision],
   )
+  const [preparedText, setPreparedText] = useState<{
+    bridge: ReturnType<typeof createSourceSession>
+    text: Text
+  } | null>(null)
   const [fontReadyBridge, setFontReadyBridge] = useState<ReturnType<
     typeof createSourceSession
   > | null>(null)
   const inputReady =
+    preparedText?.bridge === bridge &&
     installedExtensions?.bridge === bridge &&
     installedExtensions.extensions === sourceExtensions &&
     languageReady
@@ -558,7 +564,35 @@ export function SourceEditor({
   repeatFind.current = requestFind
 
   useEffect(() => {
-    if (!host.current) return
+    const controller = new AbortController()
+    setPreparedText(null)
+    const current = () =>
+      documentRuntime.session(document.tabId) === session &&
+      session.ownsCurrentSnapshot(bridge.snapshot())
+    void sourceEditorTextCooperatively(bridge.snapshot(), {
+      signal: controller.signal,
+      isCurrent: current,
+    })
+      .then((text) => {
+        if (
+          controller.signal.aborted ||
+          documentRuntime.session(document.tabId) !== session
+        )
+          return
+        if (!text || !current()) {
+          retryBridge((retry) => retry + 1)
+          return
+        }
+        setPreparedText({ bridge, text })
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) setExtensionError(String(error))
+      })
+    return () => controller.abort()
+  }, [bridge, session, document.tabId])
+
+  useEffect(() => {
+    if (!host.current || preparedText?.bridge !== bridge) return
     const active = documentRuntime.get(document.tabId)
     if (
       !active ||
@@ -1016,7 +1050,7 @@ export function SourceEditor({
         }
       },
       state: EditorState.create({
-        doc: sourceEditorText(bridge.snapshot()),
+        doc: preparedText.text,
         ...(selection ? { selection } : {}),
         extensions: [
           addons.current.of([]),
@@ -1555,7 +1589,6 @@ export function SourceEditor({
           editor.state,
           snapshot,
           request.changes,
-          MAX_DOCUMENT_BYTES,
         )
         if (!transaction)
           return { status: 'applied', contentVersion: current.contentVersion }
@@ -1810,6 +1843,7 @@ export function SourceEditor({
     }
   }, [
     bridge,
+    preparedText,
     session,
     document.tabId,
     document.revision,
@@ -1837,7 +1871,7 @@ export function SourceEditor({
   useEffect(() => {
     const editor = view.current
     setExtensionError('')
-    if (!editor) return
+    if (!editor || preparedText?.bridge !== bridge) return
     let canceled = false
     const context = Object.freeze({ viewId: viewId as ViewId })
     void Promise.all(
@@ -1857,7 +1891,7 @@ export function SourceEditor({
     return () => {
       canceled = true
     }
-  }, [bridge, sourceExtensions, viewId])
+  }, [bridge, preparedText, sourceExtensions, viewId])
   useEffect(
     () =>
       tabIndent.subscribe(() =>

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import {
   mkdir,
   mkdtemp,
+  open,
   readFile,
   rm,
   symlink,
@@ -122,5 +123,34 @@ test('note indexes include drafts, exclude media/symlinks, and coexist with save
       (page) => page.path,
     ),
     ['saved.md'],
+  )
+})
+
+test('legacy index budget refusal keeps workspace guidance', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'hibi-index-budget-'))
+  const root = join(directory, 'notes')
+  await mkdir(root)
+  const file = await open(join(root, 'large.md'), 'wx')
+  try {
+    await file.truncate(21 * 1024 * 1024)
+  } finally {
+    await file.close()
+  }
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(directory, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(directory, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await app.evaluate(({ dialog }, root) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] })
+  }, root)
+  await page.evaluate(() => window.hibi.openWorkspace())
+  await assert.rejects(
+    page.evaluate(() => window.hibi.getWorkspaceIndex()),
+    /legacy workspace index exceeds the 20 MiB message limit/,
   )
 })

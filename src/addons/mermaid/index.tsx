@@ -86,6 +86,7 @@ export default defineAddon({
       description: 'Render Mermaid code blocks.',
       kind: 'syntax',
       readOnlyWhenDisabled: false,
+      serialization: 'block-local',
       detect: (source) => /^ {0,3}(?:`{3,}|~{3,})mermaid\s*$/im.test(source),
       richExtensions: [mermaidNode(context)],
       export: {

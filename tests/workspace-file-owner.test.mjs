@@ -58,7 +58,12 @@ const unavailable = {
 
 function harness(t) {
   const frame = { url: 'app://hibi/' }
-  const window = { webContents: { mainFrame: frame } }
+  const window = {
+    webContents: {
+      mainFrame: frame,
+      send: (...args) => state.sent.push(args),
+    },
+  }
   const event = { sender: window.webContents, senderFrame: frame }
   const handlers = new Map()
   const state = {
@@ -67,6 +72,9 @@ function harness(t) {
     lookups: 0,
     calls: [],
     trashed: [],
+    documentPath: '/notes/first.md',
+    document: { revision: 1 },
+    sent: [],
     started: Promise.withResolvers(),
     pause: null,
     result: {
@@ -77,6 +85,9 @@ function harness(t) {
   t.after(() => state.pause?.resolve())
   const bindings = {
     window,
+    MEDIA_CHANNELS: { scopeChanged: 'media:scope-changed' },
+    getDocumentPath: () => state.documentPath,
+    getDocument: () => state.document,
     pendingFileOperations: new Set(),
     fileOperationHasDialog: () => false,
     fileOperationDialogOpened: () => null,
@@ -117,6 +128,27 @@ function harness(t) {
       handlers.get(name)(event, owner, ...operations[name].slice(1)),
   }
 }
+
+test('a held document path change sends exactly one media scope notification', async (t) => {
+  const h = harness(t)
+  const changed = Promise.withResolvers()
+  const release = Promise.withResolvers()
+  t.after(release.resolve)
+  const held = h.hold(
+    Promise.resolve().then(async () => {
+      h.state.documentPath = '/notes/renamed.md'
+      h.state.document.revision = 2
+      changed.resolve()
+      await release.promise
+    }),
+  )
+  const queued = h.hold(Promise.resolve())
+  await changed.promise
+  assert.deepEqual(h.state.sent, [])
+  release.resolve()
+  await Promise.all([held, queued])
+  assert.deepEqual(h.state.sent, [['media:scope-changed', 2]])
+})
 
 for (const name of reads)
   for (const change of ['restart', 'disable'])

@@ -7,6 +7,7 @@ import { showMarkdownMarkers } from '../../src/renderer/src/formatted-contributi
 import { formattedSyntax } from '../../src/renderer/src/formatted-syntax'
 import { livePreview } from '../../src/renderer/src/live-preview'
 import { markdownSyntax } from '../../src/renderer/src/markdown-syntax'
+import { tableActions } from '../../src/renderer/src/source-formatting'
 
 /** Table harness: the app's pane layout around a formatted view that can be read-only or editable. */
 const probe: ChunkedMarkdownProbe = {
@@ -79,6 +80,16 @@ Object.assign(window, {
       await settle()
     },
     view: () => view,
+    /** Run a toolbar table action at the selection, as the toolbar does. */
+    runTableAction(id: string) {
+      const current = view
+      return (
+        !!current &&
+        current.state
+          .facet(tableActions)
+          .some((actions) => actions.run(current, id))
+      )
+    },
     /** Make the mounted editor read-only and not editable, or editable again. */
     setEditable: (on: boolean) =>
       view?.dispatch({ effects: editable.reconfigure(access(on)) }),

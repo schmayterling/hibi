@@ -692,7 +692,7 @@ class TableView {
         if (column + 1 < columns) return this.edit(line, column + 1, 'start')
         if (line < last) return this.edit(below, 0, 'start')
         // Tab in the last cell adds a row, as in the rich editor.
-        if (move === 'next') return this.run('row-after')
+        if (move === 'next' && this.run('row-after')) return true
         this.leave(true)
         return true
       case 'previous':
@@ -739,6 +739,11 @@ class TableView {
     } else if (!after && before === 0) {
       insert = { from: 0, insert: '\n\n' }
       anchor = 0
+    }
+    // A read-only view only moves the caret.
+    if (!writable(this.view.state)) {
+      insert = null
+      anchor = Math.max(0, Math.min(anchor, doc.length))
     }
     this.view.dispatch({
       ...(insert ? { changes: insert } : {}),
@@ -870,6 +875,7 @@ class TableView {
 
   /** Run a toolbar table action on the edited cell, or on the cell at the selection. */
   run(id: string): boolean {
+    if (!writable(this.view.state)) return false
     const cell =
       this.editing ?? this.locate(this.view.state.selection.main.head)
     const source = this.source()

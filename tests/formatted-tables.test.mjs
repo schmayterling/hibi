@@ -670,6 +670,39 @@ test('cell editors take no input while the formatted view takes none', {
   await harness.evaluate(() => window.tables.setEditable(true))
 })
 
+test('navigation out of a read-only table writes nothing', {
+  timeout: 30000,
+}, async () => {
+  const doc = '| a | b |\n| - | - |\n| x | y |'
+  await mount(doc)
+  // Tab in the last cell would add a row; escape at the end a paragraph.
+  for (const [cell, key] of [
+    ['y', 'Tab'],
+    ['x', 'Escape'],
+    ['x', process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter'],
+  ]) {
+    await harness.evaluate(() => window.tables.setEditable(true))
+    await harness.locator('.hibi-lp-table td', { hasText: cell }).click()
+    await harness.keyboard.press('End')
+    await harness.evaluate(() => window.tables.setEditable(false))
+    await harness.keyboard.press(key)
+    const now = await state()
+    assert.equal(now.doc, doc, key)
+    assert.equal(now.editor, null, key)
+  }
+  // Nor do the toolbar's table actions.
+  assert.equal(
+    await harness.evaluate(() => {
+      const view = window.tables.view()
+      view.dispatch({ selection: { anchor: 3 } })
+      return window.tables.runTableAction('row-after')
+    }),
+    false,
+  )
+  assert.equal((await state()).doc, doc)
+  await harness.evaluate(() => window.tables.setEditable(true))
+})
+
 test('undo moves the cell editor to the cell whose edit it undoes', {
   timeout: 30000,
 }, async () => {

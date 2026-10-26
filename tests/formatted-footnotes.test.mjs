@@ -321,6 +321,8 @@ test('the index equals a whole-note parse after random edits, read in small slic
     '<pre>\n[^t]: pre\n',
     '~~~~',
     '>',
+    '- item\n\n\n\n    [^z]: after blank lines in an item',
+    '1. item\n\n\n     [^y]: in an ordered item after blank lines',
   ]
   const { slice, window } = footnoteScan
   try {
@@ -453,6 +455,40 @@ test('labels whose hashes are equal copy one chunk of counts per change', () => 
       : chunks.push(...(node?.chunks ?? []))
   walk(state.field(footnoteDefinitions).labels)
   assert.equal(chunks.flat().length, 1022)
+})
+
+test('a run of blank lines inside a list item ends no stretch, also after edits beside it', () => {
+  const { window } = footnoteScan
+  try {
+    for (const size of [16, 48, 256])
+      for (let blanks = 1; blanks <= 6; blanks++)
+        for (let pad = 0; pad < 30; pad += 7) {
+          footnoteScan.window = size
+          let state = settle(
+            create(
+              `${'x'.repeat(pad)}\n\n- item\n${'\n'.repeat(blanks)}    [^real]: note\n\nafter\n`,
+            ),
+          )
+          const label = `window ${size}, ${blanks} blank lines, ${pad} before`
+          // Before, a cut inside the blank run read the definition as code.
+          assert.deepEqual(indexed(state), { real: 1 }, label)
+          const run = state.doc.toString().indexOf('- item') + 7
+          for (const changes of [
+            { from: run, insert: '\n' },
+            { from: run, to: run + 1 },
+            { from: 0, insert: 'y' },
+          ]) {
+            state = settle(state.update({ changes }).state)
+            assert.deepEqual(
+              indexed(state),
+              parsed(state.doc.toString()),
+              `${label}, ${JSON.stringify(changes)}`,
+            )
+          }
+        }
+  } finally {
+    footnoteScan.window = window
+  }
 })
 
 test('a long line is parsed once, and a long block in reads near the budget from where the last stopped', () => {

@@ -365,6 +365,10 @@ function labelsIn(
   return labels
 }
 
+/** Whether line `number` is blank once quote markers are left out. */
+const blankLine = (doc: Text, number: number) =>
+  /^[ \t>]*$/.test(doc.line(number).text)
+
 /** The blocks open at line start `pos` of a tree parsed from `base`, innermost first. */
 function* openAt(tree: Tree, doc: Text, base: number, pos: number) {
   for (
@@ -446,8 +450,13 @@ function step(index: Index, doc: Text, budget: number): Index {
     const reach = going?.whole
       ? from + Math.max(footnoteScan.window, 2 * (going.at - from))
       : at + footnoteScan.window
-    const window = doc.lineAt(Math.min(doc.length, reach))
-    const end = doc.line(Math.min(doc.lines, window.number + 3)).to
+    // Lezer decides a run of blank lines, such as one inside a list item, by
+    // the line after it: a window reads on to three lines past its reach
+    // that are not blank, and blocks count up to two of them before its end.
+    let lastLine = doc.lineAt(Math.min(doc.length, reach)).number
+    for (let ahead = 0; ahead < 3 && lastLine < doc.lines; )
+      if (!blankLine(doc, ++lastLine)) ahead++
+    const end = doc.line(lastLine).to
     const last = end >= doc.length
     const units = head.reduce(
       (sum, line) => sum + line.to - line.from,
@@ -464,9 +473,10 @@ function step(index: Index, doc: Text, budget: number): Index {
       pending = { ...replay, whole: true }
       continue
     }
-    const limit = last
-      ? doc.length
-      : doc.line(Math.max(1, doc.lineAt(end).number - 2)).from
+    let margin = lastLine
+    for (let behind = 0; margin > 1; margin--)
+      if (!blankLine(doc, margin) && ++behind === 2) break
+    const limit = last ? doc.length : doc.line(Math.max(1, margin - 1)).from
     let cut = last ? doc.length : -1
     let resync = false
     // Stretches start at a block's line, since indentation before it can

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { history, undo } from '@tiptap/pm/history'
-import { Schema } from '@tiptap/pm/model'
+import { Node, Schema } from '@tiptap/pm/model'
 import { EditorState, TextSelection } from '@tiptap/pm/state'
 import { findWrapping, liftTarget } from '@tiptap/pm/transform'
 import {
@@ -39,6 +39,14 @@ const create = (blocks, plugins = []) =>
     plugins: [richFind(), ...plugins],
     doc: schema.nodes.doc.create(null, blocks),
   })
+// Enough of an editor view for the scan: state, dispatch, and destruction.
+const viewOf = (state) => ({
+  state,
+  isDestroyed: false,
+  dispatch(tr) {
+    this.state = this.state.apply(tr)
+  },
+})
 
 // Fold each character alone, so σ and ς are the same letter in any context.
 const fold = (text) => text.toLowerCase().replaceAll('ς', 'σ')
@@ -549,17 +557,13 @@ test('rich find scans long notes in slices and stops for a newer query', (t) => 
   // eight blocks.
   let clock = 0
   t.mock.method(performance, 'now', () => clock++)
-  const view = {
-    state: create(
+  const view = viewOf(
+    create(
       Array.from({ length: 40 }, (_, line) =>
         paragraph(line === 20 || line === 35 ? 'a needle' : `line ${line}`),
       ),
     ),
-    isDestroyed: false,
-    dispatch(tr) {
-      this.state = this.state.apply(tr)
-    },
-  }
+  )
   const status = () => {
     const { total, current } = richFindKey.getState(view.state)
     return [total, current]
@@ -590,4 +594,61 @@ test('rich find scans long notes in slices and stops for a newer query', (t) => 
   t.mock.timers.runAll()
   assert.deepEqual(status(), [null, 0])
   assert.equal(firsts.length, 2)
+})
+
+test('rich find scans each block once however many slices it takes', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let clock = 0
+  t.mock.method(performance, 'now', () => clock++)
+  const child = Node.prototype.child
+  let visits = 0
+  t.mock.method(Node.prototype, 'child', function (index) {
+    visits++
+    return child.call(this, index)
+  })
+  for (const blocks of [800, 1600, 3200]) {
+    const view = viewOf(
+      create(
+        Array.from({ length: blocks }, (_, line) => paragraph(`l${line}`)),
+      ),
+    )
+    view.dispatch(setRichFindQuery(view.state.tr, 'missing'))
+    visits = 0
+    scanRichFind(view, () => assert.fail('no match expected'))
+    t.mock.timers.runAll()
+    assert.equal(richFindKey.getState(view.state).total, 0)
+    // The walk and the final count each visit a block once.
+    assert.ok(visits <= 2 * blocks, `${visits} visits for ${blocks} blocks`)
+  }
+})
+
+test('rich find moves only after the scan has counted every match', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let clock = 0
+  t.mock.method(performance, 'now', () => clock++)
+  const view = viewOf(
+    create(
+      Array.from({ length: 1000 }, (_, line) =>
+        paragraph(line === 999 ? 'needle' : `line ${line}`),
+      ),
+    ),
+  )
+  view.dispatch(setRichFindQuery(view.state.tr, 'needle'))
+  scanRichFind(view, () => {})
+  let folded = 0
+  const lower = String.prototype.toLowerCase
+  t.mock.method(String.prototype, 'toLowerCase', function () {
+    folded += this.length
+    return lower.call(this)
+  })
+  const move = (command) => command(view.state, (tr) => view.dispatch(tr))
+  // A move cannot finish the scan synchronously; the editor queues it instead.
+  assert.equal(move(findNext), false)
+  assert.equal(move(findPrev), false)
+  assert.equal(folded, 0)
+  assert.equal(richFindKey.getState(view.state).total, null)
+  t.mock.timers.runAll()
+  assert.equal(move(findNext), true)
+  const { total, current } = richFindKey.getState(view.state)
+  assert.deepEqual([total, current], [1, 1])
 })

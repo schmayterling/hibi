@@ -230,22 +230,23 @@ function matchOffset(index: MatchIndex, doc: Node, from: number, to: number) {
   return -1
 }
 
-/** Calls `visit` for textblocks ending after `from`, in order, until it returns false. */
-function eachBlock(
-  node: Node,
-  from: number,
-  visit: (block: Node, pos: number) => boolean,
-  start = 0,
-): boolean {
-  for (let child = 0, offset = start; child < node.childCount; child++) {
-    const next = node.child(child)
-    const end = offset + next.nodeSize
-    if (end > from) {
-      if (next.inlineContent) {
-        if (!visit(next, offset)) return false
-      } else if (!eachBlock(next, from, visit, offset + 1)) return false
+/** Where a walk continues: the next child of each open ancestor and its position. */
+type Walk = { node: Node; child: number; pos: number }[]
+
+/** Calls `visit` for the remaining textblocks in order until it returns false; true once done. */
+function walkBlocks(walk: Walk, visit: (block: Node, pos: number) => boolean) {
+  while (walk.length) {
+    const parent = walk.at(-1)!
+    if (parent.child >= parent.node.childCount) {
+      walk.pop()
+      continue
     }
-    offset = end
+    const node = parent.node.child(parent.child++)
+    const pos = parent.pos
+    parent.pos += node.nodeSize
+    if (node.inlineContent) {
+      if (!visit(node, pos)) return false
+    } else if (!node.isLeaf) walk.push({ node, child: 0, pos: pos + 1 })
   }
   return true
 }
@@ -548,7 +549,7 @@ export function scanRichFind(view: EditorView, first: (match: Range) => void) {
   const index = richFindKey.getState(view.state)?.index
   if (!index) return () => {}
   let doc: Node | null = null
-  let resume = 0
+  let walk: Walk = []
   let found = false
   let timer: ReturnType<typeof setTimeout> | undefined
   const run = () => {
@@ -558,13 +559,12 @@ export function scanRichFind(view: EditorView, first: (match: Range) => void) {
     // After an edit, walk again; scanned blocks are cached and cost one lookup.
     if (view.state.doc !== doc) {
       doc = view.state.doc
-      resume = 0
+      walk = [{ node: doc, child: 0, pos: 0 }]
     }
     // Yield after about half a frame so input and painting keep up.
     const deadline = performance.now() + 8
-    const done = eachBlock(doc, resume, (block, pos) => {
+    const done = walkBlocks(walk, (block, pos) => {
       const matches = index.matches(block)
-      resume = pos + block.nodeSize
       if (!found && matches.length) {
         found = true
         first({ from: pos + 1 + matches[0]!, to: pos + 1 + matches[1]! })
@@ -583,10 +583,12 @@ export function scanRichFind(view: EditorView, first: (match: Range) => void) {
   return () => clearTimeout(timer)
 }
 
+/** Moves wait for a complete count: finishing the scan synchronously would stall. */
 function findCommand(direction: 'next' | 'previous'): Command {
   return (state, dispatch) => {
-    const index = richFindKey.getState(state)?.index
-    if (!index) return false
+    const find = richFindKey.getState(state)
+    const index = find?.index
+    if (!index || find.total === null) return false
     const { doc } = state
     const { from, to } = state.selection
     let found: Range | null

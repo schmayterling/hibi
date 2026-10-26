@@ -303,16 +303,24 @@ export async function queryWorkspaceReferences(
           ? await workspaceMetadataDelta(syntax, active)
           : null
         if (!active()) return false
-        let applied = delta?.every((page) => references.has(page.path))
-          ? await references.applyDeltaCooperatively(target, delta, active)
+        let commit = delta?.commit
+        let applied = delta?.pages.every((page) => references.has(page.path))
+          ? await references.applyDeltaCooperatively(
+              target,
+              delta.pages,
+              active,
+            )
           : null
-        if (!applied && active())
+        if (!applied && active()) {
+          const read = workspaceMetadataPages(syntax, active)
           applied = await references.applyMetadataCooperatively(
             target,
-            workspaceMetadataPages(syntax, active),
+            read.pages,
             active,
           )
-        if (!applied) return false
+          commit = read.commit
+        }
+        if (!applied || !commit?.()) return false
         if (sourceChanged) searchCursors.clear()
         graphCursors.clear()
         indexedTarget = target

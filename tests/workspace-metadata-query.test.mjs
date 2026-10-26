@@ -10,6 +10,7 @@ const host = {
   revision: 1,
   indexReads: 0,
   deltaReads: 0,
+  commits: 0,
   deltaPages: null,
   parses: 0,
   listener: null,
@@ -78,14 +79,17 @@ const bundle = await build({
           export async function workspaceMetadataDelta(syntax, current) {
             if (!current() || host().deltaPages === null) return null
             host().deltaReads++
-            return host().deltaPages.map((page) => {
+            const pages = host().deltaPages.map((page) => {
               const profile = syntax.page(page)
               host().parses++
               return { path: page.path, version: sourceIndexVersion(page.markdown),
                 syntax: profile, metadata: parseWorkspaceMetadata(page, profile) }
             })
+            return { pages, commit() { if (!current()) return false; host().commits++; return true } }
           }
-          export async function* workspaceMetadataPages(syntax, current) {
+          export function workspaceMetadataPages(syntax, current) {
+            let completed = false
+            async function* read() {
             host().indexReads++
             if (host().changeDuringRead) host().sequence++
             if (host().editDuringRead) host().versions[0].contentVersion++
@@ -102,6 +106,9 @@ const bundle = await build({
                 }),
               }
             }
+            completed = true
+            }
+            return { pages: read(), commit() { if (!completed || !current()) return false; host().commits++; return true } }
           }`,
           loader: 'js',
           resolveDir: resolve('.'),
@@ -133,6 +140,7 @@ test('ten concurrent metadata consumers share one build and parse each page once
   host.listener({ kind: 'resync' })
   const reads = host.indexReads
   const parses = host.parses
+  const commits = host.commits
   try {
     const results = await Promise.all(
       Array.from({ length: 10 }, () =>
@@ -142,6 +150,7 @@ test('ten concurrent metadata consumers share one build and parse each page once
     assert.ok(results.every((result) => result.ok))
     assert.equal(host.parses - parses, 64)
     assert.equal(host.indexReads - reads, 1)
+    assert.equal(host.commits - commits, 1)
   } finally {
     host.pages = pages
     host.indexReads = reads

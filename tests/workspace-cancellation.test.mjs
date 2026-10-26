@@ -134,7 +134,7 @@ for (const phase of ['realpath', 'stat']) {
               for await (const _page of workspaceMetadataPages(
                 { fingerprint: 'default', page: () => ({}) },
                 () => true,
-              )) {
+              ).pages) {
               }
               return null
             })()

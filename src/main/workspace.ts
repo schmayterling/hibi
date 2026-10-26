@@ -1382,114 +1382,134 @@ async function readMetadataBatch(
   return current() ? result : []
 }
 
-/** One bounded descriptor batch; only one source page is parsed at a time. */
-export async function* workspaceMetadataPages(
+type WorkspaceMetadataRead<Pages> = {
+  pages: Pages
+  commit: () => boolean
+}
+
+/** One bounded descriptor batch; publish its cache only with the applied index. */
+export function workspaceMetadataPages(
   syntax: WorkspaceSyntax,
   current: () => boolean,
-): AsyncGenerator<WorkspaceMetadataPage> {
-  const selected = root
-  if (!selected) return
-  const revision = indexRevision
-  const tree = entries
-  const drafts = metadataDrafts(selected)
-  const active = () =>
-    current() && root === selected && indexRevision === revision
-  const previous =
-    cachedRoot === selected
-      ? cachedPages
-      : new Map<string, CachedIndexPage<WorkspaceMetadataPage>>()
-  const next = new Map<string, CachedIndexPage<WorkspaceMetadataPage>>()
-  const seen = new Set<string>()
-  let building = false
-  const begin = async () => {
-    if (!building) building = await metadataParser.beginBuild(active)
-    return building && active()
-  }
-  let started = performance.now()
-  async function* paths(
-    items: readonly WorkspaceEntry[],
-  ): AsyncGenerator<string> {
-    for (const item of items) {
+): WorkspaceMetadataRead<AsyncIterable<WorkspaceMetadataPage>> {
+  let publish: (() => boolean) | undefined
+  async function* read(): AsyncGenerator<WorkspaceMetadataPage> {
+    const selected = root
+    if (!selected) return
+    const revision = indexRevision
+    const tree = entries
+    const drafts = metadataDrafts(selected)
+    const active = () =>
+      current() && root === selected && indexRevision === revision
+    const previous =
+      cachedRoot === selected
+        ? cachedPages
+        : new Map<string, CachedIndexPage<WorkspaceMetadataPage>>()
+    const next = new Map<string, CachedIndexPage<WorkspaceMetadataPage>>()
+    const seen = new Set<string>()
+    let building = false
+    const begin = async () => {
+      if (!building) building = await metadataParser.beginBuild(active)
+      return building && active()
+    }
+    let started = performance.now()
+    async function* paths(
+      items: readonly WorkspaceEntry[],
+    ): AsyncGenerator<string> {
+      for (const item of items) {
+        if (!active()) return
+        if (item.children) yield* paths(item.children)
+        else if (item.kind === 'file' && isDocumentName(item.name, true)) {
+          seen.add(item.path)
+          yield item.path
+        }
+        if (performance.now() - started >= 4) {
+          await new Promise<void>((resolve) => setImmediate(resolve))
+          started = performance.now()
+        }
+      }
+    }
+    async function* allPaths() {
+      yield* paths(tree)
+      for (const [path, draft] of drafts)
+        if (draft.pending && !seen.has(path)) yield path
+    }
+    let batch: string[] = []
+    for await (const path of allPaths()) {
+      batch.push(path)
+      if (batch.length < 64) continue
+      const pages = await readMetadataBatch(
+        batch,
+        selected,
+        syntax,
+        drafts,
+        previous,
+        active,
+        begin,
+      )
       if (!active()) return
-      if (item.children) yield* paths(item.children)
-      else if (item.kind === 'file' && isDocumentName(item.name, true)) {
-        seen.add(item.path)
-        yield item.path
+      for (const [path, cached] of pages) {
+        next.set(path, cached)
+        yield cached.page
       }
-      if (performance.now() - started >= 4) {
-        await new Promise<void>((resolve) => setImmediate(resolve))
-        started = performance.now()
+      batch = []
+    }
+    if (batch.length) {
+      const pages = await readMetadataBatch(
+        batch,
+        selected,
+        syntax,
+        drafts,
+        previous,
+        active,
+        begin,
+      )
+      if (!active()) return
+      for (const [path, cached] of pages) {
+        next.set(path, cached)
+        yield cached.page
       }
     }
-  }
-  async function* allPaths() {
-    yield* paths(tree)
-    for (const [path, draft] of drafts)
-      if (draft.pending && !seen.has(path)) yield path
-  }
-  let batch: string[] = []
-  for await (const path of allPaths()) {
-    batch.push(path)
-    if (batch.length < 64) continue
-    const pages = await readMetadataBatch(
-      batch,
-      selected,
-      syntax,
-      drafts,
-      previous,
-      active,
-      begin,
-    )
     if (!active()) return
-    for (const [path, cached] of pages) {
-      next.set(path, cached)
-      yield cached.page
+    if (building) await metadataParser.finishBuild(active)
+    else {
+      await metadataParser.close()
+      if (!active()) return
+      const id = createHash('sha256').update(selected).digest('hex')
+      await rm(join(app.getPath('userData'), 'workspace-index-cache', id), {
+        recursive: true,
+        force: true,
+      }).catch(() => {})
     }
-    batch = []
-  }
-  if (batch.length) {
-    const pages = await readMetadataBatch(
-      batch,
-      selected,
-      syntax,
-      drafts,
-      previous,
-      active,
-      begin,
-    )
     if (!active()) return
-    for (const [path, cached] of pages) {
-      next.set(path, cached)
-      yield cached.page
+    publish = () => {
+      if (!active()) return false
+      cachedRoot = selected
+      cachedPages = next
+      cachedMetadataTree = tree
+      cachedSyntaxFingerprint = syntax.fingerprint
+      cachedDraftPaths = new Set(
+        [...drafts.keys()].filter((path) => next.has(path)),
+      )
+      dirtyIndexPaths = new Set()
+      return true
     }
   }
-  if (!active()) return
-  if (building) await metadataParser.finishBuild(active)
-  else {
-    await metadataParser.close()
-    if (!active()) return
-    const id = createHash('sha256').update(selected).digest('hex')
-    await rm(join(app.getPath('userData'), 'workspace-index-cache', id), {
-      recursive: true,
-      force: true,
-    }).catch(() => {})
+  return {
+    pages: read(),
+    commit() {
+      const commit = publish
+      publish = undefined
+      return commit?.() ?? false
+    },
   }
-  if (!active()) return
-  cachedRoot = selected
-  cachedPages = next
-  cachedMetadataTree = tree
-  cachedSyntaxFingerprint = syntax.fingerprint
-  cachedDraftPaths = new Set(
-    [...drafts.keys()].filter((path) => next.has(path)),
-  )
-  dirtyIndexPaths = new Set()
 }
 
 /** Apply dirty buffers and known content changes without traversing the retained tree. */
 export async function workspaceMetadataDelta(
   syntax: WorkspaceSyntax,
   current: () => boolean,
-): Promise<readonly WorkspaceMetadataPage[] | null> {
+): Promise<WorkspaceMetadataRead<readonly WorkspaceMetadataPage[]> | null> {
   const selected = root
   if (
     !selected ||
@@ -1536,12 +1556,18 @@ export async function workspaceMetadataDelta(
       )),
     )
   if (!active() || updates.length !== changed.size) return null
-  for (const [path, cached] of updates) cachedPages.set(path, cached)
-  cachedDraftPaths = new Set(
-    [...drafts.keys()].filter((path) => cachedPages.has(path)),
-  )
-  dirtyIndexPaths = new Set()
-  return updates.map(([, cached]) => cached.page)
+  return {
+    pages: updates.map(([, cached]) => cached.page),
+    commit() {
+      if (!active()) return false
+      for (const [path, cached] of updates) cachedPages.set(path, cached)
+      cachedDraftPaths = new Set(
+        [...drafts.keys()].filter((path) => cachedPages.has(path)),
+      )
+      dirtyIndexPaths = new Set()
+      return true
+    },
+  }
 }
 
 export async function readWorkspaceIndexSource(path: string): Promise<string> {

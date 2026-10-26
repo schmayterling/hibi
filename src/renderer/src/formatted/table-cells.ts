@@ -297,12 +297,16 @@ export function renderInline(
 
 /** Where a cell's content starts and ends inside its padding. */
 export function padding(text: string) {
-  const start = /^[ \t]*/.exec(text)![0].length
-  if (start === text.length) {
+  const space = (at: number) => text[at] === ' ' || text[at] === '\t'
+  let start = 0,
+    end = text.length
+  while (start < end && space(start)) start++
+  if (start === end) {
     const middle = Math.ceil(text.length / 2)
     return { start: middle, end: middle }
   }
-  return { start, end: text.length - /[ \t]*$/.exec(text)![0].length }
+  while (space(end - 1)) end--
+  return { start, end }
 }
 
 /** Decorations of a cell editor: hidden padding, and the cell's Markdown rendered with markers under the selection. */

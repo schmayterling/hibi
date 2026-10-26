@@ -1,3 +1,4 @@
+import type { Marked } from 'marked'
 import type { MarkdownReferenceSyntax } from './document-worker-protocol.ts'
 import {
   MarkdownSemanticLexer,
@@ -48,6 +49,7 @@ export class MarkdownSemanticCache {
   constructor(
     syntax: MarkdownReferenceSyntax,
     limits = { maximumEntries: 128, maximumBytes: 8 * 1024 * 1024 },
+    parser?: Marked,
   ) {
     if (
       !Number.isSafeInteger(limits.maximumEntries) ||
@@ -56,7 +58,7 @@ export class MarkdownSemanticCache {
       limits.maximumBytes < 1
     )
       throw new Error('Invalid semantic cache limits.')
-    this.#lexer = new MarkdownSemanticLexer(syntax)
+    this.#lexer = new MarkdownSemanticLexer(syntax, parser)
     this.#maximumEntries = limits.maximumEntries
     this.#maximumBytes = limits.maximumBytes
   }

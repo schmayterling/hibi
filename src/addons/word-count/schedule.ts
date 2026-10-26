@@ -1,9 +1,9 @@
 import type { countText } from './count'
 
 /** Keep one count in flight and read source only after input becomes quiet. */
-export function scheduleCounts(
-  read: () => string | null,
-  send: (text: string) => void,
+export function scheduleCounts<Request = string>(
+  read: () => Request | null,
+  send: (text: Request) => void,
   publish: (result: ReturnType<typeof countText>) => void,
 ) {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -33,10 +33,10 @@ export function scheduleCounts(
         run()
       }, 250)
     },
-    receive(result: ReturnType<typeof countText>) {
+    receive(result: ReturnType<typeof countText> | null) {
       if (stopped || !pending) return
       pending = false
-      if (sentGeneration === generation) publish(result)
+      if (result && sentGeneration === generation) publish(result)
       run()
     },
     stop() {

@@ -112,6 +112,52 @@ test('edits after the closing line read no lines; edits inside read only the fro
   assert.equal(frontmatterProbe.parses, 1)
 })
 
+test('an edit inside frontmatter longer than one search keeps it hidden and protected', () => {
+  const yaml = Array.from({ length: 6000 }, (_, i) => `key${i}: value ${i}`)
+  let state = EditorState.create({
+    doc: `---\n${yaml.join('\n')}\n---\n\nbody`,
+    extensions: frontmatterField,
+  })
+  // Its closing line is past the first search: idle slices find it.
+  while (
+    !state.field(core.frontmatterBounds).closer &&
+    state.field(core.frontmatterBounds).searched < state.doc.length
+  )
+    state = state.update({ effects: core.frontmatterSearch.of(null) }).state
+  const hidden = state.field(frontmatterField).end
+  assert.ok(hidden > core.frontmatterProbe.search, `${hidden}`)
+  frontmatterProbe.lines = 0
+  frontmatterProbe.parses = 0
+  state = state.update({
+    changes: { from: 10, insert: 'x' },
+    userEvent: 'input.addon',
+  }).state
+  // Before, the edit searched again from the top and lost the closing line
+  // until idle time found it again.
+  assert.equal(state.field(frontmatterField).end, hidden + 1)
+  assert.ok(frontmatterProbe.lines < 10, `${frontmatterProbe.lines}`)
+  assert.equal(frontmatterProbe.parses, 1)
+  // An edited line that closes it earlier ends it there.
+  const at = state.doc.line(3).to
+  state = state.update({
+    changes: { from: at, insert: '\n---' },
+    userEvent: 'input.addon',
+  }).state
+  assert.equal(state.field(core.frontmatterBounds).closer, at + 4)
+  // An edit to the closing line reads on from it, and idle slices find the
+  // next one.
+  state = state.update({
+    changes: { from: at + 1, to: at + 4, insert: 'key: x' },
+    userEvent: 'input.addon',
+  }).state
+  while (
+    !state.field(core.frontmatterBounds).closer &&
+    state.field(core.frontmatterBounds).searched < state.doc.length
+  )
+    state = state.update({ effects: core.frontmatterSearch.of(null) }).state
+  assert.equal(state.field(frontmatterField).end, hidden + 1 + 7)
+})
+
 test('a divider at the top of a long note reads one search when it opens and the rest in idle slices', () => {
   const body = Array.from({ length: 200000 }, (_, i) => `words ${i}`).join('\n')
   for (const extensions of [frontmatterField, core.frontmatterBounds]) {

@@ -117,10 +117,49 @@ export const frontmatterBounds = StateField.define<Bounds>({
       if (value.closer && first > value.closer) {
         const closer = transaction.changes.mapPos(value.closer)
         next = { ...value, closer, searched: closer, end: value.end && closer }
-      } else if (!value.open || value.closer || first <= doc.line(1).to)
-        // An edit to the opening line or the block may move the closing line.
+      } else if (!value.open || first <= doc.line(1).to)
+        // An edit to the opening line may open or end frontmatter.
         next = boundsOf(doc)
-      else {
+      else if (value.closer) {
+        // The lines before an edit hold no closing line, so the old one
+        // holds unless an edit reaches it or an edited line closes earlier.
+        const old = transaction.startState.doc.lineAt(value.closer)
+        let reached = false
+        transaction.changes.iterChangedRanges((fromA, toA) => {
+          if (toA >= old.from && fromA <= old.to) reached = true
+        })
+        if (reached) {
+          const found = search(
+            doc,
+            doc.lineAt(first).from,
+            frontmatterProbe.search,
+          )
+          next = { open: true, ...found, end: recognized(doc, found.closer) }
+        } else {
+          let closer = transaction.changes.mapPos(value.closer)
+          transaction.changes.iterChangedRanges((_fromA, _toA, from, to) => {
+            const stop = doc.lineAt(to).number
+            for (
+              let number = Math.max(2, doc.lineAt(from).number);
+              number <= stop;
+              number++
+            ) {
+              frontmatterProbe.lines++
+              const line = doc.line(number)
+              if (closing.test(line.text)) {
+                closer = Math.min(closer, line.to)
+                break
+              }
+            }
+          })
+          next = {
+            open: true,
+            closer,
+            searched: closer,
+            end: recognized(doc, closer),
+          }
+        }
+      } else {
         const searched = transaction.changes.mapPos(value.searched, -1)
         let closer = 0
         transaction.changes.iterChangedRanges((_fromA, _toA, from, to) => {

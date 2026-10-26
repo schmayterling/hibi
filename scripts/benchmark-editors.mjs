@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { cpus, release } from 'node:os'
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
+import { cpus, loadavg, release } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -12,6 +19,7 @@ import { launchBenchmarkApp, selectBenchmarkFile } from './benchmark-flows.mjs'
 import { createTraceFinalizer } from './trace-stream.mjs'
 
 const sizes = ['blank', '100kb', '575kb', '2mb', '50mib']
+const fixtures = ['prose', 'mixed']
 const metricNames = [
   'TaskDuration',
   'ScriptDuration',
@@ -20,8 +28,9 @@ const metricNames = [
 ]
 const hash = (source) => createHash('sha256').update(source).digest('hex')
 
-export function editorFixture(size) {
+export function editorFixture(size, fixture = 'prose') {
   assert.ok(sizes.includes(size), `unknown fixture: ${size}`)
+  assert.ok(fixtures.includes(fixture), `unknown fixture kind: ${fixture}`)
   if (size === 'blank') return ''
   // Same 100,000-word paragraph fixture as trace-input-paint.mjs.
   const words = [
@@ -36,32 +45,51 @@ export function editorFixture(size) {
     'iota',
     'kappa',
   ]
-  const audit = Array.from(
+  const prose = Array.from(
     { length: 100000 },
     (_, index) =>
       `${index ? (index % 20 === 0 ? '\n\n' : ' ') : ''}${words[index % words.length]}`,
   ).join('')
   const bytes = {
     '100kb': 100000,
-    '575kb': audit.length,
+    '575kb': prose.length,
     '2mb': 2000000,
     '50mib': 50 * 1024 * 1024,
   }[size]
-  return `${audit}\n\n`
-    .repeat(Math.ceil(bytes / (audit.length + 2)))
-    .slice(0, bytes)
+  const mixed = [
+    'alpha beta gamma delta.',
+    '# Heading',
+    'Paragraph with **bold**, *italic*, and a [link](https://example.com/).',
+    '- first item\n- second item',
+    '1. ordered item\n2. another item',
+    '```js\nconst answer = 42\n```',
+    '| name | value |\n| --- | --- |\n| alpha | beta |',
+    'Inline math $x^2$ and display math:\n\n$$\nx^2 + y^2 = z^2\n$$',
+  ].join('\n\n')
+  const block = `${fixture === 'mixed' ? mixed : prose}\n\n`
+  return block.repeat(Math.ceil(bytes / block.length)).slice(0, bytes)
 }
 
-export function editorBenchmarkPlan(selected, runs) {
+export function editorBenchmarkPlan(
+  selected,
+  runs,
+  selectedFixtures = fixtures,
+) {
+  assert.ok(
+    Number.isSafeInteger(runs) && runs >= 2 && runs % 2 === 0,
+    'runs must be an even integer >= 2 for balanced ab/ba order',
+  )
   return selected.flatMap((size) =>
-    Array.from({ length: runs }, (_, run) =>
-      (size === '50mib'
-        ? ['codemirror']
-        : run % 2
-          ? ['codemirror', 'tiptap']
-          : ['tiptap', 'codemirror']
-      ).map((engine) => ({ size, run, engine })),
-    ).flat(),
+    (size === 'blank' ? ['prose'] : selectedFixtures).flatMap((fixture) =>
+      Array.from({ length: runs }, (_, run) =>
+        (size === '50mib'
+          ? ['codemirror']
+          : run % 2
+            ? ['codemirror', 'tiptap']
+            : ['tiptap', 'codemirror']
+        ).map((engine) => ({ size, fixture, run, engine })),
+      ).flat(),
+    ),
   )
 }
 
@@ -80,11 +108,11 @@ export function statistics(values) {
   }
 }
 
-export function operationPaint(events, label) {
+export function operationPaint(events, label, startLabel = label) {
   const mark = (phase) =>
     events.find(
       (event) =>
-        event.name === `${label}:${phase}` &&
+        event.name === `${phase === 'start' ? startLabel : label}:${phase}` &&
         event.cat?.includes('blink.user_timing'),
     )
   const start = mark('start'),
@@ -110,23 +138,61 @@ export function operationPaint(events, label) {
   }
 }
 
-export function requireFormattedEditor(engine, state) {
+export function requireFormattedEditor(engine, state, mixed = false) {
   assert.ok(
     state.mode === 'normal' && state.engine === engine && state.editable,
     `formatted editor required (${engine}); observed ${JSON.stringify(state)}. source fallback is not comparable; rebuild with large-note formatted opening support.`,
   )
+  if (mixed)
+    assert.ok(
+      state.formatted,
+      'mixed fixture requires a rendered formatted element',
+    )
+}
+
+export async function ensureFormattedEditor(
+  engine,
+  state,
+  switchView,
+  mixed = false,
+) {
+  const path = state.mode === 'markdown' ? 'source-first' : 'formatted'
+  if (path === 'source-first') {
+    assert.equal(
+      engine,
+      'tiptap',
+      'codemirror source-first: large-note formatted opening needs #450; sample failed',
+    )
+    state = await switchView()
+  }
+  requireFormattedEditor(engine, state, mixed)
+  return { path, method: path === 'source-first' ? 'open+switch' : 'open' }
+}
+
+export async function captureEditorSample(config, measure) {
+  const sample = {
+    ...config,
+    startedAt: new Date().toISOString(),
+    loadAverage: loadavg(),
+  }
+  try {
+    return { ...sample, ...(await measure()), status: 'complete' }
+  } catch (error) {
+    return {
+      ...sample,
+      ...error.sample,
+      status: 'failed',
+      error: error.message,
+    }
+  }
 }
 
 const measurements = {
+  openReadyMs: (row) => row.open.readyMs,
   openPaintMs: (row) => row.open.paintMs,
-  keyTaskMedianMs: (row) =>
-    statistics(row.keys.map((key) => key.taskMs)).median,
-  keyTaskP95Ms: (row) => statistics(row.keys.map((key) => key.taskMs)).p95,
-  keyPaintMedianMs: (row) =>
-    statistics(row.keys.map((key) => key.paintMs)).median,
-  keyPaintP95Ms: (row) => statistics(row.keys.map((key) => key.paintMs)).p95,
   findFirstPaintMs: (row) => row.find.first.paintMs,
   findNextPaintMs: (row) => row.find.next.paintMs,
+  scrollMainThreadPerFrameMs: (row) => row.scroll.mainThreadPerFrameMs,
   scrollMedianMs: (row) => statistics(row.scroll.frames).median,
   scrollP95Ms: (row) => statistics(row.scroll.frames).p95,
 }
@@ -134,31 +200,41 @@ const measurements = {
 export function summarizeEditors(samples) {
   const groups = new Map()
   for (const sample of samples) {
-    const key = `${sample.size}/${sample.engine}`
+    const key = `${sample.size}/${sample.fixture}/${sample.engine}`
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key).push(sample)
   }
-  return [...groups.values()].map((group) => ({
-    size: group[0].size,
-    engine: group[0].engine,
-    runs: group.length,
-    keyPaintCoverage: {
-      observed: group
-        .flatMap((row) => row.keys)
-        .filter((key) => Number.isFinite(key.paintMs)).length,
-      total: group.reduce((sum, row) => sum + row.keys.length, 0),
-    },
-    metrics: Object.fromEntries(
-      Object.entries(measurements).map(([name, read]) => [
-        name,
-        statistics(group.map(read)),
-      ]),
-    ),
-  }))
+  return [...groups.values()].map((attempts) => {
+    const group = attempts.filter((sample) => sample.status !== 'failed')
+    const keys = group.flatMap((sample) => sample.keys)
+    return {
+      size: attempts[0].size,
+      fixture: attempts[0].fixture,
+      engine: attempts[0].engine,
+      runs: group.length,
+      failed: attempts.length - group.length,
+      openMethods: [...new Set(group.map((sample) => sample.open.method))],
+      keyPaintCoverage: {
+        observed: keys.filter((key) => Number.isFinite(key.paintMs)).length,
+        total: keys.length,
+      },
+      metrics: {
+        ...Object.fromEntries(
+          Object.entries(measurements).map(([name, read]) => [
+            name,
+            statistics(group.map(read)),
+          ]),
+        ),
+        keyTaskMs: statistics(keys.map((key) => key.taskMs)),
+        keyReadyMs: statistics(keys.map((key) => key.readyMs)),
+        keyPaintMs: statistics(keys.map((key) => key.paintMs)),
+      },
+    }
+  })
 }
 
 // Observers read model lengths, never materialize the document while timing input.
-function installProbe({ fileName, sourceLength, engine }) {
+function installProbe({ fileName, sourceLength, engine, fixture }) {
   const input = () =>
     document.querySelector(
       '.rich-pane .tiptap, .rich-pane .hibi-formatted .cm-content',
@@ -182,6 +258,9 @@ function installProbe({ fileName, sourceLength, engine }) {
           ? 'codemirror'
           : null,
       editable: !!element?.isContentEditable && !element.closest('[inert]'),
+      formatted: !!document.querySelector(
+        '.rich-pane .tiptap h1, .rich-pane .hibi-lp-h1',
+      ),
     }
   }
   const probe = { pending: null, state }
@@ -196,7 +275,7 @@ function installProbe({ fileName, sourceLength, engine }) {
     if (!pending?.started || pending.ready) return
     let ready = false
     const count = document.querySelector('.find-count')?.textContent ?? ''
-    if (pending.kind === 'open') {
+    if (pending.kind === 'open' || pending.kind === 'switch') {
       const tab = document.querySelector(
         '.document-tabs [role="tab"][aria-selected="true"]',
       )
@@ -207,11 +286,15 @@ function installProbe({ fileName, sourceLength, engine }) {
           .querySelector('#document-editor-panel')
           ?.getAttribute('aria-busy') === 'false' &&
         document.fonts.status === 'loaded' &&
-        (state().mode === 'markdown'
+        (state().mode === 'markdown' && pending.kind === 'open'
           ? document.querySelector('.editor-panes')?.dataset.sourceReady ===
             'true'
-          : state().editable &&
-            length() === sourceLength + (engine === 'tiptap' ? 2 : 0))
+          : state().mode === 'normal' &&
+            state().engine === engine &&
+            state().editable &&
+            (fixture === 'mixed'
+              ? state().formatted && length() > 0
+              : length() === sourceLength + (engine === 'tiptap' ? 2 : 0)))
     } else if (pending.kind === 'key')
       ready = length() === pending.beforeLength + 1
     else ready = /^\d+\/\d+$/.test(count) && count !== pending.beforeCount
@@ -233,7 +316,7 @@ function installProbe({ fileName, sourceLength, engine }) {
       beforeLength: length(),
       beforeCount: document.querySelector('.find-count')?.textContent ?? '',
     }
-    if (kind === 'open') begin()
+    if (kind === 'open' || kind === 'switch') begin()
   }
   const observer = new MutationObserver(check)
   observer.observe(document.body, {
@@ -295,13 +378,16 @@ async function metrics(session) {
   return values
 }
 
-async function scrollFrames(page, frameCount) {
-  return page.evaluate(async (frameCount) => {
+export async function scrollFrames(page, session, frameCount) {
+  await page.evaluate(async () => {
+    document.querySelector('.rich-pane').scrollTop = 0
+    await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+  })
+  const before = await metrics(session)
+  const scroll = await page.evaluate(async (frameCount) => {
     const pane = document.querySelector('.rich-pane')
-    pane.scrollTop = 0
     const frame = () => new Promise((resolve) => requestAnimationFrame(resolve))
-    await frame()
-    await frame()
     const requestedPx = 3600
     const distancePx = Math.min(
       requestedPx,
@@ -315,6 +401,7 @@ async function scrollFrames(page, frameCount) {
         frames: [],
         reason: 'document fits viewport',
       }
+    performance.mark('scroll:start')
     const frames = []
     let previous = await frame()
     for (let index = 1; index <= frameCount; index++) {
@@ -324,13 +411,24 @@ async function scrollFrames(page, frameCount) {
       previous = now
     }
     await frame()
+    performance.mark('scroll:end')
     return { requestedPx, distancePx, actualPx: pane.scrollTop, frames }
   }, frameCount)
+  const after = await metrics(session)
+  const taskMs = (after.TaskDuration - before.TaskDuration) * 1000
+  return {
+    ...scroll,
+    taskMs: scroll.frames.length ? taskMs : null,
+    mainThreadPerFrameMs: scroll.frames.length
+      ? taskMs / scroll.frames.length
+      : null,
+  }
 }
 
 async function runSample(config, directory, file, out) {
-  const { engine, size, run } = config
-  const profile = join(directory, `${size}-${run}-${engine}`)
+  const { engine, size, fixture, run } = config
+  const sample = {}
+  const profile = join(directory, `${size}-${fixture}-${run}-${engine}`)
   await mkdir(profile)
   const app = await launchBenchmarkApp(profile)
   try {
@@ -353,15 +451,18 @@ async function runSample(config, directory, file, out) {
     await session.send('Performance.enable')
     await page.waitForFunction(() => document.hasFocus())
     await page.evaluate(installProbe, {
-      fileName: `${size}.md`,
+      fileName: basename(file),
       sourceLength: config.sourceLength,
       engine,
+      fixture,
     })
-    const trace = `traces/${basename(directory)}-${size}-${run}-${engine}.json`
+    const trace = `traces/${basename(directory)}-${size}-${fixture}-${run}-${engine}.json`
+    sample.trace = trace
     const finishTrace = createTraceFinalizer(session, join(out, trace))
     await session.send('Tracing.start', {
       transferMode: 'ReturnAsStream',
-      categories: 'devtools.timeline,blink.user_timing',
+      categories:
+        'devtools.timeline,blink.user_timing,v8,disabled-by-default-devtools.timeline.frame,disabled-by-default-v8.gc',
     })
     let tracing = true
     try {
@@ -372,7 +473,32 @@ async function runSample(config, directory, file, out) {
       const observed = await page.evaluate(() =>
         window.__editorBenchmark.state(),
       )
-      requireFormattedEditor(engine, observed)
+      sample.open = {
+        path: observed.mode === 'markdown' ? 'source-first' : 'formatted',
+        observed,
+      }
+      Object.assign(
+        sample.open,
+        await ensureFormattedEditor(
+          engine,
+          observed,
+          async () => {
+            await arm(page, 'switch', 'switch')
+            await page
+              .getByRole('button', { name: 'normal', exact: true })
+              .click()
+            await finish(page, 'switch')
+            return page.evaluate(() => window.__editorBenchmark.state())
+          },
+          fixture === 'mixed',
+        ),
+      )
+      const opened = await page.evaluate(() => window.hibi.getDocument())
+      assert.equal(
+        hash(opened.markdown),
+        config.sourceHash,
+        'opened source differs from fixture',
+      )
       await page.evaluate(() => {
         const element = document.querySelector(
           '.rich-pane .tiptap, .rich-pane .cm-content',
@@ -386,6 +512,9 @@ async function runSample(config, directory, file, out) {
           view.focus()
         }
       })
+      await arm(page, 'warmup', 'key')
+      await page.keyboard.press('x')
+      await finish(page, 'warmup')
       const keys = []
       for (let index = 0; index < config.keys; index++) {
         const label = `key-${index}`
@@ -429,25 +558,19 @@ async function runSample(config, directory, file, out) {
       const nextCount = await page.locator('.find-count').textContent()
       await findInput.press('Escape')
       await page.locator('.find-bar').waitFor({ state: 'hidden' })
-      const scroll = await scrollFrames(page, config.scrollFrames)
+      const scroll = await scrollFrames(page, session, config.scrollFrames)
       const traceCollection = await finishTrace()
       tracing = false
       const events = JSON.parse(
         await readFile(join(out, trace), 'utf8'),
-      ).traceEvents.filter(
-        (event) =>
-          event.cat?.includes('blink.user_timing') || event.name === 'Paint',
-      )
-      await writeFile(join(out, trace), JSON.stringify({ traceEvents: events }))
+      ).traceEvents
       const runtime = await app.evaluate(() => ({ ...process.versions }))
       const addons = (await page.evaluate(() => window.hibi.getAddonStates()))
         .filter(({ enabled, blockedBy }) => enabled && !blockedBy?.length)
         .map(({ id }) => id)
         .sort()
       return {
-        size,
-        engine,
-        run,
+        ...sample,
         runtime,
         addons,
         trace,
@@ -457,7 +580,22 @@ async function runSample(config, directory, file, out) {
           height: innerHeight,
           dpr: devicePixelRatio,
         })),
-        open: operationPaint(events, 'open'),
+        open: {
+          ...sample.open,
+          ...operationPaint(
+            events,
+            sample.open.method === 'open+switch' ? 'switch' : 'open',
+            'open',
+          ),
+          source:
+            sample.open.path === 'source-first'
+              ? operationPaint(events, 'open')
+              : null,
+          switch:
+            sample.open.path === 'source-first'
+              ? operationPaint(events, 'switch')
+              : null,
+        },
         keys: keys.map((key) => ({
           ...key,
           ...operationPaint(events, key.label),
@@ -478,38 +616,69 @@ async function runSample(config, directory, file, out) {
     } finally {
       if (tracing) await finishTrace().catch(() => {})
     }
+  } catch (error) {
+    throw Object.assign(error, { sample })
   } finally {
     await app.close()
   }
 }
 
 function markdownReport(report) {
-  const cell = (stats) =>
+  const columns = [
+    ['open readyMs', 'openReadyMs'],
+    ['open → paint', 'openPaintMs'],
+    ['key task median', 'keyTaskMs'],
+    ['key task p95', 'keyTaskMs', 'p95'],
+    ['key processing median', 'keyReadyMs'],
+    ['key processing p95', 'keyReadyMs', 'p95'],
+    ['key → paint median', 'keyPaintMs'],
+    ['key → paint p95', 'keyPaintMs', 'p95'],
+    ['first find → paint', 'findFirstPaintMs'],
+    ['next find → paint', 'findNextPaintMs'],
+    ['scroll main/frame', 'scrollMainThreadPerFrameMs'],
+    ['scroll interval median', 'scrollMedianMs'],
+    ['scroll interval p95', 'scrollP95Ms'],
+  ]
+  const cell = (stats, value = 'median') =>
     stats.n
-      ? `${stats.median.toFixed(2)} [${stats.min.toFixed(2)}–${stats.max.toFixed(2)}]${stats.missing ? `; ${stats.missing} missing` : ''}`
+      ? `${stats[value].toFixed(2)} [${stats.min.toFixed(2)}–${stats.max.toFixed(2)}]${stats.missing ? `; ${stats.missing} missing` : ''}`
       : 'n/a'
   return [
     `# editor comparison (${report.smoke ? 'smoke only' : report.status})`,
     '',
-    `status: ${report.status}. all timings in ms; cells are median across launches [min–max]. per-key and frame p95 use nearest rank within each launch.`,
+    `status: ${report.status}. all timings in ms; cells are median [min–max], or nearest-rank p95 where named. key statistics pool measured keys across launches; other statistics summarize launches.`,
     '',
-    '| size | engine | runs | key paints | open → paint | key task median | key task p95 | key → paint median | key → paint p95 | first find → paint | next find → paint | scroll frame median | scroll frame p95 |',
-    '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    `| size | fixture | engine | passed/failed | open method | key paints | ${columns.map(([name]) => name).join(' | ')} |`,
+    `| --- | --- | --- | ---: | --- | ---: | ${columns.map(() => '---:').join(' | ')} |`,
     ...report.summary.map(
       (row) =>
-        `| ${row.size} | ${row.engine} | ${row.runs} | ${row.keyPaintCoverage.observed}/${row.keyPaintCoverage.total} | ${Object.values(row.metrics).map(cell).join(' | ')} |`,
+        `| ${row.size} | ${row.fixture} | ${row.engine} | ${row.runs}/${row.failed} | ${row.openMethods.join(', ') || 'n/a'} | ${row.keyPaintCoverage.observed}/${row.keyPaintCoverage.total} | ${columns.map(([, name, value]) => cell(row.metrics[name], value)).join(' | ')} |`,
     ),
     '',
     'hidden windows, focus emulation, fresh profiles; engine order alternates within balanced pairs (ab, ba). startup and engine-selection reload are excluded. no os cache clearing.',
-    'open starts before the native open menu call and ends at the first renderer Paint after editable formatted DOM with the expected model length and loaded fonts. keys start at renderer keydown; find starts at input/enter. ready and paint milestones are retained separately.',
-    'Paint is a same-thread temporal trace match within the operation, not proof of glyph presentation or physical keyboard latency. missing paint is n/a, never zero. cdp task deltas include observer/driver work and work during the two-frame settlement.',
-    'scroll requests 3600 css px over a fixed number of animation frames; short documents clamp distance. documents that fit have no scroll sample. raw distances and frame intervals are in results.json.',
+    'open readyMs ends at editable formatted DOM with loaded fonts; mixed fixtures also require a rendered heading. open paint is the first subsequent renderer Paint. source-first tiptap records the source open, then clicks normal view; open+switch runs from the initial open through the first formatted paint, with switch-only timings retained. codemirror source fallback fails that sample with a #450 label and the matrix continues.',
+    'one untimed warm-up key precedes measured keys. key processing is keydown → model-ready (readyMs); cdp task deltas also include observer/driver work and two-frame settlement. key → paint is mostly next-frame wait (0.6–14.8 ms in prior input traces); it is not a processing-time metric.',
+    'Paint is a same-thread temporal trace match within the operation, not proof of glyph presentation or physical keyboard latency. missing paint is n/a, never zero. full frame, layout, gc and User Timing evidence is retained in traces.',
+    'scroll requests 3600 css px over a fixed number of animation frames after resetting and settling at the top. main/frame is the CDP TaskDuration delta divided by measured scroll frames; it includes the scroll driver and final settlement. short documents clamp distance; documents that fit have no scroll sample. raw task deltas, distances and frame intervals are in results.json.',
+    "the prose 575kb fixture is trace-input-paint.mjs's exact 574,998-byte, 100,000-word paragraph fixture. mixed fixtures repeat headings, emphasis, links, lists, code, a table and math at the same byte sizes. math rendering depends on the enabled addons recorded per sample.",
     report.smoke
       ? 'smoke numbers validate the sampler under shared load; they establish no performance ranking or full-matrix pass.'
       : 'compare complete pairs on a quiet machine; this report does not enforce a speed threshold.',
+    ...report.samples
+      .filter((sample) => sample.status === 'failed')
+      .map(
+        (sample) =>
+          `failure: ${sample.size}/${sample.fixture}/${sample.engine} run ${sample.run + 1}: ${sample.error}`,
+      ),
     ...(report.error ? ['', `failure: ${report.error}`] : []),
     '',
   ].join('\n')
+}
+
+async function fileHashes(paths) {
+  const result = {}
+  for (const path of paths.sort()) result[path] = hash(await readFile(path))
+  return result
 }
 
 async function main() {
@@ -520,6 +689,7 @@ async function main() {
       keys: { type: 'string' },
       'scroll-frames': { type: 'string' },
       sizes: { type: 'string' },
+      fixtures: { type: 'string' },
       out: { type: 'string', default: 'test-results/editor-benchmark' },
     },
   })
@@ -540,6 +710,13 @@ async function main() {
       selected.every((size) => ['blank', '100kb'].includes(size)),
       'smoke is limited to blank and 100kb',
     )
+  const selectedFixtures = values.fixtures?.split(',') ?? fixtures
+  assert.ok(
+    selectedFixtures.length &&
+      selectedFixtures.every((fixture) => fixtures.includes(fixture)) &&
+      new Set(selectedFixtures).size === selectedFixtures.length,
+    'unknown or repeated fixtures',
+  )
   const positive = (value, minimum) => {
     const number = Number(value)
     assert.ok(
@@ -548,7 +725,8 @@ async function main() {
     )
     return number
   }
-  const runs = positive(values.runs ?? (values.smoke ? 2 : 5), 1)
+  const runs = positive(values.runs ?? (values.smoke ? 2 : 6), 2)
+  const plan = editorBenchmarkPlan(selected, runs, selectedFixtures)
   const keys = positive(values.keys ?? (values.smoke ? 4 : 20), 2)
   const frameCount = positive(
     values['scroll-frames'] ?? (values.smoke ? 12 : 60),
@@ -557,6 +735,11 @@ async function main() {
   const out = resolve(values.out)
   await mkdir(join(out, 'traces'), { recursive: true })
   const directory = await mkdtemp(join(out, 'scratch-'))
+  const rendererFiles = await fileHashes(
+    (await readdir('out/renderer', { recursive: true, withFileTypes: true }))
+      .filter((entry) => entry.isFile())
+      .map((entry) => join(entry.parentPath, entry.name)),
+  )
   const report = {
     smoke: values.smoke,
     status: 'running',
@@ -564,7 +747,18 @@ async function main() {
     revision: execFileSync('git', ['rev-parse', 'HEAD'], {
       encoding: 'utf8',
     }).trim(),
+    gitStatus: execFileSync('git', ['status', '--porcelain'], {
+      encoding: 'utf8',
+    }),
     samplerHash: hash(await readFile(new URL(import.meta.url))),
+    helperHashes: await fileHashes([
+      'scripts/benchmark-flows.mjs',
+      'scripts/trace-stream.mjs',
+      'tests/electron.mjs',
+      'tests/keyboard.mjs',
+    ]),
+    rendererBuildHash: hash(JSON.stringify(rendererFiles)),
+    rendererFiles,
     buildHash: hash(await readFile('out/main/index.js')),
     lockfileHash: hash(await readFile('package-lock.json')),
     dependencies: Object.fromEntries(
@@ -595,6 +789,8 @@ async function main() {
       keys,
       scrollFrames: frameCount,
       selected,
+      fixtures: selectedFixtures,
+      warmupKeys: 1,
       hidden: true,
       focusEmulation: true,
       scrollPx: 3600,
@@ -614,44 +810,62 @@ async function main() {
   }
   try {
     for (const size of selected) {
-      const source = editorFixture(size)
-      const file = join(directory, `${size}.md`)
-      await writeFile(file, source)
-      report.fixtures.push({
-        size,
-        bytes: Buffer.byteLength(source),
-        sha256: hash(source),
-      })
-      for (const row of editorBenchmarkPlan([size], runs)) {
-        console.error(
-          `${values.smoke ? 'smoke ' : ''}${size} ${row.engine} run ${row.run + 1}/${runs}`,
-        )
-        const sample = await runSample(
-          {
-            ...row,
-            keys,
-            scrollFrames: frameCount,
-            sourceLength: source.length,
-            expectedHash: hash('x'.repeat(keys) + source),
-          },
-          directory,
-          file,
-          out,
-        )
-        const other = report.samples.find(
-          (sample) => sample.size === size && sample.engine !== row.engine,
-        )
-        if (other)
-          assert.deepEqual(
-            sample.addons,
-            other.addons,
-            'paired engines must use the same addons',
+      for (const fixture of size === 'blank' ? ['prose'] : selectedFixtures) {
+        const source = editorFixture(size, fixture)
+        const file = join(directory, `${size}-${fixture}.md`)
+        await writeFile(file, source)
+        report.fixtures.push({
+          size,
+          fixture,
+          bytes: Buffer.byteLength(source),
+          sha256: hash(source),
+        })
+        for (const row of plan.filter(
+          (row) => row.size === size && row.fixture === fixture,
+        )) {
+          console.error(
+            `${values.smoke ? 'smoke ' : ''}${size} ${fixture} ${row.engine} run ${row.run + 1}/${runs}`,
           )
-        report.samples.push(sample)
-        await save()
+          const sample = await captureEditorSample(row, async () => {
+            const sample = await runSample(
+              {
+                ...row,
+                keys,
+                scrollFrames: frameCount,
+                sourceLength: source.length,
+                sourceHash: hash(source),
+                expectedHash: hash('x'.repeat(keys + 1) + source),
+              },
+              directory,
+              file,
+              out,
+            )
+            const other = report.samples.find(
+              (sample) =>
+                sample.status === 'complete' &&
+                sample.size === size &&
+                sample.fixture === fixture &&
+                sample.engine !== row.engine,
+            )
+            if (other)
+              assert.deepEqual(
+                sample.addons,
+                other.addons,
+                'paired engines must use the same addons',
+              )
+            return sample
+          })
+          report.samples.push(sample)
+          if (sample.status === 'failed')
+            console.error(`sample failed: ${sample.error}`)
+          await save()
+        }
       }
     }
-    report.status = 'complete'
+    report.status = report.samples.some((sample) => sample.status === 'failed')
+      ? 'failed'
+      : 'complete'
+    if (report.status === 'failed') process.exitCode = 1
   } catch (error) {
     report.status = 'failed'
     report.error = error.message

@@ -2,10 +2,13 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
 import {
+  captureEditorSample,
   editorBenchmarkPlan,
   editorFixture,
+  ensureFormattedEditor,
   operationPaint,
   requireFormattedEditor,
+  scrollFrames,
   statistics,
   summarizeEditors,
 } from '../scripts/benchmark-editors.mjs'
@@ -14,8 +17,12 @@ test('editor matrix pairs both engines and reserves 50 mib for codemirror', () =
   const plan = editorBenchmarkPlan(
     ['blank', '100kb', '575kb', '2mb', '50mib'],
     2,
+    ['prose'],
   )
   assert.equal(plan.length, 18)
+  const mixed = editorBenchmarkPlan(['blank', '100kb'], 2)
+  assert.equal(mixed.length, 12)
+  assert.equal(mixed.filter((row) => row.fixture === 'mixed').length, 4)
   for (const size of ['blank', '100kb', '575kb', '2mb']) {
     assert.deepEqual(
       plan.filter((row) => row.size === size).map((row) => row.engine),
@@ -28,7 +35,45 @@ test('editor matrix pairs both engines and reserves 50 mib for codemirror', () =
   )
 })
 
-test('fixtures retain exact audit prose and declared byte sizes', () => {
+test('matrix rejects unbalanced run counts', () => {
+  for (const runs of [0, 1, 3, 2.5])
+    assert.throws(() => editorBenchmarkPlan(['blank'], runs), /even/)
+})
+
+test('mixed fixture exercises formatting without changing declared size', () => {
+  const source = editorFixture('100kb', 'mixed')
+  assert.equal(Buffer.byteLength(source), 100000)
+  for (const syntax of [
+    '# Heading',
+    '**bold**',
+    '*italic*',
+    '[link](https://example.com/)',
+    '- first item',
+    '```js',
+    '| name | value |',
+    '$x^2$',
+  ])
+    assert.ok(source.includes(syntax), `missing mixed syntax: ${syntax}`)
+})
+
+test('mixed readiness requires a rendered element', () => {
+  assert.throws(
+    () =>
+      requireFormattedEditor(
+        'codemirror',
+        {
+          mode: 'normal',
+          engine: 'codemirror',
+          editable: true,
+          formatted: false,
+        },
+        true,
+      ),
+    /formatted element/,
+  )
+})
+
+test('fixtures retain exact trace-input-paint prose and declared byte sizes', () => {
   const audit = editorFixture('575kb')
   assert.equal(audit.length, 574998)
   assert.equal(audit.split(/\s+/).length, 100000)
@@ -127,29 +172,180 @@ test('formatted checks reject source fallback, read-only input and wrong engine'
     )
 })
 
-test('summaries weight launches equally and never turn unavailable paint into zero', () => {
+test('summaries pool measured keys and retain missing paints and launch spread', () => {
   const base = {
     size: 'blank',
+    fixture: 'prose',
     engine: 'tiptap',
-    open: { paintMs: null },
+    status: 'complete',
+    open: { readyMs: 4, paintMs: null, method: 'open' },
     find: { first: { paintMs: 5 }, next: { paintMs: 6 } },
-    scroll: { frames: [] },
+    scroll: { frames: [], mainThreadPerFrameMs: null },
   }
   const rows = summarizeEditors([
     {
       ...base,
-      keys: [
-        { taskMs: 1, paintMs: 10 },
-        { taskMs: 3, paintMs: 20 },
-      ],
+      keys: Array.from({ length: 20 }, (_, i) => ({
+        taskMs: i === 19 ? 100 : 1,
+        readyMs: 0.5,
+        paintMs: 10,
+      })),
+      scroll: { frames: [16.7, 16.7], mainThreadPerFrameMs: 6 },
     },
-    { ...base, keys: [{ taskMs: 10, paintMs: null }] },
+    {
+      ...base,
+      keys: Array.from({ length: 20 }, () => ({
+        taskMs: 2,
+        readyMs: 1,
+        paintMs: null,
+      })),
+      scroll: { frames: [16.7, 16.7], mainThreadPerFrameMs: 4 },
+    },
+    { ...base, status: 'failed', error: 'unavailable' },
   ])
   assert.equal(rows.length, 1)
-  assert.deepEqual(rows[0].keyPaintCoverage, { observed: 2, total: 3 })
-  assert.equal(rows[0].metrics.keyTaskMedianMs.median, 6)
-  assert.equal(rows[0].metrics.keyPaintMedianMs.median, 15)
-  assert.equal(rows[0].metrics.keyPaintMedianMs.missing, 1)
-  assert.equal(rows[0].metrics.openPaintMs.median, null)
-  assert.equal(rows[0].metrics.scrollP95Ms.median, null)
+  const row = rows[0]
+  assert.equal(row.runs, 2)
+  assert.equal(row.failed, 1)
+  assert.deepEqual(row.keyPaintCoverage, { observed: 20, total: 40 })
+  assert.equal(row.metrics.keyTaskMs.n, 40)
+  assert.equal(row.metrics.keyTaskMs.median, 2)
+  assert.equal(
+    row.metrics.keyTaskMs.p95,
+    2,
+    'p95 must pool keys, not launch maxima',
+  )
+  assert.equal(row.metrics.keyReadyMs.median, 0.75)
+  assert.equal(row.metrics.keyPaintMs.median, 10)
+  assert.equal(row.metrics.keyPaintMs.missing, 20)
+  assert.equal(row.metrics.openReadyMs.median, 4)
+  assert.equal(row.metrics.openPaintMs.median, null)
+  assert.equal(row.metrics.scrollMainThreadPerFrameMs.median, 5)
+  assert.equal(row.metrics.scrollP95Ms.median, 16.7)
+
+  const failed = summarizeEditors([{ ...base, status: 'failed' }])[0]
+  assert.equal(failed.runs, 0)
+  assert.equal(failed.failed, 1)
+  assert.equal(failed.metrics.keyTaskMs.median, null)
+})
+
+test('source-first tiptap requests formatted view, then measures from initial open', async () => {
+  let switches = 0
+  const source = { mode: 'markdown', editable: false }
+  const opened = await ensureFormattedEditor(
+    'tiptap',
+    source,
+    async () => {
+      switches++
+      return {
+        mode: 'normal',
+        engine: 'tiptap',
+        editable: true,
+        formatted: true,
+      }
+    },
+    true,
+  )
+  assert.equal(switches, 1)
+  assert.deepEqual(opened, { path: 'source-first', method: 'open+switch' })
+  const events = [
+    mark('open:start', 1000),
+    mark('switch:start', 8000),
+    mark('switch:ready', 10000),
+    { name: 'Paint', ts: 11000, pid: 1, tid: 2 },
+    mark('switch:end', 12000),
+  ]
+  assert.equal(operationPaint(events, 'switch', 'open').readyMs, 9)
+  assert.equal(operationPaint(events, 'switch', 'open').paintMs, 10)
+  assert.equal(operationPaint(events, 'switch').paintMs, 3)
+  await ensureFormattedEditor(
+    'codemirror',
+    { mode: 'normal', engine: 'codemirror', editable: true },
+    () => assert.fail('formatted open must not switch'),
+  )
+})
+
+test('source-first codemirror and other sample failures do not abort later sizes', async () => {
+  const samples = []
+  const plan = editorBenchmarkPlan(['575kb', '2mb'], 2, ['prose'])
+  for (const row of plan) {
+    samples.push(
+      await captureEditorSample(row, async () => {
+        if (row.run === 0 && row.engine === 'tiptap')
+          throw new Error('probe failed')
+        const open = await ensureFormattedEditor(
+          row.engine,
+          { mode: 'markdown' },
+          async () => ({ mode: 'normal', engine: 'tiptap', editable: true }),
+        )
+        return { open }
+      }),
+    )
+  }
+  assert.equal(samples.length, 8)
+  assert.equal(samples.filter((sample) => sample.status === 'failed').length, 6)
+  assert.equal(samples.at(-1).size, '2mb')
+  assert.equal(samples.at(-1).status, 'complete')
+  assert.equal(samples.at(-1).open.path, 'source-first')
+  for (const sample of samples) {
+    assert.equal(sample.loadAverage.length, 3)
+    assert.ok(sample.loadAverage.every(Number.isFinite))
+    assert.ok(sample.startedAt)
+    if (sample.engine === 'codemirror')
+      assert.match(sample.error, /codemirror source-first.*#450/)
+  }
+})
+
+test('scroll reports task milliseconds per frame, excluding top-reset work', async () => {
+  let stage = 0
+  const page = {
+    async evaluate() {
+      if (stage === 0) {
+        stage++
+        return
+      }
+      assert.equal(
+        stage++,
+        2,
+        'metrics must start after reset and before scrolling',
+      )
+      return {
+        requestedPx: 3600,
+        distancePx: 3600,
+        actualPx: 3600,
+        frames: Array(12).fill(16.7),
+      }
+    },
+  }
+  const session = {
+    async send(method) {
+      assert.equal(method, 'Performance.getMetrics')
+      const duration = stage++ === 1 ? 1 : 1.072
+      return {
+        metrics: [
+          'TaskDuration',
+          'ScriptDuration',
+          'LayoutDuration',
+          'RecalcStyleDuration',
+        ].map((name) => ({ name, value: duration })),
+      }
+    },
+  }
+  const scroll = await scrollFrames(page, session, 12)
+  assert.ok(Math.abs(scroll.taskMs - 72) < 1e-8)
+  assert.ok(Math.abs(scroll.mainThreadPerFrameMs - 6) < 1e-8)
+  assert.equal(scroll.frames.length, 12)
+
+  stage = 0
+  const fitting = await scrollFrames(
+    {
+      async evaluate() {
+        return { frames: [], reason: 'document fits viewport' }
+      },
+    },
+    session,
+    12,
+  )
+  assert.equal(fitting.mainThreadPerFrameMs, null)
+  assert.equal(fitting.taskMs, null)
 })

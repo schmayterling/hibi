@@ -153,7 +153,12 @@ function decorateCell(
         const nodeOut = sink(revealed)
         let skip = false
         for (const nodeView of views.get(node.name) ?? []) {
-          cellState ??= EditorState.create({ doc: text })
+          cellState ??= EditorState.create({
+            doc: text,
+            extensions: state
+              .facet(formattedLiteral)
+              .map((name) => formattedLiteral.of(name)),
+          })
           const context: FormattedRenderContext = {
             state: cellState,
             visible: { from: 0, to: text.length },

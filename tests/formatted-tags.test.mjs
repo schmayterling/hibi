@@ -350,6 +350,151 @@ test('shift-click on a tag browses it, also in a table cell, and a plain click p
   await page.keyboard.press('Escape')
 })
 
+test('active table tag shift-click survives selection, typing and undo', {
+  timeout: 90000,
+}, async () => {
+  await engine(true)
+  await open('parity.md')
+  const original = await page.evaluate(
+    async () => (await window.hibi.getDocument()).markdown,
+  )
+  await page.locator('.rich-pane table .hibi-tag[data-tag="cell"]').click()
+  const cell = page.locator('.rich-pane .hibi-lp-cell-editor .cm-content')
+  await cell.waitFor()
+  await page.keyboard.press('Home')
+  await page.keyboard.press('Shift+ArrowRight')
+  assert.ok(
+    await cell.evaluate(
+      (element) => !element.cmTile.root.view.state.selection.main.empty,
+    ),
+  )
+  await page.keyboard.type('z')
+  await waitForAsync(
+    page,
+    async (text) => (await window.hibi.getDocument()).markdown !== text,
+    original,
+  )
+  await page.keyboard.press(`${mod}+z`)
+  await waitForAsync(
+    page,
+    async (text) => (await window.hibi.getDocument()).markdown === text,
+    original,
+  )
+  await page
+    .locator('.rich-pane .hibi-lp-cell-editor .hibi-tag[data-tag="cell"]')
+    .click({ modifiers: ['Shift'] })
+  await page
+    .getByRole('complementary', { name: /^tags$/i })
+    .getByRole('region', { name: 'Notes tagged #cell' })
+    .getByRole('button', { name: /^parity\.md$/i })
+    .waitFor()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    original,
+  )
+  await page.keyboard.press('Escape')
+})
+
+test('long names resolve off the input path and keep their complete tag identity', {
+  timeout: 90000,
+}, async () => {
+  const name = 'ΟΣ'.repeat(16000)
+  const markdown = 'prefix #' + name + ' suffix'
+  await writeFile(join(folder, 'notes', 'long-name.md'), markdown)
+  await engine(true)
+  await page.evaluate(() => {
+    const original = String.prototype.matchAll
+    window.longTagScan = {
+      units: 0,
+      restore: () => {
+        String.prototype.matchAll = original
+      },
+    }
+    String.prototype.matchAll = function (pattern) {
+      if (pattern instanceof RegExp && pattern.source.includes('#('))
+        window.longTagScan.units += this.length
+      return original.call(this, pattern)
+    }
+  })
+  try {
+    await open('long-name.md')
+    await page.waitForFunction(
+      (expected) =>
+        document
+          .querySelector('.rich-pane .hibi-tag')
+          ?.getAttribute('data-tag') === expected,
+      name.toLowerCase(),
+    )
+    await page.evaluate((at) => {
+      window.longTagScan.units = 0
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.dispatch({ changes: { from: at, insert: 'A' } })
+    }, 8 + name.length)
+    await page.waitForFunction(
+      (expected) =>
+        document
+          .querySelector('.rich-pane .hibi-tag')
+          ?.getAttribute('data-tag') === expected,
+      (name + 'A').toLowerCase(),
+    )
+    assert.ok(await page.evaluate(() => window.longTagScan.units < 2048))
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      'prefix #' + name + 'A suffix',
+    )
+  } finally {
+    await page.evaluate(() => window.longTagScan.restore())
+  }
+})
+
+test('table tags follow live bold syntax changes in static and active cells', {
+  timeout: 90000,
+}, async () => {
+  await writeFile(
+    join(folder, 'notes', 'literal-tags.md'),
+    '**#hidden** #plain\n\n| h |\n| - |\n| **#hidden** #plain |',
+  )
+  await engine(true)
+  await open('literal-tags.md')
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll('.rich-pane .hibi-tag[data-tag="hidden"]')
+        .length === 2,
+  )
+  const toggle = async (enabled) => {
+    await choose('settings')
+    await page.getByRole('tab', { name: /^syntax$/i, exact: true }).click()
+    await page
+      .getByRole('checkbox', { name: /^bold$/i, exact: true })
+      .setChecked(enabled)
+    await page
+      .getByRole('button', { name: /^back to app$/i, exact: true })
+      .click()
+  }
+  try {
+    await toggle(false)
+    await page.waitForFunction(
+      () => !document.querySelector('.rich-pane .hibi-tag[data-tag="hidden"]'),
+    )
+    await page.locator('.rich-pane table .hibi-tag[data-tag="plain"]').click()
+    await page.locator('.rich-pane .hibi-lp-cell-editor .cm-content').waitFor()
+    assert.equal(
+      await page
+        .locator('.rich-pane .hibi-lp-cell-editor .hibi-tag[data-tag="hidden"]')
+        .count(),
+      0,
+    )
+  } finally {
+    await toggle(true)
+  }
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll('.rich-pane .hibi-tag[data-tag="hidden"]')
+        .length === 2,
+  )
+})
+
 test('turning tags off shows them as text in the formatted view, and on styles them again', {
   timeout: 90000,
 }, async () => {

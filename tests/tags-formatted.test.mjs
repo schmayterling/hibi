@@ -3,7 +3,11 @@ import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import { GFM, parser } from '@lezer/markdown'
 import { formattedTags } from '../src/addons/tags/formatted.ts'
-import { formattedLiteral } from '../src/renderer/src/formatted-contributions.ts'
+import { renderInline } from '../src/renderer/src/formatted/table-cells.ts'
+import {
+  formattedLiteral,
+  formattedViews,
+} from '../src/renderer/src/formatted-contributions.ts'
 import { noteTags } from '../src/shared/note-tags.ts'
 
 const markdown = parser.configure(GFM)
@@ -24,7 +28,33 @@ function render(
     doc,
     extensions: off.map((name) => formattedLiteral.of(name)),
   })
-  let read = 0
+  let read = 0,
+    visits = 0
+  const wrap = (node) =>
+    node &&
+    new Proxy(node, {
+      get(target, key) {
+        if (
+          ['prevSibling', 'nextSibling', 'firstChild', 'lastChild'].includes(
+            key,
+          )
+        )
+          visits++
+        const value = Reflect.get(target, key, target)
+        if (
+          [
+            'prevSibling',
+            'nextSibling',
+            'firstChild',
+            'lastChild',
+            'parent',
+          ].includes(key)
+        )
+          return wrap(value)
+        if (key === 'childAfter') return (at) => wrap(value.call(target, at))
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
   const sliceDoc = state.sliceDoc
   state.sliceDoc = (from, to) => {
     read += to - from
@@ -68,10 +98,14 @@ function render(
           })
         }
         if (view.nodes.includes(node.name))
-          view.decorate(node, out, { state, visible, revealed: false })
+          view.decorate(
+            { from: node.from, to: node.to, node: wrap(node.node) },
+            out,
+            { state, visible, revealed: false },
+          )
       },
     })
-  return { marks, read }
+  return { marks, read, visits }
 }
 
 const tags = (doc, options) =>
@@ -142,6 +176,101 @@ test('syntax that is off shows as written and holds no tags', () => {
   assert.deepEqual(tags(doc), ['bold', 'heading', 'plain'])
   assert.deepEqual(tags(doc, { off: ['StrongEmphasis'] }), ['heading', 'plain'])
   assert.deepEqual(tags(doc, { off: ['ATXHeading2'] }), ['bold', 'plain'])
+})
+
+test('entity siblings outside the viewport do not add traversal work', (t) => {
+  for (const count of [2000, 8000, 32000]) {
+    const doc = 'prefix #visible ' + '&amp; '.repeat(count) + ' end'
+    const result = render(doc, { ranges: [{ from: 0, to: 32 }] })
+    assert.deepEqual(
+      result.marks.map((mark) => mark['data-tag']),
+      ['visible'],
+    )
+    assert.ok(
+      result.visits < 64,
+      `${count} entities: ${result.visits} node visits`,
+    )
+    const link = render(
+      '[label ' + '&amp; '.repeat(count) + '](target) #after',
+      { ranges: [{ from: 0, to: 32 }] },
+    )
+    assert.deepEqual(link.marks, [])
+    assert.ok(
+      link.visits < 64,
+      `${count} linked entities: ${link.visits} node visits`,
+    )
+    t.diagnostic(
+      JSON.stringify({ count, visits: result.visits, linkVisits: link.visits }),
+    )
+  }
+})
+
+test('long tag names do not materialize beyond the viewport on the input path', (t) => {
+  for (const count of [2000, 8000, 32000]) {
+    const doc = 'prefix #' + 'a'.repeat(count) + ' suffix'
+    const from = Math.floor(doc.length / 2)
+    const result = render(doc, { ranges: [{ from, to: from + 32 }] })
+    assert.ok(result.read < 1200, `${count} name units: ${result.read} read`)
+    t.diagnostic(JSON.stringify({ count, inputRead: result.read }))
+  }
+})
+
+test('viewport endpoints inside astral letters retain the whole tag identity', () => {
+  for (const doc of ['#𐐀abc', '#abc𐐀def']) {
+    const whole = render(doc).marks
+    for (let from = 0; from < doc.length; from++) {
+      const to = from + 1
+      const expected = whole.flatMap((mark) => {
+        const left = Math.max(from, mark.from),
+          right = Math.min(to, mark.to)
+        return right > left ? [{ ...mark, from: left, to: right }] : []
+      })
+      assert.deepEqual(
+        render(doc, { ranges: [{ from, to }] }).marks,
+        expected,
+        `${doc}: ${from}`,
+      )
+    }
+  }
+})
+
+test('static table cells inherit disabled inline syntax', (t) => {
+  class Element {
+    attributes = {}
+    children = []
+    setAttribute(name, value) {
+      this.attributes[name] = value
+    }
+    append(...children) {
+      this.children.push(...children)
+    }
+  }
+  const prior = globalThis.document
+  globalThis.document = {
+    createElement: () => new Element(),
+    createTextNode: (text) => ({ text }),
+  }
+  t.after(() => {
+    if (prior === undefined) delete globalThis.document
+    else globalThis.document = prior
+  })
+  for (const disabled of [false, true]) {
+    const state = EditorState.create({
+      extensions: [
+        formattedViews.of(view),
+        disabled ? formattedLiteral.of('StrongEmphasis') : [],
+      ],
+    })
+    const into = new Element()
+    renderInline({ state }, '**#hidden** #plain', into)
+    const found = []
+    const collect = (node) => {
+      if (node.attributes?.['data-tag']) found.push(node.attributes['data-tag'])
+      for (const child of node.children ?? []) collect(child)
+    }
+    collect(into)
+    assert.deepEqual(found, disabled ? ['plain'] : ['hidden', 'plain'])
+  }
 })
 
 /** Small deterministic generator, so failures reproduce. */

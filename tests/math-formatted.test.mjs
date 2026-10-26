@@ -6,7 +6,9 @@ import {
   blockMathSyntax,
   inlineMathEnd,
   inlineMathSyntax,
+  inlineMathWork,
 } from '../src/addons/math/formatted-syntax.ts'
+import { mathInsertion } from '../src/addons/math/insert.ts'
 import { inlineMath, mathTokens } from '../src/addons/math/syntax.ts'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import { outlineMathParser } from '../src/renderer/src/source-outline-math.ts'
@@ -247,6 +249,55 @@ test('inline math ends where the tokenizer expression ends, in linear time', {
     const closed = `$${'\\'.repeat(count)}x$`
     assert.equal(inlineMathEnd(closed, 0), inlineMath(closed).raw.length)
   }
+})
+
+test('many short formulas on one line cost work linear in its length', () => {
+  const work = []
+  for (const count of [1000, 2000, 4000, 8000]) {
+    // `$x\\$` closes right away and the next `\\` is an escape, so every
+    // other `$` opens a formula; scanning to the line end per opener was quadratic.
+    const line = `${'$x\\\\'.repeat(count)}$`
+    inlineMathWork.positions = 0
+    let formulas = 0
+    formatted.parse(line).iterate({
+      enter(node) {
+        if (node.name === 'InlineMath') formulas++
+      },
+    })
+    assert.equal(formulas, count / 2)
+    work.push(inlineMathWork.positions / line.length)
+  }
+  for (const perUnit of work) assert.ok(perUnit <= 1, JSON.stringify(work))
+})
+
+test('inserted display math stays in the quote or list item at the caret', () => {
+  for (const [line, column, containers] of [
+    ['before after', 6, []],
+    ['> before after', 8, ['Blockquote']],
+    ['- before after', 8, ['BulletList', 'ListItem']],
+    ['1. before after', 9, ['OrderedList', 'ListItem']],
+    ['> - before after', 10, ['Blockquote', 'BulletList', 'ListItem']],
+    ['- > before after', 10, ['BulletList', 'ListItem', 'Blockquote']],
+  ]) {
+    const source =
+      line.slice(0, column) +
+      mathInsertion(line, column, 'x^2', true) +
+      line.slice(column)
+    // The formula and the text after it keep the line's containers.
+    const tree = formatted.parse(source)
+    const at = (pos) => {
+      const names = []
+      for (let node = tree.resolve(pos, 1); node; node = node.parent)
+        if (node.type.is('Block') && node.name !== 'Paragraph')
+          names.unshift(node.name)
+      return names.filter((name) => name !== 'Document')
+    }
+    const formula = source.indexOf('$$')
+    assert.deepEqual(at(formula), [...containers, 'BlockMath'], source)
+    assert.deepEqual(at(source.indexOf('after')), containers, source)
+    assert.deepEqual(markedMath(source), [['block', 'x^2']], source)
+  }
+  assert.equal(mathInsertion('> quote', 3, 'y', false), '$y$')
 })
 
 test('a display block decides by its closing line and keeps quote markers inside it', () => {

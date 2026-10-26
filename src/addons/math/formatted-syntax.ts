@@ -22,46 +22,62 @@ const formulaLimit = 10_000
 const isTerminator = (code: number) =>
   code === 10 || code === 13 || code === 0x2028 || code === 0x2029
 
+/** Positions the inline math scan examined, for complexity tests. */
+export const inlineMathWork = { positions: 0 }
+
 /**
  * The end of inline math opened by the `$` at `open`, or -1, as the inline
- * tokenizer's regular expression matches: its lazy body prefers `\x` pairs
- * and falls back to a plain backslash. Paths end at a line break or at a `$`
- * without a backslash before it, and each position is solved once, so runs of
- * backslashes take linear time instead of the expression's backtracking.
+ * tokenizer's regular expression matches. It searches depth first in the
+ * expression's order: after each body unit the lazy body tries to close, and
+ * a `\x` pair comes before a plain backslash. A position that cannot reach a
+ * closing is remembered, so each is explored once, the search stops at the
+ * first closing, and runs of backslashes cost linear time instead of the
+ * expression's backtracking.
  */
 export function inlineMathEnd(text: string, open: number, end = text.length) {
   const start = open + 1
   const first = text.charCodeAt(start)
   if (start >= end || first === 36 || first === 10) return -1
-  let stop = start + 1
-  while (stop < end) {
-    const code = text.charCodeAt(stop)
-    if (code === 10 || (code === 36 && text.charCodeAt(stop - 1) !== 92)) break
-    stop++
+  const dead = new Set<number>()
+  // Frames: where a body unit starts, and which alternative comes next.
+  const units = [start],
+    tried = [0]
+  while (units.length) {
+    const top = units.length - 1
+    const at = units[top]!
+    const code = text.charCodeAt(at)
+    let next = -1
+    if (tried[top] === 0) {
+      tried[top] = 1
+      if (code === 92 && at + 1 < end && !isTerminator(text.charCodeAt(at + 1)))
+        next = at + 2
+    }
+    if (next < 0 && tried[top] === 1) {
+      tried[top] = 2
+      if (at < end && code !== 36 && code !== 10) next = at + 1
+    }
+    if (next < 0) {
+      units.pop()
+      tried.pop()
+      dead.add(at)
+      continue
+    }
+    if (dead.has(next)) continue
+    inlineMathWork.positions++
+    if (
+      next < end &&
+      text.charCodeAt(next) === 36 &&
+      (next + 1 >= end || text.charCodeAt(next + 1) !== 36)
+    ) {
+      const latex = text.slice(start, next)
+      return latex.length > formulaLimit || latex.trim() !== latex
+        ? -1
+        : next + 1
+    }
+    units.push(next)
+    tried.push(0)
   }
-  /** The closing `$` reached after one or more body units end at a position. */
-  const after = new Int32Array(stop - start + 1).fill(-1)
-  const at = (i: number) => (i > stop ? -1 : after[i - start]!)
-  const unit = (i: number) => {
-    const code = text.charCodeAt(i)
-    let close = -1
-    if (code === 92 && i + 1 < end && !isTerminator(text.charCodeAt(i + 1)))
-      close = at(i + 2)
-    if (close < 0 && i < end && code !== 36 && code !== 10) close = at(i + 1)
-    return close
-  }
-  for (let i = stop; i > start; i--) {
-    // The lazy body tries to close before taking another unit.
-    const closes =
-      i < end &&
-      text.charCodeAt(i) === 36 &&
-      (i + 1 >= end || text.charCodeAt(i + 1) !== 36)
-    after[i - start] = closes ? i : i < stop ? unit(i) : -1
-  }
-  const close = unit(start)
-  if (close < 0) return -1
-  const latex = text.slice(start, close)
-  return latex.length > formulaLimit || latex.trim() !== latex ? -1 : close + 1
+  return -1
 }
 
 /**

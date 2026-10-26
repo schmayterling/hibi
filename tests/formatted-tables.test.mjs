@@ -452,6 +452,53 @@ test('arrow keys move into the nearest row of an adjacent table and shift-click 
   assert.ok(selection.head > doc.indexOf('| x'))
 })
 
+test('arrow keys move into tables in quotes and lists at their row text', {
+  timeout: 30000,
+}, async () => {
+  for (const [doc, header, last] of [
+    [
+      'before\n\n> | a | b |\n> | - | - |\n> | x | y |\n\nafter',
+      '> | a | b |',
+      '> | x | y |',
+    ],
+    [
+      'before\n\n- | a | b |\n  | - | - |\n  | x | y |\n\nafter',
+      '- | a | b |',
+      '  | x | y |',
+    ],
+  ]) {
+    await mount(doc)
+    const caret = () =>
+      harness.evaluate(() => {
+        const view = window.tables.view()
+        const { head } = view.state.selection.main
+        const line = view.state.doc.lineAt(head)
+        return { head, line: line.text, column: head - line.from }
+      })
+    await harness.evaluate(() => {
+      const view = window.tables.view()
+      view.focus()
+      view.dispatch({ selection: { anchor: 7 } })
+    })
+    // From the gap line into the header's text, after the container marker.
+    await harness.keyboard.press('ArrowDown')
+    const entered = await caret()
+    assert.deepEqual([entered.line, entered.column], [header, 2], doc)
+    await harness.locator('.cm-line', { hasText: header.slice(2) }).waitFor()
+    // The next press moves on through the source instead of staying put.
+    await harness.keyboard.press('ArrowDown')
+    assert.notEqual((await caret()).head, entered.head, doc)
+    await harness.evaluate(
+      (at) => window.tables.view().dispatch({ selection: { anchor: at } }),
+      doc.length - 6,
+    )
+    await harness.locator('.hibi-lp-table').waitFor()
+    await harness.keyboard.press('ArrowUp')
+    const below = await caret()
+    assert.deepEqual([below.line, below.column], [last, 2], doc)
+  }
+})
+
 test('cells show disabled syntax as written and follow syntax setting changes', {
   timeout: 30000,
 }, async () => {

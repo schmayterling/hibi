@@ -699,9 +699,12 @@ class TableView {
     return { from, to: from + this.widget.to - this.widget.from }
   }
 
-  /** Where line `index` of the table starts now. */
-  lineStart(index: number) {
-    return this.range().from - this.widget.from + this.widget.line(index).from
+  /** Where line `index` of the table has its row text now, after container markers and indentation. */
+  rowPosition(index: number) {
+    const { from, text } = this.widget.line(index)
+    const start = index ? rowStart(text, this.widget.quotes) : this.widget.start
+    const indent = /^[ \t]*/.exec(text.slice(start))![0].length
+    return this.range().from - this.widget.from + from + start + indent
   }
 
   get lines() {
@@ -746,7 +749,7 @@ function enterTable(view: EditorView, forward: boolean) {
       ? selection.head < from && target >= from
       : selection.head > to && target <= to
     if (!crosses) continue
-    const anchor = table.lineStart(forward ? 0 : table.lines - 1)
+    const anchor = table.rowPosition(forward ? 0 : table.lines - 1)
     view.dispatch({
       selection: { anchor },
       scrollIntoView: true,

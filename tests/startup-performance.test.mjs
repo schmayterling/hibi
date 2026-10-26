@@ -95,9 +95,11 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // and 10 bytes for keeping footnote notes in the formatted view (#419).
   // API 3 adds 713 bytes for formatted registrations, publication and lazy compatibility dispatch.
   // Its render-error route adds 22 bytes; callback guards stay in the lazy flavor module.
+  // Formatted word counts reuse the existing flavor registry: splitting its shared
+  // chunk adds 102 bytes and preload references add 28, with no new eager modules.
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
-    bytes <= 691080 + 713 + 22,
+    bytes <= 691080 + 713 + 22 + 130,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

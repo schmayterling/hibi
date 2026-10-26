@@ -35,6 +35,6 @@ The SDK exports `codeMirror.language` and `codeMirror.highlight` alongside state
 
 Themes can override `syntax-keyword`, `syntax-string`, `syntax-number`, `syntax-comment`, `syntax-type`, `syntax-function`, `syntax-variable`, and `syntax-operator`. Older themes derive them from existing colors. Exports embed highlighted spans and token styles without addon code.
 
-Source highlighting uses CodeMirror's incremental parser. Rich view caches unchanged blocks and skips highlighting above 100,000 characters to keep editing responsive. Exports preserve these large blocks as complete plain text.
+Source highlighting uses CodeMirror's incremental parser. Rich view caches each block's tokens per parser, so a language that loads or changes refreshes only its own blocks, once per frame. Blocks longer than 10,000 characters reuse their previous syntax tree after edits and highlight only text near the viewport, including only the columns near the visible ones on long unwrapped lines; the rest stays plain until scrolled into view. Hidden rich panes, such as the visual pane in source mode, refresh their highlighting when shown again. Exports highlight every block.
 
 See the [code language API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FCodeLanguage.md), [addon API](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2FREADME.md), and [sideload SDK](https://docs.hibi.garden/#page=development%2Faddon-api-reference%2Fsdk.md).

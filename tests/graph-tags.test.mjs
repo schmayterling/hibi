@@ -192,45 +192,66 @@ test('tags and graph plugins browse/open notes, honor drafts, and clean up when 
     name: /^workspace graph$/i,
     exact: true,
   })
+  const notes = graph.locator('.graph-nodes [role="option"]')
   await graph
-    .getByRole('button', { name: /^open a\.md$/i, exact: true })
+    .getByText('3 of 3 notes · 1 connection', { exact: true })
     .waitFor()
-  assert.equal(await graph.locator('[data-node]').count(), 3)
-  assert.equal(await graph.locator('line').count(), 1)
+  assert.equal(await notes.getAttribute('aria-setsize'), '3')
   const canvas = await graph.locator('.graph-canvas').boundingBox()
   assert.ok(Math.abs(canvas.width - canvas.height) < 1)
   await graph.getByRole('button', { name: 'Fit graph' }).click()
+  // The canvas keeps the camera transform of its last frame; wait for the
+  // frame drawn after the latest input.
+  const camera = (view) =>
+    view.locator('canvas').evaluate(async (canvas) => {
+      await new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)),
+      )
+      const { a, e, f } = canvas.getContext('2d').getTransform()
+      return `${a} ${e} ${f}`
+    })
+  // The keyboard note sits over its dot; type-ahead moves it like in other lists.
+  const focusNote = async (view, path) => {
+    const option = view.locator('.graph-nodes [role="option"]')
+    await option.focus()
+    await option.press(path[0])
+    await view
+      .getByRole('option', { name: `Open ${path}`, exact: true })
+      .waitFor()
+  }
   const assertCentered = async (view, path) => {
-    const circle = view.locator(`[data-node="${path}"] circle`)
     await page.waitForFunction(
-      (circle) => {
-        const node = circle.getBoundingClientRect()
-        const canvas = circle.closest('svg').getBoundingClientRect()
+      ({ element, path }) => {
+        const option = element.querySelector('.graph-nodes [role="option"]')
+        const canvas = element.querySelector('.graph-view')
+        if (option?.dataset.node !== path || !canvas) return false
+        const node = option.getBoundingClientRect()
+        const frame = canvas.getBoundingClientRect()
         return (
-          Math.abs(node.x + node.width / 2 - canvas.x - canvas.width / 2) < 1 &&
-          Math.abs(node.y + node.height / 2 - canvas.y - canvas.height / 2) < 1
+          node.width > 0 &&
+          Math.abs(node.x + node.width / 2 - frame.x - frame.width / 2) < 1 &&
+          Math.abs(node.y + node.height / 2 - frame.y - frame.height / 2) < 1
         )
       },
-      await circle.elementHandle(),
+      { element: await view.elementHandle(), path },
     )
   }
   const centerNode = async (view, path, keyboard = false) => {
-    const svg = view.getByRole('application', { name: 'Workspace graph' })
-    await svg.focus()
-    await svg.press('ArrowRight')
-    const scale = (
-      await svg.locator(':scope > g').getAttribute('transform')
-    ).match(/scale\(([^)]+)\)/)[1]
-    const node = view.locator(`[data-node="${path}"]`)
-    if (keyboard) await node.press('Enter')
-    else await node.locator('circle').click()
+    const application = view.getByRole('application', {
+      name: 'Workspace graph',
+    })
+    await application.focus()
+    await application.press('ArrowRight')
+    const scale = (await camera(view)).split(' ')[0]
+    await focusNote(view, path)
+    const option = view.locator('.graph-nodes [role="option"]')
+    if (keyboard) await option.press('Enter')
+    else {
+      const box = await option.boundingBox()
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+    }
     await assertCentered(view, path)
-    assert.equal(
-      (await svg.locator(':scope > g').getAttribute('transform')).match(
-        /scale\(([^)]+)\)/,
-      )[1],
-      scale,
-    )
+    assert.equal((await camera(view)).split(' ')[0], scale)
     await waitForAsync(
       page,
       async (path) => (await window.hibi.getDocument()).name === path,
@@ -254,7 +275,7 @@ test('tags and graph plugins browse/open notes, honor drafts, and clean up when 
   )
   await graph.getByRole('button', { name: /expand graph/i }).click()
   const expanded = page.getByRole('tabpanel', { name: /workspace graph/i })
-  await expanded.locator('[data-node="a.md"]').waitFor()
+  await expanded.locator('.graph-canvas[data-labels]').waitFor()
   assert.equal(await graph.locator('.graph-canvas').count(), 1)
   await expanded.getByRole('button', { name: 'Fit graph' }).click()
   await centerNode(expanded, 'a.md')
@@ -294,15 +315,16 @@ test('tags and graph plugins browse/open notes, honor drafts, and clean up when 
     let changedAt = null
     const sample = () => {
       const active = document.querySelector(
-        '.addon-sidebar [data-node][data-active="true"]',
+        '.addon-sidebar [role="option"][aria-selected="true"]',
       )?.dataset.node
       if (changedAt === null && active === 'a.md') changedAt = performance.now()
-      if (changedAt !== null)
-        window.graphCameraSamples.push(
-          document
-            .querySelector('.addon-sidebar .graph-canvas > svg > g')
-            ?.getAttribute('transform'),
-        )
+      if (changedAt !== null) {
+        const { a, e, f } = document
+          .querySelector('.addon-sidebar .graph-view canvas')
+          .getContext('2d')
+          .getTransform()
+        window.graphCameraSamples.push(`${a} ${e} ${f}`)
+      }
       if (
         performance.now() - started < 5000 &&
         (changedAt === null || performance.now() - changedAt < 400)
@@ -323,22 +345,27 @@ test('tags and graph plugins browse/open notes, honor drafts, and clean up when 
   await graph
     .getByRole('searchbox', { name: /filter graph notes/i })
     .fill('orphan')
-  await page.waitForFunction(
-    () => document.querySelectorAll('[data-node]').length === 1,
-  )
+  await notes.and(page.locator('[aria-setsize="1"]')).waitFor()
   await graph.getByRole('searchbox', { name: /filter graph notes/i }).fill('')
-  await page.waitForFunction(
-    () => document.querySelectorAll('[data-node]').length === 3,
-  )
-  const transform = () => graph.locator('svg > g').getAttribute('transform')
+  await notes.and(page.locator('[aria-setsize="3"]')).waitFor()
   await graph.getByRole('button', { name: /^fit graph$/i, exact: true }).click()
-  const before = await transform()
+  const before = await camera(graph)
   await graph.getByRole('button', { name: /^zoom in$/i, exact: true }).click()
-  assert.notEqual(await transform(), before)
+  await waitForAsync(
+    page,
+    (before) => {
+      const { a, e, f } = document
+        .querySelector('.addon-sidebar .graph-view canvas')
+        .getContext('2d')
+        .getTransform()
+      return `${a} ${e} ${f}` !== before
+    },
+    before,
+  )
   await graph.getByRole('button', { name: /^fit graph$/i, exact: true }).click()
   // Dragging a node must not open it.
-  const node = graph.locator('[data-node="a.md"] circle'),
-    bounds = await node.boundingBox()
+  await focusNote(graph, 'a.md')
+  const bounds = await notes.boundingBox()
   await page.mouse.move(
     bounds.x + bounds.width / 2,
     bounds.y + bounds.height / 2,
@@ -353,9 +380,7 @@ test('tags and graph plugins browse/open notes, honor drafts, and clean up when 
   await app.evaluate(({ dialog }) => {
     dialog.showMessageBox = async () => ({ response: 2 })
   })
-  await graph
-    .getByRole('button', { name: /^open a\.md$/i, exact: true })
-    .focus()
+  await focusNote(graph, 'a.md')
   await page.keyboard.press('Enter')
   await assertCentered(graph, 'a.md')
   assert.equal(await graph.isVisible(), true)
@@ -384,9 +409,8 @@ test('tags and graph plugins browse/open notes, honor drafts, and clean up when 
     name: /^workspace graph$/i,
     exact: true,
   })
-  await graph
-    .getByRole('button', { name: /^open a\.md$/i, exact: true })
-    .focus()
+  await graph.locator('.graph-canvas[data-labels]').waitFor()
+  await focusNote(graph, 'a.md')
   await page.keyboard.press('Enter')
   await waitForAsync(
     page,

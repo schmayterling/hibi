@@ -31,6 +31,9 @@ async function open(t, size, lead) {
     await app.close()
     await rm(folder, { recursive: true, force: true })
   })
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
   const page = await app.firstWindow()
   page.setDefaultTimeout(60000)
   await waitForDocumentEditor(app, page)
@@ -200,7 +203,8 @@ test("find shows its matches in a large note's source view that mounts again", {
     await waitForAsync(
       page,
       () =>
-        document.querySelectorAll('.source-pane .cm-searchMatch').length === 3,
+        document.querySelectorAll('.source-pane .cm-searchMatch').length ===
+          3 && document.querySelector('.find-count')?.textContent === '1/3',
     )
     assert.equal(await page.locator('.find-count').textContent(), '1/3')
     assert.equal(

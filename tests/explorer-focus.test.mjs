@@ -133,6 +133,11 @@ test('workspace creation keeps typing in rename and accepts names on click away'
             .getByRole('button', { name: `New workspace ${kind}`, exact: true })
             .click()
         await rename.waitFor()
+        await page.waitForFunction(() =>
+          document
+            .querySelector('input[aria-label="Rename item"]')
+            ?.matches(':enabled'),
+        )
         // Let editor mounts and popover focus restoration finish before typing.
         await page.evaluate(
           () =>
@@ -161,6 +166,18 @@ test('workspace creation keeps typing in rename and accepts names on click away'
       }
     }
   }
+  await page
+    .getByRole('button', { name: 'Actions for parent', exact: true })
+    .click()
+  await page.getByRole('menuitem', { name: 'Rename', exact: true }).click()
+  await page.keyboard.type('renamed-parent')
+  assert.equal(await rename.inputValue(), 'renamed-parent')
+  await page
+    .getByRole('button', { name: 'Refresh workspace', exact: true })
+    .click()
+  await rename.waitFor({ state: 'hidden' })
+  await access(join(root, 'renamed-parent', 'rich-parent-folder'))
+  await access(join(root, 'renamed-parent', 'source-parent-folder'))
   // Escape cancels the edited name without a blur commit.
   await page
     .getByRole('button', { name: 'Actions for existing.md', exact: true })

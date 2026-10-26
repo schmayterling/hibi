@@ -7,7 +7,7 @@ import type { InlineContext, MarkdownConfig } from '@lezer/markdown'
  * `]` inside, and `==text==` whose text starts and ends with a non-space.
  */
 
-/** Characters the inline scans read, for complexity tests. */
+/** Characters the inline scans and patterns read, for complexity tests. */
 export const obsidianWork = { reads: 0 }
 
 /** A wikilink or embed as the rich view reads it, with its label's place in the source. */
@@ -23,6 +23,7 @@ export type WikiParts = {
 
 /** A wikilink or embed's parts, when `source` is exactly one. */
 export function wikiParts(source: string): WikiParts | null {
+  obsidianWork.reads += source.length
   const embed = source.startsWith('!')
   const open = embed ? 3 : 2
   const inner = source.slice(open, -2)
@@ -95,7 +96,16 @@ function wikiEnd(cx: InlineContext, pos: number, embed: boolean) {
   const stop = bracketStop(cx, open)
   if (stop === open || cx.char(stop) !== 93 || cx.char(stop + 1) !== 93)
     return -1
-  return wikiParts(cx.slice(pos, stop + 2)) ? stop + 2 : -1
+  // The target, before any `|`, needs a non-space. Only the spaces after the
+  // brackets are read: the next opener's brackets end them, so no two
+  // openers read the same text.
+  for (let at = open; at < stop; at++) {
+    obsidianWork.reads++
+    const code = cx.char(at)
+    if (code === 124) return -1
+    if (!isSpace(code)) return stop + 2
+  }
+  return -1
 }
 
 /**

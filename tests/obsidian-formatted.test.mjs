@@ -119,6 +119,19 @@ test('wikilinks, embeds and highlights are read as the rich view reads them', ()
 })
 
 test('openers without closers cost each character a bounded number of reads', () => {
+  // Openers whose target is empty share one far closer; checking each must not reread the rest.
+  const reads = []
+  for (const count of [4000, 8000]) {
+    const source = `${'[[|'.repeat(count)}]]`
+    obsidianWork.reads = 0
+    lezer.parse(source)
+    reads.push(obsidianWork.reads)
+    assert.ok(
+      obsidianWork.reads <= 2 * source.length,
+      `${obsidianWork.reads} reads for ${source.length} characters of empty targets`,
+    )
+  }
+  assert.ok(reads[1] <= 2.2 * reads[0], JSON.stringify(reads))
   for (const unit of ['[[a ', '![[a ', '==a ', '==a == ', '[[a|b ==c ']) {
     const source = unit.repeat(20000)
     obsidianWork.reads = 0

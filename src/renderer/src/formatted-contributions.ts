@@ -176,7 +176,10 @@ export const formattedLiteral = Facet.define<string>()
 export const formattedDocument = Facet.define<
   { revision: number; tabId: string | null },
   { revision: number; tabId: string | null }
->({ combine: (values) => values.at(-1) ?? { revision: 0, tabId: null } })
+>({
+  combine: (values) => values.at(-1) ?? { revision: 0, tabId: null },
+  compare: (a, b) => a.revision === b.revision && a.tabId === b.tabId,
+})
 
 /** How a formatted view reads its syntax tree, which it parses near the viewport. */
 export const formattedTree = Facet.define<
@@ -195,6 +198,18 @@ export function formattedSyntaxTree(state: EditorState): Tree | null {
  * as an index of footnote definitions that an idle slice extended.
  */
 export const formattedRefresh = StateEffect.define<null>()
+
+/**
+ * State other than syntax that renderers read, such as the footnote labels
+ * references resolve against. Renderers that keep their output, like table
+ * cells, render again when it changes.
+ */
+export const formattedRenderInputs = Facet.define<unknown>()
+
+/** The formatted view's state, in the state a renderer gets for text drawn apart from it, such as a table cell's. */
+export const formattedOwner = Facet.define<EditorState, EditorState | null>({
+  combine: (values) => values[0] ?? null,
+})
 
 /** Show the Markdown markers of the formatted text under the selection. */
 export const showMarkdownMarkers = Facet.define<boolean, boolean>({
@@ -248,6 +263,17 @@ function load(entry: FormattedEntry) {
   }, failed)
 }
 
+/** Core features' nodes, kept here rather than in the startup syntax list. */
+const coreNodes: Partial<Record<string, readonly string[]>> = {
+  'core.images': ['Image'],
+  'core.html-blocks': [
+    'HTMLBlock',
+    'CommentBlock',
+    'ProcessingInstructionBlock',
+  ],
+  'core.inline-html': ['HTMLTag', 'Comment', 'ProcessingInstruction'],
+}
+
 export const formattedContributions = {
   /** Changes when registered or loaded contributions or the syntax settings they follow change. */
   version: () =>
@@ -272,7 +298,7 @@ export const formattedContributions = {
       .snapshot()
       .flatMap((feature) =>
         !feature.enabled && feature.scope !== 'document'
-          ? (feature.nodes ?? [])
+          ? (feature.nodes ?? coreNodes[feature.id] ?? [])
           : [],
       )
     return [

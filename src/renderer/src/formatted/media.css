@@ -1,0 +1,4 @@
+/* Media fit the text column, as in the rich editor. */
+.hibi-formatted .document-media :is(img, video) {
+  max-width: 100%;
+}

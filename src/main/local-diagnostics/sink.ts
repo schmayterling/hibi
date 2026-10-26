@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import * as filesystem from 'node:fs/promises'
 import { join } from 'node:path'
+import { sameFileIdentity } from '../../shared/file-identity.ts'
 import {
   type DiagnosticProfile,
   decodeDiagnostic,
@@ -128,15 +129,17 @@ export class LocalDiagnosticSink {
     if (!ownedNames.includes(name)) throw new Error('unknown diagnostic file')
     await this.checkDirectory()
     const path = join(this.directory, name)
-    const before = await this.fs.lstat(path).catch((error: unknown) => {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    })
+    const before = await this.fs
+      .lstat(path, { bigint: true })
+      .catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+        throw error
+      })
     if (
       before &&
       (!before.isFile() ||
         before.isSymbolicLink() ||
-        before.nlink !== 1 ||
+        before.nlink !== 1n ||
         before.size > maximum)
     )
       throw new Error('unsafe diagnostic file')
@@ -148,17 +151,17 @@ export class LocalDiagnosticSink {
       0o600,
     )
     try {
-      const stat = await handle.stat()
+      const stat = await handle.stat({ bigint: true })
       await this.checkDirectory()
       if (
         !stat.isFile() ||
-        stat.nlink !== 1 ||
+        stat.nlink !== 1n ||
         stat.size > maximum ||
-        (before && (before.ino !== stat.ino || before.dev !== stat.dev))
+        (before && !sameFileIdentity(before, stat))
       )
         throw new Error('changed diagnostic file')
       if (stat.size) {
-        const prefix = Buffer.alloc(Math.min(128, stat.size))
+        const prefix = Buffer.alloc(Math.min(128, Number(stat.size)))
         await handle.read(prefix, 0, prefix.length, 0)
         if (!prefix.toString('utf8').startsWith(`{"kind":"${kind}"`))
           throw new Error('unowned diagnostic file')
@@ -569,13 +572,15 @@ export class LocalDiagnosticSink {
     const data = Buffer.from(this.report(), 'utf8')
     if (data.length > diagnosticLimits.summaryBytes)
       throw new Error('diagnostic report limit')
-    const before = await this.fs.lstat(path).catch((error: unknown) => {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    })
+    const before = await this.fs
+      .lstat(path, { bigint: true })
+      .catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+        throw error
+      })
     if (
       before &&
-      (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1)
+      (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n)
     )
       throw new Error('unsafe report destination')
     const handle = await this.fs.open(
@@ -586,11 +591,11 @@ export class LocalDiagnosticSink {
       0o600,
     )
     try {
-      const stat = await handle.stat()
+      const stat = await handle.stat({ bigint: true })
       if (
         !stat.isFile() ||
-        stat.nlink !== 1 ||
-        (before && (before.ino !== stat.ino || before.dev !== stat.dev))
+        stat.nlink !== 1n ||
+        (before && !sameFileIdentity(before, stat))
       )
         throw new Error('changed report destination')
       await handle.truncate(0)

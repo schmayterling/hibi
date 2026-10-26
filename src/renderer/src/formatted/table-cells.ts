@@ -32,6 +32,8 @@ import {
   type FormattedRenderContext,
   formattedLiteral,
   formattedMarkdown,
+  formattedOwner,
+  formattedRefresh,
   formattedViews,
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
@@ -125,6 +127,10 @@ function decorateCell(
 ) {
   const views = namedViews(state)
   const literal = literalNodes(state)
+  // Line breaks in cells are written as <br>, as the rich editor saved them.
+  const lineBreakAt = (node: SyntaxNodeRef) =>
+    node.name === 'HTMLTag' &&
+    /^<br\s*\/?>$/i.test(text.slice(node.from, node.to))
   let cellState: EditorState | null = null
   const sink = (revealed: boolean): FormattedDecorations => ({
     mark(from, to, attributes) {
@@ -152,8 +158,14 @@ function decorateCell(
         const revealed = touched(node.from, node.to)
         const nodeOut = sink(revealed)
         let skip = false
-        for (const nodeView of views.get(node.name) ?? []) {
-          cellState ??= EditorState.create({ doc: text })
+        // A cell draws its line breaks itself, so contributed HTML renderers
+        // add no second one.
+        const nodeViews = lineBreakAt(node) ? [] : (views.get(node.name) ?? [])
+        for (const nodeView of nodeViews) {
+          cellState ??= EditorState.create({
+            doc: text,
+            extensions: formattedOwner.of(state),
+          })
           const context: FormattedRenderContext = {
             state: cellState,
             visible: { from: 0, to: text.length },
@@ -242,9 +254,7 @@ function decorateCell(
         out.syntax(node.from, node.from + 1)
         return
       case 'HTMLTag':
-        // Line breaks in cells are written as <br>, as the rich editor saved them.
-        if (/^<br\s*\/?>$/i.test(text.slice(node.from, node.to)))
-          out.replace(node.from, node.to, lineBreak)
+        if (lineBreakAt(node)) out.replace(node.from, node.to, lineBreak)
         return false
       case 'Image':
       case 'Entity':
@@ -413,7 +423,14 @@ export class CellEditor {
             editorDecorations(host.main.state, view))
         }
         update(update: ViewUpdate) {
-          if (update.docChanged || update.selectionSet || update.focusChanged)
+          if (
+            update.docChanged ||
+            update.selectionSet ||
+            update.focusChanged ||
+            update.transactions.some((transaction) =>
+              transaction.effects.some((effect) => effect.is(formattedRefresh)),
+            )
+          )
             ({ decorations: this.decorations, atomic: this.atomic } =
               editorDecorations(host.main.state, update.view))
         }
@@ -662,6 +679,11 @@ export class CellEditor {
         ],
       })
     }
+  }
+
+  /** Redraw inline syntax after the formatted view's render inputs change. */
+  refresh() {
+    this.view.dispatch({ effects: formattedRefresh.of(null) })
   }
 
   /** Take input as the formatted view does, after it changed. */

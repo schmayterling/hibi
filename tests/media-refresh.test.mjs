@@ -192,10 +192,10 @@ test('stalled serve stays isolated and canceled resolutions retain their two poo
     release = resolve
   })
   const info = {
-    dev: 1,
-    ino: 1,
-    size: gif.length,
-    mtimeMs: 1,
+    dev: 1n,
+    ino: 1n,
+    size: BigInt(gif.length),
+    mtimeNs: 1000000n,
     ctimeMs: 1,
     isFile: () => true,
   }
@@ -280,10 +280,10 @@ test('two slow files admit local images after one second while real filesystem w
   const scope = { note: join(root, 'a.md'), revision: 7, workspace: root }
   const server = new DocumentMediaServer(() => scope)
   const info = {
-    dev: 1,
-    ino: 1,
-    size: gif.length,
-    mtimeMs: 1,
+    dev: 1n,
+    ino: 1n,
+    size: BigInt(gif.length),
+    mtimeNs: 1000000n,
     isFile: () => true,
   }
   let releaseSlow, releaseLocal, startedSlow
@@ -427,8 +427,8 @@ test('opened inode must match validation when a symlink changes during open', as
   t.mock.method(fs, 'open', async (...args) => {
     const file = await open(...args)
     const stat = file.stat.bind(file)
-    t.mock.method(file, 'stat', async () => {
-      const info = await stat()
+    t.mock.method(file, 'stat', async (options) => {
+      const info = await stat(options)
       info.ino++
       return info
     })
@@ -439,6 +439,39 @@ test('opened inode must match validation when a symlink changes during open', as
     t.mock.restoreAll()
     syncBuiltinESMExports()
   })
+  assert.equal((await f.server.serve(new Request(media.media.url))).status, 404)
+})
+
+test('media validation rejects file ids that round to the same number', async (t) => {
+  const f = await fixture(t)
+  const ino = 1152921504606846977n
+  assert.equal(Number(ino), Number(ino + 1n))
+  let changed = false
+  const stat = fs.stat
+  const open = fs.open
+  t.mock.method(fs, 'stat', async (path, options) => {
+    const info = await stat(path, options)
+    info.ino = options?.bigint ? ino : Number(ino)
+    return info
+  })
+  t.mock.method(fs, 'open', async (...args) => {
+    const file = await open(...args)
+    const stat = file.stat.bind(file)
+    t.mock.method(file, 'stat', async (options) => {
+      const info = await stat(options)
+      const id = changed ? ino + 1n : ino
+      info.ino = options?.bigint ? id : Number(id)
+      return info
+    })
+    return file
+  })
+  syncBuiltinESMExports()
+  t.after(() => {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  })
+  const media = await f.server.resolve('assets/x.gif', 7, 'image')
+  changed = true
   assert.equal((await f.server.serve(new Request(media.media.url))).status, 404)
 })
 
@@ -454,9 +487,9 @@ test('metadata-only ctime changes preserve tokens when path, inode, mime, size a
   t.mock.method(fs, 'open', async (...args) => {
     const file = await open(...args)
     const stat = file.stat.bind(file)
-    t.mock.method(file, 'stat', async () => {
-      const info = await stat()
-      info.ctimeMs += 1000
+    t.mock.method(file, 'stat', async (options) => {
+      const info = await stat(options)
+      info.ctimeMs += options?.bigint ? 1000n : 1000
       return info
     })
     return file

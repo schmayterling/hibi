@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { type FSWatcher, type Stats, watch } from 'node:fs'
+import { type BigIntStats, type FSWatcher, watch } from 'node:fs'
 import { lstat, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { basename, isAbsolute, join, parse, relative, sep } from 'node:path'
 import { app, type BrowserWindow, dialog, shell } from 'electron'
@@ -500,24 +500,27 @@ function takeTreePaths(): string[] | null {
   return paths
 }
 
-async function fileStatus(base: string, path: string): Promise<Stats | null> {
+async function fileStatus(
+  base: string,
+  path: string,
+): Promise<BigIntStats | null> {
   try {
-    return await lstat(join(base, path))
+    return await lstat(join(base, path), { bigint: true })
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     throw error
   }
 }
 
-function fingerprint(info: Stats | null): string | null {
+function fingerprint(info: BigIntStats | null): string | null {
   return info
     ? [
         info.dev,
         info.ino,
         info.mode,
         info.size,
-        info.mtimeMs,
-        info.ctimeMs,
+        info.mtimeNs,
+        info.ctimeNs,
       ].join(':')
     : null
 }

@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { EditorState, StateEffect, Transaction } from '@codemirror/state'
+import {
+  EditorSelection,
+  EditorState,
+  StateEffect,
+  Transaction,
+} from '@codemirror/state'
 import {
   createSourceSession,
   sourceEditTransaction,
@@ -53,6 +58,52 @@ function fixture(source, options = {}, extensions = []) {
   }
   return { session, operations, errors, observations, attach }
 }
+test('unmounted panes keep independent places mapped through edits without full-source reads', () => {
+  const f = fixture('a\r\n😀b\r\n'.repeat(60000), {}, [
+    EditorState.allowMultipleSelections.of(true),
+  ])
+  const source = f.attach('source'),
+    other = f.attach('other')
+  source.dispatch({
+    selection: EditorSelection.create([
+      EditorSelection.range(102, 106),
+      EditorSelection.cursor(120),
+    ]),
+  })
+  other.dispatch({ selection: { anchor: 202, head: 198 } })
+  source.bridge.keepPlace(source.view, 90, -7)
+  other.bridge.keepPlace(other.view, 180, -3)
+  source.dispose()
+  other.dispose()
+  f.session.releaseView('source')
+  f.session.releaseView('other')
+  f.session.counters(true)
+  f.session.edit([{ from: 0, to: 0, insert: 'é\r\n' }], 'visual', 'prefix')
+  f.session.undo()
+  f.session.redo()
+  const bridge = createSourceSession(f.session, 'source'),
+    place = bridge.place(),
+    second = createSourceSession(f.session, 'other').place()
+  assert.deepEqual(
+    place.selection.ranges.map(({ anchor, head }) => ({ anchor, head })),
+    [
+      { anchor: 104, head: 108 },
+      { anchor: 122, head: 122 },
+    ],
+  )
+  assert.equal(place.top, 92)
+  assert.equal(place.margin, -7)
+  assert.equal(second.selection.main.anchor, 204)
+  assert.equal(second.selection.main.head, 200)
+  assert.equal(second.top, 182)
+  assert.equal(second.margin, -3)
+  assert.equal(bridge.place(), null)
+  assert.equal(f.session.counters().materializations, 0)
+  assert.ok(f.session.counters().sourceUnitsRead < 1000)
+  assert.deepEqual(f.errors, [])
+  f.session.dispose()
+})
+
 test('addon admission uses exact ranges and rejects native vetoes without flattening', () => {
   for (const extensions of [
     [],

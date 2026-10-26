@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { EditorSelection, EditorState, Text } from '@codemirror/state'
+import {
+  Compartment,
+  EditorSelection,
+  EditorState,
+  Text,
+} from '@codemirror/state'
 import {
   contribution,
   frontmatterField,
@@ -12,6 +17,40 @@ import { readFrontmatter } from '../src/shared/frontmatter.ts'
 
 const text = (doc) => Text.of(doc.split('\n'))
 const end = (doc) => frontmatterOf(text(doc)).end
+
+for (const existingBounds of [false, true]) {
+  test(`frontmatter survives adding and replacing its extensions with existing bounds ${existingBounds}`, () => {
+    const slot = new Compartment()
+    const source = '---\ntitle: test\n---\n\nbody'
+    let state = EditorState.create({
+      doc: source,
+      extensions: [slot.of([]), existingBounds ? core.frontmatterBounds : []],
+    })
+    for (let round = 0; round < 3; round++) {
+      state = state.update({
+        effects: slot.reconfigure(contribution.extension),
+      }).state
+      assert.equal(state.field(frontmatterField).end, source.indexOf('body'))
+      const before = state.doc.toString()
+      state = state.update({
+        changes: { from: 4, insert: 'no' },
+        userEvent: 'input.type',
+      }).state
+      assert.equal(state.doc.toString(), before)
+      state = state.update({
+        changes: { from: state.doc.length, insert: 'x' },
+        userEvent: 'input.type',
+      }).state
+      assert.equal(state.doc.toString(), `${before}x`)
+      state = state.update({
+        effects: slot.reconfigure([]),
+        changes: { from: state.doc.length, insert: 'y' },
+      }).state
+      assert.equal(state.doc.toString(), `${before}xy`)
+      assert.equal(state.field(frontmatterField, false), undefined)
+    }
+  })
+}
 
 test('frontmatter is a closed YAML mapping at the start, hidden with one blank line', () => {
   const yaml = '---\ntitle: x\ntags: [a]\n---\n'

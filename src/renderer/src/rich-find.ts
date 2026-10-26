@@ -9,6 +9,7 @@ import {
 } from '@tiptap/pm/state'
 import { type Mapping, StepMap } from '@tiptap/pm/transform'
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view'
+import { foldSearchText } from '../../shared/search-fold.ts'
 
 type Range = { from: number; to: number }
 type FindState = {
@@ -51,14 +52,9 @@ function blockText(node: Node): string {
   return text
 }
 
-// Fold each character the same way wherever it appears. Greek final sigma is
-// the only lowercase mapping that depends on neighboring letters, so σ and ς
-// compare equal instead of hiding a match behind its context.
-const fold = (text: string) => text.toLowerCase().replaceAll('ς', 'σ')
-
 /** Non-overlapping, case-insensitive literal matches as [from, to] offset pairs. */
 function scan(text: string, needle: string) {
-  const folded = fold(text)
+  const folded = foldSearchText(text)
   const found: number[] = []
   if (folded.length === text.length) {
     for (
@@ -75,7 +71,7 @@ function scan(text: string, needle: string) {
   const ends: number[] = []
   let offset = 0
   for (const character of text) {
-    for (let unit = character.toLowerCase().length; unit > 0; unit--) {
+    for (let unit = foldSearchText(character).length; unit > 0; unit--) {
       starts.push(offset)
       ends.push(offset + character.length)
     }
@@ -97,7 +93,7 @@ class MatchIndex {
   readonly #blocks = new WeakMap<Node, number[]>()
   readonly #counts = new WeakMap<Node, number>()
   constructor(query: string) {
-    this.#needle = fold(query)
+    this.#needle = foldSearchText(query)
   }
   matches(block: Node) {
     let found = this.#blocks.get(block)

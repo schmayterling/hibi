@@ -139,6 +139,33 @@ function queuedFixture(t, source = 'one two one', extra = {}) {
   return { ...f, tasks, channels, builds, drain, step }
 }
 
+test('highlight checkpoints transfer once per query version and refresh after cancel or edit', async (t) => {
+  const starts = []
+  const f = fixture(t, 'ab'.repeat(10000), {
+    result: (_location, _action, highlightStarts, query) => {
+      assert.equal(query, starts.length < 4 ? 'aba' : 'ab')
+      starts.push(highlightStarts)
+    },
+  })
+  f.find('aba')
+  await wait(() => starts.length === 1)
+  assert.ok(starts[0].length > 1)
+  f.find('aba', 44, 47)
+  await wait(() => starts.length === 2)
+  assert.equal(starts[1], undefined)
+  f.client.cancelFind()
+  f.find('aba')
+  await wait(() => starts.length === 3)
+  assert.ok(starts[2].length > 1)
+  f.append('ab')
+  await wait(() => starts.length === 4)
+  assert.ok(starts[3].length > 1)
+  f.find('ab')
+  await wait(() => starts.length === 5)
+  assert.ok(starts[4].length > 1)
+  assert.deepEqual(f.errors, [])
+})
+
 test('typing burst rebuilds once after quiet time with exact latest query and version', (t) => {
   const f = queuedFixture(t, 'one two '.repeat(10000))
   f.find('one')

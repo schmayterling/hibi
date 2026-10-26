@@ -806,6 +806,9 @@ export class DocumentWorkerService {
               DocumentWorkerReply,
               { type: 'find' }
             >['location'],
+            ...(request.highlights
+              ? { highlightStarts: this.#index!.highlightStarts() }
+              : {}),
           })
         }
       }

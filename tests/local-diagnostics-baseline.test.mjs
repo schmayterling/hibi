@@ -43,5 +43,9 @@ test('diagnostics must coexist with journal barriers and the existing recovery U
   assert.match(preload, /journal\.flush\(\)/)
   assert.match(recovery, /Save a copy/i)
   assert.match(recovery, /Reload/)
-  assert.match(recovery, /componentDidCatch/)
+  const boundary = readFileSync(
+    new URL('../src/renderer/src/RecoveryBoundary.tsx', import.meta.url),
+    'utf8',
+  )
+  assert.match(boundary, /componentDidCatch/)
 })

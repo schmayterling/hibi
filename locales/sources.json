@@ -3086,6 +3086,9 @@
   "01fa401e3bf6": [
     "src/shared/source-transfer.ts"
   ],
+  "1c875121a939": [
+    "src/main/index.ts"
+  ],
   "dc0dc106489e": [
     "src/renderer/src/document-transfer.ts",
     "src/shared/source-transfer.ts"
@@ -5206,7 +5209,8 @@
     "src/shared/source-buffer.ts"
   ],
   "aa0061415476": [
-    "src/shared/source-buffer.ts"
+    "src/shared/source-buffer.ts",
+    "src/shared/source-load.ts"
   ],
   "f072e679279d": [
     "src/shared/source-buffer.ts"
@@ -5796,8 +5800,8 @@
     "src/shared/document-checkpoint-stream.ts"
   ],
   "d5906e55a7d6": [
-    "src/renderer/src/document-runtime.ts",
-    "src/renderer/src/document-transfer.ts"
+    "src/main/index.ts",
+    "src/renderer/src/document-runtime.ts"
   ],
   "1272f967b3e4": [
     "src/shared/source-transfer.ts"
@@ -6513,9 +6517,6 @@
   "a6da99875af4": [
     "src/main/document.ts",
     "src/renderer/src/main.tsx"
-  ],
-  "abf88542d601": [
-    "src/renderer/src/document-runtime.ts"
   ],
   "e8983dab4298": [
     "src/renderer/src/Introduction.tsx"

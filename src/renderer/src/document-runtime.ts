@@ -17,7 +17,7 @@ import type {
   RawEdit,
   SourceOperation,
 } from '../../shared/source-operations.ts'
-import { loadedDocument } from './document-transfer.ts'
+import { loadedDocument, sourceDocument } from './document-transfer.ts'
 
 type RuntimeOptions = {
   /** Combined retained history across open tabs; payload bytes are estimated. */
@@ -405,15 +405,21 @@ export class DocumentRuntime {
         for (const listener of [...this.#listeners]) listener(active, null)
     }
   }
+  ownsMetadata(metadata: DocumentFocus) {
+    const source = this.session(metadata.tabId)?.snapshot()
+    return (
+      !!source &&
+      this.#metadata.get(metadata.tabId)?.sourceId === metadata.sourceId &&
+      source.version === metadata.contentVersion &&
+      source.document.revision <= metadata.revision
+    )
+  }
   metadataDocument(metadata: DocumentMetadata): DocumentState {
     const session = this.session(metadata.tabId)
     if (!session || metadata.replaced !== false)
       throw new Error('The document source is not loaded. Try again.')
     const current = session.snapshot()
-    if (
-      current.version !== metadata.contentVersion ||
-      metadata.revision < current.document.revision
-    )
+    if (!this.ownsMetadata(metadata))
       throw new Error(
         'This tab has local edits waiting to synchronize. Try again.',
       )
@@ -429,18 +435,7 @@ export class DocumentRuntime {
           break
         }
       }
-    let text: string | undefined, savedText: string | undefined
-    const document = Object.freeze({
-      ...metadata,
-      get markdown() {
-        text ??= current.materialize()
-        return text
-      },
-      get savedMarkdown() {
-        savedText ??= saved.materialize()
-        return savedText
-      },
-    })
+    const document = sourceDocument(metadata, current, saved)
     this.#sources.set(document, current)
     return document
   }
@@ -466,8 +461,10 @@ export class DocumentRuntime {
         revision,
         contentVersion,
         canAutosave,
+        sourceId,
       } = document
       const metadata = {
+        sourceId,
         tabId,
         tabs,
         tabsEnabled,
@@ -482,21 +479,12 @@ export class DocumentRuntime {
       let session = this.#sessions.get(document.tabId)
       const local = session?.snapshot()
       if (
-        metadataOnly &&
-        (!session ||
-          !local ||
-          document.replaced !== false ||
-          document.revision < local.document.revision ||
-          document.contentVersion > local.version ||
-          (document.revision !== local.document.revision &&
-            document.contentVersion !== local.version))
+        (metadataOnly &&
+          (document.replaced !== false || !this.ownsMetadata(document))) ||
+        (session && prepared && document.replaced !== true)
       )
         throw new Error(
           'This tab has local edits waiting to synchronize. Try again.',
-        )
-      if (session && prepared && document.replaced !== true)
-        throw new Error(
-          'This tab needs explicit source replacement proof. Try again.',
         )
       if (
         session &&
@@ -581,11 +569,7 @@ export class DocumentRuntime {
               : prepared.saved
             : document.savedMarkdown,
         )
-      } else if (
-        session.snapshot().document.revision !== document.revision ||
-        (!metadataOnly &&
-          this.#metadata.get(document.tabId)?.id !== document.id)
-      ) {
+      } else {
         if (session.snapshot().document.revision !== document.revision)
           session.reidentify(document)
         const progress = this.#saves.get(document.tabId)
@@ -646,7 +630,10 @@ export class DocumentRuntime {
     this.#active = session
     this.#activeId = document.tabId
     if (!unchanged) {
-      this.#metadata.set(document.tabId, document)
+      this.#metadata.set(document.tabId, {
+        ...document,
+        sourceId: document.sourceId ?? previous?.sourceId,
+      })
       this.#cached.delete(document.tabId)
     }
     return this.get()!

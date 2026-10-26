@@ -77,6 +77,34 @@ function fixture(current, baseline = current) {
   }
 }
 
+test('metadata without a runtime owner requests an explicit source stream', async () => {
+  const f = fixture('retained outside runtime\r\n😀')
+  let requested
+  f.native.openDocumentTransfer = async (tabId) => {
+    requested = tabId
+    return f.wire
+  }
+  const { documentTransfer, ...metadata } = f.wire
+  f.native.getDocument = async () => ({
+    ...metadata,
+    documentMetadata: true,
+    replaced: false,
+    savedVersion: 7,
+  })
+  const api = documentTransferApi(f.native, () => null)
+  const document = await api.getDocument()
+  assert.equal(requested, 'one')
+  assert.equal(document.markdown, 'retained outside runtime\r\n😀')
+  assert.equal(f.state().finished, true)
+  f.native.openDocumentTransfer = () => assert.fail('dirty source was replaced')
+  const guarded = documentTransferApi(f.native, () => {
+    throw new Error(
+      'This tab has local edits waiting to synchronize. Try again.',
+    )
+  })
+  await assert.rejects(guarded.getDocument(), /local edits waiting/)
+})
+
 test('renderer hydrates bounded chunks into owned source without reading whole source', async () => {
   const source = '\uFEFFone\r\n😀 end\r\n'.repeat(10000),
     baseline = source.slice(0, -20)

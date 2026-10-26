@@ -5,6 +5,7 @@ export const BOOTSTRAP_CHANNELS = {
 } as const
 export const DOCUMENT_CHANNELS = {
   get: 'document:get',
+  transferOpen: 'document:transfer-open',
   transferRead: 'document:transfer-read',
   transferFinish: 'document:transfer-finish',
   transferAbort: 'document:transfer-abort',
@@ -51,6 +52,8 @@ export type DocumentState = {
   savedMarkdown: string
   /** Main explicitly replaced this tab's source, rather than only its metadata. */
   replaced?: boolean
+  /** Native source generation already transferred to this renderer. */
+  sourceId?: string | undefined
   name: string
   dirty: boolean
   revision: number

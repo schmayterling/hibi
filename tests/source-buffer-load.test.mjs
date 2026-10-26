@@ -33,6 +33,20 @@ test('arena reads preserve every utf16 unit without expanding a javascript itera
     else delete prototype[Symbol.iterator]
   }
 })
+test('full arenas reuse exact raw text across repeated reads', async (t) => {
+  const { SourceChunk } = await import('../src/shared/source-metrics.ts')
+  const text = '\ufeff\r\n\ud800😀\udfff'.repeat(512)
+  const arena = SourceChunk.appendable(text.length, () => {})
+  const prefix = arena.append(text.slice(0, -1))
+  assert.equal(arena.chunk.slice(prefix.from, prefix.to), text.slice(0, -1))
+  arena.append(text.slice(-1))
+  const copy = t.mock.method(String, 'fromCharCode')
+  for (let read = 0; read < 3; read++) {
+    assert.equal(arena.chunk.slice(0, text.length), text)
+    assert.equal(arena.chunk.slice(prefix.from, prefix.to), text.slice(0, -1))
+  }
+  assert.equal(copy.mock.calls.length, 0)
+})
 test('cooperative loading yields message tasks without timer clamping', async (t) => {
   t.mock.method(globalThis, 'setTimeout', () => {
     throw new Error('load used a clamped timer')

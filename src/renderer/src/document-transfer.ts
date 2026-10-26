@@ -1,11 +1,15 @@
-import type { DesktopApi, DocumentState } from '../../shared/desktop.ts'
+import type {
+  DesktopApi,
+  DocumentFocus,
+  DocumentState,
+} from '../../shared/desktop.ts'
 import type {
   DocumentMetadata,
   DocumentTransfer,
   DocumentTransferApi,
   LoadedDocument,
 } from '../../shared/document-transfer.ts'
-import { SourceStore } from '../../shared/source-buffer.ts'
+import { type SourceSnapshot, SourceStore } from '../../shared/source-buffer.ts'
 import {
   parseTransferHead,
   SourceTransferReceiver,
@@ -14,12 +18,31 @@ import {
 const loaded = new WeakMap<DocumentState, LoadedDocument>()
 export const loadedDocument = (document: DocumentState) => loaded.get(document)
 
+export function sourceDocument(
+  metadata: DocumentFocus,
+  current: SourceSnapshot,
+  saved: SourceSnapshot,
+): DocumentState {
+  let text: string | undefined, savedText: string | undefined
+  return Object.freeze({
+    ...metadata,
+    get markdown() {
+      text ??= current.materialize()
+      return text
+    },
+    get savedMarkdown() {
+      savedText ??= saved.materialize()
+      return savedText
+    },
+  })
+}
+
 /** Hydrate inside the renderer: neither IPC nor contextBridge copies a complete note. */
 export function documentTransferApi(
   native: DesktopApi & DocumentTransferApi,
   metadata?: (
     value: DocumentMetadata,
-  ) => DocumentState | Promise<DocumentState>,
+  ) => DocumentState | null | Promise<DocumentState | null>,
 ): DesktopApi {
   const pending = new Map<string, Promise<DocumentState>>()
   const load = (wire: DocumentTransfer) => {
@@ -73,18 +96,7 @@ export function documentTransferApi(
           sameSource: _same,
           ...metadata
         } = wire
-        let text: string | undefined, savedText: string | undefined
-        const document: DocumentState = Object.freeze({
-          ...metadata,
-          get markdown() {
-            text ??= snapshot.materialize()
-            return text
-          },
-          get savedMarkdown() {
-            savedText ??= baseline.materialize()
-            return savedText
-          },
-        })
+        const document = sourceDocument(metadata, snapshot, baseline)
         loaded.set(document, {
           store: source,
           current: snapshot,
@@ -102,9 +114,11 @@ export function documentTransferApi(
     if (!value || typeof value !== 'object') return value
     if ('documentTransfer' in value) return load(value as DocumentTransfer)
     if ('documentMetadata' in value) {
-      if (!metadata)
-        throw new Error('The document source is not loaded. Try again.')
-      return metadata(value as DocumentMetadata)
+      const wire = value as DocumentMetadata
+      return (
+        (await metadata?.(wire)) ??
+        load(await native.openDocumentTransfer(wire.tabId))
+      )
     }
     if ('document' in value) {
       const result = value as { document: unknown }

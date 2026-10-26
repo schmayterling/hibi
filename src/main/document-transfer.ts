@@ -21,6 +21,7 @@ export function createDocumentTransfers() {
   }
   const streams = new Map<string, Stream>()
   const known = new Map<number, WeakSet<Source['store']>>()
+  const identities = new WeakMap<object, string>()
   const tabs = new Map<string, string>()
   const close = (id: string) => {
     const stream = streams.get(id)
@@ -45,13 +46,21 @@ export function createDocumentTransfers() {
     owner: number,
     value: unknown,
     immutable: boolean,
+    force: boolean,
   ): unknown => {
     if (!value || typeof value !== 'object') return value
     const source = documentSources.get(value as DocumentState)
     if (source) {
       const state = value as DocumentState,
         key = `${owner}:${immutable ? `saved:${state.contentVersion}:` : 'load:'}${state.tabId}`
+      const identity = source.store ?? source.current
+      let sourceId = identities.get(identity)
+      if (!sourceId) {
+        sourceId = randomUUID()
+        identities.set(identity, sourceId)
+      }
       const metadata = {
+        sourceId,
         tabId: state.tabId,
         tabs: state.tabs,
         tabsEnabled: state.tabsEnabled,
@@ -69,7 +78,7 @@ export function createDocumentTransfers() {
           saveReceipt: true,
           savedVersion: source.saved.version,
         }
-      if (known.get(owner)?.has(source.store))
+      if (!force && known.get(owner)?.has(source.store))
         return {
           ...metadata,
           documentMetadata: true,
@@ -124,14 +133,17 @@ export function createDocumentTransfers() {
     }
     if ('document' in value) {
       const result = value as { document: unknown }
-      return { ...result, document: encode(owner, result.document, immutable) }
+      return {
+        ...result,
+        document: encode(owner, result.document, immutable, force),
+      }
     }
     return value
   }
   return {
-    encode(owner: number, value: unknown, immutable = false) {
+    encode(owner: number, value: unknown, immutable = false, force = false) {
       for (const [id, stream] of streams) if (!stream.current()) close(id)
-      return encode(owner, value, immutable)
+      return encode(owner, value, immutable, force)
     },
     read(owner: number, value: unknown) {
       const { request, stream } = lookup(owner, value)

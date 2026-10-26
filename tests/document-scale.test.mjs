@@ -278,7 +278,8 @@ for (const size of sizes)
         await page.waitForFunction(() =>
           document
             .querySelector('.large-markdown-preview .format-content')
-            ?.textContent.startsWith('scale-start'),
+            ?.textContent.replace(/^# /, '')
+            .startsWith('scale-start'),
         )
       }
       await page

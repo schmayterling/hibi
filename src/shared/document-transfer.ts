@@ -17,6 +17,7 @@ export type DocumentTransfer = DocumentFocus &
     sameSource: boolean
   }>
 export type DocumentTransferApi = {
+  openDocumentTransfer(tabId: string): Promise<DocumentTransfer>
   readDocumentTransfer(
     request: SourceTransferRequest,
   ): Promise<SourceTransferChunk>

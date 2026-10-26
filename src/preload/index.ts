@@ -217,6 +217,8 @@ if (process.isMainFrame) {
     void pending.catch(() => {})
   let backgroundSettingsReady = false
   contextBridge.exposeInMainWorld('hibiTransport', {
+    openDocumentTransfer: (tabId) =>
+      transport.invoke(DOCUMENT_CHANNELS.transferOpen, tabId),
     readDocumentTransfer: (request) =>
       transport.invoke(DOCUMENT_CHANNELS.transferRead, request),
     finishDocumentTransfer: (request) =>

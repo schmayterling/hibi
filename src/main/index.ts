@@ -134,6 +134,7 @@ import {
   discardChanges,
   focusDocumentTab,
   getDocument,
+  getDocumentForTab,
   getDocumentPath,
   getDocumentPathForTab,
   getDocumentSource,
@@ -1979,6 +1980,14 @@ if (!app.requestSingleInstanceLock()) {
           throw new Error('Could not record this shortcut. Try again.')
         recordingHotkey = value
         window.webContents.setIgnoreMenuShortcuts(value)
+      })
+      handle(DOCUMENT_CHANNELS.transferOpen, (event, id: unknown) => {
+        if (typeof id !== 'string' || !id || id.length > 128)
+          throw new Error('Invalid document transfer identity.')
+        const document = getDocumentForTab(id)
+        if (!document)
+          throw new Error('The document source is not loaded. Try again.')
+        return documentTransfers.encode(event.sender.id, document, false, true)
       })
       handle(DOCUMENT_CHANNELS.transferRead, (event, request: unknown) =>
         documentTransfers.read(event.sender.id, request),

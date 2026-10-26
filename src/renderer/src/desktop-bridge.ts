@@ -7,11 +7,13 @@ Object.defineProperty(window, 'hibi', {
 })
 const { documentTransferApi } = await import('./document-transfer')
 Object.defineProperty(window, 'hibi', {
-  value: documentTransferApi(window.hibiTransport, async (metadata) =>
-    (await import('./document-runtime')).documentRuntime.metadataDocument(
-      metadata,
-    ),
-  ),
+  value: documentTransferApi(window.hibiTransport, async (metadata) => {
+    const { documentRuntime } = await import('./document-runtime')
+    const owned = documentRuntime.get(metadata.tabId)
+    if (!owned || (!owned.dirty && !documentRuntime.ownsMetadata(metadata)))
+      return null
+    return documentRuntime.metadataDocument(metadata)
+  }),
   configurable: true,
 })
 await import('./main')

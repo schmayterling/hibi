@@ -6,7 +6,7 @@ import { SourceStore } from '../src/shared/source-buffer.ts'
 import { SourceTransferSender } from '../src/shared/source-transfer.ts'
 
 let sequence = 0
-async function hydrate(store, replaced = false) {
+async function hydrate(store, replaced = false, sourceId) {
   const source = store.snapshot()
   const head = {
     tabId: 'one',
@@ -18,6 +18,7 @@ async function hydrate(store, replaced = false) {
   const sender = new SourceTransferSender(head, source.chunks())
   const wire = {
     ...head,
+    sourceId,
     replaced,
     tabs: [{ id: 'one', name: 'one.md', dirty: false }],
     tabsEnabled: true,
@@ -113,6 +114,34 @@ test('a revision change without replacement proof cannot import an unequal saved
   assert.equal(host.session(), old)
   assert.equal(old.savedSnapshot(), saved)
   assert.equal(host.get().markdown, 'old source')
+  host.dispose()
+})
+
+test('metadata from another native source cannot reuse matching version numbers', async () => {
+  const host = runtime()
+  host.activate(
+    await hydrate(
+      new SourceStore('kept', { tabId: 'one', revision: 1 }, 7),
+      false,
+      'first',
+    ),
+  )
+  const session = host.session(),
+    saved = session.savedSnapshot()
+  const reply = {
+    ...host.get(),
+    documentMetadata: true,
+    replaced: false,
+    sourceId: 'second',
+    revision: 2,
+    savedVersion: 7,
+  }
+  assert.equal(host.ownsMetadata(reply), false)
+  assert.throws(() => host.metadataDocument(reply), /local edits waiting/)
+  assert.throws(() => host.activate(reply), /local edits waiting/)
+  assert.equal(host.session(), session)
+  assert.equal(session.savedSnapshot(), saved)
+  assert.equal(host.get().markdown, 'kept')
   host.dispose()
 })
 

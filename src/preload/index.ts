@@ -458,6 +458,8 @@ if (process.isMainFrame) {
     openSponsor: () => ipcRenderer.invoke(ABOUT_CHANNELS.sponsor),
     writeClipboardText: (text) =>
       ipcRenderer.invoke(CLIPBOARD_CHANNELS.writeText, text),
+    writeClipboardRendered: (text, html) =>
+      ipcRenderer.invoke(CLIPBOARD_CHANNELS.writeRendered, text, html),
     copyWorkspacePaths: (paths, options) =>
       ipcRenderer.invoke(
         CLIPBOARD_CHANNELS.writeWorkspacePaths,

@@ -296,6 +296,11 @@ export type DesktopApi = {
   openSponsor: () => Promise<void>
   /** Writes plain text to the system clipboard. */
   writeClipboardText: (text: string) => Promise<void>
+  /**
+   * Adds HTML to the text a copy just put on the system clipboard; false when
+   * the clipboard no longer holds that text.
+   */
+  writeClipboardRendered: (text: string, html: string) => Promise<boolean>
   /** Copies workspace paths, one per line; absolute paths are resolved in main. */
   copyWorkspacePaths: (
     paths: string[],

@@ -86,6 +86,39 @@ function reopened(state: EditorState, tree: Tree, pos: number) {
   return { close, open }
 }
 
+/** The content column of a list item's first line, as its marker sets it. */
+function itemWidth(state: EditorState, item: SyntaxNode) {
+  const line = state.doc.lineAt(item.from)
+  const match = /^([ \t]*(?:\d+[.)]|[-+*]))( *)(.?)/.exec(line.text)
+  if (!match) return 0
+  const spaces = match[2]!.length
+  return match[1]!.length + (!match[3] || spaces > 4 ? 1 : spaces)
+}
+
+/**
+ * Indent or outdent the lines of an item after line `after` that belong to
+ * its content, so they follow a marker that changed width.
+ */
+function shiftContent(
+  state: EditorState,
+  item: SyntaxNode,
+  after: number,
+  width: number,
+  by: number,
+) {
+  const changes: { from: number; to?: number; insert?: string }[] = []
+  if (!by) return changes
+  const end = state.doc.lineAt(item.to).number
+  for (let number = after + 1; number <= end; number++) {
+    const line = state.doc.line(number)
+    const leading = /^ */.exec(line.text)![0].length
+    if (blank(line.text) || leading < width) continue
+    if (by > 0) changes.push({ from: line.from, insert: ' '.repeat(by) })
+    else changes.push({ from: line.from, to: line.from - by })
+  }
+  return changes
+}
+
 /** The next list marker: same bullet, next number, unchecked task. */
 function nextMarker(state: EditorState, item: SyntaxNode) {
   const mark = item.getChild('ListMark')
@@ -129,7 +162,50 @@ export function blockBreak(
         return insert('\n', markerLine.from, markerLine.to)
       const marker = nextMarker(state, item)
       const { close, open } = reopened(state, tree, pos)
-      if (marker) return insert(`${close}\n${marker}${open}`)
+      if (marker) {
+        const text = `${close}\n${marker}${open}`
+        const width = itemWidth(state, item)
+        // The item's lines after the break follow the new marker's width.
+        const changes = [
+          { from: range.from, to: range.to, insert: text },
+          ...shiftContent(
+            state,
+            item,
+            line.number,
+            width,
+            marker.replace(/\[ \] $/, '').length - width,
+          ),
+        ]
+        // Numbered items after it count on from the new one.
+        let number = Number(/^\s*(\d+)/.exec(marker)?.[1])
+        for (
+          let next = item.nextSibling;
+          Number.isFinite(number) && next?.name === 'ListItem';
+          next = next.nextSibling
+        ) {
+          const mark = next.getChild('ListMark')
+          const current =
+            mark && Number.parseInt(state.sliceDoc(mark.from, mark.to), 10)
+          if (!mark || !(current! <= number)) break
+          number++
+          const digits = String(number)
+          const old = state.sliceDoc(mark.from, mark.to).length - 1
+          changes.push({ from: mark.from, to: mark.to - 1, insert: digits })
+          changes.push(
+            ...shiftContent(
+              state,
+              next,
+              state.doc.lineAt(next.from).number,
+              itemWidth(state, next),
+              digits.length - old,
+            ),
+          )
+        }
+        return {
+          changes,
+          range: EditorSelection.cursor(range.from + text.length),
+        }
+      }
     }
     const quote = around(tree, pos, ['Blockquote'])
     if (quote) {

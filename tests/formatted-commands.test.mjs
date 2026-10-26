@@ -169,3 +169,17 @@ test('backspace at the start of an item lifts it a level or ends the list before
   assert.equal(run('- one\n⟦- ⟧|two', deleteBackward), '- one\n\n|two')
   assert.equal(run('⟦- ⟧|item', deleteBackward), '|item')
 })
+
+test('enter in a numbered list keeps nested blocks under their item and counts on', () => {
+  // Before, `10.` left the child indented for `9.` and the next item stayed `10.`.
+  assert.equal(
+    run('9. nine|\n   - child\n10. ten', blockBreak),
+    '9. nine\n10. |\n    - child\n11. ten',
+  )
+  assert.equal(
+    run('1. one|\n2. two\n3. three', blockBreak),
+    '1. one\n2. |\n3. two\n4. three',
+  )
+  // A gap in the numbers ends the renumbering.
+  assert.equal(run('1. one|\n5. five', blockBreak), '1. one\n2. |\n5. five')
+})

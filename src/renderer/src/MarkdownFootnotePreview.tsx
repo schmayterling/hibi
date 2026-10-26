@@ -1,5 +1,6 @@
 import DOMPurify from 'dompurify'
 import { useEffect, useRef } from 'react'
+import { observeDocumentMedia } from './document-media'
 import { renderMarkdownAsync } from './flavors'
 
 export function MarkdownFootnotePreview({
@@ -17,6 +18,7 @@ export function MarkdownFootnotePreview({
   // biome-ignore lint/correctness/useExhaustiveDependencies: syntax and flavor changes invalidate rendered Markdown.
   useEffect(() => {
     let active = true
+    const disposers: (() => void)[] = []
     const timer = setTimeout(() => {
       void renderMarkdownAsync(source, documentId)
         .then(({ html }) => {
@@ -44,37 +46,47 @@ export function MarkdownFootnotePreview({
           ].map((image) => {
             const path = image.getAttribute('src') ?? ''
             image.removeAttribute('src')
+            image.loading = 'lazy'
+            image.decoding = 'async'
             return { image, path }
           })
           host.current.replaceChildren(fragment)
           for (const { image, path } of images) {
-            if (
-              /^data:image\/(?:png|jpeg|gif|webp|avif|svg\+xml);base64,/i.test(
-                path,
-              )
-            ) {
-              image.src = path
-              continue
-            }
             if (!path) continue
-            void window.hibi
-              .readDocumentMedia(path, revision)
-              .catch(() => null)
-              .then((media) => {
-                if (!active || !image.isConnected) return
-                if (media?.kind === 'image') image.src = media.url
-                else if (media?.kind === 'video') {
-                  const video = document.createElement('video')
-                  video.controls = true
-                  video.preload = 'metadata'
-                  video.setAttribute(
-                    'aria-label',
-                    image.getAttribute('alt') || 'Video attachment',
-                  )
+            let video: HTMLVideoElement | null = null
+            const clear = () => {
+              image.removeAttribute('src')
+              if (video) {
+                video.removeAttribute('src')
+                video.load()
+              }
+            }
+            disposers.push(
+              observeDocumentMedia(path, revision, (media) => {
+                if (!active) return
+                if (media?.kind === 'image') {
+                  if (video) {
+                    clear()
+                    video.replaceWith(image)
+                    video = null
+                  }
+                  image.src = media.url
+                } else if (media?.kind === 'video') {
+                  if (!video) {
+                    video = document.createElement('video')
+                    video.controls = true
+                    video.preload = 'metadata'
+                    video.setAttribute(
+                      'aria-label',
+                      image.getAttribute('alt') || 'Video attachment',
+                    )
+                    image.replaceWith(video)
+                  }
                   video.src = media.url
-                  image.replaceWith(video)
-                }
-              })
+                } else clear()
+              }),
+              clear,
+            )
           }
         })
         .catch(() => {
@@ -86,6 +98,7 @@ export function MarkdownFootnotePreview({
     return () => {
       active = false
       clearTimeout(timer)
+      for (const dispose of disposers) dispose()
     }
   }, [source, documentId, revision, version])
   return <div className="format-content markdown-footnote-preview" ref={host} />

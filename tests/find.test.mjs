@@ -330,4 +330,238 @@ test('find in document searches rich text and offscreen markdown without editing
   })
   await input.press('Escape')
   await bar.waitFor({ state: 'hidden' })
+
+  // Characters that lengthen when lowercased must not shift highlights, and a
+  // final sigma is still the same letter.
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource('İx needle word ΣΣ')
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  await input.fill('needle')
+  await waitForCount('1/1')
+  assert.equal(
+    await rich.locator('.ProseMirror-active-search-match').textContent(),
+    'needle',
+  )
+  await input.fill('Σ')
+  await waitForCount('1/2')
+  await input.press('Enter')
+  await waitForCount('2/2')
+  await input.press('Escape')
+  await bar.waitFor({ state: 'hidden' })
+
+  // A dense paragraph counts every match. Moving between matches restyles
+  // two highlights without case-folding the paragraph again.
+  const dense = 'needle word '.repeat(10000).trimEnd()
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource(dense)
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  await input.fill('NEEDLE')
+  await waitForCount('1/10000')
+  const folded = () =>
+    page.evaluate(() => {
+      const count = window.foldedText
+      window.foldedText = 0
+      return count
+    })
+  await page.evaluate(() => {
+    const lower = String.prototype.toLowerCase
+    window.foldedText = 0
+    window.restoreFolding = () => {
+      String.prototype.toLowerCase = lower
+    }
+    String.prototype.toLowerCase = function () {
+      window.foldedText += this.length
+      return lower.call(this)
+    }
+  })
+  const selected = () =>
+    rich.evaluate((element) => {
+      const { from, to } = element.editor.state.selection
+      return [from, to]
+    })
+  await input.press('Enter')
+  await waitForCount('2/10000')
+  assert.deepEqual(await selected(), [13, 19])
+  await input.press('Shift+Enter')
+  await waitForCount('1/10000')
+  await input.press('Shift+Enter')
+  await waitForCount('10000/10000')
+  assert.deepEqual(await selected(), [dense.length - 10, dense.length - 4])
+  await page.getByRole('button', { name: /^next match$/i, exact: true }).click()
+  await waitForCount('1/10000')
+  assert.deepEqual(await selected(), [1, 7])
+  assert.ok(
+    (await folded()) < dense.length,
+    'selection-only find steps must not rescan the paragraph',
+  )
+  assert.equal(
+    await rich.locator('.ProseMirror-active-search-match').count(),
+    1,
+  )
+  // Only matches near the viewport are highlighted, one frame after a change.
+  const highlighted = async () => {
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    )
+    return rich
+      .locator('.ProseMirror-search-match, .ProseMirror-active-search-match')
+      .count()
+  }
+  const nearby = await highlighted()
+  assert.ok(nearby > 1 && nearby < 1000, `${nearby} highlights`)
+  // A move only swaps the classes of two highlights; rewriting text in the
+  // paragraph would make the browser lay it out again.
+  await page.evaluate(() => {
+    const paragraph = document.querySelector('.rich-pane .tiptap > p')
+    window.findRecords = []
+    window.findMutations = new MutationObserver((records) => {
+      window.findRecords.push(...records)
+    })
+    window.findMutations.observe(paragraph, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    })
+  })
+  await input.press('Enter')
+  await waitForCount('2/10000')
+  assert.deepEqual(
+    await page.evaluate(() => {
+      const records = [
+        ...window.findRecords,
+        ...window.findMutations.takeRecords(),
+      ]
+      window.findMutations.disconnect()
+      return records.map((record) => [
+        record.type,
+        record.attributeName,
+        record.target.className,
+      ])
+    }),
+    [
+      ['attributes', 'class', 'ProseMirror-search-match'],
+      ['attributes', 'class', 'ProseMirror-search-match'],
+      ['attributes', 'class', 'ProseMirror-active-search-match'],
+      ['attributes', 'class', 'ProseMirror-active-search-match'],
+    ],
+  )
+  await input.press('Shift+Enter')
+  await waitForCount('1/10000')
+
+  // Replacing the selected match rescans its paragraph once, and undo
+  // restores the text and every match.
+  await rich.evaluate((element) => element.editor.commands.insertContent('pin'))
+  await waitForCount('0/9999')
+  assert.ok(
+    (await folded()) < 2 * dense.length,
+    'an edit must rescan only its paragraph, once',
+  )
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    `pin${dense.slice(6)}`,
+  )
+  await rich.evaluate((element) => element.editor.commands.undo())
+  await waitForCount('0/10000')
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    dense,
+  )
+  // Moves continue from wherever the cursor is.
+  await rich.evaluate((element) => element.editor.commands.setTextSelection(7))
+  await input.press('Enter')
+  await waitForCount('2/10000')
+  assert.deepEqual(await selected(), [13, 19])
+  await page.evaluate(() => window.restoreFolding())
+  await page.getByRole('button', { name: /^close find$/i, exact: true }).click()
+  await bar.waitFor({ state: 'hidden' })
+
+  // Ten times as many matches leave the highlighted count unchanged.
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource('needle word '.repeat(100000).trimEnd())
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  await input.fill('needle')
+  await waitForCount('1/100000')
+  assert.equal(await highlighted(), nearby)
+  await input.press('Escape')
+  await bar.waitFor({ state: 'hidden' })
+
+  // Enter while a long note is still being searched moves once it is counted,
+  // without finishing the search at once.
+  const lines = Array.from({ length: 500 }, (_, index) => `line ${index}`)
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource(
+    [...lines, 'needle one', 'needle two', 'needle three'].join('\n\n'),
+  )
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  // A fast clock ends the first search slice after one block, and the later
+  // slices are held, so the search stays pending.
+  await page.evaluate(() => {
+    const schedule = window.setTimeout
+    window.heldSlices = []
+    window.releaseSlices = () => {
+      window.setTimeout = schedule
+      for (const run of window.heldSlices.splice(0)) run()
+    }
+    window.setTimeout = (run, delay, ...rest) =>
+      delay ? schedule(run, delay, ...rest) : window.heldSlices.push(run)
+    let ticks = 0
+    performance.now = () =>
+      Performance.prototype.now.call(performance) + 1000 * ++ticks
+  })
+  await input.fill('needle')
+  await waitForCount('Searching…')
+  await page.evaluate(() => {
+    delete performance.now
+  })
+  const before = await selected()
+  await page.evaluate(() => {
+    const lower = String.prototype.toLowerCase
+    window.foldedText = 0
+    window.restoreFolding = () => {
+      String.prototype.toLowerCase = lower
+    }
+    String.prototype.toLowerCase = function () {
+      window.foldedText += this.length
+      return lower.call(this)
+    }
+  })
+  await input.press('Enter')
+  await input.press('Enter')
+  assert.ok(
+    (await folded()) < 1000,
+    'a pending move must not search the rest of the note at once',
+  )
+  await page.evaluate(() => window.restoreFolding())
+  assert.deepEqual(await selected(), before)
+  assert.equal(await bar.locator('output').textContent(), 'Searching…')
+  await page.evaluate(() => window.releaseSlices())
+  await waitForCount('3/3')
+  await input.press('Escape')
+  await bar.waitFor({ state: 'hidden' })
 })

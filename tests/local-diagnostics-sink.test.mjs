@@ -125,6 +125,38 @@ for (const profile of ['release', 'debug']) {
     assert.ok(!sink.report().includes('PRIVATE_DOCUMENT'))
   })
 
+  test(`${profile}: an expired finish cannot commit a clean marker after delayed verification`, async (t) => {
+    const entered = Promise.withResolvers()
+    const release = Promise.withResolvers()
+    let ending = false
+    const { sink, directory } = await fixture(t, profile, {
+      filesystem: {
+        ...fs,
+        lstat: async (path) => {
+          if (ending && path.endsWith('run-state.txt')) {
+            entered.resolve()
+            await release.promise
+          }
+          return fs.lstat(path)
+        },
+      },
+    })
+    await sink.flush()
+    ending = true
+    const controller = new AbortController()
+    const finished = sink.finish(controller.signal)
+    await entered.promise
+    controller.abort()
+    release.resolve()
+    await finished
+    assert.equal(
+      JSON.parse(await fs.readFile(join(directory, 'run-state.txt'), 'utf8'))
+        .state,
+      'active',
+    )
+    assert.match(sink.report(), /RUN_ENDED/)
+  })
+
   test(`${profile}: failed final marker cannot turn an uncertain run into a clean run`, async (t) => {
     for (const fault of ['close', 'rename']) {
       let ending = false
@@ -316,6 +348,7 @@ for (const profile of ['release', 'debug']) {
 
   test(`${profile}: short writes finish correctly; write failures retire the sink without recursive logging`, async (t) => {
     let failed = false
+    let retired = 0
     const storage = faultyOpen((handle, key) =>
       key === 'write'
         ? async (buffer, offset, length, position) => {
@@ -325,7 +358,13 @@ for (const profile of ['release', 'debug']) {
           }
         : null,
     )
-    const { sink } = await fixture(t, profile, { filesystem: storage })
+    const { sink } = await fixture(t, profile, {
+      filesystem: storage,
+      onFailure: () => {
+        retired++
+        throw new Error('PRIVATE_OBSERVER')
+      },
+    })
     assert.equal(sink.status.state, 'ready')
     sink.enqueue(event())
     await sink.flush()
@@ -341,6 +380,8 @@ for (const profile of ['release', 'debug']) {
     await sink.flush()
     await sink.finish()
     assert.equal(sink.status.failures, 1)
+    assert.equal(retired, 1)
+    assert.ok(!sink.report().includes('PRIVATE_OBSERVER'))
     assert.ok(!sink.report().includes('PRIVATE_PATH'))
   })
 

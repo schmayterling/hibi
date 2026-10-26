@@ -1,5 +1,6 @@
 import { Image } from '@tiptap/extension-image'
-import { attachmentMarkdown } from '../../shared/media.ts'
+import { attachmentMarkdown, type DocumentMedia } from '../../shared/media.ts'
+import { observeDocumentMedia } from './document-media.ts'
 import { decodeMarkdownEntities } from './markdown-entities.ts'
 
 /** Resolve display URLs without changing the Markdown stored in image attrs. */
@@ -34,22 +35,19 @@ export function documentImage(revision: number) {
           document.createElement('img')
         container.append(media)
         let current = node
-        let request = 0
-        const render = async () => {
-          const id = ++request
-          const { src, alt, title } = current.attrs
-          const result =
-            /^data:image\/(png|jpeg|gif|webp|avif|svg\+xml);base64,/i.test(src)
-              ? { url: src, kind: 'image' }
-              : await window.hibi
-                  .readDocumentMedia(src, revision)
-                  .catch(() => null)
-          if (id !== request) return
+        let result: DocumentMedia | null = null
+        const render = (next: DocumentMedia | null) => {
+          result = next
+          const { alt, title } = current.attrs
           if (
             (result?.kind === 'video') !==
             media instanceof HTMLVideoElement
           ) {
-            if (media instanceof HTMLVideoElement) media.pause()
+            if (media instanceof HTMLVideoElement) {
+              media.pause()
+              media.removeAttribute('src')
+              media.load()
+            }
             media = document.createElement(
               result?.kind === 'video' ? 'video' : 'img',
             )
@@ -61,7 +59,11 @@ export function documentImage(revision: number) {
             media.controls = true
             media.preload = 'metadata'
             media.setAttribute('aria-label', alt || 'Video attachment')
-          } else media.alt = alt ?? ''
+          } else {
+            media.alt = alt ?? ''
+            media.loading = 'lazy'
+            media.decoding = 'async'
+          }
           if (result) {
             if (media.getAttribute('src') !== result.url) media.src = result.url
           } else {
@@ -71,25 +73,37 @@ export function documentImage(revision: number) {
               'Could not load this media. Check the file path. Save the note first if the path is relative to it.'
           }
         }
-        void render()
-        const unsubscribe = window.hibi.onWorkspaceChanged(() => void render())
+        let unsubscribe = observeDocumentMedia(
+          current.attrs.src,
+          revision,
+          render,
+        )
         return {
           dom: container,
           stopEvent: (event) =>
             event.target instanceof Element && !!event.target.closest('video'),
           update(next) {
             if (next.type !== current.type) return false
-            const changed =
-              JSON.stringify(next.attrs) !== JSON.stringify(current.attrs)
+            const changed = next.attrs.src !== current.attrs.src
             current = next
-            if (changed) void render()
+            if (changed) {
+              unsubscribe()
+              unsubscribe = observeDocumentMedia(
+                current.attrs.src,
+                revision,
+                render,
+              )
+            } else render(result)
             return true
           },
           ignoreMutation: () => true,
           destroy() {
-            request += 1
             unsubscribe()
-            if (media instanceof HTMLVideoElement) media.pause()
+            media.removeAttribute('src')
+            if (media instanceof HTMLVideoElement) {
+              media.pause()
+              media.load()
+            }
           },
         }
       }

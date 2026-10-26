@@ -5,14 +5,6 @@ import { AllSelection, TextSelection, type Transaction } from '@tiptap/pm/state'
 import { Mapping, ReplaceStep } from '@tiptap/pm/transform'
 import { EditorContent, useEditor } from '@tiptap/react'
 import {
-  findNext,
-  findPrev,
-  getMatchHighlights,
-  getSearchState,
-  SearchQuery,
-  setSearchState,
-} from 'prosemirror-search'
-import {
   lazy,
   type MouseEvent,
   Suspense,
@@ -116,6 +108,13 @@ import type { OutlineHeading, OutlineRequest } from './OutlineSidebar'
 import { outlineHeadingAt } from './outline-position'
 import { createPlainSourceSync } from './plain-source-sync'
 import { observeRichAnnotations } from './rich-annotations'
+import {
+  findNext,
+  findPrev,
+  richFindKey,
+  scanRichFind,
+  setRichFindQuery,
+} from './rich-find'
 import { createRichParagraphProof } from './rich-paragraph-proof'
 import {
   preserveRichSource,
@@ -349,6 +348,7 @@ export function MarkdownEditor({
             'github-markdown.github',
             'text-extras.text-extras',
             'math.latex',
+            'mermaid.blocks',
           ].includes(flavor.id),
       ) ||
       markdownExtensions.some(
@@ -379,6 +379,7 @@ export function MarkdownEditor({
       ['github-markdown.github', 'github-markdown'],
       ['text-extras.text-extras', 'text-extras'],
       ['math.latex', 'math'],
+      ['mermaid.blocks', 'mermaid'],
     ])
     if (
       !richSyntaxCompatible ||
@@ -434,8 +435,9 @@ export function MarkdownEditor({
   // biome-ignore lint/correctness/useExhaustiveDependencies: syntaxVersion invalidates parser contribution compatibility.
   const plainSyncEligible = useMemo(() => {
     const knownOwner = (owner: string) =>
-      ['markdown', 'github-markdown', 'text-extras'].includes(owner) &&
-      addonRegistry.origin(owner) === 'built-in'
+      ['markdown', 'github-markdown', 'text-extras', 'mermaid'].includes(
+        owner,
+      ) && addonRegistry.origin(owner) === 'built-in'
     return (
       richSyntaxCompatible &&
       flavors.every((flavor) => {
@@ -450,6 +452,7 @@ export function MarkdownEditor({
             'markdown.obsidian',
             'github-markdown.github',
             'text-extras.text-extras',
+            'mermaid.blocks',
           ].includes(registered.id)
         )
       }) &&
@@ -500,6 +503,7 @@ export function MarkdownEditor({
     direction: 'next',
   })
   const handledFindMove = useRef(0)
+  const queuedFindMoves = useRef<FindMove['direction'][]>([])
   const {
     content,
     paneMode,
@@ -3115,21 +3119,21 @@ export function MarkdownEditor({
   useEffect(() => {
     if (!editor || !findOpen || findTarget !== 'rich') return
     const report = () => {
-      const matches = getMatchHighlights(editor.state).find()
-      const selection = editor.state.selection
-      const total = matches.length
-      const current =
-        matches.findIndex(
-          (match) => match.from === selection.from && match.to === selection.to,
-        ) + 1
+      const find = richFindKey.getState(editor.state)
+      // The total is pending until every textblock has been scanned.
+      const pending = find?.total === null
+      const total = find?.total ?? 0
+      const current = find?.current ?? 0
       // Keep the status object when matches and the current match are unchanged, so selection moves do not re-render the editor.
       setFindStatus((status) =>
         status.total === total &&
         status.current === current &&
-        !status.pending &&
+        !status.pending === !pending &&
         !status.error
           ? status
-          : { total, current },
+          : pending
+            ? { total, current, pending }
+            : { total, current },
       )
     }
     editor.on('transaction', report)
@@ -3140,44 +3144,59 @@ export function MarkdownEditor({
   }, [editor, findOpen, findTarget])
 
   useEffect(() => {
+    queuedFindMoves.current = []
     if (!editor) return
-    const query = new SearchQuery({
-      search: findOpen && findTarget === 'rich' ? findQuery : '',
-      literal: true,
-    })
-    if (!query.valid && !getSearchState(editor.state)?.query.valid) return
+    const query = findOpen && findTarget === 'rich' ? findQuery : ''
+    if (!query && !richFindKey.getState(editor.state)?.query) return
     if (!flushRich(editor)) return
-    editor.view.dispatch(setSearchState(editor.state.tr, query))
-    const first = query.valid ? query.findNext(editor.state, 0) : null
-    if (!first) return
-    editor.view.dispatch(
-      editor.state.tr
-        .setSelection(
-          TextSelection.create(editor.state.doc, first.from, first.to),
-        )
-        .scrollIntoView(),
-    )
-    revealRichRange(editor, first.from, first.to)
+    editor.view.dispatch(setRichFindQuery(editor.state.tr, query))
+    const selection = editor.state.selection
+    return scanRichFind(editor.view, (first) => {
+      // A long scan must not take over a selection made while it ran.
+      if (!editor.state.selection.eq(selection)) return
+      editor.view.dispatch(
+        editor.state.tr
+          .setSelection(
+            TextSelection.create(editor.state.doc, first.from, first.to),
+          )
+          .scrollIntoView(),
+      )
+      revealRichRange(editor, first.from, first.to)
+    })
   }, [editor, findQuery, findOpen, findTarget])
 
   useEffect(() => {
-    if (handledFindMove.current === findMove.id) return
-    handledFindMove.current = findMove.id
-    if (editor && findOpen && findTarget === 'rich' && findMove.id) {
-      if (!flushRich(editor)) return
-      const command = findMove.direction === 'next' ? findNext : findPrev
-      if (
+    if (handledFindMove.current !== findMove.id) {
+      handledFindMove.current = findMove.id
+      if (editor && findOpen && findTarget === 'rich' && findMove.id)
+        queuedFindMoves.current.push(findMove.direction)
+    }
+    // Moves made while a long note is still being searched run, in order,
+    // once its matches are counted, as in source view.
+    if (
+      !editor ||
+      !queuedFindMoves.current.length ||
+      findStatus.pending ||
+      richFindKey.getState(editor.state)?.total === null
+    )
+      return
+    const moves = queuedFindMoves.current.splice(0)
+    if (!flushRich(editor)) return
+    let moved = false
+    for (const direction of moves) {
+      const command = direction === 'next' ? findNext : findPrev
+      moved =
         command(editor.state, (transaction) =>
           editor.view.dispatch(transaction),
-        )
-      )
-        revealRichRange(
-          editor,
-          editor.state.selection.from,
-          editor.state.selection.to,
-        )
+        ) || moved
     }
-  }, [editor, findMove, findOpen, findTarget])
+    if (moved)
+      revealRichRange(
+        editor,
+        editor.state.selection.from,
+        editor.state.selection.to,
+      )
+  }, [editor, findMove, findOpen, findTarget, findStatus.pending])
 
   function updateFromSource(markdown: string) {
     onChange(markdown)

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { lstat, opendir, readFile, rm } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { app } from 'electron'
 import {
@@ -12,14 +12,15 @@ import { writeText } from './files'
 type SavedWorkspace = { path: string; pinned: boolean; hidden: boolean }
 
 let writing: Promise<void> = Promise.resolve()
-const listeners = new Set<(known: KnownWorkspace[]) => void>()
+const listeners = new Set<(known: KnownWorkspace[]) => void | Promise<void>>()
+let checkedCaches = false
 const location = () => join(app.getPath('userData'), 'recent-workspaces.json')
 const idFor = (path: string) => createHash('sha256').update(path).digest('hex')
 const asKnown = (saved: SavedWorkspace[]): KnownWorkspace[] =>
   saved.map((item) => ({ ...item, id: idFor(item.path) }))
 
 export function observeKnownWorkspaces(
-  listener: (known: KnownWorkspace[]) => void,
+  listener: (known: KnownWorkspace[]) => void | Promise<void>,
 ) {
   listeners.add(listener)
   return () => listeners.delete(listener)
@@ -30,10 +31,10 @@ const validPath = (path: unknown): path is string =>
   !path.includes('\0') &&
   isAbsolute(path)
 
-async function readWorkspaces(): Promise<SavedWorkspace[]> {
+async function readWorkspaces(): Promise<SavedWorkspace[] | null> {
   try {
     const saved: unknown = JSON.parse(await readFile(location(), 'utf8'))
-    if (!Array.isArray(saved)) return []
+    if (!Array.isArray(saved)) return null
     const seen = new Set<string>()
     return saved.flatMap((item: unknown) => {
       const path =
@@ -63,7 +64,7 @@ async function readWorkspaces(): Promise<SavedWorkspace[]> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
       console.error('could not read workspaces:', error)
-    return []
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null
   }
 }
 
@@ -74,22 +75,56 @@ function writeWorkspaces(
     .catch(() => {})
     .then(async () => {
       const file = location()
-      const current = await readWorkspaces()
+      const previous = await readWorkspaces()
+      const current = previous ?? []
       const before = JSON.stringify(current)
       const saved = update(current)
       const text = JSON.stringify(saved)
       if (text !== before) await writeText(file, text)
       const known = asKnown(saved)
-      for (const listener of listeners) listener(known)
+      if (previous !== null || text !== before) {
+        for (const listener of listeners) await listener(known)
+        await pruneIndexCaches(known)
+      }
       return known
     })
-  writing = next.then(() => {})
+  writing = next.then(
+    () => {},
+    () => {},
+  )
   return next
 }
 
+/** New search workers wait until forgotten caches have closed and been removed. */
+export const workspaceIndexCacheReady = () => writing
+
+async function pruneIndexCaches(known: readonly KnownWorkspace[]) {
+  const cache = join(app.getPath('userData'), 'workspace-index-cache')
+  try {
+    const info = await lstat(cache)
+    if (!info.isDirectory() || info.isSymbolicLink()) return
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  const ids = new Set(known.map((item) => item.id))
+  for await (const entry of await opendir(cache)) {
+    if (
+      entry.isDirectory() &&
+      /^[a-f0-9]{64}$/.test(entry.name) &&
+      !ids.has(entry.name)
+    )
+      await rm(join(cache, entry.name), { recursive: true, force: true })
+  }
+}
+
 export async function getKnownWorkspaces(): Promise<KnownWorkspace[]> {
-  await writing.catch(() => {})
-  return asKnown(await readWorkspaces())
+  if (!checkedCaches) {
+    checkedCaches = true
+    await writeWorkspaces((saved) => saved)
+  }
+  await writing
+  return asKnown((await readWorkspaces()) ?? [])
 }
 
 export async function getRecentWorkspaces(): Promise<RecentWorkspace[]> {

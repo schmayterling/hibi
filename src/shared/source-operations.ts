@@ -127,6 +127,35 @@ export function mapSourcePosition(
   return position + shift
 }
 
+/** Composes consecutive edit batches, each with the length of the source it
+ * applies to, in neighbouring pairs level by level. Each edit and its inserted
+ * text is copied once per level, not once per later batch. */
+export function composeSourceBatches(
+  batches: readonly Readonly<{ changes: readonly RawEdit[]; length: number }>[],
+): readonly RawEdit[] {
+  let level = batches
+  while (level.length > 1) {
+    const next: { changes: readonly RawEdit[]; length: number }[] = []
+    for (let index = 0; index < level.length; index += 2) {
+      const first = level[index]!,
+        second = level[index + 1]
+      next.push(
+        second
+          ? {
+              changes: composeSourceChanges(
+                first.changes,
+                second.changes,
+                first.length,
+              ),
+              length: first.length,
+            }
+          : first,
+      )
+    }
+    level = next
+  }
+  return level[0]?.changes ?? []
+}
 /** Compose two pre-state edit batches without reading or diffing the document. */
 export function composeSourceChanges(
   first: readonly RawEdit[],

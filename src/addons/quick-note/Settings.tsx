@@ -22,7 +22,7 @@ export function Settings() {
           'targets',
           value.workspaceId,
         ) as Promise<RecentWorkspace[]>,
-        window.hibi.getWorkspace(),
+        window.hibi.getWorkspaceHeader(),
       ]).then(
         ([recent, workspace]) => {
           if (!active || current !== generation) return
@@ -35,7 +35,7 @@ export function Settings() {
       )
     }
     refresh()
-    const off = window.hibi.onWorkspaceChanged(refresh)
+    const off = window.hibi.onWorkspaceHeaderChanged(refresh)
     return () => {
       active = false
       off()

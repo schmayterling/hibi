@@ -225,7 +225,10 @@ export type DesktopApi = {
   onDocumentMediaScopeChanged: (
     callback: (revision: number) => void,
   ) => () => void
-  openDroppedFile: (file: File) => Promise<{
+  openDroppedFile: (
+    file: File,
+    includeEntries?: boolean,
+  ) => Promise<{
     document: DocumentState | null
     workspace?: WorkspaceState | null
   } | null>
@@ -360,6 +363,15 @@ export type DesktopApi = {
     input?: unknown,
   ) => Promise<unknown>
   getWorkspace: () => Promise<WorkspaceState | null>
+  getWorkspaceHeader: () => Promise<
+    import('./workspace-view').WorkspaceHeader | null
+  >
+  readWorkspaceViewPage: (
+    request: import('./workspace-view').WorkspaceViewPageRequest,
+  ) => Promise<import('./workspace-view').WorkspaceViewPageResult>
+  onWorkspaceHeaderChanged: (
+    callback: (change?: import('./workspace').WorkspaceChange) => void,
+  ) => () => void
   getWorkspaceChangeSnapshot: () => Promise<
     import('./workspace').WorkspaceStreamSnapshot
   >
@@ -465,7 +477,10 @@ export type DesktopApi = {
   ) => Promise<import('./workspace-settings').WorkspaceSettings>
   getRecentWorkspaces: () => Promise<import('./workspace').RecentWorkspace[]>
   getKnownWorkspaces: () => Promise<import('./workspace').KnownWorkspace[]>
-  openRecentWorkspace: (id: string) => Promise<WorkspaceState | null>
+  openRecentWorkspace: (
+    id: string,
+    includeEntries?: boolean,
+  ) => Promise<WorkspaceState | null>
   setKnownWorkspace: (
     id: string,
     action: 'pin' | 'unpin' | 'hide',
@@ -478,9 +493,10 @@ export type DesktopApi = {
   ) => Promise<import('./workspace').WorkspaceIndex | null>
   workspaceAction: (
     action: import('./workspace').WorkspaceAction,
+    includeEntries?: boolean,
   ) => Promise<import('./workspace').WorkspaceActionResult | null>
-  openWorkspace: () => Promise<WorkspaceState | null>
-  refreshWorkspace: () => Promise<WorkspaceState | null>
+  openWorkspace: (includeEntries?: boolean) => Promise<WorkspaceState | null>
+  refreshWorkspace: (includeEntries?: boolean) => Promise<WorkspaceState | null>
   /** `target` rejects the request if another workspace session replaced it. */
   openWorkspaceFile: (
     path: string,

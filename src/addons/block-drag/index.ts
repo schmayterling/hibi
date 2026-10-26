@@ -44,6 +44,7 @@ export default defineAddon({
       })
     context.editor.registerRich({
       id: 'handle',
+      preview: 'deferred',
       attach(editor) {
         active = editor
         const element = document.createElement('button')

@@ -17,6 +17,8 @@ async function openNote(root, profile, apps) {
   apps.push(app)
   await app.evaluate(({ dialog }, root) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [root] })
+    // Quitting with the edited note answers the unsaved-changes prompt.
+    dialog.showMessageBox = async () => ({ response: 1 })
   }, root)
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
@@ -146,6 +148,24 @@ test('formatted tables show and resize the column and row sizes the rich editor 
   assert.ok(Math.abs(entry.columns[0] - (before.column + 40)) <= 2, entry)
   assert.deepEqual(entry.rows, richEntry.rows)
 
+  // Renaming the header keeps the sizes under the table's new key.
+  await table.locator('th').first().click()
+  await page.keyboard.press('End')
+  await page.keyboard.type('s')
+  await waitForAsync(
+    page,
+    async (key) => {
+      const tables = await window.hibi.readTableLayout(
+        (await window.hibi.getDocument()).tabId,
+      )
+      return tables?.length === 1 && tables[0].key !== key
+    },
+    richEntry.key,
+  )
+  const [renamed] = await stored(layout)
+  assert.deepEqual(renamed.columns, entry.columns)
+  await page.keyboard.press('Escape')
+
   // Double-clicking the edge makes the column automatic again.
   const header = await table.locator('th').first().boundingBox()
   await page.mouse.move(header.x + header.width - 2, header.y + 8)
@@ -163,6 +183,10 @@ test('formatted tables show and resize the column and row sizes the rich editor 
       )?.[0]?.columns,
   )
   assert.ok((await measure()).column < before.column)
-  // Sizes never enter the note.
+  // Sizes never enter the note, which holds only the unsaved header edit.
   assert.equal(await readFile(file, 'utf8'), markdown)
+  assert.match(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    /^\| Names \| Notes \|$/m,
+  )
 })

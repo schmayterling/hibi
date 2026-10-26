@@ -1,5 +1,10 @@
 import { isolateHistory } from '@codemirror/commands'
-import { type ChangeDesc, type Text, Transaction } from '@codemirror/state'
+import {
+  type ChangeDesc,
+  MapMode,
+  type Text,
+  Transaction,
+} from '@codemirror/state'
 import {
   type EditorView,
   ViewPlugin,
@@ -273,6 +278,14 @@ class TableView {
   private dragging = false
   private saving: ReturnType<typeof setTimeout> | undefined
   private unsubscribe: (() => void) | null = null
+  /** Sized columns' header cells and sized rows' lines through changes since the last redraw, null where deleted. */
+  private moved: {
+    columns: (number | null)[]
+    rows: (number | null)[]
+    sizes: { columns: number[]; rows: number[] }
+    count: number
+    lines: number
+  } | null = null
 
   constructor(
     readonly view: EditorView,
@@ -304,6 +317,7 @@ class TableView {
     const previous = this.widget
     this.widget = widget
     this.relocate()
+    this.followSizes()
     this.dom.classList.toggle('hibi-lp-table-inline', widget.inline)
     if (!sameConfig(previous.config, widget.config)) {
       // Other syntax or renderers: every cell renders again.
@@ -837,11 +851,110 @@ class TableView {
 
   /** Follow the edited row through the formatted view's changes; the edited cell when its row was deleted. */
   map(changes: ChangeDesc): Cell | null {
+    this.track(changes)
     const editing = this.editing
     if (!editing) return null
     editing.from = changes.mapPos(editing.from, 1)
     editing.to = changes.mapPos(editing.to, -1)
     return editing.to > editing.from ? null : editing
+  }
+
+  /**
+   * Map the header cells of sized columns and the lines of sized rows
+   * through a change of the table, any change (table actions, typing, undo
+   * and redo), so that sizes follow their columns and rows as in the rich
+   * editor. A column or row whose position the change deleted drops, unless
+   * the table kept as many: then it was replaced and keeps its index.
+   */
+  private track(changes: ChangeDesc) {
+    const { columns, rows } = this.sizes
+    if (!columns.some(Boolean) && !rows.some(Boolean)) return
+    if (!this.moved) {
+      const { from, to } = this.range()
+      if (!changes.touchesRange(from, to)) return
+      const header = this.widget.line(0),
+        cells = this.widget.row(0).cells
+      this.moved = {
+        columns: columns.map((size, index) => {
+          const cell = cells[index]
+          return size && cell ? this.now(header.from + cell.from) : null
+        }),
+        rows: rows.map((size, index) => {
+          const line = index ? index + 1 : 0
+          return size && line < this.lines
+            ? this.now(this.widget.line(line).from)
+            : null
+        }),
+        sizes: { columns: [...columns], rows: [...rows] },
+        count: this.aligned.length,
+        lines: this.lines,
+      }
+    }
+    const map = (pos: number | null) =>
+      pos === null ? null : changes.mapPos(pos, 1, MapMode.TrackAfter)
+    this.moved.columns = this.moved.columns.map(map)
+    this.moved.rows = this.moved.rows.map(map)
+  }
+
+  /** Give sized columns and rows the cells and lines they moved to, after the table changed. */
+  private followSizes() {
+    const moved = this.moved
+    if (!moved) return
+    this.moved = null
+    const { widget } = this
+    const { doc } = widget
+    if (doc !== this.view.state.doc) return
+    const header = widget.line(0),
+      row = widget.row(0)
+    const columns: number[] = [],
+      rows: number[] = []
+    moved.columns.forEach((pos, index) => {
+      const size = moved.sizes.columns[index]
+      if (!size) return
+      let target = pos === null && row.cells.length >= moved.count ? index : -1
+      for (
+        let column = 0;
+        pos !== null && column < row.cells.length;
+        column++
+      ) {
+        const span = cellSpan(row, column, header.text.length)
+        if (
+          span &&
+          pos >= header.from + span.from &&
+          pos <= header.from + span.to
+        ) {
+          target = column
+          break
+        }
+      }
+      if (target >= 0) columns[target] = size
+    })
+    moved.rows.forEach((pos, index) => {
+      const size = moved.sizes.rows[index]
+      if (!size) return
+      let target = pos === null && this.lines >= moved.lines ? index : -1
+      if (pos !== null) {
+        const line = doc.lineAt(pos).number - widget.first
+        if (line >= 0 && line < this.lines && line !== 1)
+          target = line ? line - 1 : 0
+      }
+      if (target >= 0) rows[target] = size
+    })
+    const next = {
+      columns: Array.from(columns, (size) => size ?? 0),
+      rows: Array.from(rows, (size) => size ?? 0),
+    }
+    const same = (a: number[], b: number[]) =>
+      a.length === b.length && a.every((size, index) => size === b[index])
+    if (
+      same(next.columns, moved.sizes.columns) &&
+      same(next.rows, moved.sizes.rows)
+    )
+      return
+    this.sizes.columns = next.columns
+    this.sizes.rows = next.rows
+    // Saved after the redraw, which the table's position needs.
+    this.save(1)
   }
 
   /** Edit the same cell where its row is now, after rows were added or removed around it. */
@@ -970,18 +1083,6 @@ class TableView {
         return false
     }
     const { line } = cell
-    // Sizes follow the rows and columns they belong to.
-    const sized = this.sizes.key !== null
-    if (sized) {
-      const { rows, columns } = this.sizes
-      const row = line === 0 ? 0 : line - 1
-      if (id === 'row-before') rows.splice(row, 0, 0)
-      else if (id === 'row-after') rows.splice(row + 1, 0, 0)
-      else if (id === 'row-delete') rows.splice(row, 1)
-      else if (id === 'column-before') columns.splice(cell.column, 0, 0)
-      else if (id === 'column-after') columns.splice(cell.column + 1, 0, 0)
-      else if (id === 'column-delete') columns.splice(cell.column, 1)
-    }
     this.stopEditing()
     this.view.dispatch({
       changes: result.changes,
@@ -990,7 +1091,6 @@ class TableView {
         isolateHistory.of('full'),
       ],
     })
-    if (sized) this.save()
     // Editing goes on in the cell the action leaves the caret in.
     if (result.cell && this.dom.isConnected)
       this.edit(

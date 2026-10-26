@@ -853,6 +853,62 @@ test('two views of a tab keep the table sizes each other stores', {
   assert.notEqual(width, '')
 })
 
+test('table sizes follow their columns and rows through table actions and undo', {
+  timeout: 30000,
+}, async () => {
+  const doc = '| a | b |\n| - | - |\n| 1 | 2 |\n| 3 | 4 |\n\nafter'
+  const key = tableKey(0, ['a', 'b'])
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('follow', [
+        { key, columns: [200, 180], rows: [0, 0, 90] },
+      ]),
+    key,
+  )
+  await mountTab(doc, 'follow')
+  const sizes = () =>
+    harness.evaluate(() => {
+      const table = document.querySelector('.hibi-lp-table table')
+      return {
+        columns: [...table.rows[0].cells].map((cell) => cell.style.width),
+        rows: [...table.rows].map((row) => row.style.height),
+      }
+    })
+  const action = (id, at) =>
+    harness.evaluate(
+      ({ id, at }) => {
+        const view = window.tables.view()
+        view.dispatch({ selection: { anchor: at } })
+        return window.tables.runTableAction(id)
+      },
+      { id, at },
+    )
+  assert.deepEqual(await sizes(), {
+    columns: ['200px', '180px'],
+    rows: ['', '', '90px'],
+  })
+  // A row above the sized one and a column before the first shift them.
+  assert.equal(await action('row-before', doc.indexOf('| 3') + 2), true)
+  assert.equal(await action('column-before', 2), true)
+  assert.deepEqual(await sizes(), {
+    columns: ['', '200px', '180px'],
+    rows: ['', '', '', '90px'],
+  })
+  // Undo puts the sizes back with the columns and rows.
+  await harness.keyboard.press(undoKey)
+  await harness.keyboard.press(undoKey)
+  assert.equal((await state()).doc, doc)
+  assert.deepEqual(await sizes(), {
+    columns: ['200px', '180px'],
+    rows: ['', '', '90px'],
+  })
+  await harness.waitForFunction(
+    () =>
+      JSON.stringify(window.tables.layouts('follow')[0]?.columns) ===
+      '[200,180]',
+  )
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {

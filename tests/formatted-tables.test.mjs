@@ -600,6 +600,16 @@ test('typing in a cell writes escaped source into that cell only', {
     process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
   )
   assert.match((await state()).doc, /\| new \|$/m)
+  // Inline formatting shortcuts format the cell's source.
+  await harness.keyboard.press('Home')
+  await harness.keyboard.press('Shift+End')
+  await harness.keyboard.press(
+    process.platform === 'darwin' ? 'Meta+b' : 'Control+b',
+  )
+  assert.match((await state()).doc, /\| \*\*new\*\* \|$/m)
+  await harness.keyboard.press(
+    process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+  )
   // The table renders the source after leaving it.
   await harness.keyboard.press('Escape')
   const cells = await harness.evaluate(() =>
@@ -707,8 +717,15 @@ test('in the app, cells edit their source in place, undo and run the toolbar tab
     process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
   )
   await saved(/^\| two \\\| pipe \| \[link\]/)
-  // The toolbar's table actions edit the table around the cell.
+  // The toolbar's table actions edit the table around the cell; block
+  // actions, which would break the row, are off there.
   const bar = page.getByRole('navigation', { name: /editor toolbar/i })
+  await page.waitForFunction(
+    () =>
+      document.querySelector('[data-toolbar-id="format.heading-1"]')
+        ?.disabled === true &&
+      !!document.querySelector('[data-toolbar-id="format.row-after"]'),
+  )
   const run = async (id) => {
     const action = bar.locator(`[data-toolbar-id="format.${id}"]`)
     if (

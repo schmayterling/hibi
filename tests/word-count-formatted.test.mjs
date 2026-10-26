@@ -16,12 +16,19 @@ import {
   WikiEmbed,
   WikiLink,
 } from '../src/addons/markdown/obsidian.ts'
+import {
+  blockMath,
+  blockMathStart,
+  inlineMath,
+  mathTokens,
+} from '../src/addons/math/syntax.ts'
 import { Subscript, Subtext } from '../src/addons/text-extras/nodes.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
 import { countText } from '../src/addons/word-count/count.ts'
 import { richText } from '../src/addons/word-count/formatted-text.ts'
 import { documentImage } from '../src/renderer/src/DocumentImage.ts'
 import { editorExtensions } from '../src/renderer/src/markdown.ts'
+import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
 import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 
 const flavors = [
@@ -48,20 +55,107 @@ const flavors = [
     export: { extensions: [textExtrasMarkdown] },
   },
 ]
-flavors.push({ id: 'math.latex', richExtensions: [BlockMath, InlineMath] })
-const extensions = [...editorExtensions(flavors), documentImage(0)]
-const markdown = extensions.find((extension) => extension.name === 'markdown')
-const manager = new MarkdownManager({
-  extensions,
-  marked: markdown.options.marked,
-  markedOptions: markdown.options.markedOptions,
+flavors.push({
+  id: 'math.latex',
+  richExtensions: [
+    BlockMath.extend({
+      markdownTokenizer: {
+        name: 'blockMath',
+        level: 'block',
+        start: blockMathStart,
+        tokenize: blockMath,
+      },
+    }),
+    InlineMath.extend({
+      markdownTokenizer: {
+        name: 'inlineMath',
+        level: 'inline',
+        start: (source) => source.indexOf('$'),
+        tokenize: inlineMath,
+      },
+    }),
+  ],
+  export: { extensions: [mathTokens] },
 })
-const schema = getSchema(extensions)
-const native = (source) =>
-  getText(schema.nodeFromJSON(manager.parse(source)), {
+function native(source) {
+  const freshFlavors = flavors.map((flavor) =>
+    flavor.id === 'markdown.github'
+      ? {
+          ...flavor,
+          export: { extensions: [alertMarkdown, markedGithubFootnote()] },
+        }
+      : flavor,
+  )
+  const extensions = [...editorExtensions(freshFlavors), documentImage(0)]
+  const markdown = extensions.find((extension) => extension.name === 'markdown')
+  const manager = new MarkdownManager({
+    extensions,
+    marked: markdown.options.marked,
+    markedOptions: markdown.options.markedOptions,
+  })
+  const schema = getSchema(extensions)
+  return getText(schema.nodeFromJSON(manager.parse(source)), {
     blockSeparator: '\n',
     textSerializers: getTextSerializersFromSchema(schema),
   })
+}
+
+for (const source of [
+  '- a\n  -\n nested',
+  '1. o \n\n2. two',
+  '[^a]: note\n\n- [ ] text[^a]',
+  '[ref]: /target\n\n- [ ] [some words][ref]',
+])
+  test(`list projection preserves rich block structure: ${JSON.stringify(source)}`, () => {
+    const syntax = {
+      ...defaultNoteSyntax,
+      alerts: true,
+      math: true,
+      textExtras: true,
+    }
+    assert.equal(richText(source, syntax).slice(1), native(source))
+  })
+
+for (const [source, formatted, rich] of [
+  ['- [ ] text[^a]\n\n[^a]: note', '\n\ntext\nnote', '\n\ntext[^a]\nnote'],
+  [
+    '- [ ] [some words][ref]\n\n[ref]: /target',
+    '\n\nsome words',
+    '\n\n[some words][ref]',
+  ],
+  [
+    '- [ ] [label][ref]\n\n[ref]: https://example.test',
+    '\n\nlabel',
+    '\n\n[label][ref]',
+  ],
+])
+  test(`task forward references retain Markdown semantics: ${JSON.stringify(source)}`, () => {
+    // tiptap tokenizes task text before later definitions; valid forward links still resolve.
+    assert.equal(
+      richText(source, {
+        ...defaultNoteSyntax,
+        math: true,
+        textExtras: true,
+        alerts: true,
+      }).slice(1),
+      formatted,
+    )
+    assert.equal(native(source), rich)
+  })
+
+test('disabled bullets stay literal beside active task lists', () => {
+  const source = '- [ ] task\n\n- a\n  - nested'
+  markdownSyntax.setEnabled('core.bullet-lists', false)
+  try {
+    const syntax = {
+      ...defaultNoteSyntax,
+      disabledFeatures: ['core.bullet-lists'],
+    }
+    assert.equal(richText(source, syntax).slice(1), native(source))
+  } finally {
+    markdownSyntax.reset()
+  }
+})
 
 test('disabled syntax remains literal in document totals', () => {
   for (const [source, feature, expected] of [
@@ -105,7 +199,6 @@ test('formatted text and counts match the rich view', () => {
     'footnote[^some]\n\n[^Some]: definition',
     'plain[^missing]',
     'footnote[^list]\n\n[^list]: one\n\n    second paragraph',
-    '- [ ] [label][ref]\n\n[ref]: https://example.test',
     'H~2~O\n\n-# small words',
     '![image](a.png)\n\na ![inline](b.png) b',
     '[label][ref]\n\n[ref]: https://example.test',

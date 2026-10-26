@@ -45,6 +45,7 @@ function bounded(counter, before, at, name) {
       referenceUnits: work.referenceUnits,
       source: work.source,
       parser: work.parser,
+      brackets: work.brackets,
     }),
   )
   assert.ok(work.countedUnits < 1024, JSON.stringify(work))
@@ -53,6 +54,7 @@ function bounded(counter, before, at, name) {
   assert.equal(work.source.materializations, 0)
   assert.equal(work.source.materializedUnits, 0)
   assert.equal(work.parser.parser.readUnits, 0)
+  assert.ok(work.brackets.readUnits < 1024, JSON.stringify(work))
   assert.equal(counter.store.snapshot().sliceRaw(at, at + 3), ' y ')
   return result
 }
@@ -61,19 +63,19 @@ test('50 MiB single paragraph retains local counts at three depths', {
   timeout: 180000,
 }, () => {
   const size = 50 * 1024 * 1024
-  const source = 'ordinary words '.repeat(Math.ceil(size / 15)).slice(0, size)
+  const source = 'ordinary words. '.repeat(Math.ceil(size / 16)).slice(0, size)
   const counter = new FormattedCounter(
     new SourceStore(source, { tabId: 'long-scale', revision: 0 }),
     syntax,
   )
   try {
     let total = read(counter)
-    // Every full phrase has two words; this exact remainder starts one more.
-    assert.equal(total.words, Math.floor(size / 15) * 2 + 1)
+    // each complete sentence has two words; this fixture ends at a sentence boundary.
+    assert.equal(total.words, (size / 16) * 2)
     assert.equal(total.characters, size)
     let shift = 0
     for (const depth of [1 / 4, 1 / 2, 3 / 4]) {
-      const at = Math.floor((size * depth) / 15) * 15 + 3 + shift
+      const at = Math.floor((size * depth) / 16) * 16 + 3 + shift
       total = bounded(counter, total, at, 'single-paragraph')
       shift += 3
     }
@@ -82,10 +84,54 @@ test('50 MiB single paragraph retains local counts at three depths', {
   }
 })
 
+test('50 MiB unclosed labels keep distant ordinary edits local', {
+  timeout: 180000,
+}, () => {
+  const paragraph = 'plain words here. '.repeat(64)
+  const unit = `${paragraph}\n\n`
+  const units = Math.ceil((50 * 1024 * 1024) / unit.length)
+  for (const prefix of ['[first\n\n', '[^afirst\n\n']) {
+    const counter = new FormattedCounter(
+      new SourceStore(`${prefix}${unit.repeat(units)}last`, {
+        tabId: 'unclosed-scale',
+        revision: 0,
+      }),
+      syntax,
+    )
+    try {
+      const first = countText(
+        richText(`${prefix}${unit}`, syntax, { after: true }),
+      )
+      const middle = countText(
+        richText(unit, syntax, { before: true, after: true }),
+      )
+      const last = countText(richText('last', syntax, { before: true }))
+      let total = read(counter)
+      assert.deepEqual(total, {
+        words: first.words + middle.words * (units - 1) + last.words,
+        characters:
+          first.characters +
+          middle.characters * (units - 1) +
+          last.characters -
+          1,
+      })
+      let shift = 0
+      for (const depth of [1 / 4, 1 / 2, 3 / 4]) {
+        const at =
+          prefix.length + unit.length * Math.floor(units * depth) + 3 + shift
+        total = bounded(counter, total, at, 'unclosed-label')
+        shift += 3
+      }
+    } finally {
+      counter.dispose()
+    }
+  }
+})
+
 test('50 MiB mixed blocks retain counts inside long marked paragraphs', {
   timeout: 180000,
 }, () => {
-  const paragraph = 'ordinary words '.repeat(2200)
+  const paragraph = 'ordinary words. '.repeat(2200)
   const unit = `# heading\n\n**bold** ${paragraph}**last**\n\n> quote\n> next\n\n- one\n- two\n\n| a | b |\n|---|---|\n| c | d |\n\n\`\`\`js\nx=1\n\`\`\`\n\n$$\nx\n\ny\n$$\n\n[label][ref]\n\n[ref]: https://example.test\n\n`
   const units = Math.ceil((50 * 1024 * 1024) / unit.length)
   const counter = new FormattedCounter(
@@ -113,7 +159,7 @@ test('50 MiB mixed blocks retain counts inside long marked paragraphs', {
       Math.floor(units / 2),
       Math.floor((units * 3) / 4),
     ]) {
-      const at = unit.length * index + unit.indexOf('ordinary') + 1024 + shift
+      const at = unit.length * index + unit.indexOf('ordinary') + 1027 + shift
       total = bounded(counter, total, at, 'mixed-blocks')
       shift += 3
     }

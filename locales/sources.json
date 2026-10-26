@@ -521,6 +521,9 @@
   "a066ff921096": [
     "src/addons/frontmatter/Properties.tsx"
   ],
+  "b01a69e19d91": [
+    "src/addons/word-count/count-brackets.ts"
+  ],
   "52656e8104ee": [
     "src/addons/git/Panel.tsx"
   ],
@@ -4284,6 +4287,9 @@
     "src/shared/markdown-source-model.ts"
   ],
   "7210e2c9cfdd": [
+    "src/shared/source-parser.ts"
+  ],
+  "d447510064bd": [
     "src/shared/source-parser.ts"
   ],
   "26f98a0491bd": [

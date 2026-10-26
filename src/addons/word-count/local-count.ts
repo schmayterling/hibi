@@ -4,7 +4,7 @@ import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import { SourceOwners } from '../../shared/source-owners.ts'
 import { countText } from './count.ts'
 
-// These characters can change Markdown ownership, references or inline tokens.
+// these characters can change Markdown ownership, references or inline tokens.
 const syntax = /[\r\n\t\\`&*_!#[\]<>~^$+=|-]/
 
 /** count proven plain source without materializing it or passing it to marked's block regexps. */
@@ -18,7 +18,8 @@ export function plainSource(source: SourceSnapshot, from: number, to: number) {
   for (const chunk of source.chunks(from, to)) {
     if (
       syntax.test(chunk) ||
-      /[.:@]/.test(chunk) ||
+      /[:@]/.test(chunk) ||
+      /www\./i.test(last + chunk) ||
       (first && !/^\S/.test(chunk))
     )
       return null
@@ -27,7 +28,7 @@ export function plainSource(source: SourceSnapshot, from: number, to: number) {
     const cut = cuts.at(-1)
     const end = cut
       ? cut.index + 1
-      : last === ' ' && /^[a-zA-Z0-9]/.test(chunk)
+      : last.endsWith(' ') && /^[a-zA-Z0-9]/.test(chunk)
         ? 0
         : -1
     if (end >= 0) {
@@ -36,7 +37,7 @@ export function plainSource(source: SourceSnapshot, from: number, to: number) {
       characters += count.characters
       pending = chunk.slice(end)
     } else pending += chunk
-    last = chunk.at(-1) ?? last
+    last = (last + chunk).slice(-3)
   }
   const count = countText(pending)
   return {
@@ -79,9 +80,9 @@ export function plainParagraph(
 }
 
 /**
- * Recount between stable word and grapheme boundaries. A space followed by an
- * ASCII letter/digit breaks both, including beside combining marks and emoji.
- * Never cut a word, surrogate pair, grapheme or Markdown token at a fixed size.
+ * recount between stable word and grapheme boundaries. A space followed by an
+ * ascii letter/digit breaks both, including beside combining marks and emoji.
+ * never cut a word, surrogate pair, grapheme or Markdown token at a fixed size.
  */
 export function localCount(
   source: SourceSnapshot,
@@ -105,7 +106,7 @@ export function localCount(
     end = base + span.to
   if (from <= start || to >= end || syntax.test(insert)) return null
   // ponytail: a run without stable spaces needs its whole segmentation context;
-  // composable Unicode segmentation summaries would bound edits within that run.
+  // composable unicode segmentation summaries would bound edits within that run.
   let left = from,
     right = to
   while (left > start) {
@@ -134,8 +135,16 @@ export function localCount(
   }
   const before = source.sliceRaw(left, right)
   const after = `${before.slice(0, from - left)}${insert}${before.slice(to - left)}`
-  // URL/email recognition can change when ordinary letters are edited beside these.
-  if (/[.:@]/.test(before) || /[.:@]/.test(insert)) return null
+  // punctuation or deletion can turn the first word into an ordered marker.
+  if (left === base && /^\d{1,9}[.)](?:\s|$)/.test(after)) return null
+  // url/email recognition can change when ordinary letters are edited beside these.
+  if (
+    /[:@]/.test(before) ||
+    /[:@]/.test(insert) ||
+    /www\./i.test(before) ||
+    /www\./i.test(after)
+  )
+    return null
   const oldCount = countText(before),
     newCount = countText(after)
   return {

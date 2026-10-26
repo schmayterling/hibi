@@ -4,7 +4,10 @@ import { markedGithubFootnote } from 'marked-github-footnote'
 import type { CountSyntax } from './formatted-text.ts'
 
 /** keep marked definition candidates together for regional semantic reads. */
-export function countMarkdownSyntax(syntax: CountSyntax): MarkdownConfig {
+export function countMarkdownSyntax(
+  syntax: CountSyntax,
+  canClose?: (from: number) => boolean,
+): MarkdownConfig {
   const rule = Lexer.rules.block[syntax.gfm ? 'gfm' : 'normal'].def
   const footnotes = markedGithubFootnote()
   const definition = footnotes.extensions?.find(
@@ -41,6 +44,8 @@ export function countMarkdownSyntax(syntax: CountSyntax): MarkdownConfig {
           if (cx.depth !== 1 || !/^ {0,3}\[/.test(line.text)) return false
           const start = cx.lineStart
           const isFootnote = syntax.gfm && footnote(line.text)
+          if (!isFootnote && canClose && !canClose(start + line.pos))
+            return false
           const lines = [line.text]
           let end = start + line.text.length,
             ended = false

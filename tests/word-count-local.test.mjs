@@ -67,7 +67,7 @@ for (const size of [16 * 1024, 64 * 1024])
         read(counter),
         countText(richText(source, syntax).slice(1)),
       )
-      // A syntax edit must reconcile every previously skipped parser generation.
+      // a syntax edit must reconcile every previously skipped parser generation.
       edit(counter, at, at, '**bold**')
       source = `${source.slice(0, at)}**bold**${source.slice(at)}`
       assert.deepEqual(
@@ -75,6 +75,36 @@ for (const size of [16 * 1024, 64 * 1024])
         countText(richText(source, syntax).slice(1)),
       )
     })
+
+test('paragraph-prefix punctuation edits can create ordered list ownership', (t) => {
+  for (const [initial, from, to, insert] of [
+    ['1 words', 1, 1, '.'],
+    ['1 words', 1, 1, ')'],
+    ['12.3 words', 3, 4, ''],
+  ]) {
+    const counter = new FormattedCounter(
+      new SourceStore(initial, { tabId: 'ordered-prefix', revision: 0 }),
+      syntax,
+    )
+    t.after(() => counter.dispose())
+    assert.deepEqual(
+      read(counter),
+      countText(richText(initial, syntax).slice(1)),
+    )
+    edit(counter, from, to, insert)
+    const changed = initial.slice(0, from) + insert + initial.slice(to)
+    assert.deepEqual(
+      read(counter),
+      countText(richText(changed, syntax).slice(1)),
+      changed,
+    )
+    edit(counter, from, from + insert.length, initial.slice(from, to))
+    assert.deepEqual(
+      read(counter),
+      countText(richText(initial, syntax).slice(1)),
+    )
+  }
+})
 
 test('local summaries retain unicode boundaries, bursts, neighbors and syntax invalidation', (t) => {
   for (const phrase of [
@@ -93,6 +123,8 @@ test('local summaries retain unicode boundaries, bursts, neighbors and syntax in
     for (const insert of [
       ' y ',
       'z',
+      '.',
+      'www.',
       '👩🏽‍💻',
       'é',
       '[ref]',
@@ -102,7 +134,7 @@ test('local summaries retain unicode boundaries, bursts, neighbors and syntax in
       const at = source.indexOf('ordinary', source.length / 2) + 2
       edit(counter, at, at + 2, insert)
       source = `${source.slice(0, at)}${insert}${source.slice(at + 2)}`
-      // Two edits before a read exercise pending summary accumulation.
+      // two edits before a read exercise pending summary accumulation.
       edit(counter, at + insert.length, at + insert.length, 'next ')
       source = `${source.slice(0, at + insert.length)}next ${source.slice(at + insert.length)}`
       assert.deepEqual(

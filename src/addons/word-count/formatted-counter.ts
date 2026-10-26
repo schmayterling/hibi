@@ -11,6 +11,7 @@ import type { SourceOwner, SourceOwners } from '../../shared/source-owners.ts'
 import { SourceReferences } from '../../shared/source-references.ts'
 import { blockMathSyntax } from '../math/formatted-syntax.ts'
 import { countText } from './count.ts'
+import { CountBrackets } from './count-brackets.ts'
 import { countMarkdownSyntax } from './formatted-count-syntax.ts'
 import {
   type CountSyntax,
@@ -32,6 +33,7 @@ type Entry = {
 export class FormattedCounter {
   readonly store: SourceStore
   readonly #syntax: CountSyntax
+  readonly #brackets: CountBrackets
   readonly #model: MarkdownSourceModel
   readonly #cache: MarkdownSemanticCache
   readonly #entries = new Map<number, Entry>()
@@ -49,8 +51,9 @@ export class FormattedCounter {
   constructor(store: SourceStore, syntax: CountSyntax) {
     this.store = store
     this.#syntax = syntax
+    this.#brackets = new CountBrackets(store.snapshot())
     const base = metadataParsers[syntax.gfm ? 'gfm' : 'commonmark'].configure(
-      countMarkdownSyntax(syntax),
+      countMarkdownSyntax(syntax, (from) => this.#brackets.canClose(from)),
     )
     const parser = syntax.math ? base.configure(blockMathSyntax) : base
     this.#model = syntax.frontmatter
@@ -81,9 +84,19 @@ export class FormattedCounter {
             entry.plain,
           )
         : null
+    const openers = this.#brackets.apply(prepared)
     this.store.commit(prepared)
     this.#model.apply(prepared)
-    if (delta && row && entry) {
+    let invalidated = false
+    for (const from of openers)
+      if (
+        this.#model.state().owners?.at(from)?.owner.kind ===
+        'markdown:Paragraph'
+      ) {
+        this.#model.invalidate(from, from + 1)
+        invalidated = true
+      }
+    if (delta && row && entry && !invalidated) {
       entry.plain = delta.spans
       const previous = this.#plainCounts.get(entry) ?? entry.count
       this.#plainCounts.set(entry, {
@@ -273,6 +286,7 @@ export class FormattedCounter {
         const firstBody =
           owners.get(0)?.owner.kind === 'markdown:Frontmatter' ? 1 : 0
         const text = richTokens(value.tokens, this.#syntax, {
+          references: value.scope.links,
           before: region.index > firstBody + region.leading.length,
           after: !region.last,
         })
@@ -305,6 +319,7 @@ export class FormattedCounter {
     const result = {
       ...this.#work,
       source: this.store.counters(reset),
+      brackets: this.#brackets.counters(reset),
       parser: this.#model.counters(reset),
       cache: this.#cache.counters(reset),
     }
@@ -316,6 +331,7 @@ export class FormattedCounter {
     this.#references?.dispose()
     this.#cache.clear()
     this.#model.dispose()
+    this.#brackets.dispose()
     this.#entries.clear()
     this.#members.clear()
     this.#plainCounts.clear()

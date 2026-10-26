@@ -57,6 +57,7 @@ function fixture(t, text, config = syntax) {
       const { region } = value
       const count = countText(
         richTokens(value.tokens, config, {
+          references: value.scope.links,
           before: region.index > region.leading.length,
           after: !region.last,
         }),

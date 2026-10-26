@@ -42,6 +42,73 @@ const rows = (owners) =>
     }
   })
 
+test('grammar dependency invalidation reparses earlier owners without changing source', () => {
+  for (const eol of ['\n', '\r\n']) {
+    let enabled = false
+    const dialect = parser.configure({
+      defineNodes: [{ name: 'DependentBlock', block: true }],
+      parseBlock: [
+        {
+          name: 'DependentBlock',
+          before: 'LinkReference',
+          parse(cx, line) {
+            if (!enabled || line.text !== 'candidate') return false
+            cx.addElement(
+              cx.elt(
+                'DependentBlock',
+                cx.lineStart,
+                cx.lineStart + line.text.length,
+              ),
+            )
+            cx.nextLine()
+            return true
+          },
+        },
+      ],
+    })
+    const source = `candidate${eol}${eol}${'unchanged paragraph'.concat(eol, eol).repeat(100)}last`
+    const store = new SourceStore(source, {
+      tabId: 'grammar-dependency',
+      revision: 0,
+    })
+    const snapshot = store.snapshot()
+    const model = new MarkdownSourceModel(snapshot, dialect, 'dependency')
+    try {
+      const initial = finish(model).owners
+      const tail = initial.at(source.length - 1).owner
+      assert.equal(initial.at(0).owner.kind, 'markdown:Paragraph')
+      for (const next of [true, false, true]) {
+        enabled = next
+        model.invalidate(0, 1)
+        assert.equal(model.state().complete, false)
+        assert.equal(model.state().owners.at(0).owner.parsed, false)
+        const state = finish(model)
+        assert.equal(state.source, snapshot)
+        assert.equal(store.snapshot(), snapshot)
+        assert.equal(state.owners.at(source.length - 1).owner, tail)
+        assert.deepEqual(rows(state.owners), oracle(snapshot, dialect))
+      }
+      for (const [from, to] of [
+        [-1, 1],
+        [0, 0],
+        [1, 0],
+        [0, source.length + 1],
+        [0, NaN],
+      ])
+        assert.throws(() => model.invalidate(from, to), /outside/)
+      if (eol === '\r\n')
+        assert.throws(
+          () =>
+            model.invalidate('candidate'.length + 1, 'candidate'.length + 2),
+          /outside/,
+        )
+      assert.equal(snapshot.sliceRaw(0, source.length), source)
+    } finally {
+      model.dispose()
+    }
+  }
+})
+
 test('fence pairing changes expand boundary coverage without quadratic interior walks', () => {
   const fences = 1024,
     fence = '`'.repeat(3)

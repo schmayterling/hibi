@@ -6,6 +6,7 @@ import {
   type NoteSyntax,
   noteParser,
 } from '../../shared/note-syntax.ts'
+import type { ReferenceDefinitions } from '../../shared/source-references.ts'
 import { alertMarkdown } from '../markdown/alerts.ts'
 import { mathTokens } from '../math/syntax.ts'
 import { textExtrasMarkdown } from '../text-extras/syntax.ts'
@@ -15,6 +16,8 @@ export type CountSyntax = NoteSyntax & {
   textExtras?: boolean
   math?: boolean
 }
+
+type ProjectionSyntax = CountSyntax & { references?: ReferenceDefinitions }
 
 const parsers = new Map<string, Marked>()
 
@@ -78,11 +81,23 @@ function countFootnotes(parser: Marked) {
   })
 }
 
-function lex(source: string, syntax: CountSyntax) {
+function lex(source: string, syntax: ProjectionSyntax) {
   const parser = countParser(syntax)
-  const tokens = new parser.Lexer({ ...parser.defaults, tokenizer: null }).lex(
-    source,
-  )
+  const lexer = new parser.Lexer({ ...parser.defaults, tokenizer: null })
+  if (syntax.references)
+    lexer.tokens.links = new Proxy(Object.create(null), {
+      get: (local, name) =>
+        typeof name === 'string'
+          ? Object.hasOwn(local, name)
+            ? local[name]
+            : syntax.references?.[name]
+          : undefined,
+      set: (local, name, value) => {
+        local[name] = value
+        return true
+      },
+    })
+  const tokens = lexer.lex(source)
   maskDisabled(tokens, syntax)
   return tokens
 }
@@ -191,7 +206,7 @@ function paragraph(tokens: readonly Token[] | undefined, out: string[]) {
  * A task item as the rich editor reads it: its first line is a paragraph
  * and its other lines, dedented, are blocks of their own.
  */
-function taskItem(raw: string, syntax: CountSyntax, out: string[]) {
+function taskItem(raw: string, syntax: ProjectionSyntax, out: string[]) {
   const lines = raw.split('\n')
   paragraph(
     lex(lines[0]?.match(taskLine)?.[2] ?? '', syntax).flatMap(
@@ -216,7 +231,7 @@ function taskItem(raw: string, syntax: CountSyntax, out: string[]) {
 /** A list item's blocks; an item holds a paragraph even when it is empty. */
 function listItem(
   tokens: readonly Token[],
-  syntax: CountSyntax,
+  syntax: ProjectionSyntax,
   out: string[],
 ) {
   const start = out.length
@@ -236,11 +251,28 @@ function listItem(
 /** An ordered list item: its blocks, with no paragraph added or blank lines kept. */
 function orderedItem(
   tokens: readonly Token[],
-  syntax: CountSyntax,
+  syntax: ProjectionSyntax,
   out: string[],
 ) {
   let checkbox = ''
-  for (const token of tokens) {
+  const firstParagraph = tokens.findIndex(
+    (token) => token.type === 'text' || token.type === 'paragraph',
+  )
+  for (const [index, original] of tokens.entries()) {
+    let token = original
+    // the native ordered tokenizer trims its main paragraph before inline lexing.
+    if (index === firstParagraph && 'tokens' in token && token.tokens) {
+      token = {
+        ...token,
+        tokens: token.tokens.map((part, at, all) => {
+          if (part.type !== 'text') return part
+          let raw = part.raw
+          if (at === 0) raw = raw.trimStart()
+          if (at === all.length - 1) raw = raw.trimEnd()
+          return { ...part, raw }
+        }),
+      }
+    }
     if (token.type === 'checkbox') {
       // Ordered items are no tasks: the box stays text.
       checkbox = token.raw
@@ -249,7 +281,7 @@ function orderedItem(
     if (token.type === 'text' && 'tokens' in token && token.tokens) {
       out.push('\n', checkbox)
       inline(token.tokens, out)
-    } else if (token.type === 'paragraph' && checkbox) {
+    } else if (token.type === 'paragraph') {
       out.push('\n', checkbox)
       inline((token as Tokens.Paragraph).tokens, out)
     } else block(token, syntax, out)
@@ -261,7 +293,7 @@ function orderedItem(
  * Lists as the rich editor builds them: task items form their own lists,
  * split where other items come between them or a blank line does.
  */
-function list(token: Tokens.List, syntax: CountSyntax, out: string[]) {
+function list(token: Tokens.List, syntax: ProjectionSyntax, out: string[]) {
   if (token.ordered) {
     out.push('\n')
     for (const entry of token.items) {
@@ -272,8 +304,23 @@ function list(token: Tokens.List, syntax: CountSyntax, out: string[]) {
   }
   let task: boolean | null = null
   let blank: string | null = null
-  for (const entry of token.items) {
-    const isTask = entry.task || emptyTask.test(entry.raw.split('\n')[0] ?? '')
+  const taskEnabled =
+    syntax.gfm && !syntax.disabledFeatures.includes('markdown.tasks')
+  const taskEntry = (entry: Tokens.ListItem) =>
+    taskEnabled &&
+    (entry.task || emptyTask.test(entry.raw.split('\n')[0] ?? ''))
+  for (let index = 0; index < token.items.length; index++) {
+    const entry = token.items[index]!
+    const isTask = taskEntry(entry)
+    if (!isTask && syntax.disabledFeatures.includes('core.bullet-lists')) {
+      let raw = entry.raw
+      while (token.items[index + 1] && !taskEntry(token.items[index + 1]!))
+        raw += token.items[++index]!.raw
+      out.push('\n', raw.replace(/\n+$/, ''))
+      task = false
+      blank = null
+      continue
+    }
     if (task && isTask && blank) {
       // A blank line ends a task list; more blank lines are empty paragraphs.
       const separators = blank.match(/\n\n/g)?.length ?? 0
@@ -298,7 +345,7 @@ function table(token: Tokens.Table, out: string[]) {
   }
 }
 
-function block(token: Token, syntax: CountSyntax, out: string[]) {
+function block(token: Token, syntax: ProjectionSyntax, out: string[]) {
   switch (token.type) {
     case 'space':
     case 'def':
@@ -311,6 +358,9 @@ function block(token: Token, syntax: CountSyntax, out: string[]) {
       return
     }
     case 'text':
+      // block fallback text remains inline, including after a heading in a list.
+      out.push(decodeEntities('text' in token ? String(token.text) : ''))
+      return
     case 'heading':
       paragraph('tokens' in token ? token.tokens : undefined, out)
       return
@@ -351,7 +401,7 @@ function block(token: Token, syntax: CountSyntax, out: string[]) {
  */
 function children(
   tokens: readonly Token[],
-  syntax: CountSyntax,
+  syntax: ProjectionSyntax,
   out: string[],
   implicit: boolean,
   before = false,
@@ -396,23 +446,36 @@ export function richText(
   syntax: CountSyntax,
   { before = false, after = false } = {},
 ) {
-  return richTokens(lex(source, { ...syntax, frontmatter: false }), syntax, {
-    before,
-    after,
-  })
+  const tokens = lex(source, { ...syntax, frontmatter: false })
+  return richTokens(tokens, syntax, { before, after, references: tokens.links })
 }
 
 /** Project an already-lexed region without creating a rich editor document. */
 export function richTokens(
   tokens: readonly Token[],
   syntax: CountSyntax,
-  { before = false, after = false } = {},
+  {
+    before = false,
+    after = false,
+    references,
+  }: {
+    before?: boolean
+    after?: boolean
+    references?: ReferenceDefinitions
+  } = {},
 ) {
   if (syntax.disabledFeatures.length) {
     tokens = structuredClone(tokens)
     maskDisabled(tokens as Token[], syntax)
   }
   const out: string[] = []
-  children(tokens, syntax, out, true, before, after)
+  children(
+    tokens,
+    references ? { ...syntax, references } : syntax,
+    out,
+    true,
+    before,
+    after,
+  )
   return out.join('')
 }

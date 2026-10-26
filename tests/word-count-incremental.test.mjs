@@ -163,6 +163,8 @@ test('reference and footnote deletion invalidate distant dependent counts', (t) 
   for (const source of [
     '[some]: other\n\ntext [some]\n\nlast',
     '[^some]: footnote\n\ntext[^Some]\n\nlast',
+    '[some]: other\n\n- [ ] text [some]\n\nlast',
+    '[^some]: footnote\n\n- [ ] text[^Some]\n\nlast',
   ]) {
     const counter = fixture(t, source)
     assert.deepEqual(

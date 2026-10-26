@@ -123,6 +123,127 @@ const settled = (text) =>
     text,
   )
 
+async function nativeClipboard(command, from, to = from) {
+  const before = await page.evaluate(
+    ({ command, from, to }) => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.dispatch({ selection: { anchor: from, head: to } })
+      view.focus()
+      window.nativeClipboardCount ??= 0
+      document.addEventListener(
+        command,
+        () => {
+          queueMicrotask(() => {
+            window.nativeClipboardCount++
+          })
+        },
+        { once: true, capture: true },
+      )
+      return window.nativeClipboardCount
+    },
+    { command, from, to },
+  )
+  await app.evaluate(({ BrowserWindow }, command) => {
+    BrowserWindow.getAllWindows()[0].webContents[command]()
+  }, command)
+  await page.waitForFunction(
+    (before) => window.nativeClipboardCount > before,
+    before,
+  )
+}
+
+const readClipboard = () =>
+  app.evaluate(async ({ clipboard }) => {
+    const items = await clipboard.read()
+    const item = items.find((item) => item.types.includes('text/html'))
+    return {
+      text: await clipboard.readText(),
+      html: item ? await (await item.getType('text/html')).text() : '',
+    }
+  })
+
+test('native copy, cut and paste retain both clipboard formats and sanitize exported html', {
+  timeout: 60000,
+}, async () => {
+  const from = note.indexOf('A [link]'),
+    to = note.indexOf('\n\n- one')
+  const text = note.slice(from, to)
+  await nativeClipboard('copy', from, to)
+  const copied = await readClipboard()
+  assert.equal(copied.text, text)
+  assert.match(copied.html, /<strong>bold<\/strong>/)
+  assert.match(copied.html, /data-hibi-markdown/)
+
+  await nativeClipboard('paste', note.length)
+  await settled(note + text)
+  await undo()
+  await settled(note)
+
+  await nativeClipboard('cut', from, to)
+  await settled(note.slice(0, from) + note.slice(to))
+  assert.equal((await readClipboard()).text, text)
+  await undo()
+  await settled(note)
+
+  await app.evaluate(async ({ clipboard, ClipboardItem }) => {
+    await clipboard.write([
+      new ClipboardItem({
+        'text/plain': 'external unsafe',
+        'text/html':
+          '<p><strong>external</strong> <a href="javascript:alert(1)">unsafe</a></p><script>alert(2)</script>',
+      }),
+    ])
+  })
+  await nativeClipboard('paste', note.length)
+  await settled(`${note}**external** unsafe`)
+  await undo()
+  await settled(note)
+
+  const plain = 'plain *literal* 🌿\nsecond line'
+  await app.evaluate(
+    ({ clipboard }, plain) => clipboard.writeText(plain),
+    plain,
+  )
+  await nativeClipboard('paste', note.length)
+  await settled(note + plain)
+  await undo()
+  await settled(note)
+
+  const unsafe =
+    '<script>alert(1)</script>\n\n<img src="x.png" onerror="alert(2)">'
+  await clipboardEvent('paste', note.length, note.length, {
+    'text/plain': unsafe,
+  })
+  await settled(note + unsafe)
+  await nativeClipboard('copy', note.length, note.length + unsafe.length)
+  assert.equal((await readClipboard()).text, unsafe)
+  assert.doesNotMatch(
+    (await readClipboard()).html,
+    /<script|onerror|javascript:/i,
+  )
+  await undo()
+  await settled(note)
+})
+
+test('native formatted copy has no one-mebibyte content cutoff', {
+  timeout: 60000,
+}, async () => {
+  const text = `${'clipboard text '.repeat(16)}\n\n`.repeat(5000)
+  assert.ok(text.length > 1024 * 1024)
+  await clipboardEvent('paste', note.length, note.length, {
+    'text/plain': text,
+  })
+  await settled(note + text)
+  await nativeClipboard('copy', note.length, note.length + text.length)
+  const copied = await readClipboard()
+  assert.equal(copied.text.length, text.length)
+  assert.equal(copied.text, text)
+  assert.ok(copied.html.length > text.length)
+  await undo()
+  await settled(note)
+})
+
 test('copy puts the exact markdown of the selection and its export html on the clipboard', {
   timeout: 30000,
 }, async () => {
@@ -257,6 +378,18 @@ test('pasted text stays literal, task items keep their state, code keeps its fen
   ].join('\n\n')
   await clipboardEvent('paste', end, end, { 'text/html': html })
   await settled(note + expected)
+  await undo()
+  await settled(note)
+})
+
+test('incidental copy-marker text does not bypass html conversion', {
+  timeout: 30000,
+}, async () => {
+  await clipboardEvent('paste', note.length, note.length, {
+    'text/plain': 'literal data-hibi-markdown and bold',
+    'text/html': '<p>literal data-hibi-markdown and <strong>bold</strong></p>',
+  })
+  await settled(`${note}literal data-hibi-markdown and **bold**`)
   await undo()
   await settled(note)
 })

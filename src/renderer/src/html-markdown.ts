@@ -5,6 +5,9 @@
  * their text; block-level ones keep their own paragraphs.
  */
 
+import DOMPurify from 'dompurify'
+import { renderedHtmlOptions } from '../../shared/rendered-html.ts'
+
 const blocks = new Set([
   'ADDRESS',
   'ARTICLE',
@@ -266,7 +269,13 @@ function table(element: Element): string {
 }
 
 /** Markdown for pasted HTML. */
-export function htmlToMarkdown(html: string) {
+export function htmlToMarkdown(html: string, original?: string) {
   const document = new DOMParser().parseFromString(html, 'text/html')
+  if (
+    original !== undefined &&
+    document.body.firstElementChild?.hasAttribute('data-hibi-markdown')
+  )
+    return original
+  DOMPurify.sanitize(document.body, { ...renderedHtmlOptions, IN_PLACE: true })
   return blocksOf(document.body).join('\n\n')
 }

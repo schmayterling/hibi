@@ -61,14 +61,14 @@ function paste(event: ClipboardEvent, view: EditorView) {
   const data = event.clipboardData
   const html = data?.getData('text/html')
   // Plain text, and this view's own copies, paste their text as it is.
-  if (!html || html.includes(copied) || view.state.readOnly) return false
+  if (!html || view.state.readOnly) return false
   event.preventDefault()
   // The clipboard is only readable during the event.
   const text = data?.getData('text/plain') ?? ''
   const pending = { view, selection: view.state.selection }
   pastes.add(pending)
   void import('../html-markdown')
-    .then(({ htmlToMarkdown }) => htmlToMarkdown(html))
+    .then(({ htmlToMarkdown }) => htmlToMarkdown(html, text))
     .catch((error: unknown) => {
       console.error('Pasted HTML could not be converted:', error)
       return ''

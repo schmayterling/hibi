@@ -91,6 +91,7 @@ test('ENG23/J01: fragmented source remains editable and savable across quiet-tim
     })
     view.focus()
     const saved = await window.hibi.saveDocument(true)
+    const savedText = (await window.hibi.getDocument()).markdown
     const version = context.editor.getDocument().contentVersion
     const selection = view.state.selection.toJSON()
     // Exceed the 500 ms quiet threshold in both native and renderer stores.
@@ -112,17 +113,20 @@ test('ENG23/J01: fragmented source remains editable and savable across quiet-tim
       selection: { anchor: 2 },
     })
     const final = await window.hibi.saveDocument(false)
+    const finalText = (await window.hibi.getDocument()).markdown
     return {
-      saved: saved.markdown,
+      saved: savedText,
+      receipts: [saved.saveReceipt, final.saveReceipt],
       version,
       selection,
       stable,
       undoLength,
       redo,
-      final: final.markdown,
+      final: finalText,
       dirty: final.dirty,
     }
   })
+  assert.deepEqual(result.receipts, [true, true])
   assert.equal(result.saved, 'a'.repeat(80))
   assert.deepEqual(result.stable, {
     version: result.version,

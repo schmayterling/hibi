@@ -118,6 +118,7 @@ import {
   setAddonDeactivationHandler,
   setAddonStatesHandler,
   setAddonWindowOwners,
+  stopNativeAddons,
   windowAddonName,
 } from './addons'
 import { analysisService } from './analysis'
@@ -161,6 +162,7 @@ import {
 } from './document'
 import { createDocumentTransfers } from './document-transfer'
 import { isDocumentName } from './document-types'
+import { sweepSiteScratch } from './export-scratch'
 import { externalFileArguments } from './external-files'
 import {
   fileOperationDialogOpened,
@@ -650,7 +652,19 @@ if (process.env.NODE_ENV_ELECTRON_VITE === 'development')
       app.quit()
     }
   })
-app.on('will-quit', () => {
+let nativeStopping: Promise<void> | undefined
+let nativeStopped = false
+app.on('will-quit', (event) => {
+  if (!nativeStopped) {
+    event.preventDefault()
+    nativeStopping ??= stopNativeAddons()
+      .catch(console.error)
+      .finally(() => {
+        nativeStopped = true
+        app.quit()
+      })
+    return
+  }
   globalShortcuts.clear()
   background.dispose()
 })
@@ -1347,6 +1361,7 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(async () => {
       startupMark('app-ready')
+      void sweepSiteScratch(app.getPath('userData')).catch(console.error)
       // Installed macOS apps already carry their full-resolution bundle icon.
       // A dock-sized development icon avoids re-encoding 1024px images at launch.
       if (process.platform === 'darwin' && !app.isPackaged)

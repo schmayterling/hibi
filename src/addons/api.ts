@@ -1039,7 +1039,8 @@ export type NativeAddon = {
     files: import('../shared/imports').ImportFile[]
     warnings?: string[]
   }>
-  stop?: () => void
+  /** Finish cleanup before disabling this addon or quitting Hibi. The host waits up to two seconds. */
+  stop?: () => void | Promise<void>
   /** Run in the main process when this addon's global shortcut fires, instead of showing the main window. Keys are local shortcut IDs. */
   globalShortcuts?: Record<
     string,

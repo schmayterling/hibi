@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  reloadFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 
 test('editing awaits required addon startup and disabled pending addons cannot register late commands', {
@@ -60,6 +63,7 @@ test('editing awaits required addon startup and disabled pending addons cannot r
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await reloadFormattedEngine(page, t.formattedEngine)
   await page.waitForFunction(
     () =>
       document.documentElement.getAttribute('data-delayed-editor') ===
@@ -67,6 +71,12 @@ test('editing awaits required addon startup and disabled pending addons cannot r
   )
   assert.equal(await page.locator('.titlebar').isVisible(), true)
   assert.equal(await page.locator('.tiptap').count(), 0)
+  assert.equal(
+    await page
+      .getByRole('textbox', { name: 'Document editor', exact: true })
+      .count(),
+    0,
+  )
   await page.evaluate(() =>
     window.dispatchEvent(new Event('release-delayed-editor')),
   )
@@ -75,6 +85,16 @@ test('editing awaits required addon startup and disabled pending addons cannot r
     exact: true,
   })
   await waitForDocumentEditor(app, page)
+  assert.equal(
+    await editor.evaluate(
+      (element, engine) =>
+        element.matches(
+          engine === 'tiptap' ? '.tiptap' : '.hibi-formatted .cm-content',
+        ),
+      t.formattedEngine,
+    ),
+    true,
+  )
   await replaceRichText(page, editor, 'Preserve these edits')
   await page.waitForFunction(
     () =>

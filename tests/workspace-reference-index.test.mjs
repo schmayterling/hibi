@@ -405,7 +405,6 @@ test('graph pages contain every node and resolved link without another parse', (
     pathIndex: 0,
     targetIndex: 0,
     nodeEmitted: false,
-    emitted: 0,
   }
   let result
   do {
@@ -421,10 +420,51 @@ test('graph pages contain every node and resolved link without another parse', (
     { kind: 'node', path: 'plain.txt' },
   ])
   assert.equal(parses, 2)
-  assert.equal(result.capReached, false)
-  const capped = index.graph({ ...position, pathIndex: 0, emitted: 9999 }, 2)
-  assert.equal(capped.capReached, true)
-  assert.equal(capped.hasMore, false)
+})
+
+test('graph pages sort the targets of a note once per build, not once per page', () => {
+  const index = new WorkspaceReferenceIndex()
+  const leaves = Array.from(
+    { length: 1000 },
+    (_, number) => `leaf${String(number).padStart(4, '0')}`,
+  )
+  const hub = page('hub.md', leaves.map((leaf) => `[[${leaf}]]`).join(' '))
+  index.apply(workspace, [hub, ...leaves.map((leaf) => page(`${leaf}.md`))])
+  const sort = Array.prototype.sort
+  let hubSorts = 0
+  const read = () => {
+    let position = { pathIndex: 0, targetIndex: 0, nodeEmitted: false }
+    let result,
+      pages = 0,
+      edges = 0
+    do {
+      result = index.graph(position, 100)
+      edges += result.items.filter((item) => item.kind === 'edge').length
+      position = result.position
+      pages++
+    } while (result.hasMore)
+    return { pages, edges }
+  }
+  Array.prototype.sort = function (...args) {
+    if (this.length === 1000) hubSorts++
+    return sort.apply(this, args)
+  }
+  try {
+    // The hub's 1,000 links span about ten pages; two full reads sort them once.
+    assert.deepEqual(read(), { pages: 21, edges: 1000 })
+    assert.deepEqual(read(), { pages: 21, edges: 1000 })
+    assert.equal(hubSorts, 1)
+    // A rebuild that changes the hub's links sorts the new targets once.
+    index.apply(workspace, [
+      page('hub.md', `${hub.markdown} `),
+      ...leaves.map((leaf) => page(`${leaf}.md`)),
+    ])
+    read()
+    read()
+    assert.equal(hubSorts, 2)
+  } finally {
+    Array.prototype.sort = sort
+  }
 })
 
 test('tag summaries cap distinct names while exact queries still find later tags', () => {

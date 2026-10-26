@@ -17,9 +17,10 @@ const probe: ChunkedMarkdownProbe = {
   builtGroups: 0,
 }
 let view: EditorView | null = null
+let revisionLayouts = 0
 const documentRevision = new Compartment()
-const revisionOf = (revision: number) =>
-  formattedDocument.of({ revision, tabId: null })
+const revisionOf = (revision: number, tabId: string | null = null) =>
+  formattedDocument.of({ revision, tabId })
 
 /** Shows the document revision a contributed layout saw. */
 class RevisionWidget extends WidgetType {
@@ -85,6 +86,7 @@ Object.assign(window, {
       await new Promise(requestAnimationFrame)
     },
     view: () => view,
+    revisionLayouts: () => revisionLayouts,
     /** A contributed layout that shows the document revision before each paragraph; returns its removal. */
     showRevisions: () =>
       formattedRegistry.register({
@@ -95,6 +97,7 @@ Object.assign(window, {
             {
               nodes: ['Paragraph'],
               layout(node, out, { state }) {
+                revisionLayouts++
                 out.widget(
                   node.from,
                   new RevisionWidget(state.facet(formattedDocument).revision),
@@ -105,9 +108,9 @@ Object.assign(window, {
         }),
       }),
     /** The note's files or media changed. */
-    setRevision(revision: number) {
+    setRevision(revision: number, tabId: string | null = null) {
       view?.dispatch({
-        effects: documentRevision.reconfigure(revisionOf(revision)),
+        effects: documentRevision.reconfigure(revisionOf(revision, tabId)),
       })
     },
     /** Scroll a position to the top of the viewport. */

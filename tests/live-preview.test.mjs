@@ -566,7 +566,7 @@ test('typing beside a multi-line link destination edits the text', {
   assert.deepEqual(errors, [])
 })
 
-test('contributed layouts follow the document revision', {
+test('contributed layouts reuse document identity and follow revision and tab changes', {
   timeout: 60000,
 }, async () => {
   const shown = await harness.evaluate(async () => {
@@ -582,15 +582,34 @@ test('contributed layouts follow the document revision', {
           (node) => node.textContent,
         )
       const before = read()
+      const initialLayouts = preview.revisionLayouts()
+      preview.setRevision(0)
+      await preview.settle()
+      const unchangedLayouts = preview.revisionLayouts() - initialLayouts
       preview.setRevision(1)
       await preview.settle()
-      return { before, after: read() }
+      const changedLayouts = preview.revisionLayouts() - initialLayouts
+      const after = read()
+      preview.setRevision(1, 'other-tab')
+      await preview.settle()
+      return {
+        before,
+        unchangedLayouts,
+        changedLayouts,
+        after,
+        tabLayouts: preview.revisionLayouts() - initialLayouts,
+      }
     } finally {
       remove()
     }
   })
-  // Before, the layout kept its widgets from the old revision.
-  assert.deepEqual(shown, { before: ['0', '0'], after: ['1', '1'] })
+  assert.deepEqual(shown, {
+    before: ['0', '0'],
+    unchangedLayouts: 0,
+    changedLayouts: 2,
+    after: ['1', '1'],
+    tabLayouts: 4,
+  })
 })
 
 test('a 50 MiB note renders and edits with viewport-bounded work', {

@@ -53,6 +53,7 @@ import {
 } from './workspace-index-cache'
 import { LatestIndexJob } from './workspace-index-job'
 import { workspaceIgnore, workspaceMetadata } from './workspace-metadata'
+import { resolveWorkspaceEntry } from './workspace-paths'
 import { createScanCoordinator, watchNeedsScan } from './workspace-refresh'
 import {
   showAllWorkspaceFiles,
@@ -973,58 +974,70 @@ export async function openWorkspaceFile(
   )
 }
 
-export async function snapshotWorkspace(): Promise<WorkspaceSnapshot> {
+export async function readWorkspaceExportPage(
+  relative: string,
+  target: WorkspaceTarget,
+  media: boolean | readonly string[] = true,
+): Promise<WorkspaceSnapshot['pages'][number]> {
+  if (!isCurrentWorkspaceTarget(target) || !root)
+    throw new Error('The workspace changed during export. Export again.')
   const selected = root
-  if (!selected) throw new Error('Open a workspace first.')
-  const tree = await scanWorkspace(selected)
-  const pages: WorkspaceSnapshot['pages'] = []
-  const drafts = new Map(
-    getOpenDocuments()
-      .filter((draft) => draft.dirty && draft.file)
-      .map((draft) => [draft.file, draft.markdown]),
+  const draft = getOpenDocuments().find(
+    (draft) => draft.file && relativePath(selected, draft.file) === relative,
   )
-  let bytes = 0
-  async function collect(items: WorkspaceEntry[]) {
-    for (const item of items) {
-      if (item.kind === 'folder') await collect(item.children ?? [])
-      else {
-        const path = await resolveWorkspaceFile(selected as string, item.path)
-        const markdown = drafts.get(path) ?? (await readMarkdown(path))
-        bytes += Buffer.byteLength(markdown)
-        if (pages.length >= 2000 || bytes > 20 * 1024 * 1024)
-          throw new Error(
-            'Export supports up to 2,000 documents and 20 MiB of text and images. Choose a smaller folder.',
-          )
-        const images: Record<string, string> = Object.create(null)
-        for (const source of isMarkdownDocument(item.path)
-          ? imageSources(markdown)
-          : []) {
-          const image = await exportDocumentMedia(source, path, selected)
-          if (!image) continue
-          bytes += Buffer.byteLength(image)
-          if (bytes > 20 * 1024 * 1024)
-            throw new Error(
-              'Export supports up to 20 MiB of text and images. Choose a smaller folder.',
-            )
-          images[source] = image
-        }
-        pages.push({
-          id: createHash('sha256').update(path).digest('hex'),
-          path: item.path,
-          markdown,
-          images,
-        })
-      }
-    }
+  const path =
+    draft?.pendingPath ?? (await resolveWorkspaceFile(selected, relative))
+  // New drafts have no disk file; their parent still belongs to the workspace.
+  if (draft?.pendingPath) {
+    await resolveWorkspaceEntry(selected, relative, true)
   }
-  await collect(tree)
+  const markdown = draft?.dirty ? draft.markdown : await readMarkdown(path)
+  const images: Record<string, string> = Object.create(null)
+  if (media && isMarkdownDocument(relative))
+    for (const source of typeof media === 'boolean'
+      ? imageSources(markdown)
+      : media) {
+      const image = await exportDocumentMedia(source, path, selected)
+      if (image) images[source] = image
+    }
+  if (!isCurrentWorkspaceTarget(target))
+    throw new Error('The workspace changed during export. Export again.')
+  return {
+    id: createHash('sha256').update(path).digest('hex'),
+    path: relative,
+    markdown,
+    ...(media ? { images } : {}),
+  }
+}
+
+export function exportPaths(
+  entries: readonly WorkspaceEntry[],
+): { path: string }[] {
+  return entries.flatMap((entry) =>
+    entry.children
+      ? exportPaths(entry.children)
+      : entry.kind === 'file' &&
+          !entry.name.startsWith('.') &&
+          isDocumentName(entry.name, true)
+        ? [{ path: entry.path }]
+        : [],
+  )
+}
+
+export async function snapshotWorkspace(): Promise<WorkspaceSnapshot> {
+  const target = currentWorkspaceTarget()
+  if (!target) throw new Error('Open a workspace first.')
+  await refreshWorkspace()
+  if (!isCurrentWorkspaceTarget(target))
+    throw new Error('The workspace changed during export. Export again.')
+  const workspace = getWorkspace()
+  if (!workspace) throw new Error('Open a workspace first.')
+  const pages: WorkspaceSnapshot['pages'] = []
+  for (const { path } of exportPaths(workspace.entries))
+    pages.push(await readWorkspaceExportPage(path, target))
   if (!pages.length)
     throw new Error('This workspace has no supported documents to export.')
-  return {
-    name:
-      (await workspaceMetadata(selected)).manifest?.name ?? basename(selected),
-    pages,
-  }
+  return { name: workspace.name, pages }
 }
 
 function captureIndexRequest(): { key: string; request: IndexRequest } | null {

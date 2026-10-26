@@ -1019,7 +1019,7 @@ export type NativeAddonContext = {
     reload: () => Promise<void>
   }
   exportHtml: (
-    html: string,
+    html: string | AsyncIterable<Uint8Array>,
     suggestedName: string,
     pages: number,
   ) => Promise<ExportResult | null>

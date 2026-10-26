@@ -84,7 +84,7 @@ before(
     const html = join(bundle, 'index.html')
     await writeFile(
       html,
-      '<!doctype html><html lang="en"><head><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
+      '<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
     )
     const file = join(folder, 'notes', 'blocks.md')
     await mkdir(join(folder, 'notes'))
@@ -518,6 +518,158 @@ test('a footnote reference in a table cell resolves once its definition is read,
     undefined,
     { timeout: 10000 },
   )
+})
+
+test('footnote refresh keeps a focused table editor, its selection and undo history', {
+  timeout: 60000,
+}, async () => {
+  const cdp = await harness.context().newCDPSession(harness)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await harness.evaluate(() => {
+    window.savedIdle = window.requestIdleCallback
+    window.savedCancelIdle = window.cancelIdleCallback
+    window.requestIdleCallback = () => 1
+    window.cancelIdleCallback = () => {}
+  })
+  try {
+    for (const tag of ['th', 'td']) {
+      await harness.evaluate(async () => {
+        const { history, StateEffect } = window.formattedBlocks
+        await window.livePreview.mount(
+          '| read[^far] | header |\n| --- | --- |\n| read[^far] | other[^far] |\n\n' +
+            'padding words\n\n'.repeat(10000) +
+            '\n[^far]: end',
+          { width: 800, height: 600 },
+          // Finish syntax while idle callbacks are held for the definition reader.
+          { editable: true, slice: 1000 },
+        )
+        window.livePreview.view().dispatch({
+          effects: StateEffect.appendConfig.of(history()),
+        })
+      })
+      await harness.locator(`.hibi-lp-table ${tag}`).first().click()
+      const result = await harness.evaluate(async () => {
+        const preview = window.livePreview
+        const view = preview.view()
+        const {
+          readDefinitions,
+          definitionsRead,
+          formattedRefresh,
+          undo,
+          redo,
+        } = window.formattedBlocks
+        const dom = document.querySelector('.hibi-lp-cell-editor')
+        const editor = view.constructor.findFromDOM(dom)
+        const original = view.state.doc.toString()
+        const at = editor.state.doc.toString().indexOf('read') + 1
+        editor.dispatch({
+          changes: { from: at, insert: '🌿' },
+          selection: { anchor: at, head: at + 2 },
+          userEvent: 'input.type',
+        })
+        editor.focus()
+        const edited = view.state.doc.toString()
+        const selection = editor.state.selection
+        const retained = () =>
+          dom.isConnected &&
+          editor.hasFocus &&
+          editor === view.constructor.findFromDOM(dom)
+        const read = () => {
+          for (let slices = 0; !definitionsRead(view.state); slices++) {
+            if (slices > 100)
+              throw new Error('Footnote reading did not finish.')
+            view.dispatch({ effects: readDefinitions.of(65536) })
+          }
+          view.dispatch({ effects: formattedRefresh.of(null) })
+        }
+        read()
+        const resolved = {
+          focused: retained(),
+          selection: editor.state.selection.eq(selection),
+          source: view.state.doc.toString() === edited,
+          references: document.querySelectorAll(
+            '.hibi-lp-table .hibi-lp-footnote-ref',
+          ).length,
+          activeReference: dom.querySelector('.hibi-lp-footnote-ref')
+            ?.textContent,
+        }
+        const undid = undo(view)
+        await preview.settle()
+        const undoSource = view.state.doc.toString() === original
+        const redid = redo(view)
+        await preview.settle()
+        const redoSource = view.state.doc.toString() === edited
+        const beforeRemoval = editor.state.selection
+        const start = edited.lastIndexOf('[^far]:')
+        view.dispatch({ changes: { from: start, to: view.state.doc.length } })
+        read()
+        const removed = {
+          focused: retained(),
+          selection: editor.state.selection.eq(beforeRemoval),
+          references: document.querySelectorAll(
+            '.hibi-lp-table .hibi-lp-footnote-ref',
+          ).length,
+        }
+        view.dispatch({ changes: { from: start, insert: edited.slice(start) } })
+        read()
+        return {
+          resolved,
+          undid,
+          undoSource,
+          redid,
+          redoSource,
+          removed,
+          restored: retained() && view.state.doc.toString() === edited,
+          restoredReferences: document.querySelectorAll(
+            '.hibi-lp-table .hibi-lp-footnote-ref',
+          ).length,
+        }
+      })
+      assert.deepEqual(
+        result,
+        {
+          resolved: {
+            focused: true,
+            selection: true,
+            source: true,
+            references: 3,
+            activeReference: 'far',
+          },
+          undid: true,
+          undoSource: true,
+          redid: true,
+          redoSource: true,
+          removed: { focused: true, selection: true, references: 0 },
+          restored: true,
+          restoredReferences: 3,
+        },
+        tag,
+      )
+      await harness.evaluate(() => {
+        const view = window.livePreview.view()
+        const { from, to } = view.state.selection.main
+        window.expectedAfterKey =
+          view.state.sliceDoc(0, from) + 'z' + view.state.sliceDoc(to)
+      })
+      await harness.keyboard.press('z')
+      assert.equal(
+        await harness.evaluate(
+          () =>
+            window.livePreview.view().state.doc.toString() ===
+            window.expectedAfterKey,
+        ),
+        true,
+        `${tag}: the next key reaches the cell`,
+      )
+    }
+  } finally {
+    await harness.evaluate(async () => {
+      await window.livePreview.mount('')
+      window.requestIdleCallback = window.savedIdle
+      window.cancelIdleCallback = window.savedCancelIdle
+    })
+    await cdp.detach()
+  }
 })
 
 test('toggling one of 20,000 tasks is one edit that redraws one checkbox', {

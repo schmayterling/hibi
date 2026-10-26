@@ -43,6 +43,8 @@ export const footnoteScan = {
   window: 4096,
   /** Characters parsed. */
   parsed: 0,
+  /** Characters inspected while finding a window's following lines. */
+  scanned: 0,
   /** Label counts copied into leaves that changed. */
   copied: 0,
 }
@@ -316,10 +318,21 @@ type Lines = readonly { from: number; to: number }[]
 type Pending = {
   from: number
   at: number
-  head: Lines
+  /** Null until the first window has parsed; otherwise its continuation context. */
+  head: Lines | null
   chain: string
   whole: boolean
   labels: readonly string[]
+  ahead?: Lookahead | undefined
+}
+
+/** A window and its following lines, found a bounded part at a time. */
+type Lookahead = {
+  last: number
+  end: number
+  found: readonly number[]
+  ranges: Lines
+  blanks: number
 }
 
 const scanners = new WeakMap<readonly MarkdownConfig[], MarkdownParser>()
@@ -365,9 +378,41 @@ function labelsIn(
   return labels
 }
 
-/** Whether line `number` is blank once quote markers are left out. */
-const blankLine = (doc: Text, number: number) =>
-  /^[ \t>]*$/.test(doc.line(number).text)
+/** Find three following lines, retaining the edges of runs of empty lines. */
+function lookAhead(doc: Text, value: Lookahead, budget: number): Lookahead {
+  let { last, end, blanks } = value
+  const found = [...value.found]
+  const ranges = [...value.ranges]
+  const keep = (line: { from: number; to: number }) => {
+    const to = Math.min(doc.length, line.to + 1)
+    const previous = ranges.at(-1)
+    if (previous?.to === line.from)
+      ranges[ranges.length - 1] = { from: previous.from, to }
+    else ranges.push({ from: line.from, to })
+  }
+  for (
+    let spent = 0;
+    found.length < 3 && last < doc.lines && spent < budget;
+  ) {
+    const line = doc.line(++last)
+    end = line.to
+    const size = line.to - line.from + 1
+    footnoteScan.scanned += size
+    spent += size
+    if (/^[ \t]*$/.test(line.text)) {
+      // Two blank lines preserve empty-list and loose-list decisions. More
+      // whitespace changes no block, so keep only the last line as well.
+      if (++blanks <= 2) keep(line)
+    } else {
+      if (blanks > 2) keep(doc.line(last - 1))
+      keep(line)
+      blanks = 0
+      found.push(last)
+    }
+  }
+  if (last === doc.lines && blanks > 2) keep(doc.line(last))
+  return { last, end, blanks, found, ranges }
+}
 
 /** The blocks open at line start `pos` of a tree parsed from `base`, innermost first. */
 function* openAt(tree: Tree, doc: Text, base: number, pos: number) {
@@ -444,39 +489,58 @@ function step(index: Index, doc: Text, budget: number): Index {
       break
     }
     const going = pending?.from === from ? pending : null
-    const replay = going && !going.whole ? going : null
+    const replay = going && !going.whole && going.head ? going : null
     const at = replay?.at ?? from
     const head = replay?.head ?? []
     const reach = going?.whole
       ? from + Math.max(footnoteScan.window, 2 * (going.at - from))
       : at + footnoteScan.window
-    // Lezer decides a run of blank lines, such as one inside a list item, by
-    // the line after it: a window reads on to three lines past its reach
-    // that are not blank, and blocks count up to two of them before its end.
-    let lastLine = doc.lineAt(Math.min(doc.length, reach)).number
-    for (let ahead = 0; ahead < 3 && lastLine < doc.lines; )
-      if (!blankLine(doc, ++lastLine)) ahead++
-    const end = doc.line(lastLine).to
-    const last = end >= doc.length
-    const units = head.reduce(
-      (sum, line) => sum + line.to - line.from,
-      end - at,
+    // A blank run is decided by the line after it. Find that context in
+    // slices, and omit the run's interior from the eventual parse too.
+    const edge = doc.lineAt(Math.min(doc.length, reach))
+    const scanned = footnoteScan.scanned
+    const ahead = lookAhead(
+      doc,
+      going?.ahead ?? {
+        last: edge.number,
+        end: edge.to,
+        found: [],
+        ranges: [{ from: at, to: Math.min(doc.length, edge.to + 1) }],
+        blanks: 0,
+      },
+      Math.max(footnoteScan.window, budget - spent),
     )
+    spent += footnoteScan.scanned - scanned
+    if (ahead.found.length < 3 && ahead.last < doc.lines) {
+      pending = {
+        from,
+        at,
+        head: replay?.head ?? null,
+        chain: replay?.chain ?? '',
+        whole: going?.whole ?? false,
+        labels: replay?.labels ?? [],
+        ahead,
+      }
+      continue
+    }
+    const end = ahead.end
+    const last = end >= doc.length
+    const ranges = [...head, ...ahead.ranges]
+    ranges[ranges.length - 1] = { ...ranges.at(-1)!, to: end }
+    const units = ranges.reduce((sum, line) => sum + line.to - line.from, 0)
     footnoteScan.parsed += units
     spent += units
-    const ranges = [...head, { from: at, to: end }]
     // The tree's positions start at its first range.
     const base = ranges[0]!.from
     const tree = scan.parse(new DocInput(doc), [], ranges)
     if (replay && chainAt(tree, doc, base, at) !== replay.chain) {
       // The opening lines did not recreate the blocks open there.
-      pending = { ...replay, whole: true }
+      pending = { ...replay, whole: true, ahead: undefined }
       continue
     }
-    let margin = lastLine
-    for (let behind = 0; margin > 1; margin--)
-      if (!blankLine(doc, margin) && ++behind === 2) break
-    const limit = last ? doc.length : doc.line(Math.max(1, margin - 1)).from
+    const limit = last
+      ? doc.length
+      : doc.line(Math.max(1, ahead.found.at(-2)! - 1)).from
     let cut = last ? doc.length : -1
     let resync = false
     // Stretches start at a block's line, since indentation before it can
@@ -592,7 +656,8 @@ function edit(index: Index, state: EditorState, changes: EditorStateChanges) {
   for (const { fromA, toA, fromB, toB } of changes) {
     const size = toB - fromB - (toA - fromA)
     // A block read on past windows holds while edits come after its last read line.
-    if (pending && fromA + offset < pending.at) pending = null
+    if (pending && fromA + offset <= (pending.ahead?.end ?? pending.at - 1))
+      pending = null
     // Positions in this note's terms; later text still has the old offset.
     const from = fromA + offset,
       to = toA + offset
@@ -779,11 +844,13 @@ export const definitionReader = ViewPlugin.fromClass(
             Math.floor(this.rate * deadline.timeRemaining()),
           ),
         )
-        const parsed = footnoteScan.parsed
+        const work = footnoteScan.parsed + footnoteScan.scanned
         const start = performance.now()
         this.read(budget)
         const spent = performance.now() - start
-        if (spent >= 1) this.rate = (footnoteScan.parsed - parsed) / spent
+        if (spent >= 1)
+          this.rate =
+            (footnoteScan.parsed + footnoteScan.scanned - work) / spent
       })
     }
     /** Read about `budget` more characters; references draw again when labels change. */

@@ -33,6 +33,7 @@ import {
   formattedLiteral,
   formattedMarkdown,
   formattedOwner,
+  formattedRefresh,
   formattedViews,
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
@@ -422,7 +423,14 @@ export class CellEditor {
             editorDecorations(host.main.state, view))
         }
         update(update: ViewUpdate) {
-          if (update.docChanged || update.selectionSet || update.focusChanged)
+          if (
+            update.docChanged ||
+            update.selectionSet ||
+            update.focusChanged ||
+            update.transactions.some((transaction) =>
+              transaction.effects.some((effect) => effect.is(formattedRefresh)),
+            )
+          )
             ({ decorations: this.decorations, atomic: this.atomic } =
               editorDecorations(host.main.state, update.view))
         }
@@ -671,6 +679,11 @@ export class CellEditor {
         ],
       })
     }
+  }
+
+  /** Redraw inline syntax after the formatted view's render inputs change. */
+  refresh() {
+    this.view.dispatch({ effects: formattedRefresh.of(null) })
   }
 
   /** Take input as the formatted view does, after it changed. */

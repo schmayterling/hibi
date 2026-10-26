@@ -491,6 +491,79 @@ test('a run of blank lines inside a list item ends no stretch, also after edits 
   }
 })
 
+test('blank lookahead yields between bounded reads without losing nested definitions', () => {
+  for (const [width, lines, budget] of [
+    [4, 400000, 4096],
+    [1023, 51200, 65536],
+  ]) {
+    const source =
+      'read[^real]\n\n- first\n' +
+      `${' '.repeat(width)}\n`.repeat(lines) +
+      '    [^real]: real\n\nend'
+    let state = create(source)
+    let slices = 0
+    while (!definitionsRead(state)) {
+      const parsed = footnoteScan.parsed
+      const scanned = footnoteScan.scanned ?? 0
+      state = state.update({ effects: readDefinitions.of(budget) }).state
+      const work =
+        footnoteScan.parsed - parsed + (footnoteScan.scanned ?? 0) - scanned
+      assert.ok(
+        work <= budget + 3 * footnoteScan.window,
+        `slice ${slices}: ${work}`,
+      )
+      assert.ok(++slices < 1000, 'reading converges')
+    }
+    assert.ok(slices > 100, 'blank lines are read over several slices')
+    assert.deepEqual(indexed(state), { real: 1 })
+    const at = source.lastIndexOf('[^real]:')
+    state = settle(
+      state.update({ changes: { from: at, to: at + 7, insert: '[^new]:' } })
+        .state,
+    )
+    assert.deepEqual(indexed(state), { new: 1 })
+  }
+})
+
+test('a delayed first window advances within a continuing list', () => {
+  const source =
+    '- item\n' +
+    '    \n'.repeat(4000) +
+    '  alpha\n  beta\n  gamma\n  delta\n\n[^end]: note'
+  let state = create(source)
+  for (let slices = 0; !definitionsRead(state); slices++) {
+    assert.ok(slices < 20, 'reading advances past the first list line')
+    state = state.update({ effects: readDefinitions.of(4096) }).state
+  }
+  assert.deepEqual(indexed(state), { end: 1 })
+})
+
+test('edits during blank lookahead discard stale positions and keep quote context', () => {
+  for (const prefix of ['', '> ', '> > ']) {
+    const body =
+      '- first\n' + '    \n'.repeat(4000) + '    [^real]: real\n\nend'
+    const source =
+      'read[^real]\n\n' +
+      body
+        .split('\n')
+        .map((line) => prefix + line)
+        .join('\n')
+    for (const from of [0, 5000, source.length - 2]) {
+      let state = create(source)
+      state = state.update({ effects: readDefinitions.of(1) }).state
+      assert.equal(definitionsRead(state), false)
+      state = settle(
+        state.update({ changes: { from, insert: '\n😀\n' } }).state,
+      )
+      assert.deepEqual(
+        indexed(state),
+        parsed(state.doc.toString()),
+        `${prefix}: ${from}`,
+      )
+    }
+  }
+})
+
 test('a long line is parsed once, and a long block in reads near the budget from where the last stopped', () => {
   for (const [kind, body] of [
     ['line', 'x'.repeat(1 << 20)],

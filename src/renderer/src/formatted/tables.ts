@@ -401,13 +401,6 @@ class TableView {
     this.relocate()
     this.followSizes()
     this.dom.classList.toggle('hibi-lp-table-inline', widget.inline)
-    if (!sameConfig(previous.config, widget.config)) {
-      // Other syntax or renderers: every cell renders again.
-      this.stopEditing()
-      this.headText = ''
-      for (const row of this.rendered.values()) row.element.remove()
-      this.rendered.clear()
-    }
     const header = widget.line(0),
       delimiter = widget.line(1).text
     const aligned = alignments(delimiter.slice(widget.rowStart(1, delimiter)))
@@ -472,6 +465,13 @@ class TableView {
       this.after?.remove()
       this.show(0, widget.rows)
     }
+    if (!sameConfig(previous.config, widget.config)) {
+      // New syntax or render inputs redraw cells without unmounting the editor.
+      this.refresh(this.head, 0, this.headText, true)
+      for (const [index, row] of this.rendered)
+        this.refresh(row.element, index + 2, row.text, true)
+      this.editing?.editor.refresh()
+    }
     this.applySizes()
     this.syncEditor()
   }
@@ -534,8 +534,13 @@ class TableView {
     return element
   }
 
-  /** Render the cells of a row whose text changed, except the one being edited. */
-  private refresh(row: HTMLTableRowElement, index: number, previous: string) {
+  /** Render changed cells, or all of them, except the one being edited. */
+  private refresh(
+    row: HTMLTableRowElement,
+    index: number,
+    previous: string,
+    force = false,
+  ) {
     const line = this.widget.line(index)
     const start = this.widget.rowStart(index, previous)
     const before = parseRow(previous.slice(start), start).cells
@@ -546,9 +551,10 @@ class TableView {
       const a = before[column],
         b = after[column]
       if (
-        a && b
+        !force &&
+        (a && b
           ? previous.slice(a.from, a.to) === line.text.slice(b.from, b.to)
-          : !a && !b
+          : !a && !b)
       )
         continue
       element.replaceWith(this.cell(index ? 'td' : 'th', line, b, column))

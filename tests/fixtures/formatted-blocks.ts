@@ -1,12 +1,20 @@
+import { history, redo, undo } from '@codemirror/commands'
 import { StateEffect } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import './live-preview'
 import { contribution as frontmatter } from '../../src/addons/frontmatter/formatted'
 import { contribution as alerts } from '../../src/addons/markdown/formatted'
-import { footnoteScan } from '../../src/renderer/src/formatted/footnote-definitions'
+import {
+  definitionsRead,
+  footnoteScan,
+  readDefinitions,
+} from '../../src/renderer/src/formatted/footnote-definitions'
 import { MediaWidget } from '../../src/renderer/src/formatted/media'
 import { TaskWidget } from '../../src/renderer/src/formatted/tasks'
-import { formattedDocument } from '../../src/renderer/src/formatted-contributions'
+import {
+  formattedDocument,
+  formattedRefresh,
+} from '../../src/renderer/src/formatted-contributions'
 import { formattedRegistry } from '../../src/renderer/src/formatted-registry'
 
 /** The live preview harness with the addon contributions, and media resolution counted instead of read. */
@@ -37,6 +45,13 @@ Object.assign(window, {
   },
   formattedBlocks: {
     footnoteScan,
+    definitionsRead,
+    readDefinitions,
+    formattedRefresh,
+    history,
+    undo,
+    redo,
+    StateEffect,
     media,
     MediaWidget,
     TaskWidget,

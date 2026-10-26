@@ -1,11 +1,20 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { dirname, relative, resolve } from 'node:path'
+import { setImmediate as nextTurn } from 'node:timers/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Worker } from 'node:worker_threads'
 import type { WorkspacePage } from '../shared/workspace.ts'
 import type { WorkspaceMetadataPage } from './workspace-index-metadata.ts'
+import {
+  RecordReader,
+  type RecordSlice,
+  recordSliceCharacters,
+  recordSliceTokens,
+} from './workspace-metadata-record.ts'
 import type { PageSyntax } from './workspace-syntax.ts'
+
+export { incompleteMetadataPage } from './workspace-metadata-record.ts'
 
 export type CachedMetadataRequest = {
   kind: 'cached'
@@ -50,6 +59,8 @@ export type MetadataWorkerRequest =
   | { kind: 'sourceChunk'; source: string }
   | { kind: 'parseEnd' }
   | { kind: 'parseClear' }
+  | { kind: 'resultChunk' }
+  | { kind: 'incomplete'; input: MetadataParseInput }
 type MetadataResult =
   | WorkspaceMetadataPage
   | (WorkspaceMetadataPage | null)[]
@@ -60,6 +71,9 @@ type ParserOptions = {
   entry: string | URL
   cacheDirectory?: string
   appVersion?: string
+  // Last-resort parse watchdog, not a content limit. Dense 1 MiB fixtures take <1 s.
+  // Tests may lower this to exercise a stuck parser without waiting 30 seconds.
+  watchdogMs?: number
 }
 
 // Hash the local import graph, including chunks whose filenames did not change.
@@ -86,33 +100,18 @@ async function bundleHash(entry: string | URL): Promise<string> {
   return hash.digest('hex')
 }
 
-export function incompleteMetadataPage(
-  input: MetadataParseInput,
-): WorkspaceMetadataPage {
-  return {
-    id: input.id,
-    path: input.path,
-    version: input.version,
-    syntax: { ...input.syntax, complete: false },
-    metadata: {
-      references: { links: [], wikilinks: [] },
-      referenceComplete: false,
-      tags: [],
-      properties: { values: {}, complete: false },
-      headings: { items: [], complete: false },
-    },
-  }
-}
-
 /** One parser thread, one active message; obsolete generations never start work. */
 export class WorkspaceMetadataParser {
   private worker: Worker | undefined
-  private buildWorker: Worker | undefined
+  private ready: Promise<void> = Promise.resolve()
+  private workerReady = false
+  private startupReject: ((error: Error) => void) | undefined
   private seen: Set<string> | undefined
   private pending:
     | {
-        resolve: (value: MetadataResult) => void
+        resolve: (value: MetadataResult | RecordSlice) => void
         reject: (error: Error) => void
+        parsed: () => void
       }
     | undefined
   private tail: Promise<unknown> = Promise.resolve()
@@ -127,7 +126,6 @@ export class WorkspaceMetadataParser {
 
   close(): Promise<void> {
     this.generation++
-    this.buildWorker = undefined
     this.seen = undefined
     this.propertyHashes.clear()
     if (this.worker)
@@ -138,25 +136,20 @@ export class WorkspaceMetadataParser {
   private fail(worker: Worker, error: Error): void {
     if (this.worker !== worker) return
     this.worker = undefined
-    this.buildWorker = undefined
-    this.seen = undefined
+    Object.assign(error, { metadataWorkerReady: this.workerReady })
+    this.workerReady = false
+    this.startupReject?.(error)
+    this.startupReject = undefined
     this.pending?.reject(error)
     this.pending = undefined
     this.stopping = worker.terminate()
   }
 
-  private intern(page: WorkspaceMetadataPage): WorkspaceMetadataPage {
-    const canonical = (value: string) => {
-      const existing = this.propertyHashes.get(value)
-      if (existing !== undefined) return existing
-      this.propertyHashes.set(value, value)
-      return value
-    }
-    const values: Record<string, readonly string[]> = Object.create(null)
-    for (const [key, hashes] of Object.entries(page.metadata.properties.values))
-      values[canonical(key)] = hashes.map(canonical)
-    page.metadata.properties.values = values
-    return page
+  private canonical = (value: string): string => {
+    const existing = this.propertyHashes.get(value)
+    if (existing !== undefined) return existing
+    this.propertyHashes.set(value, value)
+    return value
   }
 
   private start(options: ParserOptions, buildIdentity?: string): Worker {
@@ -168,10 +161,33 @@ export class WorkspaceMetadataParser {
       },
     })
     this.worker = worker
+    this.workerReady = false
+    let ready!: () => void
+    this.ready = new Promise<void>((resolve, reject) => {
+      ready = resolve
+      this.startupReject = reject
+    })
     worker.on(
       'message',
-      (message: { value: MetadataResult; error?: string; code?: string }) => {
+      (message: {
+        value: MetadataResult | RecordSlice
+        error?: string
+        code?: string
+        ready?: boolean
+        parsed?: boolean
+      }) => {
         if (this.worker !== worker) return
+        if (message.ready) {
+          this.workerReady = true
+          this.startupReject = undefined
+          worker.unref()
+          ready()
+          return
+        }
+        if (message.parsed) {
+          this.pending?.parsed()
+          return
+        }
         const pending = this.pending
         this.pending = undefined
         worker.unref()
@@ -194,7 +210,6 @@ export class WorkspaceMetadataParser {
         new Error(`Workspace metadata worker exited (${code}).`),
       ),
     )
-    worker.unref()
     return worker
   }
 
@@ -231,22 +246,75 @@ export class WorkspaceMetadataParser {
         hash ? JSON.stringify([options.appVersion, hash]) : undefined,
       )
     }
-    const worker = this.worker as Worker
-    const value = await new Promise<MetadataResult>((resolve, reject) => {
-      this.pending = { resolve, reject }
-      worker.ref()
-      try {
-        worker.postMessage(request)
-      } catch (error) {
-        this.fail(worker, error as Error)
-      }
-    })
+    await this.ready
     if (!active()) return null
-    if (Array.isArray(value))
-      return value.map((page) => (page ? this.intern(page) : null))
-    return value && typeof value === 'object' && 'metadata' in value
-      ? this.intern(value)
-      : value
+    const worker = this.worker as Worker
+    let value = await this.exchange(worker, request)
+    if (!value || typeof value !== 'object' || !('tokens' in value))
+      return active() ? value : null
+    const reader = new RecordReader(this.canonical)
+    try {
+      while (active()) {
+        if (value.tokens.length > recordSliceTokens)
+          throw new TypeError('Invalid metadata slice')
+        let characters = 0
+        for (let start = 0; start < value.tokens.length; start += 256) {
+          if (!active()) return null
+          const tokens = value.tokens.slice(start, start + 256)
+          for (const token of tokens)
+            characters += Array.isArray(token) ? token[0].length : 1
+          if (characters > recordSliceCharacters)
+            throw new TypeError('Invalid metadata slice')
+          reader.write(tokens)
+          await nextTurn()
+        }
+        if (value.done)
+          return active() ? (reader.finish() as MetadataResult) : null
+        const next = await this.exchange(worker, { kind: 'resultChunk' })
+        if (!next || typeof next !== 'object' || !('tokens' in next))
+          throw new TypeError('Missing metadata slice')
+        value = next
+      }
+      return null
+    } finally {
+      if (!active() && this.worker === worker)
+        await this.exchange(worker, { kind: 'parseClear' })
+    }
+  }
+
+  private async exchange(
+    worker: Worker,
+    request: MetadataWorkerRequest,
+  ): Promise<MetadataResult | RecordSlice> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await new Promise<MetadataResult | RecordSlice>(
+        (resolve, reject) => {
+          this.pending = { resolve, reject, parsed: () => clearTimeout(timer) }
+          worker.ref()
+          if (request.kind === 'parseEnd' || request.kind === 'parse') {
+            timer = setTimeout(
+              () =>
+                this.fail(
+                  worker,
+                  Object.assign(
+                    new Error('Workspace metadata parse timed out.'),
+                    { code: 'ERR_METADATA_TIMEOUT' },
+                  ),
+                ),
+              this.options().watchdogMs ?? 30_000,
+            )
+          }
+          try {
+            worker.postMessage(request)
+          } catch (error) {
+            this.fail(worker, error as Error)
+          }
+        },
+      )
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   private observe(ids: readonly (string | undefined)[]): void {
@@ -257,6 +325,7 @@ export class WorkspaceMetadataParser {
   private resourceFailure(error: unknown): boolean {
     const code = (error as NodeJS.ErrnoException)?.code
     return (
+      code === 'ERR_METADATA_TIMEOUT' ||
       code === 'ERR_WORKER_OUT_OF_MEMORY' ||
       code === 'ERR_STRING_TOO_LONG' ||
       (error instanceof RangeError && error.message === 'Invalid string length')
@@ -274,9 +343,15 @@ export class WorkspaceMetadataParser {
       return await this.send({ kind: 'parseEnd' }, active)
     } catch (error) {
       if (!active()) return null
-      if (!this.resourceFailure(error)) throw error
+      if (
+        !this.resourceFailure(error) ||
+        !(error as { metadataWorkerReady?: boolean }).metadataWorkerReady
+      )
+        throw error
       if (this.worker) this.fail(this.worker, error as Error)
-      return incompleteMetadataPage(input)
+      await this.stopping
+      if (!active()) return null
+      return await this.send({ kind: 'incomplete', input }, active)
     } finally {
       // An obsolete transaction must release its chunks before another starts.
       if (this.worker) await this.send({ kind: 'parseClear' }, () => true)
@@ -344,10 +419,28 @@ export class WorkspaceMetadataParser {
       try {
         return await this.send(request, active)
       } catch (error) {
-        if (request.kind !== 'cached' || !this.resourceFailure(error))
+        if (
+          !this.resourceFailure(error) ||
+          !(error as { metadataWorkerReady?: boolean }).metadataWorkerReady
+        )
           throw error
         if (this.worker) this.fail(this.worker, error as Error)
-        return null
+        if (request.kind === 'cached') return null
+        await this.stopping
+        if (!active()) return null
+        return this.send(
+          {
+            kind: 'incomplete',
+            input: {
+              id: request.page.id ?? '',
+              path: request.page.path,
+              version: request.version,
+              fingerprint: request.fingerprint,
+              syntax: request.syntax,
+            },
+          },
+          active,
+        )
       }
     })) as WorkspaceMetadataPage | null
   }
@@ -366,7 +459,11 @@ export class WorkspaceMetadataParser {
         try {
           return await this.send({ kind: 'cachedBatch', requests }, active)
         } catch (error) {
-          if (!this.resourceFailure(error)) throw error
+          if (
+            !this.resourceFailure(error) ||
+            !(error as { metadataWorkerReady?: boolean }).metadataWorkerReady
+          )
+            throw error
           if (this.worker) this.fail(this.worker, error as Error)
           return null
         }
@@ -378,11 +475,9 @@ export class WorkspaceMetadataParser {
     return (
       (await this.enqueue(current, async (active) => {
         this.seen = undefined
-        this.buildWorker = undefined
         const result = await this.send({ kind: 'beginBuild' }, active)
         if (result === true && active()) {
           this.seen = new Set()
-          this.buildWorker = this.worker
         }
         return result
       })) === true
@@ -393,12 +488,10 @@ export class WorkspaceMetadataParser {
     return (
       (await this.enqueue(current, async (active) => {
         const seen = this.seen
-        const worker = this.buildWorker
         this.seen = undefined
-        this.buildWorker = undefined
-        if (!seen || !worker || this.worker !== worker) return false
+        if (!seen) return false
         let remove: string[] = []
-        while (active() && this.worker === worker) {
+        while (active()) {
           const batch = await this.send({ kind: 'finishBuild', remove }, active)
           if (!batch || typeof batch !== 'object' || !('names' in batch))
             return false

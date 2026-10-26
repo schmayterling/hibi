@@ -139,7 +139,7 @@ type IndexDraft = {
 type IndexRequest = {
   key: string
   selected: string
-  workspace: WorkspaceState
+  workspace: Omit<WorkspaceState, 'entries'>
   drafts: Map<string, IndexDraft>
   documents: ReturnType<typeof getOpenDocumentMetadata>
   tree: readonly WorkspaceEntry[]

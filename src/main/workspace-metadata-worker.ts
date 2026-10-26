@@ -8,7 +8,6 @@ import {
   opendir,
   rename,
   unlink,
-  writeFile,
 } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parentPort, workerData } from 'node:worker_threads'
@@ -23,14 +22,22 @@ import type {
   MetadataParseInput,
   MetadataWorkerRequest,
 } from './workspace-metadata-parser.ts'
+import {
+  incompleteMetadataPage,
+  RecordReader,
+  type RecordSlice,
+  type RecordToken,
+  RecordWriter,
+  recordSliceBytes,
+  recordTokens,
+} from './workspace-metadata-record.ts'
 import { applySourceSyntax } from './workspace-syntax.ts'
+
+let results: AsyncGenerator<RecordSlice> | undefined
 
 const cacheDirectory = workerData.cacheDirectory as string | undefined
 const buildIdentity = workerData.buildIdentity as string | undefined
-const schema = 3
-// Corrupt/oversize cache records are discarded; parsed content is never capped.
-const maxCacheRecordBytes = 32 * 1024 * 1024
-const maxBatchBytes = 4 * 1024 * 1024
+const schema = 4
 const idPattern = /^[a-f0-9]{64}$/
 const recordPattern = /^[a-f0-9]{64}\.json$/
 const temporaryPattern = /^\.[a-f0-9]{64}-[a-f0-9-]{36}\.tmp$/
@@ -46,6 +53,7 @@ let parsing:
         file: FileHandle
         buffer: Buffer
         decoder: TextDecoder
+        remaining: bigint
         done: boolean
       }
     }
@@ -100,9 +108,13 @@ async function cacheAvailable(): Promise<boolean> {
 
 async function cached(
   request: CachedMetadataRequest,
-  budget = { bytes: maxCacheRecordBytes },
 ): Promise<WorkspaceMetadataPage | null> {
-  if (!cacheDirectory || !idPattern.test(request.id)) return null
+  if (
+    !cacheDirectory ||
+    !idPattern.test(request.id) ||
+    !(await cacheAvailable())
+  )
+    return null
   try {
     const path = join(cacheDirectory, `${request.id}.json`)
     const info = await lstat(path)
@@ -113,26 +125,56 @@ async function cached(
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
     )
     try {
-      const info = await file.stat()
+      const opened = await file.stat({ bigint: true })
       if (
-        !info.isFile() ||
-        info.size > Math.min(maxCacheRecordBytes, budget.bytes)
+        !opened.isFile() ||
+        opened.dev !== BigInt(info.dev) ||
+        opened.ino !== BigInt(info.ino)
       )
         return null
-      budget.bytes -= info.size
-      const buffer = Buffer.alloc(info.size + 1)
-      let length = 0
-      while (length < buffer.length) {
-        const { bytesRead } = await file.read(
-          buffer,
-          length,
-          buffer.length - length,
+      const reader = new RecordReader()
+      const buffer = Buffer.alloc(64 * 1024)
+      const decoder = new TextDecoder('utf-8', { fatal: true })
+      let line = '',
+        position = 0n
+      while (position < opened.size) {
+        const length = Number(
+          opened.size - position > BigInt(buffer.length)
+            ? BigInt(buffer.length)
+            : opened.size - position,
         )
-        if (!bytesRead) break
-        length += bytesRead
+        const { bytesRead } = await file.read(buffer, 0, length)
+        if (!bytesRead) return null
+        position += BigInt(bytesRead)
+        line += decoder.decode(buffer.subarray(0, bytesRead), { stream: true })
+        let end = line.indexOf('\n')
+        while (end >= 0) {
+          if (end > recordSliceBytes) return null
+          const tokens = JSON.parse(line.slice(0, end))
+          if (!Array.isArray(tokens) || tokens.length > 8192) return null
+          reader.write(tokens)
+          line = line.slice(end + 1)
+          end = line.indexOf('\n')
+        }
+        if (line.length > recordSliceBytes) return null
       }
-      if (length !== info.size) return null
-      const value = JSON.parse(buffer.subarray(0, length).toString('utf8'))
+      line += decoder.decode()
+      const after = await file.stat({ bigint: true })
+      const pathInfo = await lstat(path, { bigint: true })
+      if (
+        line.length ||
+        diskIndexVersion(opened) !== diskIndexVersion(after) ||
+        diskIndexVersion(opened) !== diskIndexVersion(pathInfo) ||
+        pathInfo.isSymbolicLink() ||
+        !(await cacheAvailable())
+      )
+        return null
+      const value = reader.finish() as {
+        schema: number
+        buildIdentity: string
+        fingerprint: string
+        page: WorkspaceMetadataPage
+      }
       const page = value.page as WorkspaceMetadataPage
       return value.schema === schema &&
         value.buildIdentity === buildIdentity &&
@@ -151,25 +193,39 @@ async function cached(
   }
 }
 
-async function cachedBatch(
+async function* resultPages(
   requests: readonly CachedMetadataRequest[],
-): Promise<(WorkspaceMetadataPage | null)[]> {
+): AsyncGenerator<RecordSlice> {
   if (requests.length > 64)
     throw new RangeError('cachedBatch accepts 64 requests')
-  const pages: (WorkspaceMetadataPage | null)[] = requests.map(() => null)
-  if (!(await cacheAvailable())) return pages
-  const budget = { bytes: maxBatchBytes - 1024 }
-  let next = 0
-  await Promise.all(
-    Array.from({ length: Math.min(4, requests.length) }, async () => {
-      while (next < requests.length) {
-        const index = next++
-        const request = requests[index]
-        if (request) pages[index] = await cached(request, budget)
-      }
-    }),
-  )
-  return pages
+  const writer = new RecordWriter()
+  for (const tokens of writer.write(['['])) yield { tokens, done: false }
+  const available = await cacheAvailable()
+  for (const request of requests) {
+    // Release each derived record before opening the next. No batch-sized heap.
+    const page = available ? await cached(request) : null
+    for (const tokens of writer.write(recordTokens(page)))
+      yield { tokens, done: false }
+  }
+  for (const tokens of writer.write([']'])) yield { tokens, done: false }
+  yield { tokens: writer.finish(), done: true }
+}
+
+async function* resultPage(value: unknown): AsyncGenerator<RecordSlice> {
+  const writer = new RecordWriter()
+  for (const tokens of writer.write(recordTokens(value)))
+    yield { tokens, done: false }
+  yield { tokens: writer.finish(), done: true }
+}
+
+async function resultChunk(): Promise<RecordSlice> {
+  const next = await results?.next()
+  if (!next || next.done) throw new TypeError('Missing metadata result')
+  if (next.value.done) {
+    await results?.return(undefined)
+    results = undefined
+  }
+  return next.value
 }
 
 async function remember(
@@ -186,12 +242,31 @@ async function remember(
     return
   const temporary = join(cacheDirectory, `.${page.id}-${randomUUID()}.tmp`)
   try {
-    const record = JSON.stringify({ schema, buildIdentity, fingerprint, page })
-    if (Buffer.byteLength(record) > maxCacheRecordBytes) return
     await mkdir(cacheDirectory, { recursive: true, mode: 0o700 })
     if (!(await cacheAvailable())) return
-    await writeFile(temporary, record, { flag: 'wx', mode: 0o600 })
-    await rename(temporary, join(cacheDirectory, `${page.id}.json`))
+    const file = await open(temporary, 'wx', 0o600)
+    try {
+      const writer = new RecordWriter()
+      const tokens = recordTokens({ schema, buildIdentity, fingerprint, page })
+      const write = async (slice: RecordToken[]) => {
+        const buffer = Buffer.from(`${JSON.stringify(slice)}\n`)
+        for (let offset = 0; offset < buffer.length; ) {
+          const { bytesWritten } = await file.write(
+            buffer,
+            offset,
+            buffer.length - offset,
+          )
+          if (!bytesWritten) throw new Error('Invalid metadata cache write')
+          offset += bytesWritten
+        }
+      }
+      for (const slice of writer.write(tokens)) await write(slice)
+      await write(writer.finish())
+    } finally {
+      await file.close()
+    }
+    if (await cacheAvailable())
+      await rename(temporary, join(cacheDirectory, `${page.id}.json`))
   } catch {
     // Cache writes are optional; the parsed page remains usable.
   } finally {
@@ -277,6 +352,7 @@ async function fileStart(input: MetadataFileInput): Promise<boolean> {
         file,
         buffer: Buffer.alloc(64 * 1024),
         decoder: new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }),
+        remaining: info.size,
         done: false,
       },
     }
@@ -290,12 +366,19 @@ async function fileChunk(): Promise<boolean | null> {
   const state = parsing
   const disk = state?.disk
   if (!state || !disk || disk.done) return null
-  const { bytesRead } = await disk.file.read(disk.buffer, 0, disk.buffer.length)
-  if (bytesRead) {
+  if (disk.remaining > 0n) {
+    const length = Number(
+      disk.remaining > BigInt(disk.buffer.length)
+        ? BigInt(disk.buffer.length)
+        : disk.remaining,
+    )
+    const { bytesRead } = await disk.file.read(disk.buffer, 0, length)
+    if (!bytesRead) return null
+    disk.remaining -= BigInt(bytesRead)
     state.chunks.push(
       disk.decoder.decode(disk.buffer.subarray(0, bytesRead), { stream: true }),
     )
-    return true
+    if (disk.remaining > 0n) return true
   }
   state.chunks.push(disk.decoder.decode())
   disk.done = true
@@ -303,17 +386,23 @@ async function fileChunk(): Promise<boolean | null> {
 }
 
 async function derive(input: MetadataParseInput, source: string) {
-  const syntax = applySourceSyntax(input.syntax, source)
-  const page: WorkspaceMetadataPage = {
-    id: input.id,
-    path: input.path,
-    version: input.version,
-    syntax,
-    metadata: parseWorkspaceMetadata(
-      { id: input.id, path: input.path, markdown: source },
+  let page: WorkspaceMetadataPage
+  try {
+    const syntax = applySourceSyntax(input.syntax, source)
+    page = {
+      id: input.id,
+      path: input.path,
+      version: input.version,
       syntax,
-    ),
+      metadata: parseWorkspaceMetadata(
+        { id: input.id, path: input.path, markdown: source },
+        syntax,
+      ),
+    }
+  } catch {
+    page = incompleteMetadataPage(input)
   }
+  parentPort?.postMessage({ parsed: true })
   await remember(page, input.fingerprint)
   return page
 }
@@ -336,7 +425,15 @@ async function parseEnd(): Promise<WorkspaceMetadataPage | null> {
       )
         return null
     } else if (state.received !== state.length) return null
-    const source = state.chunks.join('')
+    let source: string
+    try {
+      source = state.chunks.join('')
+    } catch {
+      const page = incompleteMetadataPage(state.input)
+      parentPort?.postMessage({ parsed: true })
+      await remember(page, state.input.fingerprint)
+      return page
+    }
     state.chunks.length = 0
     return await derive(state.input, source)
   } finally {
@@ -353,17 +450,28 @@ function readFailure(error: unknown): boolean {
     'EACCES',
     'EPERM',
     'ESTALE',
+    'EIO',
     'ERR_ENCODING_INVALID_ENCODED_DATA',
   ].includes((error as NodeJS.ErrnoException)?.code ?? '')
 }
 
 const startup = cleanupTemporaries()
+void startup.then(() => parentPort?.postMessage({ ready: true }))
 
 parentPort?.on('message', async (request: MetadataWorkerRequest) => {
   try {
     await startup
     let value: unknown
-    if (request.kind === 'beginBuild') {
+    if (request.kind === 'resultChunk') {
+      parentPort?.postMessage({ value: await resultChunk() })
+      return
+    }
+    await results?.return(undefined)
+    results = undefined
+    if (request.kind === 'incomplete') {
+      value = incompleteMetadataPage(request.input)
+      await remember(value as WorkspaceMetadataPage, request.input.fingerprint)
+    } else if (request.kind === 'beginBuild') {
       await clearPruning()
       await cleanupTemporaries()
       value = true
@@ -398,22 +506,28 @@ parentPort?.on('message', async (request: MetadataWorkerRequest) => {
     else if (request.kind === 'parseClear') {
       await clearParsing()
       value = true
-    } else if (request.kind === 'cachedBatch')
-      value = await cachedBatch(request.requests)
-    else if (request.kind === 'cached')
+    } else if (request.kind === 'cachedBatch') {
+      results = resultPages(request.requests)
+      parentPort?.postMessage({ value: await resultChunk() })
+      return
+    } else if (request.kind === 'cached')
       value = (await cacheAvailable()) ? await cached(request) : null
     else {
       await clearParsing()
-      const syntax = applySourceSyntax(request.syntax, request.page.markdown)
-      const page: WorkspaceMetadataPage = {
-        ...(request.page.id ? { id: request.page.id } : {}),
-        path: request.page.path,
-        version: request.version,
-        syntax,
-        metadata: parseWorkspaceMetadata(request.page, syntax),
-      }
-      await remember(page, request.fingerprint)
-      value = page
+      value = await derive(
+        {
+          id: request.page.id ?? '',
+          path: request.page.path,
+          version: request.version,
+          syntax: request.syntax,
+          fingerprint: request.fingerprint,
+        },
+        request.page.markdown,
+      )
+    }
+    if (value && typeof value === 'object' && 'metadata' in value) {
+      results = resultPage(value)
+      value = await resultChunk()
     }
     parentPort?.postMessage({ value })
   } catch (error) {

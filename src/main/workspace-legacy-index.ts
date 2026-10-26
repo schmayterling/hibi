@@ -27,8 +27,8 @@ export type LegacyIndexSource = {
 export type LegacyIndexOptions = {
   /** Workspace identity, revision, and dirty source versions. */
   key: string
-  /** Small header with entries: []; refreshed even on a warm read. */
-  workspace: WorkspaceState
+  /** Small header, refreshed even on a warm read. */
+  workspace: Omit<WorkspaceState, 'entries'>
   entries: readonly WorkspaceEntry[]
   documents: readonly { path: string; dirty: boolean; pending?: boolean }[]
   drafts: ReadonlyMap<string, LegacyIndexSource>

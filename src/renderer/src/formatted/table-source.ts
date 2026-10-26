@@ -432,3 +432,55 @@ export function planInline<W>(
   while (open.pop()) ops.push({ type: 'close' })
   return ops
 }
+
+const delimiterRow = /^\|?(?:[ \t]*:?-+:?[ \t]*\|)+(?:[ \t]*:?-+:?[ \t]*)?$/
+
+/**
+ * How many GFM tables start in these lines: a line with a pipe, then a
+ * delimiter row with as many cells, outside fenced code. Quote markers and
+ * indentation before rows are skipped. A table's count of the tables before
+ * it is its ordinal, part of the key its stored sizes have.
+ */
+export function countTables(lines: Iterable<string>) {
+  let count = 0,
+    fence = '',
+    previous: string | null = null,
+    table = false
+  for (const raw of lines) {
+    const line = raw.replace(/^(?:[ \t]*>)*[ \t]*/, '')
+    const marker = /^(`{3,}|~{3,})/.exec(line)?.[1]
+    if (fence) {
+      if (
+        marker &&
+        marker[0] === fence[0] &&
+        marker.length >= fence.length &&
+        !line.slice(marker.length).trim()
+      )
+        fence = ''
+      continue
+    }
+    if (marker) {
+      fence = marker
+      previous = null
+      table = false
+      continue
+    }
+    if (!line.trim()) {
+      previous = null
+      table = false
+      continue
+    }
+    if (table) continue
+    if (
+      previous !== null &&
+      delimiterRow.test(line.trimEnd()) &&
+      parseRow(previous).cells.length === parseRow(line).cells.length &&
+      parseRow(previous).pipes.length > 0
+    ) {
+      count++
+      table = true
+    }
+    previous = line
+  }
+  return count
+}

@@ -8,6 +8,7 @@ import {
   cellContent,
   cellFixes,
   cellSpan,
+  countTables,
   deleteColumn,
   deleteRow,
   insertColumn,
@@ -462,4 +463,40 @@ test('typed cell text stays in its cell', () => {
   )
   assert.equal(fixed('end\\', false), 'end\\')
   assert.equal(fixed('end\\\\'), 'end\\\\')
+})
+
+test('tables before a position are counted for their stored sizes', () => {
+  const doc = [
+    '# Notes',
+    '',
+    '| a | b |',
+    '| - | - |',
+    '| 1 | 2 |',
+    '',
+    '```',
+    '| not | a table |',
+    '| --- | --- |',
+    '```',
+    '',
+    'paragraph | with pipe',
+    'plain',
+    '',
+    '> | q |',
+    '> | - |',
+    '',
+    '- item',
+    '',
+    '  | c | d |',
+    '  |---|---|',
+    '',
+    '| only header |',
+    '| - | - |',
+    '',
+    'a | b',
+    ':-- | --:',
+  ]
+  assert.equal(countTables(doc), 4)
+  assert.equal(countTables(doc.slice(0, 5)), 1)
+  assert.equal(countTables(doc.slice(0, 16)), 2)
+  assert.equal(countTables([]), 0)
 })

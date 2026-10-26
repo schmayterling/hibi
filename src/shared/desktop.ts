@@ -603,6 +603,8 @@ export type DesktopApi = {
   saveHotkeys: (hotkeys: Hotkeys) => Promise<Hotkeys>
   setHotkeyRecording: (recording: boolean) => Promise<void>
   onCommand: (callback: (command: AppCommand) => void) => () => void
+  /** Edit menu undo and redo for the focused editor or field. */
+  onHistory: (callback: (direction: 'undo' | 'redo') => void) => () => void
 }
 
 import type { AddonState } from '../addons/api'

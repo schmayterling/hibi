@@ -1185,6 +1185,18 @@ function createWindow(): void {
 function installMenu(): void {
   const command = (action: AppCommand) => () =>
     mainWindow?.webContents.send(HOTKEY_CHANNELS.command, action)
+  // The app window runs undo and redo in its focused editor; other windows
+  // keep the browser's own.
+  const history =
+    (
+      direction: 'undo' | 'redo',
+    ): NonNullable<MenuItemConstructorOptions['click']> =>
+    (_item, window) => {
+      if (!(window instanceof BrowserWindow)) return
+      if (window === mainWindow)
+        window.webContents.send(HOTKEY_CHANNELS.history, direction)
+      else window.webContents[direction]()
+    }
   const addonItems: MenuItemConstructorOptions[] = []
   let group: string | null = null
   for (const item of addonHotkeys.menuContributions()) {
@@ -1249,7 +1261,43 @@ function installMenu(): void {
         },
       ],
     },
-    { role: 'editMenu' },
+    {
+      label: 'Edit',
+      // Electron's Edit menu, with undo and redo routed above. Editors take
+      // these shortcuts first; the menu runs them only when nothing did.
+      submenu: [
+        { label: 'Undo', accelerator: 'CmdOrCtrl+Z', click: history('undo') },
+        {
+          label: 'Redo',
+          accelerator:
+            process.platform === 'win32' ? 'Control+Y' : 'Shift+CmdOrCtrl+Z',
+          click: history('redo'),
+        },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        ...(process.platform === 'darwin'
+          ? [
+              { role: 'pasteAndMatchStyle' as const },
+              { role: 'delete' as const },
+              { role: 'selectAll' as const },
+              { type: 'separator' as const },
+              {
+                label: 'Speech',
+                submenu: [
+                  { role: 'startSpeaking' as const },
+                  { role: 'stopSpeaking' as const },
+                ],
+              },
+            ]
+          : [
+              { role: 'delete' as const },
+              { type: 'separator' as const },
+              { role: 'selectAll' as const },
+            ]),
+      ],
+    },
     {
       label: 'View',
       submenu: [

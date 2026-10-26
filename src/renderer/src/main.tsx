@@ -1647,6 +1647,21 @@ function App() {
   useEffect(() =>
     window.hibi.onCommand((command) => addonHost.app.runAction(command)),
   )
+  // Edit menu undo and redo. Editors cancel this event to run their session's
+  // history, which the browser's own redo never reaches; other fields keep the
+  // browser's undo and redo.
+  useEffect(() =>
+    window.hibi.onHistory((direction) => {
+      const history = new InputEvent('beforeinput', {
+        inputType: direction === 'undo' ? 'historyUndo' : 'historyRedo',
+        bubbles: true,
+        cancelable: true,
+      })
+      const { activeElement, body } = window.document
+      if ((activeElement ?? body).dispatchEvent(history))
+        window.document.execCommand(direction)
+    }),
+  )
   useEffect(() => window.hibi.onOpenSettings(() => openSetting('hibi')))
   // hibi://addons/install?id= and /open?id= links; main has already validated the ID.
   useEffect(

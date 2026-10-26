@@ -696,5 +696,6 @@ if (process.isMainFrame) {
     setHotkeyRecording: (recording) =>
       ipcRenderer.invoke(HOTKEY_CHANNELS.record, recording),
     onCommand: (callback) => subscribe(HOTKEY_CHANNELS.command, callback),
+    onHistory: (callback) => subscribe(HOTKEY_CHANNELS.history, callback),
   } satisfies DesktopApi & DocumentTransferApi)
 }

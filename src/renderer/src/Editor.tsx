@@ -241,6 +241,12 @@ type PreviewBase = {
   document: RichNode
   changes: readonly RawEdit[]
 }
+// ponytail: each source edit recomposes the recorded edits, copying their
+// inserted text; past these sizes catch-up maps by structure. Recording each
+// operation and composing once at catch-up would lift the limit.
+const recordable = (changes: readonly RawEdit[]) =>
+  changes.length <= 1024 &&
+  changes.reduce((size, change) => size + change.insert.length, 0) <= 1 << 20
 
 export function MarkdownEditor({
   document: documentState,
@@ -2060,7 +2066,8 @@ export function MarkdownEditor({
       )
     }
     // The composed source edits as a map from the old preview into the new
-    // one, or null unless they all lie in an unchanged projected body.
+    // one. Edits before the body (front matter) only move it, so body edits map
+    // from each side's own body start; an edit across the boundary gives null.
     const editMap = (
       base: PreviewBase,
       after: RichNode,
@@ -2071,23 +2078,28 @@ export function MarkdownEditor({
         body = projectMarkdown(old, markdownExtensions),
         from = body.sourceOffset ?? old.lastIndexOf(body.content),
         to = projected.sourceOffset ?? source.lastIndexOf(projected.content)
+      if (from < 0 || to < 0) return null
+      const edits: RawEdit[] = []
+      let moved = 0
+      for (const change of base.changes)
+        if (change.from >= from)
+          edits.push({
+            ...change,
+            from: change.from - from,
+            to: change.to - from,
+          })
+        else if (change.to <= from)
+          moved += change.insert.length - (change.to - change.from)
+        else return null
       if (
-        from < 0 ||
-        from !== to ||
-        base.changes.some(
-          (change) =>
-            change.from < from || change.to > from + body.content.length,
-        )
+        to !== from + moved ||
+        edits.some((change) => change.to > body.content.length)
       )
         return null
       return richEditMap(
         base.document,
         after,
-        base.changes.map((change) => ({
-          ...change,
-          from: change.from - from,
-          to: change.to - from,
-        })),
+        edits,
         body.content.length,
         // The old map is usually still cached from before the preview went
         // stale, and the caret and outline reuse the new one.
@@ -2200,8 +2212,7 @@ export function MarkdownEditor({
       if (preview) {
         const { base } = preview
         let changes: readonly RawEdit[] | null = null
-        // A hidden preview can stay stale for long; it maps by structure instead.
-        if (base && visible)
+        if (base)
           try {
             changes = composeSourceChanges(
               base.changes,
@@ -2216,11 +2227,26 @@ export function MarkdownEditor({
             preview.selection,
             prepared.operation.changes,
           ),
-          ...(base && changes ? { base: { ...base, changes } } : {}),
+          ...(base && changes && recordable(changes)
+            ? { base: { ...base, changes } }
+            : {}),
         }
       }
-      // Hidden rich state stays untouched; only its pending raw selection advances.
-      if (!visible) return
+      // Hidden rich state stays untouched until it is shown again. Its pending
+      // selection and the source edits since it last matched advance.
+      if (!visible) {
+        if (!preview && matches(prepared.before))
+          preview = {
+            snapshot: prepared.after,
+            selection: null,
+            base: {
+              snapshot: prepared.before,
+              document: editor.state.doc,
+              changes: prepared.operation.changes,
+            },
+          }
+        return
+      }
       const active = window.document.activeElement
       if (
         canWait &&

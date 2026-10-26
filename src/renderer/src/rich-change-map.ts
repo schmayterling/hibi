@@ -4,9 +4,9 @@ import { StepMap } from '@tiptap/pm/transform'
 // `[a, b)` in the old document became `[c, d)` in the new one.
 type Span = { a: number; b: number; c: number; d: number }
 type Edit = { from: number; to: number; insert: string }
-type Lookup = (position: number, from: 'source' | 'rich') => number | null
-// How far around an edit to look for an exactly mapped source offset.
-const reach = 64
+type Lookup = ((position: number, from: 'source' | 'rich') => number | null) & {
+  nearest(offset: number, side: -1 | 1): { source: number; rich: number } | null
+}
 
 /**
  * Maps the old preview into the new one through the source edits between
@@ -27,27 +27,33 @@ export function richEditMap(
     const rich = lookups[side](offset, 'source')
     return rich !== null && lookups[side](rich, 'rich') === offset ? rich : null
   }
-  const anchor = (from: number, to: number) => {
-    const a = exact(0, from),
-      c = a === null ? null : exact(1, to)
-    return a === null || c === null ? null : ([a, c] as const)
+  // The nearest source offset toward `side`, within [low, high], that both
+  // previews map exactly: visible text the edits left alone. A point where two
+  // runs meet can be ambiguous; the next one inside a run is not.
+  const anchor = (
+    offset: number,
+    shift: number,
+    side: -1 | 1,
+    low: number,
+    high: number,
+  ) => {
+    for (let at = offset, tries = 0; tries < 8; tries++) {
+      const point = lookups[0].nearest(at, side)
+      if (!point || point.source < low || point.source > high) return null
+      const a = exact(0, point.source),
+        c = a === null ? null : exact(1, point.source + shift)
+      if (a !== null && c !== null) return [a, c] as const
+      at = point.source + side
+    }
+    return null
   }
   const windows: Span[] = []
   let shift = 0,
     previous = 0
   for (const [index, edit] of edits.entries()) {
     const next = shift + edit.insert.length - (edit.to - edit.from),
-      limit = Math.min(edits[index + 1]?.from ?? length, edit.to + reach)
-    let start: readonly [number, number] | null = null,
-      end: readonly [number, number] | null = null
-    for (
-      let at = edit.from;
-      !start && at >= Math.max(previous, edit.from - reach);
-      at--
-    )
-      start = anchor(at, at + shift)
-    for (let at = edit.to; !end && at <= limit; at++)
-      end = anchor(at, at + next)
+      start = anchor(edit.from, shift, -1, previous, edit.from),
+      end = anchor(edit.to, next, 1, edit.to, edits[index + 1]?.from ?? length)
     const [b, d] = end ?? [before.content.size, after.content.size],
       last = windows.at(-1)
     if (last && (!start || start[0] < last.b || start[1] < last.d)) {

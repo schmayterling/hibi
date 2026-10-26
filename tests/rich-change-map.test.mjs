@@ -205,6 +205,22 @@ test('source edits map selections in repeated, atom and edited blocks exactly', 
   }
 })
 
+test('edits deep inside long atoms keep the text between them', () => {
+  // No visible text lies within hundreds of source units of either edit.
+  const url = (name) => `https://example.com/${name.repeat(200)}.png`
+  const source = `alpha ![x](${url('x')}) beta ![y](${url('y')}) gamma`
+  const middle = (name) => source.indexOf(url(name)) + 100
+  const { before, after, map } = edited(source, [
+    { from: middle('x'), to: middle('x'), insert: 'z' },
+    { from: middle('y'), to: middle('y'), insert: 'z' },
+  ])
+  const beta = at(before, (node) => node.isText && node.text.includes('beta'))
+  const from = beta + before.nodeAt(beta).text.indexOf('beta')
+  const mapped = TextSelection.create(before, from, from + 4).map(after, map)
+  assert.equal(after.textBetween(mapped.from, mapped.to), 'beta')
+  assert.deepEqual([mapped.from, mapped.to], [from, from + 4])
+})
+
 test('edits with wider effects still map the content they leave alone', () => {
   // A heading marker changes the block type; the following blocks keep their place.
   const source = 'alpha\n\nbeta gamma\n\nomega'

@@ -9,6 +9,7 @@ import { waitForAsync } from './poll.mjs'
 
 // Every built-in rich attachment, with math changing the preview grammar.
 const addons = [
+  'frontmatter',
   'math',
   'dictionary',
   'block-drag',
@@ -554,4 +555,129 @@ test('split preview catch-up maps selections through the source edits around the
     // The first of the repeated blocks stays the first one.
     assert.equal(after.json.anchor, before.anchor + 1, item.original)
   }
+})
+
+// Selects `beta` in the preview and reads the selection back after catch-up.
+const selectBeta = (rich) =>
+  rich.evaluate((element) => {
+    const editor = element.editor
+    let at
+    editor.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text.includes('beta'))
+        at = pos + node.text.indexOf('beta')
+    })
+    editor.commands.setTextSelection({ from: at, to: at + 4 })
+    return editor.state.selection.toJSON()
+  })
+const selected = (rich) =>
+  rich.evaluate((element) => {
+    const { doc, selection } = element.editor.state
+    return {
+      json: selection.toJSON(),
+      text: doc.textBetween(selection.from, selection.to),
+    }
+  })
+
+// One source transaction around `beta`; the catch-up must keep it selected.
+async function editAroundBeta(t, original, changes) {
+  const { page, rich, source, pauseClock } = await openSplit(t, original)
+  await source.focus()
+  await pauseClock()
+  const before = await selectBeta(rich)
+  await source.focus()
+  const untouched = await page.evaluate((changes) => {
+    const { sdk } = window.deferralFixture
+    const view = sdk.codeMirror.view.EditorView.findFromDOM(
+      document.querySelector('.cm-content'),
+    )
+    if (!view.hasFocus) throw new Error('source must own input')
+    const doc = document.querySelector('.tiptap').editor.state.doc
+    view.dispatch({
+      changes,
+      annotations: sdk.codeMirror.state.Transaction.userEvent.of('input.type'),
+    })
+    return document.querySelector('.tiptap').editor.state.doc === doc
+  }, changes(original))
+  assert.equal(untouched, true)
+  await page.clock.runFor(201)
+  const exact = await page.evaluate(() => {
+    const editor = document.querySelector('.tiptap').editor
+    const raw = window.deferralFixture.context.editor.getDocument().markdown
+    const body = raw.startsWith('---\n') ? raw.split('\n---\n')[1] : raw
+    return editor.state.doc.eq(
+      editor.schema.nodeFromJSON(window.deferralParse(body)),
+    )
+  })
+  assert.equal(exact, true)
+  const after = await selected(rich)
+  assert.equal(after.json.type, before.type)
+  assert.equal(after.text, 'beta')
+}
+
+test('split preview catch-up keeps selections between edits inside long atoms', {
+  timeout: 60000,
+}, async (t) => {
+  // No visible text lies within hundreds of source units of either edit.
+  const long = (name) => name.repeat(200)
+  await editAroundBeta(
+    t,
+    `alpha $${long('x')}$ beta $${long('y')}$ gamma\n\nomega`,
+    (text) =>
+      ['x', 'y'].map((name) => ({
+        from: text.indexOf(long(name)) + 100,
+        insert: 'z',
+      })),
+  )
+})
+
+test('split preview catch-up keeps selections when front matter moves the body', {
+  timeout: 60000,
+}, async (t) => {
+  await editAroundBeta(
+    t,
+    '---\ntitle: old\n---\n\nalpha $x^2$ beta gamma\n\nomega',
+    (text) => [
+      {
+        from: text.indexOf('old'),
+        to: text.indexOf('old') + 3,
+        insert: 'new title',
+      },
+      { from: text.indexOf('alpha'), insert: '!' },
+      { from: text.indexOf(' gamma') + 6, insert: '?' },
+    ],
+  )
+})
+
+test('a preview hidden during source edits keeps its selection when shown again', {
+  timeout: 60000,
+}, async (t) => {
+  const { page, rich, source, pauseClock, toNormal } = await openSplit(
+    t,
+    'alpha $x^2$ beta gamma\n\nomega',
+  )
+  await source.focus()
+  await pauseClock()
+  const before = await selectBeta(rich)
+  await page
+    .getByRole('button', { name: 'Source view', exact: true })
+    .evaluate((button) => button.click())
+  await page.clock.runFor(1)
+  await source.focus()
+  await page.evaluate(() => {
+    const { sdk } = window.deferralFixture
+    const view = sdk.codeMirror.view.EditorView.findFromDOM(
+      document.querySelector('.cm-content'),
+    )
+    view.dispatch({
+      changes: [
+        { from: 0, insert: '!' },
+        { from: view.state.doc.line(1).to, insert: '?' },
+      ],
+      annotations: sdk.codeMirror.state.Transaction.userEvent.of('input.type'),
+    })
+  })
+  await toNormal()
+  const after = await selected(rich)
+  assert.equal(after.text, 'beta')
+  assert.equal(after.json.anchor, before.anchor + 1)
 })

@@ -94,14 +94,14 @@ export function markdownPositions(source: string, document: RichNode) {
     offset: number,
     axis: 'source' | 'rich',
   ) => (axis === 'source' ? toSource(span.source + offset) : span.rich + offset)
-  return (position: number, from: 'source' | 'rich') => {
-    const to = from === 'source' ? 'rich' : 'source'
+  // The first run point at or after `position` on one axis.
+  const locate = (position: number, axis: 'source' | 'rich') => {
     let low = 0,
       high = spans.length - 1
     while (low <= high) {
       const middle = (low + high) >>> 1
       const span = spans[middle]!
-      if (coordinate(span, span.length - 1, from) < position) low = middle + 1
+      if (coordinate(span, span.length - 1, axis) < position) low = middle + 1
       else high = middle - 1
     }
     const span = spans[low]
@@ -110,10 +110,16 @@ export function markdownPositions(source: string, document: RichNode) {
       high = span.length - 1
       while (index <= high) {
         const middle = (index + high) >>> 1
-        if (coordinate(span, middle, from) < position) index = middle + 1
+        if (coordinate(span, middle, axis) < position) index = middle + 1
         else high = middle - 1
       }
     }
+    return { low, index }
+  }
+  const lookup = (position: number, from: 'source' | 'rich') => {
+    const to = from === 'source' ? 'rich' : 'source'
+    const { low, index } = locate(position, from)
+    const span = spans[low]
     const before = span && index ? span : spans[low - 1],
       beforeIndex = span && index ? index - 1 : (before?.length ?? 1) - 1
     if (!before) return span ? coordinate(span, index, to) : null
@@ -125,16 +131,40 @@ export function markdownPositions(source: string, document: RichNode) {
       return coordinate(before, beforeIndex, to)
     return coordinate(span, index, to)
   }
+  /** The closest source point this map knows, with its rich position: at or
+   * before `offset` for side -1, at or after it for side 1. */
+  const nearest = (offset: number, side: -1 | 1) => {
+    const found = locate(offset, 'source')
+    let span = spans[found.low],
+      index = found.index
+    if (side < 0 && (!span || coordinate(span, index, 'source') > offset)) {
+      if (span && index) index--
+      else {
+        span = spans[found.low - 1]
+        index = (span?.length ?? 0) - 1
+      }
+    }
+    return span
+      ? {
+          source: coordinate(span, index, 'source'),
+          rich: coordinate(span, index, 'rich'),
+        }
+      : null
+  }
+  return Object.assign(lookup, { nearest })
 }
 
-export type MarkdownPositionLookup = typeof markdownPositions
+export type MarkdownPositionLookup = (
+  source: string,
+  document: RichNode,
+) => (position: number, from: 'source' | 'rich') => number | null
 
 /** One current map per editor/schema. History roots must not retain older maps. */
-export function createMarkdownPositionCache(): MarkdownPositionLookup {
+export function createMarkdownPositionCache(): typeof markdownPositions {
   let cached: {
     source: string
     document: RichNode
-    map: ReturnType<MarkdownPositionLookup>
+    map: ReturnType<typeof markdownPositions>
   } | null = null
   return (source, document) => {
     if (!cached || cached.document !== document || cached.source !== source)

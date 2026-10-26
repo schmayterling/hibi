@@ -1437,7 +1437,7 @@ export function livePreview(
     ),
     EditorView.inputHandler.of((view, from, to, text) => {
       if (view.composing) return false
-      const spec = gapInput(view.state, from, to, text)
+      const spec = gapInput(view.state, syntax.tree(view.state), from, to, text)
       if (!spec) return false
       view.dispatch(view.state.update(spec, { scrollIntoView: true }))
       return true

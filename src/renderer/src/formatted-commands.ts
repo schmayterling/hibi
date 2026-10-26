@@ -63,7 +63,8 @@ function continuation(state: EditorState, tree: Tree, pos: number) {
  */
 function reopened(state: EditorState, tree: Tree, pos: number) {
   let close = '',
-    open = ''
+    open = '',
+    at = pos
   for (
     let node: SyntaxNode | null = tree.resolveInner(pos, -1);
     node && !node.type.is('Block');
@@ -82,12 +83,21 @@ function reopened(state: EditorState, tree: Tree, pos: number) {
       )
     )
       continue
-    if (!first || !last || first === last || pos <= first.to || pos > last.from)
+    if (!first || !last || first === last || at < first.to || at > last.from)
       continue
-    close += state.sliceDoc(last.from, node.name === 'Link' ? node.to : last.to)
-    open = state.sliceDoc(first.from, first.to) + open
+    // At either end of its text the break moves outside it, so no empty
+    // formatting is left behind.
+    if (at === first.to) at = node.from
+    else if (at === last.from) at = node.to
+    else {
+      close += state.sliceDoc(
+        last.from,
+        node.name === 'Link' ? node.to : last.to,
+      )
+      open = state.sliceDoc(first.from, first.to) + open
+    }
   }
-  return { close, open }
+  return { close, open, at }
 }
 
 /** The content column of a list item's first line, as its marker sets it. */
@@ -149,8 +159,9 @@ export function blockBreak(
       range: EditorSelection.cursor(from + text.length),
     })
     if (around(tree, pos, ['FencedCode', 'CodeBlock'])) {
-      const indent = /^[ \t]*/.exec(line.text)?.[0] ?? ''
-      return insert(`\n${indent}`)
+      // Quote markers and indentation before the code continue on the new line.
+      const prefix = /^(?:[ \t]*>[ \t]?)*[ \t]*/.exec(line.text)?.[0] ?? ''
+      return insert(`\n${prefix}`)
     }
     const item = around(tree, pos, ['ListItem'])
     if (item) {
@@ -163,19 +174,23 @@ export function blockBreak(
         : ''
       // An empty item leaves the list, as in the rich editor.
       if (mark && markerLine?.number === line.number && !content.trim())
-        return insert('\n', markerLine.from, markerLine.to)
+        return insert('\n', markerLine.from, Math.max(markerLine.to, range.to))
       const marker = nextMarker(state, item)
-      const { close, open } = reopened(state, tree, pos)
+      const { close, open, at } = range.empty
+        ? reopened(state, tree, pos)
+        : { close: '', open: '', at: range.from }
       if (marker) {
         const text = `${close}\n${marker}${open}`
         const width = itemWidth(state, item)
-        // The item's lines after the break follow the new marker's width.
+        const end = range.empty ? at : Math.max(at, range.to)
+        // The item's lines after the break follow the new marker's width;
+        // replaced lines and items are gone.
         const changes = [
-          { from: range.from, to: range.to, insert: text },
+          { from: at, to: end, insert: text },
           ...shiftContent(
             state,
             item,
-            line.number,
+            state.doc.lineAt(end).number,
             width,
             marker.replace(/\[ \] $/, '').length - width,
           ),
@@ -188,6 +203,7 @@ export function blockBreak(
           next = next.nextSibling
         ) {
           const mark = next.getChild('ListMark')
+          if (mark && mark.from < end) continue
           const current =
             mark && Number.parseInt(state.sliceDoc(mark.from, mark.to), 10)
           if (!mark || !(current! <= number)) break
@@ -207,7 +223,7 @@ export function blockBreak(
         }
         return {
           changes,
-          range: EditorSelection.cursor(range.from + text.length),
+          range: EditorSelection.cursor(at + text.length),
         }
       }
     }
@@ -216,13 +232,25 @@ export function blockBreak(
       const prefix = continuation(state, tree, pos)
       if (blank(line.text.replace(/^(\s*>)+/, '')))
         return insert('\n', line.from, line.to)
-      const { close, open } = reopened(state, tree, pos)
-      return insert(`${close}\n${prefix}${open}`)
+      const { close, open, at } = range.empty
+        ? reopened(state, tree, pos)
+        : { close: '', open: '', at: range.from }
+      return insert(
+        `${close}\n${prefix}${open}`,
+        at,
+        range.empty ? at : Math.max(at, range.to),
+      )
     }
     // A blank line between blocks gains another empty line.
     if (blank(line.text)) return insert('\n')
-    const { close, open } = reopened(state, tree, pos)
-    return insert(`${close}\n\n${open}`)
+    const { close, open, at } = range.empty
+      ? reopened(state, tree, pos)
+      : { close: '', open: '', at: range.from }
+    return insert(
+      `${close}\n\n${open}`,
+      at,
+      range.empty ? at : Math.max(at, range.to),
+    )
   })
 }
 
@@ -319,14 +347,21 @@ export function deleteBackward(
         if (item.parent?.parent?.name === 'ListItem')
           return indent(state, tree, true, hidden)
         // A top-level item becomes a paragraph of its own, not lazy text of
-        // the block above.
-        if (line.number > 1 && !blank(state.doc.line(line.number - 1).text))
-          return {
-            changes: { from: line.from, to: start, insert: '\n' },
-            selection: EditorSelection.cursor(line.from + 1),
-            userEvent: 'delete.backward',
-          }
-        return remove(line.from, start)
+        // the block above or the start of one with the items after it.
+        const before =
+          line.number > 1 && !blank(state.doc.line(line.number - 1).text)
+        const next = item.nextSibling
+        const changes = [
+          { from: line.from, to: start, insert: before ? '\n' : '' },
+          ...(next?.name === 'ListItem'
+            ? [{ from: state.doc.lineAt(next.from).from, insert: '\n' }]
+            : []),
+        ]
+        return {
+          changes,
+          selection: EditorSelection.cursor(line.from + (before ? 1 : 0)),
+          userEvent: 'delete.backward',
+        }
       }
       if (heading && state.doc.lineAt(heading.from).number === line.number)
         return remove(line.from, start)
@@ -595,6 +630,7 @@ export function exitBlock(
 /** Text typed on the single blank line between two blocks becomes its own paragraph. */
 export function gapInput(
   state: EditorState,
+  tree: Tree,
   from: number,
   to: number,
   text: string,
@@ -603,6 +639,13 @@ export function gapInput(
   const line = state.doc.lineAt(from)
   if (!blank(line.text) || line.number === 1 || line.number === state.doc.lines)
     return null
+  // A blank line inside a leaf block, such as a fence, is that block's text.
+  for (
+    let node: SyntaxNode | null = tree.resolveInner(from, 1);
+    node;
+    node = node.parent
+  )
+    if (node.type.is('LeafBlock')) return null
   const previous = state.doc.line(line.number - 1)
   const next = state.doc.line(line.number + 1)
   if (blank(previous.text) || blank(next.text)) return null

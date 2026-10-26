@@ -305,7 +305,7 @@ export function MarkdownEditor({
                   markdownDocument &&
                   // A large note's properties are not read, so its
                   // frontmatter stays in the text.
-                  value &&
+                  !largeOpening(documentRuntime, documentState) &&
                   markdownExtensions.some(
                     ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
                   )

@@ -104,19 +104,30 @@ test('formatted counts match rich document totals and ignore selections', {
   await engine(true)
   await page.locator('.rich-pane .cm-content').waitFor()
   await counts(rich)
-  for (const selection of ['all', 'empty']) {
+  for (const selection of ['all', 'word', 'empty']) {
     await page.evaluate((selection) => {
       const view = document.querySelector('.rich-pane .cm-content').cmTile.root
         .view
+      const from = view.state.doc.toString().indexOf('Hello')
+      view.focus()
       view.dispatch({
+        changes: { from: view.state.doc.length, insert: ' counted' },
         selection: {
-          anchor: 0,
-          head: selection === 'all' ? view.state.doc.length : 0,
+          anchor: selection === 'word' ? from : 0,
+          head:
+            selection === 'all'
+              ? view.state.doc.length + 8
+              : selection === 'word'
+                ? from + 5
+                : 0,
         },
+        userEvent: 'input.type',
       })
     }, selection)
-    await page.waitForTimeout(350)
-    assert.equal(await status().textContent(), rich)
+    await counts(expected(`${body} counted`))
+    assert.equal(await sourceText(), `${source} counted`)
+    await pressShortcut(app, mod + '+z')
+    await counts(rich)
     assert.equal(await sourceText(), source)
   }
 })

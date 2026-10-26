@@ -23,9 +23,10 @@ const handle = {
     }
   },
   async set(value: unknown) {
-    if (failing) return { status: 'unavailable', reason: 'corrupt' }
+    if (failing)
+      return { status: 'unavailable' as const, reason: 'corrupt' as const }
     publish(value)
-    return { status: 'saved', revision: state.revision, value }
+    return { status: 'saved' as const, revision: state.revision, value }
   },
 }
 
@@ -58,10 +59,13 @@ function Harness() {
   )
 }
 
-void openCustomWords({
-  storage: { global: async () => handle },
-  host: { selectedIo: null },
-} as unknown as AddonContext).then(() => {
+void openCustomWords(
+  {
+    storage: { global: async () => handle },
+    host: { selectedIo: null },
+  } as unknown as AddonContext,
+  handle,
+).then(() => {
   const root = document.createElement('div')
   document.body.append(root)
   createRoot(root).render(<Harness />)

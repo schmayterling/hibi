@@ -201,6 +201,21 @@ function visibleBand(element: HTMLElement) {
 const EDGE = 5
 const MIN = { column: 40, row: 24 }
 
+/** A focusable size handle on a cell's edge, for keyboard resizing. */
+const resizers = {
+  column: { 'aria-label': 'Resize column', 'aria-orientation': 'vertical' },
+  row: { 'aria-label': 'Resize row', 'aria-orientation': 'horizontal' },
+}
+function resizer(axis: 'column' | 'row') {
+  const handle = document.createElement('hr')
+  handle.className = 'hibi-lp-table-resizer'
+  handle.dataset.axis = axis
+  handle.tabIndex = 0
+  for (const [name, value] of Object.entries(resizers[axis]))
+    handle.setAttribute(name, value)
+  return handle
+}
+
 /** The tab a formatted view shows and the table sizes read for it, shared with the rich editor. */
 type Store = { tabId: string; loaded: TableLayout[] | null }
 const stores = new WeakMap<EditorView, Store>()
@@ -296,6 +311,7 @@ class TableView {
     this.dom.addEventListener('mousemove', this.hover)
     this.dom.addEventListener('mouseleave', this.leaveHandle)
     this.dom.addEventListener('dblclick', this.reset)
+    this.dom.addEventListener('keydown', this.key)
     this.table.append(this.columns, this.body)
     this.dom.append(this.table)
     this.body.append(this.head)
@@ -444,6 +460,9 @@ class TableView {
     if (content?.text) renderInline(this.view, content.text, paragraph)
     else paragraph.append(document.createElement('br'))
     element.append(paragraph)
+    // Keyboard handles for the column's width and the row's height.
+    if (tag === 'th') element.append(resizer('column'))
+    if (column === 0) element.append(resizer('row'))
     return element
   }
 
@@ -1345,6 +1364,52 @@ class TableView {
     frames.addEventListener('mouseup', finish)
   }
 
+  /** Arrow keys on a size handle resize its column or row; Home makes it smallest, Enter automatic. */
+  private key = (event: KeyboardEvent) => {
+    const handle = event.target
+    if (
+      !(handle instanceof HTMLElement) ||
+      !handle.classList.contains('hibi-lp-table-resizer') ||
+      !writable(this.view.state)
+    )
+      return
+    const cell = handle.parentElement as HTMLTableCellElement
+    const row = cell.parentElement as HTMLTableRowElement
+    const axis = handle.dataset.axis === 'row' ? 'row' : 'column'
+    const index =
+      axis === 'column'
+        ? cell.cellIndex
+        : row === this.head
+          ? 0
+          : Number(row.dataset.line) - 1
+    const sizes = axis === 'column' ? this.sizes.columns : this.sizes.rows
+    const box = (axis === 'column' ? cell : row).getBoundingClientRect()
+    const current =
+      sizes[index] || Math.round(axis === 'column' ? box.width : box.height)
+    const step = event.shiftKey ? 24 : 8
+    let size: number
+    switch (event.key) {
+      case axis === 'column' ? 'ArrowLeft' : 'ArrowUp':
+        size = current - step
+        break
+      case axis === 'column' ? 'ArrowRight' : 'ArrowDown':
+        size = current + step
+        break
+      case 'Home':
+        size = MIN[axis]
+        break
+      case 'Enter':
+        size = 0
+        break
+      default:
+        return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    this.resize(axis, index, size && Math.min(10000, Math.max(MIN[axis], size)))
+    this.save(300)
+  }
+
   /** Double-clicking a handle makes the column or row automatic again. */
   private reset = (event: MouseEvent) => {
     const handle = this.handle
@@ -1414,6 +1479,7 @@ class TableView {
     this.dom.removeEventListener('mousemove', this.hover)
     this.dom.removeEventListener('mouseleave', this.leaveHandle)
     this.dom.removeEventListener('dblclick', this.reset)
+    this.dom.removeEventListener('keydown', this.key)
   }
 }
 

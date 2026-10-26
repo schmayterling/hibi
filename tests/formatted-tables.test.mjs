@@ -952,6 +952,59 @@ test('stored sizes apply to header cells that render again and rows that scroll 
   assert.deepEqual(row, ['120px', true])
 })
 
+test('keyboard size handles resize and reset columns and rows', {
+  timeout: 30000,
+}, async () => {
+  await harness.evaluate(() => window.tables.layouts('keys', []))
+  await mountTab('| a | b |\n| - | - |\n| 1 | 2 |\n\nafter', 'keys')
+  const key = tableKey(0, ['a', 'b'])
+  const stored = () =>
+    harness.evaluate(
+      (key) => window.tables.layouts('keys').find((table) => table.key === key),
+      key,
+    )
+  const column = harness
+    .locator('.hibi-lp-table th')
+    .first()
+    .locator('.hibi-lp-table-resizer[data-axis="column"]')
+  assert.equal(await column.getAttribute('aria-label'), 'Resize column')
+  const width = await harness.evaluate(() =>
+    Math.round(
+      document.querySelector('.hibi-lp-table th').getBoundingClientRect().width,
+    ),
+  )
+  await column.focus()
+  await harness.keyboard.press('ArrowRight')
+  await harness.keyboard.press('Shift+ArrowRight')
+  await harness.waitForFunction(
+    ({ key, width }) =>
+      window.tables.layouts('keys').find((table) => table.key === key)
+        ?.columns?.[0] ===
+      width + 32,
+    { key, width },
+  )
+  // A row's handle is in its first cell.
+  const row = harness
+    .locator('.hibi-lp-table tr[data-line="2"] td')
+    .first()
+    .locator('.hibi-lp-table-resizer[data-axis="row"]')
+  assert.equal(await row.getAttribute('aria-label'), 'Resize row')
+  await row.focus()
+  await harness.keyboard.press('ArrowDown')
+  await harness.waitForFunction(
+    (key) =>
+      (window.tables.layouts('keys').find((table) => table.key === key)
+        ?.rows?.[1] ?? 0) > 0,
+    key,
+  )
+  // Enter makes each automatic again.
+  await harness.keyboard.press('Enter')
+  await column.focus()
+  await harness.keyboard.press('Enter')
+  await harness.waitForFunction(() => !window.tables.layouts('keys').length)
+  assert.equal(await stored(), undefined)
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {

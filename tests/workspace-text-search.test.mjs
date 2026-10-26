@@ -109,7 +109,12 @@ const bundle = await build({
             : null,
         )
         build.onLoad({ filter: /.*/, namespace: 'text-host' }, () => ({
-          contents: `const host=()=>globalThis.__hibiTextHost
+          contents: `import {parseWorkspaceMetadata,sourceIndexVersion} from ${JSON.stringify(resolve('src/main/workspace-index-metadata.ts'))}
+          const host=()=>globalThis.__hibiTextHost
+          const pages=()=>[
+            {path:'a.md',markdown:'# Alpha\\nfirst needle\\n'},
+            {path:'b.md',markdown:'# Bravo\\ncommon needle\\n'},
+          ]
           export const workspaceRoot=()=>host().root
           export const workspaceRelativePath=(file)=>{
             const path=file.slice(host().root.length+1)
@@ -131,12 +136,23 @@ const bundle = await build({
           }
           export const indexWorkspace=async()=>{
             host().indexReads++
-            return{workspace:{id:host().target.workspaceId},pages:[
-              {path:'a.md',markdown:'# Alpha\\nfirst needle\\n'},
-              {path:'b.md',markdown:'# Bravo\\ncommon needle\\n'},
-            ]}
-          }`,
+            return{workspace:{id:host().target.workspaceId},pages:pages()}
+          }
+          export const workspaceMetadataDelta=async()=>null
+          export const workspaceMetadataHeadings=async()=>null
+          export const workspaceMetadataPages=(syntax,current)=>({
+            pages:(async function*(){
+              host().indexReads++
+              for(const page of pages()){
+                if(!current())return
+                const profile=syntax.page(page)
+                yield{path:page.path,version:sourceIndexVersion(page.markdown),syntax:profile,
+                  metadata:parseWorkspaceMetadata(page,profile,undefined,()=>{})}
+              }
+            })(),commit:current,
+          })`,
           loader: 'js',
+          resolveDir: resolve('.'),
         }))
         build.onLoad({ filter: /.*/, namespace: 'text-documents' }, () => ({
           contents: `const host=()=>globalThis.__hibiTextHost

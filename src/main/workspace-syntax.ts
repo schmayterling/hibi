@@ -13,16 +13,15 @@ type Projection = NonNullable<WorkspaceSyntaxSnapshot['projections']>[number]
 
 const idPattern = /^[a-z][a-z0-9.-]{0,127}$/
 const fileIdPattern = /^[a-f0-9]{64}$/
-// Mermaid only draws fenced mermaid blocks and .mmd files, which hold no links or tags.
 const knownFlavors = new Set([
   'markdown.github',
   'markdown.obsidian',
   'math.latex',
-  'mermaid.blocks',
   'text-extras.text-extras',
+  'mermaid.blocks',
 ])
 const knownFeatures =
-  /^(?:core\.(?:heading-[1-6]|bold|italic|inline-code|escapes|code-blocks|quotes|bullet-lists|numbered-lists|dividers|line-breaks|links|images|html-blocks|inline-html)|markdown\.(?:tables|tasks|strike|alerts)|math\.(?:inline|block)|mermaid\.(?:blocks|preview)|text-extras\.(?:subscript|subtext))$/
+  /^(?:core\.(?:heading-[1-6]|bold|italic|inline-code|escapes|code-blocks|quotes|bullet-lists|numbered-lists|dividers|line-breaks|links|images|html-blocks|inline-html)|markdown\.(?:tables|tasks|strike|alerts)|math\.(?:inline|block)|text-extras\.(?:subscript|subtext)|mermaid\.(?:blocks|preview))$/
 
 export type PageSyntax = {
   readonly settings: NoteSyntax

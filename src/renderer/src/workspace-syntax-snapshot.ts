@@ -21,16 +21,15 @@ const MAX_FEATURES = 512
 const MAX_PROJECTIONS = 128
 const MAX_SYNTAX_IDS = 128
 const choiceKey = /^hibi:flavor:([0-9a-f]{64})$/
-// Mermaid only draws fenced mermaid blocks and .mmd files, which hold no links or tags.
 const knownFlavors = new Set([
   'markdown.github',
   'markdown.obsidian',
   'math.latex',
-  'mermaid.blocks',
   'text-extras.text-extras',
+  'mermaid.blocks',
 ])
 const knownFeatures =
-  /^(?:core\.(?:heading-[1-6]|bold|italic|inline-code|escapes|code-blocks|quotes|bullet-lists|numbered-lists|dividers|line-breaks|links|images|html-blocks|inline-html)|markdown\.(?:tables|tasks|strike|alerts)|math\.(?:inline|block)|mermaid\.(?:blocks|preview)|text-extras\.(?:subscript|subtext))$/
+  /^(?:core\.(?:heading-[1-6]|bold|italic|inline-code|escapes|code-blocks|quotes|bullet-lists|numbered-lists|dividers|line-breaks|links|images|html-blocks|inline-html)|markdown\.(?:tables|tasks|strike|alerts)|math\.(?:inline|block)|text-extras\.(?:subscript|subtext)|mermaid\.(?:blocks|preview))$/
 type Projection = { id: string; preservation?: { version: string } }
 
 /** Current document's built-in parser contract without enumerating other files. */

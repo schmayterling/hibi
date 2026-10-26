@@ -1,5 +1,15 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, open, readdir, readFile, rename, rm } from 'node:fs/promises'
+import { createDecipheriv, pbkdf2Sync } from 'node:crypto'
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -145,3 +155,148 @@ test('worker rejects unsafe paths before any output is staged', async () => {
     await rm(directory, { recursive: true, force: true })
   }
 })
+
+for (const mode of [
+  'folder',
+  'single',
+  'protected-folder',
+  'protected-single',
+  'memory',
+]) {
+  test(
+    'worker streams staged media for ' + mode + ' without encrypted sidecars',
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'hibi-site-worker-media-'))
+      const worker = new SiteWorker(resolve('out/main/documentation-worker.js'))
+      const singleFile = mode === 'single' || mode === 'protected-single'
+      const protectedSite = mode.startsWith('protected')
+      const inMemory = mode === 'memory'
+      const inline = singleFile || protectedSite || inMemory
+      const asset = 'hibi-assets/media/' + 'a'.repeat(64) + '.png'
+      const svg = 'hibi-assets/media/' + 'b'.repeat(64) + '.svg'
+      const vector =
+        '<svg xmlns="http://www.w3.org/2000/svg"><script>attack()</script></svg>'
+      const bytes = Buffer.concat([
+        Buffer.from('89504e470d0a1a0a', 'hex'),
+        Buffer.from('PRIVATE-ASSET-SENTINEL-9153'.repeat(2000)),
+        ...(mode === 'protected-single' ? [Buffer.alloc(8 * 1024 * 1024)] : []),
+      ])
+      try {
+        await worker.request({
+          kind: 'start',
+          directory,
+          name: 'notes',
+          paths: ['note.md'],
+          options: exportOptions({ singleFile }),
+          inMemory,
+        })
+        await mkdir(join(directory, 'assets', 'hibi-assets', 'media'), {
+          recursive: true,
+        })
+        await writeFile(join(directory, 'assets', asset), bytes)
+        await writeFile(join(directory, 'assets', svg), vector)
+        await worker.request({
+          kind: 'page',
+          page: {
+            path: 'note.md',
+            markdown: '# Note\n\n![image](image.png)\n\n![vector](vector.svg)',
+            html: '<h1>Note</h1><img src="image.png" alt="image">',
+            images: { 'image.png': asset, 'vector.svg': svg },
+          },
+        })
+        const files = await worker.request({
+          kind: 'finish',
+          template,
+          css: '',
+          colorschemes: [],
+          addons: [],
+          password: protectedSite ? 'private-export-password' : '',
+        })
+        assert.equal(
+          files.some((file) => file.path === asset),
+          !inline,
+        )
+        const text = await readFile(
+          join(
+            directory,
+            'files',
+            singleFile ? 'index.html' : 'hibi-assets/workspace.js',
+          ),
+          'utf8',
+        )
+        let payload = JSON.parse(
+          singleFile
+            ? text.match(
+                /<script id="workspace-data" type="application\/json">([\s\S]*?)<\/script>/,
+              )[1]
+            : text.slice('window.__HIBI_WORKSPACE__='.length, -1),
+        )
+        if (protectedSite) {
+          const ciphertext = Buffer.from(payload.ciphertext, 'base64')
+          const key = pbkdf2Sync(
+            'private-export-password',
+            Buffer.from(payload.salt, 'base64'),
+            payload.iterations,
+            32,
+            'sha256',
+          )
+          const cipher = createDecipheriv(
+            'aes-256-gcm',
+            key,
+            Buffer.from(payload.iv, 'base64'),
+          )
+          cipher.setAuthTag(ciphertext.subarray(-16))
+          payload = JSON.parse(
+            Buffer.concat([
+              cipher.update(ciphertext.subarray(0, -16)),
+              cipher.final(),
+            ]).toString('utf8'),
+          )
+          assert.equal(text.includes('PRIVATE-ASSET-SENTINEL-9153'), false)
+          await assert.rejects(
+            readFile(join(directory, 'files', asset)),
+            /ENOENT/,
+          )
+        }
+        assert.equal(
+          Buffer.from(
+            payload.pages[0].images['vector.svg'].split(',')[1],
+            'base64',
+          ).toString('utf8'),
+          vector,
+        )
+        assert.equal(
+          files.some((file) => file.path === svg),
+          false,
+        )
+        await assert.rejects(readFile(join(directory, 'files', svg)), /ENOENT/)
+        const image = payload.pages[0].images['image.png']
+        if (inline)
+          assert.deepEqual(Buffer.from(image.split(',')[1], 'base64'), bytes)
+        else {
+          assert.equal(image, asset)
+          assert.deepEqual(
+            await readFile(join(directory, 'files', asset)),
+            bytes,
+          )
+          assert.ok(
+            (
+              await readFile(
+                join(directory, 'files', 'note.md/index.html'),
+                'utf8',
+              )
+            ).includes('../' + asset),
+          )
+        }
+        if (inMemory)
+          assert.equal(
+            (await readSiteFiles(join(directory, 'files'), files)).length,
+            files.length,
+          )
+      } finally {
+        await worker.close()
+        await rm(directory, { recursive: true, force: true })
+      }
+    },
+  )
+}

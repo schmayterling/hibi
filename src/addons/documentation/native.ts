@@ -15,13 +15,16 @@ import {
   getWorkspace,
   isCurrentWorkspaceTarget,
   readWorkspaceExportPage,
+  readWorkspaceExportSource,
   refreshWorkspace,
 } from '../../main/workspace'
 import type { WorkspaceTarget } from '../../shared/foundation-contracts'
 import type { WorkspacePage } from '../../shared/workspace'
+import { siteAssetDirectory } from '../../site/data'
 import type { NativeAddon, SiteExportArtifact } from '../api'
 import manifest from './manifest'
 import { type ExportOptions, validateExportOptions } from './options'
+import { SiteMedia } from './site-media'
 import {
   readSiteFiles,
   type SiteFile,
@@ -42,7 +45,10 @@ type Session = {
   worker: SiteWorker
   index: number
   readIndex: number
-  reading?: Promise<WorkspacePage>
+  reading?: ReturnType<typeof readWorkspaceExportSource>
+  media: SiteMedia
+  controller: AbortController
+  inMemory: boolean
   pending: Map<
     string,
     { source: WorkspacePage; images: Promise<WorkspacePage> }
@@ -59,6 +65,7 @@ const invalid = () => new Error('Could not prepare the documentation export.')
 function dispose(session: Session): Promise<void> {
   if (session.closing) return session.closing
   clearTimeout(session.timer)
+  session.controller.abort()
   session.closing = (async () => {
     try {
       await session.worker.close()
@@ -224,7 +231,11 @@ export default {
     },
     async begin(input) {
       if (active) throw new Error('Another export is already in progress.')
-      const value = input as { target?: unknown; options?: unknown }
+      const value = input as {
+        target?: unknown
+        options?: unknown
+        inMemory?: unknown
+      }
       const target = currentWorkspaceTarget()
       if (!target || !isCurrentWorkspaceTarget(value?.target))
         throw new Error('The workspace changed during export. Export again.')
@@ -246,6 +257,8 @@ export default {
       const worker = new SiteWorker(
         join(app.getAppPath(), 'out/main/documentation-worker.js'),
       )
+      const controller = new AbortController()
+      const inMemory = value.inMemory === true
       const session: Session = {
         token: randomUUID(),
         target,
@@ -254,6 +267,14 @@ export default {
         options,
         directory,
         worker,
+        controller,
+        inMemory,
+        media: new SiteMedia(
+          directory,
+          siteAssetDirectory(paths.map((path) => ({ path }))),
+          inMemory,
+          controller.signal,
+        ),
         index: 0,
         readIndex: 0,
         pending: new Map(),
@@ -268,6 +289,7 @@ export default {
           name: session.name,
           paths,
           options,
+          inMemory,
         })
         session.busy = false
         sessionFor({ token: session.token })
@@ -288,18 +310,31 @@ export default {
       )
         throw invalid()
       try {
-        session.reading = readWorkspaceExportPage(
+        session.reading = readWorkspaceExportSource(
           session.paths[session.readIndex++]!,
           session.target,
-          false,
         )
-        const source = await session.reading
+        const captured = await session.reading
+        const source = captured.page
         if (session.closing) throw invalid()
         const images = session.worker
           .request<string[]>({ kind: 'images', page: source })
-          .then((sources) =>
-            readWorkspaceExportPage(source.path, session.target, sources),
-          )
+          .then(async (sources) => {
+            const images: Record<string, string> = Object.create(null)
+            for (const href of sources) {
+              const asset = await session.media.stage(
+                href,
+                captured.note,
+                captured.workspace,
+              )
+              if (asset) images[href] = asset
+            }
+            if (!isCurrentWorkspaceTarget(session.target))
+              throw new Error(
+                'The workspace changed during export. Export again.',
+              )
+            return { ...source, images }
+          })
         // Stage observes failures; cancellation can retire this prefetch first.
         void images.catch(() => {})
         session.pending.set(source.path, { source, images })
@@ -340,8 +375,7 @@ export default {
       return withSession(input, async (session) => {
         if (session.files) throw invalid()
         const files = await finish(session, input)
-        if ((input as { inMemory?: unknown }).inMemory === true)
-          validateSiteFiles(files)
+        if (session.inMemory) validateSiteFiles(files)
         session.files = files
       })
     },
@@ -357,7 +391,7 @@ export default {
       return withSession(input, async (session) => {
         try {
           const files = session.files
-          if (!files) throw invalid()
+          if (!files || !session.inMemory) throw invalid()
           await verifySources(session)
           validateContributions(input as Record<string, unknown>)
           return {

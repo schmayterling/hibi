@@ -974,11 +974,10 @@ export async function openWorkspaceFile(
   )
 }
 
-export async function readWorkspaceExportPage(
+export async function readWorkspaceExportSource(
   relative: string,
   target: WorkspaceTarget,
-  media: boolean | readonly string[] = true,
-): Promise<WorkspaceSnapshot['pages'][number]> {
+) {
   if (!isCurrentWorkspaceTarget(target) || !root)
     throw new Error('The workspace changed during export. Export again.')
   const selected = root
@@ -992,22 +991,40 @@ export async function readWorkspaceExportPage(
     await resolveWorkspaceEntry(selected, relative, true)
   }
   const markdown = draft?.dirty ? draft.markdown : await readMarkdown(path)
-  const images: Record<string, string> = Object.create(null)
-  if (media && isMarkdownDocument(relative))
-    for (const source of typeof media === 'boolean'
-      ? imageSources(markdown)
-      : media) {
-      const image = await exportDocumentMedia(source, path, selected)
-      if (image) images[source] = image
-    }
   if (!isCurrentWorkspaceTarget(target))
     throw new Error('The workspace changed during export. Export again.')
   return {
-    id: createHash('sha256').update(path).digest('hex'),
-    path: relative,
-    markdown,
-    ...(media ? { images } : {}),
+    page: {
+      id: createHash('sha256').update(path).digest('hex'),
+      path: relative,
+      markdown,
+    },
+    note: path,
+    workspace: selected,
   }
+}
+
+export async function readWorkspaceExportPage(
+  relative: string,
+  target: WorkspaceTarget,
+  media: boolean | readonly string[] = true,
+): Promise<WorkspaceSnapshot['pages'][number]> {
+  const source = await readWorkspaceExportSource(relative, target)
+  const images: Record<string, string> = Object.create(null)
+  if (media && isMarkdownDocument(relative))
+    for (const href of typeof media === 'boolean'
+      ? imageSources(source.page.markdown)
+      : media) {
+      const image = await exportDocumentMedia(
+        href,
+        source.note,
+        source.workspace,
+      )
+      if (image) images[href] = image
+    }
+  if (!isCurrentWorkspaceTarget(target))
+    throw new Error('The workspace changed during export. Export again.')
+  return { ...source.page, ...(media ? { images } : {}) }
 }
 
 export function exportPaths(

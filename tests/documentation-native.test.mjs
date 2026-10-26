@@ -21,7 +21,8 @@ const stubs = {
     export const refreshWorkspace = async () => {}
     export const getWorkspace = () => ({ name: 'notes', entries: [] })
     export const exportPaths = () => globalThis.__exportNative.paths ?? [{ path: 'note.md' }]
-    export const readWorkspaceExportPage = async () => globalThis.__exportNative.source`,
+    export const readWorkspaceExportPage = async () => globalThis.__exportNative.source
+    export const readWorkspaceExportSource = async () => ({ page: globalThis.__exportNative.source, note: '/unused/note.md', workspace: '/unused' })`,
   './site-runtime': `export { readSiteFiles, validateSiteFiles } from ${JSON.stringify(resolve('src/addons/documentation/site-runtime.ts'))}
     export class SiteWorker {
       request(job) { return globalThis.__exportNative.request(job) }
@@ -97,7 +98,11 @@ for (const mode of ['disk', 'memory', 'cancel']) {
     }
     let session
     try {
-      session = await native.begin({ target, options: {} })
+      session = await native.begin({
+        target,
+        options: {},
+        inMemory: mode === 'memory',
+      })
       const page = await native.page(session)
       if (mode !== 'memory')
         assert.deepEqual(

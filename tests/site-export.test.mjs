@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import { createDecipheriv, pbkdf2Sync } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { pathToFileURL } from 'node:url'
 import katex from 'katex'
 import { marked } from 'marked'
 import {
@@ -548,7 +549,7 @@ test('command-palette export opens options and writes a configured static folder
   await mkdir(output)
   await writeFile(
     join(workspace, 'README.md'),
-    '# Garden\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n[More](more.md)',
+    '# Garden\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n![large asset](img/a.png)\n\n[More](more.md)',
   )
   await writeFile(join(workspace, 'more.md'), '# More\n\nMore notes.')
   await writeFile(
@@ -560,6 +561,12 @@ test('command-palette export opens options and writes a configured static folder
     join(workspace, 'img', 'a.png'),
     Buffer.from(pixel.split(',')[1], 'base64'),
   )
+  const largeImage = await open(join(workspace, 'img', 'a.png'), 'r+')
+  try {
+    await largeImage.truncate(8 * 1024 * 1024 + 1)
+  } finally {
+    await largeImage.close()
+  }
   await mkdir(profile)
   await writeFile(
     join(profile, 'workspace-settings.json'),
@@ -777,9 +784,19 @@ test('command-palette export opens options and writes a configured static folder
   const exportedHtml = await readFile(exportedIndex, 'utf8')
   assert.match(exportedHtml, /My published garden/)
   assert.match(exportedHtml, /class="site-probe"/)
+  assert.match(exportedHtml, /src="\.\/hibi-assets\/media\/[a-f0-9]{64}\.png"/)
   const built = await page.evaluate(() => window.siteProbe.buildSite())
+  assert.match(
+    built.files.find((file) => file.path.endsWith('/workspace.js')).content,
+    /data:image\/png;base64,/,
+  )
   assert.equal(built.version, 1)
   assert.equal(built.pages, 2)
+  // The published copy remains independent of later workspace asset edits.
+  await writeFile(
+    join(workspace, 'img', 'a.png'),
+    Buffer.from(pixel.split(',')[1], 'base64'),
+  )
   assert.doesNotMatch(
     JSON.stringify(built),
     /private-note-sentinel|\.private\.md/,
@@ -859,6 +876,17 @@ test('command-palette export opens options and writes a configured static folder
   await exportedPage.waitForFunction(() => {
     const image = document.querySelector('article img.mermaid-diagram')
     return image?.complete && image.naturalWidth > 0
+  })
+  await exportedPage.waitForFunction(() => {
+    const image = document.querySelector('article img[alt="large asset"]')
+    return image?.complete && image.naturalWidth === 1
+  })
+  await exportedPage.goto(
+    pathToFileURL(join(output, 'notes-site-2', 'README.md', 'index.html')).href,
+  )
+  await exportedPage.waitForFunction(() => {
+    const image = document.querySelector('article img[alt="large asset"]')
+    return image?.complete && image.naturalWidth === 1
   })
   assert.match(
     await readFile(

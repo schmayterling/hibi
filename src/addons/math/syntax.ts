@@ -1,4 +1,5 @@
 import { Marked, type MarkedExtension } from 'marked'
+import { blockStart } from '../_shared/block-start.ts'
 import type { MarkdownFlavor, MarkdownParagraphRule } from '../api'
 
 export function inlineMath(source: string) {
@@ -7,12 +8,8 @@ export function inlineMath(source: string) {
   if (!match || !latex || latex.length > 10000 || latex.trim() !== latex) return
   return { type: 'inlineMath', raw: match[0], latex }
 }
-export function blockMathStart(source: string) {
-  // Marked probes after dropping the first character; only a real newline
-  // proves a block boundary. The tokenizer handles the current line itself.
-  const match = /\n {0,3}\$\$/.exec(source)
-  return match ? match.index + 1 : -1
-}
+// The tokenizer handles the current line itself.
+export const blockMathStart = blockStart(/ {0,3}\$\$/)
 export function blockMath(source: string) {
   const match =
     /^ {0,3}\$\$[ \t]*\n?((?:\\[\s\S]|(?!\$\$)[^\\])+?)\$\$(?:[ \t]*(?:\n|$))/.exec(

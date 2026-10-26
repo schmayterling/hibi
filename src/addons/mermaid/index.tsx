@@ -1,15 +1,31 @@
-import { lazy, useSyncExternalStore } from 'react'
+import { lazy } from 'react'
 import css from '../_shared/format-style.css?inline'
 import { localPreview, localRender } from '../_shared/local-preview'
-import { type DocumentPreviewProps, defineAddon } from '../api'
-import { mermaidNode } from './Block'
-import { mermaidLanguage } from './language'
+import { defineAddon } from '../api'
+import { Diagram, mermaidNode } from './Block'
 import manifest from './manifest'
 import { getPreferences, settingsEvent } from './preferences'
-import { renderDiagram } from './render'
+import { diagramTheme, renderDiagram } from './render'
 
-const previewCss = () =>
-  `${css}\n.mermaid-diagram{display:block;width:auto;height:auto;max-width:100%;max-height:${getPreferences().maxHeight}px;margin:auto}.mermaid-block{position:relative;padding:16px;border:1px solid var(--border);border-radius:var(--radius-control)}.mermaid-block>button{position:absolute;right:8px;top:8px}`
+const theme = diagramTheme((role) => `var(--${role})`)
+const previewCss = () => {
+  const height = getPreferences().maxHeight
+  return `${css}
+img.mermaid-diagram{display:block;width:auto;height:auto;max-width:100%;max-height:${height}px;margin:auto}
+.mermaid-diagram{margin:0;${theme};--pele-font:var(--font-ui);--pele-font-mono:var(--font-mono);--pele-radius:var(--radius-control)}
+.mermaid-diagram>svg{display:block;margin:auto;max-height:${height}px}
+.mermaid-diagram:not(:empty)+.document-notice{display:none}
+.mermaid-block{position:relative;margin:1em 0;padding:16px;border:1px solid var(--border);border-radius:var(--radius-control)}
+.mermaid-block>button{position:absolute;right:8px;top:8px}`
+}
+function PreviewDiagram({ source }: { source: string }) {
+  return (
+    <Diagram
+      source={source}
+      emptyText="Write Mermaid source to draw a diagram."
+    />
+  )
+}
 
 let stop: (() => void) | undefined
 export default defineAddon({
@@ -25,7 +41,8 @@ export default defineAddon({
     context.editor.registerCodeLanguage({
       id: 'mermaid',
       aliases: manifest.fileExtensions,
-      language: mermaidLanguage,
+      load: () =>
+        import('./language').then(({ mermaidLanguage }) => mermaidLanguage),
     })
     context.editor.registerDocumentSyntax({
       id: 'preview',
@@ -38,22 +55,13 @@ export default defineAddon({
       (source) => renderDiagram(source, context.colorschemes.getActive()),
       previewCss,
     )
-    const Preview = localPreview(context, render, previewCss)
-    function ThemedPreview(props: DocumentPreviewProps) {
-      const scheme = useSyncExternalStore(
-        context.colorschemes.subscribe,
-        context.colorschemes.getActive,
-      )
-      return <Preview key={scheme.id} {...props} />
-    }
     context.editor.registerDocumentFormat({
       id: 'mermaid',
       name: 'Mermaid',
       extensions: manifest.fileExtensions,
-      language: mermaidLanguage,
       codeLanguage: 'mermaid',
       views: ['side-by-side', 'markdown'],
-      Preview: ThemedPreview,
+      Preview: localPreview(context, render, previewCss, PreviewDiagram),
       render,
     })
     context.editor.registerSyntax({

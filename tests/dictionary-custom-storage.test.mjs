@@ -277,6 +277,38 @@ test('corrupt legacy values fail visibly without publishing a partial migration'
   assert.deepEqual(all(store), [])
 })
 
+test('a paged snapshot restarts when another window commits between pages', async (t) => {
+  let calls = 0
+  const handle = await openCustomWordStorage({
+    async query(_method, input) {
+      calls++
+      if (calls === 1)
+        return {
+          revision: 1,
+          words: [{ id: 'old', word: 'old' }],
+          after: 1,
+          more: true,
+        }
+      if (calls === 2) {
+        assert.equal(input.revision, 1)
+        throw new Error('Custom words changed in another window. Try again.')
+      }
+      assert.equal(input.after, 0)
+      assert.equal(input.revision, undefined)
+      return {
+        revision: 2,
+        words: [{ id: 'new', word: 'new' }],
+        after: 2,
+        more: false,
+      }
+    },
+  })
+  t.after(() => handle.close())
+  assert.equal(calls, 3)
+  assert.equal(handle.snapshot().revision, 2)
+  assert.deepEqual(handle.snapshot().value, [{ id: 'new', word: 'new' }])
+})
+
 test('abandoned changes roll back, revision conflicts refresh, and other windows follow commits', async (t) => {
   const ctx = await fixture(t, [{ id: 'kept', word: 'kept', note: 'original' }])
   const store = await CustomWordDatabase.open(ctx.profile)

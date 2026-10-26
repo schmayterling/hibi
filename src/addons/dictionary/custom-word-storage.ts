@@ -32,27 +32,40 @@ export async function openCustomWordStorage(
     const run = refreshing
       .catch(() => {})
       .then(async () => {
-        let after = 0
-        let revision: number | undefined
-        const words: CustomWord[] = []
         for (;;) {
-          const page = await native.query<Page>('customWords', {
-            after,
-            ...(revision === undefined ? {} : { revision }),
-          })
-          revision = page.revision
-          const normalized = customWords(page.words)
-          if (normalized.length !== page.words.length)
-            throw new Error(
-              'Could not read your custom words. The original data has been kept.',
+          try {
+            let after = 0
+            let revision: number | undefined
+            const words: CustomWord[] = []
+            for (;;) {
+              const page = await native.query<Page>('customWords', {
+                after,
+                ...(revision === undefined ? {} : { revision }),
+              })
+              revision = page.revision
+              const normalized = customWords(page.words)
+              if (normalized.length !== page.words.length)
+                throw new Error(
+                  'Could not read your custom words. The original data has been kept.',
+                )
+              words.push(...normalized)
+              if (!page.more) break
+              after = page.after
+            }
+            if (closed || revision < state.revision) return
+            state = { status: 'ready', revision, value: words }
+            for (const listener of listeners) listener()
+            return
+          } catch (error) {
+            if (
+              !closed &&
+              error instanceof Error &&
+              error.message.includes('Custom words changed in another window.')
             )
-          words.push(...normalized)
-          if (!page.more) break
-          after = page.after
+              continue
+            throw error
+          }
         }
-        if (closed || revision < state.revision) return
-        state = { status: 'ready', revision, value: words }
-        for (const listener of listeners) listener()
       })
     refreshing = run
     return run

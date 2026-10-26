@@ -40,7 +40,7 @@ type Replay = {
   retype?: boolean
 }
 
-/** A paragraph or table inside a giant block that a window may cut, and the start of its last line. */
+/** A paragraph, table, or closed fence a window may cut, and its last line's start. */
 type End = { from: number; last: number }
 
 /**
@@ -62,7 +62,7 @@ type Giant = {
   retype: boolean
   /** Its renderers read its text, so only its opening and last lines get inner nodes. */
   opaque: boolean
-  /** Paragraphs and tables inside the block that span windows or a viewport, in document order. */
+  /** Leaf blocks inside this block that need their last line across windows, in document order. */
   ends: readonly End[]
   /** The block's end, or null when it continues past the chunk into unscanned text. */
   end: number | null
@@ -481,7 +481,7 @@ const shiftEnd = (end: End, by: number): End => ({
   last: end.last + by,
 })
 
-/** The last noted paragraph or table starting at or before `pos`. */
+/** The last noted leaf block starting at or before `pos`. */
 function endAround(ends: readonly End[], pos: number) {
   let low = 0,
     high = ends.length - 1,
@@ -849,7 +849,7 @@ class ChunkedParse implements ChunkedPartialParse {
       key: block.key,
       retype,
       opaque: block.opaque,
-      // Paragraphs after the frontier are noted again as they are scanned.
+      // Leaf blocks after the frontier are noted again as they are scanned.
       ends: block.ends
         .filter((known) => from + known.last < frontier)
         .map((known) => shiftEnd(known, from)),
@@ -1297,9 +1297,8 @@ class ChunkedParse implements ChunkedPartialParse {
   }
 
   /**
-   * Note the paragraphs and tables inside a continued block that end by
-   * `until` and either span the window's frontier or are long enough for a
-   * window around a viewport to cut: their last line decides their type.
+   * Note paragraphs, tables, and closed fences ending by `until` that a
+   * window may cut. Their last line decides their type or closing bound.
    */
   private noteEnds(
     block: Continuation,
@@ -1313,7 +1312,11 @@ class ChunkedParse implements ChunkedPartialParse {
       to: until - base,
       enter: (node) => {
         if (!node.type.is('Block')) return false
-        if (!retypes.has(node.name))
+        const close = node.name === 'FencedCode' ? node.node.lastChild : null
+        if (
+          !retypes.has(node.name) &&
+          !(close?.name === 'CodeMark' && close.from > node.from)
+        )
           return node.type.is('BlockContext') ? undefined : false
         const from = base + node.from,
           to = base + node.to
@@ -1785,8 +1788,8 @@ class ChunkedParse implements ChunkedPartialParse {
     ])
     // An opaque block's renderers read its text: no lines between its ends.
     if (!block.opaque) segments.push([start, stop])
-    // A leaf block's last line decides a setext heading and closes a fence,
-    // as it does for a paragraph inside the block that the window cuts.
+    // The last line decides a heading or closes a fence, including a leaf
+    // inside a container that the window cuts.
     if (block.leaf && block.end !== null)
       segments.push([lineStart(input, last), last])
     else if (!block.leaf) {

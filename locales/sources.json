@@ -502,6 +502,7 @@
     "src/renderer/src/UpdateSettings.tsx"
   ],
   "b4276963bf99": [
+    "src/addons/block-drag/formatted.ts",
     "src/addons/block-drag/index.ts"
   ],
   "a936b1f4cf9c": [
@@ -1407,7 +1408,10 @@
     "src/addons/vim/keymaps.ts"
   ],
   "da2df709d46e": [
-    "src/renderer/src/document-worker-client.ts"
+    "src/renderer/src/document-worker-client.ts",
+    "src/shared/chunked-markdown.ts",
+    "src/shared/document-worker-service.ts",
+    "src/shared/markdown-boundary-index.ts"
   ],
   "ce6331b7277c": [
     "src/main/addon-hotkeys.ts"
@@ -3648,9 +3652,11 @@
     "src/addons/mcp-server/tools.ts"
   ],
   "df6c593c35d7": [
+    "src/addons/block-drag/formatted.ts",
     "src/addons/block-drag/index.ts"
   ],
   "cc6fc79ab665": [
+    "src/addons/block-drag/formatted.ts",
     "src/addons/block-drag/index.ts"
   ],
   "9adcdf33dce1": [
@@ -5143,6 +5149,7 @@
   ],
   "886bcbd93207": [
     "src/addons/tags/decorations.ts",
+    "src/addons/tags/formatted.ts",
     "src/addons/tags/rich-decorations.ts"
   ],
   "7d583b20c446": [

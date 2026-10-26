@@ -7,11 +7,16 @@ import {
 } from 'react'
 import type { DocumentView } from '../../shared/document-types'
 
-/** Keep source focus and pane transitions identical across editor surfaces. */
+/**
+ * Keep source focus and pane transitions identical across editor surfaces.
+ * With `releaseSource`, leaving the source view unmounts it, so a large
+ * note's text is not held twice while only the other view shows it.
+ */
 export function useEditorPanes(
   mode: DocumentView,
   markdownDocument: boolean,
   sourceFirst = false,
+  releaseSource = false,
 ) {
   const [focusedPane, setFocusedPane] = useState<'rich' | 'source'>('rich')
   const [sourceMounted, setSourceMounted] = useState(mode !== 'normal')
@@ -99,7 +104,12 @@ export function useEditorPanes(
   }, [paneMode])
   useEffect(() => {
     if (mode !== 'normal') setSourceMounted(true)
-  }, [mode])
+    else if (releaseSource && paneMode === 'normal') {
+      setSourceMounted(false)
+      setSourceReady(false)
+      setSourceSettled(false)
+    }
+  }, [mode, paneMode, releaseSource])
   return {
     content,
     paneMode,

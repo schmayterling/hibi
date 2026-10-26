@@ -12,6 +12,7 @@ import {
 import { dirname, isAbsolute, join } from 'node:path'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import { documentExtension } from '../shared/document-types.ts'
+import { foldSearchText } from '../shared/search-fold.ts'
 import type { WorkspaceTextMatch } from '../shared/workspace-query.ts'
 import { diskIndexVersion } from './workspace-index-cache.ts'
 import { workspaceIgnore } from './workspace-metadata.ts'
@@ -695,7 +696,7 @@ export class WorkspaceTextIndex {
       !this.closed &&
       this.revision === revision &&
       Atomics.load(cancel, 0) === 0
-    const folded = query.toLowerCase()
+    const folded = foldSearchText(query)
     const gram = this.gram(query)
     const pathGram = includePaths ? this.gram(query, true) : null
     let overlayAfter = ''
@@ -713,7 +714,7 @@ export class WorkspaceTextIndex {
         if (!overlay) break
         overlayAfter = overlay.path
         const pathMatch =
-          includePaths && overlay.path.toLowerCase().includes(folded)
+          includePaths && foldSearchText(overlay.path).includes(folded)
         const readDraft = this.options.readDraft
         if (!readDraft) throw stale()
         const line = yield* this.verify(
@@ -750,7 +751,7 @@ export class WorkspaceTextIndex {
           ) as { id: number; path: string } | undefined
           if (pathMatch) {
             pathAfter = pathMatch.id
-            if (!pathMatch.path.toLowerCase().includes(folded)) {
+            if (!foldSearchText(pathMatch.path).includes(folded)) {
               yield null
               continue
             }

@@ -1,46 +1,12 @@
 import type { EditorState, TransactionSpec } from '@codemirror/state'
 import { type EditorView, WidgetType } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
-import {
-  type BlockContext,
-  type LeafBlock,
-  type LeafBlockParser,
-  type MarkdownConfig,
-  TaskList,
-} from '@lezer/markdown'
+import { TaskList } from '@lezer/markdown'
+import { EmptyTask } from '../../../shared/markdown-extra-syntax.ts'
 import type { FormattedContribution } from '../formatted-contributions.ts'
 import './tasks.css'
 
-/** Lezer's task parser, for a marker with nothing after it on its line. */
-class EmptyTaskParser implements LeafBlockParser {
-  nextLine() {
-    return false
-  }
-  finish(cx: BlockContext, leaf: LeafBlock) {
-    cx.addLeafElement(
-      leaf,
-      cx.elt('Task', leaf.start, leaf.start + leaf.content.length, [
-        cx.elt('TaskMarker', leaf.start, leaf.start + 3),
-        ...cx.parser.parseInline(leaf.content.slice(3), leaf.start + 3),
-      ]),
-    )
-    return true
-  }
-}
-
-/** `- [ ]` alone on its line is a task too; GFM's syntax needs text after the marker. */
-export const EmptyTask: MarkdownConfig = {
-  parseBlock: [
-    {
-      name: 'EmptyTask',
-      leaf: (cx, leaf) =>
-        /^\[[ xX]\]$/.test(leaf.content) && cx.parentType().name === 'ListItem'
-          ? new EmptyTaskParser()
-          : null,
-      after: 'SetextHeading',
-    },
-  ],
-}
+export { EmptyTask } from '../../../shared/markdown-extra-syntax.ts'
 
 /** Check or uncheck the task marker starting at `pos` with one source edit. */
 export function toggleTask(

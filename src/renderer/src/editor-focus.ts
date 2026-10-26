@@ -1,10 +1,11 @@
-/** Focus the requested pane in the active document, never an inert editor. */
-export function focusEditor(pane: 'rich' | 'source', options?: FocusOptions) {
-  const root = document.querySelector('.editor-page[data-active="true"]')
-  const find = (kind: typeof pane) =>
-    root?.querySelector<HTMLElement>(
-      `.${kind}-pane :is(.tiptap,.cm-content):not([inert] *)`,
+/** Restore editor focus after the current layout and any pending editor load. */
+export function focusEditor(options?: FocusOptions) {
+  const active = document.activeElement
+  void import('./editor-focus-restore').then(({ focusEditor }) => {
+    if (
+      document.activeElement === active ||
+      document.activeElement === document.body
     )
-  const target = find(pane) ?? find(pane === 'rich' ? 'source' : 'rich')
-  target?.focus(options)
+      focusEditor(options)
+  })
 }

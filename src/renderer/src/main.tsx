@@ -1121,8 +1121,8 @@ function App() {
       !(active instanceof HTMLElement && active.closest('.settings-screen'))
     )
       return
-    focusEditor(mode === 'markdown' ? 'source' : 'rich')
-  }, [settingsOpen, mode])
+    focusEditor()
+  }, [settingsOpen])
   const sidebarViews = [
     ...builtInViews,
     ...addonHost.sidebarViews.map(viewShortcut),
@@ -1336,7 +1336,7 @@ function App() {
   openUpdates.current = () => openSetting('hibi', 'install-update')
 
   function startWriting() {
-    const focus = () => focusEditor(mode === 'normal' ? 'rich' : 'source')
+    const focus = () => focusEditor()
     // Wait for a closing dialog to restore focus before moving it to the editor.
     if (!showWelcome) requestAnimationFrame(focus)
     else
@@ -1817,7 +1817,7 @@ function App() {
       }
       if (next.tabs.length === 0)
         requestAnimationFrame(() =>
-          focusEditor(mode === 'normal' ? 'rich' : 'source', {
+          focusEditor({
             preventScroll: true,
           }),
         )
@@ -2111,20 +2111,9 @@ function App() {
     setSettingsOpen(false)
     requestAnimationFrame(() => {
       if (currentDocument.current?.tabId !== tabId) return
-      const current = splitTabsRef.current
-      const pane = window.document.querySelector<HTMLElement>(
-        current
-          ? `.editor-page[data-side="${current.active}"]`
-          : '#document-editor-panel',
-      )
-      Array.from(
-        pane?.querySelectorAll<HTMLElement>('[contenteditable="true"]') ?? [],
-      )
-        .find(
-          (element) =>
-            !element.closest('[inert]') && element.getClientRects().length,
-        )
-        ?.focus({ preventScroll: true })
+      focusEditor({
+        preventScroll: true,
+      })
     })
     return true
   }
@@ -2266,9 +2255,7 @@ function App() {
         setZen(!zen)
         setSettingsOpen(false)
         showTitlebar()
-        requestAnimationFrame(() =>
-          focusEditor(mode === 'normal' ? 'rich' : 'source'),
-        )
+        requestAnimationFrame(() => focusEditor())
         break
       case 'install-addon':
         void addonHost.install()

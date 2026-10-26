@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { TreeFragment } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
 import { Marked } from 'marked'
 import {
@@ -431,5 +432,108 @@ test('random notes of quotes, lists and math agree with the rich view tokenizers
       markedMath(source),
       JSON.stringify(source),
     )
+  }
+})
+
+test('display math decided by a distant closing follows edits to it incrementally', () => {
+  const blocks = (tree) => {
+    const found = []
+    tree.iterate({
+      enter(node) {
+        if (node.name === 'BlockMath') found.push([node.from, node.to])
+      },
+    })
+    return found
+  }
+  const edit = (tree, text, from, to, insert) => {
+    const next = text.slice(0, from) + insert + text.slice(to)
+    const fragments = TreeFragment.applyChanges(TreeFragment.addTree(tree), [
+      { fromA: from, toA: to, fromB: from, toB: from + insert.length },
+    ])
+    return {
+      text: next,
+      tree: new ChunkedMarkdownParser(formatted, formatted).parse(
+        next,
+        fragments,
+      ),
+    }
+  }
+  // The opener is three chunks above the edit that closes it.
+  const open = `$$\nx\n\n${'padding\n\n'.repeat(600)}`
+  let tree = new ChunkedMarkdownParser(formatted, formatted).parse(open)
+  assert.deepEqual(blocks(tree), [])
+  const closed = edit(tree, open, open.length, open.length, '$$')
+  assert.deepEqual(blocks(closed.tree), [[0, closed.text.length]])
+  assert.deepEqual(blocks(closed.tree), blocks(formatted.parse(closed.text)))
+  // Breaking the closing line makes the opener text again.
+  const reopened = edit(
+    closed.tree,
+    closed.text,
+    closed.text.length,
+    closed.text.length,
+    ' tail',
+  )
+  assert.deepEqual(blocks(reopened.tree), [])
+  // Random edits keep chunked trees equal to whole-document trees.
+  const snippets = [
+    '$$\nx^2\n$$',
+    '$$x$$',
+    'text $y$ and $$z$$ end',
+    'para\n$$\na\n\nb\n$$',
+    '$$\nunclosed',
+    '> $$\n> q\n> $$',
+    '- $$\n  w\n  $$',
+    '# heading $h$',
+    'plain words here',
+    '\\$$no$$',
+    '- item\n- item two',
+  ]
+  const inserts = ['$', '$$', '\n', '\n\n', 'x', '\\', '$$\n', '> ', '- ']
+  const nodes = (tree) => {
+    const out = []
+    tree.iterate({
+      enter: (node) => {
+        out.push(`${node.name}:${node.from}-${node.to}`)
+      },
+    })
+    return out
+  }
+  let seed = 17
+  const random = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return seed / 2147483648
+  }
+  const pick = (list) => list[Math.floor(random() * list.length)]
+  for (let run = 0; run < 150; run++) {
+    let text = ''
+    for (let i = 0; i < 24; i++)
+      text += (i ? (random() < 0.2 ? '\n' : '\n\n') : '') + pick(snippets)
+    const tiny = () =>
+      new ChunkedMarkdownParser(formatted, formatted, {
+        chunkSize: 16,
+        groupSize: 3,
+      })
+    tree = tiny().parse(text)
+    for (let step = 0; step < 6; step++) {
+      const from = Math.floor(random() * (text.length + 1))
+      const to = Math.min(
+        text.length,
+        from + (random() < 0.4 ? Math.floor(random() * 12) : 0),
+      )
+      const insert = random() < 0.2 ? '' : pick(inserts)
+      const next = text.slice(0, from) + insert + text.slice(to)
+      tree = tiny().parse(
+        next,
+        TreeFragment.applyChanges(TreeFragment.addTree(tree), [
+          { fromA: from, toA: to, fromB: from, toB: from + insert.length },
+        ]),
+      )
+      text = next
+      assert.deepEqual(
+        nodes(tree),
+        nodes(formatted.parse(text)),
+        JSON.stringify({ run, step, insert, from, to }),
+      )
+    }
   }
 })

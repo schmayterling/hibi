@@ -48,7 +48,7 @@ try {
   const result = await app.evaluate(
     async ({ app }, { code, count, baseline }) => {
       const { createRequire } = process.getBuiltinModule('node:module')
-      const { mkdtemp, rm, stat } = process.getBuiltinModule('node:fs/promises')
+      const { mkdtemp, rm } = process.getBuiltinModule('node:fs/promises')
       const { tmpdir } = process.getBuiltinModule('node:os')
       const { join } = process.getBuiltinModule('node:path')
       const module = { exports: {} }
@@ -119,8 +119,7 @@ try {
               addons: [],
               password: '',
             })
-            for (const path of files)
-              bytes += (await stat(join(directory, 'files', path))).size
+            for (const file of files) bytes += file.bytes
           } finally {
             await worker.close()
           }

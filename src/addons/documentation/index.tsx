@@ -25,8 +25,15 @@ export default defineAddon({
     const prepare = async (
       workspace: WorkspaceState,
       options: ExportOptions,
-      password = '',
-      signal?: AbortSignal,
+      {
+        password = '',
+        signal,
+        inMemory = false,
+      }: {
+        password?: string
+        signal?: AbortSignal | undefined
+        inMemory?: boolean
+      } = {},
     ) => {
       const target = await requireWorkspace(workspace)
       signal?.throwIfAborted()
@@ -91,6 +98,7 @@ export default defineAddon({
           colorschemes,
           addons: contributions.map(({ id, name, css }) => ({ id, name, css })),
           password,
+          inMemory,
         }
         await context.native.query('seal', prepared)
         signal?.throwIfAborted()
@@ -126,7 +134,7 @@ export default defineAddon({
           context.colorschemes.getPreferences(),
           input,
         )
-        const prepared = await prepare(workspace, options)
+        const prepared = await prepare(workspace, options, { inMemory: true })
         try {
           return await context.native.query<SiteExportArtifact>(
             'build',
@@ -184,12 +192,10 @@ export default defineAddon({
               password: string,
               signal?: AbortSignal,
             ) => {
-              const prepared = await prepare(
-                workspace,
-                options,
+              const prepared = await prepare(workspace, options, {
                 password,
                 signal,
-              )
+              })
               let result: ExportResult | null
               try {
                 signal?.throwIfAborted()

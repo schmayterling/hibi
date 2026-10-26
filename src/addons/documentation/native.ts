@@ -21,7 +21,12 @@ import type { WorkspacePage } from '../../shared/workspace'
 import type { NativeAddon, SiteExportArtifact } from '../api'
 import manifest from './manifest'
 import { type ExportOptions, validateExportOptions } from './options'
-import { readSiteFiles, SiteWorker } from './site-runtime'
+import {
+  readSiteFiles,
+  type SiteFile,
+  SiteWorker,
+  validateSiteFiles,
+} from './site-runtime'
 
 const graphEnabled = () =>
   getAddonStates().some((addon) => addon.id === 'graph' && addon.enabled)
@@ -36,11 +41,12 @@ type Session = {
   worker: SiteWorker
   index: number
   source: WorkspacePage | undefined
+  images?: Promise<WorkspacePage>
   busy: boolean
   committing: boolean
   timer?: ReturnType<typeof setTimeout>
   closing?: Promise<void>
-  files?: string[]
+  files?: SiteFile[]
 }
 let active: Session | undefined
 const invalid = () => new Error('Could not prepare the documentation export.')
@@ -51,6 +57,7 @@ function dispose(session: Session): Promise<void> {
   session.closing = (async () => {
     try {
       await session.worker.close()
+      await session.images?.catch(() => {})
       await rm(session.directory, { recursive: true, force: true })
     } finally {
       if (active === session) active = undefined
@@ -171,8 +178,7 @@ async function finish(session: Session, input: unknown) {
   const password = value.password ?? ''
   if (typeof password !== 'string')
     throw new Error('Enter a valid export password.')
-  await verifySources(session)
-  const files = await session.worker.request<string[]>({
+  const files = await session.worker.request<SiteFile[]>({
     kind: 'finish',
     template: await readFile(
       join(app.getAppPath(), 'out/site/template.html'),
@@ -264,7 +270,15 @@ export default {
           session.target,
           false,
         )
-        return session.source
+        const source = session.source
+        session.images = session.worker
+          .request<string[]>({ kind: 'images', page: source })
+          .then((sources) =>
+            readWorkspaceExportPage(source.path, session.target, sources),
+          )
+        // Stage observes failures; cancellation can retire this prefetch first.
+        void session.images.catch(() => {})
+        return source
       })
     },
     async stage(input) {
@@ -279,29 +293,25 @@ export default {
           throw new Error('The workspace changed during export. Export again.')
         // Bound one renderer IPC payload, not the user's site.
         if (Buffer.byteLength(rendered.html) > 64 * 1024 * 1024) throw invalid()
-        const sources = await session.worker.request<string[]>({
-          kind: 'images',
-          page: session.source,
-        })
-        const page = await readWorkspaceExportPage(
-          rendered.path,
-          session.target,
-          sources,
-        )
-        if (page.markdown !== rendered.markdown)
+        const page = await session.images
+        if (!page || page.markdown !== rendered.markdown)
           throw new Error('The workspace changed during export. Export again.')
         await session.worker.request({
           kind: 'page',
           page: { ...page, html: rendered.html },
         })
         session.source = undefined
+        delete session.images
         session.index++
       })
     },
     async seal(input) {
       return withSession(input, async (session) => {
         if (session.files) throw invalid()
-        session.files = await finish(session, input)
+        const files = await finish(session, input)
+        if ((input as { inMemory?: unknown }).inMemory === true)
+          validateSiteFiles(files)
+        session.files = files
       })
     },
     async cancel(input) {
@@ -418,7 +428,7 @@ export default {
             }
           }
           try {
-            for (const relative of files) {
+            for (const { path: relative } of files) {
               const path = join(destination, relative)
               await mkdir(dirname(path), { recursive: true })
               await writeText(path, stagedFile(session, relative), true)

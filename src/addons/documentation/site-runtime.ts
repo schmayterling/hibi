@@ -1,24 +1,29 @@
-import { readFile, stat } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
 import type { SiteWorkerRequest } from './site-worker'
 
+export type SiteFile = { path: string; bytes: number }
+
 /** Version-1 artifacts cross IPC; disk exports stream instead. */
-export async function readSiteFiles(
-  directory: string,
-  files: readonly string[],
-) {
+export function validateSiteFiles(files: readonly SiteFile[]) {
   let bytes = 0
-  for (const path of files) {
-    bytes +=
-      (await stat(join(directory, path))).size + Buffer.byteLength(path) + 64
+  for (const file of files) {
+    bytes += file.bytes + Buffer.byteLength(file.path) + 64
     if (bytes > 40 * 1024 * 1024)
       throw new Error(
         'This site is too large to return in memory. Export to disk instead.',
       )
   }
+}
+
+export async function readSiteFiles(
+  directory: string,
+  files: readonly SiteFile[],
+) {
+  validateSiteFiles(files)
   const result: { path: string; content: string }[] = []
-  for (const path of files)
+  for (const { path } of files)
     result.push({
       path,
       content: await readFile(join(directory, path), 'utf8'),

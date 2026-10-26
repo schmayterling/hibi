@@ -551,6 +551,10 @@ test('command-palette export opens options and writes a configured static folder
     '# Garden\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n[More](more.md)',
   )
   await writeFile(join(workspace, 'more.md'), '# More\n\nMore notes.')
+  await writeFile(
+    join(workspace, '.private.md'),
+    '# Private\n\nprivate-note-sentinel',
+  )
   await mkdir(join(workspace, 'img'))
   await writeFile(
     join(workspace, 'img', 'a.png'),
@@ -776,6 +780,10 @@ test('command-palette export opens options and writes a configured static folder
   const built = await page.evaluate(() => window.siteProbe.buildSite())
   assert.equal(built.version, 1)
   assert.equal(built.pages, 2)
+  assert.doesNotMatch(
+    JSON.stringify(built),
+    /private-note-sentinel|\.private\.md/,
+  )
   const draft = await page.evaluate(() =>
     window.hibi.workspaceAction({ action: 'new-file', path: '' }),
   )

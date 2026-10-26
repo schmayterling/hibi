@@ -1016,7 +1016,9 @@ export function exportPaths(
   return entries.flatMap((entry) =>
     entry.children
       ? exportPaths(entry.children)
-      : entry.kind === 'file' && isDocumentName(entry.name, true)
+      : entry.kind === 'file' &&
+          !entry.name.startsWith('.') &&
+          isDocumentName(entry.name, true)
         ? [{ path: entry.path }]
         : [],
   )

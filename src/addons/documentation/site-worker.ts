@@ -9,6 +9,7 @@ import type { SiteData, SitePage } from '../../site/data'
 import { createNoteGraph } from '../graph/model'
 import type { ExportOptions } from './options'
 import { prepareSite, siteOutput } from './site'
+import type { SiteFile } from './site-runtime'
 
 export type SiteWorkerRequest =
   | {
@@ -105,7 +106,7 @@ async function request(job: SiteWorkerRequest) {
   )
   site = { ...metadata, pages: site.pages, options: site.options }
   if (site.options.graph) site.graph = graph.finish()
-  const files: string[] = []
+  const files: SiteFile[] = []
   for await (const [relative, chunks] of siteOutput(
     job.template,
     site,
@@ -121,12 +122,16 @@ async function request(job: SiteWorkerRequest) {
     const path = join(directory, 'files', relative)
     await mkdir(dirname(path), { recursive: true })
     const file = await open(path, 'wx', 0o600)
+    let bytes = 0
     try {
-      for await (const chunk of chunks) await file.writeFile(chunk, 'utf8')
+      for await (const chunk of chunks) {
+        await file.writeFile(chunk, 'utf8')
+        bytes += Buffer.byteLength(chunk)
+      }
     } finally {
       await file.close()
     }
-    files.push(relative)
+    files.push({ path: relative, bytes })
   }
   return files
 }

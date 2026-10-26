@@ -50,6 +50,14 @@ test('owned export worker stages pages and yields main task turns while streamin
       password: '',
     })
     assert.equal(files.length, count + 6)
+    for (const file of files)
+      assert.equal(
+        file.bytes,
+        (await readFile(join(directory, 'files', file.path))).length,
+        file.path + ' reports exact UTF-8 bytes',
+      )
+    const artifact = await readSiteFiles(join(directory, 'files'), files)
+    assert.equal(artifact.length, files.length)
     assert.ok(
       turns > count,
       turns + ' task turns while preparing ' + count + ' pages',
@@ -98,7 +106,9 @@ test('version-1 artifacts refuse oversized IPC payloads before reading content',
       await file.close()
     }
     await assert.rejects(
-      readSiteFiles(directory, ['large.html']),
+      readSiteFiles(directory, [
+        { path: 'large.html', bytes: 41 * 1024 * 1024 },
+      ]),
       /Export to disk instead/,
     )
   } finally {

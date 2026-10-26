@@ -240,8 +240,8 @@ test('inline math ends where the tokenizer expression ends, in linear time', {
       JSON.stringify(text),
     )
   }
-  // The expression backtracks exponentially over backslash runs (about a
-  // second at 40 backslashes); the scan solves each position once.
+  // The expression backtracks exponentially over an unclosed backslash run
+  // (its time doubles every two backslashes); the scan solves each position once.
   assert.equal(inlineMathEnd(`$${'\\'.repeat(200_000)}x`, 0), -1)
   for (const count of [5_000, 5_001]) {
     const closed = `$${'\\'.repeat(count)}x$`

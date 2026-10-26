@@ -398,3 +398,84 @@ test('closing draft during pull yields stale reply and leaves next query usable'
   assert.equal(result.ok, false)
   assert.deepEqual((await collect({ query: 'Alpha' })).items, ['a.md'])
 })
+
+const syntaxSnapshot = {
+  version: 1,
+  flavorRevision: 1,
+  featureRevision: 1,
+  flavors: [{ id: 'markdown.github', kind: 'dialect', parserVersion: '1' }],
+  features: [],
+  projections: [],
+  choices: [],
+  hashtags: true,
+  complete: true,
+}
+
+test('long current-source scans resume through progress pages and ignore parser-only changes', async () => {
+  const file = join(host.root, 'a.md')
+  await writeFile(file, `${'x'.repeat(1_100_000)}longOnlyMarker`)
+  notify(['a.md'])
+  try {
+    const first = await query({
+      query: 'longOnlyMarker',
+      limit: 1,
+      syntaxSnapshot,
+    })
+    assert.equal(first.ok, true)
+    assert.deepEqual(first.value.items, [])
+    assert.ok(first.value.nextCursor)
+    const result = await collect({
+      query: 'longOnlyMarker',
+      limit: 1,
+      cursor: first.value.nextCursor,
+      syntaxSnapshot: { ...syntaxSnapshot, hashtags: false },
+    })
+    assert.deepEqual(result.items, ['a.md'])
+    assert.equal(result.complete, true)
+    assert.equal(
+      (await query({ query: 'longOnlyMarker', cursor: first.value.nextCursor }))
+        .code,
+      'stale',
+    )
+  } finally {
+    await writeFile(file, '# Alpha\nfirst needle\nthird line\nsecond needle\n')
+    notify(['a.md'])
+  }
+})
+
+test('concurrent graph and text builds preserve both cursor families', async () => {
+  for (const reverse of [false, true]) {
+    notify()
+    const graph = () => query({ kind: 'graph', limit: 1 })
+    const text = () => firstHit({ query: 'needle', limit: 1 })
+    const results = await Promise.all(
+      reverse ? [text(), graph()] : [graph(), text()],
+    )
+    const graphPage = results[reverse ? 1 : 0]
+    const textPage = results[reverse ? 0 : 1]
+    assert.equal(graphPage.ok, true)
+    assert.ok(graphPage.value.nextCursor)
+    assert.ok(textPage.value.nextCursor)
+    const continuations = await Promise.all([
+      query({ kind: 'graph', limit: 1, cursor: graphPage.value.nextCursor }),
+      query({ query: 'needle', limit: 1, cursor: textPage.value.nextCursor }),
+    ])
+    assert.ok(continuations.every((result) => result.ok))
+  }
+})
+
+test('literal matching remains complete when selected parser syntax is unsupported', async () => {
+  const result = await collect({
+    query: 'Alpha',
+    syntaxSnapshot: {
+      ...syntaxSnapshot,
+      flavors: [
+        ...syntaxSnapshot.flavors,
+        { id: 'third.note', kind: 'syntax', parserVersion: '1' },
+      ],
+      features: [{ id: 'third.link', enabled: false }],
+    },
+  })
+  assert.deepEqual(result.items, ['a.md'])
+  assert.equal(result.complete, true)
+})

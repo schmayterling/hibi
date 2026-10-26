@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test, { after, before } from 'node:test'
 import { build } from 'vite'
 import { parseRow } from '../src/renderer/src/formatted/table-source.ts'
+import { tableKey } from '../src/renderer/src/table-layout-store.ts'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
@@ -742,6 +743,114 @@ test('tab extends a table of only a header, and leaving a table at the end adds 
   const now = await state()
   assert.equal(now.doc, 'before\n\n| a | b |\n| - | - |\n| c |  |\n\nAFTER')
   assert.equal(now.editor, null)
+})
+
+/** Mount `doc` editable in a view of tab `tabId`, or in a second view of it beside the first. */
+const mountTab = (doc, tabId, add = false) =>
+  harness.evaluate(
+    ({ doc, tabId, add }) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 800 },
+        { editable: true, tabId, add },
+      ),
+    { doc, tabId, add },
+  )
+/** Drag a cell's right edge by `distance` pixels, once the resize handle shows. */
+const dragEdge = async (cell, distance) => {
+  const box = await cell.boundingBox()
+  const x = box.x + box.width - 2,
+    y = box.y + box.height / 2
+  await harness.mouse.move(x, y)
+  await harness
+    .locator('.hibi-lp-table[data-table-resize="column"]')
+    .first()
+    .waitFor()
+  await harness.mouse.down()
+  for (let step = 1; step <= 4; step++)
+    await harness.mouse.move(x + (distance * step) / 4, y)
+  await harness.mouse.up()
+}
+const layouts = (tabId) =>
+  harness.evaluate((tabId) => window.tables.layouts(tabId), tabId)
+
+test('tables with the same header keep their own stored sizes', {
+  timeout: 30000,
+}, async () => {
+  const doc =
+    '| h | g |\n| - | - |\n| a | b |\n\nbetween\n\n| h | g |\n| - | - |\n| c | d |\n'
+  const first = tableKey(0, ['h', 'g']),
+    second = tableKey(1, ['h', 'g'])
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('same', [{ key, columns: [200, 0], rows: null }]),
+    first,
+  )
+  await mountTab(doc, 'same')
+  const widths = () =>
+    harness.evaluate(() =>
+      [...document.querySelectorAll('.hibi-lp-table')].map(
+        (table) => table.querySelector('th').style.width,
+      ),
+    )
+  // Only the first table has sizes; the second shows its own, none.
+  assert.deepEqual(await widths(), ['200px', ''])
+  await dragEdge(
+    harness.locator('.hibi-lp-table').nth(1).locator('th').first(),
+    40,
+  )
+  await harness.waitForFunction(
+    (key) => window.tables.layouts('same').some((table) => table.key === key),
+    second,
+  )
+  const stored = await layouts('same')
+  assert.deepEqual(
+    stored.find((table) => table.key === first)?.columns,
+    [200, 0],
+  )
+  assert.ok(stored.find((table) => table.key === second)?.columns?.[0] > 0)
+})
+
+test('two views of a tab keep the table sizes each other stores', {
+  timeout: 30000,
+}, async () => {
+  const doc =
+    '| a | b |\n| - | - |\n| 1 | 2 |\n\n| c | d |\n| - | - |\n| 3 | 4 |\n'
+  await harness.evaluate(() => window.tables.layouts('two', []))
+  await mountTab(doc, 'two')
+  await mountTab(doc, 'two', true)
+  const editors = harness.locator('.rich-editor-host > .cm-editor')
+  await dragEdge(
+    editors.nth(0).locator('.hibi-lp-table').nth(0).locator('th').first(),
+    40,
+  )
+  await dragEdge(
+    editors.nth(1).locator('.hibi-lp-table').nth(1).locator('th').first(),
+    60,
+  )
+  const keys = [tableKey(0, ['a', 'b']), tableKey(1, ['c', 'd'])]
+  await harness
+    .waitForFunction(
+      (keys) =>
+        keys.every((key) =>
+          window.tables.layouts('two').some((table) => table.key === key),
+        ),
+      keys,
+      { timeout: 3000 },
+    )
+    .catch(() => {})
+  assert.deepEqual(
+    (await layouts('two')).map((table) => table.key).sort(),
+    [...keys].sort(),
+  )
+  // The other view shows the size the first one stored.
+  const width = await harness.evaluate(
+    () =>
+      document
+        .querySelectorAll('.rich-editor-host > .cm-editor')[1]
+        .querySelector('.hibi-lp-table th').style.width,
+  )
+  assert.notEqual(width, '')
 })
 
 test('typing in a cell writes escaped source into that cell only', {

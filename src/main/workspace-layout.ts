@@ -1,6 +1,10 @@
 import { lstat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
-import type { TableLayout } from '../shared/table-layout'
+import {
+  type TableLayout,
+  type TableLayoutUpdate,
+  updateTableLayout,
+} from '../shared/table-layout'
 import {
   readWorkspaceLayoutText,
   WORKSPACE_LAYOUT,
@@ -35,6 +39,17 @@ export function validateTableLayout(input: unknown): TableLayout[] {
   )
     throw new Error('The table layout is invalid.')
   return input.map(({ key, columns, rows }) => ({ key, columns, rows }))
+}
+
+function validateTableLayoutUpdate(input: unknown): TableLayoutUpdate {
+  const { remove, put } = (input ?? {}) as { remove?: unknown; put?: unknown }
+  if (
+    !Array.isArray(remove) ||
+    remove.length > 1000 ||
+    !remove.every((key) => typeof key === 'string' && key.length <= 64)
+  )
+    throw new Error('The table layout is invalid.')
+  return { remove: [...remove], put: validateTableLayout(put) }
 }
 
 const documentPath = (path: string) =>
@@ -125,16 +140,23 @@ export async function readTableLayout(
   return (await readLayout(root)).documents[path]?.tables ?? []
 }
 
-/** Replace one document's tables and prune entries whose files are gone. */
+/**
+ * Replace one document's tables, or update some of them on the sizes stored
+ * now (so windows never write back each other's stale copies), and prune
+ * entries whose files are gone.
+ */
 export async function writeTableLayout(
   root: string,
   path: string,
   input: unknown,
 ): Promise<void> {
   if (!documentPath(path)) throw new Error('Choose a file in this workspace.')
-  const tables = validateTableLayout(input).filter(
-    (table) => table.columns?.some(Boolean) || table.rows?.some(Boolean),
-  )
+  const sized = (table: TableLayout) =>
+    table.columns?.some(Boolean) || table.rows?.some(Boolean)
+  const replace = Array.isArray(input)
+    ? validateTableLayout(input).filter(sized)
+    : null
+  const change = replace ? null : validateTableLayoutUpdate(input)
   await update(
     root,
     async (layout) => {
@@ -144,6 +166,13 @@ export async function writeTableLayout(
           delete layout.documents[entry]
           changed = true
         }
+      const tables =
+        replace ??
+        updateTableLayout(
+          layout.documents[path]?.tables ?? [],
+          change as TableLayoutUpdate,
+        ).filter(sized)
+      if (tables.length > 1000) throw new Error('The table layout is invalid.')
       if (
         JSON.stringify(layout.documents[path]?.tables ?? []) ===
         JSON.stringify(tables)

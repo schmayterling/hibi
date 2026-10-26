@@ -3,11 +3,19 @@ import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import '../../src/renderer/src/styles.css'
 import type { ChunkedMarkdownProbe } from '../../src/renderer/src/chunked-markdown'
-import { showMarkdownMarkers } from '../../src/renderer/src/formatted-contributions'
+import {
+  formattedDocument,
+  showMarkdownMarkers,
+} from '../../src/renderer/src/formatted-contributions'
 import { formattedSyntax } from '../../src/renderer/src/formatted-syntax'
 import { livePreview } from '../../src/renderer/src/live-preview'
 import { markdownSyntax } from '../../src/renderer/src/markdown-syntax'
 import { tableActions } from '../../src/renderer/src/source-formatting'
+import {
+  type TableLayout,
+  type TableLayoutUpdate,
+  updateTableLayout,
+} from '../../src/shared/table-layout'
 
 /** Table harness: the app's pane layout around a formatted view that can be read-only or editable. */
 const probe: ChunkedMarkdownProbe = {
@@ -18,6 +26,26 @@ const probe: ChunkedMarkdownProbe = {
   builtGroups: 0,
 }
 let view: EditorView | null = null
+/** A second view of the same document, as another pane of the tab would be. */
+let second: EditorView | null = null
+// The workspace's table sizes, as the main process keeps and updates them.
+const layouts = new Map<string, TableLayout[]>()
+Object.assign(window, {
+  hibi: {
+    readTableLayout: async (tabId: string) => layouts.get(tabId) ?? [],
+    writeTableLayout: async (
+      tabId: string,
+      input: TableLayout[] | TableLayoutUpdate,
+    ) => {
+      layouts.set(
+        tabId,
+        Array.isArray(input)
+          ? input
+          : updateTableLayout(layouts.get(tabId) ?? [], input),
+      )
+    },
+  },
+})
 const editable = new Compartment()
 const access = (on: boolean) => [
   EditorState.readOnly.of(!on),
@@ -49,7 +77,8 @@ Object.assign(window, {
     async mount(
       doc: string,
       size?: { width: number; height: number },
-      options: { editable?: boolean } = {},
+      /** `tabId` gives the view a tab with table sizes; `add` mounts a second view of the tab beside the first. */
+      options: { editable?: boolean; tabId?: string; add?: boolean } = {},
     ) {
       if (size)
         Object.assign(panes.style, {
@@ -59,9 +88,13 @@ Object.assign(window, {
           width: `${size.width}px`,
           height: `${size.height}px`,
         })
-      view?.destroy()
+      if (!options.add) {
+        view?.destroy()
+        second?.destroy()
+        second = null
+      }
       document.querySelector<HTMLElement>('.rich-pane')!.scrollTop = 0
-      view = new EditorView({
+      const mounted = new EditorView({
         parent: host,
         state: EditorState.create({
           doc,
@@ -72,14 +105,25 @@ Object.assign(window, {
               : [],
             editable.of(access(!!options.editable)),
             showMarkdownMarkers.of(true),
+            options.tabId
+              ? formattedDocument.of({ revision: 0, tabId: options.tabId })
+              : [],
           ],
         }),
       })
+      if (options.add) second = mounted
+      else view = mounted
       await document.fonts.ready
-      view.requestMeasure()
+      mounted.requestMeasure()
       await settle()
     },
     view: () => view,
+    second: () => second,
+    /** The table sizes the workspace stores for a tab, or sets them. */
+    layouts: (tabId: string, tables?: TableLayout[]) => {
+      if (tables) layouts.set(tabId, tables)
+      return layouts.get(tabId) ?? []
+    },
     /** Run a toolbar table action at the selection, as the toolbar does. */
     runTableAction(id: string) {
       const current = view

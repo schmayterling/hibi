@@ -1,4 +1,8 @@
-import type { TableLayout } from '../../shared/table-layout'
+import {
+  type TableLayout,
+  type TableLayoutUpdate,
+  updateTableLayout,
+} from '../../shared/table-layout.ts'
 
 /*
  * Table column widths and row heights are view state, not Markdown: each tab
@@ -8,6 +12,7 @@ import type { TableLayout } from '../../shared/table-layout'
 
 // Sizes survive tab switches in this window.
 const session = new Map<string, TableLayout[]>()
+const listeners = new Map<string, Set<() => void>>()
 
 /** A table's key: its ordinal in the note and a hash of its header cells' text, so edits elsewhere keep its sizes. */
 export function tableKey(index: number, header: readonly string[]) {
@@ -29,9 +34,44 @@ export function readTableLayouts(
   return session.get(tabId) ?? window.hibi.readTableLayout(tabId)
 }
 
+const changed = (tabId: string) => {
+  for (const listener of listeners.get(tabId) ?? []) listener()
+}
+
 /** Store a tab's table sizes and save them in the workspace. */
 export function writeTableLayouts(tabId: string, tables: TableLayout[]) {
   session.set(tabId, tables)
+  save(tabId, tables)
+  changed(tabId)
+}
+
+/**
+ * Update some of a tab's tables on the sizes stored now, here and in the
+ * workspace, so that views and windows of the tab never write back each
+ * other's stale copies. `loaded` is what the caller read when this window
+ * had stored nothing yet.
+ */
+export function updateTableLayouts(
+  tabId: string,
+  loaded: readonly TableLayout[],
+  update: TableLayoutUpdate,
+) {
+  session.set(tabId, updateTableLayout(session.get(tabId) ?? loaded, update))
+  save(tabId, update)
+  changed(tabId)
+}
+
+/** Call `listener` after a tab's sizes change in this window; returns a function that stops. */
+export function subscribeTableLayouts(tabId: string, listener: () => void) {
+  const set = listeners.get(tabId) ?? new Set()
+  listeners.set(tabId, set.add(listener))
+  return () => {
+    set.delete(listener)
+    if (!set.size) listeners.delete(tabId)
+  }
+}
+
+function save(tabId: string, tables: TableLayout[] | TableLayoutUpdate) {
   void window.hibi
     .writeTableLayout(tabId, tables)
     .catch((error: unknown) =>

@@ -61,6 +61,42 @@ async function workspace(t) {
 const stored = async (root) =>
   JSON.parse(await readFile(join(root, '.hibi/layout.json'), 'utf8'))
 
+test('table layout updates change only their tables, on what is stored when they arrive', async (t) => {
+  const root = await workspace(t)
+  await writeTableLayout(root, 'a.md', [table('0:a'), table('1:b')])
+  // Two windows update different tables from the same stale copy, at once.
+  await Promise.all([
+    writeTableLayout(root, 'a.md', {
+      remove: ['0:a'],
+      put: [table('0:a', [200, 0])],
+    }),
+    writeTableLayout(root, 'a.md', { remove: ['2:c'], put: [table('2:c')] }),
+  ])
+  assert.deepEqual(await readTableLayout(root, 'a.md'), [
+    table('1:b'),
+    table('0:a', [200, 0]),
+    table('2:c'),
+  ])
+  // Removing a key drops its table; an update without sizes stores nothing.
+  await writeTableLayout(root, 'a.md', {
+    remove: ['1:b'],
+    put: [table('3:d', [0, 0])],
+  })
+  assert.deepEqual(
+    (await readTableLayout(root, 'a.md')).map((entry) => entry.key),
+    ['0:a', '2:c'],
+  )
+  for (const bad of [
+    { remove: 'x', put: [] },
+    { remove: [1], put: [] },
+    { remove: [], put: [{ key: 'x', columns: [-1], rows: null }] },
+    null,
+  ])
+    await assert.rejects(writeTableLayout(root, 'a.md', bad), {
+      message: 'The table layout is invalid.',
+    })
+})
+
 test('table layout is created lazily, read back, and pruned', async (t) => {
   const root = await workspace(t)
   await writeTableLayout(root, 'a.md', [])

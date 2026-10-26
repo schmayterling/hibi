@@ -19,8 +19,10 @@ import {
 import { tableActions } from '../source-formatting.ts'
 import {
   readTableLayouts,
+  storedTableLayouts,
+  subscribeTableLayouts,
   tableKey,
-  writeTableLayouts,
+  updateTableLayouts,
 } from '../table-layout-store.ts'
 import {
   CellEditor,
@@ -194,29 +196,32 @@ function visibleBand(element: HTMLElement) {
 const EDGE = 5
 const MIN = { column: 40, row: 24 }
 
-/** The stored table sizes of the tab a formatted view shows, shared with the rich editor. */
-type Store = { tabId: string; tables: TableLayout[] | null }
+/** The tab a formatted view shows and the table sizes read for it, shared with the rich editor. */
+type Store = { tabId: string; loaded: TableLayout[] | null }
 const stores = new WeakMap<EditorView, Store>()
 function store(view: EditorView): Store | null {
   const { tabId } = view.state.facet(formattedDocument)
   if (!tabId) return null
   const found = stores.get(view)
   if (found?.tabId === tabId) return found
-  const entry: Store = { tabId, tables: null }
+  const entry: Store = { tabId, loaded: null }
   stores.set(view, entry)
   const loaded = (tables: TableLayout[] | null) => {
     if (stores.get(view) !== entry) return
-    entry.tables = tables ?? []
+    entry.loaded = tables ?? []
     for (const table of mounted.get(view) ?? []) table.sized()
   }
   const read = readTableLayouts(tabId)
-  if (Array.isArray(read)) entry.tables = read
+  if (Array.isArray(read)) entry.loaded = read
   else
     void read.then(loaded, (error: unknown) =>
       console.error('table sizes could not be read:', error),
     )
   return entry
 }
+/** The sizes stored for a view's tab now: this window's, once it stored any. */
+const storedTables = (entry: Store | null) =>
+  entry && (storedTableLayouts(entry.tabId) ?? entry.loaded)
 
 const tableViews = new WeakMap<HTMLElement, TableView>()
 /** Mounted tables per editor, for row windows, entering tables and table actions. */
@@ -267,6 +272,7 @@ class TableView {
   private handle: { axis: 'column' | 'row'; index: number } | null = null
   private dragging = false
   private saving: ReturnType<typeof setTimeout> | undefined
+  private unsubscribe: (() => void) | null = null
 
   constructor(
     readonly view: EditorView,
@@ -1043,23 +1049,29 @@ class TableView {
     return countTables(doc.iterLines(1, doc.lineAt(this.range().from).number))
   }
 
-  /** Find the table's stored sizes: by its header, and by its ordinal when several tables share the header. */
+  /** Find the table's stored sizes by its key: its ordinal and header, so each entry binds one table, as in the rich editor. */
   sized() {
-    const tables = store(this.view)?.tables
-    if (!tables) return
+    const entry = store(this.view)
+    const tables = storedTables(entry)
+    if (!entry || !tables) return
+    this.unsubscribe ??= subscribeTableLayouts(entry.tabId, this.refreshed)
     const hash = tableKey(0, this.header).split(':')[1]
-    const candidates = tables.filter((table) => table.key.endsWith(`:${hash}`))
-    let found = candidates.length === 1 ? candidates[0] : undefined
-    if (candidates.length > 1) {
-      const key = tableKey(this.ordinal(), this.header)
-      found = candidates.find((table) => table.key === key)
-    }
+    // The ordinal needs the note before the table: only look for a stored header.
+    const key = tables.some((table) => table.key.endsWith(`:${hash}`))
+      ? tableKey(this.ordinal(), this.header)
+      : null
+    const found = key ? tables.find((table) => table.key === key) : undefined
     this.sizes = {
       key: found?.key ?? null,
       columns: [...(found?.columns ?? [])],
       rows: [...(found?.rows ?? [])],
     }
     this.applySizes()
+  }
+
+  /** Another table or view changed the stored sizes: bind them again, unless this table is changing its own. */
+  private refreshed = () => {
+    if (!this.dragging && this.saving === undefined) this.sized()
   }
 
   /** Show the column widths and row heights, as the rich editor's table decorations do. */
@@ -1090,19 +1102,21 @@ class TableView {
       return
     }
     const entry = store(this.view)
-    if (!entry?.tables || !this.dom.isConnected) return
+    const tables = storedTables(entry)
+    if (!entry || !tables || !this.dom.isConnected) return
     const key = tableKey(this.ordinal(), this.header)
     const columns = this.sizes.columns.slice(0, this.aligned.length)
     const rows = this.sizes.rows.slice(0, this.lines - 1)
-    const tables = entry.tables.filter(
-      (table) => table.key !== key && table.key !== this.sizes.key,
-    )
     const some = (sizes: number[]) => (sizes.some(Boolean) ? sizes : null)
-    if (some(columns) || some(rows))
-      tables.push({ key, columns: some(columns), rows: some(rows) })
-    this.sizes.key = some(columns) || some(rows) ? key : null
-    entry.tables = tables
-    writeTableLayouts(entry.tabId, tables)
+    const put =
+      some(columns) || some(rows)
+        ? [{ key, columns: some(columns), rows: some(rows) }]
+        : []
+    // Only this table's entries change; other tables keep what is stored now.
+    const remove = [key]
+    if (this.sizes.key && this.sizes.key !== key) remove.push(this.sizes.key)
+    this.sizes.key = put.length ? key : null
+    updateTableLayouts(entry.tabId, tables, { remove, put })
   }
 
   /** The column or row edge within reach of the pointer. */
@@ -1269,6 +1283,7 @@ class TableView {
   destroy() {
     this.stopEditing()
     if (this.saving) this.save()
+    this.unsubscribe?.()
     mounted.get(this.view)?.delete(this)
     this.dom.removeEventListener('mousedown', this.select)
     this.dom.removeEventListener('mousemove', this.hover)

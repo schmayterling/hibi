@@ -68,7 +68,19 @@ export function formulaScheduler(render: Render) {
     },
     { rootMargin: '50% 0px' },
   )
-  const cancel = (element: Element) => {
+  // Display heights arrive after layout, so render slices never force one.
+  const measuring = new Map<Element, string>()
+  const sizes = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const latex = measuring.get(entry.target)
+      const height = entry.borderBoxSize[0]?.blockSize
+      if (latex === undefined || !height) continue
+      cache.measured(latex, height)
+      measuring.delete(entry.target)
+      sizes.unobserve(entry.target)
+    }
+  })
+  const dequeue = (element: Element) => {
     queued.delete(element)
     visible.delete(element)
     observer.unobserve(element)
@@ -76,12 +88,11 @@ export function formulaScheduler(render: Render) {
   /** Renders queued formulas from `elements` until the budget is spent; at least one makes progress. */
   function work(elements: Iterable<Element>, time = budget) {
     const end = performance.now() + time
-    const displays: [Element, string][] = []
     // Iterating the live queue in place keeps each slice proportional to what it renders.
     for (const element of elements) {
       const formula = queued.get(element)
       if (!formula) continue
-      cancel(element)
+      dequeue(element)
       let result: string | null = null
       try {
         result = cache.render(formula.latex, formula.display)
@@ -89,13 +100,13 @@ export function formulaScheduler(render: Render) {
         // The node shows its source, as before when KaTeX threw.
       }
       formula.done(result)
-      if (formula.display && result !== null)
-        displays.push([element, formula.latex])
+      // Remounted display formulas reserve the height they rendered at.
+      if (formula.display && result !== null) {
+        measuring.set(element, formula.latex)
+        sizes.observe(element, { box: 'border-box' })
+      }
       if (performance.now() >= end) break
     }
-    // Remounted display formulas reserve the height they rendered at.
-    for (const [element, latex] of displays)
-      cache.measured(latex, element.getBoundingClientRect().height)
     later()
   }
   function* pending() {
@@ -145,7 +156,11 @@ export function formulaScheduler(render: Render) {
           frame = 0
           work(onScreen(performance.now() + budget))
         })
-      return () => cancel(element)
+      return () => {
+        dequeue(element)
+        measuring.delete(element)
+        sizes.unobserve(element)
+      }
     },
   }
 }

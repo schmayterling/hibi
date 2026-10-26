@@ -13,6 +13,7 @@ function environment(t) {
   const idle = []
   const observers = []
   const clock = { now: 0 }
+  const sizes = { callback: null, observed: new Set() }
   const globals = {
     requestAnimationFrame: (callback) => frames.push(callback),
     requestIdleCallback: (callback) => idle.push(callback),
@@ -23,6 +24,17 @@ function environment(t) {
       }
       observe() {}
       unobserve() {}
+    },
+    ResizeObserver: class {
+      constructor(callback) {
+        sizes.callback = callback
+      }
+      observe(target) {
+        sizes.observed.add(target)
+      }
+      unobserve(target) {
+        sizes.observed.delete(target)
+      }
     },
     window: { innerHeight: 800 },
     performance: { now: () => clock.now },
@@ -54,6 +66,7 @@ function environment(t) {
     },
     idle,
     observers,
+    sizes,
   }
 }
 const element = (top) => ({
@@ -158,6 +171,30 @@ test('scheduling visits each queued formula a bounded number of times', (t) => {
     assert.equal(renders.length, count)
     assert.ok(visits <= count + 1, `${visits} queue visits for ${count}`)
   }
+})
+
+test('display heights come from the resize observer, not layout reads in slices', (t) => {
+  const { scheduler, frame, idle, sizes } = environment(t)
+  const elements = Array.from({ length: 100 }, () => element(5000))
+  for (const [index, target] of elements.entries())
+    scheduler.schedule(target, `d_{${index}}`, true, () => {})
+  frame()
+  while (idle.length)
+    idle.shift()({ didTimeout: false, timeRemaining: () => 50 })
+  // Only the first frame's scan read layout, and it stopped at the first formula below the screen.
+  assert.equal(
+    elements.reduce((sum, target) => sum + target.reads, 0),
+    1,
+  )
+  assert.equal(sizes.observed.size, 100)
+  sizes.callback(
+    elements
+      .slice(0, 3)
+      .map((target) => ({ target, borderBoxSize: [{ blockSize: 64 }] })),
+  )
+  assert.equal(scheduler.height('d_{0}'), 64)
+  assert.equal(scheduler.height('d_{5}'), undefined)
+  assert.equal(sizes.observed.size, 97)
 })
 
 test('the cache keeps output by size and renders oversized output every time', () => {

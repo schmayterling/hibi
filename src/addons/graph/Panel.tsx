@@ -11,7 +11,7 @@ import type { WorkspaceGraphItem } from '../../shared/workspace-query'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import type { AddonContext } from '../api'
 import { Button, ControlRow, Panel, PanelMessage, TextInput } from '../ui'
-import { useWorkspaceQueryTarget } from '../use-workspace-query'
+import { useSerialRead, useWorkspaceQueryTarget } from '../use-workspace-query'
 import { GraphCanvas } from './Canvas'
 import { metadataGraph } from './model'
 
@@ -120,6 +120,7 @@ export function GraphPanel({
   const {
     target,
     workspace,
+    revision,
     loading: targetLoading,
     error: targetError,
   } = useWorkspaceQueryTarget(context)
@@ -137,17 +138,19 @@ export function GraphPanel({
     complete: boolean
   } | null>(null)
   const [queryError, setQueryError] = useState('')
-  const [loading, setLoading] = useState(true)
+  const read = useSerialRead()
+  const latest = useRef(target)
   useEffect(() => {
+    void revision
+    latest.current = target
     if (!target) {
       setResult(null)
-      setLoading(false)
+      read(null)
       return
     }
-    let active = true
-    setLoading(true)
-    setQueryError('')
-    const load = async () => {
+    read(async (alive, retry) => {
+      // Each read reports its own outcome; a read for an older workspace stays quiet.
+      setQueryError('')
       try {
         const items: WorkspaceGraphItem[] = []
         let cursor: string | undefined
@@ -159,6 +162,8 @@ export function GraphPanel({
             ...(cursor ? { cursor } : {}),
             limit: 100,
           })
+          // The workspace changed while paging, such as opening a note.
+          if (!response.ok && response.code === 'stale') return retry()
           if (!response.ok) throw new Error(response.message)
           if (response.value.kind !== 'graph')
             throw new Error('Invalid graph query.')
@@ -168,8 +173,8 @@ export function GraphPanel({
           if (!response.value.nextCursor)
             throw new Error('Graph query stopped early.')
           cursor = response.value.nextCursor
-        } while (active)
-        if (!active) return
+        } while (alive())
+        if (!alive()) return
         const next = metadataGraph(items)
         const last = previous.current
         const graph =
@@ -195,17 +200,11 @@ export function GraphPanel({
           complete,
         })
       } catch (error) {
-        if (active)
+        if (alive() && latest.current === target)
           setQueryError(error instanceof Error ? error.message : String(error))
-      } finally {
-        if (active) setLoading(false)
       }
-    }
-    void load()
-    return () => {
-      active = false
-    }
-  }, [context, target, syntaxRevision])
+    })
+  }, [context, target, revision, syntaxRevision, read])
   const current =
     result?.workspaceId === target?.workspaceId &&
     result?.generation === target?.workspaceGeneration &&
@@ -262,7 +261,7 @@ export function GraphPanel({
         >
           {error}
         </PanelMessage>
-      ) : (targetLoading || loading) && !current ? (
+      ) : (targetLoading || target) && !current ? (
         <PanelMessage
           icon={<Network size={24} />}
           title="Reading workspace…"

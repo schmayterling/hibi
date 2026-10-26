@@ -26,9 +26,10 @@ const knownFlavors = new Set([
   'markdown.obsidian',
   'math.latex',
   'text-extras.text-extras',
+  'mermaid.blocks',
 ])
 const knownFeatures =
-  /^(?:core\.(?:heading-[1-6]|bold|italic|inline-code|escapes|code-blocks|quotes|bullet-lists|numbered-lists|dividers|line-breaks|links|images|html-blocks|inline-html)|markdown\.(?:tables|tasks|strike|alerts)|math\.(?:inline|block)|text-extras\.(?:subscript|subtext))$/
+  /^(?:core\.(?:heading-[1-6]|bold|italic|inline-code|escapes|code-blocks|quotes|bullet-lists|numbered-lists|dividers|line-breaks|links|images|html-blocks|inline-html)|markdown\.(?:tables|tasks|strike|alerts)|math\.(?:inline|block)|text-extras\.(?:subscript|subtext)|mermaid\.(?:blocks|preview))$/
 type Projection = { id: string; preservation?: { version: string } }
 
 /** Current document's built-in parser contract without enumerating other files. */

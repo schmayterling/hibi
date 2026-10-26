@@ -1,12 +1,54 @@
 import { Fragment, type Node } from '@tiptap/pm/model'
 import { StepMap } from '@tiptap/pm/transform'
 
+type Span = { a: number; b: number; c: number; d: number }
+
 /**
- * Maps positions from one parse of a document to the next through only the
- * ranges that differ, so content between separate edits keeps its place.
- * Top-level blocks with text that is unique on both sides anchor the match
- * (as in patience diff), equal neighbours extend it, and each remaining gap
- * is narrowed to its first and last differing positions.
+ * Maps the old preview into the new one from ranges that cover every edit,
+ * in order: `[a, b)` in `before` became `[c, d)` in `after`. Content
+ * between ranges must match exactly; where an edit had wider effects, the
+ * ranges around the differing content merge.
+ */
+export function richRangeMap(
+  before: Node,
+  after: Node,
+  ranges: readonly Span[],
+) {
+  const kept: Span[] = [{ a: 0, b: 0, c: 0, d: 0 }]
+  for (const range of [
+    ...ranges,
+    {
+      a: before.content.size,
+      b: before.content.size,
+      c: after.content.size,
+      d: after.content.size,
+    },
+  ]) {
+    const last = kept.at(-1)!
+    if (
+      range.a >= last.b &&
+      range.c >= last.d &&
+      range.a - last.b === range.c - last.d &&
+      before.slice(last.b, range.a).eq(after.slice(last.d, range.c))
+    )
+      kept.push({ ...range })
+    else {
+      last.b = Math.max(last.b, range.b)
+      last.d = Math.max(last.d, range.d)
+    }
+  }
+  const steps = kept.flatMap(({ a, b, c, d }) =>
+    b > a || d > c ? [a, b - a, d - c] : [],
+  )
+  return steps.length ? new StepMap(steps) : StepMap.empty
+}
+
+/**
+ * Maps positions from one parse of a document to the next when the edits
+ * between them are unknown, through only the ranges that differ. Top-level
+ * blocks unique on both sides anchor the match (as in patience diff), equal
+ * neighbours extend it, and each remaining gap is narrowed to its first and
+ * last differing positions.
  */
 export function richChangeMap(before: Node, after: Node) {
   const blocks = (doc: Node) => {
@@ -21,7 +63,8 @@ export function richChangeMap(before: Node, after: Node) {
   }
   const a = blocks(before),
     b = blocks(after)
-  const key = (node: Node) => `${node.type.name}\u0000${node.textContent}`
+  const key = (node: Node) =>
+    `${node.type.name}\u0000${JSON.stringify(node.attrs)}\u0000${node.textContent}`
   const seen = new Map<string, { a: number; b: number }>()
   for (const [side, list] of [
     ['a', a.nodes],

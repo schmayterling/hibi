@@ -53,6 +53,10 @@ import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import type { SourceSnapshot } from '../../shared/source-buffer'
 import {
+  composeSourceChanges,
+  type RawEdit,
+} from '../../shared/source-operations'
+import {
   mapSourceSelection,
   type SourceSelection,
 } from '../../shared/source-selection'
@@ -108,7 +112,7 @@ import type { OutlineHeading, OutlineRequest } from './OutlineSidebar'
 import { outlineHeadingAt } from './outline-position'
 import { createPlainSourceSync } from './plain-source-sync'
 import { observeRichAnnotations } from './rich-annotations'
-import { richChangeMap } from './rich-change-map'
+import { richChangeMap, richRangeMap } from './rich-change-map'
 import {
   findNext,
   findPrev,
@@ -227,6 +231,12 @@ function revealRichRange(editor: Editor, from: number, to = from) {
 }
 
 export type ViewMode = DocumentView
+// Source edits composed since a pending split preview last matched `snapshot`.
+type PreviewBase = {
+  snapshot: SourceSnapshot
+  document: RichNode
+  changes: readonly RawEdit[]
+}
 
 export function MarkdownEditor({
   document: documentState,
@@ -314,11 +324,13 @@ export function MarkdownEditor({
     certificate: NonNullable<ReturnType<typeof createPlainSourceSync>>
     deferEcho?: boolean
   } | null>(null)
+  // A pending preview carried into the next synchronization effect.
   const retainedPreview = useRef<{
     editor: Editor
     session: DocumentSession
     snapshot: SourceSnapshot
-    selection: SourceSelection
+    selection: SourceSelection | null
+    base?: PreviewBase
   } | null>(null)
   const syntaxVersion = useSyncExternalStore(
     markdownSyntax.subscribe,
@@ -1970,6 +1982,7 @@ export function MarkdownEditor({
       // A raw text bookmark when the codec can map it. Otherwise catch-up maps
       // the untouched preview selection, of any kind, where documents agree.
       selection: SourceSelection | null
+      base?: PreviewBase
     } | null =
       retained?.editor === editor &&
       retained.session === session &&
@@ -2054,6 +2067,52 @@ export function MarkdownEditor({
         serialize(editor.state.doc),
       )
     }
+    // Each composed source edit located in the old and the new preview through
+    // their source maps, in order; null when an edit lies outside the body.
+    const editSpans = (
+      base: PreviewBase,
+      after: RichNode,
+      source: string,
+      projected: ReturnType<typeof projectMarkdown>,
+    ) => {
+      const old = base.snapshot.materialize(),
+        body = projectMarkdown(old, markdownExtensions),
+        from = body.sourceOffset ?? old.lastIndexOf(body.content),
+        to = projected.sourceOffset ?? source.lastIndexOf(projected.content)
+      if (from < 0 || to < 0) return null
+      const spans: { a: number; b: number; c: number; d: number }[] = []
+      // One side at a time, so each source map is built once.
+      const before = positions(body.content, base.document)
+      for (const change of base.changes) {
+        const a = before(change.from - from, 'source'),
+          b = before(change.to - from, 'source')
+        if (
+          change.from < from ||
+          change.to > from + body.content.length ||
+          a === null ||
+          b === null
+        )
+          return null
+        spans.push({ a, b: Math.max(a, b), c: 0, d: 0 })
+      }
+      const next = positions(projected.content, after)
+      let shift = 0
+      for (const [index, change] of base.changes.entries()) {
+        const at = change.from + shift - to,
+          c = next(at, 'source'),
+          d = next(at + change.insert.length, 'source')
+        shift += change.insert.length - (change.to - change.from)
+        if (
+          at < 0 ||
+          at + change.insert.length > projected.content.length ||
+          c === null ||
+          d === null
+        )
+          return null
+        spans[index] = { ...spans[index]!, c, d: Math.max(c, d) }
+      }
+      return spans
+    }
     const sync = () => {
       clearTimeout(timer)
       timer = undefined
@@ -2070,6 +2129,7 @@ export function MarkdownEditor({
         source = snapshot.materialize(),
         projected = projectMarkdown(source, markdownExtensions),
         bookmark = preview?.selection?.ranges[0],
+        pending = preview?.base,
         kept = editor.state.selection
       syncing = true
       try {
@@ -2082,7 +2142,18 @@ export function MarkdownEditor({
           .command(({ tr }) => {
             // Wherever the old and new previews agree, the selection keeps its
             // exact place and kind, including select-all, nodes and cells.
-            tr.setSelection(kept.map(tr.doc, richChangeMap(tr.before, tr.doc)))
+            const spans =
+              pending?.document === tr.before
+                ? editSpans(pending, tr.doc, source, projected)
+                : null
+            tr.setSelection(
+              kept.map(
+                tr.doc,
+                spans
+                  ? richRangeMap(tr.before, tr.doc, spans)
+                  : richChangeMap(tr.before, tr.doc),
+              ),
+            )
             if (bookmark) {
               const offset =
                 projected.sourceOffset ?? source.lastIndexOf(projected.content)
@@ -2148,6 +2219,17 @@ export function MarkdownEditor({
         return
       }
       if (preview) {
+        const { base } = preview
+        let changes: readonly RawEdit[] | null = null
+        // A hidden preview can stay stale for long; it maps by structure instead.
+        if (base && visible)
+          try {
+            changes = composeSourceChanges(
+              base.changes,
+              prepared.operation.changes,
+              base.snapshot.utf16Length,
+            )
+          } catch {}
         preview = {
           snapshot: prepared.after,
           selection: mapSourceSelection(
@@ -2155,6 +2237,7 @@ export function MarkdownEditor({
             preview.selection,
             prepared.operation.changes,
           ),
+          ...(base && changes ? { base: { ...base, changes } } : {}),
         }
       }
       // Hidden rich state stays untouched; only its pending raw selection advances.
@@ -2196,6 +2279,15 @@ export function MarkdownEditor({
                     prepared.operation.changes,
                   )
                 : null,
+            ...(matches(prepared.before)
+              ? {
+                  base: {
+                    snapshot: prepared.before,
+                    document: editor.state.doc,
+                    changes: prepared.operation.changes,
+                  },
+                }
+              : {}),
           }
         }
         // One coalesced catch-up after typing pauses; interaction flushes it sooner.
@@ -2253,15 +2345,11 @@ export function MarkdownEditor({
       disposed = true
       clearTimeout(timer)
       if (paragraphIdle !== undefined) cancelIdleCallback(paragraphIdle)
-      // Without a raw bookmark the editor keeps its own stale selection.
-      retainedPreview.current = preview?.selection
-        ? {
-            editor,
-            session,
-            snapshot: preview.snapshot,
-            selection: preview.selection,
-          }
-        : null
+      // Otherwise the editor keeps its own stale selection for the next effect.
+      retainedPreview.current =
+        preview?.selection || preview?.base
+          ? { editor, session, ...preview }
+          : null
       plainSync.current = null
       pendingPlainSync.current = null
       retryRich.current = () => {}

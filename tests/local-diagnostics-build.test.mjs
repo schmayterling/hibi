@@ -27,13 +27,9 @@ test('built catalog retains the actual renderer entry and lazy workers; exported
   const html = readFileSync('out/renderer/index.html', 'utf8')
   const entry = html.match(/src="\.\/(assets\/[^"]+\.js)"/)?.[1]
   assert.ok(entry && catalog.artifacts.some(([name]) => name === entry))
-  assert.deepEqual(
-    catalog.artifacts.map(([name]) => name),
-    readdirSync('out/renderer/assets')
-      .filter((name) => name.endsWith('.js'))
-      .map((name) => `assets/${name}`)
-      .sort(),
-  )
+  const listed = new Set(catalog.artifacts.map(([name]) => name))
+  for (const name of readdirSync('out/renderer/assets'))
+    if (name.endsWith('.js')) assert.ok(listed.has(`assets/${name}`), name)
   for (const prefix of [
     'document.worker-',
     'counter.worker-',

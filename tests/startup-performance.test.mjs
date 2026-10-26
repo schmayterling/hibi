@@ -95,9 +95,11 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // and 10 bytes for keeping footnote notes in the formatted view (#419),
   // plus 34 bytes for shared context-free search folding (#399),
   // and 9 bytes for the formatted view's copy importing the synchronous export
-  // renderer from the startup chunk (#459).
+  // renderer from the startup chunk (#459),
+  // plus 1 byte of minified import aliases in the entry that the source outline's
+  // lazy chunks renamed; no module moved into startup (#460).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
-  assert.ok(bytes <= 691123, `startup catalog grew to ${bytes} bytes`)
+  assert.ok(bytes <= 691124, `startup catalog grew to ${bytes} bytes`)
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
   assert.doesNotMatch(
     modules,

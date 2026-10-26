@@ -357,6 +357,11 @@ export type DesktopApi = {
   >
   invokeAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   queryAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
+  invokeAddonProfile: (
+    id: string,
+    method: string,
+    input?: unknown,
+  ) => Promise<unknown>
   getWorkspace: () => Promise<WorkspaceState | null>
   getWorkspaceHeader: () => Promise<
     import('./workspace-view').WorkspaceHeader | null

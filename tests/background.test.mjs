@@ -178,15 +178,15 @@ for (const platform of ['darwin', 'win32', 'linux']) {
     })
   }
 
-  test(`${platform}: only windows click opens; menu callbacks open, capture, show settings, and quit`, async (t) => {
+  test(`${platform}: windows and linux clicks open; menu callbacks open, capture, show settings, and quit`, async (t) => {
     const { background, mock } = await adapter(t, platform)
     mock.hasQuickNote = true
     await background.save(true)
     const tray = mock.trays[0]
-    assert.equal(tray.listenerCount('click'), platform === 'win32' ? 1 : 0)
+    assert.equal(tray.listenerCount('click'), platform === 'darwin' ? 0 : 1)
     assert.deepEqual(mock.calls, [])
     tray.emit('click')
-    assert.deepEqual(mock.calls, platform === 'win32' ? ['open'] : [])
+    assert.deepEqual(mock.calls, platform === 'darwin' ? [] : ['open'])
     mock.calls.length = 0
     const menu = tray.menus.at(-1)
     assert.deepEqual(
@@ -200,7 +200,7 @@ for (const platform of ['darwin', 'win32', 'linux']) {
     assert.equal(mock.quit, 1)
     background.refresh()
     assert.equal(mock.trays.length, 1)
-    assert.equal(tray.listenerCount('click'), platform === 'win32' ? 1 : 0)
+    assert.equal(tray.listenerCount('click'), platform === 'darwin' ? 0 : 1)
   })
 }
 

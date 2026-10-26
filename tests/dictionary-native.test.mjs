@@ -54,6 +54,14 @@ function nativeAddon(t) {
           return { id: 'dictionary' }
         case './pack-store':
           return { PackStore }
+        case './custom-word-store':
+          return {
+            CustomWordStore: class extends PackStore {
+              request() {
+                return []
+              }
+            },
+          }
         case './pack-runtime':
         case './packs':
         case '../../shared/host-selected-io':
@@ -108,6 +116,23 @@ test('re-enable waits for close and concurrent callers share the new store', asy
   assert.equal(stores.length, 2)
   assert.equal(stores[0].closed, true)
   assert.equal(stores[1].lists, 2)
+})
+
+test('disable during a waiting custom-word request cannot resurrect its storage worker', async (t) => {
+  const { addon, stores } = nativeAddon(t)
+  await addon.queries.customWords({})
+  addon.stop()
+  const stale = assert.rejects(
+    addon.queries.customWords({}),
+    /Dictionary packs are closed/,
+  )
+  addon.stop()
+  assert.equal(stores.length, 1)
+  stores[0].finishClose()
+  await stale
+  assert.equal(stores.length, 1)
+  await addon.queries.customWords({})
+  assert.equal(stores.length, 2)
 })
 
 test('stop invalidates a waiting first caller when no store exists', async (t) => {

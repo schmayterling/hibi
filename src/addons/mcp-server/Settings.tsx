@@ -58,7 +58,7 @@ export function Settings() {
     setPortError('')
   }
   const copy = (key: string, text: string) =>
-    navigator.clipboard.writeText(text).then(
+    window.hibi.writeClipboardText(text).then(
       () => setCopied(key),
       () => setError('Could not copy. Select the text and copy it instead.'),
     )

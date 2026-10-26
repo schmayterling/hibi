@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { type FSWatcher, type Stats, watch } from 'node:fs'
-import { lstat, readFile, realpath, stat } from 'node:fs/promises'
+import { lstat, readFile, realpath, rm, stat } from 'node:fs/promises'
 import { basename, isAbsolute, join, parse, relative, sep } from 'node:path'
 import { app, type BrowserWindow, dialog, shell } from 'electron'
 import ignore from 'ignore'
@@ -9,6 +9,7 @@ import type {
   WorkspaceTarget,
 } from '../shared/foundation-contracts'
 import { wikiTarget } from '../shared/note-links'
+import type { SourceSnapshot } from '../shared/source-buffer'
 import type {
   WorkspaceChange,
   WorkspaceEntry,
@@ -31,13 +32,16 @@ import {
   confirmDiscardAll,
   getDocument,
   getDocumentPath,
+  getDocumentSourceFor,
+  getDocumentTabs,
   getOpenDocumentMetadata,
   getOpenDocuments,
+  getOpenDocumentVersions,
   loadDocument,
   selectDocumentTab,
 } from './document'
 import { runFileDialog } from './file-operation-dialog'
-import { readMarkdown } from './files'
+import { readMarkdown, readMarkdownChunks } from './files'
 import {
   forgetWorkspace,
   getKnownWorkspaces,
@@ -53,14 +57,23 @@ import {
   type CachedIndexPage,
   diskIndexVersion,
   needsIndexVerification,
-  readIndexPage,
 } from './workspace-index-cache'
 import { LatestIndexJob } from './workspace-index-job'
+import type { WorkspaceMetadataPage } from './workspace-index-metadata'
+import {
+  checkLegacyIndexBytes,
+  LegacyWorkspaceIndex,
+} from './workspace-legacy-index'
 import { workspaceIgnore, workspaceMetadata } from './workspace-metadata'
+import {
+  incompleteMetadataPage,
+  WorkspaceMetadataParser,
+} from './workspace-metadata-parser'
 import { resolveWorkspaceEntry } from './workspace-paths'
 import { createScanCoordinator, watchNeedsScan } from './workspace-refresh'
 import { scanWorkspaceTree } from './workspace-scan'
 import { showAllWorkspaceFiles } from './workspace-settings'
+import type { WorkspaceSyntax } from './workspace-syntax'
 
 type ScanResult = {
   entries: WorkspaceEntry[]
@@ -101,16 +114,36 @@ const acknowledgedPaths = new Map<
 let onChanged: (change: WorkspaceChange) => void = () => {}
 let indexRevision = 0
 let cachedRoot: string | null = null
-let cachedPages = new Map<string, CachedIndexPage>()
+let cachedPages = new Map<string, CachedIndexPage<WorkspaceMetadataPage>>()
+const metadataParser = new WorkspaceMetadataParser(() => ({
+  entry: join(app.getAppPath(), 'out/main/workspace-metadata-worker.js'),
+  cacheDirectory: join(
+    app.getPath('userData'),
+    'workspace-index-cache',
+    workspaceId() ?? '',
+  ),
+  appVersion: app.getVersion(),
+}))
 let dirtyIndexPaths: Set<string> | null = null
-let cachedIndexKey: string | null = null
-let cachedIndexPages: WorkspaceIndex['pages'] | null = null
-type IndexDraft = ReturnType<typeof getOpenDocuments>[number]
+let cachedMetadataTree: readonly WorkspaceEntry[] | null = null
+let cachedSyntaxFingerprint = ''
+let cachedDraftPaths = new Set<string>()
+const legacyIndex = new LegacyWorkspaceIndex()
+let legacyCachedRoot: string | null = null
+type IndexDraft = {
+  file: string
+  tabId: string
+  contentVersion: number
+  pending: boolean
+  source: SourceSnapshot
+}
 type IndexRequest = {
   key: string
   selected: string
-  workspace: WorkspaceState
+  workspace: Omit<WorkspaceState, 'entries'>
   drafts: Map<string, IndexDraft>
+  documents: ReturnType<typeof getOpenDocumentMetadata>
+  tree: readonly WorkspaceEntry[]
   revision: number
 }
 const indexJob = new LatestIndexJob(captureIndexRequest, runIndexRequest)
@@ -137,7 +170,7 @@ function publishWorkspaceChange(change: WorkspaceChange) {
   if (
     change.kind === 'tree' ||
     change.paths === null ||
-    cachedRoot !== root ||
+    (cachedRoot !== root && legacyCachedRoot !== root) ||
     change.paths.some(indexedContentPath)
   ) {
     if (change.paths === null) dirtyIndexPaths = null
@@ -401,17 +434,17 @@ function workspaceHeaderFields(): WorkspaceMetadata | null {
 }
 
 export function getWorkspace<IncludeEntries extends boolean = false>(
-  open?: ReturnType<typeof getOpenDocuments>,
+  open?: ReturnType<typeof getOpenDocumentMetadata>,
   includeEntries?: IncludeEntries,
 ): WorkspaceReply<IncludeEntries> | null
 export function getWorkspace(
-  open?: ReturnType<typeof getOpenDocuments>,
+  open?: ReturnType<typeof getOpenDocumentMetadata>,
   includeEntries: boolean = false,
 ): WorkspaceReply<boolean> | null {
   const header = workspaceHeaderFields()
   if (!header || !root) return null
   if (!includeEntries) return { ...header, entries: [] }
-  const documents = open ?? getOpenDocuments()
+  const documents = open ?? getOpenDocumentMetadata()
   let visible = entries
   for (const draft of documents) {
     const draftPath = draft.pendingPath && relativePath(root, draft.pendingPath)
@@ -437,9 +470,11 @@ export function getWorkspace(
     visible = addDraft(visible, 0)
   }
   const dirty = new Set(
-    documents
-      .filter((draft) => draft.dirty && draft.file)
-      .map((draft) => relativePath(root!, draft.file!)),
+    documents.flatMap((draft) => {
+      const file = draft.pendingPath ?? draft.file
+      const path = draft.dirty && file ? relativePath(root!, file) : null
+      return path ? [path] : []
+    }),
   )
   const decorate = (items: WorkspaceEntry[]): WorkspaceEntry[] =>
     items.map((item) => ({
@@ -889,8 +924,12 @@ export async function loadWorkspace(
   cachedRoot = null
   cachedPages.clear()
   dirtyIndexPaths = null
-  cachedIndexKey = null
-  cachedIndexPages = null
+  metadataParser.close()
+  legacyIndex.clear()
+  legacyCachedRoot = null
+  cachedMetadataTree = null
+  cachedSyntaxFingerprint = ''
+  cachedDraftPaths.clear()
   root = nextRoot
   workspaceTarget = Object.freeze({
     workspaceId: workspaceId() as WorkspaceTarget['workspaceId'],
@@ -1003,6 +1042,12 @@ export async function deleteKnownWorkspace(
   )
     throw new Error('This folder cannot be moved to Trash from Hibi.')
   if (!(await confirmDiscardAll(window, item.path))) return false
+  const removedCaches = new Set([item.id])
+  let stopping: Promise<void> | undefined
+  if (root === item.path || root?.startsWith(`${item.path}${sep}`)) {
+    const currentId = workspaceId()
+    if (currentId) removedCaches.add(currentId)
+  }
   await shell.trashItem(item.path)
   closeDeletedDocuments(window, item.path)
   if (root === item.path || root?.startsWith(`${item.path}${sep}`)) {
@@ -1033,10 +1078,23 @@ export async function deleteKnownWorkspace(
     cachedRoot = null
     cachedPages.clear()
     dirtyIndexPaths = null
-    cachedIndexKey = null
-    cachedIndexPages = null
+    stopping = metadataParser.close()
+    legacyIndex.clear()
+    legacyCachedRoot = null
+    cachedMetadataTree = null
+    cachedSyntaxFingerprint = ''
+    cachedDraftPaths.clear()
     workspaceStream.replace(null)
   }
+  await stopping
+  await Promise.all(
+    [...removedCaches].map((id) =>
+      rm(join(app.getPath('userData'), 'workspace-index-cache', id), {
+        recursive: true,
+        force: true,
+      }).catch(() => {}),
+    ),
+  )
   await forgetWorkspace(item.path)
   publishWorkspaceChange({ kind: 'tree', paths: null })
   return true
@@ -1111,11 +1169,10 @@ export async function openWorkspaceFile(
   )
 }
 
-export async function readWorkspaceExportPage(
+export async function readWorkspaceExportSource(
   relative: string,
   target: WorkspaceTarget,
-  media: boolean | readonly string[] = true,
-): Promise<WorkspaceSnapshot['pages'][number]> {
+) {
   if (!isCurrentWorkspaceTarget(target) || !root)
     throw new Error('The workspace changed during export. Export again.')
   const selected = root
@@ -1128,23 +1185,45 @@ export async function readWorkspaceExportPage(
   if (draft?.pendingPath) {
     await resolveWorkspaceEntry(selected, relative, true)
   }
-  const markdown = draft?.dirty ? draft.markdown : await readMarkdown(path)
-  const images: Record<string, string> = Object.create(null)
-  if (media && isMarkdownDocument(relative))
-    for (const source of typeof media === 'boolean'
-      ? imageSources(markdown)
-      : media) {
-      const image = await exportDocumentMedia(source, path, selected)
-      if (image) images[source] = image
-    }
+  // Export owns one page at a time and has no per-note content ceiling.
+  const chunks: string[] = []
+  if (!draft?.dirty)
+    for await (const chunk of readMarkdownChunks(path)) chunks.push(chunk)
+  const markdown = draft?.dirty ? draft.markdown : chunks.join('')
   if (!isCurrentWorkspaceTarget(target))
     throw new Error('The workspace changed during export. Export again.')
   return {
-    id: createHash('sha256').update(path).digest('hex'),
-    path: relative,
-    markdown,
-    ...(media ? { images } : {}),
+    page: {
+      id: createHash('sha256').update(path).digest('hex'),
+      path: relative,
+      markdown,
+    },
+    note: path,
+    workspace: selected,
   }
+}
+
+export async function readWorkspaceExportPage(
+  relative: string,
+  target: WorkspaceTarget,
+  media: boolean | readonly string[] = true,
+): Promise<WorkspaceSnapshot['pages'][number]> {
+  const source = await readWorkspaceExportSource(relative, target)
+  const images: Record<string, string> = Object.create(null)
+  if (media && isMarkdownDocument(relative))
+    for (const href of typeof media === 'boolean'
+      ? imageSources(source.page.markdown)
+      : media) {
+      const image = await exportDocumentMedia(
+        href,
+        source.note,
+        source.workspace,
+      )
+      if (image) images[href] = image
+    }
+  if (!isCurrentWorkspaceTarget(target))
+    throw new Error('The workspace changed during export. Export again.')
+  return { ...source.page, ...(media ? { images } : {}) }
 }
 
 export function exportPaths(
@@ -1180,44 +1259,80 @@ export async function snapshotWorkspace(): Promise<WorkspaceSnapshot> {
 function captureIndexRequest(): { key: string; request: IndexRequest } | null {
   const selected = root
   if (!selected) return null
-  const open = getOpenDocuments()
-  const workspace = getWorkspace(open, true)
+  const documents = getOpenDocumentMetadata()
+  const workspace = getWorkspace(documents, false)
   if (!workspace) return null
-  const drafts = new Map(
-    open.flatMap((draft) => {
-      const path = draft.file && relativePath(selected, draft.file)
-      return path && draft.dirty ? [[path, draft] as const] : []
-    }),
-  )
+  const drafts = metadataDrafts(selected)
   const revision = indexRevision
   const key = JSON.stringify([
     selected,
+    workspaceTarget?.workspaceGeneration,
     revision,
     [...drafts]
       .map(([path, draft]) => [path, draft.tabId, draft.contentVersion])
       .sort(([a], [b]) => String(a).localeCompare(String(b))),
+    documents.map(({ file, pendingPath, dirty }) => [file, pendingPath, dirty]),
   ])
-  return { key, request: { key, selected, workspace, drafts, revision } }
+  return {
+    key,
+    request: {
+      key,
+      selected,
+      workspace,
+      drafts,
+      documents,
+      tree: entries,
+      revision,
+    },
+  }
 }
 
 async function runIndexRequest(
   request: IndexRequest,
   current: () => boolean,
-): Promise<WorkspaceIndex> {
-  const { selected, workspace, drafts, revision } = request
-  const pages = await collectIndexPages(
-    selected,
-    workspace.entries,
-    drafts,
-    () => current() && root === selected && indexRevision === revision,
-  )
-  const path = getDocumentPath()
-  const activePath = path ? relativePath(selected, path) : null
-  if (current()) {
-    cachedIndexKey = request.key
-    cachedIndexPages = pages
-  }
-  return { workspace: { ...workspace, activePath }, pages }
+): Promise<WorkspaceIndex | null> {
+  const { selected, workspace, drafts, documents, tree, revision } = request
+  const active = () =>
+    current() && root === selected && indexRevision === revision
+  const source = (draft: IndexDraft) => ({
+    id: createHash('sha256').update(draft.file).digest('hex'),
+    version: `draft:${draft.tabId}:${draft.contentVersion}`,
+    read: (maximumBytes: number) => {
+      checkLegacyIndexBytes(draft.source.utf16Length, maximumBytes)
+      return draft.source.materialize()
+    },
+  })
+  const result = await legacyIndex.read({
+    key: request.key,
+    workspace,
+    entries: tree,
+    documents: documents.flatMap((document) => {
+      const file = document.pendingPath ?? document.file
+      const path = file && relativePath(selected, file)
+      return path
+        ? [{ path, dirty: document.dirty, pending: !!document.pendingPath }]
+        : []
+    }),
+    drafts: new Map([...drafts].map(([path, draft]) => [path, source(draft)])),
+    resolve: async (path) => {
+      const file = await resolveWorkspaceFile(selected, path)
+      if (!active())
+        throw new DOMException('Workspace index canceled.', 'AbortError')
+      const info = await stat(file, { bigint: true })
+      return {
+        id: createHash('sha256').update(file).digest('hex'),
+        version: diskIndexVersion(info),
+        read: (maximumBytes: number) => {
+          checkLegacyIndexBytes(Number(info.size), maximumBytes)
+          return readMarkdown(file, maximumBytes)
+        },
+      }
+    },
+    isDocument: (name) => isDocumentName(name, true),
+    current: active,
+  })
+  if (result && active()) legacyCachedRoot = selected
+  return result
 }
 
 export function indexWorkspace(
@@ -1230,90 +1345,442 @@ export function indexWorkspace(
   }
   const captured = captureIndexRequest()
   if (!captured) return Promise.resolve(null)
-  if (
-    !indexJob.running &&
-    cachedIndexKey === captured.key &&
-    cachedIndexPages &&
-    dirtyIndexPaths?.size === 0
-  )
-    return Promise.resolve({
-      workspace: captured.request.workspace,
-      pages: cachedIndexPages,
-    })
   return indexJob.request(captured)
 }
 
-async function collectIndexPages(
-  selected: string,
-  entries: readonly WorkspaceEntry[],
-  drafts: Map<string, IndexDraft>,
+function metadataDrafts(selected: string): Map<string, IndexDraft> {
+  const dirty = new Set(
+    getDocumentTabs()
+      .filter((tab) => tab.dirty)
+      .map((tab) => tab.id),
+  )
+  const pending = new Set(
+    getOpenDocumentMetadata().flatMap((document) =>
+      document.pendingPath ? [document.pendingPath] : [],
+    ),
+  )
+  const drafts = new Map<string, IndexDraft>()
+  for (const version of getOpenDocumentVersions()) {
+    const path = relativePath(selected, version.file)
+    if (
+      !dirty.has(version.tabId) ||
+      !path ||
+      !isDocumentName(basename(path), true) ||
+      !relevantWatchPath(path) ||
+      path.split('/').includes('node_modules') ||
+      ignoredPaths?.ignores(path)
+    )
+      continue
+    drafts.set(path, {
+      ...version,
+      pending: pending.has(version.file),
+      source: getDocumentSourceFor(version.tabId).snapshot(),
+    })
+  }
+  return drafts
+}
+
+/** Heading text stays on disk; only this requested page crosses the worker boundary. */
+export async function workspaceMetadataHeadings(
+  path: string,
+  syntax: WorkspaceSyntax,
+  offset: number,
+  limit: number,
   current: () => boolean,
-): Promise<WorkspaceIndex['pages']> {
-  const previous = cachedRoot === selected ? cachedPages : new Map()
-  const next = new Map<string, CachedIndexPage>()
-  const pages: WorkspaceIndex['pages'] = []
-  let bytes = 0
-  async function collect(items: readonly WorkspaceEntry[]) {
-    for (const item of items) {
-      if (!current()) return
-      if (item.children) {
-        await collect(item.children)
-        continue
-      }
-      if (item.kind !== 'file') continue
-      if (!isDocumentName(item.name, true)) continue
-      try {
-        const draft = drafts.get(item.path)
-        const existing = previous.get(item.path)
-        let cached: CachedIndexPage
-        if (
-          !draft &&
-          existing?.version.startsWith('disk:') &&
-          !needsIndexVerification(dirtyIndexPaths, item.path)
-        ) {
-          cached = existing
-        } else {
-          const path =
-            draft?.file ?? (await resolveWorkspaceFile(selected, item.path))
-          if (!current()) return
-          let version: string
-          if (draft) {
-            version = `draft:${draft.tabId}:${draft.contentVersion}`
-          } else {
-            const file = await stat(path, { bigint: true })
-            version = diskIndexVersion(file)
+) {
+  const selected = root
+  if (!selected) return null
+  const revision = indexRevision
+  const active = () =>
+    current() && root === selected && indexRevision === revision
+  const draft = metadataDrafts(selected).get(path)
+  try {
+    const file = draft?.file ?? (await resolveWorkspaceFile(selected, path))
+    if (!active()) return null
+    const version = draft
+      ? `draft:${draft.tabId}:${draft.contentVersion}`
+      : diskIndexVersion(await stat(file, { bigint: true }))
+    if (!active()) return null
+    const id = createHash('sha256').update(file).digest('hex')
+    const cached = {
+      kind: 'cached' as const,
+      id,
+      path,
+      version,
+      fingerprint: syntax.fingerprint,
+    }
+    const page = await metadataParser.readHeadings(
+      cached,
+      offset,
+      limit,
+      active,
+    )
+    if (!active()) return null
+    if (page) return page
+    const input = {
+      id,
+      path,
+      version,
+      fingerprint: syntax.fingerprint,
+      syntax: syntax.page({ id, path, markdown: '' }),
+    }
+    const parsed = draft
+      ? await metadataParser.parseSource(input, draft.source, active)
+      : await metadataParser.parseFile(
+          { ...input, nativePath: file, expectedVersion: version },
+          active,
+        )
+    if (!parsed || !active()) return null
+    return await metadataParser.readHeadings(cached, offset, limit, active)
+  } catch (error) {
+    if (!active() || (error as NodeJS.ErrnoException).code === 'ENOENT')
+      return null
+    throw error
+  }
+}
+
+type PreparedMetadata =
+  | {
+      kind: 'retained'
+      path: string
+      cached: CachedIndexPage<WorkspaceMetadataPage>
+    }
+  | {
+      kind: 'source'
+      path: string
+      file: string
+      id: string
+      version: string
+      key: string
+      existing: CachedIndexPage<WorkspaceMetadataPage> | undefined
+      draft: IndexDraft | undefined
+    }
+
+async function readMetadataBatch(
+  paths: readonly string[],
+  selected: string,
+  syntax: WorkspaceSyntax,
+  drafts: ReadonlyMap<string, IndexDraft>,
+  previous: ReadonlyMap<string, CachedIndexPage<WorkspaceMetadataPage>>,
+  current: () => boolean,
+  begin?: () => Promise<boolean>,
+): Promise<[string, CachedIndexPage<WorkspaceMetadataPage>][]> {
+  const prepared: (PreparedMetadata | null)[] = paths.map(() => null)
+  let offset = 0
+  await Promise.all(
+    Array.from({ length: Math.min(4, paths.length) }, async () => {
+      while (current() && offset < paths.length) {
+        const index = offset++
+        const path = paths[index]
+        if (!path) continue
+        const draft = drafts.get(path)
+        const existing = previous.get(path)
+        try {
+          if (
+            !draft &&
+            existing?.page.version.startsWith('disk:') &&
+            existing.version ===
+              `${existing.page.version}:${syntax.fingerprint}` &&
+            !needsIndexVerification(dirtyIndexPaths, path)
+          ) {
+            prepared[index] = { kind: 'retained', path, cached: existing }
+            continue
           }
+          const file =
+            draft?.file ?? (await resolveWorkspaceFile(selected, path))
           if (!current()) return
-          cached = await readIndexPage(
-            existing,
-            version,
-            existing?.page.id ??
-              createHash('sha256').update(path).digest('hex'),
-            item.path,
-            () => draft?.markdown ?? readMarkdown(path),
-          )
+          const version = draft
+            ? `draft:${draft.tabId}:${draft.contentVersion}`
+            : diskIndexVersion(await stat(file, { bigint: true }))
+          if (!current()) return
+          const key = `${version}:${syntax.fingerprint}`
+          prepared[index] =
+            existing?.version === key
+              ? { kind: 'retained', path, cached: existing }
+              : {
+                  kind: 'source',
+                  path,
+                  file,
+                  id: createHash('sha256').update(file).digest('hex'),
+                  version,
+                  key,
+                  existing,
+                  draft,
+                }
+        } catch (error) {
+          if (!current()) return
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
         }
-        if (!current()) return
-        bytes += cached.bytes
-        if (pages.length >= 2000 || bytes > 20 * 1024 * 1024)
-          throw new Error(
-            'Hibi can index up to 2,000 documents and 20 MiB of text. Open a smaller workspace.',
-          )
-        next.set(item.path, cached)
-        pages.push(cached.page)
+      }
+    }),
+  )
+  if (!current() || (begin && !(await begin()))) return []
+  const sources = prepared.filter(
+    (item): item is Extract<PreparedMetadata, { kind: 'source' }> =>
+      item?.kind === 'source' && !item.draft,
+  )
+  const hits = sources.length
+    ? await metadataParser.cachedBatch(
+        sources.map((item) => ({
+          kind: 'cached' as const,
+          id: item.id,
+          path: item.path,
+          version: item.version,
+          fingerprint: syntax.fingerprint,
+        })),
+        current,
+      )
+    : []
+  if (!current()) return []
+  const cachedHits = new Map(
+    sources.map((item, index) => [item.path, hits[index]]),
+  )
+  const result: [string, CachedIndexPage<WorkspaceMetadataPage>][] = []
+  let started = performance.now()
+  for (const item of prepared) {
+    if (!current()) return []
+    if (!item) continue
+    if (item.kind === 'retained') result.push([item.path, item.cached])
+    else {
+      try {
+        const hit = cachedHits.get(item.path)
+        let cached: CachedIndexPage<WorkspaceMetadataPage>
+        if (hit) cached = { version: item.key, page: hit, bytes: 0 }
+        else {
+          const input = {
+            id: item.id,
+            path: item.path,
+            version: item.version,
+            fingerprint: syntax.fingerprint,
+            syntax: syntax.page({ id: item.id, path: item.path, markdown: '' }),
+          }
+          const parsed = item.draft
+            ? await metadataParser.parseSource(
+                input,
+                item.draft.source,
+                current,
+              )
+            : await metadataParser.parseFile(
+                {
+                  ...input,
+                  nativePath: item.file,
+                  expectedVersion: item.version,
+                },
+                current,
+              )
+          if (!current()) return []
+          cached = {
+            version: item.key,
+            page: parsed ?? incompleteMetadataPage(input),
+            bytes: 0,
+          }
+        }
+        if (!current()) return []
+        result.push([item.path, cached])
       } catch (error) {
-        // A concurrent rename/delete can remove a cached entry; the watcher refreshes it.
+        if (!current()) return []
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       }
     }
+    if (performance.now() - started >= 4) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      started = performance.now()
+    }
   }
-  await collect(entries)
-  if (current()) {
-    cachedRoot = selected
-    cachedPages = next
-    dirtyIndexPaths = new Set()
+  if (begin && result.length)
+    await metadataParser.markSeen(
+      result.flatMap(([, cached]) => (cached.page.id ? [cached.page.id] : [])),
+      current,
+    )
+  return current() ? result : []
+}
+
+type WorkspaceMetadataRead<Pages> = {
+  pages: Pages
+  commit: () => boolean
+}
+
+/** One bounded descriptor batch; publish its cache only with the applied index. */
+export function workspaceMetadataPages(
+  syntax: WorkspaceSyntax,
+  current: () => boolean,
+): WorkspaceMetadataRead<AsyncIterable<WorkspaceMetadataPage>> {
+  let publish: (() => boolean) | undefined
+  async function* read(): AsyncGenerator<WorkspaceMetadataPage> {
+    const selected = root
+    if (!selected) return
+    const revision = indexRevision
+    const tree = entries
+    const drafts = metadataDrafts(selected)
+    const active = () =>
+      current() && root === selected && indexRevision === revision
+    const previous =
+      cachedRoot === selected
+        ? cachedPages
+        : new Map<string, CachedIndexPage<WorkspaceMetadataPage>>()
+    const next = new Map<string, CachedIndexPage<WorkspaceMetadataPage>>()
+    const seen = new Set<string>()
+    let building = false
+    const begin = async () => {
+      if (!building) building = await metadataParser.beginBuild(active)
+      return building && active()
+    }
+    let started = performance.now()
+    async function* paths(
+      items: readonly WorkspaceEntry[],
+    ): AsyncGenerator<string> {
+      for (const item of items) {
+        if (!active()) return
+        if (item.children) yield* paths(item.children)
+        else if (item.kind === 'file' && isDocumentName(item.name, true)) {
+          seen.add(item.path)
+          yield item.path
+        }
+        if (performance.now() - started >= 4) {
+          await new Promise<void>((resolve) => setImmediate(resolve))
+          started = performance.now()
+        }
+      }
+    }
+    async function* allPaths() {
+      yield* paths(tree)
+      for (const [path, draft] of drafts)
+        if (draft.pending && !seen.has(path)) yield path
+    }
+    let batch: string[] = []
+    for await (const path of allPaths()) {
+      batch.push(path)
+      if (batch.length < 64) continue
+      const pages = await readMetadataBatch(
+        batch,
+        selected,
+        syntax,
+        drafts,
+        previous,
+        active,
+        begin,
+      )
+      if (!active()) return
+      for (const [path, cached] of pages) {
+        next.set(path, cached)
+        yield cached.page
+      }
+      batch = []
+    }
+    if (batch.length) {
+      const pages = await readMetadataBatch(
+        batch,
+        selected,
+        syntax,
+        drafts,
+        previous,
+        active,
+        begin,
+      )
+      if (!active()) return
+      for (const [path, cached] of pages) {
+        next.set(path, cached)
+        yield cached.page
+      }
+    }
+    if (!active()) return
+    if (building) await metadataParser.finishBuild(active)
+    else {
+      await metadataParser.close()
+      if (!active()) return
+      const id = createHash('sha256').update(selected).digest('hex')
+      await rm(join(app.getPath('userData'), 'workspace-index-cache', id), {
+        recursive: true,
+        force: true,
+      }).catch(() => {})
+    }
+    if (!active()) return
+    publish = () => {
+      if (!active()) return false
+      cachedRoot = selected
+      cachedPages = next
+      cachedMetadataTree = tree
+      cachedSyntaxFingerprint = syntax.fingerprint
+      cachedDraftPaths = new Set(
+        [...drafts.keys()].filter((path) => next.has(path)),
+      )
+      dirtyIndexPaths = new Set()
+      return true
+    }
   }
-  return pages
+  return {
+    pages: read(),
+    commit() {
+      const commit = publish
+      publish = undefined
+      return commit?.() ?? false
+    },
+  }
+}
+
+/** Apply dirty buffers and known content changes without traversing the retained tree. */
+export async function workspaceMetadataDelta(
+  syntax: WorkspaceSyntax,
+  current: () => boolean,
+): Promise<WorkspaceMetadataRead<readonly WorkspaceMetadataPage[]> | null> {
+  const selected = root
+  if (
+    !selected ||
+    cachedRoot !== selected ||
+    cachedMetadataTree !== entries ||
+    cachedSyntaxFingerprint !== syntax.fingerprint ||
+    !dirtyIndexPaths
+  )
+    return null
+  const revision = indexRevision
+  const active = () =>
+    current() && root === selected && indexRevision === revision
+  const drafts = metadataDrafts(selected)
+  const changed = new Set([...dirtyIndexPaths, ...cachedDraftPaths])
+  for (const [path, draft] of drafts)
+    if (draft.pending || cachedPages.has(path)) changed.add(path)
+  for (const path of changed) if (!cachedPages.has(path)) return null
+  const updates: [string, CachedIndexPage<WorkspaceMetadataPage>][] = []
+  let batch: string[] = []
+  for (const path of changed) {
+    batch.push(path)
+    if (batch.length < 64) continue
+    updates.push(
+      ...(await readMetadataBatch(
+        batch,
+        selected,
+        syntax,
+        drafts,
+        cachedPages,
+        active,
+      )),
+    )
+    batch = []
+  }
+  if (batch.length)
+    updates.push(
+      ...(await readMetadataBatch(
+        batch,
+        selected,
+        syntax,
+        drafts,
+        cachedPages,
+        active,
+      )),
+    )
+  if (!active() || updates.length !== changed.size) return null
+  return {
+    pages: updates.map(([, cached]) => cached.page),
+    commit() {
+      if (!active()) return false
+      for (const [path, cached] of updates) cachedPages.set(path, cached)
+      cachedDraftPaths = new Set(
+        [...drafts.keys()].filter((path) => cachedPages.has(path)),
+      )
+      dirtyIndexPaths = new Set()
+      return true
+    },
+  }
 }
 
 import { isMarkdownDocument } from '../shared/document-types'

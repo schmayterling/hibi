@@ -9,6 +9,9 @@ const host = {
   sequence: 1,
   revision: 1,
   indexReads: 0,
+  deltaReads: 0,
+  commits: 0,
+  deltaPages: null,
   parses: 0,
   listener: null,
   stale: false,
@@ -50,28 +53,15 @@ const bundle = await build({
     {
       name: 'metadata-host',
       setup(build) {
-        build.onResolve({ filter: /note-links\.ts$/ }, (args) =>
-          /[/\\]workspace-reference-index\.ts$/.test(args.importer)
-            ? { path: args.path, namespace: 'metadata-parser' }
-            : null,
-        )
-        build.onLoad({ filter: /.*/, namespace: 'metadata-parser' }, () => ({
-          contents: `import * as actual from ${JSON.stringify(resolve('src/shared/note-links.ts'))}
-            export const { localTarget, noteBasenames, noteTargets, wikiTarget } = actual
-            export const noteReferences = (...args) => {
-              globalThis.__hibiMetadataTestHost.parses++
-              return actual.noteReferences(...args)
-            }`,
-          loader: 'js',
-          resolveDir: resolve('.'),
-        }))
         build.onResolve({ filter: /^\.\/workspace$/ }, (args) =>
           /[/\\]workspace-metadata-query\.ts$/.test(args.importer)
             ? { path: args.path, namespace: 'metadata-host' }
             : null,
         )
         build.onLoad({ filter: /.*/, namespace: 'metadata-host' }, () => ({
-          contents: `const host = () => globalThis.__hibiMetadataTestHost
+          contents: `import { parseWorkspaceMetadata, sourceIndexVersion } from ${JSON.stringify(resolve('src/main/workspace-index-metadata.ts'))}
+          import { noteReferences } from ${JSON.stringify(resolve('src/shared/note-links.ts'))}
+          const host = () => globalThis.__hibiMetadataTestHost
           export const isCurrentWorkspaceTarget = (target) =>
             target?.workspaceId === host().target.workspaceId &&
             target?.workspaceGeneration === host().target.workspaceGeneration
@@ -84,13 +74,59 @@ const bundle = await build({
             host().listener = listener
             return () => { host().listener = null }
           }
-          export const indexWorkspace = async () => {
+          export async function workspaceMetadataHeadings(path, syntax, offset, limit, current) {
+            if (!current()) return null
+            const page = host().pages.find(page => page.path === path)
+            if (!page) return null
+            const profile = syntax.page(page)
+            const headings = parseWorkspaceMetadata(page, profile).headings
+            const items = []
+            let bytes = 0, nextOffset = offset, complete = headings.complete && profile.complete
+            for (let scanned = 0; nextOffset < headings.items.length && scanned < limit; scanned++) {
+              const heading = headings.items[nextOffset]
+              const size = Buffer.byteLength(heading.text)
+              if (size > 32768) { complete = false; nextOffset++; continue }
+              if (bytes + size > 32768) break
+              items.push(heading); bytes += size; nextOffset++
+            }
+            return { items, nextOffset, hasMore: nextOffset < headings.items.length, complete }
+          }
+          export async function workspaceMetadataDelta(syntax, current) {
+            if (!current() || host().deltaPages === null) return null
+            host().deltaReads++
+            const pages = host().deltaPages.map((page) => {
+              const profile = syntax.page(page)
+              host().parses++
+              return { path: page.path, version: sourceIndexVersion(page.markdown),
+                syntax: profile, metadata: parseWorkspaceMetadata(page, profile) }
+            })
+            return { pages, commit() { if (!current()) return false; host().commits++; return true } }
+          }
+          export function workspaceMetadataPages(syntax, current) {
+            let completed = false
+            async function* read() {
             host().indexReads++
             if (host().changeDuringRead) host().sequence++
             if (host().editDuringRead) host().versions[0].contentVersion++
-            return { workspace: { id: host().target.workspaceId }, pages: host().pages }
+            for (const page of host().pages) {
+              if (!current()) return
+              const profile = syntax.page(page)
+              yield {
+                path: page.path,
+                version: sourceIndexVersion(page.markdown),
+                syntax: profile,
+                metadata: parseWorkspaceMetadata(page, profile, (...args) => {
+                  host().parses++
+                  return noteReferences(...args)
+                }),
+              }
+            }
+            completed = true
+            }
+            return { pages: read(), commit() { if (!completed || !current()) return false; host().commits++; return true } }
           }`,
           loader: 'js',
+          resolveDir: resolve('.'),
         }))
       },
     },
@@ -119,6 +155,7 @@ test('ten concurrent metadata consumers share one build and parse each page once
   host.listener({ kind: 'resync' })
   const reads = host.indexReads
   const parses = host.parses
+  const commits = host.commits
   try {
     const results = await Promise.all(
       Array.from({ length: 10 }, () =>
@@ -128,6 +165,7 @@ test('ten concurrent metadata consumers share one build and parse each page once
     assert.ok(results.every((result) => result.ok))
     assert.equal(host.parses - parses, 64)
     assert.equal(host.indexReads - reads, 1)
+    assert.equal(host.commits - commits, 1)
   } finally {
     host.pages = pages
     host.indexReads = reads
@@ -416,6 +454,176 @@ test('frontmatter projection changes property results without a source edit', as
   host.pages = previousPages
   host.syntaxSnapshot = previousSyntax
   host.revision++
+})
+
+test('query pages reach offsets beyond 2100 and preserve large metadata fields', async () => {
+  const original = host.pages
+  const originalSyntax = host.syntaxSnapshot
+  host.syntaxSnapshot = {
+    ...host.syntaxSnapshot,
+    complete: true,
+    projections: [{ id: 'frontmatter.metadata', parserVersion: '1' }],
+  }
+  const key = 'key'.repeat(60)
+  const value = 'value'.repeat(1000)
+  const tag = 'tag'.repeat(60)
+  const title = 'heading'.repeat(800)
+  host.pages = Array.from({ length: 2102 }, (_, i) => ({
+    path: `note-${String(i).padStart(5, '0')}.md`,
+    markdown: '#work [[target]]',
+  }))
+  host.pages[0].markdown = `---\n${key}: ${value}\nlist: [${Array.from({ length: 40 }, (_, i) => `member${i}`).join(', ')}]\n---\n#work [[target]]\n\n${Array.from({ length: 299 }, (_, i) => `# h${i}`).join('\n\n')}\n\n# ${title}`
+  host.pages[1].markdown += ` #${tag}`
+  host.pages.push({ path: 'target.md', markdown: '' })
+  host.revision++
+  host.listener({ kind: 'resync' })
+  try {
+    const target = host.target
+    const tail = await query({
+      target,
+      kind: 'backlinks',
+      path: 'target.md',
+      offset: 2100,
+      limit: 100,
+    })
+    assert.equal(tail.ok, true)
+    assert.deepEqual(tail.value.items, ['note-02100.md', 'note-02101.md'])
+    assert.equal(tail.value.hasMore, false)
+    assert.deepEqual(
+      (await query({ target, kind: 'property', key, value })).value.items,
+      ['note-00000.md'],
+    )
+    assert.deepEqual(
+      (
+        await query({
+          target,
+          kind: 'property',
+          key: 'list',
+          value: 'member39',
+        })
+      ).value.items,
+      ['note-00000.md'],
+    )
+    assert.deepEqual((await query({ target, kind: 'tag', tag })).value.items, [
+      'note-00001.md',
+    ])
+    const headings = await query({
+      target,
+      kind: 'headings',
+      path: 'note-00000.md',
+      offset: 299,
+    })
+    assert.equal(headings.value.complete, true)
+    assert.deepEqual(headings.value.items, [{ depth: 1, text: title }])
+  } finally {
+    host.pages = original
+    host.syntaxSnapshot = originalSyntax
+    host.revision++
+    host.listener({ kind: 'resync' })
+  }
+})
+
+test('dirty source versions use one metadata delta for concurrent completion queries', async () => {
+  const saved = { pages: host.pages, versions: host.versions }
+  host.pages = Array.from({ length: 64 }, (_, i) => ({
+    path: `note-${i}.md`,
+    markdown: '#base',
+  }))
+  host.versions = [
+    { file: '/notes/note-0.md', tabId: 'edit', contentVersion: 1 },
+  ]
+  host.deltaPages = null
+  host.revision++
+  host.listener({ kind: 'resync' })
+  try {
+    const first = await query({
+      target: host.target,
+      kind: 'search-paths',
+      query: 'note-',
+    })
+    assert.equal(first.ok, true)
+    const reads = host.indexReads
+    const parses = host.parses
+    const deltas = host.deltaReads
+    host.pages[0] = { path: 'note-0.md', markdown: '#base #new [[note-1]]' }
+    host.deltaPages = [host.pages[0]]
+    host.versions[0].contentVersion++
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        query({ target: host.target, kind: 'search-tags', query: 'new' }),
+      ),
+    )
+    assert.ok(results.every((result) => result.ok))
+    assert.ok(results.every((result) => result.value.items[0].tag === 'new'))
+    assert.equal(host.indexReads, reads)
+    assert.equal(host.parses, parses + 1)
+    assert.equal(host.deltaReads, deltas + 1)
+    const links = await query({
+      target: host.target,
+      kind: 'links',
+      path: 'note-0.md',
+    })
+    assert.deepEqual(links.value.items, ['note-1.md'])
+  } finally {
+    host.pages = saved.pages
+    host.versions = saved.versions
+    host.deltaPages = null
+    host.revision++
+    host.listener({ kind: 'resync' })
+  }
+})
+
+test('metadata query offsets pass oversized tags and headings without stranding later records', async () => {
+  const pages = host.pages
+  host.pages = [
+    {
+      path: 'a.md',
+      markdown:
+        '#aaa #' +
+        'b'.repeat(40000) +
+        ' #ccc #ddd\n\n# one\n# ' +
+        'x'.repeat(40000) +
+        '\n# three\n# four',
+    },
+  ]
+  host.deltaPages = null
+  host.revision++
+  host.listener({ kind: 'resync' })
+  try {
+    for (const kind of ['tags', 'headings']) {
+      let offset = 0
+      let complete = true
+      const items = []
+      while (true) {
+        const result = await query({
+          target: host.target,
+          kind,
+          path: 'a.md',
+          offset,
+          limit: 1,
+        })
+        assert.equal(result.ok, true)
+        complete &&= result.value.complete
+        items.push(
+          ...result.value.items.map((item) =>
+            kind === 'tags' ? item.tag : item.text,
+          ),
+        )
+        if (!result.value.hasMore) break
+        assert.ok(result.value.nextOffset > offset)
+        offset = result.value.nextOffset
+      }
+      assert.deepEqual(
+        items,
+        kind === 'tags' ? ['aaa', 'ccc', 'ddd'] : ['one', 'three', 'four'],
+      )
+      assert.equal(complete, false)
+    }
+  } finally {
+    host.pages = pages
+    host.revision++
+    host.listener({ kind: 'resync' })
+  }
 })
 
 test('graph cursors page past 10,000 records to every note and link', async () => {

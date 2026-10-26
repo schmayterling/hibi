@@ -17,10 +17,13 @@ import {
   type SiteAddon,
   type SiteData,
   type SitePage,
+  siteAssetDirectory,
   siteJson,
+  siteMediaType,
 } from '../../site/data.ts'
 import { noteGraph } from '../graph/model.ts'
 import { type ExportOptions, exportOptions } from './options.ts'
+import { base64Chunks } from './site-media.ts'
 
 const escapeHtml = (value: string) =>
   value
@@ -270,9 +273,10 @@ export function prepareSite(
       const data = page.images?.[token.href]
       if (
         typeof data === 'string' &&
-        /^data:(?:image\/(?:png|jpeg|gif|webp|avif|svg\+xml)|video\/(?:mp4|webm|ogg));base64,[a-z\d+/]+={0,2}$/i.test(
+        (/^data:(?:image\/(?:png|jpeg|gif|webp|avif|svg\+xml)|video\/(?:mp4|webm|ogg));base64,[a-z\d+/]+={0,2}$/i.test(
           data,
-        )
+        ) ||
+          siteMediaType(data))
       )
         images[token.href] = data
     })
@@ -342,6 +346,7 @@ function content(
   prefix: string,
   paths: ReadonlySet<string>,
   navigation: readonly SitePage[],
+  externalMedia: boolean,
 ) {
   let html = renderedHtml(page.html ?? '', {
     blockquote: (_tag, attrs) => ({
@@ -412,9 +417,14 @@ function content(
           alt: attrs.alt ?? '',
           ...(src?.startsWith('data:image/')
             ? { src }
-            : isMermaidImage(attrs.src ?? '', attrs.class ?? '')
-              ? { src: attrs.src }
-              : {}),
+            : src &&
+                externalMedia &&
+                siteMediaType(src)?.startsWith('image/') &&
+                siteMediaType(src) !== 'image/svg+xml'
+              ? { src: prefix + src }
+              : isMermaidImage(attrs.src ?? '', attrs.class ?? '')
+                ? { src: attrs.src }
+                : {}),
         },
       }
     },
@@ -487,10 +497,53 @@ function siteHead(
   return `<title>${escapeHtml(title)}</title>${meta('description', description)}${meta('author', locked ? '' : site.options.author)}${meta('robots', locked || !site.options.indexing ? 'noindex, nofollow' : 'index, follow')}${meta('og:title', title, true)}${meta('og:description', description, true)}${meta('og:type', 'website', true)}${meta('og:site_name', locked ? '' : site.name, true)}${meta('og:url', locked ? '' : canonical, true)}${meta('og:image', locked ? '' : site.options.socialImage, true)}${meta('twitter:card', site.options.socialImage && !locked ? 'summary_large_image' : 'summary')}${meta('twitter:title', title)}${meta('twitter:description', description)}${meta('twitter:image', locked ? '' : site.options.socialImage)}${canonical && !locked ? `<link rel="canonical" href="${escapeHtml(canonical)}">` : ''}${site.options.favicon && !locked ? `<link rel="icon" href="${escapeHtml(site.options.favicon)}">` : ''}${structured}`
 }
 
+async function* pageData(
+  page: SitePage,
+  serialize: typeof siteJson,
+  readAsset?: (path: string) => AsyncIterable<Uint8Array>,
+  inlineAssets = false,
+) {
+  if (
+    !readAsset ||
+    !Object.values(page.images ?? {}).some((path) => siteMediaType(path))
+  ) {
+    yield serialize(page)
+    return
+  }
+  yield '{'
+  let separator = ''
+  for (const key of Object.keys(page) as (keyof SitePage)[]) {
+    if (page[key] === undefined) continue
+    yield separator + serialize(key) + ':'
+    separator = ','
+    if (key !== 'images') yield serialize(page[key])
+    else {
+      yield '{'
+      let imageSeparator = ''
+      for (const [source, path] of Object.entries(page.images ?? {})) {
+        yield imageSeparator + serialize(source) + ':'
+        imageSeparator = ','
+        const mime = siteMediaType(path)
+        if (!mime || (!inlineAssets && mime !== 'image/svg+xml'))
+          yield serialize(path)
+        else {
+          yield '"data:' + mime + ';base64,'
+          yield* base64Chunks(readAsset(path))
+          yield '"'
+        }
+      }
+      yield '}'
+    }
+  }
+  yield '}'
+}
+
 async function* siteData(
   site: SiteData,
   readPage: (page: SitePage) => Promise<SitePage>,
   serialize = siteJson,
+  readAsset?: (path: string) => AsyncIterable<Uint8Array>,
+  inlineAssets = false,
 ) {
   yield '{'
   let separator = ''
@@ -502,7 +555,12 @@ async function* siteData(
       yield '['
       for (const [index, page] of site.pages.entries()) {
         if (index) yield ','
-        yield serialize(await readPage(page))
+        yield* pageData(
+          await readPage(page),
+          serialize,
+          readAsset,
+          inlineAssets,
+        )
       }
       yield ']'
     } else yield serialize(site[key])
@@ -510,13 +568,23 @@ async function* siteData(
   yield '}'
 }
 
-async function* encryptedData(data: AsyncIterable<string>, password: string) {
+async function siteEncryption(password: string) {
   if (password.length < 8 || password.length > 1024)
     throw new Error('Use a password between 8 and 1,024 characters.')
   const salt = randomBytes(16),
-    iv = randomBytes(12),
     iterations = 600_000
   const key = await promisify(pbkdf2)(password, salt, iterations, 32, 'sha256')
+  return { salt, iterations, key }
+}
+
+async function* encryptedData(
+  data: AsyncIterable<string>,
+  password: string,
+  encryption?: Awaited<ReturnType<typeof siteEncryption>>,
+) {
+  const { salt, iterations, key } =
+    encryption ?? (await siteEncryption(password))
+  const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', key, iv)
   yield `${JSON.stringify({
     encrypted: true,
@@ -546,8 +614,12 @@ export async function* siteOutput(
   site: SiteData,
   password = '',
   readPage: (page: SitePage) => Promise<SitePage> = async (page) => page,
+  readAsset?: (path: string) => AsyncIterable<Uint8Array>,
+  inlineAssets = false,
+  mediaPaths?: readonly string[],
 ): AsyncGenerator<readonly [string, AsyncIterable<string>]> {
   const locked = !!password
+  const inlineMedia = site.options.singleFile || locked || inlineAssets
   if (site.options.passwordProtected && !locked)
     throw new Error('Enter the password for this export.')
   if (locked)
@@ -556,10 +628,68 @@ export async function* siteOutput(
       routing: 'hash',
       options: { ...site.options, passwordProtected: true },
     }
+  const inline =
+    readAsset && !inlineAssets
+      ? [
+          ...new Set(
+            mediaPaths ??
+              site.pages.flatMap((page) => Object.values(page.images ?? {})),
+          ),
+        ].filter(
+          (path) =>
+            siteMediaType(path) &&
+            (inlineMedia || siteMediaType(path) === 'image/svg+xml'),
+        )
+      : []
+  if (inline.length) site = { ...site, inlineMedia: inline }
+  const encryption =
+    locked && inline.length ? await siteEncryption(password) : undefined
   const data = () =>
     locked
-      ? encryptedData(siteData(site, readPage, JSON.stringify), password)
-      : siteData(site, readPage)
+      ? encryptedData(
+          siteData(
+            site,
+            readPage,
+            JSON.stringify,
+            inline.length ? undefined : readAsset,
+            inlineMedia,
+          ),
+          password,
+          encryption,
+        )
+      : siteData(
+          site,
+          readPage,
+          siteJson,
+          inline.length ? undefined : readAsset,
+          inlineMedia,
+        )
+  async function* records() {
+    const encode = (record: unknown) => {
+      if (!encryption) return siteJson(record)
+      const iv = randomBytes(12)
+      const cipher = createCipheriv('aes-256-gcm', encryption.key, iv)
+      const ciphertext = Buffer.concat([
+        cipher.update(JSON.stringify(record), 'utf8'),
+        cipher.final(),
+        cipher.getAuthTag(),
+      ])
+      return siteJson({
+        iv: iv.toString('base64'),
+        ciphertext: ciphertext.toString('base64'),
+      })
+    }
+    for (const path of inline) {
+      let index = 0
+      let previous: string | undefined
+      for await (const data of base64Chunks(readAsset!(path))) {
+        if (previous !== undefined)
+          yield encode({ path, index: index++, data: previous, last: false })
+        previous = data
+      }
+      yield encode({ path, index, data: previous ?? '', last: true })
+    }
+  }
   const home = homePage(site.pages, site.options.homePage) as
     | SitePage
     | undefined
@@ -574,11 +704,7 @@ export async function* siteOutput(
         )
   }
   const homeContent = home && !locked ? await readPage(home) : undefined
-  let assets = 'hibi-assets'
-  const roots = new Set(
-    site.pages.map((page) => page.path.toLowerCase().split('/')[0]),
-  )
-  while (roots.has(assets)) assets += '-site'
+  const assets = siteAssetDirectory(site.pages)
   const customCss = `@layer hibi-theme {${themeCss(site)}}\n${site.css ?? ''}\n${(site.addons ?? []).map((addon) => addon.css ?? '').join('\n')}\n${site.options.css}`
   const safeStyle = (css: string) => css.replace(/<\/style/gi, '<\\/style')
   const decorate = (
@@ -603,21 +729,29 @@ export async function* siteOutput(
       .replace(
         '<div id="root"></div>',
         () =>
-          `<div id="root">${locked ? '<main class="site-unlock"><h1>Protected site</h1><noscript>Enable JavaScript to unlock this site.</noscript></main>' : page ? content(site, page, prefix, paths, neighbors(page)) : ''}</div>`,
+          `<div id="root">${locked ? '<main class="site-unlock"><h1>Protected site</h1><noscript>Enable JavaScript to unlock this site.</noscript></main>' : page ? content(site, page, prefix, paths, neighbors(page), !inlineMedia) : ''}</div>`,
       )
   if (site.options.singleFile) {
     const marker = randomBytes(16).toString('hex')
-    const html = decorate(
-      template.replace('__HIBI_WORKSPACE_DATA__', marker),
-      homeContent,
-      './',
-      site.options.url,
-    )
+    const mediaMarker = randomBytes(16).toString('hex')
+    let source = template.replace('__HIBI_WORKSPACE_DATA__', marker)
+    let script = source.indexOf('<script>')
+    if (script < 0) script = source.indexOf('</body>')
+    if (script < 0) script = source.length
+    source = source.slice(0, script) + mediaMarker + source.slice(script)
+    const html = decorate(source, homeContent, './', site.options.url)
     const offset = html.indexOf(marker)
     async function* document() {
       yield html.slice(0, offset)
       yield* data()
-      yield html.slice(offset + marker.length)
+      const after = html.slice(offset + marker.length)
+      const mediaOffset = after.indexOf(mediaMarker)
+      yield after.slice(0, mediaOffset)
+      for await (const record of records())
+        yield '<script type="application/json" data-site-media>' +
+          record +
+          '</script>'
+      yield after.slice(mediaOffset + mediaMarker.length)
     }
     yield ['index.html', document()]
     return
@@ -631,10 +765,31 @@ export async function* siteOutput(
   yield [`${assets}/site.js`, textChunks(scripts)]
   yield [`${assets}/site.css`, textChunks(css)]
   if (!locked) yield [`${assets}/custom.css`, textChunks(customCss)]
+  const mediaFiles: string[] = []
+  let batch: string[] = []
+  let batchBytes = 0
+  const mediaFile = () => {
+    const path = assets + '/inline-media/' + mediaFiles.length + '.js'
+    mediaFiles.push(path)
+    return [path, textChunks(batch.join(''))] as const
+  }
+  for await (const record of records()) {
+    const script = 'window.__HIBI_MEDIA_CHUNK__(' + siteJson(record) + ');'
+    if (batchBytes + script.length > 4 * 1024 * 1024) {
+      yield mediaFile()
+      batch = []
+      batchBytes = 0
+    }
+    batch.push(script)
+    batchBytes += script.length
+  }
+  if (batch.length) yield mediaFile()
   async function* workspace() {
     yield 'window.__HIBI_WORKSPACE__='
     yield* data()
     yield ';'
+    if (mediaFiles.length)
+      yield 'window.__HIBI_MEDIA_FILES__=' + siteJson(mediaFiles) + ';'
   }
   yield [`${assets}/workspace.js`, workspace()]
   const shell = (prefix: string) =>

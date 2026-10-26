@@ -71,21 +71,39 @@ const sameConfig = (a: CellConfig, b: CellConfig) =>
  * table is now comes from the view.
  */
 class TableWidget extends WidgetType {
+  readonly doc: Text
+  readonly from: number
+  readonly to: number
+  readonly first: number
+  /** Where the table starts on its first line, after container markers. */
+  readonly start: number
+  readonly rows: number
+  /** Quotes around the table, whose markers start its later lines. */
+  readonly quotes: number
+  /** In a quote or list: an inline widget on the container's line. */
+  readonly inline: boolean
+  readonly config: CellConfig
   constructor(
-    readonly doc: Text,
-    readonly from: number,
-    readonly to: number,
-    readonly first: number,
-    /** Where the table starts on its first line, after container markers. */
-    readonly start: number,
-    readonly rows: number,
-    /** Quotes around the table, whose markers start its later lines. */
-    readonly quotes: number,
-    /** In a quote or list: an inline widget on the container's line. */
-    readonly inline: boolean,
-    readonly config: CellConfig,
+    doc: Text,
+    from: number,
+    to: number,
+    first: number,
+    start: number,
+    rows: number,
+    quotes: number,
+    inline: boolean,
+    config: CellConfig,
   ) {
     super()
+    this.doc = doc
+    this.from = from
+    this.to = to
+    this.first = first
+    this.start = start
+    this.rows = rows
+    this.quotes = quotes
+    this.inline = inline
+    this.config = config
   }
   override eq(other: TableWidget) {
     return (
@@ -131,7 +149,9 @@ class TableWidget extends WidgetType {
 class Heights {
   private sums: Float64Array
   private values: Float64Array
-  constructor(readonly length: number) {
+  readonly length: number
+  constructor(length: number) {
+    this.length = length
     this.values = new Float64Array(length).fill(ROW_HEIGHT)
     this.sums = new Float64Array(length + 1)
     for (let i = 1; i <= length; i++) {
@@ -220,10 +240,11 @@ class TableView {
       })
     | null = null
 
-  constructor(
-    readonly view: EditorView,
-    private widget: TableWidget,
-  ) {
+  readonly view: EditorView
+  private widget: TableWidget
+  constructor(view: EditorView, widget: TableWidget) {
+    this.view = view
+    this.widget = widget
     this.dom.className = 'tableWrapper hibi-lp-table'
     this.dom.addEventListener('mousedown', this.select)
     this.table.append(this.columns, this.body)
@@ -1021,7 +1042,10 @@ function tableAt(view: EditorView, pos: number, strict = false) {
  */
 const tableEditing = ViewPlugin.fromClass(
   class {
-    constructor(readonly view: EditorView) {}
+    readonly view: EditorView
+    constructor(view: EditorView) {
+      this.view = view
+    }
     update(update: ViewUpdate) {
       const tables = mounted.get(this.view) ?? []
       // A selection set elsewhere, as by undo, moves a focused cell editor;

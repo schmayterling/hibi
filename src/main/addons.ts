@@ -19,6 +19,7 @@ import { parseDependencies } from '../shared/dependencies'
 import { validDocumentExtensions } from '../shared/document-types'
 import type { AddonId, AddonOwner } from '../shared/foundation-contracts'
 import type { ImportFile, ImportStream } from '../shared/imports'
+import { stopNativeAddon } from './addon-stop'
 import { getAddonRevocation, loadAddonTrust } from './addon-trust'
 import { exportedAppearance } from './appearance'
 import {
@@ -207,6 +208,10 @@ export async function applyAddonRevocations(): Promise<void> {
   const next = { ...enabled }
   for (const addon of revoked) next[addon.manifest.id] = false
   await savePreferences(next)
+}
+
+export async function stopNativeAddons() {
+  await Promise.all([...natives.values()].map(stopNativeAddon))
 }
 
 export function getAddonStartupNotices() {
@@ -519,14 +524,14 @@ async function deactivateUnavailable(before: readonly AddonState[]) {
       generations.set(id, generation + 1)
       return { id, generation }
     })
-  for (const { id, generation } of owners) {
-    try {
-      natives.get(id)?.stop?.()
-    } catch (error) {
-      console.error(`could not stop native addon ${id}:`, error)
-    }
+  await Promise.all(
+    owners.map(({ id }) => {
+      const native = natives.get(id)
+      return native ? stopNativeAddon(native) : undefined
+    }),
+  )
+  for (const { id, generation } of owners)
     await onAddonDeactivated(id, generation)
-  }
 }
 
 async function disableAddonForReplacement(
@@ -665,7 +670,7 @@ export async function invokeAddon(
   id: unknown,
   method: unknown,
   input: unknown,
-  query = false,
+  kind: 'invoke' | 'query' | 'profile' = 'invoke',
 ): Promise<unknown> {
   if (typeof id !== 'string' || typeof method !== 'string')
     throw new Error('Enable this addon in Settings → Addons first.')
@@ -677,13 +682,19 @@ export async function invokeAddon(
     throw new Error(
       'This addon was disabled. Enable it in Settings → Addons to continue.',
     )
-  const handlers = query ? addon?.queries : addon?.methods
+  const handlers =
+    kind === 'profile'
+      ? addon?.profileMethods
+      : kind === 'query'
+        ? addon?.queries
+        : addon?.methods
   if (!handlers || !Object.hasOwn(handlers, method))
     throw new Error('This addon does not support the requested action.')
   const handler = handlers[method]
   if (!handler)
     throw new Error('This addon does not support the requested action.')
   return handler(input, {
+    isCurrent: () => isAddonActivationCurrent(id, generation),
     dependencies: {
       resolve: async (dependency) =>
         (await import('./dependencies')).resolveDependency(id, dependency),

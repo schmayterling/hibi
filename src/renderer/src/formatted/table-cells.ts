@@ -393,13 +393,16 @@ export class CellEditor {
   private remote = false
   private access = new Compartment()
 
+  private host: CellHost
+
   constructor(
-    private host: CellHost,
+    host: CellHost,
     parent: HTMLElement,
     text: string,
     anchor: number,
     head = anchor,
   ) {
+    this.host = host
     const main = host.main.state
     const preview = ViewPlugin.fromClass(
       class {

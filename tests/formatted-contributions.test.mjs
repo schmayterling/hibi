@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { registerHooks } from 'node:module'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import { TreeFragment } from '@lezer/common'
@@ -10,6 +11,8 @@ import {
   formattedLiteral,
   formattedOpaque,
   formattedPrefix,
+  formattedSyntaxTree,
+  formattedTree,
   formattedViews,
 } from '../src/renderer/src/formatted-contributions.ts'
 import { formattedRegistry } from '../src/renderer/src/formatted-registry.ts'
@@ -276,4 +279,72 @@ test('giant blocks of opaque nodes get inner nodes only for their opening and la
   )
   assert.ok(typed.parsedUnits < medium.length / 2, JSON.stringify(typed))
   void Table
+})
+
+test('commands read the formatted view tree from its state', () => {
+  const syntax = formattedSyntax({ slice: 1000 })
+  const state = EditorState.create({
+    doc: '> intro\nlazy line',
+    extensions: [syntax.extension, formattedTree.of(syntax.tree)],
+  })
+  assert.equal(formattedSyntaxTree(state), syntax.tree(state))
+  assert.equal(
+    formattedSyntaxTree(state).resolveInner(10, 1).parent.name,
+    'Blockquote',
+  )
+  assert.equal(formattedSyntaxTree(EditorState.create({ doc: 'x' })), null)
+})
+
+// Feature modules import their styles, which Node cannot load.
+registerHooks({
+  load: (url, context, next) =>
+    url.endsWith('.css')
+      ? { format: 'module', source: '', shortCircuit: true }
+      : next(url, context),
+})
+
+test('github tables are opaque in documents of that flavor', async () => {
+  const { contribution } = await import(
+    '../src/renderer/src/formatted/tables.ts'
+  )
+  const remove = formattedRegistry.register({
+    id: contribution.id,
+    load: () => contribution,
+  })
+  try {
+    const opaque = (flavors) =>
+      EditorState.create({
+        extensions: formattedContributions.extension(flavors),
+      }).facet(formattedOpaque)
+    // Before, only tests set the opaque nodes, and a long table parsed its rows.
+    assert.ok(opaque(['markdown.github']).includes('Table'))
+    assert.ok(!opaque(['markdown.commonmark']).includes('Table'))
+  } finally {
+    remove()
+  }
+})
+
+test('github task lists parse as tasks in documents of that flavor', async () => {
+  const { contribution } = await import(
+    '../src/renderer/src/formatted/tasks.ts'
+  )
+  const remove = formattedRegistry.register({
+    id: contribution.id,
+    load: () => contribution,
+  })
+  try {
+    // Before, no contribution added task syntax once GFM left the base parser.
+    const github = stateWith(
+      '- [x] done\n- [ ] open\n',
+      formattedContributions.extension(['markdown.github']),
+    )
+    assert.ok(names(github.syntax.tree(github.state)).includes('Task'))
+    const plain = stateWith(
+      '- [x] done\n',
+      formattedContributions.extension(['markdown.commonmark']),
+    )
+    assert.ok(!names(plain.syntax.tree(plain.state)).includes('Task'))
+  } finally {
+    remove()
+  }
 })

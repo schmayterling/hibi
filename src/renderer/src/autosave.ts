@@ -56,7 +56,9 @@ export function useAutosave(document: DocumentState | null, busy: boolean) {
     [
       document?.id,
       document?.revision,
-      document?.savedMarkdown,
+      document
+        ? documentRuntime.session(document.tabId)?.savedSnapshot()
+        : null,
       settings.enabled,
     ],
   )
@@ -117,6 +119,7 @@ export function useAutosave(document: DocumentState | null, busy: boolean) {
                   : 'Could not save this file.',
             })
           } finally {
+            documentRuntime.endSave(token)
             inFlight.current = false
             for (const pending of documentRuntime.documents()) schedule(pending)
           }

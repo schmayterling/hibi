@@ -109,15 +109,9 @@ test('recovery preview preserves the live draft; real render failures offer reco
     await crashed.locator('.recovery-details pre').innerText(),
     /fixture render failure/,
   )
-  await crashed.evaluate(() =>
-    Object.defineProperty(navigator, 'clipboard', {
-      value: {
-        writeText: async (text) => {
-          document.body.dataset.copiedError = text
-        },
-      },
-    }),
-  )
+  await crashed.evaluate(() => {
+    document.body.dataset.copiedError = ''
+  })
   await crashed.getByRole('button', { name: /copy details/i }).click()
   assert.match(
     await crashed.locator('body').getAttribute('data-copied-error'),

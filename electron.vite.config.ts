@@ -111,6 +111,9 @@ export default defineConfig({
         },
         input: {
           index: resolve('src/main/index.ts'),
+          'workspace-metadata-worker': resolve(
+            'src/main/workspace-metadata-worker.ts',
+          ),
           'typst-worker': resolve('src/addons/typst/compiler-worker.ts'),
           'format-worker': resolve('src/addons/_shared/format-worker.ts'),
           'documentation-worker': resolve(
@@ -120,6 +123,9 @@ export default defineConfig({
           'workspace-text-worker': resolve('src/main/workspace-text-worker.ts'),
           'dictionary-pack-worker': resolve(
             'src/addons/dictionary/pack-worker.ts',
+          ),
+          'dictionary-custom-words-worker': resolve(
+            'src/addons/dictionary/custom-words-worker.ts',
           ),
         },
       },

@@ -45,6 +45,7 @@ import {
   formattedContributions,
   formattedLiteral,
   formattedRefresh,
+  formattedTree,
   formattedViews,
   showMarkdownMarkers,
 } from './formatted-contributions'
@@ -1260,6 +1261,7 @@ export function livePreview(
   )
   return [
     contributions.of(formattedContributions.extension(options.flavors)),
+    formattedTree.of(syntax.tree),
     follow,
     syntax.extension,
     focused,

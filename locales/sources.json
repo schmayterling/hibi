@@ -868,9 +868,6 @@
   "519460187895": [
     "src/addons/quick-note/native.ts"
   ],
-  "44ccfbb4da90": [
-    "src/main/workspace-settings.ts"
-  ],
   "cf344c7a8b0f": [
     "src/addons/quick-note/native.ts"
   ],
@@ -3252,9 +3249,6 @@
   ],
   "318655cea4bd": [
     "src/renderer/src/CodeSyntaxSettings.tsx"
-  ],
-  "8afab8fa80cb": [
-    "src/renderer/src/WorkspaceSettings.tsx"
   ],
   "e139c41b9472": [
     "src/addons/vim/engine.ts"
@@ -6000,7 +5994,8 @@
     "src/main/workspace-entry-transfer.ts"
   ],
   "a83fa5eca26c": [
-    "src/main/workspace-entry-page.ts"
+    "src/main/workspace-entry-page.ts",
+    "src/main/workspace.ts"
   ],
   "2a3a78043479": [
     "src/main/imports.ts"
@@ -6341,9 +6336,6 @@
     "src/main/workspace-files.ts"
   ],
   "cb628f15bb2c": [
-    "src/main/workspace.ts"
-  ],
-  "31243b9077cb": [
     "src/main/workspace.ts"
   ],
   "1f93aa51a306": [
@@ -7022,9 +7014,6 @@
     "src/addons/graph/index.tsx"
   ],
   "919644e3d358": [
-    "src/renderer/src/WorkspaceSettings.tsx"
-  ],
-  "14592abed9a2": [
     "src/renderer/src/WorkspaceSettings.tsx"
   ],
   "8ebd7fbef943": [

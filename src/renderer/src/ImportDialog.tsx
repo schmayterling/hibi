@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { errorMessage } from '../../shared/errors'
 import type { Importer, ImportResult, ImportSource } from '../../shared/imports'
-import type { WorkspaceState } from '../../shared/workspace'
+import type { WorkspaceHeader } from '../../shared/workspace-view'
 import { Button, Select } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
 import type { DialogApi } from '../../ui/dialogs'
@@ -14,7 +14,7 @@ function ImportDialog({
   settings: () => void
 }) {
   const [importers, setImporters] = useState<Importer[]>([])
-  const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
+  const [workspace, setWorkspace] = useState<WorkspaceHeader | null>(null)
   const [id, setId] = useState('folder')
   const [source, setSource] = useState<ImportSource>('folder')
   const [busy, setBusy] = useState(false)
@@ -25,7 +25,10 @@ function ImportDialog({
   const [result, setResult] = useState<ImportResult | null>(null)
   useEffect(() => {
     let active = true
-    void Promise.all([window.hibi.listImporters(), window.hibi.getWorkspace()])
+    void Promise.all([
+      window.hibi.listImporters(),
+      window.hibi.getWorkspaceHeader(),
+    ])
       .then(([items, workspace]) => {
         if (active) {
           setImporters(items)

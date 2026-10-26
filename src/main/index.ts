@@ -225,6 +225,7 @@ import {
   deleteKnownWorkspace,
   documentFileChanged,
   getWorkspace,
+  getWorkspaceHeader,
   indexWorkspace,
   isCurrentWorkspaceTarget,
   listWorkspaceEntryPage,
@@ -232,6 +233,7 @@ import {
   openRecentWorkspace,
   openWorkspace,
   openWorkspaceFile,
+  readWorkspaceViewPage,
   refreshWorkspace,
   snapshotWorkspace,
   subscribeWorkspaceChanges,
@@ -771,6 +773,7 @@ function runWorkspaceOpen(
   operation: (
     window: BrowserWindow,
   ) => Promise<ReturnType<typeof getWorkspace>>,
+  includeEntries = false,
 ) {
   trustedWindow(event)
   if (closing || fileOperationHasDialog()) throw fileOperationUnavailable()
@@ -779,7 +782,7 @@ function runWorkspaceOpen(
   return runFileOperation(event, (window) =>
     intent === workspaceOpenIntent
       ? operation(window)
-      : Promise.resolve(getWorkspace()),
+      : Promise.resolve(getWorkspace(undefined, includeEntries)),
   )
 }
 
@@ -1456,7 +1459,7 @@ if (!app.requestSingleInstanceLock()) {
           info: appInfo(),
           document: getDocument(),
           hotkeys,
-          workspace: getWorkspace(),
+          workspace: getWorkspace(undefined, false),
           externalPending: externalFiles.length > 0 || (await workspacePending),
           // Files named at launch come first; a restored workspace doesn't defer it.
           introduction:
@@ -2016,10 +2019,26 @@ if (!app.requestSingleInstanceLock()) {
             : null
         },
       )
+      let legacyWorkspaceListeners = false
+      handle(WORKSPACE_CHANNELS.legacySubscribe, (event, enabled: unknown) => {
+        trustedWindow(event)
+        legacyWorkspaceListeners = enabled === true
+      })
       handle(WORKSPACE_CHANNELS.get, (event) => {
         trustedWindow(event)
-        return getWorkspace()
+        return getWorkspace(undefined, true)
       })
+      handle(WORKSPACE_CHANNELS.header, (event) => {
+        trustedWindow(event)
+        return getWorkspaceHeader()
+      })
+      handle(WORKSPACE_CHANNELS.viewPage, (event, request: unknown) =>
+        readAfterFileOperation(event, async () =>
+          readWorkspaceViewPage(
+            request as import('../shared/workspace-view').WorkspaceViewPageRequest,
+          ),
+        ),
+      )
       handle(
         MEDIA_CHANNELS.attach,
         (event, files: unknown, revision: unknown) =>
@@ -2027,8 +2046,12 @@ if (!app.requestSingleInstanceLock()) {
             attachMedia(window, files, revision),
           ),
       )
-      handle(MEDIA_CHANNELS.open, (event, path: unknown) =>
-        runFileOperation(event, (window) => openDroppedFile(window, path)),
+      handle(
+        MEDIA_CHANNELS.open,
+        (event, path: unknown, includeEntries: unknown) =>
+          runFileOperation(event, (window) =>
+            openDroppedFile(window, path, includeEntries !== false),
+          ),
       )
       handle(
         MEDIA_CHANNELS.read,
@@ -2229,11 +2252,19 @@ if (!app.requestSingleInstanceLock()) {
             if (target) await writeTableLayout(target.root, target.path, tables)
           }),
       )
-      handle(WORKSPACE_CHANNELS.action, (event, input: unknown) =>
-        runFileOperation(event, (window) => workspaceAction(window, input)),
+      handle(
+        WORKSPACE_CHANNELS.action,
+        (event, input: unknown, includeEntries: unknown) =>
+          runFileOperation(event, (window) =>
+            workspaceAction(window, input, includeEntries !== false),
+          ),
       )
-      handle(WORKSPACE_CHANNELS.open, (event) =>
-        runWorkspaceOpen(event, openWorkspace),
+      handle(WORKSPACE_CHANNELS.open, (event, includeEntries: unknown) =>
+        runWorkspaceOpen(
+          event,
+          (window) => openWorkspace(window, includeEntries !== false),
+          includeEntries !== false,
+        ),
       )
       handle(IMPORT_CHANNELS.list, (event) => {
         trustedWindow(event)
@@ -2267,8 +2298,14 @@ if (!app.requestSingleInstanceLock()) {
         },
         Promise.resolve(),
       )
-      handle(WORKSPACE_CHANNELS.openRecent, (event, id: unknown) =>
-        runWorkspaceOpen(event, () => openRecentWorkspace(id)),
+      handle(
+        WORKSPACE_CHANNELS.openRecent,
+        (event, id: unknown, includeEntries: unknown) =>
+          runWorkspaceOpen(
+            event,
+            () => openRecentWorkspace(id, includeEntries !== false),
+            includeEntries !== false,
+          ),
       )
       handle(WORKSPACE_CHANNELS.known, (event) => {
         trustedWindow(event)
@@ -2284,9 +2321,9 @@ if (!app.requestSingleInstanceLock()) {
       handle(WORKSPACE_CHANNELS.deleteKnown, (event, id: unknown) =>
         runFileOperation(event, (window) => deleteKnownWorkspace(window, id)),
       )
-      handle(WORKSPACE_CHANNELS.refresh, (event) => {
+      handle(WORKSPACE_CHANNELS.refresh, (event, includeEntries: unknown) => {
         trustedWindow(event)
-        return refreshWorkspace()
+        return refreshWorkspace(null, includeEntries !== false)
       })
       handle(
         WORKSPACE_CHANNELS.openFile,
@@ -2297,18 +2334,20 @@ if (!app.requestSingleInstanceLock()) {
       )
       observeWorkspace((change) => {
         documentMedia.invalidate(change)
-        mainWindow?.webContents.send(
-          WORKSPACE_CHANNELS.changed,
-          getWorkspace(),
-          change,
-        )
+        mainWindow?.webContents.send(WORKSPACE_CHANNELS.headerChanged, change)
+        if (legacyWorkspaceListeners)
+          mainWindow?.webContents.send(
+            WORKSPACE_CHANNELS.changed,
+            getWorkspace(undefined, true),
+            change,
+          )
       })
       subscribeWorkspaceChanges((change) => {
         const contents = mainWindow?.webContents
         if (!contents) return
         contents.send(WORKSPACE_CHANNELS.changedV2, change)
         foundationsIpcBenchmark?.send(WORKSPACE_CHANNELS.changedV2, change)
-      })
+      }, false)
       observeKnownWorkspaces((known) =>
         mainWindow?.webContents.send(WORKSPACE_CHANNELS.listChanged, known),
       )
@@ -2349,9 +2388,9 @@ if (!app.requestSingleInstanceLock()) {
           let document = null
           const errors: string[] = []
           try {
-            const hadWorkspace = Boolean(getWorkspace())
+            const hadWorkspace = Boolean(workspaceRoot())
             await openStartupWorkspace(window, externalFiles.length > 0)
-            if (!hadWorkspace && getWorkspace()) document = getDocument()
+            if (!hadWorkspace && workspaceRoot()) document = getDocument()
           } catch (error) {
             errors.push(
               error instanceof Error

@@ -112,6 +112,15 @@ if (process.isMainFrame) {
   const startupKnown: Promise<KnownWorkspace[]> = ipcRenderer.invoke(
     WORKSPACE_CHANNELS.known,
   )
+  let legacyWorkspaceListeners = 0
+  const setLegacyWorkspaceSubscription = (enabled: boolean) => {
+    void ipcRenderer
+      .invoke(WORKSPACE_CHANNELS.legacySubscribe, enabled)
+      .catch((error: unknown) =>
+        console.error('could not subscribe to workspace changes:', error),
+      )
+  }
+  setLegacyWorkspaceSubscription(false)
   async function subscribeWorkspaceChanges(callback: WorkspaceChangeListener) {
     let pending: WorkspaceChangeEvent[] = []
     let latest: WorkspaceChangeEvent | null = null
@@ -322,8 +331,12 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(MEDIA_CHANNELS.cancel, request),
     onDocumentMediaScopeChanged: (callback) =>
       subscribe(MEDIA_CHANNELS.scopeChanged, callback),
-    openDroppedFile: (file) =>
-      ipcRenderer.invoke(MEDIA_CHANNELS.open, webUtils.getPathForFile(file)),
+    openDroppedFile: (file, includeEntries = true) =>
+      ipcRenderer.invoke(
+        MEDIA_CHANNELS.open,
+        webUtils.getPathForFile(file),
+        includeEntries,
+      ),
     getInstalledAddons: () => ipcRenderer.invoke(SIDELOAD_CHANNELS.list),
     getAddonTrustSettings: () => ipcRenderer.invoke(ADDON_TRUST_CHANNELS.get),
     setAddonTrustSettings: (changes) =>
@@ -437,6 +450,11 @@ if (process.isMainFrame) {
     queryAddon: (id, method, input) =>
       ipcRenderer.invoke(ADDON_CHANNELS.query, id, method, input),
     getWorkspace: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.get),
+    getWorkspaceHeader: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.header),
+    readWorkspaceViewPage: (request) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.viewPage, request),
+    onWorkspaceHeaderChanged: (callback) =>
+      subscribe(WORKSPACE_CHANNELS.headerChanged, callback),
     getWorkspaceChangeSnapshot: () =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.changeSnapshot),
     listWorkspaceEntryPage: (owner, request) =>
@@ -518,8 +536,8 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(WORKSPACE_SETTINGS_CHANNELS.update, action),
     getRecentWorkspaces: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.recent),
     getKnownWorkspaces: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.known),
-    openRecentWorkspace: (id) =>
-      ipcRenderer.invoke(WORKSPACE_CHANNELS.openRecent, id),
+    openRecentWorkspace: (id, includeEntries = true) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.openRecent, id, includeEntries),
     setKnownWorkspace: (id, action) =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.setKnown, id, action),
     deleteKnownWorkspace: (id) =>
@@ -527,21 +545,29 @@ if (process.isMainFrame) {
     getWorkspaceSnapshot: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.snapshot),
     getWorkspaceIndex: (verifyAll = false) =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.index, verifyAll),
-    workspaceAction: (action) =>
-      ipcRenderer.invoke(WORKSPACE_CHANNELS.action, action),
-    openWorkspace: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.open),
-    refreshWorkspace: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.refresh),
+    workspaceAction: (action, includeEntries = true) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.action, action, includeEntries),
+    openWorkspace: (includeEntries = true) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.open, includeEntries),
+    refreshWorkspace: (includeEntries = true) =>
+      ipcRenderer.invoke(WORKSPACE_CHANNELS.refresh, includeEntries),
     openWorkspaceFile: (path, target) =>
       ipcRenderer.invoke(WORKSPACE_CHANNELS.openFile, path, target),
     onWorkspaceChanged: (callback) => {
+      let active = true
       const listener = (
         _event: Electron.IpcRendererEvent,
         workspace: WorkspaceState | null,
         change?: WorkspaceChange,
       ) => callback(workspace, change)
       ipcRenderer.on(WORKSPACE_CHANNELS.changed, listener)
+      if (++legacyWorkspaceListeners === 1) setLegacyWorkspaceSubscription(true)
       return () => {
+        if (!active) return
+        active = false
         ipcRenderer.removeListener(WORKSPACE_CHANNELS.changed, listener)
+        if (--legacyWorkspaceListeners === 0)
+          setLegacyWorkspaceSubscription(false)
       }
     },
     onWorkspaceListChanged: (callback) =>

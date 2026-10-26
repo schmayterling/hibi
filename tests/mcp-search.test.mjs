@@ -40,9 +40,10 @@ const bundle = await build({
             export const isCurrentWorkspaceTarget=()=>host().current
             export const workspaceRelativePath=path=>path
             export const workspaceChangeCursor=()=>({complete:true})
+            export const workspaceEntries=()=>host().paths.map(path=>({path,kind:'file'}))
             export const getWorkspace=()=>{
               host().snapshots++
-              return{name:'notes',entries:host().paths.map(path=>({path,kind:'file'}))}
+              return{name:'notes'}
             }`,
             'workspace-files': `export const createWorkspaceText=()=>{},readWorkspaceText=()=>{},renameWorkspaceFile=()=>{},trashWorkspaceFile=()=>{},updateWorkspaceText=()=>{}`,
             'workspace-metadata': `export const workspaceIgnore=async()=>({ignores:path=>host().ignored.has(path)})`,

@@ -2,9 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { electron } from './electron.mjs'
+import {
+  reloadFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -14,7 +17,11 @@ async function blockedEditor(t) {
     await readFile('out/renderer/startup-bundle.json', 'utf8'),
   )
   const entry = chunks.find((chunk) =>
-    chunk.modules.includes('src/renderer/src/Editor.tsx'),
+    chunk.modules.includes(
+      t.formattedEngine === 'codemirror'
+        ? 'src/renderer/src/FormattedEditor.tsx'
+        : 'src/renderer/src/Editor.tsx',
+    ),
   )
   assert.ok(entry)
   const bootstrap = join(profile, 'bootstrap.mjs')
@@ -54,6 +61,13 @@ async function blockedEditor(t) {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
+  // Block each engine's first demand, before Chromium can cache the module.
+  if (t.formattedEngine === 'codemirror')
+    await reloadFormattedEngine(page, t.formattedEngine)
+  else
+    await page.evaluate(() =>
+      localStorage.setItem('hibi:formatted-engine', 'tiptap'),
+    )
   await waitForAsync(
     app,
     () => typeof globalThis.releaseEditorRequest === 'function',
@@ -63,6 +77,7 @@ async function blockedEditor(t) {
     return editor && !editor.inert
   })
   assert.equal(await page.locator('.tiptap').count(), 0)
+  assert.equal(await page.locator('.hibi-formatted').count(), 0)
   return { app, page, profile }
 }
 
@@ -73,7 +88,10 @@ test('pending rich module keeps shell usable and late completion preserves stand
   const file = join(profile, 'plain.txt')
   await writeFile(file, 'literal **text**\r\n')
   await app.evaluate(({ dialog }, file) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [file],
+    })
   }, file)
   await clickMenu(app, 'Open…')
   const source = page.getByRole('textbox', {
@@ -93,6 +111,7 @@ test('pending rich module keeps shell usable and late completion preserves stand
       ),
   )
   assert.equal(await page.locator('.tiptap').count(), 0)
+  assert.equal(await page.locator('.hibi-formatted').count(), 0)
   assert.equal(
     await element.evaluate(
       (element) => element.isConnected && document.activeElement === element,

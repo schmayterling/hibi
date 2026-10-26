@@ -2,8 +2,15 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
-import { electron, stopElectronTree } from './electron.mjs'
+import {
+  electron,
+  stopElectronTree,
+  waitForDocumentEditor,
+} from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -88,11 +95,15 @@ test('source reference links use current definitions and coexist with find', {
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await page
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .waitFor()
   await app.evaluate(({ dialog, shell }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [path],
+    })
     shell.openExternal = async (href) => {
       globalThis.openedReference = href
     }
@@ -111,6 +122,9 @@ test('source reference links use current definitions and coexist with find', {
     exact: true,
   })
   await editor.waitFor()
+  const establishedWorkers = page
+    .workers()
+    .filter((worker) => worker.url().includes('/document.worker-'))
   await observeDocumentWorkers(page)
   await clickSourceLink(page, editor, 'reference')
   await waitForOpened(app, 'https://first.example/')
@@ -133,7 +147,24 @@ test('source reference links use current definitions and coexist with find', {
   await page.keyboard.press('Escape')
   await clickSourceLink(page, editor, 'reference')
   await waitForOpened(app, 'https://changed.example/')
-  assert.equal(await page.evaluate(() => window.documentWorkers.length), 1)
+  if (t.formattedEngine === 'tiptap') {
+    assert.equal(await page.evaluate(() => window.documentWorkers.length), 1)
+  } else {
+    // The formatted pane may already own the shared document worker.
+    const workers = page
+      .workers()
+      .filter((worker) => worker.url().includes('/document.worker-'))
+    assert.equal(workers.length, 1)
+    for (const worker of establishedWorkers) assert.ok(workers.includes(worker))
+    assert.equal(
+      await page.evaluate(() => window.documentWorkers.length),
+      1 - establishedWorkers.length,
+    )
+  }
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    source.replace('https://first.example/', 'https://changed.example/'),
+  )
 })
 
 test('rich-only addon syntax keeps source references out of the built-in reader', {
@@ -216,22 +247,46 @@ test('rich-only addon syntax keeps source references out of the built-in reader'
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await page
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .waitFor()
   await app.evaluate(({ dialog, shell }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [path],
+    })
     shell.openExternal = async (href) => {
       globalThis.openedReference = href
     }
   }, path)
   await pressShortcut(app, `${mod}+o`)
-  await page.locator('.literal-definition').waitFor()
-  assert.equal(
-    await page.locator('.literal-definition').textContent(),
-    '[target]: https://must-not-open.example/',
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).name === 'references.md',
   )
-  assert.equal(await page.locator('.tiptap a').count(), 1)
+  await waitForDocumentEditor(app, page)
+  if (t.formattedEngine === 'tiptap') {
+    await page.locator('.literal-definition').waitFor()
+    assert.equal(
+      await page.locator('.literal-definition').textContent(),
+      '[target]: https://must-not-open.example/',
+    )
+    assert.equal(await page.locator('.tiptap a').count(), 1)
+  } else {
+    // Design §11: API 2 rich nodes do not render in the CodeMirror pane.
+    assert.equal(await page.locator('.literal-definition').count(), 0)
+    assert.equal(
+      await page
+        .locator('.rich-pane .cm-content')
+        .getAttribute('contenteditable'),
+      'true',
+    )
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      source,
+    )
+  }
   await page.waitForFunction(
     () => document.querySelector('.app').getAttribute('aria-busy') === 'false',
   )
@@ -241,6 +296,9 @@ test('rich-only addon syntax keeps source references out of the built-in reader'
     exact: true,
   })
   await editor.waitFor()
+  const establishedWorkers = page
+    .workers()
+    .filter((worker) => worker.url().includes('/document.worker-'))
   await observeDocumentWorkers(page)
   await clickSourceLink(page, editor, 'reference')
   // A tiny source bootstrap has at most two task turns before worker creation.
@@ -252,4 +310,14 @@ test('rich-only addon syntax keeps source references out of the built-in reader'
   await clickSourceLink(page, editor, 'direct')
   await waitForOpened(app, 'https://direct.example/')
   assert.equal(await page.evaluate(() => window.documentWorkers.length), 0)
+  assert.deepEqual(
+    page
+      .workers()
+      .filter((worker) => worker.url().includes('/document.worker-')),
+    establishedWorkers,
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    source,
+  )
 })

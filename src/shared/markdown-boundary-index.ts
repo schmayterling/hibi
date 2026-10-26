@@ -1,10 +1,12 @@
 import { type Input, type Tree, TreeFragment } from '@lezer/common'
 import {
   boundaryRecords,
+  boundaryRejoin,
   boundaryStart,
   ChunkedMarkdownParser,
   type ChunkedMarkdownProbe,
   type ChunkedPartialParse,
+  unindexedFrom,
 } from './chunked-markdown.ts'
 import {
   type BoundaryConfig,
@@ -49,6 +51,10 @@ export class MarkdownBoundaryIndex {
   private parse: ChunkedPartialParse
   private tree: Tree | null = null
   private source: SourceSnapshot
+  private retained: {
+    version: number
+    fragments: readonly TreeFragment[]
+  } | null = null
   readonly config: BoundaryConfig
   constructor(
     source: SourceSnapshot,
@@ -100,6 +106,16 @@ export class MarkdownBoundaryIndex {
       offset += change.insert.length - (change.to - change.from)
       return result
     })
+    if (this.tree && unindexedFrom(this.tree) === null)
+      this.retained = {
+        version: this.version,
+        fragments: TreeFragment.addTree(this.tree),
+      }
+    if (this.retained)
+      this.retained = {
+        version: this.retained.version,
+        fragments: TreeFragment.applyChanges(this.retained.fragments, changes),
+      }
     const fragments = TreeFragment.applyChanges(
       TreeFragment.addTree(tree),
       changes,
@@ -112,9 +128,18 @@ export class MarkdownBoundaryIndex {
       this.config.prefix,
     )
   }
-  *pages(from = 0) {
-    const records = this.records(from)
-    const start = boundaryStart(this.tree!, from)
+  *pages(from = 0, baseVersion?: number) {
+    if (!this.tree) throw new Error('Could not read a document worker reply.')
+    const start = boundaryStart(this.tree, from)
+    const retained =
+      baseVersion === this.retained?.version
+        ? this.retained?.fragments.at(-1)
+        : undefined
+    const to = retained
+      ? Math.max(start, boundaryRejoin(this.tree, retained))
+      : this.length
+    const end = to < this.length ? { to } : {}
+    const records = boundaryRecords(this.tree, from, to)
     let next = records.next()
     while (!next.done) {
       const page = []
@@ -126,9 +151,10 @@ export class MarkdownBoundaryIndex {
         page.push(next.value)
         next = records.next()
       }
-      yield { from: start, records: page, done: !!next.done }
+      yield { from: start, ...end, records: page, done: !!next.done }
     }
-    if (!this.length) yield { from: 0, records: [], done: true }
+    if (!this.length || start === to)
+      yield { from: start, ...end, records: [], done: true }
   }
   records(from = 0) {
     if (!this.tree) throw new Error('Could not read a document worker reply.')

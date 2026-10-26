@@ -2316,10 +2316,41 @@ export function unindexedFrom(tree: Tree): number | null {
     : null
 }
 
+/** First reused chunk in a mapped fragment that covers the unchanged document suffix. */
+export function boundaryRejoin(tree: Tree, fragment: TreeFragment) {
+  if (
+    fragment.to !== tree.length ||
+    fragment.openEnd ||
+    unindexedFrom(fragment.tree) !== null
+  )
+    return tree.length
+  const firstGroup = Math.max(0, childBefore(tree, fragment.from))
+  for (let g = firstGroup; g < tree.children.length; g++) {
+    const group = tree.children[g] as Tree
+    const groupFrom = tree.positions[g]!
+    const firstChunk =
+      g === firstGroup
+        ? Math.max(0, childBefore(group, fragment.from - groupFrom))
+        : 0
+    for (let c = firstChunk; c < group.children.length; c++) {
+      const from = groupFrom + group.positions[c]!
+      if (from < fragment.from) continue
+      const old = chunkAround(fragment.tree, from + fragment.offset)
+      if (
+        old?.start === from + fragment.offset &&
+        old.chunk === group.children[c]
+      )
+        return from
+    }
+  }
+  return tree.length
+}
+
 /** Only metadata crosses realms. The receiving view creates its own viewport windows. */
 export function* boundaryRecords(
   tree: Tree,
   from = 0,
+  to = tree.length,
 ): Generator<BoundaryRecord> {
   const firstGroup = Math.max(0, childBefore(tree, from))
   for (let g = firstGroup; g < tree.children.length; g++) {
@@ -2329,6 +2360,7 @@ export function* boundaryRecords(
         ? Math.max(0, childBefore(group, from - tree.positions[g]!))
         : 0
     for (let c = firstChunk; c < group.children.length; c++) {
+      if (tree.positions[g]! + group.positions[c]! >= to) return
       const chunk = group.children[c] as Tree
       const info = chunk.prop(chunkInfo)!
       const type = info.kind === 'parsed' ? 'pending' : info.kind

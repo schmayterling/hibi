@@ -270,6 +270,86 @@ test('edits during a scan preserve its verified prefix and rescan only damaged r
   assert.ok(probe.scannedUnits < 160 * 1024, JSON.stringify(probe))
 })
 
+test('a 52 mib structural repair transfers only through the unchanged suffix', (t) => {
+  const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
+  const body = unit.repeat(Math.ceil((52 * 1024 * 1024) / unit.length))
+  const close = body.indexOf(
+    'paragraph',
+    Math.floor(body.length * 0.01) + 200 * 1024,
+  )
+  const text =
+    body.slice(0, close) + 'paragraph --> text\n\n' + body.slice(close)
+  const store = new SourceStore(text, { tabId: 'rejoin', revision: 0 })
+  const config = configuration({
+    chunkSize: 4096,
+    groupSize: 64,
+    giantBlock: 65536,
+  })
+  const probe = counts()
+  const index = new MarkdownBoundaryIndex(store.snapshot(), config, probe)
+  drain(index)
+  const old = hydrate(index)
+  const baseVersion = index.version
+  const at = text.lastIndexOf('\n# heading', Math.floor(text.length * 0.01)) + 1
+  const prepared = edit(store, [{ from: at, to: at, insert: '<!--\n' }])
+  probe.scannedUnits = 0
+  index.apply(prepared)
+  drain(index)
+  const pages = [...index.pages(at, baseVersion)]
+  const records = pages.reduce((sum, page) => sum + page.records.length, 0)
+  t.diagnostic(
+    JSON.stringify({
+      pages: pages.length,
+      records,
+      scanned: probe.scannedUnits,
+    }),
+  )
+  assert.ok(pages.length <= 2, JSON.stringify({ pages: pages.length, records }))
+  assert.ok(records <= 256)
+  const { from, to } = pages[0]
+  assert.ok(from > 0 && from <= at)
+  assert.ok(to > close && to < close + 512 * 1024)
+  assert.ok(pages.every((page) => page.from === from && page.to === to))
+  assert.ok(probe.scannedUnits < 1024 * 1024)
+  const builder = new BoundaryTree(index.parser, to - from)
+  for (const page of pages) builder.append(page.records)
+  const mapped = TreeFragment.applyChanges(
+    TreeFragment.addTree(old),
+    changedRanges(prepared),
+  )
+  const kept = TreeFragment.applyChanges(
+    mapped,
+    [{ fromA: from, toA: to, fromB: from, toB: to }],
+    0,
+  )
+  const fragments = [
+    ...kept,
+    new TreeFragment(from, to, builder.finish(), -from),
+  ].sort((a, b) => a.from - b.from)
+  probe.scannedUnits = 0
+  const parsed = finish(
+    index.parser.startChunkedParse(
+      sourceParserInput(store.snapshot()),
+      fragments,
+      {
+        from: index.length - 8192,
+        to: index.length,
+      },
+    ),
+  )
+  assert.equal(parsed.length, index.length)
+  assert.equal(probe.scannedUnits, 0)
+  const unchanged = [...index.pages(index.length - 100, baseVersion)]
+  assert.equal(unchanged.length, 1)
+  assert.equal(unchanged[0].to, unchanged[0].from)
+  assert.deepEqual(unchanged[0].records, [])
+  index.apply(edit(store, [{ from: at + 10, to: at + 10, insert: 'x' }]))
+  drain(index)
+  assert.ok(
+    [...index.pages(at, baseVersion)].every((page) => page.to === undefined),
+  )
+})
+
 test('giant replay points, ordered counts, read-ahead, and ends survive bounded pages', () => {
   for (const text of [
     '1. first\n' +

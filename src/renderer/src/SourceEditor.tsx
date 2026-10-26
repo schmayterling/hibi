@@ -639,9 +639,15 @@ export function SourceEditor({
       formatted
         ? {
             boundaries: {
-              request: (config, receive, declined, from) => {
+              request: (config, receive, declined, from, baseVersion) => {
                 if (bridge.isCurrent())
-                  getWorker().boundaries(config, receive, declined, from)
+                  getWorker().boundaries(
+                    config,
+                    receive,
+                    declined,
+                    from,
+                    baseVersion,
+                  )
                 else declined('stale')
               },
               release: (retain) =>

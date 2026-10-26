@@ -70,6 +70,89 @@ test('typing coalesces formatting checks without delaying document changes or un
   assert.equal(result.redone, 'hello')
 })
 
+test('multi-line text input in the visual editor pastes the text in one edit', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-rich-lines-'))
+  const app = await launchBenchmarkApp(profile)
+  t.after(async () => {
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForEditor(page)
+  const rich = page.getByRole('textbox', {
+    name: 'Document editor',
+    exact: true,
+  })
+  await page.evaluate(() => {
+    const probe = { prevented: [], inputs: [], transactions: 0 }
+    window.richLineInput = probe
+    window.addEventListener('beforeinput', (event) =>
+      probe.prevented.push(event.defaultPrevented),
+    )
+    window.addEventListener('input', (event) =>
+      probe.inputs.push([event.inputType, event.data]),
+    )
+    document
+      .querySelector('.tiptap')
+      .editor.on('transaction', ({ transaction }) => {
+        if (transaction.docChanged) probe.transactions++
+      })
+  })
+  const insert = async (input) => {
+    await rich.press('ControlOrMeta+a')
+    await page.evaluate(() =>
+      Object.assign(window.richLineInput, {
+        prevented: [],
+        inputs: [],
+        transactions: 0,
+      }),
+    )
+    await input()
+    return page.evaluate(() => {
+      const editor = document.querySelector('.tiptap').editor
+      return {
+        ...window.richLineInput,
+        doc: editor.getJSON(),
+        markdown: editor.getMarkdown(),
+      }
+    })
+  }
+  const text = Array.from({ length: 1000 }, (_, index) => `line ${index}`).join(
+    '\n\n',
+  )
+  const pasted = await insert(() =>
+    page.evaluate((text) => {
+      const clipboardData = new DataTransfer()
+      clipboardData.setData('text/plain', text)
+      document.querySelector('.tiptap').dispatchEvent(
+        new ClipboardEvent('paste', {
+          clipboardData,
+          bubbles: true,
+          cancelable: true,
+        }),
+      )
+    }, text),
+  )
+  const typed = await insert(() => page.keyboard.insertText(text))
+  assert.deepEqual(typed.prevented, [true])
+  // One transaction, the same document a paste makes, and the input signal.
+  assert.deepEqual(
+    [typed.transactions, pasted.transactions, typed.inputs],
+    [1, 1, [['insertText', text]]],
+  )
+  assert.deepEqual(typed.doc, pasted.doc)
+  assert.equal(typed.markdown, pasted.markdown)
+  await waitForAsync(
+    page,
+    async (markdown) => (await window.hibi.getDocument()).markdown === markdown,
+    typed.markdown,
+  )
+  const plain = await insert(() => page.keyboard.insertText('one line'))
+  assert.deepEqual([plain.prevented, plain.markdown], [[false], 'one line'])
+})
+
 test('visual typing after a source visit defers the hidden source and toolbar checks', {
   timeout: 30000,
 }, async (t) => {

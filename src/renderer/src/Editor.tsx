@@ -613,6 +613,38 @@ export function MarkdownEditor({
             }
             return false
           },
+          beforeinput(view, event) {
+            const text = event.data
+            if (
+              event.inputType !== 'insertText' ||
+              !text ||
+              !/[\r\n]/.test(text) ||
+              view.composing ||
+              !view.editable
+            )
+              return false
+            // Chromium applies each line break of a text input as its own
+            // editing step, quadratic in the lines. Paste the text instead, in
+            // one transaction, and send the input signal the browser would have.
+            event.preventDefault()
+            const clipboardData = new DataTransfer()
+            clipboardData.setData('text/plain', text)
+            view.dom.dispatchEvent(
+              new ClipboardEvent('paste', {
+                clipboardData,
+                bubbles: true,
+                cancelable: true,
+              }),
+            )
+            view.dom.dispatchEvent(
+              new InputEvent('input', {
+                inputType: 'insertText',
+                data: text,
+                bubbles: true,
+              }),
+            )
+            return true
+          },
         },
         attributes: {
           'aria-label': 'Document editor',

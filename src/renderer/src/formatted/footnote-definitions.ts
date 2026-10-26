@@ -719,10 +719,12 @@ export const footnoteDefinitions = StateField.define<Index>({
   create,
   update(index, transaction) {
     const { state } = transaction
+    const prefix = prefixOf(state)
     // Other syntax, or a prefix that appeared or went away, reads the note again.
     if (
       state.facet(formattedMarkdown) !== index.configs ||
-      prefixOf(state) !== transaction.changes.mapPos(index.start, -1)
+      prefix !== index.start ||
+      prefix !== transaction.changes.mapPos(index.start, -1)
     )
       return create(state)
     let next = index

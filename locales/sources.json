@@ -1408,7 +1408,10 @@
     "src/addons/vim/keymaps.ts"
   ],
   "da2df709d46e": [
-    "src/renderer/src/document-worker-client.ts"
+    "src/renderer/src/document-worker-client.ts",
+    "src/shared/chunked-markdown.ts",
+    "src/shared/document-worker-service.ts",
+    "src/shared/markdown-boundary-index.ts"
   ],
   "ce6331b7277c": [
     "src/main/addon-hotkeys.ts"

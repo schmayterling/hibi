@@ -635,7 +635,21 @@ export function SourceEditor({
     }
     const language = new Compartment()
     // The formatted view owns its syntax tree, kept across language reconfigurations.
-    const syntax = formattedSyntax()
+    const syntax = formattedSyntax(
+      formatted
+        ? {
+            boundaries: {
+              request: (config, receive, declined, from) => {
+                if (bridge.isCurrent())
+                  getWorker().boundaries(config, receive, declined, from)
+                else declined('stale')
+              },
+              release: (retain) =>
+                sourceFind.current?.releaseBoundaries(retain),
+            },
+          }
+        : {},
+    )
     const tree = (state: EditorState) =>
       formatted ? syntax.tree(state) : syntaxTree(state)
     const markdown = () => {
@@ -1948,6 +1962,7 @@ export function SourceEditor({
     requestFind,
     requestReference,
     resolveReference,
+    getWorker,
     clearReferences,
     viewId,
     formatted,
@@ -2094,7 +2109,7 @@ export function SourceEditor({
     const editor = mountedView
     if (!editor || editor !== view.current) return
     const stopFind = () => {
-      if (referenceUsed.current) sourceFind.current?.cancelFind()
+      if (referenceUsed.current || formatted) sourceFind.current?.cancelFind()
       else {
         sourceFind.current?.dispose()
         sourceFind.current = null
@@ -2122,7 +2137,7 @@ export function SourceEditor({
       stopFind()
       find.current.report({ current: 0, total: 0 })
     }
-  }, [mountedView, findActive, findQuery, requestFind])
+  }, [mountedView, formatted, findActive, findQuery, requestFind])
 
   useEffect(() => {
     if (

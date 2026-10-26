@@ -47,6 +47,21 @@ test('full arenas reuse exact raw text across repeated reads', async (t) => {
   }
   assert.equal(copy.mock.calls.length, 0)
 })
+test('async loading captures document identity and explicit limits before yielding', async () => {
+  const key = { tabId: 'captured', revision: 1 }
+  const options = { maximumBytes: 2 }
+  const loading = SourceStore.load(['ok'], key, 7, options)
+  key.tabId = 'changed'
+  key.revision = 2
+  options.maximumBytes = 0
+  const store = await loading
+  assert.deepEqual(store.snapshot().document, {
+    tabId: 'captured',
+    revision: 1,
+  })
+  assert.equal(store.snapshot().version, 7)
+  assert.equal(store.snapshot().materialize(), 'ok')
+})
 test('cooperative loading yields message tasks without timer clamping', async (t) => {
   t.mock.method(globalThis, 'setTimeout', () => {
     throw new Error('load used a clamped timer')

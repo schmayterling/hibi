@@ -969,8 +969,9 @@ export class SourceStore {
     version = 0,
     options: SourceBufferOptions = {},
   ): Promise<SourceStore> {
+    const loader = SourceStore.loader(document, version, options)
     const { loadSource } = await import('./source-load.ts')
-    return loadSource(SourceStore.loader(document, version, options), chunks)
+    return loadSource(loader, chunks)
   }
   snapshot() {
     return this.#current

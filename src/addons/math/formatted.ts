@@ -21,12 +21,15 @@ export type MathHost = {
 }
 
 const cancels = new WeakMap<HTMLElement, () => void>()
+const widgets = new WeakMap<HTMLElement, FormulaWidget>()
 
 /**
  * A rendered formula over its source. The formula text shows until KaTeX
  * output arrives: on screen before the next paint, the rest when visible or
  * idle, as in the rich view. Clicking places the caret, which reveals the
- * source while Markdown markers show, and opens the formula prompt otherwise.
+ * source while Markdown markers show. With markers hidden, an edit control
+ * covers the formula: a click, or Enter or Space once the arrow keys reach
+ * it, opens the formula prompt, as clicking an equation does in the rich view.
  */
 class FormulaWidget extends WidgetType {
   constructor(
@@ -66,25 +69,50 @@ class FormulaWidget extends WidgetType {
       target.append(pending)
     }
     pending.textContent = latex
+    const control = document.createElement('button')
+    control.type = 'button'
+    control.className = 'hibi-lp-formula-edit'
+    control.setAttribute('aria-label', 'Edit equation')
+    control.addEventListener('click', (event) => {
+      event.preventDefault()
+      void this.edit(view, dom)
+    })
+    control.addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Escape'].includes(event.key)) return
+      event.preventDefault()
+      // The caret returns beside the formula, on the side the key points to.
+      const from = view.posAtDOM(dom)
+      view.focus()
+      view.dispatch({
+        selection: {
+          anchor: event.key === 'ArrowLeft' ? from : from + this.source.length,
+        },
+      })
+    })
+    dom.append(control)
+    /** Replace the formula's content, keeping the control and its focus. */
+    const fill = (content: (into: HTMLElement) => void) => {
+      const into = display && content !== error ? target : dom
+      for (const child of [...into.childNodes])
+        if (child !== control) child.remove()
+      content(into)
+    }
+    const error = (into: HTMLElement) => {
+      into.prepend(latex)
+      dom.classList.add(display ? 'block-math-error' : 'inline-math-error')
+    }
     const reserved = display ? host.formulas.height(latex) : undefined
     if (reserved) dom.style.minHeight = `${reserved}px`
     const cancel = host.formulas.schedule(dom, latex, display, (html) => {
       if (reserved) dom.style.removeProperty('min-height')
+      // KaTeX builds this markup itself; trust: false admits no author HTML.
       if (html !== null)
-        // KaTeX builds this markup itself; trust: false admits no author HTML.
-        target.innerHTML = html
-      else {
-        dom.textContent = latex
-        dom.classList.add(display ? 'block-math-error' : 'inline-math-error')
-      }
+        fill((into) => into.insertAdjacentHTML('afterbegin', html))
+      else fill(error)
       view.requestMeasure()
     })
     cancels.set(dom, cancel)
-    dom.addEventListener('click', (event) => {
-      if (view.state.facet(showMarkdownMarkers)) return
-      event.preventDefault()
-      void this.edit(view, dom)
-    })
+    widgets.set(dom, this)
     return dom
   }
   /** Replace the formula from the prompt, while the source is still what this widget shows. */
@@ -111,9 +139,32 @@ class FormulaWidget extends WidgetType {
     cancels.get(dom)?.()
     cancels.delete(dom)
   }
-  override ignoreEvent() {
-    return false
+  override ignoreEvent(event: Event) {
+    // The edit control handles its own clicks and keys; elsewhere, a click places the caret.
+    return (
+      event.target instanceof Element &&
+      !!event.target.closest('.hibi-lp-formula-edit')
+    )
   }
+}
+
+/** With markers hidden, an arrow key toward a formula beside the caret focuses its edit control. */
+function enterFormula(view: EditorView, forward: boolean) {
+  const { main, ranges } = view.state.selection
+  if (view.state.facet(showMarkdownMarkers) || ranges.length > 1 || !main.empty)
+    return false
+  for (const control of view.contentDOM.querySelectorAll<HTMLElement>(
+    '.hibi-lp-formula-edit',
+  )) {
+    const dom = control.parentElement
+    const widget = dom && widgets.get(dom)
+    if (!dom || !widget) continue
+    const from = view.posAtDOM(dom)
+    if ((forward ? from : from + widget.source.length) !== main.head) continue
+    control.focus()
+    return true
+  }
+  return false
 }
 
 const contributions = new WeakMap<
@@ -211,7 +262,16 @@ export function mathContributions(host: MathHost) {
     editing: {
       id: 'math.editing',
       flavor: 'math.latex',
+      keys: [
+        { key: 'ArrowRight', run: (view) => enterFormula(view, true) },
+        { key: 'ArrowLeft', run: (view) => enterFormula(view, false) },
+      ],
       extension: [
+        EditorView.editorAttributes.compute([showMarkdownMarkers], (state) =>
+          state.facet(showMarkdownMarkers)
+            ? {}
+            : { class: 'hibi-lp-markers-hidden' },
+        ),
         ViewPlugin.define((view) => {
           if (view.hasFocus) host.focus(view)
           return { destroy: () => host.close(view) }
@@ -231,6 +291,20 @@ export function mathContributions(host: MathHost) {
           '.hibi-lp-math-source': {
             fontFamily: 'var(--font-mono)',
             fontSize: '0.85em',
+          },
+          '.tiptap-mathematics-render': { position: 'relative' },
+          // The edit control covers its formula and takes the usual focus ring.
+          '.hibi-lp-formula-edit': {
+            position: 'absolute',
+            inset: '0',
+            margin: '0',
+            padding: '0',
+            border: 'none',
+            background: 'none',
+            cursor: 'pointer',
+          },
+          '&:not(.hibi-lp-markers-hidden) .hibi-lp-formula-edit': {
+            display: 'none',
           },
         }),
       ],

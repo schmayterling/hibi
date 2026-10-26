@@ -326,6 +326,48 @@ test('insert math writes one source edit in the formatted view', {
   )
 })
 
+test('inserted display math stays in the quote around the caret', {
+  timeout: 90000,
+}, async () => {
+  const note = '> before after\n\nlast\n'
+  await writeFile(join(folder, 'notes', 'quote.md'), note)
+  await open('quote.md')
+  await page.locator('.rich-pane .cm-line', { hasText: 'before after' }).click()
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({ selection: { anchor: '> before'.length } })
+  })
+  await clickMenu(app, 'Command palette')
+  const commands = page.getByRole('dialog', { name: 'Command palette' })
+  await commands
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('Insert block math')
+  await commands
+    .getByRole('option', { name: /Insert block math/i })
+    .press('Enter')
+  const prompt = page.getByRole('dialog', { name: 'Math' })
+  await prompt.getByRole('textbox', { name: 'LaTeX' }).fill('x^2')
+  await prompt.getByRole('button', { name: 'Apply' }).click()
+  // The formula and the rest of the line keep their quote markers.
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    '> before\n>\n> $$\n> x^2\n> $$\n>\n>  after\n\nlast\n',
+  )
+  await page
+    .locator(
+      '.rich-pane .cm-line.hibi-lp-quote [data-type="block-math"] .katex',
+    )
+    .waitFor()
+  await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    note,
+  )
+})
+
 test('with markers hidden, clicking a formula opens its prompt and replaces the formula', {
   timeout: 90000,
 }, async () => {
@@ -351,6 +393,55 @@ test('with markers hidden, clicking a formula opens its prompt and replaces the 
   await pressShortcut(app, `${mod}+z`)
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.includes('$$\nc^2\n$$'),
+  )
+  // Keyboard: an arrow key toward a formula focuses its edit control, and
+  // Enter opens the prompt; the source never shows.
+  const control = page.locator(
+    '.rich-pane [data-type="inline-math"] button[aria-label="Edit equation"]',
+  )
+  await page.locator('.rich-pane .cm-line', { hasText: 'last line' }).click()
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({ selection: { anchor: 'Text '.length } })
+  })
+  await page.keyboard.press('ArrowRight')
+  await waitForAsync(
+    page,
+    () =>
+      document.activeElement?.getAttribute('aria-label') === 'Edit equation',
+  )
+  // Arrows leave it again, on the side they point to.
+  await page.keyboard.press('ArrowRight')
+  assert.deepEqual(
+    await page.evaluate(() => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      return { focused: view.hasFocus, head: view.state.selection.main.head }
+    }),
+    { focused: true, head: 'Text $a+b$'.length },
+  )
+  await page.keyboard.press('ArrowLeft')
+  await waitForAsync(
+    page,
+    () =>
+      document.activeElement?.getAttribute('aria-label') === 'Edit equation',
+  )
+  await page.keyboard.press('Enter')
+  assert.equal(await field.inputValue(), 'a+b')
+  await field.fill('a-b')
+  await page
+    .getByRole('dialog', { name: 'Math' })
+    .getByRole('button', { name: 'Apply' })
+    .click()
+  await waitForAsync(page, async () =>
+    (await window.hibi.getDocument()).markdown.startsWith('Text $a-b$ end.'),
+  )
+  await control.waitFor()
+  assert.equal(await page.locator('.rich-pane .hibi-lp-math-source').count(), 0)
+  await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(page, async () =>
+    (await window.hibi.getDocument()).markdown.startsWith('Text $a+b$ end.'),
   )
   await engine(true, true)
 })

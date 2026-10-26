@@ -107,6 +107,9 @@
   "d8aa9d7083d6": [
     "src/renderer/src/editor-view-api.ts"
   ],
+  "be4baf3c7663": [
+    "src/main/document.ts"
+  ],
   "31dd788747d0": [
     "src/addons/mcp-server/Settings.tsx"
   ],
@@ -1053,6 +1056,9 @@
   "99904db30de4": [
     "src/site/main.tsx"
   ],
+  "0ddc2c568df7": [
+    "src/renderer/src/DocumentTabs.tsx"
+  ],
   "17e28e230217": [
     "src/ui/Sidebar.tsx"
   ],
@@ -1063,6 +1069,12 @@
     "src/main/index.ts",
     "src/renderer/src/DocumentTabs.tsx",
     "src/shared/hotkeys.ts"
+  ],
+  "9db4e0a00da4": [
+    "src/renderer/src/DocumentTabs.tsx"
+  ],
+  "70b08b33798a": [
+    "src/renderer/src/DocumentTabs.tsx"
   ],
   "6c73f172ed0b": [
     "src/renderer/src/addon-reload.ts"
@@ -5522,6 +5534,9 @@
   "9b910110596f": [
     "src/addons/autocomplete/Settings.tsx"
   ],
+  "6067c7203339": [
+    "src/renderer/src/DocumentTabs.tsx"
+  ],
   "70a91037b87d": [
     "src/renderer/src/SettingsScreen.tsx"
   ],
@@ -6005,6 +6020,9 @@
   ],
   "cf9108c9789b": [
     "src/addons/mcp-server/tools.ts"
+  ],
+  "8b3833b3d6d6": [
+    "src/main/document.ts"
   ],
   "590fb9c8974a": [
     "src/addons/_shared/format-native.ts"

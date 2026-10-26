@@ -1004,3 +1004,307 @@ test('five hundred tabs skip geometry for unchanged lists and read before writin
     readsAfterWrites: 0,
   })
 })
+
+test('tab context menu closes tabs in bulk and disables impossible actions', {
+  timeout: 30000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-tab-menu-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(6500)
+  await waitForDocumentEditor(app, page)
+  const read = () => page.evaluate(() => window.hibi.getDocument())
+  const newTab = async () => {
+    const before = (await read()).tabId
+    await clickMenu(app, 'New')
+    await waitForAsync(
+      page,
+      async (id) => (await window.hibi.getDocument()).tabId !== id,
+      before,
+    )
+  }
+  while ((await read()).tabs.length < 4) await newTab()
+  const [a, b] = (await read()).tabs
+  assert.ok(a && b)
+  const openMenu = async (id) => {
+    await page.locator(`[data-tab-id="${id}"]`).click({ button: 'right' })
+    await page.getByRole('menu', { name: 'Tab actions' }).waitFor()
+  }
+  await openMenu(b.id)
+  assert.equal(await page.getByRole('menuitem').count(), 4)
+  assert.deepEqual(
+    await page
+      .getByRole('menuitem')
+      .evaluateAll((items) => items.map((item) => item.disabled)),
+    [false, false, false, false],
+  )
+  await page
+    .getByRole('menuitem', { name: 'Close tabs to the right', exact: true })
+    .click()
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).tabs.length === 2,
+  )
+  let current = await read()
+  assert.deepEqual(
+    current.tabs.map((tab) => tab.id),
+    [a.id, b.id],
+  )
+  assert.equal(current.tabId, b.id)
+  await openMenu(b.id)
+  await page
+    .getByRole('menuitem', { name: 'Close tabs to the left', exact: true })
+    .click()
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).tabs.length === 1,
+  )
+  current = await read()
+  assert.deepEqual(
+    current.tabs.map((tab) => tab.id),
+    [b.id],
+  )
+  assert.equal(current.tabId, b.id)
+  await openMenu(b.id)
+  assert.deepEqual(
+    await page.getByRole('menuitem').evaluateAll((items) =>
+      items.map((item) => ({
+        disabled: item.disabled,
+        text: item.textContent,
+      })),
+    ),
+    [
+      { disabled: false, text: 'Close tab' },
+      { disabled: true, text: 'Close other tabs' },
+      { disabled: true, text: 'Close tabs to the right' },
+      { disabled: true, text: 'Close tabs to the left' },
+    ],
+  )
+  await page.keyboard.press('Escape')
+  assert.equal(await page.locator('.ui-menu:popover-open').count(), 0)
+  await openMenu(b.id)
+  await page.mouse.click(400, 500)
+  assert.equal(await page.locator('.ui-menu:popover-open').count(), 0)
+  assert.equal((await read()).tabs.length, 1)
+})
+
+test('context-menu bulk close confirms dirty tabs and cancels as a unit', {
+  timeout: 40000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-tab-menu-dirty-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }) => {
+    globalThis.choices = []
+    globalThis.choice = 2
+    dialog.showMessageBox = async (_window, options) => {
+      globalThis.choices.push(options.message)
+      return { response: globalThis.choice }
+    }
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(6500)
+  await waitForDocumentEditor(app, page)
+  const read = () => page.evaluate(() => window.hibi.getDocument())
+  const newTab = async () => {
+    const before = (await read()).tabId
+    await clickMenu(app, 'New')
+    await waitForAsync(
+      page,
+      async (id) => (await window.hibi.getDocument()).tabId !== id,
+      before,
+    )
+  }
+  while ((await read()).tabs.length < 3) await newTab()
+  const [a, b, c] = (await read()).tabs
+  assert.ok(a && b && c)
+  await page.locator(`[data-tab-id="${b.id}"]`).click()
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    b.id,
+  )
+  await replaceRichText(
+    page,
+    page.getByRole('textbox', { name: /document editor/i }),
+    'dirty b',
+  )
+  await page.locator(`[data-tab-id="${c.id}"]`).click()
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    c.id,
+  )
+  const openMenu = async (id) => {
+    await page.locator(`[data-tab-id="${id}"]`).click({ button: 'right' })
+    await page.getByRole('menu', { name: 'Tab actions' }).waitFor()
+  }
+  await openMenu(a.id)
+  await page
+    .getByRole('menuitem', { name: 'Close tabs to the right', exact: true })
+    .click()
+  await waitForAsync(app, () => globalThis.choices.length === 1)
+  await page.waitForFunction(
+    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+  )
+  assert.equal((await read()).tabs.length, 3)
+  await app.evaluate(() => {
+    globalThis.choice = 1
+  })
+  await openMenu(a.id)
+  await page
+    .getByRole('menuitem', { name: 'Close tabs to the right', exact: true })
+    .click()
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).tabs.length === 1,
+  )
+  const current = await read()
+  assert.deepEqual(
+    current.tabs.map((tab) => tab.id),
+    [a.id],
+  )
+  assert.equal(current.tabId, a.id)
+  assert.equal(await app.evaluate(() => globalThis.choices.length), 2)
+})
+
+test('middle-click closes tabs without changing the active document', {
+  timeout: 30000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-tab-middle-click-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(6500)
+  await waitForDocumentEditor(app, page)
+  const read = () => page.evaluate(() => window.hibi.getDocument())
+  const newTab = async () => {
+    const before = (await read()).tabId
+    await clickMenu(app, 'New')
+    await waitForAsync(
+      page,
+      async (id) => (await window.hibi.getDocument()).tabId !== id,
+      before,
+    )
+  }
+  while ((await read()).tabs.length < 3) await newTab()
+  const [a, b, c] = (await read()).tabs
+  assert.ok(a && b && c)
+  assert.equal((await read()).tabId, c.id)
+  await page.locator(`[data-tab-id="${a.id}"]`).click({ button: 'middle' })
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).tabs.length === 2,
+  )
+  let current = await read()
+  assert.equal(current.tabId, c.id)
+  assert.equal(
+    current.tabs.some((tab) => tab.id === a.id),
+    false,
+  )
+  await page.locator(`[data-tab-id="${c.id}"]`).click({ button: 'middle' })
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).tabs.length === 1,
+  )
+  current = await read()
+  assert.notEqual(current.tabId, c.id)
+  assert.deepEqual(
+    current.tabs.map((tab) => tab.id),
+    [b.id],
+  )
+})
+
+test('middle-click is ignored while a tab close is awaiting confirmation', {
+  timeout: 30000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-tab-middle-busy-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    await app
+      .evaluate(({ dialog }) => {
+        globalThis.releaseDialog?.()
+        dialog.showMessageBox = async () => ({ response: 1 })
+      })
+      .catch(() => {})
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }) => {
+    globalThis.dialogEntered = false
+    globalThis.releaseDialog = null
+    dialog.showMessageBox = () =>
+      new Promise((resolve) => {
+        globalThis.dialogEntered = true
+        globalThis.releaseDialog = () => {
+          globalThis.releaseDialog = null
+          resolve({ response: 2 })
+        }
+      })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(6500)
+  await waitForDocumentEditor(app, page)
+  const read = () => page.evaluate(() => window.hibi.getDocument())
+  const newTab = async () => {
+    const before = (await read()).tabId
+    await clickMenu(app, 'New')
+    await waitForAsync(
+      page,
+      async (id) => (await window.hibi.getDocument()).tabId !== id,
+      before,
+    )
+  }
+  while ((await read()).tabs.length < 2) await newTab()
+  const [a, b] = (await read()).tabs
+  assert.ok(a && b)
+  assert.equal((await read()).tabId, b.id)
+  await page.locator(`[data-tab-id="${a.id}"]`).click()
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    a.id,
+  )
+  await replaceRichText(
+    page,
+    page.getByRole('textbox', { name: /document editor/i }),
+    'dirty a',
+  )
+  await page.locator(`[data-tab-id="${b.id}"]`).click()
+  await waitForAsync(
+    page,
+    async (id) => (await window.hibi.getDocument()).tabId === id,
+    b.id,
+  )
+  await page.locator(`[data-tab-key="${a.id}"] .tab-close`).click()
+  await waitForAsync(app, () => globalThis.dialogEntered)
+  await page.locator('.app[aria-busy="true"]').waitFor()
+  await page
+    .locator(`[data-tab-id="${b.id}"]`)
+    .click({ button: 'middle', force: true })
+  await app.evaluate(() => globalThis.releaseDialog())
+  await page.waitForFunction(
+    () => document.querySelector('.app')?.getAttribute('aria-busy') === 'false',
+  )
+  const current = await read()
+  assert.equal(current.tabs.length, 2)
+  assert.equal(current.tabId, b.id)
+})

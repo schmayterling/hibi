@@ -28,6 +28,7 @@ export const DOCUMENT_CHANNELS = {
   selectTab: 'document:select-tab',
   focusTab: 'document:focus-tab',
   closeTab: 'document:close-tab',
+  closeTabs: 'document:close-tabs',
   moveTab: 'document:move-tab',
   tabsEnabled: 'document:tabs-enabled',
   rename: 'document:rename',
@@ -548,6 +549,10 @@ export type DesktopApi = {
     expected: Pick<DocumentFocus, 'contentVersion' | 'revision'>,
   ) => Promise<DocumentFocus>
   closeDocumentTab: (id: string) => Promise<DocumentState | null>
+  closeDocumentTabs: (
+    ids: string[],
+    preferredTab?: string,
+  ) => Promise<DocumentState | null>
   moveDocumentTab: (
     id: string,
     beforeId: string | null,

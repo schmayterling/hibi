@@ -50,8 +50,10 @@ test('a timed-out note keeps useful backlinks and paged headings and is named in
     }
     globalThis.fallbackProbe = state
     Worker.prototype.postMessage = function (message, ...args) {
-      if (message.kind === 'fileStart' && message.input.path === 'slow.md')
-        state.slow.add(this)
+      if (message.kind === 'fileStart') {
+        if (message.input.path === 'slow.md') state.slow.add(this)
+        else state.slow.delete(this)
+      }
       if (message.kind === 'parseEnd' && state.slow.has(this)) {
         if (message.fallback) state.fallback++
         else {

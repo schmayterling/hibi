@@ -616,6 +616,7 @@
   "63956d2fc93e": "Each addon file must be no larger than 5 MiB.",
   "380ca3b00419": "Each edit needs non-empty oldText.",
   "a9ccbf1ab39f": "Each theme needs a valid, unique ID or path.",
+  "464c4ffd019e": "Edit",
   "ed4b5895642d": "Edit Mermaid diagram",
   "78f982d5235c": "Edit Typst block",
   "7588c9d702b3": "Edit YAML",

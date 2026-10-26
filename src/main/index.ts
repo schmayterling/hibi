@@ -1185,6 +1185,28 @@ function createWindow(): void {
 function installMenu(): void {
   const command = (action: AppCommand) => () =>
     mainWindow?.webContents.send(HOTKEY_CHANNELS.command, action)
+  // The app window runs undo and redo in its focused editor; its devtools and
+  // other windows keep the browser's own.
+  const history =
+    (
+      direction: 'undo' | 'redo',
+    ): NonNullable<MenuItemConstructorOptions['click']> =>
+    (_item, window) => {
+      if (!(window instanceof BrowserWindow)) return
+      const { webContents } = window
+      if (webContents.isDevToolsFocused())
+        webContents.devToolsWebContents?.[direction]()
+      else if (window === mainWindow)
+        webContents.send(HOTKEY_CHANNELS.history, direction)
+      else webContents[direction]()
+    }
+  // Electron's own Edit menu items, beside undo and redo.
+  const editItems =
+    Menu.buildFromTemplate([
+      { role: 'editMenu' },
+    ]).items[0]?.submenu?.items.filter(
+      ({ role }) => role !== 'undo' && role !== 'redo',
+    ) ?? []
   const addonItems: MenuItemConstructorOptions[] = []
   let group: string | null = null
   for (const item of addonHotkeys.menuContributions()) {
@@ -1249,7 +1271,21 @@ function installMenu(): void {
         },
       ],
     },
-    { role: 'editMenu' },
+    {
+      label: 'Edit',
+      // Editors take these shortcuts first; the menu runs them only when
+      // nothing did.
+      submenu: Menu.buildFromTemplate([
+        { label: 'Undo', accelerator: 'CmdOrCtrl+Z', click: history('undo') },
+        {
+          label: 'Redo',
+          accelerator:
+            process.platform === 'win32' ? 'Control+Y' : 'Shift+CmdOrCtrl+Z',
+          click: history('redo'),
+        },
+        ...editItems,
+      ]),
+    },
     {
       label: 'View',
       submenu: [

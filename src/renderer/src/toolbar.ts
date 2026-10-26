@@ -190,6 +190,8 @@ export const toolbar = {
     ) => Promise<void>,
   ) {
     let disposed = false
+    // Entries that rendered buttons still hold must not keep the owner alive once it is disposed.
+    let callbacks = { onError, runCommand }
     const owned = new Set<() => void>()
     const api: ToolbarApi = {
       getPreferences: () => ({
@@ -210,7 +212,8 @@ export const toolbar = {
         const validate = (next: ToolbarItem) => {
           if (
             (next.commandId !== undefined &&
-              (!/^[a-z][a-z0-9-]*$/.test(next.commandId) || !runCommand)) ||
+              (!/^[a-z][a-z0-9-]*$/.test(next.commandId) ||
+                !callbacks.runCommand)) ||
             (next.commandId === undefined) ===
               (typeof next.onClick !== 'function')
           )
@@ -229,11 +232,11 @@ export const toolbar = {
                   `toolbar:${item.id}`,
                   () =>
                     item.commandId
-                      ? runCommand?.(item.commandId, context)
+                      ? callbacks.runCommand?.(item.commandId, context)
                       : item.onClick?.(),
                 )
               } catch (error) {
-                onError(error)
+                callbacks.onError(error)
               }
             },
           })
@@ -242,6 +245,9 @@ export const toolbar = {
         const dispose = () => {
           if (!active) return
           active = false
+          // Rendered buttons can keep a removed entry for a while; it must not keep the owner's state.
+          const { onClick: _onClick, ...released } = item
+          item = released
           items.delete(id)
           owned.delete(dispose)
           publish()
@@ -271,6 +277,7 @@ export const toolbar = {
       dispose() {
         disposed = true
         for (const remove of owned) remove()
+        callbacks = { onError() {}, runCommand: undefined }
       },
     }
   },

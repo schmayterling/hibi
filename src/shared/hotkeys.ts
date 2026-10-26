@@ -3,6 +3,7 @@ export const HOTKEY_CHANNELS = {
   save: 'hotkeys:save',
   record: 'hotkeys:record',
   command: 'app:command',
+  history: 'app:history',
 } as const
 
 export const actions = [

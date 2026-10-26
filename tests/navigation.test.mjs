@@ -216,7 +216,7 @@ test('modified link clicks, note/settings history, and file-menu remote imports'
   )
   await remote(`${url}/large`)
   await page
-    .getByText(/the download exceeds the 2 mib document limit\./i)
+    .getByText(/the download exceeds the 2 mib response limit\./i)
     .waitFor()
   await assert.rejects(
     page.evaluate(() => window.hibi.openRemoteDocument('file:///etc/passwd')),

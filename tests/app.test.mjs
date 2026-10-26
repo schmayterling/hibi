@@ -220,6 +220,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'saveHotkeys',
         'setHotkeyRecording',
         'onCommand',
+        'onHistory',
       ].sort(),
     },
   )

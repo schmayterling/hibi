@@ -547,7 +547,9 @@ test('find in document searches rich text and offscreen markdown without editing
       String.prototype.toLowerCase = lower
     }
     String.prototype.toLowerCase = function () {
-      window.foldedText += this.length
+      // Count source text; key routing also folds unrelated DOM tag names.
+      if (this.includes('line ') || this.includes('needle '))
+        window.foldedText += this.length
       return lower.call(this)
     }
   })

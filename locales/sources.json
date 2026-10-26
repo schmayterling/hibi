@@ -707,10 +707,8 @@
     "src/addons/import-notion/convert.ts"
   ],
   "5389a69dd998": [
+    "src/main/files.ts",
     "src/main/workspace-files.ts"
-  ],
-  "ddfe19879e4e": [
-    "src/addons/vim/native.ts"
   ],
   "177862d61380": [
     "src/renderer/src/settings-pages.ts"
@@ -749,6 +747,7 @@
     "src/main/addon-documentation.ts"
   ],
   "5f7d0390ae07": [
+    "src/main/workspace-actions.ts",
     "src/main/workspace-paths.ts"
   ],
   "1d7031f78966": [
@@ -1223,6 +1222,12 @@
   ],
   "e21f935f11d7": [
     "src/addons/mcp-server/Settings.tsx"
+  ],
+  "0146568214a4": [
+    "src/renderer/src/workspace-menu.ts"
+  ],
+  "3c8e7898fdae": [
+    "src/renderer/src/workspace-menu.ts"
   ],
   "ec7ee2826c84": [
     "src/renderer/src/RecoveryScreen.tsx"
@@ -1828,9 +1833,6 @@
   ],
   "a8c9ae023f1a": [
     "src/renderer/src/document-worker-client.ts"
-  ],
-  "c1c0d88d3fb2": [
-    "src/shared/document-worker-service.ts"
   ],
   "14158c871b70": [
     "src/shared/document-worker-service.ts"
@@ -2510,6 +2512,12 @@
     "src/renderer/src/Editor.tsx",
     "src/renderer/src/FormatEditor.tsx"
   ],
+  "4bf40e194a49": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
+  ],
+  "f613e96f398e": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
+  ],
   "f1c65e14817e": [
     "src/main/index.ts"
   ],
@@ -2638,6 +2646,12 @@
   ],
   "a0b88bf9965c": [
     "src/addons/quick-note/CaptureWindow.tsx"
+  ],
+  "e43664c0638d": [
+    "src/main/workspace-actions.ts"
+  ],
+  "d443e8296852": [
+    "src/main/index.ts"
   ],
   "87c719d7d306": [
     "src/main/history.ts"
@@ -3091,6 +3105,7 @@
     "src/addons/dictionary/native.ts"
   ],
   "5a2f299940cc": [
+    "src/main/index.ts",
     "src/shared/document-journal.ts"
   ],
   "648a4f2f5294": [
@@ -3105,6 +3120,19 @@
   "62734d46cb24": [
     "src/main/index.ts",
     "src/shared/document-checkpoint.ts"
+  ],
+  "01fa401e3bf6": [
+    "src/shared/source-transfer.ts"
+  ],
+  "1c875121a939": [
+    "src/main/index.ts"
+  ],
+  "dc0dc106489e": [
+    "src/renderer/src/document-transfer-load.ts",
+    "src/shared/source-transfer.ts"
+  ],
+  "c2e3add49974": [
+    "src/shared/source-transfer.ts"
   ],
   "e24a669abcf1": [
     "src/shared/document-worker-service.ts"
@@ -3398,6 +3426,9 @@
   ],
   "3d171d73a47a": [
     "src/renderer/src/FormatEditor.tsx"
+  ],
+  "ba3bbbe10d8b": [
+    "src/renderer/src/RecoveryBoundary.tsx"
   ],
   "d7cd79b5925c": [
     "src/main/local-diagnostics/runtime.ts"
@@ -3701,6 +3732,9 @@
   ],
   "115967f77ac6": [
     "src/renderer/src/FindBar.tsx"
+  ],
+  "bb33bf08a10d": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
   ],
   "1ef9522a9a8a": [
     "src/main/index.ts",
@@ -4135,6 +4169,9 @@
   "f5cc17a5ad18": [
     "src/addons/graph/Canvas.tsx"
   ],
+  "1d204cfab031": [
+    "src/renderer/src/main.tsx"
+  ],
   "1f1d592bdd1a": [
     "src/main/index.ts"
   ],
@@ -4300,6 +4337,9 @@
   "6d031af10da7": [
     "src/renderer/src/NotificationSettings.tsx"
   ],
+  "983826d83b6d": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
+  ],
   "a54e09e55035": [
     "src/addons/dictionary/PackSettings.tsx"
   ],
@@ -4362,6 +4402,9 @@
   ],
   "a1ac3c3a93fa": [
     "src/renderer/src/FindBar.tsx"
+  ],
+  "84480cf303d2": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
   ],
   "c88d5e7ec3a8": [
     "src/main/index.ts",
@@ -5214,8 +5257,12 @@
   "8a2bc7e0aed9": [
     "src/shared/source-buffer.ts"
   ],
-  "aa0061415476": [
+  "c9df32f0a2c5": [
     "src/shared/source-buffer.ts"
+  ],
+  "aa0061415476": [
+    "src/shared/source-buffer.ts",
+    "src/shared/source-load.ts"
   ],
   "f072e679279d": [
     "src/shared/source-buffer.ts"
@@ -5238,11 +5285,17 @@
   "bb4430a2cffb": [
     "src/shared/source-buffer.ts"
   ],
+  "fc537eec08e6": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
+  ],
   "f45809bdd48a": [
     "src/shared/source-buffer.ts"
   ],
   "a59c5fc9e739": [
     "src/renderer/src/source-outline.ts"
+  ],
+  "3300f213fd9e": [
+    "src/shared/source-buffer.ts"
   ],
   "2fc5a26b7c5b": [
     "src/shared/source-operations.ts"
@@ -5251,6 +5304,7 @@
     "src/shared/source-buffer.ts"
   ],
   "180c25278220": [
+    "src/shared/document-session.ts",
     "src/shared/source-buffer.ts"
   ],
   "a3ec45d2752b": [
@@ -5730,7 +5784,12 @@
     "src/main/analysis.ts"
   ],
   "33848694bf6a": [
-    "src/shared/document-checkpoint.ts"
+    "src/renderer/src/main.tsx",
+    "src/shared/document-checkpoint-stream.ts"
+  ],
+  "f8848b91279e": [
+    "src/main/document-transfer.ts",
+    "src/renderer/src/document-transfer-load.ts"
   ],
   "4f933c48f0a0": [
     "src/renderer/src/document-target-edits.ts"
@@ -5739,6 +5798,9 @@
     "src/main/links.ts"
   ],
   "600ca5556eb4": [
+    "src/main/document.ts"
+  ],
+  "6ffd28864c12": [
     "src/main/document.ts"
   ],
   "602cad822b0c": [
@@ -5784,15 +5846,30 @@
     "src/main/index.ts"
   ],
   "8ea97b4e248c": [
-    "src/shared/document-checkpoint.ts"
+    "src/shared/document-checkpoint-stream.ts"
   ],
   "ee76fd92b752": [
-    "src/shared/document-checkpoint.ts"
+    "src/shared/document-checkpoint-stream.ts"
+  ],
+  "d5906e55a7d6": [
+    "src/main/index.ts",
+    "src/renderer/src/document-runtime.ts"
+  ],
+  "1272f967b3e4": [
+    "src/shared/source-transfer.ts"
+  ],
+  "9dc071e43d04": [
+    "src/main/document-transfer.ts",
+    "src/shared/document-worker-service.ts",
+    "src/shared/source-transfer.ts"
+  ],
+  "bc01d897e63b": [
+    "src/shared/source-transfer.ts"
   ],
   "53a9d03e9663": [
     "src/main/addon-documentation.ts"
   ],
-  "6d78247b2a33": [
+  "92ca4db1aa24": [
     "src/main/links.ts"
   ],
   "974b4f94f221": [
@@ -5926,6 +6003,9 @@
   "1a9c37310c3f": [
     "src/main/files.ts"
   ],
+  "db39203290d8": [
+    "src/renderer/src/document-runtime.ts"
+  ],
   "b98fc4a907d6": [
     "src/main/addon-inventory.ts"
   ],
@@ -5986,6 +6066,9 @@
   "bee50784d023": [
     "src/shared/document-edits.ts"
   ],
+  "bfffe147f4f5": [
+    "src/main/workspace-files.ts"
+  ],
   "6aa88449912f": [
     "src/shared/addon-manifest.ts"
   ],
@@ -6018,6 +6101,9 @@
     "src/addons/documentation/native.ts",
     "src/addons/documentation/site-worker.ts",
     "src/main/workspace.ts"
+  ],
+  "bcfba9ceabd5": [
+    "src/main/workspace-actions.ts"
   ],
   "1f9371eb85f2": [
     "src/main/workspace.ts"
@@ -6293,9 +6379,6 @@
   "f70a180e8466": [
     "src/shared/imports.ts"
   ],
-  "b3e591b2b962": [
-    "src/main/files.ts"
-  ],
   "73b6a9218822": [
     "src/addons/bbcode/render.ts"
   ],
@@ -6318,9 +6401,6 @@
   ],
   "f3baf23e2a31": [
     "src/main/addon-documentation.ts"
-  ],
-  "28d14c9029bb": [
-    "src/renderer/src/main.tsx"
   ],
   "4396b1d0a374": [
     "src/renderer/src/Editor.tsx"
@@ -6430,6 +6510,9 @@
   "557e75befd2a": [
     "src/renderer/src/WorkspacesSidebar.tsx"
   ],
+  "e94cf57dc0b9": [
+    "src/renderer/src/main.tsx"
+  ],
   "726915b074e5": [
     "src/main/addon-trust-crypto.ts"
   ],
@@ -6445,11 +6528,17 @@
   "dd8dcbe75100": [
     "src/main/document.ts"
   ],
+  "c70bc0cdd914": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
+  ],
   "a8509d324773": [
     "src/main/workspace-paths.ts"
   ],
   "7026bfea8279": [
     "src/main/workspace-files.ts"
+  ],
+  "5311471f72b4": [
+    "src/renderer/src/LargeMarkdownPreview.tsx"
   ],
   "5089081cf601": [
     "src/renderer/src/document-edits.ts"
@@ -6468,6 +6557,10 @@
   ],
   "c13ad6f975f2": [
     "src/main/history.ts"
+  ],
+  "81236bae92f9": [
+    "src/main/history.ts",
+    "src/renderer/src/VersionHistory.tsx"
   ],
   "ffebf17d6560": [
     "src/addons/mcp-server/tools.ts",
@@ -6499,6 +6592,9 @@
   ],
   "e8983dab4298": [
     "src/renderer/src/Introduction.tsx"
+  ],
+  "2a116f351782": [
+    "src/main/files.ts"
   ],
   "609876d22bea": [
     "src/shared/addon-manifest.ts"
@@ -6868,9 +6964,6 @@
   ],
   "9098e6f8753c": [
     "src/main/addon-repository.ts"
-  ],
-  "4e3017d9661a": [
-    "src/main/files.ts"
   ],
   "837f32b3dfef": [
     "src/addons/documentation/options.ts"

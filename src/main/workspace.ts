@@ -41,7 +41,7 @@ import {
   selectDocumentTab,
 } from './document'
 import { runFileDialog } from './file-operation-dialog'
-import { readMarkdown } from './files'
+import { readMarkdown, readMarkdownChunks } from './files'
 import {
   forgetWorkspace,
   getKnownWorkspaces,
@@ -1186,7 +1186,11 @@ export async function readWorkspaceExportPage(
   if (draft?.pendingPath) {
     await resolveWorkspaceEntry(selected, relative, true)
   }
-  const markdown = draft?.dirty ? draft.markdown : await readMarkdown(path)
+  // Export owns one page at a time and has no per-note content ceiling.
+  const chunks: string[] = []
+  if (!draft?.dirty)
+    for await (const chunk of readMarkdownChunks(path)) chunks.push(chunk)
+  const markdown = draft?.dirty ? draft.markdown : chunks.join('')
   const images: Record<string, string> = Object.create(null)
   if (media && isMarkdownDocument(relative))
     for (const source of typeof media === 'boolean'
@@ -1303,7 +1307,7 @@ async function runIndexRequest(
         version: diskIndexVersion(info),
         read: (maximumBytes: number) => {
           checkLegacyIndexBytes(Number(info.size), maximumBytes)
-          return readMarkdown(file)
+          return readMarkdown(file, maximumBytes)
         },
       }
     },

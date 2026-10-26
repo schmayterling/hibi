@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { sourceOperationLimits } from '../src/shared/source-operations.ts'
 import {
   electron,
   stopElectronTree,
@@ -155,8 +156,8 @@ test('S01/S03/S07/J01: accepted rich transformations are savable before callback
   assert.equal(await readFile(file, 'utf8'), 'alpha!')
   assert.equal(initial.current.contentVersion, 1)
 
-  stage = 'filter, dry-run history and size rejection'
-  const result = await page.evaluate(async () => {
+  stage = 'filter, dry-run history and transaction rejection'
+  const result = await page.evaluate(async (insertLimit) => {
     const editor = document.querySelector('.tiptap').editor,
       context = window.bridgeContext,
       fixture = window.bridgeFixture
@@ -178,7 +179,7 @@ test('S01/S03/S07/J01: accepted rich transformations are savable before callback
     editor.commands.keyboardShortcut('Mod-Shift-z')
     const redone = context.editor.getDocument()
     const observations = fixture.before.length
-    editor.commands.setContent('x'.repeat(2 * 1024 * 1024 + 1), {
+    editor.commands.setContent('x'.repeat(insertLimit + 1), {
       contentType: 'markdown',
     })
     const rejected = context.editor.getDocument()
@@ -200,7 +201,7 @@ test('S01/S03/S07/J01: accepted rich transformations are savable before callback
       valid,
       view: editor.state.doc.textContent,
     }
-  })
+  }, sourceOperationLimits.insertedUnits)
   assert.equal(
     result.filtered.contentVersion,
     result.beforeFilter.contentVersion,

@@ -8,19 +8,12 @@ import {
   Save,
   X,
 } from 'lucide-react'
-import {
-  Component,
-  type ErrorInfo,
-  type ReactNode,
-  useEffect,
-  useRef,
-  useState,
-} from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { DocumentState } from '../../shared/desktop'
 import { Button, IconButton } from '../../ui/Controls'
 import { Modal } from '../../ui/Modal'
-import { reportRendererFailure } from './local-diagnostics'
+import { documentRuntime } from './document-runtime'
 import './recovery.css'
 
 export function RecoveryScreen({
@@ -55,21 +48,26 @@ export function RecoveryScreen({
   async function saveCopy() {
     setBusy(true)
     setStatus('')
+    const token = documentRuntime.beginSave(draft?.tabId)
     try {
       const saved = await window.hibi.saveDocument(true)
       if (saved) {
-        setDraft(saved)
+        const owned = token
+          ? documentRuntime.acknowledgeSave(saved, token, draft?.id)
+          : null
+        setDraft(owned ?? (await window.hibi.getDocument().catch(() => draft)))
         setStatus('Copy saved.')
       }
     } catch {
       setStatus('Could not save a copy. Try again before reloading.')
     } finally {
+      documentRuntime.endSave(token)
       setBusy(false)
     }
   }
   async function copyDetails() {
     try {
-      await navigator.clipboard.writeText(details)
+      await window.hibi.writeClipboardText(details)
       setCopied(true)
       setStatus('Error details copied.')
     } catch {
@@ -192,31 +190,4 @@ export function RecoveryScreen({
         )}
     </main>
   )
-}
-
-export class RecoveryBoundary extends Component<
-  { children: ReactNode },
-  { error: Error | null }
-> {
-  state: { error: Error | null } = { error: null }
-  static getDerivedStateFromError(error: unknown) {
-    return { error: error instanceof Error ? error : new Error(String(error)) }
-  }
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    const componentStack = info.componentStack
-    reportRendererFailure(
-      'REACT_RENDER_FAILED',
-      error,
-      undefined,
-      componentStack,
-    )
-    console.error('render failed:', error, componentStack)
-  }
-  render() {
-    return this.state.error ? (
-      <RecoveryScreen error={this.state.error} />
-    ) : (
-      this.props.children
-    )
-  }
 }

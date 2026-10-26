@@ -344,7 +344,13 @@ test('local history snapshots on save, previews, and restores without overwritin
         const saved = await page.evaluate(() => window.hibi.saveDocument(false))
         await app.evaluate(() => globalThis.restoreHistoryFailure())
         assert.equal(saved.dirty, false)
-        assert.equal(saved.savedMarkdown, content)
+        assert.equal(saved.saveReceipt, true)
+        assert.equal(
+          await page.evaluate(
+            async () => (await window.hibi.getDocument()).savedMarkdown,
+          ),
+          content,
+        )
         assert.equal(await readFile(file, 'utf8'), content)
         const after = await page.evaluate(() => window.hibi.listVersions())
         if (failure === 'copy') {
@@ -407,7 +413,13 @@ test('local history snapshots on save, previews, and restores without overwritin
     )
     const saved = await page.evaluate(() => window.hibi.saveDocument(false))
     assert.equal(saved.dirty, false)
-    assert.equal(saved.savedMarkdown, content)
+    assert.equal(saved.saveReceipt, true)
+    assert.equal(
+      await page.evaluate(
+        async () => (await window.hibi.getDocument()).savedMarkdown,
+      ),
+      content,
+    )
     assert.equal(await readFile(file, 'utf8'), content)
     await page
       .getByText('File saved, but Hibi could not add it to version history.')

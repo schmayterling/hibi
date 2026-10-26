@@ -103,6 +103,7 @@ import { textExtrasMarkdown } from './src/addons/text-extras/syntax.ts'
 import { countText } from './src/addons/word-count/count.ts'
 import { createMarkdownSemantics } from './src/renderer/src/markdown-semantics.ts'
 import { DocumentWorkerService } from './src/shared/document-worker-service.ts'
+import { SourceTransferSender } from './src/shared/source-transfer.ts'
 
 const syntax = {gfm:true,alerts:true,textExtras:true}
 const flavors = [
@@ -122,7 +123,9 @@ export async function run(cases) {
   for (const fixture of cases) {
     let source = fixture.source, id = 0, version = 0
     const pending = new Map()
+    let lastReply
     const worker = new DocumentWorkerService(reply => {
+      lastReply = reply
       const request = pending.get(reply.id)
       if (!request) return
       pending.delete(reply.id)
@@ -139,8 +142,19 @@ export async function run(cases) {
       worker.receive({type:'metadata',epoch:'native-semantic',id:requestId,version,
         dialect:'gfm',semantic:syntax,from,to:source.length,limit:1})
     })
-    worker.receive({type:'load',epoch:'native-semantic',document:{tabId:'fixture',revision:0},version,
-      chunks:source.match(/[\\s\\S]{1,65536}/g) ?? []})
+    const sender = new SourceTransferSender({tabId:'fixture',revision:0,contentVersion:version,
+      streamId:crypto.randomUUID(),length:source.length},[source])
+    worker.receive({type:'load-start',epoch:'native-semantic',head:sender.head})
+    for (;;) {
+      if (lastReply?.type !== 'load-ack') throw Error('Missing source stream acknowledgement')
+      const chunk = sender.read(lastReply.request)
+      worker.receive({type:'load-chunk',epoch:'native-semantic',chunk})
+      if (chunk.done) break
+    }
+    const finish = lastReply.request
+    sender.finish(finish)
+    worker.receive({type:'load-finish',epoch:'native-semantic',request:finish})
+    if (lastReply?.type !== 'ack') throw Error('Source stream did not publish')
     try {
       for (let pass=0;pass<(fixture.edit?2:1);pass++) {
         if (pass) {

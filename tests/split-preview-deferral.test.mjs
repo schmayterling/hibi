@@ -237,7 +237,10 @@ test('math and dictionary split previews parse once per pause or rich flush, not
     parses: 0,
   })
   const saved = await page.evaluate(() => window.hibi.saveDocument(false))
-  assert.equal(saved.markdown, typed)
+  assert.equal(saved.saveReceipt, true)
+  const current = await page.evaluate(() => window.hibi.getDocument())
+  assert.equal(saved.savedVersion, current.contentVersion)
+  assert.equal(current.markdown, typed)
   assert.equal(await readFile(file, 'utf8'), typed)
   await page.clock.runFor(199)
   assert.equal((await preview()).parses, 0)

@@ -8,6 +8,7 @@ import { documentRuntime } from './document-runtime'
 import {
   afterDocumentQuiet,
   editorDocumentUpdates,
+  largeOpening,
   preferSourceOpening,
 } from './document-shell'
 import type { MarkdownEditor } from './Editor'
@@ -117,8 +118,9 @@ export function ActiveDocumentEditor({
     current.revision === props.document.revision
       ? current
       : props.document
-  const deferredSource =
-    markdown && preferSourceOpening(documentRuntime, document)
+  // Checks that read the whole source wait for notes that open in parts.
+  const deferredSource = markdown && largeOpening(documentRuntime, document)
+  const sourceFirst = markdown && preferSourceOpening(documentRuntime, document)
   const source = markdown && !deferredSource ? document.markdown : ''
   const unsupported = useMemo(() => {
     if (!markdown || deferredSource) return false
@@ -177,8 +179,8 @@ export function ActiveDocumentEditor({
       {...(viewId ? { viewId } : {})}
       document={document}
       value={source}
-      mode={deferredSource ? 'markdown' : props.mode}
-      largePreview={markdown && deferredSource && props.mode !== 'markdown'}
+      mode={sourceFirst ? 'markdown' : props.mode}
+      largePreview={sourceFirst && props.mode !== 'markdown'}
       previewSupported={
         certifiedVisual &&
         chosenFlavors.every(

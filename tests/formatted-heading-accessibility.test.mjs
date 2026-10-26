@@ -134,6 +134,69 @@ test('nested headings retain their names while fenced and indented code remain l
   )
 })
 
+for (const [kind, source, name, level] of [
+  [
+    'spaces',
+    'space first  \nspace second\n==========\n\nclosing paragraph\n',
+    'space first space second',
+    1,
+  ],
+  [
+    'backslash',
+    'slash first\\\nslash second\n----------\n\nclosing paragraph\n',
+    'slash first slash second',
+    2,
+  ],
+  [
+    'list',
+    '- list first  \n  list second\n  ==========\n\nclosing paragraph\n',
+    'list first list second',
+    1,
+  ],
+]) {
+  test(`hard-break setext heading has one complete accessibility owner: ${kind}`, {
+    timeout: 60000,
+  }, async (t) => {
+    const page = await open(t, source)
+    const rich = page.locator('.rich-pane')
+    await rich.locator('.hibi-lp-heading').first().waitFor()
+    assert.equal(await rich.getByRole('heading').count(), 1)
+    assert.equal(
+      await rich.getByRole('heading', { name, level, exact: true }).count(),
+      1,
+    )
+    const cdp = await page.context().newCDPSession(page)
+    const accessibility = await cdp.send('Accessibility.getFullAXTree')
+    assert.deepEqual(
+      accessibility.nodes
+        .filter((node) => node.role?.value === 'heading')
+        .map((node) => node.name?.value),
+      [name],
+    )
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+    await page.evaluate((anchor) => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.focus()
+      view.dispatch({ selection: { anchor }, scrollIntoView: true })
+    }, source.indexOf('second') + 'second'.length)
+    await page.keyboard.insertText('x')
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      source.replace('second', 'secondx'),
+    )
+    await page.keyboard.press('ControlOrMeta+z')
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      source,
+    )
+  })
+}
+
 test('a hidden multiline link destination does not duplicate its setext heading', {
   timeout: 60000,
 }, async (t) => {

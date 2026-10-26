@@ -6,12 +6,14 @@ import {
   Facet,
   Prec,
   type Range,
+  RangeSet,
   StateEffect,
   StateField,
   type Text,
   type TransactionSpec,
 } from '@codemirror/state'
 import {
+  BlockWrapper,
   Decoration,
   type DecorationSet,
   EditorView,
@@ -322,7 +324,12 @@ function inline(
   tree: Tree,
   reveal: readonly Revealed[],
   layout: DecorationSet,
-): { decorations: DecorationSet; atomic: DecorationSet; end: number } {
+): {
+  decorations: DecorationSet
+  atomic: DecorationSet
+  wrappers: RangeSet<BlockWrapper>
+  end: number
+} {
   const { state } = view
   const doc = state.doc
   const views = namedViews(state)
@@ -351,7 +358,7 @@ function inline(
   blocks = { literal, views, shapes }
   const decorations: Range<Decoration>[] = []
   const lines = new Map<number, LineInfo>()
-  const headings = new Set<number>()
+  const headings = new Map<number, Range<BlockWrapper>>()
   const line = (pos: number) => {
     let info = lines.get(pos)
     if (!info) {
@@ -538,14 +545,14 @@ function inline(
     }
     const heading = /^(ATX|Setext)Heading(\d)$/.exec(name)
     if (heading) {
-      if (!headings.has(ref.from)) {
-        headings.add(ref.from)
-        decorations.push(
-          Decoration.mark({
+      if (!headings.has(ref.from))
+        headings.set(
+          ref.from,
+          BlockWrapper.create({
+            tagName: 'div',
             attributes: { role: 'heading', 'aria-level': name.slice(-1) },
-          }).range(ref.from, ref.to),
+          }).range(doc.lineAt(ref.from).from, ref.to),
         )
-      }
       eachLine(doc, ref.from, ref.to, range, (current) => {
         // A setext underline line is hidden by the layout field.
         if (
@@ -709,6 +716,7 @@ function inline(
   return {
     decorations: Decoration.set(decorations, true),
     atomic: Decoration.set(atomic, true),
+    wrappers: BlockWrapper.set([...headings.values()], true),
     end,
   }
 }
@@ -1302,6 +1310,7 @@ export function livePreview(
     class {
       decorations: DecorationSet
       atomic: DecorationSet
+      wrappers: RangeSet<BlockWrapper>
       /** Space below the last line, in px. */
       end: number
       reveal: readonly Revealed[]
@@ -1310,6 +1319,7 @@ export function livePreview(
         ;({
           decorations: this.decorations,
           atomic: this.atomic,
+          wrappers: this.wrappers,
           end: this.end,
         } = inline(
           view,
@@ -1339,6 +1349,7 @@ export function livePreview(
         if (syntax.settling(update.state)) {
           this.decorations = mapLines(this.decorations, update)
           this.atomic = mapLines(this.atomic, update)
+          this.wrappers = this.wrappers.map(update.changes)
         } else if (
           update.docChanged ||
           update.viewportChanged ||
@@ -1358,6 +1369,7 @@ export function livePreview(
           ({
             decorations: this.decorations,
             atomic: this.atomic,
+            wrappers: this.wrappers,
             end: this.end,
           } = inline(update.view, tree, reveal, update.state.field(layout)))
       }
@@ -1436,6 +1448,9 @@ export function livePreview(
       revealDestinations(view.state.field(layout), view.state),
     ),
     preview,
+    EditorView.blockWrappers.of(
+      (view) => view.plugin(preview)?.wrappers ?? RangeSet.empty,
+    ),
     // The space after the last block lies outside every block's paint.
     EditorView.contentAttributes.of((view) => {
       const end = view.plugin(preview)?.end

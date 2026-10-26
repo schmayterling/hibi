@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { EditorState } from '@codemirror/state'
 import { TreeFragment } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
 import { Marked } from 'marked'
@@ -9,7 +10,7 @@ import {
   inlineMathSyntax,
   inlineMathWork,
 } from '../src/addons/math/formatted-syntax.ts'
-import { mathInsertion } from '../src/addons/math/insert.ts'
+import { containerPrefix, mathInsertion } from '../src/addons/math/insert.ts'
 import { inlineMath, mathTokens } from '../src/addons/math/syntax.ts'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import { outlineMathParser } from '../src/renderer/src/source-outline-math.ts'
@@ -271,22 +272,44 @@ test('many short formulas on one line cost work linear in its length', () => {
   for (const perUnit of work) assert.ok(perUnit <= 1, JSON.stringify(work))
 })
 
-test('inserted display math stays in the quote or list item at the caret', () => {
-  for (const [line, column, containers] of [
-    ['before after', 6, []],
-    ['> before after', 8, ['Blockquote']],
-    ['- before after', 8, ['BulletList', 'ListItem']],
-    ['1. before after', 9, ['OrderedList', 'ListItem']],
-    ['> - before after', 10, ['Blockquote', 'BulletList', 'ListItem']],
-    ['- > before after', 10, ['BulletList', 'ListItem', 'Blockquote']],
+test('inserted display math stays in the quote or list item around the caret', () => {
+  for (const [doc, caret, containers] of [
+    ['before after', 'before', []],
+    ['> before after', '> before', ['Blockquote']],
+    ['- before after', '- before', ['BulletList', 'ListItem']],
+    ['1. before after', '1. before', ['OrderedList', 'ListItem']],
+    [
+      '> - before after',
+      '> - before',
+      ['Blockquote', 'BulletList', 'ListItem'],
+    ],
+    [
+      '- > before after',
+      '- > before',
+      ['BulletList', 'ListItem', 'Blockquote'],
+    ],
+    // Lazy continuation lines lack the markers but stay in the container.
+    ['> intro\nbefore after', '> intro\nbefore', ['Blockquote']],
+    ['- intro\nbefore after', '- intro\nbefore', ['BulletList', 'ListItem']],
+    [
+      '> - intro\nbefore after',
+      '> - intro\nbefore',
+      ['Blockquote', 'BulletList', 'ListItem'],
+    ],
+    [
+      '- first\n\n  second\nbefore after',
+      '- first\n\n  second\nbefore',
+      ['BulletList', 'ListItem'],
+    ],
   ]) {
+    const at = caret.length
+    const state = EditorState.create({ doc })
+    const prefix = containerPrefix(state.doc, formatted.parse(doc), at)
     const source =
-      line.slice(0, column) +
-      mathInsertion(line, column, 'x^2', true) +
-      line.slice(column)
-    // The formula and the text after it keep the line's containers.
+      doc.slice(0, at) + mathInsertion(prefix, 'x^2', true) + doc.slice(at)
+    // The formula and the text after it keep the containers around the caret.
     const tree = formatted.parse(source)
-    const at = (pos) => {
+    const around = (pos) => {
       const names = []
       for (let node = tree.resolve(pos, 1); node; node = node.parent)
         if (node.type.is('Block') && node.name !== 'Paragraph')
@@ -294,11 +317,11 @@ test('inserted display math stays in the quote or list item at the caret', () =>
       return names.filter((name) => name !== 'Document')
     }
     const formula = source.indexOf('$$')
-    assert.deepEqual(at(formula), [...containers, 'BlockMath'], source)
-    assert.deepEqual(at(source.indexOf('after')), containers, source)
+    assert.deepEqual(around(formula), [...containers, 'BlockMath'], source)
+    assert.deepEqual(around(source.indexOf('after')), containers, source)
     assert.deepEqual(markedMath(source), [['block', 'x^2']], source)
   }
-  assert.equal(mathInsertion('> quote', 3, 'y', false), '$y$')
+  assert.equal(mathInsertion('> ', 'y', false), '$y$')
 })
 
 test('a display block decides by its closing line and keeps quote markers inside it', () => {

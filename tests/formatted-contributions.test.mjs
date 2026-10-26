@@ -348,3 +348,23 @@ test('github task lists parse as tasks in documents of that flavor', async () =>
     remove()
   }
 })
+
+test('turning off core html or images shows their nodes as written', () => {
+  const literal = () =>
+    EditorState.create({
+      extensions: formattedContributions.extension(['markdown.github']),
+    }).facet(formattedLiteral)
+  assert.ok(!literal().includes('HTMLTag'))
+  for (const [id, node] of [
+    ['core.inline-html', 'HTMLTag'],
+    ['core.html-blocks', 'HTMLBlock'],
+    ['core.images', 'Image'],
+  ]) {
+    markdownSyntax.setEnabled(id, false)
+    try {
+      assert.ok(literal().includes(node), id)
+    } finally {
+      markdownSyntax.setEnabled(id, true)
+    }
+  }
+})

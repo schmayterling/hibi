@@ -240,6 +240,17 @@ function load(entry: FormattedEntry) {
   }, failed)
 }
 
+/** Core features' nodes, kept here rather than in the startup syntax list. */
+const coreNodes: Partial<Record<string, readonly string[]>> = {
+  'core.images': ['Image'],
+  'core.html-blocks': [
+    'HTMLBlock',
+    'CommentBlock',
+    'ProcessingInstructionBlock',
+  ],
+  'core.inline-html': ['HTMLTag', 'Comment', 'ProcessingInstruction'],
+}
+
 export const formattedContributions = {
   /** Changes when registered or loaded contributions or the syntax settings they follow change. */
   version: () =>
@@ -264,7 +275,7 @@ export const formattedContributions = {
       .snapshot()
       .flatMap((feature) =>
         !feature.enabled && feature.scope !== 'document'
-          ? (feature.nodes ?? [])
+          ? (feature.nodes ?? coreNodes[feature.id] ?? [])
           : [],
       )
     return [

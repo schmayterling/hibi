@@ -189,7 +189,6 @@ const core: MarkdownSyntaxFeature[] = [
     group: 'links and media',
     description: '![description](path)',
     level: 'inline',
-    nodes: ['Image'],
     extensions: ['image'],
     matches: (token) => token.type === 'image',
     slash: { markdown: '![description](path)', cursor: 2 },
@@ -200,7 +199,6 @@ const core: MarkdownSyntaxFeature[] = [
     group: 'html',
     description: 'Include HTML in exports with unsafe content removed.',
     level: 'block',
-    nodes: ['HTMLBlock', 'CommentBlock', 'ProcessingInstructionBlock'],
     matches: (token) => token.type === 'html' && !!token.block,
     slash: { markdown: '<div>\n\n</div>', cursor: 6 },
   },
@@ -211,7 +209,6 @@ const core: MarkdownSyntaxFeature[] = [
     description:
       'Include HTML within text in exports, with unsafe content removed.',
     level: 'inline',
-    nodes: ['HTMLTag', 'Comment', 'ProcessingInstruction'],
     matches: (token) => token.type === 'html' && !token.block,
     slash: { markdown: '<span></span>', cursor: 6 },
   },

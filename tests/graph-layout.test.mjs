@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('large graphs fit padded sidebars and expanded views, resize, zoom and filter', {
   timeout: 90000,
@@ -60,36 +61,53 @@ test('large graphs fit padded sidebars and expanded views, resize, zoom and filt
     exact: true,
   })
   await sidebar.getByText(/500 of 500 notes/).waitFor()
-  const cameraScale = async (view) =>
-    Number(
-      (
-        await view.locator('.graph-canvas > svg > g').getAttribute('transform')
-      ).match(/scale\(([^)]+)\)/)[1],
-    )
+  await sidebar.locator('.graph-canvas[data-labels]').waitFor()
+  // The canvas keeps the camera transform of its last frame; wait for the
+  // frame drawn after the latest input.
+  const cameraScale = (view) =>
+    view.locator('canvas').evaluate(async (canvas) => {
+      await new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)),
+      )
+      return (
+        canvas.getContext('2d').getTransform().a /
+        (canvas.width / canvas.getBoundingClientRect().width)
+      )
+    })
   const startingScale = await cameraScale(sidebar)
+  // Every drawn pixel stays 16 px inside the frame, and the list holds every note.
   const fitted = async (view, count = 500) => {
     await page.waitForFunction(
       ({ element, count }) => {
-        const canvas = element.querySelector('.graph-canvas')
-        if (!canvas) return false
-        const frame = canvas.getBoundingClientRect()
-        const nodes = [...canvas.querySelectorAll('[data-node] circle')]
-        return (
-          nodes.length === count &&
-          frame.width > 0 &&
-          frame.height > 0 &&
-          nodes.every((node) => {
-            const box = node.getBoundingClientRect()
-            return (
-              box.left >= frame.left + 16 &&
-              box.right <= frame.right - 16 &&
-              box.top >= frame.top + 16 &&
-              box.bottom <= frame.bottom - 16
-            )
-          })
+        const canvas = element.querySelector('.graph-view canvas')
+        const option = element.querySelector('.graph-nodes [role="option"]')
+        if (
+          !canvas?.width ||
+          option?.getAttribute('aria-setsize') !== String(count)
         )
+          return false
+        const ratio = canvas.width / canvas.getBoundingClientRect().width
+        const inset = Math.ceil(16 * ratio)
+        const { data, width, height } = canvas
+          .getContext('2d')
+          .getImageData(0, 0, canvas.width, canvas.height)
+        let drawn = false
+        for (let y = 0; y < height; y++)
+          for (let x = 0; x < width; x++) {
+            if (!data[(y * width + x) * 4 + 3]) continue
+            drawn = true
+            if (
+              x < inset ||
+              y < inset ||
+              x >= width - inset ||
+              y >= height - inset
+            )
+              return false
+          }
+        return drawn
       },
       { element: await view.elementHandle(), count },
+      { polling: 100 },
     )
   }
   await sidebar.getByRole('button', { name: 'Fit graph' }).click()
@@ -105,7 +123,9 @@ test('large graphs fit padded sidebars and expanded views, resize, zoom and filt
   assert.ok(filter.x - panel.x >= 12)
   assert.ok(panel.x + panel.width - filter.x - filter.width >= 12)
   assert.equal(
-    await sidebar.locator('[data-node="n000.md"]').getAttribute('data-active'),
+    await sidebar
+      .getByRole('option', { name: 'Open n000.md', exact: true })
+      .getAttribute('aria-selected'),
     'true',
   )
   const connections = await sidebar
@@ -122,17 +142,20 @@ test('large graphs fit padded sidebars and expanded views, resize, zoom and filt
     await sidebar.locator('.graph-canvas').getAttribute('data-labels'),
     'false',
   )
-  const scale = async () =>
-    Number(
-      (
-        await sidebar
-          .locator('.graph-canvas > svg > g')
-          .getAttribute('transform')
-      ).match(/scale\(([^)]+)\)/)[1],
-    )
-  const before = await scale()
+  const before = await cameraScale(sidebar)
   await sidebar.getByRole('button', { name: 'Zoom out', exact: true }).click()
-  assert.ok((await scale()) < before)
+  await waitForAsync(
+    page,
+    async (before) => {
+      const canvas = document.querySelector('.addon-sidebar canvas')
+      return (
+        canvas.getContext('2d').getTransform().a /
+          (canvas.width / canvas.getBoundingClientRect().width) <
+        before
+      )
+    },
+    before,
+  )
   await sidebar.getByRole('button', { name: 'Fit graph', exact: true }).click()
   await fitted(sidebar)
   const handle = page
@@ -181,10 +204,7 @@ test('large graphs fit padded sidebars and expanded views, resize, zoom and filt
   )
   await fitted(expanded, 1)
   await page.getByRole('button', { name: 'Close Workspace graph' }).click()
-  assert.equal(
-    await sidebar.locator('.graph-canvas').getAttribute('data-labels'),
-    'true',
-  )
+  await sidebar.locator('.graph-canvas[data-labels="true"]').waitFor()
   await search.fill('no-matching-note')
   await sidebar.getByText('No matching notes', { exact: true }).waitFor()
   await search.fill('')

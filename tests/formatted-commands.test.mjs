@@ -221,3 +221,40 @@ test('enter and backspace keep list numbers, quoted fences and formatting edges 
   // An empty item's enter replaces the whole selection.
   assert.equal(run('- one\n- ^\n- two|', blockBreak), '- one\n\n|')
 })
+
+test('enter keeps formatting around a replaced selection, quotes from syntax, and lifts empty nested items', () => {
+  // Before, a selection inside bold lost the bold on both sides.
+  assert.equal(run('**bo^ld|ly**', blockBreak), '**bo**\n\n**|ly**')
+  assert.equal(run('[la^b|el](/u)', blockBreak), '[la](/u)\n\n[|el](/u)')
+  assert.equal(run('`co^d|e`', blockBreak), '`co`\n\n`|e`')
+  // A `>` in code is text: only the quotes around the code continue.
+  assert.equal(run('```\n> code|\n```', blockBreak), '```\n> code\n|\n```')
+  assert.equal(
+    run('> ```\n> > code|\n> ```', blockBreak),
+    '> ```\n> > code\n> |\n> ```',
+  )
+  assert.equal(
+    run('> ```\n>     code|\n> ```', blockBreak),
+    '> ```\n>     code\n>     |\n> ```',
+  )
+  // An empty nested item moves up a level; only an empty top item leaves.
+  assert.equal(
+    run('- parent\n  - child\n  - |', blockBreak),
+    '- parent\n  - child\n- |',
+  )
+  assert.equal(run('- one\n- |', blockBreak), '- one\n\n|')
+})
+
+test('enter with a selection at the edges of formatting leaves no empty markers, and a lifted item counts on', () => {
+  // Before, `bo` selected in bold left `****` and `**ld**`.
+  assert.equal(run('**^bo|ld**', blockBreak), '\n\n**|ld**')
+  assert.equal(run('**bo^ld|**', blockBreak), '**bo**\n\n|')
+  assert.equal(run('**^bold|**', blockBreak), '\n\n|')
+  assert.equal(run('[^la|bel](/u)', blockBreak), '\n\n[|bel](/u)')
+  assert.equal(run('`^code|`', blockBreak), '\n\n|')
+  // Before, the lifted item and the next one were both `2.`.
+  assert.equal(
+    run('1. parent\n   - child\n   - |\n2. after', blockBreak),
+    '1. parent\n   - child\n2. |\n3. after',
+  )
+})

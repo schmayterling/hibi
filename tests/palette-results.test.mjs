@@ -77,6 +77,18 @@ test('palette selection reuses filtered results and rerenders only the rows it c
     moved.rendered - filtered.rendered <= 24,
     `rendered ${moved.rendered - filtered.rendered} rows`,
   )
+  // Scrolling can move a different row under a stationary pointer. Chromium
+  // sends boundary events, but those must not replace keyboard selection.
+  const beforeBoundary = await counts()
+  await option(14).dispatchEvent('mouseover')
+  await page.evaluate(() => new Promise(requestAnimationFrame))
+  await selected(12)
+  assert.deepEqual(await counts(), beforeBoundary)
+  await option(14).hover()
+  await selected(14)
+  assert.equal((await counts()).filtered, beforeBoundary.filtered)
+  assert.equal((await counts()).rendered - beforeBoundary.rendered, 2)
+
   await search.fill('command 2')
   await selected(2)
   assert.equal(await page.getByRole('option').count(), 542)

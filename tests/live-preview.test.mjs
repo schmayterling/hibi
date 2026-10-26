@@ -623,6 +623,46 @@ test('a structural edit at the top of a 50 MiB note parses a bounded window and 
   console.log(JSON.stringify({ opened, typed: typed[0], closed, unfenced }))
 })
 
+test('formatting in a giant list stays drawn while an edit inside its window is reparsed', {
+  timeout: 90000,
+}, async () => {
+  const doc = Array.from(
+    { length: 20000 },
+    (_, i) => `- item **${i}** text`,
+  ).join('\n')
+  // One parse step per transaction, so an edit's reparse spans several.
+  await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    await preview.mount(doc, { width: 800, height: 600 }, { slice: 0 })
+    preview.scrollTo(preview.view().state.doc.line(10000).from)
+  }, doc)
+  await harness.waitForFunction(
+    () => document.querySelectorAll('.hibi-lp-strong').length > 10,
+  )
+  await harness.waitForFunction(() => !window.livePreview.settling())
+  const result = await harness.evaluate(() => {
+    const preview = window.livePreview
+    const view = preview.view()
+    const before = document.querySelectorAll('.hibi-lp-strong').length
+    const line = view.state.doc.line(10005)
+    view.dispatch({ changes: { from: line.to, insert: ' **new**' } })
+    return {
+      before,
+      after: document.querySelectorAll('.hibi-lp-strong').length,
+      settling: preview.settling(),
+    }
+  })
+  // The edit's reparse is unfinished, and what was drawn stays, mapped.
+  assert.ok(result.settling, JSON.stringify(result))
+  assert.ok(result.after >= result.before, JSON.stringify(result))
+  // The reparse lands in idle slices with the edit formatted.
+  await harness.waitForFunction(() =>
+    [...document.querySelectorAll('.hibi-lp-strong')].some(
+      (node) => node.textContent === 'new',
+    ),
+  )
+})
+
 test('ordered list numbers in a 20,000-item list come from cached item offsets', {
   timeout: 90000,
 }, async () => {

@@ -80,9 +80,9 @@ const bundle = await build({
             stale: host().stale, complete: true, capReached: false,
           })
           export const workspaceIndexRevision = () => host().revision
-          export const subscribeWorkspaceChanges = (listener) => {
+          export const listenWorkspaceChanges = (listener) => {
             host().listener = listener
-            return { snapshot: {}, dispose: () => { host().listener = null } }
+            return () => { host().listener = null }
           }
           export const indexWorkspace = async () => {
             host().indexReads++
@@ -245,131 +245,6 @@ test('metadata queries return bounded links and backlinks from shared pages', as
   assert.equal(host.indexReads, 3)
 })
 
-test('text search cursors resume bounded scans and expire after edits', async () => {
-  const originalPages = host.pages
-  const originalSyntax = host.syntaxSnapshot
-  const target = host.target
-  host.pages = [
-    { path: 'a.md', markdown: `${'x'.repeat(1_100_000)}needle` },
-    { path: 'b.md', markdown: 'needle' },
-  ]
-  host.revision++
-  const first = await query({
-    target,
-    kind: 'search-text',
-    query: 'needle',
-    limit: 1,
-  })
-  assert.equal(first.ok, true)
-  assert.deepEqual(first.value.items, [])
-  assert.equal(first.value.complete, false)
-  assert.equal(first.value.hasMore, true)
-  host.syntaxSnapshot = { ...host.syntaxSnapshot, hashtags: false }
-  const second = await query({
-    target,
-    kind: 'search-text',
-    query: 'needle',
-    cursor: first.value.nextCursor,
-    limit: 1,
-  })
-  assert.deepEqual(second.value.items, ['a.md'])
-  assert.equal(second.value.hasMore, true)
-  const third = await query({
-    target,
-    kind: 'search-text',
-    query: 'needle',
-    cursor: second.value.nextCursor,
-    limit: 1,
-  })
-  assert.deepEqual(third.value.items, ['b.md'])
-  assert.equal(third.value.complete, true)
-  assert.equal(third.value.nextCursor, null)
-  assert.equal(
-    (
-      await query({
-        target,
-        kind: 'search-text',
-        query: 'needle',
-        cursor: first.value.nextCursor,
-      })
-    ).code,
-    'stale',
-  )
-  const pending = await query({ target, kind: 'search-text', query: 'missing' })
-  host.revision++
-  assert.equal(
-    (
-      await query({
-        target,
-        kind: 'search-text',
-        query: 'missing',
-        cursor: pending.value.nextCursor,
-      })
-    ).code,
-    'stale',
-  )
-  host.pages = originalPages
-  host.syntaxSnapshot = originalSyntax
-  host.revision++
-})
-
-test("concurrent initial queries preserve each other's graph and text cursors", async () => {
-  const target = host.target
-  host.listener({ kind: 'resync' })
-  const [graph, text] = await Promise.all([
-    query({ target, kind: 'graph', limit: 1 }),
-    query({ target, kind: 'search-text', query: 'Intro', limit: 1 }),
-  ])
-  assert.equal(graph.ok, true)
-  assert.equal(text.ok, true)
-  assert.ok(graph.value.nextCursor)
-  assert.ok(text.value.nextCursor)
-  assert.equal(
-    (
-      await query({
-        target,
-        kind: 'graph',
-        cursor: graph.value.nextCursor,
-        limit: 1,
-      })
-    ).ok,
-    true,
-  )
-  assert.equal(
-    (
-      await query({
-        target,
-        kind: 'search-text',
-        query: 'Intro',
-        cursor: text.value.nextCursor,
-        limit: 1,
-      })
-    ).ok,
-    true,
-  )
-
-  host.revision++
-  const [textFirst, graphSecond] = await Promise.all([
-    query({ target, kind: 'search-text', query: 'Intro', limit: 1 }),
-    query({ target, kind: 'graph', limit: 1 }),
-  ])
-  assert.equal(textFirst.ok, true)
-  assert.equal(graphSecond.ok, true)
-  assert.ok(textFirst.value.nextCursor)
-  assert.equal(
-    (
-      await query({
-        target,
-        kind: 'search-text',
-        query: 'Intro',
-        cursor: textFirst.value.nextCursor,
-        limit: 1,
-      })
-    ).ok,
-    true,
-  )
-})
-
 test('concurrent 500-note graph reads reuse the winning cooperative snapshot', async () => {
   const target = host.target
   const originalPages = host.pages
@@ -472,10 +347,6 @@ test('flavor changes reindex unchanged source and expire graph cursors', async (
   const disabledUnknown = await query({ target, kind: 'links', path: 'a.md' })
   assert.equal(disabledUnknown.value.complete, false)
   assert.equal(disabledUnknown.value.unsupportedSyntax, true)
-  const search = await query({ target, kind: 'search-text', query: 'work' })
-  assert.deepEqual(search.value.items, ['a.md'])
-  assert.equal(search.value.complete, true)
-  assert.equal(search.value.unsupportedSyntax, false)
   host.pages = previousPages
   host.syntaxSnapshot = previousSyntax
   host.revision++
@@ -544,5 +415,42 @@ test('frontmatter projection changes property results without a source edit', as
   assert.equal(unknown.value.complete, false)
   host.pages = previousPages
   host.syntaxSnapshot = previousSyntax
+  host.revision++
+})
+
+test('graph cursors page past 10,000 records to every note and link', async () => {
+  const target = host.target
+  const originalPages = host.pages
+  const name = (number) => `n${String(number).padStart(4, '0')}`
+  host.pages = Array.from({ length: 2000 }, (_, number) => ({
+    path: `${name(number)}.md`,
+    markdown: [1, 7, 17, 101, 331]
+      .map((offset) => `[[${name((number + offset) % 2000)}]]`)
+      .join(' '),
+  }))
+  host.revision++
+  host.listener({ kind: 'resync' })
+  let nodes = 0,
+    edges = 0,
+    page = await query({ target, kind: 'graph', limit: 100 })
+  for (;;) {
+    assert.equal(page.ok, true)
+    for (const item of page.value.items)
+      if (item.kind === 'node') nodes++
+      else edges++
+    if (!page.value.hasMore) break
+    assert.equal(page.value.complete, false)
+    page = await query({
+      target,
+      kind: 'graph',
+      cursor: page.value.nextCursor,
+      limit: 100,
+    })
+  }
+  assert.equal(nodes, 2000)
+  assert.equal(edges, 10000)
+  assert.equal(page.value.complete, true)
+  assert.equal(page.value.capReached, false)
+  host.pages = originalPages
   host.revision++
 })

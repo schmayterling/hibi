@@ -1,15 +1,20 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
+import { TreeFragment } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
 import { Marked } from 'marked'
 import {
   dedentedFenceText,
   fenceBodyChanges,
+  fencedView,
+  fenceWork,
   markedFenceText,
+  RenderedBlocks,
   readFence,
 } from '../src/addons/_shared/formatted-fence.ts'
 import { typstTokens } from '../src/addons/typst/syntax.ts'
+import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 
 const markdown = parser.configure(GFM)
 
@@ -170,4 +175,110 @@ test('editing a fence writes its body as one change and keeps the fence around i
         )
         assert.ok(text.startsWith('intro\n\n') && text.endsWith('\n\nafter'))
       }
+})
+
+test('a fence longer than the giant block size reads and edits its whole body', () => {
+  // The formatted view's parser gives such a block inner nodes only near the viewport.
+  const body = Array.from(
+    { length: 3500 },
+    (_, index) => `  %% preserve line ${index} ${'x'.repeat(16)}`,
+  )
+  const source = `Intro.\n\n\`\`\`mermaid\ngraph TD\n${body.join('\n')}\n\`\`\`\n\nvisible text at end\n`
+  assert.ok(source.length > 64 * 1024)
+  const chunked = new ChunkedMarkdownParser(markdown, markdown)
+  const input = {
+    length: source.length,
+    chunk: (from) => source.slice(from),
+    read: (from, to) => source.slice(from, to),
+    lineChunks: false,
+  }
+  const run = (demand, fragments = []) => {
+    const parse = chunked.startChunkedParse(input, fragments, demand)
+    for (;;) {
+      const tree = parse.advance()
+      if (tree) return tree
+    }
+  }
+  // Visiting the end finds where the fence closes; back at the top, only the
+  // opening lines, a window there and the closing line have inner nodes.
+  let tree = run({ from: source.length - 2000, to: source.length })
+  tree = run({ from: 0, to: 2000 }, TreeFragment.addTree(tree))
+  let node
+  tree.iterate({
+    enter(ref) {
+      if (ref.name === 'FencedCode') node ??= ref.node
+    },
+  })
+  const texts = node.getChildren('CodeText').length
+  assert.ok(texts < 3500, `${texts} code texts: the tree is sparse`)
+  const doc = EditorState.create({ doc: source }).doc
+  const fence = readFence(doc, node)
+  assert.equal(markedFenceText(fence), `graph TD\n${body.join('\n')}`)
+  // Appending a line through the edit changes nothing else, and undo restores the bytes.
+  const state = EditorState.create({ doc: source })
+  const changes = fenceBodyChanges(
+    doc,
+    node,
+    `${markedFenceText(fence)}\n%% added`,
+    { indent: fence.indent, indented: true },
+  )
+  const edited = state.update({ changes })
+  assert.equal(
+    edited.state.doc.toString(),
+    source.replace('\n```\n\nvisible', '\n%% added\n```\n\nvisible'),
+  )
+  assert.equal(
+    edited.changes.invert(state.doc).apply(edited.state.doc).toString(),
+    source,
+  )
+})
+
+test('fences of other languages are not read', () => {
+  const lines = Array.from(
+    { length: 50000 },
+    (_, index) => `let v${index} = ${index}`,
+  )
+  const source = `\`\`\`javascript\n${lines.join('\n')}\n\`\`\`\n`
+  const state = EditorState.create({ doc: source })
+  const view = fencedView({
+    id: 'mermaid',
+    className: 'mermaid-block',
+    matches: (info) => info.toLowerCase() === 'mermaid',
+    source: markedFenceText,
+    indented: () => true,
+    mount: () => ({ update() {}, dispose() {} }),
+    settled: () => true,
+    ask: async () => null,
+    blocks: new RenderedBlocks(1),
+  })
+  let node
+  markdown.parse(source).iterate({
+    enter(ref) {
+      if (ref.name === 'FencedCode') node ??= ref
+    },
+  })
+  const sink = {
+    replace() {
+      throw new Error('replaced an unmatched fence')
+    },
+    widget() {
+      throw new Error('rendered an unmatched fence')
+    },
+    syntax() {},
+    mark() {},
+    line() {},
+  }
+  fenceWork.lines = 0
+  for (const revealed of [false, true]) {
+    assert.equal(
+      view.layout(node, sink, { state, revealed, visible: null }),
+      undefined,
+    )
+    view.decorate(node, sink, {
+      state,
+      revealed,
+      visible: { from: 0, to: 100 },
+    })
+  }
+  assert.equal(fenceWork.lines, 0)
 })

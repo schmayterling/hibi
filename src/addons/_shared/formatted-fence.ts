@@ -30,7 +30,57 @@ export type Fence = {
   indent: number
 }
 
-/** The fence of a `FencedCode` node, when it has a closing fence. */
+/** Body lines a fence read, for complexity tests. */
+export const fenceWork = { lines: 0 }
+
+/** The info string of a `FencedCode` node, read without its body. */
+export function fenceInfo(doc: Text, node: SyntaxNode) {
+  const info = node.firstChild?.nextSibling
+  return info?.name === 'CodeInfo' ? doc.sliceString(info.from, info.to) : ''
+}
+
+/** How a line continues the quotes and list items around a fence. */
+type Level = { quote: true } | { quote: false; column: number }
+
+/** The quotes and list items around `node`, outermost first, with each item's content column. */
+function containerLevels(doc: Text, node: SyntaxNode): Level[] {
+  const levels: Level[] = []
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (parent.name === 'Blockquote') levels.unshift({ quote: true })
+    else if (parent.name === 'ListItem') {
+      const line = doc.lineAt(parent.from)
+      const mark = parent.getChild('ListMark')
+      const after = mark
+        ? /^[ \t]*/.exec(doc.sliceString(mark.to, line.to))![0].length
+        : 0
+      // Up to four spaces after the marker, or one when more or none follow.
+      const gap = after > 4 || !mark || mark.to + after === line.to ? 1 : after
+      levels.unshift({
+        quote: false,
+        column: (mark ? mark.to : parent.from) + gap - line.from,
+      })
+    }
+  }
+  return levels
+}
+
+/** Where a line's text starts inside the containers: after quote markers, at list item columns. */
+function contentStart(levels: readonly Level[], text: string) {
+  let pos = 0
+  for (const level of levels)
+    if (level.quote) {
+      while (text[pos] === ' ' || text[pos] === '\t') pos++
+      if (text[pos] === '>') pos++
+      if (text[pos] === ' ' || text[pos] === '\t') pos++
+    } else pos = Math.max(pos, Math.min(level.column, text.length))
+  return pos
+}
+
+/**
+ * The fence of a `FencedCode` node, when it has a closing fence. Its body
+ * comes from the document text, not the node's children: the formatted view
+ * gives a long block inner nodes only near the viewport.
+ */
 export function readFence(doc: Text, node: SyntaxNode): Fence | null {
   const open = node.firstChild,
     close = node.lastChild
@@ -41,28 +91,22 @@ export function readFence(doc: Text, node: SyntaxNode): Fence | null {
     doc.lineAt(close.from).number === first.number
   )
     return null
-  const info = node.getChild('CodeInfo')
-  // Each body line's text, from its containers' content column; blank lines have none.
+  const levels = containerLevels(doc, node)
   const last = doc.lineAt(close.from).number
-  const lines = Array.from({ length: last - first.number - 1 }, () => '')
-  let base = -1
-  for (let child = open.nextSibling; child; child = child.nextSibling) {
-    if (child.name !== 'CodeText') continue
-    for (let at = child.from; at < child.to; ) {
-      const line = doc.lineAt(at)
-      const end = Math.min(child.to, line.to)
-      if (end > at) {
-        lines[line.number - first.number - 1] += doc.sliceString(at, end)
-        if (base < 0) base = at - line.from
-      }
-      at = line.to + 1
-    }
+  const lines: string[] = []
+  for (let number = first.number + 1; number < last; number++) {
+    const { text } = doc.line(number)
+    lines.push(text.slice(contentStart(levels, text)))
   }
+  fenceWork.lines += lines.length
   return {
-    info: info ? doc.sliceString(info.from, info.to) : '',
+    info: fenceInfo(doc, node),
     marker: doc.sliceString(open.from, open.to),
     lines,
-    indent: base < 0 ? 0 : Math.max(0, node.from - first.from - base),
+    indent: Math.max(
+      0,
+      node.from - first.from - contentStart(levels, first.text),
+    ),
   }
 }
 
@@ -142,7 +186,7 @@ export function fenceBodyChanges(
 type Rendered = {
   key: string
   dom: HTMLElement
-  dispose: () => void
+  render: MountedBlock
   owner: { view: EditorView; widget: FenceWidget }
 }
 
@@ -165,14 +209,19 @@ export class RenderedBlocks {
     }
     return null
   }
+  /** Keep a rendering that left the view; one still at work is removed instead. */
   keep(entry: Rendered) {
+    if (!entry.owner.widget.kind.settled(entry.dom)) {
+      entry.render.dispose()
+      return
+    }
     this.entries.push(entry)
     while (this.entries.length > (this.closed ? 0 : this.limit))
-      this.entries.shift()?.dispose()
+      this.entries.shift()?.render.dispose()
   }
   clear() {
     this.closed = true
-    for (const entry of this.entries.splice(0)) entry.dispose()
+    for (const entry of this.entries.splice(0)) entry.render.dispose()
   }
 }
 
@@ -181,6 +230,14 @@ export type FenceBlock = {
   source: string
   edit: () => void
 }
+
+/** A block's rendering: shown again with new source, or removed. */
+export type MountedBlock = {
+  update: (block: FenceBlock) => void
+  dispose: () => void
+}
+
+const blockKey = (widget: FenceWidget) => `${widget.kind.id}\n${widget.source}`
 
 const mounted = new WeakMap<HTMLElement, Rendered>()
 
@@ -215,7 +272,7 @@ class FenceWidget extends WidgetType {
     )
   }
   toDOM(view: EditorView) {
-    const key = `${this.kind.id}\n${this.source}`
+    const key = blockKey(this)
     let entry = this.kind.blocks.take(key)
     if (entry) entry.owner = { view, widget: this }
     else {
@@ -224,10 +281,10 @@ class FenceWidget extends WidgetType {
       const created: Rendered = {
         key,
         dom,
-        dispose: () => {},
+        render: { update: () => {}, dispose: () => {} },
         owner: { view, widget: this },
       }
-      created.dispose = this.kind.mount(created.dom, {
+      created.render = this.kind.mount(created.dom, {
         source: this.source,
         edit: () => void created.owner.widget.edit(created),
       })
@@ -280,6 +337,31 @@ class FenceWidget extends WidgetType {
     })
     view.focus()
   }
+  /**
+   * While typing in a fence, its rendering after the source shows each new
+   * source in place: the last output stays until the next one is ready, and
+   * work the old source scheduled, such as a debounced compile, is replaced.
+   * Only the rendering after a revealed fence updates this way, since
+   * CodeMirror can also offer the element of another block.
+   */
+  override updateDOM(dom: HTMLElement, view: EditorView, from: WidgetType) {
+    const entry = mounted.get(dom)
+    if (
+      !entry ||
+      !(from instanceof FenceWidget) ||
+      from.kind !== this.kind ||
+      !from.after ||
+      !this.after
+    )
+      return false
+    entry.key = blockKey(this)
+    entry.owner = { view, widget: this }
+    entry.render.update({
+      source: this.source,
+      edit: () => void entry.owner.widget.edit(entry),
+    })
+    return true
+  }
   override destroy(dom: HTMLElement) {
     const entry = mounted.get(dom)
     mounted.delete(dom)
@@ -304,8 +386,10 @@ export type FencedRenderer = {
   source: (fence: Fence) => string
   /** Whether that reading removes the fence's indentation from its lines. */
   indented: (fence: Fence) => boolean
-  /** Render into `dom`; returns the cleanup. */
-  mount: (dom: HTMLElement, block: FenceBlock) => () => void
+  /** Render into `dom`. */
+  mount: (dom: HTMLElement, block: FenceBlock) => MountedBlock
+  /** Whether a rendering's output is complete, so it is worth keeping. */
+  settled: (dom: HTMLElement) => boolean
   /** The addon's edit dialog; resolves to the new source, or null. */
   ask: (source: string) => Promise<string | null>
   blocks: RenderedBlocks
@@ -347,10 +431,11 @@ export function fenceKeys(kind: FencedRenderer): KeyBinding[] {
 
 /** Renders closed fences of one kind; others stay code blocks. */
 export function fencedView(kind: FencedRenderer): FormattedNodeView {
-  const fenceOf = (state: EditorState, node: SyntaxNode) => {
-    const fence = readFence(state.doc, node)
-    return fence && kind.matches(fence.info.trim()) ? fence : null
-  }
+  // Other fences cost one look at their info string.
+  const fenceOf = (state: EditorState, node: SyntaxNode) =>
+    kind.matches(fenceInfo(state.doc, node).trim())
+      ? readFence(state.doc, node)
+      : null
   return {
     nodes: ['FencedCode'],
     layout(node, out, { state, revealed }) {
@@ -372,10 +457,12 @@ export function fencedView(kind: FencedRenderer): FormattedNodeView {
       return false
     },
     decorate(node, out, { state, revealed }) {
-      if (!revealed || !fenceOf(state, node.node)) return undefined
+      if (!revealed || !kind.matches(fenceInfo(state.doc, node.node).trim()))
+        return undefined
+      const close = node.node.lastChild
       const first = state.doc.lineAt(node.from)
+      if (close?.name !== 'CodeMark' || close.from <= first.to) return undefined
       out.syntax(node.from, first.to)
-      const close = node.node.lastChild!
       out.syntax(close.from, close.to)
       return undefined
     },

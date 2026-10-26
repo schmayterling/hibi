@@ -106,6 +106,10 @@ test('startup catalog stays within the main byte budget and leaves notices and a
     chunks.flatMap((chunk) => chunk.modules).join('\n'),
     /src\/(?:user)?addons\/[^/]+\/native\.tsx?/,
   )
+  assert.doesNotMatch(
+    modules,
+    /addons\/sdk-(?:loader|formatted|legacy-rich)\.ts|renderer\/src\/formatted-(?:flavor|addon-compatibility|compatibility)\.ts/,
+  )
   assert.doesNotMatch(modules, /src\/renderer\/src\/window-desktop\.ts/)
   assert.ok(
     chunks.some(

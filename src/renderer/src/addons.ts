@@ -1734,6 +1734,9 @@ export function useAddons(
                 const entry = {
                   id: key,
                   addonId: id,
+                  ...(extension.preview === 'deferred'
+                    ? { preview: extension.preview }
+                    : {}),
                   attach(...args: Parameters<RichExtension['attach']>) {
                     if (disposed) return () => {}
                     try {

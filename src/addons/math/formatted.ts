@@ -22,6 +22,11 @@ export type MathHost = {
 
 const cancels = new WeakMap<HTMLElement, () => void>()
 const widgets = new WeakMap<HTMLElement, FormulaWidget>()
+const editControl = {
+  type: 'button',
+  class: 'hibi-lp-formula-edit',
+  'aria-label': 'Edit equation',
+}
 
 /**
  * A rendered formula over its source. The formula text shows until KaTeX
@@ -70,9 +75,8 @@ class FormulaWidget extends WidgetType {
     }
     pending.textContent = latex
     const control = document.createElement('button')
-    control.type = 'button'
-    control.className = 'hibi-lp-formula-edit'
-    control.setAttribute('aria-label', 'Edit equation')
+    for (const [name, value] of Object.entries(editControl))
+      control.setAttribute(name, value)
     control.addEventListener('click', (event) => {
       event.preventDefault()
       void this.edit(view, dom)

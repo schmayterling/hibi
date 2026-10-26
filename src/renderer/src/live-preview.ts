@@ -45,6 +45,7 @@ import {
   formattedContributions,
   formattedLiteral,
   formattedRefresh,
+  formattedTree,
   formattedViews,
   showMarkdownMarkers,
 } from './formatted-contributions'
@@ -1100,6 +1101,18 @@ function revealed(view: EditorView): readonly Revealed[] {
   return view.state.selection.ranges.map(({ from, to }) => ({ from, to }))
 }
 
+/**
+ * Decorations mapped through an update, without the replacements it put a
+ * line break into, which a view plugin may not draw.
+ */
+function mapLines(set: DecorationSet, update: ViewUpdate) {
+  const doc = update.state.doc
+  return set.map(update.changes).update({
+    filter: (from, to, value) =>
+      !value.point || from === to || doc.lineAt(from).to >= to,
+  })
+}
+
 /** The formatted view's rendering over its chunked Markdown syntax tree. */
 export function livePreview(
   syntax: FormattedSyntax,
@@ -1165,8 +1178,8 @@ export function livePreview(
         this.reveal = reveal
         // An edit's unfinished reparse keeps what was drawn, mapped through it.
         if (syntax.settling(update.state)) {
-          this.decorations = this.decorations.map(update.changes)
-          this.atomic = this.atomic.map(update.changes)
+          this.decorations = mapLines(this.decorations, update)
+          this.atomic = mapLines(this.atomic, update)
         } else if (
           update.docChanged ||
           update.viewportChanged ||
@@ -1248,6 +1261,7 @@ export function livePreview(
   )
   return [
     contributions.of(formattedContributions.extension(options.flavors)),
+    formattedTree.of(syntax.tree),
     follow,
     syntax.extension,
     focused,

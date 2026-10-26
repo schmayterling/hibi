@@ -661,6 +661,26 @@ test('formatting in a giant list stays drawn while an edit inside its window is 
       (node) => node.textContent === 'new',
     ),
   )
+  // Line breaks typed or pasted into hidden syntax while a reparse is
+  // pending drop the replacements they split instead of throwing.
+  await harness.waitForFunction(() => !window.livePreview.settling())
+  const split = await harness.evaluate(() => {
+    const preview = window.livePreview
+    const view = preview.view()
+    const errors = []
+    for (const insert of ['\n', 'a\nb\nc']) {
+      const line = view.state.doc.line(10006)
+      try {
+        // Between the hidden list marker and the space after it.
+        view.dispatch({ changes: { from: line.from + 1, insert } })
+      } catch (error) {
+        errors.push(String(error))
+      }
+    }
+    return { errors, settling: preview.settling() }
+  })
+  assert.deepEqual(split.errors, [], JSON.stringify(split))
+  assert.ok(split.settling, JSON.stringify(split))
 })
 
 test('ordered list numbers in a 20,000-item list come from cached item offsets', {

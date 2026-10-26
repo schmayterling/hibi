@@ -326,46 +326,70 @@ test('insert math writes one source edit in the formatted view', {
   )
 })
 
-test('inserted display math stays in the quote around the caret', {
-  timeout: 90000,
+test('inserted display math stays in the quote or list item around the caret', {
+  timeout: 120000,
 }, async () => {
-  const note = '> before after\n\nlast\n'
-  await writeFile(join(folder, 'notes', 'quote.md'), note)
-  await open('quote.md')
-  await page.locator('.rich-pane .cm-line', { hasText: 'before after' }).click()
-  await page.evaluate(() => {
-    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
-      .view
-    view.dispatch({ selection: { anchor: '> before'.length } })
-  })
-  await clickMenu(app, 'Command palette')
-  const commands = page.getByRole('dialog', { name: 'Command palette' })
-  await commands
-    .getByRole('combobox', { name: /search commands/i })
-    .fill('Insert block math')
-  await commands
-    .getByRole('option', { name: /Insert block math/i })
-    .press('Enter')
-  const prompt = page.getByRole('dialog', { name: 'Math' })
-  await prompt.getByRole('textbox', { name: 'LaTeX' }).fill('x^2')
-  await prompt.getByRole('button', { name: 'Apply' }).click()
-  // The formula and the rest of the line keep their quote markers.
-  await waitForAsync(
-    page,
-    async (expected) => (await window.hibi.getDocument()).markdown === expected,
-    '> before\n>\n> $$\n> x^2\n> $$\n>\n>  after\n\nlast\n',
-  )
-  await page
-    .locator(
-      '.rich-pane .cm-line.hibi-lp-quote [data-type="block-math"] .katex',
+  // The second note's caret line is a lazy continuation: no marker, still in the quote.
+  for (const [name, note, caret, expected, line] of [
+    [
+      'quote.md',
+      '> before after\n\nlast\n',
+      '> before',
+      '> before\n>\n> $$\n> x^2\n> $$\n>\n>  after\n\nlast\n',
+      '.hibi-lp-quote',
+    ],
+    [
+      'lazy.md',
+      '> intro\nbefore after\n\nlast\n',
+      '> intro\nbefore',
+      '> intro\nbefore\n>\n> $$\n> x^2\n> $$\n>\n>  after\n\nlast\n',
+      '.hibi-lp-quote',
+    ],
+    [
+      'lazy-list.md',
+      '- intro\nbefore after\n\nlast\n',
+      '- intro\nbefore',
+      '- intro\nbefore\n\n  $$\n  x^2\n  $$\n\n   after\n\nlast\n',
+      '.hibi-lp-nested',
+    ],
+  ]) {
+    await writeFile(join(folder, 'notes', name), note)
+    await open(name)
+    await page.locator('.rich-pane .cm-line', { hasText: 'last' }).click()
+    await page.evaluate((anchor) => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.dispatch({ selection: { anchor } })
+    }, caret.length)
+    await clickMenu(app, 'Command palette')
+    const commands = page.getByRole('dialog', { name: 'Command palette' })
+    await commands
+      .getByRole('combobox', { name: /search commands/i })
+      .fill('Insert block math')
+    await commands
+      .getByRole('option', { name: /Insert block math/i })
+      .press('Enter')
+    const prompt = page.getByRole('dialog', { name: 'Math' })
+    await prompt.getByRole('textbox', { name: 'LaTeX' }).fill('x^2')
+    await prompt.getByRole('button', { name: 'Apply' }).click()
+    // The formula and the rest of the line keep their container.
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      expected,
     )
-    .waitFor()
-  await pressShortcut(app, `${mod}+z`)
-  await waitForAsync(
-    page,
-    async (expected) => (await window.hibi.getDocument()).markdown === expected,
-    note,
-  )
+    await page
+      .locator(`.rich-pane .cm-line${line} [data-type="block-math"] .katex`)
+      .waitFor()
+    await pressShortcut(app, `${mod}+z`)
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      note,
+    )
+  }
 })
 
 test('with markers hidden, clicking a formula opens its prompt and replaces the formula', {

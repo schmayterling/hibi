@@ -10,6 +10,8 @@ import {
   formattedLiteral,
   formattedOpaque,
   formattedPrefix,
+  formattedSyntaxTree,
+  formattedTree,
   formattedViews,
 } from '../src/renderer/src/formatted-contributions.ts'
 import { formattedRegistry } from '../src/renderer/src/formatted-registry.ts'
@@ -276,4 +278,18 @@ test('giant blocks of opaque nodes get inner nodes only for their opening and la
   )
   assert.ok(typed.parsedUnits < medium.length / 2, JSON.stringify(typed))
   void Table
+})
+
+test('commands read the formatted view tree from its state', () => {
+  const syntax = formattedSyntax({ slice: 1000 })
+  const state = EditorState.create({
+    doc: '> intro\nlazy line',
+    extensions: [syntax.extension, formattedTree.of(syntax.tree)],
+  })
+  assert.equal(formattedSyntaxTree(state), syntax.tree(state))
+  assert.equal(
+    formattedSyntaxTree(state).resolveInner(10, 1).parent.name,
+    'Blockquote',
+  )
+  assert.equal(formattedSyntaxTree(EditorState.create({ doc: 'x' })), null)
 })

@@ -314,3 +314,28 @@ test('github tables are opaque in documents of that flavor', async () => {
     remove()
   }
 })
+
+test('github task lists parse as tasks in documents of that flavor', async () => {
+  const { contribution } = await import(
+    '../src/renderer/src/formatted/tasks.ts'
+  )
+  const remove = formattedRegistry.register({
+    id: contribution.id,
+    load: () => contribution,
+  })
+  try {
+    // Before, no contribution added task syntax once GFM left the base parser.
+    const github = stateWith(
+      '- [x] done\n- [ ] open\n',
+      formattedContributions.extension(['markdown.github']),
+    )
+    assert.ok(names(github.syntax.tree(github.state)).includes('Task'))
+    const plain = stateWith(
+      '- [x] done\n',
+      formattedContributions.extension(['markdown.commonmark']),
+    )
+    assert.ok(!names(plain.syntax.tree(plain.state)).includes('Task'))
+  } finally {
+    remove()
+  }
+})

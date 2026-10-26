@@ -1078,6 +1078,32 @@ test('a sized table keeps its sizes when a table is inserted before it', {
   )
 })
 
+test('a long table column made automatic again drops its fixed width', {
+  timeout: 30000,
+}, async () => {
+  const rows = Array.from({ length: 300 }, (_, i) => `| r${i} | x |`)
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('fixed', [{ key, columns: [320, 0], rows: null }]),
+    tableKey(0, ['a', 'b']),
+  )
+  await mountTab(`| a | b |\n| - | - |\n${rows.join('\n')}\n\nafter`, 'fixed')
+  await harness.evaluate(() => window.tables.settle())
+  const column = () =>
+    harness.evaluate(
+      () => document.querySelector('.hibi-lp-table col').style.width,
+    )
+  const handle = harness
+    .locator('.hibi-lp-table th')
+    .first()
+    .locator('.hibi-lp-table-resizer[data-axis="column"]')
+  await handle.focus()
+  await harness.keyboard.press('ArrowRight')
+  assert.equal(await column(), '328px')
+  await harness.keyboard.press('Enter')
+  assert.match(await column(), /%$/)
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {

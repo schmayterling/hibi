@@ -303,6 +303,8 @@ class TableView {
   private before: HTMLTableRowElement | null = null
   private after: HTMLTableRowElement | null = null
   private fixed = false
+  /** The column widths fixed from the first rows shown, which automatic columns go back to. */
+  private fixedWidths: string[] = []
   /** The cell being edited, with its row's line in the document now. */
   private editing:
     | (Cell & {
@@ -419,6 +421,7 @@ class TableView {
       this.seedHeights()
       this.start = this.end = 0
       this.fixed = false
+      this.fixedWidths = []
       this.table.style.tableLayout = ''
       for (const column of this.columns.children)
         (column as HTMLElement).style.width = ''
@@ -607,9 +610,12 @@ class TableView {
       if (total > 0) {
         this.fixed = true
         this.table.style.tableLayout = 'fixed'
-        measured.widths.forEach((width, index) => {
+        this.fixedWidths = measured.widths.map(
+          (width) => `${(width / total) * 100}%`,
+        )
+        this.fixedWidths.forEach((width, index) => {
           const column = this.columns.children[index] as HTMLElement | undefined
-          if (column) column.style.width = `${(width / total) * 100}%`
+          if (column) column.style.width = width
         })
       }
     }
@@ -1325,8 +1331,10 @@ class TableView {
     for (const [index, cell] of [...this.head.cells].entries())
       cell.style.width = columns[index] ? `${columns[index]}px` : ''
     for (const [index, column] of [...this.columns.children].entries())
-      if (this.fixed && columns[index])
-        (column as HTMLElement).style.width = `${columns[index]}px`
+      if (this.fixed)
+        (column as HTMLElement).style.width = columns[index]
+          ? `${columns[index]}px`
+          : (this.fixedWidths[index] ?? '')
     const height = (row: HTMLElement, index: number) => {
       const size = rows.get(index)
       row.style.height = size ? `${size}px` : ''

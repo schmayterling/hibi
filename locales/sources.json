@@ -3065,9 +3065,6 @@
   "650bc9063f2c": [
     "src/addons/dictionary/native.ts"
   ],
-  "9d5bc8bf6003": [
-    "src/addons/dictionary/pack-store.ts"
-  ],
   "5a2f299940cc": [
     "src/shared/document-journal.ts"
   ],
@@ -6232,16 +6229,17 @@
     "src/main/dependencies.ts"
   ],
   "e0642a812b2e": [
-    "src/addons/dictionary/pack-store.ts"
+    "src/addons/dictionary/pack-verification.ts"
   ],
   "4aca8915ed3c": [
     "src/addons/dictionary/packs.ts"
   ],
   "794c92bbef64": [
-    "src/addons/dictionary/pack-store.ts"
+    "src/addons/dictionary/pack-store.ts",
+    "src/addons/dictionary/pack-verification.ts"
   ],
   "3f08b04c75dd": [
-    "src/addons/dictionary/pack-store.ts"
+    "src/addons/dictionary/pack-verification.ts"
   ],
   "f70a180e8466": [
     "src/shared/imports.ts"

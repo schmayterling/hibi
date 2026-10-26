@@ -17,7 +17,7 @@ const require = createRequire(import.meta.url)
 function nativeAddon(t) {
   const stores = []
   class PackStore {
-    preloads = []
+    lists = 0
     closed = false
     closingStarted = false
     constructor() {
@@ -29,10 +29,8 @@ function nativeAddon(t) {
         }
       })
     }
-    preloadInstalled(input) {
-      this.preloads.push(input)
-    }
     list() {
+      this.lists++
       return []
     }
     close() {
@@ -75,12 +73,12 @@ function nativeAddon(t) {
   return { addon, stores }
 }
 
-test('disable during a queued re-enable prevents store resurrection and preload', async (t) => {
+test('disable during a queued re-enable prevents store resurrection and pack listing', async (t) => {
   const { addon, stores } = nativeAddon(t)
-  await addon.queries.preloadPacks(['en'])
+  await addon.queries.packs()
   addon.stop()
   const stale = assert.rejects(
-    addon.queries.preloadPacks(['en']),
+    addon.queries.packs(),
     /Dictionary packs are closed/,
   )
   addon.stop()
@@ -89,22 +87,19 @@ test('disable during a queued re-enable prevents store resurrection and preload'
   stores[0].finishClose()
   await stale
   assert.equal(stores.length, 1)
-  assert.deepEqual(stores[0].preloads, [['en']])
-  t.diagnostic('1 store and 1 preload before and after the second disable')
+  assert.equal(stores[0].lists, 1)
+  t.diagnostic('1 store and 1 list before and after the second disable')
 
-  await addon.queries.preloadPacks(['fr'])
+  await addon.queries.packs()
   assert.equal(stores.length, 2)
-  assert.deepEqual(stores[1].preloads, [['fr']])
+  assert.equal(stores[1].lists, 1)
 })
 
 test('re-enable waits for close and concurrent callers share the new store', async (t) => {
   const { addon, stores } = nativeAddon(t)
-  await addon.queries.preloadPacks(['en'])
+  await addon.queries.packs()
   addon.stop()
-  const pending = Promise.all([
-    addon.queries.preloadPacks(['fr']),
-    addon.queries.packs(),
-  ])
+  const pending = Promise.all([addon.queries.packs(), addon.queries.packs()])
   await setImmediate()
   assert.equal(stores.length, 1)
   assert.equal(stores[0].closed, false)
@@ -112,13 +107,13 @@ test('re-enable waits for close and concurrent callers share the new store', asy
   await pending
   assert.equal(stores.length, 2)
   assert.equal(stores[0].closed, true)
-  assert.deepEqual(stores[1].preloads, [['fr']])
+  assert.equal(stores[1].lists, 2)
 })
 
 test('stop invalidates a waiting first caller when no store exists', async (t) => {
   const { addon, stores } = nativeAddon(t)
   const stale = assert.rejects(
-    addon.queries.preloadPacks(['en']),
+    addon.queries.packs(),
     /Dictionary packs are closed/,
   )
   addon.stop()

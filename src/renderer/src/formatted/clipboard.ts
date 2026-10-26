@@ -1,6 +1,9 @@
+import type { EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
+import DOMPurify from 'dompurify'
+import { renderedHtmlOptions } from '../../../shared/rendered-html.ts'
 import { documentRuntime } from '../document-runtime'
-import { renderMarkdownAsync } from '../flavors'
+import { renderMarkdown } from '../flavors'
 import {
   type FormattedContribution,
   formattedDocument,
@@ -8,13 +11,16 @@ import {
 
 /*
  * Copy and paste in the formatted view. Copying gives the selection's exact
- * Markdown as text at once, and adds the same Markdown rendered by the export
- * renderer as HTML through the main process; pasted HTML becomes Markdown,
- * and plain text pastes as it is.
+ * Markdown as text and the same Markdown rendered by the export renderer,
+ * sanitized, as HTML; pasted HTML becomes Markdown, and plain text pastes as
+ * it is.
  */
 
 /** Marks the HTML this view copies, whose text is already the exact Markdown. */
 const copied = 'data-hibi-markdown'
+
+/** HTML pastes waiting for the converter, with the selection each replaces. */
+const pastes = new Set<{ view: EditorView; selection: EditorSelection }>()
 
 function copy(event: ClipboardEvent, view: EditorView, cut: boolean) {
   const data = event.clipboardData
@@ -28,21 +34,20 @@ function copy(event: ClipboardEvent, view: EditorView, cut: boolean) {
   event.preventDefault()
   data.clearData()
   data.setData('text/plain', markdown)
-  // The rendered HTML follows, unless something else was copied by then.
-  const { tabId } = state.facet(formattedDocument)
-  void renderMarkdownAsync(
-    markdown,
-    tabId ? documentRuntime.get(tabId)?.id : undefined,
-  )
-    .then(({ html }) =>
-      window.hibi.writeClipboardRendered(
-        markdown,
-        `<div ${copied}>${html}</div>`,
-      ),
+  try {
+    const { tabId } = state.facet(formattedDocument)
+    const { html } = renderMarkdown(
+      markdown,
+      tabId ? documentRuntime.get(tabId)?.id : undefined,
     )
-    .catch((error: unknown) =>
-      console.error('Copied HTML could not be added:', error),
+    data.setData(
+      'text/html',
+      `<div ${copied}>${DOMPurify.sanitize(html, renderedHtmlOptions)}</div>`,
     )
+  } catch (error) {
+    // The text is on the clipboard either way.
+    console.error('Copied HTML could not be rendered:', error)
+  }
   if (cut && !state.readOnly)
     view.dispatch({
       changes: ranges.map(({ from, to }) => ({ from, to })),
@@ -60,24 +65,51 @@ function paste(event: ClipboardEvent, view: EditorView) {
   event.preventDefault()
   // The clipboard is only readable during the event.
   const text = data?.getData('text/plain') ?? ''
-  void import('../html-markdown').then(({ htmlToMarkdown }) => {
-    const markdown = htmlToMarkdown(html) || text
-    if (!markdown || !view.dom.isConnected || view.state.readOnly) return
-    // One source edit at the selection, as the view's own paste makes.
-    view.dispatch(view.state.replaceSelection(markdown), {
-      scrollIntoView: true,
-      userEvent: 'input.paste',
+  const pending = { view, selection: view.state.selection }
+  pastes.add(pending)
+  void import('../html-markdown')
+    .then(({ htmlToMarkdown }) => htmlToMarkdown(html))
+    .catch((error: unknown) => {
+      console.error('Pasted HTML could not be converted:', error)
+      return ''
     })
-  })
+    .then((markdown) => {
+      pastes.delete(pending)
+      const insert = markdown || text
+      if (!insert || !view.dom.isConnected || view.state.readOnly) return
+      const { selection } = pending
+      // One source edit at the selection the paste was made at; edits and
+      // selections made since keep their place.
+      view.dispatch(
+        view.state.selection.eq(selection)
+          ? view.state.replaceSelection(insert)
+          : {
+              changes: selection.ranges.map(({ from, to }) => ({
+                from,
+                to,
+                insert,
+              })),
+            },
+        { scrollIntoView: true, userEvent: 'input.paste' },
+      )
+    })
   return true
 }
 
 /** Copy, cut and paste with Markdown text and rendered HTML. */
 export const contribution: FormattedContribution = {
   id: 'core.clipboard',
-  extension: EditorView.domEventHandlers({
-    copy: (event, view) => copy(event, view, false),
-    cut: (event, view) => copy(event, view, true),
-    paste: (event, view) => paste(event, view),
-  }),
+  extension: [
+    EditorView.domEventHandlers({
+      copy: (event, view) => copy(event, view, false),
+      cut: (event, view) => copy(event, view, true),
+      paste: (event, view) => paste(event, view),
+    }),
+    EditorView.updateListener.of((update) => {
+      if (update.docChanged)
+        for (const pending of pastes)
+          if (pending.view === update.view)
+            pending.selection = pending.selection.map(update.changes)
+    }),
+  ],
 }

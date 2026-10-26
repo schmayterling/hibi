@@ -6,7 +6,6 @@ import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron'
 import {
   app,
   BrowserWindow,
-  ClipboardItem,
   clipboard,
   dialog,
   globalShortcut,
@@ -36,11 +35,7 @@ import { ADDON_TRUST_CHANNELS } from '../shared/addon-trust'
 import { ADDON_WINDOW_CHANNELS } from '../shared/addon-windows'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { BACKGROUND_CHANNELS, QUICK_NOTE_COMMAND } from '../shared/background'
-import {
-  CLIPBOARD_CHANNELS,
-  MAX_CLIPBOARD_RENDERED,
-  MAX_CLIPBOARD_TEXT,
-} from '../shared/clipboard'
+import { CLIPBOARD_CHANNELS, MAX_CLIPBOARD_TEXT } from '../shared/clipboard'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
 import { DEPENDENCY_CHANNELS } from '../shared/dependencies'
 import {
@@ -1649,26 +1644,6 @@ if (!app.requestSingleInstanceLock()) {
           throw new Error('Hibi could not copy this text.')
         clipboard.writeText(text)
       })
-      handle(
-        CLIPBOARD_CHANNELS.writeRendered,
-        async (event, text: unknown, html: unknown) => {
-          trustedWindow(event)
-          if (
-            typeof text !== 'string' ||
-            typeof html !== 'string' ||
-            text.length + html.length > MAX_CLIPBOARD_RENDERED
-          )
-            throw new Error('Hibi could not copy this text.')
-          // Only while the clipboard still holds the copy's text: a later
-          // copy, here or in another app, stays.
-          const lines = (value: string) => value.replace(/\r\n?/g, '\n')
-          if (lines(await clipboard.readText()) !== lines(text)) return false
-          await clipboard.write([
-            new ClipboardItem({ 'text/plain': text, 'text/html': html }),
-          ])
-          return true
-        },
-      )
       handle(
         CLIPBOARD_CHANNELS.writeWorkspacePaths,
         (event, paths: unknown, options: unknown) => {

@@ -45,9 +45,16 @@ const isBlock = (node: Node) =>
   node.nodeType === Node.ELEMENT_NODE && blocks.has(node.nodeName)
 const hasBlocks = (node: Node) => [...node.childNodes].some(isBlock)
 
-/** Text that reads as itself in Markdown. */
+/**
+ * Text that reads as itself in Markdown, whichever flavors the note uses now
+ * or later: delimiters (strikethrough and subscript `~`, math `$`, highlight
+ * `==`) and entity references are escaped too.
+ */
 function literal(text: string) {
-  return text.replace(/[\\`*_[\]<]/g, '\\$&')
+  return text
+    .replace(/[\\`*_[\]<~$]/g, '\\$&')
+    .replace(/&(?=#?\w+;)/g, '\\&')
+    .replace(/=(?==)/g, '\\=')
 }
 
 /** Line starts that would begin a block. */
@@ -59,17 +66,18 @@ function escapeLineStarts(text: string) {
 
 /** Wrap inline content in a delimiter, keeping its outer spaces outside. */
 function wrap(content: string, mark: string) {
-  const match = /^(\s*)([\s\S]*?)(\s*)$/.exec(content)
-  const [, before = '', inner = '', after = ''] = match ?? []
-  return inner ? `${before}${mark}${inner}${mark}${after}` : content
+  const start = content.length - content.trimStart().length,
+    end = content.trimEnd().length
+  return start < end
+    ? `${content.slice(0, start)}${mark}${content.slice(start, end)}${mark}${content.slice(end)}`
+    : content
 }
 
 /** Inline code with a fence longer than any backtick run inside it. */
 function code(text: string) {
-  const longest = Math.max(
-    0,
-    ...(text.match(/`+/g) ?? []).map((run) => run.length),
-  )
+  let longest = 0
+  for (const run of text.match(/`+/g) ?? [])
+    longest = Math.max(longest, run.length)
   const fence = '`'.repeat(longest + 1)
   const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : ''
   return `${fence}${pad}${text}${pad}${fence}`
@@ -149,7 +157,7 @@ function blocksOf(node: Node): string[] {
   for (const child of node.childNodes) {
     if (isBlock(child)) {
       flush()
-      out.push(...block(child as Element))
+      for (const item of block(child as Element)) out.push(item)
     } else run += inlineNode(child, false)
   }
   flush()
@@ -167,9 +175,7 @@ const indent = (text: string, prefix: string, first = prefix) =>
 function block(element: Element): string[] {
   const name = element.nodeName
   if (/^H[1-6]$/.test(name)) {
-    const text = inline(element)
-      .replace(/\s*\n\s*/g, ' ')
-      .trim()
+    const text = inline(element).replace(/\s+/g, ' ').trim()
     return text ? [`${'#'.repeat(Number(name[1]))} ${text}`] : []
   }
   switch (name) {
@@ -186,10 +192,10 @@ function block(element: Element): string[] {
           `${source.getAttribute('class') ?? ''} ${element.getAttribute('class') ?? ''}`,
         )?.[1] ?? ''
       const text = (element.textContent ?? '').replace(/\n$/, '')
-      const longest = Math.max(
-        2,
-        ...(text.match(/^`+/gm) ?? []).map((run) => run.length),
-      )
+      // Longer than any line that could close it.
+      let longest = 2
+      for (const [, run = ''] of text.matchAll(/^ {0,3}(`+)/gm))
+        longest = Math.max(longest, run.length)
       const fence = '`'.repeat(longest + 1)
       return [`${fence}${language}\n${text}\n${fence}`]
     }
@@ -213,10 +219,12 @@ function list(element: Element): string {
     if (child.nodeName !== 'LI') continue
     const marker = ordered ? `${number++}. ` : '- '
     const content = blocksOf(child)
-    const checkbox = child.querySelector(':scope > input[type="checkbox"]')
-    const task = checkbox
-      ? `[${(checkbox as HTMLInputElement).checked ? 'x' : ' '}] `
-      : ''
+    // The item's own checkbox, also inside a wrapper such as a label.
+    const checkbox = child.querySelector('input[type="checkbox"]')
+    const task =
+      checkbox?.closest('li') === child
+        ? `[${(checkbox as HTMLInputElement).checked ? 'x' : ' '}] `
+        : ''
     // A list right after an item's text stays tight under it.
     const text = content.reduce(
       (out, next, index) =>
@@ -244,14 +252,17 @@ function table(element: Element): string {
         inline(cell, true).replace(/\s+/g, ' ').trim().replace(/\|/g, '\\|'),
       ),
   )
-  const width = Math.max(...cells.map((row) => row.length))
+  let width = 0
+  for (const row of cells) width = Math.max(width, row.length)
   if (!width) return ''
-  const line = (row: string[]) =>
-    `| ${Array.from({ length: width }, (_, index) => row[index] ?? '').join(' | ')} |`
+  const line = (row: string[]) => `| ${row.join(' | ')} |`
+  // The header row sets the column count; shorter body rows end early.
   const [head = [], ...body] = cells
-  return [line(head), line(Array(width).fill('---')), ...body.map(line)].join(
-    '\n',
-  )
+  return [
+    line(Array.from({ length: width }, (_, index) => head[index] ?? '')),
+    line(Array(width).fill('---')),
+    ...body.map(line),
+  ].join('\n')
 }
 
 /** Markdown for pasted HTML. */

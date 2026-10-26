@@ -66,21 +66,6 @@ before(
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1 })
     })
-    // The system clipboard stays as it is: main's clipboard is a stand-in
-    // holding the text a copy put there and what main adds to it.
-    await app.evaluate(({ clipboard }) => {
-      const stub = { text: '', html: '', reads: 0, writes: 0 }
-      globalThis.clipboardStub = stub
-      clipboard.readText = async () => {
-        stub.reads++
-        return stub.text
-      }
-      clipboard.write = async ([item]) => {
-        stub.writes++
-        stub.text = await (await item.getType('text/plain')).text()
-        stub.html = await (await item.getType('text/html')).text()
-      }
-    })
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
     await waitForDocumentEditor(app, page)
@@ -97,14 +82,19 @@ after(
   { timeout: 30000 },
 )
 
-/** Select `from`–`to` in the formatted view and send it a clipboard event; returns what it put on the clipboard. */
+/**
+ * Select `from`–`to` (null: the end) in the formatted view and send it a
+ * clipboard event; returns what it put on the clipboard.
+ */
 const clipboardEvent = (type, from, to, put = {}) =>
   page.evaluate(
     ({ type, from, to, put }) => {
       const view = document.querySelector('.rich-pane .cm-content').cmTile.root
         .view
       view.focus()
-      view.dispatch({ selection: { anchor: from, head: to } })
+      view.dispatch({
+        selection: { anchor: from, head: to ?? view.state.doc.length },
+      })
       const data = new DataTransfer()
       for (const [format, value] of Object.entries(put))
         data.setData(format, value)
@@ -122,44 +112,24 @@ const clipboardEvent = (type, from, to, put = {}) =>
     },
     { type, from, to, put },
   )
-/**
- * Copy `from`–`to` in the formatted view, the clipboard holding `held` after
- * the copy event; returns the text and the html main adds to it.
- */
-async function copyRendered(from, to, held, type = 'copy') {
-  const before = await app.evaluate((_, held) => {
-    const stub = globalThis.clipboardStub
-    Object.assign(stub, { text: held, html: '' })
-    return { reads: stub.reads, writes: stub.writes }
-  }, held)
-  const { text } = await clipboardEvent(type, from, to)
-  // Main compares the clipboard's text, then writes it with the html, or not.
-  await waitForAsync(
-    app,
-    (_, { reads, writes, write }) =>
-      write
-        ? globalThis.clipboardStub.writes > writes
-        : globalThis.clipboardStub.reads > reads,
-    { ...before, write: held === text },
-  )
-  return {
-    text,
-    html: await app.evaluate(() => globalThis.clipboardStub.html),
-    writes:
-      (await app.evaluate(() => globalThis.clipboardStub.writes)) -
-      before.writes,
-  }
-}
 const markdown = async () =>
   (await page.evaluate(() => window.hibi.getDocument())).markdown
 const undo = () => page.keyboard.press(`${mod}+z`)
+/** Wait until the note's Markdown is `text`. */
+const settled = (text) =>
+  waitForAsync(
+    page,
+    async (text) => (await window.hibi.getDocument()).markdown === text,
+    text,
+  )
 
 test('copy puts the exact markdown of the selection and its export html on the clipboard', {
   timeout: 30000,
 }, async () => {
   const from = note.indexOf('A [link]'),
     to = note.indexOf('> quoted')
-  const { text, html } = await copyRendered(from, to, note.slice(from, to))
+  const { text, html, handled } = await clipboardEvent('copy', from, to)
+  assert.equal(handled, true)
   assert.equal(text, note.slice(from, to))
   for (const part of [
     /<a href="https:\/\/example\.com\/">link<\/a>/,
@@ -172,12 +142,30 @@ test('copy puts the exact markdown of the selection and its export html on the c
     /<table>[\s\S]*<th>a<\/th>[\s\S]*<td>2<\/td>/,
   ])
     assert.match(html, part)
-  // A later copy keeps the clipboard: the html is only added to its own text.
-  const later = await copyRendered(from, to, 'copied later')
-  assert.deepEqual([later.html, later.writes], ['', 0])
   // Collapsed selections keep the view's line copy.
   const line = await clipboardEvent('copy', from + 2, from + 2)
   assert.deepEqual([line.html, line.handled], ['', true])
+})
+
+test('copied html leaves out scripts, event handlers and script links', {
+  timeout: 30000,
+}, async () => {
+  const unsafe = [
+    '<script>document.body.dataset.copied = "script"</script>',
+    '<img src="x.png" onerror="document.body.dataset.copied = \'image\'">',
+    '[bad](javascript:alert(1)) <a href="javascript:alert(2)" onclick="alert(3)">raw</a>',
+  ].join('\n\n')
+  await clipboardEvent('paste', note.length, note.length, {
+    'text/plain': unsafe,
+  })
+  await settled(note + unsafe)
+  const { text, html } = await clipboardEvent('copy', note.length, null)
+  assert.equal(text, unsafe)
+  assert.match(html, /<img [^>]*src="x\.png"/)
+  assert.match(html, />bad<\/a>[\s\S]*>raw<\/a>/)
+  assert.doesNotMatch(html, /<script|onerror|onclick|javascript:/i)
+  await undo()
+  await settled(note)
 })
 
 test('cut removes the selection in one undoable edit', {
@@ -185,25 +173,12 @@ test('cut removes the selection in one undoable edit', {
 }, async () => {
   const from = note.indexOf('1. first'),
     to = note.indexOf('2. second') + '2. second'.length
-  const { text, html } = await copyRendered(
-    from,
-    to,
-    note.slice(from, to),
-    'cut',
-  )
+  const { text, html } = await clipboardEvent('cut', from, to)
   assert.equal(text, note.slice(from, to))
   assert.match(html, /<ol>\s*<li>first<\/li>/)
-  await waitForAsync(
-    page,
-    async (gone) => !(await window.hibi.getDocument()).markdown.includes(gone),
-    '1. first',
-  )
+  await settled(note.slice(0, from) + note.slice(to))
   await undo()
-  await waitForAsync(
-    page,
-    async (note) => (await window.hibi.getDocument()).markdown === note,
-    note,
-  )
+  await settled(note)
 })
 
 test('pasted html becomes markdown in one edit; plain text and own copies paste as they are', {
@@ -234,40 +209,129 @@ test('pasted html becomes markdown in one edit; plain text and own copies paste 
     'text/plain': 'ignored',
   })
   assert.equal(pasted.handled, true)
-  await waitForAsync(
-    page,
-    async (text) => (await window.hibi.getDocument()).markdown.endsWith(text),
-    expected,
-  )
+  await settled(note + expected)
   // One source edit: one undo removes all of it.
   await undo()
-  await waitForAsync(
-    page,
-    async (note) => (await window.hibi.getDocument()).markdown === note,
-    note,
-  )
+  await settled(note)
   // Plain text pastes as it is.
   await clipboardEvent('paste', end, end, { 'text/plain': 'plain *text*' })
-  await waitForAsync(page, async () =>
-    (await window.hibi.getDocument()).markdown.endsWith('plain *text*'),
-  )
+  await settled(`${note}plain *text*`)
   await undo()
   // A copy from this view pastes its exact markdown, not its html.
   const from = note.indexOf('| a |'),
     to = note.indexOf('> quoted')
-  const copy = await copyRendered(from, to, note.slice(from, to))
+  const copy = await clipboardEvent('copy', from, to)
   assert.match(copy.html, /<table>/)
   await clipboardEvent('paste', end, end, {
     'text/html': copy.html,
     'text/plain': copy.text,
   })
+  await settled(note + note.slice(from, to))
+  await undo()
+  await settled(note)
+})
+
+test('pasted text stays literal, task items keep their state, code keeps its fence and tables stay linear', {
+  timeout: 30000,
+}, async () => {
+  assert.equal(await markdown(), note)
+  const end = note.length
+  const columns = 600
+  const html =
+    '<p>&amp;copy; ~~literal~~ $5 and $6 a==b== &amp;#35;</p>' +
+    // The rich view's task items wrap their checkboxes in labels.
+    '<ul data-type="taskList"><li data-type="taskItem" data-checked="true"><label><input type="checkbox" checked="checked"><span></span></label><div><p>done</p></div></li>' +
+    '<li data-type="taskItem" data-checked="false"><label><input type="checkbox"><span></span></label><div><p>todo</p></div></li></ul>' +
+    '<pre><code>a\n  ```\n# injected\n</code></pre>' +
+    `<table><tr><th>h</th></tr><tr>${'<td>c</td>'.repeat(columns)}</tr>${'<tr><td>r</td></tr>'.repeat(columns)}</table>`
+  const expected = [
+    '\\&copy; \\~\\~literal\\~\\~ \\$5 and \\$6 a\\==b\\== \\&#35;',
+    '- [x] done\n- [ ] todo',
+    '````\na\n  ```\n# injected\n````',
+    [
+      `| ${['h', ...Array(columns - 1).fill('')].join(' | ')} |`,
+      `| ${Array(columns).fill('---').join(' | ')} |`,
+      `| ${Array(columns).fill('c').join(' | ')} |`,
+      ...Array(columns).fill('| r |'),
+    ].join('\n'),
+  ].join('\n\n')
+  await clipboardEvent('paste', end, end, { 'text/html': html })
+  await settled(note + expected)
+  await undo()
+  await settled(note)
+})
+
+test('large html pastes convert without losing their text', {
+  timeout: 60000,
+}, async () => {
+  assert.equal(await markdown(), note)
+  const end = note.length
+  // A code span with 130,000 backtick runs, then 200,000 paragraphs in one block.
+  const code = '`a'.repeat(130000)
+  const html = `<p><code>${code}</code></p><div>${'<p>b</p>'.repeat(200000)}</div>`
+  await clipboardEvent('paste', end, end, { 'text/html': html })
+  const head = `\`\` ${code.slice(0, 40)}`,
+    length = note.length + `\`\` ${code} \`\``.length + 3 * 200000
   await waitForAsync(
     page,
-    async (text) => (await window.hibi.getDocument()).markdown.endsWith(text),
-    note.slice(from, to),
+    async ({ note, head, length }) => {
+      const text = (await window.hibi.getDocument()).markdown
+      return (
+        text.length === length &&
+        text.startsWith(note + head) &&
+        text.endsWith('\n\nb\n\nb')
+      )
+    },
+    { note, head, length },
+    { timeout: 30000 },
   )
   await undo()
+  await settled(note)
+})
+
+test('an html paste waiting for its converter replaces the selection it was made at', {
+  timeout: 30000,
+}, async () => {
   assert.equal(await markdown(), note)
+  const from = note.indexOf('A [link]'),
+    typed = note.indexOf('Clipboard')
+  await page.evaluate(
+    ({ from, typed }) => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.focus()
+      view.dispatch({ selection: { anchor: from, head: from + 1 } })
+      const data = new DataTransfer()
+      data.setData('text/html', '<p><strong>late</strong></p>')
+      view.contentDOM.dispatchEvent(
+        new ClipboardEvent('paste', {
+          clipboardData: data,
+          bubbles: true,
+          cancelable: true,
+        }),
+      )
+      // Typing and selecting elsewhere before the converter answers.
+      view.dispatch({
+        changes: { from: typed, insert: 'typed ' },
+        userEvent: 'input.type',
+      })
+      const bold = view.state.doc.toString().indexOf('bold')
+      view.dispatch({ selection: { anchor: bold, head: bold + 4 } })
+    },
+    { from, typed },
+  )
+  await settled(
+    `${note.slice(0, typed)}typed ${note.slice(typed, from)}**late**${note.slice(from + 1)}`,
+  )
+  // The selection made meanwhile stays on its text.
+  const selected = await page.evaluate(() => {
+    const { state } = document.querySelector('.rich-pane .cm-content').cmTile
+      .root.view
+    return state.sliceDoc(state.selection.main.from, state.selection.main.to)
+  })
+  assert.equal(selected, 'bold')
+  await clipboardEvent('paste', 0, null, { 'text/plain': note })
+  await settled(note)
 })
 
 test('the rich view copies the same rendered content for the same note', {
@@ -295,7 +359,7 @@ test('the rich view copies the same rendered content for the same note', {
       { text, html },
     )
   assert.equal(await markdown(), note)
-  const all = await copyRendered(0, note.length, note)
+  const all = await clipboardEvent('copy', 0, null)
   const formatted = await read(all.text, all.html)
   await open(false)
   await page.locator('.rich-pane .tiptap').click()

@@ -1083,6 +1083,14 @@ export function SourceEditor({
                     .some((handler) => handler(view, from, to, text, insert))
                 )
                   view.dispatch(insert())
+                // Listeners such as typing state get the input the browser would have sent.
+                view.contentDOM.dispatchEvent(
+                  new InputEvent('input', {
+                    inputType: 'insertText',
+                    data,
+                    bubbles: true,
+                  }),
+                )
                 return true
               }
               if (

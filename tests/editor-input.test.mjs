@@ -150,7 +150,7 @@ test('multi-line text input reaches source view in one edit, without native para
   await switchToSource(app, page)
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   await page.evaluate(() => {
-    const probe = { added: 0, prevented: [] }
+    const probe = { added: 0, prevented: [], inputs: [] }
     window.sourceLineInput = probe
     new MutationObserver((records) => {
       for (const record of records) probe.added += record.addedNodes.length
@@ -161,12 +161,16 @@ test('multi-line text input reaches source view in one edit, without native para
     window.addEventListener('beforeinput', (event) =>
       probe.prevented.push(event.defaultPrevented),
     )
+    window.addEventListener('input', (event) =>
+      probe.inputs.push(event.inputType),
+    )
   })
   const insert = async (text) => {
     await source.press('ControlOrMeta+a')
     await page.evaluate(() => {
       window.sourceLineInput.added = 0
       window.sourceLineInput.prevented = []
+      window.sourceLineInput.inputs = []
     })
     await page.keyboard.insertText(text)
     await waitForAsync(
@@ -194,6 +198,8 @@ test('multi-line text input reaches source view in one edit, without native para
     [large, paragraphs(1000)],
   ]) {
     assert.deepEqual(result.prevented, [true], added)
+    // The typing signal still arrives, as it would from the browser.
+    assert.deepEqual(result.inputs, ['insertText'])
     assert.equal(result.text, text)
     assert.equal(result.head, text.length)
   }

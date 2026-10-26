@@ -14,6 +14,7 @@ import type { ViewId } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import { normalizedSource } from '../../shared/source-projection'
 import { documentRuntime } from './document-runtime'
+import { largeOpening } from './document-shell'
 import type { MarkdownEditor as RichMarkdownEditor } from './Editor'
 import { EditorCursor } from './EditorCursor'
 import { emitEditorKeyEvent } from './editor-events'
@@ -140,8 +141,7 @@ export function MarkdownEditor({
     mode,
     markdownDocument,
     false,
-    // ponytail: the same 262,144 units as source-first opening.
-    documentRuntime.openingLength(documentState) > 256 * 1024,
+    largeOpening(documentRuntime, documentState),
   )
   const findTarget =
     mode === 'normal' ? 'rich' : mode === 'markdown' ? 'source' : focusedPane

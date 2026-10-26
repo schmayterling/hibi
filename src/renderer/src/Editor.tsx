@@ -101,6 +101,7 @@ import { observeMarkdownMarkers } from './markdown-markers'
 import {
   createMarkdownPositionCache,
   type MarkdownPositionLookup,
+  markdownPositions,
 } from './markdown-positions'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import './markdown-markers.css'
@@ -112,7 +113,7 @@ import type { OutlineHeading, OutlineRequest } from './OutlineSidebar'
 import { outlineHeadingAt } from './outline-position'
 import { createPlainSourceSync } from './plain-source-sync'
 import { observeRichAnnotations } from './rich-annotations'
-import { richChangeMap, richRangeMap } from './rich-change-map'
+import { richChangeMap, richEditMap } from './rich-change-map'
 import {
   findNext,
   findPrev,
@@ -2072,9 +2073,9 @@ export function MarkdownEditor({
         serialize(editor.state.doc),
       )
     }
-    // Each composed source edit located in the old and the new preview through
-    // their source maps, in order; null when an edit lies outside the body.
-    const editSpans = (
+    // The composed source edits as a map from the old preview into the new
+    // one, or null unless they all lie in an unchanged projected body.
+    const editMap = (
       base: PreviewBase,
       after: RichNode,
       source: string,
@@ -2084,39 +2085,29 @@ export function MarkdownEditor({
         body = projectMarkdown(old, markdownExtensions),
         from = body.sourceOffset ?? old.lastIndexOf(body.content),
         to = projected.sourceOffset ?? source.lastIndexOf(projected.content)
-      if (from < 0 || to < 0) return null
-      const spans: { a: number; b: number; c: number; d: number }[] = []
-      // One side at a time, so each source map is built once.
-      const before = positions(body.content, base.document)
-      for (const change of base.changes) {
-        const a = before(change.from - from, 'source'),
-          b = before(change.to - from, 'source')
-        if (
-          change.from < from ||
-          change.to > from + body.content.length ||
-          a === null ||
-          b === null
+      if (
+        from < 0 ||
+        from !== to ||
+        base.changes.some(
+          (change) =>
+            change.from < from || change.to > from + body.content.length,
         )
-          return null
-        spans.push({ a, b: Math.max(a, b), c: 0, d: 0 })
-      }
-      const next = positions(projected.content, after)
-      let shift = 0
-      for (const [index, change] of base.changes.entries()) {
-        const at = change.from + shift - to,
-          c = next(at, 'source'),
-          d = next(at + change.insert.length, 'source')
-        shift += change.insert.length - (change.to - change.from)
-        if (
-          at < 0 ||
-          at + change.insert.length > projected.content.length ||
-          c === null ||
-          d === null
-        )
-          return null
-        spans[index] = { ...spans[index]!, c, d: Math.max(c, d) }
-      }
-      return spans
+      )
+        return null
+      return richEditMap(
+        base.document,
+        after,
+        base.changes.map((change) => ({
+          ...change,
+          from: change.from - from,
+          to: change.to - from,
+        })),
+        body.content.length,
+        [
+          markdownPositions(body.content, base.document),
+          markdownPositions(projected.content, after),
+        ],
+      )
     }
     const sync = () => {
       clearTimeout(timer)
@@ -2147,17 +2138,12 @@ export function MarkdownEditor({
           .command(({ tr }) => {
             // Wherever the old and new previews agree, the selection keeps its
             // exact place and kind, including select-all, nodes and cells.
-            const spans =
+            const edited =
               pending?.document === tr.before
-                ? editSpans(pending, tr.doc, source, projected)
+                ? editMap(pending, tr.doc, source, projected)
                 : null
             tr.setSelection(
-              kept.map(
-                tr.doc,
-                spans
-                  ? richRangeMap(tr.before, tr.doc, spans)
-                  : richChangeMap(tr.before, tr.doc),
-              ),
+              kept.map(tr.doc, edited ?? richChangeMap(tr.before, tr.doc)),
             )
             if (bookmark) {
               const offset =

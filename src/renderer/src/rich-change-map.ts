@@ -1,19 +1,133 @@
-import { Fragment, type Node } from '@tiptap/pm/model'
+import { Fragment, type Node, type Slice } from '@tiptap/pm/model'
 import { StepMap } from '@tiptap/pm/transform'
 
+// `[a, b)` in the old document became `[c, d)` in the new one.
 type Span = { a: number; b: number; c: number; d: number }
+type Edit = { from: number; to: number; insert: string }
+type Lookup = (position: number, from: 'source' | 'rich') => number | null
+// How far around an edit to look for an exactly mapped source offset.
+const reach = 64
 
 /**
- * Maps the old preview into the new one from ranges that cover every edit,
- * in order: `[a, b)` in `before` became `[c, d)` in `after`. Content
- * between ranges must match exactly; where an edit had wider effects, the
- * ranges around the differing content merge.
+ * Maps the old preview into the new one through the source edits between
+ * them, given in order in old source offsets, with each side's source
+ * position lookup. Each edit is bounded by the nearest unchanged offsets that
+ * both previews show as the same visible text, and narrowed to where the
+ * previews differ; without such an offset it merges with its neighbour.
  */
-export function richRangeMap(
+export function richEditMap(
   before: Node,
   after: Node,
-  ranges: readonly Span[],
+  edits: readonly Edit[],
+  length: number,
+  lookups: readonly [Lookup, Lookup],
 ) {
+  // Visible text maps exactly both ways; anything else is a nearest guess.
+  const exact = (side: 0 | 1, offset: number) => {
+    const rich = lookups[side](offset, 'source')
+    return rich !== null && lookups[side](rich, 'rich') === offset ? rich : null
+  }
+  const anchor = (from: number, to: number) => {
+    const a = exact(0, from),
+      c = a === null ? null : exact(1, to)
+    return a === null || c === null ? null : ([a, c] as const)
+  }
+  const windows: Span[] = []
+  let shift = 0,
+    previous = 0
+  for (const [index, edit] of edits.entries()) {
+    const next = shift + edit.insert.length - (edit.to - edit.from),
+      limit = Math.min(edits[index + 1]?.from ?? length, edit.to + reach)
+    let start: readonly [number, number] | null = null,
+      end: readonly [number, number] | null = null
+    for (
+      let at = edit.from;
+      !start && at >= Math.max(previous, edit.from - reach);
+      at--
+    )
+      start = anchor(at, at + shift)
+    for (let at = edit.to; !end && at <= limit; at++)
+      end = anchor(at, at + next)
+    const [b, d] = end ?? [before.content.size, after.content.size],
+      last = windows.at(-1)
+    if (last && (!start || start[0] < last.b || start[1] < last.d)) {
+      last.b = Math.max(last.b, b)
+      last.d = Math.max(last.d, d)
+    } else {
+      const [a, c] = start ?? [0, 0]
+      windows.push({ a, b, c, d })
+    }
+    shift = next
+    previous = edit.to
+  }
+  return rangeMap(
+    before,
+    after,
+    windows.flatMap((window) => narrow(before, after, window)),
+  )
+}
+
+// The part of matching windows where the documents differ, if any.
+function narrow(before: Node, after: Node, window: Span): Span[] {
+  const left = before.slice(window.a, window.b),
+    right = after.slice(window.c, window.d)
+  if (left.openStart !== right.openStart || left.openEnd !== right.openEnd)
+    return [window]
+  const start = left.content.findDiffStart(right.content)
+  const end = start === null ? null : left.content.findDiffEnd(right.content)
+  if (start === null || !end) return []
+  // Positions past either cut stand for the window's own edges.
+  const overlap = Math.max(0, start - Math.min(end.a, end.b)),
+    a = window.a - left.openStart,
+    c = window.c - right.openStart,
+    clamp = (value: number, low: number, high: number) =>
+      Math.min(high, Math.max(low, value))
+  return [
+    {
+      a: clamp(a + start, window.a, window.b),
+      b: clamp(a + end.a + overlap, window.a, window.b),
+      c: clamp(c + start, window.c, window.d),
+      d: clamp(c + end.b + overlap, window.c, window.d),
+    },
+  ]
+}
+
+// Equal content between changes. The blocks cut at either end may change type,
+// as when a heading marker is typed, without moving the positions inside.
+function same(left: Slice, right: Slice) {
+  const fragments = (
+    a: Fragment,
+    b: Fragment,
+    open: number,
+    close: number,
+  ): boolean =>
+    a.childCount === b.childCount &&
+    a.content.every((child, index) => {
+      const other = b.child(index),
+        first = index === 0 && open > 0,
+        last = index === a.childCount - 1 && close > 0
+      return first || last
+        ? fragments(
+            child.content,
+            other.content,
+            first ? open - 1 : 0,
+            last ? close - 1 : 0,
+          )
+        : child.eq(other)
+    })
+  return (
+    left.openStart === right.openStart &&
+    left.openEnd === right.openEnd &&
+    fragments(left.content, right.content, left.openStart, left.openEnd)
+  )
+}
+
+/**
+ * Maps through ranges that cover every change, in order. Content between
+ * ranges must match exactly; where a change had wider effects, the ranges
+ * around the differing content merge.
+ */
+function rangeMap(before: Node, after: Node, ranges: readonly Span[]) {
   const kept: Span[] = [{ a: 0, b: 0, c: 0, d: 0 }]
   for (const range of [
     ...ranges,
@@ -29,7 +143,7 @@ export function richRangeMap(
       range.a >= last.b &&
       range.c >= last.d &&
       range.a - last.b === range.c - last.d &&
-      before.slice(last.b, range.a).eq(after.slice(last.d, range.c))
+      same(before.slice(last.b, range.a), after.slice(last.d, range.c))
     )
       kept.push({ ...range })
     else {

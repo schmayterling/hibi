@@ -124,6 +124,18 @@ const settled = (text) =>
     text,
   )
 
+async function setFixture(text) {
+  await page.locator('.rich-pane .cm-content').evaluate((element, text) => {
+    const view = element.cmTile.root.view
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: text },
+      selection: { anchor: 0 },
+      userEvent: 'input',
+    })
+  }, text)
+  await settled(text)
+}
+
 async function nativeClipboard(command, from, to = from) {
   const before = await page.evaluate(
     ({ command, from, to }) => {
@@ -525,8 +537,7 @@ test('html paste preserves code padding, Unicode spaces and literal heading mark
         )
         assert.equal(actual, expected, inserted)
       } finally {
-        await clipboardEvent('paste', 0, null, { 'text/plain': note })
-        await settled(note)
+        await setFixture(note)
       }
     })
   }
@@ -543,10 +554,7 @@ test('queued html pastes preserve event order with selection and intervening typ
   ]) {
     await t.test(name, async () => {
       try {
-        await clipboardEvent('paste', 0, null, {
-          'text/plain': selected ? 'XYZ' : 'X',
-        })
-        await settled(selected ? 'XYZ' : 'X')
+        await setFixture(selected ? 'XYZ' : 'X')
         await page.evaluate(
           ({ selected, intervening }) => {
             const view = document.querySelector('.rich-pane .cm-content').cmTile
@@ -584,8 +592,7 @@ test('queued html pastes preserve event order with selection and intervening typ
         })
         assert.equal(await markdown(), expected)
       } finally {
-        await clipboardEvent('paste', 0, null, { 'text/plain': note })
-        await settled(note)
+        await setFixture(note)
       }
     })
   }

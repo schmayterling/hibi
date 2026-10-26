@@ -299,6 +299,8 @@ export function createSourceSession(
       return snapshot
     },
     selection: () => editorSelection(snapshot, session.selection(viewId)),
+    /** Whether the view has echoed canonical edits, without flushing a hidden view. */
+    isCurrent: () => !pending && snapshot === session.snapshot(),
     dispatch,
     setVisible(next: boolean) {
       visible = next

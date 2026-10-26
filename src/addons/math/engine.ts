@@ -9,6 +9,7 @@ import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import type { AddonContext } from '../api'
 import type { MathHost } from './formatted'
+import { mathInsertion } from './insert'
 import { formulaScheduler } from './rendering'
 import { mathStyles } from './styles'
 import {
@@ -141,7 +142,13 @@ export function startMath(context: AddonContext) {
     const latex = await prompt()
     if (latex === null) return
     if (inSource && view && view.state.doc === text && view === codeMirror()) {
-      const value = block ? `\n\n$$\n${latex}\n$$\n\n` : `$${latex}$`
+      const line = view.state.doc.lineAt(selection.from)
+      const value = mathInsertion(
+        line.text,
+        selection.from - line.from,
+        latex,
+        block,
+      )
       view.dispatch({
         changes: { from: selection.from, to: selection.to, insert: value },
         selection: { anchor: selection.from + value.length },

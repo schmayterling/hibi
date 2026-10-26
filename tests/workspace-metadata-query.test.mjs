@@ -481,6 +481,31 @@ test('flavor changes reindex unchanged source and expire graph cursors', async (
   host.revision++
 })
 
+test('built-in mermaid diagrams keep the metadata index complete', async () => {
+  const target = host.target
+  const previousSyntax = host.syntaxSnapshot
+  host.syntaxSnapshot = {
+    ...previousSyntax,
+    flavors: [
+      ...previousSyntax.flavors,
+      { id: 'mermaid.blocks', kind: 'syntax', parserVersion: '1' },
+    ],
+    features: [
+      { id: 'mermaid.preview', enabled: true },
+      { id: 'mermaid.blocks', enabled: true },
+    ],
+  }
+  const links = await query({ target, kind: 'links', path: 'a.md' })
+  assert.deepEqual(links.value.items, ['b.md'])
+  assert.equal(links.value.complete, true)
+  assert.equal(links.value.unsupportedSyntax, false)
+  assert.equal(
+    (await query({ target, kind: 'graph', limit: 100 })).value.complete,
+    true,
+  )
+  host.syntaxSnapshot = previousSyntax
+})
+
 test('frontmatter projection changes property results without a source edit', async () => {
   const target = host.target
   const previousPages = host.pages

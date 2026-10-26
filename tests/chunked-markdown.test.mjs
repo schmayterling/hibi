@@ -329,3 +329,221 @@ test('typing deep in a 50 MiB note parses one chunk per edit and rebuilds a boun
     nodes(exact, middle - start, middle + 6000 - start).map(shift),
   )
 })
+
+/** Run a parse to the end, recording the largest amount of text one step read. */
+function steps(parse, counts) {
+  let largest = 0,
+    last = counts.scannedUnits + counts.parsedUnits
+  for (;;) {
+    const tree = parse.advance()
+    const now = counts.scannedUnits + counts.parsedUnits
+    largest = Math.max(largest, now - last)
+    last = now
+    if (tree) return { tree, largest }
+  }
+}
+const blockNames = new Set(
+  full.nodeSet.types
+    .filter((type) => type.is('Block'))
+    .map((type) => type.name),
+)
+const stringInput = (text) => ({
+  length: text.length,
+  chunk: (from) => text.slice(from),
+  read: (from, to) => text.slice(from, to),
+  lineChunks: false,
+})
+/** Block nodes around `pos`, innermost first. */
+const chain = (tree, pos) => {
+  const out = []
+  for (let node = tree.resolveInner(pos, 1); node; node = node.parent)
+    if (node.type.is('Block')) out.push(node.name)
+  return out.join('>')
+}
+
+test('blocks longer than a window continue from replay points with bounded steps and exact block structure', () => {
+  const lines = (count, line) =>
+    Array.from({ length: count }, (_, i) => line(i)).join('\n')
+  const giants = {
+    fence: `~~~js\n${lines(2000, (i) => `const v${i} = ${i} // *not* emphasis`)}\n~~~`,
+    open: `~~~\n${lines(2000, (i) => `line ${i} # not a heading`)}`,
+    indented: lines(2000, (i) => (i % 7 === 3 ? '' : `    code ${i}`)),
+    script: `<script>\n${lines(2000, (i) => `let a${i} = ${i}`)}\n</script>`,
+    comment: `<!-- start\n${lines(2000, (i) => (i % 5 ? `note ${i}` : ''))}\n-->`,
+    paragraph: lines(2000, (i) => `words ${i} with *em* and \`code\` [l](/u)`),
+    link: lines(2000, (i) => `[link ${i}](/u) and words`),
+    setext: `${lines(2000, (i) => `title ${i} *x*`)}\n===`,
+    table: `| a | b |\n| --- | --- |\n${lines(2000, (i) => `| ${i} | *${i}* |`)}`,
+    lazy: `- an item\n${lines(2000, (i) => `lazy ${i} line`)}`,
+    items: lines(
+      2600,
+      (i) => `${i + 1}. item ${i}${i % 9 ? '' : '\n\n   more'}`,
+    ),
+    quote: lines(2000, (i) => (i % 6 ? `> quoted ${i}` : '>')),
+  }
+  const before = '# Title\n\n- a\n- b\n\nSome *intro* text.\n\n'
+  const after = '\n\n## After\n\nClosing **words**.\n'
+  const inserts = [
+    'x',
+    '\n',
+    '\n\n',
+    '~~~',
+    '</script>',
+    '-->',
+    '    ',
+    '|',
+    '*',
+    '===',
+    '- ',
+  ]
+  const make = (counts) =>
+    new ChunkedMarkdownParser(full, base, {
+      chunkSize: 32,
+      groupSize: 4,
+      giantBlock: 512,
+      probe: counts,
+    })
+  for (const [kind, giant] of Object.entries(giants)) {
+    const r = random(kind.length * 7919)
+    let text = before + giant + after
+    let tree = null
+    for (let step = 0; step < 24; step++) {
+      // Viewports inside and around the block, then edits next to them.
+      const at = Math.floor(r() * text.length)
+      const demand = { from: at, to: Math.min(text.length, at + 150) }
+      let fragments = []
+      if (tree && step % 2) {
+        const from = Math.min(text.length, at + Math.floor(r() * 150))
+        const insert = inserts[Math.floor(r() * inserts.length)]
+        const next = text.slice(0, from) + insert + text.slice(from)
+        fragments = TreeFragment.applyChanges(TreeFragment.addTree(tree), [
+          { fromA: from, toA: from, fromB: from, toB: from + insert.length },
+        ])
+        text = next
+      } else if (tree) fragments = TreeFragment.addTree(tree)
+      const counts = probe()
+      const result = steps(
+        make(counts).startChunkedParse(stringInput(text), fragments, demand),
+        counts,
+      )
+      tree = result.tree
+      const label = `${kind} step ${step} at ${at}`
+      // No step reads more than a few windows, whatever the block's length; a
+      // paragraph starting with a bracket replays its first 1,000 characters.
+      assert.ok(result.largest <= 4 * 512 + 4096, `${label}: ${result.largest}`)
+      assert.ok(!uncovered(tree, demand.from, demand.to), label)
+      const exact = full.parse(text)
+      for (const pos of [
+        demand.from,
+        Math.floor((demand.from + demand.to) / 2),
+      ])
+        assert.equal(chain(tree, pos), chain(exact, pos), `${label} at ${pos}`)
+      // Nodes inside the viewport match, except giant blocks' own extents,
+      // code text split at window seams, and inline nodes of giant paragraphs,
+      // which are parsed per window.
+      const giant = []
+      exact.iterate({
+        from: demand.from,
+        to: demand.to,
+        enter: (node) => {
+          if (node.type.is('Block') && node.to - node.from > 512)
+            giant.push({ name: node.name, from: node.from, to: node.to })
+        },
+      })
+      const want = nodes(exact, demand.from, demand.to).filter((entry) => {
+        const [name, range] = entry.split(':')
+        const [from, to] = range.split('-').map(Number)
+        if (name === 'CodeText') return false
+        return !giant.some(
+          (node) =>
+            (node.from === from && node.to === to) ||
+            (/Paragraph|SetextHeading/.test(node.name) &&
+              from >= node.from &&
+              to <= node.to &&
+              !blockNames.has(name)),
+        )
+      })
+      const have = new Set(nodes(tree, demand.from, demand.to))
+      const missing = want.filter((entry) => !have.has(entry))
+      assert.deepEqual(missing, [], label)
+    }
+  }
+})
+
+test('a structural edit at the top of a 50 MiB note reads bounded ranges per step', () => {
+  const unit = '# heading\n\nparagraph words\n\n- one\n- two\n\n> quote\n\n'
+  let text = unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length))
+  const make = (counts) =>
+    new ChunkedMarkdownParser(full, base, { probe: counts })
+  const top = { from: 0, to: 6000 }
+  let counts = probe()
+  let { tree } = steps(
+    make(counts).startChunkedParse(stringInput(text), [], top),
+    counts,
+  )
+  const edit = (from, to, insert, demand) => {
+    const next = text.slice(0, from) + insert + text.slice(to)
+    const fragments = TreeFragment.applyChanges(TreeFragment.addTree(tree), [
+      { fromA: from, toA: to, fromB: from, toB: from + insert.length },
+    ])
+    text = next
+    counts = probe()
+    const result = steps(
+      make(counts).startChunkedParse(stringInput(text), fragments, demand),
+      counts,
+    )
+    tree = result.tree
+    return { ...counts, largest: result.largest }
+  }
+  const window = 2 * 65536
+  // Opening a fence: the block continues only to just past the viewport.
+  const opened = edit(0, 0, '~~~\n', top)
+  assert.ok(opened.largest <= window + 64, JSON.stringify(opened))
+  assert.ok(opened.scannedUnits <= 4 * 65536, JSON.stringify(opened))
+  assert.equal(chain(tree, 3000), 'FencedCode>Document')
+  // Typing inside it rescans one window and resumes from the old frontier.
+  const typed = edit(20, 20, 'x', top)
+  assert.ok(typed.scannedUnits <= 16384, JSON.stringify(typed))
+  // Closing it at the end of the note leaves the unscanned rest alone.
+  const closed = edit(text.length, text.length, '\n~~~\n', top)
+  assert.ok(closed.scannedUnits === 0, JSON.stringify(closed))
+  // A far jump continues the block in bounded windows to the viewport.
+  const middle = Math.floor(text.length / 2)
+  counts = probe()
+  const jumped = steps(
+    make(counts).startChunkedParse(
+      stringInput(text),
+      TreeFragment.addTree(tree),
+      {
+        from: middle,
+        to: middle + 6000,
+      },
+    ),
+    counts,
+  )
+  tree = jumped.tree
+  assert.ok(jumped.largest <= window + 64, JSON.stringify(jumped.largest))
+  assert.equal(chain(tree, middle + 3000), 'FencedCode>Document')
+  // The end of the note: the fence closes there.
+  const end = text.length - 2
+  counts = probe()
+  tree = steps(
+    make(counts).startChunkedParse(
+      stringInput(text),
+      TreeFragment.addTree(tree),
+      {
+        from: end - 6000,
+        to: end,
+      },
+    ),
+    counts,
+  ).tree
+  let fence = tree.resolveInner(end - 3000, 1)
+  while (fence.name !== 'FencedCode') fence = fence.parent
+  assert.equal(fence.lastChild.name, 'CodeMark')
+  // Removing the opener restores headings at the top in a bounded parse.
+  const unfenced = edit(0, 4, '', top)
+  assert.ok(unfenced.largest <= window + 64, JSON.stringify(unfenced))
+  assert.ok(unfenced.scannedUnits <= 64 * 1024, JSON.stringify(unfenced))
+  assert.equal(chain(tree, 0), 'ATXHeading1>Document')
+})

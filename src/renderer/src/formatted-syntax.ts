@@ -14,17 +14,25 @@ import { createPlainTextRunExtension } from '../../shared/markdown-plain-text-ru
 import {
   ChunkedMarkdownParser,
   type ChunkedMarkdownProbe,
+  type ChunkedPartialParse,
   type Demand,
   uncovered,
 } from './chunked-markdown.ts'
 import { codeLanguages } from './code-languages.ts'
 
 /**
- * The formatted view owns its syntax tree. Edits reparse their chunk inside
- * the transaction; scrolling and far jumps continue in idle slices, so no
- * shared background-parse budget can stall formatting near the viewport.
+ * The formatted view owns its syntax tree. A transaction parses for at most
+ * one slice and keeps the unfinished parse, which idle slices continue, so no
+ * shared background-parse budget can stall formatting near the viewport and no
+ * edit runs a whole-document parse synchronously.
  */
-type Syntax = { tree: Tree; demand: Demand; complete: boolean }
+type Syntax = {
+  tree: Tree
+  demand: Demand
+  complete: boolean
+  /** The unfinished parse of this document, continued by the next slice. */
+  parse: ChunkedPartialParse | null
+}
 
 const setDemand = StateEffect.define<Demand>()
 const resume = StateEffect.define<null>()
@@ -32,7 +40,7 @@ const resume = StateEffect.define<null>()
 export type FormattedSyntaxOptions = {
   extensions?: MarkdownExtension
   probe?: ChunkedMarkdownProbe
-  /** Milliseconds of parsing per transaction; the idle driver continues the rest. */
+  /** Milliseconds of parsing per transaction or idle slice; each parse step reads a bounded range. */
   slice?: number
 }
 
@@ -59,39 +67,34 @@ const mapDemand = (demand: Demand, changes: ChangeDesc) => ({
 function syntaxField(options: FormattedSyntaxOptions) {
   const chunked = markdownParser(options)
   const slice = options.slice ?? 8
-  const run = (
-    doc: Text,
-    fragments: readonly TreeFragment[],
-    demand: Demand,
-  ) => {
-    const parse = chunked.startChunkedParse(
-      new DocInput(doc),
-      fragments,
-      demand,
-    )
+  const run = (parse: ChunkedPartialParse, demand: Demand): Syntax => {
     const end = performance.now() + slice
     for (;;) {
       const tree = parse.advance()
-      if (tree) return tree
-      if (performance.now() > end) {
-        // Keep the verified progress; the driver resumes in an idle slice.
-        parse.stopAt(parse.parsedPos)
-        for (;;) {
-          const stopped = parse.advance()
-          if (stopped) return stopped
+      if (tree)
+        return {
+          tree,
+          demand,
+          complete: !uncovered(tree, demand.from, demand.to),
+          parse: null,
         }
-      }
+      // Keep the verified progress; the driver resumes in an idle slice.
+      if (performance.now() >= end)
+        return { tree: parse.snapshot(), demand, complete: false, parse }
     }
   }
-  const syntax = (tree: Tree, demand: Demand): Syntax => ({
-    tree,
-    demand,
-    complete: !uncovered(tree, demand.from, demand.to),
-  })
+  const start = (
+    doc: Text,
+    fragments: readonly TreeFragment[],
+    demand: Demand,
+  ) =>
+    run(chunked.startChunkedParse(new DocInput(doc), fragments, demand), demand)
   return StateField.define<Syntax>({
     create(state) {
-      const demand = { from: 0, to: Math.min(state.doc.length, 8192) }
-      return syntax(run(state.doc, [], demand), demand)
+      return start(state.doc, [], {
+        from: 0,
+        to: Math.min(state.doc.length, 8192),
+      })
     },
     update(value, transaction) {
       let demand = value.demand,
@@ -111,17 +114,23 @@ function syntaxField(options: FormattedSyntaxOptions) {
         transaction.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
           ranges.push({ fromA, toA, fromB, toB })
         })
+        // The unfinished parse belongs to the old text; its verified chunks are in the tree.
         const fragments = TreeFragment.applyChanges(
           TreeFragment.addTree(value.tree),
           ranges,
         )
-        return syntax(run(transaction.state.doc, fragments, demand), demand)
+        return start(transaction.state.doc, fragments, demand)
       }
       if (demand === value.demand && !resumed) return value
+      if (value.parse) {
+        value.parse.setDemand(demand)
+        return run(value.parse, demand)
+      }
       if (!uncovered(value.tree, demand.from, demand.to))
-        return { tree: value.tree, demand, complete: true }
-      return syntax(
-        run(transaction.state.doc, TreeFragment.addTree(value.tree), demand),
+        return { ...value, demand, complete: true }
+      return start(
+        transaction.state.doc,
+        TreeFragment.addTree(value.tree),
         demand,
       )
     },

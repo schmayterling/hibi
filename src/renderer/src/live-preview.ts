@@ -13,9 +13,14 @@ import {
   type ViewUpdate,
   WidgetType,
 } from '@codemirror/view'
-import type { SyntaxNode, SyntaxNodeRef, Tree } from '@lezer/common'
+import {
+  IterMode,
+  type SyntaxNode,
+  type SyntaxNodeRef,
+  type Tree,
+} from '@lezer/common'
 import { highlightTree } from '@lezer/highlight'
-import { parsedChunks } from './chunked-markdown'
+import { listWindow, parsedChunks } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
 import type { FormattedSyntax } from './formatted-syntax'
 import './live-preview.css'
@@ -55,7 +60,7 @@ const rule = Decoration.replace({ widget: new RuleWidget(), block: true })
 const space = Decoration.replace({ widget: new SpaceWidget() })
 const hiddenLine = Decoration.replace({ block: true })
 
-/** Space around top-level blocks in px, matching the formatted view's collapsed margins. */
+/** Margins of a block in px, as in the formatted view's document styles. */
 function blockSpace(name: string): { top: number; bottom: number } {
   const heading = /^(?:ATX|Setext)Heading(\d)$/.exec(name)
   if (heading) {
@@ -76,6 +81,54 @@ function blockSpace(name: string): { top: number; bottom: number } {
   }
 }
 
+const isBlock = (node: SyntaxNode) => node.type.is('Block')
+const isList = (node: SyntaxNode) =>
+  node.name === 'BulletList' || node.name === 'OrderedList'
+/** Containers without vertical padding: their first and last children's margins collapse through them. */
+const isContainer = (node: SyntaxNode) =>
+  node.name === 'Blockquote' || node.name === 'ListItem' || isList(node)
+
+function blockSibling(node: SyntaxNode, forward: boolean) {
+  let next = forward ? node.nextSibling : node.prevSibling
+  while (next && !isBlock(next))
+    next = forward ? next.nextSibling : next.prevSibling
+  return next
+}
+
+function blockChild(node: SyntaxNode, last: boolean) {
+  const child = last ? node.lastChild : node.firstChild
+  return child && !isBlock(child) ? blockSibling(child, !last) : child
+}
+
+/** A block's margins in its container: list items and the blocks inside them sit closer. */
+function margins(node: SyntaxNode): { top: number; bottom: number } {
+  const parent = node.parent
+  // Items and nested lists sit 0.3em apart; blocks after the first in an item one line apart.
+  if (parent?.name === 'ListItem')
+    return {
+      top: isList(node) ? 4.8 : blockSibling(node, false) ? 16 : 0,
+      bottom: 0,
+    }
+  if (parent && isList(parent))
+    return { top: blockSibling(node, false) ? 4.8 : 0, bottom: 0 }
+  const space = blockSpace(node.name)
+  // A quote's last block has no bottom margin.
+  return parent?.name === 'Blockquote' && !blockSibling(node, true)
+    ? { top: space.top, bottom: 0 }
+    : space
+}
+
+/** The collapsed top margin of a block and its first descendants. */
+function topMargin(node: SyntaxNode): number {
+  const first = isContainer(node) && blockChild(node, false)
+  return Math.max(margins(node).top, first ? topMargin(first) : 0)
+}
+
+function bottomMargin(node: SyntaxNode): number {
+  const last = isContainer(node) && blockChild(node, true)
+  return Math.max(margins(node).bottom, last ? bottomMargin(last) : 0)
+}
+
 /** Visit each line from `from` to `to` that intersects `range`. */
 function eachLine(
   doc: Text,
@@ -93,7 +146,53 @@ function eachLine(
   }
 }
 
-type LineInfo = { classes: string[]; style: string[] }
+type LineInfo = {
+  classes: string[]
+  style: string[]
+  /** Quotes and lists around the line, outermost first. */
+  containers: SyntaxNode[]
+  /** The innermost list item around the line. */
+  item: SyntaxNode | null
+  /** Where the hidden quote markers at the line start end. */
+  quoteEnd: number | null
+  /** Where the line's first block starts, when one starts on it. */
+  leaf: number | null
+  /** Where a code line's text starts. */
+  code: number | null
+  /** The layout field hides the whole line. */
+  hidden: boolean
+  /** Space above the line in px. */
+  gap: number
+}
+
+/** Item start offsets per immutable list tree, so ordinals need no sibling walk. */
+const itemOffsets = new WeakMap<Tree, number[]>()
+
+/** The item's index in its list, from offsets cached on the list tree. */
+function ordinal(
+  list: SyntaxNode,
+  item: SyntaxNode,
+  local: Map<number, number[]>,
+) {
+  const tree = list.tree
+  let offsets = tree ? itemOffsets.get(tree) : local.get(list.from)
+  if (!offsets) {
+    offsets = []
+    for (let child = list.firstChild; child; child = child.nextSibling)
+      if (child.name === 'ListItem') offsets.push(child.from - list.from)
+    if (tree) itemOffsets.set(tree, offsets)
+    else local.set(list.from, offsets)
+  }
+  const at = item.from - list.from
+  let low = 0,
+    high = offsets.length - 1
+  while (low < high) {
+    const middle = (low + high + 1) >> 1
+    if (offsets[middle]! <= at) low = middle
+    else high = middle - 1
+  }
+  return low
+}
 
 /** Inline formatting, hidden markers and line styles for the visible ranges. */
 function inline(view: EditorView, tree: Tree): DecorationSet {
@@ -104,7 +203,17 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
   const line = (pos: number) => {
     let info = lines.get(pos)
     if (!info) {
-      info = { classes: [], style: [] }
+      info = {
+        classes: [],
+        style: [],
+        containers: [],
+        item: null,
+        quoteEnd: null,
+        leaf: null,
+        code: null,
+        hidden: false,
+        gap: 0,
+      }
       lines.set(pos, info)
     }
     return info
@@ -116,8 +225,6 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
     if (to > from)
       decorations.push(Decoration.mark({ class: className }).range(from, to))
   }
-  const quoteDepth = new Map<number, number>()
-  const items = new Map<number, { depth: number; item: SyntaxNode }>()
 
   function link(node: SyntaxNode) {
     const linkMarks = node.getChildren('LinkMark')
@@ -135,7 +242,9 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
     )
       return false
     hideRange(node.from, open.to)
-    hideRange(close.from, node.to)
+    // A destination on later lines is hidden with its line breaks by the layout field.
+    if (doc.lineAt(close.from).number === doc.lineAt(node.to).number)
+      hideRange(close.from, node.to)
     mark('hibi-lp-link', open.to, close.from)
     return undefined
   }
@@ -154,6 +263,11 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
     const to = closed ? last.number - 1 : last.number
     const visibleFrom = doc.lineAt(range.from).number,
       visibleTo = doc.lineAt(range.to).number
+    // Fence lines are hidden by the layout field.
+    if (fenced && first.from >= range.from) line(first.from).hidden = true
+    if (closed && last.from <= range.to) line(last.from).hidden = true
+    const texts = node.getChildren('CodeText')
+    let text = 0
     for (
       let number = Math.max(from, visibleFrom);
       number <= Math.min(to, visibleTo);
@@ -164,36 +278,41 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
       info.classes.push('hibi-lp-codeblock')
       if (number === from) info.classes.push('hibi-lp-codeblock-first')
       if (number === to) info.classes.push('hibi-lp-codeblock-last')
-      // Indented code shows its text without the four columns of indentation.
-      let start = current.from
-      if (!fenced) {
-        const indent = /^(?: {4}|\t| {1,3}\t)/.exec(current.text)
-        if (indent) {
-          start += indent[0].length
-          hideRange(current.from, start)
-        }
-      }
+      // The line's text starts at its code text: quote markers, list
+      // indentation and the four columns of indented code before it are hidden.
+      while (text < texts.length && texts[text]!.to <= current.from) text++
+      const next = texts[text]
+      const start =
+        next && next.from <= current.to
+          ? Math.max(next.from, current.from)
+          : current.to
+      info.code = start
       // Code text is smaller than the block's line box, as in a pre element.
       mark('hibi-lp-codetext', start, current.to)
     }
     // Nested code languages use the shared token classes.
-    const text = node.getChild('CodeText')
-    if (text)
-      highlightTree(
-        tree,
-        codeHighlighter,
-        (from, to, classes) => mark(classes, from, to),
-        Math.max(text.from, range.from),
-        Math.min(text.to, range.to),
-      )
+    for (const piece of texts)
+      if (piece.to > range.from && piece.from < range.to)
+        highlightTree(
+          tree,
+          codeHighlighter,
+          (from, to, classes) => mark(classes, from, to),
+          Math.max(piece.from, range.from),
+          Math.min(piece.to, range.to),
+        )
   }
 
   for (const range of view.visibleRanges) {
     tree.iterate({
       from: range.from,
       to: range.to,
+      mode: IterMode.IgnoreMounts,
       enter(ref: SyntaxNodeRef) {
         const name = ref.name
+        if (ref.type.is('LeafBlock') && ref.from >= range.from) {
+          const info = line(doc.lineAt(ref.from).from)
+          if (info.leaf === null) info.leaf = ref.from
+        }
         const heading = /^(ATX|Setext)Heading(\d)$/.exec(name)
         if (heading) {
           eachLine(doc, ref.from, ref.to, range, (current) => {
@@ -202,8 +321,10 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
               heading[1] === 'Setext' &&
               current.to >= ref.to &&
               current.from > ref.from
-            )
+            ) {
+              line(current.from).hidden = true
               return
+            }
             line(current.from).classes.push(
               'hibi-lp-heading',
               `hibi-lp-h${heading[2]}`,
@@ -217,13 +338,12 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
             if (!parent?.name.startsWith('ATX')) return
             // The opening mark hides with its space, a closing mark with the space before it.
             if (ref.from === parent.from) {
-              // Indentation before the opening mark is hidden with it.
               const after = doc.sliceString(
                 ref.to,
                 Math.min(parent.to, ref.to + 1),
               )
               hideRange(
-                doc.lineAt(ref.from).from,
+                ref.from,
                 ref.to + (after === ' ' || after === '\t' ? 1 : 0),
               )
             } else {
@@ -295,6 +415,9 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
           case 'Entity':
             // Rendered by later formatted-view slices; shown as source text for now.
             return false
+          case 'HorizontalRule':
+            line(doc.lineAt(ref.from).from).hidden = true
+            return false
           case 'Escape':
             hideRange(ref.from, ref.from + 1)
             return
@@ -303,11 +426,10 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
               hideRange(ref.from, ref.from + 1)
             return
           case 'Blockquote':
+          case 'BulletList':
+          case 'OrderedList':
             eachLine(doc, ref.from, ref.to, range, (current) => {
-              quoteDepth.set(
-                current.from,
-                (quoteDepth.get(current.from) ?? 0) + 1,
-              )
+              line(current.from).containers.push(ref.node)
             })
             return
           case 'QuoteMark': {
@@ -315,38 +437,39 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
               ref.to,
               Math.min(doc.length, ref.to + 1),
             )
-            hideRange(
-              ref.from,
+            const info = line(doc.lineAt(ref.from).from)
+            info.quoteEnd = Math.max(
+              info.quoteEnd ?? 0,
               ref.to + (after === ' ' || after === '\t' ? 1 : 0),
             )
             return
           }
-          case 'ListItem': {
-            let depth = 0
-            for (let parent = ref.node.parent; parent; parent = parent.parent)
-              if (parent.name === 'BulletList' || parent.name === 'OrderedList')
-                depth++
+          case 'ListItem':
             eachLine(doc, ref.from, ref.to, range, (current) => {
-              items.set(current.from, { depth, item: ref.node })
+              line(current.from).item = ref.node
             })
             return
-          }
           case 'FencedCode':
           case 'CodeBlock':
             code(ref.node, range)
-            return false
+            // Quote markers inside the block are hidden with the line prefix.
+            return
         }
       },
     })
   }
-  for (const [at, depth] of quoteDepth) {
-    const info = line(at)
-    info.classes.push('hibi-lp-quote')
-    info.style.push(`--hibi-quote-depth: ${depth}`)
-  }
-  listLines(doc, items, line, hideRange)
   spacing(view, tree, line)
-  for (const [at, info] of lines)
+  const ordinals = new Map<number, number[]>()
+  for (const [at, info] of lines) {
+    const current = doc.lineAt(at)
+    containers(doc, at, info)
+    let prefix = info.quoteEnd ?? at
+    if (info.code !== null) prefix = info.code
+    else if (info.item) prefix = itemLine(doc, current, info, prefix, ordinals)
+    else if (info.leaf !== null) prefix = info.leaf
+    // Quote markers, list markers and indentation before the line's content.
+    if (!info.hidden) hideRange(at, Math.min(prefix, current.to))
+    if (info.gap) info.style.push(`padding-top: ${info.gap}px`)
     decorations.push(
       Decoration.line({
         attributes: {
@@ -355,176 +478,249 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
         },
       }).range(at),
     )
+  }
   return Decoration.set(decorations, true)
 }
 
-/** List lines: native list markers in the indentation, source markers hidden. */
-function listLines(
-  doc: Text,
-  items: Map<number, { depth: number; item: SyntaxNode }>,
-  line: (pos: number) => LineInfo,
-  hideRange: (from: number, to: number) => void,
-) {
-  const content = new Map<SyntaxNode, number>()
-  const numbers = new Map<SyntaxNode, number>()
-  for (const [at, { depth, item }] of items) {
-    const current = doc.lineAt(at)
-    const info = line(at)
-    info.classes.push('hibi-lp-list')
-    info.style.push(`--hibi-list-depth: ${depth}`)
-    const marker = item.getChild('ListMark')
-    if (marker && current.from <= item.from && item.from <= current.to) {
-      // The marker, its indentation and up to four following spaces are hidden.
-      const after = doc.sliceString(marker.to, current.to)
-      const gap = /^[ \t]{0,4}/.exec(after)?.[0].length ?? 0
-      const end =
-        marker.to +
-        (gap === after.length ? after.length : Math.max(Math.min(gap, 4), 0))
-      content.set(item, end - current.from)
-      hideRange(current.from, end)
-      info.classes.push('hibi-lp-list-item')
-      const list = item.parent
-      // Items sit 0.3em apart, and a nested list 0.3em below its parent's text.
-      if (item.prevSibling?.name === 'ListItem' || depth > 1)
-        info.style.push('padding-top: 0.3em')
-      if (list?.name === 'OrderedList') {
-        let index = numbers.get(item)
-        if (index === undefined) {
-          index = 0
-          for (
-            let sibling = item.prevSibling;
-            sibling;
-            sibling = sibling.prevSibling
-          )
-            if (sibling.name === 'ListItem') index++
-        }
-        const next = item.nextSibling
-        if (next?.name === 'ListItem') numbers.set(next, index + 1)
-        const first = list.getChild('ListItem')?.getChild('ListMark')
-        const start = first
-          ? Number.parseInt(doc.sliceString(first.from, first.to), 10)
-          : 1
-        info.classes.push('hibi-lp-list-ordered')
-        info.style.push(
-          `counter-set: list-item ${(Number.isFinite(start) ? start : 1) + index}`,
-        )
-      } else
-        info.style.push(
-          `list-style-type: ${['disc', 'circle', 'square'][Math.min(depth, 3) - 1]}`,
-        )
-    } else {
-      // Continuation lines align with the item's content.
-      const column = content.get(item) ?? 2
-      const indent = /^[ \t]*/.exec(current.text)?.[0].length ?? 0
-      hideRange(current.from, current.from + Math.min(indent, column))
-    }
+/**
+ * Quotes and lists indent a line by their widths: a quote's 20px padding and
+ * 1px bar, a list's 1.5em. Bars are drawn in the indentation; a quote's bar
+ * starts below the space above its first line, which lies outside it.
+ */
+function containers(doc: Text, at: number, info: LineInfo) {
+  if (!info.containers.length) return
+  const widths: string[] = []
+  const bars: string[] = []
+  for (const container of info.containers) {
+    const left = widths.length ? `calc(${widths.join(' + ')})` : '0px'
+    if (container.name === 'Blockquote') {
+      const top = doc.lineAt(container.from).from === at ? info.gap : 0
+      bars.push(
+        `linear-gradient(var(--border), var(--border)) ${left} ${top}px / 1px calc(100% - ${top}px) no-repeat`,
+      )
+      widths.push('21px')
+    } else widths.push('1.5 * var(--text-editor)')
+  }
+  info.classes.push('hibi-lp-nested')
+  info.style.push(`--hibi-indent: calc(${widths.join(' + ')})`)
+  if (bars.length) {
+    info.classes.push('hibi-lp-quote')
+    info.style.push(`--hibi-bars: ${bars.join(', ')}`)
   }
 }
 
-/** Collapsed margins between top-level blocks become blank-line heights or first-line padding. */
+/** List lines: native markers in the indentation, source markers and continuation indentation hidden. */
+function itemLine(
+  doc: Text,
+  current: ReturnType<Text['lineAt']>,
+  info: LineInfo,
+  prefix: number,
+  ordinals: Map<number, number[]>,
+) {
+  const item = info.item!
+  const depth = info.containers.filter(isList).length
+  const marker = item.getChild('ListMark')
+  if (!marker || item.from < current.from || item.from > current.to) {
+    // Continuation lines start at the item's content.
+    const indent = /^[ \t]*/.exec(doc.sliceString(prefix, current.to))![0]
+    return info.leaf ?? prefix + indent.length
+  }
+  info.classes.push('hibi-lp-list-item')
+  const list = item.parent!
+  if (list.name === 'OrderedList') {
+    const window = list.tree?.prop(listWindow)
+    const first = list.getChild('ListItem')?.getChild('ListMark')
+    const start =
+      window?.start ??
+      (first ? Number.parseInt(doc.sliceString(first.from, first.to), 10) : 1)
+    info.classes.push('hibi-lp-list-ordered')
+    info.style.push(
+      `counter-set: list-item ${(Number.isFinite(start) ? start : 1) + (window?.items ?? 0) + ordinal(list, item, ordinals)}`,
+    )
+  } else
+    info.style.push(
+      `list-style-type: ${['disc', 'circle', 'square'][Math.min(depth, 3) - 1]}`,
+    )
+  // The marker and up to four following spaces are hidden.
+  const after = doc.sliceString(marker.to, current.to)
+  const gap = /^[ \t]{0,4}/.exec(after)![0].length
+  return Math.max(
+    info.leaf ?? 0,
+    marker.to + (gap === after.length ? after.length : gap),
+  )
+}
+
+/**
+ * Collapsed margins between sibling blocks, at every level of quotes and
+ * lists near the visible ranges, become blank-line heights or first-line
+ * padding.
+ */
 function spacing(
   view: EditorView,
   tree: Tree,
   line: (pos: number) => LineInfo,
 ) {
   const doc = view.state.doc
-  for (const range of view.visibleRanges) {
-    const top = tree.topNode
-    let node: SyntaxNode | null = top.childBefore(range.from) ?? top.firstChild
-    if (node?.prevSibling) node = node.prevSibling
-    const blocks: SyntaxNode[] = []
-    for (; node && node.from <= range.to; node = node.nextSibling)
-      blocks.push(node)
-    const after = blocks.at(-1)?.nextSibling
-    if (after) blocks.push(after)
-    for (let index = 0; index < blocks.length; index++) {
-      const block = blocks[index]!
-      const previous = index ? blocks[index - 1]! : block.prevSibling
-      const start = doc.lineAt(block.from)
-      if (!previous) continue
-      const gap = Math.max(
-        blockSpace(previous.name).bottom,
-        blockSpace(block.name).top,
-      )
-      const end = doc.lineAt(previous.to)
-      if (end.number + 1 >= start.number) {
-        if (start.from >= range.from && start.from <= range.to)
-          line(start.from).style.push(`padding-top: ${gap}px`)
-        continue
-      }
-      for (let number = end.number + 1; number < start.number; number++) {
-        const blank = doc.line(number)
-        if (blank.from < range.from || blank.from > range.to) continue
-        const info = line(blank.from)
-        info.classes.push('hibi-lp-gap')
-        const height = number === end.number + 1 ? gap : 28
-        info.style.push(`height: ${height}px`, `line-height: ${height}px`)
-      }
+  const place = (
+    previous: SyntaxNode,
+    block: SyntaxNode,
+    range: { from: number; to: number },
+  ) => {
+    const gap = Math.max(bottomMargin(previous), topMargin(block))
+    const start = doc.lineAt(block.from),
+      end = doc.lineAt(previous.to)
+    if (end.number + 1 >= start.number) {
+      if (start.from >= range.from && start.from <= range.to)
+        line(start.from).gap = gap
+      return
+    }
+    for (let number = end.number + 1; number < start.number; number++) {
+      const blank = doc.line(number)
+      if (blank.from < range.from || blank.from > range.to) continue
+      const info = line(blank.from)
+      info.classes.push('hibi-lp-gap')
+      const height = number === end.number + 1 ? gap : 28
+      info.style.push(`height: ${height}px`, `line-height: ${height}px`)
     }
   }
+  const visit = (parent: SyntaxNode, range: { from: number; to: number }) => {
+    let node = parent.childBefore(range.from + 1)
+    while (node && !isBlock(node)) node = node.prevSibling
+    if (!node) node = blockChild(parent, false)
+    if (!node) return
+    const before = blockSibling(node, false)
+    if (before) node = before
+    for (
+      let previous: SyntaxNode | null = null;
+      node;
+      node = blockSibling(node, true)
+    ) {
+      if (previous) place(previous, node, range)
+      if (isContainer(node) && node.to >= range.from && node.from <= range.to)
+        visit(node, range)
+      if (node.from > range.to) break
+      previous = node
+    }
+  }
+  for (const range of view.visibleRanges) visit(tree.topNode, range)
 }
 
 /** Layout decorations for one parsed chunk, relative to the chunk start. */
-function chunkLayout(doc: Text, tree: Tree, from: number, to: number) {
+function chunkLayout(
+  doc: Text,
+  tree: Tree,
+  from: number,
+  covered: readonly { from: number; to: number }[],
+) {
   const out: Range<Decoration>[] = []
-  const softBreaks = (node: SyntaxNode, start: number, end: number) => {
-    const hard = new Set(
-      node.getChildren('HardBreak').map((child) => doc.lineAt(child.from).to),
-    )
-    for (
-      let current = doc.lineAt(start);
-      current.to < end;
-      current = doc.line(current.number + 1)
-    )
-      if (!hard.has(current.to))
-        out.push(space.range(current.to - from, current.to + 1 - from))
-  }
-  tree.iterate({
-    from,
-    to,
-    enter(ref) {
-      if (ref.to <= from || ref.from >= to) return false
-      switch (ref.name) {
-        case 'FencedCode': {
-          const first = doc.lineAt(ref.from)
-          out.push(hiddenLine.range(first.from - from, first.to - from))
-          const closing = ref.node.lastChild
-          const last = doc.lineAt(ref.to)
-          if (
-            closing?.name === 'CodeMark' &&
-            closing.from >= last.from &&
-            last.number > first.number
-          )
-            out.push(hiddenLine.range(last.from - from, last.to - from))
-          return false
-        }
-        case 'HorizontalRule': {
-          const current = doc.lineAt(ref.from)
-          out.push(rule.range(current.from - from, current.to - from))
-          return false
-        }
-        case 'SetextHeading1':
-        case 'SetextHeading2': {
-          const last = doc.lineAt(ref.to)
-          if (last.from > ref.from) {
-            out.push(hiddenLine.range(last.from - from, last.to - from))
-            softBreaks(ref.node, ref.from, last.from - 1)
+  for (const range of covered) {
+    /** The leaf block whose line breaks flow as spaces, except hard breaks and hidden link destinations. */
+    let leaf: {
+      from: number
+      to: number
+      hard: Set<number>
+      hidden: { from: number; to: number }[]
+    } | null = null
+    const starts = (pos: number) => pos >= range.from && pos < range.to
+    tree.iterate({
+      from: range.from,
+      to: range.to,
+      mode: IterMode.IgnoreMounts,
+      enter(ref) {
+        if (ref.to <= range.from || ref.from >= range.to) return false
+        switch (ref.name) {
+          case 'FencedCode': {
+            const first = doc.lineAt(ref.from)
+            if (starts(first.from))
+              out.push(hiddenLine.range(first.from - from, first.to - from))
+            const closing = ref.node.lastChild
+            const last = doc.lineAt(ref.to)
+            if (
+              closing?.name === 'CodeMark' &&
+              closing.from >= last.from &&
+              last.number > first.number &&
+              starts(last.from)
+            )
+              out.push(hiddenLine.range(last.from - from, last.to - from))
+            return false
           }
-          return false
+          case 'HorizontalRule': {
+            const current = doc.lineAt(ref.from)
+            if (starts(current.from))
+              out.push(rule.range(current.from - from, current.to - from))
+            return false
+          }
+          case 'SetextHeading1':
+          case 'SetextHeading2': {
+            const last = doc.lineAt(ref.to)
+            if (last.from <= ref.from) return false
+            if (starts(last.from))
+              out.push(hiddenLine.range(last.from - from, last.to - from))
+            leaf = {
+              from: ref.from,
+              to: last.from - 1,
+              hard: new Set(),
+              hidden: [],
+            }
+            return
+          }
+          case 'Paragraph':
+            leaf = { from: ref.from, to: ref.to, hard: new Set(), hidden: [] }
+            return
+          case 'HardBreak':
+            leaf?.hard.add(doc.lineAt(ref.from).to)
+            return false
+          case 'Link': {
+            const close = ref.node
+              .getChildren('LinkMark')
+              .find((mark) => doc.sliceString(mark.from, mark.to) === ']')
+            // A destination on later lines is hidden with its line breaks.
+            if (
+              leaf &&
+              close &&
+              doc.sliceString(close.to, close.to + 1) === '(' &&
+              doc.lineAt(close.from).number !== doc.lineAt(ref.to).number
+            ) {
+              leaf.hidden.push({ from: close.from, to: ref.to })
+              if (starts(close.from))
+                out.push(hide.range(close.from - from, ref.to - from))
+            }
+            return
+          }
+          case 'CodeBlock':
+          case 'HTMLBlock':
+          case 'CommentBlock':
+          case 'ProcessingInstructionBlock':
+          case 'Table':
+          case 'LinkReference':
+            return false
         }
-        case 'Paragraph':
-          softBreaks(ref.node, ref.from, ref.to)
-          return false
-        case 'CodeBlock':
-        case 'HTMLBlock':
-        case 'CommentBlock':
-        case 'ProcessingInstructionBlock':
-        case 'Table':
-        case 'LinkReference':
-          return false
-      }
-    },
-  })
+      },
+      leave(ref) {
+        if (
+          !leaf ||
+          (ref.name !== 'Paragraph' && !ref.name.startsWith('SetextHeading'))
+        )
+          return
+        const { hard, hidden } = leaf
+        const a = Math.max(leaf.from, range.from),
+          b = Math.min(leaf.to, range.to)
+        for (
+          let current = doc.lineAt(a);
+          current.to < b;
+          current = doc.line(current.number + 1)
+        )
+          if (
+            !hard.has(current.to) &&
+            !hidden.some(
+              (link) => link.from <= current.to && current.to < link.to,
+            )
+          )
+            out.push(space.range(current.to - from, current.to + 1 - from))
+        leaf = null
+      },
+    })
+  }
   return out
 }
 
@@ -532,10 +728,10 @@ function chunkLayout(doc: Text, tree: Tree, from: number, to: number) {
 const chunkCache = new WeakMap<Tree, Range<Decoration>[]>()
 function layoutDecorations(state: EditorState, tree: Tree): DecorationSet {
   const out: Range<Decoration>[] = []
-  for (const { from, chunk } of parsedChunks(tree)) {
+  for (const { from, chunk, covered } of parsedChunks(tree)) {
     let ranges = chunkCache.get(chunk)
     if (!ranges) {
-      ranges = chunkLayout(state.doc, tree, from, from + chunk.length)
+      ranges = chunkLayout(state.doc, tree, from, covered)
       chunkCache.set(chunk, ranges)
     }
     for (const range of ranges)

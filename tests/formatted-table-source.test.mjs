@@ -7,6 +7,7 @@ import {
   alignments,
   cellContent,
   parseRow,
+  planInline,
   rowStart,
 } from '../src/renderer/src/formatted/table-source.ts'
 
@@ -114,6 +115,8 @@ test('rows in quotes start after their quote markers', () => {
   assert.equal(rowStart('> | a |', 1), 2)
   assert.equal(rowStart('> > | a |', 2), 4)
   assert.equal(rowStart('  >| a |', 1), 3)
+  // A quote in a list item comes after the item's indentation.
+  assert.equal(rowStart('    > | a |', 1), 6)
   assert.equal(rowStart('| a |', 0), 0)
 })
 
@@ -179,4 +182,66 @@ test('ragged and malformed giant tables parse in linear time and bounded edits',
     },
   })
   assert.equal(tables, 1)
+})
+
+test('cell decorations nest as spans in one sweep, linear in their number', () => {
+  const ops = planInline(
+    12,
+    [
+      { from: 0, to: 12, attributes: { class: 'link' } },
+      { from: 2, to: 6, attributes: { class: 'strong' } },
+    ],
+    [
+      { from: 2, to: 4, widget: null },
+      { from: 8, to: 9, widget: 'br' },
+    ],
+    [{ at: 6, widget: 'mark', side: 1 }],
+  )
+  assert.deepEqual(
+    ops.map((op) =>
+      op.type === 'open'
+        ? `<${op.mark.attributes.class}>`
+        : op.type === 'close'
+          ? '</>'
+          : op.type === 'text'
+            ? `${op.from}-${op.to}`
+            : `[${op.widget}]`,
+    ),
+    [
+      '<link>',
+      '0-2',
+      '<strong>',
+      '4-6',
+      '</>',
+      '[mark]',
+      '6-8',
+      '[br]',
+      '9-12',
+      '</>',
+    ],
+  )
+  // Count property reads of `n` emphasis spans with hidden markers.
+  const reads = (n) => {
+    let count = 0
+    const counted = (range) =>
+      new Proxy(range, {
+        get(target, key) {
+          count++
+          return target[key]
+        },
+      })
+    const marks = [],
+      hidden = []
+    for (let i = 0; i < n; i++) {
+      marks.push(counted({ from: i * 4, to: i * 4 + 3, attributes: {} }))
+      hidden.push(counted({ from: i * 4, to: i * 4 + 1, widget: null }))
+      hidden.push(counted({ from: i * 4 + 2, to: i * 4 + 3, widget: null }))
+    }
+    planInline(n * 4, marks, hidden, [])
+    return count
+  }
+  const small = reads(128),
+    large = reads(1024)
+  // Quadratic scans read 64 times as much for 8 times the spans.
+  assert.ok(large < small * 12, `${small} → ${large}`)
 })

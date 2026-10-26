@@ -79,8 +79,8 @@ before(
         outDir: bundle,
         assetsInlineLimit: 0,
         lib: {
-          entry: resolve('tests/fixtures/live-preview.ts'),
-          name: 'LivePreviewHarness',
+          entry: resolve('tests/fixtures/formatted-tables.ts'),
+          name: 'TablesHarness',
           formats: ['iife'],
           fileName: () => 'harness.js',
           cssFileName: 'harness',
@@ -136,7 +136,10 @@ before(
     )
     harness = await next
     harness.setDefaultTimeout(10000)
-    await harness.waitForFunction(() => Boolean(window.livePreview))
+    await harness.waitForFunction(() => Boolean(window.tables))
+    // Hidden windows have no focus; keys and markers need a focused editor.
+    const focus = await harness.context().newCDPSession(harness)
+    await focus.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   },
   { timeout: 90000 },
 )
@@ -235,10 +238,10 @@ test('tables in the formatted view match the rich view in light and dark', {
     const box = element.getBoundingClientRect()
     return { width: box.width, height: box.height }
   })
-  await harness.evaluate(
-    ({ doc, pane }) => window.livePreview.mount(doc, pane),
-    { doc: note, pane },
-  )
+  await harness.evaluate(({ doc, pane }) => window.tables.mount(doc, pane), {
+    doc: note,
+    pane,
+  })
   for (const id of ['hibi-light', 'hibi-dark']) {
     const scheme = palette(id)
     await applyPalette(page, scheme)
@@ -296,7 +299,7 @@ test('a 10,000-row table renders the rows in view and one row per edit', {
   timeout: 120000,
 }, async () => {
   const result = await harness.evaluate(async () => {
-    const preview = window.livePreview
+    const preview = window.tables
     const rows = Array.from(
       { length: 10000 },
       (_, i) => `| row ${i} | **bold ${i}** | \`code ${i}\` |`,
@@ -366,6 +369,117 @@ test('a 10,000-row table renders the rows in view and one row per edit', {
   // lines and scans a bounded window, not the 380 KB table.
   assert.ok(result.probe.parsedUnits < 4096, JSON.stringify(result.probe))
   assert.ok(result.probe.scannedUnits <= 16384, JSON.stringify(result.probe))
+})
+
+/** Mount `doc` in the editable harness. */
+const mount = (doc) =>
+  harness.evaluate(
+    (doc) =>
+      window.tables.mount(
+        doc,
+        { width: 1000, height: 800 },
+        { editable: true },
+      ),
+    doc,
+  )
+
+test('container markers stay out of the cells of tables in lists and quotes', {
+  timeout: 30000,
+}, async () => {
+  for (const doc of [
+    '- | a | b |\n  | - | - |\n  | c | d |',
+    '> - | a | b |\n>   | - | - |\n>   | c | d |',
+    '- outer\n  - item\n\n    > | a | b |\n    > | - | - |\n    > | c | d |',
+  ]) {
+    await mount(doc)
+    const rows = await harness.evaluate(() =>
+      [...document.querySelectorAll('.hibi-lp-table tr')].map((row) =>
+        [...row.cells].map((cell) => cell.innerText.trim()),
+      ),
+    )
+    assert.deepEqual(
+      rows,
+      [
+        ['a', 'b'],
+        ['c', 'd'],
+      ],
+      doc,
+    )
+  }
+})
+
+test('arrow keys move into the nearest row of an adjacent table and shift-click extends the selection', {
+  timeout: 30000,
+}, async () => {
+  const doc = 'before\n\n| a | b |\n| --- | --- |\n| x | y |\n\nafter'
+  const caret = () =>
+    harness.evaluate(() => {
+      const view = window.tables.view()
+      const { anchor, head } = view.state.selection.main
+      return { anchor, head, line: view.state.doc.lineAt(head).text }
+    })
+  await mount(doc)
+  await harness.evaluate(() => {
+    const view = window.tables.view()
+    view.focus()
+    view.dispatch({ selection: { anchor: 6 } })
+  })
+  // The caret stops on the gap line, then moves into the header row.
+  await harness.keyboard.press('ArrowDown')
+  assert.equal((await caret()).line, '')
+  await harness.keyboard.press('ArrowDown')
+  assert.equal((await caret()).line, '| a | b |')
+  // The source shows while the caret is in it.
+  await harness.locator('.cm-line', { hasText: '| a | b |' }).waitFor()
+  await harness.evaluate(
+    (at) => window.tables.view().dispatch({ selection: { anchor: at } }),
+    doc.length,
+  )
+  await harness.locator('.hibi-lp-table').waitFor()
+  await harness.keyboard.press('ArrowUp')
+  assert.equal((await caret()).line, '')
+  await harness.keyboard.press('ArrowUp')
+  assert.equal((await caret()).line, '| x | y |')
+  await harness.evaluate(() =>
+    window.tables.view().dispatch({ selection: { anchor: 1 } }),
+  )
+  await harness.locator('.hibi-lp-table td', { hasText: 'y' }).click({
+    modifiers: ['Shift'],
+  })
+  const selection = await caret()
+  assert.equal(selection.anchor, 1)
+  assert.equal(selection.line, '| x | y |')
+  assert.ok(selection.head > doc.indexOf('| x'))
+})
+
+test('cells show disabled syntax as written and follow syntax setting changes', {
+  timeout: 30000,
+}, async () => {
+  const cell = () =>
+    harness.evaluate(() => ({
+      text: document.querySelector('.hibi-lp-table td').innerText,
+      bold: document.querySelectorAll('.hibi-lp-table .hibi-lp-strong').length,
+      struck: document.querySelectorAll('.hibi-lp-table .hibi-lp-strike')
+        .length,
+    }))
+  await harness.evaluate(() => window.tables.setEnabled('core.bold', false))
+  await mount('**bold**\n\n| h |\n| - |\n| **bold** ~~gone~~ |\n\nafter')
+  assert.deepEqual(await cell(), {
+    text: '**bold** gone',
+    bold: 0,
+    struck: 1,
+  })
+  // A setting change renders the mounted table again.
+  await harness.evaluate(async () => {
+    window.tables.setEnabled('core.bold', true)
+    window.tables.setEnabled('markdown.strike', false)
+    await new Promise((done) => setTimeout(done, 50))
+    await window.tables.settle()
+  })
+  assert.deepEqual(await cell(), { text: 'bold ~~gone~~', bold: 1, struck: 0 })
+  await harness.evaluate(() =>
+    window.tables.setEnabled('markdown.strike', true),
+  )
 })
 
 test('clicking a cell reveals the table source with the caret in that cell', {

@@ -17,6 +17,7 @@ import {
   type FormattedDecorations,
   type FormattedNodeView,
   type FormattedRenderContext,
+  formattedLiteral,
   formattedMarkdown,
   formattedViews,
   showMarkdownMarkers,
@@ -24,7 +25,9 @@ import {
 import {
   alignments,
   cellContent,
+  type InlineMark,
   parseRow,
+  planInline,
   rowStart,
   type TableAlignment,
 } from './table-source.ts'
@@ -75,6 +78,18 @@ function namedViews(state: EditorState) {
   return found
 }
 
+/** Nodes of syntax settings that are off, per facet value. */
+const literals = new WeakMap<readonly string[], ReadonlySet<string>>()
+function literalNodes(state: EditorState) {
+  const names = state.facet(formattedLiteral)
+  let found = literals.get(names)
+  if (!found) {
+    found = new Set(names)
+    literals.set(names, found)
+  }
+  return found
+}
+
 class BreakWidget extends WidgetType {
   override eq() {
     return true
@@ -93,8 +108,7 @@ const textStarts = new WeakMap<Node, number>()
  * text it does not reveal, from its own rendering and contributed views.
  */
 function renderInline(view: EditorView, text: string, into: HTMLElement) {
-  type Mark = { from: number; to: number; attributes: Record<string, string> }
-  const marks: Mark[] = [],
+  const marks: InlineMark[] = [],
     hidden: { from: number; to: number; widget: WidgetType | null }[] = [],
     widgets: { at: number; widget: WidgetType; side: number }[] = []
   const out: FormattedDecorations = {
@@ -115,11 +129,14 @@ function renderInline(view: EditorView, text: string, into: HTMLElement) {
   const style = (name: string, from: number, to: number) =>
     out.mark(from, to, { class: name })
   const views = namedViews(view.state)
+  const literal = literalNodes(view.state)
   let context: FormattedRenderContext | null = null
   cellParser(view.state)
     .parse(text)
     .iterate({
       enter(node) {
+        // Syntax whose setting is off shows as written, its children too.
+        if (literal.has(node.name)) return false
         let skip = false
         for (const nodeView of views.get(node.name) ?? []) {
           context ??= {
@@ -213,80 +230,56 @@ function renderInline(view: EditorView, text: string, into: HTMLElement) {
   }
 
   // Text between decoration boundaries, inside spans for the marks over it.
-  const points = new Set([0, text.length])
-  for (const range of [...marks, ...hidden]) {
-    points.add(range.from)
-    points.add(range.to)
-  }
-  for (const { at } of widgets) points.add(at)
-  const sorted = [...points]
-    .filter((point) => point >= 0 && point <= text.length)
-    .sort((a, b) => a - b)
-  const open: { mark: Mark; element: HTMLElement }[] = []
-  const parent = () => open.at(-1)?.element ?? into
-  /** Close marks that do not cover `from`-`to` and open the ones that do. */
-  const enter = (from: number, to: number) => {
-    const wanted = marks
-      .filter((mark) => mark.from <= from && mark.to >= to)
-      .sort((a, b) => a.from - b.from || b.to - a.to)
-    let keep = 0
-    while (
-      keep < open.length &&
-      keep < wanted.length &&
-      open[keep]!.mark === wanted[keep]
-    )
-      keep++
-    open.length = keep
-    for (const mark of wanted.slice(keep)) {
+  const parents: HTMLElement[] = [into]
+  for (const op of planInline(text.length, marks, hidden, widgets)) {
+    const parent = parents.at(-1)!
+    if (op.type === 'open') {
       const element = document.createElement('span')
-      for (const [key, value] of Object.entries(mark.attributes))
+      for (const [key, value] of Object.entries(op.mark.attributes))
         element.setAttribute(key, value)
-      parent().append(element)
-      open.push({ mark, element })
+      parent.append(element)
+      parents.push(element)
+    } else if (op.type === 'close') parents.pop()
+    else if (op.type === 'widget') parent.append(op.widget.toDOM(view))
+    else {
+      const node = document.createTextNode(text.slice(op.from, op.to))
+      textStarts.set(node, op.from)
+      parent.append(node)
     }
-  }
-  for (let index = 0; index < sorted.length; index++) {
-    const at = sorted[index]!,
-      next = sorted[index + 1]
-    for (const widget of widgets
-      .filter((widget) => widget.at === at)
-      .sort((a, b) => a.side - b.side)) {
-      enter(at, at)
-      parent().append(widget.widget.toDOM(view))
-    }
-    if (next === undefined) break
-    const gap = hidden.find((range) => range.from <= at && range.to >= next)
-    if (gap) {
-      if (gap.widget && gap.from === at) {
-        enter(at, at)
-        parent().append(gap.widget.toDOM(view))
-      }
-      continue
-    }
-    enter(at, next)
-    const node = document.createTextNode(text.slice(at, next))
-    textStarts.set(node, at)
-    parent().append(node)
   }
 }
 
 type Line = { from: number; text: string }
 
+const sameConfig = (a: CellConfig, b: CellConfig) =>
+  a.markdown === b.markdown && a.views === b.views && a.literal === b.literal
+
+/** What cells render with: the formatted view's syntax, renderers and syntax that is off. */
+type CellConfig = {
+  markdown: readonly MarkdownConfig[]
+  views: readonly FormattedNodeView[]
+  literal: readonly string[]
+}
+
 /**
  * A table: lines `first` (header) to `first + rows + 1` of `doc`, replaced
- * from `from`. The text snapshot is enough to render; where the table is now
- * comes from the view.
+ * from `from` to `to`. The text snapshot is enough to render; where the
+ * table is now comes from the view.
  */
 class TableWidget extends WidgetType {
   constructor(
     readonly doc: Text,
     readonly from: number,
+    readonly to: number,
     readonly first: number,
+    /** Where the table starts on its first line, after container markers. */
+    readonly start: number,
     readonly rows: number,
-    /** Quotes around the table, whose markers start its lines. */
+    /** Quotes around the table, whose markers start its later lines. */
     readonly quotes: number,
     /** In a quote or list: an inline widget on the container's line. */
     readonly inline: boolean,
+    readonly config: CellConfig,
   ) {
     super()
   }
@@ -294,9 +287,9 @@ class TableWidget extends WidgetType {
     return (
       other.doc === this.doc &&
       other.from === this.from &&
-      other.rows === this.rows &&
-      other.quotes === this.quotes &&
-      other.inline === this.inline
+      other.to === this.to &&
+      other.inline === this.inline &&
+      sameConfig(other.config, this.config)
     )
   }
   override get estimatedHeight() {
@@ -308,7 +301,10 @@ class TableWidget extends WidgetType {
   }
   /** Cells of a table line, relative to its start. */
   cells(line: Line) {
-    const start = rowStart(line.text, this.quotes)
+    const start =
+      line.from === this.line(0).from
+        ? this.start
+        : rowStart(line.text, this.quotes)
     return parseRow(line.text.slice(start), start).cells
   }
   toDOM(view: EditorView) {
@@ -426,8 +422,15 @@ class TableView {
   }
 
   update(widget: TableWidget) {
+    const previous = this.widget
     this.widget = widget
     this.dom.classList.toggle('hibi-lp-table-inline', widget.inline)
+    if (!sameConfig(previous.config, widget.config)) {
+      // Other syntax or renderers: every cell renders again.
+      this.headText = ''
+      for (const row of this.rendered.values()) row.element.remove()
+      this.rendered.clear()
+    }
     const header = widget.line(0),
       delimiter = widget.line(1).text
     if (header.text !== this.headText || delimiter !== this.delimiterText) {
@@ -680,8 +683,29 @@ class TableView {
     }
     // The widget knows its text; where the table starts now comes from the view.
     const at = view.posAtDOM(this.dom) - widget.from + source.from + offset
-    view.dispatch({ selection: { anchor: at }, userEvent: 'select.pointer' })
+    view.dispatch({
+      selection: {
+        anchor: event.shiftKey ? view.state.selection.main.anchor : at,
+        head: at,
+      },
+      userEvent: 'select.pointer',
+    })
     view.focus()
+  }
+
+  /** Where the table is now: the range its widget replaces. */
+  range() {
+    const from = this.view.posAtDOM(this.dom)
+    return { from, to: from + this.widget.to - this.widget.from }
+  }
+
+  /** Where line `index` of the table starts now. */
+  lineStart(index: number) {
+    return this.range().from - this.widget.from + this.widget.line(index).from
+  }
+
+  get lines() {
+    return this.widget.rows + 2
   }
 
   destroy() {
@@ -707,6 +731,31 @@ const rowWindows = ViewPlugin.fromClass(
     },
   },
 )
+
+/**
+ * Up and down arrows move into an adjacent table's first or last source row
+ * instead of over it, which shows its source while markers are shown.
+ */
+function enterTable(view: EditorView, forward: boolean) {
+  const selection = view.state.selection.main
+  if (!selection.empty || !view.state.facet(showMarkdownMarkers)) return false
+  const target = view.moveVertically(selection, forward).head
+  for (const table of mounted.get(view) ?? []) {
+    const { from, to } = table.range()
+    const crosses = forward
+      ? selection.head < from && target >= from
+      : selection.head > to && target <= to
+    if (!crosses) continue
+    const anchor = table.lineStart(forward ? 0 : table.lines - 1)
+    view.dispatch({
+      selection: { anchor },
+      scrollIntoView: true,
+      userEvent: 'select',
+    })
+    return true
+  }
+  return false
+}
 
 /** GitHub tables: a table widget, or the source while the selection is in it. */
 export const contribution: FormattedContribution = {
@@ -741,16 +790,27 @@ export const contribution: FormattedContribution = {
           new TableWidget(
             state.doc,
             from,
+            to,
             first.number,
+            node.from - first.from,
             last.number - first.number - 1,
             quotes,
             inline,
+            {
+              markdown: state.facet(formattedMarkdown),
+              views: state.facet(formattedViews),
+              literal: state.facet(formattedLiteral),
+            },
           ),
           inline ? undefined : { block: true },
         )
         return false
       },
     },
+  ],
+  keys: [
+    { key: 'ArrowDown', run: (view) => enterTable(view, true) },
+    { key: 'ArrowUp', run: (view) => enterTable(view, false) },
   ],
   extension: rowWindows,
 }

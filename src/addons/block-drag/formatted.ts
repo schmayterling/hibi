@@ -11,6 +11,7 @@ import type { SyntaxNode, Tree } from '@lezer/common'
 import { uncovered } from '../../renderer/src/chunked-markdown.ts'
 import {
   type FormattedContribution,
+  formattedBlockEdges,
   formattedSyntaxTree,
 } from '../../renderer/src/formatted-contributions.ts'
 import type { MenuApi } from '../api'
@@ -562,20 +563,16 @@ function column(view: EditorView) {
   return {
     left: rect.left + Number.parseFloat(style.paddingLeft),
     right: rect.right - Number.parseFloat(style.paddingRight),
-    em: Number.parseFloat(style.fontSize),
   }
 }
 
-/**
- * A block's left edge: the quotes and items around it indent it, and an
- * item starts after its marker, like the rich view's list items.
- */
-function blockLeft(block: SyntaxNode, text: ReturnType<typeof column>) {
-  let left = text.left + (block.name === 'ListItem' ? 1.5 * text.em : 0)
-  for (let node = block.parent; node; node = node.parent)
-    if (node.name === 'Blockquote') left += 21
-    else if (node.name === 'ListItem') left += 1.5 * text.em
-  return left
+/** A block's drawn edge, including contributed container widths and controls. */
+function blockLeft(view: EditorView, block: SyntaxNode) {
+  const line = shownLine(view, block, false)
+  const edge = line?.querySelector(
+    `[data-hibi-block-edge="${block.from}:${block.name}"]`,
+  )
+  return (edge ?? line)?.getBoundingClientRect().left ?? column(view).left
 }
 
 /**
@@ -735,7 +732,7 @@ class BlockHandle {
     const inside = Math.min(Math.max(x, text.left + 5), text.right - 5)
     const pos = view.posAtCoords({ x: inside, y }, false)
     const node = handleTarget(tree, pos, (node) => {
-      if (inside < blockLeft(node, text) + 12) return true
+      if (inside < blockLeft(view, node) + 12) return true
       const box = blockBox(view, node)
       return !!box && y < box.top + 12
     })
@@ -756,7 +753,7 @@ class BlockHandle {
     if (!node || !box) return null
     const base = view.dom.getBoundingClientRect()
     return {
-      left: blockLeft(node, column(view)) - this.handle.offsetWidth - base.left,
+      left: blockLeft(view, node) - this.handle.offsetWidth - base.left,
       top: box.top - base.top,
     }
   }
@@ -892,7 +889,7 @@ class BlockHandle {
           ? (edge + (after ? other.top : other.bottom)) / 2
           : edge
         const base = view.dom.getBoundingClientRect()
-        const left = blockLeft(near, text)
+        const left = blockLeft(view, near)
         return {
           left: left - base.left,
           width: text.right - left,
@@ -958,6 +955,7 @@ export function blockDragContribution(
   return {
     id: 'block-drag.handle',
     extension: [
+      formattedBlockEdges.of(true),
       handles,
       EditorView.domEventObservers({
         focus(_, view) {

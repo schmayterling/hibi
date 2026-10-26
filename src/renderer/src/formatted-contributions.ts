@@ -164,6 +164,11 @@ export type FormattedContribution = {
 /** Markdown extensions of the active contributions, read by the formatted syntax. */
 export const formattedMarkdown = Facet.define<MarkdownConfig>()
 
+/** Block overlays opt into measuring the edges the container renderer draws. */
+export const formattedBlockEdges = Facet.define<boolean, boolean>({
+  combine: (values) => values.some(Boolean),
+})
+
 /** The view's active flavor ids also identify worker boundary configurations. */
 export const formattedFlavors = Facet.define<
   readonly string[],

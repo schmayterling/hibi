@@ -1,5 +1,4 @@
 import {
-  Annotation,
   EditorSelection,
   EditorState,
   StateField,
@@ -21,9 +20,6 @@ import { readFrontmatter } from '../../shared/frontmatter.ts'
 
 const opening = /^﻿?---[ \t]*$/
 const closing = /^(?:---|\.\.\.)[ \t]*$/
-
-/** Marks the properties editor's own frontmatter edits, which pass the protection. */
-export const propertiesEdit = Annotation.define<boolean>()
 
 type Frontmatter = {
   /** Line 1 opens frontmatter. */
@@ -157,15 +153,14 @@ function hide(state: EditorState): DecorationSet {
   return Decoration.set(hiddenDecoration.range(0, to))
 }
 
-/** Typing, deleting and dropping stop at the frontmatter; the properties editor, addons, history and other views pass. */
+/**
+ * Typing, deleting and dropping stop at the frontmatter. Addon edits, such
+ * as the properties editor's, pass; history and other views' edits do not
+ * run filters.
+ */
 const protect = EditorState.transactionFilter.of((transaction) => {
   const { end } = transaction.startState.field(frontmatterField)
-  if (
-    !end ||
-    transaction.annotation(propertiesEdit) ||
-    transaction.isUserEvent('input.addon')
-  )
-    return transaction
+  if (!end || transaction.isUserEvent('input.addon')) return transaction
   let inside = false
   transaction.changes.iterChangedRanges((fromA) => {
     if (fromA < end) inside = true

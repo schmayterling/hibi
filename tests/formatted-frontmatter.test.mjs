@@ -6,7 +6,6 @@ import {
   frontmatterField,
   frontmatterOf,
   frontmatterProbe,
-  propertiesEdit,
 } from '../src/addons/frontmatter/formatted.ts'
 
 const text = (doc) => Text.of(doc.split('\n'))
@@ -52,7 +51,7 @@ test('edits after the closing line read no lines; edits inside read only the fro
   frontmatterProbe.lines = 0
   state = state.update({
     changes: { from: 4, insert: 'date: 2026-10-26\n' },
-    annotations: propertiesEdit.of(true),
+    userEvent: 'input.addon',
   }).state
   assert.ok(frontmatterProbe.lines < 10, `${frontmatterProbe.lines}`)
   assert.equal(state.field(frontmatterField).end, hidden + 17)
@@ -118,22 +117,15 @@ test('typing, deleting and selecting all stop at the frontmatter', () => {
       .state.doc.length,
     doc.length,
   )
-  // The properties editor and addons edit it.
+  // Addon edits, such as the properties editor's, change it.
   assert.ok(
     state
       .update({
         changes: { from: 4, to: 9, insert: 'name' },
-        annotations: propertiesEdit.of(true),
+        userEvent: 'input.addon',
       })
       .state.doc.toString()
       .startsWith('---\nname: x'),
-  )
-  assert.equal(
-    state.update({
-      changes: { from: 4, insert: 'a: 1\n' },
-      userEvent: 'input.addon',
-    }).state.doc.lines,
-    6,
   )
   // Selections that reach into it end at the note's text.
   state = state.update({

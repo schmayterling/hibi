@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
-import { Marked } from 'marked'
+import { Lexer, Marked } from 'marked'
 import { readFrontmatter } from '../src/shared/frontmatter.ts'
 import { noteReferences } from '../src/shared/note-links.ts'
 import { noteHeadings } from '../src/shared/note-metadata.ts'
@@ -73,6 +73,24 @@ function scanWork(t, parse) {
   let work = 0
   const indexOf = String.prototype.indexOf
   const charCodeAt = String.prototype.charCodeAt
+  const exec = RegExp.prototype.exec
+  const highlightRule = /^==(\S(?:[^\r\n]*?\S)?)==/.source
+  const textRules = new Set([
+    Lexer.rules.inline.normal.text,
+    Lexer.rules.inline.gfm.text,
+  ])
+  RegExp.prototype.exec = function (source) {
+    const result = exec.call(this, source)
+    if (textRules.has(this)) work += result?.[0].length ?? 0
+    // Failed highlight matches with a valid first character inspect the line.
+    if (
+      this.source === highlightRule &&
+      source.startsWith('==') &&
+      /\S/.test(source[2] ?? '')
+    )
+      work += result ? result[0].length : source.length
+    return result
+  }
   const hint = t.mock.method(
     String.prototype,
     'indexOf',
@@ -93,6 +111,7 @@ function scanWork(t, parse) {
   } finally {
     hint.mock.restore()
     scan.mock.restore()
+    RegExp.prototype.exec = exec
   }
 }
 
@@ -133,8 +152,29 @@ for (const [name, fragment] of [
   })
 }
 
+test('failed highlight delimiters scan linearly at 16 and 64 KiB', (t) => {
+  let previous = 0
+  for (const bytes of [16 * 1024, 64 * 1024]) {
+    const source = '==a '.repeat(bytes / 4)
+    let lexed
+    const work = scanWork(t, () => {
+      lexed = noteLexer(source)
+    })
+    t.diagnostic(`${bytes} bytes: ${work} scan work`)
+    assert.ok(work <= bytes * 8, `${work} work / ${bytes} chars`)
+    if (previous) assert.ok(work <= previous * 4.1 + 16)
+    previous = work
+    assert.equal(lexed.tokens[0].tokens[0].text, source)
+    assert.deepEqual(noteReferences(source, defaultNoteSyntax, lexed), {
+      links: [],
+      wikilinks: [],
+    })
+    assert.deepEqual(noteTags(source, defaultNoteSyntax, lexed), [])
+  }
+})
+
 test('linear counter rejects the previous lexer on small dense and unclosed inputs', (t) => {
-  for (const fragment of ['[next](next.md) #tag ', '[']) {
+  for (const fragment of ['[next](next.md) #tag ', '[', '==a ']) {
     const source = fragment.repeat(1024)
     const work = scanWork(t, () => oldLexer(source, defaultNoteSyntax))
     assert.ok(work > source.length * 8, `${work} work / ${source.length} chars`)
@@ -156,6 +196,20 @@ test('small generated fixtures match previous tokens, links, tags, and headings'
     '![',
     '==#highlight [hidden](file.md)== ',
     '== not highlight == ',
+    '==a ',
+    '==b== ',
+    '===',
+    '=====',
+    '==a==b== ',
+    '==a\t==b== ',
+    '==\u00a0x== ',
+    '==x\u2028y== ',
+    '==x\u2029== ',
+    '[==a ==b ](next.md) ',
+    '**==nested ==failed** ',
+    '==a\r\n==b== ',
+    '==a\n==b== ',
+    '==a\r==b== ',
     '**#bold** ',
     '*_nested_* ',
     '~~#strike~~ ',
@@ -180,6 +234,11 @@ test('small generated fixtures match previous tokens, links, tags, and headings'
     '> [[bad **bold** [text](a.md) [[good]]\n> # Heading',
     '| [[a]] | #table |\n| --- | --- |\n| ![[b]] | [c](c.md) |',
   ]
+  // Exhaust short equals runs and whitespace edges against the native regex.
+  const edges = ['=', 'a', ' ', '\t', '\n', '\r', '\u00a0', '\u2028', '\u2029']
+  for (const first of edges)
+    for (const middle of edges)
+      for (const last of edges) fixtures.push(`==${first}${middle}${last}==a==`)
   for (let i = 0; i < 300; i++) {
     let body = ''
     for (let j = 0; j < 12; j++) body += fragments[random(fragments.length)]

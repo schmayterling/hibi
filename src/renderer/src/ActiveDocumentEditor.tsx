@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import type { AddonManifest, MarkdownFlavor } from '../../addons/api'
+import { builtInFlavors } from '../../shared/built-in-grammar'
 import type { ViewId } from '../../shared/foundation-contracts'
 import { needsOwnedSource } from '../../shared/preservation'
 import { addonRegistry } from './addon-registry'
@@ -65,17 +66,13 @@ export function ActiveDocumentEditor({
     [knownFlavors, chosenFlavors],
   )
   // The strict proof permits only letters/digits/spaces in the changed paragraph.
-  // These built-in detectors require punctuation; arbitrary addon markers do not.
+  // Built-in grammar detectors require punctuation; arbitrary addon markers do not.
   const certifiedVisual =
     !manifests.some((manifest) => manifest.syntax?.length) &&
     protectionFlavors.every(
       (flavor) =>
         addonRegistry.origin(flavor.addonId) === 'built-in' &&
-        ((flavor.addonId === 'math' && flavor.id === 'math.latex') ||
-          (flavor.addonId === 'markdown' &&
-            ['markdown.github', 'markdown.obsidian'].includes(flavor.id)) ||
-          (flavor.addonId === 'text-extras' &&
-            flavor.id === 'text-extras.text-extras')),
+        builtInFlavors.get(flavor.id)?.owner === flavor.addonId,
     )
   const syntaxVersion = useSyncExternalStore(
     markdownSyntax.subscribe,

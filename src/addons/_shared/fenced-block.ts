@@ -12,10 +12,6 @@ export function fencedBlock(language: string, type: string) {
     return { type, raw: token.raw, source: token.text }
   }
 }
-/** Marked already ends a paragraph at a fence line, where the block is tried
- * next. A search here would read the rest of the note for every paragraph, and
- * could split a line such as x```mermaid. */
-export const fencedBlockStart = () => -1
 export function fenceSource(language: string, source: string) {
   const ticks = '`'.repeat(
     Math.max(

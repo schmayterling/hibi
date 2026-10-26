@@ -35,7 +35,7 @@ const flavors = [
     export: { extensions: [obsidianMarkdown] },
   },
   {
-    id: 'github-markdown.github',
+    id: 'markdown.github',
     markedOptions: { gfm: true },
     richExtensions: [
       GithubAlert,

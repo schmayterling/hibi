@@ -106,7 +106,7 @@ import { DocumentWorkerService } from './src/shared/document-worker-service.ts'
 
 const syntax = {gfm:true,alerts:true,textExtras:true}
 const flavors = [
-  {id:'github-markdown.github',markedOptions:{gfm:true},
+  {id:'markdown.github',markedOptions:{gfm:true},
    richExtensions:[GithubAlert,Strike,TableKit.configure({table:{resizable:false}}),TaskList,TaskItem.configure({nested:true})],
    export:{extensions:[alertMarkdown]}},
   {id:'text-extras.text-extras',richExtensions:[Subscript,Subtext],export:{extensions:[textExtrasMarkdown]}},

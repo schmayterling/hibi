@@ -97,3 +97,44 @@ test('behind the switch, notes open in the codemirror formatted view and edit th
   await saved('includes', '- **two**')
   await page.locator('.rich-pane .hibi-lp-strong', { hasText: 'two' }).waitFor()
 })
+
+test('behind the switch, frontmatter properties above the formatted view edit the note', {
+  timeout: 90000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-properties-'))
+  const file = join(folder, 'notes', 'note.md')
+  await mkdir(join(folder, 'notes'))
+  await writeFile(file, '---\ntitle: One\n---\n\n# Title\n\nBody text.\n')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  const page = await app.firstWindow()
+  await waitForDocumentEditor(app, page)
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+  }, file)
+  await pressShortcut(app, `${mod}+o`)
+  await page.locator('.rich-pane .hibi-lp-h1', { hasText: 'Title' }).waitFor()
+  const properties = page.locator('.rich-pane .frontmatter')
+  await properties.waitFor()
+  await properties.locator('.frontmatter-yaml-toggle').click()
+  await properties.getByLabel('Frontmatter YAML').fill('title: Two\n')
+  await properties.getByRole('button', { name: 'Apply YAML' }).click()
+  // One minimal edit of the source; the rest of the note is untouched.
+  await waitForAsync(page, async () => {
+    const { markdown } = await window.hibi.getDocument()
+    return markdown === '---\ntitle: Two\n---\n\n# Title\n\nBody text.\n'
+  })
+})

@@ -1,3 +1,4 @@
+import { isolateHistory } from '@codemirror/commands'
 import {
   lazy,
   Suspense,
@@ -8,6 +9,7 @@ import {
   useSyncExternalStore,
 } from 'react'
 import type { SourceExtension } from '../../addons/api'
+import { sourceChange } from '../../shared/document-journal'
 import type { ViewId } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import { documentRuntime } from './document-runtime'
@@ -55,6 +57,7 @@ export function MarkdownEditor({
   showMarkdownMarkers,
   flavors,
   documentRevision,
+  value,
   onAttach,
   onLink,
   onOutline,
@@ -171,6 +174,32 @@ export function MarkdownEditor({
     view.dispatch({ selection: { anchor: view.state.doc.length } })
     view.focus()
   }, [autoFocus, formattedReady, paneMode, content])
+  /**
+   * Properties editors above the text return the whole source, as in the
+   * rich editor; their change goes to the formatted view as one minimal edit
+   * that addon protections let through and undo takes back alone.
+   */
+  const editSource = (markdown: string) => {
+    const element = content.current?.querySelector<HTMLElement>(
+      '.rich-pane .cm-content',
+    )
+    const view = element && sourceView(element)
+    const change = sourceChange(value, markdown)
+    // A change to text edited since the properties rendered is dropped.
+    if (
+      !view ||
+      !change ||
+      change.to > view.state.doc.length ||
+      view.state.sliceDoc(change.from, change.to) !==
+        value.slice(change.from, change.to)
+    )
+      return
+    view.dispatch({
+      changes: change,
+      userEvent: 'input.addon',
+      annotations: isolateHistory.of('full'),
+    })
+  }
   const ready =
     (paneMode === 'markdown' || formattedReady) &&
     (paneMode === 'normal' || sourceReady)
@@ -224,6 +253,17 @@ export function MarkdownEditor({
             aria-hidden={paneMode === 'markdown'}
             inert={paneMode === 'markdown'}
           >
+            {markdownDocument &&
+              markdownExtensions.map(({ id, Editor }) =>
+                Editor ? (
+                  <Editor
+                    key={id}
+                    value={value}
+                    disabled={disabled}
+                    onChange={editSource}
+                  />
+                ) : null,
+              )}
             <div className="rich-editor-host">
               <SourceEditor
                 presentation="formatted"

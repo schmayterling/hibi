@@ -87,6 +87,7 @@ import {
 import type { ViewMode } from './Editor'
 import { EditorToolbar } from './EditorToolbar'
 import { isEditorCommandTargetCurrent } from './editor-command-targets'
+import { focusEditor } from './editor-focus'
 import { setEditorCommandMenu } from './editor-interaction-presence'
 import { editorPreferences, useEditorPreference } from './editor-preferences'
 import { FlavorPicker } from './FlavorPicker'
@@ -1120,13 +1121,7 @@ function App() {
       !(active instanceof HTMLElement && active.closest('.settings-screen'))
     )
       return
-    window.document
-      .querySelector<HTMLElement>(
-        mode === 'markdown'
-          ? '.editor-surface:not([inert]) .cm-content'
-          : '.editor-surface:not([inert]) .tiptap',
-      )
-      ?.focus()
+    focusEditor(mode === 'markdown' ? 'source' : 'rich')
   }, [settingsOpen, mode])
   const sidebarViews = [
     ...builtInViews,
@@ -1341,12 +1336,7 @@ function App() {
   openUpdates.current = () => openSetting('hibi', 'install-update')
 
   function startWriting() {
-    const focus = () =>
-      window.document
-        .querySelector<HTMLElement>(
-          mode === 'normal' ? '.tiptap' : '.cm-content',
-        )
-        ?.focus()
+    const focus = () => focusEditor(mode === 'normal' ? 'rich' : 'source')
     // Wait for a closing dialog to restore focus before moving it to the editor.
     if (!showWelcome) requestAnimationFrame(focus)
     else
@@ -1827,11 +1817,9 @@ function App() {
       }
       if (next.tabs.length === 0)
         requestAnimationFrame(() =>
-          window.document
-            .querySelector<HTMLElement>(
-              mode === 'normal' ? '.tiptap' : '.cm-content',
-            )
-            ?.focus({ preventScroll: true }),
+          focusEditor(mode === 'normal' ? 'rich' : 'source', {
+            preventScroll: true,
+          }),
         )
     } catch (error) {
       setError(
@@ -2279,11 +2267,7 @@ function App() {
         setSettingsOpen(false)
         showTitlebar()
         requestAnimationFrame(() =>
-          window.document
-            .querySelector<HTMLElement>(
-              mode === 'normal' ? '.tiptap' : '.cm-content',
-            )
-            ?.focus(),
+          focusEditor(mode === 'normal' ? 'rich' : 'source'),
         )
         break
       case 'install-addon':

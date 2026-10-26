@@ -102,6 +102,18 @@ export function formattedSyntaxTree(state: EditorState): Tree | null {
  */
 export const formattedRefresh = StateEffect.define<null>()
 
+/**
+ * State other than syntax that renderers read, such as the footnote labels
+ * references resolve against. Renderers that keep their output, like table
+ * cells, render again when it changes.
+ */
+export const formattedRenderInputs = Facet.define<unknown>()
+
+/** The formatted view's state, in the state a renderer gets for text drawn apart from it, such as a table cell's. */
+export const formattedOwner = Facet.define<EditorState, EditorState | null>({
+  combine: (values) => values[0] ?? null,
+})
+
 /** Show the Markdown markers of the formatted text under the selection. */
 export const showMarkdownMarkers = Facet.define<boolean, boolean>({
   combine: (values) => values.at(-1) ?? true,
@@ -154,6 +166,17 @@ function load(entry: FormattedEntry) {
   }, failed)
 }
 
+/** Core features' nodes, kept here rather than in the startup syntax list. */
+const coreNodes: Partial<Record<string, readonly string[]>> = {
+  'core.images': ['Image'],
+  'core.html-blocks': [
+    'HTMLBlock',
+    'CommentBlock',
+    'ProcessingInstructionBlock',
+  ],
+  'core.inline-html': ['HTMLTag', 'Comment', 'ProcessingInstruction'],
+}
+
 export const formattedContributions = {
   /** Changes when registered or loaded contributions or the syntax settings they follow change. */
   version: () =>
@@ -182,7 +205,7 @@ export const formattedContributions = {
         (!feature.enabled ||
           formattedCompatibility.snapshot().includes(feature.owner)) &&
         feature.scope !== 'document'
-          ? (feature.nodes ?? [])
+          ? (feature.nodes ?? coreNodes[feature.id] ?? [])
           : [],
       )
     return [

@@ -91,12 +91,13 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // Catalog baseline: 689137 bytes, plus 318 bytes for declarative styles/themes (#218)
   // and 430 bytes for releasing closed tabs' sources from document states (#440),
   // and 63 bytes for opening large notes in the CodeMirror formatted view (#450),
-  // and 1122 bytes for closing several tabs and middle-click closing (#455).
+  // and 1122 bytes for closing several tabs and middle-click closing (#455),
+  // and 10 bytes for keeping footnote notes in the formatted view (#419).
   // API 3 adds 713 bytes for formatted registrations, publication and lazy compatibility dispatch.
   // Its render-error route adds 22 bytes; callback guards stay in the lazy flavor module.
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
   assert.ok(
-    bytes <= 691070 + 713 + 22,
+    bytes <= 691080 + 713 + 22,
     `startup catalog grew to ${bytes} bytes`,
   )
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')

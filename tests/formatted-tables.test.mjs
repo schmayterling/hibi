@@ -1334,6 +1334,48 @@ test('moving rows stored by index stays within the workspace bound in every batc
   )
 })
 
+test('a save that waits for the workspace stays ahead of the next one', {
+  timeout: 60000,
+}, async () => {
+  const rows = Array.from({ length: 1001 }, (_, i) => `| r${i} | x |`)
+  const doc = `| a | b |\n| - | - |\n${rows.join('\n')}\n\nafter`
+  const heights = [0, ...rows.map((_, i) => 24 + i)]
+  await harness.evaluate(
+    ({ key, heights }) =>
+      window.tables.layouts('queue', [{ key, columns: null, rows: heights }]),
+    { key: tableKey(0, ['a', 'b']), heights },
+  )
+  await mountTab(doc, 'queue')
+  await harness.evaluate(async () => {
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await window.tables.settle()
+    window.tables.holdWrites(true)
+  })
+  // A row inserted above every sized row: a save of two batches, the first waiting.
+  assert.equal(
+    await harness.evaluate((at) => {
+      window.tables.view().dispatch({ selection: { anchor: at } })
+      return window.tables.runTableAction('row-before')
+    }, doc.indexOf('| r0') + 2),
+    true,
+  )
+  await harness.waitForFunction(() => window.tables.writes('queue').length > 0)
+  // Undo saves the heights back while the first save still waits.
+  await harness.keyboard.press(undoKey)
+  assert.equal((await state()).doc, doc)
+  await harness.evaluate(async () => {
+    for (let i = 0; i < 10; i++) await window.tables.settle()
+    window.tables.holdWrites(false)
+  })
+  await harness.waitForFunction(
+    (expected) =>
+      JSON.stringify(window.tables.layouts('queue')[0]?.rows) === expected,
+    JSON.stringify(heights),
+    { timeout: 5000 },
+  )
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {

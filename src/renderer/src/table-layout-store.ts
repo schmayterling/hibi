@@ -15,6 +15,8 @@ import {
 // Sizes survive tab switches in this window.
 const session = new Map<string, TableLayout[]>()
 const listeners = new Map<string, Set<() => void>>()
+/** Each tab's saves, one after another. */
+const writing = new Map<string, Promise<void>>()
 
 /** A table's key: its ordinal in the note and a hash of its header cells' text, so edits elsewhere keep its sizes. */
 export function tableKey(index: number, header: readonly string[]) {
@@ -91,13 +93,17 @@ function save(tabId: string, update: TableLayoutUpdate) {
   ]
   for (let at = 1000; at < set.length; at += 1000)
     parts.push({ remove: [], put: [], set: set.slice(at, at + 1000) })
-  void parts
-    .reduce<Promise<void>>(
-      (written, part) =>
-        written.then(() => window.hibi.writeTableLayout(tabId, part)),
-      Promise.resolve(),
-    )
+  // After every batch of the tab's earlier saves, so that batches of two
+  // saves never interleave; a rejected batch stops only its own save.
+  const saved = (writing.get(tabId) ?? Promise.resolve())
+    .then(async () => {
+      for (const part of parts) await window.hibi.writeTableLayout(tabId, part)
+    })
     .catch((error: unknown) =>
       console.error('table sizes could not be saved:', error),
     )
+  writing.set(tabId, saved)
+  void saved.then(() => {
+    if (writing.get(tabId) === saved) writing.delete(tabId)
+  })
 }

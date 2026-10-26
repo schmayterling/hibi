@@ -33,6 +33,9 @@ let second: EditorView | null = null
 // The workspace's table sizes, as the main process keeps and updates them.
 const layouts = new Map<string, TableLayout[]>()
 const writes: { tabId: string; input: TableLayout[] | TableLayoutUpdate }[] = []
+/** While set, writes are applied but answered only when released, as a busy workspace would. */
+let holding = false
+const held: (() => void)[] = []
 Object.assign(window, {
   hibi: {
     readTableLayout: async (tabId: string) => layouts.get(tabId) ?? [],
@@ -52,6 +55,7 @@ Object.assign(window, {
       )
         throw new Error('The table layout is invalid.')
       layouts.set(tabId, next)
+      if (holding) await new Promise<void>((done) => held.push(done))
     },
   },
 })
@@ -132,6 +136,11 @@ Object.assign(window, {
     sizeProbe: () =>
       (formattedTables as { tableSizeProbe?: { mapped: number } })
         .tableSizeProbe,
+    /** Hold the workspace's answers to writes, or answer every held one and stop holding. */
+    holdWrites(hold: boolean) {
+      holding = hold
+      if (!hold) for (const done of held.splice(0)) done()
+    },
     /** What views wrote to the workspace's table sizes for a tab, in order. */
     writes: (tabId: string) =>
       writes.filter((write) => write.tabId === tabId).map(({ input }) => input),

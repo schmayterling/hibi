@@ -1,15 +1,10 @@
-import {
-  type EditorState,
-  StateEffect,
-  StateField,
-  type Text,
-} from '@codemirror/state'
-import { type EditorView, ViewPlugin } from '@codemirror/view'
 import type { MarkdownConfig } from '@lezer/markdown'
+import type { FormattedContribution } from '../formatted-contributions.ts'
 import {
-  type FormattedContribution,
-  formattedRefresh,
-} from '../formatted-contributions.ts'
+  defined,
+  definitionReader,
+  footnoteDefinitions,
+} from './footnote-definitions.ts'
 import './footnotes.css'
 
 /** Where a `[^label]` that starts at `pos` ends, or -1. Labels have no spaces or `]`. */
@@ -92,166 +87,13 @@ export const Footnotes: MarkdownConfig = {
   ],
 }
 
-/*
- * A reference is a footnote only when the note defines its label, as in
- * marked-github-footnote. Definitions are indexed from the text: opening a
- * note reads one slice, idle time reads the rest, and an edit reads only the
- * lines it changed.
- */
-
-/** A definition's first line: `[^label]:` after quote markers and up to three spaces. */
-const definitionLine = /^(?:[ \t]*>)*[ ]{0,3}\[\^([^\]\s]+)\]:/
-
-/** The label a line defines, lowercased as references match it. */
-function definedLabel(text: string) {
-  if (!text.includes('[^')) return null
-  return definitionLine.exec(text)?.[1]?.toLowerCase() ?? null
-}
-
-/** Characters read per slice, and lines read, for scale tests. */
-export const footnoteScan = { slice: 1 << 20, lines: 0 }
-
-type Definitions = {
-  /** Definitions per label in the read part of the note. */
-  labels: ReadonlyMap<string, number>
-  /** The note is read up to this line start; past its end once all of it is read. */
-  read: number
-}
-
-function count(labels: Map<string, number>, label: string | null, by: number) {
-  if (!label) return
-  const next = (labels.get(label) ?? 0) + by
-  if (next > 0) labels.set(label, next)
-  else labels.delete(label)
-}
-
-/** Read about one slice of lines from the line start `from` into `labels`; returns where reading stopped and whether it found definitions. */
-function readSlice(doc: Text, from: number, labels: Map<string, number>) {
-  let at = from,
-    found = false
-  if (from > doc.length) return { at, found }
-  const stop = from + footnoteScan.slice
-  for (
-    const iter = doc.iterLines(doc.lineAt(from).number);
-    at <= stop && !iter.next().done;
-  ) {
-    footnoteScan.lines++
-    const label = definedLabel(iter.value)
-    if (label) {
-      count(labels, label, 1)
-      found = true
-    }
-    at += iter.value.length + 1
-  }
-  return { at, found }
-}
-
-/** Reads the next slice of the note for definitions; formatted views dispatch it in idle time. */
-export const readDefinitions = StateEffect.define<null>()
-
-export const footnoteDefinitions = StateField.define<Definitions>({
-  create(state) {
-    const labels = new Map<string, number>()
-    return { labels, read: readSlice(state.doc, 0, labels).at }
-  },
-  update(value, transaction) {
-    let { labels, read } = value
-    if (transaction.docChanged) {
-      const before = transaction.startState.doc,
-        doc = transaction.state.doc
-      const removed = new Set<number>(),
-        added = new Set<number>()
-      read =
-        value.read > before.length
-          ? doc.length + 1
-          : transaction.changes.mapPos(value.read, -1)
-      transaction.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-        // Unread text is read later, edited or not.
-        if (fromA >= value.read) return
-        const last = before.lineAt(Math.min(toA, value.read - 1)).number
-        for (let n = before.lineAt(fromA).number; n <= last; n++) removed.add(n)
-        const end = doc.lineAt(toB)
-        for (let n = doc.lineAt(fromB).number; n <= end.number; n++)
-          added.add(n)
-        read = Math.max(read, end.to + 1)
-      })
-      const changed: [string, number][] = []
-      for (const n of removed) {
-        footnoteScan.lines++
-        const label = definedLabel(before.line(n).text)
-        if (label) changed.push([label, -1])
-      }
-      for (const n of added) {
-        footnoteScan.lines++
-        const label = definedLabel(doc.line(n).text)
-        if (label) changed.push([label, 1])
-      }
-      if (changed.length) {
-        const next = new Map(labels)
-        for (const [label, by] of changed) count(next, label, by)
-        labels = next
-      }
-    }
-    if (transaction.effects.some((effect) => effect.is(readDefinitions))) {
-      const next = new Map(labels)
-      const slice = readSlice(transaction.state.doc, read, next)
-      read = slice.at
-      if (slice.found) labels = next
-    }
-    return labels === value.labels && read === value.read
-      ? value
-      : { labels, read }
-  },
-})
-
-/** Reads the rest of a long note in idle slices. */
-const reader = ViewPlugin.fromClass(
-  class {
-    private idle = 0
-    private readonly view: EditorView
-    constructor(view: EditorView) {
-      this.view = view
-      this.schedule()
-    }
-    update() {
-      this.schedule()
-    }
-    schedule() {
-      if (
-        this.idle ||
-        this.view.state.field(footnoteDefinitions).read >
-          this.view.state.doc.length
-      )
-        return
-      this.idle = requestIdleCallback(() => {
-        this.idle = 0
-        const { labels } = this.view.state.field(footnoteDefinitions)
-        this.view.dispatch({ effects: readDefinitions.of(null) })
-        // References in view follow the definitions just read.
-        if (this.view.state.field(footnoteDefinitions).labels !== labels)
-          this.view.dispatch({ effects: formattedRefresh.of(null) })
-      })
-    }
-    destroy() {
-      if (this.idle) cancelIdleCallback(this.idle)
-    }
-  },
-)
-
-/** Whether the note defines a reference's label. */
-export function defined(state: EditorState, label: string) {
-  return !!state
-    .field(footnoteDefinitions, false)
-    ?.labels.has(label.toLowerCase())
-}
-
 /** A CSS string for a list marker. */
 const cssString = (text: string) => `"${text.replace(/["\\]/g, '\\$&')}"`
 
 /** References render as superscript labels and definitions as notes labelled in their margin, both editable in place. */
 export const contribution: FormattedContribution = {
   id: 'markdown.footnotes',
-  extension: [footnoteDefinitions, reader],
+  extension: [footnoteDefinitions, definitionReader],
   flavor: 'markdown.github',
   syntax: Footnotes,
   // References start at `[`, so text without one is still skipped.

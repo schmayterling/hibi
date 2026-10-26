@@ -219,6 +219,16 @@ test('frontmatter is hidden and protected; select all covers the text', {
   await page.keyboard.press(`${mod}+a`)
   await page.keyboard.type('New')
   await source('---\ntitle: x\n---\n\nNew')
+  // The properties editor above the view edits it; it stays hidden.
+  const properties = pane('.frontmatter')
+  await properties.locator('.frontmatter-yaml-toggle').click()
+  await properties.getByLabel('Frontmatter YAML').fill('title: y\n')
+  await properties.getByRole('button', { name: 'Apply YAML' }).click()
+  await source('---\ntitle: y\n---\n\nNew')
+  assert.ok(
+    !(await pane('.cm-content').textContent()).includes('title'),
+    'frontmatter hidden after a properties edit',
+  )
 })
 
 test('github alerts show their title in place of the marker, in the alert box', {

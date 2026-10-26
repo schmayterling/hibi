@@ -5,7 +5,13 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { clipboardHtml } from '../src/renderer/src/RawHtml.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
-import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
+import {
+  clickMenu,
+  pressShortcut,
+  replaceRichText,
+  replaceSourceText,
+} from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const windowsClipboard = (html) =>
@@ -59,7 +65,7 @@ test('raw HTML stays inert and exact through rich edits, atom deletion, undo, an
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, 'tiptap')
   // Install probes before opening workspace markup, including detached DOM parsing.
   await page.evaluate(() => {
     window.__rawHtmlExecuted = false
@@ -615,4 +621,158 @@ test('raw HTML stays inert and exact through rich edits, atom deletion, undo, an
       }
     }
   })
+})
+
+test('codemirror: literal html stays inert through native body edits, source switches and clipboard history', {
+  timeout: 45000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-formatted-raw-html-'))
+  const file = join(profile, 'raw.md')
+  const original =
+    [
+      'editable paragraph',
+      '<kbd>x</kbd> <span id="raw-html-span" onclick="window.__rawExecuted=true">é &amp; 😀</span>',
+      '<div id="raw-html-div">\n<script id="raw-html-script">window.__rawExecuted=true</script>\n<img id="raw-html-img" src="x" onerror="window.__rawExecuted=true">\n<svg id="raw-html-svg" onload="window.__rawExecuted=true"></svg>\n<iframe id="raw-html-iframe" srcdoc="unsafe"></iframe>\n<style id="raw-html-style">body { display:none }</style>\n</div>',
+      '<!--  keep <b>literal</b> &amp;  -->',
+      '<details id="raw-html-details">\n<summary id="raw-html-summary">show</summary>\n\n<p id="raw-html-first">first</p>\n\n<p id="raw-html-last">last</p>\n</details>',
+      'break a<BR />b',
+      'last paragraph',
+    ].join('\n\n') + '\n'
+  await writeFile(file, original)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  const rich = await selectFormattedEngine(app, page, 'codemirror')
+  await page.evaluate(() => {
+    window.__rawExecuted = false
+    window.__rawCreated = []
+    window.alert = () => {
+      window.__rawExecuted = true
+    }
+    new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.addedNodes) {
+          if (node.matches?.('[id^="raw-html-"]'))
+            window.__rawCreated.push(node.id)
+          for (const element of node.querySelectorAll?.('[id^="raw-html-"]') ??
+            [])
+            window.__rawCreated.push(element.id)
+        }
+    }).observe(document, { subtree: true, childList: true })
+  })
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  await clickMenu(app, 'Open…')
+  await waitForDocumentEditor(app, page)
+  const saved = (expected) =>
+    waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      expected,
+    )
+  const inert = async () => {
+    assert.equal(
+      await rich
+        .locator(
+          '[id^="raw-html-"], kbd, details, summary, script, style, svg, iframe',
+        )
+        .count(),
+      0,
+    )
+    assert.equal(await page.evaluate(() => window.__rawExecuted), false)
+  }
+  await saved(original)
+  await inert()
+  assert.deepEqual(await page.evaluate(() => window.__rawCreated), [])
+  await rich.locator('.cm-line', { hasText: /^editable paragraph$/ }).click()
+  await rich.press('Home')
+  await rich.press('Shift+End')
+  await page.keyboard.insertText('edited paragraph')
+  const edited = original.replace('editable paragraph', 'edited paragraph')
+  await saved(edited)
+  await inert()
+  assert.deepEqual(await page.evaluate(() => window.__rawCreated), [])
+  await clickMenu(app, 'Save')
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  assert.equal(await readFile(file, 'utf8'), edited)
+
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  const native = async (command) => {
+    const before = await page.evaluate((command) => {
+      window.__rawClipboardCount ??= 0
+      document.addEventListener(
+        command,
+        () =>
+          queueMicrotask(() => {
+            window.__rawClipboardCount++
+          }),
+        { once: true, capture: true },
+      )
+      return window.__rawClipboardCount
+    }, command)
+    await app.evaluate(
+      ({ BrowserWindow }, command) =>
+        BrowserWindow.getAllWindows()[0].webContents[command](),
+      command,
+    )
+    await page.waitForFunction(
+      (before) => window.__rawClipboardCount > before,
+      before,
+    )
+  }
+  await rich.focus()
+  await rich.press('ControlOrMeta+a')
+  await native('copy')
+  const copied = await app.evaluate(async ({ clipboard }) => {
+    const item = (await clipboard.read()).find((item) =>
+      item.types.includes('text/html'),
+    )
+    return {
+      text: await clipboard.readText(),
+      html: item ? await (await item.getType('text/html')).text() : '',
+    }
+  })
+  assert.equal(copied.text, edited)
+  assert.doesNotMatch(
+    copied.html,
+    /<script|<iframe|<style| onerror=| onclick=/i,
+  )
+  await native('cut')
+  await saved('')
+  await pressShortcut(app, `${mod}+z`)
+  await saved(edited)
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
+  )
+  await saved('')
+  await native('paste')
+  await saved(edited)
+  await inert()
+
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  const source = page.getByRole('textbox', {
+    name: 'Markdown editor',
+    exact: true,
+  })
+  const sourceEdited = edited.replace('<kbd>x</kbd>', '<kbd>y</kbd>')
+  await replaceSourceText(page, source, sourceEdited)
+  await saved(sourceEdited)
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await inert()
+  await saved(sourceEdited)
+  assert.equal(await rich.getAttribute('contenteditable'), 'true')
 })

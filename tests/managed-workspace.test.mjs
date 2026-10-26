@@ -10,12 +10,11 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
+import { electron, waitForAppState } from './electron.mjs'
 import {
-  electron,
-  waitForAppState,
-  waitForDocumentEditor,
-} from './electron.mjs'
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 test('managed workspaces stay opt-in, preserve files, import safely, and reopen at startup', {
@@ -53,7 +52,7 @@ test('managed workspaces stay opt-in, preserve files, import safely, and reopen 
     return page
   }
   let page = await launch()
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   assert.equal(
     (await page.evaluate(() => window.hibi.getWorkspaceSettings())).enabled,
     false,
@@ -264,13 +263,22 @@ test('managed workspaces stay opt-in, preserve files, import safely, and reopen 
   await app.close()
   app = null
   page = await launch()
+  await page
+    .locator(
+      t.formattedEngine === 'tiptap'
+        ? '.rich-pane .tiptap'
+        : '.rich-pane .hibi-formatted .cm-content',
+    )
+    .waitFor()
   await waitForAppState(page, async () => !!(await window.hibi.getWorkspace()))
   await page.waitForFunction(
     () =>
       document
         .querySelector('.document-tab')
         ?.textContent?.includes('Start.md') ||
-      document.querySelector('.tiptap')?.textContent?.includes('Welcome'),
+      document
+        .querySelector('.rich-pane [role="textbox"]')
+        ?.textContent?.includes('Welcome'),
   )
   assert.equal(
     (await page.evaluate(() => window.hibi.getWorkspace())).name,

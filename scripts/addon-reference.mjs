@@ -71,7 +71,18 @@ export const referenceSources = [
     'Document analysis',
     ['TextProjection', 'TextDecoration', 'projectionRange'],
   ],
-  ['src/shared/media.ts', 'Media', null, ['MediaAttachment']],
+  [
+    'src/shared/media.ts',
+    'Media',
+    [
+      'MediaAttachment',
+      'AttachmentResult',
+      'DocumentMedia',
+      'isMediaFile',
+      'attachmentMarkdown',
+    ],
+    ['MediaAttachment'],
+  ],
   ['src/addons/authors.ts', 'Authors'],
 ]
 

@@ -408,7 +408,20 @@ test('find in document searches rich text and offscreen markdown without editing
     await rich.locator('.ProseMirror-active-search-match').count(),
     1,
   )
-  assert.equal(await rich.locator('.ProseMirror-search-match').count(), 9999)
+  // Only matches near the viewport are highlighted, one frame after a change.
+  const highlighted = async () => {
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    )
+    return rich
+      .locator('.ProseMirror-search-match, .ProseMirror-active-search-match')
+      .count()
+  }
+  const nearby = await highlighted()
+  assert.ok(nearby > 1 && nearby < 1000, `${nearby} highlights`)
   // A move only swaps the classes of two highlights; rewriting text in the
   // paragraph would make the browser lay it out again.
   await page.evaluate(() => {
@@ -469,10 +482,86 @@ test('find in document searches rich text and offscreen markdown without editing
     async (expected) => (await window.hibi.getDocument()).markdown === expected,
     dense,
   )
+  // Moves continue from wherever the cursor is.
+  await rich.evaluate((element) => element.editor.commands.setTextSelection(7))
   await input.press('Enter')
   await waitForCount('2/10000')
   assert.deepEqual(await selected(), [13, 19])
   await page.evaluate(() => window.restoreFolding())
   await page.getByRole('button', { name: /^close find$/i, exact: true }).click()
+  await bar.waitFor({ state: 'hidden' })
+
+  // Ten times as many matches leave the highlighted count unchanged.
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource('needle word '.repeat(100000).trimEnd())
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  await input.fill('needle')
+  await waitForCount('1/100000')
+  assert.equal(await highlighted(), nearby)
+  await input.press('Escape')
+  await bar.waitFor({ state: 'hidden' })
+
+  // Enter while a long note is still being searched moves once it is counted,
+  // without finishing the search at once.
+  const lines = Array.from({ length: 500 }, (_, index) => `line ${index}`)
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource(
+    [...lines, 'needle one', 'needle two', 'needle three'].join('\n\n'),
+  )
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  // A fast clock ends the first search slice after one block, and the later
+  // slices are held, so the search stays pending.
+  await page.evaluate(() => {
+    const schedule = window.setTimeout
+    window.heldSlices = []
+    window.releaseSlices = () => {
+      window.setTimeout = schedule
+      for (const run of window.heldSlices.splice(0)) run()
+    }
+    window.setTimeout = (run, delay, ...rest) =>
+      delay ? schedule(run, delay, ...rest) : window.heldSlices.push(run)
+    let ticks = 0
+    performance.now = () =>
+      Performance.prototype.now.call(performance) + 1000 * ++ticks
+  })
+  await input.fill('needle')
+  await waitForCount('Searching…')
+  await page.evaluate(() => {
+    delete performance.now
+  })
+  const before = await selected()
+  await page.evaluate(() => {
+    const lower = String.prototype.toLowerCase
+    window.foldedText = 0
+    window.restoreFolding = () => {
+      String.prototype.toLowerCase = lower
+    }
+    String.prototype.toLowerCase = function () {
+      window.foldedText += this.length
+      return lower.call(this)
+    }
+  })
+  await input.press('Enter')
+  await input.press('Enter')
+  assert.ok(
+    (await folded()) < 1000,
+    'a pending move must not search the rest of the note at once',
+  )
+  await page.evaluate(() => window.restoreFolding())
+  assert.deepEqual(await selected(), before)
+  assert.equal(await bar.locator('output').textContent(), 'Searching…')
+  await page.evaluate(() => window.releaseSlices())
+  await waitForCount('3/3')
+  await input.press('Escape')
   await bar.waitFor({ state: 'hidden' })
 })

@@ -103,9 +103,10 @@ test('visual typing after a source visit defers the hidden source and toolbar ch
     let updates = 0,
       checks = 0
     const update = source.update.bind(source)
-    source.update = (...args) => {
-      updates++
-      return update(...args)
+    // Echoes change the document; focus and parser updates of the hidden view do not.
+    source.update = (transactions) => {
+      if (transactions.some((transaction) => transaction.docChanged)) updates++
+      return update(transactions)
     }
     const can = editor.can.bind(editor)
     editor.can = (...args) => {

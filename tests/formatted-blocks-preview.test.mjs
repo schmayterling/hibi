@@ -370,6 +370,38 @@ test('20,000 images resolve only the media in view', {
     )
 })
 
+test('drawn media resolve again for a new revision without being redrawn', {
+  timeout: 60000,
+}, async () => {
+  const result = await harness.evaluate(async () => {
+    const { media, setRevision } = window.formattedBlocks
+    const preview = window.livePreview
+    await preview.mount(
+      Array.from({ length: 5 }, (_, i) => `![image ${i}](image-${i}.png)`).join(
+        '\n\n',
+      ),
+      { width: 800, height: 600 },
+    )
+    await preview.settle()
+    await new Promise((resolve) => setTimeout(resolve))
+    const images = [...document.querySelectorAll('.document-media img')]
+    media.requests.length = 0
+    media.revisions.length = 0
+    setRevision(preview.view(), 7)
+    await new Promise((resolve) => setTimeout(resolve))
+    await preview.settle()
+    return {
+      revisions: media.revisions,
+      requests: media.requests.length,
+      kept: images.filter((image) => image.isConnected).length,
+      images: images.length,
+    }
+  })
+  assert.equal(result.images, 5)
+  assert.deepEqual(result.revisions, [7, 7, 7, 7, 7])
+  assert.equal(result.kept, 5)
+})
+
 test('toggling one of 20,000 tasks is one edit that redraws one checkbox', {
   timeout: 90000,
 }, async () => {

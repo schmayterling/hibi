@@ -1,5 +1,10 @@
 import type { EditorState } from '@codemirror/state'
-import { WidgetType } from '@codemirror/view'
+import {
+  type EditorView,
+  ViewPlugin,
+  type ViewUpdate,
+  WidgetType,
+} from '@codemirror/view'
 import type { SyntaxNodeRef } from '@lezer/common'
 import { decodeHTMLStrict } from 'entities'
 import type { DocumentMedia } from '../../../shared/media.ts'
@@ -29,43 +34,48 @@ export function imageOf(state: EditorState, node: SyntaxNodeRef) {
   if (source.startsWith('<') && source.endsWith('>'))
     source = source.slice(1, -1)
   const title = node.node.getChild('LinkTitle')
+  // Line breaks in a description or title read as spaces, as in the rich editor.
+  const text = (from: number, to: number) =>
+    decode(state.sliceDoc(from, to)).replace(/[ \t]*\n[ \t]*/g, ' ')
   return {
     source: source.replace(/\\([!-/:-@[-`{-~])/g, '$1'),
-    alt: decode(state.sliceDoc(node.from + 2, close.from)),
-    title: title ? decode(state.sliceDoc(title.from + 1, title.to - 1)) : '',
+    alt: text(node.from + 2, close.from),
+    title: title ? text(title.from + 1, title.to - 1) : '',
     label: { from: node.from + 2, to: close.from },
   }
 }
 
-/** Display resolution kept for a widget DOM, released after its replacement subscribes. */
-const releases = new WeakMap<HTMLElement, () => void>()
+/** A drawn widget's media resolution, rebound when the note's revision changes. */
+type Binding = { bind(revision: number): void; release(): void }
+const drawn = new WeakMap<EditorView, Set<Binding>>()
+const bindings = new WeakMap<
+  HTMLElement,
+  { binding: Binding; view: EditorView }
+>()
 
 /**
  * An image or video from the note's source, resolved like the rich editor's
- * media for this document revision. Only widgets in view are drawn, so only
- * they resolve media.
+ * media for the view's document revision. Only widgets in view are drawn, so
+ * only they resolve media.
  */
 export class MediaWidget extends WidgetType {
   readonly source: string
   readonly alt: string
   readonly title: string
-  readonly revision: number
-  constructor(source: string, alt: string, title: string, revision: number) {
+  constructor(source: string, alt: string, title: string) {
     super()
     this.source = source
     this.alt = alt
     this.title = title
-    this.revision = revision
   }
   override eq(other: MediaWidget) {
     return (
       other.source === this.source &&
       other.alt === this.alt &&
-      other.title === this.title &&
-      other.revision === this.revision
+      other.title === this.title
     )
   }
-  toDOM() {
+  toDOM(view: EditorView) {
     const container = document.createElement('span')
     container.className = 'document-media'
     let media: HTMLImageElement | HTMLVideoElement =
@@ -99,18 +109,34 @@ export class MediaWidget extends WidgetType {
           'Could not load this media. Check the file path. Save the note first if the path is relative to it.'
       }
     }
-    releases.set(
-      container,
-      observeDocumentMedia(this.source, this.revision, render),
-    )
+    let release: (() => void) | null = null
+    const binding: Binding = {
+      bind: (revision) => {
+        // The new resolution starts before the old one is let go.
+        const previous = release
+        release = observeDocumentMedia(this.source, revision, render)
+        previous?.()
+      },
+      release: () => {
+        release?.()
+        release = null
+      },
+    }
+    binding.bind(view.state.facet(formattedDocument).revision)
+    let views = drawn.get(view)
+    if (!views) drawn.set(view, (views = new Set()))
+    views.add(binding)
+    bindings.set(container, { binding, view })
     return container
   }
   override destroy(dom: HTMLElement) {
     const media = dom.firstElementChild
     if (media instanceof HTMLElement) clear(media)
+    const entry = bindings.get(dom)
+    if (!entry) return
+    drawn.get(entry.view)?.delete(entry.binding)
     // A replacement widget in the same update reuses the resolved media.
-    const release = releases.get(dom)
-    if (release) queueMicrotask(release)
+    queueMicrotask(entry.binding.release)
   }
   /** Video controls keep their events; clicks on images place the caret. */
   override ignoreEvent(event: Event) {
@@ -126,29 +152,44 @@ function clear(media: Element) {
   }
 }
 
-/** `![description](path)` shows the image or video; its source shows beside it while revealed. */
+/** Drawn media follow a new document revision without being drawn again. */
+const revisions = ViewPlugin.fromClass(
+  class {
+    update(update: ViewUpdate) {
+      const { revision } = update.state.facet(formattedDocument)
+      if (revision === update.startState.facet(formattedDocument).revision)
+        return
+      for (const binding of drawn.get(update.view) ?? []) binding.bind(revision)
+    }
+  },
+)
+
+const marker = { class: 'hibi-lp-marker' }
+
+/**
+ * `![description](path)` shows the image or video, also when its source
+ * spans lines; its source shows beside it while revealed.
+ */
 export const contribution: FormattedContribution = {
   id: 'core.images',
   feature: 'core.images',
+  extension: revisions,
   views: [
     {
       nodes: ['Image'],
-      decorate(node, out, { state, revealed }) {
+      layout(node, out, { state, revealed }) {
         const image = imageOf(state, node)
         if (!image) return false
-        const widget = new MediaWidget(
-          image.source,
-          image.alt,
-          image.title,
-          state.facet(formattedDocument).revision,
-        )
-        if (!revealed) {
-          out.replace(node.from, node.to, widget)
-          return false
-        }
-        out.syntax(node.from, image.label.from)
-        out.syntax(image.label.to, node.to)
-        out.widget(node.to, widget, 1)
+        const widget = new MediaWidget(image.source, image.alt, image.title)
+        if (revealed) out.widget(node.to, widget, { side: 1 })
+        else out.replace(node.from, node.to, widget)
+        return false
+      },
+      decorate(node, out, { state, revealed }) {
+        const image = imageOf(state, node)
+        if (!revealed || !image) return false
+        out.mark(node.from, image.label.from, marker)
+        out.mark(image.label.to, node.to, marker)
         return false
       },
     },

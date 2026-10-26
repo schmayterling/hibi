@@ -173,19 +173,36 @@ test('footnote notes open in the formatted view with references and notes in pla
 }, async () => {
   await open(
     'footnotes.md',
-    'A claim[^1] here.\n\n[^1]: The source\n    continued.\n',
+    'A claim[^1] here, a guess[^2].\n\n[^1]: The source\n    continued.\n',
     'A claim',
   )
-  assert.equal(await pane('.hibi-lp-footnote-ref').textContent(), '1')
+  // A reference without a definition stays text, as in exports.
+  assert.deepEqual(
+    await pane('.hibi-lp-footnote-ref').evaluateAll((all) =>
+      all.map((ref) => ref.textContent),
+    ),
+    ['1'],
+  )
+  assert.match(await pane('.cm-line').first().textContent(), /guess\[\^2\]/)
   assert.equal(
     await pane('.cm-line.hibi-lp-footnote-label').textContent(),
     'The source continued.',
   )
-  // Notes are editable in place.
+  // Notes are editable in place; defining the second label resolves its reference.
   await pane('.cm-line.hibi-lp-footnote-label').click()
   await page.keyboard.press('End')
   await page.keyboard.type(' More')
-  await source('A claim[^1] here.\n\n[^1]: The source\n    continued. More\n')
+  await page.keyboard.press('Enter')
+  await page.keyboard.type('[^2]: A hunch.')
+  await source(
+    'A claim[^1] here, a guess[^2].\n\n[^1]: The source\n    continued. More\n\n[^2]: A hunch.\n',
+  )
+  await waitForAsync(
+    page,
+    () =>
+      document.querySelectorAll('.rich-pane .hibi-lp-footnote-ref').length ===
+      2,
+  )
 })
 
 test('frontmatter is hidden and protected; select all covers the text', {
@@ -240,16 +257,17 @@ test('images resolve beside the note, missing ones say so, and the caret reveals
       'base64',
     ),
   )
-  await open(
-    'media.md',
-    'Intro text\n\n![a picture](pic.png)\n\n![gone](missing.png)\n',
-    'Intro',
-  )
+  const note =
+    'Intro text\n\n![a picture](pic.png)\n\n![gone](missing.png)\n\n![two\nlines](pic.png) and ![next](\npic.png)\n'
+  await open('media.md', note, 'Intro')
   const picture = pane('.document-media img[alt="a picture"]')
-  await waitForAsync(page, () =>
-    document
-      .querySelector('.rich-pane .document-media img[alt="a picture"]')
-      ?.getAttribute('src'),
+  // Descriptions and destinations on later lines resolve like one-line images.
+  await waitForAsync(
+    page,
+    () =>
+      [...document.querySelectorAll('.rich-pane .document-media img[src]')]
+        .map((image) => image.alt)
+        .join() === 'a picture,two lines,next',
   )
   await waitForAsync(
     page,
@@ -267,7 +285,6 @@ test('images resolve beside the note, missing ones say so, and the caret reveals
   assert.equal(await picture.count(), 1)
   await page.keyboard.press('End')
   await page.keyboard.type(' after')
-  await source(
-    'Intro text\n\n![a picture](pic.png) after\n\n![gone](missing.png)\n',
-  )
+  const typed = note.replace('(pic.png)\n', '(pic.png) after\n')
+  await source(typed)
 })

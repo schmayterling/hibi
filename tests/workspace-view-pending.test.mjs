@@ -161,6 +161,7 @@ test('external tree changes retain row focus and failed pages release busy state
   const folder = join(root, 'notes')
   await mkdir(folder)
   await writeFile(join(folder, 'one.md'), '# One')
+  await writeFile(join(folder, 'zero.md'), '# Zero')
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
   })
@@ -226,6 +227,41 @@ test('external tree changes retain row focus and failed pages release busy state
   )
   assert.equal(await one.getAttribute('aria-disabled'), 'true')
   assert.equal(await one.evaluate((row) => row.disabled), false)
+  const zero = tree.getByRole('treeitem', { name: 'zero.md', exact: true })
+  await one.press('End')
+  assert.equal(
+    await zero.evaluate((row) => row === document.activeElement),
+    true,
+  )
+  await zero.press('Home')
+  assert.equal(
+    await one.evaluate((row) => row === document.activeElement),
+    true,
+  )
+  await one.press('ArrowDown')
+  assert.equal(
+    await zero.evaluate((row) => row === document.activeElement),
+    true,
+  )
+  await zero.press('ArrowUp')
+  assert.equal(
+    await one.evaluate((row) => row === document.activeElement),
+    true,
+  )
+  const more = page.getByRole('button', {
+    name: 'Actions for one.md',
+    exact: true,
+  })
+  await more.focus()
+  assert.equal(
+    await more.evaluate((button) => button === document.activeElement),
+    true,
+  )
+  assert.equal(await more.evaluate((button) => button.disabled), false)
+  assert.equal(await more.getAttribute('aria-disabled'), 'true')
+  await more.dispatchEvent('click')
+  assert.equal(await page.getByRole('menu').count(), 0)
+  await one.focus()
   await app.evaluate(() => globalThis.focusPages.release())
   await tree.getByRole('treeitem', { name: 'z.md', exact: true }).waitFor()
   await waitForAsync(

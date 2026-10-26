@@ -81,6 +81,7 @@ let showingAllFiles = false
 let ignoredPaths: ReturnType<typeof ignore> | null = null
 let watcher: FSWatcher | undefined
 let refreshTimer: ReturnType<typeof setTimeout> | undefined
+let refreshQueuedAt = 0
 let scanCoordinator:
   | ReturnType<typeof createScanCoordinator<ScanResult>>
   | undefined
@@ -722,12 +723,18 @@ function queueWatcherEvent(
         : 'change',
     )
   else unknownWatcherEvent = true
+  const now = performance.now()
+  if (refreshTimer === undefined) refreshQueuedAt = now
   clearTimeout(refreshTimer)
-  refreshTimer = setTimeout(() => {
-    void flushWatcherEvents(selected, scopeTarget).catch((error: unknown) =>
-      console.error('workspace refresh failed:', error),
-    )
-  }, 200)
+  refreshTimer = setTimeout(
+    () => {
+      refreshTimer = undefined
+      void flushWatcherEvents(selected, scopeTarget).catch((error: unknown) =>
+        console.error('workspace refresh failed:', error),
+      )
+    },
+    Math.max(0, Math.min(200, 1000 - (now - refreshQueuedAt))),
+  )
 }
 
 export function observeWorkspace(
@@ -858,6 +865,7 @@ export async function loadWorkspace(
   watcher?.close()
   watcher = undefined
   clearTimeout(refreshTimer)
+  refreshTimer = undefined
   indexJob.reset()
   scanCoordinator?.close()
   scanCoordinator = undefined
@@ -913,10 +921,10 @@ export async function loadWorkspace(
       manifest = next.manifest
       showingAllFiles = next.showAllFiles
       ignoredPaths = next.ignored
-      if (treeChanged) {
-        treeRevision++
+      if (treeChanged) treeRevision++
+      if (treeChanged || metadataChanged || paths?.some(metadataPath)) {
         publishWorkspaceChange({ kind: 'tree', paths })
-      } else if (metadataChanged || paths === null || paths.length) {
+      } else if (paths === null || paths.length) {
         publishWorkspaceChange({ kind: 'content', paths })
       }
     },
@@ -991,6 +999,7 @@ export async function deleteKnownWorkspace(
     cancelWorkspaceLoad()
     watcher?.close()
     clearTimeout(refreshTimer)
+    refreshTimer = undefined
     indexJob.reset()
     scanCoordinator?.close()
     scanCoordinator = undefined

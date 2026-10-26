@@ -61,27 +61,6 @@ test('closing a workspace prevents an in-flight scan from publishing', async () 
   assert.deepEqual(published, [])
 })
 
-test('watcher invalidation finishes current scan and queues one follow-up', async () => {
-  const scans = []
-  const published = []
-  const coordinator = createScanCoordinator(
-    () => new Promise((resolve) => scans.push(resolve)),
-    (value) => published.push(value),
-  )
-  const pending = coordinator.request()
-  coordinator.invalidate()
-  coordinator.invalidate()
-  scans.shift()('before change')
-  assert.equal(await pending, 'before change')
-  assert.deepEqual(published, ['before change'])
-  assert.equal(scans.length, 1)
-  scans.shift()('after change')
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.deepEqual(published, ['before change', 'after change'])
-  assert.equal(scans.length, 0)
-  coordinator.close()
-})
-
 test('only closure aborts traversal and cancels queued requests', async () => {
   const scans = []
   const coordinator = createScanCoordinator(
@@ -91,7 +70,6 @@ test('only closure aborts traversal and cancels queued requests', async () => {
   const pending = coordinator.request()
   const first = scans[0]
   const followUp = coordinator.request()
-  coordinator.invalidate()
   assert.equal(first.signal.aborted, false)
   first.resolve('first')
   assert.equal(await pending, 'first')

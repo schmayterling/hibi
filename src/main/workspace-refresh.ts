@@ -51,10 +51,6 @@ export function createScanCoordinator<T>(
 
   return {
     request,
-    invalidate() {
-      // The watcher-only follow-up may have no caller to observe a rejection.
-      if (!closed && running && !pending) void request().catch(() => {})
-    },
     close() {
       closed = true
       controller?.abort()

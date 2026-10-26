@@ -292,4 +292,96 @@ test('steady content events during one tree change do not repeat tree pages or u
     'one two-page traversal; content and unchanged scans reuse it',
   )
   assert.equal(states.filter((state) => state?.treePending).length, 1)
+
+  changes.length = 0
+  const beforeMetadata = host.getWorkspaceHeader().treeRevision
+  await mkdir(join(folder, '.hibi'))
+  await writeFile(
+    join(folder, '.hibi/workspace.json'),
+    JSON.stringify({
+      version: 1,
+      name: 'updated name',
+      description: '',
+      icon: '',
+      defaultFile: '',
+    }),
+  )
+  await host.refreshWorkspace(['.hibi/workspace.json'])
+  await view.refresh()
+  assert.equal(changes.filter((change) => change.kind === 'tree').length, 1)
+  assert.equal(host.getWorkspaceHeader().treeRevision, beforeMetadata)
+  assert.equal(
+    pages,
+    2,
+    'manifest notifications do not replay explorer entries',
+  )
+  assert.equal(states.at(-1).name, 'updated name')
+})
+
+test('watcher flush starts within one second while content events keep arriving', async (t) => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), 'hibi-watch-deadline-')),
+  )
+  globalThis.__viewProfile = root
+  globalThis.__viewDocuments = []
+  globalThis.__viewMaterializations = 0
+  const folder = join(root, 'notes')
+  await mkdir(folder)
+  await writeFile(join(folder, 'one.md'), '')
+  const fs = process.getBuiltinModule('node:fs')
+  const io = process.getBuiltinModule('node:fs/promises')
+  t.mock.method(fs, 'watch', () => ({
+    on() {
+      return this
+    },
+    close() {},
+  }))
+  syncBuiltinESMExports()
+  t.after(async () => {
+    try {
+      const target = host.currentWorkspaceTarget()
+      if (target) await host.deleteKnownWorkspace({}, target.workspaceId)
+    } finally {
+      host.observeWorkspace(() => {})
+      t.mock.restoreAll()
+      syncBuiltinESMExports()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+  await host.loadWorkspace(folder)
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let now = 0
+  t.mock.method(performance, 'now', () => now)
+  const starts = []
+  const lstat = io.lstat
+  t.mock.method(io, 'lstat', (path, ...args) => {
+    if (path === join(folder, '.hibi')) starts.push(now)
+    return lstat(path, ...args)
+  })
+  syncBuiltinESMExports()
+  const target = host.currentWorkspaceTarget()
+  let published
+  const changed = new Promise((resolve) => {
+    published = resolve
+  })
+  host.observeWorkspace((change) => {
+    if (change.kind === 'tree') published()
+  })
+  await writeFile(join(folder, 'new.md'), '')
+  host.queueWatcherEvent(folder, target, 'rename', 'new.md')
+  for (let event = 0; event < 6; event++) {
+    now += 150
+    t.mock.timers.tick(150)
+    host.queueWatcherEvent(folder, target, 'change', 'one.md')
+  }
+  assert.deepEqual(starts, [])
+  now = 999
+  t.mock.timers.tick(99)
+  assert.deepEqual(starts, [])
+  now = 1000
+  t.mock.timers.tick(1)
+  assert.equal(starts[0], 1000)
+  host.queueWatcherEvent(folder, target, 'change', 'one.md')
+  await changed
+  assert.ok(host.workspaceEntries().some((entry) => entry.path === 'new.md'))
 })

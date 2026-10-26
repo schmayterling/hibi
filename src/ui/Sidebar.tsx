@@ -759,9 +759,19 @@ export function Sidebar({
                             event.preventDefault()
                         }}
                         onKeyDown={(event) => {
-                          if (disabled || pending) {
-                            if (event.key !== 'Tab' && event.key !== 'Escape')
-                              event.preventDefault()
+                          if (
+                            (disabled || pending) &&
+                            ([
+                              'Enter',
+                              'Delete',
+                              'Backspace',
+                              'F2',
+                              'ContextMenu',
+                              'F10',
+                            ].includes(event.key) ||
+                              (event.key === ' ' && !picked))
+                          ) {
+                            event.preventDefault()
                             return
                           }
                           if (
@@ -875,13 +885,14 @@ export function Sidebar({
                       <button
                         type="button"
                         className="sidebar-more"
-                        disabled={disabled}
+                        aria-disabled={disabled || pending || undefined}
                         tabIndex={
                           windowed && focusId !== item.id ? -1 : undefined
                         }
                         aria-label={`Actions for ${item.label}`}
                         aria-haspopup="menu"
                         onClick={(event) => {
+                          if (disabled || pending) return
                           setFocused(item.id)
                           onMenu(
                             item.id,

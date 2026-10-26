@@ -4,7 +4,7 @@ import { createScanCoordinator } from '../src/main/workspace-refresh.ts'
 
 const turn = () => new Promise((resolve) => setImmediate(resolve))
 
-test('steady invalidations release each request within two scan completions', async (t) => {
+test('steady requests release each request within two scan completions', async (t) => {
   const scans = []
   const published = []
   const settled = []
@@ -32,7 +32,7 @@ test('steady invalidations release each request within two scan completions', as
     // These callers arrived after the current scan started: only its successor qualifies.
     requests.push(request(scan + 1))
     requests.push(request(scan + 1))
-    for (let event = 0; event < 128; event++) coordinator.invalidate()
+    for (let event = 0; event < 128; event++) requests.push(request(scan + 1))
     assert.equal(scans.length, scan + 1)
     scans[scan].resolve(scan)
     await turn()
@@ -57,13 +57,12 @@ test('steady invalidations release each request within two scan completions', as
   assert.equal(maximumActive, 1)
 })
 
-test('idle invalidation does not start work, and a later request starts a fresh scan', async () => {
+test('idle requests start fresh scans', async () => {
   let scans = 0
   const coordinator = createScanCoordinator(
     async () => ++scans,
     () => {},
   )
-  coordinator.invalidate()
   assert.equal(scans, 0)
   assert.equal(await coordinator.request(), 1)
   await turn()
@@ -82,7 +81,6 @@ test('failed scans reject their own cohort without discarding queued callers', a
   const error = new Error('scan failed')
   const failed = assert.rejects(coordinator.request(), error)
   const next = coordinator.request()
-  coordinator.invalidate()
   scans[0].reject(error)
   await failed
   assert.equal(scans[1].signal.aborted, false)
@@ -92,35 +90,13 @@ test('failed scans reject their own cohort without discarding queued callers', a
   coordinator.close()
 })
 
-test('watcher-only failures are handled and later requests can recover', async () => {
-  const scans = []
-  const published = []
-  const coordinator = createScanCoordinator(
-    () => new Promise((resolve, reject) => scans.push({ resolve, reject })),
-    (value) => published.push(value),
-  )
-  const first = coordinator.request()
-  coordinator.invalidate()
-  scans[0].resolve('first')
-  assert.equal(await first, 'first')
-  scans[1].reject(new Error('watcher-only scan failed'))
-  // Let the host detect unhandled rejections before requesting a new scan.
-  await turn()
-  const next = coordinator.request()
-  scans[2].resolve('recovered')
-  assert.equal(await next, 'recovered')
-  assert.deepEqual(published, ['first', 'recovered'])
-  coordinator.close()
-})
-
-test('requests attached to watcher follow-ups still receive scan failures', async () => {
+test('queued request cohorts still receive scan failures', async () => {
   const scans = []
   const coordinator = createScanCoordinator(
     () => new Promise((resolve, reject) => scans.push({ resolve, reject })),
     () => {},
   )
   const first = coordinator.request()
-  coordinator.invalidate()
   const error = new Error('follow-up failed')
   const failed = assert.rejects(coordinator.request(), error)
   scans[0].resolve('first')

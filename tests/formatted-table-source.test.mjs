@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { TreeFragment } from '@lezer/common'
 import { parser, Table } from '@lezer/markdown'
+import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import {
   alignments,
   cellContent,
@@ -113,4 +115,68 @@ test('rows in quotes start after their quote markers', () => {
   assert.equal(rowStart('> > | a |', 2), 4)
   assert.equal(rowStart('  >| a |', 1), 3)
   assert.equal(rowStart('| a |', 0), 0)
+})
+
+test('ragged and malformed giant tables parse in linear time and bounded edits', () => {
+  const probe = {
+    parsedChunks: 0,
+    parsedUnits: 0,
+    scannedUnits: 0,
+    reusedNodes: 0,
+    builtGroups: 0,
+  }
+  const chunked = new ChunkedMarkdownParser(markdown, markdown, {
+    probe,
+    opaque: new Set(['Table']),
+  })
+  const shapes = [
+    (i) => `| ${i} | b |`,
+    (i) => `| ${i} | b | c | d | e |`,
+    (i) => `${i} \\| no | pipes \\\\|`,
+    (i) => `| ${'\\'.repeat(i % 7)}| ${'`|'.repeat(i % 5)} |`,
+    (i) => `plain row ${i} without pipes`,
+  ]
+  const rows = Array.from({ length: 20000 }, (_, i) => shapes[i % 5](i))
+  let text = `# T\n\n| a | b |\n| - | - |\n${rows.join('\n')}\n\nafter\n`
+  const parse = (fragments, demand) => {
+    const run = chunked.startChunkedParse(
+      {
+        length: text.length,
+        read: (from, to) => text.slice(from, to),
+        chunk: (from) => text.slice(from),
+        lineChunks: false,
+      },
+      fragments,
+      demand,
+    )
+    for (;;) {
+      const tree = run.advance()
+      if (tree) return tree
+    }
+  }
+  // A table widget on screen makes the whole table the visible range.
+  const demand = { from: 0, to: text.length }
+  let tree = parse([], demand)
+  // Finding the table's end reads it once.
+  assert.ok(probe.scannedUnits < 2 * text.length, JSON.stringify(probe))
+  for (const at of [text.length >> 1, (text.length * 3) >> 2]) {
+    for (const key of Object.keys(probe)) probe[key] = 0
+    const line = text.lastIndexOf('\n', at) + 1
+    text = `${text.slice(0, line)}x${text.slice(line)}`
+    tree = parse(
+      TreeFragment.applyChanges(TreeFragment.addTree(tree), [
+        { fromA: line, toA: line, fromB: line, toB: line + 1 },
+      ]),
+      demand,
+    )
+    assert.ok(probe.parsedUnits < 4096, JSON.stringify(probe))
+    assert.ok(probe.scannedUnits <= 16384, JSON.stringify(probe))
+  }
+  let tables = 0
+  tree.iterate({
+    enter(node) {
+      if (node.name === 'Table') tables++
+    },
+  })
+  assert.equal(tables, 1)
 })

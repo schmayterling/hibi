@@ -362,6 +362,10 @@ test('a 10,000-row table renders the rows in view and one row per edit', {
   )
   assert.deepEqual(result.added, [String(result.line)])
   assert.match(result.text, /^row X/)
+  // The table's rows are opaque to the parser: an edit parses its opening
+  // lines and scans a bounded window, not the 380 KB table.
+  assert.ok(result.probe.parsedUnits < 4096, JSON.stringify(result.probe))
+  assert.ok(result.probe.scannedUnits <= 16384, JSON.stringify(result.probe))
 })
 
 test('clicking a cell reveals the table source with the caret in that cell', {

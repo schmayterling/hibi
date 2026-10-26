@@ -1,4 +1,5 @@
 import { lazy } from 'react'
+import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import { formatToolbar } from '../_shared/format-toolbar'
 import { type DocumentFormat, defineAddon } from '../api'
@@ -11,6 +12,7 @@ import css from './style.css?inline'
 import { svgSource, typstFlavor, typstTokens } from './syntax'
 import type { TypstResult } from './types'
 
+let stopFormatted: (() => void) | undefined
 export default defineAddon({
   manifest,
   flavors: [typstFlavor],
@@ -36,6 +38,20 @@ export default defineAddon({
       },
     })
     context.styles.register('preview', css)
+    let formatted: { dispose: () => void } | undefined
+    const removeFormatted = formattedRegistry.register({
+      id: 'typst.blocks',
+      load: () =>
+        import('./formatted').then(({ typstContribution }) => {
+          const loaded = typstContribution(context)
+          formatted = loaded
+          return loaded.contribution
+        }),
+    })
+    stopFormatted = () => {
+      removeFormatted()
+      formatted?.dispose()
+    }
     context.editor.registerCodeLanguage({
       id: 'typst',
       aliases: ['typ'],
@@ -173,5 +189,9 @@ export default defineAddon({
         )
       },
     })
+  },
+  stop() {
+    stopFormatted?.()
+    stopFormatted = undefined
   },
 })

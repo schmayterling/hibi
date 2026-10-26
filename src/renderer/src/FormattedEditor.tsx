@@ -234,8 +234,8 @@ export function MarkdownEditor({
         }
         onClose={() => {
           onCloseFind()
-          window.document
-            .querySelector<HTMLElement>(
+          content.current
+            ?.querySelector<HTMLElement>(
               findTarget === 'rich'
                 ? '.rich-pane .cm-content'
                 : '.source-pane .cm-content',

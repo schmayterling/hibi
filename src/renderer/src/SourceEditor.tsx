@@ -1056,21 +1056,24 @@ export function SourceEditor({
               return false
             },
             beforeinput(event, view) {
-              const text = event.data
+              const data = event.data
               if (
                 event.inputType === 'insertText' &&
-                text &&
-                /[\r\n]/.test(text) &&
+                data &&
+                /[\r\n]/.test(data) &&
                 !view.composing &&
                 !view.state.readOnly
               ) {
                 // Chromium applies each line break of a text input as its own
                 // editing step, quadratic in the lines. Insert it as CodeMirror's
-                // own text input would, in one transaction.
+                // own text input would, in one transaction, with handlers and
+                // the default insert seeing the same normalized line breaks.
                 event.preventDefault()
                 const { from, to } = view.state.selection.main
+                const lines = view.state.toText(data),
+                  text = lines.toString()
                 const insert = () =>
-                  view.state.update(view.state.replaceSelection(text), {
+                  view.state.update(view.state.replaceSelection(lines), {
                     userEvent: 'input.type',
                     scrollIntoView: true,
                   })

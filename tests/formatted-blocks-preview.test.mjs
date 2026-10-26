@@ -402,24 +402,68 @@ test('drawn media resolve again for a new revision without being redrawn', {
   assert.equal(result.kept, 5)
 })
 
+test('a definition read in idle time turns a reference in view into a footnote', {
+  timeout: 60000,
+}, async () => {
+  const opened = await harness.evaluate(async () => {
+    const { footnoteScan } = window.formattedBlocks
+    window.fullSlice = footnoteScan.slice
+    // Opening reads one slice; the definition at the end is read in idle time.
+    footnoteScan.slice = 4096
+    const body = Array.from({ length: 5000 }, (_, i) => `line ${i}`).join('\n')
+    await window.livePreview.mount(
+      `See[^far].\n\n${body}\n\n[^far]: The end.`,
+      { width: 800, height: 600 },
+    )
+    return {
+      refs: document.querySelectorAll('.hibi-lp-footnote-ref').length,
+      first: document.querySelector('.cm-line').textContent,
+    }
+  })
+  try {
+    assert.deepEqual(opened, { refs: 0, first: 'See[^far].' })
+    await harness.waitForFunction(
+      () =>
+        document.querySelector('.hibi-lp-footnote-ref')?.textContent === 'far',
+      undefined,
+      { timeout: 30000 },
+    )
+  } finally {
+    await harness.evaluate(() => {
+      window.formattedBlocks.footnoteScan.slice = window.fullSlice
+    })
+  }
+})
+
 test('toggling one of 20,000 tasks is one edit that redraws one checkbox', {
   timeout: 90000,
 }, async () => {
-  // Lists of 100 tasks: a single 20,000-item list is one giant block, which
-  // the engine still redraws whole after each edit.
+  // Lists of 100 tasks: an edit in one 20,000-item list reparses the window
+  // around the viewport, covered by the next test.
   const doc = Array.from(
     { length: 200 },
     (_, list) =>
       `## List ${list}\n\n${Array.from({ length: 100 }, (_, i) => `- [ ] task ${list * 100 + i}`).join('\n')}`,
   ).join('\n\n')
-  const result = await harness.evaluate(async (doc) => {
+  await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    await preview.mount(doc, { width: 800, height: 600 })
+    preview.scrollTo(doc.indexOf('- [ ] task 10005'))
+  }, doc)
+  await harness.waitForFunction(
+    () =>
+      [...document.querySelectorAll('input.hibi-lp-task')].some(
+        (box) =>
+          box.getAttribute('aria-label') ===
+          'Task item checkbox for task 10005',
+      ),
+    undefined,
+    { timeout: 60000 },
+  )
+  const result = await harness.evaluate(async () => {
     const preview = window.livePreview
     const { TaskWidget } = window.formattedBlocks
-    await preview.mount(doc, { width: 800, height: 600 })
     const view = preview.view()
-    const line = view.state.doc.toString().indexOf('- [ ] task 10005')
-    preview.scrollTo(line)
-    await preview.settle()
     await preview.settle()
     const counts = { created: 0, updated: 0 }
     const proto = TaskWidget.prototype
@@ -456,7 +500,7 @@ test('toggling one of 20,000 tasks is one edit that redraws one checkbox', {
       attached: box.isConnected,
       boxes: document.querySelectorAll('input.hibi-lp-task').length,
     }
-  }, doc)
+  })
   console.log(JSON.stringify(result))
   assert.equal(result.line, '- [x] task 10005')
   // The toggled checkbox updates in place; the other visible ones keep their DOM.
@@ -466,4 +510,77 @@ test('toggling one of 20,000 tasks is one edit that redraws one checkbox', {
   assert.ok(result.boxes > 10 && result.boxes < 400, JSON.stringify(result))
   assert.ok(result.probe.parsedChunks <= 2, JSON.stringify(result.probe))
   assert.ok(result.probe.parsedUnits <= 4 * 4096, JSON.stringify(result.probe))
+})
+
+test('toggling a task in one 20,000-item list keeps every checkbox in view', {
+  timeout: 120000,
+}, async () => {
+  const doc = Array.from({ length: 20000 }, (_, i) => `- [ ] task ${i}`).join(
+    '\n',
+  )
+  await harness.evaluate(async (doc) => {
+    const preview = window.livePreview
+    await preview.mount(doc, { width: 800, height: 600 })
+    preview.scrollTo(preview.view().state.doc.line(10000).from)
+  }, doc)
+  await harness.waitForFunction(
+    () =>
+      [...document.querySelectorAll('input.hibi-lp-task')].some(
+        (box) =>
+          box.getAttribute('aria-label') ===
+          'Task item checkbox for task 10005',
+      ),
+    undefined,
+    { timeout: 60000 },
+  )
+  const sync = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    const view = preview.view()
+    const { TaskWidget } = window.formattedBlocks
+    await preview.settle()
+    window.counts = { created: 0, updated: 0 }
+    const proto = TaskWidget.prototype
+    window.restore = [proto.toDOM, proto.updateDOM]
+    const [toDOM, updateDOM] = window.restore
+    proto.toDOM = function (...args) {
+      window.counts.created++
+      return toDOM.apply(this, args)
+    }
+    proto.updateDOM = function (...args) {
+      window.counts.updated++
+      return updateDOM.apply(this, args)
+    }
+    window.boxes = [...document.querySelectorAll('input.hibi-lp-task')]
+    window.toggled = window.boxes.find(
+      (box) =>
+        box.getAttribute('aria-label') === 'Task item checkbox for task 10005',
+    )
+    const at = view.posAtDOM(window.toggled)
+    view.dispatch({
+      changes: { from: at + 1, to: at + 2, insert: 'x' },
+      userEvent: 'input.toggle',
+    })
+    return {
+      boxes: window.boxes.length,
+      kept: window.boxes.filter((box) => box.isConnected).length,
+    }
+  })
+  // The edit's reparse keeps the window's checkboxes until it lands.
+  assert.equal(sync.kept, sync.boxes, JSON.stringify(sync))
+  await harness.waitForFunction(() => window.toggled.checked, undefined, {
+    timeout: 60000,
+  })
+  const settled = await harness.evaluate(() => {
+    const { TaskWidget } = window.formattedBlocks
+    ;[TaskWidget.prototype.toDOM, TaskWidget.prototype.updateDOM] =
+      window.restore
+    return {
+      ...window.counts,
+      kept: window.boxes.filter((box) => box.isConnected).length,
+      boxes: window.boxes.length,
+    }
+  })
+  assert.equal(settled.kept, settled.boxes, JSON.stringify(settled))
+  assert.equal(settled.created, 0, JSON.stringify(settled))
+  assert.equal(settled.updated, 1, JSON.stringify(settled))
 })

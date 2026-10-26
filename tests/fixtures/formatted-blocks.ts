@@ -3,6 +3,7 @@ import type { EditorView } from '@codemirror/view'
 import './live-preview'
 import { contribution as frontmatter } from '../../src/addons/frontmatter/formatted'
 import { contribution as alerts } from '../../src/addons/markdown/formatted'
+import { footnoteScan } from '../../src/renderer/src/formatted/footnotes'
 import { MediaWidget } from '../../src/renderer/src/formatted/media'
 import { TaskWidget } from '../../src/renderer/src/formatted/tasks'
 import { formattedDocument } from '../../src/renderer/src/formatted-contributions'
@@ -31,10 +32,11 @@ Object.assign(window, {
     cancelDocumentMedia: async () => {
       media.cancels++
     },
-    onWorkspaceChanged: () => () => {},
+    onWorkspaceHeaderChanged: () => () => {},
     onDocumentMediaScopeChanged: () => () => {},
   },
   formattedBlocks: {
+    footnoteScan,
     media,
     MediaWidget,
     TaskWidget,

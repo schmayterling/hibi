@@ -6,7 +6,10 @@ import {
 } from '@codemirror/state'
 import { type EditorView, ViewPlugin } from '@codemirror/view'
 import type { MarkdownConfig } from '@lezer/markdown'
-import type { FormattedContribution } from '../formatted-contributions.ts'
+import {
+  type FormattedContribution,
+  formattedRefresh,
+} from '../formatted-contributions.ts'
 import './footnotes.css'
 
 /** Where a `[^label]` that starts at `pos` ends, or -1. Labels have no spaces or `]`. */
@@ -122,19 +125,25 @@ function count(labels: Map<string, number>, label: string | null, by: number) {
   else labels.delete(label)
 }
 
-/** Read about one slice of lines from the line start `from`; returns where reading stopped. */
+/** Read about one slice of lines from the line start `from` into `labels`; returns where reading stopped and whether it found definitions. */
 function readSlice(doc: Text, from: number, labels: Map<string, number>) {
-  if (from > doc.length) return from
-  let number = doc.lineAt(from).number
-  let at = from
+  let at = from,
+    found = false
+  if (from > doc.length) return { at, found }
   const stop = from + footnoteScan.slice
-  for (const iter = doc.iterLines(number); at <= stop && !iter.next().done; ) {
+  for (
+    const iter = doc.iterLines(doc.lineAt(from).number);
+    at <= stop && !iter.next().done;
+  ) {
     footnoteScan.lines++
-    count(labels, definedLabel(iter.value), 1)
+    const label = definedLabel(iter.value)
+    if (label) {
+      count(labels, label, 1)
+      found = true
+    }
     at += iter.value.length + 1
-    number++
   }
-  return at
+  return { at, found }
 }
 
 /** Reads the next slice of the note for definitions; formatted views dispatch it in idle time. */
@@ -143,7 +152,7 @@ export const readDefinitions = StateEffect.define<null>()
 export const footnoteDefinitions = StateField.define<Definitions>({
   create(state) {
     const labels = new Map<string, number>()
-    return { labels, read: readSlice(state.doc, 0, labels) }
+    return { labels, read: readSlice(state.doc, 0, labels).at }
   },
   update(value, transaction) {
     let { labels, read } = value
@@ -185,8 +194,9 @@ export const footnoteDefinitions = StateField.define<Definitions>({
     }
     if (transaction.effects.some((effect) => effect.is(readDefinitions))) {
       const next = new Map(labels)
-      read = readSlice(transaction.state.doc, read, next)
-      labels = next
+      const slice = readSlice(transaction.state.doc, read, next)
+      read = slice.at
+      if (slice.found) labels = next
     }
     return labels === value.labels && read === value.read
       ? value
@@ -215,7 +225,11 @@ const reader = ViewPlugin.fromClass(
         return
       this.idle = requestIdleCallback(() => {
         this.idle = 0
+        const { labels } = this.view.state.field(footnoteDefinitions)
         this.view.dispatch({ effects: readDefinitions.of(null) })
+        // References in view follow the definitions just read.
+        if (this.view.state.field(footnoteDefinitions).labels !== labels)
+          this.view.dispatch({ effects: formattedRefresh.of(null) })
       })
     }
     destroy() {

@@ -25,7 +25,7 @@ import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const flavors = [
   {
-    id: 'github-markdown.github',
+    id: 'markdown.github',
     markedOptions: { gfm: true },
     richExtensions: [GithubAlert, Strike],
     export: { extensions: [alertMarkdown] },

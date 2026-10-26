@@ -1,16 +1,17 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
+import crypto, { createHash } from 'node:crypto'
 import {
   mkdir,
   mkdtemp,
   readdir,
   readFile,
+  realpath,
   rename,
   rm,
   symlink,
   writeFile,
 } from 'node:fs/promises'
-import { createRequire } from 'node:module'
+import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -69,6 +70,17 @@ await build({
 const { PackStore, packDirectory } = await import(
   pathToFileURL(join(buildRoot, 'store.mjs'))
 )
+await build({
+  entryPoints: [
+    fileURLToPath(
+      new URL('../src/addons/dictionary/pack-verification.ts', import.meta.url),
+    ),
+  ],
+  outfile: join(buildRoot, 'verification.mjs'),
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+})
 test.after(() => rm(buildRoot, { recursive: true, force: true }))
 const fixture = (name) =>
   readFile(new URL(`./fixtures/dictionary-packs/${name}`, import.meta.url))
@@ -195,6 +207,331 @@ for (const [id, query, word, count] of [
     await reopened.close()
   })
 
+test('first lookup hashes only in worker, once per file identity across launches', async (t) => {
+  const ctx = await setup(t)
+  await install(ctx.store, 'en')
+  await ctx.store.close()
+  const counter = join(ctx.root, 'hashes')
+  const measuredWorker = join(ctx.root, 'measured-worker.mjs')
+  await writeFile(counter, '')
+  await writeFile(
+    measuredWorker,
+    `
+    import crypto from 'node:crypto'
+    import { appendFileSync } from 'node:fs'
+    import { syncBuiltinESMExports } from 'node:module'
+    const hash = crypto.createHash
+    crypto.createHash = (...args) => {
+      appendFileSync(${JSON.stringify(counter)}, 'hash\\n')
+      return hash(...args)
+    }
+    syncBuiltinESMExports()
+    await import(${JSON.stringify(pathToFileURL(worker).href)})
+  `,
+  )
+  const mainHash = t.mock.method(crypto, 'createHash')
+  syncBuiltinESMExports()
+  t.after(() => {
+    mainHash.mock.restore()
+    syncBuiltinESMExports()
+  })
+  const hashes = async () =>
+    (await readFile(counter, 'utf8')).split('\n').length - 1
+  const fresh = () => {
+    const store = new PackStore(ctx.root, pathToFileURL(measuredWorker))
+    t.after(() => store.close())
+    return store
+  }
+  const first = fresh()
+  await first.installed('en')
+  assert.equal(await hashes(), 0, 'metadata inspection reads no pack payload')
+  const found = await Promise.all(
+    Array.from({ length: 8 }, () => first.lookup('en', 'children')),
+  )
+  assert.ok(found.every((entries) => entries[0].word === 'child'))
+  assert.equal(mainHash.mock.callCount(), 0, 'no main-thread hashing')
+  assert.equal(
+    await hashes(),
+    2,
+    'one hash per payload, shared by concurrent reads',
+  )
+  await first.complete('en', 'ch')
+  assert.equal(await hashes(), 2)
+  await first.close()
+  const second = fresh()
+  assert.equal((await second.lookup('en', 'children'))[0].word, 'child')
+  assert.equal(
+    await hashes(),
+    2,
+    'unchanged files are not rehashed after restart',
+  )
+  const path = join(ctx.root, 'en', 'data.jsonl')
+  const bytes = await readFile(path)
+  bytes[0] ^= 1
+  await writeFile(path, bytes)
+  await assert.rejects(second.lookup('en', 'children'), /checksum/)
+  assert.equal(
+    await hashes(),
+    3,
+    'same-size changed file is reverified even in a warm store',
+  )
+})
+
+test('validation failures discard a matching receipt, force rehash, and cache checksum failures', async (t) => {
+  for (const damage of ['syntax', 'schema', 'entry']) {
+    const ctx = await setup(t)
+    const { manifest } = await install(ctx.store, 'en')
+    await ctx.store.lookup('en', 'children')
+    await ctx.store.close()
+    const path = join(ctx.root, 'en')
+    const file = join(path, damage === 'entry' ? 'data.jsonl' : 'index.json')
+    const original = await readFile(file)
+    let bad
+    if (damage === 'entry') {
+      const parsed = JSON.parse(
+        await readFile(join(path, 'index.json'), 'utf8'),
+      )
+      const [offset] = parsed.rows.find(([key]) => key === 'children')[1][0]
+      bad = Buffer.from(original)
+      bad[offset] = '#'.charCodeAt(0)
+    } else
+      bad =
+        damage === 'syntax'
+          ? `#${original.toString().slice(1)}`
+          : original.toString().replace('"version":1', '"version":2')
+    assert.equal(Buffer.byteLength(bad), Buffer.byteLength(original))
+    await writeFile(file, bad)
+    // Model an edit invisible to a filesystem's identity, or a stale receipt after bit rot.
+    const { packStamp } = await import(
+      pathToFileURL(join(buildRoot, 'verification.mjs'))
+    )
+    await writeFile(
+      join(path, '.verified.json'),
+      JSON.stringify({
+        stamp: await packStamp(await realpath(path), manifest),
+      }),
+    )
+    const hashesFile = join(ctx.root, 'hashes')
+    const measured = join(ctx.root, 'receipt-worker.mjs')
+    await writeFile(hashesFile, '')
+    await writeFile(
+      measured,
+      `
+      import crypto from 'node:crypto'
+      import { appendFileSync } from 'node:fs'
+      import { syncBuiltinESMExports } from 'node:module'
+      const hash = crypto.createHash
+      crypto.createHash = (...args) => { appendFileSync(${JSON.stringify(hashesFile)}, 'h'); return hash(...args) }
+      syncBuiltinESMExports()
+      await import(${JSON.stringify(pathToFileURL(worker).href)})
+    `,
+    )
+    const store = new PackStore(ctx.root, pathToFileURL(measured))
+    t.after(() => store.close())
+    await assert.rejects(store.lookup('en', 'children'), /damaged/)
+    assert.equal(
+      await readFile(hashesFile, 'utf8'),
+      '',
+      'matching receipt initially skipped hashing',
+    )
+    await assert.rejects(readFile(join(path, '.verified.json')), {
+      code: 'ENOENT',
+    })
+    for (let i = 0; i < 4; i++)
+      await assert.rejects(store.complete('en', 'ch'), /checksum/)
+    assert.equal(
+      await readFile(hashesFile, 'utf8'),
+      damage === 'entry' ? 'h' : 'hh',
+      'failed checksum is shared for the same stamp',
+    )
+  }
+})
+
+test('verification replaces an interrupted receipt temporary without following its symlink', async (t) => {
+  const { store, root } = await setup(t)
+  await install(store, 'en')
+  const sentinel = join(root, 'sentinel')
+  await writeFile(sentinel, 'untouched')
+  await symlink(sentinel, join(root, 'en', '.verified.tmp'))
+  assert.equal((await store.lookup('en', 'children'))[0].word, 'child')
+  assert.equal(await readFile(sentinel, 'utf8'), 'untouched')
+  await assert.rejects(readFile(join(root, 'en', '.verified.tmp')), {
+    code: 'ENOENT',
+  })
+})
+
+test('held cold verification leaves warm-pack completions runnable', async (t) => {
+  const ctx = await setup(t)
+  await install(ctx.store, 'en')
+  await install(ctx.store, 'fr')
+  await ctx.store.close()
+  const held = join(ctx.root, 'verification-held')
+  const probe = join(ctx.root, 'warm-probe')
+  const path = join(ctx.root, 'yielding-worker.mjs')
+  await writeFile(
+    path,
+    String.raw`
+    import fs from 'node:fs'
+    import { syncBuiltinESMExports } from 'node:module'
+    import { parentPort } from 'node:worker_threads'
+    const read = fs.createReadStream
+    let release
+    let warmSeq
+    let answered = false
+    fs.createReadStream = (path, ...args) => {
+      const stream = read(path, ...args)
+      if (!/[\\/]fr[\\/]data\.jsonl$/.test(String(path))) return stream
+      return (async function* () {
+        const wait = new Promise(resolve => { release = resolve })
+        fs.writeFileSync(${JSON.stringify(held)}, 'held')
+        await wait
+        yield* stream
+      })()
+    }
+    const send = parentPort.postMessage.bind(parentPort)
+    parentPort.postMessage = (message, ...args) => {
+      if (message.seq === warmSeq) answered = true
+      return send(message, ...args)
+    }
+    parentPort.on('message', job => {
+      if (job.type === 'test-release') release?.()
+      if (job.type === 'complete' && job.id === 'en') {
+        warmSeq = job.seq
+        setImmediate(() => fs.writeFileSync(${JSON.stringify(probe)}, answered ? 'answered' : 'blocked'))
+      }
+    })
+    syncBuiltinESMExports()
+    await import(${JSON.stringify(pathToFileURL(worker).href)})
+  `,
+  )
+  const store = new PackStore(ctx.root, pathToFileURL(path))
+  t.after(() => store.close())
+  await store.lookup('en', 'children')
+  const cold = store.lookup('fr', 'pr')
+  void cold.catch(() => {})
+  let warm
+  try {
+    await waitForAsync({ evaluate: async (check) => check() }, async () =>
+      readFile(held, 'utf8').then(
+        () => true,
+        () => false,
+      ),
+    )
+    warm = store.complete('en', 'ch')
+    await waitForAsync({ evaluate: async (check) => check() }, async () =>
+      readFile(probe, 'utf8').then(
+        () => true,
+        () => false,
+      ),
+    )
+    assert.equal(
+      await readFile(probe, 'utf8'),
+      'answered',
+      'warm result sent before the cold verification is released',
+    )
+    assert.ok((await warm).includes('children'))
+  } finally {
+    store.worker.worker?.postMessage({ type: 'test-release' })
+  }
+  await Promise.allSettled([cold, warm])
+})
+
+test('a hashed pack with invalid contents keeps its validation failure per stamp', async (t) => {
+  const { store, root } = await setup(t)
+  await install(store, 'en')
+  const path = join(root, 'en')
+  const bad = (await readFile(join(path, 'index.json'), 'utf8')).replace(
+    '"version":1',
+    '"version":2',
+  )
+  await writeFile(join(path, 'index.json'), bad)
+  const manifest = JSON.parse(
+    await readFile(join(path, 'manifest.json'), 'utf8'),
+  )
+  manifest.index.sha256 = createHash('sha256').update(bad).digest('hex')
+  await writeFile(join(path, 'manifest.json'), JSON.stringify(manifest))
+  const checks = t.mock.method(store.worker, 'verify')
+  await assert.rejects(store.lookup('en', 'children'), {
+    name: 'DictionaryPackValidationError',
+  })
+  for (let i = 0; i < 4; i++)
+    await assert.rejects(store.complete('en', 'ch'), {
+      name: 'DictionaryPackValidationError',
+    })
+  assert.equal(
+    checks.mock.callCount(),
+    1,
+    'a fresh successful hash already established the invalid content',
+  )
+})
+
+test('uninstall waits for a held receipt write before unloading or removing its folder', async (t) => {
+  const ctx = await setup(t)
+  await install(ctx.store, 'en')
+  await ctx.store.close()
+  const held = join(ctx.root, 'receipt-held')
+  const path = join(ctx.root, 'receipt-write-worker.mjs')
+  await writeFile(
+    path,
+    `
+    import fs from 'node:fs'
+    import files from 'node:fs/promises'
+    import { syncBuiltinESMExports } from 'node:module'
+    import { parentPort } from 'node:worker_threads'
+    const write = files.writeFile
+    let release
+    files.writeFile = async (path, ...args) => {
+      if (String(path).endsWith('.verified.tmp')) {
+        const wait = new Promise(resolve => { release = resolve })
+        fs.writeFileSync(${JSON.stringify(held)}, 'held')
+        await wait
+      }
+      return write(path, ...args)
+    }
+    parentPort.on('message', job => { if (job.type === 'test-release') release?.() })
+    syncBuiltinESMExports()
+    await import(${JSON.stringify(pathToFileURL(worker).href)})
+  `,
+  )
+  const store = new PackStore(ctx.root, pathToFileURL(path))
+  t.after(() => store.close())
+  const reading = store.lookup('en', 'children')
+  void reading.catch(() => {})
+  await waitForAsync({ evaluate: async (check) => check() }, async () =>
+    readFile(held).then(
+      () => true,
+      () => false,
+    ),
+  )
+  const recovered = Promise.withResolvers()
+  const recover = store.recover.bind(store)
+  t.mock.method(store, 'recover', async (id) => {
+    const path = await recover(id)
+    recovered.resolve()
+    return path
+  })
+  const unload = t.mock.method(store.worker, 'unload')
+  const removing = store.uninstall('en')
+  void removing.catch(() => {})
+  try {
+    await recovered.promise
+    await new Promise(setImmediate)
+    assert.equal(
+      unload.mock.callCount(),
+      0,
+      'receipt verification owns the folder until it settles',
+    )
+  } finally {
+    store.worker.worker?.postMessage({ type: 'test-release' })
+    await Promise.allSettled([reading, removing])
+  }
+  await removing
+  assert.deepEqual(await reading, [])
+  await assert.rejects(readFile(join(ctx.root, 'en', '.verified.json')), {
+    code: 'ENOENT',
+  })
+})
+
 test('installed languages share one cached list, invalidated after install and uninstall', async (t) => {
   const { store } = await setup(t)
   const lists = t.mock.method(store, 'list')
@@ -224,6 +561,7 @@ test('offline lookups keep working during another pack download, blocked convers
       contents: `
         import { parentPort } from 'node:worker_threads'
         import { PackIndex } from ${JSON.stringify(fileURLToPath(new URL('../src/addons/dictionary/pack-index.ts', import.meta.url)))}
+        import { verifyPack } from ${JSON.stringify(fileURLToPath(new URL('../src/addons/dictionary/pack-verification.ts', import.meta.url)))}
         const index = new PackIndex()
         let queue = Promise.resolve()
         parentPort.on('message', job => {
@@ -234,7 +572,9 @@ test('offline lookups keep working during another pack download, blocked convers
             }
             const result = job.type === 'unload'
               ? await index.unload(job.id)
-              : await index.lookup(job.id, job.directory, job.word)
+              : job.type === 'verify'
+                ? await verifyPack(job.directory, job.manifest)
+                : await index.lookup(job.id, job.directory, job.word)
             parentPort.postMessage({ seq: job.seq, result })
           })
         })
@@ -308,6 +648,8 @@ test('offline lookups keep working during another pack download, blocked convers
 test('worker validates preload and completion messages before index access', async (t) => {
   const runtime = new Worker(pathToFileURL(worker))
   t.after(() => runtime.terminate())
+  const receipt = join(buildRoot, '.verified.json')
+  await writeFile(receipt, 'untouched')
   let seq = 0
   const ask = (job) =>
     new Promise((resolve, reject) => {
@@ -341,6 +683,11 @@ test('worker validates preload and completion messages before index access', asy
     { type: 'unload', id: '../en' },
   ])
     assert.ok((await ask(job)).error)
+  assert.equal(
+    await readFile(receipt, 'utf8'),
+    'untouched',
+    'invalid request cannot invalidate another location',
+  )
   assert.deepEqual(
     (
       await ask({
@@ -354,10 +701,10 @@ test('worker validates preload and completion messages before index access', asy
   )
 })
 
-test('completion and preload share verification, bounds and lifecycle guards', async (t) => {
+test('completion and lookup share verification, bounds and lifecycle guards', async (t) => {
   const ctx = await setup(t)
   await install(ctx.store, 'en')
-  await ctx.store.preload('en')
+  await ctx.store.lookup('en', 'children')
   assert.ok((await ctx.store.complete('en', 'ch')).includes('children'))
   assert.equal((await ctx.store.complete('en', 'ch', 1)).length, 1)
   assert.deepEqual(await ctx.store.complete('en', ' '), [])
@@ -365,19 +712,19 @@ test('completion and preload share verification, bounds and lifecycle guards', a
     await assert.rejects(ctx.store.complete('en', 'ch', limit), /limit/)
   for (const prefix of ['x'.repeat(129), 'ch\u0000', null])
     await assert.rejects(ctx.store.complete('en', prefix), /prefix/)
-  await assert.rejects(ctx.store.preload('../en'))
+  await assert.rejects(ctx.store.lookup('../en', 'children'))
   await assert.rejects(ctx.store.complete('../en', 'ch'))
   const completing = ctx.store.complete('en', 'ch')
-  const preloading = ctx.store.preload('en')
+  const looking = ctx.store.lookup('en', 'children')
   await ctx.store.uninstall('en')
   assert.deepEqual(await completing, [])
-  await preloading
+  assert.deepEqual(await looking, [])
   assert.deepEqual(await ctx.store.complete('en', 'ch'), [])
   await install(ctx.store, 'en')
   const pending = ctx.store.complete('en', 'ch')
   await ctx.store.close()
   assert.deepEqual(await pending, [])
-  await assert.rejects(ctx.store.preload('en'), /closed/)
+  await assert.rejects(ctx.store.lookup('en', 'children'), /closed/)
   await assert.rejects(ctx.store.complete('en', 'ch'), /closed/)
 })
 
@@ -400,59 +747,14 @@ test('one completion request asks several packs and skips missing or failing one
   await assert.rejects(ctx.store.completeAll(['en'], 'ch', 33), /limit/)
 })
 
-test('idle preload starts once, loads sequentially and close cancels remaining languages', async (t) => {
-  const { store } = await setup(t)
-  const loaded = []
-  let release
-  const held = new Promise((resolve) => {
-    release = resolve
-  })
-  t.mock.method(store, 'installed', async () => true)
-  t.mock.method(store, 'preload', async (id) => {
-    loaded.push(id)
-    await held
-  })
-  store.preloadInstalled(['en', 'zh'])
-  store.preloadInstalled(['en', 'zh'])
-  assert.deepEqual(loaded, [])
-  await new Promise(setImmediate)
-  assert.deepEqual(loaded, ['en'])
-  await new Promise(setImmediate)
-  assert.deepEqual(loaded, ['en'])
-  await store.close()
-  release()
-  await new Promise(setImmediate)
-  assert.deepEqual(loaded, ['en'])
-})
-
-test('idle preload validates, deduplicates and loads only supplied preferred and recent languages', async (t) => {
-  const { store } = await setup(t)
-  const loaded = []
-  t.mock.method(store, 'installed', async () => true)
-  t.mock.method(store, 'preload', async (id) => {
-    loaded.push(id)
-  })
-  for (const input of [undefined, null, 'en', ['../en'], Array(8).fill('en')])
-    assert.throws(() => store.preloadInstalled(input))
-  store.preloadInstalled(['fr', 'ja', 'en', 'fr'])
-  await waitForAsync(
-    { evaluate: async (check) => check() },
-    async () => loaded.length === 3,
-  )
-  assert.deepEqual(loaded, ['fr', 'ja', 'en'])
-  store.preloadInstalled(['zh'])
-  await new Promise(setImmediate)
-  assert.deepEqual(loaded, ['fr', 'ja', 'en'])
-})
-
-test('preload rejects checksum corruption before loading worker index', async (t) => {
+test('lookup rejects checksum corruption before loading worker index', async (t) => {
   const { store, root } = await setup(t)
   await install(store, 'en')
   const path = join(root, 'en', 'index.json')
   const bytes = await readFile(path)
   bytes[0] ^= 1
   await writeFile(path, bytes)
-  await assert.rejects(store.preload('en'), /checksum/)
+  await assert.rejects(store.lookup('en', 'children'), /checksum/)
   await assert.rejects(store.complete('en', 'ch'), /checksum/)
 })
 

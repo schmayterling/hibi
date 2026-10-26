@@ -158,6 +158,9 @@ export const formattedViews = Facet.define<FormattedNodeView>()
 /** Opaque node names of the active contributions, read by the formatted syntax. */
 export const formattedOpaque = Facet.define<string>()
 
+/** Inline formatting nodes of the active contributions, read by the formatted view's Enter. */
+export const formattedFormatting = Facet.define<string>()
+
 /** Nodes of syntax settings that are off: they and their children show as written. */
 export const formattedLiteral = Facet.define<string>()
 

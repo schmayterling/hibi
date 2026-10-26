@@ -13,14 +13,16 @@ const parityNote = `# Small parity
 
 Water is H~2~O and CO~2~ here, with ~a long subscript~ too.
 
--# a line of small text
+References read ~&amp;~ and ~a&#169;b~, and code keeps ~~a~ \`~~\` as text.
+
+-# a line of small text &amp; &#169;
 
 A paragraph, then
 -# small text that ends it
 
 > -# quoted small text
 
-- -# listed small text
+- -# listed small text &lt;
 - item with x~i~ inside
 `
 let app, folder, page
@@ -119,26 +121,43 @@ after(
   { timeout: 30000 },
 )
 
-/** Computed styles of subscripts and small text, and a screenshot of the pane. */
+/**
+ * The distinct computed styles of subscripts and small text, their counts,
+ * and a screenshot of the pane. The formatted view's text around a reference
+ * is split around its characters, so it has more elements.
+ */
 async function capture(name, selectors) {
-  const styles = await page.evaluate((selectors) => {
-    const read = (element, keys) => {
-      const style = getComputedStyle(element)
-      return Object.fromEntries(keys.map((key) => [key, style[key]]))
-    }
-    return {
-      subscripts: [...document.querySelectorAll(selectors.subscript)].map(
-        (element) => read(element, ['verticalAlign', 'fontSize', 'color']),
+  const { styles, count } = await page.evaluate((selectors) => {
+    const distinct = (selector, keys) => [
+      ...new Set(
+        [...document.querySelectorAll(selector)].map((element) => {
+          const style = getComputedStyle(element)
+          return JSON.stringify(keys.map((key) => style[key]))
+        }),
       ),
-      subtext: [...document.querySelectorAll(selectors.subtext)].map(
-        (element) => read(element, ['fontSize', 'color', 'lineHeight']),
+    ]
+    return {
+      styles: {
+        subscripts: distinct(selectors.subscript, [
+          'verticalAlign',
+          'fontSize',
+          'color',
+        ]),
+        subtext: distinct(selectors.subtext, [
+          'fontSize',
+          'color',
+          'lineHeight',
+        ]),
+      },
+      count: [selectors.subscript, selectors.subtext].map(
+        (selector) => document.querySelectorAll(selector).length,
       ),
     }
   }, selectors)
   const image = await page
     .locator('.rich-pane')
     .screenshot({ path: `test-results/formatted-text-extras-${name}.png` })
-  return { styles, image }
+  return { styles, count, image }
 }
 
 test('subscripts and small text render in the formatted view as in the rich view, in light and dark', {
@@ -199,13 +218,16 @@ test('subscripts and small text render in the formatted view as in the rich view
   console.log(JSON.stringify(report))
   for (const { scheme, difference } of report)
     assert.ok(difference < 0.002, `${scheme}: ${difference}`)
-  // Four subscripts and four small-text paragraphs, as in the rich view.
+  // Seven subscripts and four small-text paragraphs in the rich view; the
+  // formatted view shows each reference's characters, as the rich view does.
+  assert.deepEqual(rich['hibi-light'].count, [7, 4])
   assert.deepEqual(
-    [
-      rich['hibi-light'].styles.subscripts.length,
-      rich['hibi-light'].styles.subtext.length,
-    ],
-    [4, 4],
+    await page.evaluate(() =>
+      [...document.querySelectorAll('.rich-pane .hibi-lp-entity')].map(
+        (glyph) => glyph.textContent,
+      ),
+    ),
+    ['&', '©', '&', '©', '<'],
   )
 })
 
@@ -228,6 +250,20 @@ test('the caret reveals subscript tildes and the small-text marker', {
     .locator('.rich-pane .cm-line', { hasText: 'a line of small text' })
     .click()
   await marker('-#').waitFor()
+  // Clicking a reference's characters places the caret there, which shows
+  // its source; the other references keep their characters.
+  await page
+    .locator('.rich-pane .hibi-lp-entity', { hasText: '©' })
+    .first()
+    .click()
+  const line = page.locator('.rich-pane .cm-line', { hasText: 'a&#169;b' })
+  await line.waitFor()
+  assert.deepEqual(
+    await line
+      .locator('.hibi-lp-entity')
+      .evaluateAll((glyphs) => glyphs.map((glyph) => glyph.textContent)),
+    ['&'],
+  )
   // With markers hidden, the caret does not reveal them.
   await engine(true, false)
   await open('parity.md')
@@ -236,6 +272,131 @@ test('the caret reveals subscript tildes and the small-text marker', {
     .click()
   await settle()
   assert.equal(await marker('-#').count(), 0)
+  await engine(true, true)
+})
+
+test('enter inside a subscript splits it into two subscripts, and undo joins them', {
+  timeout: 90000,
+}, async () => {
+  await writeFile(
+    join(folder, 'notes', 'split.md'),
+    '# Split\n\nWater is ~abcd~ here.\n',
+  )
+  await open('split.md')
+  await page
+    .locator('.rich-pane .hibi-lp-subscript', { hasText: 'abcd' })
+    .waitFor()
+  await page.locator('.rich-pane .cm-line', { hasText: 'Water is' }).click()
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({
+      selection: { anchor: view.state.doc.toString().indexOf('abcd') + 2 },
+    })
+  })
+  await page.keyboard.press('Enter')
+  // Before, the note became `~ab` and `cd~` and lost both subscripts.
+  await waitForAsync(page, async () =>
+    (await window.hibi.getDocument()).markdown.includes(
+      'Water is ~ab~\n\n~cd~ here.',
+    ),
+  )
+  await page
+    .locator('.rich-pane .hibi-lp-subscript', { hasText: 'cd' })
+    .waitFor()
+  assert.deepEqual(
+    await page.evaluate(() =>
+      [...document.querySelectorAll('.rich-pane .hibi-lp-subscript')].map(
+        (element) => element.textContent,
+      ),
+    ),
+    ['ab', 'cd'],
+  )
+  await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(page, async () =>
+    (await window.hibi.getDocument()).markdown.includes(
+      'Water is ~abcd~ here.',
+    ),
+  )
+})
+
+test('backspace at the start of small text keeps the rich view block behavior', {
+  timeout: 90000,
+}, async () => {
+  const sources = [
+    '-# abcd',
+    'before\n\n-# abcd',
+    '-# before\n\n-# abcd',
+    '> -# abcd',
+    '- -# abcd',
+  ]
+  const results = []
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  for (const codemirror of [false, true]) {
+    await engine(codemirror, false)
+    const output = []
+    for (const [index, source] of sources.entries()) {
+      const name = `backspace-${codemirror}-${index}.md`
+      await writeFile(join(folder, 'notes', name), source)
+      await open(name)
+      await page
+        .locator(codemirror ? '.rich-pane .cm-content' : '.rich-pane .tiptap')
+        .waitFor()
+      await waitForAsync(
+        page,
+        async (name) => (await window.hibi.getDocument()).name === name,
+        name,
+      )
+      await page.evaluate((codemirror) => {
+        if (codemirror) {
+          const view = document.querySelector('.rich-pane .cm-content').cmTile
+            .root.view
+          view.focus()
+          view.dispatch({
+            selection: { anchor: view.state.doc.toString().indexOf('abcd') },
+          })
+        } else {
+          const editor = document.querySelector('.rich-pane .tiptap').editor
+          let at = 0
+          editor.state.doc.descendants((node, pos) => {
+            if (node.isText && node.text === 'abcd') at = pos
+          })
+          editor.commands.focus()
+          editor.commands.setTextSelection(at)
+        }
+      }, codemirror)
+      await page.keyboard.press('Backspace')
+      await page.evaluate(() => new Promise(requestAnimationFrame))
+      const markdown = (await page.evaluate(() => window.hibi.getDocument()))
+        .markdown
+      output.push(markdown.trimEnd())
+      if (codemirror) {
+        assert.deepEqual(
+          await page.evaluate(() => {
+            const content = document.querySelector('.rich-pane .cm-content')
+            return [
+              document.activeElement === content,
+              content.cmTile.root.view.state.selection.main.head,
+            ]
+          }),
+          [true, markdown.indexOf('abcd')],
+        )
+        if (markdown !== source) {
+          await pressShortcut(app, `${mod}+z`)
+          await waitForAsync(
+            page,
+            async (source) =>
+              (await window.hibi.getDocument()).markdown === source,
+            source,
+          )
+        }
+      }
+    }
+    results.push(output)
+  }
+  console.log(JSON.stringify({ smallTextBackspace: results }))
+  assert.deepEqual(results[1], results[0])
   await engine(true, true)
 })
 
@@ -255,7 +416,7 @@ test('with their syntax settings or the flavor off, subscripts and small text st
         subtext: document.querySelectorAll('.rich-pane .markdown-subtext')
           .length,
         marker: [...document.querySelectorAll('.rich-pane .cm-line')].some(
-          (line) => line.textContent === '-# a line of small text',
+          (line) => line.textContent === '-# a line of small text &amp; &#169;',
         ),
       })),
       { subscripts: 0, subtext: 0, marker: true },

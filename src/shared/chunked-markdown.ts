@@ -186,6 +186,10 @@ export type ChunkedMarkdownProbe = {
   reusedNodes: number
   /** Group nodes created for the new tree. */
   builtGroups: number
+  /** Worker adoption diagnostics; absent until a worker is attached. */
+  adoptionDeclined?: number
+  adoptedRecords?: number
+  adoptionSlices?: number
 }
 
 export type ChunkedMarkdownOptions = {
@@ -2132,6 +2136,21 @@ export class ChunkedMarkdownParser extends Parser {
     return new ChunkedParse(this, input, fragments, null)
   }
 
+  /** Scan every boundary with no inline trees, using the view's bounded scanner. */
+  startBoundaryParse(
+    input: Input,
+    fragments: readonly TreeFragment[] = [],
+    prefix = 0,
+  ): ChunkedPartialParse {
+    return new ChunkedParse(
+      this,
+      input,
+      fragments,
+      { from: Number.POSITIVE_INFINITY, to: Number.POSITIVE_INFINITY },
+      prefix,
+    )
+  }
+
   /**
    * Parse with inline content near `demand`; null parses the whole document.
    * The first `prefix` units become one `Frontmatter` node.
@@ -2235,4 +2254,223 @@ export function uncovered(tree: Tree, from: number, to: number) {
     }
   }
   return false
+}
+
+/** Bounded wire records. A giant's arrays and long key are split, never cloned as one payload. */
+export type BoundaryRecord =
+  | {
+      kind: 'chunk'
+      length: number
+      type: 'pending' | 'tail' | 'plain' | 'giant'
+      reach?: number
+      edge?: number
+    }
+  | {
+      kind: 'giant'
+      start: number
+      leaf: boolean
+      retype: boolean
+      opaque: boolean
+      end: number | null
+      stuck?: Stuck
+    }
+  | { kind: 'key'; text: string }
+  | { kind: 'point'; at: number; retype?: boolean }
+  | { kind: 'head'; from: number; to: number }
+  | { kind: 'list'; from: number; items: number }
+  | { kind: 'end'; from: number; last: number }
+
+export const boundaryPageSize = 128
+
+/** Only metadata crosses realms. The receiving view creates its own viewport windows. */
+export function* boundaryRecords(tree: Tree): Generator<BoundaryRecord> {
+  for (const group of tree.children as readonly Tree[]) {
+    for (const chunk of group.children as readonly Tree[]) {
+      const info = chunk.prop(chunkInfo)!
+      const type = info.kind === 'parsed' ? 'pending' : info.kind
+      if (type === 'root' || type === 'group') continue
+      yield {
+        kind: 'chunk',
+        length: chunk.length,
+        type,
+        ...(info.reach === undefined ? {} : { reach: info.reach }),
+        ...(info.edge === undefined ? {} : { edge: info.edge }),
+      }
+      if (info.kind !== 'giant') continue
+      const { points, key, ends, ...block } = info.block
+      yield { kind: 'giant', ...block }
+      if (key !== null) {
+        if (!key.length) yield { kind: 'key', text: '' }
+        for (let from = 0; from < key.length; from += 4096)
+          yield { kind: 'key', text: key.slice(from, from + 4096) }
+      }
+      for (const point of points) {
+        yield {
+          kind: 'point',
+          at: point.at,
+          ...(point.retype === undefined ? {} : { retype: point.retype }),
+        }
+        for (const range of point.head) yield { kind: 'head', ...range }
+        for (const list of point.lists) yield { kind: 'list', ...list }
+      }
+      for (const end of ends) yield { kind: 'end', ...end }
+    }
+  }
+}
+
+/** Appending a page visits only that page; finishing never walks the accumulated index. */
+export class BoundaryTree {
+  private groups: Tree[] = []
+  private positions: number[] = []
+  private chunks: Tree[] = []
+  private chunkPositions: number[] = []
+  private pos = 0
+  private groupFrom = 0
+  private giants = 0
+  private groupGiants = 0
+  private current: Extract<BoundaryRecord, { kind: 'chunk' }> | null = null
+  private block: Giant | null = null
+  private point: {
+    at: number
+    retype?: boolean
+    head: Lines[]
+    lists: { from: number; items: number }[]
+  } | null = null
+  private parser: ChunkedMarkdownParser
+  readonly length: number
+  constructor(parser: ChunkedMarkdownParser, length: number) {
+    this.parser = parser
+    this.length = length
+  }
+
+  append(records: readonly BoundaryRecord[]) {
+    if (records.length > boundaryPageSize)
+      throw new Error('Could not read a document worker reply.')
+    for (const record of records) {
+      if (!record || typeof record !== 'object')
+        throw new Error('Could not read a document worker reply.')
+      if (record.kind === 'chunk') {
+        this.flushChunk()
+        if (
+          !Number.isSafeInteger(record.length) ||
+          record.length <= 0 ||
+          !['pending', 'tail', 'plain', 'giant'].includes(record.type) ||
+          this.pos + record.length > this.length
+        )
+          throw new Error('Could not read a document worker reply.')
+        this.current = record
+      } else if (record.kind === 'giant') {
+        if (this.current?.type !== 'giant' || this.block)
+          throw new Error('Could not read a document worker reply.')
+        const { kind: _kind, ...block } = record
+        this.block = { ...block, key: null, points: [], ends: [] }
+      } else if (record.kind === 'key') {
+        if (
+          !this.block ||
+          typeof record.text !== 'string' ||
+          record.text.length > 4096
+        )
+          throw new Error('Could not read a document worker reply.')
+        this.block!.key = (this.block!.key ?? '') + record.text
+      } else if (record.kind === 'point') {
+        if (!this.block)
+          throw new Error('Could not read a document worker reply.')
+        this.point = {
+          at: record.at,
+          head: [],
+          lists: [],
+          ...(record.retype === undefined ? {} : { retype: record.retype }),
+        }
+        ;(this.block!.points as Replay[]).push(this.point)
+      } else if (record.kind === 'head') {
+        if (!this.point)
+          throw new Error('Could not read a document worker reply.')
+        this.point.head.push({ from: record.from, to: record.to })
+      } else if (record.kind === 'list') {
+        if (!this.point)
+          throw new Error('Could not read a document worker reply.')
+        this.point.lists.push({ from: record.from, items: record.items })
+      } else if (record.kind === 'end') {
+        if (!this.block)
+          throw new Error('Could not read a document worker reply.')
+        ;(this.block.ends as End[]).push({
+          from: record.from,
+          last: record.last,
+        })
+      } else throw new Error('Could not read a document worker reply.')
+    }
+  }
+
+  private flushChunk() {
+    const current = this.current
+    if (!current) return
+    const { type, length, reach, edge } = current
+    const shared = {
+      ...(reach === undefined ? {} : { reach }),
+      ...(edge === undefined ? {} : { edge }),
+    }
+    if (type === 'giant') {
+      if (!this.block)
+        throw new Error('Could not read a document worker reply.')
+    }
+    const info: ChunkInfo =
+      type === 'giant'
+        ? { kind: type, block: this.block!, window: null, ...shared }
+        : { kind: type, ...shared }
+    if (!this.chunks.length) this.groupFrom = this.pos
+    this.chunks.push(
+      new Tree(NodeType.none, [], [], length, [[chunkInfo, info]]),
+    )
+    this.chunkPositions.push(this.pos - this.groupFrom)
+    if (type === 'giant') {
+      this.giants++
+      this.groupGiants++
+    }
+    this.pos += length
+    this.current = null
+    this.block = null
+    this.point = null
+    if (this.chunks.length === this.parser.groupSize) this.flushGroup()
+  }
+
+  private flushGroup() {
+    if (!this.chunks.length) return
+    this.groups.push(
+      new Tree(
+        NodeType.none,
+        this.chunks,
+        this.chunkPositions,
+        this.pos - this.groupFrom,
+        [
+          [
+            chunkInfo,
+            {
+              kind: 'group',
+              parsed: 0,
+              giants: this.groupGiants,
+              ...reachOf(this.chunks, this.chunkPositions),
+            },
+          ],
+        ],
+      ),
+    )
+    this.positions.push(this.groupFrom)
+    this.chunks = []
+    this.chunkPositions = []
+    this.groupGiants = 0
+  }
+
+  finish() {
+    this.flushChunk()
+    if (this.pos !== this.length)
+      throw new Error('Could not read a document worker reply.')
+    this.flushGroup()
+    return new Tree(
+      this.parser.document,
+      this.groups,
+      this.positions,
+      this.length,
+      [[chunkInfo, { kind: 'root', parsed: 0, giants: this.giants }]],
+    )
+  }
 }

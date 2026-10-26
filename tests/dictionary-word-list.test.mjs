@@ -160,6 +160,19 @@ const scrollToEnd = async (name) => {
   assert.fail(`${name} was not reached`)
 }
 
+test('recovery notice can be dismissed without reappearing when the settings page returns', async () => {
+  await open(['keeper'])
+  await page.evaluate(() => window.wordHarness.notice('Recovered words.'))
+  const notice = page.getByRole('status')
+  await notice.waitFor()
+  await button('Dismiss').click()
+  await notice.waitFor({ state: 'detached' })
+  await page.evaluate(() => window.wordHarness.setVisible(false))
+  await page.evaluate(() => window.wordHarness.setVisible(true))
+  await button('Remove “keeper”').waitFor()
+  assert.equal(await notice.count(), 0)
+})
+
 test('mixed row heights stay windowed while scrolling and zooming', {
   timeout: 45000,
 }, async () => {

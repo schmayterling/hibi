@@ -1824,8 +1824,28 @@ if (!app.requestSingleInstanceLock()) {
         ADDON_CHANNELS.query,
         (event, id: unknown, method: unknown, input: unknown) =>
           readAfterFileOperation(event, (window) =>
-            invokeAddon(window, id, method, input, true),
+            invokeAddon(window, id, method, input, 'query'),
           ),
+      )
+      handle(
+        ADDON_CHANNELS.profile,
+        (event, id: unknown, method: unknown, input: unknown) => {
+          if (closing) throw fileOperationUnavailable()
+          const operation = invokeAddon(
+            trustedWindow(event),
+            id,
+            method,
+            input,
+            'profile',
+          )
+          const completed = operation.then(
+            () => {},
+            () => {},
+          )
+          pendingFileOperations.add(completed)
+          void completed.then(() => pendingFileOperations.delete(completed))
+          return operation
+        },
       )
       handle(
         ADDON_WINDOW_CHANNELS.open,
@@ -1862,7 +1882,7 @@ if (!app.requestSingleInstanceLock()) {
           const { window, addonId } = addonWindowSender(event)
           return readAfterFileOperation(
             event,
-            () => invokeAddon(window, addonId, method, input, true),
+            () => invokeAddon(window, addonId, method, input, 'query'),
             window,
           )
         },

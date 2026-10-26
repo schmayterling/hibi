@@ -1,6 +1,13 @@
-import type { AddonStorageHandle } from '../../shared/addon-storage'
-import type { HostSelectedIoHostApi } from '../../shared/host-selected-io'
+import {
+  HOST_SELECTED_IO_MAX_BYTES,
+  type HostSelectedIoHostApi,
+} from '../../shared/host-selected-io.ts'
 import type { AddonContext } from '../api'
+import { type CustomWord, customWords, wordText } from './custom-word-data.ts'
+import {
+  type IndexedCustomWords,
+  openCustomWordStorage,
+} from './custom-word-storage.ts'
 import {
   type DictionaryProvider,
   type Entry,
@@ -8,89 +15,46 @@ import {
   type Lang,
 } from './providers.ts'
 
-/**
- * A word the user added. Without `lang`, it belongs to the word's first lookup
- * language. Listed words always have an `id` that stays the same when their
- * language or note changes.
- */
-export type CustomWord = {
-  id?: string
-  word: string
-  lang?: Lang
-  note?: string
-}
+export { type CustomWord, customWords } from './custom-word-data.ts'
 
 // `label` and `detail` fields are collected into the UI copy catalog.
 export const yours = {
   label: 'Your word',
   detail: 'Added to your dictionary.',
 }
-const MAX_WORDS = 5000
-const MAX_NOTE = 2000
-const key = (word: CustomWord) =>
-  `${word.word.normalize('NFC').toLowerCase()}\u0000${word.lang ?? ''}`
 
-function wordText(word: string) {
-  const text = word.trim().normalize('NFC')
-  return text && text.length <= 64 && !/[\p{Cc}]/u.test(text) ? text : undefined
-}
-
-/** Valid words only, first spelling kept for each word and language. */
-export function customWords(value: unknown, limit = MAX_WORDS): CustomWord[] {
-  if (!Array.isArray(value)) return []
-  const seen = new Set<string>()
-  const words: CustomWord[] = []
-  for (const item of value) {
-    if (!item || typeof item !== 'object') continue
-    const { id, word, lang, note } = item as Record<string, unknown>
-    if (typeof word !== 'string') continue
-    const text = wordText(word)
-    if (!text) continue
-    const entry: CustomWord = {
-      ...(typeof id === 'string' && id && id.length <= 128 ? { id } : {}),
-      word: text,
-      ...(LANGS.includes(lang as Lang) ? { lang: lang as Lang } : {}),
-      ...(typeof note === 'string' && note.trim()
-        ? { note: note.trim().slice(0, MAX_NOTE) }
-        : {}),
-    }
-    if (seen.has(key(entry))) continue
-    seen.add(key(entry))
-    words.push(Object.freeze(entry))
-    if (words.length === limit) break
-  }
-  return words
-}
-
-/**
- * Gives each word a unique `id`. New words get a random one; words `loaded`
- * from before ids existed get one from their word and language, so it stays
- * the same until they are saved.
- */
-function withIds(list: CustomWord[], loaded = false) {
-  const ids = new Set<string>()
-  return list.map((item) => {
-    let id = item.id && !ids.has(item.id) ? item.id : loaded ? key(item) : ''
-    if (!id || ids.has(id)) id = crypto.randomUUID()
-    ids.add(id)
-    return id === item.id ? item : Object.freeze({ ...item, id })
-  })
-}
-
-let words: readonly CustomWord[] = Object.freeze([])
-let handle: AddonStorageHandle<unknown> | null = null
+let handle: IndexedCustomWords | null = null
+let wordNative: AddonContext['native'] | null = null
+let opening = 0
+let failure = ''
+export const customWordsFailure = () => failure
 let fileIo: HostSelectedIoHostApi | null = null
 let revision = 0
 const listeners = new Set<() => void>()
-
-function publish(next: CustomWord[]) {
-  words = Object.freeze(next)
+let view = {
+  indexed: null as IndexedCustomWords | null,
+  count: 0,
+  revision: 0,
+  version: 0,
+}
+export const customWordsView = () => view
+function publishView() {
+  view = {
+    indexed: handle,
+    count: handle?.snapshot().count ?? 0,
+    revision,
+    version: view.version + 1,
+  }
   for (const listener of listeners) listener()
 }
-
-/** The user's words, in the order they were added. Local only; never sent. */
-export function listCustomWords(): readonly CustomWord[] {
-  return words
+/** Complete vocabulary only when a consumer explicitly requests it. */
+export async function readCustomWords() {
+  const opened = handle
+  if (!opened) return Object.freeze([])
+  const loaded = await readAll(opened)
+  if (handle !== opened)
+    throw new Error('Turn on Dictionary and thesaurus to keep custom words.')
+  return Object.freeze(loaded)
 }
 
 export function onCustomWordsChanged(listener: () => void): () => void {
@@ -106,8 +70,45 @@ export function customWordsFileIo() {
 }
 
 /** Loads the saved words and follows changes made in other windows. */
-export async function openCustomWords(context: AddonContext) {
-  const opened = await context.storage.global<unknown>('custom-words', 1)
+export async function openCustomWords(
+  context: AddonContext,
+  storage?: IndexedCustomWords,
+) {
+  const captured = ++opening
+  if (handle) {
+    handle = null
+    fileIo = null
+    revision = 0
+    publishView()
+  }
+  wordNative = context.native
+  let opened: IndexedCustomWords
+  try {
+    opened =
+      storage ??
+      (await openCustomWordStorage(
+        context.native,
+        // Profile storage stays available while a user-file dialog is open.
+        <T>(method: string, input?: unknown) =>
+          window.hibi.invokeAddonProfile(
+            'dictionary',
+            method,
+            input,
+          ) as Promise<T>,
+      ))
+  } catch (error) {
+    if (captured === opening) {
+      failure =
+        error instanceof Error ? error.message : 'Could not save custom words.'
+      publishView()
+    }
+    throw error
+  }
+  if (captured !== opening) {
+    opened.close()
+    return () => {}
+  }
+  failure = ''
   handle = opened
   saving = Promise.resolve()
   pendingSaves = new Set()
@@ -119,60 +120,42 @@ export async function openCustomWords(context: AddonContext) {
   return () => {
     stop()
     if (handle === opened) {
+      opening++
+      wordNative = null
       handle = null
       fileIo = null
+      revision = 0
+      publishView()
     }
-    revision = 0
-    publish([])
+    opened.close()
   }
 }
 
-/** Publishes the handle's latest words; an older revision never replaces a newer one. */
+/** Publishes metadata and visible-page changes; older revisions never replace newer ones. */
 function sync() {
   const snapshot = handle?.snapshot()
-  if (!snapshot) return
-  if (snapshot.status === 'ready') {
-    if (snapshot.revision < revision) return
-    revision = snapshot.revision
-  }
-  publish(
-    snapshot.status === 'ready'
-      ? withIds(customWords(snapshot.value), true)
-      : [],
-  )
+  if (!snapshot || snapshot.revision < revision) return
+  revision = snapshot.revision
+  publishView()
 }
 
 let saving: Promise<unknown> = Promise.resolve()
 let pendingSaves = new Set<Promise<unknown>>()
 let exportBarriers = new Set<Set<Promise<unknown>>>()
 
-/**
- * Saves `change` applied to the latest list. Changes run one at a time, so a
- * quick edit after another never works from a stale list. Rejects with a
- * message the UI can show.
- */
-export function updateCustomWords(
-  change: (current: readonly CustomWord[]) => readonly CustomWord[],
-) {
+/** Runs keyed saves in order; later edits fetch the latest saved record. */
+function queueSave<T>(change: (opened: IndexedCustomWords) => Promise<T>) {
   const opened = handle
   const previous = saving.catch(() => {})
   const run = previous.then(async () => {
+    if (failure) throw new Error(failure)
     if (!opened || handle !== opened)
       throw new Error('Turn on Dictionary and thesaurus to keep custom words.')
-    const next = withIds(customWords(change(words), Infinity))
-    if (next.length > MAX_WORDS)
-      throw new Error(
-        'You can keep up to 5,000 custom words. Remove some to add more.',
-      )
-    const result = await opened.set(next)
+    const result = await change(opened)
     if (handle !== opened)
       throw new Error('Turn on Dictionary and thesaurus to keep custom words.')
-    if (result.status === 'conflict')
-      throw new Error('Custom words changed in another window. Try again.')
-    if (result.status !== 'saved')
-      throw new Error('Could not save custom words.')
-    // A newer change from another window may have arrived before this reply.
     sync()
+    return result
   })
   saving = run
   const pending = pendingSaves
@@ -185,6 +168,18 @@ export function updateCustomWords(
   return run
 }
 
+async function readAll(opened: IndexedCustomWords) {
+  const revision = opened.snapshot().revision
+  const words: CustomWord[] = []
+  let after = 0
+  for (;;) {
+    const page = await opened.page({ after, revision })
+    words.push(...page.words)
+    if (!page.more) return words
+    after = page.after
+  }
+}
+
 /**
  * Applies `change` to the saved entry with `original`'s id when its turn
  * comes, so queued edits to different fields of one word all keep. Rejects
@@ -194,39 +189,52 @@ export function editCustomWord(
   original: CustomWord,
   change: (current: CustomWord) => CustomWord,
 ) {
-  return updateCustomWords((current) => {
-    const { id } = original
-    const index = current.findIndex((item) => id && item.id === id)
-    const item = current[index]
-    if (!id || !item)
+  return queueSave(async (opened) => {
+    if (!original.id)
       throw new Error('This word was removed or changed in another window.')
-    return current.with(index, { ...change(item), id })
+    const current = await opened.get(original.id)
+    if (!current.word)
+      throw new Error('This word was removed or changed in another window.')
+    const [next] = customWords([{ ...change(current.word), id: original.id }])
+    if (!next) throw new Error('Could not save custom words.')
+    await opened.change(
+      async (stage) => {
+        await stage({ upsert: [next] })
+      },
+      { revision: current.revision, put: next },
+    )
   })
 }
 
-/** `incoming` words replace matching ones in place, keeping their ids; the rest are added at the end. */
-export function mergeCustomWords(
-  current: readonly CustomWord[],
-  incoming: readonly CustomWord[],
-) {
-  const merged = new Map(current.map((item) => [key(item), item]))
-  for (const { id: _id, ...item } of customWords(incoming, Infinity)) {
-    const id = merged.get(key(item))?.id
-    merged.set(key(item), id ? { ...item, id } : item)
-  }
-  return [...merged.values()]
+export function removeCustomWord(word: CustomWord) {
+  return queueSave(async (opened) => {
+    const id = word.id
+    if (!id)
+      throw new Error('This word was removed or changed in another window.')
+    const current = await opened.get(id)
+    if (!current.word)
+      throw new Error('This word was removed or changed in another window.')
+    await opened.change(
+      async (stage) => {
+        await stage({ remove: [id] })
+      },
+      { revision: current.revision, remove: id },
+    )
+  })
 }
 
-/** Adds `word`, or updates its note when it is already listed; a listed word keeps its note when `word` has none. */
+/** Adds a word or updates its note; a listed word keeps its note when none is supplied. */
 export function addCustomWord(word: CustomWord) {
   const [added] = customWords([word])
   if (!added) return Promise.reject(new Error('Enter a word to add.'))
-  return updateCustomWords((current) => {
-    const note =
-      word.note === undefined
-        ? current.find((item) => key(item) === key(added))?.note
-        : undefined
-    return mergeCustomWords(current, [note ? { ...added, note } : added])
+  return queueSave(async (opened) => {
+    await opened.change(async (stage) => {
+      await stage({
+        upsert: [added],
+        merge: true,
+        keepNote: word.note === undefined,
+      })
+    })
   })
 }
 
@@ -270,7 +278,26 @@ export async function exportSavedCustomWords(ready?: Promise<boolean>) {
       if (tail !== saving) continue
       const failure = results.find((result) => result.status === 'rejected')
       if (failure) throw failure.reason
-      return exportCustomWords(words)
+      let exported: string
+      try {
+        exported = await exportIndexedWords(opened)
+      } catch (error) {
+        if (tail !== saving) continue
+        if (
+          error instanceof Error &&
+          error.message.includes('Custom words changed in another window.')
+        ) {
+          await opened.refresh()
+          continue
+        }
+        throw error
+      }
+      if (handle !== opened)
+        throw new Error(
+          'Turn on Dictionary and thesaurus to keep custom words.',
+        )
+      if (tail !== saving) continue
+      return exported
     }
   } finally {
     active.delete(pending)
@@ -278,8 +305,7 @@ export async function exportSavedCustomWords(ready?: Promise<boolean>) {
 }
 
 /**
- * Parses one line at a time, skipping blanks and comments. Keeps one word over
- * capacity so the queued merge rejects the whole import instead of a partial list.
+ * Parses one line at a time, skipping blanks and comments.
  */
 export function importCustomWords(text: string) {
   const words: CustomWord[] = []
@@ -312,7 +338,6 @@ export function importCustomWords(text: string) {
         : line
             .slice(second + 1)
             .trim()
-            .slice(0, MAX_NOTE)
             .replaceAll('\t', ' ')
     words.push(
       Object.freeze({
@@ -321,9 +346,58 @@ export function importCustomWords(text: string) {
         ...(note ? { note } : {}),
       }),
     )
-    if (words.length > MAX_WORDS) break
   }
   return words
+}
+
+function yieldToInput() {
+  const channel = new MessageChannel()
+  return new Promise<void>((resolve) => {
+    channel.port1.onmessage = () => {
+      channel.port1.close()
+      channel.port2.close()
+      resolve()
+    }
+    channel.port2.postMessage(null)
+  })
+}
+
+/** Parses bounded slices while the save/export queue stays intact. */
+export function importSavedCustomWords(text: string) {
+  return queueSave(async (opened) => {
+    const result = await opened.change(async (stage) => {
+      for (let start = 0; start < text.length; ) {
+        let end = text.indexOf('\n', start + 16384)
+        if (end < 0) end = text.length
+        const parsed = importCustomWords(text.slice(start, end))
+        if (parsed.length)
+          await stage({ upsert: parsed, merge: true, first: true })
+        start = end + 1
+        if (start < text.length) await yieldToInput()
+      }
+    })
+    return result.changed
+  })
+}
+
+async function exportIndexedWords(opened: IndexedCustomWords) {
+  const revision = opened.snapshot().revision
+  const chunks: string[] = []
+  const encoder = new TextEncoder()
+  let bytes = 0
+  let after = 0
+  for (;;) {
+    const page = await opened.page({ after, revision })
+    const chunk = exportCustomWords(page.words)
+    bytes += encoder.encode(chunk).length + (chunks.length ? 1 : 0)
+    if (bytes > HOST_SELECTED_IO_MAX_BYTES)
+      throw new Error(
+        'This export exceeds the file or clipboard transfer limit.',
+      )
+    if (chunk) chunks.push(chunk)
+    if (!page.more) return chunks.join('\n')
+    after = page.after
+  }
 }
 
 /**
@@ -338,9 +412,25 @@ export function customWordsProvider(
     label: 'Your words',
     kind: 'offline',
     languages: LANGS,
-    async lookup(term, lang) {
+    async lookup(term, lang, signal) {
       const wanted = term.trim().normalize('NFC').toLowerCase()
-      return words
+      const native = wordNative
+      const captured = opening
+      if (!native) return []
+      const matches = (
+        await Promise.all([
+          native.query<CustomWord[]>('customWordsLookup', { term, lang }),
+          first(term) === lang
+            ? native.query<CustomWord[]>('customWordsLookup', {
+                term,
+                lang: '',
+              })
+            : [],
+        ])
+      ).flat()
+      signal?.throwIfAborted()
+      if (native !== wordNative || captured !== opening) return []
+      return matches
         .filter(
           (item) =>
             item.word.toLowerCase() === wanted &&

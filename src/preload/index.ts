@@ -449,6 +449,8 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(ADDON_CHANNELS.invoke, id, method, input),
     queryAddon: (id, method, input) =>
       ipcRenderer.invoke(ADDON_CHANNELS.query, id, method, input),
+    invokeAddonProfile: (id, method, input) =>
+      ipcRenderer.invoke(ADDON_CHANNELS.profile, id, method, input),
     getWorkspace: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.get),
     getWorkspaceHeader: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.header),
     readWorkspaceViewPage: (request) =>

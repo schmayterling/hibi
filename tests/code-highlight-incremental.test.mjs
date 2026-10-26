@@ -168,6 +168,13 @@ function mount(t, plugin, state, geometry = {}) {
       idle.delete(slice)
       callback({ didTimeout: false, timeRemaining: () => remaining })
     },
+    /** Runs the next frame, or idle slice without one; false when nothing is scheduled. */
+    step() {
+      if (frames.size) view.frame()
+      else if (idle.size) view.idle()
+      else return false
+      return true
+    },
     /** Runs frames and idle slices until no more work is scheduled. */
     flush() {
       for (let count = 0; frames.size || idle.size; count++) {
@@ -560,7 +567,10 @@ test('long-block presence stays exact and scrolling skips document walks', async
     { origin: () => top },
   )
   view.flush()
-  assert.deepEqual(plugin.getState(view.state).blocks, [0])
+  assert.deepEqual(
+    plugin.getState(view.state).blocks.map(({ pos }) => pos),
+    [0],
+  )
   assert.ok(plugin.getState(view.state).decorations.find().length)
   let walks = 0
   const counted =
@@ -953,4 +963,148 @@ test('a long block decorates again after scrolling away and back', async (t) => 
   view.scroll()
   view.flush()
   assert.ok(first() > 0, 'returning decorates the block again')
+})
+
+test('moved and restored long blocks decorate again', async (t) => {
+  await codeLanguages.ensure('javascript')
+  const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+  const block = code('const moved = 42;\n'.repeat(1_000))
+  // The whole block is on screen wherever it is.
+  const view = mount(
+    t,
+    plugin,
+    EditorState.create({
+      schema,
+      plugins: [plugin],
+      doc: schema.nodes.doc.create(null, [paragraph('before'), block]),
+    }),
+    { origin: () => 0, scale: 100_000 },
+  )
+  view.flush()
+  const verify = () =>
+    assert.deepEqual(
+      joined(tokens(plugin.getState(view.state).decorations)),
+      joined(expected(view.state.doc)),
+    )
+  verify()
+  // Moving the same node replaces the text that held its tokens.
+  const { doc } = view.state
+  view.dispatch(
+    view.state.tr.replaceWith(0, doc.content.size, [block, doc.child(0)]),
+  )
+  view.flush()
+  verify()
+  // Deleted and restored, as undo does, the same node decorates again.
+  view.dispatch(view.state.tr.delete(0, block.nodeSize))
+  view.flush()
+  assert.equal(plugin.getState(view.state).decorations.find().length, 0)
+  view.dispatch(view.state.tr.insert(0, block))
+  view.flush()
+  verify()
+})
+
+test('line planning measures a few lines per frame, about a screen past the visible ones', async (t) => {
+  await codeLanguages.ensure('javascript')
+  const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+  // A very long first line, then long and short lines; every line is 20 px tall.
+  const header = `//${'x'.repeat(40_000)}\n`
+  const rows = Array.from({ length: 2_000 }, (_, row) =>
+    row % 2 ? '//x\n' : `${`const v${row} = 42;`.padEnd(270)}\n`,
+  )
+  const starts = [0, header.length]
+  for (const row of rows) starts.push(starts.at(-1) + row.length)
+  // The last line starting at or before `offset`.
+  const lineOf = (offset) => {
+    let low = 0
+    let high = starts.length - 1
+    while (low < high) {
+      const middle = (low + high + 1) >> 1
+      if (starts[middle] <= offset) low = middle
+      else high = middle - 1
+    }
+    return low
+  }
+  let scrolled = 20 * 1_950
+  let clock = 0
+  let calls = 0
+  const view = mount(
+    t,
+    plugin,
+    EditorState.create({
+      schema,
+      plugins: [plugin],
+      doc: schema.nodes.doc.create(null, [code(header + rows.join(''))]),
+    }),
+    {
+      y: (pos) => lineOf(pos - 1) * 20 - scrolled,
+      // 8 px characters; each horizontal measurement costs 1 ms.
+      x: (pos) => {
+        calls++
+        clock++
+        return (pos - 1 - starts[lineOf(pos - 1)]) * 8
+      },
+    },
+  )
+  view.flush()
+  t.mock.method(performance, 'now', () => clock)
+  scrolled = 0
+  view.scroll()
+  let most = 0
+  for (calls = 0; view.step(); calls = 0) most = Math.max(most, calls)
+  assert.ok(most < 100, `${most} measurements in one frame`)
+  const lines = plugin
+    .getState(view.state)
+    .decorations.find()
+    .map((token) => lineOf(token.from - 1))
+  assert.ok(lines.includes(1), 'the first rows on screen are decorated')
+  assert.ok(Math.max(...lines) < 90, `line ${Math.max(...lines)} decorated`)
+})
+
+test('measured columns stay limited to the lines of live blocks', async (t) => {
+  await codeLanguages.ensure('javascript')
+  // Measured columns are kept in maps from long line text.
+  const caches = new Set()
+  const set = Map.prototype.set
+  t.mock.method(Map.prototype, 'set', function (key, value) {
+    if (typeof key === 'string' && key.length > 256 && value?.to >= 0)
+      caches.add(this)
+    return set.call(this, key, value)
+  })
+  const entries = () => [...caches].reduce((sum, cache) => sum + cache.size, 0)
+  const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+  const text = (version) => `const version${version} = 42; `.repeat(700)
+  const view = mount(
+    t,
+    plugin,
+    EditorState.create({
+      schema,
+      plugins: [plugin],
+      doc: schema.nodes.doc.create(null, [code(text(0))]),
+    }),
+    { y: () => 100, x: (pos) => (pos - 1) * 8 },
+  )
+  view.flush()
+  assert.equal(entries(), 1)
+  for (let version = 1; version <= 25; version++) {
+    view.dispatch(
+      view.state.tr.replaceWith(
+        0,
+        view.state.doc.content.size,
+        code(text(version)),
+      ),
+    )
+    view.flush()
+  }
+  assert.equal(entries(), 1, 'replaced blocks kept their measurements')
+  view.dispatch(view.state.tr.insertText('typed ', 1))
+  view.flush()
+  assert.equal(entries(), 1, 'the edited line kept its old measurement')
+  view.dispatch(
+    view.state.tr.replaceWith(
+      0,
+      view.state.doc.content.size,
+      paragraph('no code'),
+    ),
+  )
+  assert.equal(entries(), 0, 'deleted blocks kept their measurements')
 })

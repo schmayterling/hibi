@@ -23,15 +23,20 @@ const shortLine = 256
 
 type Range = { from: number; to: number }
 type Viewport = Range & {
-  /** Text on screen, decorated before the margin around it. */
-  visible: Range
+  /** First position on screen, where decorating starts. */
+  visible: number
+}
+type Block = {
+  pos: number
+  /** Kept while mapping keeps the block; moved or restored blocks get a new one. */
+  id: object
 }
 type HighlightState = {
   decorations: DecorationSet
-  /** Document range near the viewport that windowed blocks decorate. */
+  /** Document range within about a screen of the visible text that windowed blocks decorate. */
   viewport: Viewport | null
-  /** Positions of windowed blocks, in document order. */
-  blocks: readonly number[]
+  /** Windowed blocks, in document order. */
+  blocks: readonly Block[]
 }
 /** Replaces the tokens in `from`..`to`. */
 type Patch = Range & { tokens: Decoration[] }
@@ -49,18 +54,26 @@ type Parsed = {
   parsedTo: number
   parse: PartialParse | null
 }
-/** Decoration of one windowed block for one range, in pieces. */
+/** Decoration of one version of a windowed block for one range, planned line by line. */
 type Work = {
-  /** Block offsets of the range and its visible part. */
+  block: Parsed
+  text: string
+  /** Block offsets of the range. */
   from: number
   to: number
-  visibleFrom: number
-  visibleTo: number
   /** Horizontal pixels around the line starts that clipped lines cover, or null when lines are whole. */
   window: Range | null
+  /** Offsets still to plan, visible lines and those below first; `line` starts the next line in the first. */
+  plan: Range[]
+  line: number
+  /** Columns of the last measured line, checked first for the next one. */
+  guess: Range | null
   pieces: Range[]
   done: number
   clean: boolean
+  /** Measured columns by line text for this window, passed to the block's next work; `used` marks this plan's lines. */
+  lines: Map<string, Range>
+  used: Set<string>
 }
 
 const windowedBlock = (node: Node) =>
@@ -75,6 +88,10 @@ function first(start: number, end: number, after: (index: number) => boolean) {
   }
   return start
 }
+
+/** Offset of the line containing `at`. */
+const lineStart = (text: string, at: number) =>
+  at && text.lastIndexOf('\n', at - 1) + 1
 
 /** Decorations never change the document, Markdown serialization, selection, or history. */
 export const CodeHighlight = Extension.create({
@@ -122,11 +139,16 @@ export const CodeHighlight = Extension.create({
       parsed.set(node, result)
       return result
     }
-    /** Parses up to `to` until `deadline`; unfinished work resumes later. */
-    function parseTo(block: Parsed, node: Node, to: number, deadline: number) {
+    /** Parses up to `to` while `spend` allows; unfinished work resumes later. */
+    function parseTo(
+      block: Parsed,
+      node: Node,
+      to: number,
+      spend: () => boolean,
+    ) {
       try {
         while (block.parsedTo < to) {
-          if (performance.now() >= deadline) return false
+          if (!spend()) return false
           if (!block.parse || (block.parse.stoppedAt ?? Infinity) < to) {
             block.parse = block.language.parser.startParse(
               node.textContent,
@@ -231,32 +253,37 @@ export const CodeHighlight = Extension.create({
         right: Math.min(right, window.innerWidth),
       }
     }
-    /** Visible text of windowed blocks, widened by about a screen above and below. */
+    /** Text of windowed blocks within a screen above and below the visible text. */
     function measureViewport(
       view: EditorView,
       current: Viewport | null,
-      blocks: readonly number[],
+      blocks: readonly Block[],
     ): Viewport | null {
       const { top, bottom, left, right } = clipped(view)
-      const shown = blocks.flatMap((pos) => {
+      const height = bottom - top
+      const near = blocks.flatMap(({ pos }) => {
         const node = view.state.doc.nodeAt(pos)
         const box = (
           view.nodeDOM(pos) as HTMLElement | null
         )?.getBoundingClientRect()
         return node &&
           box &&
-          box.top < bottom &&
-          box.bottom > top &&
+          box.top < bottom + height &&
+          box.bottom > top - height &&
           box.left < right &&
           box.right > left
           ? [{ start: pos + 1, end: pos + 1 + node.content.size, box }]
           : []
       })
-      if (!shown.length) return null
+      if (!near.length) return null
+      const shown = near.filter(
+        ({ box }) => box.top < bottom && box.bottom > top,
+      )
       // Line geometry ignores horizontal scrolling and overlapping elements, unlike hit-testing.
       const coords = (at: number) => view.coordsAtPos(at)
       if (
         current &&
+        shown.length &&
         shown.every(
           ({ start, end, box }) =>
             (current.from <= start ||
@@ -272,35 +299,40 @@ export const CodeHighlight = Extension.create({
         return current
       let from = Number.POSITIVE_INFINITY
       let to = Number.NEGATIVE_INFINITY
-      for (const { start, end, box } of shown) {
-        from = Math.min(
-          from,
-          box.top >= top
+      let visible = Number.POSITIVE_INFINITY
+      for (const { start, end, box } of near) {
+        // The first position on a line ending below `y`, or starting at or below it.
+        const ending = (y: number, highest = end) =>
+          box.top >= y
             ? start
-            : first(start, end, (at) => coords(at).bottom > top),
-        )
-        to = Math.max(
-          to,
-          box.bottom <= bottom
+            : first(start, highest, (at) => coords(at).bottom > y)
+        const starting = (y: number, lowest = start) =>
+          box.bottom <= y
             ? end
-            : first(start, end, (at) => coords(at).top >= bottom),
-        )
+            : first(lowest, end, (at) => coords(at).top >= y)
+        const onScreen =
+          box.top < bottom && box.bottom > top ? ending(top) : null
+        if (onScreen !== null) visible = Math.min(visible, onScreen)
+        from = Math.min(from, ending(top - height, onScreen ?? end))
+        to = Math.max(to, starting(bottom + height, onScreen ?? start))
       }
-      const margin = Math.max(to - from, 2000)
-      return {
-        from: Math.max(0, from - margin),
-        to: Math.min(view.state.doc.content.size, to + margin),
-        visible: { from, to },
-      }
+      return { from, to, visible: Number.isFinite(visible) ? visible : from }
     }
     return [
       new Plugin<HighlightState>({
         key,
         state: {
-          init: (_config, state) => ({
-            ...decorate(state.doc, DecorationSet.empty),
-            viewport: null,
-          }),
+          init: (_config, state) => {
+            const { decorations, blocks } = decorate(
+              state.doc,
+              DecorationSet.empty,
+            )
+            return {
+              decorations,
+              viewport: null,
+              blocks: blocks.map((pos) => ({ pos, id: {} })),
+            }
+          },
           apply(transaction, value, oldState) {
             const refresh = transaction.getMeta(key) as Refresh | undefined
             if (!transaction.docChanged && !refresh) return value
@@ -329,10 +361,7 @@ export const CodeHighlight = Extension.create({
                     : {
                         from: from.pos,
                         to: to.pos,
-                        visible: {
-                          from: mapping.map(viewport.visible.from, 1),
-                          to: mapping.map(viewport.visible.to, -1),
-                        },
+                        visible: mapping.map(viewport.visible),
                       }
               }
               let from = doc.content.size
@@ -349,22 +378,25 @@ export const CodeHighlight = Extension.create({
                 // Attribute/mark and custom steps can change syntax without moving positions.
                 if (!changed) full = true
               }
-              if (full) blocks = update(0, doc.content.size)
-              else {
-                const found = update(
-                  Math.max(0, from - 1),
-                  Math.min(doc.content.size, Math.max(from, end) + 1),
-                  undefined,
-                  { doc: oldState.doc, from, end },
-                )
-                // Blocks outside the edit keep their mapped positions.
-                const kept = blocks.flatMap((pos) => {
-                  const mapped = mapping.mapResult(pos, 1)
-                  const node = mapped.deleted ? null : doc.nodeAt(mapped.pos)
-                  return node && windowedBlock(node) ? [mapped.pos] : []
-                })
-                blocks = [...new Set([...kept, ...found])].sort((a, b) => a - b)
+              // Mapped blocks stay the same; moved or restored ones lost their tokens and start over.
+              const kept = new Map<number, object>()
+              for (const { pos, id } of blocks) {
+                const mapped = mapping.mapResult(pos, 1)
+                const node = mapped.deleted ? null : doc.nodeAt(mapped.pos)
+                if (node && windowedBlock(node)) kept.set(mapped.pos, id)
               }
+              const found = full
+                ? update(0, doc.content.size)
+                : update(
+                    Math.max(0, from - 1),
+                    Math.min(doc.content.size, Math.max(from, end) + 1),
+                    undefined,
+                    { doc: oldState.doc, from, end },
+                  )
+              // Blocks outside the edit keep their mapped positions.
+              blocks = [...new Set([...(full ? [] : kept.keys()), ...found])]
+                .sort((a, b) => a - b)
+                .map((pos) => ({ pos, id: kept.get(pos) ?? {} }))
             }
             const keys = refresh?.keys
             if (keys)
@@ -397,10 +429,11 @@ export const CodeHighlight = Extension.create({
           let measure = true
           let scrolling = false
           let revealing = false
-          const works = new WeakMap<Parsed, Work>()
-          // Measured columns by line text, for one horizontal window.
-          let lines: { window: string; ranges: Map<string, Range> } | null =
-            null
+          const works = new Map<object, Work>()
+          const drop = (id: object) => {
+            works.get(id)?.lines.clear()
+            works.delete(id)
+          }
           // Hidden panes keep their layout, so their visibility comes from the style.
           const hidden = () => {
             const box = view.dom.getBoundingClientRect()
@@ -410,58 +443,59 @@ export const CodeHighlight = Extension.create({
             )
           }
           /**
-           * Block offsets to decorate: whole lines in `from`..`to`, except
-           * unwrapped long lines, which keep the characters inside `window`,
-           * found on each line's own geometry so tabs and wide characters count.
+           * Adds the next line of `work` to its pieces: whole, or for unwrapped
+           * long lines the characters inside the window, found on the line's
+           * own geometry so tabs and wide characters count. Returns false when
+           * that measurement has to wait for more time.
            */
-          function pieces(
-            node: Node,
-            pos: number,
-            work: Omit<Work, 'pieces' | 'done' | 'clean'>,
-          ) {
-            const start = pos + 1
-            const text = node.textContent
-            const all: Range[] = []
-            const add = (from: number, to: number) => {
-              const last = all.at(-1)
-              // Neighbouring lines share a piece, up to its length.
-              if (last && from - last.to <= 1 && to - last.from <= pieceLength)
-                last.to = to
-              else
-                for (let at = from; at < to; at += pieceLength)
-                  all.push({ from: at, to: Math.min(to, at + pieceLength) })
+          function plan(work: Work, start: number, spend: () => boolean) {
+            const range = work.plan[0]
+            if (!range) return false
+            const { text, line, window } = work
+            const newline = text.indexOf('\n', line)
+            const end = newline < 0 ? text.length : newline
+            let columns: Range = { from: 0, to: end - line }
+            if (window && end - line > shortLine) {
+              const content = text.slice(line, end)
+              const known = work.lines.get(content)
+              if (!known && !spend()) return false
+              columns =
+                known ?? clip(start + line, end - line, window, work.guess)
+              work.lines.set(content, columns)
+              work.used.add(content)
+              work.guess = columns
             }
-            const { window: range, from, to } = work
-            let guess: Range | null = null
-            for (
-              let line = from && text.lastIndexOf('\n', from - 1) + 1;
-              line < to;
-            ) {
-              const newline = text.indexOf('\n', line)
-              const end = newline < 0 ? text.length : newline
-              if (!range || end - line <= shortLine)
-                add(Math.max(from, line), Math.min(to, end))
+            const from = Math.max(range.from, line + columns.from)
+            const to = Math.min(range.to, line + columns.to)
+            const last = work.pieces.at(-1)
+            // Neighbouring lines share a piece, up to its length.
+            if (
+              last &&
+              last.to <= from &&
+              from <= last.to + 1 &&
+              from < to &&
+              to - last.from <= pieceLength
+            )
+              last.to = to
+            else
+              for (let at = from; at < to; at += pieceLength)
+                work.pieces.push({
+                  from: at,
+                  to: Math.min(to, at + pieceLength),
+                })
+            if (newline >= 0 && newline + 1 < range.to) work.line = newline + 1
+            else {
+              work.plan.shift()
+              const next = work.plan[0]
+              if (next) work.line = lineStart(text, next.from)
               else {
-                const content = text.slice(line, end)
-                const known = lines?.ranges.get(content)
-                const columns: Range =
-                  known ?? clip(start + line, end - line, range, guess)
-                lines?.ranges.set(content, columns)
-                guess = columns
-                add(
-                  Math.max(from, line + columns.from),
-                  Math.min(to, line + columns.to),
-                )
+                // Measurements of lines that left the range go with them.
+                for (const content of work.lines.keys())
+                  if (!work.used.has(content)) work.lines.delete(content)
+                work.used.clear()
               }
-              if (newline < 0) break
-              line = newline + 1
             }
-            const shown = (piece: Range) =>
-              piece.from < work.visibleTo && piece.to > work.visibleFrom
-            return [
-              ...all.filter(shown),
-              ...all.filter((piece) => !shown(piece)),
-            ]
+            return true
           }
           /**
            * Characters of the line at `line` whose boxes meet `range`
@@ -482,7 +516,7 @@ export const CodeHighlight = Extension.create({
             if (
               guess &&
               guess.from < length &&
-              x(guess.from) <= range.from &&
+              (!guess.from || x(guess.from) <= range.from) &&
               (guess.to >= length || x(guess.to) >= range.to)
             )
               return { from: guess.from, to: Math.min(guess.to, length) }
@@ -525,27 +559,37 @@ export const CodeHighlight = Extension.create({
               refresh.keys = keys
               changed.clear()
               // The refresh drops tokens of another parser, so their work starts over.
-              for (const pos of state.blocks) {
+              for (const { pos, id } of state.blocks) {
                 const node = view.state.doc.nodeAt(pos)
-                const entry = node && parsed.get(node)
                 if (
-                  entry &&
+                  node &&
                   keys.has(codeLanguageKey(String(node.attrs.language ?? '')))
                 )
-                  works.delete(entry)
+                  drop(id)
               }
             }
             if (state.blocks.length) {
+              // One budget covers measuring, parsing, and decorating every block.
+              // The first item of a frame always runs, so work keeps progressing.
+              const deadline = performance.now() + budget
+              let free = true
+              const spend = () => {
+                const late = performance.now() >= deadline
+                if (late && !free) return false
+                free = false
+                return true
+              }
               const remeasure = measure
               let next = state.viewport
               if (measure) {
                 measure = false
+                free = false
                 next = measureViewport(view, next, state.blocks)
               }
               if (next !== state.viewport) {
                 refresh.viewport = next
                 // Blocks leaving the range drop their tokens and their work.
-                for (const pos of state.blocks) {
+                for (const { pos, id } of state.blocks) {
                   const node = view.state.doc.nodeAt(pos)
                   if (!node) continue
                   const end = pos + node.nodeSize
@@ -553,23 +597,13 @@ export const CodeHighlight = Extension.create({
                     !!range && pos < range.to && end > range.from
                   if (inside(state.viewport) && !inside(next)) {
                     patches.push({ from: pos + 1, to: end - 1, tokens: [] })
-                    const entry = parsed.get(node)
-                    if (entry) works.delete(entry)
+                    drop(id)
                   }
                 }
               }
-              // One budget covers parsing, measuring, and decorating every block.
-              // The first item of a frame always runs, so work keeps progressing.
-              const deadline = performance.now() + budget
-              let free = true
-              const spend = () => {
-                if (!free && performance.now() >= deadline) return false
-                free = false
-                return true
-              }
               let waiting = false
               let area: ReturnType<typeof clipped> | null = null
-              for (const pos of next ? state.blocks : []) {
+              for (const { pos, id } of next ? state.blocks : []) {
                 const node = view.state.doc.nodeAt(pos)
                 const language =
                   node &&
@@ -582,13 +616,13 @@ export const CodeHighlight = Extension.create({
                 const from = Math.max(next.from, start) - start
                 const to = Math.min(next.to, start + size) - start
                 if (from >= to) continue
-                if (!parseTo(block, node, to, deadline)) {
+                if (!parseTo(block, node, to, spend)) {
                   waiting = true
                   continue
                 }
                 const tree = block.tree
                 if (!tree) continue
-                let work = works.get(block)
+                let work = works.get(id)
                 const element = view.nodeDOM(pos) as HTMLElement | null
                 let window: Range | null = work?.window ?? null
                 if (!work || remeasure) {
@@ -617,34 +651,56 @@ export const CodeHighlight = Extension.create({
                 }
                 if (
                   !work ||
+                  work.block !== block ||
                   work.from !== from ||
                   work.to !== to ||
                   work.window !== window
                 ) {
-                  if (!spend()) {
-                    waiting = true
-                    continue
-                  }
-                  const columns = window ? `${window.from}:${window.to}` : ''
-                  if (lines?.window !== columns)
-                    lines = { window: columns, ranges: new Map() }
-                  const range = {
+                  const text = node.textContent
+                  // Visible lines go first, then those below and above them.
+                  const visible = next.visible - start
+                  const split =
+                    visible > from && visible < to
+                      ? Math.max(from, lineStart(text, visible))
+                      : from
+                  // Measured columns hold while the window does.
+                  const lines =
+                    work && work.window === window ? work.lines : new Map()
+                  if (work && work.lines !== lines) work.lines.clear()
+                  work = {
+                    block,
+                    text,
                     from,
                     to,
-                    visibleFrom: next.visible.from - start,
-                    visibleTo: next.visible.to - start,
                     window,
-                  }
-                  work = {
-                    ...range,
-                    pieces: pieces(node, pos, range),
+                    plan:
+                      split > from
+                        ? [
+                            { from: split, to },
+                            { from, to: split },
+                          ]
+                        : [{ from, to }],
+                    line: lineStart(text, split),
+                    guess: null,
+                    pieces: [],
                     done: 0,
                     clean: false,
+                    lines,
+                    used: new Set(),
                   }
-                  works.set(block, work)
+                  works.set(id, work)
                 }
                 const spec = { language }
-                while (work.done < work.pieces.length && spend()) {
+                for (;;) {
+                  // The last piece can still grow while lines remain.
+                  if (
+                    work.done >=
+                    work.pieces.length - (work.plan.length ? 1 : 0)
+                  ) {
+                    if (work.plan.length && plan(work, start, spend)) continue
+                    break
+                  }
+                  if (!spend()) break
                   const piece = work.pieces[work.done++]
                   if (!piece) break
                   patches.push({
@@ -660,7 +716,8 @@ export const CodeHighlight = Extension.create({
                     ),
                   })
                 }
-                if (work.done < work.pieces.length) waiting = true
+                if (work.plan.length || work.done < work.pieces.length)
+                  waiting = true
                 else if (!work.clean) {
                   // Once the range is complete, tokens left from earlier ranges or versions go.
                   work.clean = true
@@ -746,7 +803,11 @@ export const CodeHighlight = Extension.create({
               watchScroll()
               const state = key.getState(view.state)
               const before = key.getState(previous)
-              if (!state?.blocks.length || state === before) return
+              if (!state || state === before) return
+              // Work of blocks that left, moved, or came back goes with its measurements.
+              const live = new Set(state.blocks.map(({ id }) => id))
+              for (const id of works.keys()) if (!live.has(id)) drop(id)
+              if (!state.blocks.length) return
               if (
                 !before?.blocks.length ||
                 (before.viewport && !state.viewport)

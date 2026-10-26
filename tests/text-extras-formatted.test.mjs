@@ -287,6 +287,32 @@ test('references in subscripts and small text show their characters, as in the r
   ])
 })
 
+test('decoded glyphs keep the style of a surrounding inline link', () => {
+  for (const [contribution, source, classes] of [
+    [
+      contributions.subscript,
+      '~[&amp;](Other.md)~',
+      'hibi-lp-subscript hibi-lp-link',
+    ],
+    [contributions.subtext, '-# [&#169;](Other.md)', 'hibi-lp-link'],
+    [
+      contributions.subscript,
+      '~[a &amp; b](Other.md)~',
+      'hibi-lp-subscript hibi-lp-link',
+    ],
+  ]) {
+    const glyph = drawn(contribution, source).find(
+      ([kind]) => kind === 'replace',
+    )
+    assert.equal(glyph[4].class, classes, source)
+  }
+  // Unresolved reference links stay literal, as in the core renderer.
+  const glyph = drawn(contributions.subscript, '~[&amp;][missing]~').find(
+    ([kind]) => kind === 'replace',
+  )
+  assert.equal(glyph[4].class, 'hibi-lp-subscript')
+})
+
 /** Enter at `|` (from `^` when selecting) in a formatted view with subscripts. */
 function enter(doc) {
   const anchor = doc.indexOf('^')

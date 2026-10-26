@@ -1,7 +1,11 @@
 import type { EditorState } from '@codemirror/state'
 import { WidgetType } from '@codemirror/view'
+import type { SyntaxNode } from '@lezer/common'
 import { decodeHTMLStrict } from 'entities'
-import type { FormattedDecorations } from '../../renderer/src/formatted-contributions.ts'
+import {
+  type FormattedDecorations,
+  formattedLiteral,
+} from '../../renderer/src/formatted-contributions.ts'
 
 /*
  * Character references in addon syntax in the formatted view: each shows the
@@ -51,6 +55,40 @@ function* referencesIn(state: EditorState, from: number, to: number) {
     }
 }
 
+/** The link mark may end at a replacement's boundary, outside its DOM. */
+function glyphAttributes(
+  state: EditorState,
+  entity: { parent?: SyntaxNode | null },
+  attributes: Record<string, string> | null,
+  links: Map<number, boolean>,
+) {
+  if (!state.facet(formattedLiteral).includes('Link'))
+    for (let node = entity.parent; node; node = node.parent) {
+      if (node.name !== 'Link') continue
+      let linked = links.get(node.from)
+      if (linked === undefined) {
+        const marks = node.getChildren('LinkMark')
+        const open = marks[0]
+        const close = marks.find(
+          (mark) => state.sliceDoc(mark.from, mark.to) === ']',
+        )
+        linked = Boolean(
+          open &&
+            close &&
+            state.sliceDoc(open.from, open.to) === '[' &&
+            state.sliceDoc(close.to, close.to + 1) === '(',
+        )
+        links.set(node.from, linked)
+      }
+      if (linked)
+        return {
+          ...attributes,
+          class: [attributes?.class, 'hibi-lp-link'].filter(Boolean).join(' '),
+        }
+    }
+  return attributes ?? {}
+}
+
 /**
  * Marks `[from, to)` with `attributes`, if any, and shows the references in
  * it as their characters, each until the caret touches it while `revealed`.
@@ -65,13 +103,14 @@ export function markDecoded(
   to: number,
   attributes: Record<string, string> | null,
   revealed: boolean,
-  entities: Iterable<{ from: number; to: number }> = referencesIn(
-    state,
-    from,
-    to,
-  ),
+  entities: Iterable<{
+    from: number
+    to: number
+    parent?: SyntaxNode | null
+  }> = referencesIn(state, from, to),
 ) {
   let at = from
+  const links = new Map<number, boolean>()
   for (const entity of entities) {
     if (
       revealed &&
@@ -84,7 +123,11 @@ export function markDecoded(
     const text = reference.test(source) ? decodeHTMLStrict(source) : source
     if (text === source) continue
     if (attributes && at < entity.from) out.mark(at, entity.from, attributes)
-    out.replace(entity.from, entity.to, new Glyphs(text, attributes ?? {}))
+    out.replace(
+      entity.from,
+      entity.to,
+      new Glyphs(text, glyphAttributes(state, entity, attributes, links)),
+    )
     at = entity.to
   }
   if (attributes && at < to) out.mark(at, to, attributes)

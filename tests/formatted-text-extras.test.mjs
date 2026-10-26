@@ -275,6 +275,69 @@ test('the caret reveals subscript tildes and the small-text marker', {
   await engine(true, true)
 })
 
+test('decoded entity glyphs retain nested link, strong and emphasis styles', {
+  timeout: 90000,
+}, async () => {
+  const source =
+    '# Attributes\n\n~**&amp;**~ ~*&#169;*~ ~[&amp;](Other.md)~\n\n-# **&amp;** *&#169;* [&#169;](Other.md) `&amp;`\n'
+  await writeFile(join(folder, 'notes', 'attributes.md'), source)
+  const styles = (selector) =>
+    page.evaluate(
+      (selector) =>
+        [...document.querySelectorAll(selector)].map((node) => {
+          const style = getComputedStyle(node)
+          const decorations = new Set()
+          for (
+            let at = node;
+            at && !at.matches('.rich-pane');
+            at = at.parentElement
+          )
+            for (const line of getComputedStyle(at).textDecorationLine.split(
+              ' ',
+            ))
+              if (line !== 'none') decorations.add(line)
+          return {
+            text: node.textContent,
+            weight: style.fontWeight,
+            style: style.fontStyle,
+            color: style.color,
+            decoration: [...decorations].sort().join(' '),
+          }
+        }),
+      selector,
+    )
+  await engine(false, false)
+  await open('attributes.md')
+  await page
+    .locator('.rich-pane .tiptap h1', { hasText: 'Attributes' })
+    .waitFor()
+  const rich = new Map()
+  for (const scheme of ['hibi-light', 'hibi-dark']) {
+    await applyPalette(scheme)
+    rich.set(
+      scheme,
+      await styles(
+        '.rich-pane sub, .rich-pane .markdown-subtext strong, .rich-pane .markdown-subtext em, .rich-pane .markdown-subtext a',
+      ),
+    )
+  }
+  await engine(true, false)
+  await page.locator('.rich-pane .hibi-lp-entity').first().waitFor()
+  for (const scheme of ['hibi-light', 'hibi-dark']) {
+    await applyPalette(scheme)
+    assert.deepEqual(
+      await styles('.rich-pane .hibi-lp-entity'),
+      rich.get(scheme),
+      scheme,
+    )
+  }
+  assert.equal(
+    await page.evaluate(async () => (await window.hibi.getDocument()).markdown),
+    source,
+  )
+  await engine(true, true)
+})
+
 test('enter inside a subscript splits it into two subscripts, and undo joins them', {
   timeout: 90000,
 }, async () => {

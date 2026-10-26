@@ -483,3 +483,51 @@ test('app and exported site share heading destinations and retain legacy links',
     },
   )
 })
+
+test('outline scroll tracking reads nearby geometry on a thousand-heading page', {
+  timeout: 45000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-site-outline-scale-'))
+  const { page } = await openSite(t, folder, {
+    name: 'outline scale',
+    pages: [
+      {
+        path: 'README.md',
+        markdown:
+          '# Top\n\n' +
+          Array.from(
+            { length: 1000 },
+            (_, i) => `## Section ${i}\n\nsection text\n\n`,
+          ).join(''),
+      },
+    ],
+  })
+  await page.getByRole('button', { name: /^toggle navigation$/i }).waitFor()
+  await page.evaluate(() => {
+    window.headingRectReads = 0
+    const rect = Element.prototype.getBoundingClientRect
+    Element.prototype.getBoundingClientRect = function (...args) {
+      if (this.matches('article h2')) window.headingRectReads++
+      return rect.apply(this, args)
+    }
+    const scroller = document.querySelector('.site-content')
+    const heading = document.getElementById('doc-section-900')
+    scroller.scrollTop +=
+      heading.getBoundingClientRect().top -
+      scroller.getBoundingClientRect().top -
+      24
+  })
+  await page
+    .locator('.site-outline a[aria-current="location"]')
+    .filter({ hasText: /^Section 900$/ })
+    .waitFor()
+  assert.ok((await page.evaluate(() => window.headingRectReads)) <= 4)
+  await page.evaluate(() => {
+    document.querySelector('.site-content').scrollTop = 0
+  })
+  await page
+    .locator('.site-outline a[aria-current="location"]')
+    .filter({ hasText: /^Section 0$/ })
+    .waitFor()
+  assert.ok((await page.evaluate(() => window.headingRectReads)) <= 4)
+})

@@ -824,7 +824,7 @@
     "src/main/document.ts"
   ],
   "42e3ecb68937": [
-    "src/main/media.ts"
+    "src/main/document-media.ts"
   ],
   "f84eb17965b6": [
     "src/main/addon-hotkeys.ts",
@@ -1478,6 +1478,9 @@
   ],
   "0af861157fe6": [
     "src/renderer/src/autosave.ts"
+  ],
+  "93a0e14c0592": [
+    "src/site/search-worker-client.ts"
   ],
   "f6a61661c1fd": [
     "src/renderer/src/document-worker-client.ts"

@@ -5,21 +5,22 @@ import {
   type ViewUpdate,
   WidgetType,
 } from '@codemirror/view'
-import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common'
+import type { SyntaxNodeRef } from '@lezer/common'
 import {
-  Autolink,
   type MarkdownConfig,
   type MarkdownParser,
   parser,
+  Table,
 } from '@lezer/markdown'
 import {
   type FormattedContribution,
   type FormattedDecorations,
   type FormattedNodeView,
+  type FormattedRenderContext,
   formattedMarkdown,
   formattedViews,
+  showMarkdownMarkers,
 } from '../formatted-contributions.ts'
-import { showMarkdownMarkers } from '../live-preview.ts'
 import {
   alignments,
   cellContent,
@@ -47,7 +48,7 @@ function cellParser(state: EditorState) {
   const contributed = state.facet(formattedMarkdown)
   let found = cellParsers.get(contributed)
   if (!found) {
-    const inline = parser.configure([Autolink, ...contributed])
+    const inline = parser.configure(contributed)
     const blocks =
       (inline as unknown as { blockNames?: readonly string[] }).blockNames ?? []
     found = inline.configure({ remove: [...blocks] })
@@ -114,7 +115,7 @@ function renderInline(view: EditorView, text: string, into: HTMLElement) {
   const style = (name: string, from: number, to: number) =>
     out.mark(from, to, { class: name })
   const views = namedViews(view.state)
-  let context: { state: EditorState; revealed: boolean } | null = null
+  let context: FormattedRenderContext | null = null
   cellParser(view.state)
     .parse(text)
     .iterate({
@@ -123,6 +124,7 @@ function renderInline(view: EditorView, text: string, into: HTMLElement) {
         for (const nodeView of views.get(node.name) ?? []) {
           context ??= {
             state: EditorState.create({ doc: text }),
+            visible: { from: 0, to: text.length },
             revealed: false,
           }
           if (nodeView.decorate?.(node, out, context) === false) skip = true
@@ -268,58 +270,33 @@ function renderInline(view: EditorView, text: string, into: HTMLElement) {
   }
 }
 
-/** Quotes and lists around a table indent it, with quote bars, like their lines. */
-function containers(node: SyntaxNode) {
-  const around: SyntaxNode[] = []
-  for (let parent = node.parent; parent; parent = parent.parent)
-    if (
-      parent.name === 'Blockquote' ||
-      parent.name === 'BulletList' ||
-      parent.name === 'OrderedList'
-    )
-      around.unshift(parent)
-  const widths: string[] = [],
-    bars: string[] = []
-  for (const container of around) {
-    const left = widths.length ? `calc(${widths.join(' + ')})` : '0px'
-    if (container.name === 'Blockquote') {
-      bars.push(
-        `linear-gradient(var(--border), var(--border)) ${left} 0 / 1px 100% no-repeat`,
-      )
-      widths.push('21px')
-    } else widths.push('1.5 * var(--text-editor)')
-  }
-  return {
-    quotes: around.filter((container) => container.name === 'Blockquote')
-      .length,
-    style: widths.length
-      ? `--hibi-indent: calc(${widths.join(' + ')})${bars.length ? `; --hibi-bars: ${bars.join(', ')}` : ''}`
-      : '',
-  }
-}
-
 type Line = { from: number; text: string }
 
 /**
- * A table: lines `first` (header) to `first + rows + 1` of `doc`. The text
- * snapshot is enough to render; where it is now comes from the view.
+ * A table: lines `first` (header) to `first + rows + 1` of `doc`, replaced
+ * from `from`. The text snapshot is enough to render; where the table is now
+ * comes from the view.
  */
 class TableWidget extends WidgetType {
   constructor(
     readonly doc: Text,
+    readonly from: number,
     readonly first: number,
     readonly rows: number,
+    /** Quotes around the table, whose markers start its lines. */
     readonly quotes: number,
-    readonly style: string,
+    /** In a quote or list: an inline widget on the container's line. */
+    readonly inline: boolean,
   ) {
     super()
   }
   override eq(other: TableWidget) {
     return (
       other.doc === this.doc &&
-      other.first === this.first &&
+      other.from === this.from &&
       other.rows === this.rows &&
-      other.style === this.style
+      other.quotes === this.quotes &&
+      other.inline === this.inline
     )
   }
   override get estimatedHeight() {
@@ -449,13 +426,8 @@ class TableView {
   }
 
   update(widget: TableWidget) {
-    const previous = this.widget
     this.widget = widget
-    if (widget.style !== previous.style || !this.headText) {
-      this.dom.classList.toggle('hibi-lp-nested', !!widget.style)
-      this.dom.classList.toggle('hibi-lp-quote', widget.style.includes('bars'))
-      this.dom.setAttribute('style', widget.style)
-    }
+    this.dom.classList.toggle('hibi-lp-table-inline', widget.inline)
     const header = widget.line(0),
       delimiter = widget.line(1).text
     if (header.text !== this.headText || delimiter !== this.delimiterText) {
@@ -707,8 +679,7 @@ class TableView {
       }
     }
     // The widget knows its text; where the table starts now comes from the view.
-    const at =
-      view.posAtDOM(this.dom) - widget.line(0).from + source.from + offset
+    const at = view.posAtDOM(this.dom) - widget.from + source.from + offset
     view.dispatch({ selection: { anchor: at }, userEvent: 'select.pointer' })
     view.focus()
   }
@@ -741,27 +712,41 @@ const rowWindows = ViewPlugin.fromClass(
 export const contribution: FormattedContribution = {
   id: 'markdown.tables',
   feature: 'markdown.tables',
+  flavor: 'markdown.github',
+  syntax: Table,
+  opaque: ['Table'],
   views: [
     {
       nodes: ['Table'],
+      space: { top: 20, bottom: 20 },
       // Rows are read from the text; neither pass walks them as nodes.
       decorate: () => false,
       layout(node, out, { state, revealed }) {
         if (revealed) return false
         const first = state.doc.lineAt(node.from),
           last = state.doc.lineAt(node.to)
-        const { quotes, style } = containers(node.node)
+        let quotes = 0,
+          inline = false
+        for (let parent = node.node.parent; parent; parent = parent.parent)
+          if (parent.name === 'Blockquote') quotes++
+          else if (parent.name === 'ListItem') inline = true
+        // In quotes and lists the table is an inline widget on its first
+        // line, which keeps the container's indent and bars.
+        inline ||= quotes > 0
+        const from = inline ? node.from : first.from,
+          to = inline ? node.to : last.to
         out.replace(
-          first.from,
-          last.to,
+          from,
+          to,
           new TableWidget(
             state.doc,
+            from,
             first.number,
             last.number - first.number - 1,
             quotes,
-            style,
+            inline,
           ),
-          { block: true },
+          inline ? undefined : { block: true },
         )
         return false
       },

@@ -5,6 +5,12 @@
 .hibi-formatted .hibi-lp-table {
   contain: inline-size;
 }
+/* In quotes and lists the table sits on its container's line, without the line's own height. */
+.hibi-formatted .hibi-lp-table-inline {
+  display: inline-block;
+  width: 100%;
+  vertical-align: top;
+}
 .hibi-formatted .hibi-lp-table > table {
   border-collapse: collapse;
   width: 100%;
@@ -31,22 +37,4 @@
 }
 .hibi-formatted .hibi-lp-table .hibi-lp-table-empty {
   display: none;
-}
-/* Quotes and lists indent a table like their lines, with the quote bars. */
-.hibi-formatted .hibi-lp-table.hibi-lp-nested {
-  position: relative;
-  margin-left: var(--hibi-indent);
-}
-.hibi-formatted .hibi-lp-table.hibi-lp-quote {
-  color: var(--syntax-quote);
-}
-.hibi-formatted .hibi-lp-table.hibi-lp-quote::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: calc(-1 * var(--hibi-indent));
-  width: var(--hibi-indent);
-  background: var(--hibi-bars);
-  pointer-events: none;
 }

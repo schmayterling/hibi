@@ -9,13 +9,10 @@ import {
 import { type EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import { type Tree, TreeFragment } from '@lezer/common'
 import {
-  Autolink,
   type MarkdownConfig,
   type MarkdownExtension,
   parseCode,
   parser,
-  Table,
-  TaskList,
 } from '@lezer/markdown'
 import { createPlainTextRunExtension } from '../../shared/markdown-plain-text-runs.ts'
 import {
@@ -26,7 +23,12 @@ import {
   uncovered,
 } from './chunked-markdown.ts'
 import { codeLanguages } from './code-languages.ts'
-import { formattedMarkdown } from './formatted-contributions.ts'
+import {
+  formattedMarkdown,
+  formattedOpaque,
+  formattedPrefix,
+  inlineStops,
+} from './formatted-contributions.ts'
 
 /**
  * The formatted view owns its syntax tree. A transaction parses for at most
@@ -37,6 +39,8 @@ import { formattedMarkdown } from './formatted-contributions.ts'
 type Syntax = {
   tree: Tree
   demand: Demand
+  /** The document prefix that is not parsed as Markdown. */
+  prefix: number
   complete: boolean
   /** The unfinished parse of this document, continued by the next slice. */
   parse: ChunkedPartialParse | null
@@ -53,17 +57,16 @@ export type FormattedSyntaxOptions = {
 }
 
 /**
- * GitHub's table, task and autolink syntax, plus the Markdown extensions of
- * the formatted view's contributions (strikethrough among them).
+ * CommonMark plus the Markdown extensions of the formatted view's
+ * contributions, which add GitHub's syntax for documents of that flavor.
  */
 function markdownParser(
   options: FormattedSyntaxOptions,
   contributed: readonly MarkdownConfig[],
+  opaque: readonly string[],
 ) {
   const base = parser.configure([
-    Table,
-    TaskList,
-    Autolink,
+    { defineNodes: [{ name: 'Frontmatter', block: true }] },
     ...contributed,
     options.extensions ?? [],
   ])
@@ -74,8 +77,16 @@ function markdownParser(
       codeParser: (info) => codeLanguages.resolve(info)?.parser ?? null,
     }),
   ])
-  runs.allow(full)
+  // The plain-text shortcut stops only at the characters core inline syntax
+  // starts with; contributed inline syntax that starts elsewhere turns it off.
+  if (
+    contributed.every(
+      (config) => !config.parseInline?.length || inlineStops(config),
+    )
+  )
+    runs.allow(full)
   return new ChunkedMarkdownParser(full, base, {
+    opaque: new Set(opaque),
     ...(options.probe ? { probe: options.probe } : {}),
   })
 }
@@ -89,19 +100,35 @@ function syntaxField(options: FormattedSyntaxOptions) {
   // Contributions change the node set, so each set of extensions gets its own parser.
   const parsers = new WeakMap<
     readonly MarkdownConfig[],
-    ChunkedMarkdownParser
+    WeakMap<readonly string[], ChunkedMarkdownParser>
   >()
   const chunkedFor = (state: EditorState) => {
-    const contributed = state.facet(formattedMarkdown)
-    let chunked = parsers.get(contributed)
+    const contributed = state.facet(formattedMarkdown),
+      opaque = state.facet(formattedOpaque)
+    let byOpaque = parsers.get(contributed)
+    if (!byOpaque) {
+      byOpaque = new WeakMap()
+      parsers.set(contributed, byOpaque)
+    }
+    let chunked = byOpaque.get(opaque)
     if (!chunked) {
-      chunked = markdownParser(options, contributed)
-      parsers.set(contributed, chunked)
+      chunked = markdownParser(options, contributed, opaque)
+      byOpaque.set(opaque, chunked)
     }
     return chunked
   }
+  const prefixOf = (state: EditorState) => {
+    let prefix = 0
+    for (const measure of state.facet(formattedPrefix))
+      prefix = Math.max(prefix, measure(state))
+    return Math.min(prefix, state.doc.length)
+  }
   const slice = options.slice ?? 8
-  const run = (parse: ChunkedPartialParse, demand: Demand): Syntax => {
+  const run = (
+    parse: ChunkedPartialParse,
+    demand: Demand,
+    prefix: number,
+  ): Syntax => {
     const end = performance.now() + slice
     for (;;) {
       const tree = parse.advance()
@@ -109,27 +136,38 @@ function syntaxField(options: FormattedSyntaxOptions) {
         return {
           tree,
           demand,
+          prefix,
           complete: !uncovered(tree, demand.from, demand.to),
           parse: null,
         }
       // Keep the verified progress; the driver resumes in an idle slice.
       if (performance.now() >= end)
-        return { tree: parse.snapshot(), demand, complete: false, parse }
+        return {
+          tree: parse.snapshot(),
+          demand,
+          prefix,
+          complete: false,
+          parse,
+        }
     }
   }
   const start = (
     state: EditorState,
     fragments: readonly TreeFragment[],
     demand: Demand,
-  ) =>
-    run(
+  ) => {
+    const prefix = prefixOf(state)
+    return run(
       chunkedFor(state).startChunkedParse(
         new DocInput(state.doc),
         fragments,
         demand,
+        prefix,
       ),
       demand,
+      prefix,
     )
+  }
   return StateField.define<Syntax>({
     create(state) {
       return start(state, [], {
@@ -144,10 +182,13 @@ function syntaxField(options: FormattedSyntaxOptions) {
         if (effect.is(setDemand)) demand = effect.value
         else if (effect.is(resume)) resumed = true
       }
-      // New syntax contributions parse the document again with their node set.
+      // New syntax contributions or a new unparsed prefix parse the document again.
+      const { state, startState } = transaction
       if (
-        transaction.state.facet(formattedMarkdown) !==
-        transaction.startState.facet(formattedMarkdown)
+        state.facet(formattedMarkdown) !==
+          startState.facet(formattedMarkdown) ||
+        state.facet(formattedOpaque) !== startState.facet(formattedOpaque) ||
+        prefixOf(state) !== value.prefix
       )
         return start(
           transaction.state,
@@ -177,7 +218,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
       if (demand === value.demand && !resumed) return value
       if (value.parse) {
         value.parse.setDemand(demand)
-        return run(value.parse, demand)
+        return run(value.parse, demand, value.prefix)
       }
       if (!uncovered(value.tree, demand.from, demand.to))
         return { ...value, demand, complete: true }

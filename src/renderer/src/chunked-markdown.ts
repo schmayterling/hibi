@@ -46,6 +46,8 @@ type Giant = {
   key: string | null
   /** A paragraph or table becomes a setext heading at its end, so it is never left open. */
   retype: boolean
+  /** Its renderers read its text, so only its opening and last lines get inner nodes. */
+  opaque: boolean
   /** The block's end, or null when it continues past the chunk into unscanned text. */
   end: number | null
 }
@@ -110,6 +112,8 @@ export type ChunkedMarkdownOptions = {
   groupSize?: number
   /** Blocks longer than this get inner nodes only near the viewport. */
   giantBlock?: number
+  /** Node names whose giant blocks need inner nodes only for their opening and last lines. */
+  opaque?: ReadonlySet<string>
   probe?: ChunkedMarkdownProbe
 }
 
@@ -139,6 +143,7 @@ type Continuation = {
   leaf: boolean
   key: string | null
   retype: boolean
+  opaque: boolean
   /** A line start inside the block where the next window begins. */
   frontier: number
   span: number
@@ -356,6 +361,7 @@ function giantCovers(
   to: number,
 ) {
   if (!info.window) return false
+  if (info.block.opaque) return true
   const a = Math.max(from, start + head(info.block)),
     b = Math.min(to, start + length)
   return (
@@ -397,11 +403,25 @@ class ChunkedParse implements ChunkedPartialParse {
     input: Input,
     fragments: readonly TreeFragment[],
     view: Demand | null,
+    prefix = 0,
   ) {
     this.parser = parser
     this.input = input
     this.view = view
     const length = input.length
+    // A prefix that is not Markdown, such as frontmatter, is one opaque node.
+    if (prefix > 0 && parser.frontmatter) {
+      this.addChunk(
+        new Tree(
+          NodeType.none,
+          [new Tree(parser.frontmatter, [], [], prefix)],
+          [0],
+          prefix,
+          [[chunkInfo, { kind: 'parsed' }]],
+        ),
+      )
+      this.pos = prefix
+    }
     this.olds = fragments.flatMap((fragment) => {
       if (fragment.tree.prop(chunkInfo)?.kind !== 'root') return []
       let safe = length
@@ -596,6 +616,7 @@ class ChunkedParse implements ChunkedPartialParse {
       leaf: block.leaf,
       key: block.key,
       retype: block.retype,
+      opaque: block.opaque,
       frontier,
       span: 2 * this.parser.chunkSize,
     })
@@ -757,6 +778,7 @@ class ChunkedParse implements ChunkedPartialParse {
         leaf: found.leaf,
         key: found.key,
         retype: found.retype,
+        opaque: this.parser.opaque.has(top.name),
         frontier: found.frontier,
         span,
       })
@@ -893,6 +915,7 @@ class ChunkedParse implements ChunkedPartialParse {
       leaf: block.leaf,
       key: block.key,
       retype: block.retype,
+      opaque: block.opaque,
       end: end === null ? null : end - block.from,
     }
   }
@@ -1049,7 +1072,8 @@ class ChunkedParse implements ChunkedPartialParse {
       prefix = from + point.prefix
     const segments: [number, number][] = []
     if (prefix > line) segments.push([line, prefix - 1])
-    segments.push([start, stop])
+    // An opaque block's renderers read its text: no lines between its ends.
+    if (!block.opaque) segments.push([start, stop])
     // A leaf block's last line decides a setext heading and closes a fence.
     if (block.leaf && block.end !== null)
       segments.push([lineStart(input, last), last])
@@ -1070,8 +1094,8 @@ class ChunkedParse implements ChunkedPartialParse {
       block,
       window: {
         head: prefix > line ? { from: line - from, to: prefix - from } : null,
-        from: start - from,
-        to: Math.min(to, stop + 1) - from,
+        from: (block.opaque ? prefix : start) - from,
+        to: (block.opaque ? prefix : Math.min(to, stop + 1)) - from,
         items: point.items ?? 0,
       },
       base: ranges[0]!.from,
@@ -1272,6 +1296,9 @@ export class ChunkedMarkdownParser extends Parser {
   readonly chunkSize: number
   readonly groupSize: number
   readonly giantBlock: number
+  readonly opaque: ReadonlySet<string>
+  /** The node a document prefix that is not Markdown becomes, when the syntax defines it. */
+  readonly frontmatter: NodeType | undefined
 
   /** `base` has the same block syntax as `full`, without code-language nesting. */
   constructor(
@@ -1295,6 +1322,10 @@ export class ChunkedMarkdownParser extends Parser {
     this.chunkSize = options.chunkSize ?? 4096
     this.groupSize = options.groupSize ?? 64
     this.giantBlock = options.giantBlock ?? 16 * this.chunkSize
+    this.opaque = options.opaque ?? new Set()
+    this.frontmatter = full.nodeSet.types.find(
+      (type) => type.name === 'Frontmatter',
+    )
   }
 
   createParse(
@@ -1312,13 +1343,17 @@ export class ChunkedMarkdownParser extends Parser {
     return new ChunkedParse(this, input, fragments, null)
   }
 
-  /** Parse with inline content near `demand`; null parses the whole document. */
+  /**
+   * Parse with inline content near `demand`; null parses the whole document.
+   * The first `prefix` units become one `Frontmatter` node.
+   */
   startChunkedParse(
     input: Input,
     fragments: readonly TreeFragment[],
     demand: Demand | null,
+    prefix = 0,
   ): ChunkedPartialParse {
-    return new ChunkedParse(this, input, fragments, demand)
+    return new ChunkedParse(this, input, fragments, demand, prefix)
   }
 }
 

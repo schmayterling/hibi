@@ -20,6 +20,9 @@ const configuration = (extra = {}) => ({
   syntax: [
     'table@1',
     'tasks@1',
+    'empty-tasks@1',
+    'footnotes@1',
+    'github-alerts@1',
     'strike@1',
     'autolink@1',
     'math-inline@1',

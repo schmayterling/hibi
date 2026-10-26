@@ -1,62 +1,11 @@
 import { WidgetType } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
-import type {
-  BlockContext,
-  LeafBlock,
-  LeafBlockParser,
-  MarkdownConfig,
-} from '@lezer/markdown'
 import type { FormattedContribution } from '../../renderer/src/formatted-contributions.ts'
+import { GithubAlerts } from '../../shared/markdown-extra-syntax.ts'
 import { alertMarker, alertType } from './alerts.ts'
 import './formatted.css'
 
-/** Where a quote starts on the line being parsed, per parse. */
-const quoteStarts = new WeakMap<BlockContext, number>()
-
-/** A quote's first line `[!type] title` is its alert title; the body starts on the next line. */
-class AlertTitleParser implements LeafBlockParser {
-  nextLine(cx: BlockContext, _line: unknown, leaf: LeafBlock) {
-    return this.finish(cx, leaf)
-  }
-  finish(cx: BlockContext, leaf: LeafBlock) {
-    const marker = alertMarker(leaf.content)
-    if (!marker) return false
-    // `[!`, the type, `]` and an optional fold sign.
-    const mark = 3 + (marker[1]?.length ?? 0) + (marker[2]?.length ?? 0)
-    cx.addLeafElement(
-      leaf,
-      cx.elt('AlertTitle', leaf.start, leaf.start + leaf.content.length, [
-        cx.elt('AlertMark', leaf.start, leaf.start + mark),
-      ]),
-    )
-    return true
-  }
-}
-
-/** GitHub alerts: a quote whose first line is `[!type]`, with an optional title after it. */
-export const GithubAlerts: MarkdownConfig = {
-  defineNodes: [{ name: 'AlertTitle', block: true }, { name: 'AlertMark' }],
-  parseBlock: [
-    {
-      name: 'AlertQuoteStart',
-      parse(cx, line) {
-        if (line.next === 62 /* > */) quoteStarts.set(cx, cx.lineStart)
-        return false
-      },
-      before: 'Blockquote',
-    },
-    {
-      name: 'AlertTitle',
-      leaf: (cx, leaf) =>
-        cx.parentType().name === 'Blockquote' &&
-        quoteStarts.get(cx) === cx.lineStart &&
-        alertMarker(leaf.content)
-          ? new AlertTitleParser()
-          : null,
-      after: 'SetextHeading',
-    },
-  ],
-}
+export { GithubAlerts } from '../../shared/markdown-extra-syntax.ts'
 
 /** The alert's type, or its own title, as the rich editor shows it. */
 export class AlertTitleWidget extends WidgetType {

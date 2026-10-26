@@ -12,10 +12,15 @@ import {
   inlineMathSyntax,
 } from '../addons/math/formatted-syntax.ts'
 
+import { EmptyTask, Footnotes, GithubAlerts } from './markdown-extra-syntax.ts'
+
 /** Both realms import these objects; an unrecognized contribution never gets a guessed grammar. */
 const catalog = {
   'table@1': Table,
   'tasks@1': TaskList,
+  'empty-tasks@1': EmptyTask,
+  'footnotes@1': Footnotes,
+  'github-alerts@1': GithubAlerts,
   'strike@1': Strikethrough,
   'autolink@1': Autolink,
   'math-inline@1': inlineMathSyntax,

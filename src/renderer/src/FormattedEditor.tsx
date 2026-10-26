@@ -14,6 +14,7 @@ import type { ViewId } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import { normalizedSource } from '../../shared/source-projection'
 import { documentRuntime } from './document-runtime'
+import { largeOpening } from './document-shell'
 import type { MarkdownEditor as RichMarkdownEditor } from './Editor'
 import { EditorCursor } from './EditorCursor'
 import { emitEditorKeyEvent } from './editor-events'
@@ -302,7 +303,7 @@ export function MarkdownEditor({
                   markdownDocument &&
                   // A large note's properties are not read, so its
                   // frontmatter stays in the text.
-                  value &&
+                  !largeOpening(documentRuntime, documentState) &&
                   markdownExtensions.some(
                     ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
                   )

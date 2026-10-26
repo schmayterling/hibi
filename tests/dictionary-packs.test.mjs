@@ -370,7 +370,7 @@ test('held cold verification leaves warm-pack completions runnable', async (t) =
   const path = join(ctx.root, 'yielding-worker.mjs')
   await writeFile(
     path,
-    `
+    String.raw`
     import fs from 'node:fs'
     import { syncBuiltinESMExports } from 'node:module'
     import { parentPort } from 'node:worker_threads'
@@ -380,7 +380,7 @@ test('held cold verification leaves warm-pack completions runnable', async (t) =
     let answered = false
     fs.createReadStream = (path, ...args) => {
       const stream = read(path, ...args)
-      if (!String(path).endsWith('/fr/data.jsonl')) return stream
+      if (!/[\\/]fr[\\/]data\.jsonl$/.test(String(path))) return stream
       return (async function* () {
         const wait = new Promise(resolve => { release = resolve })
         fs.writeFileSync(${JSON.stringify(held)}, 'held')
@@ -434,6 +434,102 @@ test('held cold verification leaves warm-pack completions runnable', async (t) =
     store.worker.worker?.postMessage({ type: 'test-release' })
   }
   await Promise.allSettled([cold, warm])
+})
+
+test('a hashed pack with invalid contents keeps its validation failure per stamp', async (t) => {
+  const { store, root } = await setup(t)
+  await install(store, 'en')
+  const path = join(root, 'en')
+  const bad = (await readFile(join(path, 'index.json'), 'utf8')).replace(
+    '"version":1',
+    '"version":2',
+  )
+  await writeFile(join(path, 'index.json'), bad)
+  const manifest = JSON.parse(
+    await readFile(join(path, 'manifest.json'), 'utf8'),
+  )
+  manifest.index.sha256 = createHash('sha256').update(bad).digest('hex')
+  await writeFile(join(path, 'manifest.json'), JSON.stringify(manifest))
+  const checks = t.mock.method(store.worker, 'verify')
+  await assert.rejects(store.lookup('en', 'children'), {
+    name: 'DictionaryPackValidationError',
+  })
+  for (let i = 0; i < 4; i++)
+    await assert.rejects(store.complete('en', 'ch'), {
+      name: 'DictionaryPackValidationError',
+    })
+  assert.equal(
+    checks.mock.callCount(),
+    1,
+    'a fresh successful hash already established the invalid content',
+  )
+})
+
+test('uninstall waits for a held receipt write before unloading or removing its folder', async (t) => {
+  const ctx = await setup(t)
+  await install(ctx.store, 'en')
+  await ctx.store.close()
+  const held = join(ctx.root, 'receipt-held')
+  const path = join(ctx.root, 'receipt-write-worker.mjs')
+  await writeFile(
+    path,
+    `
+    import fs from 'node:fs'
+    import files from 'node:fs/promises'
+    import { syncBuiltinESMExports } from 'node:module'
+    import { parentPort } from 'node:worker_threads'
+    const write = files.writeFile
+    let release
+    files.writeFile = async (path, ...args) => {
+      if (String(path).endsWith('.verified.tmp')) {
+        const wait = new Promise(resolve => { release = resolve })
+        fs.writeFileSync(${JSON.stringify(held)}, 'held')
+        await wait
+      }
+      return write(path, ...args)
+    }
+    parentPort.on('message', job => { if (job.type === 'test-release') release?.() })
+    syncBuiltinESMExports()
+    await import(${JSON.stringify(pathToFileURL(worker).href)})
+  `,
+  )
+  const store = new PackStore(ctx.root, pathToFileURL(path))
+  t.after(() => store.close())
+  const reading = store.lookup('en', 'children')
+  void reading.catch(() => {})
+  await waitForAsync({ evaluate: async (check) => check() }, async () =>
+    readFile(held).then(
+      () => true,
+      () => false,
+    ),
+  )
+  const recovered = Promise.withResolvers()
+  const recover = store.recover.bind(store)
+  t.mock.method(store, 'recover', async (id) => {
+    const path = await recover(id)
+    recovered.resolve()
+    return path
+  })
+  const unload = t.mock.method(store.worker, 'unload')
+  const removing = store.uninstall('en')
+  void removing.catch(() => {})
+  try {
+    await recovered.promise
+    await new Promise(setImmediate)
+    assert.equal(
+      unload.mock.callCount(),
+      0,
+      'receipt verification owns the folder until it settles',
+    )
+  } finally {
+    store.worker.worker?.postMessage({ type: 'test-release' })
+    await Promise.allSettled([reading, removing])
+  }
+  await removing
+  assert.deepEqual(await reading, [])
+  await assert.rejects(readFile(join(ctx.root, 'en', '.verified.json')), {
+    code: 'ENOENT',
+  })
 })
 
 test('installed languages share one cached list, invalidated after install and uninstall', async (t) => {

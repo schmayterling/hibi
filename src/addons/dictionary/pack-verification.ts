@@ -45,7 +45,7 @@ export async function verifyPack(
         info.size <= 64 * 1024 &&
         JSON.parse(await readFile(cache, 'utf8')).stamp === stamp
       )
-        return
+        return { cached: true }
     } catch {
       // Verification receipts are disposable; pack integrity is checked below.
     }
@@ -55,8 +55,11 @@ export async function verifyPack(
     const hash = createHash('sha256')
     for await (const chunk of createReadStream(file)) hash.update(chunk)
     if (hash.digest('hex') !== manifest[name].sha256)
-      throw new Error(
-        'This dictionary pack failed its checksum. Install it again.',
+      throw Object.assign(
+        new Error(
+          'This dictionary pack failed its checksum. Install it again.',
+        ),
+        { name: 'DictionaryPackChecksumError' },
       )
   }
   if ((await packStamp(path, manifest)) !== stamp)
@@ -75,4 +78,5 @@ export async function verifyPack(
   } finally {
     await rm(temporary, { force: true }).catch(() => {})
   }
+  return { cached: false }
 }

@@ -77,14 +77,18 @@ async function manifestAt(path: string, id: PackId) {
   )
 }
 
+type Verification = {
+  stamp: string
+  generation: number
+  pending: Promise<void>
+  fresh: boolean
+}
+
 /** Main owns downloads; lookup and short-lived conversion workers stay independent. */
 export class PackStore {
   private worker: PackWorker
   private invalidated = new Set<PackId>()
-  private verified = new Map<
-    PackId,
-    { stamp: string; generation: number; pending: Promise<void> }
-  >()
+  private verified = new Map<PackId, Verification>()
   private active:
     | { id: PackId; controller: AbortController; done: Promise<void> }
     | undefined
@@ -356,6 +360,7 @@ export class PackStore {
     this.installedCache = undefined
     try {
       const path = await this.recover(id)
+      await this.verified.get(id)?.pending.catch(() => {})
       await this.worker.unload(id)
       const base = await directory(this.root)
       for (const candidate of [
@@ -450,20 +455,26 @@ export class PackStore {
       ) {
         const pending = this.worker
           .verify(id, path, manifest, this.invalidated.has(id))
-          .then(async () => {
+          .then(async ({ cached }) => {
+            current.fresh = !cached
             if (changed()) return
             this.invalidated.delete(id)
             await this.worker.unload(id)
           })
-        verification = { stamp, generation, pending }
-        const current = verification
+        const current: Verification = {
+          stamp,
+          generation,
+          pending,
+          fresh: false,
+        }
+        verification = current
         this.verified.set(id, current)
         void pending.catch((error) => {
           if (
             this.verified.get(id) === current &&
             !(
               error instanceof Error &&
-              error.message.includes('failed its checksum.')
+              error.name === 'DictionaryPackChecksumError'
             )
           )
             this.verified.delete(id)
@@ -479,8 +490,16 @@ export class PackStore {
           error instanceof Error &&
           error.name === 'DictionaryPackValidationError'
         ) {
-          this.invalidated.add(id)
-          if (this.verified.get(id) === verification) this.verified.delete(id)
+          if (this.verified.get(id) === verification) {
+            if (verification.fresh) {
+              const pending = Promise.reject(error)
+              void pending.catch(() => {})
+              this.verified.set(id, { ...verification, pending })
+            } else {
+              this.invalidated.add(id)
+              this.verified.delete(id)
+            }
+          }
         }
         throw error
       }

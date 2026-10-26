@@ -58,7 +58,7 @@ port.on(
                 port.postMessage({ seq: job.seq, progress: entries }),
             )
           } else if (job.type === 'verify') {
-            await verifyPack(
+            result = await verifyPack(
               job.directory,
               validateManifest(job.manifest, job.id),
               job.force === true,
@@ -94,6 +94,9 @@ port.on(
         port.postMessage({
           seq: job.seq,
           invalidPack,
+          checksumFailed:
+            error instanceof Error &&
+            error.name === 'DictionaryPackChecksumError',
           error: invalidPack
             ? 'This dictionary pack is damaged. Install it again.'
             : error instanceof Error

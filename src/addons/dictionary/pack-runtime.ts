@@ -59,6 +59,7 @@ export class PackWorker {
         result?: unknown
         error?: string
         invalidPack?: boolean
+        checksumFailed?: boolean
       }) => {
         if (this.worker !== worker) return
         const pending = this.pending.get(message.seq)
@@ -79,7 +80,9 @@ export class PackWorker {
               new Error(message.error),
               message.invalidPack
                 ? { name: 'DictionaryPackValidationError' }
-                : {},
+                : message.checksumFailed
+                  ? { name: 'DictionaryPackChecksumError' }
+                  : {},
             ),
           )
         else pending.resolve(message.result)
@@ -203,7 +206,7 @@ export class PackWorker {
     directory: string,
     manifest: PackManifest,
     force = false,
-  ): Promise<void> {
+  ): Promise<{ cached: boolean }> {
     return this.request({ type: 'verify', id, directory, manifest, force })
   }
   preload(id: PackId, directory: string): Promise<void> {

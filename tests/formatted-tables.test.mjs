@@ -1037,6 +1037,47 @@ test('typing in a long table maps only its sized rows', {
   assert.match((await state()).doc, /^\| r3y \| x \|$/m)
 })
 
+test('a sized table keeps its sizes when a table is inserted before it', {
+  timeout: 30000,
+}, async () => {
+  const doc = 'intro\n\n| a | b |\n| - | - |\n| 1 | 2 |\n\nafter'
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('insert', [{ key, columns: [200, 0], rows: null }]),
+    tableKey(0, ['a', 'b']),
+  )
+  await mountTab(doc, 'insert')
+  await harness.evaluate(async (at) => {
+    window.tables
+      .view()
+      .dispatch({ changes: { from: at, insert: '| x | y |\n| - | - |\n\n' } })
+    await window.tables.settle()
+  }, doc.indexOf('| a'))
+  const widths = () =>
+    harness.evaluate(() =>
+      [...document.querySelectorAll('.hibi-lp-table')].map((table) => {
+        const cell = table.querySelector('th')
+        return [cell.innerText.trim(), cell.style.width]
+      }),
+    )
+  assert.deepEqual(await widths(), [
+    ['x', ''],
+    ['a', '200px'],
+  ])
+  // Its ordinal changed: the sizes move to the new key, and stay after the view closes.
+  const key = tableKey(1, ['a', 'b'])
+  await harness.waitForFunction(
+    (key) => window.tables.layouts('insert').some((table) => table.key === key),
+    key,
+  )
+  await mountTab('closed', 'other')
+  const stored = await layouts('insert')
+  assert.deepEqual(
+    stored.map((table) => [table.key, table.columns[0]]),
+    [[key, 200]],
+  )
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {

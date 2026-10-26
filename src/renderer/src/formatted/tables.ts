@@ -246,6 +246,28 @@ function store(view: EditorView): Store | null {
 const storedTables = (entry: Store | null) =>
   entry && (storedTableLayouts(entry.tabId) ?? entry.loaded)
 
+/** A table's sizes as a view holds them, and their positions through changes since the last redraw. */
+type SizeState = {
+  sizes: { key: string | null; columns: number[]; rows: Map<number, number> }
+  header: string[]
+  moved: Moved | null
+  /** What the store has for the table, as last bound or saved. */
+  stored: string | null
+}
+type Moved = {
+  columns: (number | null)[]
+  rows: { index: number; size: number; pos: number | null }[]
+  sizes: { columns: number[] }
+  count: number
+  lines: number
+}
+/**
+ * Size state of the tables an update changes, by where each table ends
+ * after it: CodeMirror may show a table in another table's view after an
+ * edit, so state follows the table, not the view.
+ */
+const handoffs = new WeakMap<EditorView, Map<number, SizeState>>()
+
 const tableViews = new WeakMap<HTMLElement, TableView>()
 /** Mounted tables per editor, for row windows, entering tables and table actions. */
 const mounted = new WeakMap<EditorView, Set<TableView>>()
@@ -297,13 +319,11 @@ class TableView {
   private saving: ReturnType<typeof setTimeout> | undefined
   private unsubscribe: (() => void) | null = null
   /** Sized columns' header cells and sized rows' lines through changes since the last redraw, null where deleted. */
-  private moved: {
-    columns: (number | null)[]
-    rows: { index: number; size: number; pos: number | null }[]
-    sizes: { columns: number[] }
-    count: number
-    lines: number
-  } | null = null
+  private moved: Moved | null = null
+  /** The stored entry as last bound or saved, so saves that change nothing write nothing. */
+  private stored: string | null = null
+  /** Where the table ends after the change being applied, while its state is handed over. */
+  private endsAt: number | null = null
 
   constructor(
     readonly view: EditorView,
@@ -335,6 +355,7 @@ class TableView {
   update(widget: TableWidget) {
     const previous = this.widget
     this.widget = widget
+    this.takeOver()
     this.relocate()
     this.followSizes()
     this.dom.classList.toggle('hibi-lp-table-inline', widget.inline)
@@ -368,7 +389,8 @@ class TableView {
       else this.renderHead(header)
       this.headText = header.text
       const texts = this.headerTexts()
-      const renamed = texts.join('\t') !== this.header.join('\t')
+      const renamed =
+        this.header.length > 0 && texts.join('\t') !== this.header.join('\t')
       this.header = texts
       // Sized tables keep their sizes under the new header; others look theirs up.
       if (!this.sizes.key) this.sized()
@@ -880,11 +902,60 @@ class TableView {
   /** Follow the edited row through the formatted view's changes; the edited cell when its row was deleted. */
   map(changes: ChangeDesc): Cell | null {
     this.track(changes)
+    this.handOver(changes)
     const editing = this.editing
     if (!editing) return null
     editing.from = changes.mapPos(editing.from, 1)
     editing.to = changes.mapPos(editing.to, -1)
     return editing.to > editing.from ? null : editing
+  }
+
+  /** Offer this table's size state to the view that shows the table after a change. */
+  private handOver(changes: ChangeDesc) {
+    const { from, to } = this.range()
+    const sized =
+      this.sizes.key !== null ||
+      this.sizes.rows.size > 0 ||
+      this.sizes.columns.some(Boolean)
+    // A table or line added or removed above may change its ordinal: check its key once edits pause.
+    if (sized && changes.touchesRange(0, Math.max(0, from - 1))) this.save(500)
+    if (!sized) return
+    this.endsAt = changes.mapPos(to, 1)
+    let states = handoffs.get(this.view)
+    if (!states) {
+      const created = new Map<number, SizeState>()
+      handoffs.set(this.view, created)
+      queueMicrotask(() => {
+        if (handoffs.get(this.view) === created) handoffs.delete(this.view)
+      })
+      states = created
+    }
+    states.set(this.endsAt, {
+      sizes: this.sizes,
+      header: this.header,
+      moved: this.moved,
+      stored: this.stored,
+    })
+  }
+
+  /** Take the size state of the table this view shows now, which another view may have held. */
+  private takeOver() {
+    const { widget } = this
+    const end = this.endsAt
+    this.endsAt = null
+    if (widget.doc !== this.view.state.doc) return
+    const state = handoffs.get(this.view)?.get(widget.to)
+    if (end === widget.to || (end === null && !state)) return
+    // Another table than before: its own state, or none until it is looked up.
+    clearTimeout(this.saving)
+    this.saving = undefined
+    this.stopEditing()
+    this.sizes = state?.sizes ?? { key: null, columns: [], rows: new Map() }
+    this.header = state?.header ?? []
+    this.moved = state?.moved ?? null
+    this.stored = state?.stored ?? null
+    // Taken over after a change: its ordinal may have changed with it.
+    if (state) this.save(500)
   }
 
   /**
@@ -1196,6 +1267,13 @@ class TableView {
       columns: [...(found?.columns ?? [])],
       rows,
     }
+    this.stored = found
+      ? JSON.stringify({
+          key: found.key,
+          columns: found.columns,
+          rows: found.rows,
+        })
+      : null
     this.seedHeights()
     this.applySizes()
   }
@@ -1258,10 +1336,13 @@ class TableView {
       some(columns) || some(rows)
         ? [{ key, columns: some(columns), rows: some(rows) }]
         : []
+    const json = put.length ? JSON.stringify(put[0]) : null
+    if (json === this.stored && (put.length || !this.sizes.key)) return
     // Only this table's entries change; other tables keep what is stored now.
     const remove = [key]
     if (this.sizes.key && this.sizes.key !== key) remove.push(this.sizes.key)
     this.sizes.key = put.length ? key : null
+    this.stored = json
     updateTableLayouts(entry.tabId, tables, { remove, put })
   }
 

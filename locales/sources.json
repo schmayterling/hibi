@@ -1949,6 +1949,9 @@
   "b865e72c0593": [
     "src/addons/ui-preview/index.tsx"
   ],
+  "e5f4adee36ed": [
+    "src/addons/mermaid/Block.tsx"
+  ],
   "c7bf14938074": [
     "src/addons/asciidoc/hibi-addon.json"
   ],
@@ -2041,6 +2044,9 @@
   ],
   "c6c094bc0054": [
     "src/addons/frontmatter/Properties.tsx"
+  ],
+  "f23b5633a4b0": [
+    "src/addons/mermaid/Block.tsx"
   ],
   "5342e09f2729": [
     "src/renderer/src/FormatEditor.tsx"
@@ -6220,9 +6226,6 @@
   "1629952fe484": [
     "src/main/dependencies.ts"
   ],
-  "4450b8d48106": [
-    "src/addons/mermaid/render.ts"
-  ],
   "e0642a812b2e": [
     "src/addons/dictionary/pack-store.ts"
   ],
@@ -7055,6 +7058,9 @@
   ],
   "a03fccdc8fea": [
     "src/addons/markdown/hibi-addon.json"
+  ],
+  "6e038946c2ae": [
+    "src/addons/mermaid/index.tsx"
   ],
   "2cfece6a285e": [
     "src/addons/typst/hibi-addon.json"

@@ -8,7 +8,15 @@ import {
   Sun,
   X,
 } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import type { CommandExecutionContext } from '../../shared/foundation-contracts'
 import { sentenceCase } from '../../shared/ui-case'
 import { IconButton, TextInput } from '../../ui/Controls'
@@ -53,6 +61,66 @@ function nestedCommands(commands: PaletteCommand[]): PaletteCommand[] {
   ])
 }
 
+// Moving the selection rerenders only the rows it leaves and enters.
+const CommandRow = memo(function CommandRow({
+  command,
+  index,
+  selected,
+  platform,
+  onHover,
+  onRun,
+}: {
+  command: PaletteCommand
+  index: number
+  selected: boolean
+  platform: string
+  onHover: (index: number) => void
+  onRun: (command: PaletteCommand) => void
+}) {
+  const Icon = categoryIcons[command.category]
+  return (
+    <div
+      id={`command-${command.id}`}
+      role="option"
+      aria-selected={selected}
+      tabIndex={-1}
+      onMouseEnter={() => onHover(index)}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => onRun(command)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') onRun(command)
+      }}
+    >
+      <Icon
+        size={16}
+        strokeWidth={1.5}
+        className="command-icon"
+        aria-hidden="true"
+      />
+      <span className="command-copy">
+        <span className="command-label">
+          {command.detail ? command.label : sentenceCase(command.label)}
+        </span>
+        {command.detail && (
+          <span className="command-detail" title={command.detail}>
+            {command.detail}
+          </span>
+        )}
+      </span>
+      {!command.detail && (
+        <span className="command-category">
+          {sentenceCase(command.category)}
+        </span>
+      )}
+      {command.children ? (
+        <ChevronRight size={16} aria-hidden="true" />
+      ) : command.shortcut ? (
+        <ShortcutKeys shortcut={command.shortcut} platform={platform} />
+      ) : null}
+    </div>
+  )
+})
+
 export function CommandPalette({
   commands,
   onClose,
@@ -80,32 +148,38 @@ export function CommandPalette({
     null,
   )
   const normalized = query.toLowerCase().trim()
-  const terms = normalized.split(/\s+/)
-  const currentCommands = menuPath.reduce(
-    (options, menu) =>
-      options.find((command) => command.id === menu.id)?.children ?? [],
-    commands,
-  )
-  const rank = (command: PaletteCommand) => {
-    const label = command.label.toLowerCase()
-    if (label === normalized) return 0
-    if (label.startsWith(normalized)) return 1
-    return terms.every((term) => label.includes(term)) ? 2 : 3
-  }
-  const searchableCommands =
-    normalized && !menuPath.length ? nestedCommands(commands) : currentCommands
-  const results =
-    searchCommands && !menuPath.length
-      ? searchCommands(query)
-      : searchableCommands.filter((command) =>
-          terms.every((term) =>
-            `${command.category} ${command.label} ${command.keywords ?? ''}`
-              .toLowerCase()
-              .includes(term),
-          ),
-        )
-  if ((!searchCommands || menuPath.length) && normalized)
-    results.sort((left, right) => rank(left) - rank(right))
+  // Arrow keys and hover reuse these results until the query, menu or commands change.
+  const results = useMemo(() => {
+    const terms = normalized.split(/\s+/)
+    const currentCommands = menuPath.reduce(
+      (options, menu) =>
+        options.find((command) => command.id === menu.id)?.children ?? [],
+      commands,
+    )
+    const rank = (command: PaletteCommand) => {
+      const label = command.label.toLowerCase()
+      if (label === normalized) return 0
+      if (label.startsWith(normalized)) return 1
+      return terms.every((term) => label.includes(term)) ? 2 : 3
+    }
+    const searchableCommands =
+      normalized && !menuPath.length
+        ? nestedCommands(commands)
+        : currentCommands
+    const results =
+      searchCommands && !menuPath.length
+        ? searchCommands(query)
+        : searchableCommands.filter((command) =>
+            terms.every((term) =>
+              `${command.category} ${command.label} ${command.keywords ?? ''}`
+                .toLowerCase()
+                .includes(term),
+            ),
+          )
+    if ((!searchCommands || menuPath.length) && normalized)
+      results.sort((left, right) => rank(left) - rank(right))
+    return results
+  }, [commands, menuPath, normalized, query, searchCommands])
   const active = Math.min(selected, results.length - 1)
   const activeId = results[active]?.id
   const resultCount = results.length
@@ -167,6 +241,13 @@ export function CommandPalette({
     setSelected(0)
     input.current?.focus()
   }
+
+  const latest = useRef(execute)
+  latest.current = execute
+  const run = useCallback(
+    (command: PaletteCommand) => latest.current(command),
+    [],
+  )
 
   function execute(command: PaletteCommand) {
     if (command.children) {
@@ -281,51 +362,17 @@ export function CommandPalette({
             }}
           />
         )}
-        {results.map((command, index) => {
-          const Icon = categoryIcons[command.category]
-          return (
-            <div
-              key={command.id}
-              id={`command-${command.id}`}
-              role="option"
-              aria-selected={index === active}
-              tabIndex={-1}
-              onMouseEnter={() => setSelected(index)}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => execute(command)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') execute(command)
-              }}
-            >
-              <Icon
-                size={16}
-                strokeWidth={1.5}
-                className="command-icon"
-                aria-hidden="true"
-              />
-              <span className="command-copy">
-                <span className="command-label">
-                  {command.detail ? command.label : sentenceCase(command.label)}
-                </span>
-                {command.detail && (
-                  <span className="command-detail" title={command.detail}>
-                    {command.detail}
-                  </span>
-                )}
-              </span>
-              {!command.detail && (
-                <span className="command-category">
-                  {sentenceCase(command.category)}
-                </span>
-              )}
-              {command.children ? (
-                <ChevronRight size={16} aria-hidden="true" />
-              ) : command.shortcut ? (
-                <ShortcutKeys shortcut={command.shortcut} platform={platform} />
-              ) : null}
-            </div>
-          )
-        })}
+        {results.map((command, index) => (
+          <CommandRow
+            key={command.id}
+            command={command}
+            index={index}
+            selected={index === active}
+            platform={platform}
+            onHover={setSelected}
+            onRun={run}
+          />
+        ))}
       </div>
       {results.length === 0 && (
         <p className="commands-empty" role="status">

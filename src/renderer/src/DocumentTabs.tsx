@@ -390,8 +390,14 @@ export function DocumentTabs({
               data-tooltip={name}
               data-verbatim="true"
               onMouseDown={(event) => {
+                if (event.button === 1) event.preventDefault()
                 if (event.button === 0)
                   event.currentTarget.focus({ preventScroll: true })
+              }}
+              onAuxClick={(event) => {
+                if (event.button !== 1) return
+                event.preventDefault()
+                if (!busy && !closing) onClose(tab.id)
               }}
               onClick={() => {
                 cancelNavigationFocus()

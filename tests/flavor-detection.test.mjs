@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Lexer, Marked } from 'marked'
+import { blockStartCounters } from '../src/addons/_shared/block-start.ts'
 import { alertMarker, alertStart } from '../src/addons/markdown/alerts.ts'
 import { flavorInfo as github } from '../src/addons/markdown/github-flavor-info.ts'
 import { mathFlavor, mathTokens } from '../src/addons/math/syntax.ts'
@@ -49,9 +50,15 @@ const pairs = [
   ],
 ]
 
-test('block extension starts skip absent markers and retain native boundaries', (t) => {
-  const alertPattern = /^ {0,3}>[ \t]*\[![a-z][a-z0-9-]*\]/im
-  const subtextPattern = /^-# /m
+test('block extension starts find line starts in the paragraph and retain native boundaries', () => {
+  const alertPattern = /\n {0,3}>[ \t]*\[![a-z][a-z0-9-]*\]/i
+  const subtextPattern = /\n-# /
+  // Marked drops a paragraph's first character and normalizes line endings,
+  // so only a newline makes a line start; offset zero is mid-line.
+  const lineStart = (source, pattern) => {
+    const match = pattern.exec(source)
+    return match ? match.index + 1 : -1
+  }
   for (const prefix of [
     '',
     'text\n',
@@ -70,16 +77,20 @@ test('block extension starts skip absent markers and retain native boundaries', 
       '> [!NOTE] trailing',
     ]) {
       const source = `${prefix}${marker}\n\nending`
-      assert.equal(alertStart(source), source.search(alertPattern))
-      assert.equal(subtextStart(source), source.search(subtextPattern))
+      assert.equal(alertStart(source), lineStart(source, alertPattern), source)
+      assert.equal(
+        subtextStart(source),
+        lineStart(source, subtextPattern),
+        source,
+      )
     }
   }
-  t.mock.method(String.prototype, 'search', () =>
-    assert.fail('absent markers must skip regex scanning'),
-  )
+  // Reading stops at the first blank line instead of the rest of the note.
+  Object.assign(blockStartCounters, { calls: 0, units: 0, max: 0 })
   const prose = 'ordinary words\n\n'.repeat(5000)
   assert.equal(alertStart(prose), -1)
   assert.equal(subtextStart(prose), -1)
+  assert.equal(blockStartCounters.units, 2 * 'ordinary words\n\n'.length)
 })
 
 test('flavor detector guards preserve contextual parsing and delimiter edge cases', () => {

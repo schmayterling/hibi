@@ -3,7 +3,14 @@ import type { noteGraph } from '../addons/graph/model'
 import type { Colorscheme } from '../shared/colorschemes'
 import type { WorkspacePage, WorkspaceSnapshot } from '../shared/workspace'
 
-export type SitePage = WorkspacePage & { title: string; description: string }
+export type SitePage = WorkspacePage & {
+  title: string
+  description: string
+  search?: {
+    version: 1
+    headings: { anchor: string; label: string; depth: number }[]
+  }
+}
 export type SiteData = Omit<WorkspaceSnapshot, 'pages'> & {
   pages: SitePage[]
   options: ExportOptions

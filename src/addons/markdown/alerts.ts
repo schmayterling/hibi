@@ -1,4 +1,5 @@
 import { Lexer, type MarkedExtension, Tokenizer } from 'marked'
+import { blockStart } from '../_shared/block-start.ts'
 
 export const alertTypes = [
   'note',
@@ -14,11 +15,7 @@ export function alertType(value: unknown): string | undefined {
 export function alertMarker(text: string) {
   return /^\[!([a-z][a-z0-9-]*)\]([+-]?)[ \t]*([^\n]*)(?:\n|$)/i.exec(text)
 }
-export function alertStart(source: string) {
-  return source.includes('[!')
-    ? source.search(/^ {0,3}>[ \t]*\[![a-z][a-z0-9-]*\]/im)
-    : -1
-}
+export const alertStart = blockStart(/ {0,3}>[ \t]*\[![a-zA-Z][a-zA-Z0-9-]*\]/)
 
 export function alertToken(source: string) {
   if (!/^ {0,3}>[ \t]*\[!/i.test(source)) return

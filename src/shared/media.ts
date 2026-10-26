@@ -6,9 +6,42 @@ export type AttachmentResult = {
   attachments: MediaAttachment[]
 }
 export type DocumentMedia = { url: string; kind: 'image' | 'video' }
+/** Internal display resolution; paths are workspace-relative invalidation dependencies. */
+export type DocumentMediaResolution = {
+  media: DocumentMedia | null
+  paths: string[] | null
+}
+
+const changedPaths = new WeakMap<object, Set<string>>()
+const normalizedPath = (path: string) => path.normalize('NFC').toLowerCase()
+
+export function mediaPathsChanged(
+  paths: readonly string[] | null,
+  change?: { kind: string; paths: readonly string[] | null },
+) {
+  if (!change?.paths || paths === null) return true
+  let changed = changedPaths.get(change)
+  if (!changed) {
+    changed = new Set(change.paths.map(normalizedPath))
+    changedPaths.set(change, changed)
+  }
+  for (const dependency of paths) {
+    let path = normalizedPath(dependency)
+    for (;;) {
+      if (changed.has(path)) return true
+      if (change.kind === 'content' || !path) break
+      const slash = path.lastIndexOf('/')
+      path = slash < 0 ? '' : path.slice(0, slash)
+    }
+  }
+  return false
+}
 export const MEDIA_CHANNELS = {
   attach: 'media:attach',
   read: 'media:read',
+  resolve: 'media:resolve',
+  cancel: 'media:cancel',
+  scopeChanged: 'media:scope-changed',
   open: 'media:open-dropped',
 } as const
 

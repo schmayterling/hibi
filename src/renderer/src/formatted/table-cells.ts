@@ -125,6 +125,10 @@ function decorateCell(
 ) {
   const views = namedViews(state)
   const literal = literalNodes(state)
+  // Line breaks in cells are written as <br>, as the rich editor saved them.
+  const lineBreakAt = (node: SyntaxNodeRef) =>
+    node.name === 'HTMLTag' &&
+    /^<br\s*\/?>$/i.test(text.slice(node.from, node.to))
   let cellState: EditorState | null = null
   const sink = (revealed: boolean): FormattedDecorations => ({
     mark(from, to, attributes) {
@@ -152,7 +156,10 @@ function decorateCell(
         const revealed = touched(node.from, node.to)
         const nodeOut = sink(revealed)
         let skip = false
-        for (const nodeView of views.get(node.name) ?? []) {
+        // A cell draws its line breaks itself, so contributed HTML renderers
+        // add no second one.
+        const nodeViews = lineBreakAt(node) ? [] : (views.get(node.name) ?? [])
+        for (const nodeView of nodeViews) {
           cellState ??= EditorState.create({ doc: text })
           const context: FormattedRenderContext = {
             state: cellState,
@@ -242,9 +249,7 @@ function decorateCell(
         out.syntax(node.from, node.from + 1)
         return
       case 'HTMLTag':
-        // Line breaks in cells are written as <br>, as the rich editor saved them.
-        if (/^<br\s*\/?>$/i.test(text.slice(node.from, node.to)))
-          out.replace(node.from, node.to, lineBreak)
+        if (lineBreakAt(node)) out.replace(node.from, node.to, lineBreak)
         return false
       case 'Image':
       case 'Entity':

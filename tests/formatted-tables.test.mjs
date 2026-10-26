@@ -556,6 +556,26 @@ test('a selection from outside into a table opens no cell editor', {
   assert.equal(selection.anchor, 0)
 })
 
+test('a <br> in a cell is one line break, drawn alike in the cell and its editor', {
+  timeout: 30000,
+}, async () => {
+  await mount('| a | b |\n| --- | --- |\n| one<br>two | c |\n')
+  const breaks = () =>
+    harness.evaluate(() => {
+      const cell = [...document.querySelectorAll('.hibi-lp-table td')].find(
+        (cell) => cell.textContent.includes('two'),
+      )
+      return {
+        editing: !!cell.querySelector('.hibi-lp-cell-editor'),
+        breaks: cell.querySelectorAll('br').length,
+      }
+    })
+  assert.deepEqual(await breaks(), { editing: false, breaks: 1 })
+  await harness.locator('.hibi-lp-table td', { hasText: 'two' }).click()
+  await harness.keyboard.press('End')
+  assert.deepEqual(await breaks(), { editing: true, breaks: 1 })
+})
+
 test('cell editors move with tab, enter and arrows and leave with escape', {
   timeout: 30000,
 }, async () => {

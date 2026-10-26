@@ -323,25 +323,42 @@ export function deleteColumn(
   for (let index = 0; index < table.lines; index++) {
     const row = line(table, index)
     if (columns === 2) {
-      // One column needs outer pipes, or its header and delimiter read as a heading.
-      const rest = row.cells.filter((_, at) => at !== column)
-      const [only] = rest
-      if (rest.length === 1 && only) {
-        // The cell left keeps its text where it is, so its sizes stay with it.
-        changes.push(
-          { from: row.start, to: only.from, insert: '| ' },
-          { from: only.to, to: row.end, insert: ' |' },
-        )
+      // One column needs outer pipes, or its header and delimiter read as a
+      // heading. The column is deleted as in wider tables and only missing
+      // pipes are added, so the cell left, even an empty one, keeps its
+      // place and its sizes follow it.
+      const cell = row.cells[column]
+      let removed: TableChange | null = null
+      if (cell) {
+        const { left, right } = pipesAround(row, cell)
+        removed =
+          left >= 0
+            ? { from: left, to: right >= 0 ? right : row.end, insert: '' }
+            : {
+                from: row.start,
+                to: right >= 0 ? right + 1 : row.end,
+                insert: '',
+              }
+      }
+      const text = (from: number, to: number) =>
+        row.text.slice(from - row.from, to - row.from)
+      const rest = removed
+        ? text(row.start, removed.from) + text(removed.to, row.end)
+        : text(row.start, row.end)
+      if (!rest.trim()) {
+        changes.push({ from: row.start, to: row.end, insert: '|' })
         continue
       }
-      const texts = rest.map(({ from, to }) =>
-        row.text.slice(from - row.from, to - row.from),
-      )
-      changes.push({
-        from: row.start,
-        to: row.end,
-        insert: texts.length ? `| ${texts.join(' | ')} |` : '|',
-      })
+      const added: TableChange[] = []
+      if (!rest.trimStart().startsWith('|')) {
+        if (removed?.from === row.start) removed.insert = '|'
+        else added.push({ from: row.start, to: row.start, insert: '| ' })
+      }
+      if (!rest.trimEnd().endsWith('|')) {
+        if (removed?.to === row.end) removed.insert += '|'
+        else added.push({ from: row.end, to: row.end, insert: ' |' })
+      }
+      changes.push(...(removed ? [removed] : []), ...added)
       continue
     }
     const cell = row.cells[column]

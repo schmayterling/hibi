@@ -1263,6 +1263,38 @@ test('columns with the same header keep their own widths through a column delete
   assert.deepEqual(await widths(), ['200px', '180px'])
 })
 
+test('empty headers keep their own widths through a column delete and undo', {
+  timeout: 30000,
+}, async () => {
+  const doc = '|  |  |\n| - | - |\n| 1 | 2 |\n\nafter'
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('empty', [
+        { key, columns: [200, 180], rows: null },
+      ]),
+    tableKey(0, ['', '']),
+  )
+  await mountTab(doc, 'empty')
+  const widths = () =>
+    harness.evaluate(() =>
+      [...document.querySelector('.hibi-lp-table tr').cells].map(
+        (cell) => cell.style.width,
+      ),
+    )
+  assert.deepEqual(await widths(), ['200px', '180px'])
+  assert.equal(
+    await harness.evaluate(() => {
+      window.tables.view().dispatch({ selection: { anchor: 5 } })
+      return window.tables.runTableAction('column-delete')
+    }),
+    true,
+  )
+  assert.deepEqual(await widths(), ['200px'])
+  await harness.keyboard.press(undoKey)
+  assert.equal((await state()).doc, doc)
+  assert.deepEqual(await widths(), ['200px', '180px'])
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {

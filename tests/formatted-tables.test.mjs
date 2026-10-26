@@ -576,7 +576,7 @@ test('a <br> in a cell is one line break, drawn alike in the cell and its editor
   assert.deepEqual(await breaks(), { editing: true, breaks: 1 })
 })
 
-test('cell editors move with tab, enter and arrows and leave with escape', {
+test('cell editors move with tab and arrows and leave with escape', {
   timeout: 30000,
 }, async () => {
   const doc = 'before\n\n| a | b |\n| --- | --- |\n| c | d |\n| e |\n\nafter'
@@ -588,7 +588,7 @@ test('cell editors move with tab, enter and arrows and leave with escape', {
     'Tab',
     'Tab',
     'Shift+Tab',
-    'Enter',
+    'ArrowDown',
     'ArrowRight',
     'ArrowRight',
     'ArrowRight',
@@ -630,6 +630,27 @@ test('cell editors move with tab, enter and arrows and leave with escape', {
 })
 
 const undoKey = process.platform === 'darwin' ? 'Meta+z' : 'Control+z'
+
+test('enter, shift-enter and mod-enter break the line in a cell, as in the rich editor', {
+  timeout: 30000,
+}, async () => {
+  const doc = '| a | b |\n| --- | --- |\n|  | x |\n\nafter'
+  await mount(doc)
+  await harness.locator('.hibi-lp-table td').first().click()
+  await harness.keyboard.press('Enter')
+  await harness.keyboard.type('cell')
+  let now = await state()
+  assert.deepEqual([now.cell, now.editor], ['2:0', 'cell'])
+  assert.match(now.doc, /^\| <br>cell \| x \|$/m)
+  // The last cell of the last row keeps editing; each key adds a break there.
+  await harness.locator('.hibi-lp-table td', { hasText: 'x' }).click()
+  await harness.keyboard.press('End')
+  for (const key of ['Enter', 'Shift+Enter', 'ControlOrMeta+Enter'])
+    await harness.keyboard.press(key)
+  now = await state()
+  assert.equal(now.cell, '2:1')
+  assert.match(now.doc, /^\| <br>cell \| x<br><br><br> \|\n\nafter$/m)
+})
 
 test('a cell editor follows its row when rows are added or deleted around it', {
   timeout: 30000,

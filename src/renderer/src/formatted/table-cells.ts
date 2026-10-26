@@ -460,6 +460,11 @@ export class CellEditor {
     }
     const content = (view: EditorView) => padding(view.state.doc.toString())
     const move = (to: CellMove) => () => host.move(to)
+    /** A line break in the cell, which Enter, Shift-Enter and Mod-Enter all make in the rich editor's cells. */
+    const lineBreak = (view: EditorView) => {
+      view.dispatch(view.state.replaceSelection('<br>'), { userEvent: 'input' })
+      return true
+    }
     // Inline formatting shortcuts format the cell's source; block ones do nothing in a cell.
     let formatting: SourceFormatting | null = null
     const inline = ['bold', 'italic', 'strike', 'inline-code']
@@ -539,23 +544,8 @@ export class CellEditor {
                 shift: edge(false, true),
               },
               { key: 'End', run: edge(true, false), shift: edge(true, true) },
-              { key: 'Enter', run: move('down') },
-              {
-                key: 'Shift-Enter',
-                run: (view) => {
-                  view.dispatch(view.state.replaceSelection('<br>'), {
-                    userEvent: 'input',
-                  })
-                  return true
-                },
-              },
-              {
-                key: 'Mod-Enter',
-                run: () => {
-                  host.leave(true)
-                  return true
-                },
-              },
+              { key: 'Enter', run: lineBreak, shift: lineBreak },
+              { key: 'Mod-Enter', run: lineBreak },
               {
                 key: 'Escape',
                 run: () => {

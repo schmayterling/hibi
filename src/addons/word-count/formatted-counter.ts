@@ -7,17 +7,25 @@ import {
 } from '../../shared/markdown-worker-parser.ts'
 import type { SourceStore } from '../../shared/source-buffer.ts'
 import type { SourceOperation } from '../../shared/source-operations.ts'
-import type { SourceOwners } from '../../shared/source-owners.ts'
+import type { SourceOwner, SourceOwners } from '../../shared/source-owners.ts'
 import { SourceReferences } from '../../shared/source-references.ts'
 import { blockMathSyntax } from '../math/formatted-syntax.ts'
 import { countText } from './count.ts'
-import { type CountSyntax, countParser, richTokens } from './formatted-text.ts'
+import { countMarkdownSyntax } from './formatted-count-syntax.ts'
+import {
+  type CountSyntax,
+  countParser,
+  richText,
+  richTokens,
+} from './formatted-text.ts'
+import { localCount, plainParagraph, plainSource } from './local-count.ts'
 
 type Count = ReturnType<typeof countText>
 type Entry = {
   count: Count
   members: readonly number[]
   current: () => boolean
+  plain: ReturnType<typeof plainParagraph>
 }
 
 /** Worker-owned counts. Unchanged blocks retain totals, not rich documents or source strings. */
@@ -29,16 +37,21 @@ export class FormattedCounter {
   readonly #entries = new Map<number, Entry>()
   readonly #members = new Map<number, Set<number>>()
   readonly #definitions = new Map<number, string>()
+  readonly #literal = new Map<number, { owner: SourceOwner; count: Count }>()
   #references: SourceReferences | null = null
   #owners: SourceOwners | null = null
   #epoch: string | null = null
   #referencesDirty = false
+  #plainValid = false
+  readonly #plainCounts = new Map<Entry, Count>()
   #total: Count = { words: 0, characters: 0 }
   #work = { countedRegions: 0, countedUnits: 0, referenceUnits: 0 }
   constructor(store: SourceStore, syntax: CountSyntax) {
     this.store = store
     this.#syntax = syntax
-    const base = metadataParsers[syntax.gfm ? 'gfm' : 'commonmark']
+    const base = metadataParsers[syntax.gfm ? 'gfm' : 'commonmark'].configure(
+      countMarkdownSyntax(syntax),
+    )
     const parser = syntax.math ? base.configure(blockMathSyntax) : base
     this.#model = syntax.frontmatter
       ? new FrontmatterSourceModel(store.snapshot(), parser, 'word-count')
@@ -51,8 +64,38 @@ export class FormattedCounter {
   }
   apply(operation: SourceOperation) {
     const prepared = this.store.prepare(operation)
+    const [change] = operation.changes
+    const row =
+      this.#plainValid && operation.changes.length === 1 && change
+        ? this.#model.state().owners?.at(change.from)
+        : null
+    const entry = row && this.#entries.get(row.owner.slot)
+    const delta =
+      entry?.plain && row && change
+        ? localCount(
+            prepared.before,
+            change.from,
+            change.to,
+            change.insert,
+            row.from,
+            entry.plain,
+          )
+        : null
     this.store.commit(prepared)
     this.#model.apply(prepared)
+    if (delta && row && entry) {
+      entry.plain = delta.spans
+      const previous = this.#plainCounts.get(entry) ?? entry.count
+      this.#plainCounts.set(entry, {
+        words: previous.words + delta.words,
+        characters: previous.characters + delta.characters,
+      })
+      this.#work.countedRegions++
+      this.#work.countedUnits += delta.units
+    } else {
+      this.#plainValid = false
+      this.#plainCounts.clear()
+    }
   }
   #remove(slot: number) {
     const entry = this.#entries.get(slot)
@@ -80,6 +123,18 @@ export class FormattedCounter {
     }
   }
   *read(): Generator<void, Count> {
+    if (this.#plainValid) {
+      for (const [entry, count] of this.#plainCounts) {
+        this.#total.words += count.words - entry.count.words
+        this.#total.characters += count.characters - entry.count.characters
+        entry.count = count
+      }
+      this.#plainCounts.clear()
+      return {
+        words: this.#total.words,
+        characters: Math.max(0, this.#total.characters - 1),
+      }
+    }
     while (!this.#model.state().complete) {
       this.#model.advance()
       yield
@@ -93,6 +148,7 @@ export class FormattedCounter {
       this.#entries.clear()
       this.#members.clear()
       this.#definitions.clear()
+      this.#literal.clear()
       this.#owners = null
       this.#referencesDirty = false
       this.#total = { words: 0, characters: 0 }
@@ -129,11 +185,28 @@ export class FormattedCounter {
     for (const owner of delta?.removed ?? []) {
       if (this.#definitions.get(owner.slot)) referencesChanged = true
       definitions.set(owner.slot, '')
+      this.#literal.delete(owner.slot)
     }
     this.#references ??= new SourceReferences(owners)
     const parser = countParser(this.#syntax)
     yield* this.#references.updateWork(owners, (region) => {
       if (region.owner.kind === 'markdown:Frontmatter') return {}
+      const { owner, contentFrom } = region
+      if (owner.kind === 'markdown:Paragraph') {
+        const cached = this.#literal.get(owner.slot)
+        const count =
+          cached?.owner === owner
+            ? cached.count
+            : plainSource(source, contentFrom, contentFrom + owner.length)
+        if (count) {
+          if (cached?.owner !== owner) this.#work.countedUnits += owner.length
+          this.#literal.set(owner.slot, { owner, count })
+          if (this.#definitions.has(owner.slot)) referencesChanged = true
+          definitions.set(owner.slot, '')
+          return {}
+        }
+      }
+      this.#literal.delete(owner.slot)
       this.#work.referenceUnits += region.to - region.from
       const links = new parser.Lexer({
         ...parser.defaults,
@@ -160,6 +233,39 @@ export class FormattedCounter {
         })()
     const staged = new Map<number, Entry>()
     for (const slot of slots) {
+      const literal = this.#literal.get(slot)
+      const region = literal && this.#cache.region(source, owners, slot)
+      if (
+        literal &&
+        region?.members.length === 1 &&
+        literal.owner === region.owner
+      ) {
+        const firstBody =
+          owners.get(0)?.owner.kind === 'markdown:Frontmatter' ? 1 : 0
+        const around =
+          source.sliceRaw(region.from, region.contentFrom) +
+          'x' +
+          source.sliceRaw(region.contentFrom + region.owner.length, region.to)
+        const count = countText(
+          richText(around, this.#syntax, {
+            before: region.index > firstBody + region.leading.length,
+            after: !region.last,
+          }),
+        )
+        this.#work.countedRegions++
+        this.#work.countedUnits += around.length
+        staged.set(slot, {
+          count: {
+            words: literal.count.words,
+            characters: literal.count.characters + count.characters - 1,
+          },
+          members: members(region),
+          current: () => true,
+          plain: literal.owner.length,
+        })
+        yield
+        continue
+      }
       const value = this.#cache.read(source, owners, slot, this.#references)
       if (value) {
         const { region } = value
@@ -176,6 +282,7 @@ export class FormattedCounter {
           count: countText(text),
           members: members(region),
           current: value.scope.current,
+          plain: plainParagraph(value.tokens, region),
         })
       }
       yield
@@ -188,6 +295,7 @@ export class FormattedCounter {
     }
     this.#owners = owners
     this.#referencesDirty = false
+    this.#plainValid = true
     return {
       words: this.#total.words,
       characters: Math.max(0, this.#total.characters - 1),
@@ -210,6 +318,8 @@ export class FormattedCounter {
     this.#model.dispose()
     this.#entries.clear()
     this.#members.clear()
+    this.#plainCounts.clear()
+    this.#literal.clear()
   }
 }
 function members(region: SemanticRegion) {

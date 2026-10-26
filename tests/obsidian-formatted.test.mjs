@@ -149,6 +149,7 @@ function drawn(source, revealed = false) {
   const calls = []
   const out = {
     mark: (from, to, attributes) => calls.push(['mark', from, to, attributes]),
+    link: (from, to, attributes) => calls.push(['link', from, to, attributes]),
     syntax: (from, to) => calls.push(['syntax', from, to]),
     replace: (from, to, widget) =>
       calls.push([
@@ -182,12 +183,12 @@ test('labels read as links, brackets and aliased targets are syntax, embeds beco
   assert.equal(contribution.flavor, 'markdown.obsidian')
   assert.deepEqual(drawn('[[Note]]'), [
     ['syntax', 0, 2],
-    ['mark', 2, 6, { class: 'hibi-lp-link', 'data-wiki-link': 'Note' }],
+    ['link', 2, 6, { 'data-wiki-link': 'Note' }],
     ['syntax', 6, 8],
   ])
   assert.deepEqual(drawn('[[ Note#Part | Shown ]]'), [
     ['syntax', 0, 15],
-    ['mark', 15, 20, { class: 'hibi-lp-link', 'data-wiki-link': 'Note#Part' }],
+    ['link', 15, 20, { 'data-wiki-link': 'Note#Part' }],
     ['syntax', 20, 23],
   ])
   assert.deepEqual(drawn('==mark=='), [
@@ -218,6 +219,7 @@ test('decoded glyphs pass mouse events through to the editor', () => {
           {
             syntax() {},
             mark() {},
+            link() {},
             replace: (_from, _to, widget) => widgets.push(widget),
           },
           { state, revealed: false, visible: { from: 0, to: source.length } },
@@ -233,7 +235,7 @@ test('decoded glyphs pass mouse events through to the editor', () => {
 test('entities in labels and highlights show their characters, as in the rich view, until the caret reveals them', () => {
   assert.deepEqual(drawn('[[Note|&amp;]]'), [
     ['syntax', 0, 7],
-    ['mark', 7, 12, { class: 'hibi-lp-link', 'data-wiki-link': 'Note' }],
+    ['link', 7, 12, { 'data-wiki-link': 'Note' }],
     ['replace', 7, 12, ['&', 'hibi-lp-link']],
     ['syntax', 12, 14],
   ])

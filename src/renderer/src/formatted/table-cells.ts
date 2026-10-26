@@ -31,6 +31,8 @@ import {
   type FormattedDecorations,
   type FormattedNodeView,
   type FormattedRenderContext,
+  followsLink,
+  formattedLinkAttributes,
   formattedLiteral,
   formattedMarkdown,
   formattedOwner,
@@ -108,6 +110,8 @@ const lineBreak = new BreakWidget()
 
 type CellDecorations = {
   mark(from: number, to: number, attributes: Record<string, string>): void
+  /** Text that reads as a link, whole around the decorations in it. */
+  link(from: number, to: number, attributes: Record<string, string>): void
   /** Syntax hidden, or replaced by a widget. */
   hide(from: number, to: number, widget: WidgetType | null): void
   /** Syntax shown as an editable marker. */
@@ -137,6 +141,9 @@ function decorateCell(
   const sink = (revealed: boolean): FormattedDecorations => ({
     mark(from, to, attributes) {
       if (to > from) out.mark(from, to, attributes)
+    },
+    link(from, to, attributes) {
+      if (to > from) out.link(from, to, formattedLinkAttributes(attributes))
     },
     syntax(from, to) {
       if (to <= from) return
@@ -237,7 +244,7 @@ function decorateCell(
           return false
         out.syntax(node.from, open.to)
         out.syntax(close.from, node.to)
-        style('hibi-lp-link', open.to, close.from)
+        out.link(open.to, close.from)
         return
       }
       case 'Autolink': {
@@ -245,7 +252,7 @@ function decorateCell(
         if (!url) return false
         out.syntax(node.from, url.from)
         out.syntax(url.to, node.to)
-        style('hibi-lp-link', url.from, url.to)
+        out.link(url.from, url.to)
         return false
       }
       case 'URL': {
@@ -255,7 +262,7 @@ function decorateCell(
           parent !== 'Image' &&
           parent !== 'LinkReference'
         )
-          style('hibi-lp-link', node.from, node.to)
+          out.link(node.from, node.to)
         return
       }
       case 'Escape':
@@ -290,6 +297,7 @@ export function renderInline(
     text,
     {
       mark: (from, to, attributes) => marks.push({ from, to, attributes }),
+      link: (from, to, attributes) => marks.push({ from, to, attributes }),
       hide: (from, to, widget) => hidden.push({ from, to, widget }),
       marker() {},
       widget: (at, widget, side) => widgets.push({ at, widget, side }),
@@ -355,6 +363,11 @@ function editorDecorations(main: EditorState, view: EditorView) {
     {
       mark: (from, to, attributes) =>
         decorations.push(Decoration.mark({ attributes }).range(from, to)),
+      // Inclusive, so that widgets at the text's ends are inside the link too.
+      link: (from, to, attributes) =>
+        decorations.push(
+          Decoration.mark({ attributes, inclusive: true }).range(from, to),
+        ),
       hide,
       marker: (from, to) =>
         decorations.push(
@@ -598,6 +611,11 @@ export class CellEditor {
           // undo of the cell's DOM never runs.
           Prec.lowest(
             EditorView.domEventHandlers({
+              // A click that follows a link leaves the selection; the table follows it.
+              mousedown: (event) =>
+                followsLink(event) &&
+                event.target instanceof Element &&
+                !!event.target.closest('.hibi-lp-link'),
               keydown: (event) =>
                 (event.metaKey || event.ctrlKey) &&
                 /^[yz]$/i.test(event.key) &&

@@ -213,10 +213,7 @@ export const contribution: FormattedContribution = {
         const from = node.from + parts.labelFrom,
           to = node.from + parts.labelTo
         out.syntax(node.from, from)
-        out.mark(from, to, {
-          class: 'hibi-lp-link',
-          'data-wiki-link': parts.target,
-        })
+        out.link(from, to, { 'data-wiki-link': parts.target })
         decodeEntities(state, out, from, to, revealed, 'hibi-lp-link')
         out.syntax(to, node.to)
         return false

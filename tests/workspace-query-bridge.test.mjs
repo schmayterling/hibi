@@ -104,15 +104,22 @@ test('installed addon queries workspace metadata through scoped bridge', {
   )
   assert.equal(property.ok, true)
   assert.deepEqual(property.value.items, ['a.md'])
-  const text = await page.evaluate(
-    (captured) =>
-      window.queryProbe.query({
+  const text = await page.evaluate(async (captured) => {
+    const items = []
+    let cursor, result
+    do {
+      result = await window.queryProbe.query({
         target: captured,
         kind: 'search-text',
         query: 'Alpha',
-      }),
-    target,
-  )
+        ...(cursor ? { cursor } : {}),
+      })
+      if (!result.ok) return result
+      items.push(...result.value.items)
+      cursor = result.value.nextCursor
+    } while (cursor)
+    return { ...result, value: { ...result.value, items } }
+  }, target)
   assert.equal(text.ok, true)
   assert.deepEqual(text.value.items, ['a.md'])
 })

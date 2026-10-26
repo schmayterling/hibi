@@ -44,6 +44,11 @@ type Syntax = {
   complete: boolean
   /** The unfinished parse of this document, continued by the next slice. */
   parse: ChunkedPartialParse | null
+  /**
+   * The parse is an edit's reparse that did not finish: its tree lacks the
+   * edited chunks' nodes until it does.
+   */
+  settling: boolean
 }
 
 const setDemand = StateEffect.define<Demand>()
@@ -128,6 +133,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
     parse: ChunkedPartialParse,
     demand: Demand,
     prefix: number,
+    settling: boolean,
   ): Syntax => {
     const end = performance.now() + slice
     for (;;) {
@@ -139,6 +145,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
           prefix,
           complete: !uncovered(tree, demand.from, demand.to),
           parse: null,
+          settling: false,
         }
       // Keep the verified progress; the driver resumes in an idle slice.
       if (performance.now() >= end)
@@ -148,6 +155,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
           prefix,
           complete: false,
           parse,
+          settling,
         }
     }
   }
@@ -155,6 +163,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
     state: EditorState,
     fragments: readonly TreeFragment[],
     demand: Demand,
+    settling: boolean,
   ) => {
     const prefix = prefixOf(state)
     return run(
@@ -166,21 +175,27 @@ function syntaxField(options: FormattedSyntaxOptions) {
       ),
       demand,
       prefix,
+      settling,
     )
   }
   return StateField.define<Syntax>({
     create(state) {
-      return start(state, [], {
-        from: 0,
-        to: Math.min(state.doc.length, 8192),
-      })
+      return start(
+        state,
+        [],
+        { from: 0, to: Math.min(state.doc.length, 8192) },
+        false,
+      )
     },
     update(value, transaction) {
       let demand = value.demand,
-        resumed = false
+        resumed = false,
+        moved = false
       for (const effect of transaction.effects) {
-        if (effect.is(setDemand)) demand = effect.value
-        else if (effect.is(resume)) resumed = true
+        if (effect.is(setDemand)) {
+          demand = effect.value
+          moved = true
+        } else if (effect.is(resume)) resumed = true
       }
       // New syntax contributions or a new unparsed prefix parse the document again.
       const { state, startState } = transaction
@@ -196,6 +211,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
           transaction.docChanged
             ? mapDemand(demand, transaction.changes)
             : demand,
+          false,
         )
       if (transaction.docChanged) {
         demand = mapDemand(demand, transaction.changes)
@@ -213,16 +229,22 @@ function syntaxField(options: FormattedSyntaxOptions) {
           TreeFragment.addTree(value.tree),
           ranges,
         )
-        return start(transaction.state, fragments, demand)
+        return start(transaction.state, fragments, demand, true)
       }
       if (demand === value.demand && !resumed) return value
       if (value.parse) {
         value.parse.setDemand(demand)
-        return run(value.parse, demand, value.prefix)
+        // A new viewport shows chunks as they are parsed.
+        return run(value.parse, demand, value.prefix, value.settling && !moved)
       }
       if (!uncovered(value.tree, demand.from, demand.to))
         return { ...value, demand, complete: true }
-      return start(transaction.state, TreeFragment.addTree(value.tree), demand)
+      return start(
+        transaction.state,
+        TreeFragment.addTree(value.tree),
+        demand,
+        false,
+      )
     },
   })
 }
@@ -272,6 +294,11 @@ export type FormattedSyntax = {
   extension: Extension
   /** The formatted view's syntax tree for a state that includes this extension. */
   tree: (state: EditorState) => Tree
+  /**
+   * An edit's reparse has not finished, so renderers keep what they drew,
+   * mapped through the edit, instead of rendering the edited chunks bare.
+   */
+  settling: (state: EditorState) => boolean
 }
 
 /** Chunked Markdown syntax for one formatted editor configuration. */
@@ -282,5 +309,6 @@ export function formattedSyntax(
   return {
     extension: [field, driver(field)],
     tree: (state) => state.field(field).tree,
+    settling: (state) => state.field(field).settling,
   }
 }

@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 test('installed addon addresses source and rich selections by live view', {
@@ -76,6 +79,8 @@ test('installed addon addresses source and rich selections by live view', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  const scroller = page.locator('.rich-pane')
   await page.waitForFunction(() => !!window.viewProbe)
   async function open(file) {
     await app.evaluate(({ dialog }, selected) => {
@@ -88,6 +93,11 @@ test('installed addon addresses source and rich selections by live view', {
   }
 
   await open(first)
+  await page.waitForFunction(() =>
+    document
+      .querySelector('[aria-label="Document editor"]')
+      ?.textContent.includes('alpha'),
+  )
   await page.waitForFunction(() => {
     const view = window.viewProbe.active()
     return (
@@ -125,7 +135,7 @@ test('installed addon addresses source and rich selections by live view', {
     ).ok,
     true,
   )
-  await page.locator('.rich-pane').evaluate((pane) => {
+  await scroller.evaluate((pane) => {
     pane.scrollTop = 0
   })
   assert.equal(
@@ -137,11 +147,12 @@ test('installed addon addresses source and rich selections by live view', {
     ).ok,
     true,
   )
-  assert.ok(
-    (await page.locator('.rich-pane').evaluate((pane) => pane.scrollTop)) > 100,
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane').scrollTop > 100,
   )
+  assert.ok((await scroller.evaluate((pane) => pane.scrollTop)) > 100)
   // Block boundaries measure as zero-height rects but are still visible.
-  await page.locator('.rich-pane').evaluate((pane) => {
+  await scroller.evaluate((pane) => {
     pane.scrollTop = 0
   })
   assert.equal(
@@ -153,9 +164,10 @@ test('installed addon addresses source and rich selections by live view', {
     ).ok,
     true,
   )
-  assert.ok(
-    (await page.locator('.rich-pane').evaluate((pane) => pane.scrollTop)) > 100,
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane').scrollTop > 100,
   )
+  assert.ok((await scroller.evaluate((pane) => pane.scrollTop)) > 100)
 
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await page.waitForFunction(() => {

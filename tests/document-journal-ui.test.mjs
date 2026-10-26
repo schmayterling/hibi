@@ -3,87 +3,96 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { crashAndReload, electron, stopElectronTree } from './electron.mjs'
 import {
-  crashAndReload,
-  electron,
-  stopElectronTree,
-  waitForDocumentEditor,
-} from './electron.mjs'
+  selectFormattedEngine,
+  testFormattedEngines,
+} from './formatted-engine.mjs'
 import { replaceRichText } from './keyboard.mjs'
 
-test('journal barriers preserve immediate saves, retries, renderer recovery, and native close', {
-  timeout: 45000,
-}, async (t) => {
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-journal-'))
-  const file = join(profile, 'note.md')
-  const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${profile}`],
-  })
-  t.after(async () => {
-    await app.close()
-    await rm(profile, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  page.setDefaultTimeout(7000)
-  const editor = () =>
-    page.getByRole('textbox', { name: 'Document editor', exact: true })
-  await waitForDocumentEditor(app, page)
-  await app.evaluate(({ dialog, ipcMain }, file) => {
-    dialog.showSaveDialog = async () => ({ canceled: false, filePath: file })
-    dialog.showMessageBox = async () => ({ response: 0 })
-    const append = ipcMain._invokeHandlers.get('document:append')
-    ipcMain.removeHandler('document:append')
-    ipcMain.handle('document:append', async (...args) => {
-      await new Promise((resolve) => setTimeout(resolve, 80))
-      const result = await append(...args)
-      if (!globalThis.lostJournalAck) {
-        globalThis.lostJournalAck = true
-        throw new Error('Simulated lost acknowledgment')
-      }
-      return result
+testFormattedEngines(
+  'journal barriers preserve immediate saves, retries, renderer recovery, and native close',
+  {
+    timeout: 45000,
+  },
+  async (t) => {
+    const profile = await mkdtemp(join(tmpdir(), 'hibi-journal-'))
+    const file = join(profile, 'note.md')
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${profile}`],
     })
-  }, file)
-  await replaceRichText(page, editor(), 'first edit 😀')
-  const saved = await page.evaluate(() => window.hibi.saveDocument(true))
-  assert.equal(saved.saveReceipt, true)
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    'first edit 😀',
-  )
-  assert.equal(saved.contentVersion, 1)
-  assert.equal(await readFile(file, 'utf8'), 'first edit 😀')
-  await replaceRichText(page, editor(), 'recover this unsaved change')
-  await page.evaluate(() => window.hibi.flushDocumentChanges())
-  await crashAndReload(app)
-  // Playwright keeps crashed targets marked as crashed after Electron reloads them.
-  // Inspect the replacement renderer through Electron's live webContents instead.
-  const recovered = await app.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(`
+    t.after(async () => {
+      await app.close()
+      await rm(profile, { recursive: true, force: true })
+    })
+    const page = await app.firstWindow()
+    page.setDefaultTimeout(7000)
+    const editor = () =>
+      page.getByRole('textbox', { name: 'Document editor', exact: true })
+    await selectFormattedEngine(app, page, t.formattedEngine)
+    await app.evaluate(({ dialog, ipcMain }, file) => {
+      dialog.showSaveDialog = async () => ({ canceled: false, filePath: file })
+      dialog.showMessageBox = async () => ({ response: 0 })
+      const append = ipcMain._invokeHandlers.get('document:append')
+      ipcMain.removeHandler('document:append')
+      ipcMain.handle('document:append', async (...args) => {
+        await new Promise((resolve) => setTimeout(resolve, 80))
+        const result = await append(...args)
+        if (!globalThis.lostJournalAck) {
+          globalThis.lostJournalAck = true
+          throw new Error('Simulated lost acknowledgment')
+        }
+        return result
+      })
+    }, file)
+    await replaceRichText(page, editor(), 'first edit 😀')
+    const saved = await page.evaluate(() => window.hibi.saveDocument(true))
+    assert.equal(saved.saveReceipt, true)
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      'first edit 😀',
+    )
+    assert.equal(saved.contentVersion, 1)
+    assert.equal(await readFile(file, 'utf8'), 'first edit 😀')
+    await replaceRichText(page, editor(), 'recover this unsaved change')
+    await page.evaluate(() => window.hibi.flushDocumentChanges())
+    await crashAndReload(app)
+    // Playwright keeps crashed targets marked as crashed after Electron reloads them.
+    // Inspect the replacement renderer through Electron's live webContents instead.
+    const recovered = await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(`
     new Promise(resolve => {
       const ready = () => {
-        const element = document.querySelector('.tiptap[contenteditable="true"]');
+        const element = document.querySelector('[aria-label="Document editor"][contenteditable="true"]');
         if (!element) { setTimeout(ready, 20); return; }
         resolve({ text: element.textContent });
       }; ready();
     })
   `),
-  )
-  assert.equal(recovered.text, 'recover this unsaved change')
-  await app.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(`
-    document.querySelector('.tiptap').editor.commands.setContent('native close must keep this final edit', { contentType: 'markdown' })
-  `),
-  )
-  const closed = new Promise((resolve) => page.once('close', resolve))
-  await app.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].close(),
-  )
-  await closed
-  assert.equal(
-    await readFile(file, 'utf8'),
-    'native close must keep this final edit',
-  )
-})
+    )
+    assert.equal(recovered.text, 'recover this unsaved change')
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(`
+      const element = document.querySelector('[aria-label="Document editor"]')
+      if (element.editor)
+        element.editor.commands.setContent('native close must keep this final edit', { contentType: 'markdown' })
+      else {
+        const view = element.cmTile.root.view
+        view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: 'native close must keep this final edit' }, userEvent: 'input.type' })
+      }
+    `),
+    )
+    const closed = new Promise((resolve) => page.once('close', resolve))
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].close(),
+    )
+    await closed
+    assert.equal(
+      await readFile(file, 'utf8'),
+      'native close must keep this final edit',
+    )
+  },
+)
 
 test('J07/J09: native receipt recovery and saturated rich input preserve exact accepted text', {
   timeout: 65000,
@@ -115,6 +124,7 @@ test('J07/J09: native receipt recovery and saturated rich input preserve exact a
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
+  await selectFormattedEngine(app, page, 'tiptap')
   await page
     .getByRole('textbox', { name: 'Document editor', exact: true })
     .waitFor()

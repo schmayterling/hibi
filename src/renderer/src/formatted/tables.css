@@ -38,3 +38,29 @@
 .hibi-formatted .hibi-lp-table .hibi-lp-table-empty {
   display: none;
 }
+/* A cell being edited: its editor's text sits where the cell's text was. */
+.hibi-formatted .hibi-lp-table .cm-editor.hibi-lp-cell-editor {
+  height: auto;
+  min-height: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+}
+.hibi-formatted .hibi-lp-table .cm-editor.hibi-lp-cell-editor.cm-focused {
+  outline: none;
+}
+.hibi-formatted .hibi-lp-table .cm-editor.hibi-lp-cell-editor .cm-scroller {
+  overflow: visible;
+  font: inherit;
+  line-height: inherit;
+}
+.hibi-formatted .hibi-lp-table .cm-editor.hibi-lp-cell-editor .cm-content {
+  padding: 0;
+  min-height: 0;
+  white-space: pre-wrap;
+  word-break: normal;
+  caret-color: var(--caret);
+}
+.hibi-formatted .hibi-lp-table .cm-editor.hibi-lp-cell-editor .cm-line {
+  padding: 0;
+}

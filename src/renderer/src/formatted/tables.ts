@@ -1,43 +1,49 @@
-import { EditorState, type Text } from '@codemirror/state'
+import { isolateHistory } from '@codemirror/commands'
+import { type Text, Transaction } from '@codemirror/state'
 import {
   type EditorView,
   ViewPlugin,
   type ViewUpdate,
   WidgetType,
 } from '@codemirror/view'
-import type { SyntaxNodeRef } from '@lezer/common'
-import {
-  type MarkdownConfig,
-  type MarkdownParser,
-  parser,
-  Table,
-} from '@lezer/markdown'
+import { type MarkdownConfig, Table } from '@lezer/markdown'
 import {
   type FormattedContribution,
-  type FormattedDecorations,
   type FormattedNodeView,
-  type FormattedRenderContext,
   formattedLiteral,
   formattedMarkdown,
   formattedViews,
-  showMarkdownMarkers,
 } from '../formatted-contributions.ts'
+import { tableActions } from '../source-formatting.ts'
+import {
+  CellEditor,
+  type CellHost,
+  type CellMove,
+  padding,
+  renderInline,
+  textStarts,
+} from './table-cells.ts'
 import {
   alignments,
   cellContent,
-  type InlineMark,
+  cellSpan,
+  deleteColumn,
+  deleteRow,
+  insertColumn,
+  insertRow,
   parseRow,
-  planInline,
   rowStart,
   type TableAlignment,
+  type TableEdit,
+  type TableText,
 } from './table-source.ts'
 import './tables.css'
 
 /*
  * GFM tables render as a table widget that looks like the rich editor's
- * tables. The widget reads its rows from the source text, so a giant table
- * needs no syntax nodes past its header, and builds DOM only for the rows
- * near the visible part of the page.
+ * tables, and a cell editor edits a cell's source in place. The widget reads
+ * its rows from the source text, so a giant table needs no syntax nodes past
+ * its header, and builds DOM only for the rows near the visible part.
  */
 
 /** A one-line row: a 28px line, the paragraph's 16px gap, 16px padding and a border. */
@@ -45,214 +51,7 @@ const ROW_HEIGHT = 61
 /** Tables up to this many rows render every row, so their columns size like the rich editor's. */
 const ALL_ROWS = 200
 
-/** Lezer Markdown for cell text: the formatted view's inline syntax and no blocks. */
-const cellParsers = new WeakMap<readonly MarkdownConfig[], MarkdownParser>()
-function cellParser(state: EditorState) {
-  const contributed = state.facet(formattedMarkdown)
-  let found = cellParsers.get(contributed)
-  if (!found) {
-    const inline = parser.configure(contributed)
-    const blocks =
-      (inline as unknown as { blockNames?: readonly string[] }).blockNames ?? []
-    found = inline.configure({ remove: [...blocks] })
-    cellParsers.set(contributed, found)
-  }
-  return found
-}
-
-/** Contributed node views by node name, per set of views. */
-const named = new WeakMap<
-  readonly FormattedNodeView[],
-  Map<string, FormattedNodeView[]>
->()
-function namedViews(state: EditorState) {
-  const views = state.facet(formattedViews)
-  let found = named.get(views)
-  if (!found) {
-    found = new Map()
-    for (const view of views)
-      for (const name of view.nodes)
-        found.set(name, [...(found.get(name) ?? []), view])
-    named.set(views, found)
-  }
-  return found
-}
-
-/** Nodes of syntax settings that are off, per facet value. */
-const literals = new WeakMap<readonly string[], ReadonlySet<string>>()
-function literalNodes(state: EditorState) {
-  const names = state.facet(formattedLiteral)
-  let found = literals.get(names)
-  if (!found) {
-    found = new Set(names)
-    literals.set(names, found)
-  }
-  return found
-}
-
-class BreakWidget extends WidgetType {
-  override eq() {
-    return true
-  }
-  toDOM() {
-    return document.createElement('br')
-  }
-}
-const lineBreak = new BreakWidget()
-
-/** Where rendered text nodes start in their cell's content. */
-const textStarts = new WeakMap<Node, number>()
-
-/**
- * A cell's inline Markdown as DOM: the decorations the formatted view gives
- * text it does not reveal, from its own rendering and contributed views.
- */
-function renderInline(view: EditorView, text: string, into: HTMLElement) {
-  const marks: InlineMark[] = [],
-    hidden: { from: number; to: number; widget: WidgetType | null }[] = [],
-    widgets: { at: number; widget: WidgetType; side: number }[] = []
-  const out: FormattedDecorations = {
-    mark(from, to, attributes) {
-      if (to > from) marks.push({ from, to, attributes })
-    },
-    syntax(from, to) {
-      if (to > from) hidden.push({ from, to, widget: null })
-    },
-    line() {},
-    widget(at, widget, side = 1) {
-      widgets.push({ at, widget, side })
-    },
-    replace(from, to, widget) {
-      if (to > from) hidden.push({ from, to, widget: widget ?? null })
-    },
-  }
-  const style = (name: string, from: number, to: number) =>
-    out.mark(from, to, { class: name })
-  const views = namedViews(view.state)
-  const literal = literalNodes(view.state)
-  let context: FormattedRenderContext | null = null
-  cellParser(view.state)
-    .parse(text)
-    .iterate({
-      enter(node) {
-        // Syntax whose setting is off shows as written, its children too.
-        if (literal.has(node.name)) return false
-        let skip = false
-        for (const nodeView of views.get(node.name) ?? []) {
-          context ??= {
-            state: EditorState.create({ doc: text }),
-            visible: { from: 0, to: text.length },
-            revealed: false,
-          }
-          if (nodeView.decorate?.(node, out, context) === false) skip = true
-        }
-        return builtIn(node) === false || skip ? false : undefined
-      },
-    })
-
-  /** The formatted view's own inline rendering, for text it does not reveal. */
-  function builtIn(node: SyntaxNodeRef): false | undefined {
-    switch (node.name) {
-      case 'Emphasis':
-        style('hibi-lp-em', node.from, node.to)
-        return
-      case 'StrongEmphasis':
-        style('hibi-lp-strong', node.from, node.to)
-        return
-      case 'EmphasisMark':
-        out.syntax(node.from, node.to)
-        return
-      case 'InlineCode': {
-        const open = node.node.firstChild,
-          close = node.node.lastChild
-        if (
-          open?.name !== 'CodeMark' ||
-          close?.name !== 'CodeMark' ||
-          open.from === close.from
-        )
-          return false
-        out.syntax(open.from, open.to)
-        out.syntax(close.from, close.to)
-        style('hibi-lp-code', open.to, close.from)
-        return false
-      }
-      case 'Link': {
-        const linkMarks = node.node.getChildren('LinkMark')
-        const open = linkMarks[0]
-        const close = linkMarks.find(
-          (mark) => text.slice(mark.from, mark.to) === ']',
-        )
-        // Reference links need the note's definitions, so they stay literal.
-        if (
-          !open ||
-          !close ||
-          text[open.from] !== '[' ||
-          text[close.to] !== '('
-        )
-          return false
-        out.syntax(node.from, open.to)
-        out.syntax(close.from, node.to)
-        style('hibi-lp-link', open.to, close.from)
-        return
-      }
-      case 'Autolink': {
-        const url = node.node.getChild('URL')
-        if (!url) return false
-        out.syntax(node.from, url.from)
-        out.syntax(url.to, node.to)
-        style('hibi-lp-link', url.from, url.to)
-        return false
-      }
-      case 'URL': {
-        const parent = node.node.parent?.name
-        if (
-          parent !== 'Link' &&
-          parent !== 'Image' &&
-          parent !== 'LinkReference'
-        )
-          style('hibi-lp-link', node.from, node.to)
-        return
-      }
-      case 'Escape':
-        out.syntax(node.from, node.from + 1)
-        return
-      case 'HTMLTag':
-        // Line breaks in cells are written as <br>, as the rich editor saved them.
-        if (/^<br\s*\/?>$/i.test(text.slice(node.from, node.to)))
-          out.replace(node.from, node.to, lineBreak)
-        return false
-      case 'Image':
-      case 'Entity':
-        // Rendered by later formatted-view slices; shown as written for now.
-        return false
-    }
-    return
-  }
-
-  // Text between decoration boundaries, inside spans for the marks over it.
-  const parents: HTMLElement[] = [into]
-  for (const op of planInline(text.length, marks, hidden, widgets)) {
-    const parent = parents.at(-1)!
-    if (op.type === 'open') {
-      const element = document.createElement('span')
-      for (const [key, value] of Object.entries(op.mark.attributes))
-        element.setAttribute(key, value)
-      parent.append(element)
-      parents.push(element)
-    } else if (op.type === 'close') parents.pop()
-    else if (op.type === 'widget') parent.append(op.widget.toDOM(view))
-    else {
-      const node = document.createTextNode(text.slice(op.from, op.to))
-      textStarts.set(node, op.from)
-      parent.append(node)
-    }
-  }
-}
-
 type Line = { from: number; text: string }
-
-const sameConfig = (a: CellConfig, b: CellConfig) =>
-  a.markdown === b.markdown && a.views === b.views && a.literal === b.literal
 
 /** What cells render with: the formatted view's syntax, renderers and syntax that is off. */
 type CellConfig = {
@@ -260,6 +59,9 @@ type CellConfig = {
   views: readonly FormattedNodeView[]
   literal: readonly string[]
 }
+
+const sameConfig = (a: CellConfig, b: CellConfig) =>
+  a.markdown === b.markdown && a.views === b.views && a.literal === b.literal
 
 /**
  * A table: lines `first` (header) to `first + rows + 1` of `doc`, replaced
@@ -299,13 +101,15 @@ class TableWidget extends WidgetType {
   line(index: number): Line {
     return this.doc.line(this.first + index)
   }
-  /** Cells of a table line, relative to its start. */
-  cells(line: Line) {
-    const start =
-      line.from === this.line(0).from
-        ? this.start
-        : rowStart(line.text, this.quotes)
-    return parseRow(line.text.slice(start), start).cells
+  /** Where a table line's row starts, relative to the line. */
+  rowStart(index: number, text: string) {
+    return index ? rowStart(text, this.quotes) : this.start
+  }
+  /** Cells and pipes of table line `index`, relative to its start. */
+  row(index: number) {
+    const { text } = this.line(index)
+    const start = this.rowStart(index, text)
+    return parseRow(text.slice(start), start)
   }
   toDOM(view: EditorView) {
     return new TableView(view, this).dom
@@ -377,12 +181,15 @@ function visibleBand(element: HTMLElement) {
 }
 
 const tableViews = new WeakMap<HTMLElement, TableView>()
-/** Mounted tables per editor, for the scroll-driven row window. */
+/** Mounted tables per editor, for row windows, entering tables and table actions. */
 const mounted = new WeakMap<EditorView, Set<TableView>>()
 
 type Rendered = { element: HTMLTableRowElement; text: string }
 
-/** The DOM of one table widget: header, then all rows or the window of rows in view. */
+/** A cell by table line (0 the header, 2 the first row) and column. */
+type Cell = { line: number; column: number }
+
+/** The DOM of one table widget: header, then all rows or the window of rows in view, and the cell being edited. */
 class TableView {
   readonly dom = document.createElement('div')
   private table = document.createElement('table')
@@ -401,6 +208,8 @@ class TableView {
   private before: HTMLTableRowElement | null = null
   private after: HTMLTableRowElement | null = null
   private fixed = false
+  private editing: (Cell & { editor: CellEditor; element: Element }) | null =
+    null
 
   constructor(
     readonly view: EditorView,
@@ -421,35 +230,50 @@ class TableView {
     return this.heights !== null
   }
 
+  get lines() {
+    return this.widget.rows + 2
+  }
+
   update(widget: TableWidget) {
     const previous = this.widget
     this.widget = widget
     this.dom.classList.toggle('hibi-lp-table-inline', widget.inline)
     if (!sameConfig(previous.config, widget.config)) {
       // Other syntax or renderers: every cell renders again.
+      this.stopEditing()
       this.headText = ''
       for (const row of this.rendered.values()) row.element.remove()
       this.rendered.clear()
     }
     const header = widget.line(0),
       delimiter = widget.line(1).text
-    if (header.text !== this.headText || delimiter !== this.delimiterText) {
-      // New columns: every row renders again.
-      this.headText = header.text
+    const aligned = alignments(delimiter.slice(widget.rowStart(1, delimiter)))
+    if (
+      delimiter !== this.delimiterText ||
+      aligned.length !== this.aligned.length ||
+      widget.row(0).cells.length !== this.head.cells.length
+    ) {
+      // New columns or alignments: every row renders again.
+      this.stopEditing()
       this.delimiterText = delimiter
-      const start = rowStart(delimiter, widget.quotes)
-      this.aligned = alignments(delimiter.slice(start))
-      this.renderHead(header)
+      this.aligned = aligned
+      this.headText = ''
       for (const row of this.rendered.values()) row.element.remove()
       this.rendered.clear()
       this.heights = null
       this.start = this.end = 0
+    }
+    if (header.text !== this.headText) {
+      if (this.editing?.line === 0) this.refresh(this.head, 0, this.headText)
+      else this.renderHead(header)
+      this.headText = header.text
     }
     const windowed = widget.rows > ALL_ROWS
     if (
       windowed !== this.windowed ||
       (this.heights && this.heights.length !== widget.rows)
     ) {
+      if (this.editing && this.editing.line > 1) this.stopEditing()
       for (const row of this.rendered.values()) row.element.remove()
       this.rendered.clear()
       this.heights = windowed ? new Heights(widget.rows) : null
@@ -466,16 +290,13 @@ class TableView {
       if (!this.before.isConnected) this.head.after(this.before)
       if (!this.after.isConnected) this.body.append(this.after)
       this.show(this.start, Math.min(widget.rows, Math.max(this.end, 20)))
-      this.view.requestMeasure({
-        key: this,
-        read: () => this.read(),
-        write: (measured) => this.write(measured),
-      })
+      this.scrolled()
     } else {
       this.before?.remove()
       this.after?.remove()
       this.show(0, widget.rows)
     }
+    this.syncEditor()
   }
 
   private spacer() {
@@ -489,7 +310,7 @@ class TableView {
   }
 
   private renderHead(header: Line) {
-    const cells = this.widget.cells(header)
+    const cells = this.widget.row(0).cells
     const count = cells.length
     this.table.style.minWidth = `${count * 25}px`
     this.columns.replaceChildren(
@@ -530,11 +351,33 @@ class TableView {
     return element
   }
 
+  /** Render the cells of a row whose text changed, except the one being edited. */
+  private refresh(row: HTMLTableRowElement, index: number, previous: string) {
+    const line = this.widget.line(index)
+    const start = this.widget.rowStart(index, previous)
+    const before = parseRow(previous.slice(start), start).cells
+    const after = this.widget.row(index).cells
+    for (let column = 0; column < row.cells.length; column++) {
+      const element = row.cells[column]
+      if (!element || element === this.editing?.element) continue
+      const a = before[column],
+        b = after[column]
+      if (
+        a && b
+          ? previous.slice(a.from, a.to) === line.text.slice(b.from, b.to)
+          : !a && !b
+      )
+        continue
+      element.replaceWith(this.cell(index ? 'td' : 'th', line, b, column))
+    }
+  }
+
   /** Render body rows `from`-`to`, keeping rendered rows whose text is unchanged. */
   private show(from: number, to: number) {
     const { widget } = this
+    const editing = this.editing ? this.editing.line - 2 : -1
     for (const [index, row] of this.rendered)
-      if (index < from || index >= to) {
+      if ((index < from || index >= to) && index !== editing) {
         row.element.remove()
         this.rendered.delete(index)
       }
@@ -542,12 +385,15 @@ class TableView {
     for (let index = to - 1; index >= from; index--) {
       const line = widget.line(index + 2)
       let rendered = this.rendered.get(index)
-      if (!rendered || rendered.text !== line.text) {
+      if (rendered && rendered.text !== line.text && index === editing) {
+        this.refresh(rendered.element, index + 2, rendered.text)
+        rendered.text = line.text
+      } else if (!rendered || rendered.text !== line.text) {
         const element = document.createElement('tr')
         element.dataset.line = String(index + 2)
         element.setAttribute('aria-rowindex', String(index + 2))
         // Missing cells render empty; cells past the header's count are not shown.
-        const cells = widget.cells(line)
+        const cells = widget.row(index + 2).cells
         for (let column = 0; column < this.aligned.length; column++)
           element.append(this.cell('td', line, cells[column], column))
         if (rendered) rendered.element.replaceWith(element)
@@ -561,6 +407,11 @@ class TableView {
         this.body.insertBefore(rendered.element, next)
       next = rendered.element
     }
+    // The row being edited stays mounted next to the window.
+    const kept = this.rendered.get(editing)?.element
+    if (kept && (editing < from || editing >= to))
+      if (editing < from) (this.before ?? this.head).after(kept)
+      else this.body.insertBefore(kept, this.after)
     this.start = from
     this.end = to
     if (this.heights) {
@@ -582,7 +433,8 @@ class TableView {
   private read() {
     const heights: [number, number][] = []
     for (const [index, row] of this.rendered)
-      heights.push([index, row.element.getBoundingClientRect().height])
+      if (index >= this.start && index < this.end)
+        heights.push([index, row.element.getBoundingClientRect().height])
     const band = visibleBand(this.dom)
     const top = this.head.getBoundingClientRect().bottom
     const bottom = this.dom.getBoundingClientRect().bottom
@@ -635,12 +487,7 @@ class TableView {
       Math.abs(heights.before(heights.length) - total) > 0.5
     this.show(from, to)
     // Measure the new rows and let the editor see the table's new height.
-    if (changed)
-      this.view.requestMeasure({
-        key: this,
-        read: () => this.read(),
-        write: (next) => this.write(next),
-      })
+    if (changed) this.scrolled()
   }
 
   /** Scrolling moves the window of rendered rows. */
@@ -653,24 +500,333 @@ class TableView {
     })
   }
 
-  /**
-   * A click puts the caret at the same place in the cell's source, which
-   * shows the table's source while the editor shows Markdown markers.
-   */
+  /** Where the table is now: the range its widget replaces. */
+  range() {
+    const from = this.view.posAtDOM(this.dom)
+    return { from, to: from + this.widget.to - this.widget.from }
+  }
+
+  /** A position of the widget's text snapshot, where it is now. */
+  private now(snapshot: number) {
+    return this.range().from - this.widget.from + snapshot
+  }
+
+  /** The cell at a position of the formatted view's document, with the offset in its text. */
+  locate(pos: number): Cell & { offset: number | 'end' } {
+    const { widget } = this
+    const snapshot = pos - this.range().from + widget.from
+    const index = widget.doc.lineAt(snapshot).number - widget.first
+    const line = Math.max(0, Math.min(this.lines - 1, index === 1 ? 0 : index))
+    const { from, text } = widget.line(line)
+    const row = widget.row(line)
+    const count = Math.min(row.cells.length, this.aligned.length)
+    for (let column = 0; column < count; column++) {
+      const span = cellSpan(row, column, text.length)!
+      if (snapshot - from <= span.to || column === count - 1)
+        return {
+          line,
+          column,
+          offset: Math.max(0, Math.min(span.to, snapshot - from) - span.from),
+        }
+    }
+    return { line, column: 0, offset: 'end' }
+  }
+
+  /** A cell's text between its delimiters in the document now; null while its row ends before it. */
+  private span({ line, column }: Cell) {
+    const { text, from } = this.widget.line(line)
+    const span = cellSpan(this.widget.row(line), column, text.length)
+    if (!span) return null
+    return {
+      from: this.now(from + span.from),
+      to: this.now(from + span.to),
+      closed: span.closed,
+    }
+  }
+
+  /** The table's lines in the document now, for its source edits. */
+  private source(): TableText {
+    const { doc } = this.view.state
+    const first = doc.lineAt(this.range().from).number
+    return {
+      lines: this.lines,
+      line: (index) => doc.line(first + index),
+      start: this.widget.start,
+      quotes: this.widget.quotes,
+    }
+  }
+
+  /** Edit a cell, with the caret at its content's start or end or at an offset in its text. */
+  edit(
+    line: number,
+    column: number,
+    at: 'start' | 'end' | number,
+    head?: number,
+  ) {
+    if (line === 1) line = 0
+    if (line < 0 || line >= this.lines || !this.aligned.length) return false
+    column = Math.max(0, Math.min(column, this.aligned.length - 1))
+    this.stopEditing()
+    if (line > 1 && !this.rendered.has(line - 2)) this.reveal(line - 2)
+    const row = line ? this.rendered.get(line - 2)?.element : this.head
+    const element = row?.cells[column]
+    const paragraph = element?.firstElementChild
+    if (!element || !(paragraph instanceof HTMLElement)) return false
+    const span = this.span({ line, column })
+    // A row that ends before the cell gets it on the first input.
+    const text = span ? this.view.state.sliceDoc(span.from, span.to) : '  '
+    // The caret goes in the content, not the padding around it.
+    const { start, end } = padding(text)
+    const clamp = (pos: number) => Math.max(start, Math.min(pos, end))
+    const anchor = at === 'start' ? start : at === 'end' ? end : clamp(at)
+    paragraph.replaceChildren()
+    const editor = new CellEditor(
+      this.host(),
+      paragraph,
+      text,
+      anchor,
+      head === undefined ? anchor : clamp(head),
+    )
+    this.editing = { line, column, editor, element }
+    editor.focus()
+    editor.mirror()
+    element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    return true
+  }
+
+  /** Edit the cell at a selection of the formatted view's document, when it stays in one cell. */
+  editAt(anchor: number, head = anchor) {
+    const { line, column, offset } = this.locate(head)
+    const from = anchor === head ? null : this.locate(anchor)
+    if (from && (from.line !== line || from.column !== column)) return false
+    return this.edit(
+      line,
+      column,
+      from?.offset ?? offset,
+      offset === 'end' ? undefined : offset,
+    )
+  }
+
+  /** Render a window of rows around row `index`, for editing it. */
+  private reveal(index: number) {
+    const from = Math.max(0, index - 10)
+    this.show(from, Math.min(this.widget.rows, Math.max(index + 10, from + 1)))
+    this.scrolled()
+  }
+
+  private host(): CellHost {
+    return {
+      main: this.view,
+      span: () => (this.editing ? this.span(this.editing) : null),
+      fill: (text) => this.fill(text),
+      move: (move) => this.move(move),
+      leave: (after) => this.leave(after),
+      blurred: (editor) => {
+        if (this.editing?.editor === editor) this.stopEditing()
+      },
+    }
+  }
+
+  /** The change that ends the edited row with its cell, holding `text`. */
+  private fill(text: string) {
+    const { line, column } = this.editing!
+    const source = this.source().line(line)
+    const start = this.widget.rowStart(line, source.text)
+    const row = parseRow(source.text.slice(start), source.from + start)
+    const last = row.pipes.at(-1)
+    const trailing =
+      last !== undefined &&
+      !source.text.slice(last - source.from + 1).trim() &&
+      (!row.cells.length || row.cells.at(-1)!.to <= last)
+    const empty = '  |'.repeat(Math.max(0, column - row.cells.length))
+    return trailing
+      ? { from: last + 1, insert: `${empty}${text}|` }
+      : {
+          from: source.from + source.text.length,
+          insert: ` |${empty}${text}|`,
+        }
+  }
+
+  private move(move: CellMove): boolean {
+    if (!this.editing) return false
+    const { line, column } = this.editing
+    const last = this.lines - 1,
+      columns = this.aligned.length
+    const below = line === 0 ? 2 : line + 1,
+      above = line === 2 ? 0 : line - 1
+    switch (move) {
+      case 'next':
+      case 'right':
+        if (column + 1 < columns) return this.edit(line, column + 1, 'start')
+        if (line < last) return this.edit(below, 0, 'start')
+        // Tab in the last cell adds a row, as in the rich editor.
+        if (move === 'next') return this.run('row-after')
+        this.leave(true)
+        return true
+      case 'previous':
+      case 'left':
+        if (column > 0) return this.edit(line, column - 1, 'end')
+        if (line > 0) return this.edit(above, columns - 1, 'end')
+        if (move === 'left') this.leave(false)
+        return true
+      case 'down':
+        if (line < last) return this.edit(below, column, 'end')
+        this.leave(true)
+        return true
+      case 'up':
+        if (line > 0) return this.edit(above, column, 'end')
+        this.leave(false)
+        return true
+    }
+  }
+
+  /** Back to the formatted view, on the line after or before the table. */
+  leave(after: boolean) {
+    const { doc } = this.view.state
+    const { from, to } = this.range()
+    this.stopEditing()
+    const before = doc.lineAt(from).from,
+      end = doc.lineAt(to).to
+    const anchor = after
+      ? end < doc.length
+        ? end + 1
+        : end
+      : before > 0
+        ? before - 1
+        : before
+    this.view.dispatch({
+      selection: { anchor },
+      scrollIntoView: true,
+      userEvent: 'select',
+    })
+    this.view.focus()
+  }
+
+  stopEditing() {
+    const editing = this.editing
+    if (!editing) return
+    this.editing = null
+    editing.editor.destroy()
+    // The cell renders statically again.
+    if (editing.line < this.lines && editing.element.isConnected)
+      editing.element.replaceWith(
+        this.cell(
+          editing.line ? 'td' : 'th',
+          this.widget.line(editing.line),
+          this.widget.row(editing.line).cells[editing.column],
+          editing.column,
+        ),
+      )
+  }
+
+  /** Show the edited cell's text after the formatted view changed it. */
+  private syncEditor() {
+    const editing = this.editing
+    if (!editing) return
+    if (editing.line >= this.lines || editing.column >= this.aligned.length) {
+      this.stopEditing()
+      return
+    }
+    const span = this.span(editing)
+    if (span) editing.editor.sync(this.view.state.sliceDoc(span.from, span.to))
+  }
+
+  /** Run a toolbar table action on the edited cell, or on the cell at the selection. */
+  run(id: string): boolean {
+    const cell =
+      this.editing ?? this.locate(this.view.state.selection.main.head)
+    const source = this.source()
+    let result: TableEdit
+    switch (id) {
+      case 'row-before':
+        result = insertRow(source, cell.line, false)
+        break
+      case 'row-after':
+        result = insertRow(source, cell.line, true)
+        break
+      case 'row-delete':
+        result = deleteRow(source, cell.line) ?? this.removal()
+        break
+      case 'column-before':
+        result = insertColumn(source, cell.column, false)
+        break
+      case 'column-after':
+        result = insertColumn(source, cell.column, true)
+        break
+      case 'column-delete':
+        result = deleteColumn(source, cell.column) ?? this.removal()
+        break
+      case 'table-delete':
+        result = this.removal()
+        break
+      default:
+        return false
+    }
+    const { line } = cell
+    this.stopEditing()
+    this.view.dispatch({
+      changes: result.changes,
+      annotations: [
+        Transaction.userEvent.of('input.format'),
+        isolateHistory.of('full'),
+      ],
+    })
+    // Editing goes on in the cell the action leaves the caret in.
+    if (result.cell && this.dom.isConnected)
+      this.edit(
+        result.cell.line < 0 ? line : result.cell.line,
+        result.cell.column,
+        'start',
+      )
+    else this.view.focus()
+    return true
+  }
+
+  /** The source edit that deletes the table, with the blank line after it. */
+  private removal(): TableEdit {
+    const { doc } = this.view.state
+    let { from, to } = this.range()
+    if (!this.widget.inline) {
+      from = doc.lineAt(from).from
+      to = doc.lineAt(to).to
+      if (doc.sliceString(to, to + 2) === '\n\n') to += 2
+      else if (to < doc.length) to += 1
+    }
+    return { changes: [{ from, to, insert: '' }], cell: null }
+  }
+
+  /** Enter the table from an adjacent line: its header or last row, under `x` or at the near edge. */
+  enter(down: boolean, x: number | null) {
+    const line = down ? 0 : this.lines - 1
+    if (line > 1 && !this.rendered.has(line - 2)) this.reveal(line - 2)
+    const row = line ? this.rendered.get(line - 2)?.element : this.head
+    let column = x === null && !down ? this.aligned.length - 1 : 0
+    if (x !== null && row)
+      for (const [index, cell] of [...row.cells].entries()) {
+        const box = cell.getBoundingClientRect()
+        if (x >= box.left && x <= box.right) column = index
+      }
+    return this.edit(line, column, down ? 'start' : 'end')
+  }
+
+  /** A click edits the clicked cell at the clicked place; shift-click extends the selection. */
   private select = (event: MouseEvent) => {
-    if (event.button !== 0) return
-    const { view, widget } = this
-    if (!view.state.facet(showMarkdownMarkers) || view.state.readOnly) return
+    if (event.button !== 0 || this.view.state.readOnly) return
     const target = event.target as Element
+    if (this.editing?.editor.view.dom.contains(target)) return
     const cell = target.closest('th, td')
     const row = cell?.parentElement
-    const line = row?.getAttribute('data-line')
-    if (!cell || !row || line == null) return
+    const index = row?.getAttribute('data-line')
+    if (!cell || !row || index == null) return
     event.preventDefault()
-    const source = widget.line(Number(line))
-    const range = widget.cells(source)[[...row.children].indexOf(cell)]
-    let offset = range ? range.to : source.text.length
-    if (range) {
+    const line = Number(index),
+      column = [...row.children].indexOf(cell)
+    const source = this.widget.line(line)
+    const parsed = this.widget.row(line)
+    const range = parsed.cells[column]
+    const span = cellSpan(parsed, column, source.text.length)
+    let offset: number | 'end' = 'end'
+    if (range && span) {
       const caret = document.caretPositionFromPoint(
         event.clientX,
         event.clientY,
@@ -678,52 +834,62 @@ class TableView {
       const text = caret && textStarts.get(caret.offsetNode)
       if (caret && text != null && cell.contains(caret.offsetNode)) {
         const content = cellContent(source.text.slice(range.from, range.to))
-        offset = range.from + content.source[text + caret.offset]!
+        offset = range.from - span.from + content.source[text + caret.offset]!
       }
     }
-    // The widget knows its text; where the table starts now comes from the view.
-    const at = view.posAtDOM(this.dom) - widget.from + source.from + offset
-    view.dispatch({
-      selection: {
-        anchor: event.shiftKey ? view.state.selection.main.anchor : at,
-        head: at,
-      },
-      userEvent: 'select.pointer',
-    })
-    view.focus()
-  }
-
-  /** Where the table is now: the range its widget replaces. */
-  range() {
-    const from = this.view.posAtDOM(this.dom)
-    return { from, to: from + this.widget.to - this.widget.from }
-  }
-
-  /** Where line `index` of the table has its row text now, after container markers and indentation. */
-  rowPosition(index: number) {
-    const { from, text } = this.widget.line(index)
-    const start = index ? rowStart(text, this.widget.quotes) : this.widget.start
-    const indent = /^[ \t]*/.exec(text.slice(start))![0].length
-    return this.range().from - this.widget.from + from + start + indent
-  }
-
-  get lines() {
-    return this.widget.rows + 2
+    if (event.shiftKey) {
+      const head = span
+        ? this.now(
+            source.from +
+              span.from +
+              (offset === 'end' ? span.to - span.from : offset),
+          )
+        : this.now(source.from + source.text.length)
+      this.view.dispatch({
+        selection: { anchor: this.view.state.selection.main.anchor, head },
+        userEvent: 'select.pointer',
+      })
+      this.view.focus()
+      return
+    }
+    this.edit(line, column, offset)
   }
 
   destroy() {
+    this.stopEditing()
     mounted.get(this.view)?.delete(this)
     this.dom.removeEventListener('mousedown', this.select)
   }
 }
 
-/** Mounted tables follow scrolling and layout changes with their row windows. */
-const rowWindows = ViewPlugin.fromClass(
+/** The mounted table containing a position of the formatted view's document. */
+function tableAt(view: EditorView, pos: number, strict = false) {
+  for (const table of mounted.get(view) ?? []) {
+    const { from, to } = table.range()
+    if (strict ? pos > from && pos < to : pos >= from && pos <= to) return table
+  }
+  return null
+}
+
+/**
+ * Tables follow scrolling with their row windows, and a collapsed
+ * selection that lands inside a table, as after undo or find, edits the
+ * cell there.
+ */
+const tableEditing = ViewPlugin.fromClass(
   class {
     constructor(readonly view: EditorView) {}
     update(update: ViewUpdate) {
       if (update.geometryChanged || update.viewportChanged)
         for (const table of mounted.get(this.view) ?? []) table.scrolled()
+      const { main } = update.state.selection
+      if (
+        update.view.hasFocus &&
+        (update.selectionSet || update.focusChanged)
+      ) {
+        const table = tableAt(update.view, main.head, true)
+        if (table) queueMicrotask(() => table.editAt(main.anchor, main.head))
+      }
     }
   },
   {
@@ -735,32 +901,30 @@ const rowWindows = ViewPlugin.fromClass(
   },
 )
 
-/**
- * Up and down arrows move into an adjacent table's first or last source row
- * instead of over it, which shows its source while markers are shown.
- */
-function enterTable(view: EditorView, forward: boolean) {
+/** Arrow keys move into an adjacent table's nearest cell instead of over it. */
+function enterTable(view: EditorView, key: 'up' | 'down' | 'left' | 'right') {
   const selection = view.state.selection.main
-  if (!selection.empty || !view.state.facet(showMarkdownMarkers)) return false
-  const target = view.moveVertically(selection, forward).head
+  if (!selection.empty) return false
+  const forward = key === 'down' || key === 'right',
+    vertical = key === 'down' || key === 'up'
+  const target = vertical
+    ? view.moveVertically(selection, forward).head
+    : view.moveByChar(selection, forward).head
   for (const table of mounted.get(view) ?? []) {
     const { from, to } = table.range()
     const crosses = forward
       ? selection.head < from && target >= from
       : selection.head > to && target <= to
-    if (!crosses) continue
-    const anchor = table.rowPosition(forward ? 0 : table.lines - 1)
-    view.dispatch({
-      selection: { anchor },
-      scrollIntoView: true,
-      userEvent: 'select',
-    })
-    return true
+    if (crosses)
+      return table.enter(
+        forward,
+        vertical ? (view.coordsAtPos(selection.head)?.left ?? null) : null,
+      )
   }
   return false
 }
 
-/** GitHub tables: a table widget, or the source while the selection is in it. */
+/** GitHub tables: a table widget whose cells edit their source in place. */
 export const contribution: FormattedContribution = {
   id: 'markdown.tables',
   feature: 'markdown.tables',
@@ -773,8 +937,7 @@ export const contribution: FormattedContribution = {
       space: { top: 20, bottom: 20 },
       // Rows are read from the text; neither pass walks them as nodes.
       decorate: () => false,
-      layout(node, out, { state, revealed }) {
-        if (revealed) return false
+      layout(node, out, { state }) {
         const first = state.doc.lineAt(node.from),
           last = state.doc.lineAt(node.to)
         let quotes = 0,
@@ -812,8 +975,17 @@ export const contribution: FormattedContribution = {
     },
   ],
   keys: [
-    { key: 'ArrowDown', run: (view) => enterTable(view, true) },
-    { key: 'ArrowUp', run: (view) => enterTable(view, false) },
+    { key: 'ArrowDown', run: (view) => enterTable(view, 'down') },
+    { key: 'ArrowUp', run: (view) => enterTable(view, 'up') },
+    { key: 'ArrowRight', run: (view) => enterTable(view, 'right') },
+    { key: 'ArrowLeft', run: (view) => enterTable(view, 'left') },
   ],
-  extension: rowWindows,
+  extension: [
+    tableEditing,
+    tableActions.of({
+      active: (view) => !!tableAt(view, view.state.selection.main.head),
+      run: (view, id) =>
+        tableAt(view, view.state.selection.main.head)?.run(id) ?? false,
+    }),
+  ],
 }

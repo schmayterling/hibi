@@ -7,7 +7,7 @@ import {
   undo,
   undoDepth,
 } from '@codemirror/commands'
-import { EditorSelection, Transaction } from '@codemirror/state'
+import { EditorSelection, Facet, Transaction } from '@codemirror/state'
 import type { EditorView, KeyBinding } from '@codemirror/view'
 import type {
   DocumentEdit,
@@ -37,6 +37,40 @@ export const formattingKeymap = (run: (id: string) => boolean): KeyBinding[] =>
   formatBindings.map(([key, id]) => ({ key, run: () => run(id) }))
 
 export type InsertValues = { url: string; alt: string }
+
+/** A view's table editing: whether the selection is in a table, and the toolbar's table actions. */
+export type TableActions = {
+  active: (view: EditorView) => boolean
+  run: (view: EditorView, id: string) => boolean
+}
+export const tableActions = Facet.define<TableActions>()
+const tableIds = [
+  'row-before',
+  'row-after',
+  'row-delete',
+  'column-before',
+  'column-after',
+  'column-delete',
+  'table-delete',
+]
+/** Actions that make or change blocks, which a table cell cannot hold. */
+const blockIds = [
+  'paragraph',
+  'subtext',
+  'bullet-list',
+  'numbered-list',
+  'checklist',
+  'quote',
+  'code-block',
+  'divider',
+  'hard-break',
+  'table',
+  'indent',
+  'outdent',
+  ...Array.from({ length: 6 }, (_, i) => `heading-${i + 1}`),
+]
+const inTable = (view: EditorView) =>
+  view.state.facet(tableActions).some((actions) => actions.active(view))
 export type SourceFormatting = ReturnType<typeof sourceFormatting>
 const marks: Record<string, string> = {
   bold: '**',
@@ -155,6 +189,7 @@ export function sourceFormatting(
   }
   const run = (id: string, values?: InsertValues) => {
     if (!editable() || !supported(id)) return false
+    if (blockIds.includes(id) && inTable(view)) return false
     if (id === 'undo' || id === 'redo' || id === 'indent' || id === 'outdent') {
       const done = {
         undo: history?.undo ?? undo,
@@ -166,6 +201,10 @@ export function sourceFormatting(
       return done
     }
     if (view.state.selection.ranges.length !== 1) return false
+    if (tableIds.includes(id))
+      return view.state
+        .facet(tableActions)
+        .some((actions) => actions.run(view, id))
     const range = view.state.selection.main
     const doc = view.state.doc
     let from = range.from,
@@ -313,10 +352,20 @@ export function sourceFormatting(
       if (!activeSelection) activeSelection = selection()
       return activeSelection
     }
+    const table = inTable(view)
     return {
+      /** The selection is in a table whose actions this view runs. */
+      table,
       state(id: string, checkPressed = true) {
         if (!supported(id))
           return { supported: false, pressed: false, disabled: true }
+        if (tableIds.includes(id))
+          return {
+            supported: true,
+            pressed: false,
+            disabled:
+              state.readOnly || !table || state.selection.ranges.length !== 1,
+          }
         const blockActive = id.startsWith('heading-')
           ? line.startsWith(`${'#'.repeat(Number(id.slice(-1)))} `)
           : id === 'numbered-list'
@@ -337,6 +386,7 @@ export function sourceFormatting(
               : (format?.isActive?.(id, { ...selected() }) ?? false)),
           disabled:
             state.readOnly ||
+            (table && blockIds.includes(id)) ||
             (state.selection.ranges.length !== 1 &&
               !['undo', 'redo', 'indent', 'outdent'].includes(id)) ||
             (id === 'undo'

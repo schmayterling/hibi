@@ -1,4 +1,4 @@
-import { defaultKeymap, history } from '@codemirror/commands'
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import '../../src/renderer/src/styles.css'
@@ -62,7 +62,7 @@ Object.assign(window, {
           extensions: [
             livePreview(formattedSyntax({ probe })),
             options.editable
-              ? [history(), keymap.of(defaultKeymap)]
+              ? [history(), keymap.of([...defaultKeymap, ...historyKeymap])]
               : [EditorState.readOnly.of(true), EditorView.editable.of(false)],
             showMarkdownMarkers.of(true),
           ],

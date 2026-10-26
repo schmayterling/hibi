@@ -7,18 +7,49 @@ export function linkScroll(
   first: HTMLElement,
   second: HTMLElement,
   initial: HTMLElement,
-  markdown?: {
-    editor: Editor
-    content: () => { source: string; body: string } | null
-    positions: MarkdownPositionLookup
-  },
+  markdown?:
+    | {
+        editor: Editor
+        content: () => { source: string; body: string } | null
+        positions: MarkdownPositionLookup
+      }
+    | 'source',
 ) {
-  if (markdown?.editor.isDestroyed) return () => {}
+  const editor = markdown && markdown !== 'source' ? markdown.editor : null
+  if (editor?.isDestroyed) return () => {}
   let leader = initial
   let frame = 0
   let refinements = 0
   const sourcePane = second.closest('.source-pane')
+  function sourceTop(target: HTMLElement): number | null {
+    const fromContent = leader.querySelector('.cm-content')
+    const toContent = target.querySelector('.cm-content')
+    const from = fromContent && sourceView(fromContent)
+    const to = toContent && sourceView(toContent)
+    if (!from || !to) return null
+    const bounds = leader.getBoundingClientRect()
+    let position = from.state.selection.main.head
+    let point = from.hasFocus ? from.coordsAtPos(position) : null
+    if (!point || point.top < bounds.top || point.bottom > bounds.bottom) {
+      position =
+        from.posAtCoords({
+          x: from.contentDOM.getBoundingClientRect().left + 8,
+          y: bounds.top + bounds.height / 2,
+        }) ?? position
+      point = from.coordsAtPos(position)
+    }
+    const at = editorPosition(to, sourcePosition(from, position))
+    if (!point || at === null) return null
+    const block = to.lineBlockAt(at)
+    if (!block.height) return null
+    const destination = to.coordsAtPos(at)
+    const y = destination
+      ? (destination.top + destination.bottom) / 2
+      : to.documentTop + block.top + to.defaultLineHeight / 2
+    return target.scrollTop + y - (point.top + point.bottom) / 2
+  }
   function anchoredTop(target: HTMLElement): number | null {
+    if (markdown === 'source') return sourceTop(target)
     if (!markdown || markdown.editor.isDestroyed) return null
     const content = second.querySelector<HTMLElement>('.cm-content')
     const view = content && sourceView(content)
@@ -124,13 +155,15 @@ export function linkScroll(
     pane.addEventListener('pointerdown', intent)
   }
   if (markdown) {
-    observer.observe(markdown.editor.view.dom)
+    const richContent = editor?.view.dom ?? first.querySelector('.cm-content')
+    if (richContent) observer.observe(richContent)
     const sourceContent = second.querySelector('.cm-content')
     if (sourceContent) observer.observe(sourceContent)
     document.addEventListener('selectionchange', selection)
     document.addEventListener('hibi:rich-content', selection)
+    first.addEventListener('hibi:source-caret', selection)
     second.addEventListener('hibi:source-caret', selection)
-    markdown.editor.on('transaction', selection)
+    editor?.on('transaction', selection)
   }
   first.addEventListener('scroll', scroll, { passive: true })
   second.addEventListener('scroll', scroll, { passive: true })
@@ -148,8 +181,9 @@ export function linkScroll(
     }
     document.removeEventListener('selectionchange', selection)
     document.removeEventListener('hibi:rich-content', selection)
+    first.removeEventListener('hibi:source-caret', selection)
     second.removeEventListener('hibi:source-caret', selection)
-    markdown?.editor.off('transaction', selection)
+    editor?.off('transaction', selection)
     first.removeEventListener('scroll', scroll)
     second.removeEventListener('scroll', scroll)
     first.removeEventListener('transitionend', settled)

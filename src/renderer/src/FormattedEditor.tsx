@@ -22,6 +22,8 @@ import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
 import { LoadingScreen } from './LoadingScreen'
+import { linkScroll } from './linked-scroll'
+import { MirrorCursor } from './MirrorCursor'
 import { markdownSyntax } from './markdown-syntax'
 import { SourceEditor } from './SourceEditor'
 import { editorPosition, sourceView } from './source-view'
@@ -188,6 +190,20 @@ export function MarkdownEditor({
     view.dispatch({ selection: { anchor: view.state.doc.length } })
     view.focus()
   }, [autoFocus, formattedReady, paneMode, content])
+  useEffect(() => {
+    if (paneMode !== 'side-by-side' || !sourceReady || !formattedReady) return
+    const rich = content.current?.querySelector<HTMLElement>('.rich-pane')
+    const source = content.current?.querySelector<HTMLElement>(
+      '.source-pane .cm-scroller',
+    )
+    if (!rich || !source) return
+    return linkScroll(
+      rich,
+      source,
+      source.contains(window.document.activeElement) ? source : rich,
+      'source',
+    )
+  }, [content, paneMode, sourceReady, formattedReady])
   /**
    * Properties editors above the text return the whole source, as in the
    * rich editor; their change goes to the formatted view as one minimal edit
@@ -261,6 +277,15 @@ export function MarkdownEditor({
       >
         <div className="editor-content" ref={content}>
           <EditorCursor root={content} settings={cursorSettings} />
+          <MirrorCursor
+            root={content}
+            active={
+              paneMode === 'side-by-side' &&
+              sourceReady &&
+              formattedReady &&
+              !disabled
+            }
+          />
           <section
             className="rich-pane"
             onFocusCapture={() => {

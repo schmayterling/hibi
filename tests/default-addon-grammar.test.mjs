@@ -10,20 +10,19 @@ import {
 } from './electron.mjs'
 import { waitForAsync } from './poll.mjs'
 
-// A default-on flavor that the editor's built-in grammar lists do not classify
-// turns off the source outline, plain visual typing and the math paragraph
-// proof for everyone (Editor.tsx, markdown-semantics.ts, workspace syntax).
+// A default-on flavor missing from src/shared/built-in-grammar.ts turns off the
+// source outline, plain visual typing and the math paragraph proof for everyone.
 const original =
   '# Title\n\n```mermaid\ngraph TD\n# not a heading\n```\n\nneedle word $x$\n\n## Next\n\nelsewhere\n'
 
-async function open(t, addons) {
+async function open(t, addons, source = original) {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-default-grammar-'))
   const profile = join(folder, 'profile')
   const file = join(folder, 'note.md')
   await mkdir(profile)
   if (addons)
     await writeFile(join(profile, 'addons.json'), JSON.stringify(addons))
-  await writeFile(file, original)
+  await writeFile(file, source)
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`, file],
   })
@@ -47,6 +46,29 @@ async function open(t, addons) {
   await waitForDocumentEditor(app, page)
   await page.locator('.tiptap .mermaid-block').waitFor()
   return page
+}
+
+async function sourceOutline(page, count) {
+  await page.getByRole('button', { name: /^source view$/i }).click()
+  await page
+    .getByRole('textbox', { name: 'Markdown editor', exact: true })
+    .waitFor()
+  await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+  await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+  await page
+    .getByRole('menuitem', { name: 'On this page', exact: true })
+    .click()
+  await page.waitForFunction(
+    (count) =>
+      document.querySelectorAll(
+        '.outline-sidebar[data-side="right"] [role="treeitem"][id^="right-outline-source:"]',
+      ).length === count,
+    count,
+  )
+  return page
+    .locator('.outline-sidebar[data-side="right"][data-open="true"]')
+    .locator('.sidebar-label')
+    .allTextContents()
 }
 
 // Typing at the end of the last paragraph parses at most that paragraph when a
@@ -115,29 +137,27 @@ test('default addons keep plain visual typing, caret history and the source outl
     word.to,
     'undo keeps the caret at the restored word',
   )
+  assert.deepEqual(await sourceOutline(page, 2), ['Title', 'Next'])
+})
 
-  await page.getByRole('button', { name: /^source view$/i }).click()
-  await page
-    .getByRole('textbox', { name: 'Markdown editor', exact: true })
-    .waitFor()
-  await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
-  await page.getByRole('button', { name: /^right sidebar views$/i }).click()
-  await page
-    .getByRole('menuitem', { name: 'On this page', exact: true })
-    .click()
-  const outline = page.locator(
-    '.outline-sidebar[data-side="right"][data-open="true"]',
+test('a quoted diagram keeps the source outline in step with the rich view', {
+  timeout: 60000,
+}, async (t) => {
+  // The quote ends at its diagram, so the next two lines are a setext heading.
+  const page = await open(
+    t,
+    undefined,
+    '> ```mermaid\n> graph TD\n> A-->B\n> ```\noutside\n===\n\n# real\n',
   )
-  await page.waitForFunction(
-    () =>
-      document.querySelectorAll(
-        '.outline-sidebar[data-side="right"] [role="treeitem"][id^="right-outline-source:"]',
-      ).length === 2,
-  )
-  assert.deepEqual(await outline.locator('.sidebar-label').allTextContents(), [
-    'Title',
-    'Next',
-  ])
+  const headings = await page.evaluate(() => {
+    const labels = []
+    document.querySelector('.tiptap').editor.state.doc.descendants((node) => {
+      if (node.type.name === 'heading') labels.push(node.textContent)
+    })
+    return labels
+  })
+  assert.deepEqual(headings, ['outside', 'real'])
+  assert.deepEqual(await sourceOutline(page, 2), headings)
 })
 
 test('default addons keep the math paragraph proof', {

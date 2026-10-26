@@ -84,7 +84,10 @@ test('common fenced-code languages highlight without executing or changing code'
   }
   assert.ok(!codeHtml(cases.js, 'js').includes('<script>'))
   assert.deepEqual(highlightCode('anything', 'unknown'), [])
-  assert.deepEqual(highlightCode('x'.repeat(100001), 'js'), [])
+  // Exports highlight long blocks too; the rich editor parses them incrementally.
+  assert.ok(
+    highlightCode('const answer = 42;\n'.repeat(6000), 'js').length > 6000,
+  )
   assert.equal(
     codeLanguages.resolve('JS filename=example.js'),
     codeLanguages.resolve('javascript'),

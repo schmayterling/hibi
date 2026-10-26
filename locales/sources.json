@@ -3120,6 +3120,9 @@
   "e130481e560e": [
     "src/shared/source-projection.ts"
   ],
+  "5d11a76afe7b": [
+    "src/main/workspace-metadata-worker.ts"
+  ],
   "55fd4183e9eb": [
     "src/shared/document-worker-service.ts"
   ],
@@ -7028,6 +7031,9 @@
   ],
   "03efeb5aa9aa": [
     "src/main/workspace-reference-index.ts"
+  ],
+  "b18dabb099df": [
+    "src/main/workspace-metadata-parser.ts"
   ],
   "a741ce8b69a7": [
     "src/main/workspace-metadata-parser.ts"

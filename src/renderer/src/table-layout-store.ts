@@ -74,21 +74,30 @@ export function subscribeTableLayouts(tabId: string, listener: () => void) {
 /**
  * Rows past the first 1,000 are stored by index, and size changes go in
  * batches of at most 1,000, so long tables stay within the workspace's
- * bounds. The workspace applies the batches in order.
+ * bounds. Sizes made automatic go first, so no batch holds more sizes than
+ * the update ends with, and each batch waits for the one before it: a
+ * rejected batch stops the rest.
  */
 function save(tabId: string, update: TableLayoutUpdate) {
-  const write = (part: TableLayoutUpdate) =>
-    void window.hibi
-      .writeTableLayout(tabId, part)
-      .catch((error: unknown) =>
-        console.error('table sizes could not be saved:', error),
-      )
-  const set = update.set ?? []
-  write({
-    ...update,
-    put: update.put.map(storedTableLayout),
-    set: set.slice(0, 1000),
-  })
+  const set = [...(update.set ?? [])].sort(
+    (a, b) => Number(b.size === 0) - Number(a.size === 0),
+  )
+  const parts: TableLayoutUpdate[] = [
+    {
+      ...update,
+      put: update.put.map(storedTableLayout),
+      set: set.slice(0, 1000),
+    },
+  ]
   for (let at = 1000; at < set.length; at += 1000)
-    write({ remove: [], put: [], set: set.slice(at, at + 1000) })
+    parts.push({ remove: [], put: [], set: set.slice(at, at + 1000) })
+  void parts
+    .reduce<Promise<void>>(
+      (written, part) =>
+        written.then(() => window.hibi.writeTableLayout(tabId, part)),
+      Promise.resolve(),
+    )
+    .catch((error: unknown) =>
+      console.error('table sizes could not be saved:', error),
+    )
 }

@@ -1295,6 +1295,45 @@ test('empty headers keep their own widths through a column delete and undo', {
   assert.deepEqual(await widths(), ['200px', '180px'])
 })
 
+test('moving rows stored by index stays within the workspace bound in every batch', {
+  timeout: 60000,
+}, async () => {
+  const rows = Array.from({ length: 2001 }, (_, i) => `| r${i} | x |`)
+  const doc = `| a | b |\n| - | - |\n${rows.join('\n')}\n\nafter`
+  // Rows 1,001 to 2,000 sized, each differently: all stored by index.
+  const heights = Array.from({ length: 2001 }, (_, i) =>
+    i > 1000 ? 24 + (i % 900) : 0,
+  )
+  await harness.evaluate(
+    ({ key, heights }) =>
+      window.tables.layouts('bound', [{ key, columns: null, rows: heights }]),
+    { key: tableKey(0, ['a', 'b']), heights },
+  )
+  await mountTab(doc, 'bound')
+  await harness.evaluate(async () => {
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await window.tables.settle()
+  })
+  // Deleting a row above moves each sized row up by one.
+  assert.equal(
+    await harness.evaluate((at) => {
+      window.tables.view().dispatch({ selection: { anchor: at } })
+      return window.tables.runTableAction('row-delete')
+    }, doc.indexOf('| r0') + 2),
+    true,
+  )
+  await harness.waitForFunction(
+    (expected) => window.tables.layouts('bound')[0]?.rows?.[1999] === expected,
+    24 + (2000 % 900),
+  )
+  const stored = (await layouts('bound'))[0].rows
+  assert.deepEqual(
+    [stored[1000], stored[1999], stored[2000] ?? 0],
+    [24 + (1001 % 900), 24 + (2000 % 900), 0],
+  )
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {

@@ -13,6 +13,7 @@ import { livePreview } from '../../src/renderer/src/live-preview'
 import { markdownSyntax } from '../../src/renderer/src/markdown-syntax'
 import { tableActions } from '../../src/renderer/src/source-formatting'
 import {
+  storedTableLayout,
   type TableLayout,
   type TableLayoutUpdate,
   updateTableLayout,
@@ -40,12 +41,17 @@ Object.assign(window, {
       input: TableLayout[] | TableLayoutUpdate,
     ) => {
       writes.push({ tabId, input: structuredClone(input) })
-      layouts.set(
-        tabId,
-        Array.isArray(input)
-          ? input
-          : updateTableLayout(layouts.get(tabId) ?? [], input),
+      const next = Array.isArray(input)
+        ? input
+        : updateTableLayout(layouts.get(tabId) ?? [], input)
+      // The workspace's bound: at most 1,000 rows stored by index.
+      if (
+        next.some(
+          (table) => (storedTableLayout(table).rowsAfter?.length ?? 0) > 1000,
+        )
       )
+        throw new Error('The table layout is invalid.')
+      layouts.set(tabId, next)
     },
   },
 })

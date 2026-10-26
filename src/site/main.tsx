@@ -27,6 +27,7 @@ import {
   type PaletteCommand,
 } from '../renderer/src/CommandPalette'
 import { headingAnchors } from '../shared/heading-anchor'
+import { renderedHtmlOptions } from '../shared/rendered-html'
 import '../addons/graph/style.css'
 import { ColorschemeSettings } from '../ui/ColorschemeSettings'
 import { IconButton, TextInput } from '../ui/Controls'
@@ -235,23 +236,7 @@ export function startSite(workspace: SiteData, root: Root) {
               'type',
             ],
           }
-        : {
-            RETURN_DOM_FRAGMENT: true,
-            USE_PROFILES: { html: true, mathMl: true, svg: true },
-            FORBID_TAGS: [
-              'style',
-              'form',
-              'button',
-              'textarea',
-              'select',
-              'iframe',
-              'object',
-              'embed',
-              'audio',
-              'video',
-            ],
-            FORBID_ATTR: ['name'],
-          },
+        : { ...renderedHtmlOptions, RETURN_DOM_FRAGMENT: true },
     )
     for (const element of fragment.querySelectorAll('[id]')) {
       const id = element.id

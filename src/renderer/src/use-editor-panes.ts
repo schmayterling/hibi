@@ -71,7 +71,9 @@ export function useEditorPanes(
         return
       }
       setFocusedPane('source')
-      const source = content.current?.querySelector<HTMLElement>('.cm-content')
+      const source = content.current?.querySelector<HTMLElement>(
+        '.source-pane .cm-content',
+      )
       if (source !== window.document.activeElement) source?.focus()
       if (source === window.document.activeElement) focusOwner.current = null
     }

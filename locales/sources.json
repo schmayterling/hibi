@@ -5148,6 +5148,7 @@
   ],
   "886bcbd93207": [
     "src/addons/tags/decorations.ts",
+    "src/addons/tags/formatted.ts",
     "src/addons/tags/rich-decorations.ts"
   ],
   "7d583b20c446": [
@@ -5354,7 +5355,7 @@
     "src/renderer/src/source-outline.ts"
   ],
   "b44730f5bd1a": [
-    "src/renderer/src/Editor.tsx"
+    "src/renderer/src/use-source-outline.ts"
   ],
   "f98206e187b9": [
     "src/renderer/src/source-outline.ts"

@@ -36,6 +36,18 @@ export type FormattedDecorations = {
   replace(from: number, to: number, widget?: WidgetType): void
 }
 
+/** Parent output owns an exact replacement range before child renderers visit it. */
+export function claimFormattedReplacement(
+  ranges: Set<string>,
+  from: number,
+  to: number,
+) {
+  const key = `${from}:${to}`
+  if (ranges.has(key)) return false
+  ranges.add(key)
+  return true
+}
+
 /**
  * Decorations that change the document's layout: block widgets and
  * replacements across lines. They are built once per parsed chunk and kept
@@ -165,6 +177,9 @@ export const formattedViews = Facet.define<FormattedNodeView>()
 
 /** Opaque node names of the active contributions, read by the formatted syntax. */
 export const formattedOpaque = Facet.define<string>()
+
+/** Inline formatting nodes of the active contributions, read by the formatted view's Enter. */
+export const formattedFormatting = Facet.define<string>()
 
 /** Nodes of syntax settings that are off: they and their children show as written. */
 export const formattedLiteral = Facet.define<string>()

@@ -1,5 +1,11 @@
 import { FileDown } from 'lucide-react'
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import {
+  type ComponentType,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import { errorMessage } from '../../shared/errors'
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
@@ -26,14 +32,19 @@ export function localRender(
   })
 }
 
-/** The renderer must return sanitized HTML. Stale renders never replace newer input. */
+/**
+ * The renderer must return sanitized HTML. Stale renders never replace newer input.
+ * With Content, the preview draws the latest source itself and renders HTML only to export.
+ */
 export function localPreview(
   context: AddonContext,
   render: (source: string, documentId?: string) => Promise<RenderedMarkdown>,
   css?: () => string,
+  Content?: ComponentType<{ source: string }>,
 ) {
   return function Preview({ value, document, toolbar }: DocumentPreviewProps) {
     const [result, setResult] = useState<RenderedMarkdown | null>(null)
+    const [source, setSource] = useState(value)
     const [error, setError] = useState('')
     const [busy, setBusy] = useState(false)
     const host = useRef<HTMLDivElement>(null)
@@ -42,10 +53,12 @@ export function localPreview(
     )
     useEffect(() => {
       let active = true
-      setResult(null)
+      if (!Content) setResult(null)
       setError('')
       const timer = setTimeout(() => {
-        if (enabled)
+        if (!enabled) return
+        if (Content) setSource(value)
+        else
           void render(value, document.id)
             .then((next) => {
               if (active) setResult(next)
@@ -66,14 +79,14 @@ export function localPreview(
       <div className="format-preview">
         <PreviewActions target={toolbar}>
           <Button
-            disabled={!result || busy}
+            disabled={(Content ? !enabled : !result) || busy}
             onClick={async () => {
-              if (!result) return
               setBusy(true)
               try {
+                const exported = result ?? (await render(value, document.id))
                 await context.native.invoke('export', {
-                  html: result.html,
-                  css: css?.() ?? result.css,
+                  html: exported.html,
+                  css: css?.() ?? exported.css,
                   name: document.name,
                 })
               } catch (reason) {
@@ -94,10 +107,18 @@ export function localPreview(
           />
         ) : error ? (
           <DocumentNotice title="Preview unavailable" message={error} />
-        ) : !result ? (
+        ) : !result && !Content ? (
           <DocumentNotice title="Rendering preview…" busy />
         ) : null}
-        <div ref={host} className="format-content" />
+        {Content ? (
+          enabled && (
+            <div className="format-content">
+              <Content source={source} />
+            </div>
+          )
+        ) : (
+          <div ref={host} className="format-content" />
+        )}
       </div>
     )
   }

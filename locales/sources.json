@@ -1413,6 +1413,9 @@
   "dd16b185f231": [
     "src/addons/quick-note/native.ts"
   ],
+  "d04bd262b5af": [
+    "src/addons/dictionary/custom-word-database.ts"
+  ],
   "2fe18391f790": [
     "src/renderer/src/AddonHotkeySettings.tsx",
     "src/renderer/src/HotkeySettings.tsx"
@@ -1455,6 +1458,8 @@
   ],
   "98bdb8dbc149": [
     "src/addons/dictionary/SideView.tsx",
+    "src/addons/dictionary/custom-word-storage.ts",
+    "src/addons/dictionary/custom-words-worker.ts",
     "src/addons/dictionary/custom-words.ts",
     "src/addons/dictionary/index.tsx"
   ],
@@ -1543,6 +1548,7 @@
     "src/addons/dictionary/CustomWords.tsx"
   ],
   "b27f46ebffcf": [
+    "src/addons/dictionary/custom-word-database.ts",
     "src/addons/dictionary/custom-words.ts"
   ],
   "020405ad0651": [
@@ -1659,8 +1665,18 @@
     "src/addons/dictionary/pack-store.ts"
   ],
   "daaa951adbd0": [
+    "src/addons/dictionary/custom-word-store.ts",
     "src/addons/dictionary/native.ts",
     "src/addons/dictionary/pack-store.ts"
+  ],
+  "69fe9e664cf9": [
+    "src/addons/dictionary/custom-word-store.ts"
+  ],
+  "eb44c955aae8": [
+    "src/addons/dictionary/custom-word-store.ts"
+  ],
+  "f12cf184abb4": [
+    "src/addons/dictionary/custom-words-worker.ts"
   ],
   "d0538788d12f": [
     "src/addons/dictionary/index.tsx"
@@ -3049,6 +3065,10 @@
   ],
   "5ba39deb9bad": [
     "src/main/host-credentials.ts"
+  ],
+  "18ef9d87cc14": [
+    "src/addons/dictionary/custom-word-database.ts",
+    "src/addons/dictionary/custom-words-worker.ts"
   ],
   "9e9f2a70c53e": [
     "src/main/dependencies.ts"
@@ -6217,6 +6237,11 @@
   "1824f46c0e29": [
     "src/renderer/src/Editor.tsx"
   ],
+  "740e6c0b4f76": [
+    "src/addons/dictionary/custom-word-database.ts",
+    "src/addons/dictionary/custom-word-storage.ts",
+    "src/addons/dictionary/custom-word-store.ts"
+  ],
   "1629952fe484": [
     "src/main/dependencies.ts"
   ],
@@ -6573,6 +6598,7 @@
   ],
   "7586b13894e7": [
     "src/addons/dictionary/CustomWords.tsx",
+    "src/addons/dictionary/custom-word-storage.ts",
     "src/addons/dictionary/custom-words.ts"
   ],
   "9a928ba210da": [
@@ -7079,9 +7105,6 @@
   ],
   "9b6e8abe425e": [
     "src/addons/frontmatter/Properties.tsx"
-  ],
-  "fb54b1cc7cef": [
-    "src/addons/dictionary/custom-words.ts"
   ],
   "0ec4c65bb923": [
     "src/renderer/src/workspace-menu.ts"

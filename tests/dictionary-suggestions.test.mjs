@@ -17,7 +17,12 @@ const settings = {
   excludedWorkspaces: [],
 }
 const session = { scope: null, documentId: 'document', personal: true }
-function dictionaryCompletions(complete, preferences, languageName) {
+function dictionaryCompletions(
+  complete,
+  preferences,
+  languageName,
+  customCompletions,
+) {
   const model = createPersonalModel()
   return autocompleteCompletions(
     {
@@ -26,6 +31,7 @@ function dictionaryCompletions(complete, preferences, languageName) {
         complete(langs, prefix, signal, limit),
       suggestionLanguages: () => ['en', 'fr', 'de', 'tl'],
       customWords: () => [],
+      customCompletions,
     },
     preferences,
     { suggest: model.suggest, epoch: () => 0 },
@@ -221,6 +227,25 @@ test('suggestions ask every language in one request, keep case, and never go onl
     ),
     [],
   )
+})
+
+test('custom suggestions use the indexed provider instead of scanning all saved words', async () => {
+  const calls = []
+  const provider = dictionaryCompletions(
+    packs({}),
+    () => settings,
+    (lang) => lang,
+    async (prefix, langs, limit) => {
+      calls.push({ prefix, langs, limit })
+      return [{ word: 'happenstance', lang: 'en' }]
+    },
+  )
+  const items = await provider(request('hap'), signal())
+  assert.deepEqual(
+    items.map(({ label, detail }) => [label, detail]),
+    [['happenstance', 'Your word']],
+  )
+  assert.deepEqual(calls, [{ prefix: 'hap', langs: ['en', 'fr'], limit: 64 }])
 })
 
 test('a failed completion request yields no suggestions; only cancellation rejects', async () => {

@@ -16,6 +16,12 @@ export interface DictionaryApi {
   ) => Promise<readonly DictionaryWords[]>
   suggestionLanguages: () => readonly Lang[]
   customWords: () => readonly CustomWord[]
+  customCompletions?: (
+    prefix: string,
+    langs: readonly Lang[],
+    limit: number,
+    signal?: AbortSignal,
+  ) => Promise<readonly CustomWord[]>
 }
 
 export function createDictionaryApi(
@@ -27,6 +33,16 @@ export function createDictionaryApi(
     version: 1,
     suggestionLanguages,
     customWords,
+    async customCompletions(prefix, langs, limit, signal) {
+      signal?.throwIfAborted()
+      const words = await native.query<CustomWord[]>('customWordsComplete', {
+        prefix,
+        langs,
+        limit,
+      })
+      signal?.throwIfAborted()
+      return words
+    },
     async complete(
       prefix,
       langs,

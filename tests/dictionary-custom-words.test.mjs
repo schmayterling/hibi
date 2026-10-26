@@ -16,7 +16,7 @@ import {
   listCustomWords,
   mergeCustomWords,
   onCustomWordsChanged,
-  openCustomWords,
+  openCustomWords as openWords,
   updateCustomWords,
 } from '../src/addons/dictionary/custom-words.ts'
 import {
@@ -28,6 +28,8 @@ import { HostSelectedIoService } from '../src/main/host-selected-io.ts'
 import { createAddonStorageScope } from '../src/renderer/src/addon-storage.ts'
 import { HOST_SELECTED_IO_MAX_BYTES } from '../src/shared/host-selected-io.ts'
 
+const openCustomWords = async (context) =>
+  openWords(context, await context.storage.global('custom-words', 1))
 const signal = new AbortController().signal
 /** Words without their ids. */
 const plain = (list) => list.map(({ id: _id, ...item }) => item)
@@ -71,7 +73,6 @@ test('custom words keep valid entries once per word and language', () => {
       { word: 'hibi' },
       { word: 'hibi', lang: 'ja' },
       { word: 'x\u0000y' },
-      { word: 'a'.repeat(65) },
       { word: 'kilig', lang: 'xx', note: '' },
       'loose',
       null,
@@ -154,54 +155,29 @@ test('a 16 MiB import deduplicates before allocating rows or whole-input arrays'
   }
 })
 
-test('imports preserve first entries and reject excess distinct words atomically', async (t) => {
+test('imports preserve first entries and keep every distinct word and full note', async (t) => {
   assert.deepEqual(
     importCustomWords(
       ` # comment\r\n\\#tag\ten\t first\tpart \r\nCafe\u0301\tde\t${'n'.repeat(2001)}\nCAFÉ\tde\tlater\nx\tXX\tone\nX\t\ttwo\nbad\u0000\ten\n`,
     ),
     [
       { word: '#tag', lang: 'en', note: 'first part' },
-      { word: 'Café', lang: 'de', note: 'n'.repeat(2000) },
+      { word: 'Café', lang: 'de', note: 'n'.repeat(2001) },
       { word: 'x', note: 'one' },
     ],
   )
   const input =
-    Array.from({ length: 5001 }, (_, index) => `w${index}`).join('\n') +
-    '\ntail\n'.repeat(100000)
-  const indexOf = String.prototype.indexOf
-  let lines = 0
-  String.prototype.indexOf = function (search, from) {
-    if (search === '\n') {
-      lines++
-      assert.ok(lines <= 5001, 'stop scanning after capacity is exceeded')
-    }
-    return indexOf.call(this, search, from)
-  }
-  let imported
-  try {
-    imported = importCustomWords(input)
-  } finally {
-    String.prototype.indexOf = indexOf
-  }
-  assert.equal(imported.length, 5001)
-  assert.equal(imported.at(-1).word, 'w5000')
+    Array.from({ length: 50000 }, (_, index) => `w${index}`).join('\n') +
+    '\ntail\n'.repeat(1000)
+  const imported = importCustomWords(input)
+  assert.equal(imported.length, 50001)
+  assert.equal(imported.at(-1).word, 'tail')
   const { handle, context } = storage([{ word: 'kept', note: 'unchanged' }])
-  let writes = 0
-  handle.set = async () => {
-    writes++
-    throw new Error('overflow must not write')
-  }
   const close = await openCustomWords(context)
   t.after(close)
-  await assert.rejects(
-    updateCustomWords((current) => mergeCustomWords(current, imported)),
-    /up to 5,000 custom words/,
-  )
-  assert.deepEqual(plain(listCustomWords()), [
-    { word: 'kept', note: 'unchanged' },
-  ])
-  assert.equal(handle.snapshot().value[0].note, 'unchanged')
-  assert.equal(writes, 0)
+  await updateCustomWords((current) => mergeCustomWords(current, imported))
+  assert.equal(handle.snapshot().value.length, 50002)
+  assert.equal(listCustomWords()[0].note, 'unchanged')
 })
 
 test('custom words load, save, follow other windows, and clear on stop', async () => {
@@ -433,7 +409,7 @@ test('clipboard export waits for saves and native acknowledgement without browse
   assert.deepEqual(writes, [copied, copied])
 })
 
-test('native clipboard rejects invalid payloads and preserves maximum-size Unicode exports', async () => {
+test('native clipboard bounds encoded bytes and preserves Unicode exports within the request', async () => {
   const writes = []
   const copy = await nativeClipboard({ writeText: (text) => writes.push(text) })
   for (const value of [
@@ -442,19 +418,11 @@ test('native clipboard rejects invalid payloads and preserves maximum-size Unico
     {},
     [],
     'x'.repeat(HOST_SELECTED_IO_MAX_BYTES + 1),
+    '界'.repeat(Math.ceil(HOST_SELECTED_IO_MAX_BYTES / 3)),
   ])
     await assert.rejects(copy(value), TypeError)
   assert.deepEqual(writes, [])
-  const text = exportCustomWords(
-    customWords(
-      Array.from({ length: 5000 }, (_, index) => ({
-        word: `${'界'.repeat(60)}${String(index).padStart(4, '0')}`,
-        lang: 'yue',
-        note: '界'.repeat(2000),
-      })),
-    ),
-  )
-  assert.ok(Buffer.byteLength(text) > HOST_SELECTED_IO_MAX_BYTES)
+  const text = '界'.repeat(Math.floor(HOST_SELECTED_IO_MAX_BYTES / 3))
   await copy(text)
   assert.deepEqual(writes, [text])
 })
@@ -1001,35 +969,47 @@ test('adding a listed word keeps its note unless a note is given, while import r
   close()
 })
 
-test('custom words refuse to go over capacity without saving part of a change', async () => {
-  const full = Array.from({ length: 4999 }, (_, index) => ({
+test('custom words preserve 50,000 words and long terms and notes', async (t) => {
+  const term = '界'.repeat(5000)
+  const note = 'full note '.repeat(5000).trim()
+  const list = Array.from({ length: 50000 }, (_, index) => ({
     word: `w${index}`,
   }))
-  const { handle, context } = storage(full)
+  assert.equal(customWords(list).length, 50000)
+  assert.deepEqual(customWords([{ word: term, note }]), [{ word: term, note }])
+  assert.deepEqual(importCustomWords(`${term}\tde\t${note}`), [
+    { word: term, lang: 'de', note },
+  ])
+  const { handle, context } = storage(list)
   const close = await openCustomWords(context)
-  await assert.rejects(
-    updateCustomWords((current) =>
-      mergeCustomWords(current, importCustomWords('kilig\ngigil')),
-    ),
-    /up to 5,000 custom words/,
-  )
-  assert.equal(listCustomWords().length, 4999)
-  await addCustomWord({ word: 'kilig' })
-  await assert.rejects(addCustomWord({ word: 'gigil' }), /up to 5,000/)
-  assert.equal(handle.snapshot().value.length, 5000)
-  // Editing a word already listed still saves at capacity.
-  await addCustomWord({ word: 'kilig', note: 'giddy' })
-  assert.equal(listCustomWords().at(-1).note, 'giddy')
-  await updateCustomWords((current) =>
-    mergeCustomWords(current, importCustomWords('kilig\t\timported')),
-  )
-  assert.equal(listCustomWords().length, 5000)
-  assert.equal(listCustomWords().at(-1).note, 'imported')
+  t.after(close)
+  await addCustomWord({ word: term, note })
+  assert.equal(handle.snapshot().value.length, 50001)
+  assert.equal(listCustomWords().at(-1).note, note)
   assert.equal(
-    importCustomWords(`${full.map(({ word }) => word).join('\n')}\nx`).length,
-    5000,
+    (await customWordsProvider(() => 'en').lookup(term, 'en'))[0].senses[0]
+      .gloss,
+    note,
   )
-  close()
+})
+
+test('100,000 custom words use constant lookup work', async (t) => {
+  const { context } = storage(
+    Array.from({ length: 100000 }, (_, index) => ({ word: `word${index}` })),
+  )
+  const close = await openCustomWords(context)
+  t.after(close)
+  const lower = t.mock.method(String.prototype, 'toLowerCase')
+  const found = await customWordsProvider(() => 'en').lookup('WORD99999', 'en')
+  assert.equal(found[0].term, 'word99999')
+  assert.equal(
+    lower.mock.callCount(),
+    2,
+    'normalize query and matching row only',
+  )
+  t.diagnostic(
+    `100,000 words: ${lower.mock.callCount()} normalization calls per lookup`,
+  )
 })
 
 test('custom words keep a newer revision over a late save reply or notification', async () => {

@@ -4,6 +4,7 @@ import { Button, Select, SettingRow, TextArea, TextInput } from '../ui'
 import {
   addCustomWord,
   type CustomWord,
+  customWordsFailure,
   customWordsFileIo,
   editCustomWord,
   exportSavedCustomWords,
@@ -36,7 +37,6 @@ function NoteInput({
     <TextInput
       aria-label={`Note for “${item.word}”`}
       placeholder="Note or definition"
-      maxLength={2000}
       value={draft?.text ?? saved}
       onChange={(event) => setDraft({ text: event.target.value })}
       onBlur={() => {
@@ -123,7 +123,6 @@ export function CustomWords() {
             <TextInput
               id="dictionary-new-word"
               placeholder="Add a word…"
-              maxLength={64}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
             />
@@ -283,9 +282,9 @@ export function CustomWords() {
           Import from file…
         </Button>
       </div>
-      {message && (
+      {(message || customWordsFailure()) && (
         <p role="status" className="setting-description">
-          {message}
+          {message || customWordsFailure()}
         </p>
       )}
     </section>

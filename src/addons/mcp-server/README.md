@@ -29,10 +29,10 @@ Authorization: Bearer <access token>
 
 - `list_documents` lists the documents in the open workspace, or in one of its folders.
 - `read_document` returns the text of a document, given its path in the workspace.
-- `search_documents` finds documents whose path or text contains the given text, ignoring case, and shows up to three matching lines from each. Pass `nextCursor` back as `cursor`, with the same query, to continue through all results. use a client-unique `searchId` to cancel its previous query; add `cancel: true` to stop it. continuations expire after 15 minutes without use or when sources change.
+- `search_documents` finds documents whose path or text contains the given text, ignoring case, and shows up to three matching lines from each. Pass `nextCursor` back as `cursor`, with the same query, to continue through all results. Use a client-unique `searchId` to cancel its previous query; add `cancel: true` to stop it. Continuations expire after 15 minutes without use or when saved files change. Unsaved edits use the snapshot captured when the search began.
 - `get_active_document` returns the name and text of the document open in the editor.
 
-Document reads return up to 1 MiB. Search indexes the whole workspace progressively, includes unsaved edits, and has no document or text-size ceiling. Search returns one work page per call, including an empty progress page while scanning; continue with the cursor for more. Pages contain at most 100 results. A stale source returns `truncated: true`; restart without a cursor when none is returned.
+Document reads return up to 1 MiB. Search indexes the whole workspace progressively, includes unsaved edits, and has no document or text-size ceiling. Each call scans for up to about 250 ms or until it finds matching documents. An empty page with `nextCursor` means the scan is still running; continue with that cursor. Pages contain at most 100 results. Restart without a cursor when `stale: true` is returned or an invalid cursor is rejected. If `truncated: true` is returned without a cursor or `stale`, the search finished with some sources unavailable.
 
 ## Allow edits
 

@@ -347,14 +347,18 @@ test('bundled MCP server serves a real HTTP client and preserves workspace edits
         ).matches,
         [],
       )
-      const stale = jsonOf(
-        await tool('search_documents', {
-          query: 'NEEDLE',
-          cursor: cancelled.nextCursor,
-        }),
-      )
-      assert.deepEqual(stale.matches, [])
-      assert.equal(stale.truncated, true)
+      const invalidCursor = await request({
+        jsonrpc: '2.0',
+        id: ++nextId,
+        method: 'tools/call',
+        params: {
+          name: 'search_documents',
+          arguments: { query: 'NEEDLE', cursor: cancelled.nextCursor },
+        },
+      })
+      const invalidReply = await invalidCursor.json()
+      assert.equal(invalidReply.error.code, -32602)
+      assert.match(invalidReply.error.message, /valid search cursor/)
       assert.deepEqual(
         search.matches.sort((a, b) => a.path.localeCompare(b.path)),
         [

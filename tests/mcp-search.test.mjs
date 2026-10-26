@@ -48,6 +48,7 @@ const bundle = await build({
             'workspace-metadata': `export const workspaceIgnore=async()=>({ignores:path=>host().ignored.has(path)})`,
             'workspace-text-search': `export const queryWorkspaceText=async(request,_versions,owner,includePaths)=>{
             host().calls++
+            host().time+=host().pageMs
             host().request=request;host().owner=owner;host().includePaths=includePaths
             return host().pages.shift()??{ok:true,value:{matches:[],complete:true,nextCursor:null}}
           }`,
@@ -59,15 +60,21 @@ const bundle = await build({
   ],
 })
 const module = { exports: {} }
-new Function('module', 'exports', 'require', bundle.outputFiles[0].text)(
-  module,
-  module.exports,
-  createRequire(import.meta.url),
-)
+new Function(
+  'module',
+  'exports',
+  'require',
+  'performance',
+  bundle.outputFiles[0].text,
+)(module, module.exports, createRequire(import.meta.url), {
+  now: () => host.time,
+})
 const { callTool } = module.exports
 test.beforeEach(() => {
   Object.assign(host, {
     calls: 0,
+    time: 0,
+    pageMs: 50,
     snapshots: 0,
     current: true,
     paths: [],
@@ -94,18 +101,36 @@ async function search(args = {}) {
   return JSON.parse(result.content[0].text)
 }
 
-test('mcp returns one progress page without scanning until the result limit', async () => {
-  host.pages = [page([], 'next-page'), page([match('normal.md')])]
+test('mcp batches empty progress pages until its call budget', async () => {
+  host.pages = Array.from({ length: 10 }, (_, index) =>
+    page([], `next-${index}`),
+  )
   const result = await search()
-  assert.equal(host.calls, 1)
+  assert.equal(host.calls, 5)
   assert.deepEqual(result, {
     workspace: 'notes',
     matches: [],
     truncated: true,
-    nextCursor: 'next-page',
+    nextCursor: 'next-4',
   })
   assert.equal(host.snapshots, 0)
   assert.equal(host.includePaths, true)
+})
+
+test('mcp stops batching on the first visible hit instead of filling the limit', async () => {
+  host.pages = [
+    page([], 'empty'),
+    page([match('.private.md')], 'hidden'),
+    page([match('normal.md')], 'visible'),
+    page([match('later.md')]),
+  ]
+  const result = await search()
+  assert.equal(host.calls, 3)
+  assert.deepEqual(
+    result.matches.map((item) => item.path),
+    ['normal.md'],
+  )
+  assert.equal(result.nextCursor, 'visible')
 })
 
 test('mcp returns verified matches before a later page becomes stale', async () => {
@@ -119,8 +144,35 @@ test('mcp returns verified matches before a later page becomes stale', async () 
   ])
   assert.equal(first.nextCursor, 'continue')
   const stale = await search({ cursor: first.nextCursor })
-  assert.deepEqual(stale, { workspace: 'notes', matches: [], truncated: true })
+  assert.deepEqual(stale, {
+    workspace: 'notes',
+    matches: [],
+    truncated: true,
+    stale: true,
+  })
   assert.equal(host.calls, 2)
+})
+
+test('mcp distinguishes finished incomplete coverage from stale first pages and invalid cursors', async () => {
+  host.pages = [
+    { ok: true, value: { matches: [], complete: false, nextCursor: null } },
+  ]
+  assert.deepEqual(await search(), {
+    workspace: 'notes',
+    matches: [],
+    truncated: true,
+  })
+  host.pages = [
+    { ok: false, code: 'stale', message: 'This search changed. Start again.' },
+  ]
+  assert.equal((await search()).stale, true)
+  host.pages = [
+    { ok: false, code: 'unsupported', message: 'Use a valid search cursor.' },
+  ]
+  await assert.rejects(
+    callTool('search_documents', { query: 'needle', cursor: 'invalid' }),
+    /valid search cursor/,
+  )
 })
 
 test('mcp search shares the read-tool visibility gate even when native search returns private files', async () => {

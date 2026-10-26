@@ -621,22 +621,28 @@ export class WorkspaceTextIndex {
   private gram(query: string, paths = false): string | null {
     let selected: string | null = null
     let frequency = Infinity
+    let spread = 0
     const table = paths ? 'path_index' : 'text_index'
     for (const gram of workspaceQueryGrams(query)) {
       const term = `"${gram.replaceAll('"', '""')}"`
       const row = this.prepare(`
-        SELECT count(*) AS count FROM (
-          SELECT rowid FROM ${table} WHERE ${table} MATCH ? LIMIT 256
-        )`).get(term) as { count: number }
+        SELECT count(*) AS count, max(rowid) AS last FROM (
+          SELECT rowid FROM ${table} WHERE ${table} MATCH ? ORDER BY rowid LIMIT 256
+        )`).get(term) as { count: number; last: number | null }
       this.counters.gramProbes++
       this.counters.postingSamples += row.count
       this.counters.maxGramPostingSamples = Math.max(
         this.counters.maxGramPostingSamples,
         row.count,
       )
-      if (row.count < frequency) {
+      // Equal capped counts use posting spread as a density estimate.
+      if (
+        row.count < frequency ||
+        (row.count === 256 && frequency === 256 && (row.last ?? 0) > spread)
+      ) {
         selected = term
         frequency = row.count
+        spread = row.last ?? 0
         if (!frequency) break
       }
     }

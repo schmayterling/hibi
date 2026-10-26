@@ -161,7 +161,7 @@ export const toolDefinitions = [
   {
     name: 'search_documents',
     description:
-      'Search paths and text without case sensitivity, with numbered matching lines. Follow nextCursor for more results.',
+      'Search paths and text without case sensitivity, with numbered matching lines. Follow nextCursor even when matches is empty: the scan is still running. If stale is true, restart without cursor. Without nextCursor or stale, truncated means some sources could not be searched. Invalid cursors are errors; start a new search without cursor.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -338,46 +338,56 @@ async function searchDocuments(args: Record<string, unknown>) {
   const { queryWorkspaceText } = await import(
     '../../main/workspace-text-search'
   )
-  const result = isCurrentWorkspaceTarget(target)
-    ? await queryWorkspaceText(
-        {
-          target,
-          kind: 'search-text',
-          query: args.query,
-          limit,
-          ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
-          ...(args.searchId !== undefined ? { searchId: args.searchId } : {}),
-          ...(args.cancel !== undefined ? { cancel: args.cancel } : {}),
-        },
-        getOpenDocumentVersions,
-        'mcp',
-        true,
+  const deadline = performance.now() + 250
+  let cursor = args.cursor as string | undefined
+  for (;;) {
+    const result = isCurrentWorkspaceTarget(target)
+      ? await queryWorkspaceText(
+          {
+            target,
+            kind: 'search-text',
+            query: args.query,
+            limit,
+            ...(cursor !== undefined ? { cursor } : {}),
+            ...(args.searchId !== undefined ? { searchId: args.searchId } : {}),
+            ...(args.cancel !== undefined ? { cancel: args.cancel } : {}),
+          },
+          getOpenDocumentVersions,
+          'mcp',
+          true,
+        )
+      : {
+          ok: false as const,
+          code: 'stale',
+          message: 'This search changed. Start again.',
+        }
+    if (!result.ok) {
+      if (result.code === 'unsupported' || result.code === 'limit-exceeded')
+        throw new InvalidParams(result.message)
+      if (result.code !== 'stale') throw new Error(result.message)
+      return textResult(
+        JSON.stringify({
+          workspace: name,
+          matches: [],
+          truncated: true,
+          stale: true,
+        }),
       )
-    : {
-        ok: false as const,
-        code: 'stale',
-        message: 'This search changed. Start again.',
-      }
-  if (!result.ok) {
-    if (result.code === 'unsupported' || result.code === 'limit-exceeded')
-      throw new InvalidParams(result.message)
-    if (result.code !== 'stale') throw new Error(result.message)
-    return textResult(
-      JSON.stringify({ workspace: name, matches: [], truncated: true }),
-    )
+    }
+    const matches = result.value.matches
+      .filter(({ path }) => visibleDocument(path, ignored))
+      .map(({ path, lines }) => ({ path, lines }))
+    cursor = result.value.nextCursor ?? undefined
+    if (matches.length || !cursor || performance.now() >= deadline)
+      return textResult(
+        JSON.stringify({
+          workspace: name,
+          matches,
+          truncated: !!cursor || !result.value.complete,
+          ...(cursor ? { nextCursor: cursor } : {}),
+        }),
+      )
   }
-  const matches = result.value.matches
-    .filter(({ path }) => visibleDocument(path, ignored))
-    .map(({ path, lines }) => ({ path, lines }))
-  const cursor = result.value.nextCursor
-  return textResult(
-    JSON.stringify({
-      workspace: name,
-      matches,
-      truncated: !!cursor || !result.value.complete,
-      ...(cursor ? { nextCursor: cursor } : {}),
-    }),
-  )
 }
 
 async function runTool(

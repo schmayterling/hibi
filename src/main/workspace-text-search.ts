@@ -137,7 +137,11 @@ class SearchWorker {
         try {
           const session = sessions.get(message.query)
           const draft = session?.drafts.get(message.path)
-          const current = draft && getDocumentSourceFor(draft.tabId).snapshot()
+          const current =
+            draft &&
+            (session?.includePaths
+              ? draft.snapshot
+              : getDocumentSourceFor(draft.tabId).snapshot())
           if (
             draft &&
             session &&
@@ -346,6 +350,17 @@ export async function queryWorkspaceText(
   if (request.cursor !== undefined) {
     session = cursors.get(request.cursor)
     if (
+      includePaths &&
+      (!session ||
+        session.owner !== owner ||
+        session.query !== request.query ||
+        session.includePaths !== includePaths ||
+        session.target.workspaceId !== request.target.workspaceId ||
+        session.target.workspaceGeneration !==
+          request.target.workspaceGeneration)
+    )
+      return failure('unsupported', 'Use a valid search cursor.')
+    if (
       !session ||
       session.owner !== owner ||
       session.query !== request.query ||
@@ -355,7 +370,7 @@ export async function queryWorkspaceText(
         request.target.workspaceGeneration ||
       session.sequence !== before.sequence ||
       session.revision !== revision ||
-      session.versions !== versions ||
+      (!includePaths && session.versions !== versions) ||
       Date.now() - session.used > (session.includePaths ? 15 * 60_000 : 60_000)
     ) {
       if (session?.owner === owner) release(session)
@@ -452,7 +467,7 @@ export async function queryWorkspaceText(
       !isCurrentWorkspaceTarget(request.target) ||
       workspaceChangeCursor().sequence !== before.sequence ||
       workspaceIndexRevision() !== revision ||
-      JSON.stringify(getVersions()) !== versions
+      (!includePaths && JSON.stringify(getVersions()) !== versions)
     )
       throw changed()
     session.used = Date.now()

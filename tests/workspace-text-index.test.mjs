@@ -554,6 +554,32 @@ test('an unavailable root retains postings and reuses them after remount', async
   assert.deepEqual((await search(f.store, 'retained')).paths, ['a.md'])
 })
 
+test('saturated gram samples prefer a sparse posting spread', async (t) => {
+  const f = await fixture(t, {})
+  await f.store.idle()
+  const insert = f.store.db.prepare(
+    'INSERT INTO text_index(rowid,text) VALUES(?,?)',
+  )
+  const common = workspaceIndexText('the ordinary corpus')
+  const rare = workspaceIndexText('the zyzzyva')
+  f.store.db.exec('BEGIN')
+  for (let rowid = 1; rowid <= 40_000; rowid++)
+    insert.run(rowid, rowid % 100 === 0 ? rare : common)
+  f.store.db.exec('COMMIT')
+  const probes = f.store.counters.gramProbes
+  const postings = f.store.counters.postingSamples
+  const selected = f.store.gram('the zyzzyva')
+  assert.notEqual(selected, '"the"')
+  assert.equal(
+    f.store.db
+      .prepare('SELECT count(*) AS n FROM text_index WHERE text_index MATCH ?')
+      .get(selected).n,
+    400,
+  )
+  assert.ok(f.store.counters.gramProbes - probes <= 8)
+  assert.ok(f.store.counters.postingSamples - postings <= 8 * 256)
+})
+
 test('common-gram planning samples at most eight bounded posting prefixes', async (t) => {
   const pages = Object.fromEntries(
     Array.from({ length: 600 }, (_, id) => [

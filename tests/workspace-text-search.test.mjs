@@ -60,7 +60,7 @@ await writeFile(join(root, 'b.md'), '# Bravo\ncommon needle 世界你好\n')
 const bundle = await build({
   stdin: {
     contents:
-      "export {queryWorkspaceReferences} from './src/main/workspace-metadata-query.ts'; export {rememberWorkspace,forgetWorkspace} from './src/main/recent-workspaces.ts'",
+      "export {queryWorkspaceReferences} from './src/main/workspace-metadata-query.ts'; export {queryWorkspaceText} from './src/main/workspace-text-search.ts'; export {rememberWorkspace,forgetWorkspace} from './src/main/recent-workspaces.ts'",
     resolveDir: resolve('.'),
   },
   bundle: true,
@@ -192,8 +192,12 @@ new Function('module', 'exports', 'require', bundle.outputFiles[0].text)(
   module.exports,
   createRequire(import.meta.url),
 )
-const { queryWorkspaceReferences, rememberWorkspace, forgetWorkspace } =
-  module.exports
+const {
+  queryWorkspaceReferences,
+  queryWorkspaceText,
+  rememberWorkspace,
+  forgetWorkspace,
+} = module.exports
 const versions = () =>
   [...host.drafts].map(([tabId, draft]) => ({
     tabId,
@@ -396,6 +400,114 @@ test('unsaved draft pulls stay bounded and preserve source without whole-note ma
   assert.equal(
     (await query({ query: 'needle', cursor: first.value.nextCursor })).code,
     'stale',
+  )
+})
+
+test('mcp draft continuations retain immutable snapshots while typing and after closing the tab', async () => {
+  const source = new SourceStore(
+    `${'a'.repeat(2_000_000)} snapshot needle tail`,
+    { tabId: 'draft-mcp', revision: 1 },
+  )
+  host.drafts.set('draft-mcp', { file: join(host.root, 'a.md'), source })
+  const request = {
+    target: host.target,
+    kind: 'search-text',
+    query: 'snapshot needle',
+    limit: 1,
+  }
+  const first = await queryWorkspaceText(request, versions, 'mcp', true)
+  assert.equal(first.ok, true)
+  assert.ok(first.value.nextCursor)
+  assert.deepEqual(first.value.matches, [])
+  const before = source.snapshot()
+  source.commit(
+    source.prepare({
+      document: before.document,
+      operationId: 'typing',
+      baseVersion: before.version,
+      contentVersion: before.version + 1,
+      origin: 'source',
+      historyGroup: 'typing',
+      changes: [
+        {
+          from: before.utf16Length - 26,
+          to: before.utf16Length,
+          insert: ' changed draft',
+        },
+      ],
+    }),
+  )
+  let cursor = first.value.nextCursor
+  const matches = []
+  while (cursor) {
+    const next = await queryWorkspaceText(
+      { ...request, cursor },
+      versions,
+      'mcp',
+      true,
+    )
+    assert.equal(next.ok, true, next.message)
+    matches.push(...next.value.matches)
+    cursor = next.value.nextCursor
+    host.drafts.clear()
+  }
+  assert.deepEqual(
+    matches.map((match) => match.path),
+    ['a.md'],
+  )
+  assert.match(matches[0].lines[0].text, /snapshot needle/)
+  assert.equal(source.counters().materializations, 0)
+})
+
+test('mcp rejects unknown and reused cursors as invalid parameters', async () => {
+  const request = {
+    target: host.target,
+    kind: 'search-text',
+    query: 'needle',
+    limit: 1,
+  }
+  assert.equal(
+    (
+      await queryWorkspaceText(
+        { ...request, cursor: 'invalid' },
+        versions,
+        'mcp',
+        true,
+      )
+    ).code,
+    'unsupported',
+  )
+  const first = await queryWorkspaceText(request, versions, 'mcp', true)
+  assert.equal(first.ok, true)
+  assert.ok(first.value.nextCursor)
+  assert.equal(
+    (
+      await queryWorkspaceText(
+        { ...request, cursor: first.value.nextCursor },
+        versions,
+        'other',
+        true,
+      )
+    ).code,
+    'unsupported',
+  )
+  const next = await queryWorkspaceText(
+    { ...request, cursor: first.value.nextCursor },
+    versions,
+    'mcp',
+    true,
+  )
+  assert.equal(next.ok, true)
+  assert.equal(
+    (
+      await queryWorkspaceText(
+        { ...request, cursor: first.value.nextCursor },
+        versions,
+        'mcp',
+        true,
+      )
+    ).code,
+    'unsupported',
   )
 })
 

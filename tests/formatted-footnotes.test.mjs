@@ -12,9 +12,13 @@ registerHooks({
       ? { format: 'module', source: '', shortCircuit: true }
       : next(url, context),
 })
-const { contribution, Footnotes } = await import(
-  '../src/renderer/src/formatted/footnotes.ts'
-)
+const {
+  contribution,
+  footnoteDefinitions,
+  Footnotes,
+  footnoteScan,
+  readDefinitions,
+} = await import('../src/renderer/src/formatted/footnotes.ts')
 
 const markdown = parser.configure([GFM, Footnotes])
 const shape = (doc, names) => {
@@ -112,7 +116,7 @@ test('chunked parses keep footnote nodes where whole-document parses put them', 
 
 test('references hide their brackets and definitions label their first line', () => {
   const doc = 'see[^1]\n\n[^1]: the "note"\n  continued'
-  const state = EditorState.create({ doc })
+  const state = EditorState.create({ doc, extensions: contribution.extension })
   const out = []
   const sink = {
     mark: (from, to, attributes) =>
@@ -155,4 +159,83 @@ test('references hide their brackets and definitions label their first line', ()
   ])
   // The continuation line's indentation is hidden; it flows after a space.
   assert.deepEqual(layout, ['"  "'])
+})
+
+/** References in `state` that render as footnotes, by their source. */
+function rendered(state) {
+  const doc = state.doc.toString()
+  const view = contribution.views.find((view) =>
+    view.nodes.includes('FootnoteReference'),
+  )
+  const out = []
+  markdown.parse(doc).iterate({
+    enter(node) {
+      if (node.name !== 'FootnoteReference') return
+      const marks = []
+      view.decorate(
+        node,
+        {
+          mark: () => marks.push('mark'),
+          syntax: () => marks.push('syntax'),
+          line() {},
+          widget() {},
+          replace() {},
+        },
+        { state, revealed: false, visible: null },
+      )
+      if (marks.length) out.push(doc.slice(node.from, node.to))
+    },
+  })
+  return out
+}
+
+test('references without a definition stay text; labels match case-insensitively', () => {
+  const state = EditorState.create({
+    doc: 'missing[^unknown], real[^1] and [^Note].\n\n[^1]: one\n> [^note]: quoted',
+    extensions: contribution.extension,
+  })
+  assert.deepEqual(rendered(state), ['[^1]', '[^Note]'])
+})
+
+test('definitions in other chunks resolve references, read in slices and per edited line', () => {
+  const slice = footnoteScan.slice
+  footnoteScan.slice = 4096
+  try {
+    const body = Array.from({ length: 20000 }, (_, i) => `line ${i}`).join('\n')
+    const doc = `see[^far] and [^near]\n\n[^near]: close\n\n${body}\n\n[^far]: at the end`
+    footnoteScan.lines = 0
+    let state = EditorState.create({ doc, extensions: contribution.extension })
+    // Opening reads one slice; the far definition is not read yet.
+    assert.ok(footnoteScan.lines < 1000, `${footnoteScan.lines}`)
+    assert.deepEqual(rendered(state), ['[^near]'])
+    // Idle slices read the rest.
+    let slices = 0
+    while (state.field(footnoteDefinitions).read <= state.doc.length) {
+      state = state.update({ effects: readDefinitions.of(null) }).state
+      slices++
+    }
+    assert.ok(slices > 10, `${slices}`)
+    assert.deepEqual(rendered(state), ['[^far]', '[^near]'])
+    // Removing a definition reads only the edited lines, and its references become text.
+    const far = state.doc.toString().lastIndexOf('[^far]:')
+    footnoteScan.lines = 0
+    state = state.update({
+      changes: { from: far, to: far + 1, insert: '(' },
+    }).state
+    assert.ok(footnoteScan.lines <= 2, `${footnoteScan.lines}`)
+    assert.deepEqual(rendered(state), ['[^near]'])
+    footnoteScan.lines = 0
+    state = state.update({
+      changes: { from: far, to: far + 1, insert: '[' },
+    }).state
+    assert.ok(footnoteScan.lines <= 2, `${footnoteScan.lines}`)
+    assert.deepEqual(rendered(state), ['[^far]', '[^near]'])
+    // Typing elsewhere reads only the typed line.
+    footnoteScan.lines = 0
+    for (let key = 0; key < 100; key++)
+      state = state.update({ changes: { from: 2, insert: 'e' } }).state
+    assert.equal(footnoteScan.lines, 200)
+  } finally {
+    footnoteScan.slice = slice
+  }
 })

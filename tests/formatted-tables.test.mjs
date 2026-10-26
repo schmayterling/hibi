@@ -1104,6 +1104,39 @@ test('a long table column made automatic again drops its fixed width', {
   assert.match(await column(), /%$/)
 })
 
+test('deleting the first of two sized columns keeps the other, and undo brings both back', {
+  timeout: 30000,
+}, async () => {
+  const doc = '| a | b |\n| - | - |\n| 1 | 2 |\n\nafter'
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('delete', [
+        { key, columns: [200, 180], rows: null },
+      ]),
+    tableKey(0, ['a', 'b']),
+  )
+  await mountTab(doc, 'delete')
+  const widths = () =>
+    harness.evaluate(() =>
+      [...document.querySelector('.hibi-lp-table tr').cells].map(
+        (cell) => cell.style.width,
+      ),
+    )
+  assert.deepEqual(await widths(), ['200px', '180px'])
+  // The one column left is written with outer pipes: its cell is rewritten.
+  assert.equal(
+    await harness.evaluate(() => {
+      window.tables.view().dispatch({ selection: { anchor: 2 } })
+      return window.tables.runTableAction('column-delete')
+    }),
+    true,
+  )
+  assert.deepEqual(await widths(), ['180px'])
+  await harness.keyboard.press(undoKey)
+  assert.equal((await state()).doc, doc)
+  assert.deepEqual(await widths(), ['200px', '180px'])
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {

@@ -627,6 +627,7 @@
   "2427b8df5e86": "Edit and preview Quarto; run embedded code when you choose.",
   "020bd15463d3": "Edit and preview R Markdown; run embedded code when you choose.",
   "14c7bbeb603c": "Edit could not be applied",
+  "cbde036b62cb": "Edit equation",
   "b9598f73f10e": "Edit footnotes in Source view. Side-by-side shows their preview.",
   "7ce59a82b75c": "Edit keyboard shortcuts",
   "7bc860ccf5e3": "Edit note properties stored in YAML, such as titles and dates.",

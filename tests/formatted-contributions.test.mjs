@@ -303,6 +303,14 @@ test('commands read the formatted view tree from its state', () => {
   assert.equal(formattedSyntaxTree(EditorState.create({ doc: 'x' })), null)
 })
 
+// Feature modules import their styles, which Node cannot load.
+registerHooks({
+  load: (url, context, next) =>
+    url.endsWith('.css')
+      ? { format: 'module', source: '', shortCircuit: true }
+      : next(url, context),
+})
+
 test('github tables are opaque in documents of that flavor', async () => {
   const { contribution } = await import(
     '../src/renderer/src/formatted/tables.ts'

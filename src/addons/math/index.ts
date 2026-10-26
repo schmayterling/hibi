@@ -7,6 +7,7 @@ import { PackageSettings } from './PackageSettings'
 import { mathFlavor } from './syntax'
 
 let dependencies: DependencyApi | undefined
+let stopMath: (() => void) | undefined
 export default defineAddon({
   manifest,
   flavors: [mathFlavor],
@@ -23,9 +24,11 @@ export default defineAddon({
   async start(context) {
     dependencies = context.dependencies
     startFormat(context, formatSpec(manifest))
-    ;(await import('./engine')).startMath(context)
+    stopMath = (await import('./engine')).startMath(context)
   },
   stop: () => {
+    stopMath?.()
+    stopMath = undefined
     dependencies = undefined
   },
 })

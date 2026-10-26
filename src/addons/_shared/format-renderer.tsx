@@ -136,6 +136,8 @@ export function startFormat(context: AddonContext, spec: FormatSpec) {
     )
   }
   async function run(document: DocumentPreviewProps['document']) {
+    // Read before asking: closing the tab while the dialog is open releases its source.
+    const source = document.markdown
     if (
       !(await context.dialogs.confirm({
         title: `${spec.engine === 'latex' ? 'Compile' : 'Run'} ${document.name}?`,
@@ -147,7 +149,7 @@ export function startFormat(context: AddonContext, spec: FormatSpec) {
     )
       return null
     return context.native.invoke<FormatResult>('run', {
-      source: document.markdown,
+      source,
       documentId: document.id,
     })
   }

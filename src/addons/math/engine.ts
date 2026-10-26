@@ -1,3 +1,4 @@
+import { syntaxTree } from '@codemirror/language'
 import { EditorView, ViewPlugin } from '@codemirror/view'
 import { type Editor, InputRule, type NodeViewRenderer } from '@tiptap/core'
 import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
@@ -5,8 +6,12 @@ import type { Node } from '@tiptap/pm/model'
 import katex from 'katex'
 import { Sigma, SquareRadical } from 'lucide-react'
 import type { MarkedExtension } from 'marked'
+import { formattedSyntaxTree } from '../../renderer/src/formatted-contributions'
+import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import type { AddonContext } from '../api'
+import type { MathHost } from './formatted'
+import { containerPrefix, mathInsertion } from './insert'
 import { formulaScheduler } from './rendering'
 import { mathStyles } from './styles'
 import {
@@ -56,7 +61,8 @@ export function startMath(context: AddonContext) {
   })
   let rich: Editor | null = null
   let source: EditorView | null = null
-  let target: 'rich' | 'source' = 'rich'
+  let formatted: EditorView | null = null
+  let target: 'rich' | 'source' | 'formatted' = 'rich'
   context.editor.registerRich({
     id: 'editing',
     preview: 'deferred',
@@ -118,9 +124,12 @@ export function startMath(context: AddonContext) {
       context.notify('Math insertion is not available for this format.')
       return
     }
+    // The CodeMirror formatted view takes the same source edit as the source view.
+    const codeMirror = () =>
+      target === 'formatted' && formatted ? formatted : source
     const editor = rich,
-      view = source,
-      inSource = target === 'source' || !isMarkdownDocument(document.name)
+      view = codeMirror(),
+      inSource = target !== 'rich' || !isMarkdownDocument(document.name)
     const doc = editor?.state.doc,
       text = view?.state.doc
     const selection = inSource
@@ -135,8 +144,20 @@ export function startMath(context: AddonContext) {
     }
     const latex = await prompt()
     if (latex === null) return
-    if (inSource && view && view.state.doc === text && view === source) {
-      const value = block ? `\n\n$$\n${latex}\n$$\n\n` : `$${latex}$`
+    if (inSource && view && view.state.doc === text && view === codeMirror()) {
+      // Display math keeps the quotes and list items around the caret.
+      const { state } = view
+      const value = mathInsertion(
+        block
+          ? containerPrefix(
+              state.doc,
+              formattedSyntaxTree(state) ?? syntaxTree(state),
+              selection.from,
+            )
+          : '',
+        latex,
+        block,
+      )
       view.dispatch({
         changes: { from: selection.from, to: selection.to, insert: value },
         selection: { anchor: selection.from + value.length },
@@ -276,6 +297,26 @@ export function startMath(context: AddonContext) {
     })),
   }
   context.styles.register('math', mathStyles)
+  const host: MathHost = {
+    formulas,
+    prompt,
+    focus(view) {
+      formatted = view
+      target = 'formatted'
+    },
+    close(view) {
+      if (formatted === view) formatted = null
+    },
+  }
+  const formattedEntries = (['inline', 'block', 'editing'] as const).map((id) =>
+    formattedRegistry.register({
+      id: `math.${id}`,
+      load: () =>
+        import('./formatted').then(
+          ({ mathContributions }) => mathContributions(host)[id],
+        ),
+    }),
+  )
   context.editor.registerFlavor({
     ...mathFlavor,
     richExtensions: [inline, block],
@@ -299,5 +340,8 @@ export function startMath(context: AddonContext) {
     context.editor.onDocumentChange((document) =>
       item.update({ hidden: !supported(document.name) }),
     )
+  }
+  return () => {
+    for (const remove of formattedEntries) remove()
   }
 }

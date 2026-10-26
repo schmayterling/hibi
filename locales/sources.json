@@ -1976,6 +1976,9 @@
     "src/renderer/src/Editor.tsx",
     "src/renderer/src/SourceEditor.tsx"
   ],
+  "cbde036b62cb": [
+    "src/addons/math/formatted.ts"
+  ],
   "b9598f73f10e": [
     "src/renderer/src/main.tsx"
   ],

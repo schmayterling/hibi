@@ -1647,10 +1647,8 @@ class ChunkedParse implements ChunkedPartialParse {
 
   /** Whether a line ends a paragraph above it, which a lazy line does not. */
   private interrupts(line: string) {
-    const text = `a\n${line}\n`
-    const probe = this.parser.options.probe
-    if (probe) probe.scannedUnits += text.length
-    const first = this.parser.scan.parse(text).topNode.firstChild
+    const parsed = this.standIn(`a\n${line}\n`)
+    const first = parsed?.topNode.firstChild
     return first?.name === 'Paragraph' && first.to === 1
   }
 
@@ -1665,17 +1663,39 @@ class ChunkedParse implements ChunkedPartialParse {
       text += `${line}\n\nx\n\n`
       after.push(text.length - 3)
     }
+    const tree = this.standIn(text)
+    return (
+      !tree ||
+      after.some((at) => {
+        const node = tree.resolve(at, 1)
+        return !(
+          node.name === 'Paragraph' &&
+          node.from === at &&
+          node.parent?.type.isTop
+        )
+      })
+    )
+  }
+
+  /**
+   * Parse text standing in for lines of the note, or null when a decision
+   * read ahead in it, which in the note would read different text.
+   */
+  private standIn(text: string) {
     const probe = this.parser.options.probe
     if (probe) probe.scannedUnits += text.length
-    const tree = this.parser.scan.parse(text)
-    return after.some((at) => {
-      const node = tree.resolve(at, 1)
-      return !(
-        node.name === 'Paragraph' &&
-        node.from === at &&
-        node.parent?.type.isTop
-      )
+    const input: Input = {
+      length: text.length,
+      chunk: (from) => text.slice(from),
+      lineChunks: false,
+      read: (from, to) => text.slice(from, to),
+    }
+    let ahead = false
+    readers.set(input, () => {
+      ahead = true
     })
+    const tree = this.parser.scan.parse(input)
+    return ahead ? null : tree
   }
 
   /** A continued block ends at `end`: one chunk, windowed when it is giant. */

@@ -744,6 +744,28 @@ test('a decision that read past an edit parses its chunk and the chunk before it
     { chunkSize: 4, groupSize: 3 },
     'opener reopened as text',
   )
+  // After a stuck list, math opening outside it holds a heading line. The
+  // search checks lines on stand-in text, where a read-ahead decision would
+  // read other text, so it leaves the rest as written.
+  const stuck = `${stuckBlock('-', 60)}$$\nx\n\n# inside math\n$$\n\nend\n`
+  const at = stuck.indexOf('# inside math')
+  const tree = finish(
+    new ChunkedMarkdownParser(math, math, {
+      chunkSize: 32,
+      groupSize: 4,
+      giantBlock: 512,
+    }).startChunkedParse(stringInput(stuck), [], {
+      from: at,
+      to: stuck.length,
+    }),
+  )
+  const shown = parsedChunks(tree).some((chunk) =>
+    chunk.covered.some((range) => range.from <= at && at < range.to),
+  )
+  assert.ok(
+    !shown || chain(tree, at + 2) === chain(math.parse(stuck), at + 2),
+    chain(tree, at + 2),
+  )
 })
 
 test('after a block that no replay can continue, formatting resumes at the next top-level block', () => {

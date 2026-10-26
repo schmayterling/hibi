@@ -183,54 +183,70 @@ test('a fence longer than the giant block size reads and edits its whole body', 
     { length: 3500 },
     (_, index) => `  %% preserve line ${index} ${'x'.repeat(16)}`,
   )
-  const source = `Intro.\n\n\`\`\`mermaid\ngraph TD\n${body.join('\n')}\n\`\`\`\n\nvisible text at end\n`
-  assert.ok(source.length > 64 * 1024)
-  const chunked = new ChunkedMarkdownParser(markdown, markdown)
-  const input = {
-    length: source.length,
-    chunk: (from) => source.slice(from),
-    read: (from, to) => source.slice(from, to),
-    lineChunks: false,
-  }
-  const run = (demand, fragments = []) => {
-    const parse = chunked.startChunkedParse(input, fragments, demand)
-    for (;;) {
-      const tree = parse.advance()
-      if (tree) return tree
+  // At the top level, and inside list items and quotes whose prefixes each line repeats.
+  for (const [open, prefix] of [
+    ['', ''],
+    ['- ', '  '],
+    ['> ', '> '],
+    ['1. ', '   '],
+    ['> - ', '>   '],
+  ]) {
+    const block = ['```mermaid', 'graph TD', ...body, '```']
+      .map((line, index) => (index ? prefix : open) + line)
+      .join('\n')
+    const source = `Intro.\n\n${block}\n\nvisible text at end\n`
+    assert.ok(source.length > 64 * 1024)
+    const chunked = new ChunkedMarkdownParser(markdown, markdown)
+    const input = {
+      length: source.length,
+      chunk: (from) => source.slice(from),
+      read: (from, to) => source.slice(from, to),
+      lineChunks: false,
     }
+    const run = (demand, fragments = []) => {
+      const parse = chunked.startChunkedParse(input, fragments, demand)
+      for (;;) {
+        const tree = parse.advance()
+        if (tree) return tree
+      }
+    }
+    // Visiting the end finds where the fence closes; back at the top of a
+    // top-level fence, only the opening lines, a window there and the closing
+    // line have inner nodes.
+    let tree = run({ from: source.length - 2000, to: source.length })
+    if (!open) tree = run({ from: 0, to: 2000 }, TreeFragment.addTree(tree))
+    let node
+    tree.iterate({
+      enter(ref) {
+        if (ref.name === 'FencedCode') node ??= ref.node
+      },
+    })
+    const texts = node.getChildren('CodeText').length
+    assert.ok(texts < 3500, `${texts} code texts: the tree is sparse`)
+    const doc = EditorState.create({ doc: source }).doc
+    const fence = readFence(doc, node)
+    assert.equal(markedFenceText(fence), `graph TD\n${body.join('\n')}`)
+    // Appending a line through the edit changes nothing else, and undo restores the bytes.
+    const state = EditorState.create({ doc: source })
+    const changes = fenceBodyChanges(
+      doc,
+      node,
+      `${markedFenceText(fence)}\n%% added`,
+      { indent: fence.indent, indented: true },
+    )
+    const edited = state.update({ changes })
+    assert.equal(
+      edited.state.doc.toString(),
+      source.replace(
+        `\n${prefix}\`\`\`\n\nvisible`,
+        `\n${prefix}%% added\n${prefix}\`\`\`\n\nvisible`,
+      ),
+    )
+    assert.equal(
+      edited.changes.invert(state.doc).apply(edited.state.doc).toString(),
+      source,
+    )
   }
-  // Visiting the end finds where the fence closes; back at the top, only the
-  // opening lines, a window there and the closing line have inner nodes.
-  let tree = run({ from: source.length - 2000, to: source.length })
-  tree = run({ from: 0, to: 2000 }, TreeFragment.addTree(tree))
-  let node
-  tree.iterate({
-    enter(ref) {
-      if (ref.name === 'FencedCode') node ??= ref.node
-    },
-  })
-  const texts = node.getChildren('CodeText').length
-  assert.ok(texts < 3500, `${texts} code texts: the tree is sparse`)
-  const doc = EditorState.create({ doc: source }).doc
-  const fence = readFence(doc, node)
-  assert.equal(markedFenceText(fence), `graph TD\n${body.join('\n')}`)
-  // Appending a line through the edit changes nothing else, and undo restores the bytes.
-  const state = EditorState.create({ doc: source })
-  const changes = fenceBodyChanges(
-    doc,
-    node,
-    `${markedFenceText(fence)}\n%% added`,
-    { indent: fence.indent, indented: true },
-  )
-  const edited = state.update({ changes })
-  assert.equal(
-    edited.state.doc.toString(),
-    source.replace('\n```\n\nvisible', '\n%% added\n```\n\nvisible'),
-  )
-  assert.equal(
-    edited.changes.invert(state.doc).apply(edited.state.doc).toString(),
-    source,
-  )
 })
 
 test('fences of other languages are not read', () => {

@@ -1,10 +1,10 @@
 import { CircleAlert, FileText, Tags } from 'lucide-react'
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { WorkspaceTagSummary } from '../../shared/workspace-query'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
 import type { AddonContext } from '../api'
 import { Button, ControlRow, Panel, PanelMessage, TextInput } from '../ui'
-import { useWorkspaceQueryTarget } from '../use-workspace-query'
+import { useSerialRead, useWorkspaceQueryTarget } from '../use-workspace-query'
 
 export function TagsPanel({
   context,
@@ -16,6 +16,7 @@ export function TagsPanel({
   const {
     target,
     workspace,
+    revision,
     loading: targetLoading,
     error: targetError,
   } = useWorkspaceQueryTarget(context)
@@ -39,8 +40,11 @@ export function TagsPanel({
     tag: string
     files: readonly string[]
   } | null>(null)
-  const [queryError, setQueryError] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [tagsError, setTagsError] = useState('')
+  const [filesError, setFilesError] = useState('')
+  const readTags = useSerialRead()
+  const readFiles = useSerialRead()
+  const latest = useRef(target)
   useEffect(() => {
     const tag =
       selection && typeof selection === 'object' && 'tag' in selection
@@ -52,15 +56,16 @@ export function TagsPanel({
     }
   }, [selection])
   useEffect(() => {
+    void revision
+    latest.current = target
     if (!target) {
       setSummary(null)
-      setLoading(false)
+      readTags(null)
       return
     }
-    let active = true
-    setLoading(true)
-    setQueryError('')
-    const load = async () => {
+    readTags(async (alive, retry) => {
+      // Each read reports its own outcome; a read for an older workspace stays quiet.
+      setTagsError('')
       try {
         const tags: WorkspaceTagSummary[] = []
         let offset = 0
@@ -72,6 +77,8 @@ export function TagsPanel({
             offset,
             limit: 100,
           })
+          // The workspace changed while paging, such as opening a note.
+          if (!response.ok && response.code === 'stale') return retry()
           if (!response.ok) throw new Error(response.message)
           if (response.value.kind !== 'tags')
             throw new Error('Invalid tags query.')
@@ -81,8 +88,8 @@ export function TagsPanel({
           if (response.value.nextOffset <= offset)
             throw new Error('Tags query stopped early.')
           offset = response.value.nextOffset
-        } while (active)
-        if (active)
+        } while (alive())
+        if (alive())
           setSummary({
             workspaceId: target.workspaceId,
             generation: target.workspaceGeneration,
@@ -91,24 +98,20 @@ export function TagsPanel({
             complete,
           })
       } catch (error) {
-        if (active)
-          setQueryError(error instanceof Error ? error.message : String(error))
-      } finally {
-        if (active) setLoading(false)
+        if (alive() && latest.current === target)
+          setTagsError(error instanceof Error ? error.message : String(error))
       }
-    }
-    void load()
-    return () => {
-      active = false
-    }
-  }, [context, target, syntaxRevision])
+    })
+  }, [context, target, revision, syntaxRevision, readTags])
   useEffect(() => {
+    void revision
     if (!target || !selected) {
       setSelectedFiles(null)
+      readFiles(null)
       return
     }
-    let active = true
-    const load = async () => {
+    readFiles(async (alive, retry) => {
+      setFilesError('')
       try {
         const files: string[] = []
         let offset = 0
@@ -120,6 +123,7 @@ export function TagsPanel({
             offset,
             limit: 100,
           })
+          if (!response.ok && response.code === 'stale') return retry()
           if (!response.ok) throw new Error(response.message)
           if (response.value.kind !== 'tag')
             throw new Error('Invalid tag query.')
@@ -128,8 +132,8 @@ export function TagsPanel({
           if (response.value.nextOffset <= offset)
             throw new Error('Tag query stopped early.')
           offset = response.value.nextOffset
-        } while (active)
-        if (active)
+        } while (alive())
+        if (alive())
           setSelectedFiles({
             workspaceId: target.workspaceId,
             generation: target.workspaceGeneration,
@@ -138,15 +142,11 @@ export function TagsPanel({
             files,
           })
       } catch (error) {
-        if (active)
-          setQueryError(error instanceof Error ? error.message : String(error))
+        if (alive() && latest.current === target)
+          setFilesError(error instanceof Error ? error.message : String(error))
       }
-    }
-    void load()
-    return () => {
-      active = false
-    }
-  }, [context, target, selected, syntaxRevision])
+    })
+  }, [context, target, selected, revision, syntaxRevision, readFiles])
   const current =
     summary?.workspaceId === target?.workspaceId &&
     summary?.generation === target?.workspaceGeneration &&
@@ -164,7 +164,7 @@ export function TagsPanel({
     selectedFiles?.tag === selected
       ? selectedFiles.files
       : []
-  const error = targetError || queryError
+  const error = targetError || tagsError || filesError
   return (
     <Panel className="tags-panel">
       <ControlRow className="tags-controls">
@@ -184,7 +184,7 @@ export function TagsPanel({
         >
           {error}
         </PanelMessage>
-      ) : (targetLoading || loading) && !current ? (
+      ) : (targetLoading || target) && !current ? (
         <PanelMessage icon={<Tags size={24} />} title="Reading tags…" loading />
       ) : !workspace ? (
         <PanelMessage icon={<Tags size={24} />} title="No workspace open">

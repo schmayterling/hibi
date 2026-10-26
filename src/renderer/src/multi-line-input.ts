@@ -3,35 +3,48 @@ import {
   Mark,
   type ResolvedPos,
   type Node as RichNode,
+  Slice,
 } from '@tiptap/pm/model'
-import { TextSelection, type Transaction } from '@tiptap/pm/state'
+import {
+  AllSelection,
+  Selection,
+  TextSelection,
+  type Transaction,
+} from '@tiptap/pm/state'
 import { ReplaceStep } from '@tiptap/pm/transform'
 import type { EditorView } from '@tiptap/pm/view'
 
 /**
  * The edit the browser makes for a multi-line text input, built as one step.
- * Each line break is a newline in preformatted text, a new item in a list (a
- * break in an empty item ends the list and later lines become paragraphs), a
- * paragraph after the end of a heading, and otherwise a copy of the current
- * block. The text stays literal and takes the marks at the caret. Returns
- * null where the browser's result isn't modelled, so the browser applies it.
+ * The browser deletes the selection, joining the text after it to the block
+ * where it starts; then each line break is a newline in preformatted text, a
+ * new item in a list (a break in an empty item ends the list and later lines
+ * become paragraphs), a paragraph after the end of a heading, and otherwise a
+ * copy of the current block. The text stays literal and takes the marks at the
+ * caret. Returns null where the browser's result isn't modelled, so the
+ * browser applies it.
  */
 export function multiLineInput(
   view: EditorView,
   data: string,
 ): Transaction | null {
-  const { selection, schema, tr } = view.state
-  const { $from, $to } = selection
-  if (!(selection instanceof TextSelection) || !$from.sameParent($to))
-    return null
+  // Without visible text, the browser's change can be read back as one Enter.
+  if (!/\S/.test(data)) return null
+  const { doc, schema, selection, tr } = view.state
+  let { $from, $to } = selection
+  if (selection instanceof AllSelection) {
+    const start = Selection.atStart(doc),
+      end = Selection.atEnd(doc)
+    if (
+      !(start instanceof TextSelection && end instanceof TextSelection) ||
+      isolated(start.$from, 0) ||
+      isolated(end.$to, 0)
+    )
+      return null
+    $from = start.$from
+    $to = end.$to
+  } else if (!(selection instanceof TextSelection)) return null
   const text = data.replace(/\r\n?/g, '\n')
-  const dom = view.domAtPos($from.pos).node
-  if ((dom instanceof Element ? dom : dom.parentElement)?.closest('pre')) {
-    tr.replaceWith($from.pos, $to.pos, schema.text(text))
-    return tr
-      .setSelection(TextSelection.create(tr.doc, $from.pos + text.length))
-      .scrollIntoView()
-  }
   // Typing's marks at the caret, but the browser types into a link only inside
   // it, and later lines keep a mark only if it continues after the selection
   // or is a style the browser copies to the new line (bold, italic, ...).
@@ -54,31 +67,45 @@ export function multiLineInput(
   const lines = text.split('\n'),
     last = lines.length - 1,
     lastLength = text.length - text.lastIndexOf('\n') - 1
-  const depth = $from.depth,
-    block = $from.parent
-  const after = block.content.cut($to.parentOffset)
-  /** Line `index` as content; the last line ends with the text after the selection. */
-  const line = (index: number) => {
-    const value = lines[index]
-    const content = value
-      ? Fragment.from(schema.text(value, index ? lineMarks : firstMarks))
-      : Fragment.empty
-    return index < last ? content : content.append(after)
-  }
-  const first = block.copy(
-    block.content.cut(0, $from.parentOffset).append(line(0)),
-  )
-  let itemDepth = depth - 1
-  while (itemDepth > 0 && !$from.node(itemDepth - 1).type.isInGroup('list'))
-    itemDepth--
   try {
+    const deleted = $from.pos === $to.pos ? doc : withoutSelection($from, $to)
+    if (!deleted) return null
+    const $pos = deleted.resolve($from.pos),
+      depth = $pos.depth,
+      block = $pos.parent
+    const dom = view.domAtPos($from.pos).node
+    if ((dom instanceof Element ? dom : dom.parentElement)?.closest('pre'))
+      return finish(
+        tr,
+        deleted.replace(
+          $pos.pos,
+          $pos.pos,
+          new Slice(Fragment.from(schema.text(text)), 0, 0),
+        ),
+        $pos.pos + text.length,
+      )
+    const after = block.content.cut($pos.parentOffset)
+    /** Line `index` as content; the last line ends with the text after the selection. */
+    const line = (index: number) => {
+      const value = lines[index]
+      const content = value
+        ? Fragment.from(schema.text(value, index ? lineMarks : firstMarks))
+        : Fragment.empty
+      return index < last ? content : content.append(after)
+    }
+    const first = block.copy(
+      block.content.cut(0, $pos.parentOffset).append(line(0)),
+    )
+    let itemDepth = depth - 1
+    while (itemDepth > 0 && !$pos.node(itemDepth - 1).type.isInGroup('list'))
+      itemDepth--
     if (!itemDepth) {
       const heading = /^H[1-6]$/.test(
-        view.nodeDOM($from.before())?.nodeName ?? '',
+        view.nodeDOM($pos.before())?.nodeName ?? '',
       )
       const type =
         heading && !after.size
-          ? $from.node(depth - 1).contentMatchAt($from.indexAfter(depth - 1))
+          ? $pos.node(depth - 1).contentMatchAt($pos.indexAfter(depth - 1))
               .defaultType
           : block.type
       if (!type) return null
@@ -90,16 +117,20 @@ export function multiLineInput(
             line(index),
           ),
         )
-      return replaceChild(tr, $from, depth - 1, blocks, last, 1 + lastLength)
+      return replaceChild(tr, $pos, depth - 1, blocks, last, 1 + lastLength)
     }
-    const item = $from.node(depth - 1),
-      list = $from.node(depth - 2)
+    const item = $pos.node(depth - 1),
+      list = $pos.node(depth - 2)
     // A line break at the start of a non-empty item adds the new item before
-    // it, keeping the item's state and children after; not modelled.
+    // it, keeping the item's state and children after; and items with more
+    // than their blocks in the `<li>`, like tasks with their checkbox, follow
+    // other rules. Neither is modelled.
     if (
       itemDepth < depth - 1 ||
       block.type !== item.type.contentMatch.defaultType ||
-      (!first.content.size && after.size)
+      (!first.content.size && after.size) ||
+      view.nodeDOM($pos.before(depth))?.parentNode !==
+        view.nodeDOM($pos.before(depth - 1))
     )
       return null
     // The first line break made in an empty item ends the list.
@@ -111,7 +142,7 @@ export function multiLineInput(
     )
       end++
     const items = [
-      item.copy(item.content.replaceChild($from.index(depth - 1), first)),
+      item.copy(item.content.replaceChild($pos.index(depth - 1), first)),
     ]
     for (let index = 1; index <= (end > last ? last : end - 2); index++)
       items.push(
@@ -121,17 +152,16 @@ export function multiLineInput(
         ),
       )
     if (end > last)
-      return replaceChild(tr, $from, depth - 2, items, last, 2 + lastLength)
+      return replaceChild(tr, $pos, depth - 2, items, last, 2 + lastLength)
     // A list nested in an item moves up a level instead; not modelled.
-    if (depth > 3 && $from.node(depth - 4).type.isInGroup('list')) return null
-    const paragraph = $from
+    if (depth > 3 && $pos.node(depth - 4).type.isInGroup('list')) return null
+    const paragraph = $pos
       .node(depth - 3)
-      .contentMatchAt($from.indexAfter(depth - 3)).defaultType
+      .contentMatchAt($pos.indexAfter(depth - 3)).defaultType
     if (!paragraph) return null
     const head = list.content.cut(
       0,
-      $from.posAtIndex($from.index(depth - 2), depth - 2) -
-        $from.start(depth - 2),
+      $pos.posAtIndex($pos.index(depth - 2), depth - 2) - $pos.start(depth - 2),
     )
     const rest = list.content.cut(head.size + item.nodeSize)
     const kept = end > 1 ? head.append(Fragment.fromArray(items)) : head
@@ -140,16 +170,70 @@ export function multiLineInput(
     for (let index = end; index <= last; index++)
       blocks.push(paragraph.createChecked(null, line(index)))
     if (rest.size) blocks.push(list.copy(rest))
-    return replaceChild(tr, $from, depth - 3, blocks, caret, 1 + lastLength)
+    return replaceChild(tr, $pos, depth - 3, blocks, caret, 1 + lastLength)
   } catch {
     return null
   }
 }
 
 /**
- * Replaces the child of the node at `depth` that holds `$pos` with `nodes`, in
- * one step over the part that differs, and puts the caret `caretOffset` into
- * `nodes[caretNode]`.
+ * The document after the browser deletes a selection across blocks: the text
+ * after it joins the block where it starts, and the block it ends in leaves
+ * its containers, which go too when that empties them. Null where the browser
+ * keeps blocks apart (tables) or restyles the joined text (other block types).
+ */
+function withoutSelection($from: ResolvedPos, $to: ResolvedPos) {
+  if ($from.sameParent($to))
+    return $from.doc.replace($from.pos, $to.pos, Slice.empty)
+  const depth = $from.sharedDepth($to.pos)
+  const after = $to.parent.content.cut($to.parentOffset)
+  if (
+    (after.size && $to.parent.type !== $from.parent.type) ||
+    isolated($from, depth) ||
+    isolated($to, depth)
+  )
+    return null
+  const parent = $from.node(depth),
+    first = $from.index(depth),
+    last = $to.index(depth)
+  const start = $from.posAtIndex(first, depth),
+    end = $to.posAtIndex(last, depth)
+  const joined = (node: RichNode): RichNode => {
+    const child = node.lastChild
+    return node.isTextblock || !child
+      ? node.copy(node.content.append(after))
+      : node.copy(node.content.replaceChild(node.childCount - 1, joined(child)))
+  }
+  const left = joined(parent.child(first).cut(0, $from.pos - start - 1))
+  const emptied = (node: RichNode): RichNode | null => {
+    const child = node.firstChild
+    if (node.isTextblock || !child) return null
+    const rest = emptied(child)
+    const content = rest
+      ? node.content.replaceChild(0, rest)
+      : node.content.cut(child.nodeSize)
+    return content.size ? node.copy(content) : null
+  }
+  const right = emptied(parent.child(last).cut($to.pos - end - 1))
+  left.check()
+  right?.check()
+  return $from.doc.replace(
+    start,
+    end + parent.child(last).nodeSize,
+    new Slice(Fragment.from(right ? [left, right] : [left]), 0, 0),
+  )
+}
+
+/** Whether `$pos` is inside an isolating node (a table) below `depth`. */
+function isolated($pos: ResolvedPos, depth: number) {
+  for (let d = depth + 1; d <= $pos.depth; d++)
+    if ($pos.node(d).type.spec.isolating) return true
+  return false
+}
+
+/**
+ * Replaces the child of the node at `depth` that holds `$pos` with `nodes`,
+ * with the caret `caretOffset` into `nodes[caretNode]`.
  */
 function replaceChild(
   tr: Transaction,
@@ -159,26 +243,25 @@ function replaceChild(
   caretNode: number,
   caretOffset: number,
 ) {
-  const parent = $pos.node(depth),
-    start = $pos.start(depth),
-    index = $pos.index(depth)
-  const offset = $pos.posAtIndex(index, depth) - start
-  const content = parent.content
-    .cut(0, offset)
-    .append(Fragment.fromArray(nodes))
-    .append(parent.content.cut(offset + parent.child(index).nodeSize))
-  const from = parent.content.findDiffStart(content),
-    end = parent.content.findDiffEnd(content)
+  let caret = $pos.posAtIndex($pos.index(depth), depth)
+  const doc = $pos.doc.replace(
+    caret,
+    caret + $pos.node(depth + 1).nodeSize,
+    new Slice(Fragment.fromArray(nodes), 0, 0),
+  )
+  caret += caretOffset
+  for (const node of nodes.slice(0, caretNode)) caret += node.nodeSize
+  return finish(tr, doc, caret)
+}
+
+/** Turns the document into `doc` in one step over the part that differs. */
+function finish(tr: Transaction, doc: RichNode, caret: number) {
+  const from = tr.doc.content.findDiffStart(doc.content),
+    end = tr.doc.content.findDiffEnd(doc.content)
   if (from == null || !end) return null
   const overlap = Math.max(0, from - Math.min(end.a, end.b))
   tr.step(
-    new ReplaceStep(
-      start + from,
-      start + end.a + overlap,
-      parent.copy(content).slice(from, end.b + overlap),
-    ),
+    new ReplaceStep(from, end.a + overlap, doc.slice(from, end.b + overlap)),
   )
-  let caret = start + offset + caretOffset
-  for (const node of nodes.slice(0, caretNode)) caret += node.nodeSize
   return tr.setSelection(TextSelection.create(tr.doc, caret)).scrollIntoView()
 }

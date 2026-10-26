@@ -127,7 +127,8 @@ test('multi-line text input in the visual editor makes the browser edit in one s
           anchorCell: cells[0],
           headCell: cells.at(-1),
         })
-      } else editor.commands.setTextSelection({ from, to })
+      } else if (select === 'all') editor.commands.selectAll()
+      else editor.commands.setTextSelection({ from, to })
       if (select === 'bold') editor.commands.setMark('bold')
       Object.assign(probe, { prevented: [], inputs: [], steps: [] })
       const { $to } = editor.state.selection
@@ -169,9 +170,9 @@ test('multi-line text input in the visual editor makes the browser edit in one s
     ],
     ['item paragraphs', '<ul><li><p>fi|rst</p><p>second</p></li></ul>', 'a\nb'],
     [
-      'task',
-      '<ul data-type="taskList"><li data-type="taskItem" data-checked="true"><p>ta|sk</p></li></ul>',
-      'a\nb',
+      'ordered end',
+      '<ol start="7"><li><p>ab|</p></li><li><p>tail</p></li></ol>',
+      'a\n\nb',
     ],
     [
       'nested list',
@@ -187,7 +188,46 @@ test('multi-line text input in the visual editor makes the browser edit in one s
     ['code end', '<p>x<code>ab|</code></p>', 'X\nY'],
     ['stored mark', '<p>|</p>', 'alpha\nbeta', 'bold'],
     ['cells', table, 'one\ntwo', 'cells', false],
-    ['blocks', '<p>ab[c</p><p>d]ef</p>', 'X\nY', undefined, false],
+    ['blocks', '<p>ab[c</p><p>d]ef</p>', 'X\nY'],
+    [
+      'blocks into a list',
+      '<p>a[b</p><ul><li><p>c]d</p><p>more</p></li><li><p>x</p></li></ul>',
+      'X\n\nY\n',
+    ],
+    [
+      'items',
+      '<ul><li><p>a[b</p></li><li><p>c]d</p></li><li><p>x</p></li></ul>',
+      'X\n\nY\n',
+    ],
+    ['all', '<h1>Title</h1><p>replace me</p>', 'X\n\nY\n', 'all'],
+    [
+      'all from a list',
+      '<ol start="7"><li><p>a</p></li></ol><p>b</p>',
+      'X\n\nY\n',
+      'all',
+    ],
+    [
+      'line breaks only',
+      '<ol start="7"><li><p>ab|</p></li><li><p>tail</p></li></ol>',
+      '\n\n',
+      undefined,
+      false,
+    ],
+    ['block kinds', '<p>a[b</p><h2>c]d</h2>', 'X\nY', undefined, false],
+    [
+      'into a table',
+      '<p>a[b</p><table><tbody><tr><td><p>c]d</p></td></tr></tbody></table>',
+      'X\nY',
+      undefined,
+      false,
+    ],
+    [
+      'task',
+      '<ul data-type="taskList"><li data-type="taskItem" data-checked="true"><p>|</p></li></ul>',
+      '\nb',
+      undefined,
+      false,
+    ],
     [
       'nested list end',
       '<ul><li><p>x</p><ul><li><p>y|</p></li></ul></li></ul>',
@@ -197,7 +237,7 @@ test('multi-line text input in the visual editor makes the browser edit in one s
     ],
     [
       'item start',
-      '<ul data-type="taskList"><li data-type="taskItem" data-checked="true"><p>|task</p></li></ul>',
+      '<ul><li><p>|x</p><ul><li><p>y</p></li></ul></li></ul>',
       '\nb',
       undefined,
       false,
@@ -279,59 +319,81 @@ test('multi-line text input work in the visual editor stays linear in the lines'
   })
   const page = await app.firstWindow()
   await waitForEditor(page)
-  const counts = await page.evaluate(() => {
+  const rich = page.getByRole('textbox', {
+    name: 'Document editor',
+    exact: true,
+  })
+  await page.evaluate(() => {
     const editor = document.querySelector('.tiptap').editor
     const mapping = Object.getPrototypeOf(editor.state.tr.mapping),
       map = mapping.map
-    const counts = []
-    for (const lines of [500, 1000]) {
-      editor.commands.setContent('<p></p>', { contentType: 'html' })
-      editor.commands.setTextSelection(1)
-      const result = { lines, transactions: 0, steps: 0, maps: 0, mapped: 0 }
-      const count = ({ transaction }) => {
-        if (!transaction.docChanged) return
-        result.transactions++
-        result.steps += transaction.steps.length
-      }
-      editor.on('transaction', count)
-      mapping.map = function (...args) {
-        result.maps++
-        result.mapped += this.to - this.from
-        return map.apply(this, args)
-      }
-      try {
-        // Lines with markdown syntax, which paste rules would format.
-        const event = new InputEvent('beforeinput', {
-          inputType: 'insertText',
-          data: Array.from(
-            { length: lines },
-            (_, index) => `line **${index}** _${index}_ \`${index}\``,
-          ).join('\n'),
-          bubbles: true,
-          cancelable: true,
-        })
-        editor.view.dom.dispatchEvent(event)
-        result.prevented = event.defaultPrevented
-      } finally {
-        mapping.map = map
-        editor.off('transaction', count)
-      }
-      result.paragraphs = editor.state.doc.childCount
-      counts.push(result)
+    const work = { prevented: [] }
+    window.richLinesWork = work
+    window.addEventListener('beforeinput', (event) =>
+      work.prevented.push(event.defaultPrevented),
+    )
+    editor.on('transaction', ({ transaction }) => {
+      if (!transaction.docChanged) return
+      work.transactions++
+      work.steps += transaction.steps.length
+    })
+    mapping.map = function (...args) {
+      work.maps++
+      work.mapped += this.to - this.from
+      return map.apply(this, args)
     }
-    return counts
   })
+  const counts = []
+  // Into an empty paragraph, and over everything after select all.
+  for (const all of [false, true])
+    for (const lines of [500, 1000]) {
+      await rich.focus()
+      await page.evaluate((all) => {
+        const editor = document.querySelector('.tiptap').editor
+        editor.commands.setContent(
+          all ? '<h1>Title</h1><p>replace me</p>' : '<p></p>',
+          { contentType: 'html' },
+        )
+        editor.commands.setTextSelection(1)
+      }, all)
+      if (all) await rich.press('ControlOrMeta+a')
+      await page.evaluate(() =>
+        Object.assign(window.richLinesWork, {
+          prevented: [],
+          transactions: 0,
+          steps: 0,
+          maps: 0,
+          mapped: 0,
+        }),
+      )
+      // Lines with markdown syntax, which paste rules would format.
+      await page.keyboard.insertText(
+        Array.from(
+          { length: lines },
+          (_, index) => `line **${index}** _${index}_ \`${index}\``,
+        ).join('\n'),
+      )
+      counts.push({
+        all,
+        lines,
+        ...(await page.evaluate(() => ({
+          ...window.richLinesWork,
+          blocks: document.querySelector('.tiptap').editor.state.doc.childCount,
+        }))),
+      })
+    }
   for (const result of counts)
     assert.deepEqual(
-      [result.prevented, result.transactions, result.steps, result.paragraphs],
-      [true, 1, 1, result.lines],
+      [result.prevented, result.transactions, result.steps, result.blocks],
+      [[true], 1, 1, result.lines],
+      JSON.stringify(result),
     )
   // Twice the lines, at most twice the position mapping work.
-  const [small, large] = counts
-  assert.ok(
-    large.maps <= 2 * small.maps + 8 && large.mapped <= 2 * small.mapped + 8,
-    JSON.stringify(counts),
-  )
+  for (const [small, large] of [counts.slice(0, 2), counts.slice(2)])
+    assert.ok(
+      large.maps <= 2 * small.maps + 8 && large.mapped <= 2 * small.mapped + 8,
+      JSON.stringify(counts),
+    )
 })
 
 test('visual typing after a source visit defers the hidden source and toolbar checks', {

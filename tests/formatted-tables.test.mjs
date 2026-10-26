@@ -747,6 +747,36 @@ test('undo moves the cell editor to the cell whose edit it undoes', {
   assert.equal(now.head, '| alpha'.length)
 })
 
+test('the toolbar inserts a header and two rows, with the caret in the first header cell', {
+  timeout: 30000,
+}, async () => {
+  await mount('hello')
+  await harness.evaluate(() => {
+    const view = window.tables.view()
+    view.focus()
+    view.dispatch({ selection: { anchor: 0, head: 5 } })
+  })
+  assert.equal(
+    await harness.evaluate(() => window.tables.runFormatting('table')),
+    true,
+  )
+  const rows = harness.locator('.hibi-lp-table tr')
+  await harness.locator('.hibi-lp-table').waitFor()
+  assert.equal(await rows.count(), 3)
+  assert.equal((await state()).head, 2)
+  // Table actions edit the table around that cell, as in the rich editor.
+  assert.equal(
+    await harness.evaluate(() => window.tables.runTableAction('row-after')),
+    true,
+  )
+  assert.equal(await rows.count(), 4)
+  assert.equal(
+    await harness.evaluate(() => window.tables.runTableAction('column-after')),
+    true,
+  )
+  assert.equal(await rows.first().locator('th, td').count(), 3)
+})
+
 test('tab extends a table of only a header, and leaving a table at the end adds a paragraph', {
   timeout: 30000,
 }, async () => {

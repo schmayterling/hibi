@@ -11,7 +11,10 @@ import {
 import { formattedSyntax } from '../../src/renderer/src/formatted-syntax'
 import { livePreview } from '../../src/renderer/src/live-preview'
 import { markdownSyntax } from '../../src/renderer/src/markdown-syntax'
-import { tableActions } from '../../src/renderer/src/source-formatting'
+import {
+  sourceFormatting,
+  tableActions,
+} from '../../src/renderer/src/source-formatting'
 import {
   storedTableLayout,
   type TableLayout,
@@ -159,6 +162,8 @@ Object.assign(window, {
           .some((actions) => actions.run(current, id))
       )
     },
+    /** Run a toolbar formatting action, as the toolbar does. */
+    runFormatting: (id: string) => !!view && sourceFormatting(view).run(id),
     /** Make the mounted editor read-only and not editable, or editable again. */
     setEditable: (on: boolean) =>
       view?.dispatch({ effects: editable.reconfigure(access(on)) }),

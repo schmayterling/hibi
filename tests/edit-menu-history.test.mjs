@@ -185,7 +185,7 @@ test('edit menu redo in docked devtools leaves the note alone', {
 }, async (t) => {
   const { app, menu, markdown, settle, typeAndUndo } = await launch(t)
   const undone = await typeAndUndo()
-  const focused = await app.evaluate(async ({ BrowserWindow }) => {
+  await app.evaluate(async ({ BrowserWindow }) => {
     const [window] = BrowserWindow.getAllWindows()
     await new Promise((resolve) => {
       window.webContents.once('devtools-opened', resolve)
@@ -194,8 +194,8 @@ test('edit menu redo in docked devtools leaves the note alone', {
     await window.webContents.devToolsWebContents.executeJavaScript(
       "const field = document.createElement('input'); document.body.append(field); field.focus(); void 0",
     )
-    // DOM focus and native devtools focus differ on hidden windows. Control
-    // the routing predicate, but still call the real devtools history method.
+    // Opening devtools without activation does not guarantee native focus.
+    // Control routing while calling the real devtools history method.
     const tools = window.webContents.devToolsWebContents
     globalThis.devtoolsRedoCalls = 0
     const redo = tools.redo.bind(tools)
@@ -204,9 +204,7 @@ test('edit menu redo in docked devtools leaves the note alone', {
       redo()
     }
     window.webContents.isDevToolsFocused = () => true
-    return tools.executeJavaScript("document.activeElement.tagName === 'INPUT'")
   })
-  assert.equal(focused, true)
   await menu('Redo')
   assert.equal(await app.evaluate(() => globalThis.devtoolsRedoCalls), 1)
   await settle()

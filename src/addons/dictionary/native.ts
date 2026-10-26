@@ -60,7 +60,6 @@ export default {
   queries: {
     ...wordQueries,
     packs: async () => (await store()).list(),
-    preloadPacks: async (input) => (await store()).preloadInstalled(input),
     async packComplete(input) {
       if (!input || typeof input !== 'object')
         throw new Error('Invalid dictionary completion')

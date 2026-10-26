@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -103,9 +103,10 @@ test('visual typing after a source visit defers the hidden source and toolbar ch
     let updates = 0,
       checks = 0
     const update = source.update.bind(source)
-    source.update = (...args) => {
-      updates++
-      return update(...args)
+    // Echoes change the document; focus and parser updates of the hidden view do not.
+    source.update = (transactions) => {
+      if (transactions.some((transaction) => transaction.docChanged)) updates++
+      return update(transactions)
     }
     const can = editor.can.bind(editor)
     editor.can = (...args) => {
@@ -133,6 +134,173 @@ test('visual typing after a source visit defers the hidden source and toolbar ch
     }
   })
   assert.deepEqual(shown, { text: 'hello', persisted: 'hello' })
+})
+
+test('multi-line text input reaches source view in one edit, without native paragraph steps', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-source-lines-'))
+  const app = await launchBenchmarkApp(profile)
+  t.after(async () => {
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForEditor(page)
+  await switchToSource(app, page)
+  const source = page.getByRole('textbox', { name: /markdown editor/i })
+  await page.evaluate(() => {
+    const probe = { added: 0, prevented: [], inputs: [] }
+    window.sourceLineInput = probe
+    new MutationObserver((records) => {
+      for (const record of records) probe.added += record.addedNodes.length
+    }).observe(document.querySelector('.cm-content'), {
+      childList: true,
+      subtree: true,
+    })
+    window.addEventListener('beforeinput', (event) =>
+      probe.prevented.push(event.defaultPrevented),
+    )
+    window.addEventListener('input', (event) =>
+      probe.inputs.push(event.inputType),
+    )
+  })
+  const insert = async (text) => {
+    await source.press('ControlOrMeta+a')
+    await page.evaluate(() => {
+      window.sourceLineInput.added = 0
+      window.sourceLineInput.prevented = []
+      window.sourceLineInput.inputs = []
+    })
+    await page.keyboard.insertText(text)
+    await waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      text,
+    )
+    return page.evaluate(async () => {
+      await new Promise(requestAnimationFrame)
+      const view = document.querySelector('.cm-content').cmTile.root.view
+      return {
+        ...window.sourceLineInput,
+        text: view.state.doc.toString(),
+        head: view.state.selection.main.head,
+      }
+    })
+  }
+  const paragraphs = (count) =>
+    Array.from({ length: count }, (_, index) => `line ${index}`).join('\n\n')
+  const small = await insert(paragraphs(100))
+  const large = await insert(paragraphs(1000))
+  const added = JSON.stringify({ small: small.added, large: large.added })
+  for (const [result, text] of [
+    [small, paragraphs(100)],
+    [large, paragraphs(1000)],
+  ]) {
+    assert.deepEqual(result.prevented, [true], added)
+    // The typing signal still arrives, as it would from the browser.
+    assert.deepEqual(result.inputs, ['insertText'])
+    assert.equal(result.text, text)
+    assert.equal(result.head, text.length)
+  }
+  // The editor renders its viewport once instead of the browser adding a
+  // block per line break, so the work no longer grows with the paragraphs.
+  assert.ok(large.added < 1000 && large.added < small.added * 2, added)
+  const plain = await insert('one line')
+  assert.deepEqual([plain.prevented, plain.text], [[false], 'one line'])
+})
+
+test('source input handlers see multi-line text input with normalized line breaks', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-source-line-handler-'))
+  const addon = join(profile, 'installed-addons', 'upper-input')
+  await mkdir(addon, { recursive: true })
+  await writeFile(
+    join(addon, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'upper-input',
+      name: 'Upper input',
+      description: 'Consuming source input handler fixture',
+      kind: 'extension',
+      apiVersion: 2,
+      version: '1.0.0',
+      authors: [{ displayName: 'Test' }],
+      capabilities: ['source'],
+      entry: 'index.js',
+    }),
+  )
+  await writeFile(
+    join(addon, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['hibi-addon.json', 'index.js'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(addon, 'index.js'),
+    `export default sdk => ({ start(context) {
+      window.upperInput = []
+      window.upperHandler = (view, from, to, text) => {
+        if (!/[\\r\\n]/.test(text)) return false
+        window.upperInput.push(text)
+        view.dispatch({ changes: { from, to, insert: text.toUpperCase() },
+          selection: { anchor: from + text.length } })
+        return true
+      }
+      context.editor.registerSource({ id: 'upper', create: () =>
+        sdk.codeMirror.view.EditorView.inputHandler.of(window.upperHandler) })
+    }})`,
+  )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'upper-input': true }),
+  )
+  const app = await launchBenchmarkApp(profile)
+  t.after(async () => {
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForEditor(page)
+  await switchToSource(app, page)
+  await page.waitForFunction(() => {
+    const view = document.querySelector('.cm-content')?.cmTile.root.view
+    return (
+      view?.contentDOM.isContentEditable &&
+      view.state
+        .facet(view.constructor.inputHandler)
+        .includes(window.upperHandler)
+    )
+  })
+  const source = page.getByRole('textbox', { name: /markdown editor/i })
+  for (const [input, expected] of [
+    ['a\r\nb', 'A\nB'],
+    ['c\rd', 'C\nD'],
+  ]) {
+    await source.press('ControlOrMeta+a')
+    await page.keyboard.insertText(input)
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      expected,
+    )
+    const view = await page.evaluate(() => {
+      const view = document.querySelector('.cm-content').cmTile.root.view
+      return {
+        text: view.state.doc.toString(),
+        head: view.state.selection.main.head,
+        seen: window.upperInput.at(-1),
+      }
+    })
+    assert.deepEqual(view, {
+      text: expected,
+      head: 3,
+      seen: expected.toLowerCase(),
+    })
+  }
 })
 
 test('formatting toolbar states match each action check across selections, typing and history', {

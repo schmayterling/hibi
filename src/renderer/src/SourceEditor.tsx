@@ -1055,7 +1055,44 @@ export function SourceEditor({
                 })
               return false
             },
-            beforeinput(event) {
+            beforeinput(event, view) {
+              const data = event.data
+              if (
+                event.inputType === 'insertText' &&
+                data &&
+                /[\r\n]/.test(data) &&
+                !view.composing &&
+                !view.state.readOnly
+              ) {
+                // Chromium applies each line break of a text input as its own
+                // editing step, quadratic in the lines. Insert it as CodeMirror's
+                // own text input would, in one transaction, with handlers and
+                // the default insert seeing the same normalized line breaks.
+                event.preventDefault()
+                const { from, to } = view.state.selection.main
+                const lines = view.state.toText(data),
+                  text = lines.toString()
+                const insert = () =>
+                  view.state.update(view.state.replaceSelection(lines), {
+                    userEvent: 'input.type',
+                    scrollIntoView: true,
+                  })
+                if (
+                  !view.state
+                    .facet(EditorView.inputHandler)
+                    .some((handler) => handler(view, from, to, text, insert))
+                )
+                  view.dispatch(insert())
+                // Listeners such as typing state get the input the browser would have sent.
+                view.contentDOM.dispatchEvent(
+                  new InputEvent('input', {
+                    inputType: 'insertText',
+                    data,
+                    bubbles: true,
+                  }),
+                )
+                return true
+              }
               if (
                 event.inputType !== 'historyUndo' &&
                 event.inputType !== 'historyRedo'

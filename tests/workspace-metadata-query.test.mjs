@@ -481,6 +481,31 @@ test('flavor changes reindex unchanged source and expire graph cursors', async (
   host.revision++
 })
 
+test('built-in mermaid diagrams keep the metadata index complete', async () => {
+  const target = host.target
+  const previousSyntax = host.syntaxSnapshot
+  host.syntaxSnapshot = {
+    ...previousSyntax,
+    flavors: [
+      ...previousSyntax.flavors,
+      { id: 'mermaid.blocks', kind: 'syntax', parserVersion: '1' },
+    ],
+    features: [
+      { id: 'mermaid.preview', enabled: true },
+      { id: 'mermaid.blocks', enabled: true },
+    ],
+  }
+  const links = await query({ target, kind: 'links', path: 'a.md' })
+  assert.deepEqual(links.value.items, ['b.md'])
+  assert.equal(links.value.complete, true)
+  assert.equal(links.value.unsupportedSyntax, false)
+  assert.equal(
+    (await query({ target, kind: 'graph', limit: 100 })).value.complete,
+    true,
+  )
+  host.syntaxSnapshot = previousSyntax
+})
+
 test('frontmatter projection changes property results without a source edit', async () => {
   const target = host.target
   const previousPages = host.pages
@@ -519,5 +544,42 @@ test('frontmatter projection changes property results without a source edit', as
   assert.equal(unknown.value.complete, false)
   host.pages = previousPages
   host.syntaxSnapshot = previousSyntax
+  host.revision++
+})
+
+test('graph cursors page past 10,000 records to every note and link', async () => {
+  const target = host.target
+  const originalPages = host.pages
+  const name = (number) => `n${String(number).padStart(4, '0')}`
+  host.pages = Array.from({ length: 2000 }, (_, number) => ({
+    path: `${name(number)}.md`,
+    markdown: [1, 7, 17, 101, 331]
+      .map((offset) => `[[${name((number + offset) % 2000)}]]`)
+      .join(' '),
+  }))
+  host.revision++
+  host.listener({ kind: 'resync' })
+  let nodes = 0,
+    edges = 0,
+    page = await query({ target, kind: 'graph', limit: 100 })
+  for (;;) {
+    assert.equal(page.ok, true)
+    for (const item of page.value.items)
+      if (item.kind === 'node') nodes++
+      else edges++
+    if (!page.value.hasMore) break
+    assert.equal(page.value.complete, false)
+    page = await query({
+      target,
+      kind: 'graph',
+      cursor: page.value.nextCursor,
+      limit: 100,
+    })
+  }
+  assert.equal(nodes, 2000)
+  assert.equal(edges, 10000)
+  assert.equal(page.value.complete, true)
+  assert.equal(page.value.capReached, false)
+  host.pages = originalPages
   host.revision++
 })

@@ -113,6 +113,9 @@ export default defineConfig({
           index: resolve('src/main/index.ts'),
           'typst-worker': resolve('src/addons/typst/compiler-worker.ts'),
           'format-worker': resolve('src/addons/_shared/format-worker.ts'),
+          'documentation-worker': resolve(
+            'src/addons/documentation/site-worker.ts',
+          ),
           'import-worker': resolve('src/addons/_shared/import-worker.ts'),
           'dictionary-pack-worker': resolve(
             'src/addons/dictionary/pack-worker.ts',

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createDecipheriv, pbkdf2Sync } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -98,6 +99,43 @@ test('export options validate URLs, images and portable paths; protected files c
       prepareSite(snapshot, { ...options, singleFile }),
       'unit-export-password-482',
     )
+    const payload = singleFile
+      ? encrypted
+          .get('index.html')
+          .match(
+            /<script id="workspace-data" type="application\/json">([\s\S]*?)<\/script>/,
+          )[1]
+      : encrypted
+          .get('hibi-assets/workspace.js')
+          .slice('window.__HIBI_WORKSPACE__='.length, -1)
+    const locked = JSON.parse(payload)
+    const cipher = Buffer.from(locked.ciphertext, 'base64')
+    const key = pbkdf2Sync(
+      'unit-export-password-482',
+      Buffer.from(locked.salt, 'base64'),
+      locked.iterations,
+      32,
+      'sha256',
+    )
+    const decipher = createDecipheriv(
+      'aes-256-gcm',
+      key,
+      Buffer.from(locked.iv, 'base64'),
+    )
+    decipher.setAuthTag(cipher.subarray(-16))
+    const plaintext = Buffer.concat([
+      decipher.update(cipher.subarray(0, -16)),
+      decipher.final(),
+    ]).toString('utf8')
+    const expected = prepareSite(snapshot, { ...options, singleFile })
+    assert.equal(
+      plaintext,
+      JSON.stringify({
+        ...expected,
+        routing: 'hash',
+        options: { ...expected.options, passwordProtected: true },
+      }),
+    )
     const all = [...encrypted.values()].join('\n')
     for (const value of [
       'private-sentinel-9742',
@@ -110,6 +148,37 @@ test('export options validate URLs, images and portable paths; protected files c
     assert.ok(!encrypted.has('sitemap.xml'))
     assert.ok(!encrypted.has('development/README.md/index.html'))
   }
+})
+
+test('static export visits page paths a linear number of times', async () => {
+  const count = 200
+  const site = prepareSite(
+    {
+      name: 'paths',
+      pages: Array.from({ length: count }, (_, index) => ({
+        path: index + '.md',
+        markdown: '# Note',
+      })),
+    },
+    exportOptions({ singleFile: false, graph: false }),
+  )
+  let reads = 0
+  for (const page of site.pages) {
+    const path = page.path
+    Object.defineProperty(page, 'path', {
+      enumerable: true,
+      get() {
+        reads++
+        return path
+      },
+    })
+  }
+  const files = await siteFiles(
+    '<html lang="en"><head><title>site</title></head><body><div id="root"></div><script id="workspace-data" type="application/json">__HIBI_WORKSPACE_DATA__</script></body></html>',
+    site,
+  )
+  assert.ok(files.has('199.md/index.html'))
+  assert.ok(reads < 40 * count, reads + ' path reads for ' + count + ' pages')
 })
 
 test('site export keeps supported static content and omits addon runtime state', async () => {
@@ -389,9 +458,12 @@ test('published sites support direct routes, crawlable HTML, branding, locked th
   await page.reload()
   await page.getByRole('button', { name: /^open graph$/i }).click()
   const graph = page.getByRole('dialog', { name: /^graph$/i })
+  // The graph's keyboard note starts on this page; type-ahead reaches the home page.
+  await graph.getByRole('option', { name: /^open /i }).focus()
+  await page.keyboard.press('r')
   await graph
-    .getByRole('button', { name: 'Open README.md', exact: true })
-    .focus()
+    .getByRole('option', { name: 'Open README.md', exact: true })
+    .waitFor()
   await page.keyboard.press('Enter')
   await graph.waitFor({ state: 'hidden' })
   assert.equal(page.url(), base)
@@ -482,7 +554,26 @@ test('command-palette export opens options and writes a configured static folder
     '# Garden\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n[More](more.md)',
   )
   await writeFile(join(workspace, 'more.md'), '# More\n\nMore notes.')
+  await writeFile(
+    join(workspace, '.private.md'),
+    '# Private\n\nprivate-note-sentinel',
+  )
+  await mkdir(join(workspace, 'img'))
+  await writeFile(
+    join(workspace, 'img', 'a.png'),
+    Buffer.from(pixel.split(',')[1], 'base64'),
+  )
   await mkdir(profile)
+  await writeFile(
+    join(profile, 'workspace-settings.json'),
+    JSON.stringify({
+      enabled: false,
+      showAllFiles: true,
+      path: null,
+      startup: 'empty',
+      startupFolder: null,
+    }),
+  )
   await writeFile(
     join(profile, 'addons.json'),
     JSON.stringify({ mermaid: true, 'site-probe': true }),
@@ -598,6 +689,15 @@ test('command-palette export opens options and writes a configured static folder
   await modal.waitFor()
   const footer = modal.locator('.dialog-footer')
   await footer.getByRole('button', { name: /^export$/i }).waitFor()
+  assert.deepEqual(
+    (
+      await modal
+        .getByLabel('Home page', { exact: true })
+        .locator('option')
+        .allTextContents()
+    ).sort(),
+    ['Automatic', 'README.md', 'more.md'],
+  )
   assert.equal(
     await modal.getByLabel('Site title', { exact: true }).inputValue(),
     'Legacy garden',
@@ -683,6 +783,36 @@ test('command-palette export opens options and writes a configured static folder
   const built = await page.evaluate(() => window.siteProbe.buildSite())
   assert.equal(built.version, 1)
   assert.equal(built.pages, 2)
+  assert.doesNotMatch(
+    JSON.stringify(built),
+    /private-note-sentinel|\.private\.md/,
+  )
+  const draft = await page.evaluate(() =>
+    window.hibi.workspaceAction({ action: 'new-file', path: '' }),
+  )
+  const unsaved = '# Unsaved export draft\n\nExact unsaved text 日本語.'
+  await page.evaluate((source) => window.hibi.updateDocument(source), unsaved)
+  const withDraft = await page.evaluate(() => window.siteProbe.buildSite())
+  assert.equal(withDraft.pages, 3)
+  assert.match(
+    withDraft.files.find((file) => file.path.endsWith('/workspace.js')).content,
+    /Exact unsaved text 日本語/,
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    unsaved,
+  )
+  await assert.rejects(readFile(join(workspace, draft.path)), /ENOENT/)
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({
+      response: 1,
+      checkboxChecked: false,
+    })
+  })
+  await page.evaluate(
+    (id) => window.hibi.closeDocumentTab(id),
+    draft.document.tabId,
+  )
   const customCss = built.files.find((file) =>
     file.path.endsWith('/custom.css'),
   ).content
@@ -764,8 +894,12 @@ test('command-palette export opens options and writes a configured static folder
     .getByLabel('Password', { exact: true })
     .fill('remember-lock-not-password-845')
   const protectedPath = join(output, 'private.html')
-  await app.evaluate(({ dialog }, filePath) => {
-    dialog.showSaveDialog = async () => ({ canceled: false, filePath })
+  await app.evaluate(({ dialog, BrowserWindow }, filePath) => {
+    dialog.showSaveDialog = async (window, options) => {
+      if (!(window instanceof BrowserWindow) || !options?.defaultPath)
+        throw new Error('Export save dialog must keep its parent window.')
+      return { canceled: false, filePath }
+    }
   }, protectedPath)
   await modal.getByRole('button', { name: /^export$/i, exact: true }).click()
   await modal.waitFor({ state: 'hidden' })

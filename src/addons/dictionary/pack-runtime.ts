@@ -1,6 +1,7 @@
 import { Worker } from 'node:worker_threads'
 import type { PackEntry } from './pack-converters'
 import { type PackId, type PackStats, validateId } from './pack-index'
+import type { PackManifest } from './packs'
 
 export function completionLimit(value: unknown = 8): number {
   if (
@@ -57,6 +58,8 @@ export class PackWorker {
         progress?: number
         result?: unknown
         error?: string
+        invalidPack?: boolean
+        checksumFailed?: boolean
       }) => {
         if (this.worker !== worker) return
         const pending = this.pending.get(message.seq)
@@ -72,7 +75,16 @@ export class PackWorker {
         this.pending.delete(message.seq)
         pending.cleanup()
         if (message.error !== undefined)
-          pending.reject(new Error(message.error))
+          pending.reject(
+            Object.assign(
+              new Error(message.error),
+              message.invalidPack
+                ? { name: 'DictionaryPackValidationError' }
+                : message.checksumFailed
+                  ? { name: 'DictionaryPackChecksumError' }
+                  : {},
+            ),
+          )
         else pending.resolve(message.result)
       },
     )
@@ -95,9 +107,14 @@ export class PackWorker {
     progress?: ((entries: number) => void) | undefined,
   ): Promise<T> {
     if (
-      !['unload', 'convert', 'lookup', 'preload', 'complete'].includes(
-        job.type as string,
-      )
+      ![
+        'unload',
+        'convert',
+        'verify',
+        'lookup',
+        'preload',
+        'complete',
+      ].includes(job.type as string)
     )
       throw new Error('Invalid dictionary operation')
     if (job.type === 'complete') {
@@ -183,6 +200,14 @@ export class PackWorker {
   }
   lookup(id: PackId, directory: string, word: string): Promise<PackEntry[]> {
     return this.request({ type: 'lookup', id, directory, word })
+  }
+  verify(
+    id: PackId,
+    directory: string,
+    manifest: PackManifest,
+    force = false,
+  ): Promise<{ cached: boolean }> {
+    return this.request({ type: 'verify', id, directory, manifest, force })
   }
   preload(id: PackId, directory: string): Promise<void> {
     return this.request({ type: 'preload', id, directory })

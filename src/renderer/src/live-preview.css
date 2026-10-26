@@ -1,0 +1,118 @@
+/* The formatted view's typography, matching the rich editor's document styles.
+   CodeMirror measures line boxes, so block margins are line paddings and gap heights.
+   Line classes repeat .cm-line so they override the line reset below. */
+.cm-editor.hibi-formatted {
+  height: auto;
+  min-height: 100%;
+}
+.cm-editor.hibi-formatted.cm-focused {
+  outline: none;
+}
+.cm-editor.hibi-formatted .cm-scroller {
+  overflow: visible;
+  font-family: var(--font-ui);
+  font-size: var(--text-editor);
+  line-height: 1.75;
+}
+.cm-editor.hibi-formatted .cm-content {
+  padding: var(--editor-padding);
+  /* Chromium can spend seconds laying out long unbroken text with pair kerning. */
+  font-kerning: none;
+  overflow-wrap: anywhere;
+  caret-color: var(--caret);
+}
+.cm-editor.hibi-formatted .cm-line {
+  padding: 0;
+}
+.cm-editor.hibi-formatted .cm-selectionBackground,
+.cm-editor.hibi-formatted.cm-focused .cm-selectionBackground {
+  background: var(--selection);
+}
+.hibi-formatted .hibi-lp-heading {
+  color: var(--syntax-heading);
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.hibi-formatted .hibi-lp-h1 {
+  font-size: 30px;
+}
+.hibi-formatted .hibi-lp-h2 {
+  font-size: 24px;
+}
+.hibi-formatted .hibi-lp-h3 {
+  font-size: 20px;
+}
+.hibi-formatted :is(.hibi-lp-h4, .hibi-lp-h5, .hibi-lp-h6) {
+  font-size: 17px;
+}
+.hibi-formatted .hibi-lp-em {
+  font-style: italic;
+}
+.hibi-formatted .hibi-lp-strong {
+  font-weight: bolder;
+}
+.hibi-formatted .hibi-lp-strike {
+  text-decoration: line-through;
+}
+.hibi-formatted .hibi-lp-code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--code-background);
+  color: var(--code-ink);
+  border-radius: var(--radius-control);
+  padding: 2px 4px;
+}
+.hibi-formatted .hibi-lp-link {
+  color: var(--syntax-link);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.hibi-formatted .cm-line.hibi-lp-list {
+  margin-left: calc(var(--hibi-list-depth) * 1.5em);
+}
+.hibi-formatted .cm-line.hibi-lp-list-item {
+  display: list-item;
+}
+.hibi-formatted .cm-line.hibi-lp-list-ordered {
+  list-style-type: decimal;
+}
+.hibi-formatted .cm-line.hibi-lp-quote {
+  padding-left: calc(var(--hibi-quote-depth) * 21px);
+  color: var(--syntax-quote);
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--border) 0 1px,
+    transparent 1px 21px
+  );
+  background-size: calc(var(--hibi-quote-depth) * 21px) 100%;
+  background-repeat: no-repeat;
+}
+/* Lines keep the pre element's generic monospace strut; text uses the code font. */
+.hibi-formatted .cm-line.hibi-lp-codeblock {
+  padding: 0 var(--space-4);
+  font-family: monospace;
+  background: var(--code-background);
+  color: var(--code-ink);
+}
+.hibi-formatted .hibi-lp-codetext {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+.hibi-formatted .cm-line.hibi-lp-codeblock-first {
+  padding-top: var(--space-4);
+  border-top-left-radius: var(--radius-control);
+  border-top-right-radius: var(--radius-control);
+}
+.hibi-formatted .cm-line.hibi-lp-codeblock-last {
+  padding-bottom: var(--space-4);
+  border-bottom-left-radius: var(--radius-control);
+  border-bottom-right-radius: var(--radius-control);
+}
+.hibi-formatted .cm-line.hibi-lp-gap {
+  overflow: hidden;
+}
+.hibi-formatted .hibi-lp-rule {
+  border-top: 1px solid var(--border);
+}

@@ -11,6 +11,7 @@ import {
 } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parentPort, workerData } from 'node:worker_threads'
+import { sameFileIdentity } from '../shared/file-identity.ts'
 import { diskIndexVersion } from './workspace-index-cache.ts'
 import {
   parseWorkspaceMetadata,
@@ -152,7 +153,7 @@ async function readRecord(id: string): Promise<CacheRecord | null> {
     return null
   try {
     const path = join(cacheDirectory, `${id}.json`)
-    const info = await lstat(path)
+    const info = await lstat(path, { bigint: true })
     if (!info.isFile() || info.isSymbolicLink()) return null
     // O_NOFOLLOW closes the lstat/open race; a fixed read also bounds file growth.
     const file = await open(
@@ -161,12 +162,7 @@ async function readRecord(id: string): Promise<CacheRecord | null> {
     )
     try {
       const opened = await file.stat({ bigint: true })
-      if (
-        !opened.isFile() ||
-        opened.dev !== BigInt(info.dev) ||
-        opened.ino !== BigInt(info.ino)
-      )
-        return null
+      if (!opened.isFile() || !sameFileIdentity(opened, info)) return null
       const reader = new RecordReader(undefined, true)
       let first = true
       const buffer = Buffer.alloc(64 * 1024)

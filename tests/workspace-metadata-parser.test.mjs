@@ -220,6 +220,41 @@ async function seed(parser, directory, paths) {
   return template
 }
 
+test('cache identity preserves file ids above the safe integer range', async (t) => {
+  const { directory, create } = await fixture(t)
+  const bundle = join(directory, 'large-file-id.mjs')
+  await writeFile(
+    bundle,
+    `
+import fs from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
+const lstat = fs.lstat
+const open = fs.open
+const identity = (info, path, options) => {
+  if (String(path).endsWith('.json'))
+    info.ino = options?.bigint ? 9007199254740993n : Number(9007199254740993n)
+  return info
+}
+fs.lstat = async (path, options) => identity(await lstat(path, options), path, options)
+fs.open = async (path, ...args) => {
+  const file = await open(path, ...args)
+  const stat = file.stat.bind(file)
+  file.stat = async (options) => identity(await stat(options), path, options)
+  return file
+}
+syncBuiltinESMExports()
+await import(${JSON.stringify(entry.href)})
+`,
+  )
+  const parser = create({ entry: bundle })
+  const expected = await parser.request(
+    parse('# cached [[target]] #work'),
+    current,
+  )
+  assert.deepEqual(await parser.request(descriptor(), current), expected)
+  assert.equal(await headingFrom(parser, expected), 'cached target #work')
+})
+
 test('cache identity requires the running app version', async (t) => {
   const { directory, create, close } = await fixture(t)
   let parser = create()

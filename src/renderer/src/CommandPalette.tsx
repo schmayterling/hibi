@@ -84,7 +84,7 @@ const CommandRow = memo(function CommandRow({
       role="option"
       aria-selected={selected}
       tabIndex={-1}
-      onMouseEnter={() => onHover(index)}
+      onMouseMove={() => onHover(index)}
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => onRun(command)}
       onKeyDown={(event) => {

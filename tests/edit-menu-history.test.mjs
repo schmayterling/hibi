@@ -4,9 +4,13 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
+import {
+  testFormattedEngines as it,
+  selectFormattedEngine,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 
-test('edit menu undo then redo restores text in the rich view, the source view and a plain field', {
+it('edit menu undo then redo restores text in the rich view, the source view and a plain field', {
   timeout: 90000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-edit-history-'))
@@ -21,6 +25,7 @@ test('edit menu undo then redo restores text in the rich view, the source view a
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await rich.waitFor()
   await page.getByRole('button', { name: /dismiss this screen/i }).click()
@@ -91,7 +96,7 @@ test('edit menu undo then redo restores text in the rich view, the source view a
 })
 
 /** A fresh app with an empty note in the rich view. */
-async function launch(t) {
+async function launch(t, engine) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-edit-history-'))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
@@ -104,6 +109,7 @@ async function launch(t) {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, engine)
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await rich.waitFor()
   await page.getByRole('button', { name: /dismiss this screen/i }).click()
@@ -143,10 +149,10 @@ async function launch(t) {
   return { app, page, rich, menu, markdown, settle, typeAndUndo }
 }
 
-test("the edit menu keeps electron's own items beside undo and redo", {
+it("the edit menu keeps electron's own items beside undo and redo", {
   timeout: 60000,
 }, async (t) => {
-  const { app } = await launch(t)
+  const { app } = await launch(t, t.formattedEngine)
   const [items, native] = await app.evaluate(({ Menu }) => {
     const shape = (items) =>
       items
@@ -169,7 +175,10 @@ test("the edit menu keeps electron's own items beside undo and redo", {
 test('edit menu redo leaves a read-only editor alone, as its shortcut does', {
   timeout: 60000,
 }, async (t) => {
-  const { rich, menu, markdown, settle, typeAndUndo } = await launch(t)
+  const { rich, menu, markdown, settle, typeAndUndo } = await launch(
+    t,
+    'tiptap',
+  )
   const undone = await typeAndUndo()
   await rich.evaluate((element) => {
     element.editor.view.focus()
@@ -180,10 +189,13 @@ test('edit menu redo leaves a read-only editor alone, as its shortcut does', {
   assert.equal(await markdown(), undone)
 })
 
-test('edit menu redo in docked devtools leaves the note alone', {
+it('edit menu redo in docked devtools leaves the note alone', {
   timeout: 60000,
 }, async (t) => {
-  const { app, menu, markdown, settle, typeAndUndo } = await launch(t)
+  const { app, menu, markdown, settle, typeAndUndo } = await launch(
+    t,
+    t.formattedEngine,
+  )
   const undone = await typeAndUndo()
   await app.evaluate(async ({ BrowserWindow }) => {
     const [window] = BrowserWindow.getAllWindows()

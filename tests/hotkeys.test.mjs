@@ -16,8 +16,8 @@ import {
   waitForDocumentEditor,
 } from './electron.mjs'
 import {
+  testFormattedEngines as it,
   selectFormattedEngine,
-  testFormattedEngines,
 } from './formatted-engine.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
 
@@ -116,244 +116,234 @@ test('hotkey validation rejects conflicts and preserves standard editing keys', 
   )
 })
 
-testFormattedEngines(
-  'rebind, conflict, clear, reset, native menus, and relaunch persistence',
-  {
-    timeout: 60000,
-  },
-  async (t) => {
-    const profile = await mkdtemp(join(tmpdir(), 'hibi-hotkeys-'))
-    let app
-    const launch = async () => {
-      app = await electron.launch({
-        args: [resolve('.'), `--user-data-dir=${profile}`],
-        colorScheme: null,
-      })
-      await app.evaluate(({ dialog }) => {
-        globalThis.saveCalls = 0
-        dialog.showSaveDialog = async () => {
-          globalThis.saveCalls++
-          return { canceled: true }
-        }
-        dialog.showMessageBox = async () => ({
-          response: 1,
-          checkboxChecked: false,
-        })
-      })
-      return app.firstWindow()
-    }
-    t.after(async () => {
-      await app?.close()
-      await rm(profile, { recursive: true, force: true })
+it('rebind, conflict, clear, reset, native menus, and relaunch persistence', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-hotkeys-'))
+  let app
+  const launch = async () => {
+    app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${profile}`],
+      colorScheme: null,
     })
-    let page = await launch()
-    await selectFormattedEngine(app, page, t.formattedEngine)
-    const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-    const storedMod = process.platform === 'darwin' ? 'meta' : 'ctrl'
-    const rich = page.getByRole('textbox', { name: /document editor/i })
-    await waitForDocumentEditor(app, page)
-    await replaceRichText(page, rich, 'keyboard checks')
-    for (const [key, mode] of [
-      ['Shift+]', 'markdown'],
-      ['Shift+\\', 'side-by-side'],
-      ['Shift+[', 'normal'],
-    ]) {
-      await pressShortcut(app, `${mod}+${key}`)
-      await page.waitForFunction(
-        (mode) =>
-          document
-            .querySelector('.editor-panes')
-            .classList.contains(`mode-${mode}`),
-        mode,
-      )
-    }
-    assert.equal(
-      (await page.evaluate(() => window.hibi.getDocument())).markdown,
-      'keyboard checks',
-    )
-    await pressShortcut(app, `${mod}+k`)
-    const palette = page.getByRole('dialog', { name: /command palette/i })
-    const search = page.getByRole('combobox', { name: /search commands/i })
-    await palette.waitFor()
-    await search.fill('preferences settings')
-    await search.press('Enter')
-    await palette.waitFor({ state: 'hidden' })
-    await page.getByRole('tab', { name: /^hotkeys$/i, exact: true }).click()
-    const binding = page.getByRole('button', {
-      name: /^rebind command palette$/i,
-      exact: true,
-    })
-    // The filter ignores letter case in command names.
-    const filter = page.getByLabel('Filter hotkeys', { exact: true })
-    await filter.fill('Command Palette')
-    await binding.waitFor()
-    assert.equal(
-      await page
-        .getByRole('button', { name: /^rebind new document$/i })
-        .count(),
-      0,
-    )
-    await filter.fill('')
-    // Keys pressed as soon as a recorder shows recording must reach it.
-    await page.evaluate(() => {
-      window.recordingFocus = []
-      new MutationObserver(() => {
-        const recorder = document.querySelector(
-          '.hotkey-recorder[aria-pressed="true"]',
-        )
-        if (recorder)
-          window.recordingFocus.push(document.activeElement === recorder)
-      }).observe(document.body, {
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['aria-pressed'],
+    await app.evaluate(({ dialog }) => {
+      globalThis.saveCalls = 0
+      dialog.showSaveDialog = async () => {
+        globalThis.saveCalls++
+        return { canceled: true }
+      }
+      dialog.showMessageBox = async () => ({
+        response: 1,
+        checkboxChecked: false,
       })
     })
-    await binding.click()
-    await page.waitForFunction(() =>
-      document.querySelector('.hotkey-recorder[aria-pressed="true"]'),
-    )
-    assert.deepEqual(await page.evaluate(() => window.recordingFocus), [true])
-    await pressShortcut(app, `${mod}+s`)
-    await page
-      .getByRole('status')
-      .filter({ hasText: /already used by save document/i })
-      .waitFor()
-    assert.equal(await app.evaluate(() => globalThis.saveCalls), 0)
-    await pressShortcut(app, `${mod}+w`)
-    await page
-      .getByRole('status')
-      .filter({ hasText: /this shortcut closes tabs/i })
-      .waitFor()
-    assert.equal(app.windows().length, 1)
-    await pressShortcut(app, `${mod}+j`)
-    await binding.press('Enter')
+    return app.firstWindow()
+  }
+  t.after(async () => {
+    await app?.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  let page = await launch()
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  const storedMod = process.platform === 'darwin' ? 'meta' : 'ctrl'
+  const rich = page.getByRole('textbox', { name: /document editor/i })
+  await waitForDocumentEditor(app, page)
+  await replaceRichText(page, rich, 'keyboard checks')
+  for (const [key, mode] of [
+    ['Shift+]', 'markdown'],
+    ['Shift+\\', 'side-by-side'],
+    ['Shift+[', 'normal'],
+  ]) {
+    await pressShortcut(app, `${mod}+${key}`)
     await page.waitForFunction(
-      () => !document.querySelector('.hotkey-recorder[aria-pressed="true"]'),
-    )
-    assert.equal(
-      (await page.evaluate(() => window.hibi.getHotkeys())).palette,
-      `${storedMod}+j`,
-    )
-
-    const saveBinding = page.getByRole('button', {
-      name: /^rebind save document$/i,
-      exact: true,
-    })
-    await saveBinding.click()
-    await page.waitForFunction(() =>
-      document.querySelector('.hotkey-recorder[aria-pressed="true"]'),
-    )
-    await pressShortcut(app, `${mod}+Shift+d`)
-    await saveBinding.press('Enter')
-    await page.waitForFunction(
-      () => !document.querySelector('.hotkey-recorder[aria-pressed="true"]'),
-    )
-    const menuSave = await app.evaluate(
-      ({ Menu }) =>
-        Menu.getApplicationMenu()
-          .items.find((item) => item.label === 'File')
-          .submenu.items.find((item) => item.label === 'Save').accelerator,
-    )
-    assert.equal(
-      menuSave.toLowerCase(),
-      `${process.platform === 'darwin' ? 'super' : 'ctrl'}+shift+d`,
-    )
-    await binding.click()
-    await page.waitForFunction(() =>
-      document.querySelector('.hotkey-recorder[aria-pressed="true"]'),
-    )
-    await binding.press('Escape')
-    assert.equal(
-      await page
-        .getByRole('main', { name: /^settings$/i, exact: true })
-        .isVisible(),
-      true,
-    )
-
-    await page
-      .getByRole('button', {
-        name: /^clear shortcut for find in document$/i,
-        exact: true,
-      })
-      .click()
-    await waitForAppState(page, () =>
-      window.hibi.getHotkeys().then((keys) => keys.find === ''),
-    )
-    await page
-      .getByRole('button', {
-        name: /^reset shortcut for find in document$/i,
-        exact: true,
-      })
-      .click()
-    await waitForAppState(page, () =>
-      window.hibi.getHotkeys().then((keys) => !!keys.find),
-    )
-    await page.evaluate(() =>
-      Promise.all(
+      (mode) =>
         document
-          .getAnimations()
-          .map((animation) => animation.finished.catch(() => {})),
-      ),
+          .querySelector('.editor-panes')
+          .classList.contains(`mode-${mode}`),
+      mode,
     )
-    await mkdir('test-results', { recursive: true })
-    await page.screenshot({ path: 'test-results/hotkeys.png' })
-    await page.getByRole('button', { name: /^back to app$/i }).click()
-    await rich.waitFor()
-    await rich.focus()
-    await pressShortcut(app, `${mod}+k`)
-    assert.equal(await palette.count(), 0)
-    await pressShortcut(app, `${mod}+s`)
-    assert.equal(await app.evaluate(() => globalThis.saveCalls), 0)
-    await pressShortcut(app, `${mod}+Shift+d`)
-    await page.waitForFunction(
-      () =>
-        document.querySelector('.titlebar')?.getAttribute('aria-busy') ===
-        'false',
-    )
-    assert.equal(await app.evaluate(() => globalThis.saveCalls), 1)
-    await pressShortcut(app, `${mod}+j`)
-    await palette.waitFor()
-    await search.fill('save document')
-    assert.equal(
-      await palette
-        .locator('.command-results .shortcut-keys kbd')
-        .last()
-        .innerText(),
-      'd',
-    )
-    await search.press('Escape')
-    await palette.waitFor({ state: 'hidden' })
-    assert.equal(
-      (await page.evaluate(() => window.hibi.getDocument())).markdown,
-      'keyboard checks',
-    )
+  }
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    'keyboard checks',
+  )
+  await pressShortcut(app, `${mod}+k`)
+  const palette = page.getByRole('dialog', { name: /command palette/i })
+  const search = page.getByRole('combobox', { name: /search commands/i })
+  await palette.waitFor()
+  await search.fill('preferences settings')
+  await search.press('Enter')
+  await palette.waitFor({ state: 'hidden' })
+  await page.getByRole('tab', { name: /^hotkeys$/i, exact: true }).click()
+  const binding = page.getByRole('button', {
+    name: /^rebind command palette$/i,
+    exact: true,
+  })
+  // The filter ignores letter case in command names.
+  const filter = page.getByLabel('Filter hotkeys', { exact: true })
+  await filter.fill('Command Palette')
+  await binding.waitFor()
+  assert.equal(
+    await page.getByRole('button', { name: /^rebind new document$/i }).count(),
+    0,
+  )
+  await filter.fill('')
+  // Keys pressed as soon as a recorder shows recording must reach it.
+  await page.evaluate(() => {
+    window.recordingFocus = []
+    new MutationObserver(() => {
+      const recorder = document.querySelector(
+        '.hotkey-recorder[aria-pressed="true"]',
+      )
+      if (recorder)
+        window.recordingFocus.push(document.activeElement === recorder)
+    }).observe(document.body, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['aria-pressed'],
+    })
+  })
+  await binding.click()
+  await page.waitForFunction(() =>
+    document.querySelector('.hotkey-recorder[aria-pressed="true"]'),
+  )
+  assert.deepEqual(await page.evaluate(() => window.recordingFocus), [true])
+  await pressShortcut(app, `${mod}+s`)
+  await page
+    .getByRole('status')
+    .filter({ hasText: /already used by save document/i })
+    .waitFor()
+  assert.equal(await app.evaluate(() => globalThis.saveCalls), 0)
+  await pressShortcut(app, `${mod}+w`)
+  await page
+    .getByRole('status')
+    .filter({ hasText: /this shortcut closes tabs/i })
+    .waitFor()
+  assert.equal(app.windows().length, 1)
+  await pressShortcut(app, `${mod}+j`)
+  await binding.press('Enter')
+  await page.waitForFunction(
+    () => !document.querySelector('.hotkey-recorder[aria-pressed="true"]'),
+  )
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getHotkeys())).palette,
+    `${storedMod}+j`,
+  )
 
-    await app.close()
-    page = await launch()
-    await page.getByRole('textbox', { name: /document editor/i }).waitFor()
-    await pressShortcut(app, `${mod}+j`)
-    await page.getByRole('dialog', { name: /command palette/i }).waitFor()
-    assert.equal(
-      (await page.evaluate(() => window.hibi.getHotkeys())).save,
-      `${storedMod}+shift+d`,
-    )
+  const saveBinding = page.getByRole('button', {
+    name: /^rebind save document$/i,
+    exact: true,
+  })
+  await saveBinding.click()
+  await page.waitForFunction(() =>
+    document.querySelector('.hotkey-recorder[aria-pressed="true"]'),
+  )
+  await pressShortcut(app, `${mod}+Shift+d`)
+  await saveBinding.press('Enter')
+  await page.waitForFunction(
+    () => !document.querySelector('.hotkey-recorder[aria-pressed="true"]'),
+  )
+  const menuSave = await app.evaluate(
+    ({ Menu }) =>
+      Menu.getApplicationMenu()
+        .items.find((item) => item.label === 'File')
+        .submenu.items.find((item) => item.label === 'Save').accelerator,
+  )
+  assert.equal(
+    menuSave.toLowerCase(),
+    `${process.platform === 'darwin' ? 'super' : 'ctrl'}+shift+d`,
+  )
+  await binding.click()
+  await page.waitForFunction(() =>
+    document.querySelector('.hotkey-recorder[aria-pressed="true"]'),
+  )
+  await binding.press('Escape')
+  assert.equal(
     await page
-      .getByRole('combobox', { name: /search commands/i })
-      .fill('preferences settings')
-    await page
-      .getByRole('combobox', { name: /search commands/i })
-      .press('Enter')
-    await page.getByRole('tab', { name: /^hotkeys$/i, exact: true }).click()
-    await page
-      .getByRole('button', { name: /^reset all$/i, exact: true })
-      .click()
-    await waitForAppState(page, () =>
-      window.hibi.getHotkeys().then((keys) => keys.palette.endsWith('+k')),
-    )
-    assert.deepEqual(
-      await page.evaluate(() => window.hibi.getHotkeys()),
-      defaultHotkeys(process.platform),
-    )
-  },
-)
+      .getByRole('main', { name: /^settings$/i, exact: true })
+      .isVisible(),
+    true,
+  )
+
+  await page
+    .getByRole('button', {
+      name: /^clear shortcut for find in document$/i,
+      exact: true,
+    })
+    .click()
+  await waitForAppState(page, () =>
+    window.hibi.getHotkeys().then((keys) => keys.find === ''),
+  )
+  await page
+    .getByRole('button', {
+      name: /^reset shortcut for find in document$/i,
+      exact: true,
+    })
+    .click()
+  await waitForAppState(page, () =>
+    window.hibi.getHotkeys().then((keys) => !!keys.find),
+  )
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .map((animation) => animation.finished.catch(() => {})),
+    ),
+  )
+  await mkdir('test-results', { recursive: true })
+  await page.screenshot({ path: 'test-results/hotkeys.png' })
+  await page.getByRole('button', { name: /^back to app$/i }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, `${mod}+k`)
+  assert.equal(await palette.count(), 0)
+  await pressShortcut(app, `${mod}+s`)
+  assert.equal(await app.evaluate(() => globalThis.saveCalls), 0)
+  await pressShortcut(app, `${mod}+Shift+d`)
+  await page.waitForFunction(
+    () =>
+      document.querySelector('.titlebar')?.getAttribute('aria-busy') ===
+      'false',
+  )
+  assert.equal(await app.evaluate(() => globalThis.saveCalls), 1)
+  await pressShortcut(app, `${mod}+j`)
+  await palette.waitFor()
+  await search.fill('save document')
+  assert.equal(
+    await palette
+      .locator('.command-results .shortcut-keys kbd')
+      .last()
+      .innerText(),
+    'd',
+  )
+  await search.press('Escape')
+  await palette.waitFor({ state: 'hidden' })
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    'keyboard checks',
+  )
+
+  await app.close()
+  page = await launch()
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  await pressShortcut(app, `${mod}+j`)
+  await page.getByRole('dialog', { name: /command palette/i }).waitFor()
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getHotkeys())).save,
+    `${storedMod}+shift+d`,
+  )
+  await page
+    .getByRole('combobox', { name: /search commands/i })
+    .fill('preferences settings')
+  await page.getByRole('combobox', { name: /search commands/i }).press('Enter')
+  await page.getByRole('tab', { name: /^hotkeys$/i, exact: true }).click()
+  await page.getByRole('button', { name: /^reset all$/i, exact: true }).click()
+  await waitForAppState(page, () =>
+    window.hibi.getHotkeys().then((keys) => keys.palette.endsWith('+k')),
+  )
+  assert.deepEqual(
+    await page.evaluate(() => window.hibi.getHotkeys()),
+    defaultHotkeys(process.platform),
+  )
+})

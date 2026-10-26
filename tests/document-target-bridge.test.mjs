@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -103,6 +104,7 @@ test('installed addon edits inactive documents and guards deferred legacy comman
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, 'tiptap')
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await page.waitForFunction(() => !!window.targetProbe)
   async function open(file) {

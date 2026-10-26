@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 
 test('spell checking toggles live, persists, and preserves text in both views', {
@@ -21,6 +24,7 @@ test('spell checking toggles live, persists, and preserves text in both views', 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(6000)
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await waitForDocumentEditor(app, page)
@@ -54,7 +58,7 @@ test('spell checking toggles live, persists, and preserves text in both views', 
   await page.getByRole('textbox', { name: /markdown editor/i }).waitFor()
   assert.equal(await rich.getAttribute('spellcheck'), 'true')
   assert.equal(
-    await page.locator('.cm-content').getAttribute('spellcheck'),
+    await page.locator('.source-pane .cm-content').getAttribute('spellcheck'),
     'false',
   )
   assert.equal(

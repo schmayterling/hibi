@@ -135,6 +135,74 @@ test('visual typing after a source visit defers the hidden source and toolbar ch
   assert.deepEqual(shown, { text: 'hello', persisted: 'hello' })
 })
 
+test('multi-line text input reaches source view in one edit, without native paragraph steps', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-source-lines-'))
+  const app = await launchBenchmarkApp(profile)
+  t.after(async () => {
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForEditor(page)
+  await switchToSource(app, page)
+  const source = page.getByRole('textbox', { name: /markdown editor/i })
+  await page.evaluate(() => {
+    const probe = { added: 0, prevented: [] }
+    window.sourceLineInput = probe
+    new MutationObserver((records) => {
+      for (const record of records) probe.added += record.addedNodes.length
+    }).observe(document.querySelector('.cm-content'), {
+      childList: true,
+      subtree: true,
+    })
+    window.addEventListener('beforeinput', (event) =>
+      probe.prevented.push(event.defaultPrevented),
+    )
+  })
+  const insert = async (text) => {
+    await source.press('ControlOrMeta+a')
+    await page.evaluate(() => {
+      window.sourceLineInput.added = 0
+      window.sourceLineInput.prevented = []
+    })
+    await page.keyboard.insertText(text)
+    await waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      text,
+    )
+    return page.evaluate(async () => {
+      await new Promise(requestAnimationFrame)
+      const view = document.querySelector('.cm-content').cmTile.root.view
+      return {
+        ...window.sourceLineInput,
+        text: view.state.doc.toString(),
+        head: view.state.selection.main.head,
+      }
+    })
+  }
+  const paragraphs = (count) =>
+    Array.from({ length: count }, (_, index) => `line ${index}`).join('\n\n')
+  const small = await insert(paragraphs(100))
+  const large = await insert(paragraphs(1000))
+  const added = JSON.stringify({ small: small.added, large: large.added })
+  for (const [result, text] of [
+    [small, paragraphs(100)],
+    [large, paragraphs(1000)],
+  ]) {
+    assert.deepEqual(result.prevented, [true], added)
+    assert.equal(result.text, text)
+    assert.equal(result.head, text.length)
+  }
+  // The editor renders its viewport once instead of the browser adding a
+  // block per line break, so the work no longer grows with the paragraphs.
+  assert.ok(large.added < 1000 && large.added < small.added * 2, added)
+  const plain = await insert('one line')
+  assert.deepEqual([plain.prevented, plain.text], [[false], 'one line'])
+})
+
 test('formatting toolbar states match each action check across selections, typing and history', {
   timeout: 60000,
 }, async (t) => {

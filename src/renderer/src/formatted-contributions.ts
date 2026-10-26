@@ -152,6 +152,14 @@ export type FormattedContribution = {
 /** Markdown extensions of the active contributions, read by the formatted syntax. */
 export const formattedMarkdown = Facet.define<MarkdownConfig>()
 
+/** The view's active flavor ids also identify worker boundary configurations. */
+export const formattedFlavors = Facet.define<
+  readonly string[],
+  readonly string[]
+>({
+  combine: (values) => values.at(-1) ?? [],
+})
+
 /** Node views of the active contributions, read by the live preview. */
 export const formattedViews = Facet.define<FormattedNodeView>()
 
@@ -294,6 +302,7 @@ export const formattedContributions = {
           : [],
       )
     return [
+      formattedFlavors.of(flavors ?? []),
       literal.map((name) => formattedLiteral.of(name)),
       formattedRegistry.entries().flatMap((entry) => {
         load(entry)

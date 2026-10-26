@@ -3395,8 +3395,8 @@ export function MarkdownEditor({
           onCloseFind()
           if (findTarget === 'rich') editor?.commands.focus()
           else
-            window.document
-              .querySelector<HTMLElement>('.source-pane .cm-content')
+            content.current
+              ?.querySelector<HTMLElement>('.source-pane .cm-content')
               ?.focus()
         }}
       />

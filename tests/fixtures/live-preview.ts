@@ -1,5 +1,8 @@
+import { history, isolateHistory, redo, undo } from '@codemirror/commands'
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, WidgetType } from '@codemirror/view'
+import { DocumentWorkerClient } from '../../src/renderer/src/document-worker-client'
+import { DocumentSession } from '../../src/shared/document-session'
 import '../../src/renderer/src/styles.css'
 // The app's control styles, such as its thin scrollbars, so panes look alike.
 import '../../src/ui/controls.css'
@@ -22,6 +25,30 @@ const probe: ChunkedMarkdownProbe = {
   builtGroups: 0,
 }
 let view: EditorView | null = null
+let workerClient: DocumentWorkerClient | null = null
+let workerSession: DocumentSession | null = null
+const workerState = {
+  ready: false,
+  requests: 0,
+  ranges: [] as number[],
+  pages: 0,
+  maxRecords: 0,
+  errors: [] as string[],
+}
+function applyHistory(command: typeof undo) {
+  if (!view) return false
+  return command({
+    state: view.state,
+    dispatch(transaction) {
+      const changes: { from: number; to: number; insert: string }[] = []
+      transaction.changes.iterChanges((from, to, _fromB, _toB, insert) => {
+        changes.push({ from, to, insert: insert.toString() })
+      })
+      workerSession?.edit(changes, 'source', 'test')
+      view!.dispatch(transaction)
+    },
+  })
+}
 let revisionLayouts = 0
 const documentRevision = new Compartment()
 const revisionOf = (revision: number, tabId: string | null = null) =>
@@ -52,10 +79,21 @@ const panes = document.querySelector<HTMLElement>('.editor-panes')!
 Object.assign(window, {
   livePreview: {
     probe,
+    workerState,
     async mount(
       doc: string,
       size?: { width: number; height: number },
-      { editable, ...options }: { slice?: number; editable?: boolean } = {},
+      {
+        editable,
+        worker = false,
+        history: withHistory = false,
+        ...options
+      }: {
+        slice?: number
+        editable?: boolean
+        worker?: boolean
+        history?: boolean
+      } = {},
     ) {
       if (size)
         Object.assign(panes.style, {
@@ -71,13 +109,74 @@ Object.assign(window, {
         ),
       )
       view?.destroy()
-      syntax = formattedSyntax({ probe, ...options })
+      workerClient?.dispose()
+      workerSession?.dispose()
+      workerClient = null
+      workerSession = null
+      Object.assign(workerState, {
+        ready: false,
+        requests: 0,
+        ranges: [],
+        pages: 0,
+        maxRecords: 0,
+        errors: [],
+      })
+      if (worker) {
+        workerSession = new DocumentSession(
+          doc,
+          { tabId: 'worker-fixture', revision: 0 },
+          0,
+          {
+            enqueue: () => {},
+            onError: (error) => workerState.errors.push(String(error)),
+          },
+        )
+        workerClient = new DocumentWorkerClient(workerSession, {
+          changed: () => {},
+          pending: () => {},
+          result: () => {},
+          error: (error) => workerState.errors.push(error),
+        })
+      }
+      syntax = formattedSyntax({
+        probe,
+        ...options,
+        ...(worker
+          ? {
+              boundaries: {
+                request: (config, receive, declined, from) => {
+                  workerState.requests++
+                  workerState.ranges.push(from ?? 0)
+                  workerState.ready = false
+                  workerClient!.boundaries(
+                    config,
+                    (page, ack) => {
+                      workerState.pages++
+                      workerState.maxRecords = Math.max(
+                        workerState.maxRecords,
+                        page.records.length,
+                      )
+                      receive(page, () => {
+                        workerState.ready = page.done
+                        ack()
+                      })
+                    },
+                    declined,
+                    from,
+                  )
+                },
+                release: (retain) => workerClient?.releaseBoundaries(retain),
+              },
+            }
+          : {}),
+      })
       view = new EditorView({
         parent: host,
         state: EditorState.create({
           doc,
           extensions: [
             livePreview(syntax),
+            withHistory ? history() : [],
             documentRevision.of(revisionOf(0)),
             editable
               ? []
@@ -91,6 +190,48 @@ Object.assign(window, {
       await new Promise(requestAnimationFrame)
     },
     view: () => view,
+    /** An external canonical edit mirrored to the formatted surface. */
+    edit(from: number, to: number, insert: string) {
+      workerSession?.edit([{ from, to, insert }], 'source', 'test')
+      view?.dispatch({
+        changes: { from, to, insert },
+        annotations: isolateHistory.of('full'),
+      })
+    },
+    undo: () => applyHistory(undo),
+    redo: () => applyHistory(redo),
+    sourceMatchesView: () =>
+      !workerSession ||
+      view?.state.doc.toString() === workerSession.snapshot().materialize(),
+    /** An unknown block grammar must keep its main-thread parser. */
+    unknownBlock: () =>
+      formattedRegistry.register({
+        id: 'test.unknown-block',
+        load: () => ({
+          id: 'test.unknown-block',
+          syntax: {
+            defineNodes: [{ name: 'UnknownBlock', block: true }],
+            parseBlock: [
+              {
+                name: 'UnknownBlock',
+                before: 'FencedCode',
+                parse(cx, line) {
+                  if (line.text.slice(line.pos) !== '%%') return false
+                  cx.addElement(
+                    cx.elt(
+                      'UnknownBlock',
+                      cx.parsedPos,
+                      cx.parsedPos + line.text.length,
+                    ),
+                  )
+                  cx.nextLine()
+                  return true
+                },
+              },
+            ],
+          },
+        }),
+      }),
     revisionLayouts: () => revisionLayouts,
     /** A contributed layout that shows the document revision before each paragraph; returns its removal. */
     showRevisions: () =>

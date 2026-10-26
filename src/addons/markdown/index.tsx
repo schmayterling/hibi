@@ -48,6 +48,7 @@ const obsidian: MarkdownFlavor = {
 }
 
 let removeFormatted: (() => void) | undefined
+let stopFormatted: (() => void) | undefined
 
 export default defineAddon({
   manifest,
@@ -58,6 +59,11 @@ export default defineAddon({
     removeFormatted = formattedRegistry.register({
       id: 'markdown.alerts',
       load: () => import('./formatted').then((module) => module.contribution),
+    })
+    stopFormatted = formattedRegistry.register({
+      id: 'markdown.obsidian',
+      load: () =>
+        import('./formatted-obsidian').then(({ contribution }) => contribution),
     })
     context.editor.registerFlavor(github)
     context.editor.registerFlavor(obsidian)
@@ -160,5 +166,7 @@ export default defineAddon({
   stop() {
     removeFormatted?.()
     removeFormatted = undefined
+    stopFormatted?.()
+    stopFormatted = undefined
   },
 })

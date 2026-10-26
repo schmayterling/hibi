@@ -22,6 +22,15 @@ const commands: PaletteCommand[] = Array.from({ length: 2000 }, (_, index) => ({
   },
   run() {},
 }))
+commands.push(
+  ...['ΟΔΟΣ', 'οδος', 'οδοσ'].map((label, index) => ({
+    id: `greek-${index}`,
+    label,
+    category: 'app' as const,
+    keywords: 'ΑΣΑ',
+    run() {},
+  })),
+)
 const search = (query: string) => {
   counts.searches++
   return commands.filter((command) => command.label.includes(query.trim()))

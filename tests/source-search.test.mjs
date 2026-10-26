@@ -23,7 +23,9 @@ const oracle = (source, query, caseSensitive) => {
     query,
     0,
     text.length,
-    caseSensitive ? undefined : (text) => text.toLowerCase(),
+    caseSensitive
+      ? undefined
+      : (text) => text.toLowerCase().replaceAll('ς', 'σ'),
   )
   const found = []
   while (!cursor.next().done) found.push({ ...cursor.value })
@@ -82,6 +84,37 @@ test('ENG25: chunked literal search agrees with native search across Unicode and
         assert.equal(found.total, found.matches.length)
         assert.equal(found.scanned, normalizedSource(source).length)
       }
+    assert.equal(store.counters().materializations, 0)
+  }
+})
+
+test('source find matches Greek sigma forms at word ends, inside words and beside punctuation', () => {
+  const text = '😀ΟΔΟΣ οδος οδοσ;ΟΔΟΣ! ΑΣΑ ΑςΑ ΑσΑ ΣΣΣΣ,ΣΣ.'
+  for (const chunkUnits of [16, 17, 19, 32]) {
+    const store = new SourceStore(text, { tabId: 'sigma', revision: 0 }, 0, {
+      chunkUnits,
+    })
+    for (const query of ['ΟΔΟΣ', 'οδος', 'οδοσ'])
+      assert.deepEqual(
+        collect(searchSourceLiteral(store.snapshot(), query)).matches,
+        [2, 7, 12, 17].map((from) => ({ from, to: from + 4, precise: true })),
+        JSON.stringify({ query, chunkUnits }),
+      )
+    for (const query of ['Σ', 'σ', 'ς'])
+      assert.deepEqual(
+        collect(searchSourceLiteral(store.snapshot(), query)).matches,
+        Array.from(text.matchAll(/[Σσς]/gu), ({ index: from }) => ({
+          from,
+          to: from + 1,
+          precise: true,
+        })),
+        JSON.stringify({ query, chunkUnits }),
+      )
+    for (const query of ['ΑΣΑ', 'ΑςΑ', 'ΑσΑ'])
+      assert.deepEqual(
+        collect(searchSourceLiteral(store.snapshot(), query)).matches,
+        [23, 27, 31].map((from) => ({ from, to: from + 3, precise: true })),
+      )
     assert.equal(store.counters().materializations, 0)
   }
 })

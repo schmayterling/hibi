@@ -57,7 +57,7 @@ export default defineAddon({
         workspaceName,
         documentId,
         documentName,
-        available: dictionary?.version === 1,
+        available: dictionary?.version === 1 || dictionary?.version === 2,
         clear,
       })
     const personalize = () => {
@@ -160,7 +160,7 @@ export default defineAddon({
         if (choice !== null) await clear(choice)
       },
     })
-    if (dictionary?.version !== 1) return
+    if (dictionary?.version !== 1 && dictionary?.version !== 2) return
     context.editor.onTypingContext((event) => {
       if (!session || event.view.documentId !== session.documentId) return
       const preferences = readPreferences()

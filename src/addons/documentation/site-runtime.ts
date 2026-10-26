@@ -31,13 +31,14 @@ export async function readSiteFiles(
   return result
 }
 
-/** One owned worker and one acknowledged page at a time. */
+/** One owned worker serializes the bounded render/stage window. */
 export class SiteWorker {
   private worker: Worker
   private pending:
     | { resolve: (result: unknown) => void; reject: (error: Error) => void }
     | undefined
   private failure: Error | undefined
+  private queue = Promise.resolve()
 
   constructor(path: string | URL) {
     this.worker = new Worker(path)
@@ -66,6 +67,15 @@ export class SiteWorker {
   }
 
   request<T = void>(job: SiteWorkerRequest): Promise<T> {
+    const result = this.queue.then(() => this.send<T>(job))
+    this.queue = result.then(
+      () => {},
+      () => {},
+    )
+    return result
+  }
+
+  private send<T>(job: SiteWorkerRequest): Promise<T> {
     if (this.failure) return Promise.reject(this.failure)
     if (this.pending)
       return Promise.reject(new Error('Another export is already in progress.'))

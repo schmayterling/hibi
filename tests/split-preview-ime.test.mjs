@@ -293,7 +293,11 @@ test('native source IME survives split preview catch-up and keeps one undo group
     '日本語😀',
   )
   const saved = await page.evaluate(() => window.hibi.saveDocument(false))
-  assert.equal(saved.markdown, committed)
+  assert.equal(saved.saveReceipt, true)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    committed,
+  )
   assert.equal(await readFile(file, 'utf8'), committed)
   await page
     .getByRole('textbox', { name: 'Document editor', exact: true })

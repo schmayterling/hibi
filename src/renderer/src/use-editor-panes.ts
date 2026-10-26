@@ -8,14 +8,19 @@ import {
 import type { DocumentView } from '../../shared/document-types'
 
 /** Keep source focus and pane transitions identical across editor surfaces. */
-export function useEditorPanes(mode: DocumentView, markdownDocument: boolean) {
+export function useEditorPanes(
+  mode: DocumentView,
+  markdownDocument: boolean,
+  sourceFirst = false,
+) {
   const [focusedPane, setFocusedPane] = useState<'rich' | 'source'>('rich')
   const [sourceMounted, setSourceMounted] = useState(mode !== 'normal')
   const [sourceReady, setSourceReady] = useState(false)
   const [sourceSettled, setSourceSettled] = useState(false)
   const [initialMode] = useState(mode)
   // Only the first opening from normal view waits for source layout.
-  const paneMode = sourceSettled || initialMode !== 'normal' ? mode : 'normal'
+  const paneMode =
+    sourceFirst || sourceSettled || initialMode !== 'normal' ? mode : 'normal'
   const content = useRef<HTMLDivElement>(null)
   const previousFocusMode = useRef(mode)
   const focusOwner = useRef<Element | null>(window.document.activeElement)

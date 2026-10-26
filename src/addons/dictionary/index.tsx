@@ -22,8 +22,8 @@ import { createDictionaryApi, type DictionaryApi } from './api'
 import {
   addCustomWord,
   customWordsProvider,
-  listCustomWords,
   openCustomWords,
+  readCustomWords,
 } from './custom-words'
 import css from './dictionary.css?inline'
 import { detectLangs, type LookupTarget, matchCase, wordAt } from './lookup'
@@ -578,7 +578,7 @@ export default defineAddon({
       createDictionaryApi(
         context.native,
         () => detectLangs('word', readPreferences()),
-        listCustomWords,
+        readCustomWords,
       ),
     )
     stopAddon = () => {

@@ -4,6 +4,7 @@ import { DocumentWorkerClient } from '../src/renderer/src/document-worker-client
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
 import { MarkdownSemanticCache } from '../src/shared/markdown-semantic-cache.ts'
+import { loadWorker } from './document-worker-transfer.mjs'
 
 const syntax = { gfm: true, alerts: true, textExtras: true }
 const wait = async (predicate) => {
@@ -25,13 +26,7 @@ function fixture(t, initial) {
   const load = (body = source) => {
     source = body
     version = 0
-    worker.receive({
-      type: 'load',
-      epoch: 'semantic',
-      document: { tabId: 'a', revision: 0 },
-      version,
-      chunks: source.match(/[\s\S]{1,65536}/g) ?? [],
-    })
+    loadWorker(worker, messages, source, 'semantic')
   }
   const send = (extra = {}) => {
     const request = {
@@ -393,13 +388,32 @@ test('client forwards semantic syntax and discards stale epoch, request and sour
       terminate: () => {},
       postMessage(message) {
         sent.push(message)
-        if (message.type === 'load' || message.type === 'edit')
-          queueMicrotask(() =>
+        if (message.type === 'load-start' || message.type === 'load-chunk')
+          setImmediate(() =>
+            worker.onmessage({
+              data: {
+                type: 'load-ack',
+                epoch: message.epoch,
+                request:
+                  message.type === 'load-start'
+                    ? { streamId: message.head.streamId, sequence: 0 }
+                    : {
+                        streamId: message.chunk.streamId,
+                        sequence: message.chunk.sequence + 1,
+                      },
+              },
+            }),
+          )
+        else if (message.type === 'load-finish' || message.type === 'edit')
+          setImmediate(() =>
             worker.onmessage({
               data: {
                 type: 'ack',
                 epoch: message.epoch,
-                version: message.version ?? message.operation.contentVersion,
+                version:
+                  message.type === 'edit'
+                    ? message.operation.contentVersion
+                    : 0,
               },
             }),
           )

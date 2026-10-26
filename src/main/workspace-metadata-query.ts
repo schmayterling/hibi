@@ -10,11 +10,13 @@ import type {
   WorkspaceReferenceQueryResult,
 } from '../shared/workspace-query.ts'
 import {
-  indexWorkspace,
   isCurrentWorkspaceTarget,
   listenWorkspaceChanges,
   workspaceChangeCursor,
   workspaceIndexRevision,
+  workspaceMetadataDelta,
+  workspaceMetadataHeadings,
+  workspaceMetadataPages,
 } from './workspace'
 import { LatestIndexJob } from './workspace-index-job'
 import {
@@ -24,6 +26,7 @@ import {
 import { workspaceSyntax } from './workspace-syntax'
 
 const references = new WorkspaceReferenceIndex()
+const maxFieldBytes = 32 * 1024
 type GraphCursorState = {
   target: WorkspaceTarget
   sequence: number
@@ -103,7 +106,7 @@ const failure = (
   message: string,
 ): OperationResult<never, QueryFailure> => ({ ok: false, code, message })
 
-/** Main-process queries reuse indexWorkspace's pages and dirty document overlay. */
+/** Main-process queries share a metadata stream and the dirty document overlay. */
 export async function queryWorkspaceReferences(
   input: unknown,
   getOpenDocumentVersions: () => readonly OpenDocumentVersion[],
@@ -144,7 +147,7 @@ export async function queryWorkspaceReferences(
   if (
     kind === 'tag' &&
     (typeof request.tag !== 'string' ||
-      request.tag.length > 128 ||
+      Buffer.byteLength(request.tag) > maxFieldBytes ||
       !/^[\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)*$/u.test(request.tag) ||
       !/[\p{L}_]/u.test(request.tag))
   )
@@ -161,13 +164,13 @@ export async function queryWorkspaceReferences(
     kind === 'property' &&
     (typeof request.key !== 'string' ||
       !request.key ||
-      request.key.length > 128 ||
+      Buffer.byteLength(request.key) > maxFieldBytes ||
       !(
         request.value === null ||
         typeof request.value === 'boolean' ||
         (typeof request.value === 'number' && Number.isFinite(request.value)) ||
         (typeof request.value === 'string' &&
-          Buffer.byteLength(request.value) <= 4096)
+          Buffer.byteLength(request.value) <= maxFieldBytes)
       ))
   )
     return failure('unsupported', 'Choose a bounded property predicate.')
@@ -212,7 +215,6 @@ export async function queryWorkspaceReferences(
     if (
       !Number.isSafeInteger(offset) ||
       offset < 0 ||
-      offset > 2000 ||
       !Number.isSafeInteger(limit) ||
       limit < 1 ||
       limit > 100
@@ -258,13 +260,7 @@ export async function queryWorkspaceReferences(
         syntax.fingerprint,
       ]),
       request: async (current) => {
-        const index = await indexWorkspace()
-        if (
-          !current() ||
-          !sourceCurrent() ||
-          index?.workspace.id !== target.workspaceId
-        )
-          return false
+        if (!current() || !sourceCurrent()) return false
         if (
           hasIndexedSnapshot(
             target,
@@ -275,13 +271,33 @@ export async function queryWorkspaceReferences(
           )
         )
           return true
-        const applied = await references.applyCooperatively(
-          target,
-          index.pages,
-          syntax.page,
-          () => current() && sourceCurrent(),
-        )
-        if (!applied) return false
+        const active = () => current() && sourceCurrent()
+        const sameSnapshot =
+          indexedTarget?.workspaceId === target.workspaceId &&
+          indexedTarget.workspaceGeneration === target.workspaceGeneration &&
+          indexedSyntaxFingerprint === syntax.fingerprint
+        const delta = sameSnapshot
+          ? await workspaceMetadataDelta(syntax, active)
+          : null
+        if (!active()) return false
+        let commit = delta?.commit
+        let applied = delta?.pages.every((page) => references.has(page.path))
+          ? await references.applyDeltaCooperatively(
+              target,
+              delta.pages,
+              active,
+            )
+          : null
+        if (!applied && active()) {
+          const read = workspaceMetadataPages(syntax, active)
+          applied = await references.applyMetadataCooperatively(
+            target,
+            read.pages,
+            active,
+          )
+          commit = read.commit
+        }
+        if (!applied || !commit?.()) return false
         graphCursors.clear()
         indexedTarget = target
         indexedSequence = before.sequence
@@ -291,17 +307,8 @@ export async function queryWorkspaceReferences(
         return true
       },
     }
-    try {
-      if (!(await referenceJob.request(latestBuild)))
-        return failure('stale', 'This workspace changed. Try again.')
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.includes('index up to 2,000 documents')
-      )
-        return failure('limit-exceeded', error.message)
-      throw error
-    }
+    if (!(await referenceJob.request(latestBuild)))
+      return failure('stale', 'This workspace changed. Try again.')
   }
   const after = workspaceChangeCursor()
   if (!sourceCurrent())
@@ -328,6 +335,7 @@ export async function queryWorkspaceReferences(
     sequence: after.sequence,
     stale: after.stale,
     complete: after.complete && references.isComplete(),
+    incompletePaths: references.incompletePaths(),
     capReached: after.capReached,
   }
   if (kind === 'resolve')
@@ -454,7 +462,14 @@ export async function queryWorkspaceReferences(
       },
     }
   }
-  if (kind === 'search-paths')
+  if (kind === 'search-paths') {
+    const result = await references.searchPathsCooperatively(
+      request.query as string,
+      offset,
+      limit,
+      cacheCurrent,
+    )
+    if (!result) return failure('stale', 'This workspace changed. Try again.')
     return {
       ok: true,
       value: {
@@ -462,11 +477,20 @@ export async function queryWorkspaceReferences(
         complete: after.complete,
         unsupportedSyntax: false,
         kind,
-        ...references.searchPaths(request.query as string, offset, limit),
+        ...result,
       },
     }
+  }
   if (kind === 'headings') {
-    const result = references.headings(path as string, offset, limit)
+    const result = await workspaceMetadataHeadings(
+      path as string,
+      syntax,
+      offset,
+      limit,
+      cacheCurrent,
+    )
+    if (!result || !cacheCurrent())
+      return failure('stale', 'This workspace changed. Try again.')
     return {
       ok: true,
       value: {
@@ -480,15 +504,21 @@ export async function queryWorkspaceReferences(
       },
     }
   }
+  const result = await references.referencesCooperatively(
+    kind,
+    path as string,
+    offset,
+    limit,
+    cacheCurrent,
+  )
+  if (!result) return failure('stale', 'This workspace changed. Try again.')
   return {
     ok: true,
     value: {
       ...base,
       kind,
       path: path as string,
-      ...(kind === 'links'
-        ? references.links(path as string, offset, limit)
-        : references.backlinks(path as string, offset, limit)),
+      ...result,
     },
   }
 }

@@ -204,6 +204,6 @@ Desktop and exported sidebars default to 256 px while respecting saved widths. D
 
 ## Compatibility
 
-The public API is version 2. Source plugins must include `version` and `apiVersion: 2`; bundled plugins use this contract. Versioned API v1 packages remain runtime-compatible and are normalized on installation. Both processes reject empty/missing versions and unsupported API versions.
+The public API is version 3. New plugins include `version` and `apiVersion: 3`; API v1 and v2 packages remain loadable and are normalized on installation. For the CodeMirror formatted view, flavors contribute `syntax` and `render`, and `context.editor.registerFormatted` installs per-view extensions. The `formatted` SDK capability adds Lezer Markdown as `sdk.codeMirror.markdown`. See [formatted view contributions](architecture.md#formatted-view-contributions) for rendering and legacy compatibility. Both processes reject empty/missing versions and unsupported API versions.
 
 Preserve signatures when adding capabilities. Breaking changes require an API version bump, addon migrations, and documentation updates. `npm start` regenerates references when declarations change. Otherwise run `npm run docs`; `npm run docs:check`, included in `npm run check`, rejects stale references. Update the addon README with behavior changes.

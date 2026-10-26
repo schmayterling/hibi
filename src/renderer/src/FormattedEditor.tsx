@@ -33,7 +33,7 @@ const MarkdownSourceEditor = lazy(() =>
 )
 
 /** Source extensions such as Vim belong to the source pane only. */
-const formattedExtensions: readonly SourceExtension[] = []
+const noFormattedExtensions: readonly SourceExtension[] = []
 /** A properties editor above the text shows the frontmatter instead. */
 const propertiesExtensions: readonly SourceExtension[] = [
   {
@@ -62,6 +62,7 @@ export function MarkdownEditor({
   onCloseFind,
   markdownExtensions,
   sourceExtensions,
+  formattedExtensions = noFormattedExtensions,
   cursorSettings,
   showLineNumbers,
   spellCheck,
@@ -75,6 +76,16 @@ export function MarkdownEditor({
   onActiveOutline,
 }: Parameters<typeof RichMarkdownEditor>[0]) {
   const markdownDocument = format?.editing === 'markdown'
+  const editorExtensions = useMemo(
+    () =>
+      markdownDocument &&
+      markdownExtensions.some(
+        ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
+      )
+        ? [...propertiesExtensions, ...formattedExtensions]
+        : formattedExtensions,
+    [markdownDocument, markdownExtensions, formattedExtensions],
+  )
   const syntaxVersion = useSyncExternalStore(
     markdownSyntax.subscribe,
     markdownSyntax.version,
@@ -298,14 +309,7 @@ export function MarkdownEditor({
                 waitForFont
                 onLink={onLink}
                 onFormatting={attachRich}
-                sourceExtensions={
-                  markdownDocument &&
-                  markdownExtensions.some(
-                    ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
-                  )
-                    ? propertiesExtensions
-                    : formattedExtensions
-                }
+                sourceExtensions={editorExtensions}
                 showLineNumbers={false}
                 onReady={(status) => setFormattedReady(status === 'ready')}
                 disabled={disabled}
@@ -355,6 +359,7 @@ export function MarkdownEditor({
                   onLink={onLink}
                   onFormatting={attachSource}
                   sourceExtensions={sourceExtensions}
+                  flavors={flavorIds}
                   showLineNumbers={showLineNumbers}
                   onReady={(status) => {
                     setSourceReady(status === 'ready')

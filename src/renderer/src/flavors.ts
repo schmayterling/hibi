@@ -58,11 +58,19 @@ export const flavors = {
     if (!/^[a-z][a-z0-9-]*$/.test(flavor.id) || registry.has(id))
       throw new Error(`invalid or duplicate flavor: ${id}`)
     const item = { ...flavor, id, addonId }
+    let active = true
+    let removeFormatted: (() => void) | undefined
+    if (flavor.syntax || flavor.render)
+      void import('./formatted-flavor').then(({ registerFormattedFlavor }) => {
+        if (active) removeFormatted = registerFormattedFlavor(addonId, flavor)
+      })
     registry.set(id, item)
     publish()
     return () => {
       if (registry.get(id) === item) {
+        active = false
         registry.delete(id)
+        removeFormatted?.()
         publish()
       }
     }

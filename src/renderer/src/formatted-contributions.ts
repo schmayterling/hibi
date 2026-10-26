@@ -5,9 +5,20 @@ import {
   Prec,
   StateEffect,
 } from '@codemirror/state'
-import { type KeyBinding, keymap, type WidgetType } from '@codemirror/view'
-import type { SyntaxNodeRef, Tree } from '@lezer/common'
+import { type KeyBinding, keymap } from '@codemirror/view'
+import type { Tree } from '@lezer/common'
 import type { MarkdownConfig } from '@lezer/markdown'
+import type { FormattedNodeView } from '../../addons/api'
+
+export type {
+  FormattedContainer,
+  FormattedDecorations,
+  FormattedLayout,
+  FormattedNodeView,
+  FormattedRenderContext,
+} from '../../addons/api'
+
+import { formattedCompatibility } from './formatted-compatibility.ts'
 import { type FormattedEntry, formattedRegistry } from './formatted-registry.ts'
 import { markdownSyntax } from './markdown-syntax.ts'
 
@@ -18,106 +29,6 @@ import { markdownSyntax } from './markdown-syntax.ts'
  * ranges, so renderers only declare decorations for the node they are given.
  * This is the internal shape of addon API 3.
  */
-
-/** Decorations for a node in the visible ranges, rebuilt as the viewport, text or selection change. */
-export type FormattedDecorations = {
-  /** Attributes, such as `class`, for text in the node. */
-  mark(from: number, to: number, attributes: Record<string, string>): void
-  /**
-   * Markdown syntax: hidden and atomic, or an editable marker while the node
-   * is revealed. Stays on one line.
-   */
-  syntax(from: number, to: number): void
-  /** Attributes for the line starting at `at`; classes and styles merge with other renderers'. */
-  line(at: number, attributes: Record<string, string>): void
-  /** An inline widget at `at`, after the text there unless `side` is -1. */
-  widget(at: number, widget: WidgetType, side?: -1 | 1): void
-  /** Replace text on one line with a widget, or hide it without one. Atomic. */
-  replace(from: number, to: number, widget?: WidgetType): void
-}
-
-/**
- * Decorations that change the document's layout: block widgets and
- * replacements across lines. They are built once per parsed chunk and kept
- * while the chunk is unchanged, so they must depend only on the node's text
- * and the reveal state.
- */
-export type FormattedLayout = {
-  /** Replace a range, which may span lines; a block widget takes whole lines. Atomic. */
-  replace(
-    from: number,
-    to: number,
-    widget?: WidgetType,
-    options?: { block?: boolean },
-  ): void
-  /** A widget at `at`; a block widget sits between lines, below them unless `side` is -1. */
-  widget(
-    at: number,
-    widget: WidgetType,
-    options?: { block?: boolean; side?: -1 | 1 },
-  ): void
-}
-
-export type FormattedRenderContext = {
-  state: EditorState
-  /** `decorate`: the visible range being rendered, to bound per-line work in long nodes; null in `layout`. */
-  visible: { from: number; to: number } | null
-  /**
-   * The selection touches the node while Markdown markers are shown: show
-   * its source and keep any rendering beside it.
-   */
-  revealed: boolean
-}
-
-/** How a quote, list item or contributed container lays out the lines inside it. */
-export type FormattedContainer = {
-  /** CSS length the container indents its lines by; quotes default to 21px, list items to 1.5em, other nodes to 0. */
-  width?: string
-  /** Class for every line in the container. */
-  class?: string
-  /**
-   * CSS background layers behind the line, from the container's left edge
-   * (`left`) to the line end; `top` is the space above the container's first
-   * line, which lies outside it, and 0 on its other lines. Both are CSS lengths.
-   */
-  paint?: (left: string, top: string) => string
-  /**
-   * Space inside the container in px: above its first line, below its last
-   * shown line and right of every line. Its first and last blocks' margins
-   * stay inside a side with padding.
-   */
-  padding?: { top?: number; bottom?: number; right?: number }
-  /** List items: false hides the list marker. */
-  marker?: boolean
-}
-
-/** Rendering for syntax nodes by name. */
-export type FormattedNodeView = {
-  nodes: readonly string[]
-  /** Inline decorations. Return false to skip the node's children. */
-  decorate?(
-    node: SyntaxNodeRef,
-    out: FormattedDecorations,
-    context: FormattedRenderContext,
-  ): undefined | false
-  /** Layout decorations. Return false to skip the node's children. */
-  layout?(
-    node: SyntaxNodeRef,
-    out: FormattedLayout,
-    context: FormattedRenderContext,
-  ): undefined | false
-  /** Block nodes: margins in px, collapsing with their neighbors' like the formatted view's document styles. */
-  space?: { top: number; bottom: number }
-  /**
-   * How the node lays out its lines as a container. Quotes and list items
-   * are containers; another block node with this hook becomes one, with
-   * spacing between its blocks. Called once per node and render.
-   */
-  container?(
-    node: SyntaxNodeRef,
-    context: FormattedRenderContext,
-  ): FormattedContainer | undefined
-}
 
 export type FormattedContribution = {
   id: string
@@ -243,15 +154,17 @@ function load(entry: FormattedEntry) {
 export const formattedContributions = {
   /** Changes when registered or loaded contributions or the syntax settings they follow change. */
   version: () =>
-    `${formattedRegistry.version()} ${loads} ${markdownSyntax.version()}`,
+    `${formattedRegistry.version()} ${loads} ${markdownSyntax.version()} ${formattedCompatibility.snapshot().join(',')}`,
   subscribe(listener: () => void) {
     listeners.add(listener)
     const registry = formattedRegistry.subscribe(listener)
     const syntax = markdownSyntax.subscribe(listener)
+    const compatibility = formattedCompatibility.subscribe(listener)
     return () => {
       listeners.delete(listener)
       registry()
       syntax()
+      compatibility()
     }
   },
   /**
@@ -263,7 +176,9 @@ export const formattedContributions = {
     const literal = markdownSyntax
       .snapshot()
       .flatMap((feature) =>
-        !feature.enabled && feature.scope !== 'document'
+        (!feature.enabled ||
+          formattedCompatibility.snapshot().includes(feature.owner)) &&
+        feature.scope !== 'document'
           ? (feature.nodes ?? [])
           : [],
       )
@@ -296,7 +211,11 @@ export function contributionExtension(
   if (contribution.inlineStops) for (const config of configs) stops.add(config)
   return [
     configs.map((config) => formattedMarkdown.of(config)),
-    (contribution.views ?? []).map((view) => formattedViews.of(view)),
+    (contribution.views ?? []).flatMap((view) =>
+      !view.feature || markdownSyntax.enabled(view.feature)
+        ? [formattedViews.of(view)]
+        : [],
+    ),
     (contribution.opaque ?? []).map((name) => formattedOpaque.of(name)),
     contribution.keys ? Prec.high(keymap.of([...contribution.keys])) : [],
     contribution.extension ?? [],

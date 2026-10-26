@@ -113,6 +113,7 @@ import {
 } from './editor-interaction-presence'
 import { editorViewRegistry } from './editor-view-api'
 import type { FindMove, FindStatus } from './FindBar'
+import { flavors as markdownFlavors } from './flavors'
 import {
   formattedDocument,
   showMarkdownMarkers,
@@ -237,7 +238,7 @@ export function SourceEditor({
   /** Formatted view: show the Markdown markers under the caret. */
   markers?: boolean
   spellCheck?: boolean
-  /** Formatted view: the document's Markdown flavor ids, which select contributions. */
+  /** The document's Markdown flavor ids, which select syntax and formatted contributions. */
   flavors?: readonly string[]
   /** Formatted view: the document revision for widgets such as media. */
   documentRevision?: number
@@ -632,12 +633,22 @@ export function SourceEditor({
             'aria-description': 'Press Escape, then Tab, to leave the editor.',
           }),
         ]
+      const extensions = markdownFlavors
+        .snapshot()
+        .filter(
+          (flavor) =>
+            !parserOptions.current.flavors ||
+            parserOptions.current.flavors.includes(flavor.id),
+        )
+        .flatMap((flavor) => flavor.syntax ?? [])
       return [
         markdownMode
           ? codeLanguage && !codeLanguages.resolve(codeLanguage)
             ? []
-            : (markdownLanguage?.({ codeLanguages: codeLanguages.resolve }) ??
-              [])
+            : (markdownLanguage?.({
+                codeLanguages: codeLanguages.resolve,
+                ...(extensions.length ? { extensions } : {}),
+              }) ?? [])
           : codeLanguage
             ? (codeLanguages.resolve(codeLanguage) ?? [])
             : (sourceLanguage ?? []),
@@ -1790,6 +1801,9 @@ export function SourceEditor({
       reportFormatting.current(formatting.current)
     }
     const unsubscribe = codeLanguages.subscribe(() => configureParser.current())
+    const unsubscribeFlavors = markdownFlavors.subscribe(() => {
+      if (!formatted) configureParser.current()
+    })
     configureParser.current()
     const measure = () => {
       if (!disposed) editor.requestMeasure()
@@ -1827,6 +1841,7 @@ export function SourceEditor({
       referenceUsed.current = false
       referenceFailed.current = false
       unsubscribe()
+      unsubscribeFlavors()
       configureParser.current = () => {}
       disposed = true
       unsubscribeInteractions()

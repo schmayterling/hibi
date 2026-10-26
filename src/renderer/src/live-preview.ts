@@ -1111,12 +1111,18 @@ function revealMatters(
   tree: Tree,
   reveal: readonly Revealed[],
 ) {
-  if (!reveal.length) return false
+  // Only contributed layout views follow the selection, in the chunks
+  // around it.
+  if (
+    !reveal.length ||
+    !state.facet(formattedViews).some((view) => view.layout)
+  )
+    return false
   const cache = cacheFor(state)
-  return parsedChunks(tree).some(
-    ({ from, chunk }) =>
-      intersects(reveal, from, from + chunk.length) &&
-      (cache.get(chunk)?.sensitive ?? true),
+  return reveal.some((range) =>
+    parsedChunks(tree, range).some(
+      ({ chunk }) => cache.get(chunk)?.sensitive ?? true,
+    ),
   )
 }
 

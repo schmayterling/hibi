@@ -2149,6 +2149,8 @@ export class ChunkedMarkdownParser extends Parser {
 /** Chunks with inner nodes, their positions, and the ranges those nodes cover. */
 export function parsedChunks(
   tree: Tree,
+  /** Only chunks touching this range, found by position. */
+  range: { from: number; to: number } = { from: 0, to: tree.length },
 ): { from: number; chunk: Tree; covered: { from: number; to: number }[] }[] {
   if (tree.prop(chunkInfo)?.kind !== 'root')
     return [{ from: 0, chunk: tree, covered: [{ from: 0, to: tree.length }] }]
@@ -2157,13 +2159,25 @@ export function parsedChunks(
     chunk: Tree
     covered: { from: number; to: number }[]
   }[] = []
-  for (let groupIndex = 0; groupIndex < tree.children.length; groupIndex++) {
+  for (
+    // A chunk ending where the range starts touches it too.
+    let groupIndex = Math.max(0, childBefore(tree, range.from - 1));
+    groupIndex < tree.children.length;
+    groupIndex++
+  ) {
     const group = tree.children[groupIndex] as Tree
-    if (!counts(group).parsed) continue
     const groupFrom = tree.positions[groupIndex]!
-    for (let index = 0; index < group.children.length; index++) {
+    if (groupFrom > range.to) break
+    if (!counts(group).parsed || groupFrom + group.length < range.from) continue
+    for (
+      let index = Math.max(0, childBefore(group, range.from - groupFrom - 1));
+      index < group.children.length;
+      index++
+    ) {
       const chunk = group.children[index] as Tree
       const from = groupFrom + group.positions[index]!
+      if (from > range.to) break
+      if (from + chunk.length < range.from) continue
       const info = chunk.prop(chunkInfo)
       if (info?.kind === 'parsed')
         chunks.push({

@@ -996,3 +996,45 @@ test('a giant window evicted by a far viewport keeps the read-ahead reach of its
   // Before, the evicted window lost its reach and kept the stale table.
   assert.deepEqual(top(back), top(conditional.parse(edited)))
 })
+
+test('parsed chunks found by position are the parsed chunks touching that range', () => {
+  const text = Array.from({ length: 3000 }, (_, i) =>
+    i % 7 ? `paragraph ${i} with *style*` : `- item ${i}\n- next`,
+  ).join('\n\n')
+  const parse = tiny({ chunkSize: 64, groupSize: 4 }).startChunkedParse(
+    stringInput(text),
+    [],
+    null,
+  )
+  let tree = null
+  while (!tree) tree = parse.advance()
+  const all = parsedChunks(tree)
+  // A lookup reads the chunks near its range, not every group and chunk:
+  // the formatted view does one for each selection move.
+  const proto = Object.getPrototypeOf(tree)
+  const prop = proto.prop
+  let reads = 0
+  proto.prop = function (...args) {
+    reads++
+    return prop.apply(this, args)
+  }
+  try {
+    parsedChunks(tree, { from: text.length >> 1, to: (text.length >> 1) + 10 })
+  } finally {
+    proto.prop = prop
+  }
+  assert.ok(all.length > 500 && reads < 40, `${all.length} ${reads}`)
+  const r = random(7)
+  for (let i = 0; i < 200; i++) {
+    const from = Math.floor(r() * text.length),
+      to = Math.min(text.length, from + Math.floor(r() * 400))
+    const expected = all
+      .filter(({ from: at, chunk }) => at <= to && at + chunk.length >= from)
+      .map(({ from: at }) => at)
+    assert.deepEqual(
+      parsedChunks(tree, { from, to }).map(({ from: at }) => at),
+      expected,
+      `${from}-${to}`,
+    )
+  }
+})

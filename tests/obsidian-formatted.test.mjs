@@ -155,7 +155,9 @@ function drawn(source, revealed = false) {
         'replace',
         from,
         to,
-        { target: widget.target, label: widget.label },
+        widget.text
+          ? [widget.text, widget.className]
+          : { target: widget.target, label: widget.label },
       ]),
     line() {},
     widget() {},
@@ -199,5 +201,27 @@ test('labels read as links, brackets and aliased targets are syntax, embeds beco
   assert.deepEqual(drawn('![[a.png|200]]', true), [
     ['syntax', 0, 3],
     ['syntax', 12, 14],
+  ])
+})
+
+test('entities in labels and highlights show their characters, as in the rich view, until the caret reveals them', () => {
+  assert.deepEqual(drawn('[[Note|&amp;]]'), [
+    ['syntax', 0, 7],
+    ['mark', 7, 12, { class: 'hibi-lp-link', 'data-wiki-link': 'Note' }],
+    ['replace', 7, 12, ['&', 'hibi-lp-link']],
+    ['syntax', 12, 14],
+  ])
+  assert.deepEqual(drawn('==&lt;tag&gt; &#x41;&nosuch;=='), [
+    ['syntax', 0, 2],
+    ['mark', 2, 28, { class: 'hibi-lp-highlight' }],
+    ['replace', 2, 6, ['<', 'hibi-lp-highlight']],
+    ['replace', 9, 13, ['>', 'hibi-lp-highlight']],
+    ['replace', 14, 20, ['A', 'hibi-lp-highlight']],
+    ['syntax', 28, 30],
+  ])
+  assert.deepEqual(drawn('==&lt;==', true), [
+    ['syntax', 0, 2],
+    ['mark', 2, 6, { class: 'hibi-lp-highlight' }],
+    ['syntax', 6, 8],
   ])
 })

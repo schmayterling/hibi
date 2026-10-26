@@ -19,6 +19,8 @@ A ==highlighted phrase== in text, and [[ Other | spaced ]].
 
 Embedded note: ![[Other]]
 
+Entities: [[Other|&amp; more]] and ==&lt;tag&gt;==.
+
 - item with [[Other#Part|part]] and ==mark==
 
 > quote with [[Other]]
@@ -197,7 +199,8 @@ test('wikilinks, embeds and highlights render in the formatted view as in the ri
   })
   const selectors = {
     link: '.rich-pane .hibi-lp-link[data-wiki-link]',
-    highlight: '.rich-pane .hibi-lp-highlight',
+    // Text only: decoded entities beside it are separate widgets.
+    highlight: '.rich-pane .hibi-lp-highlight:not(.hibi-lp-entity)',
   }
   const report = []
   for (const scheme of ['hibi-light', 'hibi-dark']) {
@@ -234,7 +237,7 @@ test('wikilinks, embeds and highlights render in the formatted view as in the ri
   console.log(JSON.stringify(report))
   for (const { scheme, difference } of report)
     assert.ok(difference < 0.002, `${scheme}: ${difference}`)
-  // Five wikilinks, two highlights, an image embed and a note embed, as in the rich view.
+  // Six wikilinks, three highlights, an image embed and a note embed, as in the rich view.
   assert.deepEqual(
     [
       rich['hibi-light'].styles.links.length,
@@ -242,12 +245,12 @@ test('wikilinks, embeds and highlights render in the formatted view as in the ri
       rich['hibi-light'].styles.images.length,
       rich['hibi-light'].styles.embedLinks.length,
     ],
-    [5, 2, 1, 1],
+    [6, 3, 1, 1],
   )
 })
 
-test('the caret reveals wikilink and embed source, and shift-click follows a wikilink', {
-  timeout: 90000,
+test('clicks and keys reach wikilinks and embeds: the caret reveals their source, shift-click and Enter follow them', {
+  timeout: 120000,
 }, async () => {
   await open('parity.md')
   await page
@@ -259,29 +262,37 @@ test('the caret reveals wikilink and embed source, and shift-click follows a wik
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   const marker = (text) =>
     page.locator('.rich-pane .hibi-lp-marker', { hasText: text })
+  const noteEmbed = page.locator('.rich-pane .obsidian-embed a', {
+    hasText: 'Other',
+  })
+  // The image embed loads after the note opens and moves the lines below it.
+  const loaded = () =>
+    page.waitForFunction(() => {
+      const image = document.querySelector('.rich-pane .obsidian-embed img')
+      return image?.complete && image.naturalWidth > 0
+    })
+  const opened = (name) =>
+    waitForAsync(
+      page,
+      async (name) => (await window.hibi.getDocument()).name === name,
+      name,
+    )
+  await loaded()
   assert.equal(await marker('[[').count(), 0)
   await page
     .locator('.rich-pane .hibi-lp-link', { hasText: 'the other note' })
     .click()
   await marker('[[Other|').waitFor()
   await marker(']]').first().waitFor()
-  // An embed under the caret shows its source instead of its rendering.
-  const embedAt = await page.evaluate(() => {
-    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
-      .view
-    const at = view.state.doc.toString().indexOf('![[Other]]') + 4
-    view.dispatch({ selection: { anchor: at } })
-    return at
-  })
-  assert.ok(embedAt > 4)
+  // Clicking an embed places the caret there, which shows its source.
+  await noteEmbed.click()
   await marker('![[').waitFor()
-  assert.equal(
-    await page
-      .locator('.rich-pane .obsidian-embed a', { hasText: 'Other' })
-      .count(),
-    0,
-  )
-  // Shift-click opens the linked note of the workspace, as links do in the formatted view.
+  assert.equal(await noteEmbed.count(), 0)
+  await page.locator('.rich-pane .obsidian-embed img').click()
+  await page
+    .locator('.rich-pane .cm-line', { hasText: '![[pic.png|120]]' })
+    .waitFor()
+  // Shift-click follows wikilinks and embeds to notes of the workspace, as links do in the formatted view.
   await app.evaluate(
     ({ dialog }, notes) => {
       dialog.showOpenDialog = async () => ({
@@ -295,18 +306,34 @@ test('the caret reveals wikilink and embed source, and shift-click follows a wik
   await page
     .locator('.rich-pane .hibi-lp-link', { hasText: 'the other note' })
     .click({ modifiers: ['Shift'] })
-  await waitForAsync(
-    page,
-    async () => (await window.hibi.getDocument()).name === 'Other.md',
-  )
-  // With markers hidden, the caret does not reveal them.
+  await opened('Other.md')
+  await open('parity.md')
+  await loaded()
+  await noteEmbed.click({ modifiers: ['Shift'] })
+  await opened('Other.md')
+  // With markers hidden, clicks reveal nothing; an arrow key toward an
+  // embedded note focuses its link, and Enter follows it.
   await engine(true, false)
   await open('parity.md')
+  await loaded()
   await page
     .locator('.rich-pane .hibi-lp-link', { hasText: 'the other note' })
     .click()
   await settle()
   assert.equal(await marker('[[').count(), 0)
+  await page
+    .locator('.rich-pane .cm-line', { hasText: 'Embedded note:' })
+    .click()
+  await page.keyboard.press('End')
+  await page.keyboard.press('ArrowLeft')
+  assert.equal(
+    await page.evaluate(
+      () => document.activeElement?.closest('.obsidian-embed')?.textContent,
+    ),
+    'Other',
+  )
+  await page.keyboard.press('Enter')
+  await opened('Other.md')
   await engine(true, true)
 })
 

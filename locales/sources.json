@@ -502,6 +502,7 @@
     "src/renderer/src/UpdateSettings.tsx"
   ],
   "b4276963bf99": [
+    "src/addons/block-drag/formatted.ts",
     "src/addons/block-drag/index.ts"
   ],
   "a936b1f4cf9c": [
@@ -3648,9 +3649,11 @@
     "src/addons/mcp-server/tools.ts"
   ],
   "df6c593c35d7": [
+    "src/addons/block-drag/formatted.ts",
     "src/addons/block-drag/index.ts"
   ],
   "cc6fc79ab665": [
+    "src/addons/block-drag/formatted.ts",
     "src/addons/block-drag/index.ts"
   ],
   "9adcdf33dce1": [

@@ -92,10 +92,11 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // and 430 bytes for releasing closed tabs' sources from document states (#440),
   // and 63 bytes for opening large notes in the CodeMirror formatted view (#450),
   // and 1122 bytes for closing several tabs and middle-click closing (#455),
+  // and 10 bytes for keeping footnote notes in the formatted view (#419),
   // plus 1 byte of minified import aliases in the entry that the source outline's
   // lazy chunks renamed; no module moved into startup (#460).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
-  assert.ok(bytes <= 691071, `startup catalog grew to ${bytes} bytes`)
+  assert.ok(bytes <= 691081, `startup catalog grew to ${bytes} bytes`)
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
   assert.doesNotMatch(
     modules,

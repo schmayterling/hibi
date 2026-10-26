@@ -1,0 +1,6 @@
+/* Like the rich editor's task item: the checkbox sits in the item's 30px
+   indentation, 4px from its start and 10px before the text. */
+.hibi-formatted .hibi-lp-task {
+  margin: 3px 13px 3px -26px;
+  accent-color: var(--accent);
+}

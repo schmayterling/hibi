@@ -133,6 +133,9 @@ after(
 
 /** Formula boxes and a screenshot of the formatted pane. */
 async function capture(name) {
+  await page.evaluate(async () => {
+    await document.fonts.ready
+  })
   const boxes = await page.evaluate(() =>
     [...document.querySelectorAll('.rich-pane .katex')].map((katex) => {
       const box = katex.getBoundingClientRect()
@@ -174,6 +177,9 @@ test('formulas render in the formatted view as in the rich view, in light and da
       document.querySelectorAll('.rich-pane .hibi-formatted .katex').length ===
       9,
   )
+  await page.locator('.hibi-formatted .katex-error').waitFor({
+    state: 'attached',
+  })
   // The rich view's markup, so the addon's styles and error display apply alike.
   assert.deepEqual(
     await page.evaluate(() => ({

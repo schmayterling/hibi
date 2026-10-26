@@ -166,12 +166,41 @@ export class SourceParserSession {
       shift += change.insert.length - (change.to - change.from)
       return range
     })
+    // All fragments refer to the last completed tree. Mapping another edit
+    // can close an earlier open edge; its tree position still stays fixed.
+    const openStarts = new Set<number>(),
+      openEnds = new Set<number>()
+    for (const fragment of this.#fragments) {
+      this.#work.fragmentVisits++
+      if (fragment.openStart) openStarts.add(fragment.from + fragment.offset)
+      if (fragment.openEnd) openEnds.add(fragment.to + fragment.offset)
+    }
     this.#work.fragmentVisits += this.#fragments.length
     const fragments = TreeFragment.applyChanges(this.#fragments, ranges)
     // A burst may outgrow useful reuse. Release that table; a background full
     // parse is preferable to retaining an unbounded edit-fragment directory.
     this.#fragments =
-      fragments.length <= this.#maximumFragments ? fragments : []
+      fragments.length <= this.#maximumFragments
+        ? fragments.map((fragment) => {
+            this.#work.fragmentVisits++
+            const openStart =
+                fragment.openStart ||
+                openStarts.has(fragment.from + fragment.offset),
+              openEnd =
+                fragment.openEnd || openEnds.has(fragment.to + fragment.offset)
+            return openStart === fragment.openStart &&
+              openEnd === fragment.openEnd
+              ? fragment
+              : new TreeFragment(
+                  fragment.from,
+                  fragment.to,
+                  fragment.tree,
+                  fragment.offset,
+                  openStart,
+                  openEnd,
+                )
+          })
+        : []
     this.#pending = null
     this.#state = Object.freeze({
       ...this.#state,

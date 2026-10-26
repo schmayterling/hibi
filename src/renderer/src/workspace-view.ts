@@ -196,6 +196,8 @@ export function createWorkspaceView(
         !!state &&
         !!workspace &&
         !state.treePending &&
+        cachedDraft !== '' &&
+        identity(workspace) === cachedTree &&
         identity(state) === identity(workspace)
       )
     },
@@ -214,9 +216,17 @@ export function createWorkspaceView(
       // A newer refresh can replace this header promise before the page reader reaches it.
       void headerTask.catch(() => {})
       if (!task) {
-        const next = read().finally(() => {
-          if (task === next) task = undefined
-        })
+        const next = read()
+          .catch((error: unknown) => {
+            if (state?.treePending) {
+              state = { ...state, treePending: false }
+              publish(state)
+            }
+            throw error
+          })
+          .finally(() => {
+            if (task === next) task = undefined
+          })
         task = next
       }
       return task

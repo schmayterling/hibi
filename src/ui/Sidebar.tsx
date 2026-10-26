@@ -414,7 +414,7 @@ export function Sidebar({
       const index = indices.get(id)
       if (index !== undefined) rowWindow.reveal(index)
     }
-    if (mode === 'tabs' && !overlay) onSelect(id)
+    if (mode === 'tabs' && !overlay && !disabled && !pending) onSelect(id)
   }
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: the shared navigation dismisses after its child controls handle Escape.
@@ -472,6 +472,7 @@ export function Sidebar({
           onDragOver={(event) => {
             if (
               disabled ||
+              pending ||
               !onMove ||
               !draggedItem.current ||
               draggedItem.current.revision !== interactionRevision
@@ -490,6 +491,7 @@ export function Sidebar({
           onDrop={(event) => {
             if (
               disabled ||
+              pending ||
               !onMove ||
               !draggedItem.current ||
               draggedItem.current.revision !== interactionRevision
@@ -583,6 +585,7 @@ export function Sidebar({
                       const source = draggedItem.current
                       if (
                         disabled ||
+                        pending ||
                         !onMove ||
                         !source ||
                         source.revision !== interactionRevision
@@ -606,6 +609,7 @@ export function Sidebar({
                       const source = draggedItem.current
                       if (
                         disabled ||
+                        pending ||
                         !onMove ||
                         !source ||
                         source.revision !== interactionRevision
@@ -660,10 +664,12 @@ export function Sidebar({
                         }}
                         id={`${idPrefix}-${item.id}`}
                         type="button"
-                        disabled={disabled}
-                        draggable={mode === 'tree' && !!onMove && !disabled}
+                        aria-disabled={disabled || pending || undefined}
+                        draggable={
+                          mode === 'tree' && !!onMove && !disabled && !pending
+                        }
                         onDragStart={(event) => {
-                          if (disabled || !onMove) {
+                          if (disabled || pending || !onMove) {
                             event.preventDefault()
                             return
                           }
@@ -720,7 +726,7 @@ export function Sidebar({
                             .join('; ') || undefined
                         }
                         onContextMenu={(event) => {
-                          if (onMenu && !disabled) {
+                          if (onMenu && !disabled && !pending) {
                             event.preventDefault()
                             setFocused(item.id)
                             onMenu(
@@ -735,6 +741,7 @@ export function Sidebar({
                           rowWindow.reveal(index)
                         }}
                         onClick={(event) => {
+                          if (disabled || pending) return
                           if (picked) {
                             if (event.shiftKey)
                               return selectRange(item.id, picked[0] ?? item.id)
@@ -752,6 +759,11 @@ export function Sidebar({
                             event.preventDefault()
                         }}
                         onKeyDown={(event) => {
+                          if (disabled || pending) {
+                            if (event.key !== 'Tab' && event.key !== 'Escape')
+                              event.preventDefault()
+                            return
+                          }
                           if (
                             onMenu &&
                             (event.key === 'ContextMenu' ||

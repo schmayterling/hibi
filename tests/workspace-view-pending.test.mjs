@@ -153,3 +153,111 @@ test('pending explorer pages block stale opens and drags without blocking the ed
   )
   await transfer.dispose()
 })
+
+test('external tree changes retain row focus and failed pages release busy state', {
+  timeout: 30000,
+}, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'hibi-tree-focus-'))
+  const folder = join(root, 'notes')
+  await mkdir(folder)
+  await writeFile(join(folder, 'one.md'), '# One')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      globalThis.focusPages?.release()
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(root, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForDocumentEditor(app, page)
+  await app.evaluate(({ dialog }, folder) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [folder],
+    })
+  }, folder)
+  await page.evaluate(() => window.hibi.openWorkspace(false))
+  await page.getByRole('button', { name: /toggle workspace sidebar/i }).click()
+  const tree = page.getByRole('tree', { name: 'Workspace files' })
+  const one = tree.getByRole('treeitem', { name: 'one.md', exact: true })
+  await one.waitFor()
+  await waitForAsync(
+    page,
+    () =>
+      document
+        .querySelector('.workspace-sidebar [role="tree"]')
+        ?.getAttribute('aria-busy') !== 'true',
+  )
+  await app.evaluate(({ ipcMain }) => {
+    const host = { seen: false, fail: false }
+    host.held = new Promise((resolve) => {
+      host.release = () => {
+        host.held = null
+        resolve()
+      }
+    })
+    globalThis.focusPages = host
+    const handlers = ipcMain._invokeHandlers
+    const read = handlers.get('workspace:view-page')
+    handlers.set('workspace:view-page', async (...args) => {
+      if (host.fail) {
+        host.fail = false
+        throw new Error('page read failed')
+      }
+      const result = await read(...args)
+      if (!args[1].drafts && host.held) {
+        host.seen = true
+        await host.held
+      }
+      return result
+    })
+  })
+  await one.focus()
+  await writeFile(join(folder, 'z.md'), '# External')
+  await waitForAsync(app, () => globalThis.focusPages.seen)
+  assert.equal(await tree.getAttribute('aria-busy'), 'true')
+  assert.equal(
+    await one.evaluate((row) => row === document.activeElement),
+    true,
+  )
+  assert.equal(await one.getAttribute('aria-disabled'), 'true')
+  assert.equal(await one.evaluate((row) => row.disabled), false)
+  await app.evaluate(() => globalThis.focusPages.release())
+  await tree.getByRole('treeitem', { name: 'z.md', exact: true }).waitFor()
+  await waitForAsync(
+    page,
+    () =>
+      document
+        .querySelector('.workspace-sidebar [role="tree"]')
+        ?.getAttribute('aria-busy') !== 'true',
+  )
+  assert.equal(
+    await one.evaluate((row) => row === document.activeElement),
+    true,
+  )
+  await app.evaluate(() => {
+    globalThis.focusPages.fail = true
+  })
+  await writeFile(join(folder, 'two.md'), '# Retry')
+  await page.getByText(/page read failed/).waitFor()
+  assert.notEqual(await tree.getAttribute('aria-busy'), 'true')
+  assert.equal(
+    await one.evaluate((row) => row === document.activeElement),
+    true,
+  )
+  await page
+    .getByRole('button', { name: 'Refresh workspace', exact: true })
+    .click()
+  await tree.getByRole('treeitem', { name: 'two.md', exact: true }).waitFor()
+  await waitForAsync(
+    page,
+    () =>
+      document
+        .querySelector('.workspace-sidebar [role="tree"]')
+        ?.getAttribute('aria-busy') !== 'true',
+  )
+})

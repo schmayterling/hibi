@@ -13,7 +13,44 @@ test('native workspace headers reject entries access while explicit snapshots re
   await writeFile(
     source,
     `
-    import { getWorkspace } from '../../src/main/workspace.ts'
+    import { getWorkspace, refreshWorkspace, loadWorkspace, openWorkspace, openRecentWorkspace, notifyWorkspaceContent } from '../../src/main/workspace.ts'
+    import { workspaceAction } from '../../src/main/workspace-actions.ts'
+    import type { WorkspaceActionResult } from '../../src/shared/workspace.ts'
+    async function replies() {
+      const refreshed = await refreshWorkspace()
+      // @ts-expect-error refresh defaults to a header
+      refreshed?.entries
+      const loaded = await loadWorkspace('/tmp/notes')
+      // @ts-expect-error load defaults to a header
+      loaded?.entries
+      const notified = await notifyWorkspaceContent(null)
+      // @ts-expect-error notification defaults to a header
+      notified?.entries
+      const action = await workspaceAction({} as never, {})
+      // @ts-expect-error actions default to a header
+      action?.workspace?.entries
+      const opened = await openWorkspace({} as never)
+      // @ts-expect-error open defaults to a header
+      opened?.entries
+      const recent = await openRecentWorkspace('notes')
+      // @ts-expect-error recent open defaults to a header
+      recent?.entries
+      const explicit = await refreshWorkspace(null, false)
+      // @ts-expect-error explicit false is still a header
+      explicit?.entries
+      const include: boolean = Math.random() > 0.5
+      const dynamic = getWorkspace(undefined, include)
+      // @ts-expect-error entries need a known full-tree request
+      dynamic?.entries
+      const snapshots: (WorkspaceState | null)[] = [
+        await refreshWorkspace(null, true), await loadWorkspace('/tmp/notes', false, true),
+        await notifyWorkspaceContent(null, true), await openWorkspace({} as never, true),
+        await openRecentWorkspace('notes', true),
+      ]
+      const fullAction: WorkspaceActionResult | null = await workspaceAction({} as never, {}, true)
+      return [snapshots.map(state => state?.entries), fullAction?.workspace?.entries]
+    }
+    void replies
     import type { WorkspaceState } from '../../src/shared/workspace.ts'
     const header = getWorkspace()
     if (header) {

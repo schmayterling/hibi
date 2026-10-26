@@ -13,6 +13,7 @@ export async function scanWorkspaceTree(
   ignored: ReturnType<typeof ignore>,
   isDocumentName: (name: string) => boolean,
   signal?: AbortSignal,
+  previous?: WorkspaceEntry[],
 ): Promise<WorkspaceEntry[]> {
   let started = performance.now()
   function checkpoint(): Promise<void> | undefined {
@@ -61,5 +62,28 @@ export async function scanWorkspaceTree(
       if (step.done) return step.value
     }
   }
-  return walk(base)
+  async function same(
+    left: WorkspaceEntry[],
+    right: WorkspaceEntry[],
+  ): Promise<boolean> {
+    if (left.length !== right.length) return false
+    for (let index = 0; index < left.length; index++) {
+      const pause = checkpoint()
+      if (pause) await pause
+      const a = left[index]!
+      const b = right[index]!
+      if (
+        a.path !== b.path ||
+        a.name !== b.name ||
+        a.kind !== b.kind ||
+        Boolean(a.children) !== Boolean(b.children)
+      )
+        return false
+      if (a.children && b.children && !(await same(a.children, b.children)))
+        return false
+    }
+    return true
+  }
+  const next = await walk(base)
+  return previous && (await same(previous, next)) ? previous : next
 }

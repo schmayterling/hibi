@@ -355,6 +355,7 @@ export async function scanWorkspace(
   base: string,
   showAllFiles = false,
   signal?: AbortSignal,
+  previous?: WorkspaceEntry[],
 ): Promise<WorkspaceEntry[]> {
   signal?.throwIfAborted()
   const ignored = await workspaceIgnore(base)
@@ -365,10 +366,13 @@ export async function scanWorkspace(
     ignored,
     (name) => isDocumentName(name, true),
     signal,
+    previous,
   )
 }
 
 type WorkspaceMetadata = Omit<WorkspaceState, 'entries'>
+export type WorkspaceReply<IncludeEntries extends boolean = false> =
+  IncludeEntries extends true ? WorkspaceState : WorkspaceMetadata
 
 function workspaceHeaderFields(): WorkspaceMetadata | null {
   if (!root) return null
@@ -385,22 +389,14 @@ function workspaceHeaderFields(): WorkspaceMetadata | null {
   }
 }
 
-export function getWorkspace(
-  open: ReturnType<typeof getOpenDocuments> | undefined,
-  includeEntries: true,
-): WorkspaceState | null
-export function getWorkspace(
+export function getWorkspace<IncludeEntries extends boolean = false>(
   open?: ReturnType<typeof getOpenDocuments>,
-  includeEntries?: false,
-): WorkspaceMetadata | null
-export function getWorkspace(
-  open: ReturnType<typeof getOpenDocuments> | undefined,
-  includeEntries: boolean,
-): WorkspaceState | null
+  includeEntries?: IncludeEntries,
+): WorkspaceReply<IncludeEntries> | null
 export function getWorkspace(
   open?: ReturnType<typeof getOpenDocuments>,
   includeEntries: boolean = false,
-): WorkspaceState | null {
+): WorkspaceReply<boolean> | null {
   const header = workspaceHeaderFields()
   if (!header || !root) return null
   if (!includeEntries) return { ...header, entries: [] }
@@ -506,11 +502,16 @@ async function acknowledgePaths(
   )
 }
 
+function requestWorkspaceScan<IncludeEntries extends boolean = false>(
+  paths: string[] | null,
+  acknowledge?: boolean,
+  includeEntries?: IncludeEntries,
+): Promise<WorkspaceReply<IncludeEntries> | null>
 async function requestWorkspaceScan(
   paths: string[] | null,
   acknowledge = false,
   includeEntries = false,
-): Promise<WorkspaceState | null> {
+): Promise<WorkspaceReply<boolean> | null> {
   const selected = root
   const target = workspaceTarget
   if (!selected || !target || !scanCoordinator)
@@ -535,17 +536,25 @@ async function requestWorkspaceScan(
   }
 }
 
+export function refreshWorkspace<IncludeEntries extends boolean = false>(
+  paths?: string[] | null,
+  includeEntries?: IncludeEntries,
+): Promise<WorkspaceReply<IncludeEntries> | null>
 export function refreshWorkspace(
   paths: string[] | null = null,
   includeEntries = false,
-): Promise<WorkspaceState | null> {
+): Promise<WorkspaceReply<boolean> | null> {
   return requestWorkspaceScan(paths, paths !== null, includeEntries)
 }
 
+export function notifyWorkspaceContent<IncludeEntries extends boolean = false>(
+  paths: string[] | null,
+  includeEntries?: IncludeEntries,
+): Promise<WorkspaceReply<IncludeEntries> | null>
 export async function notifyWorkspaceContent(
   paths: string[] | null,
   includeEntries = false,
-): Promise<WorkspaceState | null> {
+): Promise<WorkspaceReply<boolean> | null> {
   const selected = root
   const target = workspaceTarget
   if (!selected || !target) return null
@@ -704,19 +713,6 @@ function queueWatcherEvent(
   const path =
     filename && relativePath(selected, join(selected, filename.toString()))
   const target = path && atomicTempTarget(path)
-  const changedPath = target || path
-  const acknowledged = changedPath && acknowledgedPaths.get(changedPath)
-  if (
-    !changedPath ||
-    (relevantWatchPath(changedPath) &&
-      !gitMetadataPath(changedPath) &&
-      (metadataPath(changedPath) ||
-        (!changedPath.split('/').includes('node_modules') &&
-          !ignoredPaths?.ignores(changedPath) &&
-          !ignoredPaths?.ignores(`${changedPath}/`))) &&
-      (!acknowledged || acknowledged.expires < Date.now()))
-  )
-    scanCoordinator?.invalidate()
   if (target) watcherEvents.set(target, 'rename')
   else if (path)
     watcherEvents.set(
@@ -740,10 +736,14 @@ export function observeWorkspace(
   onChanged = callback
 }
 
+export function openWorkspace<IncludeEntries extends boolean = false>(
+  window: BrowserWindow,
+  includeEntries?: IncludeEntries,
+): Promise<WorkspaceReply<IncludeEntries> | null>
 export async function openWorkspace(
   window: BrowserWindow,
   includeEntries = false,
-): Promise<WorkspaceState | null> {
+): Promise<WorkspaceReply<boolean> | null> {
   const result = await runFileDialog(() =>
     dialog.showOpenDialog(window, {
       properties: ['openDirectory', 'createDirectory'],
@@ -767,11 +767,16 @@ function cancelWorkspaceLoad(): void {
   loadController = undefined
 }
 
+export function loadWorkspace<IncludeEntries extends boolean = false>(
+  selected: string,
+  selection?: boolean,
+  includeEntries?: IncludeEntries,
+): Promise<WorkspaceReply<IncludeEntries> | null>
 export async function loadWorkspace(
   selected: string,
   selection = false,
   includeEntries = false,
-): Promise<WorkspaceState | null> {
+): Promise<WorkspaceReply<boolean> | null> {
   cancelWorkspaceLoad()
   const loading = loadGeneration
   const controller = new AbortController()
@@ -887,7 +892,7 @@ export async function loadWorkspace(
     async (signal) => {
       const showAllFiles = await showAllWorkspaceFiles()
       const [next, metadata] = await Promise.all([
-        scanWorkspace(nextRoot, showAllFiles, signal),
+        scanWorkspace(nextRoot, showAllFiles, signal, entries),
         workspaceMetadata(nextRoot),
       ])
       return {
@@ -899,12 +904,21 @@ export async function loadWorkspace(
     },
     (next) => {
       if (!isCurrentWorkspaceTarget(selectedTarget)) return
+      const treeChanged = entries !== next.entries
+      const metadataChanged =
+        JSON.stringify(manifest) !== JSON.stringify(next.manifest) ||
+        showingAllFiles !== next.showAllFiles
+      const paths = takeTreePaths()
       entries = next.entries
-      treeRevision++
       manifest = next.manifest
       showingAllFiles = next.showAllFiles
       ignoredPaths = next.ignored
-      publishWorkspaceChange({ kind: 'tree', paths: takeTreePaths() })
+      if (treeChanged) {
+        treeRevision++
+        publishWorkspaceChange({ kind: 'tree', paths })
+      } else if (metadataChanged || paths === null || paths.length) {
+        publishWorkspaceChange({ kind: 'content', paths })
+      }
     },
   )
   watcher = candidateWatcher
@@ -932,7 +946,14 @@ export async function loadWorkspace(
   return getWorkspace(undefined, includeEntries)
 }
 
-export async function openRecentWorkspace(id: unknown, includeEntries = false) {
+export function openRecentWorkspace<IncludeEntries extends boolean = false>(
+  id: unknown,
+  includeEntries?: IncludeEntries,
+): Promise<WorkspaceReply<IncludeEntries> | null>
+export async function openRecentWorkspace(
+  id: unknown,
+  includeEntries = false,
+): Promise<WorkspaceReply<boolean> | null> {
   const recent = (await getKnownWorkspaces()).find(
     (item) => !item.hidden && item.id === id,
   )

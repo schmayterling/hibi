@@ -378,3 +378,35 @@ test('workspace switches publish the new header while an old tree page is still 
     1,
   )
 })
+
+test('a failed tree read clears busy state and keeps stale rows guarded until retry', async () => {
+  let header = initial
+  let fail = false
+  const published = []
+  const view = createWorkspaceView(
+    {
+      getWorkspaceHeader: async () => header,
+      readWorkspaceViewPage: async (request) => {
+        if (fail) throw new Error('page read failed')
+        return pageWorkspaceEntries(
+          request.drafts ? [] : [file('kept.md')],
+          header,
+          request,
+          listed,
+        )
+      },
+    },
+    (state) => published.push(state),
+  )
+  const first = await view.refresh()
+  header = { ...initial, treeRevision: 1 }
+  fail = true
+  await assert.rejects(view.refresh(), /page read failed/)
+  assert.equal(published.at(-1).treePending, false)
+  assert.equal(published.at(-1).entries, first.entries)
+  assert.equal(view.isCurrent(published.at(-1)), false)
+  fail = false
+  const retried = await view.refresh()
+  assert.equal(retried.treePending, false)
+  assert.equal(view.isCurrent(retried), true)
+})

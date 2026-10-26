@@ -187,3 +187,59 @@ test('aborting traversal closes its iterator and stops before later entries', as
   assert.equal(state.read(), 6)
   assert.equal(state.closed(), 1)
 })
+
+test('unchanged tree comparison yields real turns and retains the original immutable tree', async (t) => {
+  const count = 4096
+  const children = Array.from({ length: count }, (_, i) =>
+    child(`note-${i + 1}.md`),
+  )
+  fixture(t, () => children)
+  let now = 0
+  t.mock.method(performance, 'now', () => (now += 0.02))
+  let comparisons = 0
+  const previous = children.map((entry) => ({
+    name: entry.name,
+    kind: 'file',
+    get path() {
+      comparisons++
+      return entry.name
+    },
+  }))
+  let active = true
+  let turns = 0
+  const turn = () => {
+    if (active) {
+      if (comparisons) turns++
+      setImmediate(turn)
+    }
+  }
+  setImmediate(turn)
+  const { scanWorkspaceTree } = await import(`${source}#same-tree`)
+  try {
+    const result = await scanWorkspaceTree(
+      '/workspace',
+      false,
+      ignore(),
+      () => true,
+      undefined,
+      previous,
+    )
+    assert.equal(result, previous)
+    assert.equal(comparisons, count)
+    assert.ok(turns > 10, `${turns} comparison turns`)
+    children.push(child('added.md'))
+    assert.notEqual(
+      await scanWorkspaceTree(
+        '/workspace',
+        false,
+        ignore(),
+        () => true,
+        undefined,
+        previous,
+      ),
+      previous,
+    )
+  } finally {
+    active = false
+  }
+})

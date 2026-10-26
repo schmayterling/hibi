@@ -1,13 +1,28 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
+import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
 
 const bundle = await build({
-  entryPoints: ['src/main/workspace.ts'],
+  stdin: {
+    contents:
+      (await readFile('src/main/workspace.ts', 'utf8')) +
+      '\nexport { queueWatcherEvent, reconcileWatcherEvents }; export { createWorkspaceView } from "../renderer/src/workspace-view"',
+    loader: 'ts',
+    sourcefile: resolve('src/main/workspace.ts'),
+    resolveDir: resolve('src/main'),
+  },
   bundle: true,
   platform: 'node',
   format: 'cjs',
@@ -173,4 +188,108 @@ test('private cursors finish retained trees while content and replacement scans 
     1,
     'legacy snapshots remain explicit',
   )
+})
+
+test('steady content events during one tree change do not repeat tree pages or unchanged revisions', async (t) => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), 'hibi-content-scan-')),
+  )
+  globalThis.__viewProfile = root
+  globalThis.__viewDocuments = []
+  globalThis.__viewMaterializations = 0
+  const folder = join(root, 'notes')
+  await mkdir(folder)
+  for (let index = 0; index < 205; index++)
+    await writeFile(join(folder, `note-${index}.md`), '')
+  const fs = process.getBuiltinModule('node:fs')
+  const io = process.getBuiltinModule('node:fs/promises')
+  t.mock.method(fs, 'watch', () => ({
+    on() {
+      return this
+    },
+    close() {},
+  }))
+  syncBuiltinESMExports()
+  t.after(async () => {
+    try {
+      const target = host.currentWorkspaceTarget()
+      if (target) await host.deleteKnownWorkspace({}, target.workspaceId)
+    } finally {
+      t.mock.restoreAll()
+      syncBuiltinESMExports()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+  await host.loadWorkspace(folder)
+  let pages = 0
+  const states = []
+  const view = host.createWorkspaceView(
+    {
+      getWorkspaceHeader: async () => host.getWorkspaceHeader(),
+      readWorkspaceViewPage: async (request) => {
+        if (!request.drafts) pages++
+        return host.readWorkspaceViewPage(request)
+      },
+    },
+    (state) => states.push(state),
+  )
+  await view.refresh()
+  pages = 0
+  states.length = 0
+  const initial = host.getWorkspaceHeader()
+  const changes = []
+  host.observeWorkspace((change) => {
+    changes.push(change)
+    void view.refresh()
+  })
+  t.after(() => host.observeWorkspace(() => {}))
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const opendir = io.opendir
+  let scans = 0
+  let release
+  let start
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  const started = new Promise((resolve) => {
+    start = resolve
+  })
+  t.mock.method(io, 'opendir', async (path, ...args) => {
+    if (path === folder) {
+      scans++
+      if (scans === 1) {
+        start()
+        await held
+      }
+    }
+    return opendir(path, ...args)
+  })
+  syncBuiltinESMExports()
+  await rename(join(folder, 'note-0.md'), join(folder, 'renamed.md'))
+  const changed = host.refreshWorkspace(['note-0.md', 'renamed.md'])
+  await started
+  try {
+    for (let edit = 0; edit < 8; edit++) {
+      await writeFile(join(folder, 'note-1.md'), String(edit))
+      host.queueWatcherEvent(folder, initial.target, 'change', 'note-1.md')
+      await host.reconcileWatcherEvents(folder, initial.target)
+      await view.refresh()
+    }
+    assert.equal(pages, 0)
+  } finally {
+    release()
+  }
+  await changed
+  // One deliberate unchanged scan also drains any already queued scan cohort.
+  await host.refreshWorkspace()
+  await view.refresh()
+  assert.equal(scans, 2, 'one changed scan plus one explicit unchanged scan')
+  assert.equal(host.getWorkspaceHeader().treeRevision, initial.treeRevision + 1)
+  assert.equal(changes.filter((change) => change.kind === 'tree').length, 1)
+  assert.equal(
+    pages,
+    2,
+    'one two-page traversal; content and unchanged scans reuse it',
+  )
+  assert.equal(states.filter((state) => state?.treePending).length, 1)
 })

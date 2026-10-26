@@ -264,7 +264,7 @@ export function WorkspaceSidebar({
       // Another workspace starts with fresh expansion, focus, and range state.
       key={`${workspace?.id}:${workspace?.workspaceGeneration}`}
       resize={resize}
-      disabled={busy || pending}
+      disabled={busy || !isCurrent()}
       pending={pending}
       interactionRevision={workspace?.treeRevision}
       open={open}

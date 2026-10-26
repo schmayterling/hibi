@@ -42,6 +42,7 @@ export default defineAddon({
     }
     context.editor.registerRich({
       id: 'text',
+      preview: 'deferred',
       attach(instance) {
         const reader = observeRichCounts(
           instance,

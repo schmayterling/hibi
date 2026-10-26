@@ -26,8 +26,8 @@ import {
  * stretches that start at top-level blocks, so a definition counts where the
  * formatted view parses one: code, HTML and paragraph text define nothing,
  * list items and quotes can. Opening a note reads none of it: once a
- * reference is in view, idle time reads the note in slices sized to the time
- * left. An edit reads again from the stretch before it until blocks start
+ * reference is in view, the start of the note is read before that frame
+ * paints and idle time reads the rest, in slices sized to the time left. An edit reads again from the stretch before it until blocks start
  * where they did after it, usually within the next block, or further when,
  * say, a code fence opens above; stretches keep their labels until then.
  */
@@ -602,6 +602,7 @@ export const definitionReader = ViewPlugin.fromClass(
     private idle = 0
     /** Whether a reference has been in view; until then nothing is read. */
     private wanted = false
+    private destroyed = false
     /** Characters read per millisecond, as the last slice measured. */
     private rate = footnoteScan.rate
     private readonly view: EditorView
@@ -613,11 +614,19 @@ export const definitionReader = ViewPlugin.fromClass(
       this.schedule()
     }
     schedule() {
-      this.wanted ||= referenceInView(this.view)
+      if (!this.wanted && referenceInView(this.view)) {
+        this.wanted = true
+        // The start of the note before this frame paints, as much as an edit
+        // reads, so a short note's references draw resolved; idle time reads
+        // the rest.
+        queueMicrotask(() => {
+          if (!this.destroyed) this.read(footnoteScan.slice >> 4)
+        })
+        return
+      }
       if (this.idle || !this.wanted || definitionsRead(this.view.state)) return
       this.idle = requestIdleCallback((deadline) => {
         this.idle = 0
-        const { labels } = this.view.state.field(footnoteDefinitions)
         const budget = Math.min(
           footnoteScan.slice,
           Math.max(
@@ -627,14 +636,20 @@ export const definitionReader = ViewPlugin.fromClass(
         )
         const parsed = footnoteScan.parsed
         const start = performance.now()
-        this.view.dispatch({ effects: readDefinitions.of(budget) })
+        this.read(budget)
         const spent = performance.now() - start
         if (spent >= 1) this.rate = (footnoteScan.parsed - parsed) / spent
-        if (this.view.state.field(footnoteDefinitions).labels !== labels)
-          this.view.dispatch({ effects: formattedRefresh.of(null) })
       })
     }
+    /** Read about `budget` more characters; references draw again when labels change. */
+    read(budget: number) {
+      const { labels } = this.view.state.field(footnoteDefinitions)
+      this.view.dispatch({ effects: readDefinitions.of(budget) })
+      if (this.view.state.field(footnoteDefinitions).labels !== labels)
+        this.view.dispatch({ effects: formattedRefresh.of(null) })
+    }
     destroy() {
+      this.destroyed = true
       if (this.idle) cancelIdleCallback(this.idle)
     }
   },

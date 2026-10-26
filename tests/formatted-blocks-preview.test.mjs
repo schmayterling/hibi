@@ -435,7 +435,7 @@ test('a definition read in idle time turns a reference in view into a footnote',
   }
 })
 
-test("a 50 MiB note reads no footnote definitions until a reference is in view, then what each idle slice's time allows", {
+test("a 50 MiB note reads no footnote definitions until a reference is in view, then its start and what each idle slice's time allows", {
   timeout: 120000,
 }, async () => {
   const counts = await harness.evaluate(async () => {
@@ -472,7 +472,11 @@ test("a 50 MiB note reads no footnote definitions until a reference is in view, 
   // Before, opening read the first 1 MiB and idle slices read 1 MiB each,
   // whether or not a reference was in view.
   assert.deepEqual(counts.plain, [0, 0, 0], JSON.stringify(counts))
-  assert.equal(counts.opened, 0, JSON.stringify(counts))
+  // A reference in view reads the note's start before the frame paints.
+  assert.ok(
+    counts.opened > 0 && counts.opened <= counts.slice / 16 + counts.size,
+    JSON.stringify(counts),
+  )
   // The first slice reads what 10 ms allow at the starting rate, up to the
   // end of the window it is in; later ones at the rate they measured.
   const [first, ...rest] = counts.slices

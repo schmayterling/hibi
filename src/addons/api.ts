@@ -998,6 +998,8 @@ export type Addon = {
 
 /** Native modules are trusted application code, never loaded from a workspace. */
 export type NativeAddonContext = {
+  /** Whether the activation that started this request is still current. Check before queued writes. */
+  isCurrent: () => boolean
   /** Resolve declared tools, including user-selected paths. Native modules must not bypass this for managed dependencies. */
   dependencies: { resolve: (id: string) => Promise<string | null> }
   document: {
@@ -1037,7 +1039,8 @@ export type NativeAddon = {
     files: import('../shared/imports').ImportFile[]
     warnings?: string[]
   }>
-  stop?: () => void
+  /** Finish cleanup before disabling this addon or quitting Hibi. The host waits up to two seconds. */
+  stop?: () => void | Promise<void>
   /** Run in the main process when this addon's global shortcut fires, instead of showing the main window. Keys are local shortcut IDs. */
   globalShortcuts?: Record<
     string,
@@ -1047,6 +1050,11 @@ export type NativeAddon = {
   >
   /** Trusted read-only handlers. No user-file changes or dialogs; private compilation caches are allowed. */
   queries?: Record<
+    string,
+    (input: unknown, context: NativeAddonContext) => Promise<unknown>
+  >
+  /** Trusted handlers for private profile storage. No user-file changes or dialogs. */
+  profileMethods?: Record<
     string,
     (input: unknown, context: NativeAddonContext) => Promise<unknown>
   >
@@ -1070,6 +1078,7 @@ export const ADDON_CHANNELS = {
   enable: 'addons:enable',
   invoke: 'addons:invoke',
   query: 'addons:query',
+  profile: 'addons:profile',
   /** Main asks the main window to reload one addon in place. */
   reload: 'addons:reload',
 } as const

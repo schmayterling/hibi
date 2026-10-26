@@ -1,6 +1,5 @@
 import { basename } from 'node:path'
 import { type BrowserWindow, shell } from 'electron'
-import { MAX_DOCUMENT_BYTES } from '../shared/desktop'
 import {
   getDocument,
   getDocumentPath,
@@ -10,6 +9,9 @@ import {
 import { isDocumentName } from './document-types'
 import { documentMediaPath } from './images'
 import { resolveWikiDocument } from './workspace'
+
+// Remote downloads still use one bounded HTTP response.
+const MAX_REMOTE_DOCUMENT_BYTES = 2 * 1024 * 1024
 
 function webUrl(value: unknown) {
   if (typeof value !== 'string' || value.length > 8192)
@@ -111,9 +113,9 @@ export async function openRemoteDocument(
       const { done, value } = await reader.read()
       if (done) break
       size += value.byteLength
-      if (size > MAX_DOCUMENT_BYTES)
+      if (size > MAX_REMOTE_DOCUMENT_BYTES)
         throw new Error(
-          'The download exceeds the 2 MiB document limit. Choose a smaller file.',
+          'The download exceeds the 2 MiB response limit. Download the file and open it locally.',
         )
       parts.push(value)
     }

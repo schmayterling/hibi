@@ -150,7 +150,7 @@ export class WorkspaceTextIndex {
   }
 
   private advanceStamp() {
-    this.prepare(
+    this.write(
       'UPDATE documents SET checked=0 WHERE dirty=1 AND checked=-1',
     ).run()
     this.stamp = (
@@ -187,6 +187,13 @@ export class WorkspaceTextIndex {
       statement = this.db.prepare(sql)
       this.statements.set(sql, statement)
     }
+    return statement
+  }
+
+  private write(sql: string): StatementSync {
+    const statement = this.prepare(sql)
+    // FTS shadow writes can leave lastInsertRowid beyond Number's safe range.
+    statement.setReadBigInts(true)
     return statement
   }
 
@@ -232,7 +239,7 @@ export class WorkspaceTextIndex {
   private remember(path: string, info: BigIntStats) {
     this.counters.stats++
     const version = diskIndexVersion(info)
-    this.prepare(`
+    this.write(`
       INSERT INTO documents(path,version,checked) VALUES(?,?,?)
       ON CONFLICT(path) DO UPDATE SET
         checked=excluded.checked,
@@ -247,7 +254,7 @@ export class WorkspaceTextIndex {
         document.id,
       )
     )
-      this.prepare('INSERT INTO path_index(rowid,text) VALUES(?,?)').run(
+      this.write('INSERT INTO path_index(rowid,text) VALUES(?,?)').run(
         document.id,
         workspaceIndexText(path),
       )
@@ -255,10 +262,10 @@ export class WorkspaceTextIndex {
 
   private remove(document: Document) {
     this.transaction(() => {
-      this.prepare(`INSERT OR IGNORE INTO retired
+      this.write(`INSERT OR IGNORE INTO retired
         SELECT generation FROM parts WHERE doc=?`).run(document.id)
-      this.prepare('DELETE FROM path_index WHERE rowid=?').run(document.id)
-      this.prepare('DELETE FROM documents WHERE id=?').run(document.id)
+      this.write('DELETE FROM path_index WHERE rowid=?').run(document.id)
+      this.write('DELETE FROM documents WHERE id=?').run(document.id)
     })
   }
 
@@ -268,18 +275,18 @@ export class WorkspaceTextIndex {
     for (const query of this.queries.values()) Atomics.store(query.cancel, 0, 1)
     if (!paths) {
       this.advanceStamp()
-      this.prepare('INSERT OR IGNORE INTO crawl VALUES(?)').run('')
+      this.write('INSERT OR IGNORE INTO crawl VALUES(?)').run('')
     } else
       this.transaction(() => {
         for (const path of paths) {
-          this.prepare(`UPDATE documents SET checked=0,dirty=CASE WHEN path=? THEN 1 ELSE dirty END
+          this.write(`UPDATE documents SET checked=0,dirty=CASE WHEN path=? THEN 1 ELSE dirty END
             WHERE path=? OR (path>=? AND path<?)`).run(
             path,
             path,
             `${path}/`,
             `${path}0`,
           )
-          this.prepare('INSERT OR IGNORE INTO crawl VALUES(?)').run(path)
+          this.write('INSERT OR IGNORE INTO crawl VALUES(?)').run(path)
         }
       })
     this.scanning = true
@@ -315,7 +322,7 @@ export class WorkspaceTextIndex {
               this.visible(path, child.isDirectory())
             ) {
               if (child.isDirectory())
-                this.prepare('INSERT OR IGNORE INTO crawl VALUES(?)').run(path)
+                this.write('INSERT OR IGNORE INTO crawl VALUES(?)').run(path)
               else if (child.isFile() && this.supported(path)) {
                 try {
                   this.remember(
@@ -340,7 +347,7 @@ export class WorkspaceTextIndex {
         )
           this.crawlFailed = true
       }
-      this.prepare('DELETE FROM crawl WHERE path=?').run(base)
+      this.write('DELETE FROM crawl WHERE path=?').run(base)
       yield
     }
     try {
@@ -456,7 +463,7 @@ export class WorkspaceTextIndex {
   private async *index(document: Document): AsyncGenerator<void> {
     const generation = randomUUID()
     this.buildingGeneration = generation
-    this.prepare('INSERT INTO retired VALUES(?)').run(generation)
+    this.write('INSERT INTO retired VALUES(?)').run(generation)
     const source = this.source(document.path)
     let tail = ''
     let version = ''
@@ -469,10 +476,10 @@ export class WorkspaceTextIndex {
         }
         const text = tail + next.value
         this.transaction(() => {
-          const part = this.prepare(
+          const part = this.write(
             'INSERT INTO parts(doc,generation) VALUES(?,?)',
           ).run(document.id, generation)
-          this.prepare('INSERT INTO text_index(rowid,text) VALUES(?,?)').run(
+          this.write('INSERT INTO text_index(rowid,text) VALUES(?,?)').run(
             part.lastInsertRowid,
             workspaceIndexText(text),
           )
@@ -483,13 +490,13 @@ export class WorkspaceTextIndex {
         if (this.closed) return
       }
       if (version !== document.version) {
-        this.prepare(
+        this.write(
           'UPDATE documents SET version=?,dirty=1 WHERE id=? AND version=?',
         ).run(version, document.id, document.version)
         return
       }
       this.transaction(() => {
-        const published = this.prepare(`UPDATE documents SET active=?,dirty=0
+        const published = this.write(`UPDATE documents SET active=?,dirty=0
           WHERE id=? AND version=? AND checked=?`).run(
           generation,
           document.id,
@@ -497,9 +504,9 @@ export class WorkspaceTextIndex {
           this.stamp,
         )
         if (published.changes) {
-          this.prepare('DELETE FROM retired WHERE generation=?').run(generation)
+          this.write('DELETE FROM retired WHERE generation=?').run(generation)
           if (document.active)
-            this.prepare('INSERT OR IGNORE INTO retired VALUES(?)').run(
+            this.write('INSERT OR IGNORE INTO retired VALUES(?)').run(
               document.active,
             )
           this.counters.filesIndexed++
@@ -521,11 +528,11 @@ export class WorkspaceTextIndex {
     ).all(retired.generation) as { id: number }[]
     this.transaction(() => {
       for (const part of parts) {
-        this.prepare('DELETE FROM text_index WHERE rowid=?').run(part.id)
-        this.prepare('DELETE FROM parts WHERE id=?').run(part.id)
+        this.write('DELETE FROM text_index WHERE rowid=?').run(part.id)
+        this.write('DELETE FROM parts WHERE id=?').run(part.id)
       }
       if (parts.length < 32)
-        this.prepare('DELETE FROM retired WHERE generation=?').run(
+        this.write('DELETE FROM retired WHERE generation=?').run(
           retired.generation,
         )
     })
@@ -572,10 +579,10 @@ export class WorkspaceTextIndex {
               if (document)
                 this.transaction(() => {
                   if (document.active)
-                    this.prepare('INSERT OR IGNORE INTO retired VALUES(?)').run(
+                    this.write('INSERT OR IGNORE INTO retired VALUES(?)').run(
                       document.active,
                     )
-                  this.prepare(
+                  this.write(
                     'UPDATE documents SET active=NULL,dirty=0 WHERE id=? AND version=?',
                   ).run(document.id, document.version)
                 })
@@ -587,7 +594,7 @@ export class WorkspaceTextIndex {
               if (document) this.remove(document)
             } else {
               if (document)
-                this.prepare(
+                this.write(
                   'UPDATE documents SET checked=-1 WHERE id=? AND version=?',
                 ).run(document.id, document.version)
               this.scanFailed = true
@@ -696,7 +703,7 @@ export class WorkspaceTextIndex {
     let documentAfter = 0
     let partAfter = 0
     const seen = (path: string) =>
-      this.prepare('INSERT OR IGNORE INTO seen VALUES(?,?)').run(id, path)
+      this.write('INSERT OR IGNORE INTO seen VALUES(?,?)').run(id, path)
     try {
       for (;;) {
         if (!active()) throw stale()
@@ -853,8 +860,8 @@ export class WorkspaceTextIndex {
         await turn()
       }
     } finally {
-      this.prepare('DELETE FROM seen WHERE session=?').run(id)
-      this.prepare('DELETE FROM overlays WHERE session=?').run(id)
+      this.write('DELETE FROM seen WHERE session=?').run(id)
+      this.write('DELETE FROM overlays WHERE session=?').run(id)
     }
   }
 
@@ -867,7 +874,7 @@ export class WorkspaceTextIndex {
     const id = randomUUID()
     for (const path of drafts) {
       if (this.visible(path) && this.supported(path))
-        this.prepare('INSERT INTO overlays VALUES(?,?)').run(id, path)
+        this.write('INSERT INTO overlays VALUES(?,?)').run(id, path)
     }
     this.queries.set(id, {
       iterator: this.results(id, query, includePaths, cancel),
@@ -936,8 +943,8 @@ export class WorkspaceTextIndex {
     Atomics.store(query.cancel, 0, 1)
     this.queries.delete(id)
     await query.iterator.return(undefined).catch(() => {})
-    this.prepare('DELETE FROM seen WHERE session=?').run(id)
-    this.prepare('DELETE FROM overlays WHERE session=?').run(id)
+    this.write('DELETE FROM seen WHERE session=?').run(id)
+    this.write('DELETE FROM overlays WHERE session=?').run(id)
   }
 
   async expire() {

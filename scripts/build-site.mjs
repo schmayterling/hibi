@@ -56,7 +56,7 @@ const result = await build({
           .map((item) => String(item.source))
           .join('\n')
         const hash = createHash('sha256').update(js).digest('base64')
-        const policy = `default-src 'none'; worker-src blob:; script-src 'sha256-${hash}'; style-src 'unsafe-inline'; img-src data:; media-src data:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'`
+        const policy = `default-src 'none'; worker-src blob:; script-src 'sha256-${hash}'; style-src 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'`
         const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${policy}"><title>hibi documentation</title><style>${css}</style></head><body><div id="root"></div><script id="workspace-data" type="application/json">__HIBI_WORKSPACE_DATA__</script><script>${js}</script><!-- bundled licenses\n${licenses}\n--></body></html>`
         for (const key of Object.keys(bundle)) delete bundle[key]
         this.emitFile({

@@ -2,22 +2,22 @@ import { Lexer, Tokenizer } from 'marked'
 
 /** Use Marked's fence parser so indentation, long fences, and raw source round-trip. */
 export function fencedBlock(language: string, type: string) {
-  // The lexer only installs Marked's rules; each call reads one fence, never
-  // the rest of the note.
   const tokenizer = new Tokenizer()
-  new Lexer({ tokenizer })
+  new Lexer({ gfm: true, tokenizer })
   return (source: string) => {
+    if (!/^ {0,3}(?:`{3,}|~{3,})/.test(source)) return
     const token = tokenizer.fences(source)
-    if (token?.lang?.toLowerCase() !== language) return
-    return { type, raw: token.raw, source: token.text }
+    if (!token || token.lang?.toLowerCase() !== language) return
+    // Marked folds one following newline into the preceding block's raw text.
+    const space = tokenizer.space(source.slice(token.raw.length))
+    const raw = token.raw + (space?.raw === '\n' ? '\n' : '')
+    return { type, raw, source: token.text }
   }
 }
 export function fenceSource(language: string, source: string) {
-  const ticks = '`'.repeat(
-    Math.max(
-      3,
-      ...Array.from(source.matchAll(/`+/g), (match) => match[0].length + 1),
-    ),
-  )
+  let width = 3
+  for (const match of source.matchAll(/`+/g))
+    width = Math.max(width, match[0].length + 1)
+  const ticks = '`'.repeat(width)
   return `${ticks}${language}\n${source}\n${ticks}`
 }

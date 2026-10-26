@@ -17,15 +17,15 @@ test('exported vocabulary uses one offline pack request and follows custom word 
     () => ['en', 'fr'],
     () => custom,
   )
-  assert.equal(api.version, 1)
+  assert.equal(api.version, 2)
   assert.deepEqual(await api.complete('hap', ['en', 'fr', 'en'], 24), [
     { lang: 'en', words: ['happy'] },
   ])
   assert.deepEqual(calls, [{ ids: ['en', 'fr'], prefix: 'hap', limit: 24 }])
   custom = [{ word: 'Hibiland' }, { word: 'kilig', lang: 'tl' }]
-  assert.equal(api.customWords(), custom)
+  assert.equal(await api.customWords(), custom)
   custom = []
-  assert.deepEqual(api.customWords(), [])
+  assert.deepEqual(await api.customWords(), [])
   assert.deepEqual(await api.complete('', ['en'], 24), [])
   assert.deepEqual(await api.complete('hap', [], 24), [])
   assert.deepEqual(await api.complete('hap', ['en'], NaN), [])

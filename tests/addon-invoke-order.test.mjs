@@ -33,6 +33,10 @@ const source = [
     index.lastIndexOf('handle(', index.indexOf('ADDON_CHANNELS.invoke,')),
     index.lastIndexOf('handle(', index.indexOf('ADDON_CHANNELS.query,')),
   ),
+  index.slice(
+    index.lastIndexOf('handle(', index.indexOf('ADDON_CHANNELS.profile,')),
+    index.lastIndexOf('handle(', index.indexOf('ADDON_WINDOW_CHANNELS.open,')),
+  ),
 ].join('\n')
 const deferred = () => {
   let resolve
@@ -56,28 +60,31 @@ function harness() {
     generation: 1,
     lookups: 0,
     calls: [],
+    profileCalls: [],
+    dialog: false,
+    loadGate: null,
     loads: 0,
     documentPath: '/notes/first.md',
     sent: [],
     document: { tabId: 'first', revision: 1 },
     workspace: Object.freeze({ workspaceId: 'first', workspaceGeneration: 1 }),
   }
-  let handler
+  const handlers = new Map()
   const noop = () => null
   const bindings = {
     window,
     MEDIA_CHANNELS: { scopeChanged: 'media:scope-changed' },
     getDocumentPath: () => state.documentPath,
     pendingFileOperations: new Set(),
-    fileOperationHasDialog: () => false,
+    fileOperationHasDialog: () => state.dialog,
     fileOperationDialogOpened: noop,
     withinFileOperation: async (operation) => operation(),
     rendererUrl: frame.url,
     isTrustedRendererUrl: (url, expected) => url === expected,
-    handle: (_channel, invoke) => {
-      handler = invoke
+    handle: (channel, invoke) => {
+      handlers.set(channel, invoke)
     },
-    ADDON_CHANNELS: { invoke: 'addons:invoke' },
+    ADDON_CHANNELS: { invoke: 'addons:invoke', profile: 'addons:profile' },
     getAddonActivationGeneration: (id) => {
       assert.equal(typeof id, 'string')
       state.lookups++
@@ -87,7 +94,16 @@ function harness() {
       state.enabled && generation === state.generation,
     nativeAddon: async () => {
       state.loads++
+      await state.loadGate?.promise
       return {
+        profileMethods: {
+          async run(input) {
+            state.profileCalls.push(input.name)
+            input.started?.resolve()
+            await input.blocked?.promise
+            return input.name
+          },
+        },
         methods: {
           async run(input) {
             state.calls.push(input.name)
@@ -111,13 +127,19 @@ function harness() {
   const host = new Function(
     ...Object.keys(bindings),
     stripTypeScriptTypes(source) +
-      '; return { hold: pending => lockFileOperation(window, () => pending), setWindow: value => { mainWindow = value } }',
+      '; return { hold: pending => lockFileOperation(window, () => pending), setWindow: value => { mainWindow = value }, pending: pendingFileOperations, close: async () => { closing = true; ' +
+      index.match(
+        /while \(pendingFileOperations.size\)\s+await Promise.all\(pendingFileOperations\)/,
+      )[0] +
+      ' } }',
   )(...Object.values(bindings))
   return {
     ...host,
     state,
     invoke: async (input, id = 'quick-note') =>
-      handler(event, id, 'run', input),
+      handlers.get('addons:invoke')(event, id, 'run', input),
+    profile: async (input, method = 'run') =>
+      handlers.get('addons:profile')(event, 'quick-note', method, input),
   }
 }
 
@@ -243,4 +265,65 @@ test('a queued addon invoke rechecks addon authorization', async () => {
   await held
   assert.match((await request).message, /This addon was disabled/)
   assert.equal(h.state.loads, 0)
+})
+
+test('profile storage commits while a file dialog holds document operations', async () => {
+  const h = harness()
+  const gate = deferred()
+  const held = h.hold(gate.promise)
+  h.state.dialog = true
+  try {
+    assert.equal(await h.profile({ name: 'stored' }), 'stored')
+    assert.deepEqual(h.state.profileCalls, ['stored'])
+    await assert.rejects(
+      h.invoke({ name: 'file action' }),
+      /file operation is in progress/,
+    )
+    await assert.rejects(h.profile({}, 'constructor'), /does not support/)
+  } finally {
+    gate.resolve()
+    await held
+  }
+})
+
+test('profile storage rechecks sender and activation after loading its native handler', async () => {
+  const h = harness()
+  const gate = deferred()
+  h.state.loadGate = gate
+  const pending = h.profile({ name: 'old activation' }).catch((error) => error)
+  await setImmediate()
+  h.state.generation++
+  gate.resolve()
+  assert.match((await pending).message, /disabled/)
+  assert.deepEqual(h.state.profileCalls, [])
+  h.state.loadGate = null
+  assert.equal(await h.profile({ name: 'current' }), 'current')
+  h.setWindow(null)
+  await assert.rejects(
+    h.profile({ name: 'closed window' }),
+    /untrusted ipc sender/,
+  )
+})
+
+test('window close drains a pending profile commit and rejects later requests', async () => {
+  const h = harness()
+  const gate = deferred()
+  const started = deferred()
+  const pending = h.profile({ name: 'durable commit', blocked: gate, started })
+  await started.promise
+  assert.equal(h.pending.size, 1)
+  let closed = false
+  const closing = h.close().then(() => {
+    closed = true
+  })
+  await setImmediate()
+  assert.equal(closed, false)
+  await assert.rejects(
+    h.profile({ name: 'too late' }),
+    /file operation is in progress/,
+  )
+  gate.resolve()
+  assert.equal(await pending, 'durable commit')
+  await closing
+  assert.equal(h.pending.size, 0)
 })

@@ -11,7 +11,7 @@ import {
 } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, win32 } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
 import { build } from 'esbuild'
@@ -34,6 +34,7 @@ const host = {
   drafts: new Map(),
   preferenceBlock: null,
   showAllFiles: false,
+  pathApi: null,
   closeOnPull: false,
   fault: null,
   sourceReads: 0,
@@ -109,11 +110,19 @@ const bundle = await build({
             : null,
         )
         build.onLoad({ filter: /.*/, namespace: 'text-host' }, () => ({
-          contents: `const host=()=>globalThis.__hibiTextHost
+          contents: `import path from 'node:path'
+          import {parseWorkspaceMetadata,sourceIndexVersion} from ${JSON.stringify(resolve('src/main/workspace-index-metadata.ts'))}
+          const host=()=>globalThis.__hibiTextHost
+          const pages=()=>[
+            {path:'a.md',markdown:'# Alpha\\nfirst needle\\n'},
+            {path:'b.md',markdown:'# Bravo\\ncommon needle\\n'},
+          ]
           export const workspaceRoot=()=>host().root
           export const workspaceRelativePath=(file)=>{
-            const path=file.slice(host().root.length+1)
-            return file.startsWith(host().root+'/')?path:null
+            const paths=host().pathApi??path
+            const value=paths.relative(host().root,file)
+            return value&&value!=='..'&&!value.startsWith('..'+paths.sep)&&!paths.isAbsolute(value)
+              ?value.split(paths.sep).join('/'):null
           }
           export const isCurrentWorkspaceTarget=(target)=>
             target?.workspaceId===host().target.workspaceId&&
@@ -131,12 +140,23 @@ const bundle = await build({
           }
           export const indexWorkspace=async()=>{
             host().indexReads++
-            return{workspace:{id:host().target.workspaceId},pages:[
-              {path:'a.md',markdown:'# Alpha\\nfirst needle\\n'},
-              {path:'b.md',markdown:'# Bravo\\ncommon needle\\n'},
-            ]}
-          }`,
+            return{workspace:{id:host().target.workspaceId},pages:pages()}
+          }
+          export const workspaceMetadataDelta=async()=>null
+          export const workspaceMetadataHeadings=async()=>null
+          export const workspaceMetadataPages=(syntax,current)=>({
+            pages:(async function*(){
+              host().indexReads++
+              for(const page of pages()){
+                if(!current())return
+                const profile=syntax.page(page)
+                yield{path:page.path,version:sourceIndexVersion(page.markdown),syntax:profile,
+                  metadata:parseWorkspaceMetadata(page,profile,undefined,()=>{})}
+              }
+            })(),commit:current,
+          })`,
           loader: 'js',
+          resolveDir: resolve('.'),
         }))
         build.onLoad({ filter: /.*/, namespace: 'text-documents' }, () => ({
           contents: `const host=()=>globalThis.__hibiTextHost
@@ -269,6 +289,25 @@ test('text query returns verified snippets without building or snapshotting meta
   )
   assert.equal(host.indexReads, 0)
   assert.equal(host.snapshots, 0)
+})
+
+test('Windows draft paths remain in the workspace search overlay', async () => {
+  host.pathApi = win32
+  host.drafts.set('windows-draft', {
+    file: win32.join(host.root, 'a.md'),
+    source: new SourceStore('Windows draft marker', {
+      tabId: 'windows-draft',
+      revision: 1,
+    }),
+  })
+  try {
+    assert.deepEqual((await collect({ query: 'Windows draft marker' })).items, [
+      'a.md',
+    ])
+  } finally {
+    host.pathApi = null
+    host.drafts.clear()
+  }
 })
 
 test('fatal worker faults restart, and corruption discards only derived cache after exit', async () => {

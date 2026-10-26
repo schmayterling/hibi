@@ -56,13 +56,19 @@ test('atomic source operations cross preload barriers, save exact text and recov
     return { document, ack }
   }, result.operation)
   assert.equal(saved.ack.operationId, 'native-batch')
-  assert.equal(saved.document.markdown, 'AbcdeF')
+  assert.equal(saved.document.saveReceipt, true)
+  assert.equal(saved.document.savedVersion, result.operation.contentVersion)
+  assert.equal(saved.document.contentVersion, result.operation.contentVersion)
+  assert.equal('markdown' in saved.document, false)
   assert.equal(saved.document.dirty, false)
   assert.equal(await readFile(destination, 'utf8'), 'AbcdeF')
+  // Raw journal appends bypass the renderer session; reload adopts their source.
   await page.reload()
   await waitForDocumentEditor(app, page)
   const restored = await page.evaluate(() => window.hibi.getDocument())
   assert.equal(restored.markdown, 'AbcdeF')
+  assert.equal(restored.savedMarkdown, 'AbcdeF')
+  assert.equal(restored.dirty, false)
   assert.equal(restored.contentVersion, result.operation.contentVersion)
   if (process.platform === 'darwin') {
     const editor = page.getByRole('textbox', { name: /document editor/i })

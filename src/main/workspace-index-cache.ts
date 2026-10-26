@@ -1,9 +1,9 @@
 import type { BigIntStats } from 'node:fs'
 import type { WorkspacePage } from '../shared/workspace'
 
-export type CachedIndexPage = {
+export type CachedIndexPage<Page = WorkspacePage> = {
   version: string
-  page: WorkspacePage
+  page: Page
   bytes: number
 }
 
@@ -26,18 +26,20 @@ export function needsIndexVerification(
   return false
 }
 
-export async function readIndexPage(
-  previous: CachedIndexPage | undefined,
+export async function readIndexPage<Page = WorkspacePage>(
+  previous: CachedIndexPage<Page> | undefined,
   version: string,
   id: string,
   path: string,
   read: () => Promise<string> | string,
-): Promise<CachedIndexPage> {
+  derive: (page: WorkspacePage) => Page | Promise<Page> = (page) =>
+    page as Page,
+): Promise<CachedIndexPage<Page>> {
   if (previous?.version === version) return previous
   const markdown = await read()
   return {
     version,
     bytes: Buffer.byteLength(markdown),
-    page: { id, path, markdown },
+    page: await derive({ id, path, markdown }),
   }
 }

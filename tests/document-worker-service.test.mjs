@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DocumentWorkerService } from '../src/shared/document-worker-service.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
+import { loadWorker } from './document-worker-transfer.mjs'
 
 function fixture(t, source = 'one two one') {
   const messages = [],
@@ -42,17 +43,7 @@ function fixture(t, source = 'one two one') {
       check()
     })
   const load = (epoch = 'first', body = source) => {
-    const chunks = []
-    for (let from = 0; from < body.length; from += 65536)
-      chunks.push(body.slice(from, from + 65536))
-    worker.receive({
-      type: 'load',
-      epoch,
-      document: { tabId: 'a', revision: 0 },
-      version: 0,
-      chunks,
-    })
-    assert.equal(messages.at(-1).type, 'ack')
+    loadWorker(worker, messages, body, epoch)
   }
   const find = (id, version = 0, query = 'one', from = 0, to = 0) =>
     worker.receive({
@@ -67,6 +58,242 @@ function fixture(t, source = 'one two one') {
   load()
   return { worker, messages, next, load, find }
 }
+
+test('find uses channel tasks after real build steps and closes ports on completion, cancel and dispose', async (t) => {
+  const NativeChannel = MessageChannel,
+    channels = []
+  t.mock.method(
+    globalThis,
+    'MessageChannel',
+    class extends NativeChannel {
+      constructor() {
+        super()
+        channels.push({
+          channel: this,
+          close1: t.mock.method(this.port1, 'close'),
+          close2: t.mock.method(this.port2, 'close'),
+          post: t.mock.method(this.port2, 'postMessage'),
+        })
+      }
+    },
+  )
+  const f = fixture(t, 'one two '.repeat(100000)),
+    timers = t.mock.method(globalThis, 'setTimeout')
+  f.find(1)
+  const result = await f.next((reply) => reply.type === 'find')
+  assert.equal(result.location.total, 100000)
+  // Only fixture.next owns a timeout; every find slice uses a channel task.
+  assert.equal(timers.mock.calls.length, 1)
+  assert.equal(channels.length, 1)
+  assert.ok(channels[0].post.mock.calls.length > 1)
+  assert.ok(f.messages.some((reply) => reply.type === 'find-progress'))
+  assert.equal(channels[0].close1.mock.calls.length, 1)
+  assert.equal(channels[0].close2.mock.calls.length, 1)
+  f.find(2, 0, 'absent')
+  f.worker.receive({ type: 'cancel-find', epoch: 'first', id: 2 })
+  assert.equal(channels[1].close1.mock.calls.length, 1)
+  assert.equal(channels[1].close2.mock.calls.length, 1)
+  f.find(3, 0, 'one')
+  f.worker.dispose()
+  assert.equal(channels[2].close1.mock.calls.length, 1)
+  assert.equal(channels[2].close2.mock.calls.length, 1)
+})
+
+test('worker acknowledges stream start without publishing an incomplete version', () => {
+  const replies = []
+  const worker = new DocumentWorkerService((reply) => replies.push(reply))
+  try {
+    worker.receive({
+      type: 'load-start',
+      epoch: 'stream-regression',
+      head: {
+        tabId: 'a',
+        revision: 0,
+        contentVersion: 3,
+        streamId: 'bootstrap',
+        length: 1,
+      },
+    })
+    assert.equal(
+      replies.at(-1)?.type,
+      'load-ack',
+      'worker must acknowledge stream start',
+    )
+    assert.equal(
+      replies.some((reply) => reply.type === 'ack'),
+      false,
+    )
+    worker.receive({
+      type: 'load-chunk',
+      epoch: 'stream-regression',
+      chunk: { streamId: 'bootstrap', sequence: 0, chunks: ['x'], done: true },
+    })
+    assert.deepEqual(replies.at(-1).request, {
+      streamId: 'bootstrap',
+      sequence: 1,
+    })
+    assert.equal(
+      replies.some((reply) => reply.type === 'ack'),
+      false,
+    )
+    worker.receive({
+      type: 'load-finish',
+      epoch: 'stream-regression',
+      request: { streamId: 'bootstrap', sequence: 1 },
+    })
+    assert.deepEqual(replies.at(-1), {
+      type: 'ack',
+      epoch: 'stream-regression',
+      version: 3,
+    })
+  } finally {
+    worker.dispose()
+  }
+})
+
+test('worker aborts malformed or out of order streams and requires a fresh start', () => {
+  const replies = []
+  const worker = new DocumentWorkerService((reply) => replies.push(reply))
+  const epoch = 'invalid-stream'
+  const head = {
+    tabId: 'a',
+    revision: 2,
+    contentVersion: 7,
+    streamId: 'stream',
+    length: 2,
+  }
+  const chunk = { streamId: 'stream', sequence: 0, chunks: ['xy'], done: true }
+  try {
+    for (const invalid of [
+      { ...chunk, sequence: 1 },
+      { ...chunk, streamId: 'old' },
+      { ...chunk, chunks: ['x'.repeat(65537)] },
+      { ...chunk, chunks: ['x'.repeat(32769), 'x'.repeat(32769)] },
+      { ...chunk, chunks: Array(17).fill('x') },
+      { ...chunk, chunks: [42] },
+      { ...chunk, chunks: ['x'] },
+      { ...chunk, chunks: [] },
+    ]) {
+      worker.receive({ type: 'load-start', epoch, head })
+      worker.receive({ type: 'load-chunk', epoch, chunk: invalid })
+      assert.equal(replies.at(-1).stage, 'replica')
+      worker.receive({ type: 'load-chunk', epoch, chunk })
+      assert.equal(replies.at(-1).stage, 'replica')
+      worker.receive({
+        type: 'load-finish',
+        epoch,
+        request: { streamId: 'stream', sequence: 1 },
+      })
+      assert.equal(replies.at(-1).stage, 'replica')
+    }
+    for (const request of [
+      { streamId: 'stream', sequence: 0 },
+      { streamId: 'old', sequence: 1 },
+      { streamId: 'stream', sequence: 2 },
+    ]) {
+      worker.receive({ type: 'load-start', epoch, head })
+      worker.receive({ type: 'load-chunk', epoch, chunk })
+      worker.receive({ type: 'load-finish', epoch, request })
+      assert.equal(replies.at(-1).stage, 'replica')
+    }
+    worker.receive({ type: 'load-start', epoch, head })
+    worker.receive({
+      type: 'load-finish',
+      epoch,
+      request: { streamId: 'stream', sequence: 0 },
+    })
+    assert.equal(replies.at(-1).stage, 'replica')
+    worker.receive({ type: 'load-start', epoch, head })
+    worker.receive({ type: 'load-chunk', epoch, chunk })
+    worker.receive({ type: 'load-chunk', epoch, chunk })
+    assert.equal(replies.at(-1).stage, 'replica')
+    assert.equal(
+      replies.some((reply) => reply.type === 'ack'),
+      false,
+    )
+    loadWorker(worker, replies, 'fresh', epoch, { tabId: 'a', revision: 2 }, 8)
+    assert.equal(replies.at(-1).version, 8)
+  } finally {
+    worker.dispose()
+  }
+})
+
+test('worker start replaces partial streams and stale epochs cannot publish old source', async (t) => {
+  const f = fixture(t)
+  const start = (epoch, streamId, contentVersion) =>
+    f.worker.receive({
+      type: 'load-start',
+      epoch,
+      head: { tabId: 'a', revision: 1, contentVersion, streamId, length: 3 },
+    })
+  start('old', 'old', 4)
+  f.worker.receive({
+    type: 'load-chunk',
+    epoch: 'old',
+    chunk: { streamId: 'old', sequence: 0, chunks: ['x'], done: false },
+  })
+  start('fresh', 'fresh', 5)
+  const count = f.messages.length
+  f.worker.receive({
+    type: 'load-finish',
+    epoch: 'old',
+    request: { streamId: 'old', sequence: 1 },
+  })
+  assert.equal(f.messages.length, count)
+  f.worker.receive({
+    type: 'load-chunk',
+    epoch: 'fresh',
+    chunk: { streamId: 'fresh', sequence: 0, chunks: ['one'], done: true },
+  })
+  f.worker.receive({
+    type: 'load-finish',
+    epoch: 'fresh',
+    request: { streamId: 'fresh', sequence: 1 },
+  })
+  assert.equal(f.messages.at(-1).version, 5)
+  f.worker.receive({
+    type: 'find',
+    epoch: 'fresh',
+    id: 1,
+    version: 5,
+    query: 'one',
+    from: 0,
+    to: 0,
+  })
+  assert.equal(
+    (await f.next((reply) => reply.type === 'find')).location.total,
+    1,
+  )
+  start('fresh', 'partial', 6)
+  start('fresh', 'replacement', 7)
+  f.worker.receive({
+    type: 'load-chunk',
+    epoch: 'fresh',
+    chunk: { streamId: 'partial', sequence: 0, chunks: ['old'], done: true },
+  })
+  assert.equal(f.messages.at(-1).stage, 'replica')
+  f.worker.receive({
+    type: 'load-finish',
+    epoch: 'fresh',
+    request: { streamId: 'replacement', sequence: 0 },
+  })
+  assert.equal(f.messages.at(-1).stage, 'replica')
+})
+
+test('obsolete single payload loads are rejected even with valid bounded source', (t) => {
+  const f = fixture(t)
+  f.worker.receive({
+    type: 'load',
+    epoch: 'first',
+    document: { tabId: 'a', revision: 0 },
+    version: 0,
+    chunks: ['x'],
+  })
+  assert.equal(f.messages.at(-1).stage, 'replica')
+  assert.equal(f.messages.at(-1).message, 'Unknown document worker request.')
+  f.load('replacement', 'fresh')
+  assert.equal(f.messages.at(-1).type, 'ack')
+})
 
 test('math reference grammar invalidates cached definitions and hides opaque math contents', async (t) => {
   const source = '$$\n\n[ref]: /hidden\n\n$$\n\n[ref]: /real\n',
@@ -371,7 +598,11 @@ test('metadata batches cheap parser advances while yielding between work slices'
 
 test('worker source replication is ordered, atomic, and query replies name the exact accepted version', async (t) => {
   const f = fixture(t)
-  assert.deepEqual(f.messages[0], { type: 'ack', epoch: 'first', version: 0 })
+  assert.deepEqual(f.messages.at(-1), {
+    type: 'ack',
+    epoch: 'first',
+    version: 0,
+  })
   f.find(1)
   const original = await f.next(
     (reply) => reply.type === 'find' && reply.id === 1,
@@ -450,11 +681,15 @@ test('worker validates bootstrap and query limits without executing document con
   f.find(3, 0, 'script', -1, 0)
   assert.equal(f.messages.at(-1).id, 3)
   f.worker.receive({
-    type: 'load',
+    type: 'load-start',
     epoch: 'bad',
-    document: { tabId: 'a', revision: 0 },
-    version: 0,
-    chunks: [42],
+    head: {
+      tabId: 'a',
+      revision: 0,
+      contentVersion: -1,
+      streamId: 'bad',
+      length: 1,
+    },
   })
   assert.equal(f.messages.at(-1).stage, 'replica')
 })

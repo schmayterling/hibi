@@ -324,13 +324,23 @@ export function deleteColumn(
     const row = line(table, index)
     if (columns === 2) {
       // One column needs outer pipes, or its header and delimiter read as a heading.
-      const rest = row.cells
-        .filter((_, at) => at !== column)
-        .map(({ from, to }) => row.text.slice(from - row.from, to - row.from))
+      const rest = row.cells.filter((_, at) => at !== column)
+      const [only] = rest
+      if (rest.length === 1 && only) {
+        // The cell left keeps its text where it is, so its sizes stay with it.
+        changes.push(
+          { from: row.start, to: only.from, insert: '| ' },
+          { from: only.to, to: row.end, insert: ' |' },
+        )
+        continue
+      }
+      const texts = rest.map(({ from, to }) =>
+        row.text.slice(from - row.from, to - row.from),
+      )
       changes.push({
         from: row.start,
         to: row.end,
-        insert: rest.length ? `| ${rest.join(' | ')} |` : '|',
+        insert: texts.length ? `| ${texts.join(' | ')} |` : '|',
       })
       continue
     }

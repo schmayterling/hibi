@@ -1229,6 +1229,40 @@ test('moving 1,000 sized rows stores their heights in batches the workspace acce
   assert.equal((await layouts('batches'))[0].rows[1], 0)
 })
 
+test('columns with the same header keep their own widths through a column delete and undo', {
+  timeout: 30000,
+}, async () => {
+  const doc = '| Name | Name |\n| - | - |\n| 1 | 2 |\n\nafter'
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('twins', [
+        { key, columns: [200, 180], rows: null },
+      ]),
+    tableKey(0, ['Name', 'Name']),
+  )
+  await mountTab(doc, 'twins')
+  const widths = () =>
+    harness.evaluate(() =>
+      [...document.querySelector('.hibi-lp-table tr').cells].map(
+        (cell) => cell.style.width,
+      ),
+    )
+  assert.equal(
+    await harness.evaluate(
+      (at) => {
+        window.tables.view().dispatch({ selection: { anchor: at } })
+        return window.tables.runTableAction('column-delete')
+      },
+      doc.indexOf('Name |') + 'Name | '.length + 1,
+    ),
+    true,
+  )
+  assert.deepEqual(await widths(), ['200px'])
+  await harness.keyboard.press(undoKey)
+  assert.equal((await state()).doc, doc)
+  assert.deepEqual(await widths(), ['200px', '180px'])
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {

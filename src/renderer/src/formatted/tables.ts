@@ -334,8 +334,8 @@ class TableView {
   private unsubscribe: (() => void) | null = null
   /** Sized columns' header cells and sized rows' lines through changes since the last redraw, null where deleted. */
   private moved: Moved | null = null
-  /** Sizes of columns an edit removed, by header text, for when the column comes back. */
-  private dropped = new Map<string, number>()
+  /** Sizes of columns edits removed, with their index and header text, for when a column comes back there. */
+  private dropped: { index: number; size: number; text: string }[] = []
   /** The stored entry as last bound or saved, so saves that change nothing write nothing. */
   private stored: string | null = null
   /** Where the table is after the change being applied, while its state is handed over. */
@@ -1048,11 +1048,11 @@ class TableView {
     const columns: number[] = [],
       rows = new Map<number, number>()
     const texts = row.cells.map(({ from, to }) => header.text.slice(from, to))
-    /** The one new column with this header text, for a column whose cell the change rewrote. */
+    /** The one new column with this header text, for a column whose cell the change rewrote: only a text no other column had or has. */
+    const unique = (list: string[], text: string) =>
+      list.indexOf(text) >= 0 && list.indexOf(text) === list.lastIndexOf(text)
     const byText = (text: string | undefined) =>
-      text !== undefined &&
-      texts.indexOf(text) >= 0 &&
-      texts.indexOf(text) === texts.lastIndexOf(text)
+      text !== undefined && unique(texts, text) && unique(moved.texts, text)
         ? texts.indexOf(text)
         : -1
     moved.columns.forEach((pos, index) => {
@@ -1078,8 +1078,7 @@ class TableView {
       }
       if (target >= 0) columns[target] = size
       // A dropped column's size comes back with its column, as after undo.
-      else if (moved.texts[index] !== undefined)
-        this.dropped.set(moved.texts[index], size)
+      else this.dropped.push({ index, size, text: moved.texts[index] ?? '' })
     })
     for (const { index, size, pos } of moved.rows) {
       let target = pos === null && this.lines >= moved.lines ? index : -1
@@ -1091,12 +1090,10 @@ class TableView {
       if (target >= 0) rows.set(target, size)
     }
     if (row.cells.length > moved.count)
-      texts.forEach((text, column) => {
-        const size = this.dropped.get(text)
-        if (size && columns[column] === undefined) {
-          columns[column] = size
-          this.dropped.delete(text)
-        }
+      this.dropped = this.dropped.filter(({ index, size, text }) => {
+        if (columns[index] !== undefined || texts[index] !== text) return true
+        columns[index] = size
+        return false
       })
     const next = Array.from(columns, (size) => size ?? 0)
     if (

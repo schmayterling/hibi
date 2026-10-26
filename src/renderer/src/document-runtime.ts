@@ -17,7 +17,12 @@ import type {
   RawEdit,
   SourceOperation,
 } from '../../shared/source-operations.ts'
-import { loadedDocument, sourceDocument } from './document-transfer.ts'
+import {
+  documentSnapshot,
+  loadedDocument,
+  releaseDocuments,
+  sourceDocument,
+} from './document-transfer.ts'
 
 type RuntimeOptions = {
   /** Combined retained history across open tabs; payload bytes are estimated. */
@@ -63,7 +68,6 @@ export class DocumentRuntime {
   readonly #views = new Map<ViewId, ViewTarget>()
   #generation = 0
   #activeView: ViewId | null = null
-  readonly #sources = new WeakMap<DocumentState, SourceSnapshot>()
   readonly #listeners = new Set<Listener>()
   readonly #documentListeners = new Set<Listener>()
   readonly #catalogListeners = new Set<() => void>()
@@ -296,7 +300,7 @@ export class DocumentRuntime {
       )
     }
   }
-  sourceFor = (document: DocumentState) => this.#sources.get(document)
+  sourceFor = (document: DocumentState) => documentSnapshot(document)
   openingLength = (document: DocumentState) => {
     const opening = this.#openingLengths.get(document.tabId)
     return opening?.revision === document.revision
@@ -334,25 +338,19 @@ export class DocumentRuntime {
       saved = session.savedSnapshot()
     if (this.#savedText.get(id!)?.snapshot !== saved)
       this.#savedText.set(id!, { snapshot: saved })
-    const savedText = this.#savedText.get(id!)!
-    let text: string | undefined
-    const document = Object.freeze({
-      ...metadata,
-      revision: snapshot.document.revision,
-      contentVersion: snapshot.version,
-      dirty: state.dirty || metadata.ephemeral,
-      get markdown() {
-        text ??= snapshot.materialize()
-        return text
+    const document = sourceDocument(
+      {
+        ...metadata,
+        revision: snapshot.document.revision,
+        contentVersion: snapshot.version,
+        dirty: state.dirty || metadata.ephemeral,
       },
-      get savedMarkdown() {
-        savedText.value ??= saved.materialize()
-        return savedText.value
-      },
-    })
+      snapshot,
+      saved,
+      this.#savedText.get(id!)!,
+    )
     this.#cached.set(id!, document)
     this.#cachedState.set(id!, state)
-    this.#sources.set(document, snapshot)
     return document
   }
   #publish = (id: string) => {
@@ -435,9 +433,7 @@ export class DocumentRuntime {
           break
         }
       }
-    const document = sourceDocument(metadata, current, saved)
-    this.#sources.set(document, current)
-    return document
+    return sourceDocument(metadata, current, saved)
   }
   activate(document: DocumentState | DocumentMetadata, replaceLocal = false) {
     const metadataOnly = 'documentMetadata' in document
@@ -600,6 +596,7 @@ export class DocumentRuntime {
         if (!open.has(id)) {
           this.#discardSession(id, retained)
           this.#sessions.delete(id)
+          releaseDocuments(id)
         }
       this.#retainHistory()
     } finally {
@@ -741,8 +738,10 @@ export class DocumentRuntime {
     )
   }
   dispose() {
-    for (const [id, session] of this.#sessions)
+    for (const [id, session] of this.#sessions) {
       this.#discardSession(id, session)
+      releaseDocuments(id)
+    }
     this.#sessions.clear()
     this.#views.clear()
     this.#activeView = null

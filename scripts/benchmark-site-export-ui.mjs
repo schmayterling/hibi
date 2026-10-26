@@ -1,6 +1,6 @@
 // Usage: node scripts/benchmark-site-export-ui.mjs <checkout> [pages] [single|folder]
 import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { loadavg, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { electron } from '../tests/electron.mjs'
 import { clickMenu } from '../tests/keyboard.mjs'
@@ -93,6 +93,7 @@ try {
     }
     setTimeout(tick, 20)
   })
+  const loadBefore = loadavg()
   const started = Date.now()
   await exportButton.click()
   await page
@@ -131,6 +132,8 @@ try {
       layout,
       count,
       elapsedMs: elapsed,
+      loadAverageBefore: loadBefore,
+      loadAverageAfter: loadavg(),
       mainMaxLagMs: lag.maxLagMs,
       outputFiles: files.length,
       outputBytes: bytes,

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { createDecipheriv, pbkdf2Sync } from 'node:crypto'
+import { once } from 'node:events'
 import {
   mkdir,
   mkdtemp,
@@ -13,6 +14,8 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { pathToFileURL } from 'node:url'
+import { Worker } from 'node:worker_threads'
 import { exportOptions } from '../src/addons/documentation/options.ts'
 import {
   readSiteFiles,
@@ -42,6 +45,22 @@ test('owned export worker stages pages and yields main task turns while streamin
       name: 'notes',
       options: exportOptions({ singleFile: false, graph: true }),
     })
+    for (const [markdown, sources] of [
+      ['# Plain note\n\n[link](image.png)', []],
+      [
+        '![inline](image.png)\n\n![ref][picture]\n\n[picture]: other.png',
+        ['image.png', 'other.png'],
+      ],
+      ['---\nimage: "![private](secret.png)"\n---\n# Note', []],
+      ['`![code](code.png)`\n\n\\![escaped](escaped.png)', []],
+    ])
+      assert.deepEqual(
+        await worker.request({
+          kind: 'images',
+          page: { path: '0.md', markdown },
+        }),
+        sources,
+      )
     await Promise.all(
       paths.map((path) =>
         worker.request({
@@ -303,3 +322,101 @@ for (const mode of [
     },
   )
 }
+
+test('worker coalesces small output chunks while keeping exact UTF-8 bytes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'hibi-site-worker-writes-'))
+  const entry = pathToFileURL(resolve('out/main/documentation-worker.js')).href
+  const worker = new Worker(
+    new URL(
+      'data:text/javascript,' +
+        encodeURIComponent(`
+      import { promises as fs } from 'node:fs'
+      import { syncBuiltinESMExports } from 'node:module'
+      import { parentPort } from 'node:worker_threads'
+      const counters = { writes: 0, bytes: 0, maxBytes: 0, syncs: 0, scratchFiles: 0 }
+      const open = fs.open
+      fs.open = async (path, ...args) => {
+        const file = await open(path, ...args)
+        if (path.endsWith('/pages.jsonl')) counters.scratchFiles++
+        if (path.endsWith('/files/index.html')) {
+          const write = file.writeFile.bind(file)
+          file.writeFile = (chunk, ...args) => {
+            const bytes = Buffer.byteLength(chunk)
+            counters.writes++
+            counters.bytes += bytes
+            counters.maxBytes = Math.max(counters.maxBytes, bytes)
+            return write(chunk, ...args)
+          }
+        }
+        const sync = file.sync.bind(file)
+        file.sync = () => { counters.syncs++; return sync() }
+        return file
+      }
+      syncBuiltinESMExports()
+      const send = parentPort.postMessage.bind(parentPort)
+      parentPort.postMessage = message => send({ ...message, counters })
+      await import(${JSON.stringify(entry)})
+    `),
+    ),
+  )
+  const request = async (job) => {
+    const reply = once(worker, 'message')
+    worker.postMessage(job)
+    const [message] = await reply
+    if (message.error) throw new Error(message.error)
+    return message
+  }
+  try {
+    const paths = Array.from({ length: 100 }, (_, i) => i + '.md')
+    await request({
+      kind: 'start',
+      directory,
+      paths,
+      name: 'notes',
+      options: exportOptions({ singleFile: true }),
+    })
+    for (const path of paths)
+      await request({
+        kind: 'page',
+        page: {
+          path,
+          markdown: '# 日本語\n\n' + '本文'.repeat(500),
+          html: '<h1>日本語</h1>',
+        },
+      })
+    const { result: files, counters } = await request({
+      kind: 'finish',
+      template,
+      css: '',
+      colorschemes: [],
+      addons: [],
+      password: '',
+    })
+    const bytes = await readFile(join(directory, 'files/index.html'))
+    assert.equal(counters.bytes, bytes.length)
+    assert.equal(files[0].bytes, bytes.length)
+    assert.equal(counters.scratchFiles, 1)
+    assert.equal(
+      counters.syncs,
+      0,
+      'owned staging files need no durability sync',
+    )
+    assert.ok(
+      counters.writes <= Math.ceil(bytes.length / (64 * 1024)) + 1,
+      counters.writes + ' writes for ' + bytes.length + ' output bytes',
+    )
+    assert.ok(counters.maxBytes < 72 * 1024, 'one block plus one small page')
+    const site = JSON.parse(
+      bytes
+        .toString('utf8')
+        .match(
+          /<script id="workspace-data" type="application\/json">([\s\S]*?)<\/script>/,
+        )[1],
+    )
+    assert.equal(site.pages.length, paths.length)
+    assert.equal(site.pages[99].markdown, '# 日本語\n\n' + '本文'.repeat(500))
+  } finally {
+    await worker.terminate()
+    await rm(directory, { recursive: true, force: true })
+  }
+})

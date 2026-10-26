@@ -93,7 +93,7 @@ async function request(job: SiteWorkerRequest) {
     return
   }
   if (job.kind === 'images')
-    return isMarkdownDocument(job.page.path)
+    return isMarkdownDocument(job.page.path) && job.page.markdown.includes('!')
       ? [
           ...imageSources(
             readFrontmatter(job.page.markdown)?.content ?? job.page.markdown,
@@ -179,11 +179,21 @@ async function request(job: SiteWorkerRequest) {
       await mkdir(dirname(path), { recursive: true })
       const file = await open(path, 'wx', 0o600)
       let bytes = 0
+      let buffered = 0
+      const buffers: Buffer[] = []
       try {
         for await (const chunk of chunks) {
-          await file.writeFile(chunk, 'utf8')
-          bytes += Buffer.byteLength(chunk)
+          const buffer = Buffer.from(chunk, 'utf8')
+          buffers.push(buffer)
+          buffered += buffer.length
+          bytes += buffer.length
+          if (buffered >= 64 * 1024) {
+            await file.writeFile(Buffer.concat(buffers, buffered))
+            buffers.length = 0
+            buffered = 0
+          }
         }
+        if (buffered) await file.writeFile(Buffer.concat(buffers, buffered))
       } finally {
         await file.close()
       }

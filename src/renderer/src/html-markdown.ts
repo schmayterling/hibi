@@ -213,7 +213,9 @@ function block(element: Element): string[] {
       for (const [, run = ''] of text.matchAll(/^ {0,3}(`+|~+)/gm))
         longest = Math.max(longest, run.length)
       const fence = (language.includes('`') ? '~' : '`').repeat(longest + 1)
-      return [`${fence}${language}\n${text}\n${fence}`]
+      return [
+        `${fence}${language[0] === fence[0] ? ' ' : ''}${language}\n${text}\n${fence}`,
+      ]
     }
     case 'BLOCKQUOTE':
       return [indent(blocksOf(element).join('\n\n'), '> ').replace(/^$/gm, '>')]

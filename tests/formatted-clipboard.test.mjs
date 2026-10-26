@@ -543,6 +543,36 @@ test('html paste preserves code padding, Unicode spaces and literal heading mark
   }
 })
 
+test('a leading language marker cannot extend a code fence or swallow following text', {
+  timeout: 30000,
+}, async () => {
+  try {
+    await clipboardEvent('paste', note.length, note.length, {
+      'text/html':
+        '<pre><code class="language-~x`y">hello</code></pre><p>after</p>',
+    })
+    await waitForAsync(
+      page,
+      async (length) =>
+        (await window.hibi.getDocument()).markdown.length > length,
+      note.length,
+    )
+    const rendered = marked.parse((await markdown()).slice(note.length))
+    const actual = await page.evaluate((rendered) => {
+      const body = new DOMParser().parseFromString(rendered, 'text/html').body
+      return {
+        code: body.querySelector('pre code')?.textContent,
+        paragraphs: [...body.querySelectorAll('p')].map(
+          (node) => node.textContent,
+        ),
+      }
+    }, rendered)
+    assert.deepEqual(actual, { code: 'hello\n', paragraphs: ['after'] })
+  } finally {
+    await setFixture(note)
+  }
+})
+
 test('queued html pastes preserve event order with selection and intervening typing', {
   timeout: 30000,
 }, async (t) => {

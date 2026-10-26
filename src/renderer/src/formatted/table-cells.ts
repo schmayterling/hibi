@@ -164,7 +164,12 @@ function decorateCell(
         for (const nodeView of nodeViews) {
           cellState ??= EditorState.create({
             doc: text,
-            extensions: formattedOwner.of(state),
+            extensions: [
+              formattedOwner.of(state),
+              state
+                .facet(formattedLiteral)
+                .map((name) => formattedLiteral.of(name)),
+            ],
           })
           const context: FormattedRenderContext = {
             state: cellState,

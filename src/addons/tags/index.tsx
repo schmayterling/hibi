@@ -1,4 +1,5 @@
 import { Tags } from 'lucide-react'
+import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import { reportDiagnosticFailure } from '../../shared/local-diagnostics-observer'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
@@ -159,6 +160,13 @@ export default defineAddon({
       )
     })
     context.editor.registerRich(richTags(browse))
+    const removeFormatted = formattedRegistry.register({
+      id: 'tags.highlights',
+      load: () =>
+        import('./formatted').then(({ formattedTags }) =>
+          formattedTags(browse),
+        ),
+    })
     context.editor.registerSource({
       id: 'highlights',
       async create(editorContext) {
@@ -172,6 +180,7 @@ export default defineAddon({
       counter.stop()
       removeDocument()
       removeSyntax()
+      removeFormatted()
       worker?.removeEventListener('error', failed)
       worker?.removeEventListener('messageerror', failed)
       worker?.terminate()

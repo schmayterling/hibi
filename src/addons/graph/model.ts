@@ -1,6 +1,7 @@
 import { isMarkdownDocument } from '../../shared/document-types.ts'
 import {
   localTarget,
+  noteBasenames,
   noteReferences,
   noteTargets,
 } from '../../shared/note-links.ts'
@@ -14,10 +15,49 @@ let links = new Map<
   { markdown: string; references: ReturnType<typeof noteReferences> }
 >()
 
+/** Shared incremental collector for workspace and streamed export sources. */
+export function createNoteGraph(pagePaths: readonly string[]) {
+  const paths = new Set(pagePaths)
+  const basenames = noteBasenames(paths)
+  const edges = new Map<string, { source: string; target: string }>()
+  return {
+    add(page: WorkspacePage, references?: ReturnType<typeof noteReferences>) {
+      if (!isMarkdownDocument(page.path)) return
+      for (const target of noteTargets(
+        page.markdown,
+        page.path,
+        paths,
+        references,
+        basenames,
+      )) {
+        const source = page.path < target ? page.path : target
+        const destination = page.path < target ? target : page.path
+        edges.set(JSON.stringify([source, destination]), {
+          source,
+          target: destination,
+        })
+      }
+    },
+    finish() {
+      const degree = new Map<string, number>()
+      for (const edge of edges.values())
+        for (const path of [edge.source, edge.target])
+          degree.set(path, (degree.get(path) ?? 0) + 1)
+      return {
+        nodes: pagePaths.map((path) => ({
+          id: path,
+          label: (path.split('/').at(-1) ?? path).replace(/\.[^.]+$/, ''),
+          degree: degree.get(path) ?? 0,
+        })),
+        edges: [...edges.values()],
+      }
+    },
+  }
+}
+
 /** Source-only compatibility helper with default GFM/wiki syntax. */
 export function noteGraph(pages: readonly WorkspacePage[]) {
-  const paths = new Set(pages.map((page) => page.path))
-  const edges = new Map<string, { source: string; target: string }>()
+  const graph = createNoteGraph(pages.map((page) => page.path))
   const nextLinks = new Map<
     string,
     { markdown: string; references: ReturnType<typeof noteReferences> }
@@ -32,33 +72,10 @@ export function noteGraph(pages: readonly WorkspacePage[]) {
       }
     }
     nextLinks.set(page.path, cached)
-    for (const target of noteTargets(
-      page.markdown,
-      page.path,
-      paths,
-      cached.references,
-    )) {
-      const source = page.path < target ? page.path : target
-      const destination = page.path < target ? target : page.path
-      edges.set(JSON.stringify([source, destination]), {
-        source,
-        target: destination,
-      })
-    }
+    graph.add(page, cached.references)
   }
   links = nextLinks
-  const degree = new Map<string, number>()
-  for (const edge of edges.values())
-    for (const path of [edge.source, edge.target])
-      degree.set(path, (degree.get(path) ?? 0) + 1)
-  return {
-    nodes: pages.map((page) => ({
-      id: page.path,
-      label: (page.path.split('/').at(-1) ?? page.path).replace(/\.[^.]+$/, ''),
-      degree: degree.get(page.path) ?? 0,
-    })),
-    edges: [...edges.values()],
-  }
+  return graph.finish()
 }
 
 /** Graph UI consumes flavor-aware workspace metadata records. */

@@ -888,6 +888,24 @@ function spacing(
     }
   }
   for (const range of view.visibleRanges) visit(tree.topNode, range)
+  // After the last block, the note takes the rich view's last bottom margin:
+  // the blank line after its final line break is that tall, or the last
+  // line gains it below.
+  const end = view.visibleRanges.at(-1)
+  const last = blockChild(tree.topNode, true)
+  if (!end || end.to < doc.length || !last) return
+  const after = doc.lineAt(last.to)
+  for (let number = after.number + 1; number <= doc.lines; number++)
+    if (doc.line(number).text.trim()) return
+  const margin = bottomMargin(last)
+  if (after.number === doc.lines) {
+    line(after.from).style.push(`padding-bottom: ${margin}px`)
+    return
+  }
+  const blank = doc.line(after.number + 1)
+  const info = line(blank.from)
+  info.classes.push('hibi-lp-gap')
+  info.style.push(`height: ${margin}px`, `line-height: ${margin}px`)
 }
 
 /** Layout decorations for one parsed chunk, relative to the chunk start. */

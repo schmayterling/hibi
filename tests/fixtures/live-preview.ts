@@ -1,6 +1,8 @@
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, WidgetType } from '@codemirror/view'
 import '../../src/renderer/src/styles.css'
+// The app's control styles, such as its thin scrollbars, so panes look alike.
+import '../../src/ui/controls.css'
 import type { ChunkedMarkdownProbe } from '../../src/renderer/src/chunked-markdown'
 import { codeLanguages } from '../../src/renderer/src/code-languages'
 import { formattedDocument } from '../../src/renderer/src/formatted-contributions'

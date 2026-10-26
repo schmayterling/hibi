@@ -333,12 +333,50 @@ async function parity(title, doc, rich, formatted, name) {
     ({ doc, pane }) => window.livePreview.mount(doc, pane),
     { doc, pane },
   )
+  // The panes scroll alike: where scrollbars take space, as on Linux and
+  // Windows, the app's thin scrollbar is in both screenshots.
+  const scrolling = (target) =>
+    target.evaluate((title) => {
+      const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
+        root.querySelector(':is(h1, .hibi-lp-h1)')?.textContent.includes(title),
+      )
+      const style = getComputedStyle(pane)
+      return {
+        overflowY: style.overflowY,
+        scrollbarWidth: style.scrollbarWidth,
+        scrollbarColor: style.scrollbarColor,
+      }
+    }, title)
   const report = []
   for (const id of ['hibi-light', 'hibi-dark']) {
     const scheme = palette(id)
     await applyPalette(page, scheme)
     await applyPalette(harness, scheme)
     await harness.evaluate(() => window.livePreview.settle())
+    assert.deepEqual(await scrolling(harness), await scrolling(page), id)
+    // A note that fits the pane is as tall in both views, so a scrollbar
+    // shows in both screenshots or in neither. (The formatted view lays out
+    // the lines it shows, so a longer note's height is not compared.)
+    const height = (target) =>
+      target.evaluate((title) => {
+        const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
+          root
+            .querySelector(':is(h1, .hibi-lp-h1)')
+            ?.textContent.includes(title),
+        )
+        return {
+          pane: pane.clientHeight,
+          note: pane
+            .querySelector('.tiptap, .cm-content')
+            .getBoundingClientRect().height,
+        }
+      }, title)
+    const tall = { rich: await height(page), formatted: await height(harness) }
+    if (tall.rich.note <= tall.rich.pane)
+      assert.ok(
+        Math.abs(tall.rich.note - tall.formatted.note) <= 1,
+        `${id}: ${JSON.stringify(tall)}`,
+      )
     const before = await sample(page, rich, title)
     const after = await sample(harness, formatted, title)
     for (const key of Object.keys(rich)) {
@@ -389,16 +427,22 @@ async function parity(title, doc, rich, formatted, name) {
       return changed / (left.length / 4)
     }, images)
     report.push({ id, key: 'pixels', difference })
-    // The same text at the same positions renders the same pixels.
-    assert.ok(difference < 0.002, `${id}: ${difference}`)
   }
+  console.log(JSON.stringify(report.filter((entry) => entry.key === 'pixels')))
+  // The same text at the same positions renders the same pixels; a failure
+  // reports the text positions too.
+  for (const { id, key, difference } of report)
+    if (key === 'pixels')
+      assert.ok(
+        difference < 0.002,
+        `${id}: ${difference} ${JSON.stringify(report)}`,
+      )
   // Text positions match the rich view within a pixel.
   const offsets = report.filter(
     (entry) =>
       entry.key !== 'pixels' &&
       (Math.abs(entry.dx) > 1 || Math.abs(entry.dy) > 1),
   )
-  console.log(JSON.stringify(report.filter((entry) => entry.key === 'pixels')))
   assert.deepEqual(offsets, [], JSON.stringify(report))
 }
 

@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import type { FormattedContribution } from '../../renderer/src/formatted-contributions'
 import {
+  type FenceBlock,
   type FencedRenderer,
   fencedView,
   fenceKeys,
@@ -28,16 +29,21 @@ export function diagramContribution(context: AddonContext) {
     mount(dom, block) {
       const root = createRoot(dom)
       // Rendered before the line is measured and painted, outside any React
-      // update that created the widget.
-      queueMicrotask(() =>
-        flushSync(() =>
-          root.render(
-            <MermaidBlockContent source={block.source} onEdit={block.edit} />,
+      // update that created or changed the widget.
+      const render = ({ source, edit }: FenceBlock) =>
+        queueMicrotask(() =>
+          flushSync(() =>
+            root.render(<MermaidBlockContent source={source} onEdit={edit} />),
           ),
-        ),
-      )
-      return () => queueMicrotask(() => root.unmount())
+        )
+      render(block)
+      return {
+        update: render,
+        dispose: () => queueMicrotask(() => root.unmount()),
+      }
     },
+    // Diagrams draw only in view, so a kept one waits without work.
+    settled: () => true,
     ask: (source) => editMermaidSource(context, source),
     blocks,
   }

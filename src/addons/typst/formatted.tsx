@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import type { FormattedContribution } from '../../renderer/src/formatted-contributions'
 import {
   dedentedFenceText,
+  type FenceBlock,
   type FencedRenderer,
   fencedView,
   fenceKeys,
@@ -30,20 +31,28 @@ export function typstContribution(context: AddonContext) {
     mount(dom, block) {
       const root = createRoot(dom)
       // Rendered before the line is measured and painted, outside any React
-      // update that created the widget.
-      queueMicrotask(() =>
-        flushSync(() =>
-          root.render(
-            <TypstBlockContent
-              source={block.source}
-              context={context}
-              onEdit={block.edit}
-            />,
+      // update that created or changed the widget. New source re-renders the
+      // same preview, which restarts its compile debounce.
+      const render = ({ source, edit }: FenceBlock) =>
+        queueMicrotask(() =>
+          flushSync(() =>
+            root.render(
+              <TypstBlockContent
+                source={source}
+                context={context}
+                onEdit={edit}
+              />,
+            ),
           ),
-        ),
-      )
-      return () => queueMicrotask(() => root.unmount())
+        )
+      render(block)
+      return {
+        update: render,
+        dispose: () => queueMicrotask(() => root.unmount()),
+      }
     },
+    // A preview still compiling is removed with its timer, not kept.
+    settled: (dom) => !dom.querySelector('.typst-preview[aria-busy="true"]'),
     ask: (source) => editTypstSource(context, source),
     blocks,
   }

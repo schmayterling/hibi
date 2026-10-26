@@ -464,3 +464,118 @@ test("with markers hidden, arrow keys reach a diagram block's edit button", {
   )
   await page.evaluate(() => localStorage.setItem('markdown-markers', 'true'))
 })
+
+test('typing in a typst fence compiles once after the pause, and a large diagram edit keeps every line', {
+  timeout: 120000,
+}, async () => {
+  // Count compile requests in the main process; each returns a small preview.
+  await app.evaluate(({ ipcMain }) => {
+    const original = ipcMain._invokeHandlers.get('addons:query')
+    globalThis.typstCompiles = []
+    ipcMain.removeHandler('addons:query')
+    ipcMain.handle('addons:query', (event, id, method, input) => {
+      if (id !== 'typst' || method !== 'compile')
+        return original(event, id, method, input)
+      globalThis.typstCompiles.push(input.source)
+      return {
+        diagnostics: [],
+        svg: `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><title>${input.source.length}</title></svg>`,
+        dependencies: [],
+        pages: 1,
+      }
+    })
+  })
+  const note = 'Intro.\n\n```typst\n$ x^2 $\n```\n\nLast.\n'
+  await writeFile(join(folder, 'notes', 'rapid.md'), note)
+  await page.evaluate(() => localStorage.setItem('markdown-markers', 'true'))
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  await open('rapid.md')
+  await page.locator('.rich-pane .typst-preview img').waitFor()
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  // Reveal the fence and wait for its preview to settle.
+  await page.locator('.rich-pane .cm-line', { hasText: 'Intro.' }).click()
+  await page.evaluate((anchor) => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({ selection: { anchor } })
+  }, note.indexOf('x^2') + 3)
+  await page
+    .locator('.rich-pane .hibi-lp-codeblock', { hasText: 'x^2' })
+    .waitFor()
+  await page
+    .locator('.rich-pane .typst-preview[aria-busy="false"] img')
+    .waitFor()
+  await app.evaluate(() => {
+    globalThis.typstCompiles.length = 0
+  })
+  await page.keyboard.type('+abcdefghi')
+  const typed = '$ x^2+abcdefghi $'
+  // The preview of the final source arrives after one compile.
+  await waitForAsync(
+    page,
+    (length) =>
+      decodeURIComponent(
+        atob(
+          document
+            .querySelector('.rich-pane .typst-preview img')
+            ?.getAttribute('src')
+            ?.split(',')[1] ?? '',
+        ),
+      ).includes(`<title>${length}</title>`),
+    typed.length,
+    { timeout: 10000 },
+  )
+  assert.deepEqual(await app.evaluate(() => globalThis.typstCompiles), [typed])
+  // A diagram fence longer than the giant block size keeps all its lines through an edit.
+  const lines = Array.from(
+    { length: 3500 },
+    (_, index) => `  %% preserve line ${index} ${'x'.repeat(16)}`,
+  )
+  const giant = `Intro.\n\n\`\`\`mermaid\ngraph TD\n${lines.join('\n')}\n  A --> B\n\`\`\`\n\nvisible text at end\n`
+  await writeFile(join(folder, 'notes', 'giant.md'), giant)
+  await open('giant.md')
+  await page.locator('.rich-pane .cm-line', { hasText: 'Intro.' }).waitFor()
+  // Visiting the end lets the view find where the fence closes.
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({
+      selection: { anchor: view.state.doc.length },
+      scrollIntoView: true,
+    })
+  })
+  await page
+    .locator('.rich-pane .cm-line', { hasText: 'visible text at end' })
+    .waitFor()
+  await page.locator('.rich-pane .mermaid-block').first().waitFor()
+  await page
+    .getByRole('button', { name: 'Edit Mermaid diagram' })
+    .first()
+    .click()
+  const dialog = page.getByRole('dialog', { name: 'Edit Mermaid diagram' })
+  const field = dialog.getByRole('textbox', { name: 'Mermaid source' })
+  assert.equal(
+    await field.inputValue(),
+    `graph TD\n${lines.join('\n')}\n  A --> B`,
+  )
+  await field.evaluate((element) => {
+    element.focus()
+    element.setSelectionRange(element.value.length, element.value.length)
+  })
+  await page.keyboard.insertText('\n  B --> C')
+  await dialog.getByRole('button', { name: 'Apply' }).click()
+  const edited = giant.replace('  A --> B\n```', '  A --> B\n  B --> C\n```')
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    edited,
+  )
+  await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    giant,
+  )
+})

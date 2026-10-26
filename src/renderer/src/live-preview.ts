@@ -1,6 +1,7 @@
 import {
   Compartment,
-  type EditorState,
+  EditorSelection,
+  EditorState,
   type Extension,
   Facet,
   Prec,
@@ -43,8 +44,10 @@ import {
   type FormattedLayout,
   type FormattedNodeView,
   formattedContributions,
+  formattedDocument,
   formattedLiteral,
   formattedRefresh,
+  formattedTree,
   formattedViews,
   showMarkdownMarkers,
 } from './formatted-contributions'
@@ -157,6 +160,40 @@ function blockSibling(node: SyntaxNode, forward: boolean) {
 function blockChild(node: SyntaxNode, last: boolean) {
   const child = last ? node.lastChild : node.firstChild
   return child && !isBlock(child) ? blockSibling(child, !last) : child
+}
+
+/**
+ * The line of a list item's marker when the item's first block starts on
+ * the next line and shows from it: the rich view draws the marker beside
+ * that block, so the marker's own line collapses.
+ */
+function loneMarker(doc: Text, item: SyntaxNode) {
+  const own = doc.lineAt(item.from)
+  // Read the line first: most items hold text after their marker.
+  if (
+    !/^(?:[-+*]|\d{1,9}[.)])[ \t\r]*$/.test(doc.sliceString(item.from, own.to))
+  )
+    return null
+  let first = item.childAfter(own.to)
+  // Quote markers on the next line come before its block.
+  if (first && !isBlock(first)) first = blockSibling(first, true)
+  return first && !isContainer(first) && first.name !== 'FencedCode'
+    ? own
+    : null
+}
+
+/** The first line a block shows: a lone list marker's line collapses into the next. */
+function shownLine(doc: Text, node: SyntaxNode) {
+  const line = doc.lineAt(node.from)
+  if (!/(?:[-+*]|\d[.)])[ \t\r]*$/.test(line.text)) return line
+  for (
+    let inner: SyntaxNode | null = node;
+    inner && inner.from <= line.to;
+    inner = isContainer(inner) ? blockChild(inner, false) : null
+  )
+    if (inner.name === 'ListItem' && loneMarker(doc, inner))
+      return doc.line(line.number + 1)
+  return line
 }
 
 /** A block's margins in its container: list items and the blocks inside them sit closer. */
@@ -694,7 +731,7 @@ function containers(
   for (const container of info.containers) {
     const left = widths.length ? `calc(${widths.join(' + ')})` : '0px'
     const shape = blocks.shapes(container)
-    const first = doc.lineAt(container.from).from === at
+    const first = shownLine(doc, container).from === at
     const offset = `${first ? info.gap + top : 0}px`
     if (shape?.class) info.classes.push(shape.class)
     if (shape?.paint) paint.push(shape.paint(left, offset))
@@ -750,18 +787,28 @@ function itemLine(
     (container) => container.name === 'ListItem',
   ).length
   const marker = item.getChild('ListMark')
-  if (!marker || item.from < current.from || item.from > current.to) {
-    // Continuation lines start at the item's content.
-    const indent = /^[ \t]*/.exec(doc.sliceString(prefix, current.to))![0]
-    return info.leaf ?? prefix + indent.length
-  }
-  // The marker and up to four following spaces are hidden.
-  const after = doc.sliceString(marker.to, current.to)
-  const gap = /^[ \t]{0,4}/.exec(after)![0].length
-  const content = Math.max(
-    info.leaf ?? 0,
-    marker.to + (gap === after.length ? after.length : gap),
+  // Continuation lines start at the item's content.
+  const continuation = () =>
+    info.leaf ??
+    prefix + /^[ \t]*/.exec(doc.sliceString(prefix, current.to))![0].length
+  // A lone marker is drawn on the line after its own.
+  const lone = marker && loneMarker(doc, item)
+  if (
+    !marker ||
+    current.number !== (lone ? lone.number + 1 : doc.lineAt(item.from).number)
   )
+    return continuation()
+  let content: number
+  if (lone) content = continuation()
+  else {
+    // The marker and up to four following spaces are hidden.
+    const after = doc.sliceString(marker.to, current.to)
+    const gap = /^[ \t]{0,4}/.exec(after)![0].length
+    content = Math.max(
+      info.leaf ?? 0,
+      marker.to + (gap === after.length ? after.length : gap),
+    )
+  }
   if (!info.marker) return content
   info.classes.push('hibi-lp-list-item')
   const list = item.parent!
@@ -807,8 +854,9 @@ function spacing(
     const start = doc.lineAt(block.from),
       end = doc.lineAt(previous.to)
     if (end.number + 1 >= start.number) {
-      if (start.from >= range.from && start.from <= range.to)
-        line(start.from).gap = gap
+      const shown = shownLine(doc, block)
+      if (shown.from >= range.from && shown.from <= range.to)
+        line(shown.from).gap = gap
       return
     }
     for (let number = end.number + 1; number < start.number; number++) {
@@ -944,6 +992,12 @@ function chunkLayout(
           case 'Task':
             leaf = { from: ref.from, to: ref.to, hard: new Set(), hidden: [] }
             return
+          case 'ListItem': {
+            const lone = loneMarker(doc, ref.node)
+            if (lone && starts(lone.from))
+              out.push(hiddenLine.range(lone.from - from, lone.to - from))
+            return
+          }
           case 'HardBreak':
             leaf?.hard.add(doc.lineAt(ref.from).to)
             return false
@@ -1012,20 +1066,27 @@ type ChunkLayout = ReturnType<typeof chunkLayout>
  */
 const chunkCache = new WeakMap<
   readonly FormattedNodeView[],
-  WeakMap<readonly string[], WeakMap<Tree, ChunkLayout>>
+  WeakMap<readonly string[], WeakMap<object, WeakMap<Tree, ChunkLayout>>>
 >()
 function cacheFor(state: EditorState) {
   const views = state.facet(formattedViews),
-    literal = state.facet(formattedLiteral)
+    literal = state.facet(formattedLiteral),
+    // Contributed layouts may show the note's files and media.
+    document = state.facet(formattedDocument)
   let byLiteral = chunkCache.get(views)
   if (!byLiteral) {
     byLiteral = new WeakMap()
     chunkCache.set(views, byLiteral)
   }
-  let cache = byLiteral.get(literal)
+  let byDocument = byLiteral.get(literal)
+  if (!byDocument) {
+    byDocument = new WeakMap()
+    byLiteral.set(literal, byDocument)
+  }
+  let cache = byDocument.get(document)
   if (!cache) {
     cache = new WeakMap()
-    byLiteral.set(literal, cache)
+    byDocument.set(document, cache)
   }
   return cache
 }
@@ -1058,12 +1119,18 @@ function revealMatters(
   tree: Tree,
   reveal: readonly Revealed[],
 ) {
-  if (!reveal.length) return false
+  // Only contributed layout views follow the selection, in the chunks
+  // around it.
+  if (
+    !reveal.length ||
+    !state.facet(formattedViews).some((view) => view.layout)
+  )
+    return false
   const cache = cacheFor(state)
-  return parsedChunks(tree).some(
-    ({ from, chunk }) =>
-      intersects(reveal, from, from + chunk.length) &&
-      (cache.get(chunk)?.sensitive ?? true),
+  return reveal.some((range) =>
+    parsedChunks(tree, range).some(
+      ({ chunk }) => cache.get(chunk)?.sensitive ?? true,
+    ),
   )
 }
 
@@ -1100,6 +1167,32 @@ function revealed(view: EditorView): readonly Revealed[] {
   return view.state.selection.ranges.map(({ from, to }) => ({ from, to }))
 }
 
+/**
+ * Decorations mapped through an update, without the replacements it put a
+ * line break into, which a view plugin may not draw.
+ */
+function mapLines(set: DecorationSet, update: ViewUpdate) {
+  const doc = update.state.doc
+  return set.map(update.changes).update({
+    filter: (from, to, value) =>
+      !value.point || from === to || doc.lineAt(from).to >= to,
+  })
+}
+
+/**
+ * A link destination on later lines shows while the selection touches it:
+ * input beside a range that hides line breaks would not map to the text.
+ */
+function revealDestinations(set: DecorationSet, state: EditorState) {
+  for (const { from, to } of state.selection.ranges)
+    set = set.update({
+      filterFrom: from,
+      filterTo: to,
+      filter: (a, b, value) => value !== hide || b < from || a > to,
+    })
+  return set
+}
+
 /** The formatted view's rendering over its chunked Markdown syntax tree. */
 export function livePreview(
   syntax: FormattedSyntax,
@@ -1119,6 +1212,8 @@ export function livePreview(
           state.facet(formattedViews) === startState.facet(formattedViews) &&
           state.facet(formattedLiteral) ===
             startState.facet(formattedLiteral) &&
+          state.facet(formattedDocument) ===
+            startState.facet(formattedDocument) &&
           (sameRanges(reveal, revealedIn(startState)) ||
             (!revealMatters(state, tree, reveal) &&
               !revealMatters(state, tree, revealedIn(startState)))))
@@ -1126,11 +1221,6 @@ export function livePreview(
         return value.map(transaction.changes)
       return layoutDecorations(state, tree, reveal)
     },
-    provide: (field) => [
-      EditorView.decorations.from(field),
-      // Hidden layout syntax is atomic too.
-      EditorView.atomicRanges.of((view) => view.state.field(field)),
-    ],
   })
   const preview = ViewPlugin.fromClass(
     class {
@@ -1165,8 +1255,8 @@ export function livePreview(
         this.reveal = reveal
         // An edit's unfinished reparse keeps what was drawn, mapped through it.
         if (syntax.settling(update.state)) {
-          this.decorations = this.decorations.map(update.changes)
-          this.atomic = this.atomic.map(update.changes)
+          this.decorations = mapLines(this.decorations, update)
+          this.atomic = mapLines(this.atomic, update)
         } else if (
           update.docChanged ||
           update.viewportChanged ||
@@ -1177,6 +1267,8 @@ export function livePreview(
             update.startState.facet(formattedViews) ||
           update.state.facet(formattedLiteral) !==
             update.startState.facet(formattedLiteral) ||
+          update.state.facet(formattedDocument) !==
+            update.startState.facet(formattedDocument) ||
           update.transactions.some((transaction) =>
             transaction.effects.some((effect) => effect.is(formattedRefresh)),
           )
@@ -1217,7 +1309,9 @@ export function livePreview(
       if (['ListItem', 'FencedCode', 'CodeBlock'].includes(node.name))
         structured = true
     if (!structured && !view.state.facet(formattedTabIndents)) return false
-    return run((current) => indent(current.state, tree, outdent))(view)
+    return run((current) =>
+      indent(current.state, tree, outdent, hidden(current)),
+    )(view)
   }
   // Registered features and their syntax settings reconfigure the view.
   const contributions = new Compartment()
@@ -1248,12 +1342,70 @@ export function livePreview(
   )
   return [
     contributions.of(formattedContributions.extension(options.flavors)),
+    formattedTree.of(syntax.tree),
     follow,
     syntax.extension,
     focused,
     layout,
+    EditorView.decorations.compute([layout, 'selection'], (state) =>
+      revealDestinations(state.field(layout), state),
+    ),
+    // Hidden layout syntax is atomic too.
+    EditorView.atomicRanges.of((view) =>
+      revealDestinations(view.state.field(layout), view.state),
+    ),
     preview,
     EditorView.atomicRanges.of(hidden),
+    // Lines the layout hides whole, with the line breaks around them, so the
+    // caret never rests on one.
+    EditorView.atomicRanges.of((view) => {
+      const { doc } = view.state
+      const lines: Range<Decoration>[] = []
+      for (const { from, to } of view.visibleRanges)
+        view.state.field(layout).between(from, to, (a, b, value) => {
+          if (value === hiddenLine)
+            lines.push(
+              hide.range(Math.max(0, a - 1), Math.min(doc.length, b + 1)),
+            )
+        })
+      return Decoration.set(lines, true)
+    }),
+    // A caret those ranges leave on a hidden line at the start or end of the
+    // note moves to the visible line beside it.
+    EditorState.transactionFilter.of((transaction) => {
+      if (transaction.docChanged || !transaction.selection) return transaction
+      const { doc } = transaction.startState
+      const before = transaction.startState.selection.ranges
+      const lines = transaction.startState.field(layout)
+      let moved = false
+      const ranges = transaction.selection.ranges.map((range, index) => {
+        let head = range.head
+        lines.between(head, head, (from, to, value) => {
+          if (value !== hiddenLine || head < from || head > to) return
+          const back = head < (before[index]?.head ?? head)
+          head =
+            (back && from > 0) || to >= doc.length
+              ? Math.max(0, from - 1)
+              : to + 1
+        })
+        if (head === range.head) return range
+        moved = true
+        return range.empty
+          ? EditorSelection.cursor(head)
+          : EditorSelection.range(range.anchor, head)
+      })
+      return moved
+        ? [
+            transaction,
+            {
+              selection: EditorSelection.create(
+                ranges,
+                transaction.selection.mainIndex,
+              ),
+            },
+          ]
+        : transaction
+    }),
     Prec.high(
       keymap.of([
         {
@@ -1285,7 +1437,7 @@ export function livePreview(
     ),
     EditorView.inputHandler.of((view, from, to, text) => {
       if (view.composing) return false
-      const spec = gapInput(view.state, from, to, text)
+      const spec = gapInput(view.state, syntax.tree(view.state), from, to, text)
       if (!spec) return false
       view.dispatch(view.state.update(spec, { scrollIntoView: true }))
       return true

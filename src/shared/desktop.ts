@@ -5,10 +5,17 @@ export const BOOTSTRAP_CHANNELS = {
 } as const
 export const DOCUMENT_CHANNELS = {
   get: 'document:get',
+  transferOpen: 'document:transfer-open',
+  transferRead: 'document:transfer-read',
+  transferFinish: 'document:transfer-finish',
+  transferAbort: 'document:transfer-abort',
   update: 'document:update',
   append: 'document:append',
   recoveryHead: 'document:recovery-head',
   verifyCheckpoint: 'document:verify-checkpoint',
+  checkpointChunk: 'document:checkpoint-chunk',
+  checkpointFinish: 'document:checkpoint-finish',
+  checkpointAbort: 'document:checkpoint-abort',
   flush: 'document:flush',
   flushed: 'document:flushed',
   open: 'document:open',
@@ -31,7 +38,6 @@ export const DOCUMENT_CHANNELS = {
   requestRemote: 'document:request-remote',
 } as const
 
-export const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 export type DocumentState = {
   /** Stable window-local tab identity, including across save and rename. */
   tabId: string
@@ -44,6 +50,10 @@ export type DocumentState = {
   ephemeral: boolean
   markdown: string
   savedMarkdown: string
+  /** Main explicitly replaced this tab's source, rather than only its metadata. */
+  replaced?: boolean
+  /** Native source generation already transferred to this renderer. */
+  sourceId?: string | undefined
   name: string
   dirty: boolean
   revision: number
@@ -54,9 +64,14 @@ export type DocumentState = {
 }
 export type DocumentTab = { id: string; name: string; dirty: boolean }
 export type DocumentFocus = Omit<DocumentState, 'markdown' | 'savedMarkdown'>
+export type DocumentSaveReceipt = DocumentFocus & {
+  saveReceipt: true
+  savedVersion: number
+}
+export type DocumentSaveReply = DocumentState | DocumentSaveReceipt
 export type AutosaveResult = {
   status: 'saved' | 'skipped' | 'conflict'
-  document: DocumentState | null
+  document: DocumentSaveReply | null
 }
 export type DocumentCommand =
   | 'new'
@@ -279,6 +294,16 @@ export type DesktopApi = {
   getLicenses: () => Promise<import('./about').LicenseInfo[]>
   getLicense: (id: string) => Promise<string>
   openSponsor: () => Promise<void>
+  /** Writes plain text to the system clipboard. */
+  writeClipboardText: (text: string) => Promise<void>
+  /** Copies workspace paths, one per line; absolute paths are resolved in main. */
+  copyWorkspacePaths: (
+    paths: string[],
+    options: {
+      absolute: boolean
+      target?: import('./foundation-contracts').WorkspaceTarget
+    },
+  ) => Promise<void>
   setAppearance: (
     appearance: import('./colorschemes').NativeAppearance,
   ) => Promise<void>
@@ -357,6 +382,11 @@ export type DesktopApi = {
   >
   invokeAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   queryAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
+  invokeAddonProfile: (
+    id: string,
+    method: string,
+    input?: unknown,
+  ) => Promise<unknown>
   getWorkspace: () => Promise<WorkspaceState | null>
   getWorkspaceHeader: () => Promise<
     import('./workspace-view').WorkspaceHeader | null
@@ -536,7 +566,15 @@ export type DesktopApi = {
   onDocumentCheckpoint: (
     callback: (
       tabId: string,
-    ) => import('./document-checkpoint').JournalCheckpoint,
+    ) =>
+      | import('./document-checkpoint').JournalCheckpoint
+      | Promise<import('./document-checkpoint').JournalCheckpoint>,
+    read?: (
+      request: import('./source-transfer').SourceTransferRequest,
+    ) => import('./source-transfer').SourceTransferChunk,
+    close?: (
+      request: import('./source-transfer').SourceTransferRequest,
+    ) => void,
   ) => () => void
   getDocumentRecoveryState: () => ReturnType<
     ReturnType<
@@ -551,7 +589,7 @@ export type DesktopApi = {
   }>
   onExternalDocuments: (callback: () => void) => () => void
   newDocument: () => Promise<DocumentState | null>
-  saveDocument: (saveAs: boolean) => Promise<DocumentState | null>
+  saveDocument: (saveAs: boolean) => Promise<DocumentSaveReply | null>
   saveTargetDocument: (
     owner: string,
     tabId: string,
@@ -568,6 +606,8 @@ export type DesktopApi = {
   saveHotkeys: (hotkeys: Hotkeys) => Promise<Hotkeys>
   setHotkeyRecording: (recording: boolean) => Promise<void>
   onCommand: (callback: (command: AppCommand) => void) => () => void
+  /** Edit menu undo and redo for the focused editor or field. */
+  onHistory: (callback: (direction: 'undo' | 'redo') => void) => () => void
 }
 
 import type { AddonState } from '../addons/api'

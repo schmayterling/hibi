@@ -51,6 +51,8 @@ linux:
   icon: build/icon-linux.png
   target: [AppImage, deb, flatpak]
   maintainer: schmayterling
+  # freedesktop main category; matches Obsidian (closes #356)
+  category: Office
 # Pinned because electron-builder 26 defaults to end-of-life 20.08 runtimes.
 flatpak:
   runtimeVersion: '25.08'

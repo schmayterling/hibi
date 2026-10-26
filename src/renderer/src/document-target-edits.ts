@@ -1,5 +1,5 @@
 import type { DocumentsApi } from '../../addons/api'
-import { type DocumentState, MAX_DOCUMENT_BYTES } from '../../shared/desktop.ts'
+import type { DocumentState } from '../../shared/desktop.ts'
 import {
   type DocumentLifecycleEvent,
   type DocumentMetadataResult,
@@ -285,6 +285,7 @@ export function createDocumentTargetEditScope(
           message,
         }
       } finally {
+        runtime.endSave(token)
         saving.delete(target.documentId)
       }
     },
@@ -363,11 +364,7 @@ export function createDocumentTargetEditScope(
           status: 'stale',
           message: 'The document changed. Read it again before editing.',
         })
-      const validation = validateSourceEdits(
-        snapshot,
-        parsed.changes,
-        MAX_DOCUMENT_BYTES,
-      )
+      const validation = validateSourceEdits(snapshot, parsed.changes)
       if (validation.status !== 'valid')
         return remember(parsed.requestId, fingerprint, validation)
       const { changed } = validation

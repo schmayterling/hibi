@@ -12,17 +12,18 @@ import {
 import type { HostSelectedIoHostApi } from '../../shared/host-selected-io'
 import { SettingsPageVisible } from '../../ui/settings-index'
 import { Button, Select, SettingRow, TextArea, TextInput } from '../ui'
+import type { IndexedCustomWords } from './custom-word-storage'
 import {
   addCustomWord,
   type CustomWord,
+  customWordsFailure,
   customWordsFileIo,
+  customWordsView,
   editCustomWord,
   exportSavedCustomWords,
-  importCustomWords,
-  listCustomWords,
-  mergeCustomWords,
+  importSavedCustomWords,
   onCustomWordsChanged,
-  updateCustomWords,
+  removeCustomWord,
 } from './custom-words'
 import { LANGS, type Lang } from './providers'
 import { languageNames } from './settings'
@@ -58,7 +59,6 @@ function NoteInput({
     <TextInput
       aria-label={`Note for “${item.word}”`}
       placeholder="Note or definition"
-      maxLength={2000}
       value={draft?.text ?? saved}
       onChange={(event) => {
         // One object per keystroke, so a finished save clears only the text it saved.
@@ -88,12 +88,12 @@ function NoteInput({
 }
 
 /** First row whose bottom edge is below `offset`. */
-function rowAt(offsets: Float64Array, offset: number) {
+function rowAt(count: number, edge: (index: number) => number, offset: number) {
   let low = 0,
-    high = offsets.length - 1
+    high = count
   while (low < high) {
     const middle = (low + high) >> 1
-    if ((offsets[middle + 1] ?? 0) <= offset) low = middle + 1
+    if (edge(middle + 1) <= offset) low = middle + 1
     else high = middle
   }
   return low
@@ -106,10 +106,14 @@ function rowAt(offsets: Float64Array, offset: number) {
  * rows still while new rows are measured.
  */
 function WordList({
-  words,
+  paged,
+  revision,
+  version,
   row,
 }: {
-  words: readonly CustomWord[]
+  paged: IndexedCustomWords
+  revision: number
+  version: number
   row: (item: CustomWord) => ReactNode
 }) {
   const frame = useRef<HTMLDivElement>(null)
@@ -119,34 +123,68 @@ function WordList({
   const [measured, setMeasured] = useState(0)
   const [range, setRange] = useState({ from: 0, to: 0 })
   const [focused, setFocused] = useState<string>()
-  const count = words.length
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `measured` counts changes to the height map.
-  const offsets = useMemo(() => {
-    const result = new Float64Array(count + 1)
-    for (let index = 0; index < count; index++)
-      result[index + 1] =
-        (result[index] ?? 0) +
-        (heights.current.get(words[index]?.id) ?? rowEstimate)
-    return result
-  }, [words, count, measured])
-  const layout = useRef(offsets)
-  layout.current = offsets
+  // Browser scroll heights are finite; every window remains reachable by page.
+  const [selectedPage, setPage] = useState(0)
+  const total = paged.snapshot().count
+  const pages = Math.max(1, Math.ceil(total / 10000))
+  const page = Math.min(selectedPage, pages - 1)
+  const base = page * 10000
+  const count = Math.min(10000, total - base)
+  const previousPage = useRef(page)
+  useLayoutEffect(() => {
+    if (previousPage.current === page) return
+    previousPage.current = page
+    setFocused(undefined)
+    setRange({ from: 0, to: 0 })
+    frame.current?.scrollIntoView({ block: 'start' })
+  }, [page])
+  const get = (index: number) => paged.at(base + index)
+  // A native cache version changes only when its loaded rows change.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: version invalidates the bounded native index.
+  const position = useMemo(
+    () => (id: string | undefined) => paged.indexOf(id),
+    [paged, version],
+  )
+  // Prefix sums contain measured rows only, never one entry for every saved word.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: measured invalidates the height map.
+  const edge = useMemo(() => {
+    const changes = [...heights.current]
+      .flatMap(([id, height]) => {
+        const index = position(id)
+        return index !== undefined && index >= base && index < base + count
+          ? [{ index: index - base, extra: height - rowEstimate }]
+          : []
+      })
+      .sort((a, b) => a.index - b.index)
+    const sums = [0]
+    for (const change of changes) sums.push((sums.at(-1) ?? 0) + change.extra)
+    return (index: number) => {
+      let low = 0,
+        high = changes.length
+      while (low < high) {
+        const middle = (low + high) >> 1
+        if ((changes[middle]?.index ?? Infinity) < index) low = middle + 1
+        else high = middle
+      }
+      return index * rowEstimate + (sums[low] ?? 0)
+    }
+  }, [position, base, count, measured])
+  const layout = useRef({ edge, count })
+  layout.current = { edge, count }
   const update = useCallback(() => {
     const element = list.current
     const origin = frame.current?.getBoundingClientRect().top
     if (!element || origin === undefined) return
     let changed = false
     for (const item of element.children) {
-      if (!(item instanceof HTMLElement)) continue
+      if (!(item instanceof HTMLElement) || !item.dataset.word) continue
       const height = item.getBoundingClientRect().height
       const known = heights.current.get(item.dataset.word)
-      // Ignore subpixel rounding so measurements settle.
       if (!height || (known !== undefined && Math.abs(known - height) < 0.5))
         continue
       heights.current.set(item.dataset.word, height)
       changed = true
     }
-    // New heights move later rows; the next render recomputes the window from them.
     if (changed) return setMeasured((value) => value + 1)
     const view = scroller.current?.getBoundingClientRect() ?? {
       top: 0,
@@ -154,10 +192,10 @@ function WordList({
     }
     const margin = view.bottom - view.top
     const latest = layout.current
-    const from = rowAt(latest, view.top - origin - margin)
+    const from = rowAt(latest.count, latest.edge, view.top - origin - margin)
     const to = Math.min(
-      latest.length - 1,
-      rowAt(latest, view.bottom - origin + margin) + 1,
+      latest.count,
+      rowAt(latest.count, latest.edge, view.bottom - origin + margin) + 1,
     )
     setRange((current) =>
       current.from === from && current.to === to ? current : { from, to },
@@ -171,8 +209,6 @@ function WordList({
       node = node.parentElement
     scroller.current = node
     const target = node ?? window
-    // Zoom and width changes rewrap words: mounted rows are measured again, and
-    // earlier heights stay as estimates for the rest.
     const resized = new ResizeObserver(update)
     resized.observe(element)
     target.addEventListener('scroll', update, { passive: true })
@@ -183,38 +219,43 @@ function WordList({
       window.removeEventListener('resize', update)
     }
   }, [update])
-  // Every render can mount rows; equal heights and ranges stop here.
   useLayoutEffect(update)
-  const indices = useMemo(
-    () => new Map(words.map((item, index) => [item.id, index])),
-    [words],
-  )
   useLayoutEffect(() => {
     for (const id of heights.current.keys())
-      if (!indices.has(id)) heights.current.delete(id)
-  }, [indices])
-  // The last committed list locates a focused word that was just removed. The
-  // word that takes its place keeps the position, so Tab and Shift+Tab
-  // continue from there.
-  const committed = useRef(words)
-  let at = indices.get(focused)
-  if (at === undefined && focused !== undefined && count) {
-    const before = committed.current
-    const index = before.findIndex((item) => item.id === focused)
-    if (index >= 0)
-      at = Math.min(
-        before.slice(0, index).filter((item) => indices.has(item.id)).length,
-        count - 1,
-      )
-  }
-  const anchor = at === undefined ? undefined : words[at]?.id
+      if (position(id) === undefined) heights.current.delete(id)
+  }, [position])
+  const previousFocus = useRef<{ id: string; index: number } | undefined>(
+    undefined,
+  )
+  const found = position(focused)
+  let at =
+    found === undefined || found < base || found >= base + count
+      ? undefined
+      : found - base
+  if (
+    at === undefined &&
+    focused !== undefined &&
+    count &&
+    previousFocus.current?.id === focused
+  )
+    at = Math.max(0, Math.min(previousFocus.current.index - base, count - 1))
+  const anchor = at === undefined ? undefined : (get(at)?.id ?? focused)
   useLayoutEffect(() => {
-    committed.current = words
+    if (anchor && at !== undefined)
+      previousFocus.current = { id: anchor, index: base + at }
     if (anchor !== focused) setFocused(anchor)
   })
   useEffect(() => {
-    // Leaving the window or deleting the focused row keeps the anchor; focus
-    // moving to another control releases it.
+    if (paged.snapshot().revision !== revision) return
+    const ranges = [{ from: base + range.from, to: base + range.to }]
+    if (at !== undefined)
+      ranges.push({
+        from: base + Math.max(0, at - 1),
+        to: base + Math.min(count, at + 2),
+      })
+    void paged.ensure(ranges)
+  }, [paged, revision, base, range.from, range.to, at, count])
+  useEffect(() => {
     const moved = (event: FocusEvent) => {
       if (!list.current?.contains(event.target as Node)) setFocused(undefined)
     }
@@ -235,48 +276,95 @@ function WordList({
   const first = rows[0] ?? count
   const last = rows.at(-1) ?? count - 1
   return (
-    <div ref={frame}>
-      <div aria-hidden="true" style={{ height: offsets[first] }} />
-      <ul
-        ref={list}
-        onFocus={(event) =>
-          setFocused((event.target as HTMLElement).closest('li')?.dataset.word)
-        }
-      >
-        {rows.map((index, position) => {
-          const item = words[index]
-          if (!item) return null
-          const previous = rows[position - 1]
-          const gap =
-            previous === undefined
-              ? 0
-              : (offsets[index] ?? 0) - (offsets[previous + 1] ?? 0)
-          return (
-            <li
-              key={item.id}
-              className="setting-row"
-              data-word={item.id}
-              aria-posinset={index + 1}
-              aria-setsize={count}
-              style={gap ? { marginTop: gap } : undefined}
-            >
-              {row(item)}
-            </li>
-          )
-        })}
-      </ul>
-      <div
-        aria-hidden="true"
-        style={{ height: (offsets[count] ?? 0) - (offsets[last + 1] ?? 0) }}
-      />
-    </div>
+    <>
+      {pages > 1 && (
+        <nav className="dictionary-word-pages" aria-label="Custom word pages">
+          <Button
+            aria-label="Previous words"
+            disabled={!page}
+            onClick={() => setPage(page - 1)}
+          >
+            Previous
+          </Button>
+          <TextInput
+            type="number"
+            aria-label="Word list page"
+            min={1}
+            max={pages}
+            value={page + 1}
+            onChange={(event) =>
+              setPage(
+                Math.max(
+                  0,
+                  Math.min(
+                    pages - 1,
+                    Math.trunc(Number(event.target.value) || 1) - 1,
+                  ),
+                ),
+              )
+            }
+          />
+          <span className="setting-description">{`Page ${page + 1} of ${pages}`}</span>
+          <Button
+            aria-label="Next words"
+            disabled={page + 1 === pages}
+            onClick={() => setPage(page + 1)}
+          >
+            Next
+          </Button>
+        </nav>
+      )}
+      <div ref={frame}>
+        <div aria-hidden="true" style={{ height: edge(first) }} />
+        <ul
+          ref={list}
+          onFocus={(event) =>
+            setFocused(
+              (event.target as HTMLElement).closest('li')?.dataset.word,
+            )
+          }
+        >
+          {rows.map((index, position) => {
+            const item = get(index)
+            const previous = rows[position - 1]
+            const gap =
+              previous === undefined ? 0 : edge(index) - edge(previous + 1)
+            if (!item)
+              return (
+                <li
+                  key={`loading-${index}`}
+                  aria-hidden="true"
+                  style={{ height: rowEstimate, marginTop: gap }}
+                />
+              )
+            return (
+              <li
+                key={item.id}
+                className="setting-row"
+                data-word={item.id}
+                aria-posinset={base + index + 1}
+                aria-setsize={total}
+                style={gap ? { marginTop: gap } : undefined}
+              >
+                {row(item)}
+              </li>
+            )
+          })}
+        </ul>
+        <div
+          aria-hidden="true"
+          style={{ height: edge(count) - edge(last + 1) }}
+        />
+      </div>
+    </>
   )
 }
 
 export function CustomWords() {
   // Hidden discovery and search still register this section's setting rows.
   const visible = useContext(SettingsPageVisible)
-  const words = useSyncExternalStore(onCustomWordsChanged, listCustomWords)
+  const view = useSyncExternalStore(onCustomWordsChanged, customWordsView)
+  const { indexed, count } = view
   // Typed notes outlive hidden pages and offscreen rows; only a save clears them.
   const [drafts, setDrafts] = useState<Drafts>(() => new Map())
   const saving = useRef(new Map<string | undefined, number>())
@@ -294,29 +382,36 @@ export function CustomWords() {
     [],
   )
   // Confirmed removals take their unsaved notes and save counts with them.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: check drafts on saved revisions, never on every keystroke.
   useEffect(() => {
-    const live = new Set(words.map((item) => item.id))
-    for (const id of saving.current.keys())
-      if (!live.has(id)) saving.current.delete(id)
-    setDrafts((current) =>
-      [...current.keys()].every((id) => live.has(id))
-        ? current
-        : new Map([...current].filter(([id]) => live.has(id))),
-    )
-  }, [words])
+    if (indexed) {
+      let active = true
+      const ids = new Set([...saving.current.keys(), ...drafts.keys()])
+      void Promise.all(
+        [...ids].map(async (id) => {
+          if (!id || (await indexed.get(id)).word) return
+          if (!active) return
+          saving.current.delete(id)
+          changeDraft(id, () => undefined)
+        }),
+      ).catch(() => {})
+      return () => {
+        active = false
+      }
+    }
+  }, [indexed, view.revision, changeDraft])
   const [draft, setDraft] = useState('')
   const [text, setText] = useState('')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-  const merge = (imported: CustomWord[]) =>
-    updateCustomWords((current) => mergeCustomWords(current, imported)).then(
-      () =>
+  const merge = (source: string) =>
+    importSavedCustomWords(source).then((count) => {
+      if (count)
         setMessage(
-          imported.length === 1
-            ? 'Imported 1 word.'
-            : `Imported ${imported.length} words.`,
-        ),
-    )
+          count === 1 ? 'Imported 1 word.' : `Imported ${count} words.`,
+        )
+      return count
+    })
   const withFile = (run: (io: HostSelectedIoHostApi) => Promise<void>) => {
     const io = customWordsFileIo()
     if (!io) {
@@ -369,7 +464,6 @@ export function CustomWords() {
             <TextInput
               id="dictionary-new-word"
               placeholder="Add a word…"
-              maxLength={64}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
             />
@@ -378,9 +472,11 @@ export function CustomWords() {
             </Button>
           </form>
         </SettingRow>
-        {!visible ? null : words.length ? (
+        {!visible ? null : count && indexed ? (
           <WordList
-            words={words}
+            paged={indexed}
+            revision={view.revision}
+            version={view.version}
             row={(item) => (
               <>
                 <span className="dictionary-custom-word" lang={item.lang}>
@@ -418,9 +514,7 @@ export function CustomWords() {
                   variant="ghost"
                   aria-label={`Remove “${item.word}”`}
                   onClick={() =>
-                    updateCustomWords((current) =>
-                      current.filter((other) => other.id !== item.id),
-                    )
+                    removeCustomWord(item)
                       .then(() => setMessage(''))
                       .catch((error) => setMessage(failed(error)))
                   }
@@ -467,20 +561,20 @@ export function CustomWords() {
         <Button
           disabled={!text.trim()}
           onClick={() => {
-            const imported = importCustomWords(text)
-            if (!imported.length) {
-              setMessage('No words were found in the text.')
-              return
-            }
-            merge(imported)
-              .then(() => setText(''))
+            const source = text
+            merge(source)
+              .then((count) => {
+                if (count)
+                  setText((current) => (current === source ? '' : current))
+                else setMessage('No words were found in the text.')
+              })
               .catch((error) => setMessage(failed(error)))
           }}
         >
           Import text
         </Button>
         <Button
-          disabled={busy || !words.length}
+          disabled={busy || !count}
           onClick={() =>
             withFile(async (io) => {
               const selecting = io.selectExport({
@@ -518,24 +612,40 @@ export function CustomWords() {
               if (!selected.value) return
               const read = await io.readImport(selected.value.handle)
               if (!read.ok) throw new Error(read.message)
-              let imported: CustomWord[]
+              let source: string
               try {
-                imported = importCustomWords(utf8.decode(read.value))
+                source = utf8.decode(read.value)
               } catch {
                 throw new Error('Choose a text file saved as UTF-8.')
               }
-              if (!imported.length)
+              if (!(await merge(source)))
                 setMessage('No words were found in the file.')
-              else await merge(imported)
             })
           }
         >
           Import from file…
         </Button>
       </div>
-      {message && (
+      {indexed?.snapshot().notice && (
+        <div className="dictionary-word-notice">
+          <p role="status" className="setting-description">
+            {indexed.snapshot().notice}
+          </p>
+          <Button
+            variant="ghost"
+            onClick={() =>
+              void indexed
+                .dismissNotice()
+                .catch((error) => setMessage(failed(error)))
+            }
+          >
+            Dismiss
+          </Button>
+        </div>
+      )}
+      {(message || customWordsFailure()) && (
         <p role="status" className="setting-description">
-          {message}
+          {message || customWordsFailure()}
         </p>
       )}
     </section>

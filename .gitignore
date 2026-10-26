@@ -14,3 +14,7 @@ test-results/
 .env
 .env.*
 !.env.example
+
+# nix
+result
+result-*

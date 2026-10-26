@@ -49,3 +49,42 @@ test('warm export promises yield real task turns between pages', async () => {
   assert.ok(turns >= pages.length - 1, `${turns} turns for ${rendered} pages`)
   assert.equal(css, 'h1{}')
 })
+
+test('renderer prepares the next page during staging with at most two pages retained', {
+  timeout: 5000,
+}, async (t) => {
+  let release, secondRendered
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  t.after(() => release())
+  const ready = new Promise((resolve) => {
+    secondRendered = resolve
+  })
+  let rendered = 0,
+    staged = 0,
+    peak = 0
+  const running = preparePages(
+    pages.slice(0, 4),
+    async () => {
+      rendered++
+      peak = Math.max(peak, rendered - staged)
+      if (rendered === 2) secondRendered()
+      return { html: '<h1>page</h1>', css: '' }
+    },
+    async () => {
+      if (!staged) await held
+      staged++
+    },
+  )
+  try {
+    await Promise.race([ready, running.then(() => assert.fail('no overlap'))])
+    assert.equal(rendered, 2)
+    assert.equal(staged, 0)
+  } finally {
+    release()
+    await running
+  }
+  assert.equal(staged, 4)
+  assert.equal(peak, 2)
+})

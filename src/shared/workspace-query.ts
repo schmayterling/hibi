@@ -108,6 +108,8 @@ export interface WorkspaceReferenceQueryBase {
   readonly stale: boolean
   readonly complete: boolean
   readonly capReached: boolean
+  /** Bounded sample of notes whose metadata could only be partially interpreted. */
+  readonly incompletePaths?: readonly string[]
 }
 
 export type WorkspaceGraphItem =

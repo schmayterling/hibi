@@ -265,6 +265,19 @@ test('scoped text service guards reads, creates and closed-file updates', async 
   assert.equal(created.value.persisted, true)
   assert.equal(created.value.indexed, true)
   assert.deepEqual(host.changed, [['note.md']])
+  const oversized = 'é'.repeat(1024 * 1024 + 1)
+  assert.equal(
+    (await createWorkspaceText(target, 'oversized.md', oversized)).code,
+    'limit-exceeded',
+  )
+  await assert.rejects(readFile(join(root, 'oversized.md')), { code: 'ENOENT' })
+  if (process.platform !== 'win32')
+    assert.equal(
+      (await updateText(target, 'note.md', 'a'.repeat(64), oversized)).code,
+      'limit-exceeded',
+    )
+  assert.equal(await readFile(join(root, 'note.md'), 'utf8'), 'first')
+  assert.deepEqual(host.changed, [['note.md']])
   const longName = `${'x'.repeat(240)}.md`
   assert.equal((await createWorkspaceText(target, longName, 'long')).ok, true)
   let ownerChecks = 0

@@ -13,7 +13,13 @@ export function startupBundle(): Plugin {
               ? [
                   {
                     file: file.fileName,
-                    entry: file.isEntry,
+                    entry:
+                      file.isEntry ||
+                      Object.keys(file.modules).some((name) =>
+                        /\/src\/renderer\/src\/main\.tsx$/.test(
+                          name.replaceAll('\\', '/'),
+                        ),
+                      ),
                     bytes: Buffer.byteLength(file.code),
                     imports: file.imports,
                     dynamicImports: file.dynamicImports,

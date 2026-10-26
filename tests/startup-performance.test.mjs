@@ -88,9 +88,10 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   }
   for (const chunk of chunks) if (chunk.entry) visit(chunk.file)
   const initial = chunks.filter((chunk) => reached.has(chunk.file))
-  // Catalog baseline: 689137 bytes, plus 318 bytes for declarative styles/themes (#218).
+  // Catalog baseline: 689137 bytes, plus 318 bytes for declarative styles/themes (#218)
+  // and 430 bytes for releasing closed tabs' sources from document states (#440).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
-  assert.ok(bytes <= 689455, `startup catalog grew to ${bytes} bytes`)
+  assert.ok(bytes <= 689885, `startup catalog grew to ${bytes} bytes`)
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
   assert.doesNotMatch(
     modules,

@@ -281,3 +281,89 @@ test('rich highlighting waits while source mode hides it, and long lines stay wi
   )
   assert.ok((await tokens.count()) < 1000, 'typing keeps the line windowed')
 })
+
+test('scrolled tab-indented, wide-character, and wrapped long lines keep visible highlighting', {
+  timeout: 45000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-code-columns-'))
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(10000)
+  await page.getByRole('textbox', { name: /document editor/i }).waitFor()
+  const rich = page.locator('.tiptap')
+  const show = async (markdown, place) => {
+    await rich.evaluate(
+      (element, markdown) =>
+        element.editor.commands.setContent(markdown, {
+          contentType: 'markdown',
+        }),
+      markdown,
+    )
+    await page
+      .locator('.tiptap pre [class^="hibi-token-"]')
+      .first()
+      .waitFor({ state: 'attached' })
+    await page.locator('.tiptap pre').evaluate(place)
+    // Highlighted text must appear where the block is scrolled to.
+    await page.locator('.tiptap pre').evaluate(
+      (pre) =>
+        new Promise((resolve, reject) => {
+          const started = performance.now()
+          const check = () => {
+            const box = pre.getBoundingClientRect()
+            const pane = pre.closest('.rich-pane').getBoundingClientRect()
+            const shown = [
+              ...pre.querySelectorAll('[class^="hibi-token-"]'),
+            ].some((token) => {
+              const rect = token.getBoundingClientRect()
+              return (
+                rect.right > box.left &&
+                rect.left < box.right &&
+                rect.bottom > Math.max(box.top, pane.top) &&
+                rect.top < Math.min(box.bottom, pane.bottom)
+              )
+            })
+            if (shown) resolve()
+            else if (performance.now() - started > 8000)
+              reject(new Error('no highlighted code is visible'))
+            else requestAnimationFrame(check)
+          }
+          check()
+        }),
+    )
+  }
+  const right = (pre) => {
+    pre.scrollIntoView({ block: 'start' })
+    pre.scrollLeft = pre.scrollWidth
+  }
+  // An ASCII header, then lines indented by tabs far to the right.
+  await show(
+    `\`\`\`js\nconst header = 42;\n${`${'\t'.repeat(300)}const tabbed = 42;\n`.repeat(40)}\`\`\``,
+    right,
+  )
+  // One line of 20,000 wide characters.
+  await show(`\`\`\`js\nconst text = "${'漢'.repeat(20_000)}";\n\`\`\``, right)
+  // A short first line, then one long line that wraps.
+  await page.addStyleTag({
+    content: '.tiptap pre { white-space: pre-wrap; overflow-wrap: anywhere; }',
+  })
+  await show(
+    `\`\`\`js\nconst header = 42;\n${'const wrapped = 42; '.repeat(5000)}\n\`\`\``,
+    (pre) => {
+      const pane = pre.closest('.rich-pane')
+      pane.scrollTop +=
+        pre.getBoundingClientRect().top -
+        pane.getBoundingClientRect().top +
+        pre.offsetHeight / 2
+    },
+  )
+})

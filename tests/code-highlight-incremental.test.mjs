@@ -120,6 +120,7 @@ function mount(t, plugin, state, geometry = {}) {
       visibility: geometry.hidden === 'style' ? 'hidden' : 'visible',
       overflowX: 'visible',
       overflowY: 'visible',
+      whiteSpace: geometry.whiteSpace ?? 'pre',
     }),
     document: listen('document:'),
     window: { innerHeight: 800, innerWidth: 800, ...listen('window:') },
@@ -703,13 +704,17 @@ test('decorating long blocks stops at the budget and continues in later frames',
   })
   view.scroll()
   view.frame()
-  const { progress, viewport } = plugin.getState(view.state)
+  const { viewport } = plugin.getState(view.state)
   assert.ok(viewport.from < 40_000 && viewport.to > 60_000)
-  const done = progress?.get(0)
-  assert.ok(done > 0 && done < 10, `${done} pieces in one frame`)
+  const at = (from, to) =>
+    plugin
+      .getState(view.state)
+      .decorations.find(from, to)
+      .filter((token) => token.from >= from && token.to <= to).length
+  assert.ok(at(40_000, 44_000) > 0, 'the first visible pieces are decorated')
+  assert.equal(at(50_000, 60_000), 0, 'later pieces wait for later frames')
   performance.now = now
   view.flush()
-  assert.equal(plugin.getState(view.state).progress, null)
   assert.deepEqual(
     joined(tokens(plugin.getState(view.state).decorations)),
     expected(),
@@ -733,6 +738,7 @@ test('a wrapped long line decorates the rows on screen', async (t) => {
     {
       y: (pos) => Math.floor((pos - 1) / 100) * 20 - scrolled,
       x: (pos) => ((pos - 1) % 100) * 8,
+      whiteSpace: 'pre-wrap',
     },
   )
   scrolled = 20 * 500
@@ -744,4 +750,207 @@ test('a wrapped long line decorates the rows on screen', async (t) => {
   assert.ok(shown.length > 100 && shown.length < 5000, `${shown.length} tokens`)
   assert.ok(shown.some((at) => at >= 50_000 && at < 54_000))
   assert.ok(shown.every((at) => at > 40_000 && at < 64_000))
+})
+
+test('a frame decorates one piece once its budget is spent, across blocks', async (t) => {
+  await codeLanguages.ensure('javascript')
+  const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+  const block = 'const value = 1;\n'.repeat(700)
+  const view = mount(
+    t,
+    plugin,
+    EditorState.create({
+      schema,
+      plugins: [plugin],
+      doc: schema.nodes.doc.create(
+        null,
+        Array.from({ length: 12 }, () => code(block)),
+      ),
+    }),
+    { origin: () => 0, scale: 400_000 },
+  )
+  view.flush()
+  const decorated = () => {
+    let count = 0
+    view.state.doc.forEach((node, pos) => {
+      if (
+        plugin.getState(view.state).decorations.find(pos, pos + node.nodeSize)
+          .length
+      )
+        count++
+    })
+    return count
+  }
+  assert.equal(decorated(), 12)
+  // Turning the language off and on again redecorates blocks whose trees are cached.
+  codeLanguages.setEnabled('javascript', false)
+  view.flush()
+  assert.equal(decorated(), 0)
+  codeLanguages.setEnabled('javascript', true)
+  // Every clock read costs 5 ms, more than a frame's budget.
+  let clock = 0
+  const now = performance.now
+  performance.now = () => (clock += 5)
+  t.after(() => {
+    performance.now = now
+  })
+  view.frame()
+  assert.ok(decorated() <= 1, `${decorated()} blocks decorated in one frame`)
+  performance.now = now
+  view.flush()
+  assert.equal(decorated(), 12)
+})
+
+/** Pixel offsets of each character in `line`: tabs stop every 8 cells; CJK takes two. */
+function advances(line) {
+  const x = [0]
+  for (const character of line) {
+    const at = x.at(-1)
+    const cell =
+      character === '\t'
+        ? 64 - (at % 64)
+        : /[\u3000-\u9fff]/.test(character)
+          ? 16
+          : 8
+    for (const _unit of character) x.push(at + cell)
+  }
+  return x
+}
+
+for (const [name, line] of [
+  ['tab-indented', `${'\t'.repeat(400)}const tabbed = 42;`],
+  ['CJK', `const text = "${'漢'.repeat(20_000)}";`],
+]) {
+  test(`horizontally scrolled ${name} lines keep their visible tokens`, async (t) => {
+    await codeLanguages.ensure('javascript')
+    const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+    const text = `const header = 42;\n${line}\n${'const filler = 1;\n'.repeat(700)}`
+    const offsets = advances(line)
+    const second = 'const header = 42;\n'.length
+    let scrolled = 0
+    const view = mount(
+      t,
+      plugin,
+      EditorState.create({
+        schema,
+        plugins: [plugin],
+        doc: schema.nodes.doc.create(null, [code(text)]),
+      }),
+      {
+        // The header and the long line are on screen; filler lines follow.
+        y: (pos) =>
+          pos - 1 < second
+            ? 0
+            : pos - 1 <= second + line.length
+              ? 20
+              : 40 + (pos - 1) / 1000,
+        // Every line starts at the same x, moved left by the horizontal scroll;
+        // the other lines have plain 8 px characters.
+        x: (pos) => {
+          const offset = pos - 1
+          if (offset >= second && offset <= second + line.length)
+            return offsets[offset - second] - scrolled
+          const filler = second + line.length + 1
+          return (
+            (offset < second ? offset : (offset - filler) % 18) * 8 - scrolled
+          )
+        },
+      },
+    )
+    view.flush()
+    // Scrolled near the end of the long line, the tokens there must be decorated.
+    scrolled = offsets.at(-1) - 400
+    view.scroll()
+    view.flush()
+    const visible = plugin
+      .getState(view.state)
+      .decorations.find()
+      .filter((token) => {
+        const offset = token.from - 1 - second
+        return (
+          offset >= 0 &&
+          offset < line.length &&
+          offsets[offset] - scrolled < 800 &&
+          offsets[Math.min(token.to - 1 - second, line.length)] - scrolled > 0
+        )
+      })
+    assert.ok(visible.length > 0, 'no visible token was decorated')
+    // Only characters near the visible ones are decorated on the long line.
+    const covered = plugin
+      .getState(view.state)
+      .decorations.find(1 + second, 1 + second + line.length)
+      .reduce((sum, token) => sum + token.to - token.from, 0)
+    assert.ok(covered < line.length / 2, `${covered} characters decorated`)
+  })
+}
+
+test('a short first line does not stop clipping decisions for wrapping blocks', async (t) => {
+  await codeLanguages.ensure('javascript')
+  const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+  const text = `const header = 42;\n${'const wrapped = 42; '.repeat(5000)}`
+  const second = 'const header = 42;\n'.length
+  let scrolled = 0
+  // The long second line wraps every 100 characters into 20 px rows.
+  const view = mount(
+    t,
+    plugin,
+    EditorState.create({
+      schema,
+      plugins: [plugin],
+      doc: schema.nodes.doc.create(null, [code(text)]),
+    }),
+    {
+      y: (pos) =>
+        (pos - 1 < second
+          ? 0
+          : 20 + Math.floor((pos - 1 - second) / 100) * 20) - scrolled,
+      x: (pos) =>
+        pos - 1 < second ? (pos - 1) * 8 : ((pos - 1 - second) % 100) * 8,
+      whiteSpace: 'pre-wrap',
+    },
+  )
+  scrolled = 20 * 600
+  view.flush()
+  const shown = plugin
+    .getState(view.state)
+    .decorations.find()
+    .map((token) => token.from - 1 - second)
+  assert.ok(
+    shown.some((offset) => offset >= 60_000 && offset < 64_000),
+    'the wrapped rows on screen are decorated',
+  )
+})
+
+test('a long block decorates again after scrolling away and back', async (t) => {
+  await codeLanguages.ensure('javascript')
+  const [plugin] = CodeHighlight.config.addProseMirrorPlugins()
+  let origin = 0
+  const view = mount(
+    t,
+    plugin,
+    EditorState.create({
+      schema,
+      plugins: [plugin],
+      doc: schema.nodes.doc.create(null, [
+        code('const value = 1;\n'.repeat(700)),
+        ...Array.from({ length: 3_000 }, () => paragraph('between')),
+        code('const other = 2;\n'.repeat(700)),
+      ]),
+    }),
+    { origin: () => origin },
+  )
+  view.flush()
+  const first = () =>
+    plugin
+      .getState(view.state)
+      .decorations.find(0, view.state.doc.firstChild.nodeSize).length
+  assert.ok(first() > 0)
+  origin = view.state.doc.content.size - 3_000
+  view.scroll()
+  view.flush()
+  assert.equal(first(), 0, 'blocks out of range drop their tokens')
+  origin = 0
+  view.scroll()
+  view.flush()
+  assert.ok(first() > 0, 'returning decorates the block again')
 })

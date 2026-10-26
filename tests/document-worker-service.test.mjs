@@ -563,20 +563,37 @@ test('frontmatter boundary changes replace reference owner namespaces safely', a
 })
 
 test('metadata batches cheap parser advances while yielding between work slices', async (t) => {
+  const channels = [],
+    tasks = []
+  t.mock.method(
+    globalThis,
+    'MessageChannel',
+    class {
+      port1 = { onmessage: null, close: t.mock.fn() }
+      port2 = {
+        close: t.mock.fn(),
+        postMessage: () => tasks.push(() => this.port1.onmessage?.()),
+      }
+      constructor() {
+        channels.push(this)
+      }
+    },
+  )
   const { MarkdownSourceModel } = await import(
     '../src/shared/markdown-source-model.ts'
   )
   const advance = MarkdownSourceModel.prototype.advance
   let turn = 0,
-    advances = 0
+    advances = 0,
+    clock = 0,
+    settled = false
+  t.mock.method(performance, 'now', () => (clock += 0.01))
   const batches = new Map()
   t.mock.method(MarkdownSourceModel.prototype, 'advance', function () {
     advances++
     batches.set(turn, (batches.get(turn) ?? 0) + 1)
     return advance.call(this)
   })
-  const timer = setInterval(() => turn++, 0)
-  t.after(() => clearInterval(timer))
   const f = fixture(t, '# heading\n\nparagraph\n\n'.repeat(2000))
   f.worker.receive({
     type: 'metadata',
@@ -588,12 +605,41 @@ test('metadata batches cheap parser advances while yielding between work slices'
     to: 500,
     limit: 4,
   })
-  const reply = await f.next((message) => message.type === 'metadata')
+  const pending = f
+    .next((message) => message.type === 'metadata')
+    .finally(() => {
+      settled = true
+    })
+  void pending.catch(() => {})
+  while (!settled) {
+    if (tasks.length) {
+      turn++
+      tasks.shift()()
+    } else await new Promise(setImmediate)
+  }
+  const reply = await pending
   assert.equal(reply.page.rows.length, 4)
   assert.equal(reply.page.complete, true)
   assert.ok(advances > 2000)
   assert.ok(batches.size > 1, 'metadata must yield to the worker event loop')
   assert.ok(Math.max(...batches.values()) > 1, 'cheap blocks share a slice')
+  const progress = f.messages.filter(
+    (message) => message.type === 'metadata-progress',
+  )
+  assert.ok(
+    progress.length > 1,
+    'real metadata work reports progress across slices',
+  )
+  for (const reply of progress)
+    assert.deepEqual(reply, {
+      type: 'metadata-progress',
+      epoch: 'first',
+      id: 1,
+      version: 0,
+    })
+  assert.equal(channels.length, 1, 'metadata slices use channel tasks')
+  assert.equal(channels[0].port1.close.mock.callCount(), 1)
+  assert.equal(channels[0].port2.close.mock.callCount(), 1)
 })
 
 test('worker source replication is ordered, atomic, and query replies name the exact accepted version', async (t) => {

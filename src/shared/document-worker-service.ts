@@ -75,6 +75,8 @@ export class DocumentWorkerService {
   #metadataId = 0
   #metadataLoading = false
   #metadataTimer: ReturnType<typeof setTimeout> | undefined
+  #metadataChannel: MessageChannel | null = null
+  #metadataScheduled = false
   #metadataServiced = 0
   #references: MarkdownSourceReferences | null = null
   #referenceSyntax = ''
@@ -198,6 +200,10 @@ export class DocumentWorkerService {
   #cancelMetadata(release = false) {
     clearTimeout(this.#metadataTimer)
     this.#metadataTimer = undefined
+    this.#metadataChannel?.port1.close()
+    this.#metadataChannel?.port2.close()
+    this.#metadataChannel = null
+    this.#metadataScheduled = false
     this.#referenceWork?.return(undefined)
     this.#referenceWork = null
     this.#referencesReady = false
@@ -586,8 +592,25 @@ export class DocumentWorkerService {
       })
   }
   #scheduleMetadata() {
-    if (this.#metadataTimer || !this.#metadata || !this.#model) return
-    this.#metadataTimer = setTimeout(this.#advanceMetadata, 0)
+    if (
+      this.#metadataTimer ||
+      this.#metadataScheduled ||
+      !this.#metadata ||
+      !this.#model
+    )
+      return
+    if (!this.#metadataChannel) {
+      const channel = new MessageChannel()
+      this.#metadataChannel = channel
+      channel.port1.onmessage = () => {
+        if (this.#metadataChannel !== channel) return
+        this.#metadataScheduled = false
+        // Reset timer nesting without starving cancellation timers.
+        this.#metadataTimer = setTimeout(this.#advanceMetadata, 0)
+      }
+    }
+    this.#metadataScheduled = true
+    this.#metadataChannel.port2.postMessage(null)
   }
   *#readSemantics(
     request: MetadataRequest,
@@ -723,7 +746,7 @@ export class DocumentWorkerService {
             this.#semanticWork = null
             semantic = step.value
           }
-          this.#metadata = null
+          this.#cancelMetadata()
           this.#post({
             type: 'metadata',
             epoch: this.#epoch,
@@ -736,6 +759,12 @@ export class DocumentWorkerService {
           return
         }
       } while (performance.now() - this.#metadataServiced < 2)
+      this.#post({
+        type: 'metadata-progress',
+        epoch: this.#epoch,
+        id: request.id,
+        version: request.version,
+      })
       this.#scheduleMetadata()
     } catch (error) {
       this.#fail('metadata', error, request.id)

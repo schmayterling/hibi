@@ -204,6 +204,32 @@ test('labels read as links, brackets and aliased targets are syntax, embeds beco
   ])
 })
 
+test('decoded glyphs pass mouse events through to the editor', () => {
+  for (const source of ['[[Note|&amp;]]', '==&#x1f600;==']) {
+    const state = EditorState.create({ doc: source })
+    const widgets = []
+    lezer.parse(source).iterate({
+      enter(node) {
+        const view = contribution.views.find((entry) =>
+          entry.nodes.includes(node.name),
+        )
+        return view?.decorate(
+          node,
+          {
+            syntax() {},
+            mark() {},
+            replace: (_from, _to, widget) => widgets.push(widget),
+          },
+          { state, revealed: false, visible: { from: 0, to: source.length } },
+        )
+      },
+    })
+    assert.equal(widgets.length, 1)
+    assert.equal(widgets[0].ignoreEvent(new Event('mousedown')), false, source)
+    assert.equal(widgets[0].ignoreEvent(new Event('click')), false, source)
+  }
+})
+
 test('entities in labels and highlights show their characters, as in the rich view, until the caret reveals them', () => {
   assert.deepEqual(drawn('[[Note|&amp;]]'), [
     ['syntax', 0, 7],

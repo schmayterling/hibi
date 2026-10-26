@@ -337,6 +337,90 @@ test('clicks and keys reach wikilinks and embeds: the caret reveals their source
   await engine(true, true)
 })
 
+test('shift-click below an image and on decoded glyphs keeps the target through mousedown', {
+  timeout: 90000,
+}, async () => {
+  await engine(true, true)
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  for (const selector of [
+    '.hibi-lp-link[data-wiki-link="Other#Part"]',
+    '.hibi-lp-entity.hibi-lp-link',
+  ]) {
+    await open('parity.md')
+    await page.waitForFunction(() => {
+      const image = document.querySelector('.rich-pane .obsidian-embed img')
+      return image?.complete && image.naturalWidth > 0
+    })
+    await page.evaluate(() => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.focus()
+      view.dispatch({ selection: { anchor: 0 } })
+    })
+    const target = page.locator(`.rich-pane ${selector}`).first()
+    await target.waitFor()
+    const box = await target.boundingBox()
+    assert.ok(box)
+    await page.keyboard.down('Shift')
+    try {
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await page.mouse.down()
+      assert.deepEqual(
+        await page.evaluate(() => {
+          const view = document.querySelector('.rich-pane .cm-content').cmTile
+            .root.view
+          return [
+            view.state.selection.main.anchor,
+            view.state.selection.main.head,
+            document.querySelectorAll('.rich-pane .obsidian-embed').length,
+          ]
+        }),
+        [0, 0, 2],
+        'following a link must not select and reveal intervening embeds',
+      )
+    } finally {
+      await page.mouse.up()
+      await page.keyboard.up('Shift')
+    }
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'Other.md',
+    )
+  }
+  await open('parity.md')
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.focus()
+    view.dispatch({ selection: { anchor: 0 } })
+  })
+  for (const [text, marker] of [
+    ['&', '[[Other|'],
+    ['<', '=='],
+  ]) {
+    await page
+      .locator('.rich-pane .hibi-lp-entity', { hasText: text })
+      .first()
+      .click()
+    await page
+      .locator('.rich-pane .hibi-lp-marker', { hasText: marker })
+      .first()
+      .waitFor()
+    assert.equal(
+      await page.evaluate(
+        async () => (await window.hibi.getDocument()).markdown,
+      ),
+      parityNote,
+    )
+    await page.evaluate(() => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.dispatch({ selection: { anchor: 0 } })
+    })
+  }
+})
+
 test('without the obsidian flavor, wikilinks and highlights stay as written', {
   timeout: 90000,
 }, async () => {

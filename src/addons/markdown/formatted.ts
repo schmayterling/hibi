@@ -37,6 +37,9 @@ class CharactersWidget extends WidgetType {
     span.textContent = this.text
     return span
   }
+  override ignoreEvent() {
+    return false
+  }
 }
 
 /** Entities in `[from, to)` show their characters, as the rich view's text does, and their source under the caret. */
@@ -102,13 +105,6 @@ class EmbedWidget extends WidgetType {
       link.tabIndex = -1
       link.dataset.wikiEmbed = this.target
       link.textContent = this.label
-      // Shift extends the selection on mousedown, which would reveal the
-      // embed's source and remove this link before the click that follows it.
-      link.addEventListener('mousedown', (event) => {
-        if (!event.shiftKey) return
-        event.preventDefault()
-        event.stopPropagation()
-      })
       link.addEventListener('keydown', (event) => {
         const view = EditorView.findFromDOM(dom)
         if (!view) return

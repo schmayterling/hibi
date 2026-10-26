@@ -58,6 +58,7 @@ export class DocumentWorkerClient {
     request: SourceTransferRequest
     done: boolean
     finishing: boolean
+    operations: SourceOperation[]
   } | null = null
   #loaded = false
   #ack = -1
@@ -89,9 +90,7 @@ export class DocumentWorkerClient {
       session.subscribeOperations((prepared) => {
         if (this.#disposed || this.#failed) return
         const operation = prepared.operation
-        if (this.#bootstrap) {
-          this.#restart()
-        } else if (this.#loaded) {
+        if (this.#bootstrap || this.#loaded) {
           const bytes = journalMessageBytes(operation)
           if (
             this.#bytes + bytes >
@@ -109,7 +108,8 @@ export class DocumentWorkerClient {
             this.#metadataReleasing = false
             clearTimeout(this.#metadataDeadline)
             this.#metadataDeadline = undefined
-            this.#sendOperation(operation)
+            if (this.#bootstrap) this.#bootstrap.operations.push(operation)
+            else this.#sendOperation(operation)
           }
         }
         options.changed()
@@ -284,12 +284,15 @@ export class DocumentWorkerClient {
       from: request.from,
       to: request.to,
     })
-    if (this.#flight === request.id)
-      this.#findDeadline = setTimeout(
-        () => this.#fail(new Error('Find worker stopped responding.')),
-        this.#options.timeoutMs ?? 5000,
-      )
+    if (this.#flight === request.id) this.#watchFind()
     this.#watch()
+  }
+  #watchFind() {
+    clearTimeout(this.#findDeadline)
+    this.#findDeadline = setTimeout(
+      () => this.#fail(new Error('Find worker stopped responding.')),
+      this.#options.timeoutMs ?? 5000,
+    )
   }
   #watch() {
     if (!this.#bootstrap && !this.#pending.size) {
@@ -318,7 +321,11 @@ export class DocumentWorkerClient {
         )
         return
       }
-      if (!this.#session.ownsCurrentSnapshot(bootstrap.source)) {
+      const document = this.#session.snapshot().document
+      if (
+        document.tabId !== bootstrap.source.document.tabId ||
+        document.revision !== bootstrap.source.document.revision
+      ) {
         this.#restart()
         return
       }
@@ -364,6 +371,7 @@ export class DocumentWorkerClient {
       clearTimeout(this.#deadline)
       this.#deadline = undefined
       this.#ack = reply.version
+      const operations = this.#bootstrap?.operations
       if (this.#bootstrap) {
         this.#bootstrap = null
         this.#loaded = true
@@ -373,6 +381,22 @@ export class DocumentWorkerClient {
           this.#pending.delete(version)
           this.#bytes -= bytes
         }
+      if (operations)
+        for (const operation of operations) {
+          if (reply.epoch !== this.#epoch) return
+          this.#sendOperation(operation)
+        }
+    } else if (reply.type === 'find-progress') {
+      const request = this.#latest
+      if (
+        request?.id === reply.id &&
+        this.#flight === reply.id &&
+        this.#canceling === null &&
+        request.version === reply.version &&
+        reply.version === this.#ack &&
+        reply.version === this.#session.snapshot().version
+      )
+        this.#watchFind()
     } else if (reply.type === 'canceled') {
       if (reply.id !== this.#canceling) return
       this.#flight = this.#canceling = null
@@ -521,6 +545,7 @@ export class DocumentWorkerClient {
       request: { streamId: epoch, sequence: 0 },
       done: false,
       finishing: false,
+      operations: [],
     }
     const worker =
       this.#options.worker?.() ??

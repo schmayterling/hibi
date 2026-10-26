@@ -319,6 +319,35 @@ test('visual configuration opt-out, unproved edits, undo and save remain immedia
   runtime.dispose()
 })
 
+test('opening mode stays fixed while edits cross the threshold, then refreshes on activation', () => {
+  for (const [initial, inserted] of [
+    ['small', 'x'.repeat(290000)],
+    ['x'.repeat(290000), 'small'],
+  ]) {
+    const runtime = new DocumentRuntime({
+      enqueue() {},
+      onError: (error) => {
+        throw error
+      },
+    })
+    runtime.activate(document({ markdown: initial, savedMarkdown: initial }))
+    const before = preferSourceOpening(runtime, runtime.get())
+    const session = runtime.session()
+    session.edit(
+      [{ from: 0, to: initial.length, insert: inserted }],
+      'source',
+      'replace',
+    )
+    session.counters(true)
+    assert.equal(preferSourceOpening(runtime, runtime.get()), before)
+    assert.equal(session.counters().materializations, 0)
+    const next = { ...runtime.get(), revision: 2 }
+    runtime.activate(next)
+    assert.equal(preferSourceOpening(runtime, runtime.get()), !before)
+    runtime.dispose()
+  }
+})
+
 test('large source opening policy reads only snapshot metrics and leaves small notes unchanged', () => {
   const state = document()
   Object.defineProperty(state, 'markdown', {
@@ -334,6 +363,10 @@ test('large source opening policy reads only snapshot metrics and leaves small n
     50 * 1024 * 1024,
   ]) {
     const runtime = {
+      openingLength: (value) => {
+        assert.equal(value, state)
+        return units
+      },
       sourceFor: (value) => {
         assert.equal(value, state)
         return { utf16Length: units }
@@ -346,7 +379,7 @@ test('large source opening policy reads only snapshot metrics and leaves small n
   assert.equal(
     preferSourceOpening(
       {
-        sourceFor() {
+        openingLength() {
           throw new Error('no document')
         },
       },

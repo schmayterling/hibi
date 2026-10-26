@@ -107,7 +107,7 @@ import {
   type OutlineRequest,
   OutlineSidebar,
 } from './OutlineSidebar'
-import { RecoveryBoundary } from './RecoveryScreen'
+import { RecoveryBoundary } from './RecoveryBoundary'
 import { StartupPlaceholder } from './StartupPlaceholder'
 import { StatusBar, type StatusBarVisibility } from './StatusBar'
 import { settingsCategories } from './settings-categories'
@@ -562,7 +562,11 @@ function App() {
     }
   }, [busy, DocumentEditor, splitTabs?.active])
   const acknowledgeSave = useCallback(
-    (saved: DocumentState, token: DocumentSaveToken, expectedId?: string) => {
+    (
+      saved: import('../../shared/desktop').DocumentSaveReply,
+      token: DocumentSaveToken,
+      expectedId?: string,
+    ) => {
       const previous = documentRuntime.get(saved.tabId)
       const acknowledged = documentRuntime.acknowledgeSave(
         saved,
@@ -1449,7 +1453,7 @@ function App() {
         if (saving) saveCancellation.current.canceled = !next
         if (next) {
           if (saving && token) acknowledgeSave(next, token, expectedId)
-          else
+          else if (!('saveReceipt' in next))
             await acceptOperationDocument(
               next,
               command === 'new' || command === 'open',
@@ -1469,6 +1473,7 @@ function App() {
         )
         return false
       } finally {
+        documentRuntime.endSave(token)
         if (source) flushSync(endBusy)
         else endBusy()
         setSavingTab(null)

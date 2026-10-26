@@ -34,10 +34,9 @@ import { DIAGNOSTIC_CHANNEL } from '../shared/local-diagnostics'
 import { MEDIA_CHANNELS } from '../shared/media'
 import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
-import {
-  SOURCE_TRANSFER_UNITS,
-  type SourceTransferChunk,
-  type SourceTransferRequest,
+import type {
+  SourceTransferChunk,
+  SourceTransferRequest,
 } from '../shared/source-transfer'
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
@@ -76,7 +75,6 @@ if (process.isMainFrame) {
     {
       timeoutMs: 5000,
       retryDelays: [100, 500, 2000],
-      maximumCheckpointUnits: SOURCE_TRANSFER_UNITS,
       checkpoint: (tabId) => {
         if (!checkpoint)
           throw new Error('Document recovery is not ready. Retry saving.')
@@ -84,8 +82,6 @@ if (process.isMainFrame) {
       },
       head: (tabId) => transport.invoke(DOCUMENT_CHANNELS.recoveryHead, tabId),
       verify: async (snapshot, progress) => {
-        if ('source' in snapshot)
-          throw new Error('Invalid document recovery checkpoint.')
         if (!checkpointRead)
           throw new Error('Document recovery is not ready. Retry saving.')
         let request: SourceTransferRequest = {

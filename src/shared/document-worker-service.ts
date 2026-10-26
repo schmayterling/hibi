@@ -15,8 +15,6 @@ import { SourceSearchIndex } from './source-search-index.ts'
 import {
   parseTransferHead,
   parseTransferRequest,
-  SOURCE_TRANSFER_CHUNKS,
-  SOURCE_TRANSFER_UNITS,
   SourceTransferReceiver,
 } from './source-transfer.ts'
 
@@ -51,7 +49,8 @@ export class DocumentWorkerService {
   #request: FindRequest | null = null
   #work: Generator<unknown, unknown> | null = null
   #stage: 'build' | 'locate' = 'build'
-  #timer: ReturnType<typeof setTimeout> | undefined
+  #findChannel: MessageChannel | null = null
+  #findScheduled = false
   #disposed = false
   #model: MarkdownSourceModel | null = null
   #metadata: MetadataRequest | null = null
@@ -70,8 +69,10 @@ export class DocumentWorkerService {
     this.#post = post
   }
   #cancel() {
-    clearTimeout(this.#timer)
-    this.#timer = undefined
+    this.#findChannel?.port1.close()
+    this.#findChannel?.port2.close()
+    this.#findChannel = null
+    this.#findScheduled = false
     this.#work?.return(undefined)
     this.#work = null
     this.#request = null
@@ -180,24 +181,6 @@ export class DocumentWorkerService {
           epoch: this.#epoch,
           request: receiver.request,
         })
-        return
-      }
-      if (message.type === 'load') {
-        this.#reset(message.epoch)
-        if (
-          !Array.isArray(message.chunks) ||
-          message.chunks.length > SOURCE_TRANSFER_CHUNKS ||
-          message.chunks.some(
-            (chunk) =>
-              typeof chunk !== 'string' || chunk.length > SOURCE_TRANSFER_UNITS,
-          ) ||
-          message.chunks.reduce((sum, chunk) => sum + chunk.length, 0) >
-            SOURCE_TRANSFER_UNITS
-        )
-          throw new Error('Document worker bootstrap exceeds its limit.')
-        this.#publish(
-          new SourceStore(message.chunks, message.document, message.version),
-        )
         return
       }
       if (message.epoch !== this.#epoch) return
@@ -593,37 +576,61 @@ export class DocumentWorkerService {
     }
   }
   #schedule() {
-    if (this.#timer || !this.#work) return
-    this.#timer = setTimeout(() => {
-      this.#timer = undefined
-      const started = performance.now()
-      try {
-        while (this.#work && performance.now() - started < 2) {
-          const step = this.#work.next()
-          if (!step.done) continue
-          const request = this.#request!
-          if (this.#stage === 'build') {
-            this.#stage = 'locate'
-            this.#work = this.#index!.locate(request.from, request.to)
-          } else {
-            this.#work = null
-            this.#post({
-              type: 'find',
-              epoch: this.#epoch,
-              id: request.id,
-              version: request.version,
-              location: step.value as Extract<
-                DocumentWorkerReply,
-                { type: 'find' }
-              >['location'],
-            })
-          }
-        }
-        this.#schedule()
-      } catch (error) {
-        this.#fail('find', error)
+    if (this.#findScheduled || !this.#work) return
+    if (!this.#findChannel) {
+      const channel = new MessageChannel()
+      channel.port1.onmessage = () => {
+        if (this.#findChannel === channel) this.#advanceFind()
       }
-    }, 0)
+      this.#findChannel = channel
+    }
+    this.#findScheduled = true
+    this.#findChannel.port2.postMessage(null)
+  }
+  #advanceFind() {
+    this.#findScheduled = false
+    const started = performance.now()
+    let advanced = false
+    try {
+      while (this.#work && performance.now() - started < 2) {
+        const step = this.#work.next()
+        advanced = true
+        if (!step.done) continue
+        const request = this.#request!
+        if (this.#stage === 'build') {
+          this.#stage = 'locate'
+          this.#work = this.#index!.locate(request.from, request.to)
+        } else {
+          this.#work = null
+          this.#post({
+            type: 'find',
+            epoch: this.#epoch,
+            id: request.id,
+            version: request.version,
+            location: step.value as Extract<
+              DocumentWorkerReply,
+              { type: 'find' }
+            >['location'],
+          })
+        }
+      }
+      if (!this.#work) {
+        this.#cancel()
+        return
+      }
+      if (advanced) {
+        const request = this.#request!
+        this.#post({
+          type: 'find-progress',
+          epoch: this.#epoch,
+          id: request.id,
+          version: request.version,
+        })
+      }
+      this.#schedule()
+    } catch (error) {
+      this.#fail('find', error)
+    }
   }
   dispose() {
     this.#disposed = true

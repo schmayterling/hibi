@@ -19,11 +19,13 @@ class TestWorker {
   onmessage = null
   onerror = null
   onmessageerror = null
-  service = new DocumentWorkerService((reply) =>
+  replies = []
+  service = new DocumentWorkerService((reply) => {
+    this.replies.push(reply)
     setImmediate(() => {
       if (!this.terminated) this.onmessage?.({ data: structuredClone(reply) })
-    }),
-  )
+    })
+  })
   postMessage(message) {
     const copy = structuredClone(message)
     this.messages.push(copy)
@@ -80,6 +82,112 @@ function fixture(t, source = 'one two one', extra = {}) {
   }
   return { client, session, workers, results, errors, find, append }
 }
+
+test('32 mib real find build completes with progress on one worker', {
+  timeout: 60000,
+}, async (t) => {
+  // Same ordinary-word corpus as the review probe, with one distant match.
+  const unit = `${'ordinary words '.repeat(16)}\n\n`,
+    length = 32 * 1024 * 1024,
+    source =
+      unit.repeat(Math.ceil(length / unit.length)).slice(0, length - 11) +
+      'scale-start',
+    done = Promise.withResolvers(),
+    f = fixture(t, source, {
+      result: (location) => done.resolve(location),
+      error: (message) => done.reject(new Error(message)),
+    })
+  f.find('scale-start')
+  const location = await done.promise
+  assert.equal(location.total, 1)
+  assert.equal(location.next.match.from, source.length - 11)
+  assert.equal(f.workers.length, 1)
+  const worker = f.workers[0],
+    request = worker.messages.find((message) => message.type === 'find'),
+    progress = worker.replies.filter((reply) => reply.type === 'find-progress')
+  assert.ok(
+    progress.length > 1,
+    'real index work must report progress across slices',
+  )
+  for (const reply of progress)
+    assert.deepEqual(reply, {
+      type: 'find-progress',
+      epoch: request.epoch,
+      id: request.id,
+      version: request.version,
+    })
+  assert.deepEqual(f.errors, [])
+  t.diagnostic(
+    JSON.stringify({
+      units: source.length,
+      workers: f.workers.length,
+      progress: progress.length,
+      total: location.total,
+    }),
+  )
+})
+
+test('only current active find progress renews its deadline', async (t) => {
+  const f = fixture(t, 'one', { timeoutMs: 100 })
+  f.find('one')
+  await wait(() => f.results.length)
+  const worker = f.workers[0]
+  worker.blocked = true
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  f.find('two')
+  const request = worker.messages.at(-1),
+    progress = {
+      type: 'find-progress',
+      epoch: request.epoch,
+      id: request.id,
+      version: request.version,
+    }
+  // Valid progress keeps actual active work alive beyond its initial deadline.
+  for (let n = 0; n < 10; n++) {
+    t.mock.timers.tick(60)
+    worker.onmessage({ data: progress })
+    assert.equal(worker.terminated, false)
+  }
+  for (const change of [
+    { epoch: 'stale' },
+    { id: request.id - 1 },
+    { version: request.version + 1 },
+    { id: String(request.id) },
+    { version: String(request.version) },
+  ]) {
+    t.mock.timers.tick(10)
+    worker.onmessage({ data: { ...progress, ...change } })
+  }
+  t.mock.timers.tick(51)
+  assert.equal(
+    worker.terminated,
+    true,
+    'stale or malformed progress cannot extend a deadline',
+  )
+})
+
+test('canceled find progress cannot renew missing cancellation acknowledgement', async (t) => {
+  const f = fixture(t, 'one', { timeoutMs: 100 })
+  f.find('one')
+  await wait(() => f.results.length)
+  const worker = f.workers[0]
+  worker.blocked = true
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  f.find('two')
+  const request = worker.messages.at(-1)
+  f.client.cancelFind()
+  t.mock.timers.tick(60)
+  worker.onmessage({
+    data: {
+      type: 'find-progress',
+      epoch: request.epoch,
+      id: request.id,
+      version: request.version,
+    },
+  })
+  t.mock.timers.tick(41)
+  assert.equal(worker.terminated, true)
+})
 
 test('reference lookup shares find replica, cancels find independently and drops stale replies', async (t) => {
   const pages = []
@@ -429,14 +537,31 @@ test('client streams 50 mib and nonascii above 20 mib with bounded append work a
   }
 })
 
-test('edits and document changes during bootstrap restart current source and ignore stale acknowledgements', async (t) => {
+test('eighteen bootstrap edits keep one worker and exact source; identity changes restart', async (t) => {
+  const original = SourceStore.loader
+  let published
+  t.mock.method(SourceStore, 'loader', (...args) => {
+    const loader = original(...args)
+    return {
+      append: loader.append,
+      finish() {
+        published = loader.finish()
+        return published
+      },
+    }
+  })
   const f = fixture(t, 'one '.repeat(40000), {
     worker: () => {
       const worker = new TestWorker(),
-        block = f.workers.length === 0 || f.workers.length === 2,
+        block = f.workers.length === 0 || f.workers.length === 1,
         post = worker.postMessage.bind(worker)
       worker.postMessage = (message) => {
-        if (block && message.type === 'load-chunk') worker.blocked = true
+        if (
+          block &&
+          message.type === 'load-chunk' &&
+          !worker.messages.some((sent) => sent.type === 'load-chunk')
+        )
+          worker.blocked = true
         post(message)
       }
       f.workers.push(worker)
@@ -451,27 +576,39 @@ test('edits and document changes during bootstrap restart current source and ign
     first.messages.some((message) => message.type === 'load-chunk'),
   )
   const stale = first.messages.at(-1)
-  f.append('one')
-  assert.equal(first.terminated, true)
-  first.onmessage({ data: { type: 'ack', epoch: stale.epoch, version: 0 } })
+  const keys = 'abcdefghijklmnopqr'
+  for (const key of keys) f.append(key)
+  assert.equal(first.terminated, false)
+  // Resume the exact blocked transport message; the frozen prefix stays v0.
+  first.blocked = false
+  first.service.receive(stale)
   await wait(() => f.results.length)
-  assert.equal(f.workers.length, 2)
-  assert.equal(f.workers[1].messages[0].head.contentVersion, 1)
-  assert.equal(f.results.at(-1).location.total, 40001)
-  f.workers[1].onerror({ preventDefault() {} })
-  await wait(() => f.workers.length === 3)
-  const third = f.workers[2]
+  assert.equal(f.workers.length, 1)
+  assert.equal(first.messages[0].head.contentVersion, 0)
+  assert.deepEqual(
+    first.messages
+      .filter((message) => message.type === 'edit')
+      .map((message) => message.operation.contentVersion),
+    Array.from({ length: 18 }, (_, n) => n + 1),
+  )
+  assert.equal(published.snapshot().version, 18)
+  assert.equal(published.snapshot().materialize(), 'one '.repeat(40000) + keys)
+  assert.equal(f.results.at(-1).location.total, 40000)
+  first.onerror({ preventDefault() {} })
+  await wait(() => f.workers.length === 2)
+  const third = f.workers[1]
   third.blocked = true
   await wait(() =>
     third.messages.some((message) => message.type === 'load-chunk'),
   )
   f.session.reidentify({ tabId: 'saved', revision: 2 })
-  await wait(() => f.workers.length === 4 && f.results.length === 2)
+  await wait(() => f.workers.length === 3 && f.results.length === 2)
   assert.equal(third.terminated, true)
-  assert.equal(f.workers[3].messages[0].head.tabId, 'saved')
-  assert.equal(f.workers[3].messages[0].head.revision, 2)
-  assert.equal(f.workers[3].messages[0].head.contentVersion, 1)
-  assert.equal(f.session.snapshot().version, 1)
+  third.onmessage({ data: { type: 'ack', epoch: stale.epoch, version: 0 } })
+  assert.equal(f.workers[2].messages[0].head.tabId, 'saved')
+  assert.equal(f.workers[2].messages[0].head.revision, 2)
+  assert.equal(f.workers[2].messages[0].head.contentVersion, 18)
+  assert.equal(f.session.snapshot().version, 18)
   assert.deepEqual(f.errors, [])
 })
 

@@ -22,7 +22,7 @@ const head = (length, streamId = 'stream') => ({
 
 test('stream checkpoint metadata has no whole-document content ceiling', () => {
   assert.deepEqual(
-    parseJournalCheckpoint(head(50 * 1024 * 1024), 16),
+    parseJournalCheckpoint(head(50 * 1024 * 1024)),
     head(50 * 1024 * 1024),
   )
 })

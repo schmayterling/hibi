@@ -285,6 +285,7 @@ export function createDocumentTargetEditScope(
           message,
         }
       } finally {
+        runtime.endSave(token)
         saving.delete(target.documentId)
       }
     },

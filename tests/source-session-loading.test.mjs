@@ -4,12 +4,12 @@ import { setImmediate as nextTask } from 'node:timers/promises'
 import { EditorState, Text, Transaction } from '@codemirror/state'
 import {
   createSourceSession,
-  sourceEditorText,
   sourceEditorTextCooperatively,
 } from '../src/renderer/src/source-session.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 import { normalizedChunks } from '../src/shared/source-projection.ts'
+import { sourceEditorText } from './source-editor-text.mjs'
 
 const document = { tabId: 'cm-loading', revision: 0 }
 function storeFor(raw) {

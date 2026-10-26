@@ -1,5 +1,6 @@
 import type { DesktopApi, DocumentState } from '../../shared/desktop.ts'
 import type {
+  DocumentMetadata,
   DocumentTransfer,
   DocumentTransferApi,
   LoadedDocument,
@@ -16,6 +17,9 @@ export const loadedDocument = (document: DocumentState) => loaded.get(document)
 /** Hydrate inside the renderer: neither IPC nor contextBridge copies a complete note. */
 export function documentTransferApi(
   native: DesktopApi & DocumentTransferApi,
+  metadata?: (
+    value: DocumentMetadata,
+  ) => DocumentState | Promise<DocumentState>,
 ): DesktopApi {
   const pending = new Map<string, Promise<DocumentState>>()
   const load = (wire: DocumentTransfer) => {
@@ -97,6 +101,11 @@ export function documentTransferApi(
   const hydrate = async (value: unknown): Promise<unknown> => {
     if (!value || typeof value !== 'object') return value
     if ('documentTransfer' in value) return load(value as DocumentTransfer)
+    if ('documentMetadata' in value) {
+      if (!metadata)
+        throw new Error('The document source is not loaded. Try again.')
+      return metadata(value as DocumentMetadata)
+    }
     if ('document' in value) {
       const result = value as { document: unknown }
       return { ...result, document: await hydrate(result.document) }
@@ -112,7 +121,7 @@ export function documentTransferApi(
         return name === 'getDocument'
           ? response.catch((error) => {
               if (
-                !/The document (?:changed during transfer|transfer is stale or out of order)/.test(
+                !/The document (?:changed during transfer|transfer is stale or out of order)|local edits waiting to synchronize/.test(
                   String(error),
                 )
               )

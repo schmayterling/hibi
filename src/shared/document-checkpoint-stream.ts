@@ -28,6 +28,7 @@ export function createCheckpointVerifier(read: (tabId: string) => SourceStore) {
         store = read(head.tabId),
         snapshot = store.snapshot()
       if (
+        snapshot.document.tabId !== head.tabId ||
         snapshot.document.revision !== head.revision ||
         snapshot.version !== head.contentVersion ||
         snapshot.utf16Length !== head.length

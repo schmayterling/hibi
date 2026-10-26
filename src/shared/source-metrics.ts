@@ -146,7 +146,7 @@ export class SourceChunk {
   slice(from: number, to: number) {
     this.#range(from, to)
     return this.#units
-      ? String.fromCharCode(...this.#units.subarray(from, to))
+      ? Reflect.apply(String.fromCharCode, null, this.#units.subarray(from, to))
       : this.#text.slice(from, to)
   }
   #range(from: number, to: number) {

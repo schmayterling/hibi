@@ -59,6 +59,46 @@ function fixture(t, source = 'one two one') {
   return { worker, messages, next, load, find }
 }
 
+test('find uses channel tasks after real build steps and closes ports on completion, cancel and dispose', async (t) => {
+  const NativeChannel = MessageChannel,
+    channels = []
+  t.mock.method(
+    globalThis,
+    'MessageChannel',
+    class extends NativeChannel {
+      constructor() {
+        super()
+        channels.push({
+          channel: this,
+          close1: t.mock.method(this.port1, 'close'),
+          close2: t.mock.method(this.port2, 'close'),
+          post: t.mock.method(this.port2, 'postMessage'),
+        })
+      }
+    },
+  )
+  const f = fixture(t, 'one two '.repeat(100000)),
+    timers = t.mock.method(globalThis, 'setTimeout')
+  f.find(1)
+  const result = await f.next((reply) => reply.type === 'find')
+  assert.equal(result.location.total, 100000)
+  // Only fixture.next owns a timeout; every find slice uses a channel task.
+  assert.equal(timers.mock.calls.length, 1)
+  assert.equal(channels.length, 1)
+  assert.ok(channels[0].post.mock.calls.length > 1)
+  assert.ok(f.messages.some((reply) => reply.type === 'find-progress'))
+  assert.equal(channels[0].close1.mock.calls.length, 1)
+  assert.equal(channels[0].close2.mock.calls.length, 1)
+  f.find(2, 0, 'absent')
+  f.worker.receive({ type: 'cancel-find', epoch: 'first', id: 2 })
+  assert.equal(channels[1].close1.mock.calls.length, 1)
+  assert.equal(channels[1].close2.mock.calls.length, 1)
+  f.find(3, 0, 'one')
+  f.worker.dispose()
+  assert.equal(channels[2].close1.mock.calls.length, 1)
+  assert.equal(channels[2].close2.mock.calls.length, 1)
+})
+
 test('worker acknowledges stream start without publishing an incomplete version', () => {
   const replies = []
   const worker = new DocumentWorkerService((reply) => replies.push(reply))
@@ -240,36 +280,19 @@ test('worker start replaces partial streams and stale epochs cannot publish old 
   assert.equal(f.messages.at(-1).stage, 'replica')
 })
 
-test('legacy loads retain only bounded single message compatibility', () => {
-  const replies = []
-  const worker = new DocumentWorkerService((reply) => replies.push(reply))
-  try {
-    for (const chunks of [
-      ['x'.repeat(65537)],
-      ['x'.repeat(32769), 'x'.repeat(32769)],
-      Array(17).fill('x'),
-      [42],
-    ]) {
-      worker.receive({
-        type: 'load',
-        epoch: 'legacy',
-        document: { tabId: 'a', revision: 0 },
-        version: 0,
-        chunks,
-      })
-      assert.equal(replies.at(-1).stage, 'replica')
-    }
-    worker.receive({
-      type: 'load',
-      epoch: 'legacy',
-      document: { tabId: 'a', revision: 0 },
-      version: 0,
-      chunks: ['x'.repeat(65536)],
-    })
-    assert.equal(replies.at(-1).type, 'ack')
-  } finally {
-    worker.dispose()
-  }
+test('obsolete single payload loads are rejected even with valid bounded source', (t) => {
+  const f = fixture(t)
+  f.worker.receive({
+    type: 'load',
+    epoch: 'first',
+    document: { tabId: 'a', revision: 0 },
+    version: 0,
+    chunks: ['x'],
+  })
+  assert.equal(f.messages.at(-1).stage, 'replica')
+  assert.equal(f.messages.at(-1).message, 'Unknown document worker request.')
+  f.load('replacement', 'fresh')
+  assert.equal(f.messages.at(-1).type, 'ack')
 })
 
 test('math reference grammar invalidates cached definitions and hides opaque math contents', async (t) => {
@@ -658,11 +681,15 @@ test('worker validates bootstrap and query limits without executing document con
   f.find(3, 0, 'script', -1, 0)
   assert.equal(f.messages.at(-1).id, 3)
   f.worker.receive({
-    type: 'load',
+    type: 'load-start',
     epoch: 'bad',
-    document: { tabId: 'a', revision: 0 },
-    version: 0,
-    chunks: [42],
+    head: {
+      tabId: 'a',
+      revision: 0,
+      contentVersion: -1,
+      streamId: 'bad',
+      length: 1,
+    },
   })
   assert.equal(f.messages.at(-1).stage, 'replica')
 })

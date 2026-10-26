@@ -12,6 +12,7 @@ export function validateMarkdown(value: unknown): asserts value is string {
 
 export async function* readMarkdownChunks(
   path: string,
+  maximumBytes = Infinity,
 ): AsyncGenerator<string> {
   const file = await open(
     path,
@@ -21,6 +22,8 @@ export async function* readMarkdownChunks(
     const info = await file.stat()
     if (!info.isFile())
       throw new Error('Choose a text file, not a folder or device.')
+    if (info.size > maximumBytes)
+      throw new Error('This text is too large to read in one request.')
     const bytes = Buffer.allocUnsafe(65536),
       decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
     let offset = 0
@@ -56,9 +59,43 @@ export async function* readMarkdownChunks(
   }
 }
 
-export async function readMarkdown(path: string): Promise<string> {
+/** Compare an owned source directly with a stable UTF-8 read, without rebuilding a store. */
+export async function matchesMarkdown(
+  path: string,
+  source: SourceSnapshot,
+): Promise<boolean> {
+  const reader = readMarkdownChunks(path)[Symbol.asyncIterator]()
+  let text = '',
+    offset = 0
+  try {
+    for (const expected of source.chunks()) {
+      for (let from = 0; from < expected.length; ) {
+        if (offset === text.length) {
+          const next = await reader.next()
+          if (next.done) return false
+          text = next.value
+          offset = 0
+        }
+        const size = Math.min(expected.length - from, text.length - offset)
+        if (!text.startsWith(expected.slice(from, from + size), offset))
+          return false
+        from += size
+        offset += size
+      }
+    }
+    return offset === text.length && (await reader.next()).done === true
+  } finally {
+    await reader.return(undefined)
+  }
+}
+
+export async function readMarkdown(
+  path: string,
+  maximumBytes: number,
+): Promise<string> {
   const chunks: string[] = []
-  for await (const chunk of readMarkdownChunks(path)) chunks.push(chunk)
+  for await (const chunk of readMarkdownChunks(path, maximumBytes))
+    chunks.push(chunk)
   return chunks.join('')
 }
 
@@ -77,6 +114,27 @@ export async function writeMarkdown(
   )
 }
 
+async function* writeChunks(
+  source: Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
+) {
+  let buffer = Buffer.allocUnsafe(1024 * 1024),
+    used = 0
+  for await (const part of source) {
+    for (let from = 0; from < part.byteLength; ) {
+      const size = Math.min(part.byteLength - from, buffer.length - used)
+      buffer.set(part.subarray(from, from + size), used)
+      used += size
+      from += size
+      if (used === buffer.length) {
+        yield buffer
+        buffer = Buffer.allocUnsafe(1024 * 1024)
+        used = 0
+      }
+    }
+  }
+  if (used) yield buffer.subarray(0, used)
+}
+
 export async function writeText(
   path: string,
   text: string | Uint8Array | Iterable<Uint8Array> | AsyncIterable<Uint8Array>,
@@ -91,7 +149,12 @@ export async function writeText(
   try {
     const file = await open(temp, 'wx', existing?.mode ?? 0o600)
     try {
-      await file.writeFile(text, 'utf8')
+      await file.writeFile(
+        typeof text === 'string' || text instanceof Uint8Array
+          ? text
+          : writeChunks(text),
+        'utf8',
+      )
       await file.sync()
     } finally {
       await file.close()

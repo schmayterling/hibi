@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {
-  journalHead,
-  verifyJournalCheckpoint,
-} from '../src/shared/document-checkpoint.ts'
+import { journalHead } from '../src/shared/document-checkpoint.ts'
 import {
   createDocumentJournal,
   createJournalReceiver,
@@ -11,6 +8,7 @@ import {
 } from '../src/shared/document-journal.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
+import { createCheckpointTransfer } from './checkpoint-transfer.mjs'
 
 function fixture() {
   const store = new SourceStore('', { tabId: 'a', revision: 0 }, 0, {
@@ -37,7 +35,13 @@ function fixture() {
     baseVersion: version,
     contentVersion: version + 1,
   })
-  return { state, receive, change, store }
+  return {
+    state,
+    receive,
+    change,
+    store,
+    recovery: createCheckpointTransfer(() => store),
+  }
 }
 
 test('source deltas round trip Unicode boundaries, insertions, replacements, and deletions', () => {
@@ -290,7 +294,7 @@ test('J07: saturation rejects before source/history/view commit and accepts inpu
 })
 
 test('J02: delivery deadline retains edits and ignores a late acknowledgement after checkpoint recovery', async () => {
-  const { receive, change, state, store } = fixture()
+  const { receive, change, state, store, recovery } = fixture()
   let late,
     calls = 0
   const journal = createDocumentJournal(
@@ -305,10 +309,9 @@ test('J02: delivery deadline retains edits and ignores a late acknowledgement af
     },
     {
       timeoutMs: 10,
-      checkpoint: () => ({ ...journalHead(store), source: 'a' }),
+      checkpoint: () => recovery.checkpoint(journalHead(store), 'a'),
       head: async () => journalHead(store),
-      verify: (checkpoint) =>
-        verifyJournalCheckpoint(() => store, checkpoint, 1024),
+      verify: recovery.verify,
     },
   )
   await assert.rejects(journal.append(change('', 'a', 0)), /timed out/)
@@ -329,7 +332,7 @@ test('J02: delivery deadline retains edits and ignores a late acknowledgement af
 })
 
 test('timed-out transport and checkpoint calls stay bounded across repeated barriers', async () => {
-  const { change, receive, store } = fixture()
+  const { change, receive, store, recovery } = fixture()
   let sends = 0,
     verifies = 0
   const journal = createDocumentJournal(
@@ -340,7 +343,7 @@ test('timed-out transport and checkpoint calls stay bounded across repeated barr
     },
     {
       timeoutMs: 2,
-      checkpoint: () => ({ ...journalHead(store), source: 'a' }),
+      checkpoint: () => recovery.checkpoint(journalHead(store), 'a'),
       head: async () => journalHead(store),
       verify: () => {
         verifies++
@@ -357,7 +360,7 @@ test('timed-out transport and checkpoint calls stay bounded across repeated barr
 })
 
 test('J09: a lost receipt beyond the horizon is retired only by exact checkpoint verification', async () => {
-  const { receive, change, store, state } = fixture()
+  const { receive, change, store, state, recovery } = fixture()
   let verifications = 0
   const journal = createDocumentJournal(
     async (request) => {
@@ -366,11 +369,12 @@ test('J09: a lost receipt beyond the horizon is retired only by exact checkpoint
       return ack
     },
     {
-      checkpoint: () => ({ ...journalHead(store), source: 'x'.repeat(140) }),
+      checkpoint: () =>
+        recovery.checkpoint(journalHead(store), 'x'.repeat(140)),
       head: async () => journalHead(store),
       verify: async (checkpoint) => {
         verifications++
-        return verifyJournalCheckpoint(() => store, checkpoint, 1024)
+        return recovery.verify(checkpoint)
       },
     },
   )
@@ -400,6 +404,7 @@ test('lost acknowledgement for an inactive tab uses that tab for recovery', asyn
     return store
   }
   const receive = createJournalReceiver(storeFor)
+  const recovery = createCheckpointTransfer(storeFor)
   const requested = []
   const journal = createDocumentJournal(
     async (change) => {
@@ -410,15 +415,13 @@ test('lost acknowledgement for an inactive tab uses that tab for recovery', asyn
       checkpoint: (tabId) => {
         requested.push(tabId)
         const store = storeFor(tabId)
-        return { ...journalHead(store), source: store.snapshot().materialize() }
+        return recovery.checkpoint(
+          journalHead(store),
+          store.snapshot().materialize(),
+        )
       },
       head: async (tabId) => journalHead(storeFor(tabId)),
-      verify: (checkpoint) =>
-        verifyJournalCheckpoint(
-          () => storeFor(checkpoint.tabId),
-          checkpoint,
-          1024,
-        ),
+      verify: recovery.verify,
     },
   )
   await assert.rejects(
@@ -452,6 +455,7 @@ test('mixed pending tabs retire only groups with retained, verified checkpoints'
     return store
   }
   const receive = createJournalReceiver(storeFor)
+  const recovery = createCheckpointTransfer(storeFor)
   const verified = []
   let retainedB = false
   const journal = createDocumentJournal(
@@ -464,15 +468,14 @@ test('mixed pending tabs retire only groups with retained, verified checkpoints'
         if (tabId === 'b' && !retainedB)
           throw new Error('No retained document recovery checkpoint.')
         const store = storeFor(tabId)
-        return { ...journalHead(store), source: store.snapshot().materialize() }
+        return recovery.checkpoint(
+          journalHead(store),
+          store.snapshot().materialize(),
+        )
       },
       head: async (tabId) => journalHead(storeFor(tabId)),
       verify: async (checkpoint) => {
-        const head = await verifyJournalCheckpoint(
-          () => storeFor(checkpoint.tabId),
-          checkpoint,
-          1024,
-        )
+        const head = await recovery.verify(checkpoint)
         verified.push(`${head.tabId}:${head.revision}`)
         return head
       },
@@ -508,7 +511,7 @@ test('mixed pending tabs retire only groups with retained, verified checkpoints'
 })
 
 test('J06/J09: restarted receipt cache replays a contiguous suffix and preserves edits during verification', async () => {
-  const { store, change, state } = fixture()
+  const { store, change, state, recovery } = fixture()
   let receive = createJournalReceiver(() => store),
     failed = true
   let beginVerification, releaseVerification
@@ -528,17 +531,16 @@ test('J06/J09: restarted receipt cache replays a contiguous suffix and preserves
       return receive(request)
     },
     {
-      checkpoint: () => ({
-        tabId: 'a',
-        revision: 0,
-        contentVersion: 2,
-        source,
-      }),
+      checkpoint: () =>
+        recovery.checkpoint(
+          { tabId: 'a', revision: 0, contentVersion: 2 },
+          source,
+        ),
       head: async () => journalHead(store),
       verify: async (checkpoint) => {
         beginVerification()
         await hold
-        return verifyJournalCheckpoint(() => store, checkpoint, 1024)
+        return recovery.verify(checkpoint)
       },
     },
   )
@@ -562,24 +564,27 @@ test('J06/J09: restarted receipt cache replays a contiguous suffix and preserves
 
 test('checkpoint mismatch or missing suffix never retires pending edits or overwrites native text', async () => {
   for (const invalid of ['content', 'identity', 'suffix', 'ack']) {
-    const { store, receive, change, state } = fixture()
+    const { store, receive, change, state, recovery } = fixture()
     const journal = createDocumentJournal(
       async (request) => {
         if (state.contentVersion === 0) receive(request)
         throw new Error('lost')
       },
       {
-        checkpoint: () => ({
-          tabId: invalid === 'identity' ? 'b' : 'a',
-          revision: 0,
-          contentVersion: invalid === 'suffix' ? 2 : 1,
-          source: invalid === 'content' ? 'b' : 'a',
-        }),
+        checkpoint: () =>
+          recovery.checkpoint(
+            {
+              tabId: invalid === 'identity' ? 'b' : 'a',
+              revision: 0,
+              contentVersion: invalid === 'suffix' ? 2 : 1,
+            },
+            invalid === 'content' ? 'b' : 'a',
+          ),
         head: async () => journalHead(store),
         verify: async (checkpoint) =>
           invalid === 'ack'
             ? { ...journalHead(store), contentVersion: 0 }
-            : verifyJournalCheckpoint(() => store, checkpoint, 1024),
+            : recovery.verify(checkpoint),
       },
     )
     await assert.rejects(journal.append(change('', 'a', 0)))

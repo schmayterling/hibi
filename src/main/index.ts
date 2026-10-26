@@ -165,7 +165,7 @@ import {
   withinFileOperation,
 } from './file-operation-dialog'
 import { GlobalShortcuts } from './global-shortcuts'
-import { listVersions, previewVersion } from './history'
+import { listVersions, previewVersion, readVersionChunks } from './history'
 import { HostCredentials } from './host-credentials'
 import { HostNetwork } from './host-network'
 import { HostSelectedIoService } from './host-selected-io'
@@ -2024,7 +2024,7 @@ if (!app.requestSingleInstanceLock()) {
       )
       handle(HISTORY_CHANNELS.restore, (event, id: unknown) =>
         runFileOperation(event, async (window) => {
-          const content = await previewVersion(getDocumentPath(), id)
+          const content = readVersionChunks(getDocumentPath(), id)
           if (!(await confirmDiscard(window))) return null
           return restoreDocument(window, content)
         }),

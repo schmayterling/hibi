@@ -20,6 +20,7 @@ export function createDocumentTransfers() {
     current: () => boolean
   }
   const streams = new Map<string, Stream>()
+  const known = new Map<number, WeakSet<Source['store']>>()
   const tabs = new Map<string, string>()
   const close = (id: string) => {
     const stream = streams.get(id)
@@ -62,6 +63,19 @@ export function createDocumentTransfers() {
         contentVersion: state.contentVersion,
         canAutosave: state.canAutosave,
       }
+      if (immutable)
+        return {
+          ...metadata,
+          saveReceipt: true,
+          savedVersion: source.saved.version,
+        }
+      if (known.get(owner)?.has(source.store))
+        return {
+          ...metadata,
+          documentMetadata: true,
+          replaced: false,
+          savedVersion: source.saved.version,
+        }
       const signature = JSON.stringify(metadata)
       const previousId = tabs.get(key),
         previous = previousId ? streams.get(previousId) : undefined
@@ -86,6 +100,7 @@ export function createDocumentTransfers() {
       }
       const wire: DocumentTransfer = {
         ...metadata,
+        replaced: true,
         documentTransfer: head,
         sourceLength: source.current.utf16Length,
         savedLength: source.saved.utf16Length,
@@ -131,6 +146,14 @@ export function createDocumentTransfers() {
       const { request, stream } = lookup(owner, value)
       try {
         const head = stream.sender.finish(request)
+        if (stream.source.store) {
+          let owned = known.get(owner)
+          if (!owned) {
+            owned = new WeakSet()
+            known.set(owner, owned)
+          }
+          owned.add(stream.source.store)
+        }
         return {
           tabId: head.tabId,
           revision: head.revision,
@@ -147,6 +170,7 @@ export function createDocumentTransfers() {
     },
     clear() {
       for (const id of streams.keys()) close(id)
+      known.clear()
     },
   }
 }

@@ -989,7 +989,9 @@ export async function snapshotWorkspace(): Promise<WorkspaceSnapshot> {
       if (item.kind === 'folder') await collect(item.children ?? [])
       else {
         const path = await resolveWorkspaceFile(selected as string, item.path)
-        const markdown = drafts.get(path) ?? (await readMarkdown(path))
+        const markdown =
+          drafts.get(path) ??
+          (await readMarkdown(path, 20 * 1024 * 1024 - bytes))
         bytes += Buffer.byteLength(markdown)
         if (pages.length >= 2000 || bytes > 20 * 1024 * 1024)
           throw new Error(
@@ -1140,7 +1142,8 @@ async function collectIndexPages(
             existing?.page.id ??
               createHash('sha256').update(path).digest('hex'),
             item.path,
-            () => draft?.markdown ?? readMarkdown(path),
+            () =>
+              draft?.markdown ?? readMarkdown(path, 20 * 1024 * 1024 - bytes),
           )
         }
         if (!current()) return

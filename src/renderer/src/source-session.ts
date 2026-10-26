@@ -29,28 +29,6 @@ import type { SourceSelection } from '../../shared/source-selection.ts'
 
 const sourceOperationEcho = Annotation.define<string>()
 
-/** Construct CM's native Text once without flattening the canonical source. */
-export function sourceEditorText(source: SourceSnapshot): Text {
-  const lines: string[] = [],
-    parts: string[] = []
-  for (const chunk of normalizedChunks(source)) {
-    let start = 0
-    for (
-      let end = chunk.indexOf('\n');
-      end >= 0;
-      end = chunk.indexOf('\n', start)
-    ) {
-      parts.push(chunk.slice(start, end))
-      lines.push(parts.join(''))
-      parts.length = 0
-      start = end + 1
-    }
-    parts.push(chunk.slice(start))
-  }
-  lines.push(parts.join(''))
-  return Text.of(lines)
-}
-
 export type SourceEditorTextTask = Readonly<{
   sourceUnits: number
   chunks: number

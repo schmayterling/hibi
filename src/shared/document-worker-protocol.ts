@@ -1,6 +1,6 @@
 import type { Token } from 'marked'
 import type { SourceOwnerPage } from './markdown-source-model.ts'
-import type { DocumentKey, SourceOperation } from './source-operations.ts'
+import type { SourceOperation } from './source-operations.ts'
 import type { ReferenceValue } from './source-references.ts'
 import type { SearchLocation } from './source-search-index.ts'
 import type {
@@ -47,13 +47,6 @@ export type DocumentWorkerRequest =
   | { type: 'load-start'; epoch: string; head: SourceTransferHead }
   | { type: 'load-chunk'; epoch: string; chunk: SourceTransferChunk }
   | { type: 'load-finish'; epoch: string; request: SourceTransferRequest }
-  | {
-      type: 'load'
-      epoch: string
-      document: DocumentKey
-      version: number
-      chunks: readonly string[]
-    }
   | { type: 'edit'; epoch: string; operation: SourceOperation }
   | {
       type: 'find'
@@ -83,6 +76,7 @@ export type DocumentWorkerRequest =
 export type DocumentWorkerReply =
   | { type: 'load-ack'; epoch: string; request: SourceTransferRequest }
   | { type: 'ack'; epoch: string; version: number }
+  | { type: 'find-progress'; epoch: string; id: number; version: number }
   | { type: 'canceled'; epoch: string; id: number }
   | { type: 'metadata-canceled'; epoch: string; id: number; release: boolean }
   | {

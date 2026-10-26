@@ -89,14 +89,12 @@ export function subscribeDocumentShell(
   })
 }
 
-/** Temporary source-first opening; remove with the CodeMirror formatted view. */
+/** Temporary source-first opening; remove with the CodeMirror formatted view (#402). */
 export function preferSourceOpening(
-  runtime: Pick<DocumentRuntime, 'sourceFor'>,
+  runtime: Pick<DocumentRuntime, 'openingLength'>,
   document: DocumentState | null,
 ) {
-  return (
-    !!document && (runtime.sourceFor(document)?.utf16Length ?? 0) > 256 * 1024
-  )
+  return !!document && runtime.openingLength(document) > 256 * 1024
 }
 
 /** Shell and pane renders share one full footnote lex per immutable source. */
@@ -104,7 +102,8 @@ export function hasDocumentFootnotes(
   runtime: Pick<DocumentRuntime, 'sourceFor'>,
   document: DocumentState | null,
 ) {
-  if (!document || preferSourceOpening(runtime, document)) return false
+  if (!document || (runtime.sourceFor(document)?.utf16Length ?? 0) > 256 * 1024)
+    return false
   const source = runtime.sourceFor(document)
   let found = source && footnoteSources.get(source)
   if (found === undefined) {

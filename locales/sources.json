@@ -703,9 +703,6 @@
     "src/main/files.ts",
     "src/main/workspace-files.ts"
   ],
-  "ddfe19879e4e": [
-    "src/addons/vim/native.ts"
-  ],
   "177862d61380": [
     "src/renderer/src/settings-pages.ts"
   ],
@@ -1799,9 +1796,6 @@
   ],
   "a8c9ae023f1a": [
     "src/renderer/src/document-worker-client.ts"
-  ],
-  "c1c0d88d3fb2": [
-    "src/shared/document-worker-service.ts"
   ],
   "14158c871b70": [
     "src/shared/document-worker-service.ts"
@@ -3086,7 +3080,6 @@
     "src/shared/document-worker-service.ts"
   ],
   "5f0c6a56de07": [
-    "src/preload/index.ts",
     "src/shared/document-checkpoint.ts"
   ],
   "62734d46cb24": [
@@ -3392,6 +3385,9 @@
   ],
   "3d171d73a47a": [
     "src/renderer/src/FormatEditor.tsx"
+  ],
+  "ba3bbbe10d8b": [
+    "src/renderer/src/RecoveryBoundary.tsx"
   ],
   "d7cd79b5925c": [
     "src/main/local-diagnostics/runtime.ts"
@@ -5733,8 +5729,7 @@
   ],
   "33848694bf6a": [
     "src/renderer/src/main.tsx",
-    "src/shared/document-checkpoint-stream.ts",
-    "src/shared/document-checkpoint.ts"
+    "src/shared/document-checkpoint-stream.ts"
   ],
   "f8848b91279e": [
     "src/main/document-transfer.ts",
@@ -5747,6 +5742,9 @@
     "src/main/links.ts"
   ],
   "600ca5556eb4": [
+    "src/main/document.ts"
+  ],
+  "6ffd28864c12": [
     "src/main/document.ts"
   ],
   "602cad822b0c": [
@@ -5792,12 +5790,14 @@
     "src/main/index.ts"
   ],
   "8ea97b4e248c": [
-    "src/shared/document-checkpoint-stream.ts",
-    "src/shared/document-checkpoint.ts"
+    "src/shared/document-checkpoint-stream.ts"
   ],
   "ee76fd92b752": [
-    "src/shared/document-checkpoint-stream.ts",
-    "src/shared/document-checkpoint.ts"
+    "src/shared/document-checkpoint-stream.ts"
+  ],
+  "d5906e55a7d6": [
+    "src/renderer/src/document-runtime.ts",
+    "src/renderer/src/document-transfer.ts"
   ],
   "1272f967b3e4": [
     "src/shared/source-transfer.ts"
@@ -5946,6 +5946,9 @@
   ],
   "1a9c37310c3f": [
     "src/main/files.ts"
+  ],
+  "db39203290d8": [
+    "src/renderer/src/document-runtime.ts"
   ],
   "b98fc4a907d6": [
     "src/main/addon-inventory.ts"
@@ -6486,6 +6489,9 @@
   "c13ad6f975f2": [
     "src/main/history.ts"
   ],
+  "81236bae92f9": [
+    "src/main/history.ts"
+  ],
   "980892e485b4": [
     "src/main/global-shortcuts.ts"
   ],
@@ -6505,8 +6511,14 @@
     "src/main/document.ts",
     "src/renderer/src/main.tsx"
   ],
+  "abf88542d601": [
+    "src/renderer/src/document-runtime.ts"
+  ],
   "e8983dab4298": [
     "src/renderer/src/Introduction.tsx"
+  ],
+  "2a116f351782": [
+    "src/main/files.ts"
   ],
   "609876d22bea": [
     "src/shared/addon-manifest.ts"

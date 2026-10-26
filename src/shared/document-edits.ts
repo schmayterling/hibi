@@ -52,7 +52,7 @@ export type DocumentLifecycleEvent =
   | { kind: 'closed'; target: DocumentTarget }
 export type DocumentSaveResult = {
   status: 'saved' | 'clean' | 'stale' | 'conflict' | 'unsupported'
-  document: DocumentState | null
+  document: import('./desktop.ts').DocumentSaveReply | null
 }
 export type TargetDocumentSaveResult =
   | { status: 'saved' | 'clean'; savedVersion: number }

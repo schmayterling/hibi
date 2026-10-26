@@ -14,7 +14,7 @@ type PagePosition = {
   previous: PagePosition | null
 }
 
-/** Temporary read-only bridge; remove with the CodeMirror formatted view. */
+/** Temporary read-only bridge; remove with the CodeMirror formatted view (#402). */
 export function LargeMarkdownPreview({
   session,
   documentId,

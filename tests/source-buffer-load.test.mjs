@@ -3,6 +3,45 @@ import test from 'node:test'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const document = { tabId: 'load', revision: 3 }
+
+test('arena reads preserve every utf16 unit without expanding a javascript iterator', async () => {
+  const { SourceChunk } = await import('../src/shared/source-metrics.ts')
+  const text = Array.from({ length: 65536 }, (_, unit) =>
+    String.fromCharCode(unit),
+  ).join('')
+  const arena = SourceChunk.appendable(text.length, () => {})
+  arena.append(text)
+  const prototype = Uint16Array.prototype
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, Symbol.iterator)
+  const iterator = prototype[Symbol.iterator]
+  let visits = 0
+  Object.defineProperty(prototype, Symbol.iterator, {
+    configurable: true,
+    value: function* () {
+      for (const unit of iterator.call(this)) {
+        visits++
+        yield unit
+      }
+    },
+  })
+  try {
+    assert.equal(arena.chunk.slice(0, text.length), text)
+    assert.equal(visits, 0)
+  } finally {
+    if (descriptor)
+      Object.defineProperty(prototype, Symbol.iterator, descriptor)
+    else delete prototype[Symbol.iterator]
+  }
+})
+test('cooperative loading yields message tasks without timer clamping', async (t) => {
+  t.mock.method(globalThis, 'setTimeout', () => {
+    throw new Error('load used a clamped timer')
+  })
+  const store = await SourceStore.load(['x'.repeat(3 * 65536)], document)
+  assert.equal(store.snapshot().utf16Length, 3 * 65536)
+  assert.equal(store.counters().loadAppends, 3)
+})
+
 const edit = (store, from, to, insert) =>
   store.commit(
     store.prepare({
@@ -195,11 +234,13 @@ test('async load yields bounded slices for sync, async and fragmented iterables'
     maxReads = 0,
     previous = 0,
     ticks = 0
-  const timer = setInterval(() => {
+  const tick = () => {
     maxReads = Math.max(maxReads, read - previous)
     previous = read
     ticks++
-  }, 0)
+    task = setImmediate(tick)
+  }
+  let task = setImmediate(tick)
   try {
     const fragmented = await SourceStore.load(
       (function* () {
@@ -212,7 +253,7 @@ test('async load yields bounded slices for sync, async and fragmented iterables'
     assert.ok(maxReads <= 64, `reads per slice: ${maxReads}`)
     assert.equal(fragmented.snapshot().materialize(), 'x'.repeat(128))
   } finally {
-    clearInterval(timer)
+    clearImmediate(task)
   }
   let closed = false
   await assert.rejects(

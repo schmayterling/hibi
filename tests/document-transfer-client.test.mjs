@@ -156,6 +156,7 @@ test('a reused empty tab with a new revision and file identity replaces its old 
     opened = fixture('opened source')
   empty.wire.id = 'untitled'
   opened.wire.revision = opened.wire.documentTransfer.revision = 2
+  opened.wire.replaced = true
   const runtime = new DocumentRuntime({
     enqueue() {},
     onError: (error) => assert.fail(String(error)),

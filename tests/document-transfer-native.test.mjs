@@ -225,18 +225,11 @@ test('a held save reply keeps its immutable snapshot while newer edits and reads
     live: () => true,
   })
   streams.encode(1, next)
-  const chunk = streams.read(1, {
-    streamId: receipt.documentTransfer.streamId,
-    sequence: 0,
-  })
-  assert.equal(chunk.chunks.join(''), 'saved source')
-  assert.equal(
-    streams.finish(1, {
-      streamId: receipt.documentTransfer.streamId,
-      sequence: 1,
-    }).contentVersion,
-    4,
-  )
+  assert.equal(receipt.saveReceipt, true)
+  assert.equal(receipt.savedVersion, 4)
+  assert.equal('documentTransfer' in receipt, false)
+  assert.equal('markdown' in receipt, false)
+  assert.equal(saved.sliceRaw(0, 12), 'saved source')
   assert.equal(store.snapshot().sliceRaw(0, 18), 'saved source newer')
 })
 
@@ -270,4 +263,61 @@ test('snapshot forks keep saved generations without a document scan or copying i
   )
   assert.equal(saved.sliceRaw(0, 1), 'a')
   assert.equal(restored.snapshot().sliceRaw(0, 3), 'new')
+})
+
+test('acknowledged source replies use metadata and saves use a version receipt without source reads', () => {
+  const store = new SourceStore(
+    'kept source',
+    { tabId: 'meta', revision: 1 },
+    7,
+  )
+  const source = store.snapshot()
+  const document = {
+    tabId: 'meta',
+    revision: 1,
+    contentVersion: 7,
+    tabs: [],
+    tabsEnabled: true,
+    id: 'file',
+    name: 'meta.md',
+    dirty: false,
+    ephemeral: false,
+    canAutosave: true,
+    get markdown() {
+      return assert.fail('metadata read source')
+    },
+    get savedMarkdown() {
+      return assert.fail('receipt read saved source')
+    },
+  }
+  documentSources.set(document, {
+    store,
+    current: source,
+    saved: source,
+    owns: () => true,
+    live: () => true,
+  })
+  const streams = createDocumentTransfers()
+  const wire = streams.encode(1, document)
+  assert.equal(wire.replaced, true)
+  let sequence = 0
+  while (
+    !streams.read(1, {
+      streamId: wire.documentTransfer.streamId,
+      sequence: sequence++,
+    }).done
+  ) {}
+  streams.finish(1, { streamId: wire.documentTransfer.streamId, sequence })
+  const metadata = streams.encode(1, document)
+  assert.equal(metadata.documentMetadata, true)
+  assert.equal(metadata.replaced, false)
+  assert.equal('documentTransfer' in metadata, false)
+  const receipt = streams.encode(1, document, true)
+  assert.equal(receipt.saveReceipt, true)
+  assert.equal(receipt.savedVersion, 7)
+  assert.equal('documentTransfer' in receipt, false)
+  assert.equal('markdown' in receipt, false)
+  assert.equal(store.counters().materializations, 0)
+  assert.ok(streams.encode(2, document).documentTransfer)
+  streams.clear()
 })

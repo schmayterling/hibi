@@ -32,6 +32,7 @@ import { SourceMaintenance } from '../shared/source-maintenance'
 import { documentExtensions, isDocumentName } from './document-types'
 import { runFileDialog } from './file-operation-dialog'
 import {
+  matchesMarkdown,
   readMarkdownChunks,
   validateMarkdown,
   writeMarkdown,
@@ -56,6 +57,7 @@ let activeTabOpen = false
 export const documentSources = new WeakMap<
   DocumentState,
   {
+    store: SourceStore
     current: SourceSnapshot
     saved: SourceSnapshot
     owns: () => boolean
@@ -402,8 +404,11 @@ export async function selectDocumentTab(
   if (draft.path && !dirty(draft.source, draft.saved)) {
     const target = draft.source.snapshot(),
       baseline = draft.saved
-    const content = await readSource(draft.path, id, target.version + 1)
-    const changed = !(await sameSource(target, content.snapshot()))
+    const content = (await matchesMarkdown(draft.path, target))
+      ? null
+      : await readSource(draft.path, id, target.version + 1)
+    const changed =
+      content !== null && !(await sameSource(target, content.snapshot()))
     if (!source.ownsCurrentSnapshot(current))
       throw new Error('The document changed while switching tabs. Try again.')
     const latest = id === activeTab ? snapshot() : tabs.get(id)
@@ -415,7 +420,7 @@ export async function selectDocumentTab(
       latest.path !== draft.path
     )
       throw new Error('The document changed while switching tabs. Try again.')
-    if (changed) {
+    if (changed && content) {
       draft.source = content
       draft.saved = content.snapshot()
     }
@@ -634,6 +639,7 @@ export function getDocument(): DocumentState {
     canAutosave: path !== null,
   }
   documentSources.set(state, {
+    store,
     current,
     saved: baseline,
     live: () => {
@@ -685,6 +691,7 @@ export function getDocumentForTab(id: string): DocumentState | null {
     canAutosave: draft.path !== null,
   }
   documentSources.set(state, {
+    store: draft.source,
     current,
     saved: baseline,
     live: () => {
@@ -809,9 +816,13 @@ export async function saveDocument(
     )
   let previous: SourceSnapshot | null = null
   if (destination === path) {
-    const disk = await readSource(destination).catch(missingFile)
-    previous = disk?.snapshot() ?? null
-    if (!disk || !(await sameSource(disk.snapshot(), saved))) {
+    const unchanged = await matchesMarkdown(destination, saved).catch(
+      missingFile,
+    )
+    previous = unchanged
+      ? saved
+      : ((await readSource(destination).catch(missingFile))?.snapshot() ?? null)
+    if (!unchanged) {
       if (automatic) return null
       const choice = await runFileDialog(() =>
         dialog.showMessageBox(window, {
@@ -864,9 +875,10 @@ export async function autosaveDocument(
   const destination = draft.path
   const saving = draft.source.snapshot()
   const content = saving
-  const disk = await readSource(destination, id).catch(missingFile)
-  if (!disk || !(await sameSource(disk.snapshot(), draft.saved)))
-    return { status: 'conflict', document: null }
+  const unchanged = await matchesMarkdown(destination, draft.saved).catch(
+    missingFile,
+  )
+  if (!unchanged) return { status: 'conflict', document: null }
   // The source and tab may change while disk I/O is pending.
   const current = id === activeTab ? snapshot() : tabs.get(id)
   if (
@@ -888,7 +900,7 @@ export async function autosaveDocument(
   }
   storeTab()
   refreshDirtyIndicator(window)
-  await recordSaveHistory(window, destination, disk.snapshot(), content)
+  await recordSaveHistory(window, destination, draft.saved, content)
   return { status: 'saved', document: getDocumentForTab(id) }
 }
 
@@ -933,12 +945,19 @@ export async function saveTargetDocument(
   return { status: result.status, document: result.document }
 }
 
-export function restoreDocument(
+export async function restoreDocument(
   window: BrowserWindow,
-  content: string,
-): DocumentState {
-  validateMarkdown(content)
-  updateDocument(content)
+  content: AsyncIterable<string>,
+): Promise<DocumentState> {
+  const previous = source.snapshot()
+  const restored = await SourceStore.load(
+    content,
+    previous.document,
+    previous.version + 1,
+  )
+  if (!source.ownsCurrentSnapshot(previous))
+    throw new Error('The document changed while restoring. Try again.')
+  source = restored
   advanceRevision()
   refreshDirtyIndicator(window)
   return getDocument()

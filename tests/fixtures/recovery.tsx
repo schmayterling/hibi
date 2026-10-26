@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { RecoveryBoundary } from '../../src/renderer/src/RecoveryScreen'
+import { RecoveryBoundary } from '../../src/renderer/src/RecoveryBoundary'
 import { Button } from '../../src/ui/Controls'
 import '../../src/renderer/src/styles.css'
 

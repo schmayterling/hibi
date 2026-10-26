@@ -119,6 +119,7 @@ export function useAutosave(document: DocumentState | null, busy: boolean) {
                   : 'Could not save this file.',
             })
           } finally {
+            documentRuntime.endSave(token)
             inFlight.current = false
             for (const pending of documentRuntime.documents()) schedule(pending)
           }

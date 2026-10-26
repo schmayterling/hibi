@@ -217,7 +217,6 @@ type JournalOptions = {
     checkpoint: JournalCheckpoint,
     progress: () => void,
   ) => Promise<JournalHead>
-  maximumCheckpointUnits?: number
 }
 
 /** One lossless queue for legacy and atomic edits; failed delivery never forgets an edit. */
@@ -452,7 +451,6 @@ export function createDocumentJournal(
       for (const { document, entries } of groups.values()) {
         const checkpoint = parseJournalCheckpoint(
           await control(async () => checkpointFor(document.tabId)),
-          options.maximumCheckpointUnits ?? 16 * 1024 * 1024,
         )
         if (
           document.tabId !== checkpoint.tabId ||

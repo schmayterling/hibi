@@ -49,6 +49,8 @@ export type DocumentState = {
   ephemeral: boolean
   markdown: string
   savedMarkdown: string
+  /** Main explicitly replaced this tab's source, rather than only its metadata. */
+  replaced?: boolean
   name: string
   dirty: boolean
   revision: number
@@ -59,9 +61,14 @@ export type DocumentState = {
 }
 export type DocumentTab = { id: string; name: string; dirty: boolean }
 export type DocumentFocus = Omit<DocumentState, 'markdown' | 'savedMarkdown'>
+export type DocumentSaveReceipt = DocumentFocus & {
+  saveReceipt: true
+  savedVersion: number
+}
+export type DocumentSaveReply = DocumentState | DocumentSaveReceipt
 export type AutosaveResult = {
   status: 'saved' | 'skipped' | 'conflict'
-  document: DocumentState | null
+  document: DocumentSaveReply | null
 }
 export type DocumentCommand =
   | 'new'
@@ -543,7 +550,7 @@ export type DesktopApi = {
   }>
   onExternalDocuments: (callback: () => void) => () => void
   newDocument: () => Promise<DocumentState | null>
-  saveDocument: (saveAs: boolean) => Promise<DocumentState | null>
+  saveDocument: (saveAs: boolean) => Promise<DocumentSaveReply | null>
   saveTargetDocument: (
     owner: string,
     tabId: string,

@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
-import type { DocumentVersion } from '../../shared/history'
+import {
+  type DocumentVersion,
+  HISTORY_PREVIEW_BYTES,
+} from '../../shared/history'
 import { Button } from '../../ui/Controls'
 import './version-history.css'
 
@@ -84,7 +87,12 @@ export function VersionHistory({
         <Button
           className="dialog-primary"
           onClick={() => close(selected)}
-          disabled={!selected || preview === null || !!error}
+          disabled={
+            !selected ||
+            ((preview === null || !!error) &&
+              (versions.find((version) => version.id === selected)?.bytes ??
+                0) <= HISTORY_PREVIEW_BYTES)
+          }
         >
           Restore to editor
         </Button>

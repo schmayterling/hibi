@@ -7,6 +7,8 @@ import type {
   SourceTransferRequest,
 } from './source-transfer.ts'
 
+export type DocumentMetadata = DocumentFocus &
+  Readonly<{ documentMetadata: true; replaced: false; savedVersion: number }>
 export type DocumentTransfer = DocumentFocus &
   Readonly<{
     documentTransfer: SourceTransferHead

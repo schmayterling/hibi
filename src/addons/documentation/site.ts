@@ -55,9 +55,11 @@ const alertAttributes = ({
       }
     : {}),
 })
+type SearchHeading = { position: number; depth: number; label: string }
 const renderedHtml = (
   html: string,
   transforms: sanitizeHtml.IOptions['transformTags'] = {},
+  headings?: SearchHeading[],
 ) =>
   sanitizeHtml(html, {
     allowedTags: [
@@ -107,6 +109,20 @@ const renderedHtml = (
       math: ['display'],
       annotation: ['encoding'],
     },
+    exclusiveFilter: headings
+      ? (frame) => {
+          if (
+            /^h[1-6]$/.test(frame.tag) &&
+            frame.attribs.id !== 'footnote-label'
+          )
+            headings.push({
+              position: frame.tagPosition,
+              depth: Number(frame.tag.slice(1)),
+              label: frame.text,
+            })
+          return false
+        }
+      : undefined,
     allowedSchemes: ['http', 'https', 'mailto'],
     allowedSchemesByTag: { img: ['data'] },
     allowProtocolRelative: false,
@@ -203,7 +219,7 @@ export function prepareSite(
   if (new Set(addons.map((addon) => addon.id)).size !== addons.length)
     throw new Error('This export contains duplicate addon contributions.')
   const seen = new Set<string>()
-  const pages = snapshot.pages.map((page) => {
+  const pages = snapshot.pages.map((page): SitePage => {
     if (
       !page.path ||
       page.path.startsWith('/') ||
@@ -277,12 +293,34 @@ export function prepareSite(
         ? plain(paragraph.text).slice(0, 160)
         : '') ||
       options.description
+    const headings: SearchHeading[] = []
+    const html = renderedHtml(
+      page.html ?? marked.parse(source, { async: false }),
+      {},
+      headings,
+    )
+    headings.sort((left, right) => left.position - right.position)
+    const anchors = headingAnchors(headings.map((heading) => heading.label))
     return {
       path: page.path,
       markdown: page.markdown,
       title: title.slice(0, 200),
       description: description.slice(0, 500),
-      html: renderedHtml(page.html ?? marked.parse(source, { async: false })),
+      html,
+      search: {
+        version: 1,
+        headings: headings.flatMap((heading, index) =>
+          heading.depth > 1 && heading.label.trim()
+            ? [
+                {
+                  depth: heading.depth,
+                  label: heading.label.trim(),
+                  anchor: anchors[index]!.anchor,
+                },
+              ]
+            : [],
+        ),
+      },
       ...(Object.keys(images).length ? { images } : {}),
     }
   })

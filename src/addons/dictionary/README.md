@@ -81,6 +81,8 @@ Measured full packs on 12 October 2026; MB below means 1,000,000 bytes. Download
 
 Keep the app open while a pack downloads and prepares. You can cancel either stage. **Update** fetches the current source again and keeps the installed pack until the replacement is ready. **Uninstall** removes that pack's local data. Update regularly to receive corrections, particularly for the daily CC-CEDICT and JMdict sources.
 
+Packs load when a lookup or suggestion first needs them. The first lookup can take longer while a pack is checked and loaded; typing stays available. Later launches reuse checksum verification while the installed files are unchanged.
+
 Installed packs are preferred across the candidate languages. A local answer requires no lookup request. If no installed pack has an answer, the online providers may use the declared public hosts without another permission prompt. Pack installation contacts the displayed publishers but never sends the word you are looking up.
 
 English uses WordNet definitions, synonym groups, antonyms, and explicit inflected forms, with conservative suffix matching when the exact form is absent. Chinese pairs connect simplified and traditional headwords; Japanese entries connect kanji spellings and kana readings. Filipino, French, and German also match lowercase headwords. Readings appear with the definitions.

@@ -51,7 +51,7 @@ Commands receive an `<addon-id>.` prefix and are removed when the addon stops. C
 
 An addon can export a `Settings` React component alongside `manifest` and `start`. Enabled addons get a page under **Plugins**; the section disappears when no pages are available. The host supplies the heading and metadata. Use shared controls such as `SettingRow`, `Toggle`, `Button`, and `Select`.
 
-Settings load when needed for their page or command-palette discovery. Discovery can keep them mounted while hidden, so mount effects must not assume the page is visible. Settings errors are isolated from the editor. See [command discovery](../extensions/command-discovery.md).
+Settings load when needed for their page or command-palette discovery. Discovery can keep them mounted while hidden, so mount effects must not assume the page is visible. Bundled settings read `SettingsPageVisible` from `src/ui/settings-index.ts` to defer long lists and native reads until their page is shown; keep their `SettingRow` controls rendered so discovery still finds them. Settings errors are isolated from the editor. See [command discovery](../extensions/command-discovery.md).
 
 ## Editor behavior
 

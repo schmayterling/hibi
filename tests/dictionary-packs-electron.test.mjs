@@ -206,13 +206,56 @@ test('pack dialog install, offline definition, profile restart, path rejection a
   )
   await page.keyboard.press('Escape')
   await definition.waitFor({ state: 'detached' })
+  await page.evaluate(() => window.hibi.setAddonEnabled('dictionary', false))
   await app.close()
   app = undefined
   launched = await launch(profile)
   app = launched.app
   page = launched.page
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.dictionaryStartupQueries = []
+    globalThis.dictionaryPackWorkers = 0
+    const handler = ipcMain._invokeHandlers.get('addons:query')
+    ipcMain.removeHandler('addons:query')
+    ipcMain.handle('addons:query', (event, id, method, input) => {
+      if (id === 'dictionary') globalThis.dictionaryStartupQueries.push(method)
+      return handler(event, id, method, input)
+    })
+    const threads = process.getBuiltinModule('node:worker_threads')
+    const Worker = threads.Worker
+    threads.Worker = class extends Worker {
+      constructor(path, options) {
+        super(path, options)
+        if (String(path).includes('dictionary-pack-worker'))
+          globalThis.dictionaryPackWorkers++
+      }
+    }
+    const { syncBuiltinESMExports } = process.getBuiltinModule('node:module')
+    syncBuiltinESMExports()
+  })
+  await page.evaluate(() => window.hibi.setAddonEnabled('dictionary', true))
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  await waitForAsync(page, () =>
+    performance
+      .getEntriesByName('hibi:addon:dictionary', 'measure')
+      .some((entry) => entry.detail.status === 'ready'),
+  )
+  assert.deepEqual(
+    await app.evaluate(() => ({
+      queries: globalThis.dictionaryStartupQueries,
+      workers: globalThis.dictionaryPackWorkers,
+    })),
+    { queries: [], workers: 0 },
+    'dictionary activation starts no pack workers',
+  )
   await waitForPack(page, 'installed')
   assert.deepEqual(await lookup(page), entries)
+  assert.equal(
+    await app.evaluate(() => globalThis.dictionaryPackWorkers),
+    1,
+    'first lookup starts the worker measured by the startup counter',
+  )
   assert.deepEqual(
     await app.evaluate(() => globalThis.dictionaryOnlineRequests),
     [],

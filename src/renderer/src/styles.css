@@ -1498,11 +1498,11 @@ button.ui-button.update-download-button:disabled {
 /* Items and nested lists sit 0.3em apart; blocks within an item keep a paragraph-sized gap whatever
    their own font size. Only top margins are used because task items are flex containers, which
    don't collapse child margins. Task item content sits in a div after the checkbox label. */
-:is(.tiptap, .format-content) li > *,
-:is(.tiptap, .format-content) li > label + div > * {
+:is(.tiptap, .format-content) :is(li, li > label + div) > * {
   margin-block: 0;
 }
-:is(.tiptap, .format-content) li > :not(label) + *,
+/* Repeated exclusions retain the task-content selector's specificity. */
+:is(.tiptap, .format-content) li > :not(label):not(label):not(label) + *,
 :is(.tiptap, .format-content) li > label + div > :not(label) + * {
   margin-top: var(--text-editor);
 }

@@ -115,4 +115,33 @@ test('list spacing preserves nested blocks without restyling unrelated siblings'
     ['LI', '0px', '0px'],
   ]
   assert.deepEqual(margins, [expected, expected])
+  const alerts = await readFile('src/addons/markdown/alerts.css', 'utf8')
+  const alertMargins = await page.evaluate(
+    ({ css, alerts }) => {
+      const doc = document.getElementById('list-style-check').contentDocument
+      for (const style of doc.head.querySelectorAll('style')) style.remove()
+      const sheet = doc.createElement('style')
+      sheet.textContent = css + '\n' + alerts
+      doc.head.append(sheet)
+      return ['tiptap', 'format-content'].map((kind) => {
+        const root = doc.createElement('section')
+        root.className = kind
+        root.style.setProperty('--text-editor', '16px')
+        root.innerHTML =
+          '<ul><li><blockquote class="github-alert">first</blockquote><p>gap</p><blockquote class="github-alert">later</blockquote></li><li><label></label><div><blockquote class="github-alert">task</blockquote></div></li></ul>'
+        doc.body.append(root)
+        return [...root.querySelectorAll('blockquote')].map((element) => {
+          const style = doc.defaultView.getComputedStyle(element)
+          return [style.marginTop, style.marginBottom]
+        })
+      })
+    },
+    { css, alerts },
+  )
+  const expectedAlerts = [
+    ['0px', '0px'],
+    ['16px', '0px'],
+    ['0px', '0px'],
+  ]
+  assert.deepEqual(alertMargins, [expectedAlerts, expectedAlerts])
 })

@@ -521,6 +521,40 @@ test('arrow keys enter tables in quotes and lists', {
   }
 })
 
+test('a selection from outside into a table opens no cell editor', {
+  timeout: 30000,
+}, async () => {
+  // Text before the table's chunk, so an edit there moves the reused widget.
+  const filler = Array.from({ length: 2000 }, (_, i) => `paragraph ${i}`).join(
+    '\n\n',
+  )
+  const doc = `${filler}\n\n| a | b |\n| - | - |\n| x | y |\n\nafter`
+  await mount(doc)
+  await harness.evaluate(async () => {
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop = pane.scrollHeight
+    for (let i = 0; i < 100 && !document.querySelector('.hibi-lp-table'); i++)
+      await window.tables.settle()
+  })
+  const errors = []
+  const listen = (error) => errors.push(error.message)
+  harness.on('pageerror', listen)
+  await harness.evaluate((doc) => {
+    const view = window.tables.view()
+    view.dispatch({ changes: { from: 0, insert: 'moved ' } })
+    view.focus()
+    view.dispatch({
+      selection: { anchor: 0, head: doc.indexOf('| x') + 'moved '.length + 2 },
+    })
+  }, doc)
+  await harness.evaluate(() => window.tables.settle())
+  harness.off('pageerror', listen)
+  const selection = await state()
+  assert.deepEqual(errors, [])
+  assert.equal(selection.editor, null)
+  assert.equal(selection.anchor, 0)
+})
+
 test('cell editors move with tab, enter and arrows and leave with escape', {
   timeout: 30000,
 }, async () => {

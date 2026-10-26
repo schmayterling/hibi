@@ -596,6 +596,9 @@ class TableView {
 
   /** Edit the cell at a selection of the formatted view's document, when it stays in one cell. */
   editAt(anchor: number, head = anchor) {
+    const { from: start, to: end } = this.range()
+    if (anchor < start || anchor > end || head < start || head > end)
+      return false
     const { line, column, offset } = this.locate(head)
     const from = anchor === head ? null : this.locate(anchor)
     if (from && (from.line !== line || from.column !== column)) return false

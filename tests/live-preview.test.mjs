@@ -77,6 +77,20 @@ words after a rule
 closing paragraph.
 `
 
+/** List markers alone on their lines: the rich view draws them beside the item's first block. */
+const markers = `# Marker lines
+
+-
+  first under its marker
+- second item
+
+1.
+   one under its marker
+2. two
+
+closing paragraph.
+`
+
 let app, folder, page, harness
 
 const palette = (id) => {
@@ -129,6 +143,7 @@ before(
     await mkdir(join(folder, 'notes'))
     await writeFile(file, note)
     await writeFile(join(folder, 'notes', 'nested.md'), nested)
+    await writeFile(join(folder, 'notes', 'markers.md'), markers)
     app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
     })
@@ -436,6 +451,33 @@ test('blocks inside quotes and lists match the rich view in light and dark', {
     'const child = 7',
     'const deep = 1',
   ])
+})
+
+test('list markers alone on their lines sit beside the item text as in the rich view', {
+  timeout: 60000,
+}, async () => {
+  await open(join(folder, 'notes', 'markers.md'), 'Marker lines')
+  await parity(
+    'Marker lines',
+    markers,
+    {
+      title: { selector: '.tiptap h1', text: 'Marker lines' },
+      first: { selector: '.tiptap li', text: 'first under its marker' },
+      second: { selector: '.tiptap li', text: 'second item' },
+      one: { selector: '.tiptap ol li', text: 'one under its marker' },
+      two: { selector: '.tiptap ol li', text: 'two' },
+      closing: { selector: '.tiptap p', text: 'closing paragraph' },
+    },
+    {
+      title: { selector: '.hibi-lp-h1', text: 'Marker lines' },
+      first: { selector: '.hibi-lp-list-item', text: 'first under its marker' },
+      second: { selector: '.hibi-lp-list-item', text: 'second item' },
+      one: { selector: '.hibi-lp-list-ordered', text: 'one under its marker' },
+      two: { selector: '.hibi-lp-list-ordered', text: 'two' },
+      closing: { selector: '.cm-line', text: 'closing paragraph' },
+    },
+    'markers',
+  )
 })
 
 test('a 50 MiB note renders and edits with viewport-bounded work', {

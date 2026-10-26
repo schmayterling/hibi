@@ -217,8 +217,12 @@ function renderInline(view: EditorView, text: string, into: HTMLElement) {
         out.syntax(node.from, node.from + 1)
         return
       case 'HTMLTag':
-        // Line breaks in cells are written as <br>, as the rich editor saved them.
-        if (/^<br\s*\/?>$/i.test(text.slice(node.from, node.to)))
+        // Line breaks in cells are written as <br>, as the rich editor saved
+        // them; a contributed HTML renderer draws them itself.
+        if (
+          !views.has('HTMLTag') &&
+          /^<br\s*\/?>$/i.test(text.slice(node.from, node.to))
+        )
           out.replace(node.from, node.to, lineBreak)
         return false
       case 'Image':

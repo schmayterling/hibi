@@ -168,6 +168,25 @@ test('unterminated fences and raw html reject moves that could absorb source', (
   }
 })
 
+test('processing instructions reject open moves and preserve closed moves in both directions', () => {
+  for (const tail of ['', '\n', '\n\n']) {
+    const open = `first\n\n<?php\ncontent${tail}`
+    assert.equal(
+      parser.parse(open).topNode.lastChild.name,
+      'ProcessingInstructionBlock',
+    )
+    assert.equal(move(open, 'first', 1), null)
+    assert.equal(move(open, '<?php', -1), null)
+    for (const block of ['<?php\ncontent\n?>', '<?php content ?>']) {
+      const doc = `first\n\n${block}${tail}`
+      const expected = `${block}\n\nfirst${tail}`
+      assert.equal(move(doc, 'first', 1), expected)
+      assert.equal(move(doc, '<?php', -1), expected)
+      assert.equal(parser.parse(expected).topNode.lastChild.name, 'Paragraph')
+    }
+  }
+})
+
 test('closed code and html moves preserve final newline count', () => {
   for (const block of [
     '```txt\ncode\n```',

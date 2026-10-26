@@ -105,7 +105,12 @@ function closed(state: EditorState, node: SyntaxNode) {
     return (
       node.lastChild?.name === 'CodeMark' && node.lastChild.from > node.from
     )
-  if (node.name !== 'HTMLBlock' && node.name !== 'CommentBlock') return true
+  if (
+    node.name !== 'HTMLBlock' &&
+    node.name !== 'CommentBlock' &&
+    node.name !== 'ProcessingInstructionBlock'
+  )
+    return true
   const first = state.doc
     .lineAt(node.from)
     .text.slice(node.from - state.doc.lineAt(node.from).from)

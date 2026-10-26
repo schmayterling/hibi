@@ -23,6 +23,7 @@ import {
 } from './document'
 import { runFileDialog } from './file-operation-dialog'
 import { writeText } from './files'
+import { forgetWorkspace } from './recent-workspaces'
 import {
   getWorkspace,
   loadWorkspace,
@@ -222,10 +223,12 @@ export async function updateWorkspaceSettings(
       throw new Error(
         'A folder with this name already exists at the destination.',
       )
+    let copied = false
     try {
       await rename(from, to)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error
+      copied = true
       // Across disks retain the original; removing a concurrently edited tree would risk data loss.
       await mkdir(to)
       try {
@@ -253,6 +256,7 @@ export async function updateWorkspaceSettings(
     if (workspaceRoot() === from) await loadWorkspace(to, false, false)
     if (prefs.startupFolder === from) prefs.startupFolder = to
     prefs.path = to
+    if (!copied) await forgetWorkspace(from)
   } else throw new Error('Unknown workspace action.')
   await savePreferences(prefs)
   if (value.action === 'show-all-files') await refreshWorkspace(null, false)

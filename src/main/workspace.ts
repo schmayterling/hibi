@@ -161,6 +161,10 @@ export function workspaceEntries(): readonly WorkspaceEntry[] {
 export function workspaceRoot(): string | null {
   return root
 }
+
+export function workspaceName(): string | null {
+  return root ? (manifest?.name ?? basename(root)) : null
+}
 export function workspaceId(): string | null {
   return root ? createHash('sha256').update(root).digest('hex') : null
 }
@@ -307,6 +311,12 @@ export function readWorkspaceViewPage(
 
 export function workspaceIndexRevision(): number {
   return indexRevision
+}
+
+export function listenWorkspaceChanges(
+  listener: (event: WorkspaceChangeEvent) => void,
+): () => void {
+  return workspaceStream.listen(listener)
 }
 
 export function subscribeWorkspaceChanges(

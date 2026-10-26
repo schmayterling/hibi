@@ -3,7 +3,12 @@ import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import css from '../_shared/format-style.css?inline'
 import { localPreview, localRender } from '../_shared/local-preview'
 import { defineAddon } from '../api'
-import { Diagram, mermaidNode } from './Block'
+import {
+  Diagram,
+  editMermaidSource,
+  MermaidBlockContent,
+  mermaidNode,
+} from './Block'
 import manifest from './manifest'
 import { getPreferences, settingsEvent } from './preferences'
 import { diagramTheme, renderDiagram } from './render'
@@ -43,7 +48,10 @@ export default defineAddon({
       id: 'mermaid.blocks',
       load: () =>
         import('./formatted').then(({ diagramContribution }) => {
-          const loaded = diagramContribution(context)
+          const loaded = diagramContribution(context, {
+            MermaidBlockContent,
+            editMermaidSource,
+          })
           formatted = loaded
           return loaded.contribution
         }),

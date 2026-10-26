@@ -11,7 +11,7 @@ import {
   RenderedBlocks,
 } from '../_shared/formatted-fence'
 import type { AddonContext } from '../api'
-import { editTypstSource, TypstBlockContent } from './Block'
+import type { editTypstSource, TypstBlockContent } from './Block'
 
 /**
  * Typst fences in the formatted view: the rich view's block heading and
@@ -19,7 +19,19 @@ import { editTypstSource, TypstBlockContent } from './Block'
  * process; a block compiles when it comes into view, and keeps its preview
  * for a while after it scrolls away.
  */
-export function typstContribution(context: AddonContext) {
+/**
+ * The rich view's block content and dialog come from the addon's own chunk,
+ * so this one shares no modules with it and the addon loads without change.
+ */
+type BlockParts = {
+  TypstBlockContent: typeof TypstBlockContent
+  editTypstSource: typeof editTypstSource
+}
+
+export function typstContribution(
+  context: AddonContext,
+  { TypstBlockContent, editTypstSource }: BlockParts,
+) {
   const blocks = new RenderedBlocks(16)
   const typst: FencedRenderer = {
     id: 'typst',

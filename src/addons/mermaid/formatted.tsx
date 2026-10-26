@@ -11,13 +11,25 @@ import {
   RenderedBlocks,
 } from '../_shared/formatted-fence'
 import type { AddonContext } from '../api'
-import { editMermaidSource, MermaidBlockContent } from './Block'
+import type { editMermaidSource, MermaidBlockContent } from './Block'
 
 /**
  * Mermaid fences in the formatted view: the diagram replaces the fence, drawn
  * by the same renderer and edit dialog as the rich view's diagram blocks.
  */
-export function diagramContribution(context: AddonContext) {
+/**
+ * The rich view's block content and dialog come from the addon's own chunk,
+ * so this one shares no modules with it and the addon loads without change.
+ */
+type BlockParts = {
+  MermaidBlockContent: typeof MermaidBlockContent
+  editMermaidSource: typeof editMermaidSource
+}
+
+export function diagramContribution(
+  context: AddonContext,
+  { MermaidBlockContent, editMermaidSource }: BlockParts,
+) {
   const blocks = new RenderedBlocks(32)
   const diagrams: FencedRenderer = {
     id: 'mermaid',

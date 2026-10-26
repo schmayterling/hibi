@@ -3,7 +3,7 @@ import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import { formatToolbar } from '../_shared/format-toolbar'
 import { type DocumentFormat, defineAddon } from '../api'
-import { typstNode } from './Block'
+import { editTypstSource, TypstBlockContent, typstNode } from './Block'
 import { typstLanguage } from './language'
 import manifest from './manifest'
 import { TypstPreview } from './Preview'
@@ -43,7 +43,10 @@ export default defineAddon({
       id: 'typst.blocks',
       load: () =>
         import('./formatted').then(({ typstContribution }) => {
-          const loaded = typstContribution(context)
+          const loaded = typstContribution(context, {
+            TypstBlockContent,
+            editTypstSource,
+          })
           formatted = loaded
           return loaded.contribution
         }),

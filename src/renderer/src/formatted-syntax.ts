@@ -359,7 +359,8 @@ function driver(
       private view: EditorView
       private boundaryIdle = 0
       private boundaryDoc: EditorState['doc'] | null = null
-      private boundaryKey: string | null = null
+      /** The last boundary configuration followed; undefined before the first. */
+      private boundaryKey: string | null | undefined = undefined
       private boundaryStream: string | null = null
       private boundarySeeded = false
       private boundaryFrom: number | null = null
@@ -385,6 +386,8 @@ function driver(
         const config = boundaryConfig(state, options, prefixOf(state))
         const key = config ? boundaryKey(config) : null
         const sameConfig = key === this.boundaryKey
+        // Syntax the worker cannot parse requests nothing; releasing once covers every later update.
+        if (sameConfig && !config) return
         const syntax = state.field(field)
         // Retain mapped boundaries; only an unscanned tail needs another seed.
         const from =

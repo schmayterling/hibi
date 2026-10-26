@@ -30,6 +30,7 @@ let workerSession: DocumentSession | null = null
 const workerState = {
   ready: false,
   requests: 0,
+  releases: 0,
   ranges: [] as number[],
   pages: 0,
   maxRecords: 0,
@@ -116,6 +117,7 @@ Object.assign(window, {
       Object.assign(workerState, {
         ready: false,
         requests: 0,
+        releases: 0,
         ranges: [],
         pages: 0,
         maxRecords: 0,
@@ -165,7 +167,10 @@ Object.assign(window, {
                     from,
                   )
                 },
-                release: (retain) => workerClient?.releaseBoundaries(retain),
+                release: (retain) => {
+                  workerState.releases++
+                  workerClient?.releaseBoundaries(retain)
+                },
               },
             }
           : {}),

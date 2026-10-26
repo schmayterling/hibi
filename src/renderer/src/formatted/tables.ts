@@ -261,12 +261,19 @@ type Moved = {
   count: number
   lines: number
 }
+/** Where a table may start and end after a change: text inserted at its edges may or may not join it. */
+type Place = { from: number[]; to: number[] }
+const placed = (place: Place, widget: TableWidget) =>
+  place.from.includes(widget.from) && place.to.includes(widget.to)
 /**
- * Size state of the tables an update changes, by where each table ends
- * after it: CodeMirror may show a table in another table's view after an
- * edit, so state follows the table, not the view.
+ * Size state of the tables an update changes, by where each table is after
+ * it: CodeMirror may show a table in another table's view after an edit, so
+ * state follows the table, not the view.
  */
-const handoffs = new WeakMap<EditorView, Map<number, SizeState>>()
+const handoffs = new WeakMap<
+  EditorView,
+  { place: Place; state: SizeState; owner: TableView }[]
+>()
 
 const tableViews = new WeakMap<HTMLElement, TableView>()
 /** Mounted tables per editor, for row windows, entering tables and table actions. */
@@ -322,8 +329,8 @@ class TableView {
   private moved: Moved | null = null
   /** The stored entry as last bound or saved, so saves that change nothing write nothing. */
   private stored: string | null = null
-  /** Where the table ends after the change being applied, while its state is handed over. */
-  private endsAt: number | null = null
+  /** Where the table is after the change being applied, while its state is handed over. */
+  private place: Place | null = null
 
   constructor(
     readonly view: EditorView,
@@ -920,32 +927,49 @@ class TableView {
     // A table or line added or removed above may change its ordinal: check its key once edits pause.
     if (sized && changes.touchesRange(0, Math.max(0, from - 1))) this.save(500)
     if (!sized) return
-    this.endsAt = changes.mapPos(to, 1)
-    let states = handoffs.get(this.view)
-    if (!states) {
-      const created = new Map<number, SizeState>()
+    const place = {
+      from: [changes.mapPos(from, -1), changes.mapPos(from, 1)],
+      to: [changes.mapPos(to, -1), changes.mapPos(to, 1)],
+    }
+    this.place = place
+    let entries = handoffs.get(this.view)
+    if (!entries) {
+      const created: { place: Place; state: SizeState; owner: TableView }[] = []
       handoffs.set(this.view, created)
+      // Only for the redraw of this update.
       queueMicrotask(() => {
         if (handoffs.get(this.view) === created) handoffs.delete(this.view)
       })
-      states = created
+      entries = created
     }
-    states.set(this.endsAt, {
-      sizes: this.sizes,
-      header: this.header,
-      moved: this.moved,
-      stored: this.stored,
+    entries.push({
+      place,
+      owner: this,
+      state: {
+        sizes: this.sizes,
+        header: this.header,
+        moved: this.moved,
+        stored: this.stored,
+      },
+    })
+    queueMicrotask(() => {
+      if (this.place === place) this.place = null
     })
   }
 
   /** Take the size state of the table this view shows now, which another view may have held. */
   private takeOver() {
     const { widget } = this
-    const end = this.endsAt
-    this.endsAt = null
+    const place = this.place
+    this.place = null
     if (widget.doc !== this.view.state.doc) return
-    const state = handoffs.get(this.view)?.get(widget.to)
-    if (end === widget.to || (end === null && !state)) return
+    if (place && placed(place, widget)) return
+    const state = handoffs
+      .get(this.view)
+      ?.find(
+        (entry) => entry.owner !== this && placed(entry.place, widget),
+      )?.state
+    if (!place && !state) return
     // Another table than before: its own state, or none until it is looked up.
     clearTimeout(this.saving)
     this.saving = undefined

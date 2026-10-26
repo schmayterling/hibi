@@ -152,6 +152,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'removeHostCredential',
         'getHostCredentialStatus',
         'invokeAddon',
+        'invokeAddonProfile',
         'queryAddon',
         'getWorkspace',
         'getWorkspaceHeader',

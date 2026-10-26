@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
 } from 'react'
 import type { SourceExtension } from '../../addons/api'
+import { builtInFlavors } from '../../shared/built-in-grammar'
 import { sourceChange } from '../../shared/document-journal'
 import type { ViewId } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
@@ -22,10 +23,13 @@ import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
 import { LoadingScreen } from './LoadingScreen'
+import { linkScroll } from './linked-scroll'
+import { MirrorCursor } from './MirrorCursor'
 import { markdownSyntax } from './markdown-syntax'
 import { SourceEditor } from './SourceEditor'
 import { editorPosition, sourceView } from './source-view'
 import { useEditorPanes } from './use-editor-panes'
+import { sourceOutlineSyntax, useSourceOutline } from './use-source-outline'
 
 const MarkdownSourceEditor = lazy(() =>
   import('./MarkdownSourceEditor').then((module) => ({
@@ -64,6 +68,7 @@ export function MarkdownEditor({
   markdownExtensions,
   sourceExtensions,
   formattedExtensions = noFormattedExtensions,
+  richExtensions,
   cursorSettings,
   showLineNumbers,
   spellCheck,
@@ -74,7 +79,10 @@ export function MarkdownEditor({
   onAttach,
   onLink,
   onOutline,
+  onOutlineUnavailable,
   onActiveOutline,
+  outlineTarget,
+  outlineActive,
 }: Parameters<typeof RichMarkdownEditor>[0]) {
   const markdownDocument = format?.editing === 'markdown'
   // Large notes keep frontmatter in the text while properties are unavailable.
@@ -103,13 +111,7 @@ export function MarkdownEditor({
         (flavor) =>
           (flavor.export?.extensions?.length ||
             flavor.richExtensions?.length) &&
-          ![
-            'markdown.github',
-            'markdown.obsidian',
-            'github-markdown.github',
-            'text-extras.text-extras',
-            'math.latex',
-          ].includes(flavor.id),
+          !builtInFlavors.has(flavor.id),
       ) ||
       markdownExtensions.some(
         (extension) => extension.id !== 'frontmatter.metadata',
@@ -164,11 +166,51 @@ export function MarkdownEditor({
     () => () => editorViewRegistry.clearActive(viewId as ViewId),
     [viewId],
   )
-  // The outline follows the source outline in a later formatted-view slice.
   useEffect(() => {
     onOutline([])
     onActiveOutline(null)
   }, [onOutline, onActiveOutline])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: syntaxVersion invalidates the current registry preferences.
+  const outlineSyntax = useMemo(
+    () => sourceOutlineSyntax(flavors, markdownExtensions, richExtensions),
+    [flavors, markdownExtensions, richExtensions, syntaxVersion],
+  )
+  // Both panes show the source outline; the pane that takes edits selects the
+  // active heading and moves to a chosen one. The formatted view stays mounted
+  // while the source pane loads.
+  const sourceOutline = useSourceOutline({
+    active: markdownDocument && outlineActive && formattedReady,
+    content,
+    tabId: documentState.tabId,
+    revision: documentState.revision,
+    flavors,
+    outlineSyntax,
+    view: () => {
+      const pane = (selector: string) => {
+        const element = content.current?.querySelector<HTMLElement>(
+          `${selector} .cm-content`,
+        )
+        return element && sourceView(element)
+      }
+      return (
+        (findTarget === 'source' && pane('.source-pane')) || pane('.rich-pane')
+      )
+    },
+    onOutline,
+    onOutlineUnavailable,
+    onActiveOutline,
+  })
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the pane that takes edits changed or loaded.
+  useEffect(
+    () => sourceOutline.reportActive(),
+    [sourceOutline, findTarget, sourceReady],
+  )
+  const handledOutline = useRef(outlineTarget)
+  useEffect(() => {
+    if (!outlineTarget || handledOutline.current === outlineTarget) return
+    if (sourceOutline.reveal(outlineTarget.id))
+      handledOutline.current = outlineTarget
+  }, [sourceOutline, outlineTarget])
   const { attachSource, attachRich, attachFiles } = useFormattingToolbar(
     null,
     paneMode,
@@ -203,6 +245,20 @@ export function MarkdownEditor({
     view.dispatch({ selection: { anchor: view.state.doc.length } })
     view.focus()
   }, [autoFocus, formattedReady, paneMode, content])
+  useEffect(() => {
+    if (paneMode !== 'side-by-side' || !sourceReady || !formattedReady) return
+    const rich = content.current?.querySelector<HTMLElement>('.rich-pane')
+    const source = content.current?.querySelector<HTMLElement>(
+      '.source-pane .cm-scroller',
+    )
+    if (!rich || !source) return
+    return linkScroll(
+      rich,
+      source,
+      source.contains(window.document.activeElement) ? source : rich,
+      'source',
+    )
+  }, [content, paneMode, sourceReady, formattedReady])
   /**
    * Properties editors above the text return the whole source, as in the
    * rich editor; their change goes to the formatted view as one minimal edit
@@ -276,6 +332,15 @@ export function MarkdownEditor({
       >
         <div className="editor-content" ref={content}>
           <EditorCursor root={content} settings={cursorSettings} />
+          <MirrorCursor
+            root={content}
+            active={
+              paneMode === 'side-by-side' &&
+              sourceReady &&
+              formattedReady &&
+              !disabled
+            }
+          />
           <section
             className="rich-pane"
             onFocusCapture={() => {

@@ -1501,7 +1501,9 @@ button.ui-button.update-download-button:disabled {
 :is(.tiptap, .format-content) :is(li, li > label + div) > * {
   margin-block: 0;
 }
-:is(.tiptap, .format-content) :is(li, li > label + div) > :not(label) + * {
+/* Repeated exclusions retain the task-content selector's specificity. */
+:is(.tiptap, .format-content) li > :not(label):not(label):not(label) + *,
+:is(.tiptap, .format-content) li > label + div > :not(label) + * {
   margin-top: var(--text-editor);
 }
 :is(.tiptap, .format-content) li + li,

@@ -39,6 +39,7 @@ import {
   lineBreak,
 } from './formatted-commands'
 import {
+  claimFormattedReplacement,
   type FormattedContainer,
   type FormattedDecorations,
   type FormattedLayout,
@@ -350,6 +351,7 @@ function inline(
   }
   blocks = { literal, views, shapes }
   const decorations: Range<Decoration>[] = []
+  const replacements = new Set<string>()
   const lines = new Map<number, LineInfo>()
   const line = (pos: number) => {
     let info = lines.get(pos)
@@ -480,7 +482,12 @@ function inline(
     },
     replace(from, to, widget) {
       // View plugins may not replace line breaks; layout views can.
-      if (to <= from || doc.lineAt(from).to < to) return
+      if (
+        to <= from ||
+        doc.lineAt(from).to < to ||
+        !claimFormattedReplacement(replacements, from, to)
+      )
+        return
       const range = Decoration.replace(widget ? { widget } : {}).range(from, to)
       decorations.push(range)
       atomic.push(range)

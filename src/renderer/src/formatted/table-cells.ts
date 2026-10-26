@@ -28,6 +28,7 @@ import {
 import { protectMarkdownParser } from '../../../shared/markdown-flavor-guard.ts'
 import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
+  claimFormattedReplacement,
   type FormattedDecorations,
   type FormattedNodeView,
   type FormattedRenderContext,
@@ -130,6 +131,7 @@ function decorateCell(
   const to = from + (source?.[text.length] ?? text.length)
   const views = namedViews(state)
   const literal = literalNodes(state)
+  const replacements = new Set<string>()
   // Node and context positions stay in the owning document. Only the sink
   // maps them to the cell's displayed text, where escaped pipes lose a slash.
   const local = (position: number) => {
@@ -170,7 +172,8 @@ function decorateCell(
     replace(start, end, widget) {
       const from = local(start),
         to = local(end)
-      if (to > from) out.hide(from, to, widget ?? null)
+      if (to > from && claimFormattedReplacement(replacements, from, to))
+        out.hide(from, to, widget ?? null)
     },
   })
   const tree = cellParser(state).parse(state.sliceDoc(from, to))

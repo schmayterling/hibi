@@ -46,7 +46,11 @@ function outline(model) {
   const work = model.read()
   for (let steps = 0; steps < 1000000; steps++) {
     const result = work.next()
-    if (result.done) return result.value
+    if (result.done)
+      return result.value.headings.map((heading, index) => {
+        const from = result.value.position(index)
+        return { ...heading, id: `source:${from}`, from }
+      })
   }
   throw new Error('Outline did not converge.')
 }

@@ -140,7 +140,9 @@ export function createLayout(
         node.fx = node.x = message.x
         node.fy = node.y = message.y
         drag = message.drag
-        // The motion preference may have changed since the graph arrived.
+        // The motion preference may have changed since the graph arrived; steps
+        // left from the other preference no longer apply.
+        if (message.reduced !== reduced) remaining = 0
         reduced = message.reduced
         if (message.moved) {
           const count = nodes.length > 80 ? 2 : 30

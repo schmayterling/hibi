@@ -377,6 +377,39 @@ test('drags after a motion preference change lay out the same on a page as in th
   assert.deepEqual(pageAfter, workerAfter)
 })
 
+test('a reduced-motion settle cut short by a motion change leaves no steps for later drags', (t) => {
+  const tasks = pacedTasks(t)
+  const { edges } = graphTopology(denseGraph(300, 600))
+  const { layout, frames } = tasks.layout(tasks.counted)
+  layout.receive({
+    type: 'graph',
+    version: 1,
+    edges,
+    positions: new Float32Array(600).fill(Number.NaN),
+    reduced: true,
+  })
+  const drag = (index, reduced) =>
+    layout.receive({
+      type: 'pin',
+      version: 1,
+      index: 5,
+      x: 40 * index,
+      y: -30,
+      drag: index,
+      moved: true,
+      reduced,
+    })
+  // Reduced motion turned off before the first arrangement settles...
+  assert.equal(frames.at(-1).settled, false)
+  drag(1, false)
+  tasks.until(() => frames.at(-1).settled)
+  const cooled = frames.at(-1).ticks
+  // ...and on again: the next drag runs its own two steps, not the leftovers.
+  drag(2, true)
+  tasks.until(() => frames.at(-1).settled)
+  assert.equal(frames.at(-1).ticks, cooled + 2)
+})
+
 test('a page laying out 20,000 notes and 60,000 links runs one slice of work per task', (t) => {
   const tasks = pacedTasks(t)
   const message = {

@@ -47,6 +47,7 @@ import {
   formattedDocument,
   formattedLiteral,
   formattedRefresh,
+  formattedRenderInputs,
   formattedTree,
   formattedViews,
   showMarkdownMarkers,
@@ -1066,13 +1067,18 @@ type ChunkLayout = ReturnType<typeof chunkLayout>
  */
 const chunkCache = new WeakMap<
   readonly FormattedNodeView[],
-  WeakMap<readonly string[], WeakMap<object, WeakMap<Tree, ChunkLayout>>>
+  WeakMap<
+    readonly string[],
+    WeakMap<object, WeakMap<readonly unknown[], WeakMap<Tree, ChunkLayout>>>
+  >
 >()
 function cacheFor(state: EditorState) {
   const views = state.facet(formattedViews),
     literal = state.facet(formattedLiteral),
-    // Contributed layouts may show the note's files and media.
-    document = state.facet(formattedDocument)
+    // Contributed layouts may show the note's files and media, and read
+    // other state, such as the labels footnote references resolve against.
+    document = state.facet(formattedDocument),
+    inputs = state.facet(formattedRenderInputs)
   let byLiteral = chunkCache.get(views)
   if (!byLiteral) {
     byLiteral = new WeakMap()
@@ -1083,10 +1089,15 @@ function cacheFor(state: EditorState) {
     byDocument = new WeakMap()
     byLiteral.set(literal, byDocument)
   }
-  let cache = byDocument.get(document)
+  let byInputs = byDocument.get(document)
+  if (!byInputs) {
+    byInputs = new WeakMap()
+    byDocument.set(document, byInputs)
+  }
+  let cache = byInputs.get(inputs)
   if (!cache) {
     cache = new WeakMap()
-    byDocument.set(document, cache)
+    byInputs.set(inputs, cache)
   }
   return cache
 }
@@ -1214,6 +1225,8 @@ export function livePreview(
             startState.facet(formattedLiteral) &&
           state.facet(formattedDocument) ===
             startState.facet(formattedDocument) &&
+          state.facet(formattedRenderInputs) ===
+            startState.facet(formattedRenderInputs) &&
           (sameRanges(reveal, revealedIn(startState)) ||
             (!revealMatters(state, tree, reveal) &&
               !revealMatters(state, tree, revealedIn(startState)))))

@@ -221,6 +221,30 @@ test('nested bootstrap responses hydrate and concurrent consumers share one stre
   assert.equal(f.messages.length, 1)
 })
 
+test('completed bootstrap hydration is reused without reopening its consumed stream', async () => {
+  const f = fixture('startup snapshot\r\n😀')
+  let calls = 0
+  const bootstrap = f.native.bootstrap.document
+  f.native.bootstrap.document = () => {
+    calls++
+    return bootstrap()
+  }
+  const api = documentTransferApi(f.native)
+  const first = await api.bootstrap.document()
+  const reads = f.messages.length
+  const [second, third] = await Promise.all([
+    api.bootstrap.document(),
+    api.bootstrap.document(),
+  ])
+  assert.equal(second, first)
+  assert.equal(third, first)
+  assert.equal(second.document.markdown, 'startup snapshot\r\n😀')
+  assert.equal(second.info, 'unchanged')
+  assert.equal(calls, 1)
+  assert.equal(f.messages.length, reads)
+  assert.deepEqual(f.state(), { aborted: 1, finished: true })
+})
+
 test('version changes abort before publication and leave native text untouched', async () => {
   const f = fixture('x'.repeat(100000)),
     read = f.native.readDocumentTransfer

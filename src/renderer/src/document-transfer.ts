@@ -97,5 +97,12 @@ export function documentTransferApi(
       )
     return value
   }
-  return wrap(native) as DesktopApi
+  const api = wrap(native) as DesktopApi
+  const bootstrap = api.bootstrap?.document
+  if (bootstrap) {
+    // Preload retains one startup stream; every consumer shares its hydration.
+    let startup: ReturnType<typeof bootstrap> | undefined
+    api.bootstrap.document = () => (startup ??= bootstrap())
+  }
+  return api
 }

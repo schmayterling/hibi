@@ -14,6 +14,22 @@ import { defaultNoteSyntax } from '../src/shared/note-syntax.ts'
 const workspace = { workspaceId: 'notes', workspaceGeneration: 1 }
 const page = (path, markdown = '') => ({ path, markdown })
 
+test('path filters equate final and medial sigma without changing path identities', async () => {
+  const index = new WorkspaceReferenceIndex()
+  const paths = ['upper/ΟΔΟΣ.md', 'final/οδος.md', 'medial/οδοσ.md']
+  index.apply(
+    workspace,
+    paths.map((path) => page(path)),
+  )
+  for (const query of ['ΟΔΟΣ', 'οδος', 'οδοσ', 'Σ', 'σ', 'ς']) {
+    assert.deepEqual(index.searchPaths(query, 0, 10).items, [...paths].sort())
+    assert.deepEqual(
+      (await index.searchPathsCooperatively(query, 0, 10, () => true)).items,
+      [...paths].sort(),
+    )
+  }
+})
+
 test('reference index parses only changed content and updates reverse links', () => {
   let parses = 0
   const index = new WorkspaceReferenceIndex((source) => {

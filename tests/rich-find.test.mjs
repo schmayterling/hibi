@@ -12,6 +12,9 @@ import {
   scanRichFind,
   setRichFindQuery,
 } from '../src/renderer/src/rich-find.ts'
+import { foldSearchText } from '../src/shared/search-fold.ts'
+import { SourceStore } from '../src/shared/source-buffer.ts'
+import { searchSourceLiteral } from '../src/shared/source-search.ts'
 
 const schema = new Schema({
   nodes: {
@@ -478,19 +481,58 @@ test('rich find matches Greek sigma in every position of a word', () => {
   assert.deepEqual(target(state, findPrev), expected.at(-1))
 })
 
-test('lowercasing depends on neighboring letters only for Greek final sigma', () => {
-  // rich-find folds whole textblocks at once, so every other character must
-  // lowercase the same in context as alone.
+test('shared search fold agrees per scalar and in context for every Unicode scalar', () => {
+  // Formatted find folds whole blocks; source find folds individual scalars.
   for (let code = 0; code <= 0x10ffff; code++) {
     if (code >= 0xd800 && code <= 0xdfff) continue
     const character = String.fromCodePoint(code)
     const alone = fold(character)
+    assert.equal(foldSearchText(character), alone, `U+${code.toString(16)}`)
     assert.equal(
-      fold(`Α${character}Α${character}`),
+      foldSearchText(`Α${character}Α${character}`),
       `α${alone}α${alone}`,
       `U+${code.toString(16)}`,
     )
   }
+})
+
+test('source and formatted find keep identical Unicode match ranges and highlights', () => {
+  const text = `${'x'.repeat(15)}😀İ e\u0301 ß ẞ ΟΔΟΣ,ΑςΑ ΣΣ.`
+  const store = new SourceStore(text, { tabId: 'views', revision: 0 }, 0, {
+    chunkUnits: 16,
+  })
+  for (const query of [
+    '😀',
+    'İ',
+    'i',
+    'i\u0307',
+    'e\u0301',
+    'ß',
+    'ẞ',
+    'ss',
+    'ΟΔΟΣ',
+    'οδος',
+    'οδοσ',
+    'ΑΣΑ',
+    'σ',
+    'ς',
+  ]) {
+    const state = search(create([paragraph(text)]), query)
+    const source = [...searchSourceLiteral(store.snapshot(), query)].flatMap(
+      (batch) => batch.matches.map(({ from, to }) => ({ from, to })),
+    )
+    const formatted = verify(state, query).map(({ from, to }) => ({
+      from: from - 1,
+      to: to - 1,
+    }))
+    assert.deepEqual(source, formatted, query)
+    if (source.length)
+      assert.deepEqual(target(state, findNext), {
+        from: source[0].from + 1,
+        to: source[0].to + 1,
+      })
+  }
+  assert.equal(store.counters().materializations, 0)
 })
 
 test('rich find maps lengthened lowercase characters to whole source characters', () => {

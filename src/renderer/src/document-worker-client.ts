@@ -30,7 +30,12 @@ type Request = Extract<DocumentWorkerRequest, { type: 'find' }> & {
 type ClientOptions = {
   changed: () => void
   pending: () => void
-  result: (location: SearchLocation, action: FindAction) => void
+  result: (
+    location: SearchLocation,
+    action: FindAction,
+    highlightStarts: readonly number[] | undefined,
+    query: string,
+  ) => void
   error: (message: string) => void
   metadataPending?: () => void
   metadataResult?: (
@@ -84,6 +89,7 @@ export class DocumentWorkerClient {
   #findDeadline: ReturnType<typeof setTimeout> | undefined
   #findTimer: ReturnType<typeof setTimeout> | undefined
   #findQuietUntil = 0
+  #highlightRequest: Request | null = null
   constructor(session: DocumentSession, options: ClientOptions) {
     this.#session = session
     this.#options = options
@@ -180,6 +186,7 @@ export class DocumentWorkerClient {
     this.#flushMetadata()
   }
   cancelFind() {
+    this.#highlightRequest = null
     clearTimeout(this.#findTimer)
     this.#findTimer = undefined
     this.#findQuietUntil = 0
@@ -302,6 +309,9 @@ export class DocumentWorkerClient {
       id: request.id,
       version: request.version,
       query: request.query,
+      highlights:
+        this.#highlightRequest?.query !== request.query ||
+        this.#highlightRequest?.version !== request.version,
       from: request.from,
       to: request.to,
     })
@@ -436,8 +446,15 @@ export class DocumentWorkerClient {
         request?.id === reply.id &&
         request.version === reply.version &&
         reply.version === this.#session.snapshot().version
-      )
-        this.#options.result(reply.location, request.action)
+      ) {
+        if (reply.highlightStarts) this.#highlightRequest = request
+        this.#options.result(
+          reply.location,
+          request.action,
+          reply.highlightStarts,
+          request.query,
+        )
+      }
     } else if (reply.type === 'metadata-canceled') {
       if (
         reply.id !== this.#metadataCanceling ||
@@ -495,6 +512,7 @@ export class DocumentWorkerClient {
     this.#watch()
   }
   #stop() {
+    this.#highlightRequest = null
     clearTimeout(this.#findTimer)
     this.#findTimer = undefined
     clearTimeout(this.#startTimer)

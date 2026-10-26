@@ -31,7 +31,6 @@ import {
 } from '@codemirror/language'
 import {
   closeSearchPanel,
-  openSearchPanel,
   SearchQuery,
   search,
   setSearchQuery,
@@ -124,6 +123,7 @@ import {
   observeSourceAnnotations,
   sourceAnnotationExtension,
 } from './source-annotations'
+import { sourceFindHighlights } from './source-find'
 import {
   formattingKeymap,
   type SourceFormatting,
@@ -336,6 +336,7 @@ export function SourceEditor({
   const addons = useRef(new Compartment())
   const indentation = useRef(new Compartment())
   const display = useRef(new Compartment())
+  const findHighlights = useRef(new Compartment())
   // Later changes reconfigure the display compartment without a new editor.
   const displayOptions = useRef({ markers, spellCheck, documentRevision })
   displayOptions.current = { markers, spellCheck, documentRevision }
@@ -435,9 +436,10 @@ export function SourceEditor({
           navigatingFind.current = false
           find.current.report({ current: 0, total: 0, error: message })
         },
-        result: (location, action) => {
+        result: (location, action, highlightStarts, query) => {
           const current = view.current
-          if (!current || !find.current.active) return
+          if (!current || !find.current.active || query !== find.current.query)
+            return
           findCoverage.current = {
             query: find.current.query,
             version: session.snapshot().version,
@@ -449,12 +451,28 @@ export function SourceEditor({
               : action
                 ? location.next
                 : null
-          if (target) {
+          if (target || highlightStarts) {
             applyingFind.current = true
             try {
               current.dispatch({
-                selection: { anchor: target.match.from, head: target.match.to },
-                scrollIntoView: true,
+                ...(target
+                  ? {
+                      selection: {
+                        anchor: target.match.from,
+                        head: target.match.to,
+                      },
+                      scrollIntoView: true,
+                    }
+                  : {}),
+                effects: highlightStarts
+                  ? findHighlights.current.reconfigure(
+                      sourceFindHighlights(
+                        find.current.query,
+                        current.state.doc,
+                        highlightStarts,
+                      ),
+                    )
+                  : [],
               })
             } finally {
               applyingFind.current = false
@@ -1064,6 +1082,7 @@ export function SourceEditor({
         ...(selection ? { selection } : {}),
         extensions: [
           addons.current.of([]),
+          findHighlights.current.of([]),
           search({
             createPanel: () => {
               const dom = window.document.createElement('div')
@@ -2002,14 +2021,19 @@ export function SourceEditor({
     }
     if (!findActive) {
       closeSearchPanel(editor)
+      editor.dispatch({ effects: findHighlights.current.reconfigure([]) })
       stopFind()
       findActions.current = []
       navigatingFind.current = false
       return
     }
-    openSearchPanel(editor)
     const query = new SearchQuery({ search: findQuery, literal: true })
-    editor.dispatch({ effects: setSearchQuery.of(query) })
+    editor.dispatch({
+      effects: [
+        setSearchQuery.of(query),
+        findHighlights.current.reconfigure([]),
+      ],
+    })
     findActions.current = []
     navigatingFind.current = query.valid
     if (query.valid) requestFind('first')

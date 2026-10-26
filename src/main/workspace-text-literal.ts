@@ -1,68 +1,31 @@
-export type TextSearchLine = { line: number; text: string }
-type State = { matched: number; lines: TextSearchLine[] }
+import { foldSearchText } from '../shared/search-fold.ts'
 
-/** Exact default JavaScript lowercase semantics, including deferred final sigma. */
+export type TextSearchLine = { line: number; text: string }
+
+/** Context-free lowercase search across streamed UTF-16 chunks. */
 export class WorkspaceLiteralMatcher {
   readonly needle: string
-  readonly failure: Uint32Array
-  private state: State = { matched: 0, lines: [] }
-  private pending: { normal: State; final: State } | null = null
-  private beforeCased = false
+  private readonly found: TextSearchLine[] = []
   private carry = ''
   private line = 1
   private tail = ''
   private nativeTail = ''
-  private readonly native: boolean
   units = 0
 
   constructor(query: string) {
-    this.needle = query.toLowerCase()
-    this.native = !/[σς]/.test(this.needle)
-    this.failure = new Uint32Array(this.needle.length)
-    for (let index = 1, prefix = 0; index < this.needle.length; index++) {
-      while (prefix && this.needle[index] !== this.needle[prefix])
-        prefix = this.failure[prefix - 1] as number
-      if (this.needle[index] === this.needle[prefix]) prefix++
-      this.failure[index] = prefix
-    }
+    this.needle = foldSearchText(query)
   }
 
   get lines(): readonly TextSearchLine[] {
-    return this.state.lines
-  }
-
-  private feed(state: State, folded: string, text: string, offset: number) {
-    if (state.lines.length === 3) return
-    for (let index = 0; index < folded.length; index++) {
-      this.units++
-      while (state.matched && folded[index] !== this.needle[state.matched])
-        state.matched = this.failure[state.matched - 1] as number
-      if (folded[index] === this.needle[state.matched]) state.matched++
-      if (state.matched !== this.needle.length) continue
-      state.matched = this.failure[this.needle.length - 1] as number
-      if (state.lines.some((line) => line.line === this.line)) continue
-      const lineStart = text.lastIndexOf('\n', offset - 1) + 1
-      const start = Math.max(lineStart, offset - 80)
-      const newline = text.indexOf('\n', offset)
-      const end = Math.min(newline < 0 ? text.length : newline, start + 240)
-      const prefix =
-        start === 0 && this.tail && offset < 80
-          ? this.tail.slice(-(80 - offset))
-          : ''
-      state.lines.push({
-        line: this.line,
-        text: `${start > lineStart ? '…' : ''}${prefix}${text.slice(start, end)}${end < text.length && text[end] !== '\n' ? '…' : ''}`,
-      })
-      if (state.lines.length === 3) return
-    }
+    return this.found
   }
 
   private nativeSearch(text: string): TextSearchLine | null {
-    const lower = text.toLowerCase()
+    const lower = foldSearchText(text)
     const prefix = this.nativeTail.length
     const source = this.nativeTail + lower
     const aligned = lower.length === text.length
-    let lineCursor = 0
+    let nextLine = text.indexOf('\n')
     this.units += lower.length
     let raw = 0,
       folded = 0,
@@ -70,31 +33,27 @@ export class WorkspaceLiteralMatcher {
       from = 0
     while (
       from <= source.length - this.needle.length &&
-      this.state.lines.length < 3
+      this.found.length < 3
     ) {
       const match = source.indexOf(this.needle, from)
       if (match < 0) break
       const end = match + this.needle.length - prefix
       if (aligned) {
         raw = Math.max(0, end - 1)
-        for (
-          let next = text.indexOf('\n', lineCursor);
-          next >= 0 && next < raw;
-          next = text.indexOf('\n', lineCursor)
-        ) {
+        while (nextLine >= 0 && nextLine < raw) {
           line++
-          lineCursor = next + 1
+          nextLine = text.indexOf('\n', nextLine + 1)
         }
       }
       while (!aligned && raw < text.length) {
         const character = String.fromCodePoint(text.codePointAt(raw) as number)
-        const length = character.toLowerCase().length
+        const length = foldSearchText(character).length
         if (folded + length >= end) break
         folded += length
         raw += character.length
         if (character === '\n') line++
       }
-      if (!this.state.lines.some((item) => item.line === line)) {
+      if (!this.found.some((item) => item.line === line)) {
         const lineStart = text.lastIndexOf('\n', raw - 1) + 1
         const start = Math.max(lineStart, raw - 80)
         const newline = text.indexOf('\n', raw)
@@ -103,7 +62,7 @@ export class WorkspaceLiteralMatcher {
           start === 0 && this.tail && raw < 80
             ? this.tail.slice(-(80 - raw))
             : ''
-        this.state.lines.push({
+        this.found.push({
           line,
           text: `${start > lineStart ? '…' : ''}${carry}${text.slice(start, to)}${to < text.length && text[to] !== '\n' ? '…' : ''}`,
         })
@@ -117,7 +76,7 @@ export class WorkspaceLiteralMatcher {
     this.tail = text.slice(
       Math.max(text.lastIndexOf('\n') + 1, text.length - 80),
     )
-    return this.state.lines[0] ?? null
+    return this.found[0] ?? null
   }
 
   push(input: string, final = false): TextSearchLine | null {
@@ -127,53 +86,16 @@ export class WorkspaceLiteralMatcher {
       this.carry = text.slice(-1)
       text = text.slice(0, -1)
     }
-    if (this.native) return this.nativeSearch(text)
-    let offset = 0
-    for (const character of text) {
-      const ignored = /\p{Case_Ignorable}/u.test(character)
-      const cased = /\p{Cased}/u.test(character)
-      if (this.pending && !ignored) {
-        this.state = cased ? this.pending.normal : this.pending.final
-        this.pending = null
-      }
-      if (this.state.lines.length === 3)
-        return this.state.lines[0] as TextSearchLine
-      if (character === 'Σ' && this.beforeCased) {
-        this.pending = {
-          normal: { matched: this.state.matched, lines: [...this.state.lines] },
-          final: { matched: this.state.matched, lines: [...this.state.lines] },
-        }
-        this.feed(this.pending.normal, 'σ', text, offset)
-        this.feed(this.pending.final, 'ς', text, offset)
-      } else if (this.pending) {
-        const folded = character.toLowerCase()
-        this.feed(this.pending.normal, folded, text, offset)
-        this.feed(this.pending.final, folded, text, offset)
-      } else this.feed(this.state, character.toLowerCase(), text, offset)
-      if (!ignored) this.beforeCased = cased
-      if (character === '\n') this.line++
-      offset += character.length
-    }
-    this.tail = text.slice(
-      Math.max(text.lastIndexOf('\n') + 1, text.length - 80),
-    )
-    return this.state.lines[0] ?? null
+    return this.nativeSearch(text)
   }
 
   finish(): TextSearchLine | null {
-    this.push('', true)
-    if (this.pending) this.state = this.pending.final
-    this.pending = null
-    return this.state.lines[0] ?? null
+    return this.push('', true)
   }
 }
-
-/** Extra folding only broadens candidates; verification keeps original semantics. */
+/** SQLite replaces noncharacters; broaden candidates and verify against source. */
 export function workspaceCandidateText(text: string): string {
-  return text
-    .toLowerCase()
-    .replaceAll('ς', 'σ')
-    .replace(/[\uFFFE\uFFFF]/g, '�')
+  return foldSearchText(text).replace(/[\uFFFE\uFFFF]/g, '�')
 }
 
 export const workspaceShortSeparator = '\u0001'

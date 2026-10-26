@@ -422,6 +422,7 @@ test('blocks longer than a window continue from replay points with bounded steps
     ),
     nestedItems: `1. outer\n\n${lines(2600, (i) => `   1. inner ${i}`)}`,
     blankItem: `-\n  first\n\n${lines(2000, (i) => (i % 5 ? `  para ${i}` : ''))}`,
+    blankItemFence: `-\n  first\n  ~~~\n  code\n  ~~~\n\n${lines(2000, (i) => `  prose ${i} *x*`)}`,
     paragraphs: lines(4000, (i) =>
       i % 40 === 39 ? '>' : i % 80 === 38 ? '> ===' : `> words ${i}`,
     ),
@@ -666,4 +667,53 @@ test('a giant fence in a quote in a list item continues in bounded steps', () =>
     assert.ok(!uncovered(tree, middle, middle + 6000), `${at}`)
     assert.equal(chain(tree, middle + 3000), chain(exact, middle + 3000))
   }
+})
+
+test('after a block that no replay can continue, formatting resumes at the next top-level block', () => {
+  // A raw block known only by its fences, so a replay cannot reopen it.
+  const raw = parser.configure([
+    GFM,
+    {
+      defineNodes: [{ name: 'RawBlock', block: true }],
+      parseBlock: [
+        {
+          name: 'RawBlock',
+          before: 'FencedCode',
+          parse(cx, line) {
+            if (line.text.slice(line.pos) !== '%%%') return false
+            const start = cx.lineStart + line.pos
+            let end = cx.lineStart + line.text.length
+            while (cx.nextLine()) {
+              end = cx.lineStart + line.text.length
+              if (line.text.slice(line.pos) === '%%%') {
+                cx.nextLine()
+                break
+              }
+            }
+            cx.addElement(cx.elt('RawBlock', start, end))
+            return true
+          },
+        },
+      ],
+    },
+  ])
+  const text = `- item\n\n  %%%\n${'  raw line\n\n'.repeat(2000)}  %%%\n\n# after\n\nend *x*\n`
+  const at = text.indexOf('# after')
+  const counts = probe()
+  const { tree, largest } = steps(
+    new ChunkedMarkdownParser(raw, raw, {
+      chunkSize: 32,
+      groupSize: 4,
+      giantBlock: 512,
+      probe: counts,
+    }).startChunkedParse(stringInput(text), [], { from: at, to: text.length }),
+    counts,
+  )
+  assert.ok(largest <= 4 * 512 + 4096, `${largest}`)
+  assert.equal(chain(tree, at + 2), 'ATXHeading1>Document')
+  assert.ok(!uncovered(tree, at, text.length))
+  assert.deepEqual(
+    nodes(tree, at, text.length),
+    nodes(raw.parse(text), at, text.length),
+  )
 })

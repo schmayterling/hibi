@@ -469,7 +469,9 @@ class ChunkedParse implements ChunkedPartialParse {
   private snapshotTree: Tree | null = null
   private snapshotKey = ''
   /** Units scanned after the demand region while looking for a resync point. */
-  private resync = 0
+  private resynced = 0
+  /** A stuck block came before this position, and parsing has not found where it ends. */
+  private lost = false
 
   private parser: ChunkedMarkdownParser
   private input: Input
@@ -520,6 +522,11 @@ class ChunkedParse implements ChunkedPartialParse {
         continue
       }
       if (this.pos >= this.input.length) return this.finish()
+      if (this.lost) {
+        if (heavy++) return null
+        this.resync()
+        continue
+      }
       if (this.reuse()) continue
       if (!this.begin()) return this.finish()
     }
@@ -757,7 +764,7 @@ class ChunkedParse implements ChunkedPartialParse {
     if (
       this.stopped(this.pos) ||
       (after &&
-        (this.resync >= this.parser.chunkSize * 4 ||
+        (this.resynced >= this.parser.chunkSize * 4 ||
           !this.olds.some((old) => old.fragment.to > this.pos)))
     ) {
       this.addTail()
@@ -861,8 +868,11 @@ class ChunkedParse implements ChunkedPartialParse {
         if (!this.view || this.widens(tree, from, limit, span, from, end))
           this.startScan(span * 2)
         else {
+          // Quotes and lists end at the next line that does not continue
+          // them; a leaf block shows as written to the end.
           this.pos = from
-          this.addPlain()
+          if (tree.topNode.firstChild?.type.is('BlockContext')) this.lost = true
+          else this.addPlain()
         }
         return
       }
@@ -897,7 +907,7 @@ class ChunkedParse implements ChunkedPartialParse {
       }
       this.pos = chunkFrom
       this.addChunk(this.leaf('pending', start - chunkFrom))
-      if (demand && chunkFrom >= demand.to) this.resync += start - chunkFrom
+      if (demand && chunkFrom >= demand.to) this.resynced += start - chunkFrom
       chunkFrom = start
       // Stop where reuse can resume or where the caller asked to stop.
       if (hint || this.stopped(chunkFrom)) break
@@ -1054,12 +1064,29 @@ class ChunkedParse implements ChunkedPartialParse {
       const line = lineStart(input, base + node.from)
       add(line)
       // A list item opened on an otherwise blank line ends at a blank line
-      // while it holds one block, so its first block is replayed too.
+      // while its marker is all it holds, so it replays its first two
+      // blocks, opening and last lines: a paragraph first ends only where
+      // the next block starts.
       if (node.name !== 'ListItem') continue
       let child = node.firstChild
       while (child && !child.type.is('Block')) child = child.nextSibling
-      if (child && lineStart(input, base + child.from) > line)
-        add(lineStart(input, base + child.from))
+      if (!child || lineStart(input, base + child.from) <= line) continue
+      for (let count = 0; child && count < 2; count++) {
+        const first = lineStart(input, base + child.from),
+          last = lineStart(input, base + child.to)
+        if (first >= at) break
+        add(first)
+        const opening = openingEnd(input, child.name, base + child.from)
+        for (
+          let next = lineEnd(input, first) + 1;
+          opening !== null && next < Math.min(opening, last, at);
+          next = lineEnd(input, next) + 1
+        )
+          add(next)
+        if (last < at) add(last)
+        child = child.nextSibling
+        while (child && !child.type.is('Block')) child = child.nextSibling
+      }
     }
     // A block starting at `at` after a blank line starts a new block there.
     if (starts) blankBefore(at)
@@ -1312,7 +1339,35 @@ class ChunkedParse implements ChunkedPartialParse {
       this.pos = block.from
       this.addChunk(this.giantLeaf(giant, block.frontier - block.from))
     } else this.pos = block.from
-    this.addPlain()
+    this.lost = true
+  }
+
+  /**
+   * After a stuck block, look a window at a time for the line where its
+   * containers must have ended, a line after a blank one that does not
+   * continue a quote or list, and parse on from there; the text before it
+   * shows as written.
+   */
+  private resync() {
+    const from = this.pos,
+      length = this.input.length
+    const to = Math.min(length, from + this.parser.giantBlock)
+    const text = this.input.read(from, to)
+    const found =
+      /\n[ \t\r]*\n(?=[^\s>])(?![-+*](?:[ \t\r\n]|$)|\d{1,9}[.)](?:[ \t\r\n]|$))/.exec(
+        text,
+      )
+    // Its blank lines start the next chunk, as before any block.
+    let end = found ? from + found.index + 1 : to
+    if (!found && to < length)
+      // A blank line and the line after it may straddle the window's end.
+      end = Math.max(
+        from + 1,
+        lineStart(this.input, lineStart(this.input, to) - 1),
+      )
+    this.addChunk(this.leaf('plain', end - from))
+    this.pos = end
+    if (found || end >= length) this.lost = false
   }
 
   /** A continued block ends at `end`: one chunk, windowed when it is giant. */
@@ -1320,7 +1375,7 @@ class ChunkedParse implements ChunkedPartialParse {
     const { from } = block
     const to = end < this.input.length ? end + 1 : end
     const demand = this.demand()
-    if (demand && from >= demand.to) this.resync += to - from
+    if (demand && from >= demand.to) this.resynced += to - from
     if (to - from <= this.parser.giantBlock) {
       if (this.wanted(from, to) && !this.stopped(from)) {
         this.startParse(from, to)
@@ -1529,7 +1584,7 @@ class ChunkedParse implements ChunkedPartialParse {
 
   /** What follows an open block: unscanned text, or plain text after a stuck one. */
   private addRest(block: Giant) {
-    if (block.stuck) this.addPlain()
+    if (block.stuck) this.lost = true
     else this.addTail()
   }
 

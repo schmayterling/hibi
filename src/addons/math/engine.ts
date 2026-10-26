@@ -1,3 +1,4 @@
+import { syntaxTree } from '@codemirror/language'
 import { EditorView, ViewPlugin } from '@codemirror/view'
 import { type Editor, InputRule, type NodeViewRenderer } from '@tiptap/core'
 import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
@@ -5,11 +6,12 @@ import type { Node } from '@tiptap/pm/model'
 import katex from 'katex'
 import { Sigma, SquareRadical } from 'lucide-react'
 import type { MarkedExtension } from 'marked'
+import { formattedSyntaxTree } from '../../renderer/src/formatted-contributions'
 import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import { isMarkdownDocument } from '../../shared/document-types'
 import type { AddonContext } from '../api'
 import type { MathHost } from './formatted'
-import { mathInsertion } from './insert'
+import { containerPrefix, mathInsertion } from './insert'
 import { formulaScheduler } from './rendering'
 import { mathStyles } from './styles'
 import {
@@ -143,10 +145,16 @@ export function startMath(context: AddonContext) {
     const latex = await prompt()
     if (latex === null) return
     if (inSource && view && view.state.doc === text && view === codeMirror()) {
-      const line = view.state.doc.lineAt(selection.from)
+      // Display math keeps the quotes and list items around the caret.
+      const { state } = view
       const value = mathInsertion(
-        line.text,
-        selection.from - line.from,
+        block
+          ? containerPrefix(
+              state.doc,
+              formattedSyntaxTree(state) ?? syntaxTree(state),
+              selection.from,
+            )
+          : '',
         latex,
         block,
       )

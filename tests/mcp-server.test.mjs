@@ -285,6 +285,56 @@ test('bundled MCP server serves a real HTTP client and preserves workspace edits
         assert.ok(textOf(await tool('read_document', { path }), true))
       const search = jsonOf(await tool('search_documents', { query: 'NEEDLE' }))
       assert.equal(search.truncated, false)
+      const first = jsonOf(
+        await tool('search_documents', {
+          query: 'NEEDLE',
+          limit: 1,
+          searchId: 'native-pagination',
+        }),
+      )
+      assert.equal(first.matches.length, 1)
+      assert.ok(first.nextCursor)
+      const paths = first.matches.map((match) => match.path)
+      let next = first.nextCursor
+      while (next) {
+        const page = jsonOf(
+          await tool('search_documents', {
+            query: 'NEEDLE',
+            limit: 1,
+            cursor: next,
+          }),
+        )
+        paths.push(...page.matches.map((match) => match.path))
+        next = page.nextCursor
+      }
+      assert.deepEqual(paths.sort(), ['notes/path-needle.md', 'notes/topic.md'])
+      const cancelled = jsonOf(
+        await tool('search_documents', {
+          query: 'NEEDLE',
+          limit: 1,
+          searchId: 'native-cancellation',
+        }),
+      )
+      assert.ok(cancelled.nextCursor)
+      assert.deepEqual(
+        jsonOf(
+          await tool('search_documents', {
+            query: 'NEEDLE',
+            searchId: 'native-cancellation',
+            cancel: true,
+          }),
+        ).matches,
+        [],
+      )
+      assert.ok(
+        textOf(
+          await tool('search_documents', {
+            query: 'NEEDLE',
+            cursor: cancelled.nextCursor,
+          }),
+          true,
+        ),
+      )
       assert.deepEqual(
         search.matches.sort((a, b) => a.path.localeCompare(b.path)),
         [

@@ -114,6 +114,7 @@ export default defineConfig({
           'typst-worker': resolve('src/addons/typst/compiler-worker.ts'),
           'format-worker': resolve('src/addons/_shared/format-worker.ts'),
           'import-worker': resolve('src/addons/_shared/import-worker.ts'),
+          'workspace-text-worker': resolve('src/main/workspace-text-worker.ts'),
           'dictionary-pack-worker': resolve(
             'src/addons/dictionary/pack-worker.ts',
           ),

@@ -3,14 +3,15 @@ import {
   getDocument,
   getDocumentPath,
   getOpenDocuments,
+  getOpenDocumentVersions,
 } from '../../main/document'
 import { isDocumentName } from '../../main/document-types'
 import {
   currentWorkspaceTarget,
   getWorkspace,
-  indexWorkspace,
   isCurrentWorkspaceTarget,
   workspaceChangeCursor,
+  workspaceName,
   workspaceRelativePath,
   workspaceRoot,
 } from '../../main/workspace'
@@ -30,6 +31,7 @@ import type {
   WorkspaceEntry,
   WorkspaceFileResult,
 } from '../../shared/workspace'
+import { WORKSPACE_TEXT_QUERY_BYTES } from '../../shared/workspace-query'
 import {
   applyPlannedEdits,
   type OpenEditReply,
@@ -159,11 +161,18 @@ export const toolDefinitions = [
   {
     name: 'search_documents',
     description:
-      'Search paths and text without case sensitivity, with numbered matching lines. Index limit: 2,000 documents / 20 MiB.',
+      'Search paths and text without case sensitivity, with numbered matching lines. Follow nextCursor for more results.',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', minLength: 1, maxLength: 128 },
+        query: {
+          type: 'string',
+          minLength: 1,
+          maxLength: WORKSPACE_TEXT_QUERY_BYTES,
+        },
+        cursor: { type: 'string', maxLength: 64 },
+        searchId: { type: 'string', minLength: 1, maxLength: 128 },
+        cancel: { type: 'boolean' },
         limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
       },
       required: ['query'],
@@ -301,11 +310,74 @@ function workspaceResult(result: WorkspaceFileResult<unknown>, name: string) {
   throw new Error(result.message)
 }
 
+async function searchDocuments(args: Record<string, unknown>) {
+  if (
+    typeof args.query !== 'string' ||
+    !args.query.trim() ||
+    args.query.length > WORKSPACE_TEXT_QUERY_BYTES ||
+    Buffer.byteLength(args.query) > WORKSPACE_TEXT_QUERY_BYTES
+  )
+    throw new InvalidParams('Use a search query of up to 256 KiB.')
+  if (
+    args.cursor !== undefined &&
+    (typeof args.cursor !== 'string' || args.cursor.length > 64)
+  )
+    throw new InvalidParams('Use a valid search cursor.')
+  const target = currentWorkspaceTarget()
+  const name = workspaceName()
+  if (!target || !name) throw new Error('Open a workspace in Hibi first.')
+  const limit = limitFor(args.limit, 20, 100)
+  const { queryWorkspaceText } = await import(
+    '../../main/workspace-text-search'
+  )
+  const matches: {
+    path: string
+    lines: readonly { line: number; text: string }[]
+  }[] = []
+  let cursor = args.cursor as string | undefined
+  let complete = false
+  do {
+    const result = await queryWorkspaceText(
+      {
+        target,
+        kind: 'search-text',
+        query: args.query,
+        limit: limit - matches.length,
+        ...(cursor ? { cursor } : {}),
+        ...(args.searchId !== undefined ? { searchId: args.searchId } : {}),
+        ...(args.cancel !== undefined ? { cancel: args.cancel } : {}),
+      },
+      getOpenDocumentVersions,
+      'mcp',
+      true,
+    )
+    if (!result.ok) {
+      if (result.code === 'unsupported' || result.code === 'limit-exceeded')
+        throw new InvalidParams(result.message)
+      throw new Error(result.message)
+    }
+    matches.push(
+      ...result.value.matches.map(({ path, lines }) => ({ path, lines })),
+    )
+    complete = result.value.complete
+    cursor = result.value.nextCursor ?? undefined
+  } while (cursor && matches.length < limit)
+  return textResult(
+    JSON.stringify({
+      workspace: name,
+      matches,
+      truncated: !!cursor || !complete,
+      ...(cursor ? { nextCursor: cursor } : {}),
+    }),
+  )
+}
+
 async function runTool(
   name: string,
   args: Record<string, unknown>,
   access?: ToolAccess,
 ) {
+  if (name === 'search_documents') return searchDocuments(args)
   const scope = await openWorkspace()
   if (
     name === 'create_document' ||
@@ -478,53 +550,7 @@ async function runTool(
       JSON.stringify({ name: document.name, path, ...clip(document.markdown) }),
     )
   }
-  if (
-    typeof args.query !== 'string' ||
-    !args.query.trim() ||
-    args.query.length > 128
-  )
-    throw new InvalidParams('Use a search query of 1 to 128 characters.')
-  const limit = limitFor(args.limit, 20, 100)
-  const query = args.query.toLowerCase()
-  const index = await indexWorkspace()
-  scope.ensureCurrent()
-  if (!index) throw new Error('Open a workspace in Hibi first.')
-  const matches: { path: string; lines: { line: number; text: string }[] }[] =
-    []
-  let truncated = !workspaceChangeCursor().complete
-  for (const page of index.pages) {
-    if (!scope.visible(page.path)) continue
-    const pathMatch = page.path.toLowerCase().includes(query)
-    if (!pathMatch && !page.markdown.toLowerCase().includes(query)) continue
-    if (matches.length === limit) {
-      truncated = true
-      break
-    }
-    await resolveWorkspaceEntry(scope.root, page.path, true)
-    scope.ensureCurrent()
-    const lines: { line: number; text: string }[] = []
-    let line = 1
-    let start = 0
-    while (start < page.markdown.length && lines.length < 3) {
-      const newline = page.markdown.indexOf('\n', start)
-      const end = newline < 0 ? page.markdown.length : newline
-      const source = page.markdown.slice(start, end)
-      const match = source.toLowerCase().indexOf(query)
-      if (match >= 0) {
-        const from = Math.max(0, match - 80)
-        lines.push({
-          line,
-          text: `${from ? '…' : ''}${source.slice(from, from + 240)}${source.length > from + 240 ? '…' : ''}`,
-        })
-      }
-      start = end + 1
-      line++
-    }
-    matches.push({ path: page.path, lines })
-  }
-  return textResult(
-    JSON.stringify({ workspace: scope.workspace.name, matches, truncated }),
-  )
+  throw new InvalidParams(`Unknown tool: ${name}`)
 }
 
 export async function callTool(

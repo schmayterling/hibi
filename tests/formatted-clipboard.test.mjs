@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test, { after, before } from 'node:test'
+import { marked } from 'marked'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
@@ -465,6 +466,129 @@ test('an html paste waiting for its converter replaces the selection it was made
   assert.equal(selected, 'bold')
   await clipboardEvent('paste', 0, null, { 'text/plain': note })
   await settled(note)
+})
+
+test('html paste preserves code padding, Unicode spaces and literal heading markers', {
+  timeout: 60000,
+}, async (t) => {
+  for (const [name, html, selector, expected] of [
+    ['code outer spaces', '<p><code> x </code></p>', 'code', ' x '],
+    ['all-space code', '<p><code>   </code></p>', 'code', '   '],
+    ['code in heading', '<h2><code> x </code> #</h2>', 'h2', ' x  #'],
+    [
+      'code in table',
+      '<table><tr><th><code> x </code></th></tr></table>',
+      'th code',
+      ' x ',
+    ],
+    ['styled Unicode spaces', '<p><em>&nbsp;x　</em></p>', 'em', '\u00a0x　'],
+    [
+      'nonbreaking spaces',
+      '<p>&nbsp;a&nbsp;b&nbsp;</p>',
+      'p',
+      '\u00a0a\u00a0b\u00a0',
+    ],
+    ['ideographic spaces', '<p>　a　b　</p>', 'p', '　a　b　'],
+    ['heading hash', '<h2>section #</h2>', 'h2', 'section #'],
+    [
+      'backtick language',
+      '<pre><code class="language-x`y">hello</code></pre>',
+      'pre code',
+      'hello\n',
+    ],
+    [
+      'tilde body',
+      '<pre><code class="language-x`y">~~~\nhello\n</code></pre>',
+      'pre code',
+      '~~~\nhello\n',
+    ],
+  ]) {
+    await t.test(name, async () => {
+      try {
+        await clipboardEvent('paste', note.length, note.length, {
+          'text/html': html,
+        })
+        await waitForAsync(
+          page,
+          async (length) =>
+            (await window.hibi.getDocument()).markdown.length > length,
+          note.length,
+        )
+        const inserted = (await markdown()).slice(note.length)
+        const rendered = marked.parse(inserted)
+        const actual = await page.evaluate(
+          ({ rendered, selector }) =>
+            new DOMParser()
+              .parseFromString(rendered, 'text/html')
+              .querySelector(selector)?.textContent,
+          { rendered, selector },
+        )
+        assert.equal(actual, expected, inserted)
+      } finally {
+        await clipboardEvent('paste', 0, null, { 'text/plain': note })
+        await settled(note)
+      }
+    })
+  }
+})
+
+test('queued html pastes preserve event order with selection and intervening typing', {
+  timeout: 30000,
+}, async (t) => {
+  for (const [name, selected, intervening, expected] of [
+    ['same caret', false, '', 'Xfirstsecond'],
+    ['same selection', true, '', 'Xfirstsecond'],
+    ['intervening typing', false, 'typed', 'Xfirsttypedsecond'],
+    ['intervening plain paste', false, 'plain', 'Xfirstplainsecond'],
+  ]) {
+    await t.test(name, async () => {
+      try {
+        await clipboardEvent('paste', 0, null, {
+          'text/plain': selected ? 'XYZ' : 'X',
+        })
+        await settled(selected ? 'XYZ' : 'X')
+        await page.evaluate(
+          ({ selected, intervening }) => {
+            const view = document.querySelector('.rich-pane .cm-content').cmTile
+              .root.view
+            view.dispatch({ selection: { anchor: 1, head: selected ? 3 : 1 } })
+            const paste = (text, html = true) => {
+              const data = new DataTransfer()
+              data.setData(
+                html ? 'text/html' : 'text/plain',
+                html ? `<p>${text}</p>` : text,
+              )
+              view.contentDOM.dispatchEvent(
+                new ClipboardEvent('paste', {
+                  clipboardData: data,
+                  bubbles: true,
+                  cancelable: true,
+                }),
+              )
+            }
+            paste('first')
+            if (intervening === 'typed')
+              view.dispatch({
+                changes: { from: 1, insert: 'typed' },
+                selection: { anchor: 6 },
+                userEvent: 'input.type',
+              })
+            if (intervening === 'plain') paste('plain', false)
+            paste('second')
+          },
+          { selected, intervening },
+        )
+        await waitForAsync(page, async () => {
+          const text = (await window.hibi.getDocument()).markdown
+          return text.includes('second')
+        })
+        assert.equal(await markdown(), expected)
+      } finally {
+        await clipboardEvent('paste', 0, null, { 'text/plain': note })
+        await settled(note)
+      }
+    })
+  }
 })
 
 test('the rich view copies the same rendered content for the same note', {

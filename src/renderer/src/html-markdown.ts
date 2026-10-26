@@ -54,10 +54,14 @@ const hasBlocks = (node: Node) => [...node.childNodes].some(isBlock)
  * `==`) and entity references are escaped too.
  */
 function literal(text: string) {
-  return text
-    .replace(/[\\`*_[\]<~$]/g, '\\$&')
-    .replace(/&(?=#?\w+;)/g, '\\&')
-    .replace(/=(?==)/g, '\\=')
+  return (
+    text
+      .replace(/[\\`*_[\]<~$#]/g, '\\$&')
+      .replace(/&(?=#?\w+;)/g, '\\&')
+      .replace(/=(?==)/g, '\\=')
+      // Character references preserve Unicode spaces through Markdown trimming.
+      .replace(/[^\S \t\r\n\f]/gu, (space) => `&#${space.codePointAt(0)};`)
+  )
 }
 
 /** Line starts that would begin a block. */
@@ -78,11 +82,17 @@ function wrap(content: string, mark: string) {
 
 /** Inline code with a fence longer than any backtick run inside it. */
 function code(text: string) {
+  text = text.replace(/\r\n?|\n/g, ' ')
   let longest = 0
   for (const run of text.match(/`+/g) ?? [])
     longest = Math.max(longest, run.length)
   const fence = '`'.repeat(longest + 1)
-  const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : ''
+  const pad =
+    text.startsWith('`') ||
+    text.endsWith('`') ||
+    (text.startsWith(' ') && text.endsWith(' ') && /[^ ]/.test(text))
+      ? ' '
+      : ''
   return `${fence}${pad}${text}${pad}${fence}`
 }
 
@@ -99,7 +109,7 @@ function inline(node: Node, cell = false): string {
 
 function inlineNode(node: Node, cell: boolean): string {
   if (node.nodeType === Node.TEXT_NODE)
-    return literal((node.textContent ?? '').replace(/\s+/g, ' '))
+    return literal((node.textContent ?? '').replace(/[ \t\r\n\f]+/g, ' '))
   if (node.nodeType !== Node.ELEMENT_NODE) return ''
   const element = node as Element
   if (skipped.has(element.nodeName)) return ''
@@ -178,7 +188,7 @@ const indent = (text: string, prefix: string, first = prefix) =>
 function block(element: Element): string[] {
   const name = element.nodeName
   if (/^H[1-6]$/.test(name)) {
-    const text = inline(element).replace(/\s+/g, ' ').trim()
+    const text = inline(element).replace(/\n/g, ' ').trim()
     return text ? [`${'#'.repeat(Number(name[1]))} ${text}`] : []
   }
   switch (name) {
@@ -197,9 +207,9 @@ function block(element: Element): string[] {
       const text = (element.textContent ?? '').replace(/\n$/, '')
       // Longer than any line that could close it.
       let longest = 2
-      for (const [, run = ''] of text.matchAll(/^ {0,3}(`+)/gm))
+      for (const [, run = ''] of text.matchAll(/^ {0,3}(`+|~+)/gm))
         longest = Math.max(longest, run.length)
-      const fence = '`'.repeat(longest + 1)
+      const fence = (language.includes('`') ? '~' : '`').repeat(longest + 1)
       return [`${fence}${language}\n${text}\n${fence}`]
     }
     case 'BLOCKQUOTE':
@@ -252,7 +262,7 @@ function table(element: Element): string {
     [...row.children]
       .filter((cell) => cell.nodeName === 'TD' || cell.nodeName === 'TH')
       .map((cell) =>
-        inline(cell, true).replace(/\s+/g, ' ').trim().replace(/\|/g, '\\|'),
+        inline(cell, true).replace(/\n/g, ' ').trim().replace(/\|/g, '\\|'),
       ),
   )
   let width = 0

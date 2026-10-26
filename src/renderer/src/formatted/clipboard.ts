@@ -1,4 +1,4 @@
-import type { EditorSelection } from '@codemirror/state'
+import { Annotation, EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import DOMPurify from 'dompurify'
 import { renderedHtmlOptions } from '../../../shared/rendered-html.ts'
@@ -18,6 +18,7 @@ import {
 
 /** Marks the HTML this view copies, whose text is already the exact Markdown. */
 const copied = 'data-hibi-markdown'
+const pastedSelection = Annotation.define<EditorSelection>()
 
 /** HTML pastes waiting for the converter, with the selection each replaces. */
 const pastes = new Set<{ view: EditorView; selection: EditorSelection }>()
@@ -90,7 +91,11 @@ function paste(event: ClipboardEvent, view: EditorView) {
                 insert,
               })),
             },
-        { scrollIntoView: true, userEvent: 'input.paste' },
+        {
+          scrollIntoView: true,
+          userEvent: 'input.paste',
+          annotations: pastedSelection.of(selection),
+        },
       )
     })
   return true
@@ -106,10 +111,25 @@ export const contribution: FormattedContribution = {
       paste: (event, view) => paste(event, view),
     }),
     EditorView.updateListener.of((update) => {
-      if (update.docChanged)
-        for (const pending of pastes)
-          if (pending.view === update.view)
-            pending.selection = pending.selection.map(update.changes)
+      for (const transaction of update.transactions) {
+        if (!transaction.docChanged) continue
+        const pasted = transaction.annotation(pastedSelection)
+        for (const pending of pastes) {
+          if (pending.view !== update.view) continue
+          // Later pastes at the same selection follow this insertion.
+          // Intervening edits keep the original selection association.
+          pending.selection = pasted?.eq(pending.selection)
+            ? EditorSelection.create(
+                pending.selection.ranges.map((range) =>
+                  EditorSelection.cursor(
+                    transaction.changes.mapPos(range.to, 1),
+                  ),
+                ),
+                pending.selection.mainIndex,
+              )
+            : pending.selection.map(transaction.changes)
+        }
+      }
     }),
   ],
 }

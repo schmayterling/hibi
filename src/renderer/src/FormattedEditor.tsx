@@ -14,6 +14,7 @@ import type { ViewId } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import { normalizedSource } from '../../shared/source-projection'
 import { documentRuntime } from './document-runtime'
+import { largeOpening } from './document-shell'
 import type { MarkdownEditor as RichMarkdownEditor } from './Editor'
 import { EditorCursor } from './EditorCursor'
 import { emitEditorKeyEvent } from './editor-events'
@@ -126,6 +127,8 @@ export function MarkdownEditor({
     id: 0,
     direction: 'next',
   })
+  // A large note's source view unmounts when it is left, keeping its place.
+  const releaseSource = largeOpening(documentRuntime, documentState)
   const {
     content,
     paneMode,
@@ -136,7 +139,7 @@ export function MarkdownEditor({
     setSourceReady,
     setSourceSettled,
     focusOwnedByEditor,
-  } = useEditorPanes(mode, markdownDocument)
+  } = useEditorPanes(mode, markdownDocument, false, releaseSource)
   const findTarget =
     mode === 'normal' ? 'rich' : mode === 'markdown' ? 'source' : focusedPane
   useEffect(() => {
@@ -368,6 +371,7 @@ export function MarkdownEditor({
                   findQuery={findQuery}
                   findMove={findMove}
                   onFindStatus={setFindStatus}
+                  keepPlace={releaseSource}
                 />
               </Suspense>
             )}

@@ -204,6 +204,7 @@ export function SourceEditor({
   spellCheck = false,
   flavors,
   documentRevision = 0,
+  keepPlace = false,
 }: {
   document: DocumentState
   viewId?: string
@@ -241,6 +242,8 @@ export function SourceEditor({
   flavors?: readonly string[]
   /** Formatted view: the document revision for widgets such as media. */
   documentRevision?: number
+  /** A view that unmounts keeps its selection and scroll position, mapped through edits, for the next. */
+  keepPlace?: boolean
 }) {
   const formatted = presentation === 'formatted'
   const kind = formatted ? 'rich' : 'source'
@@ -285,6 +288,8 @@ export function SourceEditor({
   ])
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
+  const keepingPlace = useRef(keepPlace)
+  keepingPlace.current = keepPlace
   // Effects follow the actual view, which mounts after source preparation.
   const [mountedView, setMountedView] = useState<EditorView | null>(null)
   const [installedExtensions, setInstalledExtensions] = useState<{
@@ -670,7 +675,8 @@ export function SourceEditor({
         }),
       ]
     }
-    const selection = bridge.selection()
+    const place = keepingPlace.current ? bridge.place() : null
+    const selection = place?.selection ?? bridge.selection()
     type PendingCompletion = {
       request: CompletionRequest
       items: readonly CompletionItem[]
@@ -1068,6 +1074,14 @@ export function SourceEditor({
     }
     const editor = new EditorView({
       parent: host.current,
+      ...(place
+        ? {
+            scrollTo: EditorView.scrollIntoView(place.top, {
+              y: 'start',
+              yMargin: place.margin,
+            }),
+          }
+        : {}),
       dispatchTransactions(transactions, editor) {
         try {
           bridge.dispatch(transactions, editor, exactChanges.current)
@@ -1912,6 +1926,20 @@ export function SourceEditor({
   useLayoutEffect(() => {
     bridge.setVisible(sourceVisible || editTarget)
   }, [bridge, sourceVisible, editTarget])
+
+  // A view keeps its place while its pane still lays out: the cleanup that
+  // destroys it runs after the pane has left the page.
+  useLayoutEffect(
+    () => () => {
+      const editor = view.current
+      if (!keepingPlace.current || !editor) return
+      const height =
+        editor.scrollDOM.getBoundingClientRect().top - editor.documentTop
+      const line = editor.lineBlockAtHeight(height)
+      bridge.keepPlace(editor, line.from, line.top - height)
+    },
+    [bridge],
+  )
 
   useEffect(() => {
     const editor = view.current

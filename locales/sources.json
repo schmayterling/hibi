@@ -371,6 +371,10 @@
   "8c733faf0a0a": [
     "src/main/dependencies.ts"
   ],
+  "caf4b57ff979": [
+    "src/addons/documentation/native.ts",
+    "src/addons/documentation/site-runtime.ts"
+  ],
   "46e7dbbc93e5": [
     "src/main/index.ts",
     "src/renderer/src/main.tsx"
@@ -1369,7 +1373,9 @@
     "src/renderer/src/main.tsx"
   ],
   "7f43531f5a30": [
-    "src/addons/documentation/native.ts"
+    "src/addons/documentation/native.ts",
+    "src/addons/documentation/prepare.ts",
+    "src/addons/documentation/site-runtime.ts"
   ],
   "283432fdadc1": [
     "src/addons/dictionary/index.tsx"
@@ -2274,12 +2280,6 @@
   ],
   "d9d979c63132": [
     "src/main/host-selected-io.ts"
-  ],
-  "423a85dca9b6": [
-    "src/main/workspace.ts"
-  ],
-  "23b5bc4d7a20": [
-    "src/main/workspace.ts"
   ],
   "e7154684d4df": [
     "src/addons/dictionary/CustomWords.tsx"
@@ -3338,6 +3338,9 @@
   ],
   "cb8f2c8855ca": [
     "src/addons/dictionary/PackSettings.tsx"
+  ],
+  "bf94dee592e6": [
+    "src/addons/documentation/ExportDialog.tsx"
   ],
   "2de539a660eb": [
     "src/renderer/src/LicenseSettings.tsx"
@@ -5750,9 +5753,6 @@
   "53a9d03e9663": [
     "src/main/addon-documentation.ts"
   ],
-  "8c6ee6bc52e4": [
-    "src/addons/documentation/native.ts"
-  ],
   "6d78247b2a33": [
     "src/main/links.ts"
   ],
@@ -5973,7 +5973,9 @@
     "src/main/index.ts"
   ],
   "671a56401be1": [
-    "src/addons/documentation/native.ts"
+    "src/addons/documentation/native.ts",
+    "src/addons/documentation/site-worker.ts",
+    "src/main/workspace.ts"
   ],
   "1f9371eb85f2": [
     "src/main/workspace.ts"
@@ -6430,6 +6432,9 @@
   "3ec61208f558": [
     "src/main/global-shortcuts.ts"
   ],
+  "53101e1d982a": [
+    "src/addons/documentation/site-runtime.ts"
+  ],
   "f876c831e537": [
     "src/renderer/src/document-runtime.ts"
   ],
@@ -6473,6 +6478,7 @@
     "src/addons/autocomplete/index.tsx"
   ],
   "78c4a3ab448e": [
+    "src/addons/documentation/native.ts",
     "src/main/workspace.ts"
   ],
   "a5d897d361ec": [

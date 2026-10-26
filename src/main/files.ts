@@ -64,7 +64,7 @@ export async function writeMarkdown(
 
 export async function writeText(
   path: string,
-  text: string | Uint8Array,
+  text: string | Uint8Array | AsyncIterable<Uint8Array>,
   exclusive = false,
   canCommit?: () => boolean,
 ): Promise<void> {

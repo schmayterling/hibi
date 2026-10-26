@@ -24,6 +24,10 @@ import type {
   SourceExtension,
 } from '../../addons/api'
 import {
+  builtInFlavors,
+  builtInRichAttachments,
+} from '../../shared/built-in-grammar'
+import {
   type CompletionItem,
   type CompletionRequest,
   type CompletionUpdate,
@@ -149,15 +153,15 @@ const parseParagraph = (editor: Editor, source: string) =>
     editor.markdown!.parse(source),
   )
 
-// These built-in attachments observe or dispatch edits without replacing codecs.
-const grammarPreservingRich = new Map([
-  ['word-count.text', 'word-count'],
-  ['block-drag.handle', 'block-drag'],
-  ['dictionary.lookup', 'dictionary'],
-  ['math.editing', 'math'],
-  ['slash-commands.menu', 'slash-commands'],
-  ['tags.highlights', 'tags'],
-])
+// Addons whose syntax features the source outline and the plain codec model.
+const grammarOwners = new Set(
+  [...builtInFlavors.values()].map(({ owner }) => owner),
+)
+const plainTextOwners = new Set(
+  [...builtInFlavors.values()].flatMap(({ owner, plainText }) =>
+    plainText === false ? [] : [owner],
+  ),
+)
 
 // ProseMirror skips scrollIntoView while DOM focus is outside the editor.
 function revealRichRange(editor: Editor, from: number, to = from) {
@@ -331,7 +335,7 @@ export function MarkdownEditor({
     (extension) =>
       'addonId' in extension &&
       typeof extension.addonId === 'string' &&
-      grammarPreservingRich.get(extension.id) === extension.addonId &&
+      builtInRichAttachments.get(extension.id) === extension.addonId &&
       addonRegistry.origin(extension.addonId) === 'built-in',
   )
   // biome-ignore lint/correctness/useExhaustiveDependencies: syntaxVersion invalidates the current registry preferences.
@@ -342,14 +346,7 @@ export function MarkdownEditor({
         (flavor) =>
           (flavor.export?.extensions?.length ||
             flavor.richExtensions?.length) &&
-          ![
-            'markdown.github',
-            'markdown.obsidian',
-            'github-markdown.github',
-            'text-extras.text-extras',
-            'math.latex',
-            'mermaid.blocks',
-          ].includes(flavor.id),
+          !builtInFlavors.has(flavor.id),
       ) ||
       markdownExtensions.some(
         (extension) => extension.id !== 'frontmatter.metadata',
@@ -373,14 +370,6 @@ export function MarkdownEditor({
   }, [flavors, markdownExtensions, syntaxVersion])
   // biome-ignore lint/correctness/useExhaustiveDependencies: registry preferences invalidate outline grammar ownership.
   const outlineSyntax = useMemo(() => {
-    const known = new Map([
-      ['markdown.github', 'markdown'],
-      ['markdown.obsidian', 'markdown'],
-      ['github-markdown.github', 'github-markdown'],
-      ['text-extras.text-extras', 'text-extras'],
-      ['math.latex', 'math'],
-      ['mermaid.blocks', 'mermaid'],
-    ])
     if (
       !richSyntaxCompatible ||
       flavors.some((flavor) => {
@@ -389,7 +378,7 @@ export function MarkdownEditor({
           .find((entry) => entry === flavor)
         return (
           !entry ||
-          known.get(entry.id) !== entry.addonId ||
+          builtInFlavors.get(entry.id)?.owner !== entry.addonId ||
           addonRegistry.origin(entry.addonId) !== 'built-in'
         )
       }) ||
@@ -406,7 +395,7 @@ export function MarkdownEditor({
           (feature) =>
             !markdownSyntax.isCore(feature.id) &&
             feature.scope !== 'document' &&
-            (![...known.values()].includes(feature.owner) ||
+            (!grammarOwners.has(feature.owner) ||
               addonRegistry.origin(feature.owner) !== 'built-in'),
         )
     )
@@ -435,25 +424,19 @@ export function MarkdownEditor({
   // biome-ignore lint/correctness/useExhaustiveDependencies: syntaxVersion invalidates parser contribution compatibility.
   const plainSyncEligible = useMemo(() => {
     const knownOwner = (owner: string) =>
-      ['markdown', 'github-markdown', 'text-extras', 'mermaid'].includes(
-        owner,
-      ) && addonRegistry.origin(owner) === 'built-in'
+      plainTextOwners.has(owner) && addonRegistry.origin(owner) === 'built-in'
     return (
       richSyntaxCompatible &&
       flavors.every((flavor) => {
         const registered = flavorRegistry
           .snapshot()
           .find((entry) => entry === flavor)
+        if (!registered) return false
+        const grammar = builtInFlavors.get(registered.id)
         return (
-          registered &&
-          knownOwner(registered.addonId) &&
-          [
-            'markdown.github',
-            'markdown.obsidian',
-            'github-markdown.github',
-            'text-extras.text-extras',
-            'mermaid.blocks',
-          ].includes(registered.id)
+          grammar?.owner === registered.addonId &&
+          grammar.plainText !== false &&
+          knownOwner(registered.addonId)
         )
       }) &&
       markdownExtensions.every(

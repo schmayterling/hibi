@@ -111,12 +111,12 @@ import {
 } from './editor-interaction-presence'
 import { editorViewRegistry } from './editor-view-api'
 import type { FindMove, FindStatus } from './FindBar'
-import { formattedSyntax } from './formatted-syntax'
 import {
-  formattedTabIndents,
-  livePreview,
+  formattedDocument,
   showMarkdownMarkers,
-} from './live-preview'
+} from './formatted-contributions'
+import { formattedSyntax } from './formatted-syntax'
+import { formattedTabIndents, livePreview } from './live-preview'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import {
   observeSourceAnnotations,
@@ -200,6 +200,8 @@ export function SourceEditor({
   presentation = 'source',
   markers = true,
   spellCheck = false,
+  flavors,
+  documentRevision = 0,
 }: {
   document: DocumentState
   viewId?: string
@@ -233,6 +235,10 @@ export function SourceEditor({
   /** Formatted view: show the Markdown markers under the caret. */
   markers?: boolean
   spellCheck?: boolean
+  /** Formatted view: the document's Markdown flavor ids, which select contributions. */
+  flavors?: readonly string[]
+  /** Formatted view: the document revision for widgets such as media. */
+  documentRevision?: number
 }) {
   const formatted = presentation === 'formatted'
   const kind = formatted ? 'rich' : 'source'
@@ -246,6 +252,7 @@ export function SourceEditor({
     label,
     sourceFormat,
     supportsMedia,
+    flavors,
   })
   parserOptions.current = {
     markdownMode,
@@ -257,7 +264,9 @@ export function SourceEditor({
     label,
     sourceFormat,
     supportsMedia,
+    flavors,
   }
+  const flavorKey = flavors?.join(',')
   const configureParser = useRef(() => {})
   // biome-ignore lint/correctness/useExhaustiveDependencies: parser configuration reads these current values through parserOptions.
   useEffect(() => {
@@ -270,6 +279,7 @@ export function SourceEditor({
     label,
     sourceFormat,
     supportsMedia,
+    flavorKey,
   ])
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
@@ -318,8 +328,8 @@ export function SourceEditor({
   const indentation = useRef(new Compartment())
   const display = useRef(new Compartment())
   // Later changes reconfigure the display compartment without a new editor.
-  const displayOptions = useRef({ markers, spellCheck })
-  displayOptions.current = { markers, spellCheck }
+  const displayOptions = useRef({ markers, spellCheck, documentRevision })
+  displayOptions.current = { markers, spellCheck, documentRevision }
   const find = useRef({
     active: findActive,
     query: findQuery,
@@ -578,7 +588,7 @@ export function SourceEditor({
       } = parserOptions.current
       if (formatted)
         return [
-          livePreview(syntax),
+          livePreview(syntax, { flavors: parserOptions.current.flavors }),
           keymap.of(
             formattingKeymap((id) => formatting.current?.run(id) ?? false),
           ),
@@ -1266,6 +1276,10 @@ export function SourceEditor({
                   EditorView.contentAttributes.of({
                     spellcheck: String(displayOptions.current.spellCheck),
                   }),
+                  formattedDocument.of({
+                    revision: displayOptions.current.documentRevision,
+                    tabId: document.tabId,
+                  }),
                 ]
               : EditorView.contentAttributes.of({ spellcheck: 'false' }),
           ),
@@ -1867,9 +1881,13 @@ export function SourceEditor({
       effects: display.current.reconfigure([
         showMarkdownMarkers.of(markers),
         EditorView.contentAttributes.of({ spellcheck: String(spellCheck) }),
+        formattedDocument.of({
+          revision: documentRevision,
+          tabId: document.tabId,
+        }),
       ]),
     })
-  }, [bridge, formatted, markers, spellCheck])
+  }, [bridge, formatted, markers, spellCheck, documentRevision, document.tabId])
   useEffect(() => {
     view.current?.dispatch({
       effects: editable.current.reconfigure([

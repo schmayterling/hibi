@@ -38,11 +38,14 @@ import {
   lineBreak,
 } from './formatted-commands'
 import {
+  type FormattedContainer,
   type FormattedDecorations,
   type FormattedLayout,
   type FormattedNodeView,
   formattedContributions,
+  formattedLiteral,
   formattedViews,
+  showMarkdownMarkers,
 } from './formatted-contributions'
 import type { FormattedSyntax } from './formatted-syntax'
 import './formatted'
@@ -56,11 +59,6 @@ import './live-preview.css'
  */
 
 const hide = Decoration.replace({})
-
-/** Show the Markdown markers of the formatted text under the selection. */
-export const showMarkdownMarkers = Facet.define<boolean, boolean>({
-  combine: (values) => values.at(-1) ?? true,
-})
 
 /** Whether Tab indents formatted text; list items and code always take Tab. */
 export const formattedTabIndents = Facet.define<boolean, boolean>({
@@ -124,12 +122,29 @@ function blockSpace(name: string): { top: number; bottom: number } {
   }
 }
 
+/** Rules of the render in progress: syntax shown as written and contributed node views. */
+type Blocks = {
+  literal: ReadonlySet<string>
+  views: Map<string, FormattedNodeView[]>
+  shapes: (node: SyntaxNode) => FormattedContainer | undefined
+}
+const noBlocks: Blocks = {
+  literal: new Set(),
+  views: new Map(),
+  shapes: () => undefined,
+}
+let blocks = noBlocks
+
 const isBlock = (node: SyntaxNode) => node.type.is('Block')
 const isList = (node: SyntaxNode) =>
   node.name === 'BulletList' || node.name === 'OrderedList'
-/** Containers without vertical padding: their first and last children's margins collapse through them. */
+/** Blocks that hold blocks; unless padded, their first and last children's margins collapse through them. */
 const isContainer = (node: SyntaxNode) =>
-  node.name === 'Blockquote' || node.name === 'ListItem' || isList(node)
+  !blocks.literal.has(node.name) &&
+  (node.name === 'Blockquote' ||
+    node.name === 'ListItem' ||
+    isList(node) ||
+    !!blocks.views.get(node.name)?.some((view) => view.container))
 
 function blockSibling(node: SyntaxNode, forward: boolean) {
   let next = forward ? node.nextSibling : node.prevSibling
@@ -145,6 +160,8 @@ function blockChild(node: SyntaxNode, last: boolean) {
 
 /** A block's margins in its container: list items and the blocks inside them sit closer. */
 function margins(node: SyntaxNode): { top: number; bottom: number } {
+  // Syntax shown as written keeps a paragraph's 1em margins on both sides.
+  if (blocks.literal.has(node.name)) return { top: 16, bottom: 16 }
   const parent = node.parent
   // Items and nested lists sit 0.3em apart; blocks after the first in an item one line apart.
   if (parent?.name === 'ListItem')
@@ -154,7 +171,9 @@ function margins(node: SyntaxNode): { top: number; bottom: number } {
     }
   if (parent && isList(parent))
     return { top: blockSibling(node, false) ? 4.8 : 0, bottom: 0 }
-  const space = blockSpace(node.name)
+  const space =
+    blocks.views.get(node.name)?.find((view) => view.space)?.space ??
+    blockSpace(node.name)
   // A quote's last block has no bottom margin.
   return parent?.name === 'Blockquote' && !blockSibling(node, true)
     ? { top: space.top, bottom: 0 }
@@ -163,13 +182,32 @@ function margins(node: SyntaxNode): { top: number; bottom: number } {
 
 /** The collapsed top margin of a block and its first descendants. */
 function topMargin(node: SyntaxNode): number {
-  const first = isContainer(node) && blockChild(node, false)
+  const first =
+    isContainer(node) &&
+    !blocks.shapes(node)?.padding?.top &&
+    blockChild(node, false)
   return Math.max(margins(node).top, first ? topMargin(first) : 0)
 }
 
 function bottomMargin(node: SyntaxNode): number {
-  const last = isContainer(node) && blockChild(node, true)
+  const last =
+    isContainer(node) &&
+    !blocks.shapes(node)?.padding?.bottom &&
+    blockChild(node, true)
   return Math.max(margins(node).bottom, last ? bottomMargin(last) : 0)
+}
+
+/** Whether a layout block replace hides the whole line. */
+function replacedLine(
+  layout: DecorationSet,
+  current: ReturnType<Text['lineAt']>,
+) {
+  let replaced = false
+  layout.between(current.from, current.from, (from, to, value) => {
+    if (value.spec.block && from <= current.from && to >= current.to)
+      replaced = true
+  })
+  return replaced
 }
 
 /** Visit each line from `from` to `to` that intersects `range`. */
@@ -192,7 +230,7 @@ function eachLine(
 type LineInfo = {
   classes: string[]
   style: string[]
-  /** Quotes and lists around the line, outermost first. */
+  /** Quotes and list items around the line, outermost first. */
   containers: SyntaxNode[]
   /** The innermost list item around the line. */
   item: SyntaxNode | null
@@ -202,6 +240,8 @@ type LineInfo = {
   leaf: number | null
   /** Where a code line's text starts. */
   code: number | null
+  /** The innermost list item shows its list marker. */
+  marker: boolean
   /** Other attributes from contributed views. */
   attributes: Record<string, string>
   /** Space above the line in px. */
@@ -247,9 +287,29 @@ function inline(
   const { state } = view
   const doc = state.doc
   const views = namedViews(state)
+  const literal = new Set(state.facet(formattedLiteral))
   const atomic: Range<Decoration>[] = []
   const touched = (from: number, to: number) =>
     reveal.some((range) => range.from <= to && range.to >= from)
+  /** Contributed container layouts, once per container node and render. */
+  const shapeCache = new Map<string, FormattedContainer | undefined>()
+  const shapes = (node: SyntaxNode) => {
+    const key = `${node.from} ${node.name}`
+    if (shapeCache.has(key)) return shapeCache.get(key)
+    let shape: FormattedContainer | undefined
+    const context = {
+      state,
+      revealed: touched(node.from, node.to),
+      visible: null,
+    }
+    for (const nodeView of views.get(node.name) ?? []) {
+      shape = nodeView.container?.(node, context)
+      if (shape) break
+    }
+    shapeCache.set(key, shape)
+    return shape
+  }
+  blocks = { literal, views, shapes }
   const decorations: Range<Decoration>[] = []
   const lines = new Map<number, LineInfo>()
   const line = (pos: number) => {
@@ -263,6 +323,7 @@ function inline(
         quoteEnd: null,
         leaf: null,
         code: null,
+        marker: true,
         attributes: {},
         gap: 0,
       }
@@ -394,13 +455,30 @@ function inline(
       mode: IterMode.IgnoreMounts,
       enter(ref: SyntaxNodeRef) {
         const name = ref.name
+        // Syntax whose setting is off shows as written, its children too.
+        if (literal.has(name)) return false
         const contributed = views.get(name)
         let skip = false
         if (contributed) {
           const out = sink(touched(ref.from, ref.to))
-          const context = { state, revealed: touched(ref.from, ref.to) }
+          const context = {
+            state,
+            revealed: touched(ref.from, ref.to),
+            visible: range,
+          }
           for (const nodeView of contributed)
             if (nodeView.decorate?.(ref, out, context) === false) skip = true
+          // Other blocks with a container hook hold their lines like quotes.
+          if (
+            name !== 'Blockquote' &&
+            name !== 'ListItem' &&
+            contributed.some((nodeView) => nodeView.container)
+          ) {
+            const node = ref.node
+            eachLine(doc, ref.from, ref.to, range, (current) => {
+              line(current.from).containers.push(node)
+            })
+          }
         }
         const result = builtIn(ref, range)
         return skip ? false : result
@@ -527,8 +605,6 @@ function inline(
           hideRange(ref.from, ref.from + 1)
         return
       case 'Blockquote':
-      case 'BulletList':
-      case 'OrderedList':
         eachLine(doc, ref.from, ref.to, range, (current) => {
           line(current.from).containers.push(ref.node)
         })
@@ -544,7 +620,9 @@ function inline(
       }
       case 'ListItem':
         eachLine(doc, ref.from, ref.to, range, (current) => {
-          line(current.from).item = ref.node
+          const info = line(current.from)
+          info.item = ref.node
+          info.containers.push(ref.node)
         })
         return
       case 'FencedCode':
@@ -559,18 +637,15 @@ function inline(
   const ordinals = new Map<number, number[]>()
   for (const [at, info] of lines) {
     const current = doc.lineAt(at)
-    containers(doc, at, info)
+    containers(doc, at, info, layout)
     let prefix = info.quoteEnd ?? at
     if (info.code !== null) prefix = info.code
     else if (info.item) prefix = itemLine(doc, current, info, prefix, ordinals)
     else if (info.leaf !== null) prefix = info.leaf
     // Quote markers, list markers and indentation before the line's
     // content, unless the layout field replaces the whole line.
-    let replaced = false
-    layout.between(at, at, (from, to, value) => {
-      if (value.spec.block && from <= at && to >= current.to) replaced = true
-    })
-    if (!replaced) hideRange(at, Math.min(prefix, current.to))
+    if (!replacedLine(layout, current))
+      hideRange(at, Math.min(prefix, current.to))
     if (info.gap) info.style.push(`padding-top: ${info.gap}px`)
     decorations.push(
       Decoration.line({
@@ -582,36 +657,82 @@ function inline(
       }).range(at),
     )
   }
+  blocks = noBlocks
   return {
     decorations: Decoration.set(decorations, true),
     atomic: Decoration.set(atomic, true),
   }
 }
 
+/** Where a container's last line that the layout does not hide starts. */
+function lastLine(doc: Text, node: SyntaxNode, layout: DecorationSet) {
+  let last = doc.lineAt(node.to)
+  while (last.from > node.from && replacedLine(layout, last))
+    last = doc.line(last.number - 1)
+  return last.from
+}
+
 /**
- * Quotes and lists indent a line by their widths: a quote's 20px padding and
- * 1px bar, a list's 1.5em. Bars are drawn in the indentation; a quote's bar
- * starts below the space above its first line, which lies outside it.
+ * Containers indent a line by their widths: a quote's 20px padding and 1px
+ * bar, a list's 1.5em, or what a contributed view gives. Bars and paint are
+ * drawn from the container's left edge, below the space above its first
+ * line, which lies outside it; contributed padding goes inside.
  */
-function containers(doc: Text, at: number, info: LineInfo) {
+function containers(
+  doc: Text,
+  at: number,
+  info: LineInfo,
+  layout: DecorationSet,
+) {
   if (!info.containers.length) return
   const widths: string[] = []
-  const bars: string[] = []
+  const paint: string[] = []
+  let top = 0,
+    bottom = 0,
+    right = 0
   for (const container of info.containers) {
     const left = widths.length ? `calc(${widths.join(' + ')})` : '0px'
-    if (container.name === 'Blockquote') {
-      const top = doc.lineAt(container.from).from === at ? info.gap : 0
-      bars.push(
-        `linear-gradient(var(--border), var(--border)) ${left} ${top}px / 1px calc(100% - ${top}px) no-repeat`,
+    const shape = blocks.shapes(container)
+    const first = doc.lineAt(container.from).from === at
+    const offset = `${first ? info.gap + top : 0}px`
+    if (shape?.class) info.classes.push(shape.class)
+    if (shape?.paint) paint.push(shape.paint(left, offset))
+    else if (container.name === 'Blockquote') {
+      info.classes.push('hibi-lp-quote')
+      paint.push(
+        `linear-gradient(var(--border), var(--border)) ${left} ${offset} / 1px calc(100% - ${offset}) no-repeat`,
       )
-      widths.push('21px')
-    } else widths.push('1.5 * var(--text-editor)')
+    }
+    if (
+      shape?.marker === false &&
+      container.name === 'ListItem' &&
+      container.from === info.item?.from
+    )
+      info.marker = false
+    const padding = shape?.padding
+    if (padding) {
+      if (first) top += padding.top ?? 0
+      if (padding.bottom && lastLine(doc, container, layout) === at)
+        bottom += padding.bottom
+      right += padding.right ?? 0
+    }
+    widths.push(
+      shape?.width ??
+        (container.name === 'Blockquote'
+          ? '21px'
+          : container.name === 'ListItem'
+            ? '1.5 * var(--text-editor)'
+            : '0px'),
+    )
   }
+  info.gap += top
+  if (bottom) info.style.push(`padding-bottom: ${bottom}px`)
+  if (right) info.style.push(`padding-right: ${right}px`)
   info.classes.push('hibi-lp-nested')
   info.style.push(`--hibi-indent: calc(${widths.join(' + ')})`)
-  if (bars.length) {
-    info.classes.push('hibi-lp-quote')
-    info.style.push(`--hibi-bars: ${bars.join(', ')}`)
+  if (paint.length) {
+    info.classes.push('hibi-lp-painted')
+    info.style.push(`--hibi-paint: ${paint.join(', ')}`)
   }
 }
 
@@ -624,13 +745,23 @@ function itemLine(
   ordinals: Map<number, number[]>,
 ) {
   const item = info.item!
-  const depth = info.containers.filter(isList).length
+  const depth = info.containers.filter(
+    (container) => container.name === 'ListItem',
+  ).length
   const marker = item.getChild('ListMark')
   if (!marker || item.from < current.from || item.from > current.to) {
     // Continuation lines start at the item's content.
     const indent = /^[ \t]*/.exec(doc.sliceString(prefix, current.to))![0]
     return info.leaf ?? prefix + indent.length
   }
+  // The marker and up to four following spaces are hidden.
+  const after = doc.sliceString(marker.to, current.to)
+  const gap = /^[ \t]{0,4}/.exec(after)![0].length
+  const content = Math.max(
+    info.leaf ?? 0,
+    marker.to + (gap === after.length ? after.length : gap),
+  )
+  if (!info.marker) return content
   info.classes.push('hibi-lp-list-item')
   const list = item.parent!
   if (list.name === 'OrderedList') {
@@ -647,13 +778,7 @@ function itemLine(
     info.style.push(
       `list-style-type: ${['disc', 'circle', 'square'][Math.min(depth, 3) - 1]}`,
     )
-  // The marker and up to four following spaces are hidden.
-  const after = doc.sliceString(marker.to, current.to)
-  const gap = /^[ \t]{0,4}/.exec(after)![0].length
-  return Math.max(
-    info.leaf ?? 0,
-    marker.to + (gap === after.length ? after.length : gap),
-  )
+  return content
 }
 
 /**
@@ -672,6 +797,8 @@ function spacing(
     block: SyntaxNode,
     range: { from: number; to: number },
   ) => {
+    // The first block after an unparsed prefix such as frontmatter starts the document.
+    if (previous.name === 'Frontmatter') return
     const gap = Math.max(bottomMargin(previous), topMargin(block))
     const start = doc.lineAt(block.from),
       end = doc.lineAt(previous.to)
@@ -721,6 +848,7 @@ function chunkLayout(
 ) {
   const doc = state.doc
   const views = namedViews(state)
+  const literal = new Set(state.facet(formattedLiteral))
   const out: Range<Decoration>[] = []
   /** A contributed layout view ran, so the chunk's layout can follow the selection. */
   let sensitive = false
@@ -759,6 +887,7 @@ function chunkLayout(
       mode: IterMode.IgnoreMounts,
       enter(ref) {
         if (ref.to <= range.from || ref.from >= range.to) return false
+        if (literal.has(ref.name)) return false
         const contributed = views.get(ref.name)
         if (contributed?.some((view) => view.layout)) {
           sensitive = true
@@ -770,6 +899,7 @@ function chunkLayout(
               (selection) =>
                 selection.from <= ref.to && selection.to >= ref.from,
             ),
+            visible: null,
           }
           let skip = false
           for (const view of contributed)
@@ -807,6 +937,7 @@ function chunkLayout(
             return
           }
           case 'Paragraph':
+          case 'Task':
             leaf = { from: ref.from, to: ref.to, hard: new Set(), hidden: [] }
             return
           case 'HardBreak':
@@ -841,7 +972,9 @@ function chunkLayout(
       leave(ref) {
         if (
           !leaf ||
-          (ref.name !== 'Paragraph' && !ref.name.startsWith('SetextHeading'))
+          (ref.name !== 'Paragraph' &&
+            ref.name !== 'Task' &&
+            !ref.name.startsWith('SetextHeading'))
         )
           return
         const { hard, hidden } = leaf
@@ -953,7 +1086,10 @@ function revealed(view: EditorView): readonly Revealed[] {
 }
 
 /** The formatted view's rendering over its chunked Markdown syntax tree. */
-export function livePreview(syntax: FormattedSyntax): Extension {
+export function livePreview(
+  syntax: FormattedSyntax,
+  options: { flavors?: readonly string[] | undefined } = {},
+): Extension {
   const layout = StateField.define<DecorationSet>({
     create: (state) =>
       layoutDecorations(state, syntax.tree(state), revealedIn(state)),
@@ -1070,7 +1206,7 @@ export function livePreview(syntax: FormattedSyntax): Extension {
             this.version = version
             view.dispatch({
               effects: contributions.reconfigure(
-                formattedContributions.extension(),
+                formattedContributions.extension(options.flavors),
               ),
             })
           }),
@@ -1083,7 +1219,7 @@ export function livePreview(syntax: FormattedSyntax): Extension {
     },
   )
   return [
-    contributions.of(formattedContributions.extension()),
+    contributions.of(formattedContributions.extension(options.flavors)),
     follow,
     syntax.extension,
     focused,

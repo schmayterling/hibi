@@ -5,7 +5,9 @@ import type { FormattedContribution } from '../formatted-contributions.ts'
 export const contribution: FormattedContribution = {
   id: 'markdown.strikethrough',
   feature: 'markdown.strike',
+  flavor: 'markdown.github',
   syntax: Strikethrough,
+  inlineStops: true,
   views: [
     {
       nodes: ['Strikethrough'],

@@ -144,4 +144,7 @@ test('tab on selected code lines indents each line, and delete never joins a fen
     run('para|\n~~~\ncode\n~~~', deleteForward),
     'para|\n~~~\ncode\n~~~',
   )
+  // A heading's underline is never joined to its text or the paragraph after it.
+  assert.equal(run('Title|\n===\n\nnext', deleteForward), 'Title|\n===\n\nnext')
+  assert.equal(run('Title\n===\n|next', deleteBackward), 'Title\n===\n|next')
 })

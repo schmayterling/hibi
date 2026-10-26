@@ -125,8 +125,14 @@ export function lineBreak(
   })
 }
 
-/** Whether a line opens or closes a fenced code block. */
-function fenceLine(state: EditorState, tree: Tree, line: Line) {
+/** Whether a line opens or closes a fenced code block, or underlines a heading. */
+function delimiterLine(state: EditorState, tree: Tree, line: Line) {
+  const heading = around(tree, line.to, ['SetextHeading1', 'SetextHeading2'])
+  if (heading)
+    return (
+      state.doc.lineAt(heading.to).number === line.number &&
+      state.doc.lineAt(heading.from).number < line.number
+    )
   const code = around(tree, line.to, ['FencedCode'])
   if (!code) return false
   const first = state.doc.lineAt(code.from)
@@ -214,6 +220,8 @@ export function deleteBackward(
       'HorizontalRule',
       'Table',
       'HTMLBlock',
+      'SetextHeading1',
+      'SetextHeading2',
     ])
     if (before) return remove(previous.to + 1, line.from, line.from)
     return remove(previous.to, line.from, previous.to)
@@ -247,11 +255,12 @@ export function deleteForward(
     return null
   const pos = range.head
   const line = state.doc.lineAt(pos)
-  // Joining a fence line into this one would end or open code elsewhere.
+  // Joining a fence line or underline into this one would end or open a
+  // block elsewhere.
   if (
     pos === line.to &&
     line.number < state.doc.lines &&
-    fenceLine(state, tree, state.doc.line(line.number + 1))
+    delimiterLine(state, tree, state.doc.line(line.number + 1))
   )
     return { selection: range }
   if (pos !== line.to || line.number === state.doc.lines) {

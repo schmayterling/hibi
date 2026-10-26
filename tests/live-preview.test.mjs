@@ -525,6 +525,47 @@ test('list markers alone on their lines sit beside the item text as in the rich 
   )
 })
 
+test('typing beside a multi-line link destination edits the text', {
+  timeout: 60000,
+}, async () => {
+  const errors = []
+  const listen = (error) => errors.push(error.message)
+  harness.on('pageerror', listen)
+  const session = await harness.context().newCDPSession(harness)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const typed = []
+  for (const [doc, at] of [
+    ['[label](\nhttps://example.com/\n)', 31],
+    ['[label](\nhttps://example.com/\n)\n\nend', 31],
+  ]) {
+    await harness.evaluate(
+      async ({ doc, at }) => {
+        await window.livePreview.mount(doc, undefined, { editable: true })
+        const view = window.livePreview.view()
+        view.focus()
+        view.dispatch({ selection: { anchor: at } })
+        await window.livePreview.settle()
+      },
+      { doc, at },
+    )
+    await harness.keyboard.type('X')
+    typed.push(
+      await harness.evaluate(async () => {
+        await window.livePreview.settle()
+        return window.livePreview.view().state.doc.toString()
+      }),
+    )
+  }
+  harness.off('pageerror', listen)
+  // Before, the input showed in the page but threw on mapping, leaving the
+  // text unchanged, or landed in the paragraph after the link.
+  assert.deepEqual(typed, [
+    '[label](\nhttps://example.com/\n)X',
+    '[label](\nhttps://example.com/\n)X\n\nend',
+  ])
+  assert.deepEqual(errors, [])
+})
+
 test('a 50 MiB note renders and edits with viewport-bounded work', {
   timeout: 120000,
 }, async () => {

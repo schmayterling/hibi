@@ -39,7 +39,7 @@ class RuleWidget extends WidgetType {
     return true
   }
   toDOM() {
-    const rule = document.createElement('div')
+    const rule = document.createElement('span')
     rule.className = 'hibi-lp-rule'
     rule.setAttribute('aria-hidden', 'true')
     return rule
@@ -56,7 +56,8 @@ class SpaceWidget extends WidgetType {
     return gap
   }
 }
-const rule = Decoration.replace({ widget: new RuleWidget(), block: true })
+/** Inline, so the rule's line keeps the indent, quote bars and spacing of the blocks around it. */
+const rule = Decoration.replace({ widget: new RuleWidget() })
 const space = Decoration.replace({ widget: new SpaceWidget() })
 const hiddenLine = Decoration.replace({ block: true })
 
@@ -415,9 +416,11 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
           case 'Entity':
             // Rendered by later formatted-view slices; shown as source text for now.
             return false
-          case 'HorizontalRule':
-            line(doc.lineAt(ref.from).from).hidden = true
+          case 'HorizontalRule': {
+            line(doc.lineAt(ref.from).from).classes.push('hibi-lp-rule-line')
+            decorations.push(rule.range(ref.from, ref.to))
             return false
+          }
           case 'Escape':
             hideRange(ref.from, ref.from + 1)
             return
@@ -645,12 +648,6 @@ function chunkLayout(
               starts(last.from)
             )
               out.push(hiddenLine.range(last.from - from, last.to - from))
-            return false
-          }
-          case 'HorizontalRule': {
-            const current = doc.lineAt(ref.from)
-            if (starts(current.from))
-              out.push(rule.range(current.from - from, current.to - from))
             return false
           }
           case 'SetextHeading1':

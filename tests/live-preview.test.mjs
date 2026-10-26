@@ -66,6 +66,14 @@ const nested = `# Nested blocks
   > const deep = 1
   > ~~~
 
+> quoted words
+> ***
+> after the quoted rule
+
+words before a rule
+***
+words after a rule
+
 closing paragraph.
 `
 
@@ -395,6 +403,11 @@ test('blocks inside quotes and lists match the rich view in light and dark', {
         selector: '.tiptap li blockquote pre code',
         text: 'const deep',
       },
+      quotedRule: {
+        selector: '.tiptap blockquote p',
+        text: 'after the quoted rule',
+      },
+      rule: { selector: '.tiptap p', text: 'words after a rule' },
       closing: { selector: '.tiptap p', text: 'closing paragraph' },
     },
     {
@@ -406,6 +419,8 @@ test('blocks inside quotes and lists match the rich view in light and dark', {
       anotherItem: { selector: '.hibi-lp-list-item', text: 'another item' },
       quoteItem: { selector: '.hibi-lp-list-item', text: 'item with a quote' },
       deepCode: { selector: '.hibi-lp-codetext', text: 'const deep' },
+      quotedRule: { selector: '.hibi-lp-quote', text: 'after the quoted rule' },
+      rule: { selector: '.cm-line', text: 'words after a rule' },
       closing: { selector: '.cm-line', text: 'closing paragraph' },
     },
     'nested',

@@ -117,7 +117,15 @@
 .hibi-formatted .cm-line.hibi-lp-gap {
   overflow: hidden;
 }
+/* A rule's line is as tall as the rule, as an hr with its margins as line spacing. */
+.hibi-formatted .cm-line.hibi-lp-rule-line {
+  font-size: 0;
+  line-height: 0;
+}
 .hibi-formatted .hibi-lp-rule {
+  display: inline-block;
+  width: 100%;
+  vertical-align: top;
   border-top: 1px solid var(--border);
 }
 /* Markers of the formatting under the caret, like the rich editor's hints. */

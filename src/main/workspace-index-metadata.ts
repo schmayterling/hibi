@@ -6,6 +6,7 @@ import {
   wikiTargetName,
 } from '../shared/note-links.ts'
 import { noteHeadings, noteProperties } from '../shared/note-metadata.ts'
+import { noteLexer } from '../shared/note-syntax.ts'
 import { noteTags } from '../shared/note-tags.ts'
 import type { WorkspacePage } from '../shared/workspace.ts'
 import type { PageSyntax } from './workspace-syntax.ts'
@@ -41,8 +42,9 @@ export function parseWorkspaceMetadata(
 ): WorkspacePageMetadata {
   const markdown = isMarkdownDocument(page.path)
   const referenceComplete = true
+  const lexed = markdown ? noteLexer(page.markdown, syntax.settings) : undefined
   const raw = markdown
-    ? parse(page.markdown, syntax.settings)
+    ? parse(page.markdown, syntax.settings, lexed)
     : { links: [], wikilinks: [] }
   const references = {
     links: raw.links.flatMap((href) => {
@@ -67,11 +69,11 @@ export function parseWorkspaceMetadata(
     referenceComplete,
     tags:
       markdown && referenceComplete
-        ? noteTags(page.markdown, syntax.settings)
+        ? noteTags(page.markdown, syntax.settings, lexed)
         : [],
     properties: { values, complete: properties.complete },
     headings: markdown
-      ? noteHeadings(page.markdown, syntax.settings)
+      ? noteHeadings(page.markdown, syntax.settings, lexed)
       : { items: [], complete: true },
   }
 }

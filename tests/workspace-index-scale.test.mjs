@@ -66,6 +66,15 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
       const fs = process.getBuiltinModule('node:fs/promises')
       const open = fs.open
       globalThis.scaleSourceReads = 0
+      globalThis.scaleFileParses = 0
+      globalThis.scaleCacheBatches = 0
+      const Worker = process.getBuiltinModule('node:worker_threads').Worker
+      const postMessage = Worker.prototype.postMessage
+      Worker.prototype.postMessage = function (message, ...args) {
+        if (message.kind === 'fileStart') globalThis.scaleFileParses++
+        if (message.kind === 'cachedBatch') globalThis.scaleCacheBatches++
+        return postMessage.call(this, message, ...args)
+      }
       fs.open = (...args) => {
         if (
           String(args[0]).startsWith(notes) &&
@@ -79,10 +88,11 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
     return page
   }
   let page = await launch()
-  let legacy = await page.evaluate(() => window.hibi.getWorkspaceIndex())
-  assert.equal(legacy.pages.length, 2110)
-  assert.ok(legacy.pages.every((page) => page.markdown.includes('#work')))
-  legacy = null
+  await assert.rejects(
+    page.evaluate(() => window.hibi.getWorkspaceIndex()),
+    /legacy workspace index exceeds the 20 MiB message limit/,
+  )
+
   await app.evaluate(() => {
     globalThis.scaleSourceReads = 0
   })
@@ -103,7 +113,9 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
   assert.equal(result.value.complete, true)
   assert.equal(result.value.items.length, 10)
   assert.equal(result.value.hasMore, false)
-  assert.equal(await app.evaluate(() => globalThis.scaleSourceReads), 2110)
+  assert.equal(await app.evaluate(() => globalThis.scaleSourceReads), 0)
+  assert.equal(await app.evaluate(() => globalThis.scaleFileParses), 2110)
+  assert.equal(await app.evaluate(() => globalThis.scaleCacheBatches), 33)
   await app.close()
   app = null
   page = await launch()
@@ -112,4 +124,6 @@ test('workspaces beyond 2000 notes and 20 MiB index completely and reopen from d
   assert.equal(result.value.complete, true)
   assert.equal(result.value.items.length, 10)
   assert.equal(await app.evaluate(() => globalThis.scaleSourceReads), 0)
+  assert.equal(await app.evaluate(() => globalThis.scaleFileParses), 0)
+  assert.equal(await app.evaluate(() => globalThis.scaleCacheBatches), 33)
 })

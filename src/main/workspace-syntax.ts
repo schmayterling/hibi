@@ -23,6 +23,11 @@ const knownFeatures =
   /^(?:core\.(?:heading-[1-6]|bold|italic|inline-code|escapes|code-blocks|quotes|bullet-lists|numbered-lists|dividers|line-breaks|links|images|html-blocks|inline-html)|markdown\.(?:tables|tasks|strike|alerts)|math\.(?:inline|block)|text-extras\.(?:subscript|subtext))$/
 
 export type PageSyntax = {
+  readonly inspect?: {
+    readonly github: boolean
+    readonly math: boolean
+    readonly textExtras: boolean
+  }
   readonly settings: NoteSyntax
   readonly key: string
   readonly unsupported: boolean
@@ -33,6 +38,25 @@ export type WorkspaceSyntax = {
   readonly fingerprint: string
   readonly flavorAware: boolean
   readonly page: (page: WorkspacePage) => PageSyntax
+}
+
+/** Inspect source only where it is read; metadata workers never need a main-thread copy. */
+export function applySourceSyntax(
+  syntax: PageSyntax,
+  source: string,
+): PageSyntax {
+  const inspect = syntax.inspect
+  if (!inspect) return syntax
+  const unsupported =
+    syntax.unsupported ||
+    (inspect.github &&
+      (/^ {0,3}>[ \t]*\[![a-z][a-z0-9-]*\]/im.test(source) ||
+        /\[\^[^\]\r\n]+\]/.test(source))) ||
+    (inspect.math && source.includes('$')) ||
+    (inspect.textExtras &&
+      (/(?:^|[^~])~(?!~)[^\s~](?:[^~\n]*?[^\s~])?~(?!~)/.test(source) ||
+        /(?:^|\n)-# /.test(source)))
+  return { ...syntax, unsupported, complete: syntax.complete && !unsupported }
 }
 
 /** Main accepts bounded data only; renderer code and parser callbacks never cross IPC. */
@@ -207,30 +231,30 @@ export function workspaceSyntax(input: unknown): WorkspaceSyntax | null {
         value.hashtags as boolean,
         frontmatter,
       )
-      const source = page.markdown
       const unsupported =
         unknownFeature ||
         unknownProjection ||
-        selected.some((flavor) => !knownFlavors.has(flavor.id)) ||
-        (ids.has('markdown.github') &&
-          (/^ {0,3}>[ \t]*\[![a-z][a-z0-9-]*\]/im.test(source) ||
-            /\[\^[^\]\r\n]+\]/.test(source))) ||
-        (ids.has('math.latex') && source.includes('$')) ||
-        (ids.has('text-extras.text-extras') &&
-          (/(?:^|[^~])~(?!~)[^\s~](?:[^~\n]*?[^\s~])?~(?!~)/.test(source) ||
-            /(?:^|\n)-# /.test(source)))
-      return {
-        settings,
-        key: JSON.stringify([
-          selected.map(({ id, parserVersion }) => [id, parserVersion]),
+        selected.some((flavor) => !knownFlavors.has(flavor.id))
+      return applySourceSyntax(
+        {
           settings,
-        ]),
-        unsupported,
-        complete:
-          (value.complete as boolean) &&
-          value.projections !== undefined &&
-          !unsupported,
-      }
+          inspect: {
+            github: ids.has('markdown.github'),
+            math: ids.has('math.latex'),
+            textExtras: ids.has('text-extras.text-extras'),
+          },
+          key: JSON.stringify([
+            selected.map(({ id, parserVersion }) => [id, parserVersion]),
+            settings,
+          ]),
+          unsupported,
+          complete:
+            (value.complete as boolean) &&
+            value.projections !== undefined &&
+            !unsupported,
+        },
+        page.markdown,
+      )
     },
   }
 }

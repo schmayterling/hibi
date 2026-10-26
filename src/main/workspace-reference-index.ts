@@ -73,6 +73,10 @@ export interface GraphPosition {
 export class WorkspaceReferenceIndex {
   private target: WorkspaceTarget | null = null
   private documents = new Map<string, DocumentLinks>()
+  private revision = 0
+  private incompleteCount = 0
+  private unsupportedCount = 0
+  private tagBuild: Promise<boolean> | undefined
   private reverse = new Map<string, Set<string>>()
   private paths = new Set<string>()
   private sortedPaths: string[] = []
@@ -95,6 +99,10 @@ export class WorkspaceReferenceIndex {
   }
 
   clear(): void {
+    this.revision++
+    this.incompleteCount = 0
+    this.unsupportedCount = 0
+    this.tagBuild = undefined
     this.target = null
     this.documents = new Map()
     this.reverse = new Map()
@@ -140,22 +148,201 @@ export class WorkspaceReferenceIndex {
     canCommit: CanCommit = () => true,
   ): Promise<ApplyResult | null> {
     const snapshot = this.documents
+    const revision = this.revision
     const collected: WorkspaceMetadataPage[] = []
     let started = performance.now()
     for await (const page of pages) {
-      if (!canCommit() || this.documents !== snapshot) return null
+      if (
+        !canCommit() ||
+        this.documents !== snapshot ||
+        this.revision !== revision
+      )
+        return null
       collected.push(page)
       if (
         collected.length % workSlice === 0 ||
         performance.now() - started >= workSliceMs
       ) {
         await this.yieldTurn()
-        if (!canCommit() || this.documents !== snapshot) return null
+        if (
+          !canCommit() ||
+          this.documents !== snapshot ||
+          this.revision !== revision
+        )
+          return null
         started = performance.now()
       }
     }
-    if (!canCommit() || this.documents !== snapshot) return null
+    if (
+      !canCommit() ||
+      this.documents !== snapshot ||
+      this.revision !== revision
+    )
+      return null
     return this.applyCooperatively(target, collected, undefined, canCommit)
+  }
+
+  /** Existing paths publish only their changed metadata; untouched objects and views survive. */
+  async applyDeltaCooperatively(
+    target: WorkspaceTarget,
+    pages: readonly WorkspaceMetadataPage[],
+    canCommit: CanCommit = () => true,
+  ): Promise<ApplyResult | null> {
+    return this.finishCooperatively(
+      this.deltaSteps(target, pages, canCommit),
+      canCommit,
+    )
+  }
+
+  private *deltaSteps(
+    target: WorkspaceTarget,
+    pages: readonly WorkspaceMetadataPage[],
+    canCommit: CanCommit,
+  ): Generator<void, ApplyResult | null> {
+    if (
+      this.target?.workspaceId !== target.workspaceId ||
+      this.target.workspaceGeneration !== target.workspaceGeneration
+    )
+      return null
+    const revision = this.revision
+    const tags = this.tagPaths
+    const updates = new Map<string, DocumentLinks>()
+    const reverseChanges: [string, string, boolean][] = []
+    const tagChanges: [string, string, boolean][] = []
+    let incomplete = this.incompleteCount
+    let unsupported = this.unsupportedCount
+    let started = performance.now()
+    let count = 0
+    const pause = () =>
+      ++count % workSlice === 0 || performance.now() - started >= workSliceMs
+    for (const page of pages) {
+      const previous = this.documents.get(page.path)
+      if (!previous) return null
+      const markdown = isMarkdownDocument(page.path)
+      const syntaxComplete = !markdown || page.syntax.complete
+      const unsupportedSyntax = markdown && page.syntax.unsupported
+      if (
+        previous.version === page.version &&
+        previous.syntaxKey === page.syntax.key &&
+        previous.syntaxComplete === syntaxComplete &&
+        previous.unsupportedSyntax === unsupportedSyntax
+      )
+        continue
+      const targets = new Set<string>()
+      for (const [kind, hrefs] of [
+        ['markdown', page.metadata.references.links],
+        ['wiki', page.metadata.references.wikilinks],
+      ] as const)
+        for (const href of hrefs) {
+          const path =
+            kind === 'wiki'
+              ? resolveWikiTarget(page.path, href, this.paths, this.basenames)
+              : resolveLocalTarget(href, this.paths)
+          if (path && path !== page.path) targets.add(path)
+          if (pause()) {
+            yield
+            started = performance.now()
+          }
+        }
+      for (const path of previous.targets) {
+        if (!targets.has(path)) reverseChanges.push([path, page.path, false])
+        if (pause()) {
+          yield
+          started = performance.now()
+        }
+      }
+      for (const path of targets) {
+        if (!previous.targets.has(path))
+          reverseChanges.push([path, page.path, true])
+        if (pause()) {
+          yield
+          started = performance.now()
+        }
+      }
+      if (tags) {
+        const oldTags = new Set<string>()
+        const newTags = new Set<string>()
+        for (const tag of previous.tags) {
+          oldTags.add(tag)
+          if (pause()) {
+            yield
+            started = performance.now()
+          }
+        }
+        for (const tag of page.metadata.tags) {
+          newTags.add(tag)
+          if (pause()) {
+            yield
+            started = performance.now()
+          }
+        }
+        for (const tag of oldTags) {
+          if (!newTags.has(tag)) tagChanges.push([tag, page.path, false])
+          if (pause()) {
+            yield
+            started = performance.now()
+          }
+        }
+        for (const tag of newTags) {
+          if (!oldTags.has(tag)) tagChanges.push([tag, page.path, true])
+          if (pause()) {
+            yield
+            started = performance.now()
+          }
+        }
+      }
+      const next: DocumentLinks = {
+        ...page.metadata,
+        version: page.version,
+        syntaxKey: page.syntax.key,
+        syntaxComplete,
+        unsupportedSyntax,
+        targets,
+      }
+      incomplete +=
+        Number(!next.referenceComplete || !syntaxComplete) -
+        Number(!previous.referenceComplete || !previous.syntaxComplete)
+      unsupported +=
+        Number(unsupportedSyntax) - Number(previous.unsupportedSyntax)
+      updates.set(page.path, next)
+      if (pause()) {
+        yield
+        started = performance.now()
+      }
+    }
+    if (this.revision !== revision || !canCommit()) return null
+    if (!updates.size) return { parsed: 0, resolved: 0 }
+    for (const [path, document] of updates) this.documents.set(path, document)
+    for (const [path, source, add] of reverseChanges) {
+      const sources = this.reverse.get(path)
+      if (sources) this.sortedViews.delete(sources)
+      if (add) this.addReverse(this.reverse, path, source)
+      else {
+        sources?.delete(source)
+        if (!sources?.size) this.reverse.delete(path)
+      }
+    }
+    if (this.tagPaths === tags && tags) {
+      for (const [tag, path, add] of tagChanges) {
+        const paths = tags.get(tag)
+        if (paths) this.sortedViews.delete(paths)
+        if (add) this.addReverse(tags, tag, path)
+        else {
+          paths?.delete(path)
+          if (!paths?.size) tags.delete(tag)
+        }
+      }
+    } else this.tagPaths = null
+    this.incompleteCount = incomplete
+    this.unsupportedCount = unsupported
+    this.complete = incomplete === 0
+    this.unsupported = unsupported > 0
+    this.revision++
+    this.tagBuild = undefined
+    for (const key of this.filteredViews.keys())
+      if (!key.startsWith('paths:')) this.filteredViews.delete(key)
+    if (tagChanges.length || this.tagPaths === null) this.tagViews.clear()
+    return { parsed: updates.size, resolved: updates.size }
   }
 
   private *applySteps(
@@ -165,6 +352,7 @@ export class WorkspaceReferenceIndex {
     canCommit: CanCommit = () => true,
   ): Generator<void, ApplyResult | null> {
     const snapshot = this.documents
+    const revision = this.revision
     const sameWorkspace =
       this.target?.workspaceId === target.workspaceId &&
       this.target.workspaceGeneration === target.workspaceGeneration
@@ -177,10 +365,17 @@ export class WorkspaceReferenceIndex {
     let pathsChanged = !sameWorkspace
     let complete = true
     let unsupported = false
+    let incompleteCount = 0
+    let unsupportedCount = 0
     let parsed = 0
     let sliceStarted = performance.now()
     for (let pageIndex = 0; pageIndex < pages.length; pageIndex++) {
-      if (!canCommit() || this.documents !== snapshot) return null
+      if (
+        !canCommit() ||
+        this.documents !== snapshot ||
+        this.revision !== revision
+      )
+        return null
       const page = pages[pageIndex]
       if (!page) continue
       const cached = previous.get(page.path)
@@ -191,11 +386,13 @@ export class WorkspaceReferenceIndex {
       const syntaxComplete = !markdownSource || syntax.complete
       const unsupportedSyntax = markdownSource && syntax.unsupported
       if (cached?.version === version && cached.syntaxKey === syntax.key) {
-        next.set(page.path, {
-          ...cached,
-          syntaxComplete,
-          unsupportedSyntax,
-        })
+        next.set(
+          page.path,
+          cached.syntaxComplete === syntaxComplete &&
+            cached.unsupportedSyntax === unsupportedSyntax
+            ? cached
+            : { ...cached, syntaxComplete, unsupportedSyntax },
+        )
       } else {
         const metadata =
           'metadata' in page
@@ -217,6 +414,9 @@ export class WorkspaceReferenceIndex {
       const document = next.get(page.path)
       complete &&= !!document?.referenceComplete && !!document.syntaxComplete
       unsupported ||= !!document?.unsupportedSyntax
+      if (!document?.referenceComplete || !document.syntaxComplete)
+        incompleteCount++
+      if (document?.unsupportedSyntax) unsupportedCount++
       if (
         (pageIndex + 1) % workSlice === 0 ||
         performance.now() - sliceStarted >= workSliceMs
@@ -226,10 +426,7 @@ export class WorkspaceReferenceIndex {
       }
     }
     pathsChanged ||= previous.size !== next.size
-    const tagPaths =
-      pathsChanged || changed.size || !this.tagPaths
-        ? yield* this.buildTags(next)
-        : this.tagPaths
+    const tagPaths = pathsChanged || changed.size ? null : this.tagPaths
     const basenames = pathsChanged
       ? new Map<string, string[]>()
       : this.basenames
@@ -357,12 +554,26 @@ export class WorkspaceReferenceIndex {
         }
       }
     }
-    if (this.documents !== snapshot || !canCommit()) return null
+    if (
+      this.documents !== snapshot ||
+      this.revision !== revision ||
+      !canCommit()
+    )
+      return null
     const sortedPaths = pathsChanged
       ? yield* sortSteps([...paths], (a, b) => a.localeCompare(b))
       : this.sortedPaths
-    if (this.documents !== snapshot || !canCommit()) return null
+    if (
+      this.documents !== snapshot ||
+      this.revision !== revision ||
+      !canCommit()
+    )
+      return null
     this.documents = next
+    this.revision++
+    this.incompleteCount = incompleteCount
+    this.unsupportedCount = unsupportedCount
+    this.tagBuild = undefined
     this.filteredViews.clear()
     this.tagViews.clear()
     this.reverse = reverse
@@ -427,8 +638,14 @@ export class WorkspaceReferenceIndex {
     canCommit: CanCommit = () => true,
   ): Promise<ReferencePage | null> {
     const snapshot = this.documents
+    const revision = this.revision
     if (!(await this.ensureTagsCooperatively(canCommit))) return null
-    if (this.documents !== snapshot || !canCommit()) return null
+    if (
+      this.documents !== snapshot ||
+      this.revision !== revision ||
+      !canCommit()
+    )
+      return null
     return this.finishCooperatively(
       this.pageSteps(this.tagPaths?.get(tag) ?? [], offset, limit),
       canCommit,
@@ -480,24 +697,36 @@ export class WorkspaceReferenceIndex {
     }
     const items: WorkspaceTagSummary[] = []
     let bytes = 0
+    let nextOffset = offset
+    let capReached = false
+    let started = performance.now()
     for (
       let index = offset;
       index < sorted.length && items.length < limit;
       index++
     ) {
+      if (performance.now() - started >= workSliceMs) {
+        yield
+        started = performance.now()
+      }
       const entry = sorted[index]
       if (!entry) break
       const size = Buffer.byteLength(entry[0]) + 8
+      if (size > 32 * 1024) {
+        capReached = true
+        nextOffset = index + 1
+        continue
+      }
       if (bytes + size > 32 * 1024) break
       items.push({ tag: entry[0], count: entry[1].size })
       bytes += size
+      nextOffset = index + 1
     }
-    const nextOffset = offset + items.length
     return {
       items,
       hasMore: nextOffset < sorted.length,
       nextOffset,
-      capReached: false,
+      capReached,
     }
   }
 
@@ -513,8 +742,14 @@ export class WorkspaceReferenceIndex {
     capReached: boolean
   } | null> {
     const snapshot = this.documents
+    const revision = this.revision
     if (!(await this.ensureTagsCooperatively(canCommit))) return null
-    if (this.documents !== snapshot || !canCommit()) return null
+    if (
+      this.documents !== snapshot ||
+      this.revision !== revision ||
+      !canCommit()
+    )
+      return null
     return this.finishCooperatively(
       this.tagsSteps(offset, limit, prefix),
       canCommit,
@@ -588,10 +823,18 @@ export class WorkspaceReferenceIndex {
   private async ensureTagsCooperatively(
     canCommit: CanCommit,
   ): Promise<boolean> {
-    return (
-      (await this.finishCooperatively(this.tagSteps(canCommit), canCommit)) ??
-      false
-    )
+    if (!canCommit()) return false
+    if (!this.tagPaths && !this.tagBuild) {
+      const revision = this.revision
+      const current = () => this.revision === revision
+      const build = this.finishCooperatively(this.tagSteps(current), current)
+        .then((result) => result ?? false)
+        .finally(() => {
+          if (this.tagBuild === build) this.tagBuild = undefined
+        })
+      this.tagBuild = build
+    }
+    return (this.tagPaths !== null || !!(await this.tagBuild)) && canCommit()
   }
 
   private *buildTags(
@@ -719,6 +962,8 @@ export class WorkspaceReferenceIndex {
       return { items: [], hasMore: false, nextOffset: offset, complete: true }
     const items: NoteHeading[] = []
     let bytes = 0
+    let nextOffset = offset
+    let complete = document.headings.complete && document.syntaxComplete
     for (
       let index = offset;
       index < document.headings.items.length && items.length < limit;
@@ -727,16 +972,21 @@ export class WorkspaceReferenceIndex {
       const heading = document.headings.items[index]
       if (!heading) break
       const size = Buffer.byteLength(heading.text)
+      if (size > 32 * 1024) {
+        complete = false
+        nextOffset = index + 1
+        continue
+      }
       if (bytes + size > 32 * 1024) break
       items.push(heading)
       bytes += size
+      nextOffset = index + 1
     }
-    const nextOffset = offset + items.length
     return {
       items,
       hasMore: nextOffset < document.headings.items.length,
       nextOffset,
-      complete: document.headings.complete && document.syntaxComplete,
+      complete,
     }
   }
 
@@ -860,11 +1110,16 @@ export class WorkspaceReferenceIndex {
     current: CanCommit = () => true,
   ): Promise<T | null> {
     const snapshot = this.documents
+    const revision = this.revision
     if (!current()) return null
     let step = work.next()
     while (!step.done) {
       await this.yieldTurn()
-      if (this.documents !== snapshot || !current()) {
+      if (
+        this.documents !== snapshot ||
+        this.revision !== revision ||
+        !current()
+      ) {
         work.return(null as T)
         return null
       }

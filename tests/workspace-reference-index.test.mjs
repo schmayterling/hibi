@@ -636,3 +636,126 @@ test('link normalization preserves root, encoded filenames and wiki heading sema
   ])
     assert.equal(wikiTarget('docs/from.md', href, paths), expected)
 })
+
+test('oversized metadata fields advance their offsets and leave later records reachable', () => {
+  const index = new WorkspaceReferenceIndex()
+  index.apply(workspace, [
+    page(
+      'a.md',
+      '#aaa #' +
+        'b'.repeat(40000) +
+        ' #ccc #ddd\n\n# one\n# ' +
+        'x'.repeat(40000) +
+        '\n# three\n# four',
+    ),
+  ])
+  const tags = []
+  let offset = 0
+  let incomplete = false
+  while (true) {
+    const result = index.tags(offset, 1)
+    tags.push(...result.items.map((item) => item.tag))
+    incomplete ||= result.capReached
+    assert.ok(!result.hasMore || result.nextOffset > offset)
+    if (!result.hasMore) break
+    offset = result.nextOffset
+  }
+  assert.deepEqual(tags, ['aaa', 'ccc', 'ddd'])
+  assert.equal(incomplete, true)
+  const headings = []
+  offset = 0
+  incomplete = false
+  while (true) {
+    const result = index.headings('a.md', offset, 1)
+    headings.push(...result.items.map((item) => item.text))
+    incomplete ||= !result.complete
+    assert.ok(!result.hasMore || result.nextOffset > offset)
+    if (!result.hasMore) break
+    offset = result.nextOffset
+  }
+  assert.deepEqual(headings, ['one', 'three', 'four'])
+  assert.equal(incomplete, true)
+})
+
+test('draft deltas retain untouched documents and cached path views without walking the workspace', async () => {
+  const index = new WorkspaceReferenceIndex()
+  const syntax = {
+    settings: defaultNoteSyntax,
+    key: 'default',
+    complete: true,
+    unsupported: false,
+  }
+  const metadata = parseWorkspaceMetadata(page('a.md', '#shared'), syntax)
+  const pages = Array.from({ length: 100000 }, (_, i) => ({
+    path: `note-${i}.md`,
+    version: 'one',
+    syntax,
+    metadata,
+  }))
+  await index.applyMetadataCooperatively(
+    workspace,
+    (async function* () {
+      yield* pages
+    })(),
+  )
+  assert.equal(index.tagPaths, null, 'path queries do not prepare tags')
+  const untouched = index.documents.get('note-99999.md')
+  const sorted = index.sortedPaths
+  const pathView = await index.searchPathsCooperatively(
+    'note-',
+    0,
+    10,
+    () => true,
+  )
+  assert.equal(pathView.items.length, 10)
+  let walks = 0
+  const iterate = index.documents[Symbol.iterator]
+  index.documents[Symbol.iterator] = function* () {
+    walks++
+    yield* iterate.call(this)
+  }
+  const changed = {
+    path: 'note-0.md',
+    version: 'two',
+    syntax,
+    metadata: parseWorkspaceMetadata(
+      page('note-0.md', '#shared #new [[note-1]]'),
+      syntax,
+    ),
+  }
+  assert.deepEqual(await index.applyDeltaCooperatively(workspace, [changed]), {
+    parsed: 1,
+    resolved: 1,
+  })
+  assert.equal(walks, 0)
+  assert.equal(index.documents.get('note-99999.md'), untouched)
+  assert.equal(index.sortedPaths, sorted)
+  assert.equal(index.tagPaths, null)
+  assert.deepEqual(
+    await index.searchPathsCooperatively('note-', 0, 10, () => true),
+    pathView,
+  )
+  assert.equal(walks, 0)
+  assert.deepEqual(index.links('note-0.md', 0, 10).items, ['note-1.md'])
+  const tags = await index.tagsCooperatively(0, 10)
+  assert.deepEqual(tags.items, [
+    { tag: 'new', count: 1 },
+    { tag: 'shared', count: 100000 },
+  ])
+  const before = walks
+  await index.applyDeltaCooperatively(workspace, [
+    {
+      ...changed,
+      version: 'three',
+      metadata: parseWorkspaceMetadata(
+        page('note-0.md', '#shared #next'),
+        syntax,
+      ),
+    },
+  ])
+  assert.equal(walks, before)
+  assert.deepEqual((await index.tagsCooperatively(0, 10)).items, [
+    { tag: 'next', count: 1 },
+    { tag: 'shared', count: 100000 },
+  ])
+})

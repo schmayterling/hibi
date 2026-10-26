@@ -15,6 +15,7 @@ import {
   subscribeWorkspaceChanges,
   workspaceChangeCursor,
   workspaceIndexRevision,
+  workspaceMetadataDelta,
   workspaceMetadataPages,
 } from './workspace'
 import { LatestIndexJob } from './workspace-index-job'
@@ -293,11 +294,25 @@ export async function queryWorkspaceReferences(
           indexedSequence !== before.sequence ||
           indexedRevision !== revision ||
           indexedSourceVersions !== sourceVersions
-        const applied = await references.applyMetadataCooperatively(
-          target,
-          workspaceMetadataPages(syntax, () => current() && sourceCurrent()),
-          () => current() && sourceCurrent(),
-        )
+        const active = () => current() && sourceCurrent()
+        const sameSnapshot =
+          indexedTarget?.workspaceId === target.workspaceId &&
+          indexedTarget.workspaceGeneration === target.workspaceGeneration &&
+          indexedSyntaxFingerprint === syntax.fingerprint
+        const delta = sameSnapshot
+          ? await workspaceMetadataDelta(syntax, active)
+          : null
+        if (!active()) return false
+        let applied =
+          delta?.every((page) => references.has(page.path))
+            ? await references.applyDeltaCooperatively(target, delta, active)
+            : null
+        if (!applied && active())
+          applied = await references.applyMetadataCooperatively(
+            target,
+            workspaceMetadataPages(syntax, active),
+            active,
+          )
         if (!applied) return false
         if (sourceChanged) searchCursors.clear()
         graphCursors.clear()
@@ -380,12 +395,6 @@ export async function queryWorkspaceReferences(
       cacheCurrent,
     )
     if (!result) return failure('stale', 'This workspace changed. Try again.')
-    if (!result.items.length && result.hasMore)
-      return {
-        ok: false,
-        code: 'limit-exceeded',
-        message: 'This tag exceeds the query page size.',
-      }
     return {
       ok: true,
       value: {
@@ -544,12 +553,6 @@ export async function queryWorkspaceReferences(
   }
   if (kind === 'headings') {
     const result = references.headings(path as string, offset, limit)
-    if (!result.items.length && result.hasMore)
-      return {
-        ok: false,
-        code: 'limit-exceeded',
-        message: 'This heading exceeds the query page size.',
-      }
     return {
       ok: true,
       value: {

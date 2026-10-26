@@ -5839,6 +5839,9 @@
   "23aa870889ee": [
     "src/main/import-files.ts"
   ],
+  "47e60276c5e2": [
+    "src/main/workspace-legacy-index.ts"
+  ],
   "93989d9c45f8": [
     "src/renderer/src/mounted-document-edits.ts"
   ],
@@ -6336,9 +6339,6 @@
   "1f93aa51a306": [
     "src/addons/quick-note/native.ts"
   ],
-  "5811e6e1d87e": [
-    "src/main/workspace-metadata-query.ts"
-  ],
   "9a8066d604c9": [
     "src/main/addon-documentation.ts"
   ],
@@ -6435,9 +6435,6 @@
   "a6da99875af4": [
     "src/main/document.ts",
     "src/renderer/src/main.tsx"
-  ],
-  "f69975021d91": [
-    "src/main/workspace-metadata-query.ts"
   ],
   "e8983dab4298": [
     "src/renderer/src/Introduction.tsx"

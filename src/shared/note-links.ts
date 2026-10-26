@@ -100,10 +100,11 @@ export function noteBasenames(paths: ReadonlySet<string>) {
 export function noteReferences(
   source: string,
   syntax: NoteSyntax = defaultNoteSyntax,
+  lexed?: ReturnType<typeof noteLexer>,
 ) {
   const links: string[] = []
   const wikilinks: string[] = []
-  const { parser, tokens } = noteLexer(source, syntax)
+  const { parser, tokens } = lexed ?? noteLexer(source, syntax)
   parser.walkTokens(tokens, (token) => {
     if (token.type === 'link') links.push(token.href)
     if (token.type === 'obsidianWikiLink' || token.type === 'obsidianEmbed')

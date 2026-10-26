@@ -115,6 +115,11 @@ export function noteLexer(
           },
         ],
       })
+    // Parser variants are disposable; eviction never omits note metadata.
+    if (parsers.size >= 64) {
+      const oldest = parsers.keys().next().value
+      if (oldest !== undefined) parsers.delete(oldest)
+    }
     parsers.set(key, parser)
   }
   const tokens = parser.lexer(

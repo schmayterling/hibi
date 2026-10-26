@@ -74,12 +74,13 @@ function inlineText(tokens: readonly Token[]): string {
 export function noteHeadings(
   source: string,
   syntax: NoteSyntax = defaultNoteSyntax,
+  lexed?: ReturnType<typeof noteLexer>,
 ): {
   items: readonly NoteHeading[]
   complete: boolean
 } {
   const headings: NoteHeading[] = []
-  const { parser, tokens } = noteLexer(source, syntax)
+  const { parser, tokens } = lexed ?? noteLexer(source, syntax)
   parser.walkTokens(tokens, (token) => {
     if (token.type === 'heading') {
       headings.push({

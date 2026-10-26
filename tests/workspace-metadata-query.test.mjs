@@ -9,6 +9,8 @@ const host = {
   sequence: 1,
   revision: 1,
   indexReads: 0,
+  deltaReads: 0,
+  deltaPages: null,
   parses: 0,
   listener: null,
   stale: false,
@@ -73,6 +75,16 @@ const bundle = await build({
           }
           export const readWorkspaceIndexSource = async (path) =>
             host().pages.find((page) => page.path === path)?.markdown ?? ''
+          export async function workspaceMetadataDelta(syntax, current) {
+            if (!current() || host().deltaPages === null) return null
+            host().deltaReads++
+            return host().deltaPages.map((page) => {
+              const profile = syntax.page(page)
+              host().parses++
+              return { path: page.path, version: sourceIndexVersion(page.markdown),
+                syntax: profile, metadata: parseWorkspaceMetadata(page, profile) }
+            })
+          }
           export async function* workspaceMetadataPages(syntax, current) {
             host().indexReads++
             if (host().changeDuringRead) host().sequence++
@@ -586,6 +598,109 @@ test('query pages reach offsets beyond 2100 and preserve large metadata fields',
   } finally {
     host.pages = original
     host.syntaxSnapshot = originalSyntax
+    host.revision++
+    host.listener({ kind: 'resync' })
+  }
+})
+
+test('dirty source versions use one metadata delta for concurrent completion queries', async () => {
+  const saved = { pages: host.pages, versions: host.versions }
+  host.pages = Array.from({ length: 64 }, (_, i) => ({
+    path: `note-${i}.md`,
+    markdown: '#base',
+  }))
+  host.versions = [
+    { file: '/notes/note-0.md', tabId: 'edit', contentVersion: 1 },
+  ]
+  host.deltaPages = null
+  host.revision++
+  host.listener({ kind: 'resync' })
+  try {
+    const first = await query({
+      target: host.target,
+      kind: 'search-paths',
+      query: 'note-',
+    })
+    assert.equal(first.ok, true)
+    const reads = host.indexReads
+    const parses = host.parses
+    const deltas = host.deltaReads
+    host.pages[0] = { path: 'note-0.md', markdown: '#base #new [[note-1]]' }
+    host.deltaPages = [host.pages[0]]
+    host.versions[0].contentVersion++
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        query({ target: host.target, kind: 'search-tags', query: 'new' }),
+      ),
+    )
+    assert.ok(results.every((result) => result.ok))
+    assert.ok(results.every((result) => result.value.items[0].tag === 'new'))
+    assert.equal(host.indexReads, reads)
+    assert.equal(host.parses, parses + 1)
+    assert.equal(host.deltaReads, deltas + 1)
+    const links = await query({
+      target: host.target,
+      kind: 'links',
+      path: 'note-0.md',
+    })
+    assert.deepEqual(links.value.items, ['note-1.md'])
+  } finally {
+    host.pages = saved.pages
+    host.versions = saved.versions
+    host.deltaPages = null
+    host.revision++
+    host.listener({ kind: 'resync' })
+  }
+})
+
+test('metadata query offsets pass oversized tags and headings without stranding later records', async () => {
+  const pages = host.pages
+  host.pages = [
+    {
+      path: 'a.md',
+      markdown:
+        '#aaa #' +
+        'b'.repeat(40000) +
+        ' #ccc #ddd\n\n# one\n# ' +
+        'x'.repeat(40000) +
+        '\n# three\n# four',
+    },
+  ]
+  host.deltaPages = null
+  host.revision++
+  host.listener({ kind: 'resync' })
+  try {
+    for (const kind of ['tags', 'headings']) {
+      let offset = 0
+      let complete = true
+      const items = []
+      while (true) {
+        const result = await query({
+          target: host.target,
+          kind,
+          path: 'a.md',
+          offset,
+          limit: 1,
+        })
+        assert.equal(result.ok, true)
+        complete &&= result.value.complete
+        items.push(
+          ...result.value.items.map((item) =>
+            kind === 'tags' ? item.tag : item.text,
+          ),
+        )
+        if (!result.value.hasMore) break
+        assert.ok(result.value.nextOffset > offset)
+        offset = result.value.nextOffset
+      }
+      assert.deepEqual(
+        items,
+        kind === 'tags' ? ['aaa', 'ccc', 'ddd'] : ['one', 'three', 'four'],
+      )
+      assert.equal(complete, false)
+    }
+  } finally {
+    host.pages = pages
     host.revision++
     host.listener({ kind: 'resync' })
   }

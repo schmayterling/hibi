@@ -11,8 +11,8 @@ import { validateAddonRequirements } from '../src/shared/addon-dependencies.ts'
 import { parseAddonNetwork } from '../src/shared/host-network.ts'
 
 test('addon manifests require release versions while accepting versioned v1 packages', () => {
-  assert.equal(ADDON_API_VERSION, 2)
-  for (const apiVersion of [1, ADDON_API_VERSION]) {
+  assert.equal(ADDON_API_VERSION, 3)
+  for (const apiVersion of [1, 2, 3]) {
     assert.equal(
       compatibleAddonManifest({ apiVersion, version: '1.0.0' }),
       true,
@@ -20,7 +20,7 @@ test('addon manifests require release versions while accepting versioned v1 pack
     for (const version of [undefined, null, '', '  ', 1, 'x'.repeat(41)])
       assert.equal(compatibleAddonManifest({ apiVersion, version }), false)
   }
-  for (const apiVersion of [0, 3, '2', undefined])
+  for (const apiVersion of [0, 4, '3', undefined])
     assert.equal(
       compatibleAddonManifest({ apiVersion, version: '1.0.0' }),
       false,

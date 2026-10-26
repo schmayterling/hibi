@@ -694,7 +694,7 @@ test('installer accepts the full typst notice but keeps the 64 kib manifest boun
   await h.installAddon(h.window)
   const expected = h.installedAddons()
   assert.equal(expected[0].manifest.licenses[0].text, text)
-  assert.equal(expected[0].manifest.apiVersion, 2)
+  assert.equal(expected[0].manifest.apiVersion, 3)
   assert.equal(expected[0].manifest.defaultEnabled, false)
   assert.equal(stateOf(h, 'notice').enabled, false)
   await h.loadAddons()

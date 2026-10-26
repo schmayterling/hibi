@@ -13,7 +13,7 @@ export const manifest = {
   name: 'Hello',
   description: 'A greeting.',
   version: '1.0.0',
-  apiVersion: 2,
+  apiVersion: 3,
   capabilities: [],
   activation: 'command',
   commands: [{ id: 'greet', label: 'Greet' }],
@@ -32,6 +32,6 @@ const create: CapabilityFactory = () => ({
 export default create
 ```
 
-Use `@hibi/addon-sdk/sdk` for the legacy `SideloadFactory` type. Addons with `capabilities` use `CapabilityFactory`. Set `apiVersion` to `2` for new packages; the host still accepts compatible API v1 packages. The tarball is private and intended for local use. It provides no JavaScript exports, so neither addon code nor its compiled output should import it at runtime.
+Use `@hibi/addon-sdk/sdk` for the legacy `SideloadFactory` type. Addons with `capabilities` use `CapabilityFactory`. Set `apiVersion` to `3` for new packages; the host still accepts API v1 and v2 packages. Use the `formatted` capability for CodeMirror formatted-view extensions and `sdk.codeMirror.markdown` syntax parsers. Flavor `render` hooks share the host's inline `decorate` and cached block `layout` contract. The tarball is private and intended for local use. It provides no JavaScript exports, so neither addon code nor its compiled output should import it at runtime.
 
 The declaration closure references React, CodeMirror, Tiptap, and Marked types, so strict TypeScript checking needs the package's listed peers even for a command-only addon. These are development dependencies for addon authors, not libraries to bundle into installed addon JavaScript.

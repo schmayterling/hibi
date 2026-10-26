@@ -124,6 +124,7 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
   await writeFile(
     join(profile, 'addons.json'),
     JSON.stringify({
+      'slash-commands': false,
       'v1-proof': true,
       'legacy-proof': true,
       'formatted-proof': true,

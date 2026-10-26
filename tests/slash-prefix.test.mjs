@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { stripTypeScriptTypes } from 'node:module'
 import test from 'node:test'
-import { Text } from '@codemirror/state'
+import { EditorState, Text } from '@codemirror/state'
+import { GFM, parser } from '@lezer/markdown'
 import { Schema } from '@tiptap/pm/model'
 import {
   maximumSlashQueryUnits,
@@ -149,9 +150,13 @@ test('rich prefix checks stop early across marked spans and inline containers', 
 
 test('source reads only a possible slash prefix, even near the start of a long line', async () => {
   const ranges = []
+  let treeReads = 0
   const current = await load('source', 'current', {
     EditorView: { editable: Symbol('editable') },
-    syntaxTree: () => ({ resolveInner: () => null }),
+    syntaxTree: () => {
+      treeReads++
+      return { resolveInner: () => null }
+    },
     slashQuery,
     maximumSlashQueryUnits,
   })
@@ -182,6 +187,9 @@ test('source reads only a possible slash prefix, even near the start of a long l
   }
   assert.equal(match('x'.repeat(100_000)), null)
   assert.deepEqual(ranges, [])
+  assert.equal(match('ordinary'), null)
+  assert.equal(treeReads, 0)
+  assert.deepEqual(ranges, [[0, 8]])
   assert.equal(match(`/a${'x'.repeat(100_000)}`, 2).query, 'a')
   assert.deepEqual(ranges, [
     [0, 2],
@@ -194,4 +202,98 @@ test('source reads only a possible slash prefix, even near the start of a long l
   ])
   assert.equal(match(`/${astral}\u{10400}`), null)
   assert.deepEqual(ranges, [])
+})
+
+test('formatted queries begin at text blocks, keep container prefixes and reject code and continuation lines', async () => {
+  const current = await load('source', 'current', {
+    EditorView: { editable: Symbol('editable') },
+    syntaxTree: (state) => parser.configure(GFM).parse(state.doc.toString()),
+    slashQuery,
+    maximumSlashQueryUnits,
+  })
+  const match = (source, properties = {}) => {
+    const head = source.indexOf('/h2') + 3
+    return current(
+      {
+        hasFocus: true,
+        composing: false,
+        scrollDOM: { classList: { contains: () => false } },
+        state: {
+          doc: Text.of(source.split('\n')),
+          selection: { main: { head, empty: true }, ranges: [{}] },
+          readOnly: false,
+          facet: () => true,
+        },
+        ...properties,
+      },
+      (state) => parser.configure(GFM).parse(state.doc.toString()),
+    )
+  }
+  for (const [source, from] of [
+    ['/h2', 0],
+    ['> /h2', 2],
+    ['- /h2', 2],
+    ['1. /h2', 3],
+    ['# /h2', 2],
+    ['- [ ] /h2', 6],
+    ['/h2\n---', 0],
+  ]) {
+    const value = match(source)
+    assert.equal(value?.query, 'h2', source)
+    assert.equal(value.from, from, source)
+  }
+  for (const source of [
+    'one\n/h2',
+    '`/h2`',
+    '```\n/h2\n```',
+    '    /h2',
+    '<div>\n/h2\n</div>',
+  ])
+    assert.equal(match(source), null, source)
+  assert.equal(match('/h2', { composing: true }), null)
+  assert.equal(match('/h2', { hasFocus: false }), null)
+  assert.equal(
+    match('/h2', { scrollDOM: { classList: { contains: () => true } } }),
+    null,
+  )
+})
+
+test('formatted prefix reads stay bounded without materializing complete documents', async () => {
+  const source = '/h2' + 'x'.repeat(100_000)
+  const parsed = parser.configure(GFM).parse(source)
+  const state = EditorState.create({ doc: source, selection: { anchor: 3 } })
+  const reads = []
+  const current = await load('source', 'current', {
+    EditorView: { editable: Symbol('editable') },
+    slashQuery,
+    maximumSlashQueryUnits,
+  })
+  const doc = {
+    lineAt: (position) => ({ from: state.doc.lineAt(position).from }),
+    sliceString: (from, to) => {
+      reads.push(to - from)
+      return state.doc.sliceString(from, to)
+    },
+    toString() {
+      throw new Error('must not materialize the document')
+    },
+  }
+  const view = {
+    hasFocus: true,
+    composing: false,
+    scrollDOM: { classList: { contains: () => false } },
+    state: { doc, selection: state.selection, facet: () => true },
+  }
+  assert.equal(current(view, () => parsed).query, 'h2')
+  assert.deepEqual(reads, [3])
+  reads.length = 0
+  view.state.selection = {
+    main: { head: source.length, empty: true },
+    ranges: [{}],
+  }
+  assert.equal(
+    current(view, () => parsed),
+    null,
+  )
+  assert.deepEqual(reads, [])
 })

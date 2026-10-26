@@ -239,5 +239,41 @@ test('giant blocks of opaque nodes get inner nodes only for their opening and la
   )
   for (;;) if (run.advance()) break
   assert.ok(again.parsedUnits < 1000, JSON.stringify(again))
+  // A table shorter than the giant size but longer than two chunks gets the
+  // same window, so typing in it does not parse all its rows again.
+  const medium = `# t\n\n| a | b |\n| - | - |\n${rows.slice(0, 200).join('\n')}\n\nend\n`
+  const mediumInput = (value) => ({
+    length: value.length,
+    chunk: (from) => value.slice(from),
+    read: (from, to) => value.slice(from, to),
+    lineChunks: false,
+  })
+  const mediumParse = (probe, value, fragments) => {
+    const parse = new ChunkedMarkdownParser(base, base, {
+      probe,
+      opaque: new Set(['Table']),
+      giantBlock: 4096,
+      chunkSize: 512,
+    }).startChunkedParse(mediumInput(value), fragments, {
+      from: 0,
+      to: value.length,
+    })
+    for (;;) {
+      const tree = parse.advance()
+      if (tree) return tree
+    }
+  }
+  assert.ok(medium.length > 1024 && medium.length < 4096, `${medium.length}`)
+  const first = mediumParse(counts(), medium, [])
+  const typedAt = medium.indexOf('| 100 |') + 4
+  const typed = counts()
+  mediumParse(
+    typed,
+    `${medium.slice(0, typedAt)}x${medium.slice(typedAt)}`,
+    TreeFragment.applyChanges(TreeFragment.addTree(first), [
+      { fromA: typedAt, toA: typedAt, fromB: typedAt, toB: typedAt + 1 },
+    ]),
+  )
+  assert.ok(typed.parsedUnits < medium.length / 2, JSON.stringify(typed))
   void Table
 })

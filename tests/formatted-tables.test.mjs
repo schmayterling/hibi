@@ -630,17 +630,26 @@ test('cells show disabled syntax as written and follow syntax setting changes', 
     bold: 0,
     struck: 1,
   })
-  // A setting change renders the mounted table again.
-  await harness.evaluate(async () => {
-    window.tables.setEnabled('core.bold', true)
-    window.tables.setEnabled('markdown.strike', false)
-    await new Promise((done) => setTimeout(done, 50))
-    await window.tables.settle()
-  })
+  /** Change a syntax setting while the table is mounted. */
+  const toggle = (id, enabled) =>
+    harness.evaluate(
+      async ({ id, enabled }) => {
+        window.tables.setEnabled(id, enabled)
+        await new Promise((done) => setTimeout(done, 50))
+        await window.tables.settle()
+      },
+      { id, enabled },
+    )
+  // A core setting alone, which changes no syntax, renders the cells again.
+  await toggle('core.bold', true)
+  assert.deepEqual(await cell(), { text: 'bold gone', bold: 1, struck: 1 })
+  await toggle('core.bold', false)
+  assert.deepEqual(await cell(), { text: '**bold** gone', bold: 0, struck: 1 })
+  // So does a contributed syntax setting.
+  await toggle('core.bold', true)
+  await toggle('markdown.strike', false)
   assert.deepEqual(await cell(), { text: 'bold ~~gone~~', bold: 1, struck: 0 })
-  await harness.evaluate(() =>
-    window.tables.setEnabled('markdown.strike', true),
-  )
+  await toggle('markdown.strike', true)
 })
 
 test('in the app, cells edit their source in place, undo and run the toolbar table actions', {

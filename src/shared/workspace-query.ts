@@ -1,6 +1,16 @@
 import type { WorkspaceTarget } from './foundation-contracts'
 import type { NoteHeading, PropertyScalar } from './note-metadata.ts'
 
+// Per-message trust bound; note size, workspace size and result count are unrestricted.
+export const WORKSPACE_TEXT_QUERY_BYTES = 256 * 1024
+
+export type WorkspaceTextMatch = {
+  readonly path: string
+  /** Path matches rank before text-only matches; pages may arrive progressively. */
+  readonly score: number
+  readonly lines: readonly { readonly line: number; readonly text: string }[]
+}
+
 export type QueryFailure =
   | 'stale'
   | 'not-found'
@@ -80,6 +90,10 @@ export type WorkspaceReferenceQueryRequest =
       readonly query: string
       readonly cursor?: string
       readonly limit?: number
+      /** Reusing an identity cancels that caller's previous search immediately. */
+      readonly searchId?: string
+      /** Cancel the searchId without starting another search. */
+      readonly cancel?: boolean
     })
 
 export interface WorkspaceReferenceQueryBase {
@@ -148,6 +162,8 @@ export type WorkspaceReferenceQueryResult = WorkspaceReferenceQueryBase &
     | {
         readonly kind: 'search-text'
         readonly items: readonly string[]
+        /** Current-source snippets and relevance; older hosts may omit these. */
+        readonly matches?: readonly WorkspaceTextMatch[]
         readonly hasMore: boolean
         readonly nextCursor: string | null
       }

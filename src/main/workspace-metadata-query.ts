@@ -12,29 +12,23 @@ import type {
 import {
   indexWorkspace,
   isCurrentWorkspaceTarget,
-  subscribeWorkspaceChanges,
+  listenWorkspaceChanges,
   workspaceChangeCursor,
   workspaceIndexRevision,
 } from './workspace'
 import { LatestIndexJob } from './workspace-index-job'
 import {
   type GraphPosition,
-  type TextSearchPosition,
   WorkspaceReferenceIndex,
 } from './workspace-reference-index'
 import { workspaceSyntax } from './workspace-syntax'
 
 const references = new WorkspaceReferenceIndex()
-type SearchCursorState = {
+type GraphCursorState = {
   target: WorkspaceTarget
   sequence: number
   revision: number
   sourceVersions: string
-  query: string
-  position: TextSearchPosition
-}
-const searchCursors = new Map<string, SearchCursorState>()
-type GraphCursorState = Omit<SearchCursorState, 'query' | 'position'> & {
   syntaxFingerprint: string
   position: GraphPosition
 }
@@ -73,7 +67,6 @@ function clearCache(): void {
   referenceJob.reset()
   latestBuild = null
   references.clear()
-  searchCursors.clear()
   graphCursors.clear()
   indexedTarget = null
   indexedSequence = -1
@@ -83,7 +76,7 @@ function clearCache(): void {
   requestedSyntaxFingerprint = ''
 }
 
-subscribeWorkspaceChanges((event) => {
+listenWorkspaceChanges((event) => {
   if (event.kind === 'resync') clearCache()
 })
 
@@ -114,6 +107,7 @@ const failure = (
 export async function queryWorkspaceReferences(
   input: unknown,
   getOpenDocumentVersions: () => readonly OpenDocumentVersion[],
+  owner = 'legacy',
 ): Promise<OperationResult<WorkspaceReferenceQueryResult, QueryFailure>> {
   if (!input || typeof input !== 'object')
     return failure('unsupported', 'Choose a workspace query.')
@@ -122,6 +116,10 @@ export async function queryWorkspaceReferences(
   if (!isCurrentWorkspaceTarget(target))
     return failure('stale', 'This workspace is no longer open.')
   const kind = request.kind
+  if (kind === 'search-text')
+    return import('./workspace-text-search').then((module) =>
+      module.queryWorkspaceText(input, getOpenDocumentVersions, owner),
+    )
   if (
     kind !== 'links' &&
     kind !== 'backlinks' &&
@@ -132,8 +130,7 @@ export async function queryWorkspaceReferences(
     kind !== 'graph' &&
     kind !== 'property' &&
     kind !== 'headings' &&
-    kind !== 'search-paths' &&
-    kind !== 'search-text'
+    kind !== 'search-paths'
   )
     return failure('unsupported', 'This workspace query is not supported.')
   const path = request.path
@@ -175,22 +172,12 @@ export async function queryWorkspaceReferences(
   )
     return failure('unsupported', 'Choose a bounded property predicate.')
   if (
-    (kind === 'search-paths' || kind === 'search-text') &&
+    kind === 'search-paths' &&
     (typeof request.query !== 'string' ||
       !request.query.trim() ||
-      request.query.length > (kind === 'search-text' ? 128 : 256))
+      request.query.length > 256)
   )
-    return failure(
-      'unsupported',
-      `Choose a search of 1 to ${kind === 'search-text' ? 128 : 256} characters.`,
-    )
-  if (
-    kind === 'search-text' &&
-    (request.offset !== undefined ||
-      (request.cursor !== undefined &&
-        (typeof request.cursor !== 'string' || request.cursor.length > 64)))
-  )
-    return failure('unsupported', 'Use a valid search cursor.')
+    return failure('unsupported', 'Choose a search of 1 to 256 characters.')
   if (
     kind === 'graph' &&
     (request.offset !== undefined ||
@@ -212,11 +199,7 @@ export async function queryWorkspaceReferences(
     )
       return failure('unsupported', 'Choose a valid link target.')
   } else {
-    if (
-      kind !== 'search-text' &&
-      kind !== 'graph' &&
-      request.offset !== undefined
-    ) {
+    if (kind !== 'graph' && request.offset !== undefined) {
       if (typeof request.offset !== 'number')
         return failure('unsupported', 'Choose a numeric query offset.')
       offset = request.offset
@@ -292,12 +275,6 @@ export async function queryWorkspaceReferences(
           )
         )
           return true
-        const sourceChanged =
-          indexedTarget?.workspaceId !== target.workspaceId ||
-          indexedTarget.workspaceGeneration !== target.workspaceGeneration ||
-          indexedSequence !== before.sequence ||
-          indexedRevision !== revision ||
-          indexedSourceVersions !== sourceVersions
         const applied = await references.applyCooperatively(
           target,
           index.pages,
@@ -305,7 +282,6 @@ export async function queryWorkspaceReferences(
           () => current() && sourceCurrent(),
         )
         if (!applied) return false
-        if (sourceChanged) searchCursors.clear()
         graphCursors.clear()
         indexedTarget = target
         indexedSequence = before.sequence
@@ -413,7 +389,6 @@ export async function queryWorkspaceReferences(
       pathIndex: 0,
       targetIndex: 0,
       nodeEmitted: false,
-      emitted: 0,
     }
     if (request.cursor !== undefined) {
       const old = graphCursors.get(request.cursor as string)
@@ -453,8 +428,7 @@ export async function queryWorkspaceReferences(
         items: result.items,
         hasMore: result.hasMore,
         nextCursor,
-        complete: base.complete && !result.hasMore && !result.capReached,
-        capReached: base.capReached || result.capReached,
+        complete: base.complete && !result.hasMore,
       },
     }
   }
@@ -491,55 +465,6 @@ export async function queryWorkspaceReferences(
         ...references.searchPaths(request.query as string, offset, limit),
       },
     }
-  if (kind === 'search-text') {
-    let position: TextSearchPosition = { pathIndex: 0, sourceOffset: 0 }
-    if (request.cursor !== undefined) {
-      const old = searchCursors.get(request.cursor as string)
-      if (
-        !old ||
-        old.target.workspaceId !== target.workspaceId ||
-        old.target.workspaceGeneration !== target.workspaceGeneration ||
-        old.sequence !== after.sequence ||
-        old.revision !== revision ||
-        old.sourceVersions !== sourceVersions ||
-        old.query !== request.query
-      )
-        return failure('stale', 'This search changed. Start again.')
-      searchCursors.delete(request.cursor as string)
-      position = old.position
-    }
-    const result = references.searchText(
-      request.query as string,
-      position,
-      limit,
-    )
-    let nextCursor: string | null = null
-    if (result.hasMore) {
-      nextCursor = randomUUID()
-      if (searchCursors.size >= 16)
-        searchCursors.delete(searchCursors.keys().next().value as string)
-      searchCursors.set(nextCursor, {
-        target,
-        sequence: after.sequence,
-        revision,
-        sourceVersions,
-        query: request.query as string,
-        position: result.position,
-      })
-    }
-    return {
-      ok: true,
-      value: {
-        ...base,
-        unsupportedSyntax: false,
-        kind,
-        items: result.items,
-        hasMore: result.hasMore,
-        nextCursor,
-        complete: after.complete && !result.hasMore,
-      },
-    }
-  }
   if (kind === 'headings') {
     const result = references.headings(path as string, offset, limit)
     return {

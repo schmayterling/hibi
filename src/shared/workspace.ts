@@ -6,6 +6,10 @@ import type {
 
 export const WORKSPACE_CHANNELS = {
   get: 'workspace:get',
+  header: 'workspace:header',
+  headerChanged: 'workspace:header-changed',
+  legacySubscribe: 'workspace:legacy-subscribe',
+  viewPage: 'workspace:view-page',
   open: 'workspace:open',
   refresh: 'workspace:refresh',
   openFile: 'workspace:open-file',
@@ -72,8 +76,9 @@ export interface WorkspaceStreamSnapshot {
   readonly entries: readonly WorkspaceEntry[]
   /** A failed watcher makes this snapshot a point-in-time view only. */
   readonly stale: boolean
-  /** A failed size-capped scan leaves the retained tree incomplete. */
+  /** A failed scan leaves the retained tree incomplete. */
   readonly complete: boolean
+  /** Retained for compatibility; uncapped scans always report false. */
   readonly capReached: boolean
 }
 

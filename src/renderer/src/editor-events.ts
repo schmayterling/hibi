@@ -12,6 +12,12 @@ function editableTarget(target: EventTarget | null) {
   )
 }
 
+/** CodeMirror's formatted presentation is the normal view. */
+const viewOf = (editor: HTMLElement) =>
+  editor.classList.contains('cm-content') && !editor.closest('.hibi-formatted')
+    ? 'source'
+    : 'normal'
+
 export function onEditorInput(listener: (event: EditorInputEvent) => void) {
   let composition: { target: EventTarget | null; text: string } | null = null
   const report = (target: EventTarget | null, text: string) => {
@@ -20,7 +26,7 @@ export function onEditorInput(listener: (event: EditorInputEvent) => void) {
     listener(
       Object.freeze({
         characters: Array.from(text).length,
-        view: editor.classList.contains('cm-content') ? 'source' : 'normal',
+        view: viewOf(editor),
       }),
     )
   }
@@ -80,7 +86,7 @@ export function emitEditorKeyEvent(event: KeyboardEvent) {
     ctrlKey: event.ctrlKey,
     metaKey: event.metaKey,
     shiftKey: event.shiftKey,
-    view: editor.classList.contains('cm-content') ? 'source' : 'normal',
+    view: viewOf(editor),
   })
   for (const listener of listeners) listener(data)
 }

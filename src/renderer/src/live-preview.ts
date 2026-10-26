@@ -1,14 +1,18 @@
 import {
   type EditorState,
   type Extension,
+  Facet,
+  Prec,
   type Range,
   StateField,
   type Text,
+  type TransactionSpec,
 } from '@codemirror/state'
 import {
   Decoration,
   type DecorationSet,
   EditorView,
+  keymap,
   ViewPlugin,
   type ViewUpdate,
   WidgetType,
@@ -17,6 +21,15 @@ import type { SyntaxNode, SyntaxNodeRef, Tree } from '@lezer/common'
 import { highlightTree } from '@lezer/highlight'
 import { parsedChunks } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
+import {
+  blockBreak,
+  deleteBackward,
+  deleteForward,
+  exitBlock,
+  gapInput,
+  indent,
+  lineBreak,
+} from './formatted-commands'
 import type { FormattedSyntax } from './formatted-syntax'
 import './live-preview.css'
 
@@ -28,6 +41,18 @@ import './live-preview.css'
  */
 
 const hide = Decoration.replace({})
+
+/** Show the Markdown markers of the formatted text under the selection. */
+export const showMarkdownMarkers = Facet.define<boolean, boolean>({
+  combine: (values) => values.at(-1) ?? true,
+})
+
+/** Whether Tab indents formatted text; list items and code always take Tab. */
+export const formattedTabIndents = Facet.define<boolean, boolean>({
+  combine: (values) => values.at(-1) ?? true,
+})
+
+type Revealed = { from: number; to: number }
 
 class RuleWidget extends WidgetType {
   override eq() {
@@ -96,9 +121,16 @@ function eachLine(
 type LineInfo = { classes: string[]; style: string[] }
 
 /** Inline formatting, hidden markers and line styles for the visible ranges. */
-function inline(view: EditorView, tree: Tree): DecorationSet {
+function inline(
+  view: EditorView,
+  tree: Tree,
+  reveal: readonly Revealed[],
+): { decorations: DecorationSet; atomic: DecorationSet } {
   const { state } = view
   const doc = state.doc
+  const atomic: Range<Decoration>[] = []
+  const touched = (from: number, to: number) =>
+    reveal.some((range) => range.from <= to && range.to >= from)
   const decorations: Range<Decoration>[] = []
   const lines = new Map<number, LineInfo>()
   const line = (pos: number) => {
@@ -109,12 +141,21 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
     }
     return info
   }
+  // Hidden syntax is atomic, so the caret steps over it and it never splits.
   const hideRange = (from: number, to: number) => {
-    if (to > from) decorations.push(hide.range(from, to))
+    if (to <= from) return
+    const range = hide.range(from, to)
+    decorations.push(range)
+    atomic.push(range)
   }
   const mark = (className: string, from: number, to: number) => {
     if (to > from)
       decorations.push(Decoration.mark({ class: className }).range(from, to))
+  }
+  /** Markers of formatting under the selection stay visible and editable. */
+  const syntax = (from: number, to: number, revealed: boolean) => {
+    if (revealed) mark('hibi-lp-marker', from, to)
+    else hideRange(from, to)
   }
   const quoteDepth = new Map<number, number>()
   const items = new Map<number, { depth: number; item: SyntaxNode }>()
@@ -134,8 +175,9 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
       target !== '('
     )
       return false
-    hideRange(node.from, open.to)
-    hideRange(close.from, node.to)
+    const revealed = touched(node.from, node.to)
+    syntax(node.from, open.to, revealed)
+    syntax(close.from, node.to, revealed)
     mark('hibi-lp-link', open.to, close.from)
     return undefined
   }
@@ -215,6 +257,8 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
           case 'HeaderMark': {
             const parent = ref.node.parent
             if (!parent?.name.startsWith('ATX')) return
+            const current = doc.lineAt(ref.from)
+            const revealed = touched(current.from, current.to)
             // The opening mark hides with its space, a closing mark with the space before it.
             if (ref.from === parent.from) {
               // Indentation before the opening mark is hidden with it.
@@ -222,18 +266,20 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
                 ref.to,
                 Math.min(parent.to, ref.to + 1),
               )
-              hideRange(
-                doc.lineAt(ref.from).from,
+              syntax(
+                revealed ? ref.from : current.from,
                 ref.to + (after === ' ' || after === '\t' ? 1 : 0),
+                revealed,
               )
             } else {
               const before = doc.sliceString(
                 Math.max(parent.from, ref.from - 1),
                 ref.from,
               )
-              hideRange(
+              syntax(
                 ref.from - (before === ' ' || before === '\t' ? 1 : 0),
                 ref.to,
+                revealed,
               )
             }
             return
@@ -248,9 +294,15 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
             mark('hibi-lp-strike', ref.from, ref.to)
             return
           case 'EmphasisMark':
-          case 'StrikethroughMark':
-            hideRange(ref.from, ref.to)
+          case 'StrikethroughMark': {
+            const parent = ref.node.parent
+            syntax(
+              ref.from,
+              ref.to,
+              !!parent && touched(parent.from, parent.to),
+            )
             return
+          }
           case 'InlineCode': {
             const open = ref.node.firstChild,
               close = ref.node.lastChild
@@ -260,8 +312,9 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
               open.from === close.from
             )
               return false
-            hideRange(open.from, open.to)
-            hideRange(close.from, close.to)
+            const revealed = touched(ref.from, ref.to)
+            syntax(open.from, open.to, revealed)
+            syntax(close.from, close.to, revealed)
             mark('hibi-lp-code', open.to, close.from)
             return false
           }
@@ -270,8 +323,9 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
           case 'Autolink': {
             const url = ref.node.getChild('URL')
             if (!url) return false
-            hideRange(ref.from, url.from)
-            hideRange(url.to, ref.to)
+            const revealed = touched(ref.from, ref.to)
+            syntax(ref.from, url.from, revealed)
+            syntax(url.to, ref.to, revealed)
             mark('hibi-lp-link', url.from, url.to)
             return false
           }
@@ -296,7 +350,7 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
             // Rendered by later formatted-view slices; shown as source text for now.
             return false
           case 'Escape':
-            hideRange(ref.from, ref.from + 1)
+            syntax(ref.from, ref.from + 1, touched(ref.from, ref.to))
             return
           case 'HardBreak':
             if (doc.sliceString(ref.from, ref.from + 1) === '\\')
@@ -355,7 +409,10 @@ function inline(view: EditorView, tree: Tree): DecorationSet {
         },
       }).range(at),
     )
-  return Decoration.set(decorations, true)
+  return {
+    decorations: Decoration.set(decorations, true),
+    atomic: Decoration.set(atomic, true),
+  }
 }
 
 /** List lines: native list markers in the indentation, source markers hidden. */
@@ -544,6 +601,12 @@ function layoutDecorations(state: EditorState, tree: Tree): DecorationSet {
   return Decoration.set(out, true)
 }
 
+/** Ranges whose markers show: the selection while the focused editor shows markers. */
+function revealed(view: EditorView): readonly Revealed[] {
+  if (!view.hasFocus || !view.state.facet(showMarkdownMarkers)) return []
+  return view.state.selection.ranges.map(({ from, to }) => ({ from, to }))
+}
+
 /** The formatted view's rendering over its chunked Markdown syntax tree. */
 export function livePreview(syntax: FormattedSyntax): Extension {
   const layout = StateField.define<DecorationSet>({
@@ -559,25 +622,117 @@ export function livePreview(syntax: FormattedSyntax): Extension {
   const preview = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet
+      atomic: DecorationSet
+      reveal: readonly Revealed[]
       constructor(view: EditorView) {
-        this.decorations = inline(view, syntax.tree(view.state))
+        this.reveal = revealed(view)
+        ;({ decorations: this.decorations, atomic: this.atomic } = inline(
+          view,
+          syntax.tree(view.state),
+          this.reveal,
+        ))
       }
       update(update: ViewUpdate) {
         const tree = syntax.tree(update.state)
+        // Candidate text keeps its markers while an input method composes.
+        const reveal = update.view.composing
+          ? this.reveal.map((range) => ({
+              from: update.changes.mapPos(range.from, -1),
+              to: update.changes.mapPos(range.to, 1),
+            }))
+          : revealed(update.view)
+        const changedReveal =
+          reveal.length !== this.reveal.length ||
+          reveal.some(
+            (range, index) =>
+              range.from !== this.reveal[index]?.from ||
+              range.to !== this.reveal[index]?.to,
+          )
+        this.reveal = reveal
         if (
           update.docChanged ||
           update.viewportChanged ||
+          changedReveal ||
           tree !== syntax.tree(update.startState)
         )
-          this.decorations = inline(update.view, tree)
+          ({ decorations: this.decorations, atomic: this.atomic } = inline(
+            update.view,
+            tree,
+            reveal,
+          ))
       }
     },
     { decorations: (plugin) => plugin.decorations },
   )
+  const hidden = (view: EditorView) =>
+    view.plugin(preview)?.atomic ?? Decoration.none
+  const run =
+    (command: (view: EditorView) => TransactionSpec | null) =>
+    (view: EditorView) => {
+      const spec = command(view)
+      if (!spec) return false
+      view.dispatch(
+        view.state.update(spec, { scrollIntoView: true, userEvent: 'input' }),
+      )
+      return true
+    }
+  const tab = (outdent: boolean) => (view: EditorView) => {
+    const tree = syntax.tree(view.state)
+    let structured = false
+    for (
+      let node: SyntaxNode | null = tree.resolveInner(
+        view.state.selection.main.head,
+        -1,
+      );
+      node;
+      node = node.parent
+    )
+      if (['ListItem', 'FencedCode', 'CodeBlock'].includes(node.name))
+        structured = true
+    if (!structured && !view.state.facet(formattedTabIndents)) return false
+    return run((current) => indent(current.state, tree, outdent))(view)
+  }
   return [
     syntax.extension,
     layout,
     preview,
+    EditorView.atomicRanges.of(hidden),
+    Prec.high(
+      keymap.of([
+        {
+          key: 'Enter',
+          run: run((view) => blockBreak(view.state, syntax.tree(view.state))),
+        },
+        {
+          key: 'Shift-Enter',
+          run: run((view) => lineBreak(view.state, syntax.tree(view.state))),
+        },
+        {
+          key: 'Backspace',
+          run: run((view) =>
+            deleteBackward(view.state, syntax.tree(view.state), hidden(view)),
+          ),
+        },
+        {
+          key: 'Delete',
+          run: run((view) =>
+            deleteForward(view.state, syntax.tree(view.state), hidden(view)),
+          ),
+        },
+        {
+          key: 'Mod-Enter',
+          run: run((view) => exitBlock(view.state, syntax.tree(view.state))),
+        },
+        { key: 'Tab', run: tab(false), shift: tab(true) },
+      ]),
+    ),
+    EditorView.inputHandler.of((view, from, to, text) => {
+      if (view.composing) return false
+      const spec = gapInput(view.state, from, to, text)
+      if (!spec) return false
+      view.dispatch(view.state.update(spec, { scrollIntoView: true }))
+      return true
+    }),
     EditorView.lineWrapping,
     EditorView.editorAttributes.of({ class: 'hibi-formatted' }),
   ]

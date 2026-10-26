@@ -326,6 +326,8 @@ export function useFormattingToolbar(
   const dialogs = useDialogs()
   const toasts = useToasts()
   const source = useRef<SourceFormatting | null>(null)
+  // A CodeMirror formatted pane formats its Markdown source like a source pane.
+  const rich = useRef<SourceFormatting | null>(null)
   const latest = useRef({
     editor,
     mode,
@@ -368,9 +370,13 @@ export function useFormattingToolbar(
             : mode === 'normal'
               ? 'rich'
               : focusedPane)) === 'source'
-      if (!useSource && !editor?.isEditable) return
-      if (!useSource && editor && !flushRich(editor)) return
-      const sourceSelection = useSource ? source.current?.capture(coords) : null
+      const codeMirror = useSource ? source.current : rich.current
+      const viaCodeMirror = useSource || !!rich.current
+      if (!viaCodeMirror && !editor?.isEditable) return
+      if (!viaCodeMirror && editor && !flushRich(editor)) return
+      const sourceSelection = viaCodeMirror
+        ? (codeMirror?.capture(coords) ?? null)
+        : null
       const document = editor?.state.doc
       const selection = editor?.state.selection
       const position =
@@ -388,7 +394,7 @@ export function useFormattingToolbar(
           latest.current.format.formatting !== 'markdown'
         )
           inserted = sourceSelection?.insertMedia(attachments) ?? false
-        else if (useSource)
+        else if (useSource || rich.current)
           inserted =
             sourceSelection?.insertMarkdown(
               latest.current.format?.insertMedia?.(attachments) ??
@@ -441,6 +447,10 @@ export function useFormattingToolbar(
   )
   const refresh = useRef(() => {})
   const scheduleRefresh = useRef(() => {})
+  const attachRich = useCallback((value: SourceFormatting | null) => {
+    rich.current = value
+    scheduleRefresh.current()
+  }, [])
   const attachSource = useCallback(
     (value: SourceFormatting | null) => {
       const initial = !source.current
@@ -464,12 +474,13 @@ export function useFormattingToolbar(
     async function run(action: Action) {
       const { editor, dialogs, disabled } = latest.current
       if (disabled) return
-      const useSource = inSource()
+      const codeMirror = inSource() ? source.current : rich.current
+      const useSource = inSource() || !!codeMirror
       if (!useSource && editor && !flushRich(editor)) return
       if (action.id === 'image') {
         await attachFiles(null)
       } else if (action.id === 'link') {
-        const sourceSelection = useSource ? source.current?.capture() : null
+        const sourceSelection = useSource ? codeMirror?.capture() : null
         const document = editor?.state.doc
         const selection = editor?.state.selection
         const result = await dialogs.open<InsertValues>({
@@ -521,7 +532,7 @@ export function useFormattingToolbar(
             })
             .run()
         else chain.extendMarkRange('link').setLink({ href: result.url }).run()
-      } else if (useSource) source.current?.run(action.id)
+      } else if (useSource) codeMirror?.run(action.id)
       else if (editor?.isEditable) {
         action.rich(editor.chain().focus(), editor).run()
       }
@@ -537,8 +548,9 @@ export function useFormattingToolbar(
     refresh.current = () =>
       toolbar.batch(() => {
         const { editor, disabled } = latest.current
-        const useSource = inSource()
-        const sourceState = useSource ? source.current?.inspect() : null
+        const codeMirror = inSource() ? source.current : rich.current
+        const useSource = inSource() || !!codeMirror
+        const sourceState = useSource ? codeMirror?.inspect() : null
         const inTable =
           !useSource &&
           !!editor &&
@@ -618,8 +630,9 @@ export function useFormattingToolbar(
       (mode === 'side-by-side' && focusedPane === 'source')
     )
       source.current?.focus()
+    else if (rich.current) rich.current.focus()
     // Tiptap's focus command defers to a frame and can override a newer click into source.
     else if (editor && !editor.isDestroyed) editor.view.focus()
   }, [mode, focusedPane, editor, markdownMode, focusOwnedByEditor])
-  return { attachSource, attachFiles }
+  return { attachSource, attachRich, attachFiles }
 }

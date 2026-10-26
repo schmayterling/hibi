@@ -116,3 +116,11 @@
 .hibi-formatted .hibi-lp-rule {
   border-top: 1px solid var(--border);
 }
+/* Markers of the formatting under the caret, like the rich editor's hints. */
+.hibi-formatted .hibi-lp-marker {
+  color: var(--muted);
+  font-size: 0.8em;
+  font-weight: 400;
+  font-style: normal;
+  text-decoration: none;
+}

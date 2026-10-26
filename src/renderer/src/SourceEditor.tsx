@@ -111,6 +111,12 @@ import {
 } from './editor-interaction-presence'
 import { editorViewRegistry } from './editor-view-api'
 import type { FindMove, FindStatus } from './FindBar'
+import { formattedSyntax } from './formatted-syntax'
+import {
+  formattedTabIndents,
+  livePreview,
+  showMarkdownMarkers,
+} from './live-preview'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import {
   observeSourceAnnotations,
@@ -191,6 +197,9 @@ export function SourceEditor({
   sourceExtensions,
   onFormatting,
   onLink,
+  presentation = 'source',
+  markers = true,
+  spellCheck = false,
 }: {
   document: DocumentState
   viewId?: string
@@ -219,7 +228,14 @@ export function SourceEditor({
   sourceExtensions: readonly SourceExtension[]
   onFormatting: (formatting: SourceFormatting | null) => void
   onLink: (href: string) => void
+  /** Formatted renders Markdown in place over the same source session. */
+  presentation?: 'source' | 'formatted'
+  /** Formatted view: show the Markdown markers under the caret. */
+  markers?: boolean
+  spellCheck?: boolean
 }) {
+  const formatted = presentation === 'formatted'
+  const kind = formatted ? 'rich' : 'source'
   const parserOptions = useRef({
     markdownMode,
     markdownLanguage,
@@ -300,6 +316,10 @@ export function SourceEditor({
   const numbers = useRef(new Compartment())
   const addons = useRef(new Compartment())
   const indentation = useRef(new Compartment())
+  const display = useRef(new Compartment())
+  // Later changes reconfigure the display compartment without a new editor.
+  const displayOptions = useRef({ markers, spellCheck })
+  displayOptions.current = { markers, spellCheck }
   const find = useRef({
     active: findActive,
     query: findQuery,
@@ -544,6 +564,10 @@ export function SourceEditor({
       return
     }
     const language = new Compartment()
+    // The formatted view owns its syntax tree; a language change rebuilds it.
+    let syntax = formattedSyntax()
+    const tree = (state: EditorState) =>
+      formatted ? syntax.tree(state) : syntaxTree(state)
     const markdown = () => {
       const {
         markdownMode,
@@ -552,6 +576,19 @@ export function SourceEditor({
         codeLanguage,
         label,
       } = parserOptions.current
+      if (formatted) {
+        syntax = formattedSyntax()
+        return [
+          livePreview(syntax),
+          keymap.of(
+            formattingKeymap((id) => formatting.current?.run(id) ?? false),
+          ),
+          EditorView.contentAttributes.of({
+            'aria-label': 'Document editor',
+            'aria-description': 'Press Escape, then Tab, to leave the editor.',
+          }),
+        ]
+      }
       return [
         markdownMode
           ? codeLanguage && !codeLanguages.resolve(codeLanguage)
@@ -643,12 +680,14 @@ export function SourceEditor({
         /<\/?[a-z!]/i.test(line.text)
       )
         return null
-      const tree = ensureSyntaxTree(state, line.to, 2)
-      if (tree?.type.name !== 'Document') return null
+      const parsed = formatted
+        ? tree(state)
+        : ensureSyntaxTree(state, line.to, 2)
+      if (parsed?.type.name !== 'Document') return null
       let from = line.from,
         to = line.to,
         excluded = false
-      tree.iterate({
+      parsed.iterate({
         from: line.from,
         to: line.to,
         enter(node) {
@@ -701,7 +740,7 @@ export function SourceEditor({
       return {
         view: target,
         contentVersion: snapshot.version,
-        editor: 'source',
+        editor: kind,
         documentLength: state.doc.length,
         selection: { anchor: selected.main.anchor, head: pos },
         get prose() {
@@ -749,7 +788,7 @@ export function SourceEditor({
       return {
         view: target,
         contentVersion: snapshot.version,
-        editor: 'source',
+        editor: kind,
         documentLength: editor.state.doc.length,
         position,
         selection: {
@@ -1031,16 +1070,25 @@ export function SourceEditor({
               })),
             ]),
           ),
-          indentation.current.of(sourceIndentation(tabIndent.snapshot().unit)),
-          keymap.of([
-            // Like Enter, a Tab the open list declines (it just opened, or its
-            // item keeps Tab) does what it would without the list.
-            {
-              key: 'Tab',
-              run: (view) => indentSource(view, indentMore),
-              shift: (view) => indentSource(view, indentLess),
-            },
-          ]),
+          indentation.current.of(
+            formatted
+              ? [
+                  sourceIndentation(tabIndent.snapshot().unit),
+                  formattedTabIndents.of(tabIndent.snapshot().enabled),
+                ]
+              : sourceIndentation(tabIndent.snapshot().unit),
+          ),
+          formatted
+            ? []
+            : keymap.of([
+                // Like Enter, a Tab the open list declines (it just opened, or its
+                // item keeps Tab) does what it would without the list.
+                {
+                  key: 'Tab',
+                  run: (view) => indentSource(view, indentMore),
+                  shift: (view) => indentSource(view, indentLess),
+                },
+              ]),
           EditorView.domEventHandlers({
             keydown(event, view) {
               // CodeMirror arms Tab focus for two seconds after an unhandled Escape;
@@ -1094,7 +1142,7 @@ export function SourceEditor({
                 y: event.clientY,
               })
               if (position == null) return false
-              let node = syntaxTree(view.state).resolveInner(position, -1)
+              let node = tree(view.state).resolveInner(position, -1)
               const lexical = node
               while (node.parent && !['Link', 'Autolink'].includes(node.name))
                 node = node.parent
@@ -1168,13 +1216,24 @@ export function SourceEditor({
             { key: 'Mod-z', run: bridge.undo, shift: bridge.redo },
             { key: 'Mod-y', run: bridge.redo },
           ]),
-          syntaxHighlighting(highlighting),
-          syntaxHighlighting(codeHighlighter),
+          formatted
+            ? []
+            : [
+                syntaxHighlighting(highlighting),
+                syntaxHighlighting(codeHighlighter),
+              ],
           EditorView.lineWrapping,
           placeholder('Start typing'),
-          EditorView.contentAttributes.of({
-            spellcheck: 'false',
-          }),
+          display.current.of(
+            formatted
+              ? [
+                  showMarkdownMarkers.of(displayOptions.current.markers),
+                  EditorView.contentAttributes.of({
+                    spellcheck: String(displayOptions.current.spellCheck),
+                  }),
+                ]
+              : EditorView.contentAttributes.of({ spellcheck: 'false' }),
+          ),
           EditorView.updateListener.of((update) => {
             const newline = update.docChanged && newlineInput
             if (update.docChanged) newlineInput = false
@@ -1214,7 +1273,7 @@ export function SourceEditor({
               }
             }
             if (update.selectionSet || update.docChanged)
-              editorViewRegistry.changed(viewId as ViewId, 'source')
+              editorViewRegistry.changed(viewId as ViewId, kind)
             if (
               update.docChanged ||
               update.selectionSet ||
@@ -1361,7 +1420,7 @@ export function SourceEditor({
     editor.contentDOM.addEventListener('compositionend', endCompositionSignal)
     const removeAnnotations = observeSourceAnnotations(editor)
     const unregisterProjection = documentProjections.register(
-      'source',
+      kind,
       (cached) => {
         const context = editContext.current
         const current = editorDocument.get()
@@ -1486,7 +1545,7 @@ export function SourceEditor({
       ? mountedDocumentEdits.register(
           document.tabId,
           target,
-          'source',
+          kind,
           (target, request) => applySourceEdits(request, target),
         )
       : () => {}
@@ -1582,7 +1641,7 @@ export function SourceEditor({
     const unregisterViewApi = editorViewRegistry.register(
       document.tabId,
       viewId as ViewId,
-      'source',
+      kind,
       {
         read: () => {
           const source = bridge.snapshot()
@@ -1656,7 +1715,7 @@ export function SourceEditor({
       })
     }
     void window.document.fonts
-      .load('13px "Geist Mono"')
+      .load(formatted ? '16px "Geist"' : '13px "Geist Mono"')
       .then(finishFont, finishFont)
     return () => {
       cancelAnimationFrame(compositionFrame)
@@ -1710,6 +1769,8 @@ export function SourceEditor({
     resolveReference,
     clearReferences,
     viewId,
+    formatted,
+    kind,
   ])
 
   useEffect(() => {
@@ -1753,12 +1814,27 @@ export function SourceEditor({
       tabIndent.subscribe(() =>
         view.current?.dispatch({
           effects: indentation.current.reconfigure(
-            sourceIndentation(tabIndent.snapshot().unit),
+            formatted
+              ? [
+                  sourceIndentation(tabIndent.snapshot().unit),
+                  formattedTabIndents.of(tabIndent.snapshot().enabled),
+                ]
+              : sourceIndentation(tabIndent.snapshot().unit),
           ),
         }),
       ),
-    [],
+    [formatted],
   )
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new bridge replaces the editor view.
+  useEffect(() => {
+    if (!formatted) return
+    view.current?.dispatch({
+      effects: display.current.reconfigure([
+        showMarkdownMarkers.of(markers),
+        EditorView.contentAttributes.of({ spellcheck: String(spellCheck) }),
+      ]),
+    })
+  }, [bridge, formatted, markers, spellCheck])
   useEffect(() => {
     view.current?.dispatch({
       effects: editable.current.reconfigure([
@@ -1790,7 +1866,7 @@ export function SourceEditor({
   useEffect(() => {
     view.current?.dispatch({
       effects: numbers.current.reconfigure(
-        showLineNumbers
+        showLineNumbers && !formatted
           ? lineNumbers({
               domEventHandlers: {
                 mousedown(view, line, event) {
@@ -1807,7 +1883,7 @@ export function SourceEditor({
           : [],
       ),
     })
-  }, [bridge, showLineNumbers])
+  }, [bridge, showLineNumbers, formatted])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new bridge replaces the editor view.
   useEffect(() => {
@@ -1877,7 +1953,10 @@ export function SourceEditor({
           )}
         </DocumentNotice>
       )}
-      <div className="source-editor" ref={host} />
+      <div
+        className={formatted ? 'formatted-editor' : 'source-editor'}
+        ref={host}
+      />
     </>
   )
 }

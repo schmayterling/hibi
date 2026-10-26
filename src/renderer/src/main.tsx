@@ -96,6 +96,7 @@ import {
   loadFlavor,
   selectedFlavors,
 } from './flavors'
+import { codemirrorFormattedView } from './formatted-engine'
 import { LoadingScreen } from './LoadingScreen'
 import { installRendererDiagnostics } from './local-diagnostics'
 import { transformMarkdown } from './markdown-projection'
@@ -317,7 +318,9 @@ function App() {
     let active = true
     // Publish the demanded module as ordinary state: a first Suspense retry can
     // otherwise hold an already loaded editor behind React's reveal throttle.
-    void import('./Editor').then(
+    void (
+      codemirrorFormattedView ? import('./FormattedEditor') : import('./Editor')
+    ).then(
       ({ MarkdownEditor }) => {
         if (active) setRichEditor({ Component: MarkdownEditor })
       },

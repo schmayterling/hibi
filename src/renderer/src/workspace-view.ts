@@ -1,5 +1,5 @@
 import type { DesktopApi } from '../../shared/desktop'
-import type { WorkspaceEntry, WorkspaceState } from '../../shared/workspace'
+import type { WorkspaceEntry } from '../../shared/workspace'
 import type {
   WorkspaceHeader,
   WorkspaceViewEntry,
@@ -7,6 +7,10 @@ import type {
 
 type Bridge = Pick<DesktopApi, 'getWorkspaceHeader' | 'readWorkspaceViewPage'>
 type Location = { entry: WorkspaceEntry; parent: string; index: number }
+export type WorkspaceView = WorkspaceHeader & {
+  entries: WorkspaceEntry[]
+  treePending: boolean
+}
 
 function identity(header: WorkspaceHeader) {
   return JSON.stringify([header.target, header.treeRevision])
@@ -15,10 +19,12 @@ function identity(header: WorkspaceHeader) {
 /** One paged read at a time; content signals refresh only the header. */
 export function createWorkspaceView(
   bridge: Bridge,
-  publish: (workspace: WorkspaceState | null) => void,
+  publish: (workspace: WorkspaceView | null) => void,
 ) {
   let requested = 0
-  let task: Promise<WorkspaceState | null> | undefined
+  let task: Promise<WorkspaceView | null> | undefined
+  let headerTask: Promise<WorkspaceHeader | null>
+  let state: WorkspaceView | null = null
   let cachedTree = ''
   let cachedDraft = ''
   let baseEntries: WorkspaceEntry[] = []
@@ -61,17 +67,35 @@ export function createWorkspaceView(
     return copies.get('') ?? baseEntries
   }
 
-  async function read(): Promise<WorkspaceState | null> {
+  function receiveHeader(header: WorkspaceHeader | null) {
+    if (!header?.target) {
+      state = null
+      publish(null)
+    } else if (!state || identity(state) !== identity(header)) {
+      const sameRoot =
+        state && JSON.stringify(state.target) === JSON.stringify(header.target)
+      state = { ...header, entries: sameRoot ? visible : [], treePending: true }
+      publish(state)
+    }
+  }
+
+  async function read(): Promise<WorkspaceView | null> {
+    let readRequest = 0
     while (true) {
       const current = requested
-      let header = await bridge.getWorkspaceHeader()
+      let header = await (current === readRequest
+        ? bridge.getWorkspaceHeader()
+        : headerTask)
+      readRequest = current
       if (current !== requested) continue
+      receiveHeader(header)
       if (!header?.target) {
         cachedTree = ''
         cachedDraft = ''
         baseEntries = []
         locations.clear()
         visible = []
+        state = null
         publish(null)
         return null
       }
@@ -160,15 +184,35 @@ export function createWorkspaceView(
         header = latest
       }
       if (current !== requested) continue
-      const state = { ...header, entries: visible }
+      state = { ...header, entries: visible, treePending: false }
       publish(state)
       return state
     }
   }
 
   return {
-    refresh(): Promise<WorkspaceState | null> {
-      requested++
+    isCurrent(workspace: WorkspaceView | null) {
+      return (
+        !!state &&
+        !!workspace &&
+        !state.treePending &&
+        identity(state) === identity(workspace)
+      )
+    },
+    invalidate() {
+      if (state && !state.treePending) {
+        state = { ...state, treePending: true }
+        publish(state)
+      }
+    },
+    refresh(): Promise<WorkspaceView | null> {
+      const current = ++requested
+      headerTask = bridge.getWorkspaceHeader().then((header) => {
+        if (current === requested) receiveHeader(header)
+        return header
+      })
+      // A newer refresh can replace this header promise before the page reader reaches it.
+      void headerTask.catch(() => {})
       if (!task) {
         const next = read().finally(() => {
           if (task === next) task = undefined

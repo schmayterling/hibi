@@ -41,7 +41,7 @@ import { DialogProvider, useDialogs } from '../../ui/DialogProvider'
 import { MenuHost } from '../../ui/MenuHost'
 import { ToastProvider, useToasts } from '../../ui/Sonner'
 import type { ToastHandle } from '../../ui/toasts'
-import { createWorkspaceView } from './workspace-view'
+import { createWorkspaceView, type WorkspaceView } from './workspace-view'
 import './styles.css'
 import '../../ui/ui-case'
 import { Minimize2, X } from 'lucide-react'
@@ -627,7 +627,7 @@ function App() {
     if (settingsOpen || paletteOpen) setSettingsLoaded(true)
   }, [settingsOpen, paletteOpen])
   const [findOpen, setFindOpen] = useState(false)
-  const [workspace, setWorkspace] = useState<WorkspaceState | null>(null)
+  const [workspace, setWorkspace] = useState<WorkspaceView | null>(null)
   const workspaceView = useMemo(
     () => createWorkspaceView(window.hibi, setWorkspace),
     [],
@@ -820,7 +820,11 @@ function App() {
   function captureFileCommandContext(
     entry: WorkspaceEntry,
   ): CommandExecutionContext | null {
-    if (!workspace?.id || workspace.workspaceGeneration === undefined)
+    if (
+      !workspaceView.isCurrent(workspace) ||
+      !workspace?.id ||
+      workspace.workspaceGeneration === undefined
+    )
       return null
     const file: FileTarget = {
       workspaceId: workspace.id as WorkspaceId,
@@ -1476,6 +1480,7 @@ function App() {
         ? window.hibi.openRecentWorkspace(recentId, false)
         : window.hibi.openWorkspace(false))
       if (next) {
+        workspaceView.invalidate()
         refreshWorkspaceView()
         selectSidebarView('workspace')
         setWorkspaceRename(null)
@@ -1531,6 +1536,7 @@ function App() {
   async function refreshFiles() {
     try {
       await window.hibi.refreshWorkspace(false)
+      workspaceView.invalidate()
       refreshWorkspaceView()
     } catch (error) {
       setError(
@@ -1547,6 +1553,7 @@ function App() {
     setError('')
     try {
       await acceptOperationDocument(await window.hibi.renameDocument(name))
+      workspaceView.invalidate()
       refreshWorkspaceView()
     } catch (error) {
       setError(
@@ -1625,6 +1632,7 @@ function App() {
     try {
       const result = await window.hibi.workspaceAction(action, false)
       if (result) {
+        workspaceView.invalidate()
         await acceptOperationDocument(
           result.document,
           action.action === 'new-file',
@@ -1682,6 +1690,7 @@ function App() {
     try {
       const result = await window.hibi.openDroppedFile(file, false)
       if (result?.document) {
+        if ('workspace' in result) workspaceView.invalidate()
         await acceptOperationDocument(result.document, true)
         showDocument(intent)
         refreshWorkspaceView()
@@ -3062,6 +3071,7 @@ function App() {
           sidebarOpen && !zen && !settingsOpen && sidebarView === 'workspace'
         }
         workspace={workspace}
+        isCurrent={() => workspaceView.isCurrent(workspace)}
         onOpen={() => addonHost.app.runAction('open-workspace')}
         onFile={(path, target) => openFile(path, undefined, target)}
         tabs={document?.tabsEnabled !== false}

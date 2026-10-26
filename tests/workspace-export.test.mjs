@@ -11,13 +11,50 @@ test('header-only workspace reads preserve export options, snapshots and disk ex
   const directory = await mkdtemp(join(tmpdir(), 'hibi-workspace-export-'))
   const workspace = join(directory, 'notes')
   const output = join(directory, 'output')
+  const profile = join(directory, 'profile')
+  const probe = join(profile, 'installed-addons', 'snapshot-probe')
+  await mkdir(probe, { recursive: true })
+  await writeFile(
+    join(probe, 'hibi-addon.json'),
+    JSON.stringify({
+      id: 'snapshot-probe',
+      name: 'Snapshot probe',
+      description: 'Workspace snapshot fixture.',
+      kind: 'extension',
+      apiVersion: 2,
+      version: '1.0.0',
+      authors: [{ displayName: 'Test' }],
+      entry: 'index.js',
+      capabilities: [],
+      defaultEnabled: true,
+    }),
+  )
+  await writeFile(
+    join(probe, 'index.js'),
+    `export default () => ({
+      start(context) { window.snapshotProbe = () => context.workspace.snapshot() },
+      stop() { delete window.snapshotProbe },
+    })`,
+  )
+  await writeFile(
+    join(probe, '.hibi-install.json'),
+    JSON.stringify({
+      hash: 'a'.repeat(64),
+      files: ['hibi-addon.json', 'index.js'],
+      source: 'local',
+    }),
+  )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'snapshot-probe': true }),
+  )
   await mkdir(join(workspace, 'nested'), { recursive: true })
   await mkdir(output)
   await writeFile(join(workspace, 'README.md'), '# Garden')
   await writeFile(join(workspace, 'nested', 'other.md'), '# Other')
   await writeFile(join(workspace, '.private.md'), '# Hidden sentinel')
   const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${join(directory, 'profile')}`],
+    args: [resolve('.'), `--user-data-dir=${profile}`],
   })
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
@@ -60,6 +97,25 @@ test('header-only workspace reads preserve export options, snapshots and disk ex
       const snapshot = await page.evaluate(() =>
         window.hibi.getWorkspaceSnapshot(),
       )
+      assert.deepEqual(snapshot.pages.map((page) => page.path).sort(), paths)
+      assert.equal(
+        snapshot.pages.find((page) => page.path === draft.path).markdown,
+        markdown,
+      )
+      assert.equal(
+        snapshot.pages.find((page) => page.path === 'nested/other.md').markdown,
+        '# Other',
+      )
+    },
+  )
+
+  await t.test(
+    'addon sdk snapshot includes disk pages and pending source',
+    async () => {
+      await page.waitForFunction(
+        () => typeof window.snapshotProbe === 'function',
+      )
+      const snapshot = await page.evaluate(() => window.snapshotProbe())
       assert.deepEqual(snapshot.pages.map((page) => page.path).sort(), paths)
       assert.equal(
         snapshot.pages.find((page) => page.path === draft.path).markdown,

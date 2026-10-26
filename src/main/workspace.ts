@@ -220,7 +220,7 @@ type ViewSnapshot = {
 let viewSnapshots: { tree?: ViewSnapshot; drafts?: ViewSnapshot } = {}
 
 export function getWorkspaceHeader(): WorkspaceHeader | null {
-  const state = getWorkspace(undefined, false)
+  const state = workspaceHeaderFields()
   if (!state || !root) return null
   const drafts: WorkspaceViewEntry[] = []
   for (const document of getOpenDocumentMetadata()) {
@@ -243,9 +243,8 @@ export function getWorkspaceHeader(): WorkspaceHeader | null {
     viewDrafts = drafts
     viewDraftRevision++
   }
-  const { entries: _entries, ...header } = state
   return {
-    ...header,
+    ...state,
     ...workspaceChangeCursor(),
     treeRevision,
     draftRevision: viewDraftRevision,
@@ -369,13 +368,12 @@ export async function scanWorkspace(
   )
 }
 
-export function getWorkspace(
-  open?: ReturnType<typeof getOpenDocuments>,
-  includeEntries = false,
-): WorkspaceState | null {
+type WorkspaceMetadata = Omit<WorkspaceState, 'entries'>
+
+function workspaceHeaderFields(): WorkspaceMetadata | null {
   if (!root) return null
   const path = getDocumentPath()
-  const header: WorkspaceState = {
+  return {
     id: workspaceId()!,
     ...(workspaceTarget
       ? { workspaceGeneration: workspaceTarget.workspaceGeneration }
@@ -383,10 +381,29 @@ export function getWorkspace(
     name: manifest?.name ?? basename(root),
     manifest,
     ...(obsidian ? { obsidian } : {}),
-    entries: [],
     activePath: path ? relativePath(root, path) : null,
   }
-  if (!includeEntries) return header
+}
+
+export function getWorkspace(
+  open: ReturnType<typeof getOpenDocuments> | undefined,
+  includeEntries: true,
+): WorkspaceState | null
+export function getWorkspace(
+  open?: ReturnType<typeof getOpenDocuments>,
+  includeEntries?: false,
+): WorkspaceMetadata | null
+export function getWorkspace(
+  open: ReturnType<typeof getOpenDocuments> | undefined,
+  includeEntries: boolean,
+): WorkspaceState | null
+export function getWorkspace(
+  open?: ReturnType<typeof getOpenDocuments>,
+  includeEntries: boolean = false,
+): WorkspaceState | null {
+  const header = workspaceHeaderFields()
+  if (!header || !root) return null
+  if (!includeEntries) return { ...header, entries: [] }
   const documents = open ?? getOpenDocuments()
   let visible = entries
   for (const draft of documents) {

@@ -66,7 +66,10 @@ test('core view pages ordered entries and overlays dirty drafts before atomic pu
     {
       getWorkspaceHeader: async () => initial,
       readWorkspaceViewPage: async (request) => {
-        assert.equal(published.length, 0)
+        assert.equal(
+          published.filter((state) => state && !state.treePending).length,
+          0,
+        )
         assert.equal(request.limit, 200)
         pages++
         return pageWorkspaceEntries(
@@ -81,7 +84,10 @@ test('core view pages ordered entries and overlays dirty drafts before atomic pu
   )
   const result = await view.refresh()
   assert.equal(pages, 4)
-  assert.equal(published.length, 1)
+  assert.equal(
+    published.filter((state) => state && !state.treePending).length,
+    1,
+  )
   assert.equal(result.entries[0].children.length, 452)
   assert.equal(result.entries[0].children[0].dirty, true)
   assert.equal(result.entries[0].children.at(-1).path, 'folder/new.md')
@@ -232,7 +238,10 @@ test('new refresh invalidates in-flight pages and never publishes a previous gen
   assert.equal(view.refresh(), pending)
   release()
   const state = await pending
-  assert.equal(published.length, 1)
+  assert.equal(
+    published.filter((state) => state && !state.treePending).length,
+    1,
+  )
   assert.equal(state.workspaceGeneration, 2)
   assert.equal(state.entries[0].path, '2.md')
 })
@@ -264,4 +273,108 @@ test('a replaced tree restarts listing and closing clears the renderer tree', as
   header = null
   assert.equal(await view.refresh(), null)
   assert.equal(published.at(-1), null)
+})
+
+test('tree actions disable retained rows until the requested revision is published', async () => {
+  let header = initial
+  let release
+  let started
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  const reading = new Promise((resolve) => {
+    started = resolve
+  })
+  const published = []
+  const view = createWorkspaceView(
+    {
+      getWorkspaceHeader: async () => header,
+      readWorkspaceViewPage: async (request) => {
+        if (request.treeRevision === 1 && !request.drafts) {
+          started()
+          await held
+        }
+        return pageWorkspaceEntries(
+          request.drafts
+            ? []
+            : [file(request.treeRevision ? 'renamed.md' : 'old.md')],
+          header,
+          request,
+          listed,
+        )
+      },
+    },
+    (state) => published.push(state),
+  )
+  const previous = await view.refresh()
+  assert.equal(view.isCurrent(previous), true)
+  view.invalidate()
+  assert.equal(view.isCurrent(previous), false)
+  assert.equal(published.at(-1).treePending, true)
+  header = { ...initial, treeRevision: 1 }
+  const pending = view.refresh()
+  await reading
+  assert.equal(published.at(-1).entries[0].path, 'old.md')
+  assert.equal(published.at(-1).treePending, true)
+  release()
+  const current = await pending
+  assert.equal(current.entries[0].path, 'renamed.md')
+  assert.equal(current.treePending, false)
+  assert.equal(view.isCurrent(previous), false)
+  assert.equal(view.isCurrent(current), true)
+})
+
+test('workspace switches publish the new header while an old tree page is still held', async () => {
+  let header = initial
+  let release
+  let started
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  const reading = new Promise((resolve) => {
+    started = resolve
+  })
+  const published = []
+  const view = createWorkspaceView(
+    {
+      getWorkspaceHeader: async () => header,
+      readWorkspaceViewPage: async (request) => {
+        if (request.target.workspaceGeneration === 1 && !request.drafts) {
+          started()
+          await held
+        }
+        return pageWorkspaceEntries(
+          request.drafts
+            ? []
+            : [file(`${request.target.workspaceGeneration}.md`)],
+          { ...header, target: request.target },
+          request,
+          listed,
+        )
+      },
+    },
+    (state) => published.push(state),
+  )
+  const pending = view.refresh()
+  await reading
+  header = {
+    ...initial,
+    name: 'second',
+    workspaceGeneration: 2,
+    target: { ...target, workspaceGeneration: 2 },
+  }
+  assert.equal(view.refresh(), pending)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(published.at(-1).workspaceGeneration, 2)
+  assert.equal(published.at(-1).name, 'second')
+  assert.deepEqual(published.at(-1).entries, [])
+  assert.equal(published.at(-1).treePending, true)
+  release()
+  const current = await pending
+  assert.equal(current.entries[0].path, '2.md')
+  assert.equal(current.treePending, false)
+  assert.equal(
+    published.filter((state) => state && !state.treePending).length,
+    1,
+  )
 })

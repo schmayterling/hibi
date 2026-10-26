@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { registerHooks } from 'node:module'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import { TreeFragment } from '@lezer/common'
@@ -17,6 +18,14 @@ import {
 import { formattedRegistry } from '../src/renderer/src/formatted-registry.ts'
 import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
+
+// Feature modules import their styles; these tests need only the code.
+registerHooks({
+  load: (url, context, next) =>
+    url.endsWith('.css')
+      ? { format: 'module', source: '', shortCircuit: true }
+      : next(url, context),
+})
 
 /** `==text==` as a `Highlight` node, standing in for a contributed syntax. */
 const highlightDelimiter = { resolve: 'Highlight', mark: 'HighlightMark' }

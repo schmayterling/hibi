@@ -181,7 +181,7 @@ function renumbered(
 }
 
 /** The content column of a list item's first line, as its marker sets it. */
-function itemWidth(state: EditorState, item: SyntaxNode) {
+export function itemWidth(state: EditorState, item: SyntaxNode) {
   const line = state.doc.lineAt(item.from)
   const match = /^([ \t]*(?:\d+[.)]|[-+*]))( *)(.?)/.exec(line.text)
   if (!match) return 0

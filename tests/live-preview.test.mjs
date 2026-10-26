@@ -333,12 +333,50 @@ async function parity(title, doc, rich, formatted, name) {
     ({ doc, pane }) => window.livePreview.mount(doc, pane),
     { doc, pane },
   )
+  // The panes scroll alike: where scrollbars take space, as on Linux and
+  // Windows, the app's thin scrollbar is in both screenshots.
+  const scrolling = (target) =>
+    target.evaluate((title) => {
+      const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
+        root.querySelector(':is(h1, .hibi-lp-h1)')?.textContent.includes(title),
+      )
+      const style = getComputedStyle(pane)
+      return {
+        overflowY: style.overflowY,
+        scrollbarWidth: style.scrollbarWidth,
+        scrollbarColor: style.scrollbarColor,
+      }
+    }, title)
   const report = []
   for (const id of ['hibi-light', 'hibi-dark']) {
     const scheme = palette(id)
     await applyPalette(page, scheme)
     await applyPalette(harness, scheme)
     await harness.evaluate(() => window.livePreview.settle())
+    assert.deepEqual(await scrolling(harness), await scrolling(page), id)
+    // A note that fits the pane is as tall in both views, so a scrollbar
+    // shows in both screenshots or in neither. (The formatted view lays out
+    // the lines it shows, so a longer note's height is not compared.)
+    const height = (target) =>
+      target.evaluate((title) => {
+        const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
+          root
+            .querySelector(':is(h1, .hibi-lp-h1)')
+            ?.textContent.includes(title),
+        )
+        return {
+          pane: pane.clientHeight,
+          note: pane
+            .querySelector('.tiptap, .cm-content')
+            .getBoundingClientRect().height,
+        }
+      }, title)
+    const tall = { rich: await height(page), formatted: await height(harness) }
+    if (tall.rich.note <= tall.rich.pane)
+      assert.ok(
+        Math.abs(tall.rich.note - tall.formatted.note) <= 1,
+        `${id}: ${JSON.stringify(tall)}`,
+      )
     const before = await sample(page, rich, title)
     const after = await sample(harness, formatted, title)
     for (const key of Object.keys(rich)) {
@@ -369,36 +407,59 @@ async function parity(title, doc, rich, formatted, name) {
         path: `test-results/live-preview-${name}-formatted-${id}.png`,
       }),
     ].map((image) => image.toString('base64'))
-    const difference = await app.evaluate(({ nativeImage }, images) => {
-      const [a, b] = images.map((image) =>
-        nativeImage.createFromBuffer(Buffer.from(image, 'base64')),
-      )
-      const size = a.getSize()
-      const other = b.getSize()
-      if (size.width !== other.width || size.height !== other.height) return 1
-      const left = a.toBitmap(),
-        right = b.toBitmap()
-      let changed = 0
-      for (let i = 0; i < left.length; i += 4)
-        if (
-          Math.abs(left[i] - right[i]) > 8 ||
-          Math.abs(left[i + 1] - right[i + 1]) > 8 ||
-          Math.abs(left[i + 2] - right[i + 2]) > 8
+    const { difference, box } = await app.evaluate(
+      ({ nativeImage }, images) => {
+        const [a, b] = images.map((image) =>
+          nativeImage.createFromBuffer(Buffer.from(image, 'base64')),
         )
-          changed++
-      return changed / (left.length / 4)
-    }, images)
-    report.push({ id, key: 'pixels', difference })
-    // The same text at the same positions renders the same pixels.
-    assert.ok(difference < 0.002, `${id}: ${difference}`)
+        const size = a.getSize()
+        const other = b.getSize()
+        if (size.width !== other.width || size.height !== other.height)
+          return { difference: 1, box: [size, other] }
+        const left = a.toBitmap(),
+          right = b.toBitmap()
+        let changed = 0,
+          box = null
+        for (let i = 0; i < left.length; i += 4)
+          if (
+            Math.abs(left[i] - right[i]) > 8 ||
+            Math.abs(left[i + 1] - right[i + 1]) > 8 ||
+            Math.abs(left[i + 2] - right[i + 2]) > 8
+          ) {
+            changed++
+            const x = (i / 4) % size.width,
+              y = Math.floor(i / 4 / size.width)
+            box = box
+              ? [
+                  Math.min(box[0], x),
+                  Math.min(box[1], y),
+                  Math.max(box[2], x),
+                  Math.max(box[3], y),
+                ]
+              : [x, y, x, y]
+          }
+        return { difference: changed / (left.length / 4), box }
+      },
+      images,
+    )
+    // Where the screenshots differ, in their pixels: left, top, right, bottom.
+    report.push({ id, key: 'pixels', difference, box })
   }
+  console.log(JSON.stringify(report.filter((entry) => entry.key === 'pixels')))
+  // The same text at the same positions renders the same pixels; a failure
+  // reports the text positions too.
+  for (const { id, key, difference } of report)
+    if (key === 'pixels')
+      assert.ok(
+        difference < 0.002,
+        `${id}: ${difference} ${JSON.stringify(report)}`,
+      )
   // Text positions match the rich view within a pixel.
   const offsets = report.filter(
     (entry) =>
       entry.key !== 'pixels' &&
       (Math.abs(entry.dx) > 1 || Math.abs(entry.dy) > 1),
   )
-  console.log(JSON.stringify(report.filter((entry) => entry.key === 'pixels')))
   assert.deepEqual(offsets, [], JSON.stringify(report))
 }
 
@@ -523,6 +584,125 @@ test('list markers alone on their lines sit beside the item text as in the rich 
     },
     'markers',
   )
+})
+
+test('notes end as in the rich view, so both views scroll alike', {
+  timeout: 120000,
+}, async () => {
+  // Zero, one and several final line breaks, and last blocks that paint or are replaced.
+  const endings = {
+    paragraph: 'tail',
+    newline: 'tail\n',
+    blank: 'tail\n\n',
+    blanks: 'tail\n\n\n',
+    paragraphs: 'tail\n\n\n\n',
+    quote: '> tail',
+    quoteBlank: '> tail\n\n',
+    list: '- tail',
+    fence: '```js\nconst tail = 1\n```',
+    open: '```js\nconst tail = 1',
+    table: '| tail | b |\n| - | - |\n| c | d |',
+  }
+  /** The note's height, where the block holding "tail" ends, and whether the pane scrolls. */
+  const measure = (target, title) =>
+    target.evaluate((title) => {
+      const pane = [...document.querySelectorAll('.rich-pane')].find((root) =>
+        root.querySelector(':is(h1, .hibi-lp-h1)')?.textContent.includes(title),
+      )
+      const note = pane.querySelector('.tiptap, .cm-content')
+      const top = note.getBoundingClientRect().top
+      const block = [...note.children].find((child) =>
+        child.textContent.includes('tail'),
+      )
+      return {
+        note: note.getBoundingClientRect().height,
+        block: block.getBoundingClientRect().bottom - top,
+        scrolls: pane.scrollHeight > pane.clientHeight,
+      }
+    }, title)
+  for (const [name, ending] of Object.entries(endings)) {
+    const title = `Ending ${name}`
+    const doc = `# ${title}\n\n${ending}`
+    const file = join(folder, 'notes', `ending-${name}.md`)
+    await writeFile(file, doc)
+    await open(file, title)
+    const richPane = page.locator('.rich-pane', {
+      has: page.locator('.tiptap h1', { hasText: title }),
+    })
+    const size = await richPane.evaluate((element) => {
+      const box = element.getBoundingClientRect()
+      return { width: box.width, height: box.height }
+    })
+    const mount = (height) =>
+      harness.evaluate(({ doc, size }) => window.livePreview.mount(doc, size), {
+        doc,
+        size: { ...size, height },
+      })
+    await mount(size.height)
+    const rich = await measure(page, title)
+    const formatted = await measure(harness, title)
+    const report = `${name}: ${JSON.stringify({ rich, formatted })}`
+    assert.ok(Math.abs(rich.note - formatted.note) <= 1, report)
+    // Space after the last block lies outside it, as a quote's bar shows.
+    assert.ok(Math.abs(rich.block - formatted.block) <= 1, report)
+    // Panes a little shorter than the note scroll; a little taller do not.
+    const style = await richPane.getAttribute('style')
+    const scrolling = { rich: [], formatted: [] }
+    for (const height of [
+      Math.floor(rich.note) - 2,
+      Math.ceil(rich.note) + 2,
+    ]) {
+      await richPane.evaluate((element, height) => {
+        Object.assign(element.style, {
+          flex: 'none',
+          height: `${height}px`,
+          minHeight: '0',
+        })
+      }, height)
+      await mount(height)
+      scrolling.rich.push((await measure(page, title)).scrolls)
+      scrolling.formatted.push((await measure(harness, title)).scrolls)
+    }
+    await richPane.evaluate((element, style) => {
+      if (style === null) element.removeAttribute('style')
+      else element.setAttribute('style', style)
+    }, style)
+    assert.deepEqual(scrolling.rich, [true, false], name)
+    assert.deepEqual(scrolling.formatted, scrolling.rich, name)
+  }
+})
+
+test('blank lines after the last block are laid out only where the view shows them', {
+  timeout: 60000,
+}, async () => {
+  const doc = `# Blank tail\n\ntail${'\n'.repeat(10000)}`
+  const lines = await harness.evaluate(async (doc) => {
+    await window.livePreview.mount(doc, { width: 800, height: 600 })
+    window.livePreview.scrollTo(doc.length)
+    await window.livePreview.settle()
+    const view = window.livePreview.view()
+    const text = view.state.doc
+    const read = text.line
+    let calls = 0
+    text.line = function (number) {
+      calls++
+      return read.call(this, number)
+    }
+    window.livePreview.refresh()
+    delete text.line
+    return calls
+  }, doc)
+  // The view shows a few dozen of the 10,000 blank lines.
+  assert.ok(lines < 200, `${lines} line reads`)
+  // Near the last block, the blank lines take the rich view's spacing.
+  const heights = await harness.evaluate(async () => {
+    window.livePreview.scrollTo(0)
+    await window.livePreview.settle()
+    return [...document.querySelectorAll('.cm-line')]
+      .slice(3, 7)
+      .map((line) => line.getBoundingClientRect().height)
+  })
+  assert.deepEqual(heights, [16, 28, 16, 28])
 })
 
 test('typing beside a multi-line link destination edits the text', {

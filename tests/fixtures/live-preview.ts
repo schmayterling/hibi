@@ -1,9 +1,14 @@
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, WidgetType } from '@codemirror/view'
 import '../../src/renderer/src/styles.css'
+// The app's control styles, such as its thin scrollbars, so panes look alike.
+import '../../src/ui/controls.css'
 import type { ChunkedMarkdownProbe } from '../../src/renderer/src/chunked-markdown'
 import { codeLanguages } from '../../src/renderer/src/code-languages'
-import { formattedDocument } from '../../src/renderer/src/formatted-contributions'
+import {
+  formattedDocument,
+  formattedRefresh,
+} from '../../src/renderer/src/formatted-contributions'
 import { formattedRegistry } from '../../src/renderer/src/formatted-registry'
 import { formattedSyntax } from '../../src/renderer/src/formatted-syntax'
 import { livePreview } from '../../src/renderer/src/live-preview'
@@ -112,6 +117,10 @@ Object.assign(window, {
       view?.dispatch({
         effects: documentRevision.reconfigure(revisionOf(revision, tabId)),
       })
+    },
+    /** Redraw the formatted view's decorations. */
+    refresh() {
+      view?.dispatch({ effects: formattedRefresh.of(null) })
     },
     /** Scroll a position to the top of the viewport. */
     scrollTo(pos: number) {

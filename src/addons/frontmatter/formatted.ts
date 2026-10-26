@@ -63,7 +63,7 @@ export const frontmatterField: StateField<Frontmatter> =
     update: (value, transaction) =>
       transaction.docChanged ||
       transaction.state.field(frontmatterBounds) !==
-        transaction.startState.field(frontmatterBounds)
+        transaction.startState.field(frontmatterBounds, false)
         ? fromBounds(transaction.state)
         : value,
     provide: () => frontmatterBounds,
@@ -81,7 +81,7 @@ const hidden = StateField.define<DecorationSet>({
   create: (state) => hide(state),
   update: (value, transaction) =>
     transaction.state.field(frontmatterField).end ===
-      transaction.startState.field(frontmatterField).end &&
+      transaction.startState.field(frontmatterField, false)?.end &&
     !transaction.docChanged
       ? value
       : hide(transaction.state),
@@ -113,7 +113,7 @@ const protect = EditorState.transactionFilter.of((transaction) => {
   if (inside) return []
   // Selections end at the note's text, also when an edit just closed the frontmatter.
   const end = transaction.docChanged
-    ? transaction.state.field(frontmatterField).end
+    ? (transaction.state.field(frontmatterField, false)?.end ?? 0)
     : start
   const selection =
     transaction.selection ??

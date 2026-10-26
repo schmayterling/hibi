@@ -156,7 +156,17 @@ test('native file operations preserve drafts and avoid silent overwrites', {
   await crashAndReload(app)
   const recovered = await app.evaluate(({ BrowserWindow }) => {
     const contents = BrowserWindow.getAllWindows()[0].webContents
-    return contents.executeJavaScript('window.hibi.getDocument()')
+    // Playwright retains its crashed target; wait in the replacement renderer.
+    return contents.executeJavaScript(`
+      new Promise(resolve => {
+        const ready = () => {
+          if (!document.querySelector('.app[aria-busy="false"] #document-editor-panel [contenteditable="true"]'))
+            return requestAnimationFrame(ready)
+          window.hibi.getDocument().then(resolve)
+        }
+        ready()
+      })
+    `)
   })
   assert.equal(recovered.markdown, draft)
   assert.equal(recovered.dirty, true)

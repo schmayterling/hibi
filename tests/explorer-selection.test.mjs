@@ -133,7 +133,7 @@ test('workspace files support multiple selection and group actions', {
   )
   assert.match(
     group.join(', '),
-    /duplicate, copy to…, move to…, copy relative paths, move to trash/i,
+    /duplicate, copy to…, move to…, copy relative paths, copy absolute paths, move to trash/i,
   )
   await closeMenu()
   assert.match((await openMenu('z.md', /actions for z\.md/i)).join(), /rename/i)

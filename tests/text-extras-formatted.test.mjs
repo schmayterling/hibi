@@ -187,7 +187,7 @@ test('tildes, backticks and escapes cost each character a bounded number of read
 })
 
 /** What a contribution's views draw for `source`, with the selection at `caret` if revealed. */
-function drawn(contribution, source, caret) {
+function drawn(contribution, source, caret, wrap = (node) => node) {
   const state = EditorState.create({
     doc: source,
     selection: { anchor: caret ?? 0 },
@@ -207,7 +207,7 @@ function drawn(contribution, source, caret) {
         view.nodes.includes(node.name),
       )
       if (!view) return
-      return view.decorate(node, out, {
+      return view.decorate({ ...node, node: wrap(node.node) }, out, {
         state,
         revealed: caret !== undefined,
         visible: { from: 0, to: source.length },
@@ -300,6 +300,12 @@ test('decoded glyphs keep the style of a surrounding inline link', () => {
       '~[a &amp; b](Other.md)~',
       'hibi-lp-subscript hibi-lp-link',
     ],
+    [contributions.subscript, '~[&amp;]()~', 'hibi-lp-subscript hibi-lp-link'],
+    [
+      contributions.subscript,
+      '~[&amp;](Other.md "title")~',
+      'hibi-lp-subscript hibi-lp-link',
+    ],
   ]) {
     const glyph = drawn(contribution, source).find(
       ([kind]) => kind === 'replace',
@@ -311,6 +317,57 @@ test('decoded glyphs keep the style of a surrounding inline link', () => {
     ([kind]) => kind === 'replace',
   )
   assert.equal(glyph[4].class, 'hibi-lp-subscript')
+})
+
+test('links around many subscripts do not scan their siblings for each glyph', () => {
+  for (const count of [64, 128, 256]) {
+    let siblings = 0
+    const wrapped = new WeakMap()
+    const wrap = (node) => {
+      if (!node) return node
+      if (wrapped.has(node)) return wrapped.get(node)
+      const proxy = new Proxy(node, {
+        get(target, key) {
+          if (
+            ['parent', 'firstChild', 'lastChild', 'nextSibling'].includes(key)
+          )
+            return wrap(Reflect.get(target, key, target))
+          if (key === 'getChildren')
+            return (...args) => target.getChildren.apply(proxy, args)
+          if (key === 'cursor')
+            return (...args) => {
+              const cursor = target.cursor(...args)
+              return new Proxy(cursor, {
+                get(target, key) {
+                  if (key === 'nextSibling')
+                    return (...args) => {
+                      siblings++
+                      return target.nextSibling(...args)
+                    }
+                  const value = Reflect.get(target, key, target)
+                  return typeof value === 'function'
+                    ? value.bind(target)
+                    : value
+                },
+              })
+            }
+          const value = Reflect.get(target, key, target)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+      wrapped.set(node, proxy)
+      return proxy
+    }
+    const glyphs = drawn(
+      contributions.subscript,
+      `[${'~&amp;~ '.repeat(count)}](Other.md)`,
+      undefined,
+      wrap,
+    ).filter(([kind]) => kind === 'replace')
+    assert.equal(glyphs.length, count)
+    assert.ok(glyphs.every((glyph) => glyph[4].class.includes('hibi-lp-link')))
+    assert.ok(siblings === 0, `${siblings} sibling visits for ${count} glyphs`)
+  }
 })
 
 /** Enter at `|` (from `^` when selecting) in a formatted view with subscripts. */

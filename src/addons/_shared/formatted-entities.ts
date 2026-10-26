@@ -60,27 +60,17 @@ function glyphAttributes(
   state: EditorState,
   entity: { parent?: SyntaxNode | null },
   attributes: Record<string, string> | null,
-  links: Map<number, boolean>,
 ) {
   if (!state.facet(formattedLiteral).includes('Link'))
     for (let node = entity.parent; node; node = node.parent) {
       if (node.name !== 'Link') continue
-      let linked = links.get(node.from)
-      if (linked === undefined) {
-        const marks = node.getChildren('LinkMark')
-        const open = marks[0]
-        const close = marks.find(
-          (mark) => state.sliceDoc(mark.from, mark.to) === ']',
-        )
-        linked = Boolean(
-          open &&
-            close &&
-            state.sliceDoc(open.from, open.to) === '[' &&
-            state.sliceDoc(close.to, close.to + 1) === '(',
-        )
-        links.set(node.from, linked)
-      }
-      if (linked)
+      // Endpoints distinguish inline links from references without scanning the label.
+      const open = node.firstChild
+      if (
+        open?.name === 'LinkMark' &&
+        state.sliceDoc(open.from, open.to) === '[' &&
+        state.sliceDoc(node.to - 1, node.to) === ')'
+      )
         return {
           ...attributes,
           class: [attributes?.class, 'hibi-lp-link'].filter(Boolean).join(' '),
@@ -110,7 +100,6 @@ export function markDecoded(
   }> = referencesIn(state, from, to),
 ) {
   let at = from
-  const links = new Map<number, boolean>()
   for (const entity of entities) {
     if (
       revealed &&
@@ -126,7 +115,7 @@ export function markDecoded(
     out.replace(
       entity.from,
       entity.to,
-      new Glyphs(text, glyphAttributes(state, entity, attributes, links)),
+      new Glyphs(text, glyphAttributes(state, entity, attributes)),
     )
     at = entity.to
   }

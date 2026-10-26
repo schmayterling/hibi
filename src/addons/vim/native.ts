@@ -9,9 +9,7 @@ import { parseVimConfig, type VimConfig } from './config'
 
 const preference = () => join(app.getPath('userData'), 'vim-config.json')
 async function readConfig(path: string): Promise<VimConfig> {
-  const text = await readMarkdown(path)
-  if (Buffer.byteLength(text, 'utf8') > 256_000)
-    throw new Error('Choose a Vim config smaller than 256 KB.')
+  const text = await readMarkdown(path, 256_000)
   return { path, ...parseVimConfig(text, path.toLowerCase().endsWith('.lua')) }
 }
 async function config(): Promise<VimConfig> {

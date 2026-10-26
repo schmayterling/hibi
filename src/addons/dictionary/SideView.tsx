@@ -270,7 +270,7 @@ export function SideView({
         onSubmit={(event) => {
           event.preventDefault()
           const next = search.trim()
-          if (next) lookUp(next.slice(0, 64), true)
+          if (next) lookUp(next, true)
         }}
       >
         <TextInput

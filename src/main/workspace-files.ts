@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto'
 import { type BigIntStats, constants } from 'node:fs'
 import { link, lstat, open, realpath, unlink } from 'node:fs/promises'
 import { dirname, relative, sep } from 'node:path'
-import { MAX_DOCUMENT_BYTES } from '../shared/desktop'
 import type { WorkspaceTarget } from '../shared/foundation-contracts'
 import type {
   WorkspaceBinaryCreation,
@@ -35,6 +34,13 @@ import {
 } from './workspace-paths'
 
 const MAX_BINARY_BYTES = 16 * 1024 * 1024
+// The legacy addon text API carries one bounded request/response. Document loading streams separately.
+const MAX_TEXT_MESSAGE_BYTES = 2 * 1024 * 1024
+function validateWorkspaceText(value: unknown): asserts value is string {
+  validateMarkdown(value)
+  if (Buffer.byteLength(value) > MAX_TEXT_MESSAGE_BYTES)
+    throw new Error('The text request exceeds the 2 MiB message limit.')
+}
 
 const stale = (): WorkspaceFileResult<never> => ({
   ok: false,
@@ -189,7 +195,7 @@ type ScopedText = ScopedBytes & {
 }
 
 async function readScopedText(root: string, file: string): Promise<ScopedText> {
-  const read = await readScopedBytes(root, file, MAX_DOCUMENT_BYTES)
+  const read = await readScopedBytes(root, file, MAX_TEXT_MESSAGE_BYTES)
   return {
     ...read,
     markdown: new TextDecoder('utf-8', {
@@ -446,7 +452,7 @@ async function createWorkspaceFile(
   }
 }
 
-/** Exclusive text creation retains the existing 2 MiB document limit. */
+/** Exclusive text creation retains the legacy 2 MiB message bound. */
 export async function createWorkspaceText(
   target: WorkspaceTarget,
   path: unknown,
@@ -456,7 +462,7 @@ export async function createWorkspaceText(
   if (typeof markdown !== 'string')
     return { ok: false, code: 'unsupported', message: 'Use UTF-8 text.' }
   try {
-    validateMarkdown(markdown)
+    validateWorkspaceText(markdown)
   } catch (error) {
     const failure = knownFailure(error)
     if (failure) return failure
@@ -556,7 +562,7 @@ export async function updateWorkspaceText(
   if (typeof markdown !== 'string')
     return { ok: false, code: 'unsupported', message: 'Use UTF-8 text.' }
   try {
-    validateMarkdown(markdown)
+    validateWorkspaceText(markdown)
     const file = await resolveWorkspaceEntry(root, path)
     if (!isCurrentWorkspaceTarget(target)) return stale()
     if (!ownerActive()) return disposed()

@@ -41,7 +41,7 @@ async function open(t, addons, source = original) {
   page.setDefaultTimeout(10000)
   await waitForAsync(
     page,
-    async () => (await window.hibi.getDocument()).name === 'note.md',
+    async () => (await window.hibi?.getDocument())?.name === 'note.md',
   )
   await waitForDocumentEditor(app, page)
   await page.locator('.tiptap .mermaid-block').waitFor()

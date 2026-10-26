@@ -182,11 +182,16 @@ test('private cursors finish retained trees while content and replacement scans 
     0,
     'headers, native refresh and view pages never materialize open text',
   )
-  assert.equal(host.getWorkspace(undefined, true).entries[0].children.length, 6)
+  const legacy = host.getWorkspace(undefined, true).entries[0].children
+  assert.equal(legacy.length, 7)
+  assert.ok(
+    legacy.some((entry) => entry.path === 'notes/new.md' && entry.dirty),
+  )
+  assert.ok(!legacy.some((entry) => entry.path === 'notes/gone.md'))
   assert.equal(
     globalThis.__viewMaterializations,
-    1,
-    'legacy snapshots remain explicit',
+    0,
+    'explicit legacy tree snapshots need metadata, not open document text',
   )
 })
 

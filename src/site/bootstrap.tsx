@@ -5,6 +5,7 @@ import { exportOptions } from '../addons/documentation/options'
 import { Button, TextInput } from '../ui/Controls'
 import type { LockedSite, SiteData } from './data'
 import { startSite } from './main'
+import { base64Bytes, decodeSiteMedia, siteMediaRecords } from './media'
 import './site.css'
 
 declare global {
@@ -20,7 +21,8 @@ const data =
   (JSON.parse(document.getElementById('workspace-data')?.textContent ?? '{}') as
     | SiteData
     | LockedSite)
-function openSite(data: SiteData) {
+async function openSite(data: SiteData, key?: CryptoKey) {
+  await decodeSiteMedia(data, siteMediaRecords(), key)
   data.options = exportOptions(data.options, data.name, data.appearance)
   data.routing ??= 'hash'
   startSite(data, root)
@@ -39,8 +41,6 @@ function Unlock({ data }: { data: LockedSite }) {
           try {
             if (!crypto.subtle)
               throw new Error('Open this file locally or serve it over HTTPS.')
-            const bytes = (value: string) =>
-              Uint8Array.from(atob(value), (char) => char.charCodeAt(0))
             const material = await crypto.subtle.importKey(
               'raw',
               new TextEncoder().encode(password),
@@ -51,7 +51,7 @@ function Unlock({ data }: { data: LockedSite }) {
             const key = await crypto.subtle.deriveKey(
               {
                 name: 'PBKDF2',
-                salt: bytes(data.salt),
+                salt: base64Bytes(data.salt),
                 iterations: data.iterations,
                 hash: 'SHA-256',
               },
@@ -61,15 +61,17 @@ function Unlock({ data }: { data: LockedSite }) {
               ['decrypt'],
             )
             const decoded = await crypto.subtle.decrypt(
-              { name: 'AES-GCM', iv: bytes(data.iv) },
+              { name: 'AES-GCM', iv: base64Bytes(data.iv) },
               key,
-              bytes(data.ciphertext),
+              base64Bytes(data.ciphertext),
             )
             setPassword('')
-            openSite(JSON.parse(new TextDecoder().decode(decoded)))
+            await openSite(JSON.parse(new TextDecoder().decode(decoded)), key)
           } catch (error) {
             setError(
-              error instanceof Error && error.message.includes('HTTPS')
+              error instanceof Error &&
+                (error.message.includes('HTTPS') ||
+                  error.message.includes('SVG'))
                 ? error.message
                 : 'Incorrect password or damaged export.',
             )
@@ -99,4 +101,13 @@ function Unlock({ data }: { data: LockedSite }) {
   )
 }
 if ('encrypted' in data) root.render(<Unlock data={data} />)
-else openSite(data)
+else
+  void openSite(data).catch((error) =>
+    root.render(
+      <p role="alert">
+        {error instanceof Error && error.message.includes('SVG')
+          ? error.message
+          : 'This export is damaged or incomplete.'}
+      </p>,
+    ),
+  )

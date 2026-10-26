@@ -139,7 +139,11 @@ test('read-only split preview preserves catch-up, save, selection and normal-vie
   assert.equal(pending.source, first)
   assert.ok(pending.rich.endsWith('omega'))
   const saved = await page.evaluate(() => window.hibi.saveDocument(false))
-  assert.equal(saved.markdown, first)
+  assert.equal(saved.saveReceipt, true)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    first,
+  )
   assert.equal(await readFile(file, 'utf8'), first)
   assert.equal(
     await rich.evaluate((element) => element.editor.state.doc.textContent),

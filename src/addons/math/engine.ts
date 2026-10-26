@@ -59,6 +59,7 @@ export function startMath(context: AddonContext) {
   let target: 'rich' | 'source' = 'rich'
   context.editor.registerRich({
     id: 'editing',
+    preview: 'deferred',
     attach(editor) {
       rich = editor
       const focus = () => {

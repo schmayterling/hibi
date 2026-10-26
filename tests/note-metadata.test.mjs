@@ -82,7 +82,7 @@ test('built-in parser settings govern GFM, Obsidian, headings, and hashtags', ()
   )
 })
 
-test('properties keep bounded scalars and reject nested or invalid yaml', () => {
+test('properties retain scalars and reject nested or invalid yaml', () => {
   const result = noteProperties(
     '---\ntitle: Example\nrating: 3\npublic: true\ntags: [one, two]\nnested: { unsafe: value }\n---\n# Heading',
   )
@@ -95,7 +95,7 @@ test('properties keep bounded scalars and reject nested or invalid yaml', () => 
   assert.equal(noteProperties('---\nbad: [\n---\nbody').complete, false)
   assert.equal(
     noteProperties(`---\nlong: ${'x'.repeat(100_000)}\n---\nbody`).complete,
-    false,
+    true,
   )
   assert.equal(noteProperties('plain markdown').complete, true)
   assert.equal(noteProperties('---\n[link](a.md)').complete, false)
@@ -112,13 +112,37 @@ test('headings follow standard gfm text while excluding code and frontmatter', (
     ],
   )
   const long = noteHeadings(`# ${'x'.repeat(40_000)}`)
-  assert.equal(long.complete, false)
-  assert.ok(new TextEncoder().encode(long.items[0].text).length <= 4099)
+  assert.equal(long.complete, true)
+  assert.equal(long.items[0].text, 'x'.repeat(40_000))
   assert.deepEqual(
     noteHeadings(`---\nlong: ${'x'.repeat(100_000)}\n---\n# Visible`),
-    { items: [], complete: false },
+    { items: [{ depth: 1, text: 'Visible' }], complete: true },
   )
   assert.deepEqual(noteHeadings('---\n# Visible').items, [
     { depth: 1, text: 'Visible' },
   ])
+})
+
+test('metadata retains every property, scalar, list item and heading beyond former cutoffs', () => {
+  const key = 'k'.repeat(200)
+  const value = 'v'.repeat(5000)
+  const members = Array.from({ length: 40 }, (_, i) => `item-${i}`)
+  const properties = noteProperties(
+    `---\n${Array.from({ length: 100 }, (_, i) => `key${i}: ${i}`).join('\n')}\n${key}: ${value}\nlist: [${members.join(', ')}]\n---\nbody`,
+  )
+  assert.equal(properties.complete, true)
+  assert.equal(Object.keys(properties.values).length, 102)
+  assert.equal(properties.values[key], value)
+  assert.deepEqual(properties.values.list, members)
+  const headings = noteHeadings(
+    Array.from({ length: 300 }, (_, i) => `# heading ${i}`).join('\n\n'),
+  )
+  assert.equal(headings.complete, true)
+  assert.equal(headings.items.length, 300)
+  assert.equal(headings.items.at(-1).text, 'heading 299')
+})
+
+test('yaml alias expansion remains bounded', () => {
+  const source = `---\na: &a one\nlist: [${Array.from({ length: 60 }, () => '*a').join(', ')}]\n---\nbody`
+  assert.equal(noteProperties(source).complete, false)
 })

@@ -106,6 +106,41 @@ async function search(store, query, drafts = [], includePaths = false) {
   }
 }
 
+test('query cleanup preserves unsafe FTS last-insert metadata as bigint', async (t) => {
+  const f = await fixture(t, { 'a.md': 'needle' })
+  await f.store.idle()
+  const db = f.store.db
+  db.exec(
+    'CREATE TABLE probe(value); INSERT INTO probe(rowid,value) VALUES(9009535716950017,1)',
+  )
+  const prepare = db.prepare.bind(db)
+  const restored = []
+  t.mock.method(db, 'prepare', (sql) => {
+    const statement = prepare(sql)
+    const run = statement.run.bind(statement)
+    statement.run = (...args) => {
+      const result = run(...args)
+      if (
+        typeof result.lastInsertRowid === 'number' &&
+        !Number.isSafeInteger(result.lastInsertRowid)
+      )
+        throw new RangeError('Unsafe SQLite mutation metadata')
+      return result
+    }
+    restored.push(() => {
+      statement.run = run
+    })
+    return statement
+  })
+  try {
+    const result = await search(f.store, 'needle')
+    assert.deepEqual(result.paths, ['a.md'])
+    assert.equal(result.complete, true)
+  } finally {
+    for (const restore of restored) restore()
+  }
+})
+
 test('streaming lowercase agrees with whole-string search at scalar and sigma boundaries', () => {
   let checks = 0
   for (const text of [

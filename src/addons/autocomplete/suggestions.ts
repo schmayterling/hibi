@@ -153,8 +153,25 @@ export function autocompleteCompletions(
       learning.epoch() !== epoch
     )
       return []
+    const vocabulary = !typed
+      ? []
+      : dictionary.customCompletions
+        ? await dictionary
+            .customCompletions(typed, langs, 64, signal)
+            .catch((error) => {
+              if (signal.aborted) throw error
+              return []
+            })
+        : await dictionary.customWords()
+    signal.throwIfAborted()
+    if (
+      session() !== captured ||
+      preferences() !== settings ||
+      learning.epoch() !== epoch
+    )
+      return []
     const customNames = new Set<string>()
-    const custom = (typed ? dictionary.customWords() : [])
+    const custom = vocabulary
       .filter(
         (item) =>
           (!item.lang || langs.includes(item.lang)) &&

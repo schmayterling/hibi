@@ -45,9 +45,13 @@ test('journal barriers preserve immediate saves, retries, renderer recovery, and
   }, file)
   await replaceRichText(page, editor(), 'first edit 😀')
   const saved = await page.evaluate(() => window.hibi.saveDocument(true))
-  assert.equal(saved.markdown, 'first edit 😀')
+  assert.equal(saved.saveReceipt, true)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    'first edit 😀',
+  )
   assert.equal(saved.contentVersion, 1)
-  assert.equal(await readFile(file, 'utf8'), saved.markdown)
+  assert.equal(await readFile(file, 'utf8'), 'first edit 😀')
   await replaceRichText(page, editor(), 'recover this unsaved change')
   await page.evaluate(() => window.hibi.flushDocumentChanges())
   await crashAndReload(app)
@@ -144,12 +148,16 @@ test('J07/J09: native receipt recovery and saturated rich input preserve exact a
     return { saved, recovery: window.hibi.getDocumentRecoveryState() }
   })
   assert.equal(recovered.saved.contentVersion, 140)
-  assert.equal(recovered.saved.markdown, 'x'.repeat(140))
+  assert.equal(recovered.saved.saveReceipt, true)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    'x'.repeat(140),
+  )
   assert.equal(recovered.recovery.pendingCount, 0)
   assert.ok(
     await app.evaluate(() => globalThis.pressureFixture.verifications > 0),
   )
-  assert.equal(await readFile(file, 'utf8'), recovered.saved.markdown)
+  assert.equal(await readFile(file, 'utf8'), 'x'.repeat(140))
 
   stage = 'saturation'
   await app.evaluate(() => {
@@ -191,7 +199,11 @@ test('J07/J09: native receipt recovery and saturated rich input preserve exact a
     await window.hibi.flushDocumentChanges()
     return window.hibi.saveDocument(false)
   })
-  assert.equal(saved.markdown, pressure.text)
+  assert.equal(saved.saveReceipt, true)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    pressure.text,
+  )
   assert.equal(saved.contentVersion, 140 + pressure.observed)
   assert.equal(await readFile(file, 'utf8'), pressure.text)
   const resumed = await page.evaluate(async () => {
@@ -203,6 +215,10 @@ test('J07/J09: native receipt recovery and saturated rich input preserve exact a
       saved: await window.hibi.saveDocument(false),
     }
   })
-  assert.equal(resumed.saved.markdown, resumed.text)
+  assert.equal(resumed.saved.saveReceipt, true)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    resumed.text,
+  )
   assert.equal(resumed.saved.contentVersion, saved.contentVersion + 1)
 })

@@ -9,6 +9,7 @@ export default defineAddon({
     context.styles.register('menu', css)
     context.editor.registerRich({
       id: 'menu',
+      preview: 'deferred',
       attach: (editor) => attachRich(editor, context),
     })
     context.editor.registerSource({

@@ -52,7 +52,7 @@ export type DocumentLifecycleEvent =
   | { kind: 'closed'; target: DocumentTarget }
 export type DocumentSaveResult = {
   status: 'saved' | 'clean' | 'stale' | 'conflict' | 'unsupported'
-  document: DocumentState | null
+  document: import('./desktop.ts').DocumentSaveReply | null
 }
 export type TargetDocumentSaveResult =
   | { status: 'saved' | 'clean'; savedVersion: number }
@@ -229,7 +229,7 @@ export function validateSourceEdits(
 export function editedSource(
   snapshot: SourceSnapshot,
   changes: readonly SourceEdit[],
-  maximumBytes: number,
+  maximumBytes = Infinity,
 ) {
   const validation = validateSourceEdits(snapshot, changes, maximumBytes)
   if (validation.status !== 'valid') throw new Error(validation.message)

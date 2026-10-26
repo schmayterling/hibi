@@ -442,7 +442,11 @@ test('lost diagnostic credit cannot delay save, canceled close or acknowledged r
   const sentinel = 'PRIVATE SAVED TEXT 雪'
   await replaceRichText(page, editor, sentinel)
   const saved = await page.evaluate(() => window.hibi.saveDocument(true))
-  assert.equal(saved.markdown, sentinel)
+  assert.equal(saved.saveReceipt, true)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    sentinel,
+  )
   assert.equal(await readFile(file, 'utf8'), sentinel)
   await replaceRichText(page, editor, 'PRIVATE RECOVERED TEXT 雪')
   await page.evaluate(() => window.hibi.flushDocumentChanges())

@@ -35,7 +35,13 @@ import { DialogProvider, useDialogs } from '../ui/DialogProvider'
 import { ShortcutKeys } from '../ui/ShortcutKeys'
 import { Sidebar, type SidebarItem } from '../ui/Sidebar'
 import { useSidebarResize } from '../ui/useSidebarResize'
-import { homePage, isMermaidImage, pageRoute, type SiteData } from './data'
+import {
+  homePage,
+  isMermaidImage,
+  pageRoute,
+  type SiteData,
+  siteMediaType,
+} from './data'
 import { createSiteSearchWorker } from './search-worker-client'
 import { pageTitle } from './title'
 import './site.css'
@@ -295,19 +301,27 @@ export function startSite(workspace: SiteData, root: Root) {
     for (const image of fragment.querySelectorAll('img')) {
       const embedded =
         byPath.get(path)?.images?.[image.getAttribute('src') ?? '']
+      const type =
+        typeof embedded === 'string' ? siteMediaType(embedded) : undefined
+      const blob = type && workspace.media?.[embedded!]
+      const assetType = blob || type !== 'image/svg+xml' ? type : undefined
+      const media =
+        blob || (assetType ? new URL(embedded!, siteRoot).href : embedded)
       if (
-        typeof embedded === 'string' &&
-        /^data:video\/(mp4|webm|ogg);base64,/i.test(embedded)
+        typeof media === 'string' &&
+        (assetType?.startsWith('video/') ||
+          /^data:video\/(mp4|webm|ogg);base64,/i.test(media))
       ) {
         const video = document.createElement('video')
         video.controls = true
         video.preload = 'metadata'
         video.setAttribute('aria-label', image.alt || 'Video attachment')
-        video.src = embedded
+        video.src = media
         image.replaceWith(video)
         continue
       }
-      if (typeof embedded === 'string') image.setAttribute('src', embedded)
+      if (typeof media === 'string') image.setAttribute('src', media)
+      if (assetType?.startsWith('image/')) continue
       const src = image.getAttribute('src') ?? ''
       if (
         !/^data:image\/(png|jpeg|gif|webp|avif|svg\+xml);base64,/i.test(src) &&

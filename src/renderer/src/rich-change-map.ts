@@ -66,17 +66,49 @@ export function richEditMap(
     shift = next
     previous = edit.to
   }
+  const slices = [slicer(before), slicer(after)] as const
   return rangeMap(
     before,
     after,
-    windows.flatMap((window) => narrow(before, after, window)),
+    slices,
+    windows.flatMap((window) => narrow(slices, window)),
   )
 }
 
+type Slicer = (from: number, to: number) => Slice
+
+// Slices of one document cut from just the top-level blocks they cover. A
+// whole-document slice resolves both ends by walking every earlier block, so
+// slicing per edit would read the document once per edit.
+function slicer(doc: Node): Slicer {
+  const nodes: Node[] = [],
+    starts: number[] = []
+  doc.forEach((node, offset) => {
+    nodes.push(node)
+    starts.push(offset)
+  })
+  return (from, to) => {
+    // The first block that ends after `from`, then each one starting before `to`.
+    let low = 0,
+      high = nodes.length
+    while (low < high) {
+      const middle = (low + high) >>> 1
+      if (starts[middle]! + nodes[middle]!.nodeSize <= from) low = middle + 1
+      else high = middle
+    }
+    let end = low
+    while (end < nodes.length && starts[end]! < to) end++
+    const base = starts[low] ?? doc.content.size
+    return doc.type
+      .create(doc.attrs, nodes.slice(low, end))
+      .slice(from - base, to - base)
+  }
+}
+
 // The part of matching windows where the documents differ, if any.
-function narrow(before: Node, after: Node, window: Span): Span[] {
-  const left = before.slice(window.a, window.b),
-    right = after.slice(window.c, window.d)
+function narrow(slices: readonly [Slicer, Slicer], window: Span): Span[] {
+  const left = slices[0](window.a, window.b),
+    right = slices[1](window.c, window.d)
   if (left.openStart !== right.openStart || left.openEnd !== right.openEnd)
     return [window]
   const start = left.content.findDiffStart(right.content)
@@ -133,7 +165,12 @@ function same(left: Slice, right: Slice) {
  * ranges must match exactly; where a change had wider effects, the ranges
  * around the differing content merge.
  */
-function rangeMap(before: Node, after: Node, ranges: readonly Span[]) {
+function rangeMap(
+  before: Node,
+  after: Node,
+  slices: readonly [Slicer, Slicer],
+  ranges: readonly Span[],
+) {
   const kept: Span[] = [{ a: 0, b: 0, c: 0, d: 0 }]
   for (const range of [
     ...ranges,
@@ -149,7 +186,7 @@ function rangeMap(before: Node, after: Node, ranges: readonly Span[]) {
       range.a >= last.b &&
       range.c >= last.d &&
       range.a - last.b === range.c - last.d &&
-      same(before.slice(last.b, range.a), after.slice(last.d, range.c))
+      same(slices[0](last.b, range.a), slices[1](last.d, range.c))
     )
       kept.push({ ...range })
     else {

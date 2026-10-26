@@ -4,6 +4,7 @@ import { getSchema } from '@tiptap/core'
 import { Image } from '@tiptap/extension-image'
 import { TableKit } from '@tiptap/extension-table'
 import { MarkdownManager } from '@tiptap/markdown'
+import { Fragment, Schema } from '@tiptap/pm/model'
 import { AllSelection, NodeSelection, TextSelection } from '@tiptap/pm/state'
 import { CellSelection } from '@tiptap/pm/tables'
 import { StarterKit } from '@tiptap/starter-kit'
@@ -242,4 +243,65 @@ test('edits with wider effects still map the content they leave alone', () => {
     joined.map,
   )
   assert.equal(joined.after.textBetween(kept.from, kept.to), 'three')
+})
+
+test('edits spread through a long document read each block a bounded number of times', () => {
+  const plainSchema = new Schema({
+    nodes: {
+      doc: { content: 'paragraph+' },
+      paragraph: { content: 'text*' },
+      text: {},
+    },
+  })
+  const build = (rows) =>
+    plainSchema.node(
+      'doc',
+      null,
+      rows.map((row) =>
+        plainSchema.node('paragraph', null, plainSchema.text(row)),
+      ),
+    )
+  const lines = Array.from(
+    { length: 50000 },
+    (_, index) => `row ${index} alpha beta omega`,
+  )
+  const source = lines.join('\n\n')
+  const before = build(lines)
+  const starts = [0]
+  for (const line of lines) starts.push(starts.at(-1) + line.length + 2)
+  const oldMap = markdownPositions(source, before)
+  // ProseMirror reads children one by one when it resolves or cuts positions.
+  const reads = (count) => {
+    const rows = lines.slice(),
+      edits = []
+    for (let edit = 0; edit < count; edit++) {
+      const row = Math.floor(((edit + 1) * lines.length) / (count + 1))
+      edits.push({ from: starts[row], to: starts[row], insert: '!' })
+      rows[row] = `!${rows[row]}`
+    }
+    const after = build(rows)
+    const lookups = [oldMap, markdownPositions(rows.join('\n\n'), after)]
+    const child = Fragment.prototype.child
+    let total = 0
+    Fragment.prototype.child = function (index) {
+      total++
+      return child.call(this, index)
+    }
+    let map
+    try {
+      map = richEditMap(before, after, edits, source.length, lookups)
+    } finally {
+      Fragment.prototype.child = child
+    }
+    // Row 12,345 is never edited; its `beta` keeps its text.
+    const from = starts[12345] + 1 + lines[12345].indexOf('beta')
+    const mapped = map.map(from)
+    assert.equal(after.textBetween(mapped, mapped + 4), 'beta')
+    return total
+  }
+  const few = reads(100),
+    many = reads(1000)
+  // Linear in the document and the edits, never their product.
+  assert.ok(many < few * 1.5, `${few} reads for 100 edits, ${many} for 1,000`)
+  assert.ok(many < 5 * lines.length, String(many))
 })

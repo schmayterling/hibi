@@ -1238,6 +1238,21 @@ export function SourceEditor({
                   ),
                 })
             },
+            mousedown(event) {
+              if (
+                !formatted ||
+                !event.shiftKey ||
+                !parserOptions.current.markdownMode ||
+                !parserOptions.current.linksEnabled ||
+                !(event.target instanceof Element) ||
+                !event.target.closest('.hibi-lp-link')
+              )
+                return false
+              // Following a link must not first extend the selection: revealing
+              // intervening embeds moves the target before its click arrives.
+              event.preventDefault()
+              return true
+            },
             click(event, view) {
               if (
                 !event.shiftKey ||

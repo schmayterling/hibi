@@ -649,12 +649,17 @@ function inline(
           mark('hibi-lp-link', ref.from, ref.to)
         return
       }
-      case 'Image':
-      case 'LinkReference':
       case 'HTMLBlock':
-      case 'HTMLTag':
       case 'CommentBlock':
       case 'ProcessingInstructionBlock':
+        // Opaque renderers still need the container prefixes on later lines.
+        for (const quote of ref.node.getChildren('QuoteMark'))
+          if (quote.to >= range.from && quote.from <= range.to)
+            builtIn(quote, range)
+        return false
+      case 'Image':
+      case 'LinkReference':
+      case 'HTMLTag':
       case 'Table':
       case 'Entity':
         // Rendered by later formatted-view slices; shown as source text for now.

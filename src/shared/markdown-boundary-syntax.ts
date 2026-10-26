@@ -11,8 +11,8 @@ import {
   blockMathSyntax,
   inlineMathSyntax,
 } from '../addons/math/formatted-syntax.ts'
-
 import { EmptyTask, Footnotes, GithubAlerts } from './markdown-extra-syntax.ts'
+import { ContainerHTML } from './markdown-html-syntax.ts'
 
 /** Both realms import these objects; an unrecognized contribution never gets a guessed grammar. */
 const catalog = {
@@ -77,6 +77,7 @@ export function boundaryParser(config: BoundaryConfig) {
     return null
   return parser.configure([
     { defineNodes: [{ name: 'Frontmatter', block: true }] },
+    ContainerHTML,
     ...config.syntax.map((id) => catalog[id]),
   ])
 }

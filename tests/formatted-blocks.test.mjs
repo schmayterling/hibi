@@ -229,3 +229,45 @@ test('github alerts show their title in place of the marker, in the alert box', 
   }
   assert.ok(lines[0].classes.includes('hibi-lp-alert-title'))
 })
+
+test('images resolve beside the note, missing ones say so, and the caret reveals their source', {
+  timeout: 60000,
+}, async () => {
+  await writeFile(
+    join(folder, 'notes', 'pic.png'),
+    Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
+      'base64',
+    ),
+  )
+  await open(
+    'media.md',
+    'Intro text\n\n![a picture](pic.png)\n\n![gone](missing.png)\n',
+    'Intro',
+  )
+  const picture = pane('.document-media img[alt="a picture"]')
+  await waitForAsync(page, () =>
+    document
+      .querySelector('.rich-pane .document-media img[alt="a picture"]')
+      ?.getAttribute('src'),
+  )
+  await waitForAsync(
+    page,
+    () =>
+      document.querySelector('.rich-pane .document-media img[alt="gone"]')
+        ?.dataset.tooltip,
+  )
+  assert.equal(
+    await pane('.document-media img[alt="gone"]').getAttribute('data-tooltip'),
+    'Could not load this media. Check the file path. Save the note first if the path is relative to it.',
+  )
+  // Clicking the image puts the caret beside it, which reveals its source.
+  await picture.click()
+  await pane('.hibi-lp-marker', { hasText: '](pic.png)' }).waitFor()
+  assert.equal(await picture.count(), 1)
+  await page.keyboard.press('End')
+  await page.keyboard.type(' after')
+  await source(
+    'Intro text\n\n![a picture](pic.png) after\n\n![gone](missing.png)\n',
+  )
+})

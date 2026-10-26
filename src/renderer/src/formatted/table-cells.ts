@@ -32,6 +32,7 @@ import {
   type FormattedRenderContext,
   formattedLiteral,
   formattedMarkdown,
+  formattedOwner,
   formattedViews,
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
@@ -160,7 +161,10 @@ function decorateCell(
         // add no second one.
         const nodeViews = lineBreakAt(node) ? [] : (views.get(node.name) ?? [])
         for (const nodeView of nodeViews) {
-          cellState ??= EditorState.create({ doc: text })
+          cellState ??= EditorState.create({
+            doc: text,
+            extensions: formattedOwner.of(state),
+          })
           const context: FormattedRenderContext = {
             state: cellState,
             visible: { from: 0, to: text.length },

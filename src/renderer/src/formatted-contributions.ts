@@ -188,6 +188,18 @@ export function formattedSyntaxTree(state: EditorState): Tree | null {
  */
 export const formattedRefresh = StateEffect.define<null>()
 
+/**
+ * State other than syntax that renderers read, such as the footnote labels
+ * references resolve against. Renderers that keep their output, like table
+ * cells, render again when it changes.
+ */
+export const formattedRenderInputs = Facet.define<unknown>()
+
+/** The formatted view's state, in the state a renderer gets for text drawn apart from it, such as a table cell's. */
+export const formattedOwner = Facet.define<EditorState, EditorState | null>({
+  combine: (values) => values[0] ?? null,
+})
+
 /** Show the Markdown markers of the formatted text under the selection. */
 export const showMarkdownMarkers = Facet.define<boolean, boolean>({
   combine: (values) => values.at(-1) ?? true,

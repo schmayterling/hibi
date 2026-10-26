@@ -1,5 +1,8 @@
 import type { MarkdownConfig } from '@lezer/markdown'
-import type { FormattedContribution } from '../formatted-contributions.ts'
+import {
+  type FormattedContribution,
+  formattedRenderInputs,
+} from '../formatted-contributions.ts'
 import {
   defined,
   definitionReader,
@@ -93,7 +96,15 @@ const cssString = (text: string) => `"${text.replace(/["\\]/g, '\\$&')}"`
 /** References render as superscript labels and definitions as notes labelled in their margin, both editable in place. */
 export const contribution: FormattedContribution = {
   id: 'markdown.footnotes',
-  extension: [footnoteDefinitions, definitionReader],
+  extension: [
+    footnoteDefinitions,
+    definitionReader,
+    // Table cells draw references again when labels change.
+    formattedRenderInputs.compute(
+      [footnoteDefinitions],
+      (state) => state.field(footnoteDefinitions).labels,
+    ),
+  ],
   flavor: 'markdown.github',
   syntax: Footnotes,
   // References start at `[`, so text without one is still skipped.

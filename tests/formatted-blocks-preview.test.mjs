@@ -491,6 +491,35 @@ test("a 50 MiB note reads no footnote definitions until a reference is in view, 
     )
 })
 
+test('a footnote reference in a table cell resolves once its definition is read, in the cell and its editor', {
+  timeout: 60000,
+}, async () => {
+  await harness.evaluate(() =>
+    window.livePreview.mount(
+      '| a | b |\n| --- | --- |\n| see[^cell] | x |\n\n[^cell]: In a table.\n',
+      { width: 800, height: 600 },
+      { editable: true },
+    ),
+  )
+  // Before, a table's reference never started reading, and cells resolved
+  // labels against a state without the index.
+  await harness.waitForFunction(
+    () =>
+      document.querySelector('.hibi-lp-table .hibi-lp-footnote-ref')
+        ?.textContent === 'cell',
+    undefined,
+    { timeout: 10000 },
+  )
+  await harness.locator('.hibi-lp-table td', { hasText: 'see' }).click()
+  await harness.waitForFunction(
+    () =>
+      document.querySelector('.hibi-lp-cell-editor .hibi-lp-footnote-ref')
+        ?.textContent === 'cell',
+    undefined,
+    { timeout: 10000 },
+  )
+})
+
 test('toggling one of 20,000 tasks is one edit that redraws one checkbox', {
   timeout: 90000,
 }, async () => {

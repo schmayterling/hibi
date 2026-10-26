@@ -22,6 +22,7 @@ import {
   formattedDocument,
   formattedLiteral,
   formattedMarkdown,
+  formattedRenderInputs,
   formattedViews,
 } from '../formatted-contributions.ts'
 import { tableActions } from '../source-formatting.ts'
@@ -73,15 +74,19 @@ const ALL_ROWS = 200
 
 type Line = { from: number; text: string }
 
-/** What cells render with: the formatted view's syntax, renderers and syntax that is off. */
+/** What cells render with: the formatted view's syntax, renderers, syntax that is off and what renderers read. */
 type CellConfig = {
   markdown: readonly MarkdownConfig[]
   views: readonly FormattedNodeView[]
   literal: readonly string[]
+  inputs: readonly unknown[]
 }
 
 const sameConfig = (a: CellConfig, b: CellConfig) =>
-  a.markdown === b.markdown && a.views === b.views && a.literal === b.literal
+  a.markdown === b.markdown &&
+  a.views === b.views &&
+  a.literal === b.literal &&
+  a.inputs === b.inputs
 
 /**
  * A table: lines `first` (header) to `first + rows + 1` of `doc`, replaced
@@ -1801,6 +1806,7 @@ export const contribution: FormattedContribution = {
               markdown: state.facet(formattedMarkdown),
               views: state.facet(formattedViews),
               literal: state.facet(formattedLiteral),
+              inputs: state.facet(formattedRenderInputs),
             },
           ),
           inline ? undefined : { block: true },

@@ -5,7 +5,7 @@ import {
   StateField,
   type Text,
 } from '@codemirror/state'
-import { type EditorView, ViewPlugin } from '@codemirror/view'
+import { type EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import {
   type MarkdownConfig,
@@ -15,6 +15,7 @@ import {
 import { ChunkedMarkdownParser } from '../chunked-markdown.ts'
 import {
   formattedMarkdown,
+  formattedOwner,
   formattedPrefix,
   formattedRefresh,
   formattedSyntaxTree,
@@ -671,7 +672,10 @@ export const footnoteDefinitions = StateField.define<Index>({
 
 /** Whether the note defines a reference's label. */
 export function defined(state: EditorState, label: string) {
-  const index = state.field(footnoteDefinitions, false)
+  // A table cell's own state reads the index of the view that draws it.
+  const index =
+    state.field(footnoteDefinitions, false) ??
+    state.facet(formattedOwner)?.field(footnoteDefinitions, false)
   return !!index && countOf(index.labels, label.toLowerCase()) > 0
 }
 
@@ -681,19 +685,41 @@ export function definitionsRead(state: EditorState) {
   return !index || (!index.stale && index.read >= state.doc.length)
 }
 
-/** Whether a footnote reference is in view. */
+/** Whether `text` has `[^` from `from` to `to`, read in the document's own chunks. */
+function referenceText(doc: Text, from: number, to: number) {
+  let previous = ''
+  for (const iter = doc.iterRange(from, to); !iter.next().done; ) {
+    if ((previous + iter.value).includes('[^')) return true
+    previous = iter.value.slice(-1)
+  }
+  return false
+}
+
+/**
+ * Whether a footnote reference is in view. Tables draw their cells in
+ * widgets, which leave their text out of the visible ranges, so a table in
+ * the viewport counts when its text there has one.
+ */
 function referenceInView(view: EditorView) {
   const tree = formattedSyntaxTree(view.state)
+  const { from, to } = view.viewport
   let found = false
-  for (const { from, to } of view.visibleRanges)
-    tree?.iterate({
-      from,
-      to,
-      enter: (node) => {
-        if (node.name === 'FootnoteReference') found = true
-        return !found
-      },
-    })
+  tree?.iterate({
+    from,
+    to,
+    enter: (node) => {
+      if (found) return false
+      if (node.name === 'FootnoteReference') found = true
+      else if (node.name === 'Table')
+        found = referenceText(
+          view.state.doc,
+          Math.max(from, node.from),
+          Math.min(to, node.to),
+        )
+      else return undefined
+      return false
+    },
+  })
   return found
 }
 
@@ -714,11 +740,16 @@ export const definitionReader = ViewPlugin.fromClass(
       this.view = view
       this.schedule()
     }
-    update() {
-      this.schedule()
+    update(update: ViewUpdate) {
+      this.schedule(
+        update.docChanged ||
+          update.viewportChanged ||
+          formattedSyntaxTree(update.state) !==
+            formattedSyntaxTree(update.startState),
+      )
     }
-    schedule() {
-      if (!this.wanted && referenceInView(this.view)) {
+    schedule(look = true) {
+      if (!this.wanted && look && referenceInView(this.view)) {
         this.wanted = true
         // The start of the note before this frame paints, as much as an edit
         // reads, so a short note's references draw resolved; idle time reads

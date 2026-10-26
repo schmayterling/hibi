@@ -108,7 +108,7 @@ test('long tables store rows past the first 1,000 by index, within bounds', asyn
   rows[1] = 40
   rows[1500] = 90
   const stored = storedTableLayout({ key: '0:long', columns: null, rows })
-  assert.equal(stored.rows.length, 1000)
+  assert.deepEqual(stored.rows, [0, 40])
   assert.deepEqual(stored.rowsAfter, [[1500, 90]])
   await writeTableLayout(root, 'a.md', [stored])
   const [read] = await readTableLayout(root, 'a.md')
@@ -135,6 +135,36 @@ test('long tables store rows past the first 1,000 by index, within bounds', asyn
       writeTableLayout(root, 'a.md', [
         { key: 'x', columns: null, rows: null, rowsAfter },
       ]),
+      { message: 'The table layout is invalid.' },
+    )
+})
+
+test('table size updates from two windows change only their own sizes', async (t) => {
+  const root = await workspace(t)
+  await writeTableLayout(root, 'a.md', [table('0:a', [100, 0], [0, 40])])
+  const set = (axis, index, size) =>
+    writeTableLayout(root, 'a.md', {
+      remove: [],
+      put: [],
+      set: [{ key: '0:a', axis, index, size }],
+    })
+  // One window widens a column while another heightens a row of the same table.
+  await Promise.all([set('column', 0, 180), set('row', 1, 60)])
+  assert.deepEqual(await readTableLayout(root, 'a.md'), [
+    { key: '0:a', columns: [180], rows: [0, 60] },
+  ])
+  // Rows past the first 1,000 stay stored by index.
+  await set('row', 1500, 90)
+  assert.deepEqual(await readTableLayout(root, 'a.md'), [
+    { key: '0:a', columns: [180], rows: [0, 60], rowsAfter: [[1500, 90]] },
+  ])
+  for (const change of [
+    { key: '0:a', axis: 'column', index: 1000, size: 1 },
+    { key: '0:a', axis: 'diagonal', index: 0, size: 1 },
+    { key: '0:a', axis: 'row', index: 0, size: 10001 },
+  ])
+    await assert.rejects(
+      writeTableLayout(root, 'a.md', { remove: [], put: [], set: [change] }),
       { message: 'The table layout is invalid.' },
     )
 })

@@ -12,7 +12,10 @@ import {
   WidgetType,
 } from '@codemirror/view'
 import { type MarkdownConfig, Table } from '@lezer/markdown'
-import type { TableLayout } from '../../../shared/table-layout'
+import {
+  type TableLayout,
+  tableSizeChanges,
+} from '../../../shared/table-layout'
 import {
   type FormattedContribution,
   type FormattedNodeView,
@@ -1396,12 +1399,30 @@ class TableView {
         : []
     const json = put.length ? JSON.stringify(put[0]) : null
     if (json === this.stored && (put.length || !this.sizes.key)) return
-    // Only this table's entries change; other tables keep what is stored now.
+    // Under the same key only the sizes that changed, so that other views'
+    // and windows' changes to the table stay; else only this table's entries.
+    const previous =
+      this.stored && key === this.sizes.key
+        ? (JSON.parse(this.stored) as TableLayout)
+        : null
     const remove = [key]
     if (this.sizes.key && this.sizes.key !== key) remove.push(this.sizes.key)
     this.sizes.key = put.length ? key : null
     this.stored = json
-    updateTableLayouts(entry.tabId, tables, { remove, put })
+    updateTableLayouts(
+      entry.tabId,
+      tables,
+      previous
+        ? {
+            remove: [],
+            put: [],
+            set: tableSizeChanges(
+              previous,
+              put[0] ?? { key, columns: null, rows: null },
+            ),
+          }
+        : { remove, put },
+    )
   }
 
   /** The column or row edge within reach of the pointer. */

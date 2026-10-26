@@ -1137,6 +1137,35 @@ test('deleting the first of two sized columns keeps the other, and undo brings b
   assert.deepEqual(await widths(), ['200px', '180px'])
 })
 
+test('a resize stores only the size it changed', {
+  timeout: 30000,
+}, async () => {
+  const key = tableKey(0, ['a', 'b'])
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('axis', [
+        { key, columns: [200, 0], rows: [0, 50] },
+      ]),
+    key,
+  )
+  await mountTab('| a | b |\n| - | - |\n| 1 | 2 |\n\nafter', 'axis')
+  await harness
+    .locator('.hibi-lp-table th')
+    .first()
+    .locator('.hibi-lp-table-resizer[data-axis="column"]')
+    .focus()
+  await harness.keyboard.press('ArrowRight')
+  await harness.waitForFunction(() => window.tables.writes('axis').length > 0)
+  assert.deepEqual(await harness.evaluate(() => window.tables.writes('axis')), [
+    {
+      remove: [],
+      put: [],
+      set: [{ key, axis: 'column', index: 0, size: 208 }],
+    },
+  ])
+  assert.deepEqual((await layouts('axis'))[0].rows, [0, 50])
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {

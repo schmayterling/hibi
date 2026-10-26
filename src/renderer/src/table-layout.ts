@@ -3,7 +3,11 @@ import type { Node } from '@tiptap/pm/model'
 import { Plugin, PluginKey, type Transaction } from '@tiptap/pm/state'
 import { type Mappable, ReplaceStep } from '@tiptap/pm/transform'
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view'
-import type { TableLayout } from '../../shared/table-layout'
+import {
+  type TableLayout,
+  type TableSize,
+  tableSizeChanges,
+} from '../../shared/table-layout'
 import { richSourceEcho } from './rich-source-session'
 import {
   tableKey as layoutKey,
@@ -572,19 +576,23 @@ export const tableLayout = Extension.create<{ tabId: string }>({
             if (json === written) return
             const previous = JSON.parse(written) as TableLayout[]
             written = json
-            // Only the tables this editor changed: sizes other views and
+            // Only the sizes this editor changed: sizes other views and
             // windows stored since stay as they are.
-            const before = new Map(
-              previous.map((table) => [table.key, JSON.stringify(table)]),
-            )
+            const before = new Map(previous.map((table) => [table.key, table]))
             const keys = new Set(tables.map((table) => table.key))
+            const put: TableLayout[] = [],
+              set: TableSize[] = []
+            for (const table of tables) {
+              const old = before.get(table.key)
+              if (old) set.push(...tableSizeChanges(old, table))
+              else put.push(table)
+            }
             updateTableLayouts(tabId, previous, {
               remove: previous
                 .filter((table) => !keys.has(table.key))
                 .map((table) => table.key),
-              put: tables.filter(
-                (table) => before.get(table.key) !== JSON.stringify(table),
-              ),
+              put,
+              set,
             })
           }
           void Promise.resolve(readTableLayouts(tabId)).then(

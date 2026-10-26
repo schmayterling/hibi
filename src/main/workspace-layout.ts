@@ -1,6 +1,8 @@
 import { lstat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import {
+  listedTableLayout,
+  storedTableLayout,
   type TableLayout,
   type TableLayoutUpdate,
   updateTableLayout,
@@ -73,14 +75,38 @@ export function validateTableLayout(input: unknown): TableLayout[] {
 }
 
 function validateTableLayoutUpdate(input: unknown): TableLayoutUpdate {
-  const { remove, put } = (input ?? {}) as { remove?: unknown; put?: unknown }
+  const {
+    remove,
+    put,
+    set = [],
+  } = (input ?? {}) as { remove?: unknown; put?: unknown; set?: unknown }
   if (
     !Array.isArray(remove) ||
     remove.length > 1000 ||
-    !remove.every((key) => typeof key === 'string' && key.length <= 64)
+    !remove.every((key) => typeof key === 'string' && key.length <= 64) ||
+    !Array.isArray(set) ||
+    set.length > 1000 ||
+    !set.every(
+      (change) =>
+        change &&
+        typeof change === 'object' &&
+        typeof change.key === 'string' &&
+        change.key.length <= 64 &&
+        (change.axis === 'column' || change.axis === 'row') &&
+        Number.isInteger(change.index) &&
+        change.index >= 0 &&
+        change.index < (change.axis === 'column' ? 1000 : 10_000_000) &&
+        Number.isInteger(change.size) &&
+        change.size >= 0 &&
+        change.size <= 10000,
+    )
   )
     throw new Error('The table layout is invalid.')
-  return { remove: [...remove], put: validateTableLayout(put) }
+  return {
+    remove: [...remove],
+    put: validateTableLayout(put),
+    set: set.map(({ key, axis, index, size }) => ({ key, axis, index, size })),
+  }
 }
 
 const documentPath = (path: string) =>
@@ -199,13 +225,17 @@ export async function writeTableLayout(
           delete layout.documents[entry]
           changed = true
         }
+      // Updates apply with every row listed; rows past 1,000 are stored by index again.
       const tables =
         replace ??
-        updateTableLayout(
-          layout.documents[path]?.tables ?? [],
-          change as TableLayoutUpdate,
-        ).filter(sized)
-      if (tables.length > 1000) throw new Error('The table layout is invalid.')
+        validateTableLayout(
+          updateTableLayout(layout.documents[path]?.tables ?? [], {
+            ...(change as TableLayoutUpdate),
+            put: (change as TableLayoutUpdate).put.map(listedTableLayout),
+          })
+            .map(storedTableLayout)
+            .filter(sized),
+        )
       if (
         JSON.stringify(layout.documents[path]?.tables ?? []) ===
         JSON.stringify(tables)

@@ -31,6 +31,7 @@ let view: EditorView | null = null
 let second: EditorView | null = null
 // The workspace's table sizes, as the main process keeps and updates them.
 const layouts = new Map<string, TableLayout[]>()
+const writes: { tabId: string; input: TableLayout[] | TableLayoutUpdate }[] = []
 Object.assign(window, {
   hibi: {
     readTableLayout: async (tabId: string) => layouts.get(tabId) ?? [],
@@ -38,6 +39,7 @@ Object.assign(window, {
       tabId: string,
       input: TableLayout[] | TableLayoutUpdate,
     ) => {
+      writes.push({ tabId, input: structuredClone(input) })
       layouts.set(
         tabId,
         Array.isArray(input)
@@ -124,6 +126,9 @@ Object.assign(window, {
     sizeProbe: () =>
       (formattedTables as { tableSizeProbe?: { mapped: number } })
         .tableSizeProbe,
+    /** What views wrote to the workspace's table sizes for a tab, in order. */
+    writes: (tabId: string) =>
+      writes.filter((write) => write.tabId === tabId).map(({ input }) => input),
     /** The table sizes the workspace stores for a tab, or sets them. */
     layouts: (tabId: string, tables?: TableLayout[]) => {
       if (tables) layouts.set(tabId, tables)

@@ -289,6 +289,16 @@ test('behind the switch, frontmatter properties above the formatted view edit th
   await page.locator('.rich-pane .hibi-lp-h1', { hasText: 'Title' }).waitFor()
   const properties = page.locator('.rich-pane .frontmatter')
   await properties.waitFor()
+  // The properties show the frontmatter; the text below does not repeat it.
+  // Before, it showed again as a rule and a heading.
+  await waitForAsync(
+    page,
+    () =>
+      !document
+        .querySelector('.rich-pane .cm-content')
+        ?.textContent.includes('title: One'),
+  )
+  assert.equal(await page.locator('.rich-pane .hibi-lp-h2').count(), 0)
   await properties.locator('.frontmatter-yaml-toggle').click()
   await properties.getByLabel('Frontmatter YAML').fill('title: Two\n')
   await properties.getByRole('button', { name: 'Apply YAML' }).click()

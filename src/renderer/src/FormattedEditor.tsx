@@ -34,6 +34,16 @@ const MarkdownSourceEditor = lazy(() =>
 
 /** Source extensions such as Vim belong to the source pane only. */
 const formattedExtensions: readonly SourceExtension[] = []
+/** A properties editor above the text shows the frontmatter instead. */
+const propertiesExtensions: readonly SourceExtension[] = [
+  {
+    id: 'formatted.frontmatter',
+    create: () =>
+      import('./formatted-frontmatter').then(
+        (module) => module.formattedFrontmatter,
+      ),
+  },
+]
 
 /**
  * Markdown notes on the CodeMirror formatted view, behind the temporary
@@ -288,7 +298,12 @@ export function MarkdownEditor({
                 waitForFont
                 onLink={onLink}
                 onFormatting={attachRich}
-                sourceExtensions={formattedExtensions}
+                sourceExtensions={
+                  markdownDocument &&
+                  markdownExtensions.some(({ Editor }) => Editor)
+                    ? propertiesExtensions
+                    : formattedExtensions
+                }
                 showLineNumbers={false}
                 onReady={(status) => setFormattedReady(status === 'ready')}
                 disabled={disabled}

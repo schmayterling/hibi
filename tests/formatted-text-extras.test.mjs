@@ -279,7 +279,7 @@ test('decoded entity glyphs retain nested link, strong and emphasis styles', {
   timeout: 90000,
 }, async () => {
   const source =
-    '# Attributes\n\n~**&amp;**~ ~*&#169;*~ ~[&amp;](Other.md)~\n\n-# **&amp;** *&#169;* [&#169;](Other.md) `&amp;`\n'
+    '# Attributes\n\n~**&amp;**~ ~*&#169;*~ ~[&amp;](Other.md)~\n\n-# **&amp;** *&#169;* [&#169;](Other.md) `&amp;`\n\n| cell |\n| --- |\n| ~[&amp;](Other.md)~ **~&#169;~** |\n'
   await writeFile(join(folder, 'notes', 'attributes.md'), source)
   const styles = (selector) =>
     page.evaluate(
@@ -322,7 +322,10 @@ test('decoded entity glyphs retain nested link, strong and emphasis styles', {
     )
   }
   await engine(true, false)
-  await page.locator('.rich-pane .hibi-lp-entity').first().waitFor()
+  await waitForAsync(
+    page,
+    () => document.querySelectorAll('.rich-pane .hibi-lp-entity').length >= 8,
+  )
   for (const scheme of ['hibi-light', 'hibi-dark']) {
     await applyPalette(scheme)
     assert.deepEqual(
@@ -479,11 +482,17 @@ test('with their syntax settings or the flavor off, subscripts and small text st
         subtext: document.querySelectorAll('.rich-pane .markdown-subtext')
           .length,
         marker: [...document.querySelectorAll('.rich-pane .cm-line')].some(
-          (line) => line.textContent === '-# a line of small text &amp; &#169;',
+          (line) => line.textContent === '-# a line of small text & ©',
         ),
       })),
       { subscripts: 0, subtext: 0, marker: true },
       check,
+    )
+    assert.equal(
+      await page.evaluate(
+        async () => (await window.hibi.getDocument()).markdown,
+      ),
+      parityNote,
     )
   }
   await open('parity.md')

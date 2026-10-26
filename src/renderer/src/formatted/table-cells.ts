@@ -27,6 +27,7 @@ import {
 } from '@lezer/markdown'
 import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
+  claimFormattedReplacement,
   type FormattedDecorations,
   type FormattedNodeView,
   type FormattedRenderContext,
@@ -127,6 +128,7 @@ function decorateCell(
 ) {
   const views = namedViews(state)
   const literal = literalNodes(state)
+  const replacements = new Set<string>()
   // Line breaks in cells are written as <br>, as the rich editor saved them.
   const lineBreakAt = (node: SyntaxNodeRef) =>
     node.name === 'HTMLTag' &&
@@ -146,7 +148,8 @@ function decorateCell(
       out.widget(at, widget, side)
     },
     replace(from, to, widget) {
-      if (to > from) out.hide(from, to, widget ?? null)
+      if (to > from && claimFormattedReplacement(replacements, from, to))
+        out.hide(from, to, widget ?? null)
     },
   })
   cellParser(state)

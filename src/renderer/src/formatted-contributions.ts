@@ -36,6 +36,18 @@ export type FormattedDecorations = {
   replace(from: number, to: number, widget?: WidgetType): void
 }
 
+/** Parent output owns an exact replacement range before child renderers visit it. */
+export function claimFormattedReplacement(
+  ranges: Set<string>,
+  from: number,
+  to: number,
+) {
+  const key = `${from}:${to}`
+  if (ranges.has(key)) return false
+  ranges.add(key)
+  return true
+}
+
 /**
  * Decorations that change the document's layout: block widgets and
  * replacements across lines. They are built once per parsed chunk and kept

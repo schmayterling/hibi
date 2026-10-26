@@ -11,6 +11,8 @@ import {
   subtextSyntax,
 } from '../src/addons/text-extras/formatted-syntax.ts'
 import { textExtrasMarkdown } from '../src/addons/text-extras/syntax.ts'
+import { contribution as entities } from '../src/renderer/src/formatted/entities.ts'
+import { renderInline } from '../src/renderer/src/formatted/table-cells.ts'
 import { blockBreak } from '../src/renderer/src/formatted-commands.ts'
 import {
   contributionExtension,
@@ -317,6 +319,58 @@ test('decoded glyphs keep the style of a surrounding inline link', () => {
     ([kind]) => kind === 'replace',
   )
   assert.equal(glyph[4].class, 'hibi-lp-subscript')
+})
+
+test('table cells keep one contextual glyph when core entities and subscripts coexist', (t) => {
+  class Element {
+    attributes = {}
+    children = []
+    classList = {
+      add: (name) => {
+        this.className = [this.className, name].filter(Boolean).join(' ')
+      },
+    }
+    set className(value) {
+      this.attributes.class = value
+    }
+    get className() {
+      return this.attributes.class ?? ''
+    }
+    setAttribute(name, value) {
+      this.attributes[name] = value
+    }
+    append(...children) {
+      this.children.push(...children)
+    }
+  }
+  const prior = globalThis.document
+  globalThis.document = {
+    createElement: () => new Element(),
+    createTextNode: (text) => ({ text }),
+  }
+  t.after(() => {
+    if (prior === undefined) delete globalThis.document
+    else globalThis.document = prior
+  })
+  const state = EditorState.create({
+    extensions: [
+      contributionExtension(entities),
+      contributionExtension(contributions.subscript),
+    ],
+  })
+  const into = new Element()
+  renderInline({ state }, '~[&amp;](target)~ **~&#169;~**', into)
+  const glyphs = []
+  const collect = (node) => {
+    if (node.className?.includes('hibi-lp-entity'))
+      glyphs.push([node.textContent, node.className])
+    for (const child of node.children ?? []) collect(child)
+  }
+  collect(into)
+  assert.deepEqual(glyphs, [
+    ['&', 'hibi-lp-subscript hibi-lp-link hibi-lp-entity'],
+    ['©', 'hibi-lp-subscript hibi-lp-entity'],
+  ])
 })
 
 test('links around many subscripts do not scan their siblings for each glyph', () => {

@@ -91,11 +91,13 @@ export class DocumentWorkerClient {
     version: number
     config: BoundaryConfig
     key: string
+    from: number
     receive: BoundaryReceive
     declined: (reason: 'stale' | 'mismatch') => void
   } | null = null
   #sentBoundaries = ''
   #boundarySequence = 0
+  #boundaryFrom: number | null = null
   constructor(session: DocumentSession, options: ClientOptions) {
     this.#session = session
     this.#options = options
@@ -108,6 +110,7 @@ export class DocumentWorkerClient {
           // The receiver still belongs to its view's old document until it requests again.
           this.#sentBoundaries = ''
           this.#boundarySequence = 0
+          this.#boundaryFrom = null
         }
         this.#deferFind()
         if (this.#bootstrap || this.#loaded) {
@@ -158,11 +161,16 @@ export class DocumentWorkerClient {
     config: BoundaryConfig,
     receive: BoundaryReceive,
     declined: (reason: 'stale' | 'mismatch') => void,
+    from = 0,
   ) {
     if (this.#disposed || this.#failed) return
     const key = JSON.stringify(config),
       version = this.#session.snapshot().version
-    if (this.#boundaries?.key === key && this.#boundaries.version === version) {
+    if (
+      this.#boundaries?.key === key &&
+      this.#boundaries.version === version &&
+      this.#boundaries.from === from
+    ) {
       this.#boundaries.receive = receive
       return
     }
@@ -171,19 +179,26 @@ export class DocumentWorkerClient {
       key,
       version,
       id: ++this.#requestId,
+      from,
       receive,
       declined,
     }
     this.#sentBoundaries = ''
     this.#boundarySequence = 0
+    this.#boundaryFrom = null
     if (!this.#worker && !this.#startTimer && !this.#bootstrap) this.#restart()
     this.#flushBoundaries()
   }
-  releaseBoundaries() {
+  releaseBoundaries(retain = false) {
     this.#boundaries = null
     this.#sentBoundaries = ''
     this.#boundarySequence = 0
-    this.#post({ type: 'cancel-boundaries', epoch: this.#epoch })
+    this.#boundaryFrom = null
+    this.#post({
+      type: 'cancel-boundaries',
+      epoch: this.#epoch,
+      ...(retain ? { retain: true } : {}),
+    })
   }
   #flushBoundaries() {
     const request = this.#boundaries
@@ -203,6 +218,7 @@ export class DocumentWorkerClient {
       id: request.id,
       version: request.version,
       config: request.config,
+      ...(request.from ? { from: request.from } : {}),
     })
   }
   find(query: string, from: number, to: number, action: FindAction = null) {
@@ -417,7 +433,12 @@ export class DocumentWorkerClient {
         request.declined('mismatch')
         return
       }
+      const from = reply.from ?? 0
       if (
+        !Number.isSafeInteger(from) ||
+        from < 0 ||
+        from > request.from ||
+        (this.#boundaryFrom !== null && from !== this.#boundaryFrom) ||
         reply.sequence !== this.#boundarySequence++ ||
         !Array.isArray(reply.records) ||
         reply.records.length > 128 ||
@@ -427,6 +448,7 @@ export class DocumentWorkerClient {
         this.releaseBoundaries()
         return
       }
+      this.#boundaryFrom = from
       let acknowledged = false
       request.receive(reply, () => {
         if (
@@ -639,6 +661,7 @@ export class DocumentWorkerClient {
     this.#sentRequest = 0
     this.#sentBoundaries = ''
     this.#boundarySequence = 0
+    this.#boundaryFrom = null
   }
   #restart() {
     this.#stop()

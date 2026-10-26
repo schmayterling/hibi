@@ -28,6 +28,7 @@ import {
   type ChunkedPartialParse,
   type Demand,
   uncovered,
+  unindexedFrom,
 } from './chunked-markdown.ts'
 import { codeLanguages } from './code-languages.ts'
 import {
@@ -61,11 +62,12 @@ type Syntax = {
 }
 
 const setDemand = StateEffect.define<Demand>()
-const resume = StateEffect.define<null>()
+const resume = StateEffect.define<boolean>()
 const adoptBoundaries = StateEffect.define<{
   doc: EditorState['doc']
   key: string
   tree: Tree
+  from: number
 }>()
 
 export type FormattedSyntaxOptions = {
@@ -75,8 +77,9 @@ export type FormattedSyntaxOptions = {
       config: BoundaryConfig,
       receive: BoundaryReceive,
       declined: (reason: 'stale' | 'mismatch') => void,
+      from?: number,
     ) => void
-    release: () => void
+    release: (retain?: boolean) => void
   }
   probe?: ChunkedMarkdownProbe
   /** Milliseconds of parsing per transaction or idle slice; each parse step reads a bounded range. */
@@ -180,6 +183,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
     demand: Demand,
     prefix: number,
     settling: boolean,
+    oneStep = false,
   ): Syntax => {
     const end = performance.now() + slice
     for (;;) {
@@ -194,7 +198,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
           settling: false,
         }
       // Keep the verified progress; the driver resumes in an idle slice.
-      if (performance.now() >= end)
+      if (oneStep || performance.now() >= end)
         return {
           tree: parse.snapshot(),
           demand,
@@ -236,13 +240,16 @@ function syntaxField(options: FormattedSyntaxOptions) {
     update(value, transaction) {
       let demand = value.demand,
         resumed = false,
-        moved = false
+        moved = false,
+        oneStep = false
       for (const effect of transaction.effects) {
         if (effect.is(setDemand)) {
           demand = effect.value
           moved = true
-        } else if (effect.is(resume)) resumed = true
-        else if (effect.is(adoptBoundaries)) {
+        } else if (effect.is(resume)) {
+          resumed = true
+          oneStep = effect.value
+        } else if (effect.is(adoptBoundaries)) {
           const adopted = effect.value
           const config = boundaryConfig(
             transaction.state,
@@ -253,13 +260,32 @@ function syntaxField(options: FormattedSyntaxOptions) {
             adopted.doc === transaction.state.doc &&
             config &&
             adopted.key === boundaryKey(config)
-          )
-            return start(
-              transaction.state,
-              TreeFragment.applyChanges(TreeFragment.addTree(adopted.tree), []),
-              demand,
-              true,
-            )
+          ) {
+            const length = transaction.state.doc.length
+            const fragments = adopted.from
+              ? [
+                  ...TreeFragment.applyChanges(
+                    TreeFragment.addTree(value.tree),
+                    [
+                      {
+                        fromA: adopted.from,
+                        toA: length,
+                        fromB: adopted.from,
+                        toB: length,
+                      },
+                    ],
+                    0,
+                  ),
+                  new TreeFragment(
+                    adopted.from,
+                    length,
+                    adopted.tree,
+                    -adopted.from,
+                  ),
+                ]
+              : TreeFragment.addTree(adopted.tree)
+            return start(transaction.state, fragments, demand, true)
+          }
         }
       }
       // New syntax contributions or a new unparsed prefix parse the document again.
@@ -300,7 +326,13 @@ function syntaxField(options: FormattedSyntaxOptions) {
       if (value.parse) {
         value.parse.setDemand(demand)
         // A new viewport shows chunks as they are parsed.
-        return run(value.parse, demand, value.prefix, value.settling && !moved)
+        return run(
+          value.parse,
+          demand,
+          value.prefix,
+          value.settling && !moved,
+          oneStep,
+        )
       }
       if (!uncovered(value.tree, demand.from, demand.to))
         return { ...value, demand, complete: true }
@@ -328,6 +360,9 @@ function driver(
       private boundaryIdle = 0
       private boundaryDoc: EditorState['doc'] | null = null
       private boundaryKey: string | null = null
+      private boundaryStream: string | null = null
+      private boundarySeeded = false
+      private boundaryFrom: number | null = null
       private boundaryTree: BoundaryTree | null = null
       private destroyed = false
       constructor(view: EditorView) {
@@ -349,9 +384,26 @@ function driver(
         const { state } = this.view
         const config = boundaryConfig(state, options, prefixOf(state))
         const key = config ? boundaryKey(config) : null
-        if (state.doc === this.boundaryDoc && key === this.boundaryKey) return
+        const sameConfig = key === this.boundaryKey
+        const syntax = state.field(field)
+        // Retain mapped boundaries; only an unscanned tail needs another seed.
+        const from =
+          sameConfig && this.boundarySeeded
+            ? syntax.parse && !syntax.parse.scanningContext
+              ? null
+              : unindexedFrom(syntax.tree)
+            : 0
+        if (
+          state.doc === this.boundaryDoc &&
+          sameConfig &&
+          (from === null || this.boundaryFrom !== null)
+        )
+          return
         this.boundaryDoc = state.doc
         this.boundaryKey = key
+        this.boundaryStream = null
+        if (!sameConfig) this.boundarySeeded = false
+        this.boundaryFrom = null
         this.boundaryTree = null
         if (this.boundaryIdle) cancelIdleCallback(this.boundaryIdle)
         this.boundaryIdle = 0
@@ -360,6 +412,11 @@ function driver(
           options.boundaries.release()
           return
         }
+        if (from === null) {
+          options.boundaries.release(true)
+          return
+        }
+        this.boundaryFrom = from
         const doc = state.doc
         options.boundaries.request(
           config,
@@ -372,22 +429,30 @@ function driver(
               this.declined()
               return
             }
+            const stream = `${page.epoch}:${page.id}`
+            if (stream !== this.boundaryStream) {
+              this.boundaryStream = stream
+              this.boundaryTree = null
+              if (this.boundaryIdle) cancelIdleCallback(this.boundaryIdle)
+              this.boundaryIdle = 0
+            }
             // The sender waits for this idle slice before sending another page.
             this.boundaryIdle = requestIdleCallback(
               () => {
-                this.boundaryIdle = 0
                 if (
                   this.destroyed ||
                   this.view.state.doc !== doc ||
-                  this.boundaryKey !== page.key
+                  this.boundaryKey !== page.key ||
+                  this.boundaryStream !== stream
                 ) {
                   this.declined()
                   return
                 }
+                this.boundaryIdle = 0
                 try {
                   this.boundaryTree ??= new BoundaryTree(
                     chunkedFor(this.view.state),
-                    page.length,
+                    page.length - (page.from ?? 0),
                   )
                   this.boundaryTree.append(page.records)
                   const probe = options.probe
@@ -399,11 +464,21 @@ function driver(
                   if (page.done) {
                     const tree = this.boundaryTree.finish()
                     this.boundaryTree = null
+                    this.boundarySeeded = true
                     this.view.dispatch({
-                      effects: adoptBoundaries.of({ doc, key: page.key, tree }),
+                      effects: adoptBoundaries.of({
+                        doc,
+                        key: page.key,
+                        tree,
+                        from: page.from ?? 0,
+                      }),
                     })
                   }
                   acknowledge()
+                  if (page.done && this.boundaryStream === stream) {
+                    this.boundaryFrom = null
+                    options.boundaries?.release(true)
+                  }
                 } catch {
                   this.declined()
                   this.boundaryTree = null
@@ -414,6 +489,7 @@ function driver(
             )
           },
           this.declined,
+          from,
         )
       }
       /** A changed viewport parses on the next task; leftover work waits for idle time. */
@@ -430,8 +506,14 @@ function driver(
         const syntax = view.state.field(field)
         const same = syntax.demand.from === from && syntax.demand.to === to
         if (same && syntax.complete) return
+        // While the worker repairs a changed context, keep the local fallback
+        // moving one bounded parse step rather than duplicating a full scan.
+        const bounded = this.boundarySeeded && this.boundaryFrom !== null
         view.dispatch({
-          effects: same ? resume.of(null) : setDemand.of({ from, to }),
+          effects: [
+            ...(same ? [] : [setDemand.of({ from, to })]),
+            resume.of(bounded),
+          ],
         })
       }
       destroy() {

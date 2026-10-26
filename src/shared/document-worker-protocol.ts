@@ -10,6 +10,7 @@ export type BoundaryPage = {
   key: string
   sequence: number
   length: number
+  from?: number
   records: BoundaryRecord[]
   done: boolean
 }
@@ -69,6 +70,7 @@ export type DocumentWorkerRequest =
       id: number
       version: number
       config: BoundaryConfig
+      from?: number
     }
   | {
       type: 'boundary-ack'
@@ -78,7 +80,7 @@ export type DocumentWorkerRequest =
       key: string
       sequence: number
     }
-  | { type: 'cancel-boundaries'; epoch: string }
+  | { type: 'cancel-boundaries'; epoch: string; retain?: boolean }
   | { type: 'load-start'; epoch: string; head: SourceTransferHead }
   | { type: 'load-chunk'; epoch: string; chunk: SourceTransferChunk }
   | { type: 'load-finish'; epoch: string; request: SourceTransferRequest }

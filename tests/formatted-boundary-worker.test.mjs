@@ -82,12 +82,84 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
   const errors = []
   page.on('pageerror', (error) => errors.push(String(error)))
   await page.waitForFunction(() => Boolean(window.livePreview))
+  await t.test(
+    'a restarted worker replaces its partial index for the same document',
+    async () => {
+      await page.evaluate(async () => {
+        const NativeWorker = window.Worker
+        const restart = { workers: 0, crashed: false, pages: [] }
+        window.boundaryRestart = restart
+        window.restoreBoundaryWorker = () => {
+          window.Worker = NativeWorker
+        }
+        window.Worker = class extends NativeWorker {
+          constructor(...args) {
+            super(...args)
+            const worker = ++restart.workers
+            this.addEventListener('message', ({ data }) => {
+              if (data.type === 'boundaries')
+                restart.pages.push({
+                  worker,
+                  epoch: data.epoch,
+                  version: data.version,
+                  sequence: data.sequence,
+                  done: data.done,
+                })
+            })
+          }
+          postMessage(message, ...args) {
+            if (message.type === 'boundary-ack' && !restart.crashed) {
+              restart.crashed = true
+              this.dispatchEvent(
+                new ErrorEvent('error', {
+                  message: 'restart after the first adopted boundary page',
+                  cancelable: true,
+                }),
+              )
+              return
+            }
+            super.postMessage(message, ...args)
+          }
+        }
+        await window.livePreview.mount(
+          '# heading\n\nparagraph words\n\n'.repeat(80000),
+          undefined,
+          { worker: true },
+        )
+      })
+      try {
+        await page.waitForFunction(
+          () =>
+            window.livePreview.workerState.ready ||
+            window.livePreview.probe.adoptionDeclined,
+        )
+        const result = await page.evaluate(() => ({
+          restart: window.boundaryRestart,
+          ...window.livePreview.workerState,
+          declined: window.livePreview.probe.adoptionDeclined ?? 0,
+        }))
+        assert.equal(result.restart.workers, 2)
+        assert.equal(result.restart.pages[0].done, false)
+        const starts = result.restart.pages.filter(
+          (page) => page.sequence === 0,
+        )
+        assert.equal(starts.length, 2)
+        assert.equal(starts[0].version, starts[1].version)
+        assert.notEqual(starts[0].epoch, starts[1].epoch)
+        assert.equal(result.ready, true, JSON.stringify(result))
+        assert.equal(result.declined, 0)
+        assert.deepEqual(result.errors, [])
+      } finally {
+        await page.evaluate(() => window.restoreBoundaryWorker())
+      }
+    },
+  )
   await page.evaluate(async () => {
     const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
     await window.livePreview.mount(
-      unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length)),
+      unit.repeat(Math.ceil((52 * 1024 * 1024) / unit.length)),
       undefined,
-      { worker: true },
+      { worker: true, history: true, editable: true },
     )
   })
   await page
@@ -147,24 +219,173 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
     }),
   )
 
-  // A same-config remote edit gets a new exact index on the same replica.
-  await page.evaluate(() =>
-    window.livePreview.edit(
-      window.livePreview.view().state.doc.length - 12,
-      window.livePreview.view().state.doc.length - 12,
-      '\n# changed\n',
-    ),
+  await t.test(
+    'warm edits reuse mapped boundaries without retransferring the index',
+    async () => {
+      const samples = []
+      for (const fraction of [0.99, 0.5]) {
+        const before = await page.evaluate((fraction) => {
+          const preview = window.livePreview
+          const at = Math.floor(preview.view().state.doc.length * fraction)
+          const before = {
+            at,
+            length: preview.view().state.doc.length,
+            pages: preview.workerState.pages,
+            requests: preview.workerState.requests,
+          }
+          preview.reset()
+          preview.edit(at, at, 'x')
+          return before
+        }, fraction)
+        await page.waitForFunction(
+          () =>
+            !window.livePreview.settling() &&
+            (window.livePreview.workerState.ready ||
+              window.livePreview.workerState.errors.length),
+          undefined,
+          { timeout: 30000 },
+        )
+        const after = await page.evaluate((before) => {
+          const preview = window.livePreview
+          return {
+            pages: preview.workerState.pages - before.pages,
+            records: preview.probe.adoptedRecords,
+            requests: preview.workerState.requests - before.requests,
+            scanned: preview.probe.scannedUnits,
+            length: preview.view().state.doc.length,
+            inserted: preview
+              .view()
+              .state.doc.sliceString(before.at, before.at + 1),
+            errors: preview.workerState.errors,
+          }
+        }, before)
+        assert.equal(after.length, before.length + 1)
+        assert.equal(after.inserted, 'x')
+        assert.deepEqual(after.errors, [])
+        samples.push(after)
+      }
+      t.diagnostic(JSON.stringify({ warmEdits: samples }))
+      for (const sample of samples) {
+        assert.equal(sample.pages, 0, JSON.stringify(sample))
+        assert.equal(sample.records, 0, JSON.stringify(sample))
+        assert.equal(sample.requests, 0, JSON.stringify(sample))
+        assert.ok(sample.scanned <= 65536, JSON.stringify(sample))
+      }
+    },
   )
-  await page.waitForFunction(
-    () =>
-      window.livePreview.workerState.ready ||
-      window.livePreview.workerState.errors.length,
-    undefined,
-    { timeout: 30000 },
-  )
-  assert.deepEqual(
-    await page.evaluate(() => window.livePreview.workerState.errors),
-    [],
+
+  await t.test(
+    'edited indexes retain far jumps and rebuild after structural undo and redo',
+    async () => {
+      for (const fraction of [0.01, 0.5, 0.99]) {
+        const at = await page.evaluate((fraction) => {
+          const preview = window.livePreview
+          const view = preview.view()
+          const at = view.state.doc.lineAt(
+            Math.floor(view.state.doc.length * fraction),
+          ).from
+          preview.reset()
+          view.dispatch({ selection: { anchor: at }, scrollIntoView: true })
+          return at
+        }, fraction)
+        await page.waitForFunction(
+          (at) =>
+            [...document.querySelectorAll('.hibi-lp-heading')].some(
+              (element) =>
+                Math.abs(window.livePreview.view().posAtDOM(element) - at) <
+                12000,
+            ),
+          at,
+        )
+        assert.equal(
+          await page.evaluate(() => window.livePreview.probe.scannedUnits),
+          0,
+        )
+      }
+      const original = await page.evaluate(() => {
+        const preview = window.livePreview
+        const view = preview.view()
+        const tail = view.state.doc.sliceString(view.state.doc.length - 300)
+        const at =
+          view.state.doc.length - 300 + tail.lastIndexOf('# heading') + 3
+        view.dispatch({ selection: { anchor: at }, scrollIntoView: true })
+        return { at, length: view.state.doc.length }
+      })
+      const repairs = []
+      for (const action of ['insert', 'undo', 'redo', 'undo']) {
+        await page.evaluate(() => window.livePreview.reset())
+        const before = await page.evaluate(
+          () => window.livePreview.workerState.requests,
+        )
+        const fenced = action === 'insert' || action === 'redo'
+        assert.equal(
+          await page.evaluate((action) => {
+            const preview = window.livePreview
+            if (action === 'insert') {
+              preview.edit(0, 0, '~~~\n')
+              return true
+            }
+            return preview[action]()
+          }, action),
+          true,
+        )
+        await page.waitForFunction(
+          () =>
+            !window.livePreview.settling() &&
+            window.livePreview.workerState.ready,
+          undefined,
+          { timeout: 120000 },
+        )
+        if (fenced)
+          assert.ok(
+            (await page.evaluate(
+              () => window.livePreview.workerState.requests,
+            )) > before,
+            'a newly opened fence must request its invalidated boundaries',
+          )
+        const at = original.at + (fenced ? 4 : 0)
+        await page.evaluate((at) => window.livePreview.scrollTo(at), at)
+        await page.waitForFunction(
+          ({ at, fenced }) => {
+            let node = window.livePreview.tree().resolveInner(at)
+            while (node) {
+              if (node.name === (fenced ? 'FencedCode' : 'ATXHeading1'))
+                return true
+              node = node.parent
+            }
+            return false
+          },
+          { at, fenced },
+        )
+        assert.deepEqual(
+          await page.evaluate(() => ({
+            length: window.livePreview.view().state.doc.length,
+            head: window.livePreview.view().state.selection.main.head,
+            exact: window.livePreview.sourceMatchesView(),
+            errors: window.livePreview.workerState.errors,
+          })),
+          {
+            length: original.length + (fenced ? 4 : 0),
+            head: at,
+            exact: true,
+            errors: [],
+          },
+        )
+        repairs.push(
+          await page.evaluate(
+            (action) => ({
+              action,
+              requestedFrom: window.livePreview.workerState.ranges.at(-1),
+              scanned: window.livePreview.probe.scannedUnits,
+              parsed: window.livePreview.probe.parsedUnits,
+              records: window.livePreview.probe.adoptedRecords,
+            }),
+            action,
+          ),
+        )
+      }
+      t.diagnostic(JSON.stringify({ structuralRepairs: repairs }))
+    },
   )
 
   const unknown = await page.evaluate(async () => {
@@ -190,4 +411,13 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
   assert.ok(unknown.declined > 0)
   await page.waitForFunction(() => window.livePreview.probe.scannedUnits > 0)
   await page.evaluate(() => window.removeUnknown())
+  await page.waitForFunction(
+    () =>
+      window.livePreview.workerState.requests > 0 &&
+      window.livePreview.workerState.ready,
+  )
+  assert.equal(
+    await page.evaluate(() => window.livePreview.workerState.ranges[0]),
+    0,
+  )
 })

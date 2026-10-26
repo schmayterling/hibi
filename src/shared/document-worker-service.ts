@@ -163,7 +163,7 @@ export class DocumentWorkerService {
           this.#scheduleBoundaries()
           return
         }
-        this.#boundaryPages = this.#boundaryModel.pages()
+        this.#boundaryPages = this.#boundaryModel.pages(request.from ?? 0)
       }
       const page = this.#boundaryPages.next()
       if (page.done) {
@@ -358,8 +358,15 @@ export class DocumentWorkerService {
       } else if (message.type === 'boundaries') {
         if (message.version !== this.#store.snapshot().version) return
         if (
+          !Number.isSafeInteger(message.from ?? 0) ||
+          (message.from ?? 0) < 0 ||
+          (message.from ?? 0) > this.#store.snapshot().normalizedLength
+        )
+          throw new Error('Could not read a document worker reply.')
+        if (
           this.#boundaryRequest?.id === message.id &&
           this.#boundaryRequest.version === message.version &&
+          this.#boundaryRequest.from === message.from &&
           JSON.stringify(this.#boundaryRequest.config) ===
             JSON.stringify(message.config)
         )
@@ -382,7 +389,10 @@ export class DocumentWorkerService {
         this.#boundaryAwaiting = null
         this.#scheduleBoundaries()
       } else if (message.type === 'cancel-boundaries') {
-        this.#stopBoundaries(true)
+        if (message.retain !== undefined && typeof message.retain !== 'boolean')
+          throw new Error('Could not read a document worker reply.')
+        this.#stopBoundaries(!message.retain)
+        this.#boundaryRequest = null
       } else if (message.type === 'cancel-find') {
         if (this.#request?.id === message.id) {
           this.#cancel()

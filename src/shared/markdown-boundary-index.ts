@@ -1,6 +1,7 @@
 import { type Input, type Tree, TreeFragment } from '@lezer/common'
 import {
   boundaryRecords,
+  boundaryStart,
   ChunkedMarkdownParser,
   type ChunkedMarkdownProbe,
   type ChunkedPartialParse,
@@ -111,8 +112,9 @@ export class MarkdownBoundaryIndex {
       this.config.prefix,
     )
   }
-  *pages() {
-    const records = this.records()
+  *pages(from = 0) {
+    const records = this.records(from)
+    const start = boundaryStart(this.tree!, from)
     let next = records.next()
     while (!next.done) {
       const page = []
@@ -124,12 +126,12 @@ export class MarkdownBoundaryIndex {
         page.push(next.value)
         next = records.next()
       }
-      yield { records: page, done: !!next.done }
+      yield { from: start, records: page, done: !!next.done }
     }
-    if (!this.length) yield { records: [], done: true }
+    if (!this.length) yield { from: 0, records: [], done: true }
   }
-  records() {
+  records(from = 0) {
     if (!this.tree) throw new Error('Could not read a document worker reply.')
-    return boundaryRecords(this.tree)
+    return boundaryRecords(this.tree, from)
   }
 }

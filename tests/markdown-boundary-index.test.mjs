@@ -390,3 +390,34 @@ test('a far jump uses the ready boundary index without a main-thread block scan'
   assert.ok(tree.length === text.length)
   assert.equal(work.scannedUnits, 0)
 })
+
+test('suffix pages preserve exact boundaries without copying the unchanged prefix', () => {
+  const text = '# heading🙂\n\nparagraph words\n\n'.repeat(20000)
+  for (const ending of ['\n', '\r\n', '\r']) {
+    const store = new SourceStore(text.replaceAll('\n', ending), {
+      tabId: 'suffix',
+      revision: 0,
+    })
+    const index = new MarkdownBoundaryIndex(store.snapshot(), configuration())
+    drain(index)
+    const requested = text.length - 150
+    const pages = [...index.pages(requested)]
+    const from = pages[0].from
+    assert.ok(from > 0 && from <= requested)
+    assert.ok(pages.length <= 2)
+    assert.ok(pages.every((page) => page.from === from))
+    const builder = new BoundaryTree(index.parser, text.length - from)
+    for (const page of pages) builder.append(page.records)
+    const parsed = finish(
+      index.parser.startChunkedParse(
+        input(text.slice(from)),
+        TreeFragment.addTree(builder.finish()),
+        { from: 0, to: text.length - from },
+      ),
+    )
+    assert.deepEqual(
+      shape(parsed),
+      shape(boundaryParser(configuration()).parse(text.slice(from))),
+    )
+  }
+})

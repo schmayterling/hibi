@@ -271,3 +271,53 @@ test('release cancels a scan without cancelling find or changing canonical sourc
   assert.equal(f.session.snapshot().version, 0)
   assert.deepEqual(f.errors, [])
 })
+
+test('completed indexes stay idle through edits and stream only a requested suffix', async (t) => {
+  const f = fixture(t)
+  f.request()
+  await until(() => f.pages.at(-1)?.done)
+  f.client.releaseBoundaries(true)
+  const firstPages = f.pages.length
+  const source = f.session.snapshot()
+  f.session.edit(
+    [{ from: source.utf16Length - 4, to: source.utf16Length - 4, insert: 'x' }],
+    'source',
+    'test',
+  )
+  await until(() =>
+    f.transports[0].replies.some(
+      (reply) => reply.type === 'ack' && reply.version === 1,
+    ),
+  )
+  assert.equal(f.pages.length, firstPages)
+  const from = f.session.snapshot().normalizedLength - 150
+  f.client.boundaries(
+    config,
+    (page, ack) => {
+      f.pages.push(page)
+      ack()
+    },
+    (reason) => f.declined.push(reason),
+    from,
+  )
+  await until(() => f.pages.at(-1)?.done && f.pages.at(-1)?.version === 1)
+  const suffix = f.pages.slice(firstPages)
+  assert.ok(suffix.length < firstPages)
+  assert.ok(suffix.every((page) => page.from > 0 && page.from <= from))
+  assert.deepEqual(f.declined, [])
+  assert.deepEqual(f.errors, [])
+})
+
+test('invalid suffix offsets cannot publish another boundary page', async (t) => {
+  for (const from of [-1, 0.5, Number.MAX_SAFE_INTEGER]) {
+    const f = fixture(t)
+    f.request(config, (page) => f.pages.push(page))
+    await until(() => f.pages.length === 1)
+    f.transports[0].onmessage({
+      data: { ...f.pages[0], sequence: 1, from },
+    })
+    assert.deepEqual(f.declined, ['mismatch'])
+    assert.equal(f.pages.length, 1)
+    assert.deepEqual(f.errors, [])
+  }
+})

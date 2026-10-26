@@ -1,3 +1,4 @@
+import { history, isolateHistory, redo, undo } from '@codemirror/commands'
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, WidgetType } from '@codemirror/view'
 import { DocumentWorkerClient } from '../../src/renderer/src/document-worker-client'
@@ -24,9 +25,24 @@ let workerSession: DocumentSession | null = null
 const workerState = {
   ready: false,
   requests: 0,
+  ranges: [] as number[],
   pages: 0,
   maxRecords: 0,
   errors: [] as string[],
+}
+function applyHistory(command: typeof undo) {
+  if (!view) return false
+  return command({
+    state: view.state,
+    dispatch(transaction) {
+      const changes: { from: number; to: number; insert: string }[] = []
+      transaction.changes.iterChanges((from, to, _fromB, _toB, insert) => {
+        changes.push({ from, to, insert: insert.toString() })
+      })
+      workerSession?.edit(changes, 'source', 'test')
+      view!.dispatch(transaction)
+    },
+  })
 }
 const documentRevision = new Compartment()
 const revisionOf = (revision: number) =>
@@ -64,8 +80,14 @@ Object.assign(window, {
       {
         editable,
         worker = false,
+        history: withHistory = false,
         ...options
-      }: { slice?: number; editable?: boolean; worker?: boolean } = {},
+      }: {
+        slice?: number
+        editable?: boolean
+        worker?: boolean
+        history?: boolean
+      } = {},
     ) {
       if (size)
         Object.assign(panes.style, {
@@ -88,6 +110,7 @@ Object.assign(window, {
       Object.assign(workerState, {
         ready: false,
         requests: 0,
+        ranges: [],
         pages: 0,
         maxRecords: 0,
         errors: [],
@@ -115,8 +138,9 @@ Object.assign(window, {
         ...(worker
           ? {
               boundaries: {
-                request: (config, receive, declined) => {
+                request: (config, receive, declined, from) => {
                   workerState.requests++
+                  workerState.ranges.push(from ?? 0)
                   workerState.ready = false
                   workerClient!.boundaries(
                     config,
@@ -132,9 +156,10 @@ Object.assign(window, {
                       })
                     },
                     declined,
+                    from,
                   )
                 },
-                release: () => workerClient?.releaseBoundaries(),
+                release: (retain) => workerClient?.releaseBoundaries(retain),
               },
             }
           : {}),
@@ -145,6 +170,7 @@ Object.assign(window, {
           doc,
           extensions: [
             livePreview(syntax),
+            withHistory ? history() : [],
             documentRevision.of(revisionOf(0)),
             editable
               ? []
@@ -161,8 +187,16 @@ Object.assign(window, {
     /** An external canonical edit mirrored to the formatted surface. */
     edit(from: number, to: number, insert: string) {
       workerSession?.edit([{ from, to, insert }], 'source', 'test')
-      view?.dispatch({ changes: { from, to, insert } })
+      view?.dispatch({
+        changes: { from, to, insert },
+        annotations: isolateHistory.of('full'),
+      })
     },
+    undo: () => applyHistory(undo),
+    redo: () => applyHistory(redo),
+    sourceMatchesView: () =>
+      !workerSession ||
+      view?.state.doc.toString() === workerSession.snapshot().materialize(),
     /** An unknown block grammar must keep its main-thread parser. */
     unknownBlock: () =>
       formattedRegistry.register({

@@ -211,6 +211,8 @@ export type Demand = { from: number; to: number }
 export interface ChunkedPartialParse extends PartialParse {
   /** The verified chunks so far, with the rest unscanned. */
   snapshot(): Tree
+  /** A changed block context is still being continued beyond verified chunks. */
+  readonly scanningContext: boolean
   setDemand(demand: Demand): void
 }
 
@@ -633,6 +635,16 @@ class ChunkedParse implements ChunkedPartialParse {
 
   get parsedPos() {
     return this.pos
+  }
+
+  get scanningContext() {
+    const work = this.work
+    return (
+      work?.kind === 'continue' ||
+      this.lost !== null ||
+      (work?.kind === 'scan' &&
+        !this.hints(work.from, work.from + work.span).size)
+    )
   }
 
   stopAt(pos: number) {
@@ -2282,10 +2294,39 @@ export type BoundaryRecord =
 
 export const boundaryPageSize = 128
 
+/** The chunk boundary at or before a requested suffix. */
+export function boundaryStart(tree: Tree, from: number) {
+  const groupIndex = Math.max(0, childBefore(tree, from))
+  const group = tree.children[groupIndex] as Tree | undefined
+  if (!group) return 0
+  const groupFrom = tree.positions[groupIndex]!
+  const index = Math.max(0, childBefore(group, from - groupFrom))
+  return groupFrom + group.positions[index]!
+}
+
+/** Only the final tail lacks verified boundaries; find it without walking the index. */
+export function unindexedFrom(tree: Tree): number | null {
+  const group = tree.children.at(-1) as Tree | undefined
+  const chunk = group?.children.at(-1) as Tree | undefined
+  return chunk?.prop(chunkInfo)?.kind === 'tail'
+    ? tree.positions.at(-1)! + group!.positions.at(-1)!
+    : null
+}
+
 /** Only metadata crosses realms. The receiving view creates its own viewport windows. */
-export function* boundaryRecords(tree: Tree): Generator<BoundaryRecord> {
-  for (const group of tree.children as readonly Tree[]) {
-    for (const chunk of group.children as readonly Tree[]) {
+export function* boundaryRecords(
+  tree: Tree,
+  from = 0,
+): Generator<BoundaryRecord> {
+  const firstGroup = Math.max(0, childBefore(tree, from))
+  for (let g = firstGroup; g < tree.children.length; g++) {
+    const group = tree.children[g] as Tree
+    const firstChunk =
+      g === firstGroup
+        ? Math.max(0, childBefore(group, from - tree.positions[g]!))
+        : 0
+    for (let c = firstChunk; c < group.children.length; c++) {
+      const chunk = group.children[c] as Tree
       const info = chunk.prop(chunkInfo)!
       const type = info.kind === 'parsed' ? 'pending' : info.kind
       if (type === 'root' || type === 'group') continue

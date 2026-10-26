@@ -4,8 +4,15 @@ import { TreeFragment } from '@lezer/common'
 import { parser, Table } from '@lezer/markdown'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import {
+  alignColumn,
   alignments,
   cellContent,
+  deleteColumn,
+  deleteRow,
+  insertColumn,
+  insertRow,
+  moveColumn,
+  moveRow,
   parseRow,
   rowStart,
 } from '../src/renderer/src/formatted/table-source.ts'
@@ -179,4 +186,152 @@ test('ragged and malformed giant tables parse in linear time and bounded edits',
     },
   })
   assert.equal(tables, 1)
+})
+
+/** A table in `doc` as transforms read it, from its first line to its last. */
+function table(doc, quotes = 0) {
+  const lines = doc.split('\n')
+  const starts = []
+  let at = 0
+  for (const text of lines) {
+    starts.push(at)
+    at += text.length + 1
+  }
+  return {
+    lines: lines.length,
+    line: (index) => ({ from: starts[index], text: lines[index] }),
+    quotes,
+  }
+}
+const apply = (doc, edit) => {
+  assert.ok(edit, 'an edit')
+  let text = doc
+  for (const { from, to, insert } of [...edit.changes].sort(
+    (a, b) => b.from - a.from,
+  ))
+    text = text.slice(0, from) + insert + text.slice(to)
+  return text
+}
+const grid = (doc) =>
+  doc
+    .split('\n')
+    .map((text) =>
+      parseRow(text).cells.map(({ from, to }) => text.slice(from, to)),
+    )
+
+const base = '| a | b |\n| --- | :-: |\n| 1 | 2 |\n| 3 | 4 |'
+
+test('rows insert, delete and move as single lines', () => {
+  assert.equal(
+    apply(base, insertRow(table(base), 2, true)),
+    '| a | b |\n| --- | :-: |\n| 1 | 2 |\n|  |  |\n| 3 | 4 |',
+  )
+  assert.equal(
+    apply(base, insertRow(table(base), 2, false)),
+    '| a | b |\n| --- | :-: |\n|  |  |\n| 1 | 2 |\n| 3 | 4 |',
+  )
+  // Below the header is the first row; above it, a new header.
+  assert.equal(
+    apply(base, insertRow(table(base), 0, true)),
+    '| a | b |\n| --- | :-: |\n|  |  |\n| 1 | 2 |\n| 3 | 4 |',
+  )
+  assert.equal(
+    apply(base, insertRow(table(base), 0, false)),
+    '|  |  |\n| --- | :-: |\n| a | b |\n| 1 | 2 |\n| 3 | 4 |',
+  )
+  assert.equal(
+    apply(base, deleteRow(table(base), 3)),
+    '| a | b |\n| --- | :-: |\n| 1 | 2 |',
+  )
+  assert.equal(
+    apply(base, deleteRow(table(base), 0)),
+    '| 1 | 2 |\n| --- | :-: |\n| 3 | 4 |',
+  )
+  assert.equal(deleteRow(table('| a |\n| - |'), 0), null)
+  assert.equal(
+    apply(base, moveRow(table(base), 3, -1)),
+    '| a | b |\n| --- | :-: |\n| 3 | 4 |\n| 1 | 2 |',
+  )
+  assert.equal(moveRow(table(base), 2, -1), null, 'rows stay below the header')
+  // Rows in quotes and lists keep their line prefix.
+  const quoted = '> | a | b |\n> | - | - |\n> | 1 | 2 |'
+  assert.equal(
+    apply(quoted, insertRow(table(quoted, 1), 2, true)),
+    '> | a | b |\n> | - | - |\n> | 1 | 2 |\n> |  |  |',
+  )
+  const listed = '  | a |\n  | - |\n  | 1 |'
+  assert.equal(
+    apply(listed, insertRow(table(listed), 2, false)),
+    '  | a |\n  | - |\n  |  |\n  | 1 |',
+  )
+})
+
+test('columns insert, delete and move in every row, ragged rows included', () => {
+  const ragged = '| a | b |\n| --- | :-: |\n| 1 |\n| 3 | 4 | 5 |\nx \\| y'
+  assert.deepEqual(grid(apply(ragged, insertColumn(table(ragged), 0, false))), [
+    ['', 'a', 'b'],
+    ['---', '---', ':-:'],
+    ['', '1'],
+    ['', '3', '4', '5'],
+    ['', 'x \\| y'],
+  ])
+  assert.deepEqual(grid(apply(ragged, insertColumn(table(ragged), 1, true))), [
+    ['a', 'b', ''],
+    ['---', ':-:', '---'],
+    ['1'],
+    ['3', '4', '', '5'],
+    ['x \\| y'],
+  ])
+  assert.deepEqual(grid(apply(ragged, deleteColumn(table(ragged), 0))), [
+    ['b'],
+    [':-:'],
+    [],
+    ['4', '5'],
+    [],
+  ])
+  assert.deepEqual(grid(apply(ragged, moveColumn(table(ragged), 0, 1))), [
+    ['b', 'a'],
+    [':-:', '---'],
+    ['', '1'],
+    ['4', '3', '5'],
+    ['', 'x \\| y'],
+  ])
+  assert.equal(moveColumn(table(ragged), 1, 1), null)
+  assert.equal(deleteColumn(table('| a |\n| - |'), 0), null)
+  // Rows without outer pipes keep their cells.
+  const bare = 'a | b\n--- | ---\n1 | 2'
+  assert.deepEqual(grid(apply(bare, insertColumn(table(bare), 0, false))), [
+    ['', 'a', 'b'],
+    ['---', '---', '---'],
+    ['', '1', '2'],
+  ])
+  assert.deepEqual(grid(apply(bare, insertColumn(table(bare), 1, true))), [
+    ['a', 'b', ''],
+    ['---', '---', '---'],
+    ['1', '2', ''],
+  ])
+  assert.deepEqual(grid(apply(bare, deleteColumn(table(bare), 1))), [
+    ['a'],
+    ['---'],
+    ['1'],
+  ])
+  // Deleting a row's only cell keeps the row in the table.
+  const lone = '| a | b |\n| - | - |\nonly'
+  assert.equal(apply(lone, deleteColumn(table(lone), 0)), '| b |\n| - |\n|')
+})
+
+test('alignment rewrites the delimiter cell and keeps its length', () => {
+  assert.equal(
+    apply(base, alignColumn(table(base), 0, 'left')),
+    '| a | b |\n| :--- | :-: |\n| 1 | 2 |\n| 3 | 4 |',
+  )
+  assert.equal(
+    apply(base, alignColumn(table(base), 1, 'right')),
+    '| a | b |\n| --- | ---: |\n| 1 | 2 |\n| 3 | 4 |',
+  )
+  assert.equal(
+    apply(base, alignColumn(table(base), 1, null)),
+    '| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |',
+  )
+  assert.deepEqual(alignColumn(table(base), 1, 'center').changes, [])
 })

@@ -655,18 +655,13 @@ function inline(
         )
         return
       }
-      case 'ListItem': {
+      case 'ListItem':
         eachLine(doc, ref.from, ref.to, range, (current) => {
           const info = line(current.from)
           info.item = ref.node
           info.containers.push(ref.node)
         })
-        // The layout field hides a lone marker's line.
-        const lone = loneMarker(doc, ref.node)
-        if (lone && lone.from >= range.from && lone.from <= range.to)
-          line(lone.from).hidden = true
         return
-      }
       case 'FencedCode':
       case 'CodeBlock':
         code(ref.node, range)

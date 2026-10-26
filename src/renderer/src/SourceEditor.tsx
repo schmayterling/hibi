@@ -118,6 +118,7 @@ import { flavorSyntax } from './flavor-syntax'
 import { flavors as markdownFlavors } from './flavors'
 import {
   formattedDocument,
+  formattedRenderInputs,
   showMarkdownMarkers,
 } from './formatted-contributions'
 import { formattedSyntax } from './formatted-syntax'
@@ -2029,7 +2030,13 @@ export function SourceEditor({
     )
       .then((extensions) => {
         if (!canceled) {
-          editor.dispatch({ effects: addons.current.reconfigure(extensions) })
+          editor.dispatch({
+            effects: addons.current.reconfigure([
+              extensions,
+              // Cached renderers must see the fields installed with their input.
+              formatted ? formattedRenderInputs.of(extensions) : [],
+            ]),
+          })
           setInstalledExtensions({ bridge, extensions: sourceExtensions })
         }
       })
@@ -2041,7 +2048,7 @@ export function SourceEditor({
     return () => {
       canceled = true
     }
-  }, [bridge, preparedText, sourceExtensions, viewId])
+  }, [bridge, preparedText, sourceExtensions, viewId, formatted])
   useEffect(
     () =>
       tabIndent.subscribe(() =>

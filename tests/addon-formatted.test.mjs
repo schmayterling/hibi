@@ -382,7 +382,7 @@ test('installed flavor state stays current in static and editable table cells', 
   const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-cell-state-'))
   const profile = join(folder, 'profile')
   const file = join(folder, 'note.md')
-  const source = '# Title\n\n**body**\n'
+  const source = '# Title\n\n**body**\n\n| **head** |\n| --- |\n| **a\\|b** |\n'
   await writeFile(file, source)
   await install(
     profile,
@@ -405,9 +405,9 @@ test('installed flavor state stays current in static and editable table cells', 
           render: [{
             nodes: ['Paragraph', 'StrongEmphasis'],
             decorate(node, out, { state, visible }) {
-              if (!window.enforceCellState) return
               try {
-                const size = state.field(length)
+                const size = state.field(length, false)
+                if (size === undefined) return
                 const source = state.sliceDoc(node.from, node.to)
                 if (size !== state.doc.length) throw Error('Stale field')
                 if (node.name === 'StrongEmphasis' && !source.startsWith('**')) throw Error('Wrong source positions')
@@ -456,12 +456,12 @@ test('installed flavor state stays current in static and editable table cells', 
   )
   await page.locator('.rich-pane [data-field-ready="yes"]').waitFor()
   await page.evaluate(() => {
-    window.enforceCellState = true
     const view = document.querySelector('.rich-pane .cm-content').cmTile.root
       .view
     view.dispatch({ selection: { anchor: 0 } })
   })
   await page.locator('.rich-pane .cell-state-proof').first().waitFor()
+  await page.locator('.rich-pane table .cell-state-proof').first().waitFor()
   const addition = '\n| **head** |\n| --- |\n| **a\\|b** |\n'
   await page.evaluate((text) => {
     const view = document.querySelector('.rich-pane .cm-content').cmTile.root

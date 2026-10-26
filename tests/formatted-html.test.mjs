@@ -47,3 +47,45 @@ test('inline html shows as editable source chips and <br> breaks the line', () =
     ['break after', 8],
   ])
 })
+
+test('html blocks are code-like boxes, styled only on their visible lines', () => {
+  const doc = `<div>\n${Array.from({ length: 50 }, (_, i) => `row ${i}`).join('\n')}\n</div>\n\ntext`
+  const state = EditorState.create({ doc })
+  const [blocks] = contributions
+  const [view] = blocks.views
+  assert.deepEqual(view.space, { top: 16, bottom: 16 })
+  const render = (visible) => {
+    const lines = []
+    markdown.parse(doc).iterate({
+      enter(node) {
+        if (view.nodes.includes(node.name))
+          view.decorate(
+            node,
+            {
+              mark() {},
+              syntax() {},
+              line: (at, attributes) =>
+                lines.push([state.doc.lineAt(at).number, attributes.class]),
+              widget() {},
+              replace() {},
+            },
+            { state, revealed: false, visible },
+          )
+      },
+    })
+    return lines
+  }
+  const all = render({ from: 0, to: doc.length })
+  assert.equal(all.length, 52)
+  assert.deepEqual(all[0], [1, 'hibi-lp-codeblock hibi-lp-codeblock-first'])
+  assert.deepEqual(all.at(-1), [52, 'hibi-lp-codeblock hibi-lp-codeblock-last'])
+  // A viewport inside the block styles only its lines.
+  const middle = render({
+    from: state.doc.line(20).from,
+    to: state.doc.line(24).to,
+  })
+  assert.deepEqual(
+    middle.map(([number]) => number),
+    [20, 21, 22, 23, 24],
+  )
+})

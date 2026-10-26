@@ -16,8 +16,44 @@ class BreakWidget extends WidgetType {
 }
 const lineBreak = new BreakWidget()
 
-/** Raw HTML stays editable source, styled like the rich editor's HTML chips. */
+/** Raw HTML stays editable source, styled like the rich editor's HTML chips and boxes. */
 export const contributions: readonly FormattedContribution[] = [
+  {
+    id: 'core.html-blocks',
+    feature: 'core.html-blocks',
+    views: [
+      {
+        nodes: ['HTMLBlock', 'CommentBlock', 'ProcessingInstructionBlock'],
+        // A box like a code block, with the rich editor's 1em margins.
+        space: { top: 16, bottom: 16 },
+        decorate(node, out, { state, visible }) {
+          if (!visible) return false
+          const doc = state.doc
+          const first = doc.lineAt(node.from).number,
+            last = doc.lineAt(node.to).number
+          const to = Math.min(last, doc.lineAt(visible.to).number)
+          for (
+            let number = Math.max(first, doc.lineAt(visible.from).number);
+            number <= to;
+            number++
+          ) {
+            const line = doc.line(number)
+            out.line(line.from, {
+              class: [
+                'hibi-lp-codeblock',
+                ...(number === first ? ['hibi-lp-codeblock-first'] : []),
+                ...(number === last ? ['hibi-lp-codeblock-last'] : []),
+              ].join(' '),
+            })
+            const start = Math.max(line.from, node.from)
+            if (line.to > start)
+              out.mark(start, line.to, { class: 'hibi-lp-codetext' })
+          }
+          return false
+        },
+      },
+    ],
+  },
   {
     id: 'core.inline-html',
     feature: 'core.inline-html',

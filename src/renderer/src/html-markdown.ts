@@ -56,7 +56,7 @@ const hasBlocks = (node: Node) => [...node.childNodes].some(isBlock)
 function literal(text: string) {
   return (
     text
-      .replace(/[\\`*_[\]<~$#]/g, '\\$&')
+      .replace(/[\\`*_[\]<~$]/g, '\\$&')
       .replace(/&(?=#?\w+;)/g, '\\&')
       .replace(/=(?==)/g, '\\=')
       // Character references preserve Unicode spaces through Markdown trimming.
@@ -188,7 +188,10 @@ const indent = (text: string, prefix: string, first = prefix) =>
 function block(element: Element): string[] {
   const name = element.nodeName
   if (/^H[1-6]$/.test(name)) {
-    const text = inline(element).replace(/\n/g, ' ').trim()
+    const text = inline(element)
+      .replace(/\n/g, ' ')
+      .trim()
+      .replace(/(^|[ \t])#+$/, (tail) => tail.replace(/#/g, '\\#'))
     return text ? [`${'#'.repeat(Number(name[1]))} ${text}`] : []
   }
   switch (name) {

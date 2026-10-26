@@ -27,7 +27,9 @@ const create = (doc) =>
 function settle(state) {
   for (let slices = 0; !definitionsRead(state); slices++) {
     assert.ok(slices < 10000, 'reading converges')
-    state = state.update({ effects: readDefinitions.of(null) }).state
+    state = state.update({
+      effects: readDefinitions.of(footnoteScan.slice),
+    }).state
   }
   return state
 }
@@ -160,7 +162,7 @@ test('chunked parses keep footnote nodes where whole-document parses put them', 
 
 test('references hide their brackets and definitions label their first line', () => {
   const doc = 'see[^1]\n\n[^1]: the "note"\n  continued'
-  const state = create(doc)
+  const state = settle(create(doc))
   const out = []
   const sink = {
     mark: (from, to, attributes) =>
@@ -234,8 +236,10 @@ function rendered(state) {
 }
 
 test('references without a definition stay text; labels match case-insensitively', () => {
-  const state = create(
-    'missing[^unknown], real[^1] and [^Note].\n\n[^1]: one\n\n> [^note]: quoted',
+  const state = settle(
+    create(
+      'missing[^unknown], real[^1] and [^Note].\n\n[^1]: one\n\n> [^note]: quoted',
+    ),
   )
   assert.deepEqual(rendered(state), ['[^1]', '[^Note]'])
 })
@@ -375,7 +379,9 @@ test('label counts copied stay with the labels changed: none when typing in a de
     while (!definitionsRead(state)) {
       const labels = Object.keys(indexed(state)).length
       const copied = footnoteScan.copied
-      state = state.update({ effects: readDefinitions.of(null) }).state
+      state = state.update({
+        effects: readDefinitions.of(footnoteScan.slice),
+      }).state
       const read = Object.keys(indexed(state)).length - labels
       assert.ok(
         footnoteScan.copied - copied <= 16 * read,
@@ -449,7 +455,7 @@ test('labels whose hashes are equal copy one chunk of counts per change', () => 
   assert.equal(chunks.flat().length, 1022)
 })
 
-test('opening a long note reads one slice; idle slices read the rest', () => {
+test('opening a note reads none of it; idle slices read the rest', () => {
   const slice = footnoteScan.slice
   footnoteScan.slice = 4096
   try {
@@ -460,11 +466,15 @@ test('opening a long note reads one slice; idle slices read the rest', () => {
     let state = create(
       `see[^far] and [^near]\n\n[^near]: close\n\n${body}\n\n[^far]: at the end`,
     )
-    assert.ok(footnoteScan.parsed < 4 * 4096, `${footnoteScan.parsed}`)
+    assert.equal(footnoteScan.parsed, 0)
+    assert.deepEqual(rendered(state), [])
+    state = state.update({ effects: readDefinitions.of(4096) }).state
     assert.deepEqual(rendered(state), ['[^near]'])
     let slices = 0
     while (!definitionsRead(state)) {
-      state = state.update({ effects: readDefinitions.of(null) }).state
+      state = state.update({
+        effects: readDefinitions.of(footnoteScan.slice),
+      }).state
       slices++
     }
     assert.ok(slices > 10, `${slices}`)

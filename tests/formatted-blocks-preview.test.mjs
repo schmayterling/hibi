@@ -435,6 +435,58 @@ test('a definition read in idle time turns a reference in view into a footnote',
   }
 })
 
+test("a 50 MiB note reads no footnote definitions until a reference is in view, then what each idle slice's time allows", {
+  timeout: 120000,
+}, async () => {
+  const counts = await harness.evaluate(async () => {
+    const { footnoteScan } = window.formattedBlocks
+    const held = []
+    const idle = window.requestIdleCallback
+    // Idle callbacks run only when released, with a set time remaining.
+    window.requestIdleCallback = (callback) => held.push(callback)
+    const release = async (remaining) => {
+      const parsed = footnoteScan.parsed
+      for (const callback of held.splice(0))
+        callback({ didTimeout: false, timeRemaining: () => remaining })
+      await new Promise(requestAnimationFrame)
+      return footnoteScan.parsed - parsed
+    }
+    try {
+      const unit = '# heading\n\nparagraph words\n\n- one\n- two\n\n> quote\n\n'
+      const body = unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length))
+      footnoteScan.parsed = 0
+      await window.livePreview.mount(body, { width: 800, height: 600 })
+      const plain = [footnoteScan.parsed, await release(50), await release(50)]
+      await window.livePreview.mount(
+        `See[^far].\n\n${body}\n\n[^far]: The end.`,
+        { width: 800, height: 600 },
+      )
+      const opened = footnoteScan.parsed
+      const slices = [await release(10), await release(10), await release(10)]
+      const { rate, slice, window: size } = footnoteScan
+      return { plain, opened, slices, rate, slice, size }
+    } finally {
+      window.requestIdleCallback = idle
+    }
+  })
+  // Before, opening read the first 1 MiB and idle slices read 1 MiB each,
+  // whether or not a reference was in view.
+  assert.deepEqual(counts.plain, [0, 0, 0], JSON.stringify(counts))
+  assert.equal(counts.opened, 0, JSON.stringify(counts))
+  // The first slice reads what 10 ms allow at the starting rate, up to the
+  // end of the window it is in; later ones at the rate they measured.
+  const [first, ...rest] = counts.slices
+  assert.ok(
+    first > 0 && first <= 10 * counts.rate + counts.size,
+    JSON.stringify(counts),
+  )
+  for (const read of rest)
+    assert.ok(
+      read > 0 && read <= counts.slice + counts.size,
+      JSON.stringify(counts),
+    )
+})
+
 test('toggling one of 20,000 tasks is one edit that redraws one checkbox', {
   timeout: 90000,
 }, async () => {

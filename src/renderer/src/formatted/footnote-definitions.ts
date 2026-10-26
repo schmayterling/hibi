@@ -17,6 +17,7 @@ import {
   formattedMarkdown,
   formattedPrefix,
   formattedRefresh,
+  formattedSyntaxTree,
 } from '../formatted-contributions.ts'
 
 /*
@@ -24,16 +25,19 @@ import {
  * resolves. The note is read as Markdown blocks, without inline syntax, in
  * stretches that start at top-level blocks, so a definition counts where the
  * formatted view parses one: code, HTML and paragraph text define nothing,
- * list items and quotes can. Opening a note reads part of it and idle time
- * the rest. An edit reads again from the stretch before it until blocks start
+ * list items and quotes can. Opening a note reads none of it: once a
+ * reference is in view, idle time reads the note in slices sized to the time
+ * left. An edit reads again from the stretch before it until blocks start
  * where they did after it, usually within the next block, or further when,
  * say, a code fence opens above; stretches keep their labels until then.
  */
 
 /** Work counters, slice and window sizes, for scale tests. */
 export const footnoteScan = {
-  /** Characters to parse per idle slice; an edit parses up to a sixteenth of it at once. */
+  /** Most characters an idle slice parses; an edit parses up to a sixteenth of it at once. */
   slice: 1 << 20,
+  /** Characters per millisecond a first idle slice assumes; later slices use the rate they measured. */
+  rate: 4096,
   /** Characters a reading window covers, doubled while one block fills it. */
   window: 4096,
   /** Characters parsed. */
@@ -449,24 +453,21 @@ function step(index: Index, doc: Text, budget: number): Index {
   }
 }
 
-/** Reads the next slice of the note; formatted views dispatch it in idle time. */
-export const readDefinitions = StateEffect.define<null>()
+/** Reads about this many more characters of the note; formatted views dispatch it in idle time. */
+export const readDefinitions = StateEffect.define<number>()
 
+/** An index that has read nothing yet. */
 function create(state: EditorState): Index {
   const start = prefixOf(state)
-  return step(
-    {
-      configs: state.facet(formattedMarkdown),
-      start,
-      groups: [],
-      read: start,
-      stale: null,
-      window: footnoteScan.window,
-      labels: new Array(fanOut),
-    },
-    state.doc,
-    footnoteScan.slice,
-  )
+  return {
+    configs: state.facet(formattedMarkdown),
+    start,
+    groups: [],
+    read: start,
+    stale: null,
+    window: footnoteScan.window,
+    labels: new Array(fanOut),
+  }
 }
 
 /** One stretch stands for the edited text and the stretches it touched, keeping their labels until read again. */
@@ -558,8 +559,8 @@ export const footnoteDefinitions = StateField.define<Index>({
       next = edit(index, state, changes)
       if (next.stale) next = step(next, state.doc, footnoteScan.slice >> 4)
     }
-    if (transaction.effects.some((effect) => effect.is(readDefinitions)))
-      next = step(next, state.doc, footnoteScan.slice)
+    for (const effect of transaction.effects)
+      if (effect.is(readDefinitions)) next = step(next, state.doc, effect.value)
     return next
   },
 })
@@ -576,10 +577,33 @@ export function definitionsRead(state: EditorState) {
   return !index || (!index.stale && index.read >= state.doc.length)
 }
 
-/** Reads the rest of a long note in idle slices, and draws references again when labels change. */
+/** Whether a footnote reference is in view. */
+function referenceInView(view: EditorView) {
+  const tree = formattedSyntaxTree(view.state)
+  let found = false
+  for (const { from, to } of view.visibleRanges)
+    tree?.iterate({
+      from,
+      to,
+      enter: (node) => {
+        if (node.name === 'FootnoteReference') found = true
+        return !found
+      },
+    })
+  return found
+}
+
+/**
+ * Reads the note in idle time once a reference is in view, each slice what
+ * its time allows, and draws references again when labels change.
+ */
 export const definitionReader = ViewPlugin.fromClass(
   class {
     private idle = 0
+    /** Whether a reference has been in view; until then nothing is read. */
+    private wanted = false
+    /** Characters read per millisecond, as the last slice measured. */
+    private rate = footnoteScan.rate
     private readonly view: EditorView
     constructor(view: EditorView) {
       this.view = view
@@ -589,11 +613,23 @@ export const definitionReader = ViewPlugin.fromClass(
       this.schedule()
     }
     schedule() {
-      if (this.idle || definitionsRead(this.view.state)) return
-      this.idle = requestIdleCallback(() => {
+      this.wanted ||= referenceInView(this.view)
+      if (this.idle || !this.wanted || definitionsRead(this.view.state)) return
+      this.idle = requestIdleCallback((deadline) => {
         this.idle = 0
         const { labels } = this.view.state.field(footnoteDefinitions)
-        this.view.dispatch({ effects: readDefinitions.of(null) })
+        const budget = Math.min(
+          footnoteScan.slice,
+          Math.max(
+            footnoteScan.window,
+            Math.floor(this.rate * deadline.timeRemaining()),
+          ),
+        )
+        const parsed = footnoteScan.parsed
+        const start = performance.now()
+        this.view.dispatch({ effects: readDefinitions.of(budget) })
+        const spent = performance.now() - start
+        if (spent >= 1) this.rate = (footnoteScan.parsed - parsed) / spent
         if (this.view.state.field(footnoteDefinitions).labels !== labels)
           this.view.dispatch({ effects: formattedRefresh.of(null) })
       })

@@ -57,7 +57,10 @@ import {
 } from './workspace-index-cache'
 import { LatestIndexJob } from './workspace-index-job'
 import type { WorkspaceMetadataPage } from './workspace-index-metadata'
-import { LegacyWorkspaceIndex } from './workspace-legacy-index'
+import {
+  checkLegacyIndexBytes,
+  LegacyWorkspaceIndex,
+} from './workspace-legacy-index'
 import { workspaceIgnore, workspaceMetadata } from './workspace-metadata'
 import {
   incompleteMetadataPage,
@@ -1127,7 +1130,10 @@ async function runIndexRequest(
   const source = (draft: IndexDraft) => ({
     id: createHash('sha256').update(draft.file).digest('hex'),
     version: `draft:${draft.tabId}:${draft.contentVersion}`,
-    read: () => draft.source.materialize(),
+    read: (maximumBytes: number) => {
+      checkLegacyIndexBytes(draft.source.utf16Length, maximumBytes)
+      return draft.source.materialize()
+    },
   })
   const result = await legacyIndex.read({
     key: request.key,
@@ -1145,11 +1151,14 @@ async function runIndexRequest(
       const file = await resolveWorkspaceFile(selected, path)
       if (!active())
         throw new DOMException('Workspace index canceled.', 'AbortError')
-      const version = diskIndexVersion(await stat(file, { bigint: true }))
+      const info = await stat(file, { bigint: true })
       return {
         id: createHash('sha256').update(file).digest('hex'),
-        version,
-        read: () => readMarkdown(file),
+        version: diskIndexVersion(info),
+        read: (maximumBytes: number) => {
+          checkLegacyIndexBytes(Number(info.size), maximumBytes)
+          return readMarkdown(file)
+        },
       }
     },
     isDocument: (name) => isDocumentName(name, true),

@@ -8,10 +8,20 @@ import type {
 // Legacy IPC sends full text in one reply; paged metadata/search has no such bound.
 export const MAX_LEGACY_INDEX_BYTES = 20 * 1024 * 1024
 
+export function checkLegacyIndexBytes(
+  bytes: number,
+  remaining = MAX_LEGACY_INDEX_BYTES,
+): void {
+  if (bytes > remaining)
+    throw new Error(
+      'The legacy workspace index exceeds the 20 MiB message limit. Use paged workspace queries instead.',
+    )
+}
+
 export type LegacyIndexSource = {
   id: string
   version: string
-  read: () => Promise<string> | string
+  read: (maximumBytes: number) => Promise<string> | string
 }
 
 export type LegacyIndexOptions = {
@@ -64,9 +74,7 @@ export class LegacyWorkspaceIndex {
       bytes += amount
       if (bytes > MAX_LEGACY_INDEX_BYTES) {
         if (current()) this.cached = undefined
-        throw new Error(
-          'The legacy workspace index exceeds the 20 MiB message limit. Use paged workspace queries instead.',
-        )
+        checkLegacyIndexBytes(bytes)
       }
     }
     // Count escaped UTF-8 in bounded pieces without a second full-page JSON string.
@@ -192,7 +200,7 @@ export class LegacyWorkspaceIndex {
           charge(cached.bytes)
         } else {
           if (!current()) return null
-          const markdown = await source.read()
+          const markdown = await source.read(MAX_LEGACY_INDEX_BYTES - bytes)
           if (!current()) return null
           const page = { id: source.id, path: entry.path, markdown }
           const before = bytes
@@ -209,7 +217,10 @@ export class LegacyWorkspaceIndex {
       } catch (error) {
         if (!current()) return null
         // Concurrent rename/delete is reconciled by the next watcher revision.
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          this.cached = undefined
+          throw error
+        }
       }
     }
     if (!current()) return null

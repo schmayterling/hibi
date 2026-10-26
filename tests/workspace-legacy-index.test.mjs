@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  checkLegacyIndexBytes,
   LegacyWorkspaceIndex,
   MAX_LEGACY_INDEX_BYTES,
 } from '../src/main/workspace-legacy-index.ts'
@@ -219,6 +220,32 @@ test('oversized reply stops before reading the rest and retains no partial new k
   const result = await index.read(options)
   assert.equal(result.pages[0].markdown, 'small')
   assert.equal(counters.reads, 21)
+})
+
+test('remaining reply budget rejects oversized source before materialization', async () => {
+  const { index, options } = fixture(2)
+  const budgets = []
+  let materialized = 0
+  const resolve = options.resolve
+  options.resolve = async (path) => {
+    const source = await resolve(path)
+    return {
+      ...source,
+      read: (maximumBytes) => {
+        assert.ok(Number.isSafeInteger(maximumBytes))
+        assert.ok(maximumBytes > 0 && maximumBytes < MAX_LEGACY_INDEX_BYTES)
+        budgets.push(maximumBytes)
+        checkLegacyIndexBytes(11 * 1024 * 1024, maximumBytes)
+        materialized++
+        return 'x'.repeat(11 * 1024 * 1024)
+      },
+    }
+  }
+  await assert.rejects(index.read(options), /20 MiB message limit/)
+  assert.equal(materialized, 1)
+  assert.equal(budgets.length, 2)
+  assert.ok(budgets[1] < budgets[0] - 11 * 1024 * 1024)
+  assert.equal(index.cached, undefined)
 })
 
 test('stale after resolve/stat starts zero Markdown reads', async () => {

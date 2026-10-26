@@ -15,6 +15,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
+import {
+  listedTableLayout,
+  storedTableLayout,
+} from '../src/shared/table-layout.ts'
 
 const bundle = await build({
   entryPoints: ['src/main/workspace-layout.ts'],
@@ -60,6 +64,110 @@ async function workspace(t) {
 
 const stored = async (root) =>
   JSON.parse(await readFile(join(root, '.hibi/layout.json'), 'utf8'))
+
+test('table layout updates change only their tables, on what is stored when they arrive', async (t) => {
+  const root = await workspace(t)
+  await writeTableLayout(root, 'a.md', [table('0:a'), table('1:b')])
+  // Two windows update different tables from the same stale copy, at once.
+  await Promise.all([
+    writeTableLayout(root, 'a.md', {
+      remove: ['0:a'],
+      put: [table('0:a', [200, 0])],
+    }),
+    writeTableLayout(root, 'a.md', { remove: ['2:c'], put: [table('2:c')] }),
+  ])
+  assert.deepEqual(await readTableLayout(root, 'a.md'), [
+    table('1:b'),
+    table('0:a', [200, 0]),
+    table('2:c'),
+  ])
+  // Removing a key drops its table; an update without sizes stores nothing.
+  await writeTableLayout(root, 'a.md', {
+    remove: ['1:b'],
+    put: [table('3:d', [0, 0])],
+  })
+  assert.deepEqual(
+    (await readTableLayout(root, 'a.md')).map((entry) => entry.key),
+    ['0:a', '2:c'],
+  )
+  for (const bad of [
+    { remove: 'x', put: [] },
+    { remove: [1], put: [] },
+    { remove: [], put: [{ key: 'x', columns: [-1], rows: null }] },
+    null,
+  ])
+    await assert.rejects(writeTableLayout(root, 'a.md', bad), {
+      message: 'The table layout is invalid.',
+    })
+})
+
+test('long tables store rows past the first 1,000 by index, within bounds', async (t) => {
+  const root = await workspace(t)
+  // A table sized at row 1,500 of a long table, as the editors keep it.
+  const rows = Array(1501).fill(0)
+  rows[1] = 40
+  rows[1500] = 90
+  const stored = storedTableLayout({ key: '0:long', columns: null, rows })
+  assert.deepEqual(stored.rows, [0, 40])
+  assert.deepEqual(stored.rowsAfter, [[1500, 90]])
+  await writeTableLayout(root, 'a.md', [stored])
+  const [read] = await readTableLayout(root, 'a.md')
+  assert.deepEqual(listedTableLayout(read).rows, rows)
+  // Only sized rows past the listed ones are stored.
+  assert.deepEqual(
+    storedTableLayout({
+      key: 'x',
+      columns: null,
+      rows: [...Array(5000).fill(0)],
+    }),
+    { key: 'x', columns: null, rows: null },
+  )
+  for (const rowsAfter of [
+    [[999, 10]],
+    [
+      [1001, 10],
+      [1000, 10],
+    ],
+    [[1000, 10001]],
+    Array.from({ length: 1001 }, (_, i) => [1000 + i, 10]),
+  ])
+    await assert.rejects(
+      writeTableLayout(root, 'a.md', [
+        { key: 'x', columns: null, rows: null, rowsAfter },
+      ]),
+      { message: 'The table layout is invalid.' },
+    )
+})
+
+test('table size updates from two windows change only their own sizes', async (t) => {
+  const root = await workspace(t)
+  await writeTableLayout(root, 'a.md', [table('0:a', [100, 0], [0, 40])])
+  const set = (axis, index, size) =>
+    writeTableLayout(root, 'a.md', {
+      remove: [],
+      put: [],
+      set: [{ key: '0:a', axis, index, size }],
+    })
+  // One window widens a column while another heightens a row of the same table.
+  await Promise.all([set('column', 0, 180), set('row', 1, 60)])
+  assert.deepEqual(await readTableLayout(root, 'a.md'), [
+    { key: '0:a', columns: [180], rows: [0, 60] },
+  ])
+  // Rows past the first 1,000 stay stored by index.
+  await set('row', 1500, 90)
+  assert.deepEqual(await readTableLayout(root, 'a.md'), [
+    { key: '0:a', columns: [180], rows: [0, 60], rowsAfter: [[1500, 90]] },
+  ])
+  for (const change of [
+    { key: '0:a', axis: 'column', index: 1000, size: 1 },
+    { key: '0:a', axis: 'diagonal', index: 0, size: 1 },
+    { key: '0:a', axis: 'row', index: 0, size: 10001 },
+  ])
+    await assert.rejects(
+      writeTableLayout(root, 'a.md', { remove: [], put: [], set: [change] }),
+      { message: 'The table layout is invalid.' },
+    )
+})
 
 test('table layout is created lazily, read back, and pruned', async (t) => {
   const root = await workspace(t)

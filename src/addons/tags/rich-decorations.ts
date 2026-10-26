@@ -7,6 +7,7 @@ import { tagMatches } from './syntax.ts'
 export function richTags(browse: (tag: string) => void): RichExtension {
   return {
     id: 'highlights',
+    preview: 'deferred',
     attach(editor) {
       const key = new PluginKey<DecorationSet>('tags')
       function decorate(

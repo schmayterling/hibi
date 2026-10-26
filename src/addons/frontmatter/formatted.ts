@@ -9,50 +9,31 @@ import {
   type FormattedContribution,
   formattedPrefix,
 } from '../../renderer/src/formatted-contributions.ts'
-import { readFrontmatter } from '../../shared/frontmatter.ts'
+import {
+  frontmatterBounds,
+  frontmatterProbe,
+} from '../../renderer/src/formatted-frontmatter.ts'
 
 /*
  * The formatted view hides frontmatter: the properties editor above the note
- * edits it, so typing, deleting and selecting all stop at its end. Finding it
- * reads only the lines up to its closing line, and an edit after that line
- * reads none.
+ * edits it, so typing, deleting and selecting all stop at its end. The
+ * formatted view's frontmatter search finds it, a bounded part of the note
+ * at a time.
  */
 
-const opening = /^\uFEFF?---[ \t]*$/
-const closing = /^(?:---|\.\.\.)[ \t]*$/
+export { frontmatterProbe }
 
 type Frontmatter = {
   /** Line 1 opens frontmatter. */
   open: boolean
-  /** The first later line that could close it, or 0. */
+  /** The line that closes it, or 0. */
   closing: number
-  /** The text through the closing line's break, as the shared reader last read it. */
-  source: string
-  /** The shared reader takes `source` as frontmatter. */
+  /** The shared reader takes the lines up to it as frontmatter. */
   valid: boolean
   /** End of the hidden range: the frontmatter, its last line break and one blank line after it. */
   end: number
 }
-const none: Frontmatter = {
-  open: false,
-  closing: 0,
-  source: '',
-  valid: false,
-  end: 0,
-}
-
-/** Lines read and YAML parses while finding frontmatter, for scale tests. */
-export const frontmatterProbe = { lines: 0, parses: 0 }
-
-function findClosing(doc: Text, from: number) {
-  if (from > doc.lines) return 0
-  let number = from
-  for (const iter = doc.iterLines(from); !iter.next().done; number++) {
-    frontmatterProbe.lines++
-    if (closing.test(iter.value)) return number
-  }
-  return 0
-}
+const none: Frontmatter = { open: false, closing: 0, valid: false, end: 0 }
 
 /** The hidden range's end for a closing line: through its line break and one blank line. */
 function hiddenEnd(doc: Text, closingLine: number) {
@@ -64,74 +45,36 @@ function hiddenEnd(doc: Text, closingLine: number) {
     : close.to + 1
 }
 
-/** The shared reader decides, as for the properties editor and the rich view; unchanged text keeps its answer. */
-function evaluate(
-  doc: Text,
-  closingLine: number,
-  previous: Frontmatter | null,
-): Frontmatter {
-  if (!closingLine) return { ...none, open: true }
-  const close = doc.line(closingLine)
-  const source = doc.sliceString(0, Math.min(doc.length, close.to + 1))
-  let valid = previous?.valid ?? false
-  if (source !== previous?.source) {
-    frontmatterProbe.parses++
-    valid = !!readFrontmatter(source)
-  }
+function fromBounds(state: EditorState): Frontmatter {
+  const { open, closer, end } = state.field(frontmatterBounds)
+  if (!open) return none
+  const closing = closer ? state.doc.lineAt(closer).number : 0
   return {
-    open: true,
-    closing: closingLine,
-    source,
-    valid,
-    end: valid ? hiddenEnd(doc, closingLine) : 0,
+    open,
+    closing,
+    valid: end > 0,
+    end: end ? hiddenEnd(state.doc, closing) : 0,
   }
 }
+
+export const frontmatterField: StateField<Frontmatter> =
+  StateField.define<Frontmatter>({
+    create: fromBounds,
+    update: (value, transaction) =>
+      transaction.docChanged ||
+      transaction.state.field(frontmatterBounds) !==
+        transaction.startState.field(frontmatterBounds)
+        ? fromBounds(transaction.state)
+        : value,
+    provide: () => frontmatterBounds,
+  })
 
 /** Frontmatter at the start of `doc`. */
 export function frontmatterOf(doc: Text): Frontmatter {
-  return opening.test(doc.line(1).text)
-    ? evaluate(doc, findClosing(doc, 2), null)
-    : none
+  return EditorState.create({ doc, extensions: frontmatterField }).field(
+    frontmatterField,
+  )
 }
-
-export const frontmatterField = StateField.define<Frontmatter>({
-  create: (state) => frontmatterOf(state.doc),
-  update(value, transaction) {
-    if (!transaction.docChanged) return value
-    const doc = transaction.state.doc
-    if (!opening.test(doc.line(1).text)) return none
-    if (!value.open) return frontmatterOf(doc)
-    let from = Number.POSITIVE_INFINITY
-    transaction.changes.iterChangedRanges((fromA) => {
-      from = Math.min(from, fromA)
-    })
-    if (value.closing) {
-      // Edits after the closing line keep the frontmatter; only the blank line after it can change.
-      if (from > transaction.startState.doc.line(value.closing).to)
-        return {
-          ...value,
-          end: value.valid ? hiddenEnd(doc, value.closing) : 0,
-        }
-      return evaluate(doc, findClosing(doc, 2), value)
-    }
-    // Nothing closed it before, so only the edited lines can.
-    let found = 0
-    transaction.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
-      for (
-        let number = Math.max(2, doc.lineAt(fromB).number);
-        number <= doc.lineAt(toB).number;
-        number++
-      ) {
-        frontmatterProbe.lines++
-        if (closing.test(doc.line(number).text)) {
-          if (!found || number < found) found = number
-          break
-        }
-      }
-    })
-    return evaluate(doc, found, value)
-  },
-})
 
 const hiddenDecoration = Decoration.replace({ block: true })
 const hidden = StateField.define<DecorationSet>({

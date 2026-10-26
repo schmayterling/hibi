@@ -7,6 +7,7 @@ import {
   frontmatterOf,
   frontmatterProbe,
 } from '../src/addons/frontmatter/formatted.ts'
+import * as core from '../src/renderer/src/formatted-frontmatter.ts'
 import { readFrontmatter } from '../src/shared/frontmatter.ts'
 
 const text = (doc) => Text.of(doc.split('\n'))
@@ -109,6 +110,30 @@ test('edits after the closing line read no lines; edits inside read only the fro
     userEvent: 'input.addon',
   }).state
   assert.equal(frontmatterProbe.parses, 1)
+})
+
+test('a divider at the top of a long note reads one search when it opens and the rest in idle slices', () => {
+  const body = Array.from({ length: 200000 }, (_, i) => `words ${i}`).join('\n')
+  for (const extensions of [frontmatterField, core.frontmatterBounds]) {
+    frontmatterProbe.lines = 0
+    let state = EditorState.create({ doc: `---\n${body}`, extensions })
+    // Before, opening read every line for a closing one: 200,000 here.
+    const opened = frontmatterProbe.lines
+    assert.ok(opened > 0 && opened < 10000, `${opened}`)
+    let slices = 0
+    while (state.field(core.frontmatterBounds).searched < state.doc.length) {
+      const lines = frontmatterProbe.lines
+      state = state.update({ effects: core.frontmatterSearch.of(null) }).state
+      assert.ok(frontmatterProbe.lines - lines < 10000)
+      slices++
+    }
+    assert.ok(slices > 10, `${slices}`)
+    assert.ok(
+      frontmatterProbe.lines <= state.doc.lines,
+      `${frontmatterProbe.lines}`,
+    )
+    assert.equal(state.field(core.frontmatterBounds).end, 0)
+  }
 })
 
 test('a divider at the top of a long note is read once, then only edited lines', () => {

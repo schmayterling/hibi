@@ -81,9 +81,14 @@ test('split panes keep both editors mounted, edit both files, and share one docu
     ({ ipcMain }, ids) => {
       const focus = ipcMain._invokeHandlers.get('document:focus-tab')
       const get = ipcMain._invokeHandlers.get('document:get')
+      const transfer = ipcMain._invokeHandlers.get('document:transfer-open')
+      const read = ipcMain._invokeHandlers.get('document:transfer-read')
+      if (!transfer || !read)
+        throw new Error('Document transfer is unavailable.')
       if (!focus) throw new Error('Document focus handler is unavailable.')
       if (!get) throw new Error('Document get handler is unavailable.')
       let phase = 0
+      globalThis.splitRecoveryMismatches = 0
       ipcMain.removeHandler('document:focus-tab')
       ipcMain.handle('document:focus-tab', async (...args) => {
         if (phase === 1 && args[1] === ids.left) {
@@ -106,9 +111,24 @@ test('split panes keep both editors mounted, edit both files, and share one docu
         const document = await get(...args)
         if (phase === 3) {
           phase = 4
-          return { ...document, markdown: `${document.markdown}mismatch` }
+          return transfer(args[0], document.tabId)
         }
         return document
+      })
+      ipcMain.removeHandler('document:transfer-read')
+      ipcMain.handle('document:transfer-read', async (...args) => {
+        const chunk = await read(...args)
+        if (phase !== 4) return chunk
+        phase = 5
+        globalThis.splitRecoveryMismatches++
+        // Keep framing valid while the transferred source disagrees with the
+        // retained session at the same revision and content version.
+        return {
+          ...chunk,
+          chunks: chunk.chunks.map((text, index) =>
+            index === 0 ? `m${text.slice(1)}` : text,
+          ),
+        }
       })
     },
     { left: aId, right: bId },
@@ -125,6 +145,7 @@ test('split panes keep both editors mounted, edit both files, and share one docu
   await page
     .getByText('This tab has local edits waiting to synchronize. Try again.')
     .waitFor()
+  assert.equal(await app.evaluate(() => globalThis.splitRecoveryMismatches), 1)
   assert.equal(await page.locator('.app').getAttribute('aria-busy'), 'true')
   await page.getByRole('button', { name: 'Retry document focus' }).waitFor()
   assert.equal(

@@ -286,6 +286,8 @@ export function SourceEditor({
   ])
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
+  // Effects follow the actual view, which mounts after source preparation.
+  const [mountedView, setMountedView] = useState<EditorView | null>(null)
   const [installedExtensions, setInstalledExtensions] = useState<{
     bridge: ReturnType<typeof createSourceSession>
     extensions: readonly SourceExtension[]
@@ -1446,6 +1448,7 @@ export function SourceEditor({
       }),
     })
     view.current = editor
+    setMountedView(editor)
     const detachSession = bridge.attach(editor)
     const removeTypingHistory = session.subscribeOperations((prepared) => {
       if (
@@ -1863,6 +1866,7 @@ export function SourceEditor({
       detachSession()
       editor.destroy()
       view.current = null
+      setMountedView(null)
     }
   }, [
     bridge,
@@ -1880,11 +1884,10 @@ export function SourceEditor({
   ])
 
   useEffect(() => {
-    if (disabled || !editTarget || !inputReady) {
-      const editor = view.current
-      if (editor) closeCompletion(editor)
-    }
-  }, [disabled, editTarget, inputReady])
+    if (mountedView !== view.current) return
+    if (mountedView && (disabled || !editTarget || !inputReady))
+      closeCompletion(mountedView)
+  }, [mountedView, disabled, editTarget, inputReady])
 
   // Before paint and before focus moves here, a shown or targeted view catches up.
   useLayoutEffect(() => {
@@ -1931,10 +1934,9 @@ export function SourceEditor({
       ),
     [formatted],
   )
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new bridge replaces the editor view.
   useEffect(() => {
-    if (!formatted) return
-    view.current?.dispatch({
+    if (!formatted || mountedView !== view.current) return
+    mountedView?.dispatch({
       effects: display.current.reconfigure([
         showMarkdownMarkers.of(markers),
         EditorView.contentAttributes.of({ spellcheck: String(spellCheck) }),
@@ -1944,15 +1946,23 @@ export function SourceEditor({
         }),
       ]),
     })
-  }, [bridge, formatted, markers, spellCheck, documentRevision, document.tabId])
+  }, [
+    mountedView,
+    formatted,
+    markers,
+    spellCheck,
+    documentRevision,
+    document.tabId,
+  ])
   useEffect(() => {
-    view.current?.dispatch({
+    if (mountedView !== view.current) return
+    mountedView?.dispatch({
       effects: editable.current.reconfigure([
         EditorView.editable.of(!disabled && inputReady),
         EditorState.readOnly.of(disabled || !inputReady),
       ]),
     })
-  }, [disabled, inputReady])
+  }, [mountedView, disabled, inputReady])
 
   useEffect(() => {
     // Publish readiness after CodeMirror configures input, before its next frame.
@@ -1972,9 +1982,9 @@ export function SourceEditor({
     languageError,
   ])
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new bridge replaces the editor view.
   useEffect(() => {
-    view.current?.dispatch({
+    if (mountedView !== view.current) return
+    mountedView?.dispatch({
       effects: numbers.current.reconfigure(
         showLineNumbers && !formatted
           ? lineNumbers({
@@ -1993,12 +2003,11 @@ export function SourceEditor({
           : [],
       ),
     })
-  }, [bridge, showLineNumbers, formatted])
+  }, [mountedView, showLineNumbers, formatted])
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new bridge replaces the editor view.
   useEffect(() => {
-    const editor = view.current
-    if (!editor) return
+    const editor = mountedView
+    if (!editor || editor !== view.current) return
     const stopFind = () => {
       if (referenceUsed.current) sourceFind.current?.cancelFind()
       else {
@@ -2023,12 +2032,17 @@ export function SourceEditor({
       stopFind()
       find.current.report({ current: 0, total: 0 })
     }
-  }, [bridge, findActive, findQuery, requestFind])
+  }, [mountedView, findActive, findQuery, requestFind])
 
   useEffect(() => {
-    if (handledFindMove.current === findMove.id) return
+    if (
+      !mountedView ||
+      mountedView !== view.current ||
+      handledFindMove.current === findMove.id
+    )
+      return
     handledFindMove.current = findMove.id
-    if (findActive && view.current && findMove.id) {
+    if (findActive && findMove.id) {
       if (findActions.current.length >= 128) {
         find.current.report({
           current: 0,
@@ -2043,7 +2057,7 @@ export function SourceEditor({
         requestFind(findActions.current.shift()!)
       }
     }
-  }, [findActive, findMove, requestFind])
+  }, [mountedView, findActive, findMove, requestFind])
 
   return (
     <>

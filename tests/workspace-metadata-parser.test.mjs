@@ -18,10 +18,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
 import { diskIndexVersion } from '../src/main/workspace-index-cache.ts'
-import {
-  incompleteMetadataPage,
-  WorkspaceMetadataParser,
-} from '../src/main/workspace-metadata-parser.ts'
+import { WorkspaceMetadataParser } from '../src/main/workspace-metadata-parser.ts'
 import {
   RecordReader,
   RecordWriter,
@@ -141,6 +138,22 @@ test('derived cache survives reopening and validates source, syntax and corrupt 
 })
 
 const current = () => true
+async function headingFrom(parser, page) {
+  assert.deepEqual(page.metadata.headings.items, [])
+  const result = await parser.readHeadings(
+    {
+      kind: 'cached',
+      id: page.id,
+      path: page.path,
+      version: page.version,
+      fingerprint: 'default',
+    },
+    0,
+    1,
+    current,
+  )
+  return result?.items[0]?.text
+}
 const descriptor = (path = 'note.md') => ({
   kind: 'cached',
   id: createHash('sha256').update(path).digest('hex'),
@@ -378,7 +391,7 @@ test('cache batches stream every large record and oversized string without size 
         ...request,
         metadata: {
           ...template.page.metadata,
-          headings: { complete: true, items: [{ depth: 1, text: heading }] },
+          tags: [heading],
         },
       },
     })
@@ -388,9 +401,7 @@ test('cache batches stream every large record and oversized string without size 
     current,
   )
   assert.equal(pages.filter(Boolean).length, 3)
-  assert.ok(
-    pages.every((page) => page.metadata.headings.items[0].text === heading),
-  )
+  assert.ok(pages.every((page) => page.metadata.tags[0] === heading))
   const large = descriptor('large.md')
   const text = `x${'\u0000é😀'.repeat(6 * 1024 * 1024)}`
   await writeRecord(join(directory, `${large.id}.json`), {
@@ -400,7 +411,7 @@ test('cache batches stream every large record and oversized string without size 
       ...large,
       metadata: {
         ...template.page.metadata,
-        headings: { complete: true, items: [{ depth: 1, text }] },
+        tags: [text],
       },
     },
   })
@@ -410,7 +421,7 @@ test('cache batches stream every large record and oversized string without size 
   await close(parser)
   parser = create()
   const [page] = await parser.cachedBatch([large], current)
-  assert.equal(page.metadata.headings.items[0].text, text)
+  assert.equal(page.metadata.tags[0], text)
   const corrupt = descriptor('corrupt.md')
   await truncate(join(directory, `${corrupt.id}.json`), 32 * 1024 * 1024 + 1)
   assert.equal(await parser.request(corrupt, current), null)
@@ -419,7 +430,7 @@ test('cache batches stream every large record and oversized string without size 
     parseNote('large.md', '# recomputed'),
     current,
   )
-  assert.equal(recomputed.metadata.headings.items[0].text, 'recomputed')
+  assert.equal(await headingFrom(parser, recomputed), 'recomputed')
 })
 
 test('completed builds prune removed records and abandoned temporaries, retaining seen ids only', async (t) => {
@@ -536,7 +547,7 @@ test('close rejects active work and skips old queued generations before respawni
   assert.equal(await queued, null)
   assert.equal(calls, 1)
   const replacement = await parser.request(parse('# replacement'), current)
-  assert.equal(replacement.metadata.headings.items[0].text, 'replacement')
+  assert.equal(await headingFrom(parser, replacement), 'replacement')
   assert.notEqual(parser.worker, old)
 })
 
@@ -761,7 +772,7 @@ await import(${JSON.stringify(entry.href)})
   assert.equal((await readdir(directory)).includes(`${note.id}.json`), false)
   const next = await diskInput(directory, '# next', 'next.md')
   assert.equal(
-    (await parser.parseFile(next, current)).metadata.headings.items[0].text,
+    await headingFrom(parser, await parser.parseFile(next, current)),
     'next',
   )
 })
@@ -799,12 +810,12 @@ await import(${JSON.stringify(entry.href)})
   assert.equal(await parser.parseFile(note, current), null)
   assert.equal((await readdir(directory)).includes(`${note.id}.json`), false)
   assert.equal(
-    (await parser.parseFile(next, current)).metadata.headings.items[0].text,
+    await headingFrom(parser, await parser.parseFile(next, current)),
     'next',
   )
   assert.equal(parser.worker, worker)
   assert.equal(
-    (await parser.parseFile(note, current)).metadata.headings.items[0].text,
+    await headingFrom(parser, await parser.parseFile(note, current)),
     'retry',
   )
   assert.equal(await parser.finishBuild(current), true)
@@ -841,8 +852,10 @@ test('production disk parsing rejects stale stats, symlinks, invalid UTF-8 and m
   assert.equal(await parser.parseFile(note, current), null)
   assert.equal(changed, true)
   assert.equal(
-    (await parser.parseSource(input(), snapshot('# next'), current)).metadata
-      .headings.items[0].text,
+    await headingFrom(
+      parser,
+      await parser.parseSource(input(), snapshot('# next'), current),
+    ),
     'next',
   )
 })
@@ -915,8 +928,10 @@ test('source cancellation checks every chunk, clears stale content, and close pe
   assert.equal(await parser.parseSource(input(), huge, () => live), null)
   assert.equal(slices, 2)
   assert.equal(
-    (await parser.parseSource(input(), snapshot('# fresh'), current)).metadata
-      .headings.items[0].text,
+    await headingFrom(
+      parser,
+      await parser.parseSource(input(), snapshot('# fresh'), current),
+    ),
     'fresh',
   )
   const old = parser.worker
@@ -943,10 +958,10 @@ test('source cancellation checks every chunk, clears stale content, and close pe
     current,
   )
   assert.notEqual(parser.worker, old)
-  assert.equal(page.metadata.headings.items[0].text, 'replacement')
+  assert.equal(await headingFrom(parser, page), 'replacement')
 })
 
-test('resource failures persist incomplete pages and retain completed-build pruning', async (t) => {
+test('resource failures retransfer into linear fallback and retain completed-build pruning', async (t) => {
   const { directory, create, close } = await fixture(t)
   const parser = create()
   const note = await diskInput(directory, '# disk')
@@ -969,7 +984,11 @@ test('resource failures persist incomplete pages and retain completed-build prun
       mode === 'file'
         ? await parser.parseFile(note, current)
         : await parser.parseSource(note, snapshot('# draft'), current)
-    assert.deepEqual(page, incompleteMetadataPage(note))
+    assert.equal(page.metadata.referenceComplete, false)
+    assert.equal(
+      await headingFrom(parser, page),
+      mode === 'file' ? 'disk' : 'draft',
+    )
     assert.equal(await parser.finishBuild(current), true)
     assert.deepEqual(
       await parser.request(
@@ -984,7 +1003,7 @@ test('resource failures persist incomplete pages and retain completed-build prun
       current,
     )
     assert.notEqual(parser.worker, old)
-    assert.equal(next.metadata.headings.items[0].text, 'next')
+    assert.equal(await headingFrom(parser, next), 'next')
   }
   await close(parser)
   const reopened = create()
@@ -993,7 +1012,12 @@ test('resource failures persist incomplete pages and retain completed-build prun
       [{ ...descriptor(note.path), version: note.version }],
       current,
     ),
-    [incompleteMetadataPage(note)],
+    [
+      await parser.request(
+        { ...descriptor(note.path), version: note.version },
+        current,
+      ),
+    ],
   )
 })
 
@@ -1056,16 +1080,16 @@ test('disk cancellation stops after one fixed-buffer chunk and releases file sta
   assert.ok(await parser.parseSource(input(), snapshot('# next'), current))
 })
 
-test('worker-side string limit becomes persisted incomplete page and next file succeeds', async (t) => {
+test('worker-side string join failure uses linear chunks and next file succeeds', async (t) => {
   const { directory, create } = await fixture(t)
   const bundle = join(directory, 'string-limit.mjs')
   await writeFile(
     bundle,
     [
       `await import(${JSON.stringify(entry.href)})`,
-      'const join = Array.prototype.join',
+      'const join = Array.prototype.join; let failed = false',
       'Array.prototype.join = function (...args) {',
-      "  if (this[0] === 'string-limit-fixture') throw new RangeError('Invalid string length')",
+      "  if (!failed && this[0] === 'string-limit-fixture') { failed = true; throw new RangeError('Invalid string length') }",
       '  return join.apply(this, args)',
       '}',
     ].join('\n'),
@@ -1078,10 +1102,11 @@ test('worker-side string limit becomes persisted incomplete page and next file s
     snapshot('string-limit-fixture'),
     current,
   )
-  assert.deepEqual(page, incompleteMetadataPage(input()))
+  assert.equal(page.metadata.referenceComplete, false)
+  assert.deepEqual(page.metadata.headings.items, [])
   const next = await diskInput(directory, '# recovered')
   assert.equal(
-    (await parser.parseFile(next, current)).metadata.headings.items[0].text,
+    await headingFrom(parser, await parser.parseFile(next, current)),
     'recovered',
   )
   assert.equal(parser.worker, old)
@@ -1160,7 +1185,7 @@ function boundedDrain(t, parser) {
   return () => ({ writes, turns, replies, largest })
 }
 
-test('heading-dense results write and reopen records above 32 MiB with bounded main turns', async (t) => {
+test('heading-dense results keep cold and warm metadata bounded while paging sidecars', async (t) => {
   const { directory, create, close } = await fixture(t)
   const bundle = join(directory, 'dense-headings.mjs')
   const count = 65536
@@ -1188,21 +1213,24 @@ await import(${JSON.stringify(entry.href)})
     current,
   )
   assert.equal(page.metadata.headings.complete, true)
-  assert.equal(page.metadata.headings.items.length, count)
-  assert.equal(page.metadata.headings.items.at(-1).text, 'h'.repeat(512))
-  assert.ok((await stat(join(directory, `${id}.json`))).size > 32 * 1024 * 1024)
-  assert.ok(stats().replies > 100)
-  assert.ok(stats().writes > 1000)
+  assert.equal(page.metadata.headings.count, count)
+  assert.deepEqual(page.metadata.headings.items, [])
+  assert.ok((await stat(join(directory, `${id}.json`))).size < 4096)
+  assert.ok(stats().replies < 4)
+  assert.ok(stats().writes < 32)
   assert.equal(stats().writes, stats().turns)
   await close(parser)
   parser = create({ entry: bundle })
   const [cached] = await parser.cachedBatch([descriptor()], current)
-  assert.equal(cached.metadata.headings.items.length, count)
-  assert.equal(
-    cached.metadata.headings.items.at(-1).depth,
-    ((count - 1) % 6) + 1,
-  )
-  assert.equal(cached.metadata.headings.items.at(-1).text.length, 512)
+  assert.equal(cached.metadata.headings.count, count)
+  assert.deepEqual(cached.metadata.headings.items, [])
+  const tail = await parser.readHeadings(descriptor(), count - 1, 1, current)
+  assert.deepEqual(tail, {
+    items: [{ depth: ((count - 1) % 6) + 1, text: 'h'.repeat(512) }],
+    nextOffset: count,
+    hasMore: false,
+    complete: true,
+  })
   assert.equal(stats().writes, stats().turns)
 })
 
@@ -1217,13 +1245,13 @@ test('oversized single strings split on wire and main; cancellation during drain
       ...template.page,
       metadata: {
         ...template.page.metadata,
-        headings: { complete: true, items: [{ depth: 1, text }] },
+        tags: [text],
       },
     },
   })
   const stats = boundedDrain(t, parser)
   const [page] = await parser.cachedBatch([descriptor()], current)
-  assert.equal(page.metadata.headings.items[0].text, text)
+  assert.equal(page.metadata.tags[0], text)
   assert.ok(stats().replies > 100)
   assert.equal(stats().writes, stats().turns)
   let live = true
@@ -1238,14 +1266,15 @@ test('oversized single strings split on wire and main; cancellation during drain
   )
 })
 
-test('deep-blockquote parse errors persist by version and bundle, reopen, continue and prune', async (t) => {
+test('deep-blockquote fallback persists by version and bundle, reopen, continue and prune', async (t) => {
   const { directory, create, close } = await fixture(t)
   let parser = create()
   await seed(parser, directory, ['removed.md'])
   const note = await diskInput(directory, `${'> '.repeat(100000)}deep`)
   await parser.beginBuild(current)
   const page = await parser.parseFile(note, current)
-  assert.deepEqual(page, incompleteMetadataPage(note))
+  assert.equal(page.metadata.referenceComplete, false)
+  assert.deepEqual(page.metadata.headings.items, [])
   assert.equal(
     (await parser.parseSource(input('next.md'), snapshot('# next'), current))
       .path,
@@ -1269,7 +1298,7 @@ test('deep-blockquote parse errors persist by version and bundle, reopen, contin
   assert.equal(await parser.request(cached, current), null)
 })
 
-test('parse-only watchdog terminates a stuck fixture, persists sentinel and keeps pruning after respawn', async (t) => {
+test('parse-only watchdog retransfers into fallback, persists derived data and keeps pruning after respawn', async (t) => {
   const { directory, create, close } = await fixture(t)
   const bundle = join(directory, 'watchdog.mjs')
   await writeFile(
@@ -1278,7 +1307,7 @@ test('parse-only watchdog terminates a stuck fixture, persists sentinel and keep
 import { Marked } from ${JSON.stringify(import.meta.resolve('marked'))}
 const lex = Marked.prototype.lexer
 Marked.prototype.lexer = function (source, ...args) {
-  if (source === 'watchdog-fixture') { while (true) {} }
+  if (source.startsWith('watchdog-fixture')) { while (true) {} }
   return lex.call(this, source, ...args)
 }
 await import(${JSON.stringify(entry.href)})
@@ -1290,10 +1319,13 @@ await import(${JSON.stringify(entry.href)})
   const old = parser.worker
   const page = await parser.parseSource(
     input(),
-    snapshot('watchdog-fixture'),
+    snapshot('watchdog-fixture\n# recovered\n[[target]] #work'),
     current,
   )
-  assert.deepEqual(page, incompleteMetadataPage(input()))
+  assert.equal(page.metadata.referenceComplete, false)
+  assert.deepEqual(page.metadata.references.wikilinks, ['target'])
+  assert.deepEqual(page.metadata.tags, ['work'])
+  assert.equal(await headingFrom(parser, page), 'recovered')
   assert.notEqual(parser.worker, old)
   assert.equal(
     (await parser.parseSource(input('next.md'), snapshot('# next'), current))

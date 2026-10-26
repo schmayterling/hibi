@@ -5,7 +5,11 @@ import {
   noteReferences,
   wikiTargetName,
 } from '../shared/note-links.ts'
-import { noteHeadings, noteProperties } from '../shared/note-metadata.ts'
+import {
+  type NoteHeading,
+  noteHeadings,
+  noteProperties,
+} from '../shared/note-metadata.ts'
 import { noteLexer } from '../shared/note-syntax.ts'
 import { noteTags } from '../shared/note-tags.ts'
 import type { WorkspacePage } from '../shared/workspace.ts'
@@ -39,6 +43,7 @@ export function parseWorkspaceMetadata(
   page: WorkspacePage,
   syntax: PageSyntax,
   parse = noteReferences,
+  onHeading?: (heading: NoteHeading) => void,
 ): WorkspacePageMetadata {
   const markdown = isMarkdownDocument(page.path)
   const referenceComplete = true
@@ -73,7 +78,7 @@ export function parseWorkspaceMetadata(
         : [],
     properties: { values, complete: properties.complete },
     headings: markdown
-      ? noteHeadings(page.markdown, syntax.settings, lexed)
+      ? noteHeadings(page.markdown, syntax.settings, lexed, onHeading)
       : { items: [], complete: true },
   }
 }

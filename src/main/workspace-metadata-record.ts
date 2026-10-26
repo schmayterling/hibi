@@ -77,6 +77,7 @@ type Container = {
   value: unknown[] | Record<string, unknown>
   key?: string
   hashes?: boolean
+  headings?: boolean
 }
 
 /** Incremental reconstruction; strings remain ropes until their consumer needs them. */
@@ -87,7 +88,13 @@ export class RecordReader {
   private result: unknown
   private roots = 0
   private canonical: (value: string) => string
-  constructor(canonical: (value: string) => string = (value) => value) {
+  private skipHeadings: boolean
+  private skipped = 0
+  constructor(
+    canonical: (value: string) => string = (value) => value,
+    skipHeadings = false,
+  ) {
+    this.skipHeadings = skipHeadings
     this.canonical = canonical
   }
 
@@ -113,6 +120,11 @@ export class RecordReader {
 
   write(tokens: readonly RecordToken[]): void {
     for (const token of tokens) {
+      if (this.skipped) {
+        if (token === '{' || token === '[') this.skipped++
+        else if (token === '}' || token === ']') this.skipped--
+        continue
+      }
       if (Array.isArray(token)) {
         if (
           typeof token[0] !== 'string' ||
@@ -139,8 +151,15 @@ export class RecordReader {
           const value = token === '[' ? [] : {}
           const parent = this.stack.at(-1)
           const hashes = !!(parent?.hashes || parent?.key === 'values')
+          const headings = parent?.key === 'headings'
+          const skip =
+            this.skipHeadings &&
+            parent?.headings &&
+            parent.key === 'items' &&
+            token === '['
           this.add(value)
-          this.stack.push({ value, hashes })
+          if (skip) this.skipped = 1
+          else this.stack.push({ value, hashes, headings })
         } else if (token === '}' || token === ']') {
           const parent = this.stack.pop()
           if (
@@ -161,7 +180,7 @@ export class RecordReader {
   }
 
   finish(): unknown {
-    if (this.stack.length || this.fragment || this.roots !== 1)
+    if (this.stack.length || this.fragment || this.skipped || this.roots !== 1)
       throw new TypeError('Incomplete metadata record')
     return this.result
   }

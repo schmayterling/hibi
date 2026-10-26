@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { constants, type Dir } from 'node:fs'
 import {
   type FileHandle,
@@ -16,6 +16,15 @@ import {
   parseWorkspaceMetadata,
   type WorkspaceMetadataPage,
 } from './workspace-index-metadata.ts'
+import { parseWorkspaceMetadataFallback } from './workspace-metadata-fallback.ts'
+import {
+  type HeadingStoreRecord,
+  HeadingStoreWriter,
+  headingDirectoryAvailable,
+  headingStorePattern,
+  readHeadingStore,
+  validHeadingStore,
+} from './workspace-metadata-heading-store.ts'
 import type {
   CachedMetadataRequest,
   MetadataFileInput,
@@ -37,10 +46,29 @@ let results: AsyncGenerator<RecordSlice> | undefined
 
 const cacheDirectory = workerData.cacheDirectory as string | undefined
 const buildIdentity = workerData.buildIdentity as string | undefined
-const schema = 4
+const schema = 5
+const headingDirectory = workerData.headingDirectory as string
+const headingLocations = new Map<
+  string,
+  {
+    version: string
+    fingerprint: string
+    path: string
+    directory: string
+    store: HeadingStoreRecord | undefined
+    complete: boolean
+  }
+>()
+type CacheRecord = {
+  schema: number
+  buildIdentity: string
+  fingerprint: string
+  page: WorkspaceMetadataPage
+  headings?: HeadingStoreRecord
+}
 const idPattern = /^[a-f0-9]{64}$/
 const recordPattern = /^[a-f0-9]{64}\.json$/
-const temporaryPattern = /^\.[a-f0-9]{64}-[a-f0-9-]{36}\.tmp$/
+const temporaryPattern = /^\.[a-f0-9]{64}-[a-f0-9-]{36}(?:\.hidx|\.hdat)?\.tmp$/
 let pruning: Dir | undefined
 let parsing:
   | {
@@ -60,6 +88,22 @@ let parsing:
   | undefined
 const strings = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item) => typeof item === 'string')
+
+function headingIdentity(
+  input: Pick<MetadataParseInput, 'id' | 'path' | 'version' | 'fingerprint'>,
+): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify([
+        buildIdentity,
+        input.id,
+        input.path,
+        input.version,
+        input.fingerprint,
+      ]),
+    )
+    .digest('hex')
+}
 
 function valid(page: WorkspaceMetadataPage): boolean {
   const metadata = page?.metadata
@@ -86,13 +130,10 @@ function valid(page: WorkspaceMetadataPage): boolean {
     ) &&
     typeof metadata.headings?.complete === 'boolean' &&
     Array.isArray(metadata.headings.items) &&
-    metadata.headings.items.every(
-      (heading) =>
-        Number.isInteger(heading.depth) &&
-        heading.depth >= 1 &&
-        heading.depth <= 6 &&
-        typeof heading.text === 'string',
-    )
+    metadata.headings.items.length === 0 &&
+    metadata.headings.paged === true &&
+    Number.isSafeInteger(metadata.headings.count) &&
+    (metadata.headings.count ?? -1) >= 0
   )
 }
 
@@ -106,17 +147,11 @@ async function cacheAvailable(): Promise<boolean> {
   }
 }
 
-async function cached(
-  request: CachedMetadataRequest,
-): Promise<WorkspaceMetadataPage | null> {
-  if (
-    !cacheDirectory ||
-    !idPattern.test(request.id) ||
-    !(await cacheAvailable())
-  )
+async function readRecord(id: string): Promise<CacheRecord | null> {
+  if (!cacheDirectory || !idPattern.test(id) || !(await cacheAvailable()))
     return null
   try {
-    const path = join(cacheDirectory, `${request.id}.json`)
+    const path = join(cacheDirectory, `${id}.json`)
     const info = await lstat(path)
     if (!info.isFile() || info.isSymbolicLink()) return null
     // O_NOFOLLOW closes the lstat/open race; a fixed read also bounds file growth.
@@ -132,7 +167,8 @@ async function cached(
         opened.ino !== BigInt(info.ino)
       )
         return null
-      const reader = new RecordReader()
+      const reader = new RecordReader(undefined, true)
+      let first = true
       const buffer = Buffer.alloc(64 * 1024)
       const decoder = new TextDecoder('utf-8', { fatal: true })
       let line = '',
@@ -152,6 +188,18 @@ async function cached(
           if (end > recordSliceBytes) return null
           const tokens = JSON.parse(line.slice(0, end))
           if (!Array.isArray(tokens) || tokens.length > 8192) return null
+          // Old records can contain millions of headings. Reject their schema before reconstruction.
+          if (first) {
+            if (
+              tokens[0] !== '{' ||
+              !Array.isArray(tokens[1]) ||
+              tokens[1][0] !== 'schema' ||
+              tokens[1][1] !== true ||
+              tokens[2] !== schema
+            )
+              return null
+            first = false
+          }
           reader.write(tokens)
           line = line.slice(end + 1)
           end = line.indexOf('\n')
@@ -169,21 +217,26 @@ async function cached(
         !(await cacheAvailable())
       )
         return null
-      const value = reader.finish() as {
-        schema: number
-        buildIdentity: string
-        fingerprint: string
-        page: WorkspaceMetadataPage
-      }
+      const value = reader.finish() as CacheRecord
       const page = value.page as WorkspaceMetadataPage
       return value.schema === schema &&
         value.buildIdentity === buildIdentity &&
-        value.fingerprint === request.fingerprint &&
-        page?.id === request.id &&
-        page.path === request.path &&
-        page.version === request.version &&
-        valid(page)
-        ? page
+        typeof value.fingerprint === 'string' &&
+        page?.id === id &&
+        valid(page) &&
+        (!value.headings ||
+          (validHeadingStore(value.headings) &&
+            value.headings.key.startsWith(`${id}-`) &&
+            value.headings.count === page.metadata.headings.count &&
+            value.headings.identity ===
+              headingIdentity({
+                id,
+                path: page.path,
+                version: page.version,
+                fingerprint: value.fingerprint,
+              }))) &&
+        (page.metadata.headings.count === 0 || !!value.headings)
+        ? value
         : null
     } finally {
       await file.close()
@@ -191,6 +244,65 @@ async function cached(
   } catch {
     return null
   }
+}
+
+async function cached(
+  request: CachedMetadataRequest,
+): Promise<WorkspaceMetadataPage | null> {
+  const value = await readRecord(request.id)
+  return value &&
+    value.fingerprint === request.fingerprint &&
+    value.page.path === request.path &&
+    value.page.version === request.version
+    ? value.page
+    : null
+}
+
+async function readHeadings(
+  request: CachedMetadataRequest,
+  offset: number,
+  limit: number,
+) {
+  const local = headingLocations.get(request.id)
+  if (
+    local &&
+    local.version === request.version &&
+    local.path === request.path &&
+    local.fingerprint === request.fingerprint
+  )
+    return local.store
+      ? readHeadingStore(
+          local.directory,
+          local.store,
+          offset,
+          limit,
+          local.complete,
+        )
+      : {
+          items: [],
+          nextOffset: offset,
+          hasMore: false,
+          complete: local.complete,
+        }
+  const record = await readRecord(request.id)
+  if (
+    !record ||
+    record.fingerprint !== request.fingerprint ||
+    record.page.path !== request.path ||
+    record.page.version !== request.version
+  )
+    return null
+  const complete =
+    record.page.metadata.headings.complete && record.page.syntax.complete
+  if (!record.headings)
+    return { items: [], nextOffset: offset, hasMore: false, complete }
+  return readHeadingStore(
+    cacheDirectory as string,
+    record.headings,
+    offset,
+    limit,
+    complete,
+  )
 }
 
 async function* resultPages(
@@ -231,7 +343,8 @@ async function resultChunk(): Promise<RecordSlice> {
 async function remember(
   page: WorkspaceMetadataPage,
   fingerprint: string,
-): Promise<void> {
+  headings?: HeadingStoreRecord,
+): Promise<boolean> {
   if (
     !cacheDirectory ||
     !buildIdentity ||
@@ -239,15 +352,21 @@ async function remember(
     !idPattern.test(page.id) ||
     !page.version.startsWith('disk:')
   )
-    return
+    return false
   const temporary = join(cacheDirectory, `.${page.id}-${randomUUID()}.tmp`)
   try {
     await mkdir(cacheDirectory, { recursive: true, mode: 0o700 })
-    if (!(await cacheAvailable())) return
+    if (!(await cacheAvailable())) return false
     const file = await open(temporary, 'wx', 0o600)
     try {
       const writer = new RecordWriter()
-      const tokens = recordTokens({ schema, buildIdentity, fingerprint, page })
+      const tokens = recordTokens({
+        schema,
+        buildIdentity,
+        fingerprint,
+        page,
+        headings,
+      })
       const write = async (slice: RecordToken[]) => {
         const buffer = Buffer.from(`${JSON.stringify(slice)}\n`)
         for (let offset = 0; offset < buffer.length; ) {
@@ -265,13 +384,16 @@ async function remember(
     } finally {
       await file.close()
     }
-    if (await cacheAvailable())
+    if (await cacheAvailable()) {
       await rename(temporary, join(cacheDirectory, `${page.id}.json`))
+      return true
+    }
   } catch {
     // Cache writes are optional; the parsed page remains usable.
   } finally {
     await unlink(temporary).catch(() => {})
   }
+  return false
 }
 
 async function clearPruning(): Promise<void> {
@@ -301,8 +423,16 @@ async function finishBuild(remove: readonly string[]) {
     return null
   }
   try {
-    for (const name of remove)
+    for (const name of remove) {
+      const record = await readRecord(name.slice(0, -5))
+      if (record?.headings)
+        for (const suffix of ['hidx', 'hdat'])
+          await unlink(
+            join(cacheDirectory, `${record.headings.key}.${suffix}`),
+          ).catch(() => {})
       await unlink(join(cacheDirectory, name)).catch(() => {})
+      headingLocations.delete(name.slice(0, -5))
+    }
     pruning ??= await opendir(cacheDirectory)
     const names: string[] = []
     // Bound enumeration itself, including unrelated entries.
@@ -316,7 +446,15 @@ async function finishBuild(remove: readonly string[]) {
         return { names, done: names.length === 0 }
       }
       if (recordPattern.test(entry.name)) names.push(entry.name)
-      else if (temporaryPattern.test(entry.name))
+      else if (headingStorePattern.test(entry.name)) {
+        const id = entry.name.slice(0, 64)
+        const record = await readRecord(id)
+        if (
+          !record?.headings ||
+          !entry.name.startsWith(`${record.headings.key}.`)
+        )
+          await unlink(join(cacheDirectory, entry.name)).catch(() => {})
+      } else if (temporaryPattern.test(entry.name))
         await unlink(join(cacheDirectory, entry.name)).catch(() => {})
     }
     return { names, done: false }
@@ -385,57 +523,122 @@ async function fileChunk(): Promise<boolean | null> {
   return false
 }
 
-async function derive(input: MetadataParseInput, source: string) {
+async function derive(
+  input: MetadataParseInput,
+  chunks: readonly string[],
+  fallback = false,
+  current: () => Promise<boolean> = async () => true,
+) {
+  let directory = headingDirectory
+  if (
+    cacheDirectory &&
+    buildIdentity &&
+    idPattern.test(input.id) &&
+    input.version.startsWith('disk:')
+  ) {
+    await mkdir(cacheDirectory, { recursive: true, mode: 0o700 }).catch(
+      () => {},
+    )
+    if (await cacheAvailable()) directory = cacheDirectory
+  }
+  if (!(await headingDirectoryAvailable(directory))) return null
+  let writer: HeadingStoreWriter | undefined
+  const onHeading = (heading: Parameters<HeadingStoreWriter['add']>[0]) => {
+    writer ??= new HeadingStoreWriter(
+      directory,
+      idPattern.test(input.id)
+        ? input.id
+        : createHash('sha256').update(input.path).digest('hex'),
+      headingIdentity(input),
+    )
+    writer.add(heading)
+  }
   let page: WorkspaceMetadataPage
   try {
-    const syntax = applySourceSyntax(input.syntax, source)
-    page = {
-      id: input.id,
-      path: input.path,
-      version: input.version,
-      syntax,
-      metadata: parseWorkspaceMetadata(
-        { id: input.id, path: input.path, markdown: source },
-        syntax,
-      ),
+    if (fallback)
+      page = parseWorkspaceMetadataFallback(input, chunks, onHeading)
+    else {
+      try {
+        const source = chunks.join('')
+        const syntax = applySourceSyntax(input.syntax, source)
+        page = {
+          id: input.id,
+          path: input.path,
+          version: input.version,
+          syntax,
+          metadata: parseWorkspaceMetadata(
+            { id: input.id, path: input.path, markdown: source },
+            syntax,
+            undefined,
+            onHeading,
+          ),
+        }
+      } catch (error) {
+        writer?.abort()
+        writer = undefined
+        if (readFailure(error)) throw error
+        page = parseWorkspaceMetadataFallback(input, chunks, onHeading)
+      }
     }
-  } catch {
-    page = incompleteMetadataPage(input)
+    const headings = writer?.finish()
+    page.metadata.headings = {
+      items: [],
+      complete: page.metadata.headings.complete,
+      count: headings?.count ?? 0,
+      paged: true,
+    }
+    if (!(await headingDirectoryAvailable(directory)) || !(await current())) {
+      writer?.abort()
+      return null
+    }
+    const previous = headingLocations.get(input.id)
+    headingLocations.set(input.id, {
+      version: input.version,
+      fingerprint: input.fingerprint,
+      path: input.path,
+      directory,
+      store: headings,
+      complete: page.metadata.headings.complete && page.syntax.complete,
+    })
+    if (previous?.store && previous.directory === headingDirectory)
+      for (const suffix of ['hidx', 'hdat'])
+        await unlink(
+          join(previous.directory, `${previous.store.key}.${suffix}`),
+        ).catch(() => {})
+    parentPort?.postMessage({ parsed: true })
+    if (directory === cacheDirectory || !headings) {
+      if (await remember(page, input.fingerprint, headings))
+        headingLocations.delete(input.id)
+    }
+    return page
+  } catch (error) {
+    writer?.abort()
+    throw error
   }
-  parentPort?.postMessage({ parsed: true })
-  await remember(page, input.fingerprint)
-  return page
 }
 
-async function parseEnd(): Promise<WorkspaceMetadataPage | null> {
+async function parseEnd(
+  fallback = false,
+): Promise<WorkspaceMetadataPage | null> {
   const state = parsing
   if (!state) return null
   try {
-    if (state.disk) {
-      const { file, input, done } = state.disk
-      if (!done) return null
-      const info = await file.stat({ bigint: true })
-      const pathInfo = await lstat(input.nativePath, { bigint: true })
-      if (
-        !info.isFile() ||
-        !pathInfo.isFile() ||
-        pathInfo.isSymbolicLink() ||
-        diskIndexVersion(info) !== input.expectedVersion ||
-        diskIndexVersion(pathInfo) !== input.expectedVersion
+    const current = async () => {
+      const disk = state.disk
+      if (!disk) return state.received === state.length
+      if (!disk.done) return false
+      const info = await disk.file.stat({ bigint: true })
+      const pathInfo = await lstat(disk.input.nativePath, { bigint: true })
+      return (
+        info.isFile() &&
+        pathInfo.isFile() &&
+        !pathInfo.isSymbolicLink() &&
+        diskIndexVersion(info) === disk.input.expectedVersion &&
+        diskIndexVersion(pathInfo) === disk.input.expectedVersion
       )
-        return null
-    } else if (state.received !== state.length) return null
-    let source: string
-    try {
-      source = state.chunks.join('')
-    } catch {
-      const page = incompleteMetadataPage(state.input)
-      parentPort?.postMessage({ parsed: true })
-      await remember(page, state.input.fingerprint)
-      return page
     }
-    state.chunks.length = 0
-    return await derive(state.input, source)
+    if (!(await current())) return null
+    return await derive(state.input, state.chunks, fallback, current)
   } finally {
     await clearParsing()
   }
@@ -470,7 +673,8 @@ parentPort?.on('message', async (request: MetadataWorkerRequest) => {
     results = undefined
     if (request.kind === 'incomplete') {
       value = incompleteMetadataPage(request.input)
-      await remember(value as WorkspaceMetadataPage, request.input.fingerprint)
+    } else if (request.kind === 'readHeadings') {
+      value = await readHeadings(request.input, request.offset, request.limit)
     } else if (request.kind === 'beginBuild') {
       await clearPruning()
       await cleanupTemporaries()
@@ -502,7 +706,8 @@ parentPort?.on('message', async (request: MetadataWorkerRequest) => {
       parsing.chunks.push(request.source)
       parsing.received += request.source.length
       value = true
-    } else if (request.kind === 'parseEnd') value = await parseEnd()
+    } else if (request.kind === 'parseEnd')
+      value = await parseEnd(request.fallback)
     else if (request.kind === 'parseClear') {
       await clearParsing()
       value = true
@@ -522,7 +727,8 @@ parentPort?.on('message', async (request: MetadataWorkerRequest) => {
           syntax: request.syntax,
           fingerprint: request.fingerprint,
         },
-        request.page.markdown,
+        [request.page.markdown],
+        request.fallback,
       )
     }
     if (value && typeof value === 'object' && 'metadata' in value) {

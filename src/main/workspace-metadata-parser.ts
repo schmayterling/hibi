@@ -1,11 +1,16 @@
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
-import { dirname, relative, resolve } from 'node:path'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join, relative, resolve } from 'node:path'
 import { setImmediate as nextTurn } from 'node:timers/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Worker } from 'node:worker_threads'
 import type { WorkspacePage } from '../shared/workspace.ts'
 import type { WorkspaceMetadataPage } from './workspace-index-metadata.ts'
+import {
+  type HeadingPage,
+  headingPageLimit,
+} from './workspace-metadata-heading-store.ts'
 import {
   RecordReader,
   type RecordSlice,
@@ -31,6 +36,7 @@ export type MetadataRequest =
       syntax: PageSyntax
       version: string
       fingerprint: string
+      fallback?: boolean
     }
 export type MetadataParseInput = {
   id: string
@@ -57,12 +63,19 @@ export type MetadataWorkerRequest =
   | { kind: 'fileChunk' }
   | { kind: 'sourceStart'; input: MetadataParseInput; length: number }
   | { kind: 'sourceChunk'; source: string }
-  | { kind: 'parseEnd' }
+  | { kind: 'parseEnd'; fallback?: boolean }
+  | {
+      kind: 'readHeadings'
+      input: CachedMetadataRequest
+      offset: number
+      limit: number
+    }
   | { kind: 'parseClear' }
   | { kind: 'resultChunk' }
   | { kind: 'incomplete'; input: MetadataParseInput }
 type MetadataResult =
   | WorkspaceMetadataPage
+  | HeadingPage
   | (WorkspaceMetadataPage | null)[]
   | boolean
   | CacheNames
@@ -71,7 +84,7 @@ type ParserOptions = {
   entry: string | URL
   cacheDirectory?: string
   appVersion?: string
-  // Last-resort parse watchdog, not a content limit. Dense 1 MiB fixtures take <1 s.
+  // Expensive Markdown parsing restarts with the linear scanner after this delay.
   // Tests may lower this to exercise a stuck parser without waiting 30 seconds.
   watchdogMs?: number
 }
@@ -105,6 +118,7 @@ export class WorkspaceMetadataParser {
   private worker: Worker | undefined
   private ready: Promise<void> = Promise.resolve()
   private workerReady = false
+  private headingDirectory: string | undefined
   private startupReject: ((error: Error) => void) | undefined
   private seen: Set<string> | undefined
   private pending:
@@ -142,7 +156,11 @@ export class WorkspaceMetadataParser {
     this.startupReject = undefined
     this.pending?.reject(error)
     this.pending = undefined
-    this.stopping = worker.terminate()
+    const directory = this.headingDirectory
+    this.headingDirectory = undefined
+    this.stopping = worker.terminate().then(async () => {
+      if (directory) await rm(directory, { recursive: true, force: true })
+    })
   }
 
   private canonical = (value: string): string => {
@@ -152,15 +170,24 @@ export class WorkspaceMetadataParser {
     return value
   }
 
-  private start(options: ParserOptions, buildIdentity?: string): Worker {
+  private start(
+    options: ParserOptions,
+    headingDirectory: string,
+    buildIdentity?: string,
+  ): Worker {
     const worker = new Worker(options.entry, {
-      workerData: { cacheDirectory: options.cacheDirectory, buildIdentity },
+      workerData: {
+        cacheDirectory: options.cacheDirectory,
+        buildIdentity,
+        headingDirectory,
+      },
       resourceLimits: {
         maxOldGenerationSizeMb: 256,
         maxYoungGenerationSizeMb: 32,
       },
     })
     this.worker = worker
+    this.headingDirectory = headingDirectory
     this.workerReady = false
     let ready!: () => void
     this.ready = new Promise<void>((resolve, reject) => {
@@ -193,7 +220,10 @@ export class WorkspaceMetadataParser {
         worker.unref()
         if (message.error)
           pending?.reject(
-            Object.assign(new Error(message.error), { code: message.code }),
+            Object.assign(new Error(message.error), {
+              code: message.code,
+              metadataWorkerReady: this.workerReady,
+            }),
           )
         else pending?.resolve(message.value)
       },
@@ -241,8 +271,14 @@ export class WorkspaceMetadataParser {
         ? await bundleHash(options.entry)
         : undefined
       if (!active()) return null
+      const directory = await mkdtemp(join(tmpdir(), 'hibi-metadata-headings-'))
+      if (!active()) {
+        await rm(directory, { recursive: true, force: true })
+        return null
+      }
       this.start(
         options,
+        directory,
         hash ? JSON.stringify([options.appVersion, hash]) : undefined,
       )
     }
@@ -252,7 +288,7 @@ export class WorkspaceMetadataParser {
     let value = await this.exchange(worker, request)
     if (!value || typeof value !== 'object' || !('tokens' in value))
       return active() ? value : null
-    const reader = new RecordReader(this.canonical)
+    const reader = new RecordReader(this.canonical, true)
     try {
       while (active()) {
         if (value.tokens.length > recordSliceTokens)
@@ -292,7 +328,10 @@ export class WorkspaceMetadataParser {
         (resolve, reject) => {
           this.pending = { resolve, reject, parsed: () => clearTimeout(timer) }
           worker.ref()
-          if (request.kind === 'parseEnd' || request.kind === 'parse') {
+          if (
+            (request.kind === 'parseEnd' || request.kind === 'parse') &&
+            !request.fallback
+          ) {
             timer = setTimeout(
               () =>
                 this.fail(
@@ -351,7 +390,8 @@ export class WorkspaceMetadataParser {
       if (this.worker) this.fail(this.worker, error as Error)
       await this.stopping
       if (!active()) return null
-      return await this.send({ kind: 'incomplete', input }, active)
+      if (!(await transfer()) || !active()) return null
+      return await this.send({ kind: 'parseEnd', fallback: true }, active)
     } finally {
       // An obsolete transaction must release its chunks before another starts.
       if (this.worker) await this.send({ kind: 'parseClear' }, () => true)
@@ -428,21 +468,41 @@ export class WorkspaceMetadataParser {
         if (request.kind === 'cached') return null
         await this.stopping
         if (!active()) return null
-        return this.send(
-          {
-            kind: 'incomplete',
-            input: {
-              id: request.page.id ?? '',
-              path: request.page.path,
-              version: request.version,
-              fingerprint: request.fingerprint,
-              syntax: request.syntax,
-            },
-          },
-          active,
-        )
+        return this.send({ ...request, fallback: true }, active)
       }
     })) as WorkspaceMetadataPage | null
+  }
+
+  async readHeadings(
+    input: CachedMetadataRequest,
+    offset: number,
+    limit: number,
+    current: () => boolean,
+  ): Promise<HeadingPage | null> {
+    if (
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > headingPageLimit
+    )
+      throw new RangeError('Invalid heading page')
+    return (await this.enqueue(current, async (active) => {
+      try {
+        return await this.send(
+          { kind: 'readHeadings', input, offset, limit },
+          active,
+        )
+      } catch (error) {
+        if (
+          !this.resourceFailure(error) ||
+          !(error as { metadataWorkerReady?: boolean }).metadataWorkerReady
+        )
+          throw error
+        if (this.worker) this.fail(this.worker, error as Error)
+        return null
+      }
+    })) as HeadingPage | null
   }
 
   /** At most 64 descriptors per call; null entries must be parsed normally. */

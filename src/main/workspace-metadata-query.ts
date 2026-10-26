@@ -15,6 +15,7 @@ import {
   workspaceChangeCursor,
   workspaceIndexRevision,
   workspaceMetadataDelta,
+  workspaceMetadataHeadings,
   workspaceMetadataPages,
 } from './workspace'
 import { LatestIndexJob } from './workspace-index-job'
@@ -334,6 +335,7 @@ export async function queryWorkspaceReferences(
     sequence: after.sequence,
     stale: after.stale,
     complete: after.complete && references.isComplete(),
+    incompletePaths: references.incompletePaths(),
     capReached: after.capReached,
   }
   if (kind === 'resolve')
@@ -480,7 +482,15 @@ export async function queryWorkspaceReferences(
     }
   }
   if (kind === 'headings') {
-    const result = references.headings(path as string, offset, limit)
+    const result = await workspaceMetadataHeadings(
+      path as string,
+      syntax,
+      offset,
+      limit,
+      cacheCurrent,
+    )
+    if (!result || !cacheCurrent())
+      return failure('stale', 'This workspace changed. Try again.')
     return {
       ok: true,
       value: {

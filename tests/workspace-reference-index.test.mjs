@@ -170,9 +170,6 @@ test('lazy tag, property, heading and path queries invalidate changed notes', ()
   assert.deepEqual(index.tagged('work', 0, 10).items, ['a.md'])
   assert.deepEqual(index.tags(0, 10).items, [{ tag: 'work', count: 1 }])
   assert.deepEqual(index.property('tags', 'two', 0, 10).items, ['a.md'])
-  assert.deepEqual(index.headings('a.md', 0, 10).items, [
-    { depth: 1, text: 'Intro' },
-  ])
   assert.deepEqual(index.searchPaths('A.MD', 0, 10).items, ['a.md'])
   index.apply(workspace, [
     page('a.md', '---\ntitle: Beta\n---\n# Changed\n\n#other'),
@@ -182,9 +179,6 @@ test('lazy tag, property, heading and path queries invalidate changed notes', ()
   assert.deepEqual(index.tagged('other', 0, 10).items, ['a.md'])
   assert.deepEqual(index.tags(0, 10).items, [{ tag: 'other', count: 1 }])
   assert.deepEqual(index.property('title', 'Alpha', 0, 10).items, [])
-  assert.deepEqual(index.headings('a.md', 0, 10).items, [
-    { depth: 1, text: 'Changed' },
-  ])
 })
 
 test('cooperative metadata work yields between batches and publishes whole snapshots', async () => {
@@ -528,9 +522,6 @@ test('large frontmatter preserves references, tags, properties, and headings', (
     index.property('long', 'x'.repeat(100_000), 0, 10).items[0],
     'a.md',
   )
-  assert.deepEqual(index.headings('a.md', 0, 10).items, [
-    { depth: 1, text: 'Heading b #work' },
-  ])
   index.apply(workspace, [page('a.md', '# Heading [[b]] #work'), page('b.md')])
   assert.equal(index.isComplete(), true)
   assert.deepEqual(index.links('a.md', 0, 10).items, ['b.md'])
@@ -680,19 +671,6 @@ test('oversized metadata fields advance their offsets and leave later records re
     offset = result.nextOffset
   }
   assert.deepEqual(tags, ['aaa', 'ccc', 'ddd'])
-  assert.equal(incomplete, true)
-  const headings = []
-  offset = 0
-  incomplete = false
-  while (true) {
-    const result = index.headings('a.md', offset, 1)
-    headings.push(...result.items.map((item) => item.text))
-    incomplete ||= !result.complete
-    assert.ok(!result.hasMore || result.nextOffset > offset)
-    if (!result.hasMore) break
-    offset = result.nextOffset
-  }
-  assert.deepEqual(headings, ['one', 'three', 'four'])
   assert.equal(incomplete, true)
 })
 

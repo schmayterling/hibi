@@ -74,6 +74,23 @@ const bundle = await build({
             host().listener = listener
             return () => { host().listener = null }
           }
+          export async function workspaceMetadataHeadings(path, syntax, offset, limit, current) {
+            if (!current()) return null
+            const page = host().pages.find(page => page.path === path)
+            if (!page) return null
+            const profile = syntax.page(page)
+            const headings = parseWorkspaceMetadata(page, profile).headings
+            const items = []
+            let bytes = 0, nextOffset = offset, complete = headings.complete && profile.complete
+            for (let scanned = 0; nextOffset < headings.items.length && scanned < limit; scanned++) {
+              const heading = headings.items[nextOffset]
+              const size = Buffer.byteLength(heading.text)
+              if (size > 32768) { complete = false; nextOffset++; continue }
+              if (bytes + size > 32768) break
+              items.push(heading); bytes += size; nextOffset++
+            }
+            return { items, nextOffset, hasMore: nextOffset < headings.items.length, complete }
+          }
           export async function workspaceMetadataDelta(syntax, current) {
             if (!current() || host().deltaPages === null) return null
             host().deltaReads++

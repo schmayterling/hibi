@@ -1357,6 +1357,65 @@ function metadataDrafts(selected: string): Map<string, IndexDraft> {
   return drafts
 }
 
+/** Heading text stays on disk; only this requested page crosses the worker boundary. */
+export async function workspaceMetadataHeadings(
+  path: string,
+  syntax: WorkspaceSyntax,
+  offset: number,
+  limit: number,
+  current: () => boolean,
+) {
+  const selected = root
+  if (!selected) return null
+  const revision = indexRevision
+  const active = () =>
+    current() && root === selected && indexRevision === revision
+  const draft = metadataDrafts(selected).get(path)
+  try {
+    const file = draft?.file ?? (await resolveWorkspaceFile(selected, path))
+    if (!active()) return null
+    const version = draft
+      ? `draft:${draft.tabId}:${draft.contentVersion}`
+      : diskIndexVersion(await stat(file, { bigint: true }))
+    if (!active()) return null
+    const id = createHash('sha256').update(file).digest('hex')
+    const cached = {
+      kind: 'cached' as const,
+      id,
+      path,
+      version,
+      fingerprint: syntax.fingerprint,
+    }
+    const page = await metadataParser.readHeadings(
+      cached,
+      offset,
+      limit,
+      active,
+    )
+    if (!active()) return null
+    if (page) return page
+    const input = {
+      id,
+      path,
+      version,
+      fingerprint: syntax.fingerprint,
+      syntax: syntax.page({ id, path, markdown: '' }),
+    }
+    const parsed = draft
+      ? await metadataParser.parseSource(input, draft.source, active)
+      : await metadataParser.parseFile(
+          { ...input, nativePath: file, expectedVersion: version },
+          active,
+        )
+    if (!parsed || !active()) return null
+    return await metadataParser.readHeadings(cached, offset, limit, active)
+  } catch (error) {
+    if (!active() || (error as NodeJS.ErrnoException).code === 'ENOENT')
+      return null
+    throw error
+  }
+}
+
 type PreparedMetadata =
   | {
       kind: 'retained'

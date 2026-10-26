@@ -75,20 +75,31 @@ export function noteHeadings(
   source: string,
   syntax: NoteSyntax = defaultNoteSyntax,
   lexed?: ReturnType<typeof noteLexer>,
+  onHeading?: (heading: NoteHeading) => void,
 ): {
   items: readonly NoteHeading[]
   complete: boolean
+  count?: number
+  paged?: boolean
 } {
   const headings: NoteHeading[] = []
+  let count = 0
   const { parser, tokens } = lexed ?? noteLexer(source, syntax)
   parser.walkTokens(tokens, (token) => {
     if (token.type === 'heading') {
-      headings.push({
+      const heading = {
         depth: token.depth,
         text: inlineText(token.tokens ?? []).trim(),
-      })
+      }
+      if (onHeading) onHeading(heading)
+      else headings.push(heading)
+      count++
     }
     return []
   })
-  return { items: headings, complete: true }
+  return {
+    items: headings,
+    complete: true,
+    ...(onHeading ? { count, paged: true } : {}),
+  }
 }

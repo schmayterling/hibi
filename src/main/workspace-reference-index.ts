@@ -8,7 +8,7 @@ import {
   resolveWikiTarget,
   wikiTarget,
 } from '../shared/note-links.ts'
-import type { NoteHeading, PropertyScalar } from '../shared/note-metadata.ts'
+import type { PropertyScalar } from '../shared/note-metadata.ts'
 import { defaultNoteSyntax } from '../shared/note-syntax.ts'
 import type { WorkspacePage } from '../shared/workspace'
 import type {
@@ -24,7 +24,7 @@ import {
 } from './workspace-index-metadata.ts'
 import type { PageSyntax } from './workspace-syntax.ts'
 
-type DocumentLinks = WorkspacePageMetadata & {
+type DocumentLinks = Omit<WorkspacePageMetadata, 'headings'> & {
   version: string
   syntaxKey: string
   syntaxComplete: boolean
@@ -38,6 +38,13 @@ type ApplyResult = {
 }
 
 type CanCommit = () => boolean
+
+const referenceMetadata = (metadata: WorkspacePageMetadata) => ({
+  references: metadata.references,
+  referenceComplete: metadata.referenceComplete,
+  tags: metadata.tags,
+  properties: metadata.properties,
+})
 
 const workSlice = 64
 const workSliceMs = 4
@@ -73,6 +80,7 @@ export class WorkspaceReferenceIndex {
   private documents = new Map<string, DocumentLinks>()
   private revision = 0
   private incompleteCount = 0
+  private incompleteDocuments = new Set<string>()
   private unsupportedCount = 0
   private tagBuild: Promise<boolean> | undefined
   private reverse = new Map<string, Set<string>>()
@@ -99,6 +107,7 @@ export class WorkspaceReferenceIndex {
   clear(): void {
     this.revision++
     this.incompleteCount = 0
+    this.incompleteDocuments.clear()
     this.unsupportedCount = 0
     this.tagBuild = undefined
     this.target = null
@@ -290,7 +299,7 @@ export class WorkspaceReferenceIndex {
         }
       }
       const next: DocumentLinks = {
-        ...page.metadata,
+        ...referenceMetadata(page.metadata),
         version: page.version,
         syntaxKey: page.syntax.key,
         syntaxComplete,
@@ -310,7 +319,12 @@ export class WorkspaceReferenceIndex {
     }
     if (this.revision !== revision || !canCommit()) return null
     if (!updates.size) return { parsed: 0, resolved: 0 }
-    for (const [path, document] of updates) this.documents.set(path, document)
+    for (const [path, document] of updates) {
+      this.documents.set(path, document)
+      if (!document.referenceComplete || !document.syntaxComplete)
+        this.incompleteDocuments.add(path)
+      else this.incompleteDocuments.delete(path)
+    }
     for (const [path, source, add] of reverseChanges) {
       const sources = this.reverse.get(path)
       if (sources) this.sortedViews.delete(sources)
@@ -364,6 +378,7 @@ export class WorkspaceReferenceIndex {
     let complete = true
     let unsupported = false
     let incompleteCount = 0
+    const incompleteDocuments = new Set<string>()
     let unsupportedCount = 0
     let parsed = 0
     let sliceStarted = performance.now()
@@ -395,9 +410,9 @@ export class WorkspaceReferenceIndex {
         const metadata =
           'metadata' in page
             ? page.metadata
-            : parseWorkspaceMetadata(page, syntax, this.parse)
+            : parseWorkspaceMetadata(page, syntax, this.parse, () => {})
         next.set(page.path, {
-          ...metadata,
+          ...referenceMetadata(metadata),
           version,
           syntaxKey: syntax.key,
           syntaxComplete,
@@ -412,8 +427,10 @@ export class WorkspaceReferenceIndex {
       const document = next.get(page.path)
       complete &&= !!document?.referenceComplete && !!document.syntaxComplete
       unsupported ||= !!document?.unsupportedSyntax
-      if (!document?.referenceComplete || !document.syntaxComplete)
+      if (!document?.referenceComplete || !document.syntaxComplete) {
         incompleteCount++
+        incompleteDocuments.add(page.path)
+      }
       if (document?.unsupportedSyntax) unsupportedCount++
       if (
         (pageIndex + 1) % workSlice === 0 ||
@@ -570,6 +587,7 @@ export class WorkspaceReferenceIndex {
     this.documents = next
     this.revision++
     this.incompleteCount = incompleteCount
+    this.incompleteDocuments = incompleteDocuments
     this.unsupportedCount = unsupportedCount
     this.tagBuild = undefined
     this.filteredViews.clear()
@@ -587,6 +605,19 @@ export class WorkspaceReferenceIndex {
 
   has(path: string): boolean {
     return this.documents.has(path)
+  }
+
+  incompletePaths(): readonly string[] {
+    const paths: string[] = []
+    let bytes = 0
+    for (const path of this.incompleteDocuments) {
+      const size = Buffer.byteLength(path)
+      if (bytes + size > 32 * 1024) break
+      paths.push(path)
+      bytes += size
+      if (paths.length === 8) break
+    }
+    return paths
   }
 
   isComplete(): boolean {
@@ -939,49 +970,6 @@ export class WorkspaceReferenceIndex {
     if (this.documents !== snapshot || !canCommit()) return null
     this.rememberPaths(cacheKey, matches, complete)
     return { ...(yield* this.pageSteps(matches, offset, limit)), complete }
-  }
-
-  headings(
-    path: string,
-    offset: number,
-    limit: number,
-  ): {
-    items: readonly NoteHeading[]
-    hasMore: boolean
-    nextOffset: number
-    complete: boolean
-  } {
-    const document = this.documents.get(path)
-    if (!document || !isMarkdownDocument(path))
-      return { items: [], hasMore: false, nextOffset: offset, complete: true }
-    const items: NoteHeading[] = []
-    let bytes = 0
-    let nextOffset = offset
-    let complete = document.headings.complete && document.syntaxComplete
-    for (
-      let index = offset;
-      index < document.headings.items.length && items.length < limit;
-      index++
-    ) {
-      const heading = document.headings.items[index]
-      if (!heading) break
-      const size = Buffer.byteLength(heading.text)
-      if (size > 32 * 1024) {
-        complete = false
-        nextOffset = index + 1
-        continue
-      }
-      if (bytes + size > 32 * 1024) break
-      items.push(heading)
-      bytes += size
-      nextOffset = index + 1
-    }
-    return {
-      items,
-      hasMore: nextOffset < document.headings.items.length,
-      nextOffset,
-      complete,
-    }
   }
 
   searchPaths(query: string, offset: number, limit: number): ReferencePage {

@@ -44,10 +44,10 @@ import {
 } from './sideload'
 import { testPause } from './test-pauses'
 import {
-  getWorkspace,
   refreshWorkspace,
   resolveWorkspaceFile,
   snapshotWorkspace,
+  workspaceEntries,
   workspaceId,
   workspaceRoot,
 } from './workspace'
@@ -698,7 +698,7 @@ export async function invokeAddon(
             'This document is no longer in the workspace. Open it again.',
           )
         async function find(
-          entries: import('../shared/workspace').WorkspaceEntry[],
+          entries: readonly import('../shared/workspace').WorkspaceEntry[],
         ): Promise<string | null> {
           for (const entry of entries) {
             if (entry.children) {
@@ -712,7 +712,7 @@ export async function invokeAddon(
           }
           return null
         }
-        const path = await find(getWorkspace()?.entries ?? [])
+        const path = await find(workspaceEntries())
         if (!path)
           throw new Error(
             'This document is no longer in the workspace. Open it again.',

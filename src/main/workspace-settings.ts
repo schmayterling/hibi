@@ -9,11 +9,10 @@ import {
 } from 'node:fs/promises'
 import { basename, isAbsolute, join } from 'node:path'
 import { app, type BrowserWindow, dialog } from 'electron'
-import {
-  WORKSPACE_ENTRY_LIMITS,
-  type WorkspacePreferences,
-  type WorkspaceSettings,
-  type WorkspaceSettingsAction,
+import type {
+  WorkspacePreferences,
+  WorkspaceSettings,
+  WorkspaceSettingsAction,
 } from '../shared/workspace-settings'
 import {
   getDocument,
@@ -24,6 +23,7 @@ import {
 } from './document'
 import { runFileDialog } from './file-operation-dialog'
 import { writeText } from './files'
+import { forgetWorkspace } from './recent-workspaces'
 import {
   getWorkspace,
   loadWorkspace,
@@ -43,7 +43,6 @@ import { isPathInside } from './workspace-paths'
 const defaults: WorkspacePreferences = {
   enabled: false,
   showAllFiles: false,
-  entryLimit: WORKSPACE_ENTRY_LIMITS[0],
   path: null,
   startup: 'empty',
   startupFolder: null,
@@ -58,8 +57,6 @@ async function preferences(): Promise<WorkspacePreferences> {
       typeof value.enabled !== 'boolean' ||
       (value.showAllFiles !== undefined &&
         typeof value.showAllFiles !== 'boolean') ||
-      (value.entryLimit !== undefined &&
-        !WORKSPACE_ENTRY_LIMITS.includes(value.entryLimit)) ||
       !['empty', 'managed', 'folder'].includes(value.startup) ||
       ![value.path, value.startupFolder].every(
         (path) =>
@@ -70,7 +67,13 @@ async function preferences(): Promise<WorkspacePreferences> {
       )
     )
       throw new Error('Invalid workspace settings.')
-    return { ...defaults, ...value }
+    return {
+      enabled: value.enabled,
+      showAllFiles: value.showAllFiles ?? defaults.showAllFiles,
+      path: value.path,
+      startup: value.startup,
+      startupFolder: value.startupFolder,
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
       console.error('Could not read workspace settings:', error)
@@ -79,9 +82,6 @@ async function preferences(): Promise<WorkspacePreferences> {
 }
 export async function showAllWorkspaceFiles() {
   return (await preferences()).showAllFiles
-}
-export async function workspaceEntryLimit() {
-  return (await preferences()).entryLimit
 }
 async function savePreferences(value: WorkspacePreferences) {
   await writeText(location(), JSON.stringify(value))
@@ -151,12 +151,6 @@ export async function updateWorkspaceSettings(
     if (typeof value.enabled !== 'boolean')
       throw new Error('Choose whether to show all workspace files.')
     prefs.showAllFiles = value.enabled
-  } else if (value.action === 'entry-limit') {
-    if (!WORKSPACE_ENTRY_LIMITS.includes(value.limit))
-      throw new Error(
-        'Choose a workspace item limit of 20,000, 50,000, or 100,000.',
-      )
-    prefs.entryLimit = value.limit
   } else if (value.action === 'choose') {
     const selected = await chooseFolder(window, 'Choose Hibi workspace')
     if (selected) {
@@ -167,7 +161,7 @@ export async function updateWorkspaceSettings(
   } else if (value.action === 'open') {
     if (!prefs.enabled || !prefs.path)
       throw new Error('Enable your Hibi workspace first.')
-    await loadWorkspace(prefs.path)
+    await loadWorkspace(prefs.path, false, false)
   } else if (value.action === 'startup') {
     if (!['empty', 'managed', 'folder'].includes(value.startup))
       throw new Error('Choose a startup option.')
@@ -183,7 +177,7 @@ export async function updateWorkspaceSettings(
     const root = workspaceRoot()
     if (!root) throw new Error('Open a folder first.')
     await ensureManifest(root)
-    await refreshWorkspace([WORKSPACE_MANIFEST])
+    await refreshWorkspace([WORKSPACE_MANIFEST], false)
   } else if (value.action === 'save-manifest') {
     const root = workspaceRoot()
     if (!root) throw new Error('Open a folder first.')
@@ -203,7 +197,7 @@ export async function updateWorkspaceSettings(
       WORKSPACE_MANIFEST,
       JSON.stringify(manifest, null, 2) + '\n',
     )
-    await refreshWorkspace([WORKSPACE_IGNORE, WORKSPACE_MANIFEST])
+    await refreshWorkspace([WORKSPACE_IGNORE, WORKSPACE_MANIFEST], false)
   } else if (value.action === 'relocate') {
     if (!prefs.enabled || !prefs.path)
       throw new Error('Enable your Hibi workspace first.')
@@ -229,10 +223,12 @@ export async function updateWorkspaceSettings(
       throw new Error(
         'A folder with this name already exists at the destination.',
       )
+    let copied = false
     try {
       await rename(from, to)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error
+      copied = true
       // Across disks retain the original; removing a concurrently edited tree would risk data loss.
       await mkdir(to)
       try {
@@ -257,12 +253,13 @@ export async function updateWorkspaceSettings(
       )
     }
     relocateDocument(from, to)
-    if (workspaceRoot() === from) await loadWorkspace(to)
+    if (workspaceRoot() === from) await loadWorkspace(to, false, false)
     if (prefs.startupFolder === from) prefs.startupFolder = to
     prefs.path = to
+    if (!copied) await forgetWorkspace(from)
   } else throw new Error('Unknown workspace action.')
   await savePreferences(prefs)
-  if (value.action === 'show-all-files') await refreshWorkspace()
+  if (value.action === 'show-all-files') await refreshWorkspace(null, false)
   return getWorkspaceSettings()
 }
 
@@ -299,7 +296,7 @@ export async function openStartupWorkspace(
     hasExternalFiles
   )
     return
-  await loadWorkspace(path)
-  const file = getWorkspace()?.manifest?.defaultFile
+  await loadWorkspace(path, false, false)
+  const file = getWorkspace(undefined, false)?.manifest?.defaultFile
   if (file) await loadDocument(window, await resolveWorkspaceFile(path, file))
 }

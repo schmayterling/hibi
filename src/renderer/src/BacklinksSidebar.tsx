@@ -47,8 +47,8 @@ export function BacklinksSidebar({
     const timer = setTimeout(() => {
       const read = async () => {
         try {
-          const snapshot = await window.hibi.getWorkspaceChangeSnapshot()
-          if (!snapshot.target || snapshot.target.workspaceId !== workspaceId)
+          const snapshot = await window.hibi.getWorkspaceHeader()
+          if (!snapshot?.target || snapshot.target.workspaceId !== workspaceId)
             return
           const paths: string[] = []
           const syntaxSnapshot = captureWorkspaceSyntaxSnapshot(

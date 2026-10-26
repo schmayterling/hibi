@@ -34,7 +34,7 @@ async function fixture(t) {
         return result
       },
       cancelDocumentMedia: async (request) => server.cancel(request),
-      onWorkspaceChanged(callback) {
+      onWorkspaceHeaderChanged(callback) {
         changes.add(callback)
         return () => changes.delete(callback)
       },
@@ -62,7 +62,7 @@ async function fixture(t) {
     },
     emit(change) {
       server.invalidate(change)
-      for (const callback of changes) callback({}, change)
+      for (const callback of changes) callback(change)
     },
     relocated() {
       for (const callback of scopes) callback(scope.revision)

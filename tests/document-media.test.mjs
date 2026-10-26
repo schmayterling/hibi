@@ -64,7 +64,7 @@ test('20 displayed images ignore 100 unrelated workspace events and refresh only
       }),
       cancelDocumentMedia: async () => {},
       onDocumentMediaScopeChanged: () => () => {},
-      onWorkspaceChanged(callback) {
+      onWorkspaceHeaderChanged(callback) {
         listeners.add(callback)
         return () => listeners.delete(callback)
       },
@@ -88,10 +88,7 @@ test('20 displayed images ignore 100 unrelated workspace events and refresh only
   const initial = { requests, responseBytes }
   for (let i = 0; i < 100; i++)
     for (const listener of listeners)
-      listener(
-        { id: 'workspace', activePath: 'note.md' },
-        { kind: 'content', paths: [`build/${i}.js`] },
-      )
+      listener({ kind: 'content', paths: [`build/${i}.js`] })
   await settle()
   t.diagnostic(
     JSON.stringify({
@@ -106,7 +103,7 @@ test('20 displayed images ignore 100 unrelated workspace events and refresh only
   assert.equal(listeners.size, 1)
   const previous = views.map((view) => view.dom.children[0].getAttribute('src'))
   for (const listener of listeners)
-    listener({}, { kind: 'content', paths: ['assets/7.png'] })
+    listener({ kind: 'content', paths: ['assets/7.png'] })
   await settle()
   assert.equal(requests - initial.requests, 1)
   assert.deepEqual(
@@ -140,7 +137,7 @@ test('same-path views share resolution and unmount cancels obsolete work before 
       cancelDocumentMedia: async () => {
         cancels++
       },
-      onWorkspaceChanged: () => () => {},
+      onWorkspaceHeaderChanged: () => () => {},
       onDocumentMediaScopeChanged: () => () => {},
     },
   }

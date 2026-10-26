@@ -16,18 +16,32 @@ import type { MarkdownParser } from '@lezer/markdown'
  * one chunk and a viewport change parses only the chunks it reveals.
  *
  * A top-level block that spans a scan window is continued in bounded windows
- * from replay points: lines whose parse, followed by the text from a later
- * line, recreates the parser state at that line. A block longer than
- * `giantBlock` gets inner nodes only in a window around the viewport. Every
- * step of a parse therefore reads a bounded range.
+ * from replay points: lines whose parse, after the opening lines of the
+ * blocks around them, recreates the parser state at that line. A block
+ * longer than `giantBlock` gets inner nodes only in a window around the
+ * viewport. Every step of a parse therefore reads a bounded range, apart from
+ * lines longer than a window, which lezer reads whole.
  */
 
+/** Whole lines: `from` starts a line and `to` follows its newline. */
+type Lines = { from: number; to: number }
+
 /**
- * Parsing lines `line`-`prefix` and then the text from `at` recreates the
- * parser state at `at`. In a top-level list, `items` counts its items before
- * `line`.
+ * Parsing the lines in `head` and then the text from `at` recreates the
+ * parser state at `at`: `head` holds the opening lines of the blocks around
+ * `at` that start before it. `lists` counts the items before `at` of the
+ * ordered lists around it, by list start; `retype` marks a point inside a
+ * paragraph or table, whose last line decides its type.
  */
-type Replay = { at: number; line: number; prefix: number; items?: number }
+type Replay = {
+  at: number
+  head: readonly Lines[]
+  lists: readonly { from: number; items: number }[]
+  retype?: boolean
+}
+
+/** A paragraph or table inside a giant block that a window may cut, and the start of its last line. */
+type End = { from: number; last: number }
 
 /**
  * A block that spans scan windows: longer than the giant size, or still being
@@ -48,37 +62,49 @@ type Giant = {
   retype: boolean
   /** Its renderers read its text, so only its opening and last lines get inner nodes. */
   opaque: boolean
+  /** Paragraphs and tables inside the block that span windows or a viewport, in document order. */
+  ends: readonly End[]
   /** The block's end, or null when it continues past the chunk into unscanned text. */
   end: number | null
+  /** No replay point holds past the chunk, so the rest of the document shows as written. */
+  stuck?: boolean
 }
 
 /**
- * Lines of a giant block with inner nodes: the replayed lines it was parsed
- * with, and a window around the viewport. `items` counts a top-level list's
- * items before the window.
+ * Lines of a giant block with inner nodes: the opening lines it was parsed
+ * with, and a window around the viewport.
  */
 type Window = {
-  head: { from: number; to: number } | null
+  head: readonly Lines[]
   from: number
   to: number
-  items: number
 }
 
 type ChunkInfo =
   | { kind: 'root' | 'group'; parsed: number; giants: number }
-  | { kind: 'parsed' | 'pending' | 'tail' }
+  | { kind: 'parsed' | 'pending' | 'tail' | 'plain' }
   | { kind: 'giant'; block: Giant; window: Window | null }
 type GiantInfo = Extract<ChunkInfo, { kind: 'giant' }>
 
 const chunkInfo = new NodeProp<ChunkInfo>({ perNode: true })
 
 /**
- * On the list node of a window into a giant top-level list: the items before
- * the window's first item and the list's first number.
+ * On the top node of a window into a giant block: for ordered lists that
+ * start before the window, by list start relative to the top node, the items
+ * between the list's first item, which the window parses with its opening
+ * lines, and the window's first item.
  */
-export const listWindow = new NodeProp<{ items: number; start: number }>({
+export const listWindow = new NodeProp<ReadonlyMap<number, number>>({
   perNode: true,
 })
+
+/** Leaf blocks whose last line decides their type. */
+const retypes = new Set([
+  'Paragraph',
+  'Table',
+  'SetextHeading1',
+  'SetextHeading2',
+])
 
 /** Items of a list node in a tree starting at `base` whose lines start in `from`-`to`. */
 function itemsIn(list: SyntaxNode, base: number, from: number, to: number) {
@@ -144,6 +170,7 @@ type Continuation = {
   key: string | null
   retype: boolean
   opaque: boolean
+  ends: End[]
   /** A line start inside the block where the next window begins. */
   frontier: number
   span: number
@@ -170,6 +197,7 @@ type Work =
       to: number
       block: Giant
       window: Window
+      point: Replay
       base: number
       units: number
       parse: PartialParse
@@ -240,10 +268,13 @@ function openingEnd(input: Input, name: string, from: number) {
     case 'ProcessingInstructionBlock':
       lines = 1
       break
-    // The second line decides whether a paragraph is a table.
+    // The second line decides whether a paragraph is a table; a setext
+    // heading is a paragraph until its last line.
     case 'Table':
     case 'Paragraph':
     case 'Task':
+    case 'SetextHeading1':
+    case 'SetextHeading2':
       lines = 2
       break
     default:
@@ -253,7 +284,7 @@ function openingEnd(input: Input, name: string, from: number) {
   // A link reference definition is decided within its label's 999
   // characters and the two lines after them.
   if (
-    (name === 'Paragraph' || name === 'Task') &&
+    (name === 'Paragraph' || name === 'Task' || name.startsWith('Setext')) &&
     input.read(from, from + 1) === '['
   )
     end = lineEnd(input, Math.min(input.length, from + 1000)) + 1
@@ -268,7 +299,9 @@ function openingEnd(input: Input, name: string, from: number) {
 function stateKey(input: Input, name: string, from: number) {
   const first = input.read(from, lineEnd(input, from))
   switch (name) {
-    case 'Paragraph': {
+    case 'Paragraph':
+    case 'SetextHeading1':
+    case 'SetextHeading2': {
       // A table parser, inert after the second line, keeps a later table
       // from interrupting the paragraph. Escaped pipes do not count.
       for (let i = 0; i < first.length; i++) {
@@ -345,12 +378,14 @@ const counts = (tree: Tree) => {
 const endsOpen = (chunk: Tree | undefined) => {
   const info = chunk?.prop(chunkInfo)
   return (
-    info?.kind === 'tail' || (info?.kind === 'giant' && info.block.end === null)
+    info?.kind === 'tail' ||
+    info?.kind === 'plain' ||
+    (info?.kind === 'giant' && info.block.end === null)
   )
 }
 
 /** Where a giant block's covered head ends: its opening lines for a leaf block. */
-const head = (block: Giant) => (block.leaf ? block.points[0]!.prefix : 0)
+const head = (block: Giant) => (block.leaf ? block.points[0]!.at : 0)
 
 /** Whether a giant chunk at `start` has inner nodes for all of `from`-`to`. */
 function giantCovers(
@@ -372,9 +407,57 @@ function giantCovers(
 const shift = (point: Replay, by: number): Replay => ({
   ...point,
   at: point.at + by,
-  line: point.line + by,
-  prefix: point.prefix + by,
+  head: point.head.map((range) => ({
+    from: range.from + by,
+    to: range.to + by,
+  })),
+  lists: point.lists.map((list) => ({
+    from: list.from + by,
+    items: list.items,
+  })),
 })
+
+const shiftEnd = (end: End, by: number): End => ({
+  from: end.from + by,
+  last: end.last + by,
+})
+
+/** The last noted paragraph or table starting at or before `pos`. */
+function endAround(ends: readonly End[], pos: number) {
+  let low = 0,
+    high = ends.length - 1,
+    found: End | null = null
+  while (low <= high) {
+    const middle = (low + high) >> 1
+    if (ends[middle]!.from <= pos) {
+      found = ends[middle]!
+      low = middle + 1
+    } else high = middle - 1
+  }
+  return found
+}
+
+/** A line that is blank inside its quotes and lists. */
+const blank = /^[ \t>\r]*$/
+
+/** The blocks around the line at `pos` and where they start, in a tree starting at `base`. */
+function blocksAround(input: Input, tree: Tree, base: number, pos: number) {
+  const end = lineEnd(input, pos)
+  let key = ''
+  for (
+    let node: SyntaxNode | null = tree.resolveInner(
+      end - base,
+      end > pos ? -1 : 1,
+    );
+    node;
+    node = node.parent
+  )
+    if (node.type.is('Block') && !node.type.isTop)
+      // A setext heading is a paragraph until its last line, which a
+      // replay of two lines may not reach.
+      key += `${node.name.startsWith('Setext') ? 'Paragraph' : node.name} ${base + node.from},`
+  return key
+}
 
 class ChunkedParse implements ChunkedPartialParse {
   stoppedAt: number | null = null
@@ -425,7 +508,8 @@ class ChunkedParse implements ChunkedPartialParse {
     this.olds = fragments.flatMap((fragment) => {
       if (fragment.tree.prop(chunkInfo)?.kind !== 'root') return []
       let safe = length
-      if (fragment.to < length) {
+      // A fragment cut by a change at the end of the text ends at its end too.
+      if (fragment.to < length || fragment.openEnd) {
         // A node may end differently if one of its next two lines changed.
         safe = lineStart(input, fragment.to)
         for (let i = 0; i < 2 && safe > 0; i++)
@@ -577,6 +661,8 @@ class ChunkedParse implements ChunkedPartialParse {
     const chunk = group.children[index] as Tree
     const info = chunk.prop(chunkInfo)
     const end = this.pos + chunk.length
+    // Shown as written after a stuck block: the block's chunk decides again.
+    if (info?.kind === 'plain') return false
     if (info?.kind === 'tail') {
       // Still unscanned: keep it until the viewport reaches it.
       if (this.wanted(this.pos, this.input.length)) return false
@@ -609,14 +695,19 @@ class ChunkedParse implements ChunkedPartialParse {
     const continuation = (
       points: readonly Replay[],
       frontier: number,
+      retype = block.retype,
     ): Continuation => ({
       from,
       start: from + block.start,
       points: points.map((point) => shift(point, from)),
       leaf: block.leaf,
       key: block.key,
-      retype: block.retype,
+      retype,
       opaque: block.opaque,
+      // Paragraphs after the frontier are noted again as they are scanned.
+      ends: block.ends
+        .filter((known) => from + known.last < frontier)
+        .map((known) => shiftEnd(known, from)),
       frontier,
       span: 2 * this.parser.chunkSize,
     })
@@ -624,7 +715,7 @@ class ChunkedParse implements ChunkedPartialParse {
       // Edited inside: the block continues from its last replay point before
       // the edit, so only the lines after it are scanned again.
       if (block.leaf) {
-        const prefix = from + block.points[0]!.prefix
+        const prefix = from + block.points[0]!.at
         if (prefix > old.safe) return false
         this.stepGiant(continuation(block.points, Math.max(prefix, old.safe)))
         return true
@@ -633,7 +724,10 @@ class ChunkedParse implements ChunkedPartialParse {
       while (index >= 0 && from + block.points[index]!.at > old.safe) index--
       if (index < 0) return false
       const points = block.points.slice(0, index + 1)
-      this.stepGiant(continuation(points, from + points.at(-1)!.at))
+      const point = points.at(-1)!
+      this.stepGiant(
+        continuation(points, from + point.at, point.retype ?? false),
+      )
       return true
     }
     const demand = this.demand()
@@ -673,7 +767,7 @@ class ChunkedParse implements ChunkedPartialParse {
     const probe = this.parser.options.probe
     if (probe) probe.reusedNodes++
     this.pos = end
-    if (block.end === null) this.addTail()
+    if (block.end === null) this.addRest(block)
     return true
   }
 
@@ -710,7 +804,19 @@ class ChunkedParse implements ChunkedPartialParse {
 
   private startParse(from: number, to: number) {
     this.pos = from
-    const parse = this.parser.full.startParse(this.input, [], [{ from, to }])
+    // Before a block that is not after blank lines, the chunk's input ends
+    // with its last line's text: that block's line closes everything open,
+    // where an empty last line would continue a fence in a list item.
+    const end =
+      to < this.input.length &&
+      !/^[ \t\r]*$/.test(this.input.read(to, lineEnd(this.input, to)))
+        ? to - 1
+        : to
+    const parse = this.parser.full.startParse(
+      this.input,
+      [],
+      [{ from, to: end }],
+    )
     this.work = { kind: 'parse', from, to, parse }
   }
 
@@ -751,37 +857,54 @@ class ChunkedParse implements ChunkedPartialParse {
     // block at the end of a chunk would otherwise absorb them, as at the end
     // of a document.
     const starts: number[] = []
+    let previous: SyntaxNode | null = null
     for (let node = tree.topNode.firstChild; node; node = node.nextSibling) {
       const line = lineStart(this.input, from + node.from)
       if (line > limit) break
-      const start = blankRunStart(this.input, line, from)
+      let start = blankRunStart(this.input, line, from)
+      // Blank lines that an open block above took in, such as a fence in a
+      // list item, stay in its chunk.
+      if (previous)
+        start = Math.max(
+          start,
+          Math.min(line, lineEnd(this.input, from + previous.to) + 1),
+        )
       if (start > from && start !== starts.at(-1)) starts.push(start)
+      previous = node
     }
     if (end >= length && starts.at(-1) !== length) starts.push(length)
     if (!starts.length) {
       // One block spans the window: continue it from a replay point, or
       // widen the window when it has none.
-      const found = this.view && this.replayAt(tree, from, limit, from)
+      const found =
+        this.view && this.replayAt(tree, from, limit, from, null, from)
       if (!found) {
-        this.startScan(span * 2)
+        if (!this.view || this.widens(tree, from, limit, span, from, end))
+          this.startScan(span * 2)
+        else {
+          this.pos = from
+          this.addPlain()
+        }
         return
       }
       const top = tree.topNode.firstChild!
-      if (/^(Bullet|Ordered)List$/.test(top.name))
-        found.point.items = itemsIn(top, from, from, found.point.line)
-      this.stepGiant({
+      const block: Continuation = {
         from,
         start: from + top.from,
         points: found.leaf
           ? [found.point]
-          : [{ at: from, line: from, prefix: from, items: 0 }, found.point],
+          : [{ at: from, head: [], lists: [] }, found.point],
         leaf: found.leaf,
         key: found.key,
         retype: found.retype,
         opaque: this.parser.opaque.has(top.name),
-        frontier: found.frontier,
+        ends: [],
+        frontier: from,
         span,
-      })
+      }
+      if (!found.leaf) this.noteEnds(block, tree, from, found.frontier)
+      block.frontier = found.frontier
+      this.stepGiant(block)
       return
     }
     const hints = this.hints(from, limit)
@@ -807,13 +930,15 @@ class ChunkedParse implements ChunkedPartialParse {
   /**
    * A replay point past `after` and at most `limit` for the top-level block of
    * a scan, when that block spans `limit`. Positions in `tree` are relative to
-   * `base`.
+   * `base`; `previous` is the point the scan continued from, at `frontier`.
    */
   private replayAt(
     tree: Tree,
     base: number,
     limit: number,
     after: number,
+    previous: Replay | null,
+    frontier: number,
   ): Found | null {
     const input = this.input
     const top = tree.topNode.firstChild
@@ -825,62 +950,237 @@ class ChunkedParse implements ChunkedPartialParse {
       return {
         leaf: true,
         key: stateKey(input, top.name, base + top.from),
-        retype: top.name === 'Paragraph' || top.name === 'Table',
-        point: { at: prefix, line: lineOf(top), prefix },
+        retype: retypes.has(top.name),
+        point: {
+          at: prefix,
+          head: [{ from: lineOf(top), to: prefix }],
+          lists: [],
+        },
         frontier: limit,
       }
     }
-    // A block that starts a line inside quotes and lists, where every list
-    // item around it starts on that line too, parses alone as in place.
-    let best = -1
-    for (
-      let node: SyntaxNode = top;
-      node.name === 'Blockquote' ||
-      node.name === 'BulletList' ||
-      node.name === 'OrderedList';
-    ) {
+    const point = (
+      at: number,
+      chain: readonly SyntaxNode[],
+      head: Lines[],
+      retype: boolean,
+    ): Found | null => {
+      if (!this.verified(tree, base, head, at)) return null
+      // Items before `at` of the ordered lists around it.
+      const lists = chain.flatMap((node) => {
+        if (node.name !== 'OrderedList') return []
+        const from = base + node.from
+        const known = previous?.lists.find((list) => list.from === from)
+        return [
+          {
+            from,
+            items: known
+              ? known.items + itemsIn(node, base, frontier, at)
+              : itemsIn(node, base, from, at),
+          },
+        ]
+      })
+      return {
+        leaf: false,
+        key: null,
+        retype,
+        point: { at, head, lists, ...(retype ? { retype } : {}) },
+        frontier: at,
+      }
+    }
+    // The latest block that starts a line inside the quotes and lists at the
+    // limit continues after the opening lines of the blocks around it.
+    const chain: SyntaxNode[] = []
+    const starts: { at: number; chain: SyntaxNode[] }[] = []
+    for (let node: SyntaxNode = top; ; ) {
+      chain.push(node)
       let child = node.childBefore(limit - base + 1)
       while (child && !child.type.is('Block')) child = child.prevSibling
       if (!child) break
       const at = lineOf(child)
-      if (at > after) best = at
+      if (at > after && at !== starts.at(-1)?.at)
+        starts.push({ at, chain: [...chain] })
+      if (!child.type.is('BlockContext')) break
       node = child
     }
-    if (best > after)
-      return {
-        leaf: false,
-        key: null,
-        retype: false,
-        point: { at: best, line: best, prefix: best },
-        frontier: best,
-      }
-    // A long leaf block opened on its list item's line continues with its
-    // opening lines, like a top-level one.
-    let leaf: SyntaxNode | null = tree.resolveInner(limit - base, 1)
+    for (let i = starts.length - 1; i >= 0; i--) {
+      const { at, chain } = starts[i]!
+      const found = point(at, chain, this.headOf(chain, base, at, true), false)
+      if (found) return found
+    }
+    // Inside a long leaf block, its opening lines join those of the blocks
+    // around it, and it continues from any later line: the limit, or the
+    // last line before blank ones there.
+    let at = limit
+    while (at > after && blank.test(input.read(at, lineEnd(input, at))))
+      at = lineStart(input, at - 1)
+    if (at <= after) return null
+    const end = lineEnd(input, at)
+    let leaf: SyntaxNode | null = tree.resolveInner(
+      end - base,
+      end > at ? -1 : 1,
+    )
     while (leaf && !leaf.type.is('LeafBlock')) leaf = leaf.parent
-    if (!leaf || base + leaf.to < limit || limit <= after) return null
+    if (!leaf || base + leaf.to < at) return null
     const line = lineOf(leaf)
+    const prefix = openingEnd(input, leaf.name, base + leaf.from)
+    if (line >= at || prefix === null || prefix > at) return null
+    const around: SyntaxNode[] = []
     for (
       let node = leaf.parent;
       node && node.name !== 'Document';
       node = node.parent
-    )
-      if (
-        node.name !== 'Blockquote' &&
-        node.name !== 'BulletList' &&
-        node.name !== 'OrderedList' &&
-        (node.name !== 'ListItem' || lineOf(node) !== line)
-      )
-        return null
-    const prefix = openingEnd(input, leaf.name, base + leaf.from)
-    if (prefix === null || prefix > limit) return null
-    return {
-      leaf: false,
-      key: null,
-      retype: false,
-      point: { at: limit, line, prefix },
-      frontier: limit,
+    ) {
+      if (!node.type.is('BlockContext')) return null
+      around.unshift(node)
     }
+    const head = this.headOf([...around, leaf], base, at, false)
+    head.at(-1)!.to = Math.max(head.at(-1)!.to, prefix)
+    return point(at, around, head, retypes.has(leaf.name))
+  }
+
+  /**
+   * The opening lines of the blocks in `chain`, from the top down, that start
+   * before the line at `at`, with the blank line before each: a block after a
+   * blank line would otherwise continue a paragraph above it. Positions in
+   * the chain's tree are relative to `base`.
+   */
+  private headOf(
+    chain: readonly SyntaxNode[],
+    base: number,
+    at: number,
+    starts: boolean,
+  ) {
+    const input = this.input
+    const head: Lines[] = []
+    const push = (from: number) => {
+      const to = lineEnd(input, from) + 1,
+        previous = head.at(-1)
+      if (previous && previous.to === from) previous.to = to
+      else head.push({ from, to })
+    }
+    const blankBefore = (line: number) => {
+      const last = head.at(-1)
+      if (!last) return
+      const before = lineStart(input, line - 1)
+      if (before >= last.to && blank.test(input.read(before, line - 1)))
+        push(before)
+    }
+    const add = (line: number) => {
+      const last = head.at(-1)
+      if (line >= at || (last && line < last.to)) return
+      blankBefore(line)
+      push(line)
+    }
+    for (const node of chain) {
+      const line = lineStart(input, base + node.from)
+      add(line)
+      // A list item opened on an otherwise blank line ends at a blank line
+      // while it holds one block, so its first block is replayed too.
+      if (node.name !== 'ListItem') continue
+      let child = node.firstChild
+      while (child && !child.type.is('Block')) child = child.nextSibling
+      if (child && lineStart(input, base + child.from) > line)
+        add(lineStart(input, base + child.from))
+    }
+    // A block starting at `at` after a blank line starts a new block there.
+    if (starts) blankBefore(at)
+    return head
+  }
+
+  /**
+   * Whether parsing `head` and then the line at `at` and the next one puts
+   * the same blocks around `at` as `tree`, which starts at `base`.
+   */
+  private verified(
+    tree: Tree,
+    base: number,
+    head: readonly Lines[],
+    at: number,
+  ) {
+    const input = this.input
+    const to = Math.min(
+      input.length,
+      lineEnd(input, lineEnd(input, at) + 1) + 1,
+    )
+    const ranges = head.map((range) => ({ ...range }))
+    const last = ranges.at(-1)
+    if (last && last.to === at) last.to = to
+    else ranges.push({ from: at, to })
+    const parse = this.parser.scan.startParse(input, [], ranges)
+    let replayed: Tree | null = null
+    while (!replayed) replayed = parse.advance()
+    const probe = this.parser.options.probe
+    if (probe)
+      probe.scannedUnits += ranges.reduce(
+        (sum, range) => sum + range.to - range.from,
+        0,
+      )
+    return (
+      blocksAround(input, replayed, ranges[0]!.from, at) ===
+      blocksAround(input, tree, base, at)
+    )
+  }
+
+  /**
+   * Note the paragraphs and tables inside a continued block that end by
+   * `until` and either span the window's frontier or are long enough for a
+   * window around a viewport to cut: their last line decides their type.
+   */
+  private noteEnds(
+    block: Continuation,
+    tree: Tree,
+    base: number,
+    until: number,
+  ) {
+    const long = this.parser.chunkSize / 2
+    tree.iterate({
+      from: Math.max(0, block.frontier - base),
+      to: until - base,
+      enter: (node) => {
+        if (!node.type.is('Block')) return false
+        if (!retypes.has(node.name))
+          return node.type.is('BlockContext') ? undefined : false
+        const from = base + node.from,
+          to = base + node.to
+        if (
+          to <= until &&
+          (from < block.frontier || to - from > long) &&
+          (block.ends.at(-1)?.from ?? -1) < from
+        )
+          block.ends.push({ from, last: lineStart(this.input, to) })
+        return false
+      },
+    })
+  }
+
+  /**
+   * Whether a scan without a replay point may read a wider window: up to the
+   * giant size, to the end of the opening lines of the leaf block at the
+   * limit, or while lines are too long for the window to hold a few.
+   */
+  private widens(
+    tree: Tree,
+    base: number,
+    limit: number,
+    span: number,
+    from: number,
+    to: number,
+  ) {
+    if (span < this.parser.giantBlock) return true
+    let leaf: SyntaxNode | null = tree.resolveInner(limit - base, 1)
+    while (leaf && !leaf.type.is('LeafBlock')) leaf = leaf.parent
+    const prefix = leaf && openingEnd(this.input, leaf.name, base + leaf.from)
+    if (prefix != null && prefix > limit) return true
+    const text = this.input.read(from, to)
+    let lines = 0
+    for (
+      let index = text.indexOf('\n');
+      index >= 0 && lines < 8;
+      index = text.indexOf('\n', index + 1)
+    )
+      lines++
+    return lines < 8
   }
 
   /**
@@ -898,7 +1198,7 @@ class ChunkedParse implements ChunkedPartialParse {
       !found ||
       info?.kind !== 'giant' ||
       info.block.key !== key ||
-      at < found.start + info.block.points[0]!.prefix
+      at < found.start + info.block.points[0]!.at
     )
       return null
     const end =
@@ -916,6 +1216,7 @@ class ChunkedParse implements ChunkedPartialParse {
       key: block.key,
       retype: block.retype,
       opaque: block.opaque,
+      ends: block.ends.map((known) => shiftEnd(known, -block.from)),
       end: end === null ? null : end - block.from,
     }
   }
@@ -950,13 +1251,16 @@ class ChunkedParse implements ChunkedPartialParse {
     }
     const point = block.points.at(-1)!
     const to = Math.min(this.input.length, block.frontier + block.span)
-    const ranges =
-      point.prefix > point.line && block.frontier > point.prefix
-        ? [
-            { from: point.line, to: point.prefix },
-            { from: block.frontier, to },
-          ]
-        : [{ from: Math.min(point.line, block.frontier), to }]
+    const ranges: Lines[] = []
+    for (const range of point.head)
+      if (range.from < block.frontier)
+        ranges.push({
+          from: range.from,
+          to: Math.min(range.to, block.frontier),
+        })
+    const last = ranges.at(-1)
+    if (last && last.to === block.frontier) last.to = to
+    else ranges.push({ from: block.frontier, to })
     this.work = {
       kind: 'continue',
       block,
@@ -976,36 +1280,62 @@ class ChunkedParse implements ChunkedPartialParse {
     const end = base + (top?.to ?? 0)
     const limit = this.limit(to, block.frontier)
     if (to >= this.input.length || end < limit) {
+      if (!block.leaf) this.noteEnds(block, tree, base, end)
       this.endGiant(block, end)
       return
     }
     let frontier = block.frontier
     if (block.leaf) frontier = limit
     else {
-      const found = this.replayAt(tree, base, limit, block.frontier)
+      const found = this.replayAt(
+        tree,
+        base,
+        limit,
+        block.frontier,
+        block.points.at(-1)!,
+        block.frontier,
+      )
       if (found) {
-        const top = tree.topNode.firstChild!,
-          point = block.points.at(-1)!
-        if (
-          point.items !== undefined &&
-          /^(Bullet|Ordered)List$/.test(top.name)
-        )
-          found.point.items =
-            point.items + itemsIn(top, base, point.line, found.point.line)
         block.points.push(found.point)
+        block.retype = found.retype
         frontier = found.frontier
       }
     }
     if (frontier > block.frontier) {
+      if (!block.leaf) this.noteEnds(block, tree, base, frontier)
       block.frontier = frontier
       block.span = Math.min(this.parser.giantBlock, block.span * 2)
-    } else {
-      // ponytail: a line longer than the window, or a block nested in a list
-      // item opened on an earlier line, is read in growing windows; lines that
-      // long need a line-splitting scan, nested blocks deeper replay points.
+    } else if (this.widens(tree, base, limit, block.span, block.frontier, to)) {
+      // ponytail: lines longer than the window are read whole, as lezer
+      // parses lines; a step reads at most a few of them.
       block.span *= 2
+    } else {
+      this.stuck(block)
+      return
     }
     this.stepGiant(block)
+  }
+
+  /**
+   * No replay point holds past the frontier, so the rest of the block could
+   * be read only in one step. Its scanned part stays an open block with
+   * inner nodes near the viewport, and the rest of the document shows as
+   * written until an edit or the viewport retries it.
+   */
+  private stuck(block: Continuation) {
+    const giant: Giant = { ...this.giant(block, null), stuck: true }
+    if (block.frontier > block.from) {
+      if (
+        this.wanted(block.from, block.frontier) &&
+        !this.stopped(block.from)
+      ) {
+        this.startWindow(block.from, block.frontier, giant)
+        return
+      }
+      this.pos = block.from
+      this.addChunk(this.giantLeaf(giant, block.frontier - block.from))
+    } else this.pos = block.from
+    this.addPlain()
   }
 
   /** A continued block ends at `end`: one chunk, windowed when it is giant. */
@@ -1050,10 +1380,7 @@ class ChunkedParse implements ChunkedPartialParse {
     let point = block.points[0]!
     let start: number
     if (block.leaf)
-      start = lineStart(
-        input,
-        Math.min(last, Math.max(from + point.prefix, want)),
-      )
+      start = lineStart(input, Math.min(last, Math.max(from + point.at, want)))
     else {
       // Quotes and lists change state between replay points, so the window
       // parses on from the last one before it.
@@ -1068,15 +1395,21 @@ class ChunkedParse implements ChunkedPartialParse {
         Math.min(last, Math.max(start, demand ? demand.to + pad : last)),
       ),
     )
-    const line = from + point.line,
-      prefix = from + point.prefix
-    const segments: [number, number][] = []
-    if (prefix > line) segments.push([line, prefix - 1])
+    const segments: [number, number][] = point.head.map((range) => [
+      from + range.from,
+      from + range.to - 1,
+    ])
     // An opaque block's renderers read its text: no lines between its ends.
     if (!block.opaque) segments.push([start, stop])
-    // A leaf block's last line decides a setext heading and closes a fence.
+    // A leaf block's last line decides a setext heading and closes a fence,
+    // as it does for a paragraph inside the block that the window cuts.
     if (block.leaf && block.end !== null)
       segments.push([lineStart(input, last), last])
+    else if (!block.leaf) {
+      const cut = endAround(block.ends, stop - from)
+      if (cut && from + cut.last > stop)
+        segments.push([from + cut.last, lineEnd(input, from + cut.last)])
+    }
     const ranges: { from: number; to: number }[] = []
     for (const [a, b] of segments) {
       const previous = ranges.at(-1)
@@ -1093,11 +1426,11 @@ class ChunkedParse implements ChunkedPartialParse {
       to,
       block,
       window: {
-        head: prefix > line ? { from: line - from, to: prefix - from } : null,
-        from: (block.opaque ? prefix : start) - from,
-        to: (block.opaque ? prefix : Math.min(to, stop + 1)) - from,
-        items: point.items ?? 0,
+        head: point.head,
+        from: block.opaque ? point.at : start - from,
+        to: block.opaque ? point.at : Math.min(to, stop + 1) - from,
       },
+      point,
       base: ranges[0]!.from,
       units: ranges.reduce((sum, range) => sum + range.to - range.from, 0),
       parse: this.parser.full.startParse(input, [], ranges),
@@ -1105,7 +1438,7 @@ class ChunkedParse implements ChunkedPartialParse {
   }
 
   private windowed(work: Extract<Work, { kind: 'window' }>, tree: Tree) {
-    const { from, to, block, window } = work
+    const { from, to, block, window, point } = work
     const probe = this.parser.options.probe
     if (probe) {
       probe.parsedChunks++
@@ -1117,14 +1450,24 @@ class ChunkedParse implements ChunkedPartialParse {
     const last = block.end === null ? to - 1 : from + block.end
     // The block keeps its real extent; lines outside the window have no inner nodes.
     const props = [...node.propValues]
-    if (node.type.name === 'OrderedList' && offset)
-      props.push([
-        listWindow,
-        {
-          items: window.items,
-          start: Number.parseInt(this.input.read(start, start + 12), 10),
-        },
-      ])
+    // Ordered lists around the window's start have their first item, from
+    // the opening lines, but not the items between it and the window.
+    const lists = new Map<number, number>()
+    for (const list of point.lists) {
+      const listFrom = from + list.from
+      let found: SyntaxNode | null = tree.resolveInner(listFrom - work.base, 1)
+      while (
+        found &&
+        !(found.name === 'OrderedList' && work.base + found.from === listFrom)
+      )
+        found = found.parent
+      if (found)
+        lists.set(
+          listFrom - start,
+          list.items - itemsIn(found, work.base, listFrom, from + point.at),
+        )
+    }
+    if (lists.size) props.push([listWindow, lists])
     const extended = new Tree(
       node.type,
       node.children,
@@ -1140,7 +1483,7 @@ class ChunkedParse implements ChunkedPartialParse {
       ]),
     )
     this.pos = to
-    if (block.end === null) this.addTail()
+    if (block.end === null) this.addRest(block)
   }
 
   private parsed(from: number, to: number, tree: Tree) {
@@ -1183,7 +1526,7 @@ class ChunkedParse implements ChunkedPartialParse {
     return hints
   }
 
-  private leaf(kind: 'pending' | 'tail', length: number) {
+  private leaf(kind: 'pending' | 'tail' | 'plain', length: number) {
     return new Tree(NodeType.none, [], [], length, [[chunkInfo, { kind }]])
   }
 
@@ -1198,6 +1541,20 @@ class ChunkedParse implements ChunkedPartialParse {
     if (this.pos >= length) return
     this.addChunk(this.leaf('tail', length - this.pos))
     this.pos = length
+  }
+
+  /** The rest of the document, shown as written after a stuck block. */
+  private addPlain() {
+    const length = this.input.length
+    if (this.pos >= length) return
+    this.addChunk(this.leaf('plain', length - this.pos))
+    this.pos = length
+  }
+
+  /** What follows an open block: unscanned text, or plain text after a stuck one. */
+  private addRest(block: Giant) {
+    if (block.stuck) this.addPlain()
+    else this.addTail()
   }
 
   /** Append a chunk starting at the current position. */
@@ -1387,11 +1744,9 @@ export function parsedChunks(
         const covered: { from: number; to: number }[] = []
         const headTo = head(info.block)
         if (headTo) covered.push({ from, to: from + headTo })
-        else if (window.head)
-          covered.push({
-            from: from + window.head.from,
-            to: from + window.head.to,
-          })
+        else
+          for (const range of window.head)
+            covered.push({ from: from + range.from, to: from + range.to })
         if (window.to > window.from)
           covered.push({ from: from + window.from, to: from + window.to })
         chunks.push({ from, chunk, covered })
@@ -1423,7 +1778,8 @@ export function uncovered(tree: Tree, from: number, to: number) {
       const chunk = group.children[index] as Tree
       if (start + chunk.length <= from) continue
       const info = chunk.prop(chunkInfo)
-      if (info?.kind === 'parsed') continue
+      // Text after a stuck block shows as written; parsing will not change that.
+      if (info?.kind === 'parsed' || info?.kind === 'plain') continue
       if (
         info?.kind === 'giant' &&
         giantCovers(info, start, chunk.length, from, to)

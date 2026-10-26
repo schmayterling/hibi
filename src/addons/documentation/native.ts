@@ -158,7 +158,7 @@ async function* stagedFile(
 
 async function verifySources(session: Session) {
   // Compare exact sources again after rendering; new drafts and disk edits must not slip through.
-  const workspace = getWorkspace()
+  const workspace = getWorkspace(undefined, true)
   if (
     !workspace ||
     JSON.stringify(exportPaths(workspace.entries).map((page) => page.path)) !==
@@ -204,7 +204,7 @@ export default {
       return {
         theme: exportedAppearance(),
         graph: graphEnabled(),
-        pages: exportPaths(getWorkspace()?.entries ?? []),
+        pages: exportPaths(getWorkspace(undefined, true)?.entries ?? []),
       }
     },
     async begin(input) {
@@ -214,7 +214,7 @@ export default {
       if (!target || !isCurrentWorkspaceTarget(value?.target))
         throw new Error('The workspace changed during export. Export again.')
       await refreshWorkspace()
-      const workspace = getWorkspace()
+      const workspace = getWorkspace(undefined, true)
       if (!workspace || !isCurrentWorkspaceTarget(target))
         throw new Error('The workspace changed during export. Export again.')
       const options = validateExportOptions(value.options)

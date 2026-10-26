@@ -114,6 +114,12 @@ export class WorkspaceChangeStream {
     }
   }
 
+  /** Internal consumers can listen without cloning the entire workspace tree. */
+  listen(listener: WorkspaceListener): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
   /** Registration and snapshot happen synchronously; no event can fall between them. */
   subscribe(
     listener: (event: WorkspaceChangeEvent) => void,

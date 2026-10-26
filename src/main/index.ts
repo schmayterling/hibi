@@ -1185,18 +1185,28 @@ function createWindow(): void {
 function installMenu(): void {
   const command = (action: AppCommand) => () =>
     mainWindow?.webContents.send(HOTKEY_CHANNELS.command, action)
-  // The app window runs undo and redo in its focused editor; other windows
-  // keep the browser's own.
+  // The app window runs undo and redo in its focused editor; its devtools and
+  // other windows keep the browser's own.
   const history =
     (
       direction: 'undo' | 'redo',
     ): NonNullable<MenuItemConstructorOptions['click']> =>
     (_item, window) => {
       if (!(window instanceof BrowserWindow)) return
-      if (window === mainWindow)
-        window.webContents.send(HOTKEY_CHANNELS.history, direction)
-      else window.webContents[direction]()
+      const { webContents } = window
+      if (webContents.isDevToolsFocused())
+        webContents.devToolsWebContents?.[direction]()
+      else if (window === mainWindow)
+        webContents.send(HOTKEY_CHANNELS.history, direction)
+      else webContents[direction]()
     }
+  // Electron's own Edit menu items, beside undo and redo.
+  const editItems =
+    Menu.buildFromTemplate([
+      { role: 'editMenu' },
+    ]).items[0]?.submenu?.items.filter(
+      ({ role }) => role !== 'undo' && role !== 'redo',
+    ) ?? []
   const addonItems: MenuItemConstructorOptions[] = []
   let group: string | null = null
   for (const item of addonHotkeys.menuContributions()) {
@@ -1263,9 +1273,9 @@ function installMenu(): void {
     },
     {
       label: 'Edit',
-      // Electron's Edit menu, with undo and redo routed above. Editors take
-      // these shortcuts first; the menu runs them only when nothing did.
-      submenu: [
+      // Editors take these shortcuts first; the menu runs them only when
+      // nothing did.
+      submenu: Menu.buildFromTemplate([
         { label: 'Undo', accelerator: 'CmdOrCtrl+Z', click: history('undo') },
         {
           label: 'Redo',
@@ -1273,30 +1283,8 @@ function installMenu(): void {
             process.platform === 'win32' ? 'Control+Y' : 'Shift+CmdOrCtrl+Z',
           click: history('redo'),
         },
-        { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        ...(process.platform === 'darwin'
-          ? [
-              { role: 'pasteAndMatchStyle' as const },
-              { role: 'delete' as const },
-              { role: 'selectAll' as const },
-              { type: 'separator' as const },
-              {
-                label: 'Speech',
-                submenu: [
-                  { role: 'startSpeaking' as const },
-                  { role: 'stopSpeaking' as const },
-                ],
-              },
-            ]
-          : [
-              { role: 'delete' as const },
-              { type: 'separator' as const },
-              { role: 'selectAll' as const },
-            ]),
-      ],
+        ...editItems,
+      ]),
     },
     {
       label: 'View',

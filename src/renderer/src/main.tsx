@@ -1649,17 +1649,23 @@ function App() {
   )
   // Edit menu undo and redo. Editors cancel this event to run their session's
   // history, which the browser's own redo never reaches; other fields keep the
-  // browser's undo and redo.
+  // browser's undo and redo. Read-only editors take neither, as with their
+  // shortcuts.
   useEffect(() =>
     window.hibi.onHistory((direction) => {
-      const history = new InputEvent('beforeinput', {
-        inputType: direction === 'undo' ? 'historyUndo' : 'historyRedo',
-        bubbles: true,
-        cancelable: true,
-      })
-      const { activeElement, body } = window.document
-      if ((activeElement ?? body).dispatchEvent(history))
-        window.document.execCommand(direction)
+      const target = window.document.activeElement
+      if (
+        target instanceof HTMLElement &&
+        target.hasAttribute('contenteditable')
+      ) {
+        const history = new InputEvent('beforeinput', {
+          inputType: direction === 'undo' ? 'historyUndo' : 'historyRedo',
+          bubbles: true,
+          cancelable: true,
+        })
+        if (!target.isContentEditable || !target.dispatchEvent(history)) return
+      }
+      window.document.execCommand(direction)
     }),
   )
   useEffect(() => window.hibi.onOpenSettings(() => openSetting('hibi')))

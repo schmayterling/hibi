@@ -5389,9 +5389,6 @@
   "55260a7157b3": [
     "src/renderer/src/AddonInstallChooser.tsx"
   ],
-  "3565fcc6c17d": [
-    "src/main/index.ts"
-  ],
   "c75049813154": [
     "src/renderer/src/Introduction.tsx",
     "src/renderer/src/SettingsScreen.tsx"

@@ -293,3 +293,24 @@ test('commands read the formatted view tree from its state', () => {
   )
   assert.equal(formattedSyntaxTree(EditorState.create({ doc: 'x' })), null)
 })
+
+test('github tables are opaque in documents of that flavor', async () => {
+  const { contribution } = await import(
+    '../src/renderer/src/formatted/tables.ts'
+  )
+  const remove = formattedRegistry.register({
+    id: contribution.id,
+    load: () => contribution,
+  })
+  try {
+    const opaque = (flavors) =>
+      EditorState.create({
+        extensions: formattedContributions.extension(flavors),
+      }).facet(formattedOpaque)
+    // Before, only tests set the opaque nodes, and a long table parsed its rows.
+    assert.ok(opaque(['markdown.github']).includes('Table'))
+    assert.ok(!opaque(['markdown.commonmark']).includes('Table'))
+  } finally {
+    remove()
+  }
+})

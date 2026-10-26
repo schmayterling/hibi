@@ -1,5 +1,5 @@
 import { EditorView, ViewPlugin } from '@codemirror/view'
-import { type Editor, InputRule } from '@tiptap/core'
+import { type Editor, InputRule, type NodeViewRenderer } from '@tiptap/core'
 import { BlockMath, InlineMath } from '@tiptap/extension-mathematics'
 import type { Node } from '@tiptap/pm/model'
 import katex from 'katex'
@@ -7,6 +7,7 @@ import { Sigma, SquareRadical } from 'lucide-react'
 import type { MarkedExtension } from 'marked'
 import { isMarkdownDocument } from '../../shared/document-types'
 import type { AddonContext } from '../api'
+import { formulaScheduler } from './rendering'
 import { mathStyles } from './styles'
 import {
   blockMath,
@@ -156,6 +157,64 @@ export function startMath(context: AddonContext) {
       else chain.insertInlineMath({ latex }).run()
     }
   }
+  const formulas = formulaScheduler((latex, displayMode) =>
+    katex.renderToString(latex, {
+      ...options,
+      displayMode,
+      output: 'htmlAndMathml',
+    }),
+  )
+  /** Same markup as the package views; KaTeX output arrives after mounting. */
+  const view =
+    (display: boolean): NodeViewRenderer =>
+    ({ node, getPos, editor }) => {
+      const latex = String(node.attrs.latex ?? '')
+      const dom: HTMLElement = document.createElement(display ? 'div' : 'span')
+      dom.className = 'tiptap-mathematics-render'
+      if (editor.isEditable)
+        dom.classList.add('tiptap-mathematics-render--editable')
+      dom.dataset.type = display ? 'block-math' : 'inline-math'
+      dom.setAttribute('data-latex', latex)
+      const target = display ? document.createElement('div') : dom
+      if (display) {
+        target.className = 'block-math-inner'
+        dom.append(target)
+      }
+      // Until then the expression stays readable; display spacing, or the
+      // height this formula last rendered at, limits the height change.
+      const pending = display ? document.createElement('span') : target
+      if (display) {
+        pending.className = 'katex-display'
+        target.append(pending)
+      }
+      pending.textContent = latex
+      const reserved = display ? formulas.height(latex) : undefined
+      if (reserved) dom.style.minHeight = `${reserved}px`
+      const click = (event: MouseEvent) => {
+        event.preventDefault()
+        event.stopPropagation()
+        const pos = getPos()
+        if (pos !== undefined) void edit(node, pos, display)
+      }
+      dom.addEventListener('click', click)
+      const cancel = formulas.schedule(dom, latex, display, (html) => {
+        if (reserved) dom.removeAttribute('style')
+        if (html !== null) {
+          // KaTeX builds this markup itself; trust: false admits no author HTML.
+          target.innerHTML = html
+          return
+        }
+        dom.textContent = latex
+        dom.classList.add(display ? 'block-math-error' : 'inline-math-error')
+      })
+      return {
+        dom,
+        destroy() {
+          cancel()
+          dom.removeEventListener('click', click)
+        },
+      }
+    }
   const inline = InlineMath.extend({
     markdownTokenizer: {
       name: 'inlineMath',
@@ -180,11 +239,7 @@ export function startMath(context: AddonContext) {
         }),
       ]
     },
-  }).configure({
-    katexOptions: options,
-    onClick: (node, pos) => {
-      void edit(node, pos, false)
-    },
+    addNodeView: () => view(false),
   })
   const block = BlockMath.extend({
     markdownTokenizer: {
@@ -210,21 +265,13 @@ export function startMath(context: AddonContext) {
         }),
       ]
     },
-  }).configure({
-    katexOptions: { ...options, displayMode: true },
-    onClick: (node, pos) => {
-      void edit(node, pos, true)
-    },
+    addNodeView: () => view(true),
   })
   const renderers: MarkedExtension = {
     extensions: ['inlineMath', 'blockMath'].map((name) => ({
       name,
       renderer: (token) =>
-        katex.renderToString(String(token.latex ?? ''), {
-          ...options,
-          displayMode: name === 'blockMath',
-          output: 'htmlAndMathml',
-        }),
+        formulas.render(String(token.latex ?? ''), name === 'blockMath'),
     })),
   }
   context.styles.register('math', mathStyles)

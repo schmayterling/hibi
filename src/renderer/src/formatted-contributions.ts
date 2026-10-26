@@ -59,11 +59,35 @@ export type FormattedLayout = {
 
 export type FormattedRenderContext = {
   state: EditorState
+  /** `decorate`: the visible range being rendered, to bound per-line work in long nodes; null in `layout`. */
+  visible: { from: number; to: number } | null
   /**
    * The selection touches the node while Markdown markers are shown: show
    * its source and keep any rendering beside it.
    */
   revealed: boolean
+}
+
+/** How a quote, list item or contributed container lays out the lines inside it. */
+export type FormattedContainer = {
+  /** CSS length the container indents its lines by; quotes default to 21px, list items to 1.5em, other nodes to 0. */
+  width?: string
+  /** Class for every line in the container. */
+  class?: string
+  /**
+   * CSS background layers behind the line, from the container's left edge
+   * (`left`) to the line end; `top` is the space above the container's first
+   * line, which lies outside it, and 0 on its other lines. Both are CSS lengths.
+   */
+  paint?: (left: string, top: string) => string
+  /**
+   * Space inside the container in px: above its first line, below its last
+   * shown line and right of every line. Its first and last blocks' margins
+   * stay inside a side with padding.
+   */
+  padding?: { top?: number; bottom?: number; right?: number }
+  /** List items: false hides the list marker. */
+  marker?: boolean
 }
 
 /** Rendering for syntax nodes by name. */
@@ -81,6 +105,17 @@ export type FormattedNodeView = {
     out: FormattedLayout,
     context: FormattedRenderContext,
   ): undefined | false
+  /** Block nodes: margins in px, collapsing with their neighbors' like the formatted view's document styles. */
+  space?: { top: number; bottom: number }
+  /**
+   * How the node lays out its lines as a container. Quotes and list items
+   * are containers; another block node with this hook becomes one, with
+   * spacing between its blocks. Called once per node and render.
+   */
+  container?(
+    node: SyntaxNodeRef,
+    context: FormattedRenderContext,
+  ): FormattedContainer | undefined
 }
 
 export type FormattedContribution = {
@@ -90,8 +125,22 @@ export type FormattedContribution = {
    * is off, the syntax is not parsed and its text shows as written.
    */
   feature?: string
+  /** Markdown flavor id (`owner.flavor`) a document must use for the contribution to apply. */
+  flavor?: string
   /** Lezer Markdown extensions composed into the formatted view's language. */
   syntax?: MarkdownConfig | readonly MarkdownConfig[]
+  /**
+   * The syntax's inline parsers start only at characters in
+   * ``\`&*_![]<>~^$:``, URLs or email addresses, so the language keeps
+   * skipping text without them; other contributed inline syntax turns that off.
+   */
+  inlineStops?: boolean
+  /**
+   * Nodes whose renderers read their source text instead of inner nodes: a
+   * block of these longer than the giant size gets inner nodes only for its
+   * opening and last lines, wherever the viewport is.
+   */
+  opaque?: readonly string[]
   views?: readonly FormattedNodeView[]
   /** Keys that run before the formatted view's structure keys. */
   keys?: readonly KeyBinding[]
@@ -104,6 +153,37 @@ export const formattedMarkdown = Facet.define<MarkdownConfig>()
 
 /** Node views of the active contributions, read by the live preview. */
 export const formattedViews = Facet.define<FormattedNodeView>()
+
+/** Opaque node names of the active contributions, read by the formatted syntax. */
+export const formattedOpaque = Facet.define<string>()
+
+/** Nodes of syntax settings that are off: they and their children show as written. */
+export const formattedLiteral = Facet.define<string>()
+
+/**
+ * The document a formatted view edits, provided by its host: the tab that
+ * shows it, and a revision that changes when its files or media may have.
+ */
+export const formattedDocument = Facet.define<
+  { revision: number; tabId: string | null },
+  { revision: number; tabId: string | null }
+>({ combine: (values) => values.at(-1) ?? { revision: 0, tabId: null } })
+
+/** Show the Markdown markers of the formatted text under the selection. */
+export const showMarkdownMarkers = Facet.define<boolean, boolean>({
+  combine: (values) => values.at(-1) ?? true,
+})
+
+/**
+ * A document prefix the formatted view does not parse as Markdown, such as
+ * frontmatter: it becomes one `Frontmatter` node. Contributions provide a
+ * function of the state; the longest prefix applies.
+ */
+export const formattedPrefix = Facet.define<(state: EditorState) => number>()
+
+const stops = new WeakSet<MarkdownConfig>()
+/** Whether a contributed extension's inline parsers start only where the plain-text shortcut stops. */
+export const inlineStops = (config: MarkdownConfig) => stops.has(config)
 
 const loaded = new WeakMap<FormattedEntry, FormattedContribution>()
 const loading = new WeakSet<FormattedEntry>()
@@ -156,15 +236,31 @@ export const formattedContributions = {
     }
   },
   /**
-   * Extensions for the loaded, enabled contributions; entries not loaded yet
-   * start loading, and `subscribe` reports when they arrive.
+   * Extensions for the loaded, enabled contributions that apply to a
+   * document with these flavors; entries not loaded yet start loading, and
+   * `subscribe` reports when they arrive.
    */
-  extension(): Extension {
-    return formattedRegistry.entries().flatMap((entry) => {
-      load(entry)
-      const contribution = loaded.get(entry)
-      return contribution ? contributionExtension(contribution) : []
-    })
+  extension(flavors?: readonly string[] | undefined): Extension {
+    const literal = markdownSyntax
+      .snapshot()
+      .flatMap((feature) =>
+        !feature.enabled && feature.scope !== 'document'
+          ? (feature.nodes ?? [])
+          : [],
+      )
+    return [
+      literal.map((name) => formattedLiteral.of(name)),
+      formattedRegistry.entries().flatMap((entry) => {
+        load(entry)
+        const contribution = loaded.get(entry)
+        return contribution &&
+          (!contribution.flavor ||
+            !flavors ||
+            flavors.includes(contribution.flavor))
+          ? contributionExtension(contribution)
+          : []
+      }),
+    ]
   },
 }
 
@@ -175,11 +271,14 @@ export function contributionExtension(
   if (contribution.feature && !markdownSyntax.enabled(contribution.feature))
     return []
   const syntax = contribution.syntax ?? []
+  const configs = (
+    Array.isArray(syntax) ? syntax : [syntax]
+  ) as MarkdownConfig[]
+  if (contribution.inlineStops) for (const config of configs) stops.add(config)
   return [
-    ((Array.isArray(syntax) ? syntax : [syntax]) as MarkdownConfig[]).map(
-      (config) => formattedMarkdown.of(config),
-    ),
+    configs.map((config) => formattedMarkdown.of(config)),
     (contribution.views ?? []).map((view) => formattedViews.of(view)),
+    (contribution.opaque ?? []).map((name) => formattedOpaque.of(name)),
     contribution.keys ? Prec.high(keymap.of([...contribution.keys])) : [],
     contribution.extension ?? [],
   ]

@@ -15,6 +15,7 @@ const core: MarkdownSyntaxFeature[] = [
       description: `${'#'.repeat(index + 1)} heading`,
       level: 'block',
       extensions: ['heading'],
+      nodes: [`ATXHeading${index + 1}`, `SetextHeading${index + 1}`],
       matches: (token) => token.type === 'heading' && token.depth === index + 1,
       slash: {
         markdown: `${'#'.repeat(index + 1)} `,
@@ -33,6 +34,7 @@ const core: MarkdownSyntaxFeature[] = [
     group: 'text',
     description: '**bold**',
     level: 'inline',
+    nodes: ['StrongEmphasis'],
     extensions: ['bold'],
     matches: (token) => token.type === 'strong',
     slash: { markdown: '****', cursor: 2, rich: (chain) => chain.toggleBold() },
@@ -43,6 +45,7 @@ const core: MarkdownSyntaxFeature[] = [
     group: 'text',
     description: '*italic*',
     level: 'inline',
+    nodes: ['Emphasis'],
     extensions: ['italic'],
     matches: (token) => token.type === 'em',
     slash: { markdown: '**', cursor: 1, rich: (chain) => chain.toggleItalic() },
@@ -53,6 +56,7 @@ const core: MarkdownSyntaxFeature[] = [
     group: 'text',
     description: '`code`',
     level: 'inline',
+    nodes: ['InlineCode'],
     extensions: ['code'],
     matches: (token) => token.type === 'codespan',
     slash: { markdown: '``', cursor: 1, rich: (chain) => chain.toggleCode() },
@@ -64,6 +68,7 @@ const core: MarkdownSyntaxFeature[] = [
     description:
       'Put a backslash before punctuation, such as \\*, to show it as text.',
     level: 'inline',
+    nodes: ['Escape'],
     matches: (token) => token.type === 'escape',
     slash: { markdown: '\\*' },
   },
@@ -74,6 +79,7 @@ const core: MarkdownSyntaxFeature[] = [
     description:
       'Wrap code in three backticks or tildes, or indent it with four spaces.',
     level: 'block',
+    nodes: ['FencedCode', 'CodeBlock'],
     extensions: ['codeBlock'],
     matches: (token) => token.type === 'code',
     slash: {
@@ -90,6 +96,7 @@ const core: MarkdownSyntaxFeature[] = [
     group: 'blocks',
     description: '> quote',
     level: 'block',
+    nodes: ['Blockquote'],
     extensions: ['blockquote'],
     matches: (token) => token.type === 'blockquote',
     slash: {
@@ -105,6 +112,7 @@ const core: MarkdownSyntaxFeature[] = [
     group: 'blocks',
     description: '- item',
     level: 'block',
+    nodes: ['BulletList'],
     extensions: ['bulletList'],
     matches: (token) =>
       token.type === 'list' &&
@@ -123,6 +131,7 @@ const core: MarkdownSyntaxFeature[] = [
     group: 'blocks',
     description: '1. item',
     level: 'block',
+    nodes: ['OrderedList'],
     extensions: ['orderedList'],
     matches: (token) =>
       token.type === 'list' &&
@@ -141,6 +150,7 @@ const core: MarkdownSyntaxFeature[] = [
     group: 'blocks',
     description: '---, ***, or ___.',
     level: 'block',
+    nodes: ['HorizontalRule'],
     extensions: ['horizontalRule'],
     matches: (token) => token.type === 'hr',
     slash: {
@@ -157,6 +167,7 @@ const core: MarkdownSyntaxFeature[] = [
     description:
       'End a line with two spaces or a backslash to keep the line break.',
     level: 'inline',
+    nodes: ['HardBreak'],
     extensions: ['hardBreak'],
     matches: (token) => token.type === 'br',
     slash: { markdown: '  \n', rich: (chain) => chain.setHardBreak() },
@@ -167,6 +178,7 @@ const core: MarkdownSyntaxFeature[] = [
     group: 'links and media',
     description: 'Markdown links and automatic links.',
     level: 'inline',
+    nodes: ['Link', 'Autolink', 'URL'],
     extensions: ['link'],
     matches: (token) => token.type === 'link',
     slash: { markdown: '[text](url)', cursor: 1 },
@@ -319,6 +331,9 @@ export const markdownSyntax = {
       (feature.extensions !== undefined &&
         (!Array.isArray(feature.extensions) ||
           feature.extensions.some((name) => typeof name !== 'string'))) ||
+      (feature.nodes !== undefined &&
+        (!Array.isArray(feature.nodes) ||
+          feature.nodes.some((name) => typeof name !== 'string'))) ||
       (feature.slash !== undefined &&
         (!feature.slash ||
           typeof feature.slash.markdown !== 'string' ||
@@ -339,6 +354,7 @@ export const markdownSyntax = {
       id,
       owner,
       extensions: [...(feature.extensions ?? [])],
+      ...(feature.nodes ? { nodes: [...feature.nodes] } : {}),
     }
     registry.set(id, entry)
     publish()

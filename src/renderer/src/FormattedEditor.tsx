@@ -54,6 +54,7 @@ export function MarkdownEditor({
   spellCheck,
   showMarkdownMarkers,
   flavors,
+  documentRevision,
   onAttach,
   onLink,
   onOutline,
@@ -100,6 +101,7 @@ export function MarkdownEditor({
       ),
     }
   }, [flavors, markdownExtensions, syntaxVersion])
+  const flavorIds = useMemo(() => flavors.map((flavor) => flavor.id), [flavors])
   const [formattedReady, setFormattedReady] = useState(false)
   const [findQuery, setFindQuery] = useState('')
   const [findStatus, setFindStatus] = useState<FindStatus>({
@@ -250,6 +252,8 @@ export function MarkdownEditor({
                 onFindStatus={setFindStatus}
                 markers={showMarkdownMarkers}
                 spellCheck={spellCheck}
+                flavors={flavorIds}
+                documentRevision={documentRevision}
               />
             </div>
           </section>

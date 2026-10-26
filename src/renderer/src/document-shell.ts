@@ -2,7 +2,6 @@ import type { DocumentState } from '../../shared/desktop.ts'
 import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes.ts'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import type { DocumentRuntime } from './document-runtime.ts'
-import { codemirrorFormattedView } from './formatted-engine.ts'
 
 const certifiedVisualEchoes = new WeakSet<SourceSnapshot>()
 // Weak entries leave with their source snapshot, including when a tab closes.
@@ -103,12 +102,7 @@ export function hasDocumentFootnotes(
   runtime: Pick<DocumentRuntime, 'sourceFor'>,
   document: DocumentState | null,
 ) {
-  // The CodeMirror formatted view edits footnotes in place.
-  if (
-    !document ||
-    codemirrorFormattedView ||
-    (runtime.sourceFor(document)?.utf16Length ?? 0) > 256 * 1024
-  )
+  if (!document || (runtime.sourceFor(document)?.utf16Length ?? 0) > 256 * 1024)
     return false
   const source = runtime.sourceFor(document)
   let found = source && footnoteSources.get(source)

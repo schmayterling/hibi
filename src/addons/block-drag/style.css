@@ -24,3 +24,10 @@
   visibility: hidden !important;
   pointer-events: none !important;
 }
+/* Where a dragged block lands in the CodeMirror formatted view, like the rich view's drop cursor. */
+.block-drag-drop {
+  position: absolute;
+  height: 1px;
+  background: currentColor;
+  pointer-events: none;
+}

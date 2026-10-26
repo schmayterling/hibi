@@ -20,7 +20,7 @@ const stubs = {
     export const isCurrentWorkspaceTarget = () => true
     export const refreshWorkspace = async () => {}
     export const getWorkspace = () => ({ name: 'notes', entries: [] })
-    export const exportPaths = () => [{ path: 'note.md' }]
+    export const exportPaths = () => globalThis.__exportNative.paths ?? [{ path: 'note.md' }]
     export const readWorkspaceExportPage = async () => globalThis.__exportNative.source`,
   './site-runtime': `export { readSiteFiles, validateSiteFiles } from ${JSON.stringify(resolve('src/addons/documentation/site-runtime.ts'))}
     export class SiteWorker {
@@ -142,3 +142,57 @@ for (const mode of ['disk', 'memory', 'cancel']) {
     }
   })
 }
+
+test('native export admits two pages while staging and refuses a third', async () => {
+  let release, started
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  const ready = new Promise((resolve) => {
+    started = resolve
+  })
+  const paths = ['one.md', 'two.md', 'three.md'].map((path) => ({ path }))
+  globalThis.__exportNative = {
+    target,
+    paths,
+    source: { path: 'one.md', markdown: '# One' },
+    async request(job) {
+      if (job.kind === 'images') return []
+      if (job.kind === 'page' && job.page.path === 'one.md') {
+        started()
+        await held
+      }
+    },
+    close() {
+      release()
+    },
+  }
+  let session, staging
+  try {
+    session = await native.begin({ target, options: {} })
+    const first = await native.page(session)
+    staging = native.stage({
+      ...session,
+      page: { ...first, html: '<h1>One</h1>' },
+    })
+    void staging.catch(() => {})
+    await ready
+    globalThis.__exportNative.source = { path: 'two.md', markdown: '# Two' }
+    const second = await native.page(session)
+    assert.equal(second.path, 'two.md')
+    await assert.rejects(native.page(session), /Could not prepare/)
+    release()
+    await staging
+    await native.stage({
+      ...session,
+      page: { ...second, html: '<h1>Two</h1>' },
+    })
+    globalThis.__exportNative.source = { path: 'three.md', markdown: '# Three' }
+    assert.equal((await native.page(session)).path, 'three.md')
+  } finally {
+    release()
+    await staging?.catch(() => {})
+    if (session) await native.cancel(session)
+    delete globalThis.__exportNative
+  }
+})

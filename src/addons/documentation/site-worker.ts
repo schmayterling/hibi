@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdir, open, readFile, writeFile } from 'node:fs/promises'
+import { type FileHandle, mkdir, open } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { parentPort } from 'node:worker_threads'
 import { imageSources } from '../../main/images'
@@ -35,9 +35,29 @@ let directory = ''
 let site: SiteData
 let paths: Set<string>
 let graph: ReturnType<typeof createNoteGraph>
-const pages = new Map<string, { index: number; hash: string }>()
+let scratch: FileHandle
+let offset = 0
+const pages = new Map<string, { offset: number; bytes: number; hash: string }>()
 const sourceHash = (source: string) =>
   createHash('sha256').update(source, 'utf16le').digest('hex')
+
+async function readPage(page: SitePage): Promise<SitePage> {
+  const record = pages.get(page.path)!
+  const bytes = Buffer.alloc(record.bytes)
+  let read = 0
+  while (read < bytes.length) {
+    const chunk = await scratch.read(
+      bytes,
+      read,
+      bytes.length - read,
+      record.offset + read,
+    )
+    if (!chunk.bytesRead)
+      throw new Error('Could not prepare the documentation export.')
+    read += chunk.bytesRead
+  }
+  return JSON.parse(bytes.toString('utf8')) as SitePage
+}
 
 async function request(job: SiteWorkerRequest) {
   if (job.kind === 'start') {
@@ -52,7 +72,7 @@ async function request(job: SiteWorkerRequest) {
       { ...job.options, graph: false },
     )
     site.options = job.options
-    await mkdir(join(directory, 'pages'))
+    scratch = await open(join(directory, 'pages.jsonl'), 'wx+', 0o600)
     await mkdir(join(directory, 'files'))
     return
   }
@@ -77,12 +97,14 @@ async function request(job: SiteWorkerRequest) {
     const index = pages.size
     if (!paths.has(page.path) || pages.has(page.path))
       throw new Error('The workspace changed during export. Export again.')
-    await writeFile(
-      join(directory, 'pages', String(index)),
-      JSON.stringify(page),
-      { flag: 'wx', mode: 0o600 },
-    )
-    pages.set(page.path, { index, hash: sourceHash(page.markdown) })
+    const bytes = Buffer.from(JSON.stringify(page))
+    await scratch.writeFile(bytes)
+    pages.set(page.path, {
+      offset,
+      bytes: bytes.length,
+      hash: sourceHash(page.markdown),
+    })
+    offset += bytes.length
     site.pages[index] = {
       path: page.path,
       title: page.title,
@@ -107,31 +129,29 @@ async function request(job: SiteWorkerRequest) {
   site = { ...metadata, pages: site.pages, options: site.options }
   if (site.options.graph) site.graph = graph.finish()
   const files: SiteFile[] = []
-  for await (const [relative, chunks] of siteOutput(
-    job.template,
-    site,
-    job.password,
-    async (page) =>
-      JSON.parse(
-        await readFile(
-          join(directory, 'pages', String(pages.get(page.path)!.index)),
-          'utf8',
-        ),
-      ) as SitePage,
-  )) {
-    const path = join(directory, 'files', relative)
-    await mkdir(dirname(path), { recursive: true })
-    const file = await open(path, 'wx', 0o600)
-    let bytes = 0
-    try {
-      for await (const chunk of chunks) {
-        await file.writeFile(chunk, 'utf8')
-        bytes += Buffer.byteLength(chunk)
+  try {
+    for await (const [relative, chunks] of siteOutput(
+      job.template,
+      site,
+      job.password,
+      readPage,
+    )) {
+      const path = join(directory, 'files', relative)
+      await mkdir(dirname(path), { recursive: true })
+      const file = await open(path, 'wx', 0o600)
+      let bytes = 0
+      try {
+        for await (const chunk of chunks) {
+          await file.writeFile(chunk, 'utf8')
+          bytes += Buffer.byteLength(chunk)
+        }
+      } finally {
+        await file.close()
       }
-    } finally {
-      await file.close()
+      files.push({ path: relative, bytes })
     }
-    files.push({ path: relative, bytes })
+  } finally {
+    await scratch.close()
   }
   return files
 }

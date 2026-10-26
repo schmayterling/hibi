@@ -1375,7 +1375,8 @@
   "7f43531f5a30": [
     "src/addons/documentation/native.ts",
     "src/addons/documentation/prepare.ts",
-    "src/addons/documentation/site-runtime.ts"
+    "src/addons/documentation/site-runtime.ts",
+    "src/addons/documentation/site-worker.ts"
   ],
   "283432fdadc1": [
     "src/addons/dictionary/index.tsx"

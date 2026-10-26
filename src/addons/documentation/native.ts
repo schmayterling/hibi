@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, mkdtemp, open, readFile, rm } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { copyFile, mkdir, mkdtemp, open, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { app, BrowserWindow, dialog } from 'electron'
@@ -40,8 +41,12 @@ type Session = {
   directory: string
   worker: SiteWorker
   index: number
-  source: WorkspacePage | undefined
-  images?: Promise<WorkspacePage>
+  readIndex: number
+  reading?: Promise<WorkspacePage>
+  pending: Map<
+    string,
+    { source: WorkspacePage; images: Promise<WorkspacePage> }
+  >
   busy: boolean
   committing: boolean
   timer?: ReturnType<typeof setTimeout>
@@ -57,7 +62,12 @@ function dispose(session: Session): Promise<void> {
   session.closing = (async () => {
     try {
       await session.worker.close()
-      await session.images?.catch(() => {})
+      await session.reading?.catch(() => {})
+      await Promise.all(
+        [...session.pending.values()].map((page) =>
+          page.images.catch(() => {}),
+        ),
+      )
       await rm(session.directory, { recursive: true, force: true })
     } finally {
       if (active === session) active = undefined
@@ -70,7 +80,7 @@ function touch(session: Session) {
   clearTimeout(session.timer)
   session.timer = setTimeout(() => {
     if (active !== session || session.closing) return
-    if (session.busy || session.committing) touch(session)
+    if (session.busy || session.committing || session.reading) touch(session)
     else void dispose(session).catch(console.error)
   }, 5 * 60_000)
   session.timer.unref()
@@ -174,7 +184,12 @@ async function verifySources(session: Session) {
 async function finish(session: Session, input: unknown) {
   const value = input as Record<string, unknown>
   const contributions = validateContributions(value)
-  if (session.index !== session.paths.length || session.source) throw invalid()
+  if (
+    session.index !== session.paths.length ||
+    session.pending.size ||
+    session.reading
+  )
+    throw invalid()
   const password = value.password ?? ''
   if (typeof password !== 'string')
     throw new Error('Enter a valid export password.')
@@ -240,7 +255,8 @@ export default {
         directory,
         worker,
         index: 0,
-        source: undefined,
+        readIndex: 0,
+        pending: new Map(),
         busy: true,
         committing: false,
       }
@@ -262,46 +278,61 @@ export default {
       }
     },
     async page(input) {
-      return withSession(input, async (session) => {
-        if (session.source || session.index >= session.paths.length)
-          throw invalid()
-        session.source = await readWorkspaceExportPage(
-          session.paths[session.index]!,
+      const session = sessionFor(input)
+      if (
+        session.reading ||
+        session.committing ||
+        session.files ||
+        session.pending.size >= 2 ||
+        session.readIndex >= session.paths.length
+      )
+        throw invalid()
+      try {
+        session.reading = readWorkspaceExportPage(
+          session.paths[session.readIndex++]!,
           session.target,
           false,
         )
-        const source = session.source
-        session.images = session.worker
+        const source = await session.reading
+        if (session.closing) throw invalid()
+        const images = session.worker
           .request<string[]>({ kind: 'images', page: source })
           .then((sources) =>
             readWorkspaceExportPage(source.path, session.target, sources),
           )
         // Stage observes failures; cancellation can retire this prefetch first.
-        void session.images.catch(() => {})
+        void images.catch(() => {})
+        session.pending.set(source.path, { source, images })
         return source
-      })
+      } catch (error) {
+        await dispose(session)
+        throw error
+      } finally {
+        delete session.reading
+      }
     },
     async stage(input) {
       return withSession(input, async (session) => {
         const rendered = (input as { page?: WorkspacePage }).page
+        const pending = rendered && session.pending.get(rendered.path)
         if (
           !rendered ||
-          rendered.path !== session.source?.path ||
-          rendered.markdown !== session.source.markdown ||
+          !pending ||
+          rendered.path !== session.paths[session.index] ||
+          rendered.markdown !== pending.source.markdown ||
           typeof rendered.html !== 'string'
         )
           throw new Error('The workspace changed during export. Export again.')
         // Bound one renderer IPC payload, not the user's site.
         if (Buffer.byteLength(rendered.html) > 64 * 1024 * 1024) throw invalid()
-        const page = await session.images
+        const page = await pending.images
         if (!page || page.markdown !== rendered.markdown)
           throw new Error('The workspace changed during export. Export again.')
         await session.worker.request({
           kind: 'page',
           page: { ...page, html: rendered.html },
         })
-        session.source = undefined
-        delete session.images
+        session.pending.delete(rendered.path)
         session.index++
       })
     },
@@ -429,10 +460,21 @@ export default {
           }
           try {
             for (const { path: relative } of files) {
+              if (relative === 'index.html') continue
               const path = join(destination, relative)
               await mkdir(dirname(path), { recursive: true })
-              await writeText(path, stagedFile(session, relative), true)
+              await copyFile(
+                join(session.directory, 'files', relative),
+                path,
+                constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE,
+              )
             }
+            // Publish the entrypoint last, with one sync for this new export.
+            await writeText(
+              join(destination, 'index.html'),
+              stagedFile(session, 'index.html'),
+              true,
+            )
           } catch (error) {
             await rm(destination, { recursive: true, force: true })
             throw error

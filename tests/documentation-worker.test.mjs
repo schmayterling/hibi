@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, open, readFile, rename, rm } from 'node:fs/promises'
+import { mkdtemp, open, readdir, readFile, rename, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -32,15 +32,22 @@ test('owned export worker stages pages and yields main task turns while streamin
       name: 'notes',
       options: exportOptions({ singleFile: false, graph: true }),
     })
-    for (const path of paths)
-      await worker.request({
-        kind: 'page',
-        page: {
-          path,
-          markdown: '# Note\n\n[next](1.md)',
-          html: '<h1>Note</h1><script>attack()</script>',
-        },
-      })
+    await Promise.all(
+      paths.map((path) =>
+        worker.request({
+          kind: 'page',
+          page: {
+            path,
+            markdown: '# Note\n\n[next](1.md)',
+            html: '<h1>Note</h1><script>attack()</script>',
+          },
+        }),
+      ),
+    )
+    assert.deepEqual((await readdir(directory)).sort(), [
+      'files',
+      'pages.jsonl',
+    ])
     const files = await worker.request({
       kind: 'finish',
       template,
@@ -77,7 +84,10 @@ test('owned export worker stages pages and yields main task turns while streamin
     )
     assert.match(html, /<h1 id="note">Note<\/h1>/)
     assert.match(html, /98.md\//)
-    await rename(join(directory, 'pages'), join(directory, 'saved-pages'))
+    await rename(
+      join(directory, 'pages.jsonl'),
+      join(directory, 'saved-pages.jsonl'),
+    )
     await worker.request({
       kind: 'verify',
       page: { path: '99.md', markdown: '# Note\n\n[next](1.md)' },

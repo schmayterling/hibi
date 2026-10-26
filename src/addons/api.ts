@@ -205,6 +205,8 @@ export type RichExtension = {
   id: string
   /** Attach editor behavior without rebuilding its schema or undo history. */
   attach: (editor: Editor, context?: EditorExtensionContext) => () => void
+  /** Lets a read-only split preview catch up after source typing pauses. Omit to update it after every source edit. */
+  preview?: 'deferred'
 }
 
 export type StatusItem = {

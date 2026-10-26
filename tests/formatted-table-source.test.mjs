@@ -519,3 +519,48 @@ test('tables before a position are counted for their stored sizes', () => {
   assert.equal(countTables(doc.slice(0, 16)), 2)
   assert.equal(countTables([]), 0)
 })
+
+test('table ordinals count tables as the formatted view parser finds them in lists, quotes and fences', () => {
+  const parsed = (doc) => {
+    let found = 0
+    markdown.parse(doc).iterate({
+      enter(node) {
+        if (node.name === 'Table') found++
+      },
+    })
+    return found
+  }
+  // Tables on list markers, and fences that end with their quote or list item.
+  for (const doc of [
+    '- | a | b |\n  | - | - |\n  | 1 | 2 |',
+    '> ```\n> code\n\n| a | b |\n| - | - |',
+    '- ```\n  code\n\n| a | b |\n| - | - |',
+    '> - | a |\n>   | - |',
+    '1. | a |\n   | - |',
+  ])
+    assert.equal(countTables(doc.split('\n')), parsed(doc), doc)
+  let seed = 7
+  const random = (n) => {
+    seed = (seed * 16807) % 2147483647
+    return seed % n
+  }
+  const blocks = [
+    '| a | b |\n| - | - |\n| 1 | 2 |',
+    '- | a | b |\n  | - | - |',
+    '> | a | b |\n> | - | - |',
+    '> ```\n> | x | y |\n> | - | - |',
+    '- ```\n  | x | y |\n  | - | - |',
+    '```\n| x | y |\n| - | - |\n```',
+    '- item',
+    'paragraph | pipe',
+    '> quote',
+    '1. | a |\n   | - |',
+  ]
+  for (let round = 0; round < 300; round++) {
+    const doc = Array.from(
+      { length: 1 + random(6) },
+      () => blocks[random(blocks.length)],
+    ).join('\n\n')
+    assert.equal(countTables(doc.split('\n')), parsed(doc), doc)
+  }
+})

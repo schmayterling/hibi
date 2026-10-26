@@ -458,38 +458,64 @@ export function planInline<W>(
 }
 
 const delimiterRow = /^\|?(?:[ \t]*:?-+:?[ \t]*\|)+(?:[ \t]*:?-+:?[ \t]*)?$/
+const quoteMarker = /^ {0,3}>[ \t]?/
+const listMarker = /^(?:[-+*]|\d{1,9}[.)])(?:[ \t]+|$)/
 
 /**
  * How many GFM tables start in these lines: a line with a pipe, then a
- * delimiter row with as many cells, outside fenced code. Quote markers and
- * indentation before rows are skipped. A table's count of the tables before
- * it is its ordinal, part of the key its stored sizes have.
+ * delimiter row with as many cells, outside fenced code. Like the formatted
+ * view's parser, a table may start after quote and list markers, and a
+ * fence ends with its closing marker or with the quote or list item around
+ * it. A table's count of the tables before it is its ordinal, part of the
+ * key its stored sizes have.
  */
 export function countTables(lines: Iterable<string>) {
   let count = 0,
-    fence = '',
+    fence: { marker: string; quotes: number; indent: number } | null = null,
     previous: string | null = null,
-    table = false
+    table = false,
+    // The content column of the list item the lines are in, 0 outside lists.
+    list = 0
   for (const raw of lines) {
-    const line = raw.replace(/^(?:[ \t]*>)*[ \t]*/, '')
-    const marker = /^(`{3,}|~{3,})/.exec(line)?.[1]
-    if (fence) {
-      if (
-        marker &&
-        marker[0] === fence[0] &&
-        marker.length >= fence.length &&
-        !line.slice(marker.length).trim()
-      )
-        fence = ''
-      continue
+    let quotes = 0,
+      at = 0
+    for (
+      let marker = quoteMarker.exec(raw);
+      marker;
+      marker = quoteMarker.exec(raw.slice(at))
+    ) {
+      quotes++
+      at += marker[0].length
     }
+    const text = raw.slice(at)
+    const indent = text.length - text.trimStart().length
+    const line = text.slice(indent)
+    if (fence) {
+      if (quotes >= fence.quotes && (!line || indent >= fence.indent)) {
+        const marker = /^(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1]
+        if (
+          marker &&
+          marker[0] === fence.marker[0] &&
+          marker.length >= fence.marker.length
+        )
+          fence = null
+        continue
+      }
+      // Its quote or list item ended, and the fence with it.
+      fence = null
+    }
+    const item = listMarker.exec(line)?.[0]
+    if (item) list = indent + item.length
+    else if (line && indent < list) list = 0
+    const content = item ? line.slice(item.length) : line
+    const marker = /^(`{3,}|~{3,})/.exec(content)?.[1]
     if (marker) {
-      fence = marker
+      fence = { marker, quotes, indent: list }
       previous = null
       table = false
       continue
     }
-    if (!line.trim()) {
+    if (!content.trim()) {
       previous = null
       table = false
       continue
@@ -497,14 +523,15 @@ export function countTables(lines: Iterable<string>) {
     if (table) continue
     if (
       previous !== null &&
-      delimiterRow.test(line.trimEnd()) &&
-      parseRow(previous).cells.length === parseRow(line).cells.length &&
+      !item &&
+      delimiterRow.test(content.trimEnd()) &&
+      parseRow(previous).cells.length === parseRow(content).cells.length &&
       parseRow(previous).pipes.length > 0
     ) {
       count++
       table = true
     }
-    previous = line
+    previous = content
   }
   return count
 }

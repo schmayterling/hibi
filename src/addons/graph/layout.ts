@@ -140,9 +140,11 @@ export function createLayout(
         node.fx = node.x = message.x
         node.fy = node.y = message.y
         drag = message.drag
+        // The motion preference may have changed since the graph arrived.
+        reduced = message.reduced
         if (message.moved) {
           const count = nodes.length > 80 ? 2 : 30
-          if (!message.reduced) {
+          if (!reduced) {
             simulation!.alpha(0.15)
             start()
           } else if (stepper) {

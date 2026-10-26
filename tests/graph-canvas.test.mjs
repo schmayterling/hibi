@@ -333,6 +333,50 @@ test('a page laying out in pieces puts every note where the worker does, drags i
   assert.deepEqual(page, worker)
 })
 
+test('drags after a motion preference change lay out the same on a page as in the worker', (t) => {
+  const tasks = pacedTasks(t)
+  const { edges } = graphTopology(denseGraph(300, 600))
+  // Settles in one motion mode, then drags a note once per later preference.
+  const settle = (pieces, reduced, ...drags) => {
+    const { layout, frames } = tasks.layout(pieces)
+    layout.receive({
+      type: 'graph',
+      version: 1,
+      edges,
+      positions: new Float32Array(600).fill(Number.NaN),
+      reduced,
+    })
+    tasks.until(() => frames.at(-1)?.settled)
+    const settled = [frames.at(-1)]
+    for (const [index, reduced] of drags.entries()) {
+      layout.receive({
+        type: 'pin',
+        version: 1,
+        index: 5,
+        x: 40 * (index + 1),
+        y: -30,
+        drag: index + 1,
+        moved: true,
+        reduced,
+      })
+      tasks.until(() => frames.at(-1).settled)
+      settled.push(frames.at(-1))
+    }
+    return settled
+  }
+  // Reduced motion turned on after a normal settle, then off again.
+  const worker = settle(undefined, false, true, false)
+  const page = settle(tasks.counted, false, true, false)
+  assert.equal(page[1].ticks, page[0].ticks + 2)
+  assert.ok(page[2].ticks > page[1].ticks + 100, `${page[2].ticks} steps`)
+  assert.deepEqual(page, worker)
+  // Turned off after a reduced settle: the drag sets the layout moving again.
+  const workerAfter = settle(undefined, true, false)
+  const pageAfter = settle(tasks.counted, true, false)
+  assert.ok(workerAfter[1].ticks > 260, `${workerAfter[1].ticks} steps`)
+  assert.deepEqual(pageAfter, workerAfter)
+})
+
 test('a page laying out 20,000 notes and 60,000 links runs one slice of work per task', (t) => {
   const tasks = pacedTasks(t)
   const message = {

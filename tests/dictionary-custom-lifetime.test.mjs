@@ -326,11 +326,9 @@ test('large custom lists load only visible pages and keep row edits keyed', asyn
   await chooser.fill('2')
   const note = words.getByRole('textbox', { name: 'Note for “paged10000”' })
   await note.waitFor()
-  const row = words
-    .getByRole('listitem')
-    .filter({
-      has: page.getByRole('textbox', { name: 'Note for “paged10000”' }),
-    })
+  const row = words.getByRole('listitem').filter({
+    has: page.getByRole('textbox', { name: 'Note for “paged10000”' }),
+  })
   assert.equal(await row.getAttribute('aria-posinset'), '10001')
   assert.equal(await row.getAttribute('aria-setsize'), '10050')
   assert.ok((await words.getByRole('listitem').count()) < 80)

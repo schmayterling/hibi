@@ -1,0 +1,40 @@
+/* Tables look like the rich editor's: the same rules as its document styles.
+   CodeMirror measures the widget's box, so the space around a table comes
+   from the gap lines around it, not margins. A wide table overflows the
+   text column without widening the editor's lines. */
+.hibi-formatted .hibi-lp-table {
+  contain: inline-size;
+}
+/* In quotes and lists the table sits on its container's line, without the line's own height. */
+.hibi-formatted .hibi-lp-table-inline {
+  display: inline-block;
+  width: 100%;
+  vertical-align: top;
+}
+.hibi-formatted .hibi-lp-table > table {
+  border-collapse: collapse;
+  width: 100%;
+  /* Lines wrap like the rich editor's text, not the editor's line wrapping. */
+  white-space: pre-wrap;
+  word-break: normal;
+}
+.hibi-formatted .hibi-lp-table :is(th, td) {
+  position: relative;
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  text-align: left;
+}
+.hibi-formatted .hibi-lp-table th {
+  background: var(--surface);
+}
+.hibi-formatted .hibi-lp-table p {
+  margin: 0 0 1em;
+}
+/* Rows outside the visible window of a long table are spacer height. */
+.hibi-formatted .hibi-lp-table .hibi-lp-table-spacer > td {
+  padding: 0;
+  border-block: 0;
+}
+.hibi-formatted .hibi-lp-table .hibi-lp-table-empty {
+  display: none;
+}

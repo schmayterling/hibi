@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { registerHooks } from 'node:module'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import { TreeFragment } from '@lezer/common'
@@ -292,6 +293,14 @@ test('commands read the formatted view tree from its state', () => {
     'Blockquote',
   )
   assert.equal(formattedSyntaxTree(EditorState.create({ doc: 'x' })), null)
+})
+
+// Feature modules import their styles, which Node cannot load.
+registerHooks({
+  load: (url, context, next) =>
+    url.endsWith('.css')
+      ? { format: 'module', source: '', shortCircuit: true }
+      : next(url, context),
 })
 
 test('github tables are opaque in documents of that flavor', async () => {

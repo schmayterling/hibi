@@ -318,19 +318,33 @@ for (const hook of ['decorate', 'layout', 'container']) {
       JSON.stringify({ 'failure-proof': true }),
     )
     const app = await electron.launch({
-      args: [resolve('.'), `--user-data-dir=${profile}`, file],
+      args: [resolve('.'), `--user-data-dir=${profile}`],
     })
     t.after(async () => {
       await app.close()
       await rm(folder, { recursive: true, force: true })
     })
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
     const page = await app.firstWindow()
     await waitForDocumentEditor(app, page)
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, file)
+    await pressShortcut(app, `${mod}+o`)
+    await waitForAsync(
+      page,
+      async () => (await window.hibi.getDocument()).name === 'note.md',
+    )
     await page.evaluate(() =>
       localStorage.setItem('hibi:formatted-engine', 'codemirror'),
     )
     await page.reload()
-    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+    await waitForDocumentEditor(app, page)
     await page.waitForFunction(() => window.proofCalls > 0)
     const strong = page.locator('.rich-pane .hibi-lp-strong')
     assert.equal(await strong.count(), 1)

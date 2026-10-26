@@ -10,11 +10,9 @@ export function registerFormattedFlavor(
   const id = `${addonId}.${flavor.id}`
   let failed = false
   let remove = () => {}
-  const guard = <Args extends unknown[], Result>(
-    callback: ((...args: Args) => Result) | undefined,
-  ) =>
-    callback &&
-    ((...args: Args): Result | undefined => {
+  const guard =
+    <Args extends unknown[], Result>(callback: (...args: Args) => Result) =>
+    (...args: Args): Result | undefined => {
       if (failed) return
       try {
         return callback(...args)
@@ -25,7 +23,7 @@ export function registerFormattedFlavor(
           onError(error)
         })
       }
-    })
+    }
   remove = formattedRegistry.register({
     id: `flavor:${id}`,
     load: () => ({
@@ -34,22 +32,24 @@ export function registerFormattedFlavor(
       ...(flavor.syntax ? { syntax: flavor.syntax } : {}),
       views:
         flavor.render?.map((view): FormattedNodeView => {
-          const container = guard(view.container)
+          const container = view.container && guard(view.container)
           return {
             ...view,
-            decorate: guard(view.decorate),
-            layout: guard(view.layout),
-            container:
-              container &&
-              ((node, context) => {
-                const shape = container(node, context)
-                if (!shape?.paint) return shape
-                const paint = guard(shape.paint)
-                return {
-                  ...shape,
-                  paint: (left, top) => paint?.(left, top) ?? '',
+            ...(view.decorate ? { decorate: guard(view.decorate) } : {}),
+            ...(view.layout ? { layout: guard(view.layout) } : {}),
+            ...(container
+              ? {
+                  container(node, context) {
+                    const shape = container(node, context)
+                    if (!shape?.paint) return shape
+                    const paint = guard(shape.paint)
+                    return {
+                      ...shape,
+                      paint: (left, top) => paint(left, top) ?? '',
+                    }
+                  },
                 }
-              }),
+              : {}),
             ...(view.feature ? { feature: `${addonId}.${view.feature}` } : {}),
           }
         }) ?? [],

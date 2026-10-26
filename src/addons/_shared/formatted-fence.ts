@@ -39,41 +39,92 @@ export function fenceInfo(doc: Text, node: SyntaxNode) {
   return info?.name === 'CodeInfo' ? doc.sliceString(info.from, info.to) : ''
 }
 
-/** How a line continues the quotes and list items around a fence. */
-type Level = { quote: true } | { quote: false; column: number }
+/**
+ * A quote around a fence, or a list item with the line its marker is on and
+ * its content's column past the item's base.
+ */
+type Level = { quote: true } | { quote: false; first: number; offset: number }
 
-/** The quotes and list items around `node`, outermost first, with each item's content column. */
-function containerLevels(doc: Text, node: SyntaxNode): Level[] {
-  const levels: Level[] = []
-  for (let parent = node.parent; parent; parent = parent.parent) {
-    if (parent.name === 'Blockquote') levels.unshift({ quote: true })
-    else if (parent.name === 'ListItem') {
-      const line = doc.lineAt(parent.from)
-      const mark = parent.getChild('ListMark')
-      const after = mark
-        ? /^[ \t]*/.exec(doc.sliceString(mark.to, line.to))![0].length
-        : 0
-      // Up to four spaces after the marker, or one when more or none follow.
-      const gap = after > 4 || !mark || mark.to + after === line.to ? 1 : after
-      levels.unshift({
-        quote: false,
-        column: (mark ? mark.to : parent.from) + gap - line.from,
-      })
-    }
-  }
-  return levels
+/** The column at `to` in a line; tabs advance to the next multiple of four. */
+function column(text: string, to: number) {
+  let col = 0
+  for (let i = 0; i < to; i++) col += text[i] === '\t' ? 4 - (col % 4) : 1
+  return col
 }
 
-/** Where a line's text starts inside the containers: after quote markers, at list item columns. */
-function contentStart(levels: readonly Level[], text: string) {
-  let pos = 0
-  for (const level of levels)
+/** Where a line reaches column `goal`, past a tab that crosses it. */
+function findColumn(text: string, goal: number) {
+  let i = 0
+  for (let col = 0; i < text.length && col < goal; i++)
+    col += text[i] === '\t' ? 4 - (col % 4) : 1
+  return i
+}
+
+const skipSpace = (text: string, from: number) => {
+  while (text[from] === ' ' || text[from] === '\t') from++
+  return from
+}
+
+/**
+ * Where a line's text starts inside the quotes and list items around a
+ * fence, and its column, skipping their markup as lezer-markdown does: a
+ * quote marker with one space or tab after it, and an item's indentation in
+ * columns from where its outer containers end. Stripping stops at a container
+ * the line doesn't continue, so it never removes the line's text.
+ */
+function contentStart(levels: readonly Level[], text: string, line: number) {
+  let pos = 0,
+    base = 0
+  for (const level of levels) {
+    const next = skipSpace(text, pos)
     if (level.quote) {
-      while (text[pos] === ' ' || text[pos] === '\t') pos++
-      if (text[pos] === '>') pos++
-      if (text[pos] === ' ' || text[pos] === '\t') pos++
-    } else pos = Math.max(pos, Math.min(level.column, text.length))
-  return pos
+      if (text[next] !== '>') break
+      pos = next + (text[next + 1] === ' ' || text[next + 1] === '\t' ? 2 : 1)
+      base = column(text, pos)
+    } else {
+      // Below its marker, an item goes on in lines indented to its content, or blank.
+      if (
+        line !== level.first &&
+        next < text.length &&
+        column(text, next) < base + level.offset
+      )
+        break
+      base += level.offset
+      pos = findColumn(text, base)
+    }
+  }
+  return { pos, base }
+}
+
+/** The quotes and list items around `node`, outermost first; null without an item's marker. */
+function containerLevels(doc: Text, node: SyntaxNode): Level[] | null {
+  const containers: SyntaxNode[] = []
+  for (let parent = node.parent; parent; parent = parent.parent)
+    if (parent.name === 'Blockquote' || parent.name === 'ListItem')
+      containers.unshift(parent)
+  const levels: Level[] = []
+  for (const container of containers) {
+    if (container.name === 'Blockquote') {
+      levels.push({ quote: true })
+      continue
+    }
+    const mark = container.getChild('ListMark')
+    if (!mark) return null
+    const { text, from, number } = doc.lineAt(mark.from)
+    // The content column after the marker: up to four columns of space, or
+    // one when more or none follow.
+    const after = column(text, mark.to - from)
+    const skipped = skipSpace(text, mark.to - from)
+    const spaced = column(text, skipped)
+    const content =
+      spaced >= after + 5 || skipped === text.length ? after + 1 : spaced
+    levels.push({
+      quote: false,
+      first: number,
+      offset: content - contentStart(levels, text, number).base,
+    })
+  }
+  return levels
 }
 
 /**
@@ -92,11 +143,15 @@ export function readFence(doc: Text, node: SyntaxNode): Fence | null {
   )
     return null
   const levels = containerLevels(doc, node)
+  if (!levels) return null
   const last = doc.lineAt(close.from).number
   const lines: string[] = []
   for (let number = first.number + 1; number < last; number++) {
     const { text } = doc.line(number)
-    lines.push(text.slice(contentStart(levels, text)))
+    const { pos, base } = contentStart(levels, text, number)
+    // A tab across the content column leaves its columns past it as spaces.
+    const spaces = Math.max(0, column(text, pos) - base)
+    lines.push(' '.repeat(spaces) + text.slice(pos))
   }
   fenceWork.lines += lines.length
   return {
@@ -105,7 +160,8 @@ export function readFence(doc: Text, node: SyntaxNode): Fence | null {
     lines,
     indent: Math.max(
       0,
-      node.from - first.from - contentStart(levels, first.text),
+      column(first.text, node.from - first.from) -
+        contentStart(levels, first.text, first.number).base,
     ),
   }
 }
@@ -147,7 +203,10 @@ export function fenceBodyChanges(
     .replace(/[^>\t ]/g, ' ')
   const prefix = fence.indented
     ? opening
-    : opening.slice(0, Math.max(0, opening.length - fence.indent))
+    : opening.slice(
+        0,
+        findColumn(opening, column(opening, opening.length) - fence.indent),
+      )
   const marker = /^(`+|~+)/.exec(doc.sliceString(node.from, first.to))![0]
   const char = marker[0]!
   let length = marker.length

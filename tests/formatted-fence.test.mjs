@@ -177,6 +177,51 @@ test('editing a fence writes its body as one change and keeps the fence around i
       }
 })
 
+test('fences after tabs, in quotes indented differently and after lazy lines keep every character through an edit', () => {
+  for (const block of [
+    '-\t```mermaid\n\tgraph TD\n\t  A-->B\n\t```',
+    '1.\t```mermaid\n\tgraph TD\n\t  A-->B\n\t```',
+    '- a\n\t```mermaid\n\tgraph TD\n\t  A-->B\n\t```',
+    '   > - ```mermaid\n>   graph TD\n>     A-->B\n>   ```',
+    '> - ```mermaid\n   >   graph TD\n   >     A-->B\n   >   ```',
+    '- item\nlazy line\n  ```mermaid\n  graph TD\n    A-->B\n  ```',
+    '> intro\nlazy line\n> ```mermaid\n> graph TD\n>   A-->B\n> ```',
+  ]) {
+    const before = `intro\n\n${block}\n\nafter\n`
+    // The formatted view reads what the rich view reads.
+    assert.deepEqual(markedDiagrams(before), ['graph TD\n  A-->B'], block)
+    const [found] = fences(before, 'mermaid', markedFenceText)
+    assert.equal(found?.text, 'graph TD\n  A-->B', block)
+    // Applying the dialog with a line added keeps the others and undoes exactly.
+    const state = EditorState.create({ doc: before })
+    let node
+    markdown.parse(before).iterate({
+      enter(ref) {
+        if (ref.name === 'FencedCode') node ??= ref.node
+      },
+    })
+    const fence = readFence(state.doc, node)
+    const source = 'graph TD\n  A-->B\n  B-->C'
+    const edited = state.update({
+      changes: fenceBodyChanges(state.doc, node, source, {
+        indent: fence.indent,
+        indented: true,
+      }),
+    })
+    const text = edited.state.doc.toString()
+    assert.deepEqual(markedDiagrams(text), [source], text)
+    assert.deepEqual(
+      fences(text, 'mermaid', markedFenceText).map(({ text }) => text),
+      [source],
+      text,
+    )
+    assert.equal(
+      edited.changes.invert(state.doc).apply(edited.state.doc).toString(),
+      before,
+    )
+  }
+})
+
 test('a fence longer than the giant block size reads and edits its whole body', () => {
   // The formatted view's parser gives such a block inner nodes only near the viewport.
   const body = Array.from(

@@ -136,7 +136,13 @@ export function MarkdownEditor({
     setSourceReady,
     setSourceSettled,
     focusOwnedByEditor,
-  } = useEditorPanes(mode, markdownDocument)
+  } = useEditorPanes(
+    mode,
+    markdownDocument,
+    false,
+    // ponytail: the same 262,144 units as source-first opening.
+    documentRuntime.openingLength(documentState) > 256 * 1024,
+  )
   const findTarget =
     mode === 'normal' ? 'rich' : mode === 'markdown' ? 'source' : focusedPane
   useEffect(() => {

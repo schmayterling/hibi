@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { CustomWordDatabase } from '../src/addons/dictionary/custom-word-database.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { crashAndReload, electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
 
@@ -169,16 +169,11 @@ test('renderer loss discards staging and window close drains a pending profile c
   const fixtureState = await fixture(t)
   let { app, page } = await fixtureState.launch()
   await stageWord(page, 'lost-renderer')
-  await app.evaluate(async ({ BrowserWindow, dialog }) => {
-    const window = BrowserWindow.getAllWindows()[0]
-    // The crash recovery path must keep this test window hidden.
-    window.isVisible = () => true
-    dialog.showMessageBox = async () => ({ response: 0 })
-    await new Promise((resolve) => {
-      window.webContents.once('did-finish-load', resolve)
-      window.webContents.forcefullyCrashRenderer()
-    })
+  await app.evaluate(({ BrowserWindow }) => {
+    // Exercise recovery without showing the test window.
+    BrowserWindow.getAllWindows()[0].isVisible = () => true
   })
+  await crashAndReload(app)
   // Playwright keeps the crashed target; use the recovered window's real preload bridge.
   page = {
     evaluate: (fn, input) =>
@@ -252,8 +247,12 @@ test('renderer loss discards staging and window close drains a pending profile c
     false,
     'pending commit keeps close from finishing',
   )
+  // Closing the last window quits the main process outside macos.
+  const closed =
+    process.platform === 'darwin' ? null : app.waitForEvent('close')
   await app.evaluate(() => globalThis.releaseCommit())
-  await waitForAsync(app, () => globalThis.windowClosed)
+  if (closed) await closed
+  else await waitForAsync(app, () => globalThis.windowClosed)
   await fixtureState.close()
   ;({ app, page } = await fixtureState.launch())
   assert.equal((await metadata(page)).count, 2)

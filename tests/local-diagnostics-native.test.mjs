@@ -132,6 +132,8 @@ test('main-loop sampling stops while hidden, minimized, suspended or failed', {
   await app.evaluate(() => globalThis.diagnosticFixture.report())
   const sampling = () =>
     app.evaluate(() => globalThis.diagnosticFixture.sampling())
+  // Hosted fixtures may already be visible; set the hidden state explicitly.
+  await app.evaluate(() => globalThis.diagnosticFixture.visibility(false))
   assert.deepEqual(await sampling(), { armedBeforeReady: false, armed: false })
   assert.equal(
     await app.evaluate(() => globalThis.diagnosticFixture.visibility(true)),

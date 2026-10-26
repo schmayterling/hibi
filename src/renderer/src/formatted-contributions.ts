@@ -168,7 +168,10 @@ export const formattedLiteral = Facet.define<string>()
 export const formattedDocument = Facet.define<
   { revision: number; tabId: string | null },
   { revision: number; tabId: string | null }
->({ combine: (values) => values.at(-1) ?? { revision: 0, tabId: null } })
+>({
+  combine: (values) => values.at(-1) ?? { revision: 0, tabId: null },
+  compare: (a, b) => a.revision === b.revision && a.tabId === b.tabId,
+})
 
 /** How a formatted view reads its syntax tree, which it parses near the viewport. */
 export const formattedTree = Facet.define<

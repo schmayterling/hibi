@@ -123,6 +123,7 @@ export type DocumentWorkerReply =
   | { type: 'load-ack'; epoch: string; request: SourceTransferRequest }
   | { type: 'ack'; epoch: string; version: number }
   | { type: 'find-progress'; epoch: string; id: number; version: number }
+  | { type: 'metadata-progress'; epoch: string; id: number; version: number }
   | { type: 'canceled'; epoch: string; id: number }
   | { type: 'metadata-canceled'; epoch: string; id: number; release: boolean }
   | {

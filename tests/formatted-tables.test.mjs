@@ -1074,3 +1074,57 @@ test('in the app, a composition in a cell undoes as one step', {
   await page.keyboard.press(undoKey)
   await saved(/^\| value 0 \| value 1 \| value 2 \|/)
 })
+
+test('in the app, undo and redo in a cell do nothing while the view takes no input', {
+  timeout: 60000,
+}, async () => {
+  await openFormatted()
+  await page
+    .locator('.rich-pane .hibi-lp-table td')
+    .filter({ hasText: /^value 2$/ })
+    .click()
+  await page.keyboard.press('End')
+  await page.keyboard.type('X')
+  await saved(/\| value 2X \| value 3 \|/)
+  const before = await markdown()
+  // Flip the editor's own read-only and editable switch, as while its
+  // input is not ready.
+  const readOnly = await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    const [compartment, access] = [...view.state.config.compartments].find(
+      ([, value]) =>
+        Array.isArray(value) &&
+        value.length === 2 &&
+        value.every((part) => part.facet && typeof part.value === 'boolean'),
+    )
+    window.restoreInput = () =>
+      view.dispatch({ effects: compartment.reconfigure(access) })
+    view.dispatch({
+      effects: compartment.reconfigure(
+        access.map((part) => part.facet.of(!part.value)),
+      ),
+    })
+    return view.state.readOnly
+  })
+  assert.equal(readOnly, true)
+  const settled = () =>
+    page.evaluate(async () => {
+      for (let frame = 0; frame < 3; frame++)
+        await new Promise(requestAnimationFrame)
+      return (await window.hibi.getDocument()).markdown
+    })
+  const results = []
+  for (const key of [
+    undoKey,
+    process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
+  ]) {
+    await page.keyboard.press(key)
+    results.push(await settled())
+  }
+  await page.evaluate(() => window.restoreInput())
+  assert.deepEqual(results, [before, before])
+  // Input again: undo reaches the document's history.
+  await page.keyboard.press(undoKey)
+  await saved(/\| value 2 \| value 3 \|/)
+})

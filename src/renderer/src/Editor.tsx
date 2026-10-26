@@ -105,7 +105,6 @@ import { observeMarkdownMarkers } from './markdown-markers'
 import {
   createMarkdownPositionCache,
   type MarkdownPositionLookup,
-  markdownPositions,
 } from './markdown-positions'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import './markdown-markers.css'
@@ -1634,17 +1633,21 @@ export function MarkdownEditor({
     }
   }, [editor, markdownDocument])
   // biome-ignore lint/correctness/useExhaustiveDependencies: maps belong to this rich editor and syntax generation.
+  const positionCache = useMemo(createMarkdownPositionCache, [
+    editor,
+    syntaxVersion,
+  ])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: maps belong to this rich editor and syntax generation.
   const positions = useMemo<MarkdownPositionLookup>(() => {
-    const fallback = createMarkdownPositionCache()
     return (source, document) => (position, from) => {
       const snapshot = documentRuntime.session(documentState.tabId)?.snapshot()
       const exact =
         snapshot && markdownSyntax.version() === syntaxVersion
           ? plainSync.current?.map(snapshot, document, position, from)
           : null
-      return exact ?? fallback(source, document)(position, from)
+      return exact ?? positionCache(source, document)(position, from)
     }
-  }, [editor, syntaxVersion])
+  }, [positionCache])
   const geometryContent = useMemo(
     () => () => {
       if (!editor || !richSourceCurrent(editor)) return null
@@ -2086,9 +2089,11 @@ export function MarkdownEditor({
           to: change.to - from,
         })),
         body.content.length,
+        // The old map is usually still cached from before the preview went
+        // stale, and the caret and outline reuse the new one.
         [
-          markdownPositions(body.content, base.document),
-          markdownPositions(projected.content, after),
+          positionCache(body.content, base.document),
+          positionCache(projected.content, after),
         ],
       )
     }
@@ -2350,6 +2355,7 @@ export function MarkdownEditor({
     documentState.revision,
     content,
     positions,
+    positionCache,
     updateRichEditable,
   ])
   const richEditContext = useRef({

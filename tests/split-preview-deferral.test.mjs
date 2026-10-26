@@ -468,3 +468,90 @@ test('split preview catch-up keeps selections in content the edits left alone', 
     )
   }
 })
+
+test('split preview catch-up maps selections through the source edits around them', {
+  timeout: 120000,
+}, async (t) => {
+  // Lines that end in an atom have no visible text at the edit, and repeated
+  // or atom-only blocks between the edits give a structural diff no anchor.
+  const cases = [
+    {
+      original: 'alpha $x^2$ beta gamma\n\nomega',
+      target: 'beta',
+      lines: [1, 1],
+    },
+    {
+      original: 'left\n\nsame\n\nsame\n\nmath $x^2$\n\nomega',
+      target: 'same',
+      lines: [1, 7],
+    },
+    {
+      original:
+        'left\n\n![a](https://example.com/a.png)\n\n![b](https://example.com/b.png)\n\nmath $x^2$\n\nomega',
+      target: null,
+      lines: [1, 7],
+    },
+  ]
+  for (const item of cases) {
+    const { page, rich, source, preview, pauseClock } = await openSplit(
+      t,
+      item.original,
+    )
+    await source.focus()
+    await pauseClock()
+    const before = await rich.evaluate((element, target) => {
+      const editor = element.editor
+      let position
+      editor.state.doc.descendants((node, pos) => {
+        if (position !== undefined) return
+        if (target && node.isText && node.text.includes(target))
+          position = pos + node.text.indexOf(target)
+        if (!target && node.type.name === 'image') position = pos
+      })
+      if (target)
+        editor.commands.setTextSelection({
+          from: position,
+          to: position + target.length,
+        })
+      else editor.commands.setNodeSelection(position)
+      return editor.state.selection.toJSON()
+    }, item.target)
+    await source.focus()
+    const untouched = await page.evaluate((lines) => {
+      const { sdk } = window.deferralFixture
+      const view = sdk.codeMirror.view.EditorView.findFromDOM(
+        document.querySelector('.cm-content'),
+      )
+      if (!view.hasFocus) throw new Error('source must own input')
+      const doc = document.querySelector('.tiptap').editor.state.doc
+      const [first, last] = lines.map((line) => view.state.doc.line(line))
+      view.dispatch({
+        changes: [
+          lines[0] === lines[1]
+            ? { from: first.from, insert: '!' }
+            : { from: first.to, insert: '!' },
+          { from: last.to, insert: '?' },
+        ],
+        annotations:
+          sdk.codeMirror.state.Transaction.userEvent.of('input.type'),
+      })
+      return document.querySelector('.tiptap').editor.state.doc === doc
+    }, item.lines)
+    assert.equal(untouched, true)
+    await page.clock.runFor(201)
+    assert.equal((await preview()).exact, true)
+    const after = await rich.evaluate((element) => {
+      const { doc, selection } = element.editor.state
+      return {
+        json: selection.toJSON(),
+        text: doc.textBetween(selection.from, selection.to),
+        image: selection.node?.attrs.src ?? null,
+      }
+    })
+    assert.equal(after.json.type, before.type, item.original)
+    if (item.target) assert.equal(after.text, item.target, item.original)
+    else assert.equal(after.image, 'https://example.com/a.png')
+    // The first of the repeated blocks stays the first one.
+    assert.equal(after.json.anchor, before.anchor + 1, item.original)
+  }
+})

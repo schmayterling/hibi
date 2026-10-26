@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
 const filler = (name) =>
@@ -215,7 +215,8 @@ test('behind the switch, the formatted view reports, follows and navigates the r
   for (const text of [original.replace('[ref]:', '[gone]:'), original]) {
     await writeFile(file, text)
     await clickMenu(app, 'Open…')
-    await page.waitForFunction(
+    await waitForAsync(
+      page,
       async (revision) => (await window.hibi.getDocument()).revision > revision,
       previous.revision,
     )

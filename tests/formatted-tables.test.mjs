@@ -608,6 +608,109 @@ test('cell editors move with tab, enter and arrows and leave with escape', {
   assert.match((await state()).doc, /\| e \|\n\| {2}\| {2}\|\n\nafter/)
 })
 
+const undoKey = process.platform === 'darwin' ? 'Meta+z' : 'Control+z'
+
+test('a cell editor follows its row when rows are added or deleted around it', {
+  timeout: 30000,
+}, async () => {
+  const doc = '| h |\n| - |\n| alpha |\n| beta |\n| gamma |\n\nafter'
+  await mount(doc)
+  await harness.locator('.hibi-lp-table td', { hasText: 'gamma' }).click()
+  await harness.keyboard.press('End')
+  // Another edit adds a row above the edited one: typing stays in gamma.
+  await harness.evaluate(
+    (at) =>
+      window.tables
+        .view()
+        .dispatch({ changes: { from: at, insert: '| NEW |\n' } }),
+    doc.indexOf('| gamma'),
+  )
+  await harness.keyboard.type('X')
+  let now = await state()
+  assert.match(now.doc, /\| beta \|\n\| NEW \|\n\| gammaX \|\n/)
+  assert.deepEqual([now.cell, now.editor], ['5:0', 'gammaX'])
+  // Deleting the edited row moves the editor to the row now in its place.
+  const from = now.doc.indexOf('\n| gammaX |')
+  await harness.evaluate(
+    ({ from, to }) => window.tables.view().dispatch({ changes: { from, to } }),
+    { from, to: from + '\n| gammaX |'.length },
+  )
+  await harness.evaluate(() => window.tables.settle())
+  await harness.keyboard.type('Y')
+  now = await state()
+  assert.match(now.doc, /\| beta \|\n\| NEWY \|\n\nafter$/)
+  assert.deepEqual([now.cell, now.editor], ['4:0', 'NEWY'])
+})
+
+test('cell editors take no input while the formatted view takes none', {
+  timeout: 30000,
+}, async () => {
+  const doc = 'before\n\n| a | b |\n| - | - |\n| c | d |\n\nafter'
+  await mount(doc)
+  await harness.locator('.hibi-lp-table td', { hasText: 'c' }).click()
+  await harness.keyboard.press('End')
+  await harness.evaluate(() => window.tables.setEditable(false))
+  await harness.keyboard.type('Z')
+  await harness.keyboard.press('Shift+Enter')
+  assert.equal((await state()).doc, doc)
+  await harness.evaluate(() => window.tables.setEditable(true))
+  await harness.keyboard.type('W')
+  assert.match((await state()).doc, /^\| cW \| d \|$/m)
+  // Keys from above enter no cell of a read-only table.
+  await harness.keyboard.press('Escape')
+  await harness.evaluate(() => {
+    const view = window.tables.view()
+    window.tables.setEditable(false)
+    view.dispatch({ selection: { anchor: 6 } })
+    view.focus()
+  })
+  await harness.keyboard.press('ArrowDown')
+  await harness.keyboard.press('ArrowDown')
+  assert.equal((await state()).editor, null)
+  await harness.evaluate(() => window.tables.setEditable(true))
+})
+
+test('undo moves the cell editor to the cell whose edit it undoes', {
+  timeout: 30000,
+}, async () => {
+  const doc = '| alpha | beta |\n| - | - |\n| x | y |\n\nafter'
+  await mount(doc)
+  await harness.locator('.hibi-lp-table th', { hasText: 'alpha' }).click()
+  await harness.keyboard.press('End')
+  await harness.keyboard.type('1')
+  await harness.keyboard.press('Tab')
+  await harness.keyboard.press('End')
+  await harness.keyboard.type('2')
+  await harness.keyboard.press(undoKey)
+  assert.deepEqual(
+    [(await state()).cell, (await state()).editor],
+    ['0:1', 'beta'],
+  )
+  await harness.keyboard.press(undoKey)
+  const now = await state()
+  assert.equal(now.doc, doc)
+  assert.deepEqual([now.cell, now.editor], ['0:0', 'alpha'])
+  assert.equal(now.head, '| alpha'.length)
+})
+
+test('tab extends a table of only a header, and leaving a table at the end adds a paragraph', {
+  timeout: 30000,
+}, async () => {
+  await mount('before\n\n| a | b |\n| - | - |')
+  await harness.locator('.hibi-lp-table th', { hasText: 'b' }).click()
+  await harness.keyboard.press('Tab')
+  assert.equal((await state()).cell, '2:0')
+  await harness.keyboard.type('c')
+  assert.equal((await state()).doc, 'before\n\n| a | b |\n| - | - |\n| c |  |')
+  await harness.keyboard.press(
+    process.platform === 'darwin' ? 'Meta+Enter' : 'Control+Enter',
+  )
+  await harness.keyboard.type('AFTER')
+  const now = await state()
+  assert.equal(now.doc, 'before\n\n| a | b |\n| - | - |\n| c |  |\n\nAFTER')
+  assert.equal(now.editor, null)
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {
@@ -696,9 +799,26 @@ test('cells show disabled syntax as written and follow syntax setting changes', 
   await toggle('markdown.strike', true)
 })
 
-test('in the app, cells edit their source in place, undo and run the toolbar table actions', {
-  timeout: 90000,
-}, async () => {
+const markdown = async () =>
+  (await page.evaluate(() => window.hibi.getDocument())).markdown
+/** Wait until the app's document matches `check`, line by line. */
+const saved = async (check) => {
+  try {
+    await waitForAsync(
+      page,
+      async (check) =>
+        new RegExp(check, 'm').test((await window.hibi.getDocument()).markdown),
+      check.source,
+    )
+  } catch {
+    assert.match(await markdown(), check)
+  }
+}
+let formatted = false
+/** Open the note in the app's formatted view, once. */
+const openFormatted = async () => {
+  if (formatted) return
+  formatted = true
   // Quitting with the edited note answers the unsaved-changes prompt.
   await app.evaluate(({ dialog }) => {
     dialog.showMessageBox = async () => ({ response: 1 })
@@ -717,22 +837,12 @@ test('in the app, cells edit their source in place, undo and run the toolbar tab
   // Hidden windows have no focus; editors need a focused page.
   const session = await page.context().newCDPSession(page)
   await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-  const markdown = async () =>
-    (await page.evaluate(() => window.hibi.getDocument())).markdown
-  const saved = async (check) => {
-    try {
-      await waitForAsync(
-        page,
-        async (check) =>
-          new RegExp(check, 'm').test(
-            (await window.hibi.getDocument()).markdown,
-          ),
-        check.source,
-      )
-    } catch {
-      assert.match(await markdown(), check)
-    }
-  }
+}
+
+test('in the app, cells edit their source in place, undo and run the toolbar table actions', {
+  timeout: 90000,
+}, async () => {
+  await openFormatted()
   await page
     .locator('.rich-pane .hibi-lp-table td', { hasText: 'two | pipe' })
     .click()
@@ -792,4 +902,33 @@ test('in the app, cells edit their source in place, undo and run the toolbar tab
     await markdown(),
     /A paragraph before the table\.\n\n\| col 0 \|/,
   )
+})
+
+test('in the app, a composition in a cell undoes as one step', {
+  timeout: 60000,
+}, async () => {
+  await openFormatted()
+  await page
+    .locator('.rich-pane .hibi-lp-table td')
+    .filter({ hasText: /^value 1$/ })
+    .click()
+  await page.keyboard.press('End')
+  const cdp = await page.context().newCDPSession(page)
+  // Converting moves the selection inside the composition between changes.
+  for (const [text, from, to] of [
+    ['に', 1, 1],
+    ['にほ', 2, 2],
+    ['日本', 0, 2],
+    ['日本', 2, 2],
+    ['日本語', 3, 3],
+  ])
+    await cdp.send('Input.imeSetComposition', {
+      text,
+      selectionStart: from,
+      selectionEnd: to,
+    })
+  await cdp.send('Input.insertText', { text: '日本語' })
+  await saved(/^\| value 0 \| value 1日本語 \| value 2 \|/)
+  await page.keyboard.press(undoKey)
+  await saved(/^\| value 0 \| value 1 \| value 2 \|/)
 })

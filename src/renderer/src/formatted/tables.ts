@@ -1,5 +1,5 @@
 import { isolateHistory } from '@codemirror/commands'
-import { type Text, Transaction } from '@codemirror/state'
+import { type ChangeDesc, type Text, Transaction } from '@codemirror/state'
 import {
   type EditorView,
   ViewPlugin,
@@ -26,9 +26,11 @@ import {
   CellEditor,
   type CellHost,
   type CellMove,
+  cellInput,
   padding,
   renderInline,
   textStarts,
+  writable,
 } from './table-cells.ts'
 import {
   alignments,
@@ -244,8 +246,15 @@ class TableView {
   private before: HTMLTableRowElement | null = null
   private after: HTMLTableRowElement | null = null
   private fixed = false
-  private editing: (Cell & { editor: CellEditor; element: Element }) | null =
-    null
+  /** The cell being edited, with its row's line in the document now. */
+  private editing:
+    | (Cell & {
+        editor: CellEditor
+        element: Element
+        from: number
+        to: number
+      })
+    | null = null
   /** Header cells' text, part of the table's key in the size store. */
   private header: string[] = []
   /** Column widths and row heights in px by index, 0 for automatic; rows count the header. */
@@ -288,6 +297,7 @@ class TableView {
   update(widget: TableWidget) {
     const previous = this.widget
     this.widget = widget
+    this.relocate()
     this.dom.classList.toggle('hibi-lp-table-inline', widget.inline)
     if (!sameConfig(previous.config, widget.config)) {
       // Other syntax or renderers: every cell renders again.
@@ -330,9 +340,13 @@ class TableView {
       windowed !== this.windowed ||
       (this.heights && this.heights.length !== widget.rows)
     ) {
-      if (this.editing && this.editing.line > 1) this.stopEditing()
-      for (const row of this.rendered.values()) row.element.remove()
-      this.rendered.clear()
+      // The edited row stays; the others render again.
+      const editing = this.editing ? this.editing.line - 2 : -1
+      for (const [index, row] of this.rendered)
+        if (index !== editing) {
+          row.element.remove()
+          this.rendered.delete(index)
+        }
       this.heights = windowed ? new Heights(widget.rows) : null
       this.start = this.end = 0
       this.fixed = false
@@ -622,7 +636,13 @@ class TableView {
     head?: number,
   ) {
     if (line === 1) line = 0
-    if (line < 0 || line >= this.lines || !this.aligned.length) return false
+    if (
+      line < 0 ||
+      line >= this.lines ||
+      !this.aligned.length ||
+      !writable(this.view.state)
+    )
+      return false
     column = Math.max(0, Math.min(column, this.aligned.length - 1))
     this.stopEditing()
     if (line > 1 && !this.rendered.has(line - 2)) this.reveal(line - 2)
@@ -645,7 +665,15 @@ class TableView {
       anchor,
       head === undefined ? anchor : clamp(head),
     )
-    this.editing = { line, column, editor, element }
+    const source = this.widget.line(line)
+    this.editing = {
+      line,
+      column,
+      editor,
+      element,
+      from: this.now(source.from),
+      to: this.now(source.from + source.text.length),
+    }
     editor.focus()
     editor.mirror()
     element.scrollIntoView({ block: 'nearest', inline: 'nearest' })
@@ -711,7 +739,8 @@ class TableView {
   private move(move: CellMove): boolean {
     if (!this.editing) return false
     const { line, column } = this.editing
-    const last = this.lines - 1,
+    // The last row to edit; a table of only a header has no body rows yet.
+    const last = this.lines > 2 ? this.lines - 1 : 0,
       columns = this.aligned.length
     const below = line === 0 ? 2 : line + 1,
       above = line === 2 ? 0 : line - 1
@@ -741,24 +770,39 @@ class TableView {
     }
   }
 
-  /** Back to the formatted view, on the line after or before the table. */
+  /**
+   * Back to the formatted view, on the line after or before the table. A
+   * table at the document's end or start gets an empty paragraph there:
+   * text on the line right after a table would be one of its rows.
+   */
   leave(after: boolean) {
     const { doc } = this.view.state
     const { from, to } = this.range()
     this.stopEditing()
     const before = doc.lineAt(from).from,
       end = doc.lineAt(to).to
-    const anchor = after
-      ? end < doc.length
-        ? end + 1
-        : end
-      : before > 0
-        ? before - 1
-        : before
+    // Whether only blank lines follow the table.
+    let last = after
+    for (let pos = end; last && pos < doc.length; ) {
+      const line = doc.lineAt(pos + 1)
+      last = !line.text.trim()
+      pos = line.to
+    }
+    let anchor = after ? end + 1 : before - 1
+    let insert: { from: number; insert: string } | null = null
+    if (last) {
+      if (doc.sliceString(end, end + 2) !== '\n\n')
+        insert = { from: end, insert: '\n\n' }
+      anchor = end + 2
+    } else if (!after && before === 0) {
+      insert = { from: 0, insert: '\n\n' }
+      anchor = 0
+    }
     this.view.dispatch({
+      ...(insert ? { changes: insert } : {}),
       selection: { anchor },
       scrollIntoView: true,
-      userEvent: 'select',
+      userEvent: insert ? 'input' : 'select',
     })
     this.view.focus()
   }
@@ -778,6 +822,96 @@ class TableView {
           editing.column,
         ),
       )
+  }
+
+  /** Follow the edited row through the formatted view's changes; the edited cell when its row was deleted. */
+  map(changes: ChangeDesc): Cell | null {
+    const editing = this.editing
+    if (!editing) return null
+    editing.from = changes.mapPos(editing.from, 1)
+    editing.to = changes.mapPos(editing.to, -1)
+    return editing.to > editing.from ? null : editing
+  }
+
+  /** Edit the same cell where its row is now, after rows were added or removed around it. */
+  private relocate() {
+    const editing = this.editing
+    if (!editing) return
+    const { widget } = this
+    const doc = this.view.state.doc
+    if (editing.to <= editing.from) {
+      this.stopEditing()
+      return
+    }
+    if (widget.doc !== doc) return
+    const index = doc.lineAt(editing.from).number - widget.first
+    if (index !== editing.line) {
+      if (
+        index < 0 ||
+        index === 1 ||
+        index >= this.lines ||
+        !index !== !editing.line
+      ) {
+        this.stopEditing()
+        return
+      }
+      const row = this.rendered.get(editing.line - 2)
+      this.rendered.delete(editing.line - 2)
+      this.rendered.get(index - 2)?.element.remove()
+      if (row) {
+        this.rendered.set(index - 2, row)
+        row.element.dataset.line = String(index)
+        row.element.setAttribute('aria-rowindex', String(index))
+      }
+      editing.line = index
+    }
+    const line = widget.line(index)
+    editing.from = line.from
+    editing.to = line.from + line.text.length
+  }
+
+  /** Whether a cell editor of this table has focus. */
+  get focused() {
+    return this.editing?.editor.view.hasFocus ?? false
+  }
+
+  /** Let the cell editor take input as the formatted view does. */
+  reconfigure() {
+    this.editing?.editor.reconfigure(this.view.state)
+  }
+
+  /**
+   * After the formatted view changed under a focused cell editor: edit where
+   * a selection it set lands, as after undo, or, when the edited row was
+   * deleted, the row now in its place. Elsewhere, editing ends there.
+   */
+  follow(lost: Cell | null) {
+    const editing = this.editing
+    if (editing?.editor.view.composing) return
+    if (!this.dom.isConnected) {
+      this.view.focus()
+      return
+    }
+    if (lost) {
+      if (!this.edit(Math.min(lost.line, this.lines - 1), lost.column, 'end'))
+        this.view.focus()
+      return
+    }
+    const { anchor, head } = this.view.state.selection.main
+    const span = editing && this.span(editing)
+    if (
+      editing &&
+      span &&
+      Math.min(anchor, head) >= span.from &&
+      Math.max(anchor, head) <= span.to
+    ) {
+      editing.editor.select(anchor - span.from, head - span.from)
+      return
+    }
+    if (!this.editAt(anchor, head)) {
+      this.stopEditing()
+      this.view.focus()
+    }
   }
 
   /** Show the edited cell's text after the formatted view changed it. */
@@ -1077,7 +1211,7 @@ class TableView {
 
   /** A click edits the clicked cell at the clicked place; shift-click extends the selection. */
   private select = (event: MouseEvent) => {
-    if (event.button !== 0 || this.view.state.readOnly) return
+    if (event.button !== 0 || !writable(this.view.state)) return
     if (this.handle) {
       event.preventDefault()
       this.drag(event)
@@ -1155,8 +1289,26 @@ const tableEditing = ViewPlugin.fromClass(
   class {
     constructor(readonly view: EditorView) {}
     update(update: ViewUpdate) {
+      const tables = mounted.get(this.view) ?? []
+      // A selection set elsewhere, as by undo, moves a focused cell editor;
+      // not one the formatted view read from the editor's DOM selection.
+      const selected = update.transactions.some(
+        (transaction) =>
+          transaction.selection &&
+          !transaction.annotation(cellInput) &&
+          !transaction.isUserEvent('select'),
+      )
+      for (const table of tables) {
+        const focused = table.focused
+        // Before tables redraw: the edited rows where they are now.
+        const lost = update.docChanged ? table.map(update.changes) : null
+        if (focused && (selected || lost))
+          queueMicrotask(() => table.follow(selected ? null : lost))
+      }
       if (update.geometryChanged || update.viewportChanged)
-        for (const table of mounted.get(this.view) ?? []) table.scrolled()
+        for (const table of tables) table.scrolled()
+      if (writable(update.startState) !== writable(update.state))
+        for (const table of tables) table.reconfigure()
       const { main } = update.state.selection
       if (
         update.view.hasFocus &&

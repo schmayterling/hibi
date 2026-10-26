@@ -314,6 +314,17 @@ test('rows insert and delete as single lines', () => {
     '| 1 | 2 |\n| --- | :-: |\n| 3 | 4 |',
   )
   assert.equal(deleteRow(table('| a |\n| - |'), 0), null)
+  // A promoted row takes the delimiter row's width, or it is no header.
+  const short = '| a | b |\n| --- | :-: |\n| 1 |\n| 3 | 4 |'
+  assert.equal(
+    apply(short, deleteRow(table(short), 0)),
+    '| 1 |  |\n| --- | :-: |\n| 3 | 4 |',
+  )
+  const long = '| a | b |\n| - | - |\n| 1 | 2 | 3 |'
+  assert.equal(
+    apply(long, deleteRow(table(long), 0)),
+    '| 1 | 2 | 3 |\n| - | - | --- |',
+  )
   // New rows take the continuation prefix of quotes and list items.
   const quoted = '> | a | b |\n> | - | - |\n> | 1 | 2 |'
   assert.equal(
@@ -366,11 +377,15 @@ test('columns insert and delete in every row, ragged and bare rows included', ()
     ['---', '---', '---'],
     ['1', '2', ''],
   ])
-  assert.deepEqual(grid(apply(bare, deleteColumn(table(bare), 1))), [
-    ['a'],
-    ['---'],
-    ['1'],
-  ])
+  // One column keeps outer pipes, or its header and delimiter read as a heading.
+  assert.equal(
+    apply(bare, deleteColumn(table(bare), 1)),
+    '| a |\n| --- |\n| 1 |',
+  )
+  assert.equal(
+    apply(bare, deleteColumn(table(bare), 0)),
+    '| b |\n| --- |\n| 2 |',
+  )
   // Deleting a row's only cell keeps the row in the table.
   const lone = '| a | b |\n| - | - |\nonly'
   assert.equal(apply(lone, deleteColumn(table(lone), 0)), '| b |\n| - |\n|')
@@ -393,16 +408,20 @@ test('row and column edits keep generated tables parsing as tables', () => {
     const columns = 1 + random(4)
     const row = () =>
       `| ${Array.from({ length: random(columns + 2) }, cell).join(' | ')} |`
+    // Header and delimiter rows with or without outer pipes.
+    const outer = columns < 2 || random(2) === 0
+    const head = (cells) =>
+      outer ? `| ${cells.join(' | ')} |` : cells.join(' | ')
     const doc = [
-      `| ${Array.from({ length: columns }, (_, i) => `h${i}`).join(' | ')} |`,
-      `| ${Array.from({ length: columns }, () => '---').join(' | ')} |`,
+      head(Array.from({ length: columns }, (_, i) => `h${i}`)),
+      head(Array.from({ length: columns }, () => '---')),
       ...Array.from({ length: 1 + random(4) }, row),
     ].join('\n')
     const source = table(doc)
     const at = random(source.lines)
     const edits = [
       insertRow(source, at === 1 ? 0 : at, random(2) === 0),
-      at > 1 ? deleteRow(source, at) : null,
+      at !== 1 ? deleteRow(source, at) : null,
       insertColumn(source, random(columns), random(2) === 0),
       deleteColumn(source, random(columns)),
     ]

@@ -250,15 +250,26 @@ export function deleteRow(table: TableText, at: number): TableEdit | null {
   if (at === 0) {
     if (table.lines < 3) return null
     const header = line(table, 0),
+      delimiter = line(table, 1),
       first = line(table, 2)
+    // A header has as many cells as the delimiter row, or it is no table.
+    const width = delimiter.cells.length,
+      count = first.cells.length
+    const text = (from: number, to: number) =>
+      first.text.slice(from - first.from, to - first.from)
+    let promoted = text(first.start, first.end)
+    if (count < width) {
+      const pad = appendCells(first, Array(width - count).fill(''))
+      promoted =
+        text(first.start, pad.from) + pad.insert + text(pad.from, first.end)
+    }
     return {
       changes: [
-        {
-          from: header.start,
-          to: header.end,
-          insert: first.text.slice(first.start - first.from),
-        },
-        { from: line(table, 1).end, to: first.end, insert: '' },
+        { from: header.start, to: header.end, insert: promoted },
+        { from: delimiter.end, to: first.end, insert: '' },
+        ...(count > width
+          ? [appendCells(delimiter, Array(count - width).fill('---'))]
+          : []),
       ],
       cell: { line: 0, column: 0 },
     }
@@ -306,10 +317,23 @@ export function deleteColumn(
   table: TableText,
   column: number,
 ): TableEdit | null {
-  if (line(table, 0).cells.length < 2) return null
+  const columns = line(table, 0).cells.length
+  if (columns < 2) return null
   const changes: TableChange[] = []
   for (let index = 0; index < table.lines; index++) {
     const row = line(table, index)
+    if (columns === 2) {
+      // One column needs outer pipes, or its header and delimiter read as a heading.
+      const rest = row.cells
+        .filter((_, at) => at !== column)
+        .map(({ from, to }) => row.text.slice(from - row.from, to - row.from))
+      changes.push({
+        from: row.start,
+        to: row.end,
+        insert: rest.length ? `| ${rest.join(' | ')} |` : '|',
+      })
+      continue
+    }
     const cell = row.cells[column]
     if (!cell) continue
     const { left, right } = pipesAround(row, cell)
@@ -328,7 +352,7 @@ export function deleteColumn(
     changes,
     cell: {
       line: -1,
-      column: Math.max(0, Math.min(column, line(table, 0).cells.length - 2)),
+      column: Math.max(0, Math.min(column, columns - 2)),
     },
   }
 }

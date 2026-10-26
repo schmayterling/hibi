@@ -326,7 +326,9 @@ function App() {
     // Publish the demanded module as ordinary state: a first Suspense retry can
     // otherwise hold an already loaded editor behind React's reveal throttle.
     void Promise.all([
-      codemirrorFormattedView ? import('./FormattedEditor') : import('./Editor'),
+      codemirrorFormattedView
+        ? import('./FormattedEditor')
+        : import('./Editor'),
       import('./ActiveDocumentEditor'),
     ]).then(
       ([{ MarkdownEditor }, { ActiveDocumentEditor }]) => {

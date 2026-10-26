@@ -9,21 +9,21 @@ import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
-/** A note of `size` KiB: a heading, then paragraphs of ordinary words. */
-const makeSource = (size) => {
+/** A note of `size` KiB: a heading, `lead`, then paragraphs of ordinary words. */
+const makeSource = (size, lead = '') => {
   const unit = `${'ordinary words '.repeat(16)}\n\n`,
     length = size * 1024
-  return `# Large note\n\n${unit.repeat(Math.ceil(length / unit.length))}`.slice(
+  return `# Large note\n\n${lead}${unit.repeat(Math.ceil(length / unit.length))}`.slice(
     0,
     length,
   )
 }
 
 /** Open a note of `size` KiB with the CodeMirror formatted view switched on. */
-async function open(t, size) {
+async function open(t, size, lead) {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-hidden-source-'))
   const file = join(folder, 'note.md')
-  await writeFile(file, makeSource(size))
+  await writeFile(file, makeSource(size, lead))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
   })
@@ -57,7 +57,7 @@ async function open(t, size) {
   await page
     .locator('.rich-pane .hibi-lp-h1', { hasText: 'Large note' })
     .waitFor()
-  return { page, view }
+  return { app, page, view }
 }
 
 /** Live JavaScript heap after a full collection. */
@@ -102,4 +102,117 @@ test('a small note keeps its source view ready after a visit', {
 }, async (t) => {
   const { page } = await open(t, 16)
   assert.equal(await mounted(page), 1)
+})
+
+/** The source view's selection and the first position of the line at its top. */
+const place = (page) =>
+  page.evaluate(() => {
+    const view = document.querySelector('.source-pane .cm-content').cmTile.root
+      .view
+    const height = view.scrollDOM.getBoundingClientRect().top - view.documentTop
+    const { anchor, head } = view.state.selection.main
+    return { anchor, head, top: view.lineBlockAtHeight(height).from }
+  })
+
+/** Wait for a source view that holds the note, two frames after it mounts. */
+async function sourceShown(page) {
+  await waitForAsync(page, () => {
+    const content = document.querySelector('.source-pane .cm-content')
+    return content?.cmTile?.root?.view?.state.doc.length > 1024 * 1024
+  })
+  await page.evaluate(async () => {
+    await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+  })
+}
+
+test("a large note's source view comes back with its selection and scroll, mapped through edits", {
+  timeout: 240000,
+}, async (t) => {
+  const { page, view } = await open(t, 2 * 1024)
+  await view('Source view')
+  await sourceShown(page)
+  await page.evaluate(() => {
+    const view = document.querySelector('.source-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({
+      selection: { anchor: 19000, head: 19010 },
+      scrollIntoView: true,
+    })
+  })
+  await page.evaluate(async () => {
+    await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+  })
+  const before = await place(page)
+  assert.deepEqual([before.anchor, before.head], [19000, 19010])
+  assert.ok(before.top > 0, JSON.stringify(before))
+  const leave = async () => {
+    await view('normal')
+    await waitForAsync(
+      page,
+      () => document.querySelectorAll('.source-pane .cm-editor').length === 0,
+    )
+  }
+  // Without edits, the source view comes back where it was.
+  await leave()
+  await view('Source view')
+  await sourceShown(page)
+  assert.deepEqual(await place(page), before)
+  // An edit above it in the formatted view moves both by its length.
+  await leave()
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({ changes: { from: 0, insert: 'x\n' }, userEvent: 'input' })
+  })
+  await waitForAsync(page, async () =>
+    (await window.hibi.getDocument()).markdown.startsWith('x\n# Large note'),
+  )
+  await view('Source view')
+  await sourceShown(page)
+  assert.deepEqual(await place(page), {
+    anchor: before.anchor + 2,
+    head: before.head + 2,
+    top: before.top + 2,
+  })
+})
+
+test("find shows its matches in a large note's source view that mounts again", {
+  timeout: 240000,
+}, async (t) => {
+  const { app, page, view } = await open(
+    t,
+    2 * 1024,
+    'a needle, another needle and a third needle\n\n',
+  )
+  await pressShortcut(app, `${mod}+f`)
+  await page
+    .getByRole('textbox', { name: 'Find in document', exact: true })
+    .fill('needle')
+  await waitForAsync(
+    page,
+    () => document.querySelector('.find-count')?.textContent === '1/3',
+  )
+  for (let visit = 0; visit < 2; visit++) {
+    await view('Source view')
+    await sourceShown(page)
+    await waitForAsync(
+      page,
+      () =>
+        document.querySelectorAll('.source-pane .cm-searchMatch').length === 3,
+    )
+    assert.equal(await page.locator('.find-count').textContent(), '1/3')
+    assert.equal(
+      await page
+        .getByRole('textbox', { name: 'Find in document', exact: true })
+        .inputValue(),
+      'needle',
+    )
+    await view('normal')
+    await waitForAsync(
+      page,
+      () => document.querySelectorAll('.source-pane .cm-editor').length === 0,
+    )
+  }
 })

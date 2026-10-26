@@ -127,6 +127,8 @@ export function MarkdownEditor({
     id: 0,
     direction: 'next',
   })
+  // A large note's source view unmounts when it is left, keeping its place.
+  const releaseSource = largeOpening(documentRuntime, documentState)
   const {
     content,
     paneMode,
@@ -137,12 +139,7 @@ export function MarkdownEditor({
     setSourceReady,
     setSourceSettled,
     focusOwnedByEditor,
-  } = useEditorPanes(
-    mode,
-    markdownDocument,
-    false,
-    largeOpening(documentRuntime, documentState),
-  )
+  } = useEditorPanes(mode, markdownDocument, false, releaseSource)
   const findTarget =
     mode === 'normal' ? 'rich' : mode === 'markdown' ? 'source' : focusedPane
   useEffect(() => {
@@ -374,6 +371,7 @@ export function MarkdownEditor({
                   findQuery={findQuery}
                   findMove={findMove}
                   onFindStatus={setFindStatus}
+                  keepPlace={releaseSource}
                 />
               </Suspense>
             )}

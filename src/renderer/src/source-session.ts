@@ -183,6 +183,9 @@ const editorSelection = (
     selection.mainIndex,
   )
 
+/** How far above a pane's kept top line its scroll position was, per session and view. */
+const keptMargins = new WeakMap<DocumentSession, Map<string, number>>()
+
 /** Accepted CM transactions enter the same source/history/recovery authority as visual edits. */
 export function createSourceSession(
   session: DocumentSession,
@@ -363,6 +366,59 @@ export function createSourceSession(
         unregister()
         unsubscribe()
         unsubscribeStorage()
+      }
+    },
+    /**
+     * Keep the view's selection and the line at its top for this pane's next
+     * view, which `place` returns. The session maps both through the edits
+     * made meanwhile, like any view's selection.
+     */
+    keepPlace(
+      view: Pick<EditorView, 'state' | 'update'>,
+      top: number,
+      margin: number,
+    ) {
+      flush()
+      try {
+        session.select(
+          rawSelection(snapshot, view.state.selection),
+          snapshot.version,
+          `${viewId}\0selection`,
+        )
+        session.select(
+          rawSelection(snapshot, EditorSelection.single(top)),
+          snapshot.version,
+          `${viewId}\0top`,
+        )
+      } catch {
+        // A closing or synchronizing session keeps no place.
+        return
+      }
+      let margins = keptMargins.get(session)
+      if (!margins) {
+        margins = new Map()
+        keptMargins.set(session, margins)
+      }
+      margins.set(viewId, margin)
+    },
+    /** The place this pane kept, in this replica's positions; taking it forgets it. */
+    place() {
+      const selection = session.selection(`${viewId}\0selection`),
+        top = session.selection(`${viewId}\0top`),
+        margin = keptMargins.get(session)?.get(viewId)
+      session.releaseView(`${viewId}\0selection`)
+      session.releaseView(`${viewId}\0top`)
+      keptMargins.get(session)?.delete(viewId)
+      if (margin === undefined) return null
+      try {
+        const kept = editorSelection(snapshot, selection),
+          line = editorSelection(snapshot, top)
+        return kept && line
+          ? { selection: kept, top: line.main.head, margin }
+          : null
+      } catch {
+        // Positions the replica no longer holds, as after a reload, are not restored.
+        return null
       }
     },
     undo: () => !!session.undo(),

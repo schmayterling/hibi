@@ -959,7 +959,9 @@ export function livePreview(syntax: FormattedSyntax): Extension {
       if (['ListItem', 'FencedCode', 'CodeBlock'].includes(node.name))
         structured = true
     if (!structured && !view.state.facet(formattedTabIndents)) return false
-    return run((current) => indent(current.state, tree, outdent))(view)
+    return run((current) =>
+      indent(current.state, tree, outdent, hidden(current)),
+    )(view)
   }
   return [
     syntax.extension,

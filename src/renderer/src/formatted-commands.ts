@@ -125,6 +125,19 @@ export function lineBreak(
   })
 }
 
+/** Whether a line opens or closes a fenced code block. */
+function fenceLine(state: EditorState, tree: Tree, line: Line) {
+  const code = around(tree, line.to, ['FencedCode'])
+  if (!code) return false
+  const first = state.doc.lineAt(code.from)
+  if (first.number === line.number) return true
+  const closing = code.lastChild
+  return (
+    closing?.name === 'CodeMark' &&
+    state.doc.lineAt(closing.from).number === line.number
+  )
+}
+
 /** Where a line's visible content starts: after hidden prefixes such as markers. */
 function contentStart(line: Line, hidden: Hidden) {
   let start = line.from
@@ -234,6 +247,13 @@ export function deleteForward(
     return null
   const pos = range.head
   const line = state.doc.lineAt(pos)
+  // Joining a fence line into this one would end or open code elsewhere.
+  if (
+    pos === line.to &&
+    line.number < state.doc.lines &&
+    fenceLine(state, tree, state.doc.line(line.number + 1))
+  )
+    return { selection: range }
   if (pos !== line.to || line.number === state.doc.lines) {
     let end = pos
     for (let moved = true; moved; ) {
@@ -283,6 +303,7 @@ export function indent(
   state: EditorState,
   tree: Tree,
   outdent: boolean,
+  hidden: Hidden,
 ): TransactionSpec | null {
   if (state.readOnly) return null
   const range = state.selection.main
@@ -332,12 +353,51 @@ export function indent(
       userEvent: 'delete.dedent',
     }
   }
-  if (around(tree, range.head, ['FencedCode', 'CodeBlock'])) {
-    if (outdent) return { selection: range }
+  const code = around(tree, range.head, ['FencedCode', 'CodeBlock'])
+  if (code) {
+    if (range.empty && !outdent)
+      return {
+        changes: { from: range.from, insert: '\t' },
+        selection: EditorSelection.cursor(range.from + 1),
+        userEvent: 'input.indent',
+      }
+    // Otherwise each code line the selection covers is indented or
+    // outdented after its container prefix, never a fence line.
+    const fenced = code.name === 'FencedCode'
+    const closing = code.lastChild
+    const opening = state.doc.lineAt(code.from).number
+    const closed =
+      fenced &&
+      closing?.name === 'CodeMark' &&
+      state.doc.lineAt(closing.from).number > opening
+    const end = state.doc.lineAt(range.to)
+    const last =
+      !range.empty && range.to === end.from && end.from > range.from
+        ? end.number - 1
+        : end.number
+    const changes: { from: number; to?: number; insert?: string }[] = []
+    for (
+      let number = Math.max(
+        state.doc.lineAt(range.from).number,
+        fenced ? opening + 1 : opening,
+      );
+      number <=
+      Math.min(last, state.doc.lineAt(code.to).number - (closed ? 1 : 0));
+      number++
+    ) {
+      const line = state.doc.line(number)
+      const start = contentStart(line, hidden)
+      if (!outdent) changes.push({ from: start, insert: '\t' })
+      else {
+        const lead = /^(?:\t| {1,4})/.exec(state.sliceDoc(start, line.to))
+        if (lead) changes.push({ from: start, to: start + lead[0].length })
+      }
+    }
+    const set = state.changes(changes)
     return {
-      changes: { from: range.from, to: range.to, insert: '\t' },
-      selection: EditorSelection.cursor(range.from + 1),
-      userEvent: 'input.indent',
+      changes: set,
+      selection: state.selection.map(set, 1),
+      userEvent: outdent ? 'delete.dedent' : 'input.indent',
     }
   }
   const line = state.doc.lineAt(range.head)

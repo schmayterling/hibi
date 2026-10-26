@@ -19,9 +19,8 @@ import {
   customWordsFileIo,
   editCustomWord,
   exportSavedCustomWords,
-  importCustomWords,
+  importSavedCustomWords,
   listCustomWords,
-  mergeCustomWords,
   onCustomWordsChanged,
   updateCustomWords,
 } from './custom-words'
@@ -308,15 +307,14 @@ export function CustomWords() {
   const [text, setText] = useState('')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
-  const merge = (imported: CustomWord[]) =>
-    updateCustomWords((current) => mergeCustomWords(current, imported)).then(
-      () =>
+  const merge = (source: string) =>
+    importSavedCustomWords(source).then((count) => {
+      if (count)
         setMessage(
-          imported.length === 1
-            ? 'Imported 1 word.'
-            : `Imported ${imported.length} words.`,
-        ),
-    )
+          count === 1 ? 'Imported 1 word.' : `Imported ${count} words.`,
+        )
+      return count
+    })
   const withFile = (run: (io: HostSelectedIoHostApi) => Promise<void>) => {
     const io = customWordsFileIo()
     if (!io) {
@@ -466,13 +464,13 @@ export function CustomWords() {
         <Button
           disabled={!text.trim()}
           onClick={() => {
-            const imported = importCustomWords(text)
-            if (!imported.length) {
-              setMessage('No words were found in the text.')
-              return
-            }
-            merge(imported)
-              .then(() => setText(''))
+            const source = text
+            merge(source)
+              .then((count) => {
+                if (count)
+                  setText((current) => (current === source ? '' : current))
+                else setMessage('No words were found in the text.')
+              })
               .catch((error) => setMessage(failed(error)))
           }}
         >
@@ -517,15 +515,14 @@ export function CustomWords() {
               if (!selected.value) return
               const read = await io.readImport(selected.value.handle)
               if (!read.ok) throw new Error(read.message)
-              let imported: CustomWord[]
+              let source: string
               try {
-                imported = importCustomWords(utf8.decode(read.value))
+                source = utf8.decode(read.value)
               } catch {
                 throw new Error('Choose a text file saved as UTF-8.')
               }
-              if (!imported.length)
+              if (!(await merge(source)))
                 setMessage('No words were found in the file.')
-              else await merge(imported)
             })
           }
         >

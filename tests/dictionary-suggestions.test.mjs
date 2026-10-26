@@ -231,19 +231,20 @@ test('suggestions ask every language in one request, keep case, and never go onl
 
 test('custom suggestions use the indexed provider instead of scanning all saved words', async () => {
   const calls = []
+  const word = `hap${'x'.repeat(128)}`
   const provider = dictionaryCompletions(
     packs({}),
     () => settings,
     (lang) => lang,
     async (prefix, langs, limit) => {
       calls.push({ prefix, langs, limit })
-      return [{ word: 'happenstance', lang: 'en' }]
+      return [{ word, lang: 'en' }]
     },
   )
   const items = await provider(request('hap'), signal())
   assert.deepEqual(
     items.map(({ label, detail }) => [label, detail]),
-    [['happenstance', 'Your word']],
+    [[word, 'Your word']],
   )
   assert.deepEqual(calls, [{ prefix: 'hap', langs: ['en', 'fr'], limit: 64 }])
 })

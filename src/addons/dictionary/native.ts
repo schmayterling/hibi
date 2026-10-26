@@ -47,6 +47,8 @@ export default {
   stop,
   queries: {
     customWords: async (input) => (await wordStore()).request('page', input),
+    customWordsLookup: async (input) =>
+      (await wordStore()).request('lookup', input),
     customWordsComplete: async (input) =>
       (await wordStore()).request('complete', input),
     packs: async () => (await store()).list(),

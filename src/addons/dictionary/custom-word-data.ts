@@ -7,8 +7,15 @@ export type CustomWord = {
   lang?: Lang
   note?: string
 }
-export const customWordKey = (word: CustomWord) =>
-  `${word.word.normalize('NFC').toLowerCase()}\u0000${word.lang ?? ''}`
+const valid = new WeakSet<CustomWord>()
+const keys = new WeakMap<CustomWord, string>()
+export function customWordKey(word: CustomWord) {
+  const cached = keys.get(word)
+  if (cached !== undefined) return cached
+  const key = `${word.word.normalize('NFC').toLowerCase()}\u0000${word.lang ?? ''}`
+  if (Object.isFrozen(word)) keys.set(word, key)
+  return key
+}
 
 export function wordText(word: string) {
   const text = word.trim().normalize('NFC')
@@ -22,20 +29,27 @@ export function customWords(value: unknown): CustomWord[] {
   const words: CustomWord[] = []
   for (const item of value) {
     if (!item || typeof item !== 'object') continue
-    const { id, word, lang, note } = item as Record<string, unknown>
-    if (typeof word !== 'string') continue
-    const text = wordText(word)
-    if (!text) continue
-    const entry: CustomWord = {
-      ...(typeof id === 'string' && id && id.length <= 128 ? { id } : {}),
-      word: text,
-      ...(LANGS.includes(lang as Lang) ? { lang: lang as Lang } : {}),
-      ...(typeof note === 'string' && note.trim() ? { note: note.trim() } : {}),
+    let entry: CustomWord
+    if (valid.has(item)) entry = item
+    else {
+      const { id, word, lang, note } = item as Record<string, unknown>
+      if (typeof word !== 'string') continue
+      const text = wordText(word)
+      if (!text) continue
+      entry = Object.freeze({
+        ...(typeof id === 'string' && id && id.length <= 128 ? { id } : {}),
+        word: text,
+        ...(LANGS.includes(lang as Lang) ? { lang: lang as Lang } : {}),
+        ...(typeof note === 'string' && note.trim()
+          ? { note: note.trim() }
+          : {}),
+      })
+      valid.add(entry)
     }
     const identity = customWordKey(entry)
     if (seen.has(identity)) continue
     seen.add(identity)
-    words.push(Object.freeze(entry))
+    words.push(entry)
   }
   return words
 }

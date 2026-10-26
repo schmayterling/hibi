@@ -13,6 +13,7 @@ import {
   exportCustomWords,
   exportSavedCustomWords,
   importCustomWords,
+  importSavedCustomWords,
   listCustomWords,
   mergeCustomWords,
   onCustomWordsChanged,
@@ -178,6 +179,22 @@ test('imports preserve first entries and keep every distinct word and full note'
   await updateCustomWords((current) => mergeCustomWords(current, imported))
   assert.equal(handle.snapshot().value.length, 50002)
   assert.equal(listCustomWords()[0].note, 'unchanged')
+})
+
+test('large text imports yield to input tasks and exports join the whole save', async (t) => {
+  const { context } = storage([])
+  const close = await openCustomWords(context)
+  t.after(close)
+  const text = Array.from({ length: 50000 }, (_, i) => `word${i}`).join('\n')
+  let yielded = false
+  setImmediate(() => {
+    yielded = true
+  })
+  const importing = importSavedCustomWords(text)
+  const exported = exportSavedCustomWords()
+  assert.equal(await importing, 50000)
+  assert.equal(await exported, text)
+  assert.equal(yielded, true)
 })
 
 test('custom words load, save, follow other windows, and clear on stop', async () => {
@@ -1012,6 +1029,23 @@ test('100,000 custom words use constant lookup work', async (t) => {
   )
 })
 
+test('a language collision never silently removes either word or its note', async (t) => {
+  const original = [
+    { word: 'word', lang: 'en', note: 'english note' },
+    { word: 'word', lang: 'fr', note: 'french note' },
+  ]
+  const { handle, context } = storage(original)
+  const close = await openCustomWords(context)
+  t.after(close)
+  const writes = t.mock.method(handle, 'set')
+  await assert.rejects(
+    editCustomWord(listCustomWords()[0], (word) => ({ ...word, lang: 'fr' })),
+    /Could not save/,
+  )
+  assert.deepEqual(plain(listCustomWords()), original)
+  assert.equal(writes.mock.callCount(), 0)
+})
+
 test('custom words keep a newer revision over a late save reply or notification', async () => {
   // A held save reply, as the storage handle delivers it: its snapshot keeps
   // the newer revision that arrived first.
@@ -1091,6 +1125,71 @@ test('custom words are looked up as the user’s own without going online', asyn
   )
   assert.deepEqual(sent, [])
   close()
+})
+
+test('cold custom lookup answers locally while the settings snapshot is still loading', async (t) => {
+  const gate = Promise.withResolvers()
+  const word = { id: 'cold', word: 'cold', lang: 'en', note: 'kept locally' }
+  const loading = openWords({
+    host: { selectedIo: {} },
+    native: {
+      async query(method, input) {
+        if (method === 'customWords') {
+          await gate.promise
+          return { revision: 1, words: [word], after: 1, more: false }
+        }
+        assert.equal(method, 'customWordsLookup')
+        return input.lang === 'en' ? [word] : []
+      },
+    },
+  })
+  t.after(async () => {
+    gate.resolve()
+    ;(await loading)()
+  })
+  let online = 0
+  const registry = createRegistry()
+  registry.register(customWordsProvider(() => 'en'))
+  registry.register({
+    id: 'online',
+    label: 'online',
+    kind: 'online',
+    languages: ['en'],
+    async lookup() {
+      online++
+      return []
+    },
+  })
+  const result = await gather(registry, ['en'], 'lookup', (provider, lang) =>
+    provider.lookup('cold', lang, signal),
+  )
+  assert.equal(result.found[0].value[0].senses[0].gloss, 'kept locally')
+  assert.equal(online, 0)
+  assert.deepEqual(listCustomWords(), [], 'whole-list load remains held')
+})
+
+test('a late initial load cannot replace a newer dictionary activation', async (t) => {
+  const gate = Promise.withResolvers()
+  const old = openWords({
+    native: {
+      async query() {
+        await gate.promise
+        return {
+          revision: 1,
+          words: [{ id: 'old', word: 'old' }],
+          after: 1,
+          more: false,
+        }
+      },
+    },
+    host: { selectedIo: {} },
+  })
+  const { context } = storage([{ word: 'new' }])
+  const close = await openCustomWords(context)
+  t.after(close)
+  gate.resolve()
+  ;(await old)()
+  assert.deepEqual(plain(listCustomWords()), [{ word: 'new' }])
 })
 
 test('custom words come before pack words in suggestions', async () => {

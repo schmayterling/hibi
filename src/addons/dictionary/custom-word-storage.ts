@@ -1,6 +1,6 @@
 import type { AddonStorageHandle } from '../../shared/addon-storage'
 import type { AddonContext } from '../api'
-import type { CustomWord } from './custom-word-data'
+import { type CustomWord, customWords } from './custom-word-data.ts'
 
 const encoder = new TextEncoder()
 type Page = {
@@ -11,6 +11,7 @@ type Page = {
 }
 export type CustomWordStorage = AddonStorageHandle<unknown> & {
   close?: () => void
+  normalized?: true
 }
 
 /** Adapts indexed native records to the dictionary's existing compare-and-set flow. */
@@ -40,7 +41,12 @@ export async function openCustomWordStorage(
             ...(revision === undefined ? {} : { revision }),
           })
           revision = page.revision
-          words.push(...page.words)
+          const normalized = customWords(page.words)
+          if (normalized.length !== page.words.length)
+            throw new Error(
+              'Could not read your custom words. The original data has been kept.',
+            )
+          words.push(...normalized)
           if (!page.more) break
           after = page.after
         }
@@ -63,6 +69,7 @@ export async function openCustomWordStorage(
     throw error
   }
   return {
+    normalized: true,
     snapshot: () => state,
     subscribe(listener) {
       listeners.add(listener)

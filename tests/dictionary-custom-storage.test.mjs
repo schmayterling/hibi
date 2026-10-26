@@ -38,7 +38,11 @@ const all = (store) => {
 const native = (store, calls = []) => ({
   async query(method, input) {
     calls.push({ method, input })
-    return method === 'customWords' ? store.page(input) : store.complete(input)
+    return method === 'customWords'
+      ? store.page(input)
+      : method === 'customWordsLookup'
+        ? store.lookup(input)
+        : store.complete(input)
   },
   async invoke(method, input) {
     assert.equal(method, 'changeCustomWords')
@@ -135,6 +139,53 @@ test('50,000 keyed records and long fields persist, with only changed records wr
   t.diagnostic(
     '50,001 records: one keyed write and zero list reads for a single-note edit',
   )
+})
+
+test('100,000 native records use an indexed exact lookup', async (t) => {
+  const ctx = await fixture(t)
+  const store = await CustomWordDatabase.open(ctx.profile)
+  t.after(() => store.close())
+  const token = store.change({
+    type: 'begin',
+    revision: store.revision(),
+  }).token
+  for (let offset = 0; offset < 100000; offset += 256) {
+    store.change({
+      type: 'stage',
+      token,
+      remove: [],
+      upsert: Array.from(
+        { length: Math.min(256, 100000 - offset) },
+        (_, i) => ({ id: `id-${offset + i}`, word: `word${offset + i}` }),
+      ),
+    })
+  }
+  store.change({ type: 'commit', token })
+  const lower = t.mock.method(String.prototype, 'toLowerCase')
+  assert.equal(
+    store.lookup({ term: 'WORD99999', lang: '' })[0].word,
+    'word99999',
+  )
+  assert.equal(lower.mock.callCount(), 1)
+  lower.mock.restore()
+  const db = new DatabaseSync(
+    join(ctx.profile, 'dictionary-custom-words', 'words.sqlite'),
+  )
+  const plan = db
+    .prepare(
+      'EXPLAIN QUERY PLAN SELECT * FROM words WHERE term = ? AND lang = ?',
+    )
+    .all('word99999', '')
+  assert.ok(
+    plan.some(
+      (row) =>
+        String(row.detail).includes('SEARCH') &&
+        String(row.detail).includes('term=?') &&
+        String(row.detail).includes('lang=?'),
+    ),
+  )
+  db.close()
+  t.diagnostic('100,000 native records: one normalized indexed lookup')
 })
 
 test('a killed migration rolls back every staged record and retries without losing legacy data', async (t) => {

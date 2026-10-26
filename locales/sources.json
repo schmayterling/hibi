@@ -1414,7 +1414,8 @@
     "src/addons/quick-note/native.ts"
   ],
   "d04bd262b5af": [
-    "src/addons/dictionary/custom-word-database.ts"
+    "src/addons/dictionary/custom-word-database.ts",
+    "src/addons/dictionary/custom-word-storage.ts"
   ],
   "2fe18391f790": [
     "src/renderer/src/AddonHotkeySettings.tsx",
@@ -2813,7 +2814,7 @@
   "938687e1fee8": [
     "src/addons/dictionary/CustomWords.tsx"
   ],
-  "610a5d14e9aa": [
+  "a41953871087": [
     "src/addons/dictionary/CustomWords.tsx"
   ],
   "79cf4fcf85ad": [
@@ -6318,6 +6319,9 @@
   ],
   "7a5592fe56ea": [
     "src/addons/documentation/site.ts"
+  ],
+  "6805eb10d78f": [
+    "src/addons/dictionary/custom-words.ts"
   ],
   "160f0858f2bd": [
     "src/main/workspace-files.ts"

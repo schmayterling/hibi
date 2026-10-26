@@ -180,6 +180,18 @@ export class CustomWordDatabase {
     if (words.length === 256) more = true
     return { revision: current, words, after: cursor, more }
   }
+  lookup(input: unknown) {
+    const { term, lang } = (input ?? {}) as Record<string, unknown>
+    if (
+      typeof term !== 'string' ||
+      !(lang === '' || LANGS.includes(lang as Lang))
+    )
+      throw new Error('Invalid custom words request.')
+    const row = this.db
+      .prepare('SELECT * FROM words WHERE term = ? AND lang = ?')
+      .get(term.trim().normalize('NFC').toLowerCase(), String(lang))
+    return row ? [entry(row as Row)] : []
+  }
   complete(input: unknown) {
     const { prefix, langs, limit } = (input ?? {}) as Record<string, unknown>
     if (

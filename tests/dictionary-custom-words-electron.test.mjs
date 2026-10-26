@@ -603,24 +603,25 @@ test('5,000 custom words keep bounded live rows, skip hidden discovery work, and
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ ipcMain }) => {
     const query = ipcMain._invokeHandlers.get('addons:query')
-    const write = ipcMain._invokeHandlers.get('addon-storage:write')
+    const write = ipcMain._invokeHandlers.get('addons:invoke')
     globalThis.packReads = 0
     ipcMain.removeHandler('addons:query')
     ipcMain.handle('addons:query', (event, id, method, ...input) => {
       if (id === 'dictionary' && method === 'packs') globalThis.packReads++
       return query(event, id, method, ...input)
     })
-    ipcMain.removeHandler('addon-storage:write')
-    ipcMain.handle('addon-storage:write', (event, request) => {
+    ipcMain.removeHandler('addons:invoke')
+    ipcMain.handle('addons:invoke', (event, id, method, input) => {
       if (
         globalThis.failNextWrite &&
-        request?.owner === 'dictionary' &&
-        request.key === 'custom-words'
+        id === 'dictionary' &&
+        method === 'changeCustomWords' &&
+        input?.type === 'commit'
       ) {
         globalThis.failNextWrite = false
-        return { status: 'unavailable', reason: 'corrupt' }
+        throw new Error('Could not save custom words.')
       }
-      return write(event, request)
+      return write(event, id, method, input)
     })
   })
   const palette = page.getByRole('dialog', { name: /command palette/i })

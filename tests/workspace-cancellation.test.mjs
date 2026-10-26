@@ -1,10 +1,30 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import test from 'node:test'
 import { build } from 'esbuild'
+import { waitForAsync } from './poll.mjs'
+
+async function waitForOperation(operation, message) {
+  let result
+  await assert.doesNotReject(
+    waitForAsync({ evaluate: (predicate) => predicate() }, async () => {
+      result = await operation
+      return true
+    }),
+    message,
+  )
+  return result
+}
 
 const bundle = await build({
   entryPoints: ['src/main/workspace.ts'],
@@ -128,10 +148,19 @@ for (const phase of ['realpath', 'stat']) {
     syncBuiltinESMExports()
     try {
       const pending = indexWorkspace()
-      await reading
+      await waitForOperation(
+        reading,
+        `The workspace ${phase} hook was not reached.`,
+      )
       await loadWorkspace(next)
       release()
-      assert.equal(await pending, null)
+      assert.equal(
+        await waitForOperation(
+          pending,
+          `The ${phase} index did not settle after cancellation.`,
+        ),
+        null,
+      )
       assert.equal(reads, 0)
     } finally {
       release()
@@ -150,7 +179,8 @@ test('a committed selection still remembers and publishes when another open inte
   const notes = join(base, 'notes')
   await mkdir(notes)
   t.after(() => rm(base, { recursive: true, force: true }))
-  const original = fs.writeFile
+  const original = fs.open
+  let writes = 0
   let release
   let started
   const writing = new Promise((resolve) => {
@@ -161,26 +191,48 @@ test('a committed selection still remembers and publishes when another open inte
   })
   const changes = []
   observeWorkspace((change) => changes.push(change))
-  fs.writeFile = async (path, ...args) => {
-    if (path === join(base, 'recent-workspaces.json.tmp')) {
-      started()
-      await held
+  fs.open = async (path, ...args) => {
+    const file = await original(path, ...args)
+    if (
+      dirname(path) === base &&
+      /^\.recent-workspaces\.json\..+\.tmp$/.test(basename(path))
+    ) {
+      const write = file.writeFile.bind(file)
+      file.writeFile = async (...values) => {
+        writes++
+        started()
+        await held
+        return write(...values)
+      }
     }
-    return original(path, ...args)
+    return file
   }
   syncBuiltinESMExports()
   try {
     const pending = loadWorkspace(notes, true)
-    await writing
+    await waitForOperation(
+      writing,
+      'The recent-workspaces atomic write hook was not reached.',
+    )
+    assert.equal(writes, 1)
+    assert.equal(workspaceRoot(), notes)
+    assert.equal(changes.filter((change) => change.kind === 'tree').length, 0)
+    const recent = join(base, 'recent-workspaces.json')
+    await assert.rejects(readFile(recent), { code: 'ENOENT' })
     cancelWorkspaceSelection()
     release()
-    assert.equal((await pending).name, 'notes')
+    const result = await waitForOperation(
+      pending,
+      'The committed workspace load did not settle after releasing its write.',
+    )
+    assert.equal(result.name, 'notes')
+    assert.equal(JSON.parse(await readFile(recent, 'utf8'))[0].path, notes)
     assert.equal(workspaceRoot(), notes)
     assert.equal(changes.filter((change) => change.kind === 'tree').length, 1)
   } finally {
     release()
     observeWorkspace(() => {})
-    fs.writeFile = original
+    fs.open = original
     syncBuiltinESMExports()
   }
 })

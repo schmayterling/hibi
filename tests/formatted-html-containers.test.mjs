@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import { parser } from '@lezer/markdown'
+import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
 import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
 import { boundaryParser } from '../src/shared/markdown-boundary-syntax.ts'
 
@@ -93,4 +94,57 @@ test('raw html terminators keep their semantics, including blank lines and conta
     worker().parse(escaped).toString(),
     parser.parse(escaped).toString(),
   )
+})
+
+test('a 50 mib quoted html block advances through bounded source ranges', () => {
+  const measure = (length) => {
+    const head = '> <div>\n',
+      unit = '> html line\n'
+    let reads = 0,
+      widest = 0
+    const read = (from, to) => {
+      reads += to - from
+      widest = Math.max(widest, to - from)
+      let text = ''
+      if (from < head.length) {
+        text = head.slice(from, Math.min(to, head.length))
+        from = head.length
+      }
+      if (from < to) {
+        const offset = (from - head.length) % unit.length
+        text += unit
+          .repeat(Math.ceil((to - from + offset) / unit.length))
+          .slice(offset, offset + to - from)
+      }
+      return text
+    }
+    const md = worker()
+    const parse = new ChunkedMarkdownParser(md, md, {
+      chunkSize: 1024,
+      giantBlock: 4096,
+    }).startChunkedParse(
+      {
+        length,
+        lineChunks: false,
+        read,
+        chunk: (from) => read(from, Math.min(length, from + unit.length)),
+      },
+      [],
+      { from: 0, to: 1024 },
+    )
+    let result = null,
+      largest = 0
+    for (let i = 0; i < 32 && !result; i++) {
+      const before = reads
+      result = parse.advance()
+      largest = Math.max(largest, reads - before)
+    }
+    assert.ok(result)
+    assert.ok(widest <= 16 * 1024, String(widest))
+    return { reads, largest, widest }
+  }
+  const small = measure(2 * 1024 * 1024),
+    large = measure(50 * 1024 * 1024)
+  console.log(JSON.stringify({ small, large }))
+  assert.deepEqual(large, small)
 })

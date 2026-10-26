@@ -10,6 +10,7 @@ import {
 } from '../shared/note-links.ts'
 import type { PropertyScalar } from '../shared/note-metadata.ts'
 import { defaultNoteSyntax } from '../shared/note-syntax.ts'
+import { foldSearchText } from '../shared/search-fold.ts'
 import type { WorkspacePage } from '../shared/workspace'
 import type {
   WorkspaceGraphItem,
@@ -993,7 +994,7 @@ export class WorkspaceReferenceIndex {
     offset: number,
     limit: number,
   ): Generator<void, ReferencePage> {
-    const folded = query.toLocaleLowerCase()
+    const folded = foldSearchText(query)
     const cacheKey = `paths:${folded}`
     const cached = this.filteredViews.get(cacheKey)
     if (cached) return yield* this.pageSteps(cached.paths, offset, limit)
@@ -1001,7 +1002,7 @@ export class WorkspaceReferenceIndex {
     let count = 0
     let started = performance.now()
     for (const path of this.paths) {
-      if (path.toLocaleLowerCase().includes(folded)) matches.push(path)
+      if (foldSearchText(path).includes(folded)) matches.push(path)
       if (
         ++count % workSlice === 0 ||
         performance.now() - started >= workSliceMs

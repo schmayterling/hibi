@@ -82,6 +82,12 @@ test('palette selection reuses filtered results and rerenders only the rows it c
   assert.equal(await page.getByRole('option').count(), 542)
   assert.ok((await counts()).filtered > moved.filtered)
 
+  for (const query of ['ΟΔΟΣ', 'οδος', 'οδοσ', 'Σ', 'σ', 'ς', 'ΑςΑ']) {
+    await search.fill(query)
+    await page.locator('#command-greek-0[aria-selected="true"]').waitFor()
+    assert.equal(await page.getByRole('option').count(), 3, query)
+  }
+
   // A search callback runs once per query, not once per selection move.
   await page.evaluate(() => window.paletteHarness.setMode('search'))
   await search.fill('Command 5')

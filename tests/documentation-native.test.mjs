@@ -21,8 +21,8 @@ const stubs = {
     export const refreshWorkspace = async () => {}
     export const getWorkspace = () => ({ name: 'notes', entries: [] })
     export const exportPaths = () => globalThis.__exportNative.paths ?? [{ path: 'note.md' }]
-    export const readWorkspaceExportPage = async () => globalThis.__exportNative.source
-    export const readWorkspaceExportSource = async () => ({ page: globalThis.__exportNative.source, note: '/unused/note.md', workspace: '/unused' })`,
+    export const readWorkspaceExportPage = async (path) => globalThis.__exportNative.read ? globalThis.__exportNative.read(path) : globalThis.__exportNative.source
+    export const readWorkspaceExportSource = async (path) => ({ page: await readWorkspaceExportPage(path), note: '/unused/note.md', workspace: '/unused' })`,
   './site-runtime': `export { readSiteFiles, validateSiteFiles } from ${JSON.stringify(resolve('src/addons/documentation/site-runtime.ts'))}
     export class SiteWorker {
       request(job) { return globalThis.__exportNative.request(job) }
@@ -201,3 +201,71 @@ test('native export admits two pages while staging and refuses a third', async (
     delete globalThis.__exportNative
   }
 })
+
+for (const [count, padding, sizes] of [
+  [33, 0, [16, 16, 1]],
+  [3, 200000, [1, 1, 1]],
+])
+  test(
+    'source verification reads at most two notes and batches every exact source: ' +
+      padding,
+    async () => {
+      const paths = Array.from({ length: count }, (_, i) => ({
+        path: i + '.md',
+      }))
+      const verified = []
+      let active = 0,
+        peak = 0
+      globalThis.__exportNative = {
+        target,
+        paths,
+        async read(path) {
+          active++
+          peak = Math.max(peak, active)
+          await new Promise(setImmediate)
+          active--
+          return { path, markdown: '# ' + path + 'x'.repeat(padding) }
+        },
+        async request(job) {
+          if (job.kind === 'images') return []
+          if (job.kind === 'finish') return [{ path: 'index.html', bytes: 1 }]
+          if (job.kind === 'verify') verified.push(job.pages ?? [job.page])
+        },
+        close() {},
+      }
+      let session
+      try {
+        session = await native.begin({ target, options: {} })
+        for (const _path of paths) {
+          const page = await native.page(session)
+          await native.stage({
+            ...session,
+            page: { ...page, html: '<p>note</p>' },
+          })
+        }
+        await native.seal({ ...session, ...contributions })
+        assert.equal(peak, 2)
+        assert.deepEqual(
+          verified.map((pages) => pages.length),
+          sizes,
+        )
+        assert.ok(
+          verified.every(
+            (pages) =>
+              pages.reduce(
+                (bytes, page) => bytes + Buffer.byteLength(page.markdown),
+                0,
+              ) <=
+              256 * 1024,
+          ),
+        )
+        assert.deepEqual(
+          verified.flat().map((page) => page.path),
+          paths.map((page) => page.path),
+        )
+      } finally {
+        if (session) await native.cancel(session)
+        delete globalThis.__exportNative
+      }
+    },
+  )

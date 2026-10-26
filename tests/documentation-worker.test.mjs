@@ -105,7 +105,10 @@ test('owned export worker stages pages and yields main task turns while streamin
     await assert.rejects(
       worker.request({
         kind: 'verify',
-        page: { path: '99.md', markdown: '# Changed' },
+        pages: [
+          { path: '99.md', markdown: '# Note\n\n[next](1.md)' },
+          { path: '98.md', markdown: '# Changed' },
+        ],
       }),
       /workspace changed/,
     )

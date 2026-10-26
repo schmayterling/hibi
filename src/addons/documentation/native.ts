@@ -182,10 +182,29 @@ async function verifySources(session: Session) {
       JSON.stringify(session.paths)
   )
     throw new Error('The workspace changed during export. Export again.')
-  for (const path of session.paths) {
-    const page = await readWorkspaceExportPage(path, session.target, false)
-    await session.worker.request({ kind: 'verify', page })
+  let pages: WorkspacePage[] = []
+  let bytes = 0
+  const verify = async () => {
+    if (!pages.length) return
+    await session.worker.request({ kind: 'verify', pages })
+    pages = []
+    bytes = 0
   }
+  for (let index = 0; index < session.paths.length; index += 2) {
+    const sources = await Promise.all(
+      session.paths
+        .slice(index, index + 2)
+        .map((path) => readWorkspaceExportPage(path, session.target, false)),
+    )
+    for (const page of sources) {
+      const size = Buffer.byteLength(page.markdown)
+      if (pages.length && bytes + size > 256 * 1024) await verify()
+      pages.push(page)
+      bytes += size
+      if (pages.length === 16 || bytes >= 256 * 1024) await verify()
+    }
+  }
+  await verify()
 }
 
 async function finish(session: Session, input: unknown) {

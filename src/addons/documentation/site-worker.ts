@@ -24,6 +24,7 @@ export type SiteWorkerRequest =
     }
   | { kind: 'page'; page: WorkspacePage }
   | { kind: 'verify'; page: WorkspacePage }
+  | { kind: 'verify'; pages: WorkspacePage[] }
   | { kind: 'images'; page: WorkspacePage }
   | {
       kind: 'finish'
@@ -100,8 +101,9 @@ async function request(job: SiteWorkerRequest) {
         ]
       : []
   if (job.kind === 'verify') {
-    if (pages.get(job.page.path)?.hash !== sourceHash(job.page.markdown))
-      throw new Error('The workspace changed during export. Export again.')
+    for (const page of 'pages' in job ? job.pages : [job.page])
+      if (pages.get(page.path)?.hash !== sourceHash(page.markdown))
+        throw new Error('The workspace changed during export. Export again.')
     return
   }
   if (job.kind === 'page') {

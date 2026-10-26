@@ -301,6 +301,16 @@ test('file picker and drops attach media safely, stream videos, and move/open wo
     await readFile(join(workspace, 'folder/one.md'), 'utf8'),
     '# one',
   )
+  await waitForAsync(
+    page,
+    () =>
+      document
+        .querySelector('.workspace-sidebar [role="tree"]')
+        ?.getAttribute('aria-busy') !== 'true' &&
+      document.querySelector(
+        '.workspace-sidebar [role="treeitem"][id="sidebar-folder/one.md"]',
+      ) !== null,
+  )
   await tree
     .getByRole('treeitem', { name: /^one\.md$/i, exact: true })
     .dispatchEvent('dragstart', { dataTransfer: transfer })

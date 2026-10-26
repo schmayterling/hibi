@@ -69,7 +69,7 @@ export function observeDocumentMedia(
   }
   entry.listeners.add(listener)
   if (!unsubscribe)
-    unsubscribe = window.hibi.onWorkspaceChanged((_workspace, change) => {
+    unsubscribe = window.hibi.onWorkspaceHeaderChanged((change) => {
       for (const entry of entries.values())
         if (mediaPathsChanged(entry.paths, change)) resolve(entry)
     })

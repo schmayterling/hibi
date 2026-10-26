@@ -7,6 +7,7 @@
   "include": [
     "src/addons/*/native.ts",
     "src/addons/*/compiler-worker.ts",
+    "src/addons/dictionary/custom-words-worker.ts",
     "src/addons/*/manifest.ts",
     "src/useraddons/*/native.ts",
     "src/useraddons/*/manifest.ts",

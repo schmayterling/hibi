@@ -2,12 +2,14 @@ import { join } from 'node:path'
 import { app, clipboard } from 'electron'
 import { HOST_SELECTED_IO_MAX_BYTES } from '../../shared/host-selected-io'
 import type { NativeAddon } from '../api'
+import { CustomWordStore } from './custom-word-store'
 import manifest from './manifest'
 import { completionLimit, completionPrefix } from './pack-runtime'
 import { PackStore } from './pack-store'
 import { lookupInput, packId } from './packs'
 
 let current: PackStore | undefined
+let words: CustomWordStore | undefined
 let closing = Promise.resolve()
 let generation = 0
 async function store() {
@@ -20,20 +22,43 @@ async function store() {
   )
   return current
 }
+async function wordStore() {
+  const captured = generation
+  await closing
+  if (captured !== generation) throw new Error('Dictionary packs are closed.')
+  words ??= new CustomWordStore(
+    join(app.getAppPath(), 'out/main/dictionary-custom-words-worker.js'),
+    app.getPath('userData'),
+  )
+  return words
+}
 function stop() {
   generation++
-  if (!current) return
-  closing = current
-    .close()
+  closing = Promise.all([closing, current?.close(), words?.close()])
+    .then(() => {})
     .catch((error) => console.error('could not close dictionary packs:', error))
   current = undefined
+  words = undefined
 }
 app.on('before-quit', stop)
+
+const wordQueries = {
+  customWords: async (input: unknown) =>
+    (await wordStore()).request('page', input),
+  customWordsMetadata: async () => (await wordStore()).request('metadata'),
+  customWordsGet: async (input: unknown) =>
+    (await wordStore()).request('get', input),
+  customWordsLookup: async (input: unknown) =>
+    (await wordStore()).request('lookup', input),
+  customWordsComplete: async (input: unknown) =>
+    (await wordStore()).request('complete', input),
+}
 
 export default {
   id: manifest.id,
   stop,
   queries: {
+    ...wordQueries,
     packs: async () => (await store()).list(),
     async packComplete(input) {
       if (!input || typeof input !== 'object')
@@ -61,12 +86,16 @@ export default {
       return (await store()).lookup(id, word)
     },
   },
+  profileMethods: {
+    ...wordQueries,
+    changeCustomWords: async (input, context) =>
+      (await wordStore()).request('change', input, context.isCurrent),
+  },
   methods: {
     async copyCustomWords(input) {
-      // A valid 5,000-word export fits this character bound, including its notes.
       if (
         typeof input !== 'string' ||
-        input.length > HOST_SELECTED_IO_MAX_BYTES
+        Buffer.byteLength(input) > HOST_SELECTED_IO_MAX_BYTES
       )
         throw new TypeError('Invalid custom words text')
       return clipboard.writeText(input)

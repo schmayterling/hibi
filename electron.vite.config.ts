@@ -121,6 +121,9 @@ export default defineConfig({
           'dictionary-pack-worker': resolve(
             'src/addons/dictionary/pack-worker.ts',
           ),
+          'dictionary-custom-words-worker': resolve(
+            'src/addons/dictionary/custom-words-worker.ts',
+          ),
         },
       },
     },

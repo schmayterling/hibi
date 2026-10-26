@@ -52,6 +52,7 @@ export function guardMarkdownSyntax(
     const wrapper = config.wrap
     const result: MarkdownConfig = {
       ...config,
+      ...(config.props && { props: config.props.map(guard) }),
       ...(config.parseInline && {
         parseInline: config.parseInline.map((rule) => ({
           ...rule,
@@ -105,81 +106,101 @@ export function protectMarkdownParser(
     else configs.push(extension as MarkdownConfig)
   }
   flatten(extensions)
-  const owners = configs.filter((config) => guarded.has(config))
+  const owners = configs
+    .map((config) => guarded.get(config))
+    .filter((available) => available !== undefined)
   if (!owners.length) return base.configure(extensions)
-  // Keep node ids stable, but restore overridden/removed rules after quarantine.
-  const configure = () =>
-    base.configure(
-      configs.map((config) => {
-        if (guarded.get(config)?.() !== false) return config
-        return config.defineNodes
-          ? {
-              defineNodes: config.defineNodes.map((node) =>
-                typeof node === 'string'
-                  ? node
-                  : { name: node.name, block: node.block ?? false },
-              ),
-            }
-          : {}
-      }),
-    )
-  const result = configure()
-  let current = result
-  let create = current.createParse.bind(current)
-  let inline = current.parseInline.bind(current)
-  let parsing = 0
-  const attempt = <T>(run: () => T, restart: () => void): T => {
+  const activeOwners = () =>
+    owners.reduce((count, available) => count + Number(available()), 0)
+  const retry = <T>(run: () => T): T => {
+    let remaining = activeOwners()
     for (;;) {
       try {
-        parsing++
         return run()
       } catch (error) {
-        if (!(error instanceof FlavorSyntaxFailure)) throw error
-        current = configure()
-        create = current.createParse.bind(current)
-        inline = current.parseInline.bind(current)
-        restart()
-      } finally {
-        parsing--
+        const next = activeOwners()
+        if (!(error instanceof FlavorSyntaxFailure) || next >= remaining)
+          throw error
+        remaining = next
       }
     }
   }
+  // Keep node ids stable, but restore overridden/removed rules after quarantine.
+  const configure = () =>
+    retry(() =>
+      base.configure(
+        configs.map((config) => {
+          if (guarded.get(config)?.() !== false) return config
+          return config.defineNodes
+            ? {
+                defineNodes: config.defineNodes.map((node) =>
+                  typeof node === 'string'
+                    ? node
+                    : { name: node.name, block: node.block ?? false },
+                ),
+              }
+            : {}
+        }),
+      ),
+    )
+  const result = configure()
+  let current = result
+  let count = activeOwners()
+  let create = current.createParse.bind(current)
+  let inline = current.parseInline.bind(current)
+  let parsing = 0
+  const attempt = <T>(run: () => T): T =>
+    retry(() => {
+      try {
+        parsing++
+        if (activeOwners() !== count) {
+          current = configure()
+          count = activeOwners()
+          create = current.createParse.bind(current)
+          inline = current.parseInline.bind(current)
+        }
+        const value = run()
+        if (activeOwners() !== count) throw new FlavorSyntaxFailure()
+        return value
+      } finally {
+        parsing--
+      }
+    })
   result.createParse = (input, fragments, ranges) => {
     let parse: PartialParse | undefined
+    let version = current
+    // Fragments made before quarantine may contain the removed owner's nodes.
+    if (activeOwners() !== owners.length) fragments = []
     let stoppedAt: number | null = null
     const start = () => {
+      if (version !== current) {
+        fragments = []
+        parse = undefined
+        version = current
+      }
       if (!parse) {
         parse = create(input, fragments, ranges)
         if (stoppedAt !== null) parse.stopAt(stoppedAt)
       }
       return parse
     }
-    const restart = () => {
-      fragments = []
-      parse = undefined
-    }
-    attempt(start, restart)
+    attempt(start)
     return {
-      advance: () => attempt(() => start().advance(), restart),
+      advance: () => attempt(() => start().advance()),
       stopAt(position) {
         stoppedAt = position
-        attempt(() => start().stopAt(position), restart)
+        attempt(() => start().stopAt(position))
       },
       get parsedPos() {
-        return attempt(() => start().parsedPos, restart)
+        return attempt(() => start().parsedPos)
       },
       get stoppedAt() {
-        return attempt(() => start().stoppedAt, restart)
+        return attempt(() => start().stoppedAt)
       },
     }
   }
   result.parseInline = (text, offset) =>
-    parsing
-      ? inline(text, offset)
-      : attempt(
-          () => inline(text, offset),
-          () => {},
-        )
+    parsing ? inline(text, offset) : attempt(() => inline(text, offset))
   result.configure = (spec) => protectMarkdownParser(base, [extensions, spec])
   return result
 }

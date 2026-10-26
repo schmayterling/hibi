@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { NodeProp, TreeFragment } from '@lezer/common'
 import { parser } from '@lezer/markdown'
 import {
   guardMarkdownSyntax,
@@ -258,3 +259,129 @@ test('removing an owner during a partial parse restarts without stale wrappers',
   assert.equal(tree.toString(), parser.parse('one\n\ntwo\n').toString())
   assert.deepEqual(bad.errors, [])
 })
+
+for (const derived of [false, true]) {
+  test(`owned props failures recover during ${derived ? 'derived' : 'initial'} configuration`, () => {
+    const prop = new NodeProp()
+    const healthy = owner({ props: [prop.add({ Paragraph: 'healthy' })] })
+    const failures = [new Error('first props'), new Error('second props')]
+    const bad = failures.map((error, index) =>
+      owner([
+        {
+          defineNodes: [`Owned${index}`],
+          props: [prop.add({ Paragraph: 'partial' })],
+        },
+        {
+          props: [
+            () => {
+              throw error
+            },
+          ],
+        },
+      ]),
+    )
+    const base = derived ? protectedParser([healthy.config]) : parser
+    const configs = bad.map((item) => item.config)
+    const configured = derived
+      ? base.configure(configs)
+      : protectMarkdownParser(base, [healthy.config, configs])
+    const tree = configured.parse('**strong**')
+    assert.equal(tree.toString(), parser.parse('**strong**').toString())
+    assert.equal(tree.topNode.firstChild.type.prop(prop), 'healthy')
+    assert.deepEqual(healthy.errors, [])
+    for (const [index, item] of bad.entries()) {
+      assert.deepEqual(item.errors, [failures[index]])
+      assert.ok(
+        configured.nodeSet.types.some((type) => type.name === `Owned${index}`),
+      )
+    }
+  })
+}
+
+test('recovery quarantines successive props owners and discards their partial props', () => {
+  const prop = new NodeProp()
+  let armed = false
+  const failures = [new Error('first props'), new Error('second props')]
+  const bad = failures.map((error) =>
+    owner({
+      props: [
+        prop.add((type) => {
+          if (armed && type.name === 'Paragraph') throw error
+          return 'partial'
+        }),
+      ],
+    }),
+  )
+  const first = owner({
+    parseInline: [
+      {
+        name: 'Fault',
+        parse() {
+          armed = true
+          throw Error('first parser')
+        },
+      },
+    ],
+  })
+  const healthy = owner({ props: [prop.add({ Paragraph: 'healthy' })] })
+  const configured = protectedParser([
+    healthy.config,
+    ...bad.map((item) => item.config),
+    first.config,
+  ])
+  const tree = configured.parse('**strong**')
+  assert.equal(tree.toString(), parser.parse('**strong**').toString())
+  assert.equal(tree.topNode.firstChild.type.prop(prop), 'healthy')
+  for (const [index, item] of bad.entries())
+    assert.deepEqual(item.errors, [failures[index]])
+  assert.equal(first.errors.length, 1)
+  assert.deepEqual(healthy.errors, [])
+})
+
+for (const reuse of [false, true]) {
+  test(`quarantine discards ${reuse ? 'old fragments' : 'interleaved partial nodes'}`, () => {
+    let armed = false
+    const bad = owner({
+      defineNodes: ['Old'],
+      parseInline: [
+        {
+          name: 'Old',
+          parse(cx, next, pos) {
+            if (armed && cx.slice(cx.offset, cx.end).includes('explode'))
+              throw Error('late fault')
+            return next === 126
+              ? cx.addElement(cx.elt('Old', pos, pos + 1))
+              : -1
+          },
+        },
+      ],
+    })
+    const configured = protectedParser([bad.config])
+    const source = `${'~before~ **strong**\n\n'.repeat(60)}explode\n`
+    const old = configured.parse(source)
+    assert.match(old.toString(), /Old/)
+    const a = configured.startParse(source),
+      b = configured.startParse(source)
+    for (let step = 0; step < 3; step++) {
+      assert.equal(a.advance(), null)
+      assert.equal(b.advance(), null)
+    }
+    const finish = (parse) => {
+      let tree
+      for (let step = 0; !tree && step < 500; step++) tree = parse.advance()
+      assert.ok(tree, 'parse must finish')
+      return tree
+    }
+    armed = true
+    const expected = parser.parse(source).toString()
+    assert.equal(finish(a).toString(), expected)
+    assert.equal(
+      (reuse
+        ? configured.parse(source, TreeFragment.addTree(old))
+        : finish(b)
+      ).toString(),
+      expected,
+    )
+    assert.equal(bad.errors.length, 1)
+  })
+}

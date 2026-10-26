@@ -9,9 +9,14 @@ import { waitForAsync } from './poll.mjs'
 
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 
-for (const mode of ['source', 'formatted']) {
+for (const [mode, cascade] of [
+  ['source', false],
+  ['formatted', false],
+  ['source', true],
+  ['formatted', true],
+]) {
   for (const newline of ['\n', '\r\n']) {
-    test(`${mode} parser failure retains ${newline === '\n' ? 'lf' : 'crlf'} typing, undo, and unrelated registrations`, {
+    test(`${mode} ${cascade ? 'parser and props' : 'parser'} failure retains ${newline === '\n' ? 'lf' : 'crlf'} typing, undo, and unrelated registrations`, {
       timeout: 90000,
     }, async (t) => {
       const folder = await mkdtemp(join(tmpdir(), 'hibi-parser-fault-'))
@@ -57,9 +62,11 @@ for (const mode of ['source', 'formatted']) {
         `export default sdk => ({ start(context) {
         const delimiter = {resolve:'Proof',mark:'ProofMark'}
         let old
+        if (${cascade}) context.editor.registerFlavor({id:'props',name:'Props',kind:'syntax',description:'Proof',detect:()=>true,
+          syntax:{props:[()=>{if(window.propsArmed){window.propFailures=(window.propFailures||0)+1;throw Error('props proof failure')}return null}]}})
         const flavor = () => ({id:'bad',name:'Bad',kind:'syntax',description:'Proof',detect:()=>true,
           syntax:{defineNodes:['Proof','ProofMark','Partial'],parseInline:[{name:'Proof',parse(cx,next,pos){
-            if(window.throwNow){window.parseFailures=(window.parseFailures||0)+1;cx.addElement(cx.elt('Partial',pos,pos+1));throw Error('parser proof failure')}
+            if(window.throwNow){window.parseFailures=(window.parseFailures||0)+1;window.propsArmed=${cascade};cx.addElement(cx.elt('Partial',pos,pos+1));throw Error('parser proof failure')}
             if(next!==61||cx.char(pos+1)!==61)return -1
             return cx.addDelimiter(delimiter,pos,pos+2,true,true)
           }}]},render:[{nodes:['Proof'],decorate(node,out){out.mark(node.from+2,node.to-2,{class:'fault-proof'})}},{nodes:['Partial'],decorate(node,out){out.mark(node.from,node.to,{class:'partial-proof'})}}]})
@@ -135,7 +142,7 @@ for (const mode of ['source', 'formatted']) {
       await session.send('Emulation.setFocusEmulationEnabled', {
         enabled: true,
       })
-      await page.evaluate((selector) => {
+      const at = await page.evaluate((selector) => {
         const view = document.querySelector(selector).cmTile.root.view
         const at = view.state.doc.toString().indexOf('proof') + 1
         view.dispatch({ selection: { anchor: at } })
@@ -165,6 +172,24 @@ for (const mode of ['source', 'formatted']) {
         .filter({ hasText: 'parser-proof.bad: parser proof failure' })
         .waitFor()
       assert.equal(await page.evaluate(() => window.parseFailures), 1)
+      assert.equal(
+        await page.evaluate(() => window.propFailures ?? 0),
+        Number(cascade),
+      )
+      assert.equal(
+        await page.evaluate(
+          (selector) =>
+            document.querySelector(selector).cmTile.root.view.state.selection
+              .main.head,
+          selector,
+        ),
+        at + 1,
+      )
+      if (cascade)
+        await page
+          .locator('.toast')
+          .filter({ hasText: 'parser-proof.props: props proof failure' })
+          .waitFor()
       assert.deepEqual(errors, [])
       await pressShortcut(app, `${mod}+z`)
       await waitForAsync(

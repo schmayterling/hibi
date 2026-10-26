@@ -70,8 +70,8 @@ test('typing coalesces formatting checks without delaying document changes or un
   assert.equal(result.redone, 'hello')
 })
 
-test('multi-line text input in the visual editor pastes the text in one edit', {
-  timeout: 60000,
+test('multi-line text input in the visual editor makes the browser edit in one step', {
+  timeout: 120000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-rich-lines-'))
   const app = await launchBenchmarkApp(profile)
@@ -86,71 +86,233 @@ test('multi-line text input in the visual editor pastes the text in one edit', {
     exact: true,
   })
   await page.evaluate(() => {
-    const probe = { prevented: [], inputs: [], transactions: 0 }
-    window.richLineInput = probe
+    const editor = document.querySelector('.tiptap').editor
+    const handlers = editor.options.editorProps.handleDOMEvents
+    const probe = { prevented: [], inputs: [], steps: [] }
     window.addEventListener('beforeinput', (event) =>
       probe.prevented.push(event.defaultPrevented),
     )
-    window.addEventListener('input', (event) =>
-      probe.inputs.push([event.inputType, event.data]),
-    )
-    document
-      .querySelector('.tiptap')
-      .editor.on('transaction', ({ transaction }) => {
-        if (transaction.docChanged) probe.transactions++
+    window.addEventListener('input', (event) => probe.inputs.push(event.data))
+    editor.on('transaction', ({ transaction }) => {
+      if (transaction.docChanged) probe.steps.push(transaction.steps.length)
+    })
+    // `|` marks the caret and `[` `]` a selection. `browser` leaves every
+    // input to the browser, as the editor did before.
+    window.richLines = (html, select, browser) => {
+      editor.setOptions({
+        editorProps: {
+          ...editor.options.editorProps,
+          handleDOMEvents: {
+            ...handlers,
+            beforeinput: browser ? () => false : handlers.beforeinput,
+          },
+        },
       })
-  })
-  const insert = async (input) => {
-    await rich.press('ControlOrMeta+a')
-    await page.evaluate(() =>
-      Object.assign(window.richLineInput, {
-        prevented: [],
-        inputs: [],
-        transactions: 0,
-      }),
-    )
-    await input()
-    return page.evaluate(() => {
-      const editor = document.querySelector('.tiptap').editor
+      editor.commands.setContent(html, { contentType: 'html' })
+      const marks = []
+      editor.state.doc.descendants((node, pos) => {
+        for (const match of node.text?.matchAll(/[|[\]]/g) ?? [])
+          marks.push(pos + match.index)
+      })
+      const tr = editor.state.tr
+      for (const pos of [...marks].reverse()) tr.delete(pos, pos + 1)
+      editor.view.dispatch(tr)
+      const [from, to = from] = marks.map((pos, index) => pos - index)
+      if (select === 'cells') {
+        const cells = []
+        editor.state.doc.descendants((node, pos) => {
+          if (node.type.name === 'tableCell') cells.push(pos)
+        })
+        editor.commands.setCellSelection({
+          anchorCell: cells[0],
+          headCell: cells.at(-1),
+        })
+      } else editor.commands.setTextSelection({ from, to })
+      if (select === 'bold') editor.commands.setMark('bold')
+      Object.assign(probe, { prevented: [], inputs: [], steps: [] })
+      const { $to } = editor.state.selection
+      return $to.parent.textBetween($to.parentOffset, $to.parent.content.size)
+    }
+    window.richLinesResult = () => {
+      const { $head } = editor.state.selection
       return {
-        ...window.richLineInput,
+        ...probe,
         doc: editor.getJSON(),
         markdown: editor.getMarkdown(),
+        caret: [
+          $head.parent.textBetween(0, $head.parentOffset),
+          $head.parent.textBetween(
+            $head.parentOffset,
+            $head.parent.content.size,
+          ),
+        ],
       }
-    })
+    }
+  })
+  const table =
+    '<table><tbody><tr><td><p>a|</p></td><td><p>b</p></td></tr><tr><td><p>c</p></td><td><p>d</p></td></tr></tbody></table>'
+  // [case, document, input, selection], then whether the editor handles it.
+  const cases = [
+    [
+      'markdown',
+      '<p>|</p>',
+      'words **bold** _em_ `code` [l](https://e.test) <b>h</b>\n# no\n- item\n> quote\n1. one\n\nend',
+    ],
+    ['paragraph', '<p>start|END</p>', 'a\r\n\nb\rc'],
+    ['heading middle', '<h2>st|art</h2>', '1\n\n2'],
+    ['heading end', '<h2>start|</h2><p>z</p>', 'a\nb\n'],
+    ['list', '<ul><li><p>start|END</p></li></ul>', 'a\n\nb'],
+    [
+      'list end',
+      '<ol><li><p>one|</p></li><li><p>two</p></li></ol>',
+      'a\n\nb\n\nc',
+    ],
+    ['item paragraphs', '<ul><li><p>fi|rst</p><p>second</p></li></ul>', 'a\nb'],
+    [
+      'task',
+      '<ul data-type="taskList"><li data-type="taskItem" data-checked="true"><p>ta|sk</p></li></ul>',
+      'a\nb',
+    ],
+    [
+      'nested list',
+      '<ul><li><p>x</p><ul><li><p>y|</p></li></ul></li></ul>',
+      'a\nb',
+    ],
+    ['quote', '<blockquote><p>start|</p></blockquote>', 'a\n\nb'],
+    ['code', '<pre><code>s|e</code></pre>', '**l**\r\n\t b\rc\n'],
+    ['cell', table, 'one\n\ntwo'],
+    ['selection', '<p>before [MIDDLE] after</p>', 'one\ntwo'],
+    ['bold', '<p><strong>a|b</strong></p>', 'X\nY'],
+    ['link end', '<p>x<a href="https://e.test">ab|</a>z</p>', 'X\nY'],
+    ['code end', '<p>x<code>ab|</code></p>', 'X\nY'],
+    ['stored mark', '<p>|</p>', 'alpha\nbeta', 'bold'],
+    ['cells', table, 'one\ntwo', 'cells', false],
+    ['blocks', '<p>ab[c</p><p>d]ef</p>', 'X\nY', undefined, false],
+    [
+      'nested list end',
+      '<ul><li><p>x</p><ul><li><p>y|</p></li></ul></li></ul>',
+      'a\n\nb',
+      undefined,
+      false,
+    ],
+    ['single line', '<p>a|</p>', 'one line', undefined, false],
+  ]
+  for (const [what, html, text, select, handled = true] of cases) {
+    const results = []
+    for (const browser of [true, false]) {
+      await rich.focus()
+      const rest = await page.evaluate(
+        (args) => window.richLines(...args),
+        [html, select, browser],
+      )
+      await page.keyboard.insertText(text)
+      results.push({
+        rest,
+        ...(await page.evaluate(() => window.richLinesResult())),
+      })
+    }
+    const [browser, typed] = results
+    assert.deepEqual(
+      [typed.doc, typed.markdown],
+      [browser.doc, browser.markdown],
+      what,
+    )
+    assert.deepEqual(typed.prevented, [handled], what)
+    if (!handled) continue
+    // One step and the input signal, with the caret after the input (the
+    // browser's own edit can leave it a line early).
+    assert.deepEqual([typed.steps, typed.inputs], [[1], [text]], what)
+    const line = text.split(/\r\n?|\n/).at(-1)
+    assert.equal(typed.caret[1], typed.rest, what)
+    assert.ok(
+      what === 'code' ? typed.caret[0].endsWith(line) : typed.caret[0] === line,
+      `${what}: ${typed.caret}`,
+    )
   }
-  const text = Array.from({ length: 1000 }, (_, index) => `line ${index}`).join(
-    '\n\n',
-  )
-  const pasted = await insert(() =>
-    page.evaluate((text) => {
-      const clipboardData = new DataTransfer()
-      clipboardData.setData('text/plain', text)
-      document.querySelector('.tiptap').dispatchEvent(
-        new ClipboardEvent('paste', {
-          clipboardData,
+  const undone = []
+  for (const browser of [true, false]) {
+    await rich.focus()
+    await page.evaluate(
+      (browser) => window.richLines('<p>|</p>', undefined, browser),
+      browser,
+    )
+    await page.keyboard.insertText('hello')
+    await page.keyboard.insertText('one\ntwo')
+    undone.push(
+      await page.evaluate(() => {
+        const editor = document.querySelector('.tiptap').editor
+        editor.commands.undo()
+        return editor.getJSON()
+      }),
+    )
+  }
+  assert.deepEqual(undone[1], undone[0])
+})
+
+test('multi-line text input work in the visual editor stays linear in the lines', {
+  timeout: 60000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-rich-lines-work-'))
+  const app = await launchBenchmarkApp(profile)
+  t.after(async () => {
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  await waitForEditor(page)
+  const counts = await page.evaluate(() => {
+    const editor = document.querySelector('.tiptap').editor
+    const mapping = Object.getPrototypeOf(editor.state.tr.mapping),
+      map = mapping.map
+    const counts = []
+    for (const lines of [500, 1000]) {
+      editor.commands.setContent('<p></p>', { contentType: 'html' })
+      editor.commands.setTextSelection(1)
+      const result = { lines, transactions: 0, steps: 0, maps: 0, mapped: 0 }
+      const count = ({ transaction }) => {
+        if (!transaction.docChanged) return
+        result.transactions++
+        result.steps += transaction.steps.length
+      }
+      editor.on('transaction', count)
+      mapping.map = function (...args) {
+        result.maps++
+        result.mapped += this.to - this.from
+        return map.apply(this, args)
+      }
+      try {
+        // Lines with markdown syntax, which paste rules would format.
+        const event = new InputEvent('beforeinput', {
+          inputType: 'insertText',
+          data: Array.from(
+            { length: lines },
+            (_, index) => `line **${index}** _${index}_ \`${index}\``,
+          ).join('\n'),
           bubbles: true,
           cancelable: true,
-        }),
-      )
-    }, text),
+        })
+        editor.view.dom.dispatchEvent(event)
+        result.prevented = event.defaultPrevented
+      } finally {
+        mapping.map = map
+        editor.off('transaction', count)
+      }
+      result.paragraphs = editor.state.doc.childCount
+      counts.push(result)
+    }
+    return counts
+  })
+  for (const result of counts)
+    assert.deepEqual(
+      [result.prevented, result.transactions, result.steps, result.paragraphs],
+      [true, 1, 1, result.lines],
+    )
+  // Twice the lines, at most twice the position mapping work.
+  const [small, large] = counts
+  assert.ok(
+    large.maps <= 2 * small.maps + 8 && large.mapped <= 2 * small.mapped + 8,
+    JSON.stringify(counts),
   )
-  const typed = await insert(() => page.keyboard.insertText(text))
-  assert.deepEqual(typed.prevented, [true])
-  // One transaction, the same document a paste makes, and the input signal.
-  assert.deepEqual(
-    [typed.transactions, pasted.transactions, typed.inputs],
-    [1, 1, [['insertText', text]]],
-  )
-  assert.deepEqual(typed.doc, pasted.doc)
-  assert.equal(typed.markdown, pasted.markdown)
-  await waitForAsync(
-    page,
-    async (markdown) => (await window.hibi.getDocument()).markdown === markdown,
-    typed.markdown,
-  )
-  const plain = await insert(() => page.keyboard.insertText('one line'))
-  assert.deepEqual([plain.prevented, plain.markdown], [[false], 'one line'])
 })
 
 test('visual typing after a source visit defers the hidden source and toolbar checks', {

@@ -103,6 +103,7 @@ import {
   type MarkdownPositionLookup,
 } from './markdown-positions'
 import { mountedDocumentEdits } from './mounted-document-edits'
+import { multiLineInput } from './multi-line-input'
 import './markdown-markers.css'
 import type { ReferenceValue } from '../../shared/source-references'
 import { createMarkdownSemantics } from './markdown-semantics'
@@ -598,27 +599,19 @@ export function MarkdownEditor({
           },
           beforeinput(view, event) {
             const text = event.data
-            if (
-              event.inputType !== 'insertText' ||
-              !text ||
-              !/[\r\n]/.test(text) ||
-              view.composing ||
-              !view.editable
-            )
-              return false
             // Chromium applies each line break of a text input as its own
-            // editing step, quadratic in the lines. Paste the text instead, in
-            // one transaction, and send the input signal the browser would have.
+            // editing step, quadratic in the lines. Make the same edit in one
+            // step, and send the input signal the browser would have.
+            const transaction =
+              event.inputType === 'insertText' &&
+              text &&
+              /[\r\n]/.test(text) &&
+              !view.composing &&
+              view.editable &&
+              multiLineInput(view, text)
+            if (!transaction) return false
             event.preventDefault()
-            const clipboardData = new DataTransfer()
-            clipboardData.setData('text/plain', text)
-            view.dom.dispatchEvent(
-              new ClipboardEvent('paste', {
-                clipboardData,
-                bubbles: true,
-                cancelable: true,
-              }),
-            )
+            view.dispatch(transaction)
             view.dom.dispatchEvent(
               new InputEvent('input', {
                 inputType: 'insertText',

@@ -1,8 +1,14 @@
 import { lazy } from 'react'
+import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import css from '../_shared/format-style.css?inline'
 import { localPreview, localRender } from '../_shared/local-preview'
 import { defineAddon } from '../api'
-import { Diagram, mermaidNode } from './Block'
+import {
+  Diagram,
+  editMermaidSource,
+  MermaidBlockContent,
+  mermaidNode,
+} from './Block'
 import manifest from './manifest'
 import { getPreferences, settingsEvent } from './preferences'
 import { diagramTheme, renderDiagram } from './render'
@@ -37,7 +43,24 @@ export default defineAddon({
     const styles = context.styles.register('preview', previewCss())
     const updateStyles = () => styles.update(previewCss())
     window.addEventListener(settingsEvent, updateStyles)
-    stop = () => window.removeEventListener(settingsEvent, updateStyles)
+    let formatted: { dispose: () => void } | undefined
+    const removeFormatted = formattedRegistry.register({
+      id: 'mermaid.blocks',
+      load: () =>
+        import('./formatted').then(({ diagramContribution }) => {
+          const loaded = diagramContribution(context, {
+            MermaidBlockContent,
+            editMermaidSource,
+          })
+          formatted = loaded
+          return loaded.contribution
+        }),
+    })
+    stop = () => {
+      window.removeEventListener(settingsEvent, updateStyles)
+      removeFormatted()
+      formatted?.dispose()
+    }
     context.editor.registerCodeLanguage({
       id: 'mermaid',
       aliases: manifest.fileExtensions,

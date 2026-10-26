@@ -3,8 +3,18 @@ import type { Node } from '@tiptap/pm/model'
 import { Plugin, PluginKey, type Transaction } from '@tiptap/pm/state'
 import { type Mappable, ReplaceStep } from '@tiptap/pm/transform'
 import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view'
-import type { TableLayout } from '../../shared/table-layout'
+import {
+  type TableLayout,
+  type TableSize,
+  tableSizeChanges,
+} from '../../shared/table-layout'
 import { richSourceEcho } from './rich-source-session'
+import {
+  tableKey as layoutKey,
+  readTableLayouts,
+  storedTableLayouts,
+  updateTableLayouts,
+} from './table-layout-store'
 
 type Axis = 'column' | 'row'
 type Handle = { table: number; axis: Axis; index: number }
@@ -32,8 +42,6 @@ type Meta = {
 const key = new PluginKey<State>('tableLayout')
 const EDGE = 5
 const MIN = { column: 40, row: 24 }
-// Sizes are view state, not Markdown: they survive tab switches in this window.
-const session = new Map<string, TableLayout[]>()
 
 function tablesIn(doc: Node) {
   const found: { pos: number; node: Node }[] = []
@@ -51,14 +59,11 @@ const columnCount = (table: Node) => table.firstChild?.childCount ?? 0
 
 /** Ordinal plus a hash of the header row, so edits elsewhere keep sizes. */
 function tableKey(index: number, table: Node) {
-  let text = String(columnCount(table))
+  const header: string[] = []
   table.firstChild?.forEach((cell) => {
-    text += `\t${cell.textContent}`
+    header.push(cell.textContent)
   })
-  let hash = 0x811c9dc5
-  for (let i = 0; i < text.length; i++)
-    hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193)
-  return `${index}:${(hash >>> 0).toString(36)}`
+  return layoutKey(index, header)
 }
 
 function bind(doc: Node, stored: TableLayout[], tracked: Sized[]): Sized[] {
@@ -560,7 +565,7 @@ export const tableLayout = Extension.create<{ tabId: string }>({
         },
         view(view) {
           let timer: ReturnType<typeof setTimeout> | undefined
-          let written = JSON.stringify(session.get(tabId) ?? [])
+          let written = JSON.stringify(storedTableLayouts(tabId) ?? [])
           const save = () => {
             clearTimeout(timer)
             timer = undefined
@@ -569,17 +574,33 @@ export const tableLayout = Extension.create<{ tabId: string }>({
             const tables = layout(state, view.state.doc)
             const json = JSON.stringify(tables)
             if (json === written) return
+            const previous = JSON.parse(written) as TableLayout[]
             written = json
-            session.set(tabId, tables)
-            void window.hibi
-              .writeTableLayout(tabId, tables)
-              .catch((error: unknown) =>
-                console.error('table sizes could not be saved:', error),
+            // Only the sizes this editor changed: sizes other views and
+            // windows stored since stay as they are.
+            const before = new Map(previous.map((table) => [table.key, table]))
+            const keys = new Set(tables.map((table) => table.key))
+            const set: TableSize[] = []
+            for (const table of tables)
+              set.push(
+                ...tableSizeChanges(
+                  before.get(table.key) ?? {
+                    key: table.key,
+                    columns: null,
+                    rows: null,
+                  },
+                  table,
+                ),
               )
+            updateTableLayouts(tabId, previous, {
+              remove: previous
+                .filter((table) => !keys.has(table.key))
+                .map((table) => table.key),
+              put: [],
+              set,
+            })
           }
-          void Promise.resolve(
-            session.get(tabId) ?? window.hibi.readTableLayout(tabId),
-          ).then(
+          void Promise.resolve(readTableLayouts(tabId)).then(
             (tables) => {
               if (!tables?.length || view.isDestroyed) return
               written = JSON.stringify(tables)

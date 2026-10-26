@@ -50,19 +50,77 @@ function TypstForm({
   )
 }
 
+/** Ask for changed Typst block source; resolves to null when canceled. */
+export function editTypstSource(context: AddonContext, source: string) {
+  return context.dialogs.open<string>({
+    title: 'Edit Typst block',
+    size: 'wide',
+    content: ({ close }) => <TypstForm source={source} close={close} />,
+  }).result
+}
+
+/** A Typst block's heading actions and preview, in either formatted view. */
+export function TypstBlockContent({
+  source,
+  context,
+  onEdit,
+}: {
+  source: string
+  context: AddonContext
+  onEdit: () => void
+}) {
+  const documentId = useSyncExternalStore(
+    context.editor.onDocumentChange,
+    () => context.editor.getDocument()?.id,
+  )
+  async function pdf() {
+    try {
+      const path = await context.native.invoke<string | null>('pdf', {
+        source,
+        documentId,
+        block: true,
+        compiler: systemCompilerEnabled() ? 'system' : 'bundled',
+      })
+      if (path) context.notify(`Exported PDF to ${path}`)
+    } catch (error) {
+      context.toasts.show({
+        message:
+          error instanceof Error ? error.message : 'Could not export Typst.',
+        variant: 'error',
+      })
+    }
+  }
+  return (
+    <>
+      <div className="typst-block-heading">
+        <span>Typst</span>
+        <div>
+          <IconButton aria-label="Edit Typst block" onClick={onEdit}>
+            <Pencil size={16} />
+          </IconButton>
+          <IconButton
+            aria-label="Export Typst block PDF"
+            onClick={() => void pdf()}
+          >
+            <FileDown size={16} />
+          </IconButton>
+        </div>
+      </div>
+      <TypstPreview
+        value={source}
+        documentId={documentId}
+        context={context}
+        block
+      />
+    </>
+  )
+}
+
 export function typstNode(context: AddonContext) {
   function View({ node, editor, getPos, updateAttributes }: NodeViewProps) {
     const source = String(node.attrs.source ?? '')
-    const documentId = useSyncExternalStore(
-      context.editor.onDocumentChange,
-      () => context.editor.getDocument()?.id,
-    )
     async function edit() {
-      const value = await context.dialogs.open<string>({
-        title: 'Edit Typst block',
-        size: 'wide',
-        content: ({ close }) => <TypstForm source={source} close={close} />,
-      }).result
+      const value = await editTypstSource(context, source)
       if (value === null || editor.isDestroyed) return
       const position = getPos()
       if (
@@ -71,47 +129,12 @@ export function typstNode(context: AddonContext) {
       )
         updateAttributes({ source: value })
     }
-    async function pdf() {
-      try {
-        const path = await context.native.invoke<string | null>('pdf', {
-          source,
-          documentId,
-          block: true,
-          compiler: systemCompilerEnabled() ? 'system' : 'bundled',
-        })
-        if (path) context.notify(`Exported PDF to ${path}`)
-      } catch (error) {
-        context.toasts.show({
-          message:
-            error instanceof Error ? error.message : 'Could not export Typst.',
-          variant: 'error',
-        })
-      }
-    }
     return (
       <NodeViewWrapper className="typst-block" contentEditable={false}>
-        <div className="typst-block-heading">
-          <span>Typst</span>
-          <div>
-            <IconButton
-              aria-label="Edit Typst block"
-              onClick={() => void edit()}
-            >
-              <Pencil size={16} />
-            </IconButton>
-            <IconButton
-              aria-label="Export Typst block PDF"
-              onClick={() => void pdf()}
-            >
-              <FileDown size={16} />
-            </IconButton>
-          </div>
-        </div>
-        <TypstPreview
-          value={source}
-          documentId={documentId}
+        <TypstBlockContent
+          source={source}
           context={context}
-          block
+          onEdit={() => void edit()}
         />
       </NodeViewWrapper>
     )

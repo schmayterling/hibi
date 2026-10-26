@@ -18,6 +18,10 @@ import {
 import { getDocumentSourceFor, getDocumentTabs } from './document'
 import { documentExtensions } from './document-types'
 import {
+  observeKnownWorkspaces,
+  workspaceIndexCacheReady,
+} from './recent-workspaces'
+import {
   isCurrentWorkspaceTarget,
   listenWorkspaceChanges,
   workspaceChangeCursor,
@@ -224,9 +228,14 @@ function stop() {
   extensions = ''
 }
 app.on('before-quit', stop)
+observeKnownWorkspaces((known) => {
+  if (client && !known.some((item) => item.path === root)) stop()
+  return stopping.then(() => {})
+})
 listenWorkspaceChanges((event) => {
   if (
     event.kind === 'resync' ||
+    event.paths === null ||
     event.paths?.some(
       (path) => path === '.hibi/ignore' || path === '.hibiignore',
     )
@@ -333,9 +342,6 @@ export async function queryWorkspaceText(
   }
   const versions = JSON.stringify(getVersions())
   const supported = documentExtensions()
-  const key = JSON.stringify(supported)
-  if (client && (root !== selected || extensions !== key || client.failed))
-    stop()
   let session: Session | undefined
   if (request.cursor !== undefined) {
     session = cursors.get(request.cursor)
@@ -365,12 +371,27 @@ export async function queryWorkspaceText(
       }
       const generation = ++requestGeneration
       if (group) latestGroups.set(group, generation)
+      const showAllFiles = await showAllWorkspaceFiles()
+      const key = JSON.stringify([supported, showAllFiles])
+      if (group && latestGroups.get(group) !== generation) throw changed()
+      if (
+        client &&
+        (root !== selected || extensions !== key || client.failed)
+      ) {
+        stop()
+        if (group) latestGroups.set(group, generation)
+      }
       if (!client) {
-        const showAllFiles = await showAllWorkspaceFiles()
         await stopping
+        await workspaceIndexCacheReady()
+        const current = client as SearchWorker | null
         if (
           !isCurrentWorkspaceTarget(request.target) ||
-          (group && latestGroups.get(group) !== generation)
+          workspaceChangeCursor().sequence !== before.sequence ||
+          workspaceIndexRevision() !== revision ||
+          (group && latestGroups.get(group) !== generation) ||
+          (current &&
+            (root !== selected || extensions !== key || current.failed))
         )
           throw changed()
         if (!client) {

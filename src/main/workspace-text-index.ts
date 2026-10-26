@@ -92,6 +92,9 @@ export class WorkspaceTextIndex {
     maxChunkUnits: 0,
     openFiles: 0,
     maxOpenFiles: 0,
+    gramProbes: 0,
+    postingSamples: 0,
+    maxGramPostingSamples: 0,
   }
 
   private constructor(
@@ -130,12 +133,10 @@ export class WorkspaceTextIndex {
         text, tokenize='trigram case_sensitive 1',
         content='', contentless_delete=1, detail=none
       );
-      CREATE VIRTUAL TABLE IF NOT EXISTS vocabulary USING fts5vocab(text_index,row);
       CREATE VIRTUAL TABLE IF NOT EXISTS path_index USING fts5(
         text, tokenize='trigram case_sensitive 1',
         content='', contentless_delete=1, detail=none
       );
-      CREATE VIRTUAL TABLE IF NOT EXISTS path_vocabulary USING fts5vocab(path_index,row);
       CREATE TEMP TABLE crawl(path TEXT PRIMARY KEY);
       CREATE TEMP TABLE seen(
         session TEXT, path TEXT, PRIMARY KEY(session,path)
@@ -297,6 +298,9 @@ export class WorkspaceTextIndex {
       try {
         const full = base ? this.nativePath(base) : this.options.root
         const info = await lstat(full, { bigint: true })
+        if ((await realpath(full)) !== full)
+          throw Object.assign(stale(), { code: 'ENOENT' })
+        if (!base && !info.isDirectory()) throw stale()
         if (!info.isSymbolicLink() && info.isFile() && this.supported(base))
           this.remember(base, info)
         else if (
@@ -329,6 +333,7 @@ export class WorkspaceTextIndex {
         }
       } catch (error) {
         if (
+          !base ||
           !['ENOENT', 'ENOTSUP'].includes(
             (error as NodeJS.ErrnoException).code ?? '',
           )
@@ -337,6 +342,12 @@ export class WorkspaceTextIndex {
       }
       this.prepare('DELETE FROM crawl WHERE path=?').run(base)
       yield
+    }
+    try {
+      if (!(await lstat(this.options.root)).isDirectory())
+        this.crawlFailed = true
+    } catch {
+      this.crawlFailed = true
     }
     if (!this.crawlFailed) {
       let after = 0
@@ -390,6 +401,8 @@ export class WorkspaceTextIndex {
         try {
           const before = await handle.stat({ bigint: true })
           const resolved = await realpath(file)
+          if (resolved !== file)
+            throw Object.assign(stale(), { code: 'ENOENT' })
           const named = await lstat(file, { bigint: true })
           if (
             !before.isFile() ||
@@ -608,18 +621,26 @@ export class WorkspaceTextIndex {
   private gram(query: string, paths = false): string | null {
     let selected: string | null = null
     let frequency = Infinity
+    const table = paths ? 'path_index' : 'text_index'
     for (const gram of workspaceQueryGrams(query)) {
-      const row = this.prepare(
-        paths
-          ? 'SELECT doc FROM path_vocabulary WHERE term=?'
-          : 'SELECT doc FROM vocabulary WHERE term=?',
-      ).get(gram) as { doc: number } | undefined
-      if ((row?.doc ?? 0) < frequency) {
-        selected = gram
-        frequency = row?.doc ?? 0
+      const term = `"${gram.replaceAll('"', '""')}"`
+      const row = this.prepare(`
+        SELECT count(*) AS count FROM (
+          SELECT rowid FROM ${table} WHERE ${table} MATCH ? LIMIT 256
+        )`).get(term) as { count: number }
+      this.counters.gramProbes++
+      this.counters.postingSamples += row.count
+      this.counters.maxGramPostingSamples = Math.max(
+        this.counters.maxGramPostingSamples,
+        row.count,
+      )
+      if (row.count < frequency) {
+        selected = term
+        frequency = row.count
+        if (!frequency) break
       }
     }
-    return selected === null ? null : `"${selected.replaceAll('"', '""')}"`
+    return selected
   }
 
   private sourceFailed(error: unknown) {

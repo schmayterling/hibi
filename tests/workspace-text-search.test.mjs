@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -25,6 +33,7 @@ const host = {
   workers: new Set(),
   drafts: new Map(),
   preferenceBlock: null,
+  showAllFiles: false,
   closeOnPull: false,
   fault: null,
   sourceReads: 0,
@@ -49,7 +58,11 @@ await writeFile(
 )
 await writeFile(join(root, 'b.md'), '# Bravo\ncommon needle 世界你好\n')
 const bundle = await build({
-  entryPoints: ['src/main/workspace-metadata-query.ts'],
+  stdin: {
+    contents:
+      "export {queryWorkspaceReferences} from './src/main/workspace-metadata-query.ts'; export {rememberWorkspace,forgetWorkspace} from './src/main/recent-workspaces.ts'",
+    resolveDir: resolve('.'),
+  },
   bundle: true,
   platform: 'node',
   format: 'cjs',
@@ -138,7 +151,7 @@ const bundle = await build({
         }))
         build.onLoad({ filter: /.*/, namespace: 'text-settings' }, () => ({
           contents: `export const showAllWorkspaceFiles=async()=>{
-          await globalThis.__hibiTextHost.preferenceBlock;return false
+          await globalThis.__hibiTextHost.preferenceBlock;return globalThis.__hibiTextHost.showAllFiles
         }`,
           loader: 'js',
         }))
@@ -179,7 +192,8 @@ new Function('module', 'exports', 'require', bundle.outputFiles[0].text)(
   module.exports,
   createRequire(import.meta.url),
 )
-const { queryWorkspaceReferences } = module.exports
+const { queryWorkspaceReferences, rememberWorkspace, forgetWorkspace } =
+  module.exports
 const versions = () =>
   [...host.drafts].map(([tabId, draft]) => ({
     tabId,
@@ -478,4 +492,44 @@ test('literal matching remains complete when selected parser syntax is unsupport
   })
   assert.deepEqual(result.items, ['a.md'])
   assert.equal(result.complete, true)
+})
+
+test('show-all-files changes restart the worker in both directions', async () => {
+  const file = join(host.root, '.private.md')
+  await writeFile(file, 'visibility marker')
+  notify()
+  try {
+    assert.deepEqual((await collect({ query: 'visibility marker' })).items, [])
+    host.showAllFiles = true
+    assert.deepEqual((await collect({ query: 'visibility marker' })).items, [
+      '.private.md',
+    ])
+    host.showAllFiles = false
+    assert.deepEqual((await collect({ query: 'visibility marker' })).items, [])
+  } finally {
+    host.showAllFiles = false
+    await rm(file)
+    notify()
+  }
+})
+
+test('forgetting a workspace closes its actual worker before cache deletion and permits a later rebuild', async () => {
+  host.target = {
+    workspaceId: createHash('sha256').update(host.root).digest('hex'),
+    workspaceGeneration: host.target.workspaceGeneration + 1,
+  }
+  notify()
+  await rememberWorkspace(host.root)
+  assert.deepEqual((await collect({ query: 'Alpha' })).items, ['a.md'])
+  const directory = join(
+    profile,
+    'workspace-index-cache',
+    host.target.workspaceId,
+  )
+  await access(join(directory, 'text-v1.sqlite'))
+  await forgetWorkspace(host.root)
+  assert.equal(host.workers.size, 0)
+  await assert.rejects(access(directory), { code: 'ENOENT' })
+  assert.deepEqual((await collect({ query: 'Alpha' })).items, ['a.md'])
+  await access(join(directory, 'text-v1.sqlite'))
 })

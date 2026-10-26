@@ -111,7 +111,8 @@ await writeFile(
   }
   globalThis.searchIdle=()=>rpc('idle')
   globalThis.searchInvalidate=paths=>rpc('invalidate',{paths})
-  globalThis.searchTimed=async({query,includePaths=false,target=50})=>{
+  globalThis.searchTimed=async({query,includePaths=false,target=50,onePage=false})=>{
+    const before=onePage?await rpc('idle'):null
     const begin=performance.now()
     const id=await rpc('begin',{query,drafts:[],includePaths,
       cancel:new SharedArrayBuffer(4)})
@@ -120,10 +121,13 @@ await writeFile(
       const page=await rpc('page',{queryId:id,limit:Math.min(100,target-rows)})
       pages++;rows+=page.matches.length;hasMore=page.hasMore
       if(firstMs===null&&rows)firstMs=performance.now()-begin
-    }while(hasMore&&rows<target)
+    }while(hasMore&&rows<target&&!onePage)
     const totalMs=performance.now()-begin
     if(hasMore)await rpc('cancel',{queryId:id})
-    return{firstMs,totalMs,rows,pages,hasMore}
+    const after=onePage?await rpc('idle'):null
+    const work=before&&after?Object.fromEntries(
+      ['filesRead','bytesRead','gramProbes','postingSamples'].map(key=>[key,after[key]-before[key]])):undefined
+    return{firstMs,totalMs,rows,pages,hasMore,...(work?{work}:{})}
   }
   globalThis.searchMetrics=()=>{
     const result={
@@ -173,6 +177,7 @@ try {
     ['single-cjk', '語'],
     ['missing', 'unfindable-zqvdrr'],
     ['path', `note-${count - 1}.md`],
+    ['common-gram', 'word1234 word4321'],
   ]
   const queries = []
   for (const [kind, query] of cases) {
@@ -184,6 +189,7 @@ try {
           query,
           includePaths: kind === 'path',
           target: 50,
+          onePage: kind === 'common-gram',
         }),
       )
     queries.push({
@@ -191,7 +197,10 @@ try {
       query,
       returned: samples[0].rows,
       firstMs: summary(samples.map((sample) => sample.firstMs)),
-      first50Ms: summary(samples.map((sample) => sample.totalMs)),
+      ...(kind === 'common-gram'
+        ? { firstPageMs: summary(samples.map((sample) => sample.totalMs)) }
+        : { first50Ms: summary(samples.map((sample) => sample.totalMs)) }),
+      hasMore: samples[0].hasMore,
       samples,
     })
   }

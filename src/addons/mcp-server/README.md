@@ -32,7 +32,7 @@ Authorization: Bearer <access token>
 - `search_documents` finds documents whose path or text contains the given text, ignoring case, and shows up to three matching lines from each. Pass `nextCursor` back as `cursor`, with the same query, to continue through all results. use a client-unique `searchId` to cancel its previous query; add `cancel: true` to stop it. continuations expire after 15 minutes without use or when sources change.
 - `get_active_document` returns the name and text of the document open in the editor.
 
-Document reads return up to 1 MiB. Search indexes the whole workspace progressively, includes unsaved edits, and has no document or text-size ceiling. Search pages contain at most 100 results; continue with the cursor for more.
+Document reads return up to 1 MiB. Search indexes the whole workspace progressively, includes unsaved edits, and has no document or text-size ceiling. Search returns one work page per call, including an empty progress page while scanning; continue with the cursor for more. Pages contain at most 100 results. A stale source returns `truncated: true`; restart without a cursor when none is returned.
 
 ## Allow edits
 

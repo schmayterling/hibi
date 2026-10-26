@@ -6422,6 +6422,7 @@
     "src/main/history.ts"
   ],
   "ffebf17d6560": [
+    "src/addons/mcp-server/tools.ts",
     "src/main/workspace-text-index.ts",
     "src/main/workspace-text-search.ts",
     "src/main/workspace-text-worker.ts"

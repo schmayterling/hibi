@@ -240,6 +240,18 @@ function textResult(text: string, isError = false) {
   return { content: [{ type: 'text' as const, text }], isError }
 }
 
+function visibleDocument(
+  path: string,
+  ignored: Awaited<ReturnType<typeof workspaceIgnore>>,
+) {
+  try {
+    pathFor(path)
+    return isDocumentName(path, true) && !ignored.ignores(path)
+  } catch {
+    return false
+  }
+}
+
 async function openWorkspace() {
   const root = workspaceRoot()
   const target = currentWorkspaceTarget()
@@ -252,14 +264,7 @@ async function openWorkspace() {
   }
   const ignored = await workspaceIgnore(root)
   ensureCurrent()
-  const visible = (path: string) => {
-    try {
-      pathFor(path)
-      return isDocumentName(path, true) && !ignored.ignores(path)
-    } catch {
-      return false
-    }
-  }
+  const visible = (path: string) => visibleDocument(path, ignored)
   const documents: string[] = []
   const folders = new Set<string>([''])
   function collect(entries: WorkspaceEntry[]) {
@@ -325,48 +330,51 @@ async function searchDocuments(args: Record<string, unknown>) {
     throw new InvalidParams('Use a valid search cursor.')
   const target = currentWorkspaceTarget()
   const name = workspaceName()
-  if (!target || !name) throw new Error('Open a workspace in Hibi first.')
+  const root = workspaceRoot()
+  if (!target || !name || !root)
+    throw new Error('Open a workspace in Hibi first.')
   const limit = limitFor(args.limit, 20, 100)
+  const ignored = await workspaceIgnore(root)
   const { queryWorkspaceText } = await import(
     '../../main/workspace-text-search'
   )
-  const matches: {
-    path: string
-    lines: readonly { line: number; text: string }[]
-  }[] = []
-  let cursor = args.cursor as string | undefined
-  let complete = false
-  do {
-    const result = await queryWorkspaceText(
-      {
-        target,
-        kind: 'search-text',
-        query: args.query,
-        limit: limit - matches.length,
-        ...(cursor ? { cursor } : {}),
-        ...(args.searchId !== undefined ? { searchId: args.searchId } : {}),
-        ...(args.cancel !== undefined ? { cancel: args.cancel } : {}),
-      },
-      getOpenDocumentVersions,
-      'mcp',
-      true,
+  const result = isCurrentWorkspaceTarget(target)
+    ? await queryWorkspaceText(
+        {
+          target,
+          kind: 'search-text',
+          query: args.query,
+          limit,
+          ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+          ...(args.searchId !== undefined ? { searchId: args.searchId } : {}),
+          ...(args.cancel !== undefined ? { cancel: args.cancel } : {}),
+        },
+        getOpenDocumentVersions,
+        'mcp',
+        true,
+      )
+    : {
+        ok: false as const,
+        code: 'stale',
+        message: 'This search changed. Start again.',
+      }
+  if (!result.ok) {
+    if (result.code === 'unsupported' || result.code === 'limit-exceeded')
+      throw new InvalidParams(result.message)
+    if (result.code !== 'stale') throw new Error(result.message)
+    return textResult(
+      JSON.stringify({ workspace: name, matches: [], truncated: true }),
     )
-    if (!result.ok) {
-      if (result.code === 'unsupported' || result.code === 'limit-exceeded')
-        throw new InvalidParams(result.message)
-      throw new Error(result.message)
-    }
-    matches.push(
-      ...result.value.matches.map(({ path, lines }) => ({ path, lines })),
-    )
-    complete = result.value.complete
-    cursor = result.value.nextCursor ?? undefined
-  } while (cursor && matches.length < limit)
+  }
+  const matches = result.value.matches
+    .filter(({ path }) => visibleDocument(path, ignored))
+    .map(({ path, lines }) => ({ path, lines }))
+  const cursor = result.value.nextCursor
   return textResult(
     JSON.stringify({
       workspace: name,
       matches,
-      truncated: !!cursor || !complete,
+      truncated: !!cursor || !result.value.complete,
       ...(cursor ? { nextCursor: cursor } : {}),
     }),
   )

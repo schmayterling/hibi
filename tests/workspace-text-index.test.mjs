@@ -505,3 +505,78 @@ test('directory invalidation and stale cleanup use indexed ranges', async (t) =>
   } while (result.hasMore)
   assert.equal(f.store.counters.filesRead, reads)
 })
+
+test('case-only file and directory renames never return old spellings', async (t) => {
+  const f = await fixture(t, {
+    'Note.md': 'rename marker',
+    'Folder/child.md': 'folder marker',
+  })
+  await f.store.idle()
+  await rename(join(f.root, 'Note.md'), join(f.root, 'note.md'))
+  f.store.invalidate(['Note.md', 'note.md'])
+  assert.deepEqual((await search(f.store, 'rename marker')).paths, ['note.md'])
+  await rename(join(f.root, 'Folder'), join(f.root, 'folder'))
+  f.store.invalidate(['Folder', 'folder'])
+  assert.deepEqual((await search(f.store, 'folder marker')).paths, [
+    'folder/child.md',
+  ])
+  await f.store.idle()
+  assert.equal(
+    f.store.db.prepare('SELECT count(*) AS n FROM documents').get().n,
+    2,
+  )
+})
+
+test('an unavailable root retains postings and reuses them after remount', async (t) => {
+  const f = await fixture(t, { 'a.md': 'retained marker' })
+  await f.store.idle()
+  const indexed = f.store.counters.filesIndexed
+  const away = `${f.root}-unmounted`
+  await rename(f.root, away)
+  try {
+    f.store.invalidate(null)
+    await f.store.idle()
+    assert.equal(
+      f.store.db
+        .prepare('SELECT count(*) AS n FROM documents WHERE active IS NOT NULL')
+        .get().n,
+      1,
+    )
+    const missing = await search(f.store, 'retained')
+    assert.equal(missing.complete, false)
+    assert.deepEqual(missing.paths, [])
+  } finally {
+    await rename(away, f.root)
+  }
+  f.store.invalidate(null)
+  await f.store.idle()
+  assert.equal(f.store.counters.filesIndexed, indexed)
+  assert.deepEqual((await search(f.store, 'retained')).paths, ['a.md'])
+})
+
+test('common-gram planning samples at most eight bounded posting prefixes', async (t) => {
+  const pages = Object.fromEntries(
+    Array.from({ length: 600 }, (_, id) => [
+      `note-${id}.md`,
+      'word1234 word432 word321 common planning corpus',
+    ]),
+  )
+  const f = await fixture(t, pages)
+  await f.store.idle()
+  for (const query of [
+    'word1234 word4321',
+    'word'.repeat(16),
+    '你好'.repeat(500),
+  ]) {
+    assert.ok(workspaceQueryGrams(query).length <= 8)
+    const probes = f.store.counters.gramProbes
+    const postings = f.store.counters.postingSamples
+    const id = f.store.createQuery(query)
+    await f.store.page(id, 1)
+    await f.store.cancel(id)
+    assert.ok(f.store.counters.gramProbes - probes <= 8)
+    assert.ok(f.store.counters.postingSamples - postings <= 8 * 256)
+    assert.ok(f.store.counters.maxGramPostingSamples <= 256)
+  }
+  assert.equal(f.store.counters.maxGramPostingSamples, 256)
+})

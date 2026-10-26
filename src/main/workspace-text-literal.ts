@@ -221,13 +221,13 @@ export function workspaceQueryGrams(query: string): string[] {
       return [small[0] + workspaceShortSeparator + small[1]]
   }
   const grams = new Set<string>()
-  const stride = Math.max(1, Math.floor(folded.length / 32))
+  const stride = Math.max(1, Math.ceil((folded.length - 2) / 8))
   let pair = '',
     position = 0,
     next = 0
   for (const character of folded) {
     const gram = pair + character
-    if ([...pair].length === 2 && position >= next) {
+    if ([...pair].length === 2 && position >= next && grams.size < 8) {
       grams.add(gram)
       next = position + stride
     }

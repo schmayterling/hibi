@@ -20,6 +20,8 @@ Use `\$x$` or `\$$x$$` to write literal dollar-delimited text. Visual edits keep
 
 You can also insert equations from the toolbar or command palette. Click a rendered equation to edit it.
 
+In long notes, equations on screen render first. The others show their source for a moment while they render in the background, so you can start typing right away.
+
 Choose which math features to use in **Settings → Syntax**.
 
 Automatic flavor detection ignores dollar signs inside code and escaped dollar signs.

@@ -70,7 +70,7 @@ Reuse the [document format APIs](development/document-formats.md) for views, for
 
 ### LaTeX
 
-Keep the internal `math` ID stable for existing preferences and integrations. Markdown equations use KaTeX with `trust: false`, bounded macro expansion, and no shared user macros. Invalid equations show their source. Preserve complete `@font-face` rules and KaTeX math-family declarations in the editor and offline exports.
+Keep the internal `math` ID stable for existing preferences and integrations. Markdown equations use KaTeX with `trust: false`, bounded macro expansion, and no shared user macros. Invalid equations show their source. Equation views show their source until KaTeX output arrives: equations on screen render before the next paint, newly visible ones next, and the rest in idle slices. Output is cached by expression and display mode, up to about 8 million characters (larger outputs render on every mount), so remounts, undo, and exports reuse it. Pending display equations reserve the height they last rendered at, and equations are not scroll anchors, so surrounding text keeps its place while they render. Preserve complete `@font-face` rules and KaTeX math-family declarations in the editor and offline exports.
 
 Full `.tex` documents preview and export the PDF produced by an explicit Tectonic compilation. Use the current unsaved buffer and saved local inputs from the document's folder. Documentation-site export can use Pandoc 3.11 or newer when no matching compiled PDF is cached.
 

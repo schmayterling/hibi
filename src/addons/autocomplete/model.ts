@@ -443,7 +443,7 @@ export function createPersonalModel(options: PersonalModelOptions = {}) {
         (item) =>
           langs.includes(item.lang) &&
           typeof item.word === 'string' &&
-          item.word.length <= 64 &&
+          (item.custom === true || item.word.length <= 64) &&
           !/[\r\n]/.test(item.word) &&
           item.word
             .normalize('NFD')

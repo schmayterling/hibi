@@ -7,6 +7,7 @@ import { ADDON_TRUST_CHANNELS } from '../shared/addon-trust'
 import { ADDON_WINDOW_CHANNELS } from '../shared/addon-windows'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { BACKGROUND_CHANNELS } from '../shared/background'
+import { CLIPBOARD_CHANNELS } from '../shared/clipboard'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
 import { DEPENDENCY_CHANNELS } from '../shared/dependencies'
 import {
@@ -14,10 +15,10 @@ import {
   BOOTSTRAP_CHANNELS,
   type DesktopApi,
   DOCUMENT_CHANNELS,
-  MAX_DOCUMENT_BYTES,
 } from '../shared/desktop'
 import type { JournalCheckpoint } from '../shared/document-checkpoint'
 import { createDocumentJournal } from '../shared/document-journal'
+import type { DocumentTransferApi } from '../shared/document-transfer'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
 import type {
   WorkspaceChangeEvent,
@@ -34,6 +35,10 @@ import { DIAGNOSTIC_CHANNEL } from '../shared/local-diagnostics'
 import { MEDIA_CHANNELS } from '../shared/media'
 import { SELECTED_TEXT_CHANNELS } from '../shared/selected-text'
 import { SIDELOAD_CHANNELS } from '../shared/sideload'
+import type {
+  SourceTransferChunk,
+  SourceTransferRequest,
+} from '../shared/source-transfer'
 import { TABLE_LAYOUT_CHANNELS } from '../shared/table-layout'
 import { UI_CASE_CHANNEL } from '../shared/ui-case'
 import { UPDATE_CHANNELS } from '../shared/updates'
@@ -61,21 +66,54 @@ if (process.isMainFrame) {
   } catch {
     /* Diagnostics cannot prevent the document bridge from starting. */
   }
-  let checkpoint: ((tabId: string) => JournalCheckpoint) | undefined
+  let checkpoint:
+    | ((tabId: string) => JournalCheckpoint | Promise<JournalCheckpoint>)
+    | undefined
+  let checkpointRead:
+    | ((request: SourceTransferRequest) => SourceTransferChunk)
+    | undefined
+  let checkpointClose: ((request: SourceTransferRequest) => void) | undefined
   const journal = createDocumentJournal(
     (change) => transport.invoke(DOCUMENT_CHANNELS.append, change),
     {
       timeoutMs: 5000,
       retryDelays: [100, 500, 2000],
-      maximumCheckpointUnits: MAX_DOCUMENT_BYTES,
       checkpoint: (tabId) => {
         if (!checkpoint)
           throw new Error('Document recovery is not ready. Retry saving.')
         return checkpoint(tabId)
       },
       head: (tabId) => transport.invoke(DOCUMENT_CHANNELS.recoveryHead, tabId),
-      verify: (snapshot) =>
-        transport.invoke(DOCUMENT_CHANNELS.verifyCheckpoint, snapshot),
+      verify: async (snapshot, progress) => {
+        if (!checkpointRead)
+          throw new Error('Document recovery is not ready. Retry saving.')
+        let request: SourceTransferRequest = {
+          streamId: snapshot.streamId,
+          sequence: 0,
+        }
+        try {
+          await transport.invoke(DOCUMENT_CHANNELS.verifyCheckpoint, snapshot)
+          progress()
+          for (;;) {
+            const chunk = checkpointRead(request)
+            request = await transport.invoke(
+              DOCUMENT_CHANNELS.checkpointChunk,
+              chunk,
+            )
+            progress()
+            if (chunk.done) break
+          }
+          return await transport.invoke(
+            DOCUMENT_CHANNELS.checkpointFinish,
+            request,
+          )
+        } finally {
+          checkpointClose?.(request)
+          await transport
+            .invoke(DOCUMENT_CHANNELS.checkpointAbort, request)
+            .catch(() => {})
+        }
+      },
     },
   )
   const invoke: typeof transport.invoke = (channel, ...args) =>
@@ -190,7 +228,15 @@ if (process.isMainFrame) {
   for (const pending of [startupDocument, startupAddons, startupKnown])
     void pending.catch(() => {})
   let backgroundSettingsReady = false
-  contextBridge.exposeInMainWorld('hibi', {
+  contextBridge.exposeInMainWorld('hibiTransport', {
+    openDocumentTransfer: (tabId) =>
+      transport.invoke(DOCUMENT_CHANNELS.transferOpen, tabId),
+    readDocumentTransfer: (request) =>
+      transport.invoke(DOCUMENT_CHANNELS.transferRead, request),
+    finishDocumentTransfer: (request) =>
+      transport.invoke(DOCUMENT_CHANNELS.transferFinish, request),
+    abortDocumentTransfer: (request) =>
+      transport.invoke(DOCUMENT_CHANNELS.transferAbort, request),
     registerGlobalShortcut: (id, accelerator, token) =>
       ipcRenderer.invoke(
         GLOBAL_SHORTCUT_CHANNELS.register,
@@ -282,10 +328,15 @@ if (process.isMainFrame) {
     appendSourceOperation: journal.appendOperation,
     admitSourceOperation: journal.assertCapacity,
     getDocumentRecoveryState: journal.state,
-    onDocumentCheckpoint: (callback) => {
+    onDocumentCheckpoint: (callback, read, close) => {
       checkpoint = callback
+      checkpointRead = read
+      checkpointClose = close
       return () => {
-        if (checkpoint === callback) checkpoint = undefined
+        if (checkpoint !== callback) return
+        checkpoint = undefined
+        checkpointRead = undefined
+        checkpointClose = undefined
       }
     },
     flushDocumentChanges: journal.flush,
@@ -405,6 +456,14 @@ if (process.isMainFrame) {
     getLicenses: () => ipcRenderer.invoke(ABOUT_CHANNELS.licenses),
     getLicense: (id) => ipcRenderer.invoke(ABOUT_CHANNELS.license, id),
     openSponsor: () => ipcRenderer.invoke(ABOUT_CHANNELS.sponsor),
+    writeClipboardText: (text) =>
+      ipcRenderer.invoke(CLIPBOARD_CHANNELS.writeText, text),
+    copyWorkspacePaths: (paths, options) =>
+      ipcRenderer.invoke(
+        CLIPBOARD_CHANNELS.writeWorkspacePaths,
+        paths,
+        options,
+      ),
     setAppearance: (appearance) =>
       ipcRenderer.invoke(APPEARANCE_CHANNEL, appearance),
     getAddonStates: () => ipcRenderer.invoke(ADDON_CHANNELS.states),
@@ -449,6 +508,8 @@ if (process.isMainFrame) {
       ipcRenderer.invoke(ADDON_CHANNELS.invoke, id, method, input),
     queryAddon: (id, method, input) =>
       ipcRenderer.invoke(ADDON_CHANNELS.query, id, method, input),
+    invokeAddonProfile: (id, method, input) =>
+      ipcRenderer.invoke(ADDON_CHANNELS.profile, id, method, input),
     getWorkspace: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.get),
     getWorkspaceHeader: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.header),
     readWorkspaceViewPage: (request) =>
@@ -635,5 +696,5 @@ if (process.isMainFrame) {
     setHotkeyRecording: (recording) =>
       ipcRenderer.invoke(HOTKEY_CHANNELS.record, recording),
     onCommand: (callback) => subscribe(HOTKEY_CHANNELS.command, callback),
-  } satisfies DesktopApi)
+  } satisfies DesktopApi & DocumentTransferApi)
 }

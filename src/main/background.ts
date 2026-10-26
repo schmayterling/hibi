@@ -74,7 +74,9 @@ export class BackgroundMode {
     )
     try {
       tray.setToolTip('Hibi')
-      if (process.platform === 'win32') tray.on('click', this.actions.open)
+      // Windows: left click. Linux: StatusNotifierItem "Activate" (usually left
+      // click, desktop-dependent). macOS keeps click-to-open-menu.
+      if (process.platform !== 'darwin') tray.on('click', this.actions.open)
       tray.setContextMenu(this.menu())
       return tray
     } catch (error) {

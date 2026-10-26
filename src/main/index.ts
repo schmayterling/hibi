@@ -6,6 +6,7 @@ import type { IpcMainInvokeEvent, MenuItemConstructorOptions } from 'electron'
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   globalShortcut,
   ipcMain,
@@ -34,6 +35,7 @@ import { ADDON_TRUST_CHANNELS } from '../shared/addon-trust'
 import { ADDON_WINDOW_CHANNELS } from '../shared/addon-windows'
 import { ANALYSIS_CHANNELS } from '../shared/analysis'
 import { BACKGROUND_CHANNELS, QUICK_NOTE_COMMAND } from '../shared/background'
+import { CLIPBOARD_CHANNELS, MAX_CLIPBOARD_TEXT } from '../shared/clipboard'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
 import { DEPENDENCY_CHANNELS } from '../shared/dependencies'
 import {
@@ -41,14 +43,13 @@ import {
   type AppInfo,
   BOOTSTRAP_CHANNELS,
   DOCUMENT_CHANNELS,
-  MAX_DOCUMENT_BYTES,
 } from '../shared/desktop'
+import { journalHead } from '../shared/document-checkpoint'
+import { createCheckpointVerifier } from '../shared/document-checkpoint-stream'
 import {
-  journalHead,
-  parseJournalCheckpoint,
-  verifyJournalCheckpoint,
-} from '../shared/document-checkpoint'
-import { createJournalReceiver } from '../shared/document-journal'
+  createJournalReceiver,
+  MAX_JOURNAL_INSERT_UNITS,
+} from '../shared/document-journal'
 import { ASSOCIATION_CHANNELS } from '../shared/file-associations'
 import type { AddonId, WorkspaceTarget } from '../shared/foundation-contracts'
 import {
@@ -117,6 +118,7 @@ import {
   setAddonDeactivationHandler,
   setAddonStatesHandler,
   setAddonWindowOwners,
+  stopNativeAddons,
   windowAddonName,
 } from './addons'
 import { analysisService } from './analysis'
@@ -135,6 +137,7 @@ import {
   discardChanges,
   focusDocumentTab,
   getDocument,
+  getDocumentForTab,
   getDocumentPath,
   getDocumentPathForTab,
   getDocumentSource,
@@ -157,7 +160,9 @@ import {
   updateDocument,
   updateDocumentEdited,
 } from './document'
+import { createDocumentTransfers } from './document-transfer'
 import { isDocumentName } from './document-types'
+import { sweepSiteScratch } from './export-scratch'
 import { externalFileArguments } from './external-files'
 import {
   fileOperationDialogOpened,
@@ -165,7 +170,7 @@ import {
   withinFileOperation,
 } from './file-operation-dialog'
 import { GlobalShortcuts } from './global-shortcuts'
-import { listVersions, previewVersion } from './history'
+import { listVersions, previewVersion, readVersionChunks } from './history'
 import { HostCredentials } from './host-credentials'
 import { HostNetwork } from './host-network'
 import { HostSelectedIoService } from './host-selected-io'
@@ -241,7 +246,7 @@ import {
   workspaceRelativePath,
   workspaceRoot,
 } from './workspace'
-import { workspaceAction } from './workspace-actions'
+import { workspaceAction, workspaceClipboardPaths } from './workspace-actions'
 import {
   createWorkspaceBinary,
   createWorkspaceText,
@@ -647,7 +652,19 @@ if (process.env.NODE_ENV_ELECTRON_VITE === 'development')
       app.quit()
     }
   })
-app.on('will-quit', () => {
+let nativeStopping: Promise<void> | undefined
+let nativeStopped = false
+app.on('will-quit', (event) => {
+  if (!nativeStopped) {
+    event.preventDefault()
+    nativeStopping ??= stopNativeAddons()
+      .catch(console.error)
+      .finally(() => {
+        nativeStopped = true
+        app.quit()
+      })
+    return
+  }
   globalShortcuts.clear()
   background.dispose()
 })
@@ -876,6 +893,8 @@ function showStartupError(window: BrowserWindow | null = mainWindow): void {
 
 let windowSetupReady = false
 const appendDocumentChange = createJournalReceiver(getDocumentSourceFor)
+const checkpointVerifier = createCheckpointVerifier(getDocumentSourceFor)
+const documentTransfers = createDocumentTransfers()
 function createWindow(): void {
   if (!windowSetupReady) return
   closing = false
@@ -919,7 +938,11 @@ function createWindow(): void {
     addonHotkeys.clearRegistrations()
     installMenu()
   })
-  window.webContents.on('did-start-loading', () => analysisService.cancel())
+  window.webContents.on('did-start-loading', () => {
+    analysisService.cancel()
+    checkpointVerifier.clear()
+    documentTransfers.clear()
+  })
   window.webContents.on('render-process-gone', () => {
     backgroundSettingsReady = false
     stopRecording()
@@ -1338,6 +1361,7 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(async () => {
       startupMark('app-ready')
+      void sweepSiteScratch(app.getPath('userData')).catch(console.error)
       // Installed macOS apps already carry their full-resolution bundle icon.
       // A dock-sized development icon avoids re-encoding 1024px images at launch.
       if (process.platform === 'darwin' && !app.isPackaged)
@@ -1377,12 +1401,24 @@ if (!app.requestSingleInstanceLock()) {
           trustedWindow(args[0])
           if (!foundationsIpcBenchmark) {
             await ready
-            return listener(...args)
+            return documentTransfers.encode(
+              args[0].sender.id,
+              await listener(...args),
+              channel === DOCUMENT_CHANNELS.save ||
+                channel === DOCUMENT_CHANNELS.saveTarget ||
+                channel === DOCUMENT_CHANNELS.autosave,
+            )
           }
           foundationsIpcBenchmark.request(channel, args.slice(1))
           try {
             await ready
-            const result = await listener(...args)
+            const result = documentTransfers.encode(
+              args[0].sender.id,
+              await listener(...args),
+              channel === DOCUMENT_CHANNELS.save ||
+                channel === DOCUMENT_CHANNELS.saveTarget ||
+                channel === DOCUMENT_CHANNELS.autosave,
+            )
             foundationsIpcBenchmark.response(channel, result)
             return result
           } catch (error) {
@@ -1566,6 +1602,19 @@ if (!app.requestSingleInstanceLock()) {
         trustedWindow(event)
         return shell.openExternal(SPONSOR_URL)
       })
+      handle(CLIPBOARD_CHANNELS.writeText, (event, text: unknown) => {
+        trustedWindow(event)
+        if (typeof text !== 'string' || text.length > MAX_CLIPBOARD_TEXT)
+          throw new Error('Hibi could not copy this text.')
+        clipboard.writeText(text)
+      })
+      handle(
+        CLIPBOARD_CHANNELS.writeWorkspacePaths,
+        (event, paths: unknown, options: unknown) => {
+          trustedWindow(event)
+          clipboard.writeText(workspaceClipboardPaths(paths, options))
+        },
+      )
       if (import.meta.env.DEV)
         handle(
           'addons:development-manifest',
@@ -1824,8 +1873,28 @@ if (!app.requestSingleInstanceLock()) {
         ADDON_CHANNELS.query,
         (event, id: unknown, method: unknown, input: unknown) =>
           readAfterFileOperation(event, (window) =>
-            invokeAddon(window, id, method, input, true),
+            invokeAddon(window, id, method, input, 'query'),
           ),
+      )
+      handle(
+        ADDON_CHANNELS.profile,
+        (event, id: unknown, method: unknown, input: unknown) => {
+          if (closing) throw fileOperationUnavailable()
+          const operation = invokeAddon(
+            trustedWindow(event),
+            id,
+            method,
+            input,
+            'profile',
+          )
+          const completed = operation.then(
+            () => {},
+            () => {},
+          )
+          pendingFileOperations.add(completed)
+          void completed.then(() => pendingFileOperations.delete(completed))
+          return operation
+        },
       )
       handle(
         ADDON_WINDOW_CHANNELS.open,
@@ -1862,7 +1931,7 @@ if (!app.requestSingleInstanceLock()) {
           const { window, addonId } = addonWindowSender(event)
           return readAfterFileOperation(
             event,
-            () => invokeAddon(window, addonId, method, input, true),
+            () => invokeAddon(window, addonId, method, input, 'query'),
             window,
           )
         },
@@ -1965,6 +2034,23 @@ if (!app.requestSingleInstanceLock()) {
         recordingHotkey = value
         window.webContents.setIgnoreMenuShortcuts(value)
       })
+      handle(DOCUMENT_CHANNELS.transferOpen, (event, id: unknown) => {
+        if (typeof id !== 'string' || !id || id.length > 128)
+          throw new Error('Invalid document transfer identity.')
+        const document = getDocumentForTab(id)
+        if (!document)
+          throw new Error('The document source is not loaded. Try again.')
+        return documentTransfers.encode(event.sender.id, document, false, true)
+      })
+      handle(DOCUMENT_CHANNELS.transferRead, (event, request: unknown) =>
+        documentTransfers.read(event.sender.id, request),
+      )
+      handle(DOCUMENT_CHANNELS.transferFinish, (event, request: unknown) =>
+        documentTransfers.finish(event.sender.id, request),
+      )
+      handle(DOCUMENT_CHANNELS.transferAbort, (event, request: unknown) =>
+        documentTransfers.abort(event.sender.id, request),
+      )
       handle(DOCUMENT_CHANNELS.get, (event) => {
         trustedWindow(event)
         return getDocument()
@@ -2000,7 +2086,7 @@ if (!app.requestSingleInstanceLock()) {
       )
       handle(HISTORY_CHANNELS.restore, (event, id: unknown) =>
         runFileOperation(event, async (window) => {
-          const content = await previewVersion(getDocumentPath(), id)
+          const content = readVersionChunks(getDocumentPath(), id)
           if (!(await confirmDiscard(window))) return null
           return restoreDocument(window, content)
         }),
@@ -2353,6 +2439,11 @@ if (!app.requestSingleInstanceLock()) {
       )
       handle(DOCUMENT_CHANNELS.update, (event, value: unknown) => {
         const window = trustedWindow(event)
+        if (
+          typeof value !== 'string' ||
+          value.length > MAX_JOURNAL_INSERT_UNITS
+        )
+          throw new Error('Invalid document change.')
         updateDocument(value)
         updateDocumentEdited(window)
       })
@@ -2372,14 +2463,21 @@ if (!app.requestSingleInstanceLock()) {
         DOCUMENT_CHANNELS.verifyCheckpoint,
         (event, checkpoint: unknown) => {
           trustedWindow(event)
-          const parsed = parseJournalCheckpoint(checkpoint, MAX_DOCUMENT_BYTES)
-          return verifyJournalCheckpoint(
-            () => getDocumentSourceFor(parsed.tabId),
-            parsed,
-            MAX_DOCUMENT_BYTES,
-          )
+          return checkpointVerifier.begin(checkpoint)
         },
       )
+      handle(DOCUMENT_CHANNELS.checkpointChunk, (event, chunk: unknown) => {
+        trustedWindow(event)
+        return checkpointVerifier.append(chunk)
+      })
+      handle(DOCUMENT_CHANNELS.checkpointFinish, (event, request: unknown) => {
+        trustedWindow(event)
+        return checkpointVerifier.finish(request)
+      })
+      handle(DOCUMENT_CHANNELS.checkpointAbort, (event, request: unknown) => {
+        trustedWindow(event)
+        checkpointVerifier.abort(request)
+      })
       handle(DOCUMENT_CHANNELS.open, (event) =>
         runFileOperation(event, openDocument),
       )

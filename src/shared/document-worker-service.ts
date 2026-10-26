@@ -12,6 +12,11 @@ import { SourceStore } from './source-buffer.ts'
 import { SourceMaintenance } from './source-maintenance.ts'
 import type { ReferenceValue } from './source-references.ts'
 import { SourceSearchIndex } from './source-search-index.ts'
+import {
+  parseTransferHead,
+  parseTransferRequest,
+  SourceTransferReceiver,
+} from './source-transfer.ts'
 
 type FindRequest = Extract<DocumentWorkerRequest, { type: 'find' }>
 type MetadataRequest = Extract<DocumentWorkerRequest, { type: 'metadata' }>
@@ -32,6 +37,10 @@ const validSyntax = (
 export class DocumentWorkerService {
   readonly #post: (reply: DocumentWorkerReply) => void
   #store: SourceStore | null = null
+  #bootstrap: {
+    loader: ReturnType<typeof SourceStore.loader>
+    receiver: SourceTransferReceiver
+  } | null = null
   #maintenance: SourceMaintenance | null = null
   #epoch = ''
   #index: SourceSearchIndex | null = null
@@ -40,7 +49,8 @@ export class DocumentWorkerService {
   #request: FindRequest | null = null
   #work: Generator<unknown, unknown> | null = null
   #stage: 'build' | 'locate' = 'build'
-  #timer: ReturnType<typeof setTimeout> | undefined
+  #findChannel: MessageChannel | null = null
+  #findScheduled = false
   #disposed = false
   #model: MarkdownSourceModel | null = null
   #metadata: MetadataRequest | null = null
@@ -59,8 +69,10 @@ export class DocumentWorkerService {
     this.#post = post
   }
   #cancel() {
-    clearTimeout(this.#timer)
-    this.#timer = undefined
+    this.#findChannel?.port1.close()
+    this.#findChannel?.port2.close()
+    this.#findChannel = null
+    this.#findScheduled = false
     this.#work?.return(undefined)
     this.#work = null
     this.#request = null
@@ -107,6 +119,7 @@ export class DocumentWorkerService {
       this.#maintenance?.dispose()
       this.#maintenance = null
       this.#store = null
+      this.#bootstrap = null
     }
     this.#post({
       type: 'error',
@@ -114,6 +127,35 @@ export class DocumentWorkerService {
       stage,
       ...(id === undefined ? {} : { id }),
       message: error instanceof Error ? error.message : String(error),
+    })
+  }
+  #reset(epoch: string) {
+    this.#cancel()
+    this.#cancelMetadata(true)
+    this.#metadataId = 0
+    this.#maintenance?.dispose()
+    this.#maintenance = null
+    this.#index = null
+    this.#store = null
+    this.#bootstrap = null
+    this.#epoch = epoch
+    this.#findId = 0
+  }
+  #publish(store: SourceStore) {
+    this.#store = store
+    this.#maintenance = new SourceMaintenance(
+      store,
+      (change) => {
+        store.commitCompaction(change)
+        this.#index?.adoptStorage(change)
+        this.#model?.adoptStorage(change)
+      },
+      (error) => this.#fail('replica', error),
+    )
+    this.#post({
+      type: 'ack',
+      epoch: this.#epoch,
+      version: store.snapshot().version,
     })
   }
   receive(message: DocumentWorkerRequest) {
@@ -125,50 +167,47 @@ export class DocumentWorkerService {
         !/^[\w.:-]{1,128}$/.test(message.epoch)
       )
         throw new Error('Invalid document worker identity.')
-      if (message.type === 'load') {
-        this.#cancel()
-        this.#cancelMetadata(true)
-        this.#metadataId = 0
-        this.#maintenance?.dispose()
-        this.#maintenance = null
-        this.#index = null
-        this.#store = null
-        this.#epoch = message.epoch
-        this.#findId = 0
-        if (
-          !Array.isArray(message.chunks) ||
-          message.chunks.length > 8192 ||
-          message.chunks.some(
-            (chunk) => typeof chunk !== 'string' || chunk.length > 65536,
-          ) ||
-          message.chunks.reduce((sum, chunk) => sum + chunk.length, 0) >
-            32 * 1024 * 1024
-        )
-          throw new Error('Document worker bootstrap exceeds its limit.')
-        this.#store = new SourceStore(
-          message.chunks,
-          message.document,
-          message.version,
-          { maximumBytes: 32 * 1024 * 1024 },
-        )
-        const store = this.#store
-        this.#maintenance = new SourceMaintenance(
-          store,
-          (change) => {
-            store.commitCompaction(change)
-            this.#index?.adoptStorage(change)
-            this.#model?.adoptStorage(change)
-          },
-          (error) => this.#fail('replica', error),
-        )
+      if (message.type === 'load-start') {
+        this.#reset(message.epoch)
+        const head = parseTransferHead(message.head),
+          loader = SourceStore.loader(
+            { tabId: head.tabId, revision: head.revision },
+            head.contentVersion,
+          ),
+          receiver = new SourceTransferReceiver(head, loader.append)
+        this.#bootstrap = { loader, receiver }
         this.#post({
-          type: 'ack',
+          type: 'load-ack',
           epoch: this.#epoch,
-          version: this.#store.snapshot().version,
+          request: receiver.request,
         })
         return
       }
       if (message.epoch !== this.#epoch) return
+      if (message.type === 'load-chunk' || message.type === 'load-finish') {
+        const bootstrap = this.#bootstrap
+        if (!bootstrap) throw new Error('Document worker is not initialized.')
+        if (message.type === 'load-chunk') {
+          bootstrap.receiver.receive(message.chunk)
+          this.#post({
+            type: 'load-ack',
+            epoch: this.#epoch,
+            request: bootstrap.receiver.request,
+          })
+        } else {
+          const request = parseTransferRequest(message.request),
+            expected = bootstrap.receiver.finish()
+          if (
+            request.streamId !== expected.streamId ||
+            request.sequence !== expected.sequence
+          )
+            throw new Error('The document transfer is stale or out of order.')
+          const store = bootstrap.loader.finish()
+          this.#bootstrap = null
+          this.#publish(store)
+        }
+        return
+      }
       if (!this.#store) throw new Error('Document worker is not initialized.')
       if (message.type === 'edit') {
         const prepared = this.#store.prepare(message.operation)
@@ -537,37 +576,61 @@ export class DocumentWorkerService {
     }
   }
   #schedule() {
-    if (this.#timer || !this.#work) return
-    this.#timer = setTimeout(() => {
-      this.#timer = undefined
-      const started = performance.now()
-      try {
-        while (this.#work && performance.now() - started < 2) {
-          const step = this.#work.next()
-          if (!step.done) continue
-          const request = this.#request!
-          if (this.#stage === 'build') {
-            this.#stage = 'locate'
-            this.#work = this.#index!.locate(request.from, request.to)
-          } else {
-            this.#work = null
-            this.#post({
-              type: 'find',
-              epoch: this.#epoch,
-              id: request.id,
-              version: request.version,
-              location: step.value as Extract<
-                DocumentWorkerReply,
-                { type: 'find' }
-              >['location'],
-            })
-          }
-        }
-        this.#schedule()
-      } catch (error) {
-        this.#fail('find', error)
+    if (this.#findScheduled || !this.#work) return
+    if (!this.#findChannel) {
+      const channel = new MessageChannel()
+      channel.port1.onmessage = () => {
+        if (this.#findChannel === channel) this.#advanceFind()
       }
-    }, 0)
+      this.#findChannel = channel
+    }
+    this.#findScheduled = true
+    this.#findChannel.port2.postMessage(null)
+  }
+  #advanceFind() {
+    this.#findScheduled = false
+    const started = performance.now()
+    let advanced = false
+    try {
+      while (this.#work && performance.now() - started < 2) {
+        const step = this.#work.next()
+        advanced = true
+        if (!step.done) continue
+        const request = this.#request!
+        if (this.#stage === 'build') {
+          this.#stage = 'locate'
+          this.#work = this.#index!.locate(request.from, request.to)
+        } else {
+          this.#work = null
+          this.#post({
+            type: 'find',
+            epoch: this.#epoch,
+            id: request.id,
+            version: request.version,
+            location: step.value as Extract<
+              DocumentWorkerReply,
+              { type: 'find' }
+            >['location'],
+          })
+        }
+      }
+      if (!this.#work) {
+        this.#cancel()
+        return
+      }
+      if (advanced) {
+        const request = this.#request!
+        this.#post({
+          type: 'find-progress',
+          epoch: this.#epoch,
+          id: request.id,
+          version: request.version,
+        })
+      }
+      this.#schedule()
+    } catch (error) {
+      this.#fail('find', error)
+    }
   }
   dispose() {
     this.#disposed = true
@@ -577,5 +640,6 @@ export class DocumentWorkerService {
     this.#maintenance = null
     this.#index = null
     this.#store = null
+    this.#bootstrap = null
   }
 }

@@ -51,6 +51,7 @@ export default defineAddon({
           workspaceGeneration: target.workspaceGeneration,
         },
         options,
+        inMemory,
       })
       const cancel = () =>
         context.native.query('cancel', { token: session.token })

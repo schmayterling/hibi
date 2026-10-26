@@ -177,9 +177,9 @@ function firstBlock(item: SyntaxNode) {
   return first
 }
 
-/** Frontmatter keeps its place, and an item's first block moves with its item. */
+/** Frontmatter stays first; item openings and alert titles move with their containers. */
 function fixed(node: SyntaxNode) {
-  if (node.name === 'Frontmatter') return true
+  if (node.name === 'Frontmatter' || node.name === 'AlertTitle') return true
   const parent = node.parent
   return parent?.name === 'ListItem' && firstBlock(parent)?.from === node.from
 }

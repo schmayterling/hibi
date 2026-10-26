@@ -1,5 +1,7 @@
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, WidgetType } from '@codemirror/view'
+import { DocumentWorkerClient } from '../../src/renderer/src/document-worker-client'
+import { DocumentSession } from '../../src/shared/document-session'
 import '../../src/renderer/src/styles.css'
 import type { ChunkedMarkdownProbe } from '../../src/renderer/src/chunked-markdown'
 import { codeLanguages } from '../../src/renderer/src/code-languages'
@@ -17,6 +19,15 @@ const probe: ChunkedMarkdownProbe = {
   builtGroups: 0,
 }
 let view: EditorView | null = null
+let workerClient: DocumentWorkerClient | null = null
+let workerSession: DocumentSession | null = null
+const workerState = {
+  ready: false,
+  requests: 0,
+  pages: 0,
+  maxRecords: 0,
+  errors: [] as string[],
+}
 const documentRevision = new Compartment()
 const revisionOf = (revision: number) =>
   formattedDocument.of({ revision, tabId: null })
@@ -46,10 +57,15 @@ const panes = document.querySelector<HTMLElement>('.editor-panes')!
 Object.assign(window, {
   livePreview: {
     probe,
+    workerState,
     async mount(
       doc: string,
       size?: { width: number; height: number },
-      { editable, ...options }: { slice?: number; editable?: boolean } = {},
+      {
+        editable,
+        worker = false,
+        ...options
+      }: { slice?: number; editable?: boolean; worker?: boolean } = {},
     ) {
       if (size)
         Object.assign(panes.style, {
@@ -65,7 +81,64 @@ Object.assign(window, {
         ),
       )
       view?.destroy()
-      syntax = formattedSyntax({ probe, ...options })
+      workerClient?.dispose()
+      workerSession?.dispose()
+      workerClient = null
+      workerSession = null
+      Object.assign(workerState, {
+        ready: false,
+        requests: 0,
+        pages: 0,
+        maxRecords: 0,
+        errors: [],
+      })
+      if (worker) {
+        workerSession = new DocumentSession(
+          doc,
+          { tabId: 'worker-fixture', revision: 0 },
+          0,
+          {
+            enqueue: () => {},
+            onError: (error) => workerState.errors.push(String(error)),
+          },
+        )
+        workerClient = new DocumentWorkerClient(workerSession, {
+          changed: () => {},
+          pending: () => {},
+          result: () => {},
+          error: (error) => workerState.errors.push(error),
+        })
+      }
+      syntax = formattedSyntax({
+        probe,
+        ...options,
+        ...(worker
+          ? {
+              boundaries: {
+                request: (config, receive, declined) => {
+                  workerState.requests++
+                  workerState.ready = false
+                  workerClient!.boundaries(
+                    config,
+                    (page, ack) => {
+                      workerState.pages++
+                      workerState.maxRecords = Math.max(
+                        workerState.maxRecords,
+                        page.records.length,
+                      )
+                      receive(page, () => {
+                        workerState.ready = page.done
+                        ack()
+                      })
+                    },
+                    declined,
+                  )
+                },
+                release: () => workerClient?.releaseBoundaries(),
+              },
+            }
+          : {}),
+      })
       view = new EditorView({
         parent: host,
         state: EditorState.create({
@@ -85,6 +158,40 @@ Object.assign(window, {
       await new Promise(requestAnimationFrame)
     },
     view: () => view,
+    /** An external canonical edit mirrored to the formatted surface. */
+    edit(from: number, to: number, insert: string) {
+      workerSession?.edit([{ from, to, insert }], 'source', 'test')
+      view?.dispatch({ changes: { from, to, insert } })
+    },
+    /** An unknown block grammar must keep its main-thread parser. */
+    unknownBlock: () =>
+      formattedRegistry.register({
+        id: 'test.unknown-block',
+        load: () => ({
+          id: 'test.unknown-block',
+          syntax: {
+            defineNodes: [{ name: 'UnknownBlock', block: true }],
+            parseBlock: [
+              {
+                name: 'UnknownBlock',
+                before: 'FencedCode',
+                parse(cx, line) {
+                  if (line.text.slice(line.pos) !== '%%') return false
+                  cx.addElement(
+                    cx.elt(
+                      'UnknownBlock',
+                      cx.parsedPos,
+                      cx.parsedPos + line.text.length,
+                    ),
+                  )
+                  cx.nextLine()
+                  return true
+                },
+              },
+            ],
+          },
+        }),
+      }),
     /** A contributed layout that shows the document revision before each paragraph; returns its removal. */
     showRevisions: () =>
       formattedRegistry.register({

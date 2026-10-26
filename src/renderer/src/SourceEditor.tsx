@@ -610,7 +610,17 @@ export function SourceEditor({
     }
     const language = new Compartment()
     // The formatted view owns its syntax tree, kept across language reconfigurations.
-    const syntax = formattedSyntax()
+    const syntax = formattedSyntax(
+      formatted
+        ? {
+            boundaries: {
+              request: (config, receive, declined) =>
+                getWorker().boundaries(config, receive, declined),
+              release: () => sourceFind.current?.releaseBoundaries(),
+            },
+          }
+        : {},
+    )
     const tree = (state: EditorState) =>
       formatted ? syntax.tree(state) : syntaxTree(state)
     const markdown = () => {
@@ -1858,6 +1868,7 @@ export function SourceEditor({
     requestFind,
     requestReference,
     resolveReference,
+    getWorker,
     clearReferences,
     viewId,
     formatted,
@@ -1985,7 +1996,7 @@ export function SourceEditor({
     const editor = view.current
     if (!editor) return
     const stopFind = () => {
-      if (referenceUsed.current) sourceFind.current?.cancelFind()
+      if (referenceUsed.current || formatted) sourceFind.current?.cancelFind()
       else {
         sourceFind.current?.dispose()
         sourceFind.current = null

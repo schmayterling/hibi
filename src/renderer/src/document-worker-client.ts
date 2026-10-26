@@ -1,6 +1,7 @@
 import { journalMessageBytes } from '../../shared/document-journal.ts'
 import type { DocumentSession } from '../../shared/document-session.ts'
 import type {
+  BoundaryReceive,
   DocumentWorkerReply,
   DocumentWorkerRequest,
   MarkdownReferenceRequest,
@@ -9,6 +10,7 @@ import type {
   MetadataDialect,
 } from '../../shared/document-worker-protocol.ts'
 import { reportDiagnosticFailure } from '../../shared/local-diagnostics-observer.ts'
+import type { BoundaryConfig } from '../../shared/markdown-boundary-syntax.ts'
 import type { SourceOwnerPage } from '../../shared/markdown-source-model.ts'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import type { SourceOperation } from '../../shared/source-operations.ts'
@@ -84,6 +86,16 @@ export class DocumentWorkerClient {
   #findDeadline: ReturnType<typeof setTimeout> | undefined
   #findTimer: ReturnType<typeof setTimeout> | undefined
   #findQuietUntil = 0
+  #boundaries: {
+    id: number
+    version: number
+    config: BoundaryConfig
+    key: string
+    receive: BoundaryReceive
+    declined: (reason: 'stale' | 'mismatch') => void
+  } | null = null
+  #sentBoundaries = ''
+  #boundarySequence = 0
   constructor(session: DocumentSession, options: ClientOptions) {
     this.#session = session
     this.#options = options
@@ -92,6 +104,11 @@ export class DocumentWorkerClient {
       session.subscribeOperations((prepared) => {
         if (this.#disposed || this.#failed) return
         const operation = prepared.operation
+        if (this.#boundaries) {
+          this.#boundaries.version = prepared.after.version
+          this.#sentBoundaries = ''
+          this.#boundarySequence = 0
+        }
         this.#deferFind()
         if (this.#bootstrap || this.#loaded) {
           const bytes = journalMessageBytes(operation)
@@ -135,6 +152,56 @@ export class DocumentWorkerClient {
         }
       }),
     ]
+  }
+  boundaries(
+    config: BoundaryConfig,
+    receive: BoundaryReceive,
+    declined: (reason: 'stale' | 'mismatch') => void,
+  ) {
+    if (this.#disposed || this.#failed) return
+    const key = JSON.stringify(config),
+      version = this.#session.snapshot().version
+    if (this.#boundaries?.key === key && this.#boundaries.version === version) {
+      this.#boundaries.receive = receive
+      return
+    }
+    this.#boundaries = {
+      config,
+      key,
+      version,
+      id: ++this.#requestId,
+      receive,
+      declined,
+    }
+    this.#sentBoundaries = ''
+    this.#boundarySequence = 0
+    if (!this.#worker && !this.#startTimer && !this.#bootstrap) this.#restart()
+    this.#flushBoundaries()
+  }
+  releaseBoundaries() {
+    this.#boundaries = null
+    this.#sentBoundaries = ''
+    this.#boundarySequence = 0
+    this.#post({ type: 'cancel-boundaries', epoch: this.#epoch })
+  }
+  #flushBoundaries() {
+    const request = this.#boundaries
+    if (
+      !request ||
+      !this.#loaded ||
+      this.#ack !== this.#session.snapshot().version
+    )
+      return
+    const sent = `${request.id} ${request.version} ${request.key}`
+    if (this.#sentBoundaries === sent) return
+    this.#sentBoundaries = sent
+    this.#post({
+      type: 'boundaries',
+      epoch: this.#epoch,
+      id: request.id,
+      version: request.version,
+      config: request.config,
+    })
   }
   find(query: string, from: number, to: number, action: FindAction = null) {
     if (this.#disposed || this.#failed) return
@@ -328,7 +395,57 @@ export class DocumentWorkerClient {
     )
   }
   #reply(reply: DocumentWorkerReply) {
-    if (this.#disposed || reply.epoch !== this.#epoch) return
+    if (this.#disposed) return
+    if (reply.epoch !== this.#epoch) {
+      if (reply.type === 'boundaries') this.#boundaries?.declined('stale')
+      return
+    }
+    if (reply.type === 'boundaries' || reply.type === 'boundary-declined') {
+      const request = this.#boundaries
+      if (!request) return
+      if (
+        reply.id !== request.id ||
+        reply.version !== request.version ||
+        reply.version !== this.#session.snapshot().version
+      ) {
+        request.declined('stale')
+        return
+      }
+      if (reply.key !== request.key || reply.type === 'boundary-declined') {
+        request.declined('mismatch')
+        return
+      }
+      if (
+        reply.sequence !== this.#boundarySequence++ ||
+        !Array.isArray(reply.records) ||
+        reply.records.length > 128 ||
+        reply.length !== this.#session.snapshot().normalizedLength
+      ) {
+        request.declined('mismatch')
+        this.releaseBoundaries()
+        return
+      }
+      let acknowledged = false
+      request.receive(reply, () => {
+        if (
+          acknowledged ||
+          this.#boundaries !== request ||
+          request.version !== reply.version ||
+          reply.version !== this.#session.snapshot().version
+        )
+          return
+        acknowledged = true
+        this.#post({
+          type: 'boundary-ack',
+          epoch: this.#epoch,
+          id: request.id,
+          version: reply.version,
+          key: request.key,
+          sequence: reply.sequence,
+        })
+      })
+      return
+    }
     if (reply.type === 'load-ack') {
       const bootstrap = this.#bootstrap
       if (
@@ -492,6 +609,7 @@ export class DocumentWorkerClient {
     }
     this.#flushQuery()
     this.#flushMetadata()
+    this.#flushBoundaries()
     this.#watch()
   }
   #stop() {
@@ -517,6 +635,8 @@ export class DocumentWorkerClient {
     this.#flight = this.#canceling = null
     this.#ack = this.#sent = -1
     this.#sentRequest = 0
+    this.#sentBoundaries = ''
+    this.#boundarySequence = 0
   }
   #restart() {
     this.#stop()
@@ -538,6 +658,12 @@ export class DocumentWorkerClient {
       this.#metadata = {
         ...this.#metadata,
         epoch: this.#epoch,
+        id: ++this.#requestId,
+        version: this.#session.snapshot().version,
+      }
+    if (this.#boundaries)
+      this.#boundaries = {
+        ...this.#boundaries,
         id: ++this.#requestId,
         version: this.#session.snapshot().version,
       }
@@ -614,5 +740,6 @@ export class DocumentWorkerClient {
     for (const detach of this.#detach) detach()
     this.#latest = null
     this.#metadata = null
+    this.#boundaries = null
   }
 }

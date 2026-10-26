@@ -14,8 +14,15 @@ import {
   parseCode,
   parser,
 } from '@lezer/markdown'
+import type { BoundaryReceive } from '../../shared/document-worker-protocol.ts'
+import {
+  type BoundaryConfig,
+  boundaryKey,
+  boundarySyntaxIds,
+} from '../../shared/markdown-boundary-syntax.ts'
 import { createPlainTextRunExtension } from '../../shared/markdown-plain-text-runs.ts'
 import {
+  BoundaryTree,
   ChunkedMarkdownParser,
   type ChunkedMarkdownProbe,
   type ChunkedPartialParse,
@@ -24,6 +31,8 @@ import {
 } from './chunked-markdown.ts'
 import { codeLanguages } from './code-languages.ts'
 import {
+  formattedFlavors,
+  formattedLiteral,
   formattedMarkdown,
   formattedOpaque,
   formattedPrefix,
@@ -53,9 +62,22 @@ type Syntax = {
 
 const setDemand = StateEffect.define<Demand>()
 const resume = StateEffect.define<null>()
+const adoptBoundaries = StateEffect.define<{
+  doc: EditorState['doc']
+  key: string
+  tree: Tree
+}>()
 
 export type FormattedSyntaxOptions = {
   extensions?: MarkdownExtension
+  boundaries?: {
+    request: (
+      config: BoundaryConfig,
+      receive: BoundaryReceive,
+      declined: (reason: 'stale' | 'mismatch') => void,
+    ) => void
+    release: () => void
+  }
   probe?: ChunkedMarkdownProbe
   /** Milliseconds of parsing per transaction or idle slice; each parse step reads a bounded range. */
   slice?: number
@@ -100,6 +122,30 @@ const mapDemand = (demand: Demand, changes: ChangeDesc) => ({
   from: changes.mapPos(demand.from, -1),
   to: changes.mapPos(demand.to, 1),
 })
+
+function boundaryConfig(
+  state: EditorState,
+  options: FormattedSyntaxOptions,
+  prefix: number,
+): BoundaryConfig | null {
+  const syntax = boundarySyntaxIds([
+    ...state.facet(formattedMarkdown),
+    options.extensions ?? [],
+  ])
+  return syntax
+    ? {
+        schema: 1,
+        syntax,
+        flavors: state.facet(formattedFlavors),
+        literal: state.facet(formattedLiteral),
+        opaque: state.facet(formattedOpaque),
+        prefix,
+        chunkSize: 4096,
+        groupSize: 64,
+        giantBlock: 65536,
+      }
+    : null
+}
 
 function syntaxField(options: FormattedSyntaxOptions) {
   // Contributions change the node set, so each set of extensions gets its own parser.
@@ -178,7 +224,7 @@ function syntaxField(options: FormattedSyntaxOptions) {
       settling,
     )
   }
-  return StateField.define<Syntax>({
+  const field = StateField.define<Syntax>({
     create(state) {
       return start(
         state,
@@ -196,6 +242,25 @@ function syntaxField(options: FormattedSyntaxOptions) {
           demand = effect.value
           moved = true
         } else if (effect.is(resume)) resumed = true
+        else if (effect.is(adoptBoundaries)) {
+          const adopted = effect.value
+          const config = boundaryConfig(
+            transaction.state,
+            options,
+            prefixOf(transaction.state),
+          )
+          if (
+            adopted.doc === transaction.state.doc &&
+            config &&
+            adopted.key === boundaryKey(config)
+          )
+            return start(
+              transaction.state,
+              TreeFragment.applyChanges(TreeFragment.addTree(adopted.tree), []),
+              demand,
+              true,
+            )
+        }
       }
       // New syntax contributions or a new unparsed prefix parse the document again.
       const { state, startState } = transaction
@@ -247,22 +312,109 @@ function syntaxField(options: FormattedSyntaxOptions) {
       )
     },
   })
+  return { field, chunkedFor, prefixOf }
 }
 
 /** Keeps the parsed region on the viewport, one idle slice at a time. */
-function driver(field: StateField<Syntax>) {
+function driver(
+  { field, chunkedFor, prefixOf }: ReturnType<typeof syntaxField>,
+  options: FormattedSyntaxOptions,
+) {
   return ViewPlugin.fromClass(
     class {
       private timer: ReturnType<typeof setTimeout> | null = null
       private idle = 0
       private view: EditorView
+      private boundaryIdle = 0
+      private boundaryDoc: EditorState['doc'] | null = null
+      private boundaryKey: string | null = null
+      private boundaryTree: BoundaryTree | null = null
+      private destroyed = false
       constructor(view: EditorView) {
         this.view = view
         this.schedule(true)
+        this.followBoundaries()
       }
       update(update: ViewUpdate) {
+        this.followBoundaries()
         if (update.viewportChanged) this.schedule(true)
         else if (!update.state.field(field).complete) this.schedule(false)
+      }
+      private declined = () => {
+        const probe = options.probe
+        if (probe) probe.adoptionDeclined = (probe.adoptionDeclined ?? 0) + 1
+      }
+      private followBoundaries() {
+        if (!options.boundaries) return
+        const { state } = this.view
+        const config = boundaryConfig(state, options, prefixOf(state))
+        const key = config ? boundaryKey(config) : null
+        if (state.doc === this.boundaryDoc && key === this.boundaryKey) return
+        this.boundaryDoc = state.doc
+        this.boundaryKey = key
+        this.boundaryTree = null
+        if (this.boundaryIdle) cancelIdleCallback(this.boundaryIdle)
+        this.boundaryIdle = 0
+        if (!config) {
+          this.declined()
+          options.boundaries.release()
+          return
+        }
+        const doc = state.doc
+        options.boundaries.request(
+          config,
+          (page, acknowledge) => {
+            if (
+              this.destroyed ||
+              this.view.state.doc !== doc ||
+              this.boundaryKey !== page.key
+            ) {
+              this.declined()
+              return
+            }
+            // The sender waits for this idle slice before sending another page.
+            this.boundaryIdle = requestIdleCallback(
+              () => {
+                this.boundaryIdle = 0
+                if (
+                  this.destroyed ||
+                  this.view.state.doc !== doc ||
+                  this.boundaryKey !== page.key
+                ) {
+                  this.declined()
+                  return
+                }
+                try {
+                  this.boundaryTree ??= new BoundaryTree(
+                    chunkedFor(this.view.state),
+                    page.length,
+                  )
+                  this.boundaryTree.append(page.records)
+                  const probe = options.probe
+                  if (probe) {
+                    probe.adoptedRecords =
+                      (probe.adoptedRecords ?? 0) + page.records.length
+                    probe.adoptionSlices = (probe.adoptionSlices ?? 0) + 1
+                  }
+                  if (page.done) {
+                    const tree = this.boundaryTree.finish()
+                    this.boundaryTree = null
+                    this.view.dispatch({
+                      effects: adoptBoundaries.of({ doc, key: page.key, tree }),
+                    })
+                  }
+                  acknowledge()
+                } catch {
+                  this.declined()
+                  this.boundaryTree = null
+                  options.boundaries?.release()
+                }
+              },
+              { timeout: 200 },
+            )
+          },
+          this.declined,
+        )
       }
       /** A changed viewport parses on the next task; leftover work waits for idle time. */
       schedule(soon: boolean) {
@@ -283,6 +435,10 @@ function driver(field: StateField<Syntax>) {
         })
       }
       destroy() {
+        this.destroyed = true
+        if (this.boundaryIdle) cancelIdleCallback(this.boundaryIdle)
+        this.boundaryTree = null
+        options.boundaries?.release()
         if (this.timer !== null) clearTimeout(this.timer)
         if (this.idle) cancelIdleCallback(this.idle)
       }
@@ -305,9 +461,10 @@ export type FormattedSyntax = {
 export function formattedSyntax(
   options: FormattedSyntaxOptions = {},
 ): FormattedSyntax {
-  const field = syntaxField(options)
+  const syntax = syntaxField(options)
+  const { field } = syntax
   return {
-    extension: [field, driver(field)],
+    extension: [field, driver(syntax, options)],
     tree: (state) => state.field(field).tree,
     settling: (state) => state.field(field).settling,
   }

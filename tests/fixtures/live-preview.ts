@@ -28,7 +28,7 @@ Object.assign(window, {
     async mount(
       doc: string,
       size?: { width: number; height: number },
-      options: { slice?: number } = {},
+      { editable, ...options }: { slice?: number; editable?: boolean } = {},
     ) {
       if (size)
         Object.assign(panes.style, {
@@ -51,8 +51,9 @@ Object.assign(window, {
           doc,
           extensions: [
             livePreview(syntax),
-            EditorState.readOnly.of(true),
-            EditorView.editable.of(false),
+            editable
+              ? []
+              : [EditorState.readOnly.of(true), EditorView.editable.of(false)],
           ],
         }),
       })

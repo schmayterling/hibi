@@ -31,9 +31,11 @@ const glyph = Decoration.replace({
 function run(doc, command) {
   const hidden = []
   let text = '',
-    caret = 0
+    caret = 0,
+    anchor = null
   for (const char of doc) {
     if (char === '|') caret = text.length
+    else if (char === '^') anchor = text.length
     else if (char === '⟦' || char === '⟪')
       hidden.push({ from: text.length, value: char === '⟦' ? hide : glyph })
     else if (char === '⟧' || char === '⟫') hidden.at(-1).to = text.length
@@ -41,7 +43,7 @@ function run(doc, command) {
   }
   const state = EditorState.create({
     doc: text,
-    selection: { anchor: caret },
+    selection: { anchor: anchor ?? caret, head: caret },
   })
   const spec = command(
     state,
@@ -50,8 +52,14 @@ function run(doc, command) {
   )
   if (!spec) return null
   const next = state.update(spec).state
-  const head = next.selection.main.head
-  return `${next.doc.sliceString(0, head)}|${next.doc.sliceString(head)}`
+  const { anchor: start, head } = next.selection.main
+  if (start === head)
+    return `${next.doc.sliceString(0, head)}|${next.doc.sliceString(head)}`
+  const marks = [
+    [start, '^'],
+    [head, '|'],
+  ].sort((a, b) => a[0] - b[0])
+  return `${next.doc.sliceString(0, marks[0][0])}${marks[0][1]}${next.doc.sliceString(marks[0][0], marks[1][0])}${marks[1][1]}${next.doc.sliceString(marks[1][0])}`
 }
 
 test('enter splits paragraphs and continues or leaves lists and quotes like the rich editor', () => {
@@ -88,20 +96,26 @@ test('backspace and delete edit visible text and remove block markers before joi
 
 test('tab nests and outdents list items, indents code and keeps paragraphs out of code', () => {
   assert.equal(
-    run('- one\n- |two', (state, tree) => indent(state, tree, false)),
+    run('- one\n- |two', (state, tree, hidden) =>
+      indent(state, tree, false, hidden),
+    ),
     '- one\n  - |two',
   )
   assert.equal(
-    run('- one\n  - |two', (state, tree) => indent(state, tree, true)),
+    run('- one\n  - |two', (state, tree, hidden) =>
+      indent(state, tree, true, hidden),
+    ),
     '- one\n- |two',
   )
   assert.equal(
-    run('```\n|code\n```', (state, tree) => indent(state, tree, false)),
+    run('```\n|code\n```', (state, tree, hidden) =>
+      indent(state, tree, false, hidden),
+    ),
     '```\n\t|code\n```',
   )
   // A tab at the start of a paragraph line would make it indented code.
   assert.equal(
-    run('|para', (state, tree) => indent(state, tree, false)),
+    run('|para', (state, tree, hidden) => indent(state, tree, false, hidden)),
     '|para',
   )
 })
@@ -119,4 +133,66 @@ test('typing on the blank line between two blocks starts its own paragraph', () 
   }
   assert.equal(type('one\n|\ntwo', 'x'), 'one\n\nx|\n\ntwo')
   assert.equal(type('one\n\n|\n\ntwo', 'x'), null)
+})
+
+test('tab on selected code lines indents each line, and delete never joins a fence line', () => {
+  const tab = (state, tree, hidden) => indent(state, tree, false, hidden)
+  const untab = (state, tree, hidden) => indent(state, tree, true, hidden)
+  // Before, the selected lines became one tab.
+  assert.equal(run('```\n^x\ny|\n```', tab), '```\n\t^x\n\ty|\n```')
+  assert.equal(run('```\n\t^x\n\ty|\n```', untab), '```\n^x\ny|\n```')
+  // Inside a quote the tab goes after the hidden quote markers.
+  assert.equal(
+    run('> ```\n⟦> ⟧^x\n⟦> ⟧y|\n> ```', tab),
+    '> ```\n> \t^x\n> \ty|\n> ```',
+  )
+  // A selection reaching a fence line leaves the fence alone.
+  assert.equal(run('^```\nx|\n```', tab), '^```\n\tx|\n```')
+  // Before, Delete joined `code~~~` and the prose after became code.
+  assert.equal(
+    run('~~~\ncode|\n~~~\n\nafter', deleteForward),
+    '~~~\ncode|\n~~~\n\nafter',
+  )
+  assert.equal(
+    run('para|\n~~~\ncode\n~~~', deleteForward),
+    'para|\n~~~\ncode\n~~~',
+  )
+  // A heading's underline is never joined to its text or the paragraph after it.
+  assert.equal(run('Title|\n===\n\nnext', deleteForward), 'Title|\n===\n\nnext')
+  assert.equal(run('Title\n===\n|next', deleteBackward), 'Title\n===\n|next')
+})
+
+test('enter inside formatting closes it before the break and opens it again after', () => {
+  // Before, `**bo|ld**` became `**bo` and `ld**`, and the bold was lost.
+  assert.equal(run('**bo|ld**', blockBreak), '**bo**\n\n**|ld**')
+  assert.equal(run('a *b **c|d** e*', blockBreak), 'a *b **c***\n\n***|d** e*')
+  assert.equal(run('`co|de`', blockBreak), '`co`\n\n`|de`')
+  assert.equal(run('[la|bel](/u)', blockBreak), '[la](/u)\n\n[|bel](/u)')
+  assert.equal(run('- ~~st|ruck~~', blockBreak), '- ~~st~~\n- ~~|ruck~~')
+  // At the edge of formatting the break stays outside it.
+  assert.equal(run('**bold**|', blockBreak), '**bold**\n\n|')
+})
+
+test('backspace at the start of an item lifts it a level or ends the list before it', () => {
+  // Before, the marker went and the item became lazy text of the item above.
+  assert.equal(
+    run('- parent\n⟦  - ⟧|child', deleteBackward),
+    '- parent\n- |child',
+  )
+  assert.equal(run('- one\n⟦- ⟧|two', deleteBackward), '- one\n\n|two')
+  assert.equal(run('⟦- ⟧|item', deleteBackward), '|item')
+})
+
+test('enter in a numbered list keeps nested blocks under their item and counts on', () => {
+  // Before, `10.` left the child indented for `9.` and the next item stayed `10.`.
+  assert.equal(
+    run('9. nine|\n   - child\n10. ten', blockBreak),
+    '9. nine\n10. |\n    - child\n11. ten',
+  )
+  assert.equal(
+    run('1. one|\n2. two\n3. three', blockBreak),
+    '1. one\n2. |\n3. two\n4. three',
+  )
+  // A gap in the numbers ends the renumbering.
+  assert.equal(run('1. one|\n5. five', blockBreak), '1. one\n2. |\n5. five')
 })

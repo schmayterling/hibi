@@ -1,6 +1,7 @@
 import {
   Compartment,
-  type EditorState,
+  EditorSelection,
+  EditorState,
   type Extension,
   Facet,
   Prec,
@@ -1164,6 +1165,20 @@ function mapLines(set: DecorationSet, update: ViewUpdate) {
   })
 }
 
+/**
+ * A link destination on later lines shows while the selection touches it:
+ * input beside a range that hides line breaks would not map to the text.
+ */
+function revealDestinations(set: DecorationSet, state: EditorState) {
+  for (const { from, to } of state.selection.ranges)
+    set = set.update({
+      filterFrom: from,
+      filterTo: to,
+      filter: (a, b, value) => value !== hide || b < from || a > to,
+    })
+  return set
+}
+
 /** The formatted view's rendering over its chunked Markdown syntax tree. */
 export function livePreview(
   syntax: FormattedSyntax,
@@ -1190,11 +1205,6 @@ export function livePreview(
         return value.map(transaction.changes)
       return layoutDecorations(state, tree, reveal)
     },
-    provide: (field) => [
-      EditorView.decorations.from(field),
-      // Hidden layout syntax is atomic too.
-      EditorView.atomicRanges.of((view) => view.state.field(field)),
-    ],
   })
   const preview = ViewPlugin.fromClass(
     class {
@@ -1281,7 +1291,9 @@ export function livePreview(
       if (['ListItem', 'FencedCode', 'CodeBlock'].includes(node.name))
         structured = true
     if (!structured && !view.state.facet(formattedTabIndents)) return false
-    return run((current) => indent(current.state, tree, outdent))(view)
+    return run((current) =>
+      indent(current.state, tree, outdent, hidden(current)),
+    )(view)
   }
   // Registered features and their syntax settings reconfigure the view.
   const contributions = new Compartment()
@@ -1317,8 +1329,65 @@ export function livePreview(
     syntax.extension,
     focused,
     layout,
+    EditorView.decorations.compute([layout, 'selection'], (state) =>
+      revealDestinations(state.field(layout), state),
+    ),
+    // Hidden layout syntax is atomic too.
+    EditorView.atomicRanges.of((view) =>
+      revealDestinations(view.state.field(layout), view.state),
+    ),
     preview,
     EditorView.atomicRanges.of(hidden),
+    // Lines the layout hides whole, with the line breaks around them, so the
+    // caret never rests on one.
+    EditorView.atomicRanges.of((view) => {
+      const { doc } = view.state
+      const lines: Range<Decoration>[] = []
+      for (const { from, to } of view.visibleRanges)
+        view.state.field(layout).between(from, to, (a, b, value) => {
+          if (value === hiddenLine)
+            lines.push(
+              hide.range(Math.max(0, a - 1), Math.min(doc.length, b + 1)),
+            )
+        })
+      return Decoration.set(lines, true)
+    }),
+    // A caret those ranges leave on a hidden line at the start or end of the
+    // note moves to the visible line beside it.
+    EditorState.transactionFilter.of((transaction) => {
+      if (transaction.docChanged || !transaction.selection) return transaction
+      const { doc } = transaction.startState
+      const before = transaction.startState.selection.ranges
+      const lines = transaction.startState.field(layout)
+      let moved = false
+      const ranges = transaction.selection.ranges.map((range, index) => {
+        let head = range.head
+        lines.between(head, head, (from, to, value) => {
+          if (value !== hiddenLine || head < from || head > to) return
+          const back = head < (before[index]?.head ?? head)
+          head =
+            (back && from > 0) || to >= doc.length
+              ? Math.max(0, from - 1)
+              : to + 1
+        })
+        if (head === range.head) return range
+        moved = true
+        return range.empty
+          ? EditorSelection.cursor(head)
+          : EditorSelection.range(range.anchor, head)
+      })
+      return moved
+        ? [
+            transaction,
+            {
+              selection: EditorSelection.create(
+                ranges,
+                transaction.selection.mainIndex,
+              ),
+            },
+          ]
+        : transaction
+    }),
     Prec.high(
       keymap.of([
         {

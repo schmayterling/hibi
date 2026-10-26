@@ -89,6 +89,7 @@ import type { RawEdit } from '../../shared/source-operations'
 import { editorChangesFromSource } from '../../shared/source-projection'
 import { Button } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
+import { uncovered } from './chunked-markdown'
 import { codeHighlighter, codeLanguages } from './code-languages'
 import {
   completionBroker,
@@ -711,8 +712,11 @@ export function SourceEditor({
       const pos = state.selection.main.head
       if (
         !markdownMode ||
-        pos > 16384 ||
-        !sourceProseAllowed(state.sliceDoc(0, pos))
+        // The formatted view's tree knows the blocks around the caret past
+        // the prefix the source view reads as text.
+        (formatted
+          ? pos <= 16384 && !sourceProseAllowed(state.sliceDoc(0, pos))
+          : pos > 16384 || !sourceProseAllowed(state.sliceDoc(0, pos)))
       )
         return null
       const line = state.doc.lineAt(pos)
@@ -725,7 +729,11 @@ export function SourceEditor({
       const parsed = formatted
         ? tree(state)
         : ensureSyntaxTree(state, line.to, 2)
-      if (parsed?.type.name !== 'Document') return null
+      if (
+        parsed?.type.name !== 'Document' ||
+        (formatted && uncovered(parsed, line.from, line.to))
+      )
+        return null
       let from = line.from,
         to = line.to,
         excluded = false

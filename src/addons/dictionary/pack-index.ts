@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { type FileHandle, lstat, open } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { sameFileIdentity } from '../../shared/file-identity.ts'
 import type { PackEntry } from './pack-converters'
 
 export type PackId = 'en' | 'zh' | 'yue' | 'ja' | 'tl' | 'fr' | 'de'
@@ -94,21 +95,22 @@ async function file(
   max: number,
 ) {
   const path = join(directory, name)
-  const before = await lstat(path)
-  requireValid(before.isFile() && before.size > 0 && before.size <= max)
+  const before = await lstat(path, { bigint: true })
+  requireValid(
+    before.isFile() && before.size > 0n && before.size <= BigInt(max),
+  )
   const handle = await open(
     path,
     constants.O_RDONLY | (constants.O_NOFOLLOW || 0),
   )
   try {
-    const after = await handle.stat()
+    const after = await handle.stat({ bigint: true })
     requireValid(
       after.isFile() &&
         after.size === before.size &&
-        after.ino === before.ino &&
-        after.dev === before.dev,
+        sameFileIdentity(after, before),
     )
-    return { handle, size: after.size }
+    return { handle, size: Number(after.size) }
   } catch (error) {
     await handle.close()
     throw error

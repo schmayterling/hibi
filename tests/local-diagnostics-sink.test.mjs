@@ -132,12 +132,12 @@ for (const profile of ['release', 'debug']) {
     const { sink, directory } = await fixture(t, profile, {
       filesystem: {
         ...fs,
-        lstat: async (path) => {
+        lstat: async (path, options) => {
           if (ending && path.endsWith('run-state.txt')) {
             entered.resolve()
             await release.promise
           }
-          return fs.lstat(path)
+          return fs.lstat(path, options)
         },
       },
     })

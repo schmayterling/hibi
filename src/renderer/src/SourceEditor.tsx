@@ -616,8 +616,11 @@ export function SourceEditor({
       formatted
         ? {
             boundaries: {
-              request: (config, receive, declined) =>
-                getWorker().boundaries(config, receive, declined),
+              request: (config, receive, declined) => {
+                if (bridge.isCurrent())
+                  getWorker().boundaries(config, receive, declined)
+                else declined('stale')
+              },
               release: () => sourceFind.current?.releaseBoundaries(),
             },
           }

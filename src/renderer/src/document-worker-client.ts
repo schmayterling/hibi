@@ -105,7 +105,7 @@ export class DocumentWorkerClient {
         if (this.#disposed || this.#failed) return
         const operation = prepared.operation
         if (this.#boundaries) {
-          this.#boundaries.version = prepared.after.version
+          // The receiver still belongs to its view's old document until it requests again.
           this.#sentBoundaries = ''
           this.#boundarySequence = 0
         }
@@ -147,6 +147,7 @@ export class DocumentWorkerClient {
           this.#latest = null
           this.#findQuietUntil = 0
           this.#metadata = null
+          this.#boundaries = null
           this.#restart()
           options.changed()
         }
@@ -189,7 +190,8 @@ export class DocumentWorkerClient {
     if (
       !request ||
       !this.#loaded ||
-      this.#ack !== this.#session.snapshot().version
+      request.version !== this.#session.snapshot().version ||
+      this.#ack !== request.version
     )
       return
     const sent = `${request.id} ${request.version} ${request.key}`
@@ -665,7 +667,6 @@ export class DocumentWorkerClient {
       this.#boundaries = {
         ...this.#boundaries,
         id: ++this.#requestId,
-        version: this.#session.snapshot().version,
       }
     const epoch = this.#epoch
     this.#startTimer = setTimeout(() => {

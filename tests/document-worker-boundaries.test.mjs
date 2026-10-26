@@ -195,6 +195,30 @@ test('edits cancel stale pages, keep the replica, and deliver the exact latest i
   assert.deepEqual(f.errors, [])
 })
 
+test('canonical edits cannot send newer boundaries to a view that has not caught up', async (t) => {
+  const f = fixture(t, '# old\n\ntext\n\n'.repeat(600)),
+    held = []
+  f.request(config, (page, ack) => {
+    f.pages.push(page)
+    held.push(ack)
+  })
+  await until(() => f.pages.length === 1)
+  f.session.edit([{ from: 0, to: 1, insert: '>' }], 'source', 'test')
+  held[0]()
+  const worker = f.transports[0]
+  await until(() =>
+    worker.replies.some(
+      (reply) => reply.type === 'boundaries' && reply.version === 1,
+    ),
+  )
+  await new Promise(setImmediate)
+  assert.equal(f.pages.length, 1)
+  assert.ok(f.declined.includes('stale'))
+  f.request()
+  await until(() => f.pages.at(-1).done && f.pages.at(-1).version === 1)
+  assert.deepEqual(f.errors, [])
+})
+
 test('configuration changes supersede in-flight pages and unknown versions decline safely', async (t) => {
   const f = fixture(t),
     held = []

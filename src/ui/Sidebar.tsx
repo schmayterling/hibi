@@ -100,10 +100,9 @@ function RenameInput({
   const input = useRef<HTMLInputElement>(null)
   const id = editing.id
   const selectExtension = editing.selectExtension
-  const disabled = editing.disabled
   useLayoutEffect(() => {
     const element = input.current
-    if (!id || !element || disabled) return
+    if (!id || !element) return
     element.focus()
     const dot = element.value.lastIndexOf('.')
     element.setSelectionRange(
@@ -111,7 +110,7 @@ function RenameInput({
       !selectExtension && dot > 0 ? dot : element.value.length,
     )
     element.scrollIntoView({ block: 'nearest' })
-  }, [id, selectExtension, disabled])
+  }, [id, selectExtension])
   return (
     <TextInput
       ref={input}

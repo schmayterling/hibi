@@ -812,6 +812,7 @@
     "src/addons/mcp-server/tools.ts"
   ],
   "2874c2767f58": [
+    "src/main/workspace-text-index.ts",
     "src/main/workspace.ts"
   ],
   "3cc25a18d979": [
@@ -4932,7 +4933,7 @@
   "0a57174b2c85": [
     "src/addons/math/PackageSettings.tsx"
   ],
-  "7ee609e625df": [
+  "323568a5283e": [
     "src/addons/mcp-server/tools.ts"
   ],
   "32392c06e0d5": [
@@ -6424,6 +6425,12 @@
   ],
   "c13ad6f975f2": [
     "src/main/history.ts"
+  ],
+  "ffebf17d6560": [
+    "src/addons/mcp-server/tools.ts",
+    "src/main/workspace-text-index.ts",
+    "src/main/workspace-text-search.ts",
+    "src/main/workspace-text-worker.ts"
   ],
   "980892e485b4": [
     "src/main/global-shortcuts.ts"

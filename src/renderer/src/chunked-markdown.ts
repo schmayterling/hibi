@@ -80,13 +80,44 @@ type Window = {
   to: number
 }
 
+/** How far decisions made in a chunk or group read ahead, relative to its start. */
+type Reach = {
+  reach?: number
+  /** Decisions on a chunk's first line, which also decide where the chunk before it ends. */
+  edge?: number
+}
+
 type ChunkInfo =
-  | { kind: 'root' | 'group'; parsed: number; giants: number }
-  | { kind: 'parsed' | 'pending' | 'tail' | 'plain' }
-  | { kind: 'giant'; block: Giant; window: Window | null }
+  | ({ kind: 'root' | 'group'; parsed: number; giants: number } & Reach)
+  | ({ kind: 'parsed' | 'pending' | 'tail' | 'plain' } & Reach)
+  | ({ kind: 'giant'; block: Giant; window: Window | null } & Reach)
 type GiantInfo = Extract<ChunkInfo, { kind: 'giant' }>
 
 const chunkInfo = new NodeProp<ChunkInfo>({ perNode: true })
+
+/** The parse reading each input, for decisions that read ahead. */
+const readers = new WeakMap<Input, (to: number) => void>()
+
+/**
+ * For a Markdown extension whose decision on the line being parsed read the
+ * input past that line: report that it read `input`, the input a `wrap`
+ * receives, up to `to`. The chunk the decision was made in, and the chunk
+ * before it when it was made on the chunk's first line, are parsed again
+ * once an edit lands before `to`.
+ */
+export function readAhead(input: Input, to: number) {
+  readers.get(input)?.(to)
+}
+
+/** The furthest reach of these chunks, relative to the first one's start. */
+function reachOf(chunks: readonly Tree[], positions: readonly number[]) {
+  let reach = -1
+  for (let i = 0; i < chunks.length; i++) {
+    const own = chunks[i]!.prop(chunkInfo)?.reach
+    if (own !== undefined) reach = Math.max(reach, positions[i]! + own)
+  }
+  return reach < 0 ? {} : { reach }
+}
 
 /**
  * On the top node of a window into a giant block: for ordered lists that
@@ -138,7 +169,7 @@ export type ChunkedMarkdownOptions = {
   groupSize?: number
   /** Blocks longer than this get inner nodes only near the viewport. */
   giantBlock?: number
-  /** Node names whose giant blocks need inner nodes only for their opening and last lines. */
+  /** Node names whose blocks longer than two chunks need inner nodes only for their opening and last lines. */
   opaque?: ReadonlySet<string>
   probe?: ChunkedMarkdownProbe
 }
@@ -158,6 +189,8 @@ type Old = {
   root: Tree
   /** Old nodes ending at or before this position keep their next two lines. */
   safe: number
+  /** Where the next change starts: decisions that read this far no longer hold. */
+  cut: number
 }
 
 /** A block being continued window by window; positions are absolute. */
@@ -476,6 +509,10 @@ class ChunkedParse implements ChunkedPartialParse {
   private snapshotKey = ''
   /** Units scanned after the demand region while looking for a resync point. */
   private resync = 0
+  /** The inner parse running now, whose line a read-ahead decision is on. */
+  private reading: PartialParse | null = null
+  /** Read-ahead decisions not yet in a chunk: the line each was on and how far it read. */
+  private reads: { at: number; to: number }[] = []
 
   private parser: ChunkedMarkdownParser
   private input: Input
@@ -507,15 +544,20 @@ class ChunkedParse implements ChunkedPartialParse {
     }
     this.olds = fragments.flatMap((fragment) => {
       if (fragment.tree.prop(chunkInfo)?.kind !== 'root') return []
-      let safe = length
+      let safe = length,
+        cut = Number.POSITIVE_INFINITY
       // A fragment cut by a change at the end of the text ends at its end too.
       if (fragment.to < length || fragment.openEnd) {
+        cut = fragment.to
         // A node may end differently if one of its next two lines changed.
         safe = lineStart(input, fragment.to)
         for (let i = 0; i < 2 && safe > 0; i++)
           safe = lineStart(input, safe - 1)
       }
-      return [{ fragment, root: fragment.tree, safe }]
+      return [{ fragment, root: fragment.tree, safe, cut }]
+    })
+    readers.set(input, (to) => {
+      this.reads.push({ at: this.reading?.parsedPos ?? this.pos, to })
     })
   }
 
@@ -564,7 +606,18 @@ class ChunkedParse implements ChunkedPartialParse {
       chunkPositions = [...this.chunkPositions]
     const groupStart = chunks.length ? this.groupStart : this.pos
     if (open) {
-      chunks.push(this.giantLeaf(this.giant(open, null), rest - open.from))
+      // Its read-ahead decisions so far come along, for an edit meanwhile.
+      let reach = -1
+      for (const read of this.reads)
+        if (read.at >= open.from && read.at < rest)
+          reach = Math.max(reach, read.to - open.from)
+      chunks.push(
+        this.giantLeaf(
+          this.giant(open, null),
+          rest - open.from,
+          reach < 0 ? {} : { reach },
+        ),
+      )
       chunkPositions.push(open.from - groupStart)
     }
     if (rest < length) {
@@ -580,6 +633,7 @@ class ChunkedParse implements ChunkedPartialParse {
               kind: 'group',
               parsed: this.groupParsed,
               giants: this.groupGiants,
+              ...reachOf(chunks, chunkPositions),
             },
           ],
         ]),
@@ -644,6 +698,8 @@ class ChunkedParse implements ChunkedPartialParse {
       const { parsed, giants } = counts(group)
       if (
         end <= old.safe &&
+        !this.readsPast(old, this.pos, group) &&
+        !this.edgeAt(old, end) &&
         !endsOpen(group.children.at(-1) as Tree | undefined) &&
         !(parsed && this.far(this.pos, end)) &&
         !(
@@ -669,6 +725,9 @@ class ChunkedParse implements ChunkedPartialParse {
       this.addTail()
       return true
     }
+    // A decision in the chunk, or one deciding where it ends, read past the change.
+    if (this.readsPast(old, this.pos, chunk) || this.edgeAt(old, end))
+      return false
     if (info?.kind === 'giant') return this.reuseGiant(old, chunk, info)
     if (end > old.safe) return false
     if (
@@ -681,11 +740,26 @@ class ChunkedParse implements ChunkedPartialParse {
       return true
     }
     if (info?.kind === 'parsed' && this.far(this.pos, end)) {
-      this.addChunk(this.leaf('pending', chunk.length))
+      this.addChunk(this.leaf('pending', chunk.length, info))
     } else this.addChunk(chunk)
     if (probe) probe.reusedNodes++
     this.pos = end
     return true
+  }
+
+  /** Whether a decision in an old chunk or group at `pos` read past the next change. */
+  private readsPast(old: Old, pos: number, tree: Tree) {
+    const reach = tree.prop(chunkInfo)?.reach
+    return reach !== undefined && pos + reach >= old.cut
+  }
+
+  /** Whether the old chunk at `pos` read past the next change deciding, on its first line, that a block starts there. */
+  private edgeAt(old: Old, pos: number) {
+    if (old.cut === Number.POSITIVE_INFINITY) return false
+    const at = pos + old.fragment.offset,
+      found = chunkAround(old.root, at)
+    const edge = found?.start === at ? found.chunk.prop(chunkInfo)?.edge : null
+    return edge != null && pos + edge >= old.cut
   }
 
   private reuseGiant(old: Old, chunk: Tree, info: GiantInfo) {
@@ -824,7 +898,9 @@ class ChunkedParse implements ChunkedPartialParse {
   private continueWork() {
     const work = this.work!
     let tree: Tree | null = null
+    this.reading = work.parse
     for (let i = 0; i < innerSteps && !tree; i++) tree = work.parse.advance()
+    this.reading = null
     if (!tree) return false
     this.work = null
     if (work.kind === 'scan') this.scanned(work.from, work.span, tree)
@@ -1109,7 +1185,9 @@ class ChunkedParse implements ChunkedPartialParse {
     else ranges.push({ from: at, to })
     const parse = this.parser.scan.startParse(input, [], ranges)
     let replayed: Tree | null = null
+    this.reading = parse
     while (!replayed) replayed = parse.advance()
+    this.reading = null
     const probe = this.parser.options.probe
     if (probe)
       probe.scannedUnits += ranges.reduce(
@@ -1344,7 +1422,12 @@ class ChunkedParse implements ChunkedPartialParse {
     const to = end < this.input.length ? end + 1 : end
     const demand = this.demand()
     if (demand && from >= demand.to) this.resync += to - from
-    if (to - from <= this.parser.giantBlock) {
+    // Opaque blocks get windows sooner: their renderers never read inner
+    // nodes, so a medium table need not be parsed again on every edit.
+    if (
+      to - from <=
+      (block.opaque ? 2 * this.parser.chunkSize : this.parser.giantBlock)
+    ) {
       if (this.wanted(from, to) && !this.stopped(from)) {
         this.startParse(from, to)
         return
@@ -1526,13 +1609,27 @@ class ChunkedParse implements ChunkedPartialParse {
     return hints
   }
 
-  private leaf(kind: 'pending' | 'tail' | 'plain', length: number) {
-    return new Tree(NodeType.none, [], [], length, [[chunkInfo, { kind }]])
+  private leaf(
+    kind: 'pending' | 'tail' | 'plain',
+    length: number,
+    reach: Reach = {},
+  ) {
+    const { reach: own, edge } = reach
+    return new Tree(NodeType.none, [], [], length, [
+      [
+        chunkInfo,
+        {
+          kind,
+          ...(own === undefined ? {} : { reach: own }),
+          ...(edge === undefined ? {} : { edge }),
+        },
+      ],
+    ])
   }
 
-  private giantLeaf(block: Giant, length: number) {
+  private giantLeaf(block: Giant, length: number, reach: Reach = {}) {
     return new Tree(NodeType.none, [], [], length, [
-      [chunkInfo, { kind: 'giant', block, window: null }],
+      [chunkInfo, { kind: 'giant', block, window: null, ...reach }],
     ])
   }
 
@@ -1559,6 +1656,39 @@ class ChunkedParse implements ChunkedPartialParse {
 
   /** Append a chunk starting at the current position. */
   private addChunk(chunk: Tree) {
+    // Read-ahead decisions made inside the chunk travel with it.
+    if (this.reads.length) {
+      const from = this.pos,
+        end = from + chunk.length
+      let reach = -1,
+        edge = -1
+      this.reads = this.reads.filter((read) => {
+        if (read.at >= end) return true
+        if (read.at >= from) {
+          reach = Math.max(reach, read.to - from)
+          if (read.at === from) edge = Math.max(edge, read.to - from)
+        }
+        return false
+      })
+      const info = chunk.prop(chunkInfo)
+      if (info && reach >= 0)
+        chunk = new Tree(
+          chunk.type,
+          chunk.children,
+          chunk.positions,
+          chunk.length,
+          [
+            [
+              chunkInfo,
+              {
+                ...info,
+                reach: Math.max(reach, info.reach ?? -1),
+                ...(edge >= 0 ? { edge: Math.max(edge, info.edge ?? -1) } : {}),
+              },
+            ],
+          ],
+        )
+    }
     if (!this.chunks.length) this.groupStart = this.pos
     this.chunks.push(chunk)
     this.chunkPositions.push(this.pos - this.groupStart)
@@ -1604,6 +1734,7 @@ class ChunkedParse implements ChunkedPartialParse {
               kind: 'group',
               parsed: this.groupParsed,
               giants: this.groupGiants,
+              ...reachOf(this.chunks, this.chunkPositions),
             },
           ],
         ],

@@ -6,6 +6,7 @@ import {
   ChunkedMarkdownParser,
   listWindow,
   parsedChunks,
+  readAhead,
   uncovered,
 } from '../src/renderer/src/chunked-markdown.ts'
 
@@ -666,4 +667,80 @@ test('a giant fence in a quote in a list item continues in bounded steps', () =>
     assert.ok(!uncovered(tree, middle, middle + 6000), `${at}`)
     assert.equal(chain(tree, middle + 3000), chain(exact, middle + 3000))
   }
+})
+
+test('a decision that read past an edit parses its chunk and the chunk before it again', () => {
+  // `$$` opens display math only when a closing `$$` line follows within
+  // 10,000 characters, as in the rich view, so the decision reads ahead.
+  let input = null
+  /** Where the display math opened at `start` ends, or null. */
+  const closing = (start) => {
+    const limit = Math.min(input.length, start + 10000)
+    const close = /\n\$\$(?=\n|$)/.exec(input.read(start + 2, limit))
+    readAhead(input, close ? start + 2 + close.index + 3 : limit)
+    return close ? start + 2 + close.index + 3 : null
+  }
+  const math = parser.configure([
+    GFM,
+    {
+      defineNodes: [{ name: 'BlockMath', block: true }],
+      wrap: (inner, outer) => {
+        input = outer
+        return inner
+      },
+      parseBlock: [
+        {
+          name: 'BlockMath',
+          before: 'FencedCode',
+          // Display math interrupts a paragraph.
+          endLeaf: (cx, line) =>
+            line.text.slice(line.pos) === '$$' &&
+            closing(cx.lineStart + line.pos) !== null,
+          parse(cx, line) {
+            if (line.text.slice(line.pos) !== '$$') return false
+            const start = cx.lineStart + line.pos
+            const end = closing(start)
+            if (end === null) return false
+            while (cx.lineStart + line.text.length < end && cx.nextLine()) {}
+            cx.nextLine()
+            cx.addElement(cx.elt('BlockMath', start, end))
+            return true
+          },
+        },
+      ],
+    },
+  ])
+  const run = (text, fragments, options) =>
+    finish(
+      new ChunkedMarkdownParser(math, math, options).startChunkedParse(
+        stringInput(text),
+        fragments,
+        { from: 0, to: 3000 },
+      ),
+    )
+  const check = (before, at, insert, options, label) => {
+    const old = run(before, [], options)
+    const text = before.slice(0, at) + insert + before.slice(at)
+    const tree = run(
+      text,
+      TreeFragment.applyChanges(TreeFragment.addTree(old), [
+        { fromA: at, toA: at, fromB: at, toB: at + insert.length },
+      ]),
+      options,
+    )
+    same(nodes(tree), nodes(math.parse(text)), text, label)
+  }
+  // A closing line typed far below an opener makes it display math.
+  const padded = `$$\nx\n\n${'padding\n\n'.repeat(600)}`
+  check(padded, padded.length, '$$', {}, 'closed far below')
+  // An opener that stops being math continues the paragraph before it, so
+  // the chunk ending at its line is parsed again too.
+  const interrupted = `${'intro words\n\n'.repeat(12)}para line\n$$\nx\n\n# heading\n\n$$\n\nend\n`
+  check(
+    interrupted,
+    interrupted.lastIndexOf('$$') + 2,
+    'z',
+    { chunkSize: 4, groupSize: 3 },
+    'opener reopened as text',
+  )
 })

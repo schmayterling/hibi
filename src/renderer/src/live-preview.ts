@@ -44,6 +44,7 @@ import {
   type FormattedNodeView,
   formattedContributions,
   formattedLiteral,
+  formattedRefresh,
   formattedViews,
   showMarkdownMarkers,
 } from './formatted-contributions'
@@ -1004,14 +1005,30 @@ function chunkLayout(
 
 type ChunkLayout = ReturnType<typeof chunkLayout>
 /**
- * Layout per chunk tree and set of views: reused chunks keep their
- * decorations, shifted to their position. A chunk under the selection whose
- * layout comes from contributed views is laid out again with its reveal state.
+ * Layout per chunk tree, set of views and set of nodes shown as written:
+ * reused chunks keep their decorations, shifted to their position. A chunk
+ * under the selection whose layout comes from contributed views is laid out
+ * again with its reveal state.
  */
 const chunkCache = new WeakMap<
   readonly FormattedNodeView[],
-  WeakMap<Tree, ChunkLayout>
+  WeakMap<readonly string[], WeakMap<Tree, ChunkLayout>>
 >()
+function cacheFor(state: EditorState) {
+  const views = state.facet(formattedViews),
+    literal = state.facet(formattedLiteral)
+  let byLiteral = chunkCache.get(views)
+  if (!byLiteral) {
+    byLiteral = new WeakMap()
+    chunkCache.set(views, byLiteral)
+  }
+  let cache = byLiteral.get(literal)
+  if (!cache) {
+    cache = new WeakMap()
+    byLiteral.set(literal, cache)
+  }
+  return cache
+}
 const intersects = (reveal: readonly Revealed[], from: number, to: number) =>
   reveal.some((range) => range.from <= to && range.to >= from)
 function layoutDecorations(
@@ -1019,12 +1036,7 @@ function layoutDecorations(
   tree: Tree,
   reveal: readonly Revealed[],
 ): DecorationSet {
-  const views = state.facet(formattedViews)
-  let cache = chunkCache.get(views)
-  if (!cache) {
-    cache = new WeakMap()
-    chunkCache.set(views, cache)
-  }
+  const cache = cacheFor(state)
   const out: Range<Decoration>[] = []
   for (const { from, chunk, covered } of parsedChunks(tree)) {
     let layout = cache.get(chunk)
@@ -1047,11 +1059,11 @@ function revealMatters(
   reveal: readonly Revealed[],
 ) {
   if (!reveal.length) return false
-  const cache = chunkCache.get(state.facet(formattedViews))
+  const cache = cacheFor(state)
   return parsedChunks(tree).some(
     ({ from, chunk }) =>
       intersects(reveal, from, from + chunk.length) &&
-      (cache?.get(chunk)?.sensitive ?? true),
+      (cache.get(chunk)?.sensitive ?? true),
   )
 }
 
@@ -1105,6 +1117,8 @@ export function livePreview(
         syntax.settling(state) ||
         (tree === syntax.tree(startState) &&
           state.facet(formattedViews) === startState.facet(formattedViews) &&
+          state.facet(formattedLiteral) ===
+            startState.facet(formattedLiteral) &&
           (sameRanges(reveal, revealedIn(startState)) ||
             (!revealMatters(state, tree, reveal) &&
               !revealMatters(state, tree, revealedIn(startState)))))
@@ -1160,7 +1174,12 @@ export function livePreview(
           tree !== syntax.tree(update.startState) ||
           update.state.field(layout) !== update.startState.field(layout) ||
           update.state.facet(formattedViews) !==
-            update.startState.facet(formattedViews)
+            update.startState.facet(formattedViews) ||
+          update.state.facet(formattedLiteral) !==
+            update.startState.facet(formattedLiteral) ||
+          update.transactions.some((transaction) =>
+            transaction.effects.some((effect) => effect.is(formattedRefresh)),
+          )
         )
           ({ decorations: this.decorations, atomic: this.atomic } = inline(
             update.view,

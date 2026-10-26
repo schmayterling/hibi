@@ -578,4 +578,33 @@ test('typing in a typst fence compiles once after the pause, and a large diagram
     async (expected) => (await window.hibi.getDocument()).markdown === expected,
     giant,
   )
+  // A fence in a list item indented with a tab keeps every character through the dialog.
+  const tabbed =
+    'Intro.\n\n-\t```typst\n\tpreserve marker: alpha\n\tpreserve marker: omega\n\t```\n\noutside tail.\n'
+  await writeFile(join(folder, 'notes', 'tabbed.md'), tabbed)
+  await open('tabbed.md')
+  await page.getByRole('button', { name: 'Edit Typst block' }).click()
+  const typstDialog = page.getByRole('dialog', { name: 'Edit Typst block' })
+  const typstField = typstDialog.getByRole('textbox', { name: 'Typst source' })
+  assert.equal(
+    await typstField.inputValue(),
+    'preserve marker: alpha\npreserve marker: omega',
+  )
+  await typstField.evaluate((element) => {
+    element.focus()
+    element.setSelectionRange(element.value.length, element.value.length)
+  })
+  await page.keyboard.insertText('\n// added')
+  await typstDialog.getByRole('button', { name: 'Apply' }).click()
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    'Intro.\n\n-\t```typst\n \tpreserve marker: alpha\n \tpreserve marker: omega\n \t// added\n\t```\n\noutside tail.\n',
+  )
+  await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    tabbed,
+  )
 })

@@ -1,101 +1,417 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
-import { parser, Table } from '@lezer/markdown'
-import {
-  alignments,
-  cellContent,
-  parseRow,
-  rowStart,
-} from '../src/renderer/src/formatted/table-source.ts'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import test, { after, before } from 'node:test'
+import { build } from 'vite'
+import { parseRow } from '../src/renderer/src/formatted/table-source.ts'
+import { bundledColorschemes } from '../src/shared/color-palettes.ts'
+import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
+import { electron, waitForDocumentEditor } from './electron.mjs'
+import { pressShortcut } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
-const markdown = parser.configure(Table)
-const cells = (text) =>
-  parseRow(text).cells.map(({ from, to }) => text.slice(from, to))
+const wide = Array.from({ length: 30 }, (_, i) => `col ${i}`)
+const note = `# Formatted tables
 
-test('rows split into cells at unescaped pipes, with or without outer pipes', () => {
-  assert.deepEqual(cells('| a | b |'), ['a', 'b'])
-  assert.deepEqual(cells('a | b'), ['a', 'b'])
-  assert.deepEqual(cells('|a|b|'), ['a', 'b'])
-  assert.deepEqual(cells('| a \\| b | c |'), ['a \\| b', 'c'])
-  // An even run of backslashes escapes itself, so the pipe ends the cell.
-  assert.deepEqual(cells('| a \\\\| b |'), ['a \\\\', 'b'])
-  assert.deepEqual(cells('| `x | y` |'), ['`x', 'y`'])
-  assert.deepEqual(cells('| `x \\| y` |'), ['`x \\| y`'])
-  assert.deepEqual(cells('|\ta\t|  b  |'), ['a', 'b'])
-  // Wide characters keep UTF-16 positions.
-  assert.deepEqual(cells('| 表格 | 😀 x |'), ['表格', '😀 x'])
-})
+A paragraph before the table.
 
-test('empty cells are the empty range where their text goes', () => {
-  const text = '| a ||  | b |'
-  const row = parseRow(text, 10)
-  assert.deepEqual(row.pipes, [10, 14, 15, 18, 22])
-  assert.deepEqual(
-    row.cells.map(({ from, to }) => [from, to]),
-    [
-      [12, 13],
-      [15, 15],
-      [17, 17],
-      [20, 21],
-    ],
-  )
-})
+| Name | **Bold** head | Right | Center |
+| --- | :-- | --: | :-: |
+| one | *em* and \`code\` | 1 | x |
+| two \\| pipe | [link](https://example.com/) ~~gone~~ | 22 |
+| three | a<br>b | 333 | z | extra |
 
-test('cells match the formatted view parser on generated tables', () => {
-  let seed = 7
-  const random = (n) => {
-    seed = (seed * 16807) % 2147483647
-    return seed % n
+| ${wide.join(' | ')} |
+| ${wide.map(() => '---').join(' | ')} |
+| ${wide.map((_, i) => `value ${i}`).join(' | ')} |
+
+- item
+
+  | a | b |
+  | - | - |
+  | c | d |
+
+> quoted
+>
+> | q1 | q2 |
+> | -- | -- |
+> | q3 | q4 |
+>
+> after the quoted table
+
+Closing paragraph.
+`
+
+let app, folder, page, harness
+
+const palette = (id) => {
+  const scheme = bundledColorschemes.find((entry) => entry.id === id)
+  return {
+    id,
+    appearance: scheme.appearance,
+    css: `:root { color-scheme: ${scheme.appearance}; ${COLOR_TOKENS.map((key) => `--${key}: ${scheme.colors[key]};`).join(' ')} }`,
   }
-  const pieces = ['a', 'bb', ' ', '\t', '|', '\\|', '\\\\', '`', '*', '表', '😀']
-  const row = () =>
-    Array.from({ length: 1 + random(12) }, () => pieces[random(pieces.length)]).join('')
-  for (let round = 0; round < 400; round++) {
-    const body = Array.from({ length: 1 + random(4) }, row)
-    const doc = `| h1 | h2 |\n| --- | --- |\n${body.map((line) => `x${line}`).join('\n')}`
-    const tree = markdown.parse(doc)
-    let line = 2
-    tree.iterate({
-      enter(node) {
-        if (node.name !== 'TableRow') return
-        const text = doc.slice(node.from, node.to)
-        const expected = node.node
-          .getChildren('TableCell')
-          .map((cell) => [cell.from - node.from, cell.to - node.from])
-        const actual = parseRow(text)
-          .cells.filter(({ from, to }) => to > from)
-          .map(({ from, to }) => [from, to])
-        assert.deepEqual(actual, expected, JSON.stringify(text))
-        line++
-        return false
+}
+const applyPalette = (target, scheme) =>
+  target.evaluate(({ id, appearance, css }) => {
+    let style = document.querySelector('style[data-test-palette]')
+    if (!style) {
+      style = document.createElement('style')
+      style.dataset.testPalette = ''
+      document.head.append(style)
+    }
+    // Scrollbars show the document's height, which the formatted view estimates for text it has not rendered.
+    style.textContent = `${css} .rich-pane { scrollbar-width: none !important; }`
+    document.documentElement.dataset.colorscheme = id
+    document.documentElement.dataset.appearance = appearance
+  }, scheme)
+
+before(
+  async () => {
+    folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-tables-'))
+    const bundle = join(folder, 'bundle')
+    await build({
+      configFile: false,
+      logLevel: 'silent',
+      define: { 'process.env.NODE_ENV': '"production"' },
+      build: {
+        outDir: bundle,
+        assetsInlineLimit: 0,
+        lib: {
+          entry: resolve('tests/fixtures/live-preview.ts'),
+          name: 'LivePreviewHarness',
+          formats: ['iife'],
+          fileName: () => 'harness.js',
+          cssFileName: 'harness',
+        },
       },
     })
-    assert.ok(line > 2, doc)
+    const html = join(bundle, 'index.html')
+    await writeFile(
+      html,
+      '<!doctype html><html lang="en"><head><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
+    )
+    await mkdir(join(folder, 'notes'))
+    const file = join(folder, 'notes', 'tables.md')
+    await writeFile(file, note)
+    app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+    })
+    page = await app.firstWindow()
+    page.setDefaultTimeout(10000)
+    await waitForDocumentEditor(app, page)
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, file)
+    await pressShortcut(
+      app,
+      process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
+    )
+    await page.locator('.tiptap h1', { hasText: 'Formatted tables' }).waitFor()
+    const size = await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].getContentSize(),
+    )
+    const next = app.waitForEvent('window')
+    await app.evaluate(
+      ({ BrowserWindow }, { path, size }) => {
+        const window = new BrowserWindow({
+          width: size[0],
+          height: size[1],
+          useContentSize: true,
+          show: false,
+          webPreferences: {
+            sandbox: true,
+            contextIsolation: true,
+            nodeIntegration: false,
+            backgroundThrottling: false,
+          },
+        })
+        void window.loadFile(path)
+      },
+      { path: html, size },
+    )
+    harness = await next
+    harness.setDefaultTimeout(10000)
+    await harness.waitForFunction(() => Boolean(window.livePreview))
+  },
+  { timeout: 90000 },
+)
+
+after(
+  async () => {
+    await app?.close()
+    if (folder) await rm(folder, { recursive: true, force: true })
+  },
+  { timeout: 30000 },
+)
+
+/**
+ * Every rendered table in a pane, by its header text: its cells' boxes, text
+ * and styles, and where it is from the document's top, or above the closing
+ * paragraph when the pane is scrolled down (the formatted view estimates the
+ * height of text it has not rendered).
+ */
+const tables = (target, fromEnd) =>
+  target.evaluate((fromEnd) => {
+    const pane = document.querySelector('.rich-pane')
+    const origin = pane.getBoundingClientRect()
+    const closing = [...pane.querySelectorAll('p, .cm-line')]
+      .find((element) => element.textContent.startsWith('Closing paragraph'))
+      ?.getBoundingClientRect().top
+    return [...pane.querySelectorAll('table')].map((table) => {
+      const frame = table.getBoundingClientRect()
+      return {
+        header: table.rows[0].innerText,
+        at: [
+          frame.left - origin.left + pane.scrollLeft,
+          fromEnd
+            ? closing - frame.top
+            : frame.top - origin.top + pane.scrollTop,
+          frame.width,
+          frame.height,
+        ].map((value) => Math.round(value)),
+        rows: [...table.rows].map((row) =>
+          [...row.cells].map((cell) => {
+            const box = cell.getBoundingClientRect()
+            const style = getComputedStyle(cell)
+            const inner = cell.querySelector(
+              'strong, em, s, code, a, br, .hibi-lp-strong, .hibi-lp-em, .hibi-lp-strike, .hibi-lp-code, .hibi-lp-link',
+            )
+            const innerStyle = inner && getComputedStyle(inner)
+            return {
+              text: cell.innerText,
+              box: [
+                box.left - frame.left,
+                box.top - frame.top,
+                box.width,
+                box.height,
+              ].map((value) => Math.round(value)),
+              tag: cell.tagName,
+              style: [
+                style.fontFamily,
+                style.fontSize,
+                style.fontWeight,
+                style.color,
+                style.backgroundColor,
+                style.textAlign,
+                style.borderTopColor,
+                style.paddingLeft,
+              ],
+              inner: innerStyle && [
+                inner.textContent,
+                innerStyle.fontFamily,
+                innerStyle.fontSize,
+                innerStyle.fontWeight,
+                innerStyle.fontStyle,
+                innerStyle.color,
+                innerStyle.backgroundColor,
+                innerStyle.textDecorationLine,
+              ],
+            }
+          }),
+        ),
+      }
+    })
+  }, fromEnd)
+
+/** Scroll a pane to `top`, as a fraction of its scroll range. */
+const scroll = (target, fraction) =>
+  target.evaluate(async (fraction) => {
+    const pane = document.querySelector('.rich-pane')
+    pane.scrollTop = (pane.scrollHeight - pane.clientHeight) * fraction
+    for (let frame = 0; frame < 3; frame++)
+      await new Promise(requestAnimationFrame)
+  }, fraction)
+
+test('tables in the formatted view match the rich view in light and dark', {
+  timeout: 60000,
+}, async () => {
+  const richPane = page.locator('.rich-pane')
+  const pane = await richPane.evaluate((element) => {
+    const box = element.getBoundingClientRect()
+    return { width: box.width, height: box.height }
+  })
+  await harness.evaluate(
+    ({ doc, pane }) => window.livePreview.mount(doc, pane),
+    { doc: note, pane },
+  )
+  for (const id of ['hibi-light', 'hibi-dark']) {
+    const scheme = palette(id)
+    await applyPalette(page, scheme)
+    await applyPalette(harness, scheme)
+    // The formatted view renders the tables near the visible part: compare
+    // them at the top and the bottom of the note.
+    const compared = new Set()
+    for (const fraction of [0, 1]) {
+      await scroll(page, fraction)
+      await scroll(harness, fraction)
+      const rich = await tables(page, fraction === 1)
+      for (const table of await tables(harness, fraction === 1)) {
+        const expected = rich.find((other) => other.header === table.header)
+        // Same cells, at the same places, with the same text and styles.
+        assert.deepEqual(table, expected, `${id} ${table.header}`)
+        compared.add(table.header)
+      }
+    }
+    assert.equal(compared.size, 4, [...compared].join(' / '))
+    await scroll(page, 0)
+    await scroll(harness, 0)
+    const images = [
+      await richPane.screenshot({
+        path: `test-results/formatted-tables-rich-${id}.png`,
+      }),
+      await harness.locator('.rich-pane').screenshot({
+        path: `test-results/formatted-tables-formatted-${id}.png`,
+      }),
+    ].map((image) => image.toString('base64'))
+    const difference = await app.evaluate(({ nativeImage }, images) => {
+      const [a, b] = images.map((image) =>
+        nativeImage.createFromBuffer(Buffer.from(image, 'base64')),
+      )
+      const size = a.getSize(),
+        other = b.getSize()
+      if (size.width !== other.width || size.height !== other.height) return 1
+      const left = a.toBitmap(),
+        right = b.toBitmap()
+      let changed = 0
+      for (let i = 0; i < left.length; i += 4)
+        if (
+          Math.abs(left[i] - right[i]) > 8 ||
+          Math.abs(left[i + 1] - right[i + 1]) > 8 ||
+          Math.abs(left[i + 2] - right[i + 2]) > 8
+        )
+          changed++
+      return changed / (left.length / 4)
+    }, images)
+    console.log(JSON.stringify({ id, difference }))
+    assert.ok(difference < 0.002, `${id}: ${difference}`)
   }
 })
 
-test('delimiter rows give column alignments', () => {
-  assert.deepEqual(alignments('| --- | :-- | --: | :-: |'), [
-    null,
-    'left',
-    'right',
-    'center',
-  ])
-  assert.deepEqual(alignments(':--|--:'), ['left', 'right'])
-  assert.deepEqual(alignments('| - |'), [null])
+test('a 10,000-row table renders the rows in view and one row per edit', {
+  timeout: 120000,
+}, async () => {
+  const result = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    const rows = Array.from(
+      { length: 10000 },
+      (_, i) => `| row ${i} | **bold ${i}** | \`code ${i}\` |`,
+    )
+    const doc = `# Big table\n\nIntro.\n\n| a | b | c |\n| --- | :-: | --: |\n${rows.join('\n')}\n\nAfter.\n`
+    await preview.mount(doc, { width: 1000, height: 800 })
+    const view = preview.view()
+    const rendered = () =>
+      document.querySelectorAll('.hibi-lp-table tr[data-line]').length
+    // The table appears once its block is scanned in idle slices.
+    for (let i = 0; i < 500 && !document.querySelector('.hibi-lp-table'); i++)
+      await new Promise((done) => setTimeout(done, 20))
+    await preview.settle()
+    const top = rendered()
+    const pane = document.querySelector('.rich-pane')
+    const table = document.querySelector('.hibi-lp-table')
+    const box = table.getBoundingClientRect()
+    pane.scrollTop +=
+      box.top - pane.getBoundingClientRect().top + box.height / 2
+    await preview.settle()
+    await preview.settle()
+    const shown = [
+      ...document.querySelectorAll('.hibi-lp-table tr[data-line]'),
+    ].filter((row) => {
+      const rect = row.getBoundingClientRect()
+      return rect.bottom > 0 && rect.top < innerHeight
+    })
+    const middle = rendered()
+    // One keystroke in a visible row re-renders that row only.
+    const line = Number(shown[3].dataset.line)
+    const header = view.state.doc.lineAt(doc.indexOf('| a |')).number
+    const target = view.state.doc.line(header + line)
+    const added = []
+    const observer = new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.addedNodes)
+          if (node.nodeName === 'TR') added.push(node.dataset.line)
+    })
+    observer.observe(table.querySelector('tbody'), { childList: true })
+    preview.reset()
+    view.dispatch({ changes: { from: target.from + 6, insert: 'X' } })
+    await preview.settle()
+    observer.disconnect()
+    return {
+      top,
+      middle,
+      shown: shown.map((row) => Number(row.dataset.line)),
+      line,
+      added,
+      text: table.querySelector(`tr[data-line="${line}"]`)?.innerText,
+      probe: { ...preview.probe },
+      height: box.height,
+    }
+  })
+  console.log(JSON.stringify(result))
+  assert.ok(result.height > 10000 * 50, 'spacers keep the full height')
+  assert.ok(result.top < 100, `${result.top} rows at the top`)
+  assert.ok(result.middle < 100, `${result.middle} rows in the middle`)
+  assert.ok(
+    result.shown.length > 5 &&
+      result.shown.every((line) => line > 4000 && line < 6000),
+    JSON.stringify(result.shown),
+  )
+  assert.deepEqual(result.added, [String(result.line)])
+  assert.match(result.text, /^row X/)
 })
 
-test('cell content reads escaped pipes as pipes and maps back to the source', () => {
-  const { text, source } = cellContent('a \\| `b\\|c`')
-  assert.equal(text, 'a | `b|c`')
-  assert.equal(source[2], 3, 'the pipe is after its backslash')
-  assert.equal(source[text.length], 11)
-  assert.deepEqual(cellContent('plain').source, [0, 1, 2, 3, 4, 5])
-})
-
-test('rows in quotes start after their quote markers', () => {
-  assert.equal(rowStart('> | a |', 1), 2)
-  assert.equal(rowStart('> > | a |', 2), 4)
-  assert.equal(rowStart('  >| a |', 1), 3)
-  assert.equal(rowStart('| a |', 0), 0)
+test('clicking a cell reveals the table source with the caret in that cell', {
+  timeout: 90000,
+}, async () => {
+  // Quitting with the edited note answers the unsaved-changes prompt.
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
+  )
+  await page.locator('.rich-pane .hibi-lp-table').first().waitFor()
+  // Hidden windows have no focus; revealing source needs a focused editor.
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await page
+    .locator('.rich-pane .hibi-lp-table td', { hasText: 'two | pipe' })
+    .click()
+  const line = page.locator('.rich-pane .cm-line', {
+    hasText: '| two \\| pipe |',
+  })
+  await line.waitFor()
+  // Other tables stay rendered.
+  await page
+    .locator('.rich-pane .hibi-lp-table th', { hasText: 'col 0' })
+    .waitFor()
+  await page.keyboard.type('!')
+  await waitForAsync(page, async () =>
+    (await window.hibi.getDocument()).markdown.includes('!'),
+  )
+  // The typed text lands in the clicked cell's source.
+  const { markdown } = await page.evaluate(() => window.hibi.getDocument())
+  const row = markdown.split('\n').find((text) => text.startsWith('| two'))
+  const [first, ...rest] = parseRow(row).cells.map(({ from, to }) =>
+    row.slice(from, to),
+  )
+  assert.equal(first.replace('!', ''), 'two \\| pipe', row)
+  assert.deepEqual(rest, ['[link](https://example.com/) ~~gone~~', '22'])
+  // Leaving the table renders it again with the edit.
+  await page
+    .locator('.rich-pane .cm-line', {
+      hasText: 'A paragraph before the table.',
+    })
+    .click()
+  await page.locator('.rich-pane .hibi-lp-table td', { hasText: '!' }).waitFor()
 })

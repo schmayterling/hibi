@@ -72,7 +72,7 @@ export type MetadataWorkerRequest =
     }
   | { kind: 'parseClear' }
   | { kind: 'resultChunk' }
-  | { kind: 'incomplete'; input: MetadataParseInput }
+  | { kind: 'incomplete'; input: MetadataParseInput | MetadataFileInput }
 type MetadataResult =
   | WorkspaceMetadataPage
   | HeadingPage
@@ -371,6 +371,26 @@ export class WorkspaceMetadataParser {
     )
   }
 
+  private async linearFallback(
+    input: MetadataParseInput,
+    active: () => boolean,
+    run: () => Promise<MetadataResult>,
+  ): Promise<MetadataResult> {
+    try {
+      return await run()
+    } catch (error) {
+      if (!active()) return null
+      if (
+        !this.resourceFailure(error) ||
+        !(error as { metadataWorkerReady?: boolean }).metadataWorkerReady
+      )
+        throw error
+      if (this.worker) this.fail(this.worker, error as Error)
+      await this.stopping
+      return this.send({ kind: 'incomplete', input }, active)
+    }
+  }
+
   private async parseInput(
     input: MetadataParseInput,
     active: () => boolean,
@@ -390,8 +410,10 @@ export class WorkspaceMetadataParser {
       if (this.worker) this.fail(this.worker, error as Error)
       await this.stopping
       if (!active()) return null
-      if (!(await transfer()) || !active()) return null
-      return await this.send({ kind: 'parseEnd', fallback: true }, active)
+      return await this.linearFallback(input, active, async () => {
+        if (!(await transfer()) || !active()) return null
+        return this.send({ kind: 'parseEnd', fallback: true }, active)
+      })
     } finally {
       // An obsolete transaction must release its chunks before another starts.
       if (this.worker) await this.send({ kind: 'parseClear' }, () => true)
@@ -468,7 +490,17 @@ export class WorkspaceMetadataParser {
         if (request.kind === 'cached') return null
         await this.stopping
         if (!active()) return null
-        return this.send({ ...request, fallback: true }, active)
+        return this.linearFallback(
+          {
+            id: request.page.id ?? '',
+            path: request.page.path,
+            version: request.version,
+            fingerprint: request.fingerprint,
+            syntax: request.syntax,
+          },
+          active,
+          () => this.send({ ...request, fallback: true }, active),
+        )
       }
     })) as WorkspaceMetadataPage | null
   }

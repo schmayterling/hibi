@@ -199,7 +199,7 @@ export function incompleteMetadataPage(
       referenceComplete: false,
       tags: [],
       properties: { values: {}, complete: false },
-      headings: { items: [], complete: false },
+      headings: { items: [], complete: false, count: 0, paged: true },
     },
   }
 }

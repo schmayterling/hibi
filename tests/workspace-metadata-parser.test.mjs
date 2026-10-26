@@ -18,7 +18,10 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { promisify } from 'node:util'
 import { diskIndexVersion } from '../src/main/workspace-index-cache.ts'
-import { WorkspaceMetadataParser } from '../src/main/workspace-metadata-parser.ts'
+import {
+  incompleteMetadataPage,
+  WorkspaceMetadataParser,
+} from '../src/main/workspace-metadata-parser.ts'
 import {
   RecordReader,
   RecordWriter,
@@ -1020,6 +1023,221 @@ test('resource failures retransfer into linear fallback and retain completed-bui
     ],
   )
 })
+
+function failBothParsers(t, parser, code, beforeSecond) {
+  let failures = 0
+  const attach = (worker) => {
+    const post = worker.postMessage.bind(worker)
+    t.mock.method(worker, 'postMessage', (request) => {
+      if (
+        failures < 2 &&
+        (request.kind === 'parseEnd' || request.kind === 'parse')
+      ) {
+        failures++
+        beforeSecond?.(failures)
+        worker.emit(
+          'error',
+          Object.assign(new Error('resource fixture'), {
+            code: Array.isArray(code) ? code[failures - 1] : code,
+          }),
+        )
+      } else post(request)
+    })
+    return worker
+  }
+  const start = parser.start.bind(parser)
+  t.mock.method(parser, 'start', (...args) => attach(start(...args)))
+  attach(parser.worker)
+  return () => failures
+}
+
+for (const mode of ['file', 'source', 'request']) {
+  test(`double resource failure persists incomplete metadata and continues for ${mode}`, async (t) => {
+    const { directory, create, close } = await fixture(t)
+    let parser = create()
+    const note =
+      mode === 'file' ? await diskInput(directory, '# resource') : input()
+    await parser.beginBuild(current)
+    const failures = failBothParsers(
+      t,
+      parser,
+      mode === 'source' ? 'ERR_STRING_TOO_LONG' : 'ERR_WORKER_OUT_OF_MEMORY',
+    )
+    const page =
+      mode === 'file'
+        ? await parser.parseFile(note, current)
+        : mode === 'source'
+          ? await parser.parseSource(note, snapshot('# resource'), current)
+          : await parser.request(parse('# resource'), current)
+    const expected = incompleteMetadataPage(note)
+    assert.equal(failures(), 2)
+    assert.deepEqual(page, expected)
+    assert.deepEqual(page.metadata.headings, {
+      items: [],
+      complete: false,
+      count: 0,
+      paged: true,
+    })
+    const cached = { ...descriptor(note.path), version: note.version }
+    assert.deepEqual(await parser.request(cached, current), expected)
+    assert.deepEqual(await parser.readHeadings(cached, 0, 10, current), {
+      items: [],
+      nextOffset: 0,
+      hasMore: false,
+      complete: false,
+    })
+    assert.equal(
+      (await readdir(directory)).some((name) =>
+        /\.h(?:idx|dat)$|\.tmp$/.test(name),
+      ),
+      false,
+    )
+    const next = await parser.parseSource(
+      input('next.md'),
+      snapshot('# next'),
+      current,
+    )
+    assert.equal(await headingFrom(parser, next), 'next')
+    assert.equal(await parser.finishBuild(current), true)
+    await close(parser)
+    parser = create()
+    assert.deepEqual(await parser.cachedBatch([cached], current), [expected])
+    assert.deepEqual(await parser.readHeadings(cached, 0, 10, current), {
+      items: [],
+      nextOffset: 0,
+      hasMore: false,
+      complete: false,
+    })
+    assert.equal(
+      await parser.request({ ...cached, version: 'disk:changed' }, current),
+      null,
+    )
+  })
+}
+
+test('double resource failure leaves draft incomplete headings transient', async (t) => {
+  const { directory, create } = await fixture(t)
+  const parser = create()
+  const note = { ...input(), version: 'draft:1' }
+  await parser.beginBuild(current)
+  failBothParsers(t, parser, 'ERR_WORKER_OUT_OF_MEMORY')
+  assert.deepEqual(
+    await parser.parseSource(note, snapshot('private draft'), current),
+    incompleteMetadataPage(note),
+  )
+  assert.deepEqual(
+    await parser.readHeadings(
+      { ...descriptor(), version: note.version },
+      0,
+      10,
+      current,
+    ),
+    {
+      items: [],
+      nextOffset: 0,
+      hasMore: false,
+      complete: false,
+    },
+  )
+  assert.deepEqual(await readdir(directory), [])
+})
+
+test('obsolete fallback resource failures return null without persisting incomplete metadata', async (t) => {
+  const { directory, create } = await fixture(t)
+  const parser = create()
+  await parser.beginBuild(current)
+  let live = true
+  failBothParsers(t, parser, 'ERR_WORKER_OUT_OF_MEMORY', (failure) => {
+    if (failure === 2) live = false
+  })
+  assert.equal(
+    await parser.parseSource(input(), snapshot('# obsolete'), () => live),
+    null,
+  )
+  assert.deepEqual(await readdir(directory), [])
+  assert.equal(
+    (await parser.parseSource(input('next.md'), snapshot('# next'), current))
+      .metadata.headings.count,
+    1,
+  )
+})
+
+test('fallback program and startup errors propagate without incomplete records', async (t) => {
+  const { directory, create } = await fixture(t)
+  const broken = join(directory, 'broken-fallback.mjs')
+  await writeFile(
+    broken,
+    "throw Object.assign(new Error('startup fixture'), { code: 'ERR_WORKER_OUT_OF_MEMORY' })",
+  )
+  for (const startup of [false, true]) {
+    const options = { entry }
+    const parser = create(options)
+    await parser.beginBuild(current)
+    failBothParsers(
+      t,
+      parser,
+      ['ERR_WORKER_OUT_OF_MEMORY', 'ERR_FIXTURE_PROGRAM'],
+      (failure) => {
+        if (startup && failure === 1) options.entry = broken
+      },
+    )
+    await assert.rejects(
+      parser.parseSource(input(), snapshot('# fault'), current),
+      (error) =>
+        error.code ===
+          (startup ? 'ERR_WORKER_OUT_OF_MEMORY' : 'ERR_FIXTURE_PROGRAM') &&
+        error.metadataWorkerReady === !startup,
+    )
+    assert.equal((await readdir(directory)).includes(`${id}.json`), false)
+    t.mock.restoreAll()
+    options.entry = entry
+    assert.equal(
+      (await parser.parseSource(input('next.md'), snapshot('# next'), current))
+        .metadata.headings.count,
+      1,
+    )
+  }
+})
+
+for (const mode of ['stale', 'EIO']) {
+  test(`double resource failure never persists an incomplete file after ${mode}`, async (t) => {
+    const { directory, create } = await fixture(t)
+    const { writeFileSync } = await import('node:fs')
+    const note = await diskInput(directory, '# resource')
+    const flag = join(directory, 'fault-flag')
+    const bundle = join(directory, 'incomplete-stat.mjs')
+    await writeFile(
+      bundle,
+      `
+import fs from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
+const lstat = fs.lstat
+fs.lstat = async (path, ...args) => {
+  if (String(path) === ${JSON.stringify(note.nativePath)} && existsSync(${JSON.stringify(flag)}))
+    throw Object.assign(new Error('stat fixture'), { code: 'EIO' })
+  return lstat(path, ...args)
+}
+syncBuiltinESMExports()
+await import(${JSON.stringify(entry.href)})
+`,
+    )
+    const parser = create({ entry: bundle })
+    await parser.beginBuild(current)
+    failBothParsers(t, parser, 'ERR_WORKER_OUT_OF_MEMORY', (failure) => {
+      if (failure !== 2) return
+      if (mode === 'stale') writeFileSync(note.nativePath, '# changed')
+      else writeFileSync(flag, '')
+    })
+    assert.equal(await parser.parseFile(note, current), null)
+    assert.equal((await readdir(directory)).includes(`${note.id}.json`), false)
+    assert.equal(
+      (await parser.parseSource(input('next.md'), snapshot('# next'), current))
+        .metadata.headings.count,
+      1,
+    )
+  })
+}
 
 test('cache resource failures are misses; critical worker program errors propagate', async (t) => {
   const { create, directory } = await fixture(t)

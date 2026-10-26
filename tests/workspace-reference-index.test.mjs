@@ -161,7 +161,7 @@ test('non-markdown pages do not add source links and result bytes are capped', (
   assert.equal(second.hasMore, false)
 })
 
-test('lazy tag, property, heading and path queries invalidate changed notes', () => {
+test('lazy tag, property and path queries invalidate changed notes', () => {
   const index = new WorkspaceReferenceIndex()
   index.apply(workspace, [
     page('a.md', '---\ntitle: Alpha\ntags: [one, two]\n---\n# Intro\n\n#work'),
@@ -501,7 +501,7 @@ test('long tags remain in the index and bounded summary pages', () => {
   })
 })
 
-test('large frontmatter preserves references, tags, properties, and headings', () => {
+test('large frontmatter preserves references, tags, and properties', () => {
   let parses = 0
   const index = new WorkspaceReferenceIndex((source) => {
     parses++
@@ -647,7 +647,7 @@ test('link normalization preserves root, encoded filenames and wiki heading sema
     assert.equal(wikiTarget('docs/from.md', href, paths), expected)
 })
 
-test('oversized metadata fields advance their offsets and leave later records reachable', () => {
+test('oversized tag fields advance their offsets and leave later records reachable', () => {
   const index = new WorkspaceReferenceIndex()
   index.apply(workspace, [
     page(

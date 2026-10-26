@@ -396,6 +396,30 @@ async function remember(
   return false
 }
 
+async function incomplete(input: MetadataParseInput | MetadataFileInput) {
+  if ('nativePath' in input) {
+    const info = await lstat(input.nativePath, { bigint: true })
+    if (
+      !info.isFile() ||
+      info.isSymbolicLink() ||
+      diskIndexVersion(info) !== input.expectedVersion
+    )
+      return null
+  }
+  const page = incompleteMetadataPage(input)
+  if (await remember(page, input.fingerprint)) headingLocations.delete(input.id)
+  else
+    headingLocations.set(input.id, {
+      version: input.version,
+      fingerprint: input.fingerprint,
+      path: input.path,
+      directory: headingDirectory,
+      store: undefined,
+      complete: false,
+    })
+  return page
+}
+
 async function clearPruning(): Promise<void> {
   const directory = pruning
   pruning = undefined
@@ -672,7 +696,7 @@ parentPort?.on('message', async (request: MetadataWorkerRequest) => {
     await results?.return(undefined)
     results = undefined
     if (request.kind === 'incomplete') {
-      value = incompleteMetadataPage(request.input)
+      value = await incomplete(request.input)
     } else if (request.kind === 'readHeadings') {
       value = await readHeadings(request.input, request.offset, request.limit)
     } else if (request.kind === 'beginBuild') {
@@ -741,7 +765,8 @@ parentPort?.on('message', async (request: MetadataWorkerRequest) => {
     const disk =
       request.kind === 'fileStart' ||
       request.kind === 'fileChunk' ||
-      request.kind === 'parseEnd'
+      request.kind === 'parseEnd' ||
+      request.kind === 'incomplete'
     parentPort?.postMessage(
       disk && readFailure(error)
         ? { value: null }

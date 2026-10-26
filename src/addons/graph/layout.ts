@@ -7,6 +7,7 @@ import {
   type Simulation,
   type SimulationNodeDatum,
 } from 'd3-force'
+import type { pageSteps } from './page-step'
 
 /** Renderer-to-layout messages. Node indices follow the graph's node order. */
 export type LayoutMessage =
@@ -46,11 +47,13 @@ export type LayoutFrame = {
 /**
  * Posts frames only while the renderer has returned a buffer, so a busy page
  * never queues them. `slice` bounds each run of reduced-motion steps; a page
- * running the layout itself uses a short one so input stays responsive.
+ * running the layout itself uses a short one and passes `pieces`, which splits
+ * each step so input stays responsive however large the graph.
  */
 export function createLayout(
   post: (frame: LayoutFrame, transfer: Transferable[]) => void,
   slice = 50,
+  pieces?: typeof pageSteps,
 ) {
   let simulation: Simulation<SimulationNodeDatum, undefined> | null = null
   let nodes: SimulationNodeDatum[] = []
@@ -62,10 +65,16 @@ export function createLayout(
   let dirty = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let spare: ArrayBuffer[] = []
+  let stepper: ReturnType<typeof pageSteps> | null = null
+  // A step begun in pieces, and when it began.
+  let partial: Generator<number, void> | null = null
+  let begun = 0
   const settled = () =>
     !simulation ||
     !nodes.length ||
-    (reduced ? remaining <= 0 : simulation.alpha() < simulation.alphaMin())
+    (reduced
+      ? remaining <= 0
+      : !partial && simulation.alpha() < simulation.alphaMin())
   function publish() {
     const buffer = spare.pop()
     dirty = !buffer
@@ -81,25 +90,38 @@ export function createLayout(
     simulation!.tick(count)
     ticks += count
   }
+  /** Runs one step, or as much of it as fits before `deadline` in pieces. */
+  function advance(deadline: number) {
+    if (!stepper) {
+      step(1)
+      return true
+    }
+    partial ??= stepper()
+    while (!partial.next().done) if (performance.now() >= deadline) return false
+    partial = null
+    ticks++
+    return true
+  }
   function run() {
     timer = undefined
     if (!simulation || settled()) return
     const started = performance.now()
     if (reduced) {
       // Reduced motion shows only the first and final arrangements.
-      while (remaining > 0 && performance.now() - started < slice) {
-        step(1)
-        remaining--
-      }
+      while (remaining > 0 && performance.now() - started < slice)
+        if (advance(started + slice)) remaining--
       if (remaining <= 0) publish()
       else timer = setTimeout(run, 0)
       return
     }
     // Pace motion near the display rate; heavier graphs step back to back.
-    step(1)
-    publish()
+    if (!partial) begun = started
+    if (advance(started + slice)) publish()
     if (!settled())
-      timer = setTimeout(run, Math.max(0, 16 - (performance.now() - started)))
+      timer = setTimeout(
+        run,
+        partial ? 0 : Math.max(0, 16 - (performance.now() - begun)),
+      )
   }
   function start() {
     if (timer === undefined && !settled()) timer = setTimeout(run, 0)
@@ -119,17 +141,22 @@ export function createLayout(
         node.fy = node.y = message.y
         drag = message.drag
         if (message.moved) {
-          if (message.reduced) step(nodes.length > 80 ? 2 : 30)
-          else {
+          const count = nodes.length > 80 ? 2 : 30
+          if (!message.reduced) {
             simulation!.alpha(0.15)
             start()
-          }
+          } else if (stepper) {
+            // Pieces finish these steps between tasks; a drag adds no backlog.
+            remaining = Math.max(remaining, count)
+            start()
+          } else step(count)
         }
         publish()
         return
       }
       clearTimeout(timer)
       timer = undefined
+      partial = null
       simulation?.stop()
       const { edges, positions } = message
       const count = positions.length / 2
@@ -167,6 +194,7 @@ export function createLayout(
         .force('charge', forceManyBody().strength(-180))
         .force('collide', forceCollide(22))
         .force('center', forceCenter())
+      stepper = pieces?.(nodes, edges, simulation) ?? null
       remaining = reduced ? 160 : 0
       spare = [new ArrayBuffer(count * 8), new ArrayBuffer(count * 8)]
       if (reduced) {
@@ -179,6 +207,7 @@ export function createLayout(
     },
     stop() {
       clearTimeout(timer)
+      partial = null
       simulation?.stop()
       simulation = null
     },

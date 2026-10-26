@@ -419,18 +419,21 @@ export function GraphCanvas({
     // A page that cannot start workers (a strict host policy, some file
     // viewers) runs the same layout itself, in short slices between tasks.
     const layOutHere = () => {
-      void import('./layout').then(({ createLayout }) => {
-        if (!alive) return
-        const layout = createLayout(
-          (frame) => queueMicrotask(() => receive(frame)),
-          8,
-        )
-        port = state.port = {
-          postMessage: (message: LayoutMessage) => layout.receive(message),
-          terminate: layout.stop,
-        }
-        startLayout()
-      })
+      void Promise.all([import('./layout'), import('./page-step')]).then(
+        ([{ createLayout }, { pageSteps }]) => {
+          if (!alive) return
+          const layout = createLayout(
+            (frame) => queueMicrotask(() => receive(frame)),
+            8,
+            pageSteps,
+          )
+          port = state.port = {
+            postMessage: (message: LayoutMessage) => layout.receive(message),
+            terminate: layout.stop,
+          }
+          startLayout()
+        },
+      )
     }
     try {
       const started = createWorker.current()

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createLayout } from '../src/addons/graph/layout.ts'
+import { pageSteps, piece } from '../src/addons/graph/page-step.ts'
 import {
   cameraPosition,
   drawGraph,
@@ -225,6 +226,137 @@ test('layout steps off the page, settles, and never queues unreturned frames', a
   const busy = await run(graph, false, false)
   busy.layout.stop()
   assert.equal(busy.frames.length, 2)
+})
+
+// Layouts on a task queue whose clock moves only with the page steps' own
+// work (1 ms per 1,000 operations), so slices are counted rather than timed.
+function pacedTasks(t) {
+  let clock = 0,
+    work = 0,
+    roots = 0,
+    last = 0
+  const tasks = new Map()
+  const layouts = []
+  t.mock.method(performance, 'now', () => clock)
+  t.mock.method(globalThis, 'setTimeout', (task) => {
+    tasks.set(++last, task)
+    return last
+  })
+  t.mock.method(globalThis, 'clearTimeout', (key) => tasks.delete(key))
+  // Every link and every collision takes one square root, worker or page.
+  const sqrt = Math.sqrt
+  Math.sqrt = (value) => {
+    roots++
+    return sqrt(value)
+  }
+  t.after(() => {
+    Math.sqrt = sqrt
+    // What stopped layouts leave queued is d3's timer check, which releases
+    // d3's interval; skipping it would keep the process alive.
+    for (const layout of layouts) layout.stop()
+    for (const task of [...tasks.values()]) task()
+  })
+  return {
+    counted(...graph) {
+      const step = pageSteps(...graph)
+      return function* () {
+        for (const done of step()) {
+          work += done
+          clock += done / 1000
+          yield done
+        }
+      }
+    },
+    layout(pieces) {
+      const frames = []
+      const layout = createLayout(
+        (frame) => {
+          frames.push({ ...frame, positions: frame.positions.slice() })
+          layout.receive({ type: 'buffer', buffer: frame.positions.buffer })
+        },
+        pieces ? 8 : undefined,
+        pieces,
+      )
+      layouts.push(layout)
+      return { layout, frames }
+    },
+    /** Runs queued tasks one at a time until `done()`; returns each one's work. */
+    until(done) {
+      const slices = []
+      while (!done()) {
+        const [key, task] = tasks.entries().next().value
+        tasks.delete(key)
+        work = 0
+        roots = 0
+        task()
+        slices.push({ work, roots })
+      }
+      return slices
+    },
+  }
+}
+
+test('a page laying out in pieces puts every note where the worker does, drags included', (t) => {
+  const tasks = pacedTasks(t)
+  const { edges } = graphTopology(denseGraph(300, 600))
+  const settle = (pieces) => {
+    const { layout, frames } = tasks.layout(pieces)
+    layout.receive({
+      type: 'graph',
+      version: 1,
+      edges,
+      positions: new Float32Array(600).fill(Number.NaN),
+      reduced: true,
+    })
+    tasks.until(() => frames.at(-1)?.settled)
+    const first = frames.at(-1)
+    // A reduced-motion drag settles the neighbors; a page does so between tasks.
+    layout.receive({
+      type: 'pin',
+      version: 1,
+      index: 5,
+      x: 40,
+      y: -30,
+      drag: 1,
+      moved: true,
+      reduced: true,
+    })
+    tasks.until(() => frames.at(-1).settled)
+    return [first, frames.at(-1)]
+  }
+  const worker = settle()
+  const page = settle(tasks.counted)
+  assert.deepEqual(
+    page.map((frame) => frame.ticks),
+    [160, 162],
+  )
+  assert.deepEqual(page, worker)
+})
+
+test('a page laying out 20,000 notes and 60,000 links runs one slice of work per task', (t) => {
+  const tasks = pacedTasks(t)
+  const message = {
+    type: 'graph',
+    version: 1,
+    edges: graphTopology(denseGraph(20000, 60000)).edges,
+    positions: new Float32Array(40000).fill(Number.NaN),
+    reduced: false,
+  }
+  const page = tasks.layout(tasks.counted)
+  page.layout.receive(message)
+  const slices = tasks.until(() => page.frames.at(-1).ticks === 2)
+  page.layout.stop()
+  // Each task stops within one piece of its 8 ms slice, 8,000 operations here,
+  const most = (key) => Math.max(...slices.map((slice) => slice[key]))
+  assert.ok(most('work') <= 8000 + piece, `${most('work')} operations`)
+  // as the square roots confirm: one whole step takes over 60,000.
+  assert.ok(most('roots') <= 8000 + piece, `${most('roots')} square roots`)
+  assert.ok(slices.length > 500, `${slices.length} tasks`)
+  // The steps are the worker's own.
+  const worker = tasks.layout()
+  worker.layout.receive(message)
+  tasks.until(() => worker.frames.at(-1).ticks === 2)
+  assert.deepEqual(page.frames.at(-1), worker.frames.at(-1))
 })
 
 test('topology changes keep laid-out notes and seed new ones beside a neighbor', async () => {

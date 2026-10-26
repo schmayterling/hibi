@@ -88,7 +88,10 @@ const cssString = (text: string) => `"${text.replace(/["\\]/g, '\\$&')}"`
 /** References render as superscript labels and definitions as notes labelled in their margin, both editable in place. */
 export const contribution: FormattedContribution = {
   id: 'markdown.footnotes',
+  flavor: 'markdown.github',
   syntax: Footnotes,
+  // References start at `[`, so text without one is still skipped.
+  inlineStops: true,
   views: [
     {
       nodes: ['FootnoteReference'],
@@ -104,6 +107,11 @@ export const contribution: FormattedContribution = {
     },
     {
       nodes: ['FootnoteDefinition'],
+      // A note's lines hang like a list item's, its label in the margin.
+      container: () => ({
+        width: 'calc(1.5 * var(--text-editor))',
+        class: 'hibi-lp-footnote',
+      }),
       decorate(node, out, { state }) {
         const label = node.node.getChild('FootnoteLabel')
         if (!label) return undefined

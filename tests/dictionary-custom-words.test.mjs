@@ -52,6 +52,7 @@ async function storage(t, initial = []) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-custom-words-'))
   const db = await CustomWordDatabase.open(profile)
   const calls = []
+  const peers = []
   const native = {
     commit: async (input) => db.change(input),
     async invoke(method, input) {
@@ -70,6 +71,7 @@ async function storage(t, initial = []) {
   )
   t.after(async () => {
     indexed.close()
+    for (const peer of peers) peer.close()
     db.close()
     await rm(profile, { recursive: true, force: true })
   })
@@ -84,7 +86,11 @@ async function storage(t, initial = []) {
     indexed,
     native,
     calls,
-    profile,
+    async openPeer() {
+      const peer = await CustomWordDatabase.open(profile)
+      peers.push(peer)
+      return peer
+    },
     context: { indexed, native, host: { selectedIo: {} } },
   }
 }
@@ -213,7 +219,7 @@ test('large text imports yield to input tasks and exports join the whole save', 
 })
 
 test('custom words load metadata, save, follow other windows, and clear on stop', async (t) => {
-  const { context, indexed, calls, profile } = await storage(t, [
+  const { context, indexed, calls, openPeer } = await storage(t, [
     { word: 'kilig', lang: 'tl' },
   ])
   let changes = 0
@@ -245,8 +251,7 @@ test('custom words load metadata, save, follow other windows, and clear on stop'
     { word: 'kilig', note: 'giddy' },
   ])
   await removeCustomWord(added)
-  const peer = await CustomWordDatabase.open(profile)
-  t.after(() => peer.close())
+  const peer = await openPeer()
   const { token } = peer.change({ type: 'begin', revision: peer.revision() })
   peer.change({
     type: 'stage',
@@ -480,7 +485,7 @@ test('native clipboard bounds encoded bytes and preserves Unicode exports within
 })
 
 test('export keeps an indexed commit conflict after a queued language save recovers', async (t) => {
-  const { context, native, profile } = await storage(t, [
+  const { context, native, openPeer } = await storage(t, [
     { word: 'zorp', lang: 'en', note: 'old' },
   ])
   const commit = native.commit
@@ -515,8 +520,7 @@ test('export keeps an indexed commit conflict after a queued language save recov
   void exporting.then(() => {
     done = true
   })
-  const peer = await CustomWordDatabase.open(profile)
-  t.after(() => peer.close())
+  const peer = await openPeer()
   const { token } = peer.change({ type: 'begin', revision: peer.revision() })
   peer.change({
     type: 'stage',
@@ -984,7 +988,7 @@ test('queued field edits apply to the word as it is saved, in either order', asy
 })
 
 test('an indexed edit cannot resurrect a word removed before commit', async (t) => {
-  const { context, native, profile } = await storage(t, [
+  const { context, native, openPeer } = await storage(t, [
     { word: 'kilig', note: 'old' },
   ])
   const gate = Promise.withResolvers()
@@ -1007,8 +1011,7 @@ test('an indexed edit cannot resurrect a word removed before commit', async (t) 
     close()
   })
   await entered.promise
-  const peer = await CustomWordDatabase.open(profile)
-  t.after(() => peer.close())
+  const peer = await openPeer()
   const { token } = peer.change({ type: 'begin', revision: peer.revision() })
   peer.change({ type: 'stage', token, upsert: [], remove: [item.id] })
   peer.change({ type: 'commit', token })
@@ -1138,7 +1141,7 @@ test('a language collision never silently removes either word or its note', asyn
 })
 
 test('custom words keep newer indexed metadata over a late commit reply or refresh', async (t) => {
-  const { context, native, indexed, profile } = await storage(t, [
+  const { context, native, indexed, openPeer } = await storage(t, [
     { word: 'kilig' },
   ])
   const gate = Promise.withResolvers()
@@ -1159,8 +1162,7 @@ test('custom words keep newer indexed metadata over a late commit reply or refre
     close()
   })
   await entered.promise
-  const peer = await CustomWordDatabase.open(profile)
-  t.after(() => peer.close())
+  const peer = await openPeer()
   const { token } = peer.change({ type: 'begin', revision: peer.revision() })
   peer.change({
     type: 'stage',

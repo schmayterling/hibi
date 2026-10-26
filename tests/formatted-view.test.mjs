@@ -423,3 +423,50 @@ test('behind the switch, frontmatter after a byte order mark shows once', {
     )
   }
 })
+
+test('behind the switch, a leading block that is not a metadata mapping stays in the text', {
+  timeout: 120000,
+}, async (t) => {
+  for (const [label, note, check] of [
+    ['scalar', '---\nhello\n---\n\n# Title\n', 'hello'],
+    ['empty', '---\n---\n\n# Title\n', null],
+  ]) {
+    const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-properties-'))
+    const file = join(folder, 'notes', 'note.md')
+    await mkdir(join(folder, 'notes'))
+    await writeFile(file, note)
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+    })
+    t.after(async () => {
+      await app.close()
+      await rm(folder, { recursive: true, force: true })
+    })
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    const page = await app.firstWindow()
+    await waitForDocumentEditor(app, page)
+    await page.evaluate(() =>
+      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+    )
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, file)
+    await pressShortcut(app, `${mod}+o`)
+    await page.locator('.rich-pane .hibi-lp-h1', { hasText: 'Title' }).waitFor()
+    // The properties do not show it, so the text does, as the rich view.
+    // Before, any pair of `---` lines was hidden.
+    const shown = await page.evaluate(() => ({
+      text: document.querySelector('.rich-pane .cm-content')?.textContent,
+      rules: document.querySelectorAll('.rich-pane .hibi-lp-rule').length,
+    }))
+    if (check) assert.ok(shown.text.includes(check), `${label}: ${shown.text}`)
+    else assert.ok(shown.rules > 0, `${label}: ${JSON.stringify(shown)}`)
+  }
+})

@@ -300,7 +300,9 @@ export function MarkdownEditor({
                 onFormatting={attachRich}
                 sourceExtensions={
                   markdownDocument &&
-                  markdownExtensions.some(({ Editor }) => Editor)
+                  markdownExtensions.some(
+                    ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
+                  )
                     ? propertiesExtensions
                     : formattedExtensions
                 }

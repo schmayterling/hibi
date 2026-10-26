@@ -459,6 +459,7 @@ export function planInline<W>(
 
 const delimiterRow = /^\|?(?:[ \t]*:?-+:?[ \t]*\|)+(?:[ \t]*:?-+:?[ \t]*)?$/
 const quoteMarker = /^ {0,3}>[ \t]?/
+const heading = /^#{1,6}(?:[ \t]|$)/
 const listMarker = /^(?:[-+*]|\d{1,9}[.)])(?:[ \t]+|$)/
 
 /**
@@ -473,10 +474,12 @@ export function countTables(lines: Iterable<string>) {
   let count = 0,
     fence: { marker: string; quotes: number; indent: number } | null = null,
     previous: string | null = null,
-    table = false,
+    // The container (quote depth and list column) of the table the lines are in.
+    table: string | null = null,
     // The content column of the list item the lines are in, 0 outside lists.
     list = 0
   for (const raw of lines) {
+    const lead = raw.length - raw.trimStart().length
     let quotes = 0,
       at = 0
     for (
@@ -506,21 +509,44 @@ export function countTables(lines: Iterable<string>) {
     }
     const item = listMarker.exec(line)?.[0]
     if (item) list = indent + item.length
-    else if (line && indent < list) list = 0
-    const content = item ? line.slice(item.length) : line
+    else if (line && Math.max(lead, indent) < list) list = 0
+    // Quotes inside the list item come after its marker.
+    let content = item ? line.slice(item.length) : line
+    for (
+      let marker = quoteMarker.exec(content);
+      marker && item;
+      marker = quoteMarker.exec(content)
+    ) {
+      quotes++
+      content = content.slice(marker[0].length)
+    }
     const marker = /^(`{3,}|~{3,})/.exec(content)?.[1]
     if (marker) {
       fence = { marker, quotes, indent: list }
       previous = null
-      table = false
+      table = null
       continue
     }
     if (!content.trim()) {
       previous = null
-      table = false
+      table = null
       continue
     }
-    if (table) continue
+    // A new list item, a heading or another container ends a table, and
+    // its rows head no table there.
+    const container = `${quotes}:${list}`
+    if (
+      table !== null &&
+      (item || heading.test(content) || container !== table)
+    ) {
+      table = null
+      previous = null
+    }
+    if (table !== null) continue
+    if (heading.test(content)) {
+      previous = null
+      continue
+    }
     if (
       previous !== null &&
       !item &&
@@ -529,7 +555,7 @@ export function countTables(lines: Iterable<string>) {
       parseRow(previous).pipes.length > 0
     ) {
       count++
-      table = true
+      table = container
     }
     previous = content
   }

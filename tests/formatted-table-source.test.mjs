@@ -564,3 +564,46 @@ test('table ordinals count tables as the formatted view parser finds them in lis
     assert.equal(countTables(doc.split('\n')), parsed(doc), doc)
   }
 })
+
+test('table ordinals end tables where list items, headings and quotes start, as the parser does', () => {
+  const parsed = (doc) => {
+    let found = 0
+    markdown.parse(doc).iterate({
+      enter(node) {
+        if (node.name === 'Table') found++
+      },
+    })
+    return found
+  }
+  for (const doc of [
+    '- | a |\n  | - |\n- | b |\n  | - |',
+    '| a |\n| - |\n# H\n| b |\n| - |',
+    '- > | a |\n  > | - |',
+    '> | a |\n> | - |\n- | b |\n  | - |',
+    '| a |\n| - |\n> | b |\n> | - |',
+    '| a |\n| - |\n> | - |',
+  ])
+    assert.equal(countTables(doc.split('\n')), parsed(doc), doc)
+  // Blocks that start new blocks, without blank lines between them.
+  let seed = 3
+  const random = (n) => {
+    seed = (seed * 16807) % 2147483647
+    return seed % n
+  }
+  const blocks = [
+    '- | a | b |\n  | - | - |',
+    '# Heading',
+    '> | a | b |\n> | - | - |',
+    '- > | x |\n  > | - |',
+    '- item',
+    '> quote',
+    '1. | a |\n   | - |',
+  ]
+  for (let round = 0; round < 300; round++) {
+    const doc = Array.from(
+      { length: 2 + random(5) },
+      () => blocks[random(blocks.length)],
+    ).join('\n')
+    assert.equal(countTables(doc.split('\n')), parsed(doc), doc)
+  }
+})

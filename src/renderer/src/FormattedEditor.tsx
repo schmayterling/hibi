@@ -300,6 +300,9 @@ export function MarkdownEditor({
                 onFormatting={attachRich}
                 sourceExtensions={
                   markdownDocument &&
+                  // A large note's properties are not read, so its
+                  // frontmatter stays in the text.
+                  value &&
                   markdownExtensions.some(
                     ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
                   )

@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { constants, type Stats } from 'node:fs'
+import { type BigIntStats, constants } from 'node:fs'
 import { open, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, relative, sep } from 'node:path'
 import { Readable } from 'node:stream'
+import { sameFileIdentity } from '../shared/file-identity.ts'
+import { fileTimeMilliseconds } from '../shared/file-time.ts'
 import {
   type DocumentMediaResolution,
   mediaPathsChanged,
@@ -39,18 +41,29 @@ export async function openMedia(path: string, signal?: AbortSignal) {
   )
   try {
     signal?.throwIfAborted()
-    const stat = await file.stat()
-    if (!stat.isFile() || !stat.size || !Number.isSafeInteger(stat.size))
+    const stat = await file.stat({ bigint: true })
+    const size = Number(stat.size)
+    if (!stat.isFile() || !size || !Number.isSafeInteger(size))
       throw new Error('Choose a supported image or video file.')
     signal?.throwIfAborted()
-    const header = Buffer.alloc(Math.min(4096, stat.size))
+    const header = Buffer.alloc(Math.min(4096, size))
     const { bytesRead } = await file.read(header, 0, header.length, 0)
     signal?.throwIfAborted()
     const mime =
       imageMime(header.subarray(0, bytesRead)) ??
       videoMime(header.subarray(0, bytesRead))
     if (!mime) throw new Error('Choose a supported image or video file.')
-    return { file, stat, mime }
+    return {
+      file,
+      stat: {
+        dev: stat.dev,
+        ino: stat.ino,
+        mtimeNs: stat.mtimeNs,
+        mtimeMs: fileTimeMilliseconds(stat.mtimeNs),
+        size,
+      },
+      mime,
+    }
   } catch (error) {
     await file.close()
     throw error
@@ -61,7 +74,7 @@ type Scope = { note: string | null; revision: number; workspace: string | null }
 type Version = {
   path: string
   mime: string
-  stat: Stats
+  stat: Pick<BigIntStats, 'dev' | 'ino' | 'mtimeNs'> & { size: number }
   token: string
   controller: AbortController
 }
@@ -84,10 +97,9 @@ function sameFile(
   return (
     left.path === right.path &&
     left.mime === right.mime &&
-    left.stat.dev === right.stat.dev &&
-    left.stat.ino === right.stat.ino &&
+    sameFileIdentity(left.stat, right.stat) &&
     left.stat.size === right.stat.size &&
-    left.stat.mtimeMs === right.stat.mtimeMs
+    left.stat.mtimeNs === right.stat.mtimeNs
   )
 }
 
@@ -217,14 +229,13 @@ export class DocumentMediaServer {
     const path = await realpath(source)
     paths?.add(path)
     signal.throwIfAborted()
-    const expected = await stat(path)
+    const expected = await stat(path, { bigint: true })
     signal.throwIfAborted()
     const opened = await openMedia(path, signal)
     try {
       // Bind validation to the opened inode, including a symlink replaced during open.
       if (
-        opened.stat.dev !== expected.dev ||
-        opened.stat.ino !== expected.ino ||
+        !sameFileIdentity(opened.stat, expected) ||
         (await realpath(source)) !== path ||
         !this.live(entry) ||
         signal.aborted

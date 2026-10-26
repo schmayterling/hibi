@@ -665,7 +665,7 @@ export async function invokeAddon(
   id: unknown,
   method: unknown,
   input: unknown,
-  query = false,
+  kind: 'invoke' | 'query' | 'profile' = 'invoke',
 ): Promise<unknown> {
   if (typeof id !== 'string' || typeof method !== 'string')
     throw new Error('Enable this addon in Settings → Addons first.')
@@ -677,7 +677,12 @@ export async function invokeAddon(
     throw new Error(
       'This addon was disabled. Enable it in Settings → Addons to continue.',
     )
-  const handlers = query ? addon?.queries : addon?.methods
+  const handlers =
+    kind === 'profile'
+      ? addon?.profileMethods
+      : kind === 'query'
+        ? addon?.queries
+        : addon?.methods
   if (!handlers || !Object.hasOwn(handlers, method))
     throw new Error('This addon does not support the requested action.')
   const handler = handlers[method]

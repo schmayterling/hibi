@@ -162,7 +162,7 @@ export function autocompleteCompletions(
               if (signal.aborted) throw error
               return []
             })
-        : dictionary.customWords()
+        : await dictionary.customWords()
     signal.throwIfAborted()
     if (
       session() !== captured ||

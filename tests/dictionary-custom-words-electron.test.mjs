@@ -335,7 +335,11 @@ test('custom words are added, edited, removed, kept across restart, and suggeste
   )
 
   // With slow saves, typing a note, another, then the first again keeps the last one typed.
-  await app.evaluate(({ ipcMain }) => {
+  await app.evaluate(({ ipcMain, app }) => {
+    const { DatabaseSync } = process.getBuiltinModule('node:sqlite')
+    const path = process
+      .getBuiltinModule('node:path')
+      .join(app.getPath('userData'), 'dictionary-custom-words', 'words.sqlite')
     const exportWrite = ipcMain._invokeHandlers.get(
       'host-selected-io:write-export',
     )
@@ -353,11 +357,11 @@ test('custom words are added, edited, removed, kept across restart, and suggeste
       globalThis.canceledExports.push(result)
       return result
     })
-    const write = ipcMain._invokeHandlers.get('addons:invoke')
+    const write = ipcMain._invokeHandlers.get('addons:profile')
     globalThis.held = []
     globalThis.written = 0
-    ipcMain.removeHandler('addons:invoke')
-    ipcMain.handle('addons:invoke', async (event, id, method, input) => {
+    ipcMain.removeHandler('addons:profile')
+    ipcMain.handle('addons:profile', async (event, id, method, input) => {
       if (
         id !== 'dictionary' ||
         method !== 'changeCustomWords' ||
@@ -371,13 +375,14 @@ test('custom words are added, edited, removed, kept across restart, and suggeste
           throw new Error('Could not save custom words.')
         }
         const result = await write(event, id, method, input)
-        const page = await ipcMain._invokeHandlers.get('addons:query')(
-          event,
-          id,
-          'customWords',
-          {},
-        )
-        globalThis.lastWrite = { value: page.words }
+        const db = new DatabaseSync(path, { readOnly: true })
+        try {
+          globalThis.lastWrite = {
+            value: db.prepare('SELECT word, note FROM words').all(),
+          }
+        } finally {
+          db.close()
+        }
         return result
       } finally {
         globalThis.written++
@@ -603,15 +608,15 @@ test('5,000 custom words keep bounded live rows, skip hidden discovery work, and
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ ipcMain }) => {
     const query = ipcMain._invokeHandlers.get('addons:query')
-    const write = ipcMain._invokeHandlers.get('addons:invoke')
+    const write = ipcMain._invokeHandlers.get('addons:profile')
     globalThis.packReads = 0
     ipcMain.removeHandler('addons:query')
     ipcMain.handle('addons:query', (event, id, method, ...input) => {
       if (id === 'dictionary' && method === 'packs') globalThis.packReads++
       return query(event, id, method, ...input)
     })
-    ipcMain.removeHandler('addons:invoke')
-    ipcMain.handle('addons:invoke', (event, id, method, input) => {
+    ipcMain.removeHandler('addons:profile')
+    ipcMain.handle('addons:profile', (event, id, method, input) => {
       if (
         globalThis.failNextWrite &&
         id === 'dictionary' &&

@@ -8,18 +8,28 @@ let queue = Promise.resolve()
 port.on('message', (job: { seq: number; method: string; input: unknown }) => {
   queue = queue.then(async () => {
     try {
-      database ??= CustomWordDatabase.open(workerData.profile)
+      if (!database) {
+        const opening = CustomWordDatabase.open(workerData.profile)
+        database = opening
+        void opening.catch(() => {
+          if (database === opening) database = undefined
+        })
+      }
       const store = await database
       const result =
-        job.method === 'page'
-          ? store.page(job.input)
-          : job.method === 'lookup'
-            ? store.lookup(job.input)
-            : job.method === 'complete'
-              ? store.complete(job.input)
-              : job.method === 'change'
-                ? store.change(job.input)
-                : undefined
+        job.method === 'metadata'
+          ? store.metadata()
+          : job.method === 'get'
+            ? store.get(job.input)
+            : job.method === 'page'
+              ? store.page(job.input)
+              : job.method === 'lookup'
+                ? store.lookup(job.input)
+                : job.method === 'complete'
+                  ? store.complete(job.input)
+                  : job.method === 'change'
+                    ? store.change(job.input)
+                    : undefined
       if (result === undefined) throw new Error('Invalid custom words request.')
       port.postMessage({ seq: job.seq, result })
     } catch (error) {

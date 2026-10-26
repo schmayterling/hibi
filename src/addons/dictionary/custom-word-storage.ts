@@ -1,138 +1,208 @@
 import type { AddonStorageHandle } from '../../shared/addon-storage'
 import type { AddonContext } from '../api'
-import { type CustomWord, customWords } from './custom-word-data.ts'
+import {
+  type CustomWord,
+  customWordKey,
+  customWords,
+} from './custom-word-data.ts'
 
-const encoder = new TextEncoder()
-type Page = {
+export type CustomWordStorage = AddonStorageHandle<unknown> & {
+  close?: () => void
+}
+export type WordMetadata = { revision: number; count: number; notice?: string }
+export type WordPage = {
   revision: number
   words: CustomWord[]
   after: number
   more: boolean
 }
-export type CustomWordStorage = AddonStorageHandle<unknown> & {
-  close?: () => void
-  normalized?: true
+export type WordRange = { from: number; to: number }
+type Stage = {
+  upsert?: readonly CustomWord[]
+  remove?: readonly string[]
+  merge?: boolean
+  keepNote?: boolean
+  first?: boolean
 }
+type Commit = WordMetadata & { changed: number }
+const encoder = new TextEncoder()
+const conflict = (error: unknown) =>
+  error instanceof Error &&
+  error.message.includes('Custom words changed in another window.')
+const unavailable = () =>
+  new Error('Turn on Dictionary and thesaurus to keep custom words.')
 
-/** Adapts indexed native records to the dictionary's existing compare-and-set flow. */
-export async function openCustomWordStorage(
-  native: AddonContext['native'],
-  write: AddonContext['native']['invoke'] = native.invoke,
-): Promise<CustomWordStorage> {
-  let state = {
-    status: 'ready' as const,
+/** A bounded viewport cache; the full dictionary stays in the native index. */
+export class IndexedCustomWords {
+  readonly kind = 'indexed'
+  private state: WordMetadata & { version: number } = {
     revision: 0,
-    value: [] as CustomWord[],
+    count: 0,
+    version: 0,
   }
-  const listeners = new Set<() => void>()
-  const channel = new BroadcastChannel('hibi-dictionary-custom-words')
-  let closed = false
-  let refreshing: Promise<void> = Promise.resolve()
-  const load = () => {
-    const run = refreshing
-      .catch(() => {})
-      .then(async () => {
-        for (;;) {
-          try {
-            let after = 0
-            let revision: number | undefined
-            const words: CustomWord[] = []
-            for (;;) {
-              const page = await native.query<Page>('customWords', {
-                after,
-                ...(revision === undefined ? {} : { revision }),
-              })
-              revision = page.revision
-              const normalized = customWords(page.words)
-              if (normalized.length !== page.words.length)
-                throw new Error(
-                  'Could not read your custom words. The original data has been kept.',
-                )
-              words.push(...normalized)
-              if (!page.more) break
-              after = page.after
-            }
-            if (closed || revision < state.revision) return
-            state = { status: 'ready', revision, value: words }
-            for (const listener of listeners) listener()
-            return
-          } catch (error) {
-            if (
-              !closed &&
-              error instanceof Error &&
-              error.message.includes('Custom words changed in another window.')
-            )
-              continue
-            throw error
-          }
-        }
-      })
-    refreshing = run
-    return run
+  private rows = new Map<number, CustomWord>()
+  private indices = new Map<string, number>()
+  private listeners = new Set<() => void>()
+  private channel = new BroadcastChannel('hibi-dictionary-custom-words')
+  private closed = false
+  private loading = 0
+  private token: string | undefined
+  private call: AddonContext['native']['invoke']
+  constructor(call: AddonContext['native']['invoke']) {
+    this.call = call
+    this.channel.onmessage = () => {
+      void this.refresh().catch(() => {})
+    }
   }
-  channel.onmessage = () => {
-    void load().catch((error) =>
-      console.error('could not refresh custom words:', error),
+  snapshot = () => this.state
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
+  at = (index: number) => this.rows.get(index)
+  indexOf = (id: string | undefined) =>
+    id === undefined ? undefined : this.indices.get(id)
+  private publish(metadata: WordMetadata = this.state) {
+    if (this.closed) return
+    this.state = { ...metadata, version: this.state.version + 1 }
+    for (const listener of this.listeners) listener()
+  }
+  private reindex() {
+    this.indices.clear()
+    for (const [index, word] of this.rows)
+      if (word.id) this.indices.set(word.id, index)
+  }
+  async refresh() {
+    const metadata = await this.call<WordMetadata>('customWordsMetadata')
+    if (this.closed || metadata.revision < this.state.revision) return
+    if (metadata.revision !== this.state.revision) {
+      this.loading++
+      this.rows.clear()
+      this.indices.clear()
+    }
+    this.publish(metadata)
+  }
+  async get(id: string) {
+    if (this.closed) throw unavailable()
+    return this.call<{ revision: number; word: CustomWord | null }>(
+      'customWordsGet',
+      { id },
     )
   }
-  try {
-    await load()
-  } catch (error) {
-    channel.close()
-    throw error
+  async page(input: { after?: number; offset?: number; revision?: number }) {
+    if (this.closed) throw unavailable()
+    const page = await this.call<WordPage>('customWords', input)
+    const words = customWords(page.words)
+    if (words.length !== page.words.length)
+      throw new Error(
+        'Could not read your custom words. The original data has been kept.',
+      )
+    return { ...page, words }
   }
-  return {
-    normalized: true,
-    snapshot: () => state,
-    subscribe(listener) {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-    close() {
-      closed = true
-      channel.close()
-      listeners.clear()
-    },
-    async set(value) {
-      if (closed || !Array.isArray(value))
-        return { status: 'unavailable', reason: 'stale-activation' }
-      const base = state
-      const old = new Map(base.value.map((word) => [word.id, word]))
-      const next = value as CustomWord[]
-      const upsert = next.filter((word) => {
-        const saved = old.get(word.id)
-        old.delete(word.id)
-        return (
-          !saved ||
-          saved.word !== word.word ||
-          saved.lang !== word.lang ||
-          saved.note !== word.note
-        )
-      })
-      const remove = [...old.keys()]
-      if (!upsert.length && !remove.length)
-        return { status: 'saved', revision: base.revision, value: base.value }
-      let token: string | undefined
-      try {
-        const transaction = await write<{ token: string }>(
-          'changeCustomWords',
-          { type: 'begin', revision: base.revision },
-        )
-        token = transaction.token
+  async ensure(ranges: readonly WordRange[]) {
+    const loading = ++this.loading
+    const revision = this.state.revision
+    // Keep the visible rows and focus neighbors, plus one native page on either side.
+    for (const index of this.rows.keys())
+      if (
+        !ranges.some(({ from, to }) => index >= from - 256 && index < to + 256)
+      )
+        this.rows.delete(index)
+    this.reindex()
+    try {
+      for (const { from, to } of ranges) {
+        for (
+          let index = Math.max(0, from);
+          index < Math.min(to, this.state.count);
+        ) {
+          if (this.rows.has(index)) {
+            index++
+            continue
+          }
+          const page = await this.page({ offset: index, revision })
+          if (this.closed || loading !== this.loading) return
+          if (!page.words.length) break
+          for (const word of page.words) this.rows.set(index++, word)
+          this.reindex()
+          this.publish()
+        }
+      }
+    } catch (error) {
+      if (this.closed || loading !== this.loading) return
+      if (conflict(error)) await this.refresh()
+      else
+        this.publish({
+          ...this.state,
+          notice:
+            error instanceof Error
+              ? error.message
+              : 'Could not save custom words.',
+        })
+    }
+  }
+  async change(
+    produce: (stage: (batch: Stage) => Promise<void>) => Promise<void>,
+    options: { revision?: number; put?: CustomWord; remove?: string } = {},
+  ): Promise<Commit> {
+    if (this.closed) throw unavailable()
+    let token: string | undefined
+    let staged = 0
+    let mergedRows: Map<string, number> | undefined
+    let retainRows = true
+    const changedRows = new Map<number, CustomWord>()
+    try {
+      const revision = options.revision ?? this.state.revision
+      if (revision !== this.state.revision) await this.refresh()
+      token = (
+        await this.call<{ token: string }>('changeCustomWords', {
+          type: 'begin',
+          revision,
+        })
+      ).token
+      this.token = token
+      await produce(async ({ upsert = [], remove = [], ...flags }) => {
         let batch: CustomWord[] = []
         let bytes = 0
-        const stage = async () => {
-          if (closed)
-            throw new Error(
-              'Turn on Dictionary and thesaurus to keep custom words.',
+        const send = async (removed: readonly string[] = []) => {
+          if (this.closed) throw unavailable()
+          if (!batch.length && !removed.length) return
+          const result = await this.call<{ count: number }>(
+            'changeCustomWords',
+            { type: 'stage', token, upsert: batch, remove: removed, ...flags },
+          )
+          staged = result.count
+          if (!flags.merge || removed.length) retainRows = false
+          if (flags.merge) {
+            mergedRows ??= new Map(
+              [...this.rows].map(([index, word]) => [
+                customWordKey(word),
+                index,
+              ]),
             )
-          if (batch.length)
-            await write('changeCustomWords', {
-              type: 'stage',
-              token,
-              upsert: batch,
-              remove: [],
-            })
+            for (const word of batch) {
+              const index = mergedRows.get(customWordKey(word))
+              if (
+                index === undefined ||
+                (flags.first && changedRows.has(index))
+              )
+                continue
+              const previous = changedRows.get(index) ?? this.rows.get(index)
+              const [next] = customWords([
+                {
+                  ...word,
+                  id: previous?.id,
+                  ...(flags.keepNote &&
+                  word.note === undefined &&
+                  previous?.note
+                    ? { note: previous.note }
+                    : {}),
+                },
+              ])
+              if (next) changedRows.set(index, next)
+            }
+          }
           batch = []
           bytes = 0
         }
@@ -142,53 +212,89 @@ export async function openCustomWordStorage(
             batch.length &&
             (batch.length === 256 || bytes + size > 1024 * 1024)
           )
-            await stage()
+            await send()
           batch.push(word)
           bytes += size
         }
-        await stage()
+        await send()
         for (let offset = 0; offset < remove.length; offset += 256)
-          await write('changeCustomWords', {
-            type: 'stage',
-            token,
-            upsert: [],
-            remove: remove.slice(offset, offset + 256),
-          })
-        if (closed)
-          throw new Error(
-            'Turn on Dictionary and thesaurus to keep custom words.',
-          )
-        const { revision } = await write<{ revision: number }>(
-          'changeCustomWords',
-          { type: 'commit', token },
-        )
-        token = undefined
-        if (!closed && revision >= state.revision) {
-          state = { status: 'ready', revision, value: next }
-          for (const listener of listeners) listener()
-        }
-        if (!closed) channel.postMessage(revision)
-        return { status: 'saved', revision, value: next }
-      } catch (error) {
-        if (
-          error instanceof Error &&
-          error.message.includes('Custom words changed in another window.')
-        ) {
-          await load()
-          return { status: 'conflict', current: state }
-        }
-        if (
-          error instanceof Error &&
-          error.message.includes('storage request size.')
-        )
-          throw new Error('This custom word exceeds the storage request size.')
-        throw new Error('Could not save custom words.')
-      } finally {
-        if (token)
-          await write('changeCustomWords', { type: 'abort', token }).catch(
-            () => {},
-          )
+          await send(remove.slice(offset, offset + 256))
+      })
+      if (this.closed) throw unavailable()
+      if (!staged) return { ...this.state, changed: 0 }
+      const result = await this.call<Commit>('changeCustomWords', {
+        type: 'commit',
+        token,
+      })
+      token = undefined
+      this.token = undefined
+      if (!this.closed && result.revision >= this.state.revision) {
+        this.loading++
+        if (options.put?.id) {
+          const index = this.indices.get(options.put.id)
+          if (index !== undefined) this.rows.set(index, options.put)
+        } else if (options.remove) {
+          const removed = this.indices.get(options.remove)
+          if (removed === undefined) this.rows.clear()
+          else {
+            const rows = new Map<number, CustomWord>()
+            for (const [index, word] of this.rows)
+              if (index !== removed)
+                rows.set(index > removed ? index - 1 : index, word)
+            this.rows = rows
+          }
+        } else if (retainRows) {
+          for (const [index, word] of changedRows) this.rows.set(index, word)
+        } else this.rows.clear()
+        this.reindex()
+        this.publish(result)
+        this.channel.postMessage(result.revision)
       }
-    },
+      return result
+    } catch (error) {
+      if (conflict(error)) {
+        await this.refresh()
+        throw new Error('Custom words changed in another window. Try again.')
+      }
+      if (
+        error instanceof Error &&
+        error.message.includes('storage request size.')
+      )
+        throw new Error('This custom word exceeds the storage request size.')
+      throw new Error('Could not save custom words.')
+    } finally {
+      if (token)
+        await this.call('changeCustomWords', { type: 'abort', token }).catch(
+          () => {},
+        )
+      if (this.token === token) this.token = undefined
+    }
+  }
+  close() {
+    this.closed = true
+    this.loading++
+    this.channel.close()
+    this.rows.clear()
+    this.indices.clear()
+    this.listeners.clear()
+    if (this.token)
+      void this.call('changeCustomWords', {
+        type: 'abort',
+        token: this.token,
+      }).catch(() => {})
+  }
+}
+
+export async function openCustomWordStorage(
+  native: AddonContext['native'],
+  call: AddonContext['native']['invoke'] = native.invoke,
+) {
+  const store = new IndexedCustomWords(call)
+  try {
+    await store.refresh()
+    return store
+  } catch (error) {
+    store.close()
+    throw error
   }
 }

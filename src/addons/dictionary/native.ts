@@ -42,15 +42,23 @@ function stop() {
 }
 app.on('before-quit', stop)
 
+const wordQueries = {
+  customWords: async (input: unknown) =>
+    (await wordStore()).request('page', input),
+  customWordsMetadata: async () => (await wordStore()).request('metadata'),
+  customWordsGet: async (input: unknown) =>
+    (await wordStore()).request('get', input),
+  customWordsLookup: async (input: unknown) =>
+    (await wordStore()).request('lookup', input),
+  customWordsComplete: async (input: unknown) =>
+    (await wordStore()).request('complete', input),
+}
+
 export default {
   id: manifest.id,
   stop,
   queries: {
-    customWords: async (input) => (await wordStore()).request('page', input),
-    customWordsLookup: async (input) =>
-      (await wordStore()).request('lookup', input),
-    customWordsComplete: async (input) =>
-      (await wordStore()).request('complete', input),
+    ...wordQueries,
     packs: async () => (await store()).list(),
     preloadPacks: async (input) => (await store()).preloadInstalled(input),
     async packComplete(input) {
@@ -79,9 +87,12 @@ export default {
       return (await store()).lookup(id, word)
     },
   },
-  methods: {
+  profileMethods: {
+    ...wordQueries,
     changeCustomWords: async (input) =>
       (await wordStore()).request('change', input),
+  },
+  methods: {
     async copyCustomWords(input) {
       if (
         typeof input !== 'string' ||

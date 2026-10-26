@@ -1048,6 +1048,11 @@ export type NativeAddon = {
     string,
     (input: unknown, context: NativeAddonContext) => Promise<unknown>
   >
+  /** Trusted handlers for private profile storage. No user-file changes or dialogs. */
+  profileMethods?: Record<
+    string,
+    (input: unknown, context: NativeAddonContext) => Promise<unknown>
+  >
   methods: Record<
     string,
     (input: unknown, context: NativeAddonContext) => Promise<unknown>
@@ -1068,6 +1073,7 @@ export const ADDON_CHANNELS = {
   enable: 'addons:enable',
   invoke: 'addons:invoke',
   query: 'addons:query',
+  profile: 'addons:profile',
   /** Main asks the main window to reload one addon in place. */
   reload: 'addons:reload',
 } as const

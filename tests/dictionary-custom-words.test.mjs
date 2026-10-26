@@ -31,6 +31,16 @@ import { HOST_SELECTED_IO_MAX_BYTES } from '../src/shared/host-selected-io.ts'
 
 const openCustomWords = async (context) =>
   openWords(context, await context.storage.global('custom-words', 1))
+function profileWindow(t, invoke) {
+  const prior = globalThis.window
+  globalThis.window = {
+    hibi: { invokeAddonProfile: (_id, method, input) => invoke(method, input) },
+  }
+  t.after(() => {
+    if (prior === undefined) delete globalThis.window
+    else globalThis.window = prior
+  })
+}
 const signal = new AbortController().signal
 /** Words without their ids. */
 const plain = (list) => list.map(({ id: _id, ...item }) => item)
@@ -1130,14 +1140,15 @@ test('custom words are looked up as the user’s own without going online', asyn
 test('cold custom lookup answers locally while the settings snapshot is still loading', async (t) => {
   const gate = Promise.withResolvers()
   const word = { id: 'cold', word: 'cold', lang: 'en', note: 'kept locally' }
+  profileWindow(t, async (method) => {
+    assert.equal(method, 'customWordsMetadata')
+    await gate.promise
+    return { revision: 1, count: 1 }
+  })
   const loading = openWords({
     host: { selectedIo: {} },
     native: {
       async query(method, input) {
-        if (method === 'customWords') {
-          await gate.promise
-          return { revision: 1, words: [word], after: 1, more: false }
-        }
         assert.equal(method, 'customWordsLookup')
         return input.lang === 'en' ? [word] : []
       },
@@ -1170,6 +1181,11 @@ test('cold custom lookup answers locally while the settings snapshot is still lo
 
 test('a late initial load cannot replace a newer dictionary activation', async (t) => {
   const gate = Promise.withResolvers()
+  profileWindow(t, async (method) => {
+    assert.equal(method, 'customWordsMetadata')
+    await gate.promise
+    return { revision: 1, count: 1 }
+  })
   const old = openWords({
     native: {
       async query() {

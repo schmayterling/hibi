@@ -9,6 +9,12 @@ import { Worker } from 'node:worker_threads'
 import { build } from 'esbuild'
 import { CustomWordDatabase } from '../src/addons/dictionary/custom-word-database.ts'
 import { openCustomWordStorage } from '../src/addons/dictionary/custom-word-storage.ts'
+import {
+  customWordsView,
+  editCustomWord,
+  listCustomWords,
+  openCustomWords,
+} from '../src/addons/dictionary/custom-words.ts'
 import { waitForAsync } from './poll.mjs'
 
 async function fixture(t, words = []) {
@@ -21,8 +27,22 @@ async function fixture(t, words = []) {
     entries: { 'custom-words': { version: 1, revision: 4, value: words } },
   })
   await writeFile(file, original)
-  t.after(() => rm(profile, { recursive: true, force: true }))
-  return { profile, file, original }
+  const owned = []
+  t.after(async () => {
+    for (const close of owned.reverse()) await close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  return {
+    profile,
+    file,
+    original,
+    own: (close) => owned.push(close),
+    async open() {
+      const store = await CustomWordDatabase.open(profile)
+      owned.push(() => store.close())
+      return store
+    },
+  }
 }
 const all = (store) => {
   const words = []
@@ -35,21 +55,19 @@ const all = (store) => {
     after = page.after
   }
 }
-const native = (store, calls = []) => ({
-  async query(method, input) {
+const native = (store, calls = []) => {
+  const call = async (method, input) => {
     calls.push({ method, input })
-    return method === 'customWords'
-      ? store.page(input)
-      : method === 'customWordsLookup'
-        ? store.lookup(input)
-        : store.complete(input)
-  },
-  async invoke(method, input) {
+    if (method === 'customWordsMetadata') return store.metadata()
+    if (method === 'customWordsGet') return store.get(input)
+    if (method === 'customWords') return store.page(input)
+    if (method === 'customWordsLookup') return store.lookup(input)
+    if (method === 'customWordsComplete') return store.complete(input)
     assert.equal(method, 'changeCustomWords')
-    calls.push({ method, input })
     return store.change(input)
-  },
-})
+  }
+  return { query: call, invoke: call }
+}
 
 test('migration verifies 5,000 words and retains the complete downgrade snapshot', async (t) => {
   const saved = Array.from({ length: 5000 }, (_, index) => ({
@@ -58,11 +76,11 @@ test('migration verifies 5,000 words and retains the complete downgrade snapshot
     note: `note ${index}`,
   }))
   const ctx = await fixture(t, saved)
-  let store = await CustomWordDatabase.open(ctx.profile)
+  let store = await ctx.open()
   assert.deepEqual(all(store), saved)
   assert.equal(await readFile(ctx.file, 'utf8'), ctx.original)
   store.close()
-  store = await CustomWordDatabase.open(ctx.profile)
+  store = await ctx.open()
   t.after(() => store.close())
   assert.deepEqual(all(store), saved, 'reopening does not import a second copy')
   const token = store.change({
@@ -86,7 +104,7 @@ test('migration verifies 5,000 words and retains the complete downgrade snapshot
 
 test('50,000 keyed records and long fields persist, with only changed records written', async (t) => {
   const ctx = await fixture(t)
-  const store = await CustomWordDatabase.open(ctx.profile)
+  const store = await ctx.open()
   t.after(() => store.close())
   const calls = []
   const handle = await openCustomWordStorage(native(store, calls))
@@ -101,15 +119,32 @@ test('50,000 keyed records and long fields persist, with only changed records wr
     lang: 'de',
     note: 'full note '.repeat(5000).trim(),
   })
-  assert.equal((await handle.set(words)).status, 'saved')
+  assert.equal(
+    (
+      await handle.change(async (stage) => {
+        await stage({ upsert: words })
+      })
+    ).count,
+    50001,
+  )
   assert.deepEqual(all(store), words)
   assert.equal(await readFile(ctx.file, 'utf8'), ctx.original)
+  await handle.ensure([{ from: 49999, to: 50001 }])
+  assert.equal(handle.at(50000).word.length, 5000)
   calls.length = 0
-  const changed = words.with(49999, {
-    ...words[49999],
-    note: 'one changed record',
-  })
-  assert.equal((await handle.set(changed)).status, 'saved')
+  const current = await handle.get('id-49999')
+  const changed = { ...current.word, note: 'one changed record' }
+  assert.equal(
+    (
+      await handle.change(
+        async (stage) => {
+          await stage({ upsert: [changed] })
+        },
+        { revision: current.revision, put: changed },
+      )
+    ).count,
+    50001,
+  )
   const stages = calls.filter(({ input }) => input?.type === 'stage')
   assert.equal(stages.length, 1)
   assert.equal(stages[0].input.upsert.length, 1)
@@ -143,7 +178,7 @@ test('50,000 keyed records and long fields persist, with only changed records wr
 
 test('100,000 native records use an indexed exact lookup', async (t) => {
   const ctx = await fixture(t)
-  const store = await CustomWordDatabase.open(ctx.profile)
+  const store = await ctx.open()
   t.after(() => store.close())
   const token = store.change({
     type: 'begin',
@@ -185,7 +220,55 @@ test('100,000 native records use an indexed exact lookup', async (t) => {
     ),
   )
   db.close()
-  t.diagnostic('100,000 native records: one normalized indexed lookup')
+  const calls = []
+  const bridge = native(store, calls)
+  const prior = globalThis.window
+  globalThis.window = {
+    hibi: {
+      invokeAddonProfile: (_id, method, input) => bridge.invoke(method, input),
+    },
+  }
+  ctx.own(() => {
+    if (prior === undefined) delete globalThis.window
+    else globalThis.window = prior
+  })
+  const close = await openCustomWords({
+    native: bridge,
+    host: { selectedIo: {} },
+  })
+  ctx.own(close)
+  assert.equal(
+    listCustomWords().length,
+    0,
+    'activation never loads the full list',
+  )
+  assert.equal(calls.filter(({ method }) => method === 'customWords').length, 0)
+  assert.equal(customWordsView().count, 100000)
+  const target = store.get({ id: 'id-99999' }).word
+  calls.length = 0
+  await editCustomWord(target, (current) => ({
+    ...current,
+    note: 'keyed edit',
+  }))
+  assert.equal(
+    calls.filter(({ method }) => method === 'customWordsGet').length,
+    1,
+  )
+  assert.equal(calls.filter(({ method }) => method === 'customWords').length, 0)
+  const stages = calls.filter(({ input }) => input?.type === 'stage')
+  assert.equal(stages.length, 1)
+  assert.equal(stages[0].input.upsert.length, 1)
+  await customWordsView().indexed.ensure([{ from: 50000, to: 50040 }])
+  assert.equal(calls.filter(({ method }) => method === 'customWords').length, 1)
+  assert.equal(customWordsView().indexed.at(50000).word, 'word50000')
+  assert.equal(
+    listCustomWords().length,
+    0,
+    'viewport reads never create a full snapshot',
+  )
+  t.diagnostic(
+    '100,000 native records: activation reads 0 pages; one keyed edit reads/writes 1 record; viewport reads 1 page',
+  )
 })
 
 test('a killed migration rolls back every staged record and retries without losing legacy data', async (t) => {
@@ -229,7 +312,7 @@ test('a killed migration rolls back every staged record and retries without losi
   const worker = new Worker(pathToFileURL(path), {
     workerData: { profile: ctx.profile },
   })
-  t.after(() => worker.terminate())
+  ctx.own(() => worker.terminate())
   await new Promise((resolve, reject) => {
     worker.once('message', (message) => {
       assert.equal(message, 'migration-held')
@@ -239,7 +322,7 @@ test('a killed migration rolls back every staged record and retries without losi
   })
   await worker.terminate()
   assert.equal(await readFile(ctx.file, 'utf8'), ctx.original)
-  const store = await CustomWordDatabase.open(ctx.profile)
+  const store = await ctx.open()
   t.after(() => store.close())
   assert.deepEqual(
     all(store).map(({ word }) => ({ word })),
@@ -265,36 +348,38 @@ test('corrupt legacy values fail visibly without publishing a partial migration'
     JSON.stringify({ format: 1, entries: { 'custom-words': null } }),
   ]) {
     await writeFile(ctx.file, original)
-    await assert.rejects(
-      CustomWordDatabase.open(ctx.profile),
-      /original data has been kept/,
-    )
+    await assert.rejects(ctx.open(), /original data has been kept/)
     assert.equal(await readFile(ctx.file, 'utf8'), original)
   }
   await writeFile(ctx.file, ctx.original)
-  const store = await CustomWordDatabase.open(ctx.profile)
+  const store = await ctx.open()
   t.after(() => store.close())
   assert.deepEqual(all(store), [])
 })
 
-test('a paged snapshot restarts when another window commits between pages', async (t) => {
-  let calls = 0
+test('a viewport discards old pages when another window commits between reads', async (t) => {
+  let metadataCalls = 0,
+    pages = 0
   const handle = await openCustomWordStorage({
-    async query(_method, input) {
-      calls++
-      if (calls === 1)
+    async invoke(method, input) {
+      if (method === 'customWordsMetadata')
+        return ++metadataCalls === 1
+          ? { revision: 1, count: 300 }
+          : { revision: 2, count: 1 }
+      assert.equal(method, 'customWords')
+      pages++
+      if (pages === 1)
         return {
           revision: 1,
           words: [{ id: 'old', word: 'old' }],
           after: 1,
           more: true,
         }
-      if (calls === 2) {
+      if (pages === 2) {
         assert.equal(input.revision, 1)
         throw new Error('Custom words changed in another window. Try again.')
       }
-      assert.equal(input.after, 0)
-      assert.equal(input.revision, undefined)
+      assert.equal(input.revision, 2)
       return {
         revision: 2,
         words: [{ id: 'new', word: 'new' }],
@@ -304,14 +389,16 @@ test('a paged snapshot restarts when another window commits between pages', asyn
     },
   })
   t.after(() => handle.close())
-  assert.equal(calls, 3)
+  await handle.ensure([{ from: 0, to: 300 }])
   assert.equal(handle.snapshot().revision, 2)
-  assert.deepEqual(handle.snapshot().value, [{ id: 'new', word: 'new' }])
+  assert.equal(handle.at(0), undefined)
+  await handle.ensure([{ from: 0, to: 1 }])
+  assert.deepEqual(handle.at(0), { id: 'new', word: 'new' })
 })
 
 test('abandoned changes roll back, revision conflicts refresh, and other windows follow commits', async (t) => {
   const ctx = await fixture(t, [{ id: 'kept', word: 'kept', note: 'original' }])
-  const store = await CustomWordDatabase.open(ctx.profile)
+  const store = await ctx.open()
   t.after(() => store.close())
   let token = store.change({ type: 'begin', revision: 1 }).token
   store.change({
@@ -330,12 +417,15 @@ test('abandoned changes roll back, revision conflicts refresh, and other windows
     second.close()
   })
   const changed = [{ id: 'kept', word: 'kept', note: 'saved' }]
-  await first.set(changed)
+  await first.change(async (stage) => {
+    await stage({ upsert: changed })
+  })
   await waitForAsync(
     { evaluate: async (check) => check() },
     () => second.snapshot().revision === first.snapshot().revision,
   )
-  assert.deepEqual(second.snapshot().value, changed)
+  await second.ensure([{ from: 0, to: 1 }])
+  assert.deepEqual(second.at(0), changed[0])
   token = store.change({ type: 'begin', revision: store.revision() }).token
   store.change({
     type: 'stage',
@@ -344,10 +434,77 @@ test('abandoned changes roll back, revision conflicts refresh, and other windows
     remove: [],
   })
   store.change({ type: 'commit', token })
-  assert.equal(
-    (await first.set([{ id: 'kept', word: 'kept', note: 'stale' }])).status,
-    'conflict',
+  await assert.rejects(
+    first.change(async (stage) => {
+      await stage({ upsert: [{ id: 'kept', word: 'kept', note: 'stale' }] })
+    }),
+    /changed in another window/,
   )
-  assert.equal(first.snapshot().value.length, 2)
-  assert.equal(first.snapshot().value[0].note, 'saved')
+  assert.equal(first.snapshot().count, 2)
+  await first.ensure([{ from: 0, to: 2 }])
+  assert.equal(first.at(0).note, 'saved')
+})
+
+test('a rejected stage and lost abort cannot wedge the next client save', async (t) => {
+  const ctx = await fixture(t, [{ id: 'kept', word: 'kept' }])
+  const store = await ctx.open()
+  const bridge = native(store)
+  let loseAbort = true
+  const handle = await openCustomWordStorage(bridge, async (method, input) => {
+    if (input?.type === 'abort' && loseAbort) {
+      loseAbort = false
+      throw new Error('renderer lost')
+    }
+    return bridge.invoke(method, input)
+  })
+  ctx.own(() => handle.close())
+  await assert.rejects(
+    handle.change(async (stage) => {
+      await stage({ upsert: [{ id: 'lost', word: 'lost' }] })
+      throw new Error('renderer lost')
+    }),
+    /Could not save/,
+  )
+  await handle.change(async (stage) => {
+    await stage({ upsert: [{ id: 'next', word: 'next' }] })
+  })
+  assert.deepEqual(
+    all(store).map(({ word }) => word),
+    ['kept', 'next'],
+  )
+})
+
+test('a late commit reply never replaces a newer profile revision', async (t) => {
+  const ctx = await fixture(t, [{ id: 'kept', word: 'kept' }])
+  const store = await ctx.open()
+  const bridge = native(store)
+  const gate = Promise.withResolvers()
+  const committed = Promise.withResolvers()
+  const handle = await openCustomWordStorage(bridge, async (method, input) => {
+    const result = await bridge.invoke(method, input)
+    if (input?.type === 'commit') {
+      committed.resolve()
+      await gate.promise
+    }
+    return result
+  })
+  ctx.own(() => handle.close())
+  const saved = handle.change(async (stage) => {
+    await stage({ upsert: [{ id: 'kept', word: 'kept', note: 'older' }] })
+  })
+  await committed.promise
+  const { token } = store.change({ type: 'begin', revision: store.revision() })
+  store.change({
+    type: 'stage',
+    token,
+    upsert: [{ id: 'kept', word: 'kept', note: 'newer' }],
+    remove: [],
+  })
+  store.change({ type: 'commit', token })
+  await handle.refresh()
+  gate.resolve()
+  await saved
+  assert.equal(handle.snapshot().revision, 3)
+  await handle.ensure([{ from: 0, to: 1 }])
+  assert.equal(handle.at(0).note, 'newer')
 })

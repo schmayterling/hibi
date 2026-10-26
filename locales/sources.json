@@ -1545,6 +1545,9 @@
   "a04c9b95fb0a": [
     "src/addons/ui-preview/index.tsx"
   ],
+  "be7ccdcd6b0c": [
+    "src/addons/dictionary/CustomWords.tsx"
+  ],
   "f454b68dc829": [
     "src/addons/dictionary/CustomWords.tsx"
   ],
@@ -1553,6 +1556,7 @@
   ],
   "b27f46ebffcf": [
     "src/addons/dictionary/custom-word-database.ts",
+    "src/addons/dictionary/custom-word-storage.ts",
     "src/addons/dictionary/custom-words.ts"
   ],
   "020405ad0651": [
@@ -3701,6 +3705,9 @@
     "src/main/index.ts",
     "src/shared/hotkeys.ts"
   ],
+  "ad5823d9cb53": [
+    "src/addons/dictionary/CustomWords.tsx"
+  ],
   "2d51b02e58b4": [
     "src/renderer/src/UpdateSettings.tsx"
   ],
@@ -4184,6 +4191,9 @@
   "217fbef16da6": [
     "src/addons/documentation/ExportDialog.tsx"
   ],
+  "d631053c9df8": [
+    "src/addons/dictionary/CustomWords.tsx"
+  ],
   "60b14317b8ae": [
     "src/addons/asciidoc/hibi-addon.json",
     "src/addons/creole/hibi-addon.json",
@@ -4351,6 +4361,9 @@
   "c88d5e7ec3a8": [
     "src/main/index.ts",
     "src/shared/hotkeys.ts"
+  ],
+  "bdc51b04dd04": [
+    "src/addons/dictionary/CustomWords.tsx"
   ],
   "da2eb576b5f6": [
     "src/addons/ui-preview/index.tsx"
@@ -6992,6 +7005,9 @@
   ],
   "653913ac0e67": [
     "src/addons/word-count/hibi-addon.json"
+  ],
+  "0ea187fc0e5a": [
+    "src/addons/dictionary/CustomWords.tsx"
   ],
   "c4853f18f5cc": [
     "src/addons/dictionary/Settings.tsx"

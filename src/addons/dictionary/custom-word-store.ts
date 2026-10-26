@@ -14,7 +14,7 @@ export class CustomWordStore {
     private profile: string,
   ) {}
   request(
-    method: 'page' | 'lookup' | 'complete' | 'change',
+    method: 'metadata' | 'get' | 'page' | 'lookup' | 'complete' | 'change',
     input?: unknown,
   ): Promise<unknown> {
     if (this.closed)

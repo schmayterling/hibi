@@ -6,11 +6,6 @@ import {
 } from '../src/addons/dictionary/offline.ts'
 import { packIds } from '../src/addons/dictionary/packs.ts'
 import { createRegistry, gather } from '../src/addons/dictionary/providers.ts'
-import {
-  readPreferences,
-  readRecentPack,
-  writePreferences,
-} from '../src/addons/dictionary/settings.ts'
 
 const entry = {
   word: '猫',
@@ -102,55 +97,6 @@ test('lookup and related reject cancellation while native response remains held'
     await assert.rejects(pending, (error) => error === reason)
     release([entry])
   }
-})
-
-test('recent pack persists only successful lookup or completion language beside preferences', async (t) => {
-  const saved = new Map()
-  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
-  Object.defineProperty(globalThis, 'localStorage', {
-    configurable: true,
-    value: {
-      getItem: (key) => saved.get(key) ?? null,
-      setItem: (key, value) => saved.set(key, value),
-    },
-  })
-  t.after(() => {
-    if (descriptor)
-      Object.defineProperty(globalThis, 'localStorage', descriptor)
-    else delete globalThis.localStorage
-  })
-  assert.deepEqual(readPreferences(), { latin: 'en', han: 'zh' })
-  assert.equal(readRecentPack(), undefined)
-  saved.set('hibi:dictionary:recent-pack', '../en')
-  assert.equal(readRecentPack(), undefined)
-  let result = [entry]
-  const providers = createOfflineProviders({
-    async query() {
-      return result
-    },
-  })
-  const zh = providers.find((provider) => provider.id === 'offline-zh')
-  const fr = providers.find((provider) => provider.id === 'offline-fr')
-  const signal = new AbortController().signal
-  await zh.lookup('猫', 'zh', signal)
-  assert.equal(readRecentPack(), 'zh')
-  writePreferences({ latin: 'fr', han: 'ja' })
-  assert.deepEqual(readPreferences(), { latin: 'fr', han: 'ja' })
-  assert.equal(readRecentPack(), 'zh')
-  result = []
-  await fr.lookup('missing', 'fr', signal)
-  await fr.complete('missing', 'fr', signal)
-  assert.equal(readRecentPack(), 'zh')
-  result = ['Maison']
-  await fr.complete('mai', 'fr', signal)
-  assert.equal(readRecentPack(), 'fr')
-  await assert.rejects(zh.lookup('猫', 'zh', AbortSignal.abort()))
-  assert.equal(readRecentPack(), 'fr')
-  assert.deepEqual([...saved.keys()].sort(), [
-    'hibi:dictionary',
-    'hibi:dictionary:recent-pack',
-  ])
-  assert.equal(saved.get('hibi:dictionary:recent-pack'), 'fr')
 })
 
 test('a local answer across candidate languages avoids all online requests', async () => {

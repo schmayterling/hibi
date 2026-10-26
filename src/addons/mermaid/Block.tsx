@@ -7,16 +7,11 @@ import {
 import { Pencil } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { errorMessage } from '../../shared/errors'
-import {
-  fencedBlock,
-  fencedBlockStart,
-  fenceSource,
-} from '../_shared/fenced-block'
 import type { AddonContext } from '../api'
 import { Button, DocumentNotice, IconButton, TextArea } from '../ui'
+import { mermaidMarkdown } from './markdown'
 import { mountDiagram } from './render'
 
-const tokenize = fencedBlock('mermaid', 'mermaidBlock')
 function Form({
   source,
   close,
@@ -132,25 +127,7 @@ export function mermaidNode(context: AddonContext) {
       mergeAttributes(HTMLAttributes, { 'data-type': 'mermaid-block' }),
       ['code', { class: 'language-mermaid' }, node.attrs.source],
     ],
-    markdownTokenName: 'mermaidBlock',
-    markdownTokenizer: {
-      name: 'mermaidBlock',
-      level: 'block',
-      start: fencedBlockStart,
-      tokenize,
-    },
-    parseMarkdown: (token, helpers) =>
-      helpers.createNode('mermaidBlock', {
-        source: token.source,
-        raw: token.raw,
-      }),
-    renderMarkdown: (node) => {
-      const source = String(node.attrs?.source ?? ''),
-        raw = String(node.attrs?.raw ?? '')
-      return raw && tokenize(raw)?.source === source
-        ? raw.replace(/\r?\n$/, '')
-        : fenceSource('mermaid', source)
-    },
+    ...mermaidMarkdown,
     addNodeView: () => ReactNodeViewRenderer(View),
   })
 }

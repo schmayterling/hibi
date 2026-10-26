@@ -8,7 +8,13 @@ import { codeHtml, codeLanguages } from '../src/renderer/src/code-languages.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
-test('language loading deduplicates aliases and respects disabled preferences during import', async () => {
+test('language loading deduplicates aliases and respects disabled preferences during import', async (t) => {
+  const changes = []
+  t.after(
+    codeLanguages.subscribe((names) => {
+      if (names.size) changes.push([...names].sort())
+    }),
+  )
   assert.equal(codeLanguages.resolve('rust'), null)
   const [rust, alias] = await Promise.all([
     codeLanguages.ensure('rust'),
@@ -20,8 +26,14 @@ test('language loading deduplicates aliases and respects disabled preferences du
   codeLanguages.setEnabled('python', false)
   await codeLanguages.settle()
   assert.equal(codeLanguages.resolve('py'), null)
+  // Arrivals name only the changed language; a parser loaded while disabled publishes nothing.
+  assert.deepEqual(changes, [
+    ['rs', 'rust'],
+    ['py', 'python'],
+  ])
   codeLanguages.setEnabled('python', true)
   assert.ok(codeLanguages.resolve('py'))
+  assert.deepEqual(changes.at(-1), ['py', 'python'])
   assert.match(codeHtml('def sample(): return 1', 'py'), /hibi-token-keyword/)
 })
 

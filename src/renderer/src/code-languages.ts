@@ -1,4 +1,5 @@
 import type { Language, StreamParser } from '@codemirror/language'
+import type { Tree } from '@lezer/common'
 import { highlightTree, tagHighlighter, tags } from '@lezer/highlight'
 import type { CodeLanguage } from '../../shared/syntax'
 
@@ -145,9 +146,11 @@ const loaded = new WeakMap<CodeLanguage, Language>()
 const pending = new Map<CodeLanguage, Promise<Language | null>>()
 const failed = new WeakSet<CodeLanguage>()
 const registered = new Map<string, CodeLanguage>()
-const listeners = new Set<() => void>()
+const listeners = new Set<(changed: ReadonlySet<string>) => void>()
 let version = 0
 let languages = new Map<string, Language>()
+/** Each lowercase name's parser, definition still to load, or null while disabled. */
+let resolution = new Map<string, unknown>()
 let definitions = new Map<string, CodeLanguage>()
 let aliases = new Map<string, string>()
 let catalog: readonly {
@@ -201,8 +204,19 @@ function publish() {
       .filter(([alias, id]) => id === entry.id && alias !== entry.id)
       .map(([alias]) => alias),
   }))
+  const next = new Map<string, unknown>()
+  for (const [alias, id] of aliases)
+    next.set(
+      alias,
+      disabled.has(id) ? null : (languages.get(id) ?? definitions.get(id)),
+    )
+  // Highlighters refresh only names whose parser or availability changed, including aliases.
+  const changed = new Set<string>()
+  for (const name of new Set([...resolution.keys(), ...next.keys()]))
+    if (resolution.get(name) !== next.get(name)) changed.add(name)
+  resolution = next
   version++
-  for (const listener of listeners) listener()
+  for (const listener of listeners) listener(changed)
 }
 publish()
 function savePreferences() {
@@ -216,6 +230,9 @@ function savePreferences() {
   }
   publish()
 }
+/** Lowercase language name from a fence's info string. */
+export const codeLanguageKey = (info: string) =>
+  info.trim().split(/\s+/)[0]?.toLowerCase() ?? ''
 export const codeLanguages = {
   version: () => version,
   snapshot: () => catalog,
@@ -234,16 +251,14 @@ export const codeLanguages = {
     savePreferences()
   },
   resolve(info: string) {
-    const id =
-      aliases.get(info.trim().split(/\s+/)[0]?.toLowerCase() ?? '') ?? ''
+    const id = aliases.get(codeLanguageKey(info)) ?? ''
     if (disabled.has(id)) return null
     const language = languages.get(id)
     if (!language) void codeLanguages.ensure(id)
     return language ?? null
   },
   async ensure(info: string): Promise<Language | null> {
-    const id =
-      aliases.get(info.trim().split(/\s+/)[0]?.toLowerCase() ?? '') ?? ''
+    const id = aliases.get(codeLanguageKey(info)) ?? ''
     const definition = definitions.get(id)
     if (disabled.has(id) || !definition || failed.has(definition)) return null
     if (languages.has(id)) return languages.get(id) ?? null
@@ -274,8 +289,7 @@ export const codeLanguages = {
     await Promise.all(pending.values())
   },
   retry(info: string) {
-    const id =
-      aliases.get(info.trim().split(/\s+/)[0]?.toLowerCase() ?? '') ?? ''
+    const id = aliases.get(codeLanguageKey(info)) ?? ''
     const definition = definitions.get(id)
     if (!definition || disabled.has(id)) return Promise.resolve(null)
     failed.delete(definition)
@@ -283,7 +297,8 @@ export const codeLanguages = {
     publish()
     return loading
   },
-  subscribe(listener: () => void) {
+  /** Listeners receive the lowercase names whose parser or availability changed. */
+  subscribe(listener: (changed: ReadonlySet<string>) => void) {
     listeners.add(listener)
     return () => {
       listeners.delete(listener)
@@ -344,22 +359,27 @@ export const codeHighlighter = tagHighlighter([
   { tag: [tags.operator, tags.punctuation], class: 'hibi-token-operator' },
 ])
 export type CodeSpan = { from: number; to: number; classes: string }
-export function highlightCode(text: string, info: string): CodeSpan[] {
-  if (text.length > 100000) return []
-  const language = codeLanguages.resolve(info)
-  // Large blocks remain complete plain text; avoid synchronously parsing megabytes in rich view/export.
-  if (!language) return []
+/** Token classes for a parsed range; `to` may stop inside a partial tree. */
+export function codeSpans(tree: Tree, from?: number, to?: number) {
   const spans: CodeSpan[] = []
+  highlightTree(
+    tree,
+    codeHighlighter,
+    (from, to, classes) => spans.push({ from, to, classes }),
+    from,
+    to,
+  )
+  return spans
+}
+export function highlightCode(text: string, info: string): CodeSpan[] {
+  const language = codeLanguages.resolve(info)
+  if (!language) return []
   try {
-    highlightTree(
-      language.parser.parse(text),
-      codeHighlighter,
-      (from, to, classes) => spans.push({ from, to, classes }),
-    )
+    return codeSpans(language.parser.parse(text))
   } catch (error) {
     console.error(`code highlighting failed: ${info}`, error)
+    return []
   }
-  return spans
 }
 export function escapeCode(text: string) {
   return text

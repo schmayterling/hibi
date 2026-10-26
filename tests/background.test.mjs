@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
@@ -205,7 +205,8 @@ for (const platform of ['darwin', 'win32', 'linux']) {
 }
 
 test('background saves persist both choices, reload, and serialize without dropping writes', async (t) => {
-  const { background, BackgroundMode, actions, mock, file } = await adapter(t)
+  const { background, BackgroundMode, actions, mock, file, root } =
+    await adapter(t)
   const restored = new BackgroundMode(actions)
   t.after(() => restored.dispose())
   assert.equal(await background.save(true), true)
@@ -228,7 +229,10 @@ test('background saves persist both choices, reload, and serialize without dropp
   )
   assert.equal(background.enabled, true)
   assert.equal(await readFile(file, 'utf8'), 'true')
-  await assert.rejects(readFile(`${file}.tmp`), { code: 'ENOENT' })
+  assert.deepEqual(
+    (await readdir(root)).filter((name) => name.endsWith('.tmp')),
+    [],
+  )
 })
 
 test('background rejects non-boolean saves without changing preferences or tray state', async (t) => {

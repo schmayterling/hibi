@@ -93,9 +93,11 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   // and 63 bytes for opening large notes in the CodeMirror formatted view (#450),
   // and 1122 bytes for closing several tabs and middle-click closing (#455),
   // and 10 bytes for keeping footnote notes in the formatted view (#419),
-  // plus 34 bytes for shared context-free search folding (#399).
+  // plus 34 bytes for shared context-free search folding (#399),
+  // and 9 bytes for the formatted view's copy importing the synchronous export
+  // renderer from the startup chunk (#459).
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
-  assert.ok(bytes <= 691114, `startup catalog grew to ${bytes} bytes`)
+  assert.ok(bytes <= 691123, `startup catalog grew to ${bytes} bytes`)
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
   assert.doesNotMatch(
     modules,

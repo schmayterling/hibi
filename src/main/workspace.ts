@@ -188,6 +188,10 @@ function publishWorkspaceChange(change: WorkspaceChange) {
 export function workspaceRoot(): string | null {
   return root
 }
+
+export function workspaceName(): string | null {
+  return root ? (manifest?.name ?? basename(root)) : null
+}
 export function workspaceId(): string | null {
   return root ? createHash('sha256').update(root).digest('hex') : null
 }
@@ -238,6 +242,12 @@ export function listWorkspaceEntryPage(
 
 export function workspaceIndexRevision(): number {
   return indexRevision
+}
+
+export function listenWorkspaceChanges(
+  listener: (event: WorkspaceChangeEvent) => void,
+): () => void {
+  return workspaceStream.listen(listener)
 }
 
 export function subscribeWorkspaceChanges(
@@ -1568,25 +1578,6 @@ export async function workspaceMetadataDelta(
       return true
     },
   }
-}
-
-export async function readWorkspaceIndexSource(path: string): Promise<string> {
-  const selected = root
-  if (!selected) return ''
-  const dirty = new Set(
-    getDocumentTabs()
-      .filter((tab) => tab.dirty)
-      .map((tab) => tab.id),
-  )
-  const draft = getOpenDocumentVersions().find(
-    (draft) =>
-      dirty.has(draft.tabId) && relativePath(selected, draft.file) === path,
-  )
-  if (draft) return getDocumentSourceFor(draft.tabId).snapshot().materialize()
-  const revision = indexRevision
-  const file = await resolveWorkspaceFile(selected, path)
-  if (root !== selected || indexRevision !== revision) return ''
-  return readMarkdown(file)
 }
 
 import { isMarkdownDocument } from '../shared/document-types'

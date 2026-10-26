@@ -539,27 +539,6 @@ test('large frontmatter preserves references, tags, properties, and headings', (
   assert.deepEqual(index.links('a.md', 0, 10).items, ['b.md'])
 })
 
-test('text search resumes long notes and finds boundary-spanning matches', async () => {
-  const index = new WorkspaceReferenceIndex()
-  const pages = [
-    page('a.md', `${'x'.repeat(65_534)}needle${'y'.repeat(1_100_000)}`),
-    page('b.md', 'needle'),
-  ]
-  index.apply(workspace, pages)
-  const read = (path) => pages.find((page) => page.path === path).markdown
-  let result = await index.searchText(
-    'NEEDLE',
-    { pathIndex: 0, sourceOffset: 0 },
-    1,
-    read,
-  )
-  assert.deepEqual(result.items, ['a.md'])
-  assert.equal(result.hasMore, true)
-  result = await index.searchText('NEEDLE', result.position, 1, read)
-  assert.deepEqual(result.items, ['b.md'])
-  assert.equal(result.hasMore, false)
-})
-
 test('workspace metadata indexes more than 2000 documents and continues past offset 2100', async () => {
   const index = new WorkspaceReferenceIndex()
   const pages = Array.from({ length: 2101 }, (_, i) =>

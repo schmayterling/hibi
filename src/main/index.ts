@@ -2200,7 +2200,11 @@ if (!app.requestSingleInstanceLock()) {
       handle(WORKSPACE_CHANNELS.queryReferences, (event, request: unknown) =>
         readAfterFileOperation(event, () =>
           import('./workspace-metadata-query').then((module) =>
-            module.queryWorkspaceReferences(request, getOpenDocumentVersions),
+            module.queryWorkspaceReferences(
+              request,
+              getOpenDocumentVersions,
+              String(event.sender.id),
+            ),
           ),
         ),
       )

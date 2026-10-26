@@ -57,11 +57,6 @@ export interface ReferencePage {
   readonly nextOffset: number
 }
 
-export interface TextSearchPosition {
-  readonly pathIndex: number
-  readonly sourceOffset: number
-}
-
 export interface GraphPosition {
   readonly pathIndex: number
   readonly targetIndex: number
@@ -1029,63 +1024,6 @@ export class WorkspaceReferenceIndex {
     }
     this.rememberPaths(cacheKey, matches, true)
     return yield* this.pageSteps(matches, offset, limit)
-  }
-
-  /** Scan at most one million source characters per call; cursor resumes long notes. */
-  async searchText(
-    query: string,
-    start: TextSearchPosition,
-    limit: number,
-    read: (path: string) => Promise<string> | string,
-  ): Promise<{
-    items: readonly string[]
-    position: TextSearchPosition
-    hasMore: boolean
-  }> {
-    const term = query.toLowerCase()
-    const items: string[] = []
-    let pathIndex = start.pathIndex
-    let sourceOffset = start.sourceOffset
-    let budget = 1024 * 1024
-    let bytes = 0
-    let loadedPath: string | undefined
-    let source = ''
-    while (pathIndex < this.sortedPaths.length && items.length < limit) {
-      const path = this.sortedPaths[pathIndex]
-      if (path !== loadedPath) {
-        source = path ? await read(path) : ''
-        loadedPath = path
-      }
-      if (sourceOffset >= source.length) {
-        pathIndex++
-        sourceOffset = 0
-        continue
-      }
-      if (!budget) break
-      const length = Math.min(64 * 1024, budget, source.length - sourceOffset)
-      const overlap = Math.max(0, sourceOffset - query.length * 4)
-      const chunk = source.slice(overlap, sourceOffset + length)
-      budget -= length
-      if (chunk.toLowerCase().includes(term)) {
-        const size = Buffer.byteLength(path ?? '')
-        if (bytes + size > 32 * 1024) break
-        if (path) items.push(path)
-        bytes += size
-        pathIndex++
-        sourceOffset = 0
-      } else {
-        sourceOffset += length
-        if (sourceOffset >= source.length) {
-          pathIndex++
-          sourceOffset = 0
-        }
-      }
-    }
-    return {
-      items,
-      position: { pathIndex, sourceOffset },
-      hasMore: pathIndex < this.sortedPaths.length,
-    }
   }
 
   resolve(

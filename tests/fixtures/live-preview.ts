@@ -70,6 +70,8 @@ Object.assign(window, {
     },
     /** The formatted view's syntax tree. */
     tree: () => (view ? syntax.tree(view.state) : null),
+    /** An edit's reparse is still running. */
+    settling: () => (view ? syntax.settling(view.state) : false),
     reset() {
       for (const key of Object.keys(probe) as (keyof ChunkedMarkdownProbe)[])
         probe[key] = 0

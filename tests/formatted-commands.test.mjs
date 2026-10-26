@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
-import { Decoration } from '@codemirror/view'
+import { Decoration, WidgetType } from '@codemirror/view'
 import { GFM, parser } from '@lezer/markdown'
 import {
   blockBreak,
@@ -15,10 +15,18 @@ import {
 
 const markdown = parser.configure(GFM)
 const hide = Decoration.replace({})
+const glyph = Decoration.replace({
+  widget: new (class extends WidgetType {
+    toDOM() {
+      return null
+    }
+  })(),
+})
 
 /**
- * Run a structure command on `doc`, where `|` marks the caret and `⟦` `⟧`
- * enclose syntax the formatted view hides.
+ * Run a structure command on `doc`, where `|` marks the caret, `⟦` `⟧`
+ * enclose syntax the formatted view hides and `⟪` `⟫` text it shows as a
+ * widget.
  */
 function run(doc, command) {
   const hidden = []
@@ -26,8 +34,9 @@ function run(doc, command) {
     caret = 0
   for (const char of doc) {
     if (char === '|') caret = text.length
-    else if (char === '⟦') hidden.push({ from: text.length })
-    else if (char === '⟧') hidden.at(-1).to = text.length
+    else if (char === '⟦' || char === '⟪')
+      hidden.push({ from: text.length, value: char === '⟦' ? hide : glyph })
+    else if (char === '⟧' || char === '⟫') hidden.at(-1).to = text.length
     else text += char
   }
   const state = EditorState.create({
@@ -37,7 +46,7 @@ function run(doc, command) {
   const spec = command(
     state,
     markdown.parse(text),
-    Decoration.set(hidden.map(({ from, to }) => hide.range(from, to))),
+    Decoration.set(hidden.map(({ from, to, value }) => value.range(from, to))),
   )
   if (!spec) return null
   const next = state.update(spec).state
@@ -71,6 +80,10 @@ test('backspace and delete edit visible text and remove block markers before joi
   assert.equal(run('⟦**⟧bold⟦**⟧|', deleteBackward), '**bol|**')
   assert.equal(run('one|\n\ntwo', deleteForward), 'one|two')
   assert.equal(run('|⟦**⟧bold⟦**⟧', deleteForward), '|**old**')
+  // A widget shown for its text is deleted whole, like any character.
+  assert.equal(run('ab ⟪&amp;⟫| cd', deleteBackward), 'ab | cd')
+  assert.equal(run('ab |⟪&amp;⟫ cd', deleteForward), 'ab | cd')
+  assert.equal(run('ab ⟪&amp;⟫⟦**⟧|', deleteBackward), 'ab |**')
 })
 
 test('tab nests and outdents list items, indents code and keeps paragraphs out of code', () => {

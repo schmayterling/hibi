@@ -6,9 +6,12 @@ import {
   editorBenchmarkPlan,
   editorFixture,
   ensureFormattedEditor,
+  minimumKeysForP95,
   operationPaint,
+  pairEditors,
   requireFormattedEditor,
   scrollFrames,
+  scrollSeries,
   statistics,
   summarizeEditors,
 } from '../scripts/benchmark-editors.mjs'
@@ -223,10 +226,123 @@ test('summaries pool measured keys and retain missing paints and launch spread',
   assert.equal(row.metrics.scrollMainThreadPerFrameMs.median, 5)
   assert.equal(row.metrics.scrollP95Ms.median, 16.7)
 
+  assert.equal(row.keyIndexMedians.taskMs.length, 20)
+  assert.equal(row.keyIndexMedians.taskMs[0], 1.5)
+  assert.equal(row.keyIndexMedians.taskMs[19], 51)
+
   const failed = summarizeEditors([{ ...base, status: 'failed' }])[0]
   assert.equal(failed.runs, 0)
   assert.equal(failed.failed, 1)
   assert.equal(failed.metrics.keyTaskMs.median, null)
+})
+
+const launch = (engine, run, values = {}) => ({
+  size: '100kb',
+  fixture: 'prose',
+  engine,
+  run,
+  status: 'complete',
+  open: { readyMs: values.open ?? 10, paintMs: null, method: 'open' },
+  keys: (values.keys ?? [1, 1, 1]).map((readyMs) => ({
+    taskMs: readyMs * 2,
+    readyMs,
+    paintMs: null,
+  })),
+  find: { first: { paintMs: 5 }, next: { paintMs: 5 } },
+  scroll: {
+    frames: [16.7],
+    first: { mainThreadPerFrameMs: values.first ?? 4 },
+    mainThreadPerFrameMs: values.scroll ?? 2,
+  },
+})
+
+test('short key series report per-index medians but no p95', () => {
+  const [row] = summarizeEditors([
+    launch('tiptap', 0, { keys: [9, 6, 5, 5] }),
+    launch('tiptap', 1, { keys: [7, 4, 5, 5] }),
+  ])
+  assert.ok(minimumKeysForP95 >= 20)
+  assert.equal(row.metrics.keyReadyMs.p95, null)
+  assert.equal(row.metrics.keyTaskMs.p95, null)
+  assert.equal(row.metrics.keyReadyMs.max, 9)
+  assert.deepEqual(row.keyIndexMedians.readyMs, [8, 5, 5, 5])
+})
+
+test('pairs compare codemirror with tiptap within each run, so load drift cancels', () => {
+  // The second pair ran ten times slower; each launch is still compared with its partner.
+  const pairs = pairEditors([
+    launch('tiptap', 0, { open: 100, keys: [2, 2, 2], scroll: 1, first: 2 }),
+    launch('codemirror', 0, { open: 50, keys: [1, 1, 1], scroll: 3, first: 8 }),
+    launch('codemirror', 1, {
+      open: 500,
+      keys: [10, 10, 10],
+      scroll: 30,
+      first: 80,
+    }),
+    launch('tiptap', 1, {
+      open: 1000,
+      keys: [20, 20, 20],
+      scroll: 10,
+      first: 20,
+    }),
+    launch('codemirror', 2),
+    { ...launch('tiptap', 2), status: 'failed' },
+  ])
+  assert.equal(pairs.length, 1)
+  const [row] = pairs
+  assert.equal(row.pairs, 2)
+  assert.deepEqual(
+    [row.ratios.openReadyMs.median, row.ratios.openReadyMs.min],
+    [0.5, 0.5],
+  )
+  assert.equal(row.ratios.keyReadyMs.median, 0.5)
+  assert.equal(row.ratios.keyTaskMs.median, 0.5)
+  assert.equal(row.ratios.scrollMainThreadPerFrameMs.median, 3)
+  assert.equal(row.ratios.scrollFirstPerFrameMs.median, 4)
+  assert.equal(row.ratios.openPaintMs.n, 0)
+  assert.equal(row.ratios.openPaintMs.missing, 2)
+})
+
+test('scroll series keeps the first traversal apart from settled repeat passes', async () => {
+  const passes = []
+  const page = {
+    async evaluate(_work, argument) {
+      // Reset-and-settle runs without an argument; each pass names its marks.
+      if (argument === undefined) return { settled: true, settleMs: 3 }
+      passes.push(argument.label)
+      return {
+        requestedPx: 3600,
+        distancePx: 3600,
+        actualPx: 3600,
+        frames: Array(argument.frameCount).fill(16.7),
+      }
+    },
+  }
+  const durations = [1, 1.008, 1.008, 1.01, 1.01, 1.016, 1.016, 1.02]
+  const session = {
+    async send() {
+      const value = durations.shift()
+      return {
+        metrics: [
+          'TaskDuration',
+          'ScriptDuration',
+          'LayoutDuration',
+          'RecalcStyleDuration',
+        ].map((name) => ({ name, value })),
+      }
+    },
+  }
+  const scroll = await scrollSeries(page, session, 2, 3)
+  assert.deepEqual(passes, ['scroll-first', 'scroll-0', 'scroll-1', 'scroll-2'])
+  assert.ok(Math.abs(scroll.first.mainThreadPerFrameMs - 4) < 1e-8)
+  assert.deepEqual(
+    scroll.passes.map((pass) => Math.round(pass.mainThreadPerFrameMs)),
+    [1, 3, 2],
+  )
+  assert.equal(Math.round(scroll.mainThreadPerFrameMs), 2)
+  assert.equal(scroll.frames.length, 6)
+  assert.equal(Math.round(scroll.taskMs), 12)
+  assert.ok(scroll.passes.every((pass) => pass.settled))
 })
 
 test('source-first tiptap requests formatted view, then measures from initial open', async () => {

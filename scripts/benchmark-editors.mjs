@@ -206,9 +206,71 @@ const measurements = {
   openPaintMs: (row) => row.open.paintMs,
   findFirstPaintMs: (row) => row.find.first.paintMs,
   findNextPaintMs: (row) => row.find.next.paintMs,
+  scrollFirstPerFrameMs: (row) => row.scroll.first?.mainThreadPerFrameMs,
   scrollMainThreadPerFrameMs: (row) => row.scroll.mainThreadPerFrameMs,
   scrollMedianMs: (row) => statistics(row.scroll.frames).median,
   scrollP95Ms: (row) => statistics(row.scroll.frames).p95,
+}
+
+/** Measured keys per launch before a nearest-rank p95 is more than the slowest few keys. */
+export const minimumKeysForP95 = 20
+
+const keyMetrics = ['taskMs', 'readyMs', 'paintMs']
+
+/** Per-launch values compared within each ab/ba pair, so load drift between launches cancels. */
+const pairedMeasurements = {
+  openReadyMs: measurements.openReadyMs,
+  openPaintMs: measurements.openPaintMs,
+  ...Object.fromEntries(
+    keyMetrics.map((metric) => [
+      `key${metric[0].toUpperCase()}${metric.slice(1)}`,
+      (row) => statistics(row.keys.map((key) => key[metric])).median,
+    ]),
+  ),
+  findFirstPaintMs: measurements.findFirstPaintMs,
+  findNextPaintMs: measurements.findNextPaintMs,
+  scrollFirstPerFrameMs: measurements.scrollFirstPerFrameMs,
+  scrollMainThreadPerFrameMs: measurements.scrollMainThreadPerFrameMs,
+}
+
+/** Codemirror / tiptap ratios of launches that ran as a pair (same size, fixture and run). */
+export function pairEditors(samples) {
+  const pairs = new Map()
+  for (const sample of samples) {
+    if (sample.status !== 'complete') continue
+    const key = `${sample.size}/${sample.fixture}`
+    if (!pairs.has(key)) pairs.set(key, new Map())
+    const runs = pairs.get(key)
+    if (!runs.has(sample.run)) runs.set(sample.run, {})
+    runs.get(sample.run)[sample.engine] = sample
+  }
+  return [...pairs].map(([key, runs]) => {
+    const [size, fixture] = key.split('/')
+    const complete = [...runs.values()].filter(
+      (pair) => pair.tiptap && pair.codemirror,
+    )
+    return {
+      size,
+      fixture,
+      pairs: complete.length,
+      ratios: Object.fromEntries(
+        Object.entries(pairedMeasurements).map(([name, read]) => [
+          name,
+          statistics(
+            complete.map(({ tiptap, codemirror }) => {
+              const before = read(tiptap),
+                after = read(codemirror)
+              return Number.isFinite(before) &&
+                Number.isFinite(after) &&
+                before > 0
+                ? after / before
+                : null
+            }),
+          ),
+        ]),
+      ),
+    }
+  })
 }
 
 export function summarizeEditors(samples) {
@@ -221,6 +283,15 @@ export function summarizeEditors(samples) {
   return [...groups.values()].map((attempts) => {
     const group = attempts.filter((sample) => sample.status === 'complete')
     const keys = group.flatMap((sample) => sample.keys)
+    // Fewer keys per launch make the nearest-rank p95 the first keys after warm-up.
+    const quoteP95 =
+      group.length > 0 &&
+      group.every((sample) => sample.keys.length >= minimumKeysForP95)
+    const keyStatistics = (metric) => {
+      const result = statistics(keys.map((key) => key[metric]))
+      return quoteP95 ? result : { ...result, p95: null }
+    }
+    const keyCount = Math.max(0, ...group.map((sample) => sample.keys.length))
     return {
       size: attempts[0].size,
       fixture: attempts[0].fixture,
@@ -241,10 +312,22 @@ export function summarizeEditors(samples) {
             statistics(group.map(read)),
           ]),
         ),
-        keyTaskMs: statistics(keys.map((key) => key.taskMs)),
-        keyReadyMs: statistics(keys.map((key) => key.readyMs)),
-        keyPaintMs: statistics(keys.map((key) => key.paintMs)),
+        keyTaskMs: keyStatistics('taskMs'),
+        keyReadyMs: keyStatistics('readyMs'),
+        keyPaintMs: keyStatistics('paintMs'),
       },
+      // Medians across launches per measured key index show whether warm-up reached steady state.
+      keyIndexMedians: Object.fromEntries(
+        keyMetrics.map((metric) => [
+          metric,
+          Array.from(
+            { length: keyCount },
+            (_, index) =>
+              statistics(group.map((sample) => sample.keys[index]?.[metric]))
+                .median,
+          ),
+        ]),
+      ),
     }
   })
 }
@@ -411,14 +494,30 @@ async function metrics(session) {
   return values
 }
 
-export async function scrollFrames(page, session, frameCount) {
-  await page.evaluate(async () => {
+export async function scrollFrames(
+  page,
+  session,
+  frameCount,
+  label = 'scroll',
+) {
+  const start = await page.evaluate(async () => {
     document.querySelector('.rich-pane').scrollTop = 0
     await new Promise(requestAnimationFrame)
     await new Promise(requestAnimationFrame)
+    // Start from a quiet main thread: a long idle period means no task or frame was pending.
+    const started = performance.now()
+    for (;;) {
+      const remaining = await new Promise((resolve) =>
+        requestIdleCallback((deadline) => resolve(deadline.timeRemaining())),
+      )
+      const settleMs = performance.now() - started
+      if (remaining >= 40) return { settled: true, settleMs }
+      if (settleMs >= 1000) return { settled: false, settleMs }
+    }
   })
+  const pass = { frameCount, label }
   const before = await metrics(session)
-  const scroll = await page.evaluate(async (frameCount) => {
+  const scroll = await page.evaluate(async ({ frameCount, label }) => {
     const pane = document.querySelector('.rich-pane')
     const frame = () => new Promise((resolve) => requestAnimationFrame(resolve))
     const requestedPx = 3600
@@ -434,7 +533,7 @@ export async function scrollFrames(page, session, frameCount) {
         frames: [],
         reason: 'document fits viewport',
       }
-    performance.mark('scroll:start')
+    performance.mark(`${label}:start`)
     const frames = []
     let previous = await frame()
     for (let index = 1; index <= frameCount; index++) {
@@ -444,17 +543,47 @@ export async function scrollFrames(page, session, frameCount) {
       previous = now
     }
     await frame()
-    performance.mark('scroll:end')
+    performance.mark(`${label}:end`)
     return { requestedPx, distancePx, actualPx: pane.scrollTop, frames }
-  }, frameCount)
+  }, pass)
   const after = await metrics(session)
   const taskMs = (after.TaskDuration - before.TaskDuration) * 1000
   return {
     ...scroll,
+    ...start,
     taskMs: scroll.frames.length ? taskMs : null,
     mainThreadPerFrameMs: scroll.frames.length
       ? taskMs / scroll.frames.length
       : null,
+  }
+}
+
+/**
+ * A first traversal, then repeated passes from the same settled top. The
+ * first pass pays one-time work, such as codemirror measuring lines it has
+ * not drawn before; steady state is the median of the later passes.
+ */
+export async function scrollSeries(page, session, frameCount, passes) {
+  const first = await scrollFrames(page, session, frameCount, 'scroll-first')
+  const steady = []
+  for (let pass = 0; pass < passes; pass++)
+    steady.push(await scrollFrames(page, session, frameCount, `scroll-${pass}`))
+  const last = steady.at(-1) ?? first
+  const measured = steady.filter((pass) => pass.frames.length)
+  return {
+    requestedPx: last.requestedPx,
+    distancePx: last.distancePx,
+    actualPx: last.actualPx,
+    ...(last.reason ? { reason: last.reason } : {}),
+    first,
+    passes: steady,
+    frames: steady.flatMap((pass) => pass.frames),
+    taskMs: measured.length
+      ? measured.reduce((total, pass) => total + pass.taskMs, 0)
+      : null,
+    mainThreadPerFrameMs: statistics(
+      measured.map((pass) => pass.mainThreadPerFrameMs),
+    ).median,
   }
 }
 
@@ -550,9 +679,13 @@ async function runSample(config, directory, file, out) {
             view.focus()
           }
         })
-        await arm(page, 'warmup', 'key')
-        await page.keyboard.press('x')
-        await finish(page, 'warmup')
+        // Untimed keys reach steady state first; see keyIndexMedians in the report.
+        for (let index = 0; index < config.warmupKeys; index++) {
+          const label = `warmup-${index}`
+          await arm(page, label, 'key')
+          await page.keyboard.press('x')
+          await finish(page, label)
+        }
         const keys = []
         for (let index = 0; index < config.keys; index++) {
           const label = `key-${index}`
@@ -596,7 +729,12 @@ async function runSample(config, directory, file, out) {
         const nextCount = await page.locator('.find-count').textContent()
         await findInput.press('Escape')
         await page.locator('.find-bar').waitFor({ state: 'hidden' })
-        sample.scroll = await scrollFrames(page, session, config.scrollFrames)
+        sample.scroll = await scrollSeries(
+          page,
+          session,
+          config.scrollFrames,
+          config.scrollPasses,
+        )
         sample.keys = keys
         sample.find = {
           query: size === 'blank' ? 'x' : 'alpha',
@@ -681,13 +819,29 @@ function markdownReport(report) {
     ['key → paint p95', 'keyPaintMs', 'p95'],
     ['first find → paint', 'findFirstPaintMs'],
     ['next find → paint', 'findNextPaintMs'],
-    ['scroll main/frame', 'scrollMainThreadPerFrameMs'],
+    ['scroll first main/frame', 'scrollFirstPerFrameMs'],
+    ['scroll steady main/frame', 'scrollMainThreadPerFrameMs'],
     ['scroll interval median', 'scrollMedianMs'],
     ['scroll interval p95', 'scrollP95Ms'],
   ]
   const cell = (stats, value = 'median') =>
-    stats.n
+    stats.n && Number.isFinite(stats[value])
       ? `${stats[value].toFixed(2)} [${stats.min.toFixed(2)}–${stats.max.toFixed(2)}]${stats.missing ? `; ${stats.missing} missing` : ''}`
+      : 'n/a'
+  const ratios = [
+    ['open readyMs', 'openReadyMs'],
+    ['open → paint', 'openPaintMs'],
+    ['key task', 'keyTaskMs'],
+    ['key processing', 'keyReadyMs'],
+    ['key → paint', 'keyPaintMs'],
+    ['first find → paint', 'findFirstPaintMs'],
+    ['next find → paint', 'findNextPaintMs'],
+    ['scroll first main/frame', 'scrollFirstPerFrameMs'],
+    ['scroll steady main/frame', 'scrollMainThreadPerFrameMs'],
+  ]
+  const ratio = (stats) =>
+    stats.n
+      ? `${stats.median.toFixed(2)} [${stats.min.toFixed(2)}–${stats.max.toFixed(2)}]`
       : 'n/a'
   return [
     `# editor comparison (${report.smoke ? 'smoke only' : report.status})`,
@@ -701,11 +855,33 @@ function markdownReport(report) {
         `| ${row.size} | ${row.fixture} | ${row.engine} | ${row.runs}/${row.failed}/${row.unavailable} | ${row.openMethods.join(', ') || 'n/a'} | ${row.keyPaintCoverage.observed}/${row.keyPaintCoverage.total} | ${columns.map(([, name, value]) => cell(row.metrics[name], value)).join(' | ')} |`,
     ),
     '',
+    '## codemirror / tiptap per pair',
+    '',
+    'each launch pair ran back to back with the same size, fixture and run index; ratios below 1 favor codemirror. cells are the median ratio [min–max] over complete pairs.',
+    '',
+    `| size | fixture | pairs | ${ratios.map(([name]) => name).join(' | ')} |`,
+    `| --- | --- | ---: | ${ratios.map(() => '---:').join(' | ')} |`,
+    ...report.pairs.map(
+      (row) =>
+        `| ${row.size} | ${row.fixture} | ${row.pairs} | ${ratios.map(([, name]) => ratio(row.ratios[name])).join(' | ')} |`,
+    ),
+    '',
+    '## key processing by measured key index',
+    '',
+    'median readyMs across launches for each measured key after warm-up; a falling series means warm-up was too short.',
+    '',
+    '| size | fixture | engine | readyMs by index |',
+    '| --- | --- | --- | --- |',
+    ...report.summary.map(
+      (row) =>
+        `| ${row.size} | ${row.fixture} | ${row.engine} | ${row.keyIndexMedians.readyMs.map((value) => (Number.isFinite(value) ? value.toFixed(2) : 'n/a')).join(' ') || 'n/a'} |`,
+    ),
+    '',
     'hidden windows, focus emulation, fresh profiles; engine order alternates within balanced pairs (ab, ba). startup and engine-selection reload are excluded. no os cache clearing.',
     'open readyMs ends at editable formatted DOM with loaded fonts; mixed fixtures also require a rendered heading. open paint is the first subsequent renderer Paint. source-first tiptap attempts normal view; open+switch is reported only if an editable formatted view becomes ready. an observed read-only preview, or codemirror source fallback needing #450, records unavailable formatted metrics while retaining source-open timing, capability state, source hash and traces. unavailable samples make the report partial; unexpected errors fail it. the matrix continues in both cases.',
-    'one untimed warm-up key precedes measured keys. key processing is keydown → model-ready (readyMs); cdp task deltas also include observer/driver work and two-frame settlement. key → paint is mostly next-frame wait (0.6–14.8 ms in prior input traces); it is not a processing-time metric.',
+    `${report.config.warmupKeys} untimed warm-up keys precede measured keys; p95 is quoted only when every launch measured at least ${minimumKeysForP95} keys. key processing is keydown → model-ready (readyMs); cdp task deltas also include observer/driver work and two-frame settlement. key → paint is mostly next-frame wait (0.6–14.8 ms in prior input traces); it is not a processing-time metric.`,
     'Paint is a same-thread temporal trace match within the operation, not proof of glyph presentation or physical keyboard latency. missing paint is n/a, never zero. full frame, layout, gc and User Timing evidence is retained in traces.',
-    'scroll requests 3600 css px over a fixed number of animation frames after resetting and settling at the top. main/frame is the CDP TaskDuration delta divided by measured scroll frames; it includes the scroll driver and final settlement. short documents clamp distance; documents that fit have no scroll sample. raw task deltas, distances and frame intervals are in results.json.',
+    `scroll requests 3600 css px over a fixed number of animation frames. every pass starts at the top after a long idle period (or 1 s), so pending background work does not land in it. the first traversal follows typing and find; steady state is the median of ${report.config.scrollPasses} later passes over the same distance, which codemirror has already drawn and measured once. main/frame is the CDP TaskDuration delta divided by measured scroll frames; it includes the scroll driver and final settlement. short documents clamp distance; documents that fit have no scroll sample. raw task deltas, distances, settle state and frame intervals are in results.json.`,
     "the prose 575kb fixture is trace-input-paint.mjs's exact 574,998-byte, 100,000-word paragraph fixture. mixed fixtures repeat headings, emphasis, links, lists, code, a table and math at the same byte sizes. math rendering depends on the enabled addons recorded per sample.",
     report.smoke
       ? 'smoke numbers validate the sampler under shared load; they establish no performance ranking or full-matrix pass.'
@@ -733,7 +909,9 @@ async function main() {
       smoke: { type: 'boolean', default: false },
       runs: { type: 'string' },
       keys: { type: 'string' },
+      'warmup-keys': { type: 'string' },
       'scroll-frames': { type: 'string' },
+      'scroll-passes': { type: 'string' },
       sizes: { type: 'string' },
       fixtures: { type: 'string' },
       out: { type: 'string', default: 'test-results/editor-benchmark' },
@@ -773,11 +951,13 @@ async function main() {
   }
   const runs = positive(values.runs ?? (values.smoke ? 2 : 6), 2)
   const plan = editorBenchmarkPlan(selected, runs, selectedFixtures)
-  const keys = positive(values.keys ?? (values.smoke ? 4 : 20), 2)
+  const keys = positive(values.keys ?? minimumKeysForP95, 2)
+  const warmupKeys = positive(values['warmup-keys'] ?? 5, 1)
   const frameCount = positive(
     values['scroll-frames'] ?? (values.smoke ? 12 : 60),
     2,
   )
+  const scrollPasses = positive(values['scroll-passes'] ?? 3, 1)
   const out = resolve(values.out)
   await mkdir(join(out, 'traces'), { recursive: true })
   const directory = await mkdtemp(join(out, 'scratch-'))
@@ -836,7 +1016,8 @@ async function main() {
       scrollFrames: frameCount,
       selected,
       fixtures: selectedFixtures,
-      warmupKeys: 1,
+      warmupKeys,
+      scrollPasses,
       hidden: true,
       focusEmulation: true,
       scrollPx: 3600,
@@ -845,9 +1026,11 @@ async function main() {
     fixtures: [],
     samples: [],
     summary: [],
+    pairs: [],
   }
   const save = async () => {
     report.summary = summarizeEditors(report.samples)
+    report.pairs = pairEditors(report.samples)
     await writeFile(
       join(out, 'results.json'),
       `${JSON.stringify(report, null, 2)}\n`,
@@ -877,10 +1060,12 @@ async function main() {
               {
                 ...row,
                 keys,
+                warmupKeys,
                 scrollFrames: frameCount,
+                scrollPasses,
                 sourceLength: source.length,
                 sourceHash: hash(source),
-                expectedHash: hash('x'.repeat(keys + 1) + source),
+                expectedHash: hash('x'.repeat(keys + warmupKeys) + source),
               },
               directory,
               file,

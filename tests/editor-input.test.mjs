@@ -195,6 +195,13 @@ test('multi-line text input in the visual editor makes the browser edit in one s
       undefined,
       false,
     ],
+    [
+      'item start',
+      '<ul data-type="taskList"><li data-type="taskItem" data-checked="true"><p>|task</p></li></ul>',
+      '\nb',
+      undefined,
+      false,
+    ],
     ['single line', '<p>a|</p>', 'one line', undefined, false],
   ]
   for (const [what, html, text, select, handled = true] of cases) {
@@ -247,6 +254,18 @@ test('multi-line text input in the visual editor makes the browser edit in one s
     )
   }
   assert.deepEqual(undone[1], undone[0])
+  // Ending a list at its only item keeps the text, which the browser's own
+  // edit drops.
+  await rich.focus()
+  await page.evaluate(() =>
+    window.richLines('<ul><li><p>|</p></li></ul><p>z</p>', undefined, false),
+  )
+  await page.keyboard.insertText('\nb')
+  const ended = await page.evaluate(() => window.richLinesResult())
+  assert.deepEqual(
+    [ended.prevented, ended.markdown, ended.caret],
+    [[true], 'b\n\nz', ['b', '']],
+  )
 })
 
 test('multi-line text input work in the visual editor stays linear in the lines', {

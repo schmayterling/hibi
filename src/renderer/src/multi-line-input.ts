@@ -94,9 +94,12 @@ export function multiLineInput(
     }
     const item = $from.node(depth - 1),
       list = $from.node(depth - 2)
+    // A line break at the start of a non-empty item adds the new item before
+    // it, keeping the item's state and children after; not modelled.
     if (
       itemDepth < depth - 1 ||
-      block.type !== item.type.contentMatch.defaultType
+      block.type !== item.type.contentMatch.defaultType ||
+      (!first.content.size && after.size)
     )
       return null
     // The first line break made in an empty item ends the list.

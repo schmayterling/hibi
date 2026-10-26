@@ -472,7 +472,9 @@ function inline(
             return false
           case 'HorizontalRule': {
             line(doc.lineAt(ref.from).from).classes.push('hibi-lp-rule-line')
-            decorations.push(rule.range(ref.from, ref.to))
+            const range = rule.range(ref.from, ref.to)
+            decorations.push(range)
+            atomic.push(range)
             return false
           }
           case 'Escape':

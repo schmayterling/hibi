@@ -1,4 +1,5 @@
 import { WidgetType } from '@codemirror/view'
+import type { SyntaxNode } from '@lezer/common'
 import type {
   BlockContext,
   LeafBlock,
@@ -83,13 +84,42 @@ export function titleOf(source: string) {
   return { type, text: marker[3]?.trim() || type }
 }
 
+/** The quote's first block. */
+function firstBlock(quote: SyntaxNode) {
+  for (let child = quote.firstChild; child; child = child.nextSibling)
+    if (child.type.is('Block')) return child
+  return null
+}
+
 export const contribution: FormattedContribution = {
   id: 'markdown.alerts',
   feature: 'markdown.alerts',
+  flavor: 'markdown.github',
   syntax: GithubAlerts,
   views: [
     {
+      // The alerts.css box: a 3px bar in the alert color over a 6% tint, 12px 16px inside.
+      nodes: ['Blockquote'],
+      container(node, { state }) {
+        const title = firstBlock(node.node)
+        if (title?.name !== 'AlertTitle') return undefined
+        const type = titleOf(state.sliceDoc(title.from, title.to))?.type
+        return {
+          width: '19px',
+          class: `hibi-lp-alert hibi-lp-alert-${type ?? 'note'}`,
+          paint: (left, top) =>
+            [
+              `linear-gradient(var(--alert-color), var(--alert-color)) ${left} ${top} / 3px calc(100% - ${top}) no-repeat`,
+              `linear-gradient(var(--alert-tint), var(--alert-tint)) ${left} ${top} / calc(100% - ${left}) calc(100% - ${top}) no-repeat`,
+            ].join(', '),
+          padding: { top: 12, bottom: 12, right: 16 },
+        }
+      },
+    },
+    {
       nodes: ['AlertTitle'],
+      // The title's margin below it, var(--space-2).
+      space: { top: 0, bottom: 8 },
       decorate(node, out, { state, revealed }) {
         const title = titleOf(state.sliceDoc(node.from, node.to))
         if (!title) return false

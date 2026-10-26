@@ -105,7 +105,10 @@ test('chunked parses keep alert titles where whole-document parses put them', ()
 })
 
 test('the title line shows the type or its title, and its source while revealed', () => {
-  const [view] = contribution.views
+  const view = contribution.views.find((view) =>
+    view.nodes.includes('AlertTitle'),
+  )
+  assert.deepEqual(view.space, { top: 0, bottom: 8 })
   const render = (doc, revealed) => {
     const state = EditorState.create({ doc })
     const out = []
@@ -141,4 +144,34 @@ test('the title line shows the type or its title, and its source while revealed'
     ['line', 0, 'hibi-lp-alert-title'],
     ['mark', '[!Tip]', 'hibi-lp-marker'],
   ])
+})
+
+test('alert quotes lay out as the alerts.css box; other quotes keep their bar', () => {
+  const [box] = contribution.views
+  const shape = (doc) => {
+    const state = EditorState.create({ doc })
+    const shapes = []
+    markdown.parse(doc).iterate({
+      enter(node) {
+        if (box.nodes.includes(node.name))
+          shapes.push(
+            box.container(node, { state, revealed: false, visible: null }),
+          )
+      },
+    })
+    return shapes
+  }
+  const [tip] = shape('> [!TIP] Read\n> body')
+  assert.equal(tip.width, '19px')
+  assert.equal(tip.class, 'hibi-lp-alert hibi-lp-alert-tip')
+  assert.deepEqual(tip.padding, { top: 12, bottom: 12, right: 16 })
+  assert.match(
+    tip.paint('24px', '16px'),
+    /24px 16px \/ 3px calc\(100% - 16px\)/,
+  )
+  assert.deepEqual(shape('> plain quote\n> [!NOTE] text'), [undefined])
+  // A nested alert lays out its own box inside the outer quote.
+  const nested = shape('> outer\n>\n> > [!caution]\n> > inner')
+  assert.equal(nested[0], undefined)
+  assert.equal(nested[1].class, 'hibi-lp-alert hibi-lp-alert-caution')
 })

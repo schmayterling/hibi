@@ -1,6 +1,8 @@
 /* GitHub alerts in the formatted view, with the colors of alerts.css. */
 .hibi-formatted .cm-line.hibi-lp-alert {
   --alert-color: var(--status-info);
+  --alert-tint: color-mix(in srgb, var(--alert-color) 6%, transparent);
+  color: var(--ink);
 }
 .hibi-formatted .cm-line.hibi-lp-alert-tip {
   --alert-color: var(--status-success);

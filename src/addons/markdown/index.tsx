@@ -95,12 +95,13 @@ export default defineAddon({
           }),
       },
     }
-    for (const [id, label, extensions, matches] of [
+    for (const [id, label, extensions, matches, nodes] of [
       [
         'tables',
         'Tables',
         ['tableKit'],
         (token: { type: string }) => token.type === 'table',
+        ['Table'],
       ],
       [
         'tasks',
@@ -108,12 +109,14 @@ export default defineAddon({
         ['taskList', 'taskItem'],
         (token: { type: string; items?: { task?: boolean }[] }) =>
           token.type === 'list' && !!token.items?.some((item) => item.task),
+        ['Task'],
       ],
       [
         'strike',
         'Strikethrough',
         ['strike'],
         (token: { type: string }) => token.type === 'del',
+        ['Strikethrough'],
       ],
       [
         'alerts',
@@ -122,6 +125,7 @@ export default defineAddon({
         (token: { type: string; text?: string }) =>
           token.type === 'githubAlert' ||
           (token.type === 'blockquote' && !!alertMarker(token.text ?? '')),
+        ['AlertTitle'],
       ],
     ] as const)
       context.editor.registerSyntax({
@@ -130,6 +134,7 @@ export default defineAddon({
         group: 'Markdown',
         level: id === 'strike' ? 'inline' : 'block',
         extensions,
+        nodes,
         matches,
         slash: slash[id],
       })

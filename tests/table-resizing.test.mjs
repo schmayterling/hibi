@@ -2,14 +2,17 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { waitForAsync } from './poll.mjs'
 
 const markdown =
   '# Sizes\n\n| Name | Notes |\n| --- | --- |\n| one | first row |\n| two | second row |\n'
 
-async function openNote(root, profile, apps) {
+async function openNote(root, profile, apps, engine) {
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -19,11 +22,11 @@ async function openNote(root, profile, apps) {
   }, root)
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, engine)
   await page.evaluate(() => window.hibi.openWorkspace())
   await page.getByRole('button', { name: 'Toggle workspace sidebar' }).click()
   await page.getByRole('treeitem', { name: 'note.md' }).click()
-  const table = page.locator('.tiptap table')
+  const table = page.locator('.rich-pane table')
   await table.getByText('first row').waitFor()
   return { page, table }
 }
@@ -46,7 +49,7 @@ async function drag(page, cell, axis, distance) {
   const x = axis === 'column' ? box.x + box.width - 2 : box.x + box.width / 2
   const y = axis === 'row' ? box.y + box.height - 2 : box.y + box.height / 2
   await page.mouse.move(x, y)
-  await page.locator(`.tiptap[data-table-resize="${axis}"]`).waitFor()
+  await page.locator(`.rich-pane [data-table-resize="${axis}"]`).waitFor()
   await page.mouse.down()
   for (let step = 1; step <= 4; step++)
     await page.mouse.move(
@@ -76,7 +79,12 @@ test('table columns and rows resize outside the Markdown file', {
     for (const app of apps) await app.close()
     await rm(folder, { recursive: true, force: true })
   })
-  let { page, table } = await openNote(root, join(folder, 'profile'), apps)
+  let { page, table } = await openNote(
+    root,
+    join(folder, 'profile'),
+    apps,
+    t.formattedEngine,
+  )
 
   const before = await sizes(table)
   await drag(page, table.locator('th').first(), 'column', 80)
@@ -117,11 +125,16 @@ test('table columns and rows resize outside the Markdown file', {
   )
 
   await apps.pop().close()
-  ;({ page, table } = await openNote(root, join(folder, 'profile'), apps))
+  ;({ page, table } = await openNote(
+    root,
+    join(folder, 'profile'),
+    apps,
+    t.formattedEngine,
+  ))
   await waitForAsync(
     page,
     (expected) => {
-      const element = document.querySelector('.tiptap table')
+      const element = document.querySelector('.rich-pane table')
       return (
         Math.abs(
           element.rows[0].cells[0].getBoundingClientRect().width -
@@ -148,7 +161,7 @@ test('table columns and rows resize outside the Markdown file', {
     page,
     (width) =>
       document
-        .querySelector('.tiptap table')
+        .querySelector('.rich-pane table')
         .rows[0].cells[0].getBoundingClientRect().width <
       width - 40,
     after.column,

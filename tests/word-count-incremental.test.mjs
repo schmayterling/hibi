@@ -58,6 +58,48 @@ test('regional counts equal a full rich-text projection across syntax boundaries
     )
   }
 })
+test('leading blank lines retain their first empty paragraph', (t) => {
+  for (const eol of ['\n', '\r\n']) {
+    const source = `${eol}${eol}body`
+    const counter = fixture(t, source)
+    assert.deepEqual(
+      count(counter),
+      countText(richText(source, syntax).slice(1)),
+    )
+    edit(counter, 0, eol.length * 2, '')
+    assert.deepEqual(count(counter), countText('body'))
+    edit(counter, 0, 0, eol + eol, 'undo')
+    assert.deepEqual(
+      count(counter),
+      countText(richText(source, syntax).slice(1)),
+    )
+  }
+})
+test('opaque math spans blank lines through edits, undo and disabled syntax', (t) => {
+  for (const eol of ['\n', '\r\n']) {
+    for (const config of [
+      { ...syntax, math: true },
+      { ...syntax, math: true, disabledFeatures: ['math.block'] },
+      { ...syntax, math: false },
+    ]) {
+      const source = 'before\n\n$$\nx\n\ny\n$$\n\nafter'.replaceAll('\n', eol)
+      const counter = new FormattedCounter(
+        new SourceStore(source, { tabId: 'math', revision: 0 }),
+        config,
+      )
+      t.after(() => counter.dispose())
+      const expected = (text) => countText(richText(text, config).slice(1))
+      assert.deepEqual(count(counter), expected(source))
+      const close = source.lastIndexOf('$$')
+      edit(counter, close, close + 2, '')
+      const changed = source.slice(0, close) + source.slice(close + 2)
+      assert.deepEqual(count(counter), expected(changed))
+      edit(counter, close, close, '$$', 'undo')
+      assert.deepEqual(count(counter), expected(source))
+      assert.equal(counter.store.snapshot().sliceRaw(0, source.length), source)
+    }
+  }
+})
 test('frontmatter is excluded; edits, reference changes, undo and cancelled work retain totals', (t) => {
   const body =
     '# title\r\n\r\n[label][ref]\r\n\r\n-# body 👩🏽‍💻\r\n\r\n[ref]: old\r\n'
@@ -144,23 +186,54 @@ test('reference and footnote deletion invalidate distant dependent counts', (t) 
   }
 })
 
-test('unchanged regions retain counts after an ordinary local edit', (t) => {
-  const source = 'a paragraph with **bold** text and emoji 😀.\n\n'.repeat(1500)
-  const counter = fixture(t, source)
-  count(counter)
-  counter.counters(true)
-  const from = source.indexOf('paragraph', source.length / 2)
-  edit(counter, from, from + 9, 'words')
-  assert.deepEqual(
-    count(counter),
-    countText(
-      richText(
-        source.slice(0, from) + 'words' + source.slice(from + 9),
-        syntax,
-      ).slice(1),
-    ),
+test('removing a fence boundary recounts its preceding semantic anchor', (t) => {
+  const config = {
+    ...syntax,
+    disabledFeatures: [
+      'core.bullet-lists',
+      'core.links',
+      'core.images',
+      'core.code-blocks',
+    ],
+  }
+  const source = '-\ne\n-\n```j[^'
+  const counter = new FormattedCounter(
+    new SourceStore(source, { tabId: 'fence', revision: 0 }),
+    config,
   )
-  const work = counter.counters()
-  assert.ok(work.countedUnits < 1024, JSON.stringify(work))
-  assert.ok(work.referenceUnits < 1024, JSON.stringify(work))
+  t.after(() => counter.dispose())
+  const expected = (text) => countText(richText(text, config).slice(1))
+  assert.deepEqual(count(counter), expected(source))
+  edit(counter, 8, 12, '**')
+  assert.deepEqual(count(counter), expected('-\ne\n-\n``**'))
+  edit(counter, 8, 10, '`j[^', 'undo')
+  assert.deepEqual(count(counter), expected(source))
 })
+
+for (const math of [false, true])
+  test(`unchanged regions retain counts after a local edit with math=${math}`, (t) => {
+    const source = 'a paragraph with **bold** text and emoji 😀.\n\n'.repeat(
+      1500,
+    )
+    const counter = new FormattedCounter(
+      new SourceStore(source, { tabId: 'bounded', revision: 0 }),
+      { ...syntax, math },
+    )
+    t.after(() => counter.dispose())
+    count(counter)
+    counter.counters(true)
+    const from = source.indexOf('paragraph', source.length / 2)
+    edit(counter, from, from + 9, 'words')
+    assert.deepEqual(
+      count(counter),
+      countText(
+        richText(
+          source.slice(0, from) + 'words' + source.slice(from + 9),
+          syntax,
+        ).slice(1),
+      ),
+    )
+    const work = counter.counters()
+    assert.ok(work.countedUnits < 1024, JSON.stringify(work))
+    assert.ok(work.referenceUnits < 1024, JSON.stringify(work))
+  })

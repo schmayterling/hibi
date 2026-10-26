@@ -9,6 +9,7 @@ import type { SourceStore } from '../../shared/source-buffer.ts'
 import type { SourceOperation } from '../../shared/source-operations.ts'
 import type { SourceOwners } from '../../shared/source-owners.ts'
 import { SourceReferences } from '../../shared/source-references.ts'
+import { blockMathSyntax } from '../math/formatted-syntax.ts'
 import { countText } from './count.ts'
 import { type CountSyntax, countParser, richTokens } from './formatted-text.ts'
 
@@ -37,7 +38,8 @@ export class FormattedCounter {
   constructor(store: SourceStore, syntax: CountSyntax) {
     this.store = store
     this.#syntax = syntax
-    const parser = metadataParsers[syntax.gfm ? 'gfm' : 'commonmark']
+    const base = metadataParsers[syntax.gfm ? 'gfm' : 'commonmark']
+    const parser = syntax.math ? base.configure(blockMathSyntax) : base
     this.#model = syntax.frontmatter
       ? new FrontmatterSourceModel(store.snapshot(), parser, 'word-count')
       : new MarkdownSourceModel(store.snapshot(), parser, 'word-count')
@@ -107,6 +109,8 @@ export class FormattedCounter {
         let at = row.index + direction
         for (let next = owners.get(at); next; next = owners.get(at)) {
           dirty.add(next.owner.slot)
+          for (const reader of this.#members.get(next.owner.slot) ?? [])
+            dirty.add(reader)
           if (next.owner.kind !== 'trivia') break
           at += direction
         }
@@ -163,7 +167,7 @@ export class FormattedCounter {
         const firstBody =
           owners.get(0)?.owner.kind === 'markdown:Frontmatter' ? 1 : 0
         const text = richTokens(value.tokens, this.#syntax, {
-          before: region.index > firstBody,
+          before: region.index > firstBody + region.leading.length,
           after: !region.last,
         })
         this.#work.countedRegions++

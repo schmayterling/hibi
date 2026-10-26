@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import test from 'node:test'
+import { pathToFileURL } from 'node:url'
 import { parser } from '@lezer/markdown'
 import { build } from 'esbuild'
 import { Lexer, Marked, Tokenizer } from 'marked'
@@ -279,6 +280,33 @@ test('giant multiline setext and paragraphs retain full raw text without running
     )
     assert.equal(recursive.mock.callCount(), 0)
     recursive.mock.restore()
+  }
+})
+
+test('setext scanner preserves independent rules and the nested parser grammar', async () => {
+  const require = createRequire(import.meta.url)
+  const nestedPath = createRequire(require.resolve('@tiptap/markdown')).resolve(
+    'marked',
+  )
+  const nested = await import(pathToFileURL(nestedPath).href)
+  for (const gfm of [false, true]) {
+    const tokenizer = new BlockTokenizer()
+    new Lexer({ gfm, tokenizer })
+    tokenizer.rules = {
+      ...tokenizer.rules,
+      block: {
+        ...tokenizer.rules.block,
+        lheading: new RegExp(tokenizer.rules.block.lheading.source),
+      },
+    }
+    assert.equal(tokenizer.lheading(paragraph), undefined)
+    const nestedTokenizer = new BlockTokenizer()
+    new nested.Lexer({ gfm, tokenizer: nestedTokenizer })
+    assert.equal(nestedTokenizer.lheading(paragraph), undefined)
+    const original = new nested.Marked({ gfm })
+    const patched = new nested.Marked({ gfm }, blockMarkdown)
+    for (const source of corpus)
+      assert.deepEqual(patched.lexer(source), original.lexer(source), source)
   }
 })
 

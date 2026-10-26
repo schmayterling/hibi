@@ -7,6 +7,7 @@ import {
   frontmatterOf,
   frontmatterProbe,
 } from '../src/addons/frontmatter/formatted.ts'
+import { readFrontmatter } from '../src/shared/frontmatter.ts'
 
 const text = (doc) => Text.of(doc.split('\n'))
 const end = (doc) => frontmatterOf(text(doc)).end
@@ -20,7 +21,7 @@ test('frontmatter is a closed YAML mapping at the start, hidden with one blank l
   assert.equal(end(yaml), yaml.length)
   assert.equal(end('---\na: 1\n---'), '---\na: 1\n---'.length)
   assert.equal(end('---\na: 1\n...\nbody'), '---\na: 1\n...\n'.length)
-  assert.equal(end('﻿---\n{}\n---\nbody'), '﻿---\n{}\n---\n'.length)
+  assert.equal(end('\uFEFF---\n{}\n---\nbody'), '\uFEFF---\n{}\n---\n'.length)
   // Dividers, lists, prose and unclosed blocks are Markdown.
   for (const doc of [
     '---\n\nparagraph',
@@ -31,6 +32,47 @@ test('frontmatter is a closed YAML mapping at the start, hidden with one blank l
     ' ---\na: 1\n---',
   ])
     assert.equal(end(doc), 0, JSON.stringify(doc))
+})
+
+test('the shared frontmatter reader decides, for anchors, tags, directives and comments too', () => {
+  for (const header of [
+    '&a\nkey: value',
+    '&a key: value',
+    '!!map\nkey: value',
+    '!tag\nkey: value',
+    '%YAML 1.2\nkey: value',
+    '# comment\nkey: value',
+    '? complex key\n: value',
+    '{a: 1, b: 2}',
+    '"quoted": key',
+    '- a\n- b',
+    '!!str\nkey: value',
+    'plain words',
+    '*alias',
+    '',
+  ]) {
+    const doc = `---\n${header}\n---\nbody`
+    const shared = readFrontmatter(doc)
+    assert.equal(
+      end(doc),
+      shared ? shared.prefix.length : 0,
+      JSON.stringify(header),
+    )
+  }
+  // Protection follows: an anchored header is hidden and its body stays editable.
+  const doc = '---\n&a\nkey: value\n---\nbody'
+  const state = EditorState.create({
+    doc,
+    selection: { anchor: doc.length },
+    extensions: contribution.extension,
+  })
+  assert.equal(state.field(frontmatterField).end, doc.indexOf('body'))
+  assert.equal(
+    state
+      .update({ changes: { from: 4, insert: 'x' }, userEvent: 'input.type' })
+      .state.doc.toString(),
+    doc,
+  )
 })
 
 test('edits after the closing line read no lines; edits inside read only the frontmatter', () => {
@@ -55,6 +97,18 @@ test('edits after the closing line read no lines; edits inside read only the fro
   }).state
   assert.ok(frontmatterProbe.lines < 10, `${frontmatterProbe.lines}`)
   assert.equal(state.field(frontmatterField).end, hidden + 17)
+  // Body edits parse no YAML; an edit inside parses the frontmatter once.
+  frontmatterProbe.parses = 0
+  for (let key = 0; key < 100; key++)
+    state = state.update({
+      changes: { from: state.doc.length, insert: 'y' },
+    }).state
+  assert.equal(frontmatterProbe.parses, 0)
+  state = state.update({
+    changes: { from: 4, insert: 'z' },
+    userEvent: 'input.addon',
+  }).state
+  assert.equal(frontmatterProbe.parses, 1)
 })
 
 test('a divider at the top of a long note is read once, then only edited lines', () => {
@@ -163,4 +217,17 @@ test('typing, deleting and selecting all stop at the frontmatter', () => {
   }).state
   assert.equal(typed.doc.toString(), '---\na: 1\n---\nx')
   assert.equal(typed.selection.main.head, 14)
+  // Typing the closing line hides the frontmatter and moves the caret below it.
+  state = EditorState.create({
+    doc: '---\na: 1\n\nbody',
+    selection: { anchor: 9 },
+    extensions: contribution.extension,
+  })
+  const closed = state.update({
+    changes: { from: 9, insert: '---' },
+    selection: { anchor: 12 },
+    userEvent: 'input.type',
+  }).state
+  assert.equal(closed.field(frontmatterField).end, 13)
+  assert.equal(closed.selection.main.head, 13)
 })

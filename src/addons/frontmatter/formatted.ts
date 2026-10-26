@@ -18,7 +18,7 @@ import { readFrontmatter } from '../../shared/frontmatter.ts'
  * reads none.
  */
 
-const opening = /^﻿?---[ \t]*$/
+const opening = /^\uFEFF?---[ \t]*$/
 const closing = /^(?:---|\.\.\.)[ \t]*$/
 
 type Frontmatter = {
@@ -26,15 +26,23 @@ type Frontmatter = {
   open: boolean
   /** The first later line that could close it, or 0. */
   closing: number
-  /** The closing line ends metadata that is a YAML mapping. */
+  /** The text through the closing line's break, as the shared reader last read it. */
+  source: string
+  /** The shared reader takes `source` as frontmatter. */
   valid: boolean
   /** End of the hidden range: the frontmatter, its last line break and one blank line after it. */
   end: number
 }
-const none: Frontmatter = { open: false, closing: 0, valid: false, end: 0 }
+const none: Frontmatter = {
+  open: false,
+  closing: 0,
+  source: '',
+  valid: false,
+  end: 0,
+}
 
-/** Lines read while finding frontmatter, for scale tests. */
-export const frontmatterProbe = { lines: 0 }
+/** Lines read and YAML parses while finding frontmatter, for scale tests. */
+export const frontmatterProbe = { lines: 0, parses: 0 }
 
 function findClosing(doc: Text, from: number) {
   if (from > doc.lines) return 0
@@ -44,20 +52,6 @@ function findClosing(doc: Text, from: number) {
     if (closing.test(iter.value)) return number
   }
   return 0
-}
-
-/** A YAML mapping's first line has a key, `{` or `?`; prose and lists rule it out without parsing. */
-function mayBeMapping(doc: Text, closingLine: number) {
-  for (let number = 2; number < closingLine; number++) {
-    frontmatterProbe.lines++
-    const text = doc.line(number).text
-    if (/^[ \t]*(?:#.*)?$/.test(text)) continue
-    return (
-      /^[ \t]*[{?]/.test(text) ||
-      (/:(?:[ \t]|$)/.test(text) && !/^[ \t]*-(?:[ \t]|$)/.test(text))
-    )
-  }
-  return true
 }
 
 /** The hidden range's end for a closing line: through its line break and one blank line. */
@@ -70,16 +64,24 @@ function hiddenEnd(doc: Text, closingLine: number) {
     : close.to + 1
 }
 
-function evaluate(doc: Text, closingLine: number): Frontmatter {
-  if (!closingLine) return { open: true, closing: 0, valid: false, end: 0 }
+/** The shared reader decides, as for the properties editor and the rich view; unchanged text keeps its answer. */
+function evaluate(
+  doc: Text,
+  closingLine: number,
+  previous: Frontmatter | null,
+): Frontmatter {
+  if (!closingLine) return { ...none, open: true }
   const close = doc.line(closingLine)
-  // The shared reader decides, as for the properties editor and the rich view.
-  const valid =
-    mayBeMapping(doc, closingLine) &&
-    !!readFrontmatter(doc.sliceString(0, Math.min(doc.length, close.to + 1)))
+  const source = doc.sliceString(0, Math.min(doc.length, close.to + 1))
+  let valid = previous?.valid ?? false
+  if (source !== previous?.source) {
+    frontmatterProbe.parses++
+    valid = !!readFrontmatter(source)
+  }
   return {
     open: true,
     closing: closingLine,
+    source,
     valid,
     end: valid ? hiddenEnd(doc, closingLine) : 0,
   }
@@ -88,7 +90,7 @@ function evaluate(doc: Text, closingLine: number): Frontmatter {
 /** Frontmatter at the start of `doc`. */
 export function frontmatterOf(doc: Text): Frontmatter {
   return opening.test(doc.line(1).text)
-    ? evaluate(doc, findClosing(doc, 2))
+    ? evaluate(doc, findClosing(doc, 2), null)
     : none
 }
 
@@ -110,7 +112,7 @@ export const frontmatterField = StateField.define<Frontmatter>({
           ...value,
           end: value.valid ? hiddenEnd(doc, value.closing) : 0,
         }
-      return evaluate(doc, findClosing(doc, 2))
+      return evaluate(doc, findClosing(doc, 2), value)
     }
     // Nothing closed it before, so only the edited lines can.
     let found = 0
@@ -127,7 +129,7 @@ export const frontmatterField = StateField.define<Frontmatter>({
         }
       }
     })
-    return evaluate(doc, found)
+    return evaluate(doc, found, value)
   },
 })
 
@@ -159,15 +161,21 @@ function hide(state: EditorState): DecorationSet {
  * run filters.
  */
 const protect = EditorState.transactionFilter.of((transaction) => {
-  const { end } = transaction.startState.field(frontmatterField)
-  if (!end || transaction.isUserEvent('input.addon')) return transaction
+  const start = transaction.startState.field(frontmatterField).end
+  if (transaction.isUserEvent('input.addon')) return transaction
   let inside = false
   transaction.changes.iterChangedRanges((fromA) => {
-    if (fromA < end) inside = true
+    if (fromA < start) inside = true
   })
   if (inside) return []
-  const selection = transaction.selection
-  if (selection?.ranges.some((range) => range.from < end))
+  // Selections end at the note's text, also when an edit just closed the frontmatter.
+  const end = transaction.docChanged
+    ? transaction.state.field(frontmatterField).end
+    : start
+  const selection =
+    transaction.selection ??
+    (end !== start ? transaction.state.selection : undefined)
+  if (end && selection?.ranges.some((range) => range.from < end))
     return [
       transaction,
       {
@@ -186,13 +194,14 @@ const protect = EditorState.transactionFilter.of((transaction) => {
   // A note that ends on its closing line gets a line break before typed text.
   const doc = transaction.startState.doc
   if (
+    start &&
     transaction.docChanged &&
-    end === doc.length &&
-    doc.sliceString(end - 1, end) !== '\n'
+    start === doc.length &&
+    doc.sliceString(start - 1, start) !== '\n'
   )
     return [
       transaction,
-      { changes: { from: end, insert: '\n' }, sequential: true },
+      { changes: { from: start, insert: '\n' }, sequential: true },
     ]
   return transaction
 })

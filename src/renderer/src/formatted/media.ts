@@ -124,7 +124,10 @@ export class MediaWidget extends WidgetType {
     }
     binding.bind(view.state.facet(formattedDocument).revision)
     let views = drawn.get(view)
-    if (!views) drawn.set(view, (views = new Set()))
+    if (!views) {
+      views = new Set()
+      drawn.set(view, views)
+    }
     views.add(binding)
     bindings.set(container, { binding, view })
     return container

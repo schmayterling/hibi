@@ -772,7 +772,7 @@ function runWorkspaceOpen(
   operation: (
     window: BrowserWindow,
   ) => Promise<ReturnType<typeof getWorkspace>>,
-  includeEntries = true,
+  includeEntries = false,
 ) {
   trustedWindow(event)
   if (closing || fileOperationHasDialog()) throw fileOperationUnavailable()
@@ -2019,7 +2019,7 @@ if (!app.requestSingleInstanceLock()) {
       })
       handle(WORKSPACE_CHANNELS.get, (event) => {
         trustedWindow(event)
-        return getWorkspace()
+        return getWorkspace(undefined, true)
       })
       handle(WORKSPACE_CHANNELS.header, (event) => {
         trustedWindow(event)
@@ -2028,7 +2028,7 @@ if (!app.requestSingleInstanceLock()) {
       handle(WORKSPACE_CHANNELS.viewPage, (event, request: unknown) =>
         readAfterFileOperation(event, async () =>
           readWorkspaceViewPage(
-            request as import('../shared/workspace').WorkspaceViewPageRequest,
+            request as import('../shared/workspace-view').WorkspaceViewPageRequest,
           ),
         ),
       )
@@ -2306,7 +2306,7 @@ if (!app.requestSingleInstanceLock()) {
         if (legacyWorkspaceListeners)
           mainWindow?.webContents.send(
             WORKSPACE_CHANNELS.changed,
-            getWorkspace(),
+            getWorkspace(undefined, true),
             change,
           )
       })

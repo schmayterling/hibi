@@ -11,6 +11,7 @@ import {
   indexWorkspace,
   isCurrentWorkspaceTarget,
   workspaceChangeCursor,
+  workspaceEntries,
   workspaceRelativePath,
   workspaceRoot,
 } from '../../main/workspace'
@@ -253,7 +254,7 @@ async function openWorkspace() {
   }
   const documents: string[] = []
   const folders = new Set<string>([''])
-  function collect(entries: WorkspaceEntry[]) {
+  function collect(entries: readonly WorkspaceEntry[]) {
     for (const entry of entries) {
       if (entry.kind === 'folder') {
         folders.add(entry.path)
@@ -261,7 +262,7 @@ async function openWorkspace() {
       } else if (visible(entry.path)) documents.push(entry.path)
     }
   }
-  collect(workspace.entries)
+  collect(workspaceEntries())
   return { root, target, workspace, documents, folders, visible, ensureCurrent }
 }
 

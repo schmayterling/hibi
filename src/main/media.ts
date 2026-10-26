@@ -108,12 +108,12 @@ async function openMedia(path: string) {
 export async function openDroppedFile(
   window: BrowserWindow,
   value: unknown,
-  includeEntries = true,
+  includeEntries = false,
 ) {
   const path = await realpath(filePath(value))
   if ((await lstat(path)).isDirectory())
     return {
-      workspace: await loadWorkspace(path, true, includeEntries),
+      workspace: await loadWorkspace(path, false, includeEntries),
       document: getDocument(),
     }
   if (!isDocumentName(path))

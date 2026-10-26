@@ -349,12 +349,14 @@ export type DesktopApi = {
   queryAddon: (id: string, method: string, input?: unknown) => Promise<unknown>
   getWorkspace: () => Promise<WorkspaceState | null>
   getWorkspaceHeader: () => Promise<
-    import('./workspace').WorkspaceHeader | null
+    import('./workspace-view').WorkspaceHeader | null
   >
   readWorkspaceViewPage: (
-    request: import('./workspace').WorkspaceViewPageRequest,
-  ) => Promise<import('./workspace').WorkspaceEntryPageResult>
-  onWorkspaceHeaderChanged: (callback: () => void) => () => void
+    request: import('./workspace-view').WorkspaceViewPageRequest,
+  ) => Promise<import('./workspace-view').WorkspaceViewPageResult>
+  onWorkspaceHeaderChanged: (
+    callback: (change?: import('./workspace').WorkspaceChange) => void,
+  ) => () => void
   getWorkspaceChangeSnapshot: () => Promise<
     import('./workspace').WorkspaceStreamSnapshot
   >

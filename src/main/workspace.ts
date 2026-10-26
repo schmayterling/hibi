@@ -14,14 +14,18 @@ import type {
   WorkspaceEntry,
   WorkspaceEntryPageRequest,
   WorkspaceEntryPageResult,
-  WorkspaceHeader,
   WorkspaceIndex,
   WorkspaceSnapshot,
   WorkspaceState,
   WorkspaceStreamSnapshot,
-  WorkspaceViewPageRequest,
 } from '../shared/workspace'
 import type { WorkspaceManifest } from '../shared/workspace-settings'
+import type {
+  WorkspaceHeader,
+  WorkspaceViewEntry,
+  WorkspaceViewPageRequest,
+  WorkspaceViewPageResult,
+} from '../shared/workspace-view'
 import {
   closeDeletedDocuments,
   confirmDiscardAll,
@@ -69,6 +73,7 @@ let workspaceGeneration = 0
 let workspaceTarget: WorkspaceTarget | null = null
 const workspaceStream = new WorkspaceChangeStream()
 let entries: WorkspaceEntry[] = []
+let treeRevision = 0
 let manifest: WorkspaceManifest | null = null
 let obsidian: WorkspaceState['obsidian']
 let showingAllFiles = false
@@ -120,7 +125,7 @@ function indexedContentPath(path: string): boolean {
     ignoredPaths?.ignores(path)
   )
     return false
-  return getOpenDocuments().some(
+  return getOpenDocumentMetadata().some(
     (draft) =>
       draft.pendingPath && relativePath(selected, draft.pendingPath) === path,
   )
@@ -144,6 +149,11 @@ function publishWorkspaceChange(change: WorkspaceChange) {
     change.paths,
   )
   onChanged(change)
+}
+
+/** Retained immutable scan tree for native readers; no document text or decoration. */
+export function workspaceEntries(): readonly WorkspaceEntry[] {
+  return entries
 }
 
 export function workspaceRoot(): string | null {
@@ -197,14 +207,21 @@ export function listWorkspaceEntryPage(
   return pageWorkspaceEntries(entries, workspaceChangeCursor(), request)
 }
 
-let viewDrafts: WorkspaceEntry[] = []
+let viewDrafts: WorkspaceViewEntry[] = []
 let viewDraftKey = ''
 let viewDraftRevision = 0
+type ViewSnapshot = {
+  revision: number
+  entries: readonly WorkspaceEntry[]
+  status: WorkspaceStreamCursor
+}
+// Each private stream retains its immutable tree until that traversal finishes.
+let viewSnapshots: { tree?: ViewSnapshot; drafts?: ViewSnapshot } = {}
 
 export function getWorkspaceHeader(): WorkspaceHeader | null {
   const state = getWorkspace(undefined, false)
   if (!state || !root) return null
-  const drafts: WorkspaceEntry[] = []
+  const drafts: WorkspaceViewEntry[] = []
   for (const document of getOpenDocumentMetadata()) {
     if (!document.dirty && !document.pendingPath) continue
     const nativePath = document.pendingPath ?? document.file
@@ -216,6 +233,7 @@ export function getWorkspaceHeader(): WorkspaceHeader | null {
         name: basename(path),
         kind: 'file',
         dirty: document.dirty,
+        ...(document.pendingPath ? { pending: true } : {}),
       })
   }
   const key = JSON.stringify([workspaceTarget, drafts])
@@ -228,24 +246,62 @@ export function getWorkspaceHeader(): WorkspaceHeader | null {
   return {
     ...header,
     ...workspaceChangeCursor(),
+    treeRevision,
     draftRevision: viewDraftRevision,
   }
 }
 
 export function readWorkspaceViewPage(
   request: WorkspaceViewPageRequest,
-): WorkspaceEntryPageResult {
-  if (request?.draftRevision !== viewDraftRevision)
-    return {
-      ok: false,
-      code: 'resync-needed',
-      message: 'open documents changed. start listing again.',
+): WorkspaceViewPageResult {
+  if (!isCurrentWorkspaceTarget(request?.target))
+    return pageWorkspaceEntries([], workspaceChangeCursor(), request)
+  const kind = request.drafts ? 'drafts' : 'tree'
+  const revision = request.drafts ? request.draftRevision : request.treeRevision
+  let snapshot = viewSnapshots[kind]
+  if (
+    !snapshot ||
+    snapshot.revision !== revision ||
+    snapshot.status.target?.workspaceId !== request.target.workspaceId ||
+    snapshot.status.target.workspaceGeneration !==
+      request.target.workspaceGeneration
+  ) {
+    if (
+      request.cursor !== undefined ||
+      revision !== (request.drafts ? viewDraftRevision : treeRevision)
+    )
+      return {
+        ok: false,
+        code: 'resync-needed',
+        message:
+          'The workspace changed. Start listing again from the first page.',
+      }
+    snapshot = {
+      revision,
+      entries: request.drafts ? viewDrafts : entries,
+      status: workspaceChangeCursor(),
     }
-  return pageWorkspaceEntries(
-    request.drafts ? viewDrafts : entries,
-    workspaceChangeCursor(),
-    request,
+    viewSnapshots[kind] = snapshot
+  }
+  const result = pageWorkspaceEntries(
+    snapshot.entries,
+    { ...snapshot.status, sequence: revision },
+    { ...request, sequence: revision },
+    request.drafts
+      ? (entry) => {
+          const draft = entry as WorkspaceViewEntry
+          return {
+            path: draft.path,
+            name: draft.name,
+            kind: draft.kind,
+            dirty: draft.dirty,
+            ...(draft.pending ? { pending: true } : {}),
+          }
+        }
+      : undefined,
   )
+  if (result.ok && result.value.nextCursor === null) delete viewSnapshots[kind]
+  return result
 }
 
 export function workspaceIndexRevision(): number {
@@ -254,7 +310,7 @@ export function workspaceIndexRevision(): number {
 
 export function subscribeWorkspaceChanges(
   listener: (event: WorkspaceChangeEvent) => void,
-  includeEntries = true,
+  includeEntries = false,
 ): { snapshot: WorkspaceStreamSnapshot; dispose: () => void } {
   return workspaceStream.subscribe(
     listener,
@@ -314,7 +370,7 @@ export async function scanWorkspace(
 
 export function getWorkspace(
   open?: ReturnType<typeof getOpenDocuments>,
-  includeEntries = true,
+  includeEntries = false,
 ): WorkspaceState | null {
   if (!root) return null
   const path = getDocumentPath()
@@ -463,14 +519,14 @@ async function requestWorkspaceScan(
 
 export function refreshWorkspace(
   paths: string[] | null = null,
-  includeEntries = true,
+  includeEntries = false,
 ): Promise<WorkspaceState | null> {
   return requestWorkspaceScan(paths, paths !== null, includeEntries)
 }
 
 export async function notifyWorkspaceContent(
   paths: string[] | null,
-  includeEntries = true,
+  includeEntries = false,
 ): Promise<WorkspaceState | null> {
   const selected = root
   const target = workspaceTarget
@@ -668,7 +724,7 @@ export function observeWorkspace(
 
 export async function openWorkspace(
   window: BrowserWindow,
-  includeEntries = true,
+  includeEntries = false,
 ): Promise<WorkspaceState | null> {
   const result = await runFileDialog(() =>
     dialog.showOpenDialog(window, {
@@ -696,7 +752,7 @@ function cancelWorkspaceLoad(): void {
 export async function loadWorkspace(
   selected: string,
   selection = false,
-  includeEntries = true,
+  includeEntries = false,
 ): Promise<WorkspaceState | null> {
   cancelWorkspaceLoad()
   const loading = loadGeneration
@@ -801,6 +857,8 @@ export async function loadWorkspace(
   })
   const selectedTarget = workspaceTarget
   entries = nextEntries
+  treeRevision++
+  viewSnapshots = {}
   manifest = metadata.manifest
   obsidian = vault
   showingAllFiles = showAllFiles
@@ -824,6 +882,7 @@ export async function loadWorkspace(
     (next) => {
       if (!isCurrentWorkspaceTarget(selectedTarget)) return
       entries = next.entries
+      treeRevision++
       manifest = next.manifest
       showingAllFiles = next.showAllFiles
       ignoredPaths = next.ignored
@@ -855,7 +914,7 @@ export async function loadWorkspace(
   return getWorkspace(undefined, includeEntries)
 }
 
-export async function openRecentWorkspace(id: unknown, includeEntries = true) {
+export async function openRecentWorkspace(id: unknown, includeEntries = false) {
   const recent = (await getKnownWorkspaces()).find(
     (item) => !item.hidden && item.id === id,
   )
@@ -908,6 +967,8 @@ export async function deleteKnownWorkspace(
     workspaceTarget = null
     workspaceGeneration++
     entries = []
+    treeRevision++
+    viewSnapshots = {}
     manifest = null
     obsidian = undefined
     ignoredPaths = null
@@ -1050,7 +1111,7 @@ function captureIndexRequest(): { key: string; request: IndexRequest } | null {
   const selected = root
   if (!selected) return null
   const open = getOpenDocuments()
-  const workspace = getWorkspace(open)
+  const workspace = getWorkspace(open, true)
   if (!workspace) return null
   const drafts = new Map(
     open.flatMap((draft) => {

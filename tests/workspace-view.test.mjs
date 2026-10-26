@@ -21,16 +21,26 @@ const initial = {
   activePath: 'folder/one.md',
   target,
   sequence: 0,
+  treeRevision: 0,
   draftRevision: 0,
   stale: false,
   complete: true,
   capReached: false,
 }
-const file = (path, dirty) => ({
+const file = (path, dirty, pending = false) => ({
   path,
   name: path.split('/').at(-1),
   kind: 'file',
   ...(dirty === undefined ? {} : { dirty }),
+  ...(pending ? { pending: true } : {}),
+})
+
+const listed = ({ path, name, kind, dirty, pending }) => ({
+  path,
+  name,
+  kind,
+  ...(dirty === undefined ? {} : { dirty }),
+  ...(pending ? { pending: true } : {}),
 })
 
 test('core view pages ordered entries and overlays dirty drafts before atomic publication', async () => {
@@ -49,8 +59,8 @@ test('core view pages ordered entries and overlays dirty drafts before atomic pu
   ]
   const drafts = [
     file('folder/one.md', true),
-    file('folder/new.md', true),
-    file('new.md', true),
+    file('folder/new.md', true, true),
+    file('new.md', true, true),
   ]
   const view = createWorkspaceView(
     {
@@ -63,6 +73,7 @@ test('core view pages ordered entries and overlays dirty drafts before atomic pu
           request.drafts ? drafts : entries,
           initial,
           request,
+          listed,
         )
       },
     },
@@ -77,6 +88,113 @@ test('core view pages ordered entries and overlays dirty drafts before atomic pu
   assert.equal(result.entries.at(-1).path, 'new.md')
   await view.refresh()
   assert.equal(pages, 4, 'unchanged header reuses the retained renderer tree')
+})
+
+test('content churn and draft changes never replay a retained tree', async () => {
+  const count = 100000
+  const entries = Array.from({ length: count }, (_, i) => file(`note-${i}.md`))
+  let header = initial
+  let drafts = []
+  let treePages = 0
+  let draftPages = 0
+  let changes = 0
+  let view
+  const states = []
+  view = createWorkspaceView(
+    {
+      getWorkspaceHeader: async () => header,
+      readWorkspaceViewPage: async (request) => {
+        await new Promise((resolve) => setImmediate(resolve))
+        if (request.drafts) draftPages++
+        else {
+          treePages++
+          if (changes++ < 50) {
+            header = { ...header, sequence: header.sequence + 1 }
+            void view.refresh()
+          }
+        }
+        return pageWorkspaceEntries(
+          request.drafts ? drafts : entries,
+          { ...header, sequence: request.treeRevision ?? header.sequence },
+          request,
+          listed,
+        )
+      },
+    },
+    (state) => states.push(state),
+  )
+  const first = await view.refresh()
+  assert.equal(first.entries.length, count)
+  assert.equal(treePages, count / 200)
+  const firstEntries = first.entries
+  header = { ...header, sequence: header.sequence + 1, activePath: 'note-2.md' }
+  assert.equal((await view.refresh()).entries, firstEntries)
+  assert.equal(states.at(-1).activePath, 'note-2.md')
+  assert.equal(treePages, count / 200)
+  assert.equal(draftPages, 1)
+
+  drafts = [file('note-1.md', true), file('pending.md', true, true)]
+  header = { ...header, draftRevision: 1, sequence: header.sequence + 1 }
+  const dirty = await view.refresh()
+  assert.equal(dirty.entries[1].dirty, true)
+  assert.equal(dirty.entries.at(-1).path, 'pending.md')
+  assert.equal(
+    firstEntries[1].dirty,
+    undefined,
+    'published snapshots stay unchanged',
+  )
+  assert.equal(treePages, count / 200)
+  assert.equal(draftPages, 2)
+
+  drafts = []
+  header = { ...header, draftRevision: 2 }
+  const clean = await view.refresh()
+  assert.equal(clean.entries.length, count)
+  assert.equal(clean.entries[1].dirty, undefined)
+  assert.equal(treePages, count / 200)
+  assert.equal(draftPages, 3)
+})
+
+test('dirty documents flag existing rows and only pending drafts create rows', async () => {
+  const entries = [
+    {
+      path: 'notes',
+      name: 'notes',
+      kind: 'folder',
+      children: [file('notes/kept.md')],
+    },
+  ]
+  const drafts = [
+    file('notes/kept.md', true),
+    file('notes/gone.md', true),
+    file('private.md', true),
+    file('notes/new.md', true, true),
+  ]
+  const view = createWorkspaceView(
+    {
+      getWorkspaceHeader: async () => initial,
+      readWorkspaceViewPage: async (request) =>
+        pageWorkspaceEntries(
+          request.drafts ? drafts : entries,
+          initial,
+          request,
+          listed,
+        ),
+    },
+    () => {},
+  )
+  const result = await view.refresh()
+  assert.deepEqual(
+    result.entries.map((entry) => entry.path),
+    ['notes'],
+  )
+  assert.deepEqual(
+    result.entries[0].children.map((entry) => [entry.path, entry.dirty]),
+    [
+      ['notes/kept.md', true],
+      ['notes/new.md', true],
+    ],
+  )
 })
 
 test('new refresh invalidates in-flight pages and never publishes a previous generation', async () => {
@@ -98,6 +216,7 @@ test('new refresh invalidates in-flight pages and never publishes a previous gen
           [file(`${request.target.workspaceGeneration}.md`)],
           { ...header, target: request.target },
           request,
+          listed,
         )
       },
     },
@@ -118,7 +237,7 @@ test('new refresh invalidates in-flight pages and never publishes a previous gen
   assert.equal(state.entries[0].path, '2.md')
 })
 
-test('stale sequence restarts listing and closing clears the renderer tree', async () => {
+test('a replaced tree restarts listing and closing clears the renderer tree', async () => {
   let header = initial
   let first = true
   const published = []
@@ -128,13 +247,14 @@ test('stale sequence restarts listing and closing clears the renderer tree', asy
       readWorkspaceViewPage: async (request) => {
         if (first) {
           first = false
-          header = { ...initial, sequence: 1 }
+          header = { ...initial, sequence: 1, treeRevision: 1 }
           return { ok: false, code: 'resync-needed', message: 'changed' }
         }
         return pageWorkspaceEntries(
           request.drafts ? [] : [file('current.md')],
           header,
           request,
+          listed,
         )
       },
     },

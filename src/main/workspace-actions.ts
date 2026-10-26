@@ -81,7 +81,7 @@ async function rethrowPartialCopy(
 export async function workspaceAction(
   window: BrowserWindow,
   input: unknown,
-  includeEntries = true,
+  includeEntries = false,
 ): Promise<WorkspaceActionResult | null> {
   const base = workspaceRoot()
   if (!base) throw new Error('Open a workspace first.')

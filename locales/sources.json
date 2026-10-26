@@ -5978,6 +5978,10 @@
   "887f13fbc6f3": [
     "src/main/workspace-entry-transfer.ts"
   ],
+  "a83fa5eca26c": [
+    "src/main/workspace-entry-page.ts",
+    "src/main/workspace.ts"
+  ],
   "2a3a78043479": [
     "src/main/imports.ts"
   ],
@@ -6467,6 +6471,7 @@
     "src/main/workspace.ts"
   ],
   "2b9947edaee2": [
+    "src/main/workspace-entry-page.ts",
     "src/main/workspace-files.ts"
   ],
   "1c59a85f5059": [
@@ -7247,9 +7252,6 @@
   "026c3a7db7ce": [
     "src/addons/mcp-server/types.ts"
   ],
-  "4111eecf2704": [
-    "src/main/workspace.ts"
-  ],
   "f771f4d32eee": [
     "src/addons/diagnostics/Settings.tsx"
   ],
@@ -7283,12 +7285,6 @@
   ],
   "389595a44dc9": [
     "src/addons/vim/Settings.tsx"
-  ],
-  "3466e13af050": [
-    "src/main/workspace-entry-page.ts"
-  ],
-  "fecd7b4e2f4f": [
-    "src/main/workspace-entry-page.ts"
   ],
   "0620e3b71e5a": [
     "src/ui/Sonner.tsx"

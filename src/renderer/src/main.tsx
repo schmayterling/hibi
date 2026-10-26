@@ -632,6 +632,13 @@ function App() {
     () => createWorkspaceView(window.hibi, setWorkspace),
     [],
   )
+  const refreshWorkspaceView = useCallback(() => {
+    void workspaceView
+      .refresh()
+      .catch((error: unknown) =>
+        setError(error instanceof Error ? error.message : String(error)),
+      )
+  }, [workspaceView, setError])
   const fileMenuTarget = useRef<{
     workspace: WorkspaceState
     file: FileTarget
@@ -921,7 +928,8 @@ function App() {
         index: () => window.hibi.getWorkspaceIndex(),
         snapshot: () => window.hibi.getWorkspaceSnapshot(),
         get: () => window.hibi.getWorkspace(),
-        open: openFolder,
+        open: async () =>
+          (await openFolder()) ? window.hibi.getWorkspace() : null,
         openFile: async (path, owner) => {
           await openFile(path, owner)
         },
@@ -938,7 +946,7 @@ function App() {
           if (next.revision !== document?.revision) {
             await acceptOperationDocument(next)
           }
-          await workspaceView.refresh()
+          refreshWorkspaceView()
           return result
         } finally {
           endBusy()
@@ -1079,15 +1087,8 @@ function App() {
     localStorage.removeItem('sidebar-open')
   }, [])
   useEffect(
-    () =>
-      window.hibi.onWorkspaceHeaderChanged(() => {
-        void workspaceView
-          .refresh()
-          .catch((error: unknown) =>
-            setError(error instanceof Error ? error.message : String(error)),
-          )
-      }),
-    [workspaceView, setError],
+    () => window.hibi.onWorkspaceHeaderChanged(refreshWorkspaceView),
+    [refreshWorkspaceView],
   )
   // biome-ignore lint/correctness/useExhaustiveDependencies: the dialog callback uses the current settings opener after a one-time vault prompt.
   useEffect(() => {
@@ -1348,7 +1349,7 @@ function App() {
         if (result.document) {
           await acceptOperationDocument(result.document, true)
           showDocument(intent)
-          await workspaceView.refresh()
+          refreshWorkspaceView()
         }
         if (result.errors.length) setError(result.errors.join('\n'))
       } catch (error) {
@@ -1390,7 +1391,6 @@ function App() {
       startBusy()
       setSavingTab(saving ? (currentDocument.current?.tabId ?? null) : null)
       setError('')
-      let refresh: Promise<WorkspaceState | null> | undefined
       try {
         const next = await (command === 'new'
           ? window.hibi.newDocument()
@@ -1406,10 +1406,7 @@ function App() {
               command === 'new' || command === 'open',
             )
           if (command === 'new' || command === 'open') showDocument()
-          // After a save the refresh only updates the file tree, so it doesn't
-          // hold the window busy. Requesting it first keeps later replies after it.
-          if (saving) refresh = workspaceView.refresh()
-          else await workspaceView.refresh()
+          refreshWorkspaceView()
         }
         return Boolean(next)
       } catch (error) {
@@ -1423,9 +1420,6 @@ function App() {
         if (source) flushSync(endBusy)
         else endBusy()
         setSavingTab(null)
-        refresh?.catch((error: unknown) =>
-          setError(error instanceof Error ? error.message : String(error)),
-        )
         if (source)
           requestAnimationFrame(() => {
             const active = window.document.activeElement
@@ -1439,7 +1433,7 @@ function App() {
           })
       }
     },
-    [dialogs, acknowledgeSave, setError],
+    [dialogs, acknowledgeSave, setError, refreshWorkspaceView],
   )
 
   const runCommand = useCallback(
@@ -1478,11 +1472,11 @@ function App() {
     setError('')
     const intent = settingsIntent.current
     try {
-      let next = await (recentId
+      const next = await (recentId
         ? window.hibi.openRecentWorkspace(recentId, false)
         : window.hibi.openWorkspace(false))
       if (next) {
-        next = await workspaceView.refresh()
+        refreshWorkspaceView()
         selectSidebarView('workspace')
         setWorkspaceRename(null)
         setSidebarOpen(true)
@@ -1520,7 +1514,7 @@ function App() {
         if (!owner || selected?.definition.owner !== owner)
           addonViews.selectDocument()
         setSettingsOpen(false)
-        await workspaceView.refresh()
+        refreshWorkspaceView()
         if (sidebarResize.overlay) setSidebarOpen(false)
       }
       return !!next
@@ -1537,7 +1531,7 @@ function App() {
   async function refreshFiles() {
     try {
       await window.hibi.refreshWorkspace(false)
-      await workspaceView.refresh()
+      refreshWorkspaceView()
     } catch (error) {
       setError(
         error instanceof Error
@@ -1553,7 +1547,7 @@ function App() {
     setError('')
     try {
       await acceptOperationDocument(await window.hibi.renameDocument(name))
-      await workspaceView.refresh()
+      refreshWorkspaceView()
     } catch (error) {
       setError(
         error instanceof Error ? error.message : 'Could not rename this file.',
@@ -1635,7 +1629,7 @@ function App() {
           result.document,
           action.action === 'new-file',
         )
-        await workspaceView.refresh()
+        refreshWorkspaceView()
         if (action.action === 'new-file') showDocument()
         if (action.action === 'new-file' || action.action === 'new-folder') {
           selectSidebarView('workspace')
@@ -1673,7 +1667,7 @@ function App() {
       const result = await window.hibi.attachMedia(files, target.revision)
       if (!result) return null
       await acceptOperationDocument(result.document)
-      await workspaceView.refresh()
+      refreshWorkspaceView()
       return result.attachments
     } finally {
       // Restore editor editability before the caller inserts its captured selection.
@@ -1690,7 +1684,7 @@ function App() {
       if (result?.document) {
         await acceptOperationDocument(result.document, true)
         showDocument(intent)
-        await workspaceView.refresh()
+        refreshWorkspaceView()
         if ('workspace' in result) {
           selectSidebarView('workspace')
           setSettingsOpen(settingsOpenedSince(intent))
@@ -1718,7 +1712,7 @@ function App() {
       const next = await operation()
       if (!next) return
       await acceptOperationDocument(next, replaceLocal)
-      await workspaceView.refresh()
+      refreshWorkspaceView()
       if (revealDocument) {
         showDocument()
         settingsNavigation.current.forward = []

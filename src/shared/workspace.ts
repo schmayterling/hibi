@@ -64,18 +64,6 @@ export type WorkspaceState = {
   obsidian?: { externalAddons: boolean }
 }
 
-/** Header and draft revision for a bounded core explorer read. */
-export interface WorkspaceHeader
-  extends Omit<WorkspaceState, 'entries'>,
-    Omit<WorkspaceStreamSnapshot, 'entries'> {
-  readonly draftRevision: number
-}
-
-export interface WorkspaceViewPageRequest extends WorkspaceEntryPageRequest {
-  readonly draftRevision: number
-  readonly drafts?: boolean
-}
-
 /** Workspace-relative paths use forward slashes; null means the changed paths are unknown. */
 export type WorkspaceChange = {
   kind: 'content' | 'tree'
@@ -110,7 +98,6 @@ export interface WorkspaceEntryPageRequest {
 }
 
 export interface WorkspaceListedEntry {
-  readonly dirty?: boolean
   readonly path: string
   readonly name: string
   readonly kind: WorkspaceEntry['kind']

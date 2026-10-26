@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { errorMessage } from '../../shared/errors'
 import type { Importer, ImportResult, ImportSource } from '../../shared/imports'
-import type { WorkspaceHeader } from '../../shared/workspace'
+import type { WorkspaceHeader } from '../../shared/workspace-view'
 import { Button, Select } from '../../ui/Controls'
 import { DocumentNotice } from '../../ui/DocumentNotice'
 import type { DialogApi } from '../../ui/dialogs'

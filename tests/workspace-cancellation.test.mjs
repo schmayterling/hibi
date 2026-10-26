@@ -150,7 +150,7 @@ test('a committed selection still remembers and publishes when another open inte
   const notes = join(base, 'notes')
   await mkdir(notes)
   t.after(() => rm(base, { recursive: true, force: true }))
-  const original = fs.writeFile
+  const original = fs.rename
   let release
   let started
   const writing = new Promise((resolve) => {
@@ -161,12 +161,12 @@ test('a committed selection still remembers and publishes when another open inte
   })
   const changes = []
   observeWorkspace((change) => changes.push(change))
-  fs.writeFile = async (path, ...args) => {
-    if (path === join(base, 'recent-workspaces.json.tmp')) {
+  fs.rename = async (from, to, ...args) => {
+    if (to === join(base, 'recent-workspaces.json')) {
       started()
       await held
     }
-    return original(path, ...args)
+    return original(from, to, ...args)
   }
   syncBuiltinESMExports()
   try {
@@ -180,7 +180,7 @@ test('a committed selection still remembers and publishes when another open inte
   } finally {
     release()
     observeWorkspace(() => {})
-    fs.writeFile = original
+    fs.rename = original
     syncBuiltinESMExports()
   }
 })

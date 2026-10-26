@@ -13,13 +13,13 @@ export const MAX_WORKSPACE_PAGE_BYTES = 64 * 1024
 const stale = (): WorkspaceEntryPageResult => ({
   ok: false,
   code: 'stale',
-  message: 'this workspace is no longer open.',
+  message: 'This workspace is no longer open.',
 })
 
 const resync = (): WorkspaceEntryPageResult => ({
   ok: false,
   code: 'resync-needed',
-  message: 'the workspace changed. start listing again from the first page.',
+  message: 'The workspace changed. Start listing again from the first page.',
 })
 
 const limitExceeded = (message: string): WorkspaceEntryPageResult => ({
@@ -95,6 +95,11 @@ export function pageWorkspaceEntries(
   entries: readonly WorkspaceEntry[],
   snapshot: WorkspaceStreamCursor,
   request: WorkspaceEntryPageRequest,
+  select: (entry: WorkspaceEntry) => WorkspaceListedEntry = (entry) => ({
+    path: entry.path,
+    name: entry.name,
+    kind: entry.kind,
+  }),
 ): WorkspaceEntryPageResult {
   const target = snapshot.target
   if (
@@ -111,7 +116,7 @@ export function pageWorkspaceEntries(
     limit < 1 ||
     limit > MAX_WORKSPACE_PAGE_ENTRIES
   )
-    return limitExceeded('choose a page size from 1 to 200 entries.')
+    return limitExceeded('Choose a page size from 1 to 200 entries.')
   if (request.sequence !== undefined && request.sequence !== snapshot.sequence)
     return resync()
   const stack =
@@ -145,12 +150,7 @@ export function pageWorkspaceEntries(
       }
     const frame = stack[stack.length - 1] as Frame
     const source = frame.entries[frame.index] as WorkspaceEntry
-    const entry: WorkspaceListedEntry = {
-      path: source.path,
-      name: source.name,
-      kind: source.kind,
-      ...(source.dirty !== undefined ? { dirty: source.dirty } : {}),
-    }
+    const entry = select(source)
     const nextBytes =
       bytes +
       Buffer.byteLength(JSON.stringify(entry)) +
@@ -161,7 +161,7 @@ export function pageWorkspaceEntries(
       MAX_WORKSPACE_PAGE_BYTES
     ) {
       if (!result.length)
-        return limitExceeded('this path exceeds the 64 kib page limit.')
+        return limitExceeded('This path exceeds the 64 KiB page limit.')
       return {
         ok: true,
         value: { ...header, entries: result, nextCursor: cursor },

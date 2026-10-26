@@ -536,7 +536,14 @@ test('typing in a typst fence compiles once after the pause, and a large diagram
   const giant = `Intro.\n\n\`\`\`mermaid\ngraph TD\n${lines.join('\n')}\n  A --> B\n\`\`\`\n\nvisible text at end\n`
   await writeFile(join(folder, 'notes', 'giant.md'), giant)
   await open('giant.md')
-  await page.locator('.rich-pane .cm-line', { hasText: 'Intro.' }).waitFor()
+  // The previous note also starts with "Intro.", so wait for this note's source.
+  await waitForAsync(
+    page,
+    (length) =>
+      document.querySelector('.rich-pane .cm-content')?.cmTile.root.view.state
+        .doc.length === length,
+    giant.length,
+  )
   // Visiting the end lets the view find where the fence closes.
   await page.evaluate(() => {
     const view = document.querySelector('.rich-pane .cm-content').cmTile.root

@@ -348,6 +348,7 @@ export function MarkdownEditor({
             'github-markdown.github',
             'text-extras.text-extras',
             'math.latex',
+            'mermaid.blocks',
           ].includes(flavor.id),
       ) ||
       markdownExtensions.some(
@@ -378,6 +379,7 @@ export function MarkdownEditor({
       ['github-markdown.github', 'github-markdown'],
       ['text-extras.text-extras', 'text-extras'],
       ['math.latex', 'math'],
+      ['mermaid.blocks', 'mermaid'],
     ])
     if (
       !richSyntaxCompatible ||
@@ -433,8 +435,9 @@ export function MarkdownEditor({
   // biome-ignore lint/correctness/useExhaustiveDependencies: syntaxVersion invalidates parser contribution compatibility.
   const plainSyncEligible = useMemo(() => {
     const knownOwner = (owner: string) =>
-      ['markdown', 'github-markdown', 'text-extras'].includes(owner) &&
-      addonRegistry.origin(owner) === 'built-in'
+      ['markdown', 'github-markdown', 'text-extras', 'mermaid'].includes(
+        owner,
+      ) && addonRegistry.origin(owner) === 'built-in'
     return (
       richSyntaxCompatible &&
       flavors.every((flavor) => {
@@ -449,6 +452,7 @@ export function MarkdownEditor({
             'markdown.obsidian',
             'github-markdown.github',
             'text-extras.text-extras',
+            'mermaid.blocks',
           ].includes(registered.id)
         )
       }) &&

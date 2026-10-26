@@ -172,11 +172,10 @@ function loneMarker(doc: Text, item: SyntaxNode) {
     !/^(?:[-+*]|\d{1,9}[.)])[ \t\r]*$/.test(doc.sliceString(item.from, own.to))
   )
     return null
-  const first = item.childAfter(own.to)
-  return first &&
-    isBlock(first) &&
-    !isContainer(first) &&
-    first.name !== 'FencedCode'
+  let first = item.childAfter(own.to)
+  // Quote markers on the next line come before its block.
+  if (first && !isBlock(first)) first = blockSibling(first, true)
+  return first && !isContainer(first) && first.name !== 'FencedCode'
     ? own
     : null
 }

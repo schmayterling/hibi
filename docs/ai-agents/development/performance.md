@@ -14,6 +14,10 @@ These tests use production assets, the test Electron runtime, hidden windows by 
 
 Main and renderer performance entries start with `hibi:`. Entry checkpoints occur after static imports, not at process launch. Native preference reads have separate durations. Editor readiness, required editing capabilities, and window painting are separate checkpoints.
 
+## Paired formatted editors
+
+After building, run `node scripts/benchmark-editors.mjs --smoke --out test-results/editor-smoke` for two launches per engine at blank and 100 kB. Omit `--smoke` on a quiet machine for blank, 100 kB, the audit's 574,998-byte/100,000-word prose, 2 MB, and CodeMirror-only 50 MiB; `--sizes`, `--runs`, `--keys`, and `--scroll-frames` select a smaller matrix. The sampler balances engine order (AB, BA), uses hidden fresh profiles with focus emulation, and writes `results.json`, `table.md`, and filtered paint/User Timing traces. It reports open-to-formatted-paint, per-key CDP main-thread time and keydown-to-paint, first/next find, and frame intervals over a 3,600 px scroll, with medians and launch ranges. Paint is a temporal trace match, not physical presentation; missing evidence stays unavailable. Source-view fallback fails explicitly, so larger sizes require a build that opens them formatted. Smoke numbers check the harness only and must be labelled smoke, never treated as a full-matrix performance comparison.
+
 ## CodSpeed
 
 `npm run bench` runs 18 core/default-plugin operations through Vitest with CPU simulation. After building, `npm run bench:desktop` runs six Electron flows through Tinybench in walltime mode. Native simulation is rejected because the work runs in Electron child processes. Walltime measures elapsed duration; driver profiles do not show the renderer's complete CPU use.

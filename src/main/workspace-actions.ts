@@ -18,6 +18,7 @@ import {
   isCurrentWorkspaceTarget,
   notifyWorkspaceContent,
   refreshWorkspace,
+  type WorkspaceReply,
   workspaceRoot,
 } from './workspace'
 import { copyEntry, moveEntry } from './workspace-entry-transfer'
@@ -78,10 +79,21 @@ async function rethrowPartialCopy(
   throw error
 }
 
+type WorkspaceActionReply<IncludeEntries extends boolean = false> = Omit<
+  WorkspaceActionResult,
+  'workspace'
+> & { workspace: WorkspaceReply<IncludeEntries> | null }
+
+export function workspaceAction<IncludeEntries extends boolean = false>(
+  window: BrowserWindow,
+  input: unknown,
+  includeEntries?: IncludeEntries,
+): Promise<WorkspaceActionReply<IncludeEntries> | null>
 export async function workspaceAction(
   window: BrowserWindow,
   input: unknown,
-): Promise<WorkspaceActionResult | null> {
+  includeEntries = false,
+): Promise<WorkspaceActionReply<boolean> | null> {
   const base = workspaceRoot()
   if (!base) throw new Error('Open a workspace first.')
   if (!input || typeof input !== 'object')
@@ -154,7 +166,7 @@ export async function workspaceAction(
         throw new Error('Use a supported file extension.')
       if (source === resultPath)
         return {
-          workspace: getWorkspace(),
+          workspace: getWorkspace(undefined, includeEntries),
           document: getDocument(),
           path: relative(base, source).split(sep).join('/'),
         }
@@ -232,11 +244,11 @@ export async function workspaceAction(
   const paths = [sourcePath, resultPath]
     .filter((path): path is string => path !== null)
     .map((path) => relative(base, path).split(sep).join('/'))
-  let workspace: WorkspaceActionResult['workspace']
+  let workspace: WorkspaceReply<boolean> | null
   try {
     workspace = treeChanged
-      ? await refreshWorkspace(paths)
-      : await notifyWorkspaceContent(paths)
+      ? await refreshWorkspace(paths, includeEntries)
+      : await notifyWorkspaceContent(paths, includeEntries)
   } catch (error) {
     if (!treeChanged) throw error
     throw new Error(

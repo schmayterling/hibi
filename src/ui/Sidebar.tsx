@@ -48,6 +48,10 @@ export type SidebarProps = {
   overlay?: boolean
   onDismiss?: () => void
   disabled?: boolean
+  /** Tree pages are being refreshed; rows remain visible but unavailable. */
+  pending?: boolean
+  /** Drags belong to the tree revision where they started. */
+  interactionRevision?: number | undefined
   className?: string
   idPrefix?: string
   panelPrefix?: string
@@ -159,6 +163,8 @@ export function Sidebar({
   side = 'left',
   onDismiss,
   disabled = false,
+  pending = false,
+  interactionRevision,
 }: SidebarProps) {
   const container = useRef<HTMLDivElement>(null)
   const focusedElement = useRef<HTMLElement | null>(null)
@@ -221,7 +227,11 @@ export function Sidebar({
     null,
   )
   const [dragging, setDragging] = useState(false)
-  const draggedItem = useRef<{ id: string; ids: string[] } | null>(null)
+  const draggedItem = useRef<{
+    id: string
+    ids: string[]
+    revision: number | undefined
+  } | null>(null)
   const [dragged, setDragged] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -404,7 +414,7 @@ export function Sidebar({
       const index = indices.get(id)
       if (index !== undefined) rowWindow.reveal(index)
     }
-    if (mode === 'tabs' && !overlay) onSelect(id)
+    if (mode === 'tabs' && !overlay && !disabled && !pending) onSelect(id)
   }
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: the shared navigation dismisses after its child controls handle Escape.
@@ -460,7 +470,14 @@ export function Sidebar({
           hidden={content !== undefined}
           data-drop-target={dropTarget === ''}
           onDragOver={(event) => {
-            if (disabled || !onMove || !draggedItem.current) return
+            if (
+              disabled ||
+              pending ||
+              !onMove ||
+              !draggedItem.current ||
+              draggedItem.current.revision !== interactionRevision
+            )
+              return
             event.preventDefault()
             event.dataTransfer.dropEffect = 'move'
             setDropTarget('')
@@ -472,7 +489,14 @@ export function Sidebar({
               setDropTarget(null)
           }}
           onDrop={(event) => {
-            if (disabled || !onMove || !draggedItem.current) return
+            if (
+              disabled ||
+              pending ||
+              !onMove ||
+              !draggedItem.current ||
+              draggedItem.current.revision !== interactionRevision
+            )
+              return
             event.preventDefault()
             event.stopPropagation()
             onMove(draggedItem.current.id, null, draggedItem.current.ids)
@@ -493,6 +517,7 @@ export function Sidebar({
             }
             role={mode === 'tabs' ? 'tablist' : 'tree'}
             aria-label={label}
+            aria-busy={pending || undefined}
             aria-orientation={mode === 'tabs' ? 'vertical' : undefined}
             aria-multiselectable={picked ? true : undefined}
           >
@@ -558,7 +583,14 @@ export function Sidebar({
                     data-drop-target={dropTarget === item.id}
                     onDragOver={(event) => {
                       const source = draggedItem.current
-                      if (disabled || !onMove || !source) return
+                      if (
+                        disabled ||
+                        pending ||
+                        !onMove ||
+                        !source ||
+                        source.revision !== interactionRevision
+                      )
+                        return
                       event.stopPropagation()
                       const target = item.children ? item.id : parent
                       if (
@@ -575,7 +607,14 @@ export function Sidebar({
                     }}
                     onDrop={(event) => {
                       const source = draggedItem.current
-                      if (disabled || !onMove || !source) return
+                      if (
+                        disabled ||
+                        pending ||
+                        !onMove ||
+                        !source ||
+                        source.revision !== interactionRevision
+                      )
+                        return
                       event.preventDefault()
                       event.stopPropagation()
                       const target = item.children ? item.id : parent
@@ -625,11 +664,17 @@ export function Sidebar({
                         }}
                         id={`${idPrefix}-${item.id}`}
                         type="button"
-                        disabled={disabled}
-                        draggable={mode === 'tree' && !!onMove && !disabled}
+                        aria-disabled={disabled || pending || undefined}
+                        draggable={
+                          mode === 'tree' && !!onMove && !disabled && !pending
+                        }
                         onDragStart={(event) => {
-                          if (!onMove) return
+                          if (disabled || pending || !onMove) {
+                            event.preventDefault()
+                            return
+                          }
                           draggedItem.current = {
+                            revision: interactionRevision,
                             id: item.id,
                             ids: menuGroup(item.id),
                           }
@@ -681,7 +726,7 @@ export function Sidebar({
                             .join('; ') || undefined
                         }
                         onContextMenu={(event) => {
-                          if (onMenu && !disabled) {
+                          if (onMenu && !disabled && !pending) {
                             event.preventDefault()
                             setFocused(item.id)
                             onMenu(
@@ -696,6 +741,7 @@ export function Sidebar({
                           rowWindow.reveal(index)
                         }}
                         onClick={(event) => {
+                          if (disabled || pending) return
                           if (picked) {
                             if (event.shiftKey)
                               return selectRange(item.id, picked[0] ?? item.id)
@@ -713,6 +759,21 @@ export function Sidebar({
                             event.preventDefault()
                         }}
                         onKeyDown={(event) => {
+                          if (
+                            (disabled || pending) &&
+                            ([
+                              'Enter',
+                              'Delete',
+                              'Backspace',
+                              'F2',
+                              'ContextMenu',
+                              'F10',
+                            ].includes(event.key) ||
+                              (event.key === ' ' && !picked))
+                          ) {
+                            event.preventDefault()
+                            return
+                          }
                           if (
                             onMenu &&
                             (event.key === 'ContextMenu' ||
@@ -824,13 +885,14 @@ export function Sidebar({
                       <button
                         type="button"
                         className="sidebar-more"
-                        disabled={disabled}
+                        aria-disabled={disabled || pending || undefined}
                         tabIndex={
                           windowed && focusId !== item.id ? -1 : undefined
                         }
                         aria-label={`Actions for ${item.label}`}
                         aria-haspopup="menu"
                         onClick={(event) => {
+                          if (disabled || pending) return
                           setFocused(item.id)
                           onMenu(
                             item.id,

@@ -64,6 +64,7 @@ export class LocalDiagnostics {
         ['format-worker.js', 4],
         ['dictionary-pack-worker.js', 5],
         ['import-worker.js', 6],
+        ['workspace-text-worker.js', 7],
       ] as const) {
         const path = join(import.meta.dirname, relative)
         this.catalog.set(path, id)

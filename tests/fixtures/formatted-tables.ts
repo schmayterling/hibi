@@ -1,5 +1,5 @@
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
-import { EditorState } from '@codemirror/state'
+import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import '../../src/renderer/src/styles.css'
 import type { ChunkedMarkdownProbe } from '../../src/renderer/src/chunked-markdown'
@@ -17,6 +17,11 @@ const probe: ChunkedMarkdownProbe = {
   builtGroups: 0,
 }
 let view: EditorView | null = null
+const editable = new Compartment()
+const access = (on: boolean) => [
+  EditorState.readOnly.of(!on),
+  EditorView.editable.of(on),
+]
 
 // The GitHub flavor's strikethrough setting, which the Markdown addon registers in the app.
 markdownSyntax.register('markdown', {
@@ -63,7 +68,8 @@ Object.assign(window, {
             livePreview(formattedSyntax({ probe })),
             options.editable
               ? [history(), keymap.of([...defaultKeymap, ...historyKeymap])]
-              : [EditorState.readOnly.of(true), EditorView.editable.of(false)],
+              : [],
+            editable.of(access(!!options.editable)),
             showMarkdownMarkers.of(true),
           ],
         }),
@@ -73,6 +79,9 @@ Object.assign(window, {
       await settle()
     },
     view: () => view,
+    /** Make the mounted editor read-only and not editable, or editable again. */
+    setEditable: (on: boolean) =>
+      view?.dispatch({ effects: editable.reconfigure(access(on)) }),
     setEnabled: (id: string, enabled: boolean) =>
       markdownSyntax.setEnabled(id, enabled),
     reset() {

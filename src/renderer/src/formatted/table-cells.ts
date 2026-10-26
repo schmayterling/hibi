@@ -1,6 +1,8 @@
 import { defaultKeymap, isolateHistory } from '@codemirror/commands'
 import {
+  Annotation,
   type ChangeSpec,
+  Compartment,
   EditorSelection,
   EditorState,
   Prec,
@@ -350,6 +352,15 @@ function editorDecorations(main: EditorState, view: EditorView) {
   }
 }
 
+/** Marks the formatted view's transactions that a cell editor sends. */
+export const cellInput = Annotation.define<true>()
+
+/** Whether the formatted view takes input: a cell editor follows it. */
+export const writable = (state: EditorState) =>
+  !state.readOnly && state.facet(EditorView.editable)
+/** Read-only, not uneditable: a cell editor keeps focus while input waits. */
+const access = (state: EditorState) => EditorState.readOnly.of(!writable(state))
+
 /** Where a cell editor moves: to another cell, or out of the table. */
 export type CellMove = 'next' | 'previous' | 'up' | 'down' | 'left' | 'right'
 
@@ -379,6 +390,7 @@ export class CellEditor {
   readonly view: EditorView
   /** A change from the formatted view is being applied. */
   private remote = false
+  private access = new Compartment()
 
   constructor(
     private host: CellHost,
@@ -440,7 +452,15 @@ export class CellEditor {
         selection: { anchor, head },
         extensions: [
           preview,
+          this.access.of(access(main)),
           EditorState.transactionFilter.of((transaction) => {
+            // Nothing writes the cell while the formatted view takes no input.
+            if (
+              transaction.docChanged &&
+              !this.remote &&
+              !writable(host.main.state)
+            )
+              return []
             // The caret moves within the content, not into the padding.
             if (!transaction.docChanged && transaction.selection) {
               if (this.remote) return transaction
@@ -579,20 +599,26 @@ export class CellEditor {
     if (this.remote) return
     for (const transaction of transactions) {
       if (!view.dom.isConnected) return
-      if (!transaction.docChanged && !transaction.selection) continue
       const span = this.host.span()
       const changes: ChangeSpec[] = []
       if (transaction.docChanged) {
         if (!span) changes.push(this.host.fill(transaction.newDoc.toString()))
         else
           transaction.changes.iterChanges((fromA, toA, _fromB, _toB, text) => {
-            changes.push({
-              from: span.from + fromA,
-              to: span.from + toA,
-              insert: text.toString(),
-            })
+            const insert = text.toString()
+            // Choosing a composition's candidates rewrites its text unchanged.
+            if (transaction.startState.sliceDoc(fromA, toA) !== insert)
+              changes.push({
+                from: span.from + fromA,
+                to: span.from + toA,
+                insert,
+              })
           })
       }
+      if (!changes.length && !transaction.selection) continue
+      // A composition's candidates stay in the cell, so that the formatted
+      // view's history keeps the composition one step.
+      if (!changes.length && view.composing) continue
       const selection = transaction.newSelection
       const userEvent = transaction.annotation(Transaction.userEvent)
       const isolate = transaction.annotation(isolateHistory)
@@ -612,8 +638,27 @@ export class CellEditor {
             }
           : {}),
         ...(userEvent ? { userEvent } : {}),
-        ...(isolate ? { annotations: isolateHistory.of(isolate) } : {}),
+        annotations: [
+          cellInput.of(true),
+          ...(isolate ? [isolateHistory.of(isolate)] : []),
+        ],
       })
+    }
+  }
+
+  /** Take input as the formatted view does, after it changed. */
+  reconfigure(main: EditorState) {
+    if (writable(main) !== writable(this.view.state))
+      this.view.dispatch({ effects: this.access.reconfigure(access(main)) })
+  }
+
+  /** Select in the cell's text, for a selection the formatted view set. */
+  select(anchor: number, head: number) {
+    this.remote = true
+    try {
+      this.view.dispatch({ selection: { anchor, head } })
+    } finally {
+      this.remote = false
     }
   }
 
@@ -657,6 +702,7 @@ export class CellEditor {
     const { anchor, head } = this.view.state.selection.main
     this.host.main.dispatch({
       selection: { anchor: span.from + anchor, head: span.from + head },
+      annotations: cellInput.of(true),
     })
   }
 

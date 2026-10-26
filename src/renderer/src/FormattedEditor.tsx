@@ -76,15 +76,19 @@ export function MarkdownEditor({
   onActiveOutline,
 }: Parameters<typeof RichMarkdownEditor>[0]) {
   const markdownDocument = format?.editing === 'markdown'
+  // Large notes keep frontmatter in the text while properties are unavailable.
+  const showProperties =
+    !!value &&
+    markdownDocument &&
+    markdownExtensions.some(
+      ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
+    )
   const editorExtensions = useMemo(
     () =>
-      markdownDocument &&
-      markdownExtensions.some(
-        ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
-      )
+      showProperties
         ? [...propertiesExtensions, ...formattedExtensions]
         : formattedExtensions,
-    [markdownDocument, markdownExtensions, formattedExtensions],
+    [showProperties, formattedExtensions],
   )
   const syntaxVersion = useSyncExternalStore(
     markdownSyntax.subscribe,

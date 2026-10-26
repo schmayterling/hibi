@@ -89,10 +89,12 @@ test('startup catalog stays within the main byte budget and leaves notices and a
   for (const chunk of chunks) if (chunk.entry) visit(chunk.file)
   const initial = chunks.filter((chunk) => reached.has(chunk.file))
   // Catalog baseline: 689137 bytes, plus 318 bytes for declarative styles/themes (#218)
-  // and 430 bytes for releasing closed tabs' sources from document states (#440).
+  // and 430 bytes for releasing closed tabs' sources from document states (#440),
+  // and 63 bytes for opening large notes in the CodeMirror formatted view (#450),
+  // and 1122 bytes for closing several tabs and middle-click closing (#455).
   // API 3 adds 713 bytes for formatted registrations, publication and lazy compatibility dispatch.
   const bytes = initial.reduce((sum, chunk) => sum + chunk.bytes, 0)
-  assert.ok(bytes <= 689885 + 713, `startup catalog grew to ${bytes} bytes`)
+  assert.ok(bytes <= 691070 + 713, `startup catalog grew to ${bytes} bytes`)
   const modules = initial.flatMap((chunk) => chunk.modules).join('\n')
   assert.doesNotMatch(
     modules,

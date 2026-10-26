@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { constants, type Stats } from 'node:fs'
+import { type BigIntStats, constants } from 'node:fs'
 import {
   lstat,
   mkdir,
@@ -21,6 +21,7 @@ import {
   validAddonInventoryPath,
   validAddonPath,
 } from '../shared/addon-package.ts'
+import { sameFileIdentity } from '../shared/file-identity.ts'
 
 const MAX_INVENTORY_ENTRIES = 5000
 const MAX_INVENTORY_BYTES = 64 * 1024 * 1024
@@ -339,13 +340,12 @@ export async function inventoryAddonArchive(
   })
 }
 
-function sameFile(a: Stats, b: Stats): boolean {
+function sameFile(a: BigIntStats, b: BigIntStats): boolean {
   return (
-    a.dev === b.dev &&
-    a.ino === b.ino &&
+    sameFileIdentity(a, b) &&
     a.size === b.size &&
-    a.mtimeMs === b.mtimeMs &&
-    a.ctimeMs === b.ctimeMs
+    a.mtimeNs === b.mtimeNs &&
+    a.ctimeNs === b.ctimeNs
   )
 }
 
@@ -365,17 +365,21 @@ export async function inventoryAddonDirectory(
 ): Promise<AddonInventory> {
   signal?.throwIfAborted()
   root = await canonicalRoot(root)
-  const directories = new Map<string, Stats>()
-  const files = new Map<string, Stats>()
+  const directories = new Map<string, BigIntStats>()
+  const files = new Map<string, BigIntStats>()
   const register = pathRegistry()
   const entries: AddonInventory['entries'] = []
   let count = 0,
     declared = 0
 
-  async function checked(path: string, folder: boolean, expected?: Stats) {
+  async function checked(
+    path: string,
+    folder: boolean,
+    expected?: BigIntStats,
+  ) {
     signal?.throwIfAborted()
     const target = path ? join(root, path) : root
-    const stat = await lstat(target)
+    const stat = await lstat(target, { bigint: true })
     if (stat.isSymbolicLink())
       throw new Error(
         'Addon folders cannot contain symbolic links or invalid paths.',
@@ -388,8 +392,7 @@ export async function inventoryAddonDirectory(
     if (
       (canonical !== root && !canonical.startsWith(root + sep)) ||
       (expected &&
-        (expected.dev !== stat.dev ||
-          expected.ino !== stat.ino ||
+        (!sameFileIdentity(expected, stat) ||
           (!folder && !sameFile(expected, stat))))
     )
       throw new Error(
@@ -413,7 +416,7 @@ export async function inventoryAddonDirectory(
       throw new Error('The requested addon file is absent from the inventory.')
     await checkParents(path)
     await checked(path, false, expected)
-    if (manifestPath(path) && expected.size > MAX_ADDON_MANIFEST_BYTES)
+    if (manifestPath(path) && expected.size > BigInt(MAX_ADDON_MANIFEST_BYTES))
       throw new Error(
         'hibi-addon.json must be a JSON file no larger than 64 KiB.',
       )
@@ -424,7 +427,7 @@ export async function inventoryAddonDirectory(
         (constants.O_NONBLOCK ?? 0),
     )
     try {
-      const before = await handle.stat()
+      const before = await handle.stat({ bigint: true })
       if (!before.isFile() || !sameFile(expected, before))
         throw new Error('The addon files changed during preparation.')
       const parts: Buffer[] = []
@@ -440,7 +443,10 @@ export async function inventoryAddonDirectory(
         inventoryLimits(0, 0, size)
         parts.push(chunk.subarray(0, bytesRead))
       }
-      if (size !== expected.size || !sameFile(before, await handle.stat()))
+      if (
+        BigInt(size) !== expected.size ||
+        !sameFile(before, await handle.stat({ bigint: true }))
+      )
         throw new Error('The addon files changed during preparation.')
       await checkParents(path)
       await checked(path, false, expected)
@@ -460,15 +466,16 @@ export async function inventoryAddonDirectory(
       const relative = path ? `${path}/${entry.name}` : entry.name
       const stat = await checked(relative, entry.isDirectory())
       count++
-      declared += stat.isFile() ? stat.size : 0
-      inventoryLimits(count, declared, stat.isFile() ? stat.size : 0)
+      const size = stat.isFile() ? Number(stat.size) : 0
+      declared += size
+      inventoryLimits(count, declared, size)
       register.add(relative, stat.isDirectory())
       if (excludedAddonPath(relative)) continue
       depthLimit(relative, stat.isDirectory())
       entries.push({
         path: relative,
         directory: stat.isDirectory(),
-        size: stat.isFile() ? stat.size : 0,
+        size,
       })
       if (stat.isDirectory()) await walk(relative)
       else files.set(relative, stat)

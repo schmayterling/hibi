@@ -3100,6 +3100,12 @@ function App() {
             false,
           )
         }
+        onCloseTabs={(ids, preferred) =>
+          void applyDocumentOperation(
+            () => window.hibi.closeDocumentTabs(ids, preferred),
+            false,
+          )
+        }
         onMoveTab={(id, beforeId) =>
           void applyDocumentOperation(
             () => window.hibi.moveDocumentTab(id, beforeId),

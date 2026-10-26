@@ -1728,14 +1728,16 @@ const tableEditing = ViewPlugin.fromClass(
         for (const table of tables) table.scrolled()
       if (writable(update.startState) !== writable(update.state))
         for (const table of tables) table.reconfigure()
-      const { main } = update.state.selection
-      if (
-        update.view.hasFocus &&
-        (update.selectionSet || update.focusChanged)
-      ) {
-        const table = tableAt(update.view, main.head, true)
-        if (table) queueMicrotask(() => table.editAt(main.anchor, main.head))
-      }
+      // The cell at the selection is found once tables have redrawn, from the
+      // selection then: until the redraw, tables are where they were before
+      // this update, and it may remove them.
+      if (update.view.hasFocus && (update.selectionSet || update.focusChanged))
+        queueMicrotask(() => {
+          const { view } = this
+          const { main } = view.state.selection
+          if (view.hasFocus)
+            tableAt(view, main.head, true)?.editAt(main.anchor, main.head)
+        })
     }
   },
   {

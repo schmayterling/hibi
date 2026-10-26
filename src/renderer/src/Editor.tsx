@@ -103,6 +103,7 @@ import {
   type MarkdownPositionLookup,
 } from './markdown-positions'
 import { mountedDocumentEdits } from './mounted-document-edits'
+import { multiLineInput } from './multi-line-input'
 import './markdown-markers.css'
 import type { ReferenceValue } from '../../shared/source-references'
 import { createMarkdownSemantics } from './markdown-semantics'
@@ -595,6 +596,30 @@ export function MarkdownEditor({
               return true
             }
             return false
+          },
+          beforeinput(view, event) {
+            const text = event.data
+            // Chromium applies each line break of a text input as its own
+            // editing step, quadratic in the lines. Make the same edit in one
+            // step, and send the input signal the browser would have.
+            const transaction =
+              event.inputType === 'insertText' &&
+              text &&
+              /[\r\n]/.test(text) &&
+              !view.composing &&
+              view.editable &&
+              multiLineInput(view, text)
+            if (!transaction) return false
+            event.preventDefault()
+            view.dispatch(transaction)
+            view.dom.dispatchEvent(
+              new InputEvent('input', {
+                inputType: 'insertText',
+                data: text,
+                bubbles: true,
+              }),
+            )
+            return true
           },
         },
         attributes: {

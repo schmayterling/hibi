@@ -21,6 +21,7 @@ import {
 } from 'react'
 import type { Root } from 'react-dom/client'
 import { GraphCanvas } from '../addons/graph/Canvas'
+import GraphLayoutWorker from '../addons/graph/layout.worker.ts?worker&inline'
 import {
   CommandPalette,
   type PaletteCommand,
@@ -38,6 +39,9 @@ import { homePage, isMermaidImage, pageRoute, type SiteData } from './data'
 import { createSiteSearchWorker } from './search-worker-client'
 import { pageTitle } from './title'
 import './site.css'
+
+// Exported sites ship one script, so the layout worker is inlined.
+const layoutWorker = () => new GraphLayoutWorker()
 
 export function startSite(workspace: SiteData, root: Root) {
   const options = workspace.options
@@ -908,9 +912,9 @@ export function startSite(workspace: SiteData, root: Root) {
     const [query, setQuery] = useState('')
     const graph = useMemo(() => {
       const nodes =
-        workspace.graph?.nodes
-          .filter((node) => node.id.toLowerCase().includes(query.toLowerCase()))
-          .slice(0, 500) ?? []
+        workspace.graph?.nodes.filter((node) =>
+          node.id.toLowerCase().includes(query.toLowerCase()),
+        ) ?? []
       const ids = new Set(nodes.map((node) => node.id))
       return {
         nodes,
@@ -934,6 +938,7 @@ export function startSite(workspace: SiteData, root: Root) {
           active={active}
           open={open}
           resetKey={query}
+          worker={layoutWorker}
         />
       </div>
     )

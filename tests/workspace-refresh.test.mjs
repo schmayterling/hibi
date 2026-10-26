@@ -18,7 +18,7 @@ const { createScanCoordinator, watchNeedsScan } = await import(
   `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString('base64')}`
 )
 
-test('workspace scans share one request, discard stale results, and run one follow-up', async () => {
+test('workspace scans finish current callers before coalesced follow-up callers', async () => {
   const scans = []
   const published = []
   const coordinator = createScanCoordinator(
@@ -30,16 +30,21 @@ test('workspace scans share one request, discard stale results, and run one foll
   )
 
   const first = coordinator.request()
-  coordinator.request()
+  const second = coordinator.request()
+  const third = coordinator.request()
   assert.equal(scans.length, 1)
-  scans.shift()('stale')
-  await new Promise((resolve) => setImmediate(resolve))
+  scans.shift()('first')
+  assert.equal(await first, 'first')
   assert.equal(scans.length, 1)
-  assert.deepEqual(published, [])
+  assert.deepEqual(published, ['first'])
 
-  scans.shift()('current')
-  assert.equal(await first, 'current')
-  assert.deepEqual(published, ['current'])
+  scans.shift()('follow-up')
+  assert.deepEqual(await Promise.all([second, third]), [
+    'follow-up',
+    'follow-up',
+  ])
+  assert.deepEqual(published, ['first', 'follow-up'])
+  coordinator.close()
 })
 
 test('closing a workspace prevents an in-flight scan from publishing', async () => {
@@ -56,24 +61,7 @@ test('closing a workspace prevents an in-flight scan from publishing', async () 
   assert.deepEqual(published, [])
 })
 
-test('watcher invalidation during a scan suppresses its stale result', async () => {
-  const scans = []
-  const published = []
-  const coordinator = createScanCoordinator(
-    () => new Promise((resolve) => scans.push(resolve)),
-    (value) => published.push(value),
-  )
-  const pending = coordinator.request()
-  coordinator.invalidate()
-  scans.shift()('before change')
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.deepEqual(published, [])
-  scans.shift()('after change')
-  assert.equal(await pending, 'after change')
-  assert.deepEqual(published, ['after change'])
-})
-
-test('new scan requests and closure abort stale traversal signals', async () => {
+test('only closure aborts traversal and cancels queued requests', async () => {
   const scans = []
   const coordinator = createScanCoordinator(
     (signal) => new Promise((resolve) => scans.push({ signal, resolve })),
@@ -81,16 +69,20 @@ test('new scan requests and closure abort stale traversal signals', async () => 
   )
   const pending = coordinator.request()
   const first = scans[0]
-  coordinator.request()
-  assert.equal(first.signal?.aborted, true)
-  first.resolve('stale')
-  await new Promise((resolve) => setImmediate(resolve))
+  const followUp = coordinator.request()
+  assert.equal(first.signal.aborted, false)
+  first.resolve('first')
+  assert.equal(await pending, 'first')
   const next = scans[1]
+  const queued = coordinator.request()
   assert.equal(next.signal.aborted, false)
   coordinator.close()
   assert.equal(next.signal.aborted, true)
+  assert.equal(await queued, null)
   next.resolve('closed')
-  assert.equal(await pending, null)
+  assert.equal(await followUp, null)
+  assert.equal(await coordinator.request(), null)
+  assert.equal(scans.length, 2)
 })
 
 test('watcher rescans new, removed, and parent directory changes', () => {

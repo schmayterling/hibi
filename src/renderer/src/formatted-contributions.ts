@@ -3,6 +3,7 @@ import {
   type Extension,
   Facet,
   Prec,
+  StateEffect,
 } from '@codemirror/state'
 import { type KeyBinding, keymap, type WidgetType } from '@codemirror/view'
 import type { SyntaxNodeRef } from '@lezer/common'
@@ -137,7 +138,7 @@ export type FormattedContribution = {
   inlineStops?: boolean
   /**
    * Nodes whose renderers read their source text instead of inner nodes: a
-   * block of these longer than the giant size gets inner nodes only for its
+   * block of these longer than two chunks gets inner nodes only for its
    * opening and last lines, wherever the viewport is.
    */
   opaque?: readonly string[]
@@ -168,6 +169,13 @@ export const formattedDocument = Facet.define<
   { revision: number; tabId: string | null },
   { revision: number; tabId: string | null }
 >({ combine: (values) => values.at(-1) ?? { revision: 0, tabId: null } })
+
+/**
+ * Render the visible ranges again, for renderers whose output depends on
+ * state that changed without the text, selection or viewport changing, such
+ * as an index of footnote definitions that an idle slice extended.
+ */
+export const formattedRefresh = StateEffect.define<null>()
 
 /** Show the Markdown markers of the formatted text under the selection. */
 export const showMarkdownMarkers = Facet.define<boolean, boolean>({

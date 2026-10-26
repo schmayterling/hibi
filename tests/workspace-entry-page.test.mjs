@@ -106,6 +106,65 @@ test('workspace pages cap utf-8 payload bytes without dropping entries', () => {
   )
 })
 
+test('a full paged traversal visits each entry once rather than replaying offsets', () => {
+  let visits = 0
+  const entries = Array.from({ length: 2000 }, (_, index) => ({
+    get path() {
+      visits++
+      return `note-${index}.md`
+    },
+    name: `note-${index}.md`,
+    kind: 'file',
+  }))
+  let cursor
+  let count = 0
+  do {
+    const result = pageWorkspaceEntries(entries, snapshot, {
+      target,
+      cursor,
+      limit: 10,
+    })
+    assert.equal(result.ok, true)
+    count += result.value.entries.length
+    cursor = result.value.nextCursor ?? undefined
+  } while (cursor)
+  assert.equal(count, entries.length)
+  assert.ok(visits <= entries.length * 2, `${visits} entry visits`)
+})
+
+test('workspace pages resume nested and empty folders without losing siblings', () => {
+  const entries = [
+    {
+      path: 'a',
+      name: 'a',
+      kind: 'folder',
+      children: [
+        { path: 'a/b', name: 'b', kind: 'folder', children: [] },
+        {
+          path: 'a/c',
+          name: 'c',
+          kind: 'folder',
+          children: [{ path: 'a/c/n.md', name: 'n.md', kind: 'file' }],
+        },
+      ],
+    },
+    { path: 'z.md', name: 'z.md', kind: 'file' },
+  ]
+  const paths = []
+  let cursor
+  do {
+    const result = pageWorkspaceEntries(entries, snapshot, {
+      target,
+      cursor,
+      limit: 1,
+    })
+    assert.equal(result.ok, true)
+    paths.push(...result.value.entries.map((entry) => entry.path))
+    cursor = result.value.nextCursor ?? undefined
+  } while (cursor)
+  assert.deepEqual(paths, ['a', 'a/b', 'a/c', 'a/c/n.md', 'z.md'])
+})
+
 test('workspace pages report stale and capped retained trees', () => {
   const capped = {
     ...snapshot,

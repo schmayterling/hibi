@@ -25,12 +25,10 @@ function onWorkspaceChange(listener: (change?: WorkspaceChange) => void) {
   workspaceListeners.add(listener)
   if (!stopWorkspaceListener) {
     workspaceRevision++
-    stopWorkspaceListener = window.hibi.onWorkspaceChanged(
-      (_workspace, change) => {
-        workspaceRevision++
-        for (const notify of workspaceListeners) notify(change)
-      },
-    )
+    stopWorkspaceListener = window.hibi.onWorkspaceHeaderChanged((change) => {
+      workspaceRevision++
+      for (const notify of workspaceListeners) notify(change)
+    })
   }
   return () => {
     workspaceListeners.delete(listener)

@@ -22,7 +22,6 @@ import type {
   WorkspaceAction,
   WorkspaceActionResult,
   WorkspaceEntry,
-  WorkspaceState,
 } from '../../shared/workspace'
 import { IconButton } from '../../ui/Controls'
 import { useDialogs } from '../../ui/DialogProvider'
@@ -39,6 +38,7 @@ import {
   workspaceStep,
   workspaceTarget,
 } from './workspace-menu'
+import type { WorkspaceView } from './workspace-view'
 
 const ignoreDecorations = () => () => {}
 
@@ -75,6 +75,7 @@ function workspaceItems(
 
 export function WorkspaceSidebar({
   workspace,
+  isCurrent,
   onOpen,
   onFile,
   tabs,
@@ -92,7 +93,8 @@ export function WorkspaceSidebar({
   editing,
   onEditing: setEditing,
 }: {
-  workspace: WorkspaceState | null
+  workspace: WorkspaceView | null
+  isCurrent: () => boolean
   onOpen: () => void
   onFile: (path: string, target?: WorkspaceTarget) => Promise<boolean>
   /** Each opened file gets its own tab, so a group can open together. */
@@ -113,6 +115,8 @@ export function WorkspaceSidebar({
   editing: WorkspaceRename
   onEditing: (target: WorkspaceRename) => void
 }) {
+  const pending = workspace?.treePending ?? false
+  const canInteract = () => !busy && !pending && isCurrent()
   const menu = useMenus(onError)
   const dialogs = useDialogs()
   const [renaming, setRenaming] = useState(false)
@@ -149,7 +153,7 @@ export function WorkspaceSidebar({
     }
   }
   async function commitRename() {
-    if (!editing || committing.current || busy) return
+    if (!editing || committing.current || !canInteract()) return
     committing.current = true
     setRenaming(true)
     try {
@@ -169,7 +173,7 @@ export function WorkspaceSidebar({
     }
   }
   function openMenu(path: string, anchor: HTMLElement, paths = [path]) {
-    if (busy || !workspace) return
+    if (!canInteract() || !workspace) return
     const target = workspaceTarget(workspace)
     const find = (entries: WorkspaceEntry[]): WorkspaceEntry | undefined => {
       for (const entry of entries) {
@@ -260,7 +264,9 @@ export function WorkspaceSidebar({
       // Another workspace starts with fresh expansion, focus, and range state.
       key={`${workspace?.id}:${workspace?.workspaceGeneration}`}
       resize={resize}
-      disabled={busy}
+      disabled={busy || !isCurrent()}
+      pending={pending}
+      interactionRevision={workspace?.treeRevision}
       open={open}
       overlay={overlay}
       onDismiss={onDismiss}
@@ -272,9 +278,13 @@ export function WorkspaceSidebar({
         ids: selection,
         onChange: (ids) => setPicked({ scope, ids }),
       }}
-      onSelect={onFile}
+      onSelect={(path) => {
+        if (canInteract())
+          void onFile(path, workspaceTarget(workspace) ?? undefined)
+      }}
       onMenu={openMenu}
       onMove={(path, parent, paths = [path]) => {
+        if (!canInteract()) return
         const target = workspaceTarget(workspace)
         if (!target) return
         const destination = (path: string) =>
@@ -290,7 +300,7 @@ export function WorkspaceSidebar({
       editing={
         editing && {
           ...editing,
-          disabled: renaming || busy,
+          disabled: renaming || busy || pending,
           onChange: (value) => setEditing({ ...editing, value }),
           onCommit: () => void commitRename(),
           onCancel: () => setEditing(null),
@@ -350,7 +360,7 @@ export function WorkspaceSidebar({
         )
       }
       empty={
-        workspace ? (
+        pending ? null : workspace ? (
           'No files to show in this folder.'
         ) : (
           <button

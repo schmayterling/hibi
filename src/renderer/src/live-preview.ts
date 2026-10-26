@@ -44,6 +44,7 @@ import {
   type FormattedNodeView,
   formattedContributions,
   formattedLiteral,
+  formattedRefresh,
   formattedViews,
   showMarkdownMarkers,
 } from './formatted-contributions'
@@ -765,14 +766,17 @@ function itemLine(
   info.classes.push('hibi-lp-list-item')
   const list = item.parent!
   if (list.name === 'OrderedList') {
-    const window = list.tree?.prop(listWindow)
     const first = list.getChild('ListItem')?.getChild('ListMark')
-    const start =
-      window?.start ??
-      (first ? Number.parseInt(doc.sliceString(first.from, first.to), 10) : 1)
+    const start = first
+      ? Number.parseInt(doc.sliceString(first.from, first.to), 10)
+      : 1
+    // A window into a giant block lacks the items before it.
+    let top: SyntaxNode = list
+    while (top.parent && top.parent.name !== 'Document') top = top.parent
+    const skipped = top.tree?.prop(listWindow)?.get(list.from - top.from) ?? 0
     info.classes.push('hibi-lp-list-ordered')
     info.style.push(
-      `counter-set: list-item ${(Number.isFinite(start) ? start : 1) + (window?.items ?? 0) + ordinal(list, item, ordinals)}`,
+      `counter-set: list-item ${(Number.isFinite(start) ? start : 1) + skipped + ordinal(list, item, ordinals)}`,
     )
   } else
     info.style.push(
@@ -1001,14 +1005,30 @@ function chunkLayout(
 
 type ChunkLayout = ReturnType<typeof chunkLayout>
 /**
- * Layout per chunk tree and set of views: reused chunks keep their
- * decorations, shifted to their position. A chunk under the selection whose
- * layout comes from contributed views is laid out again with its reveal state.
+ * Layout per chunk tree, set of views and set of nodes shown as written:
+ * reused chunks keep their decorations, shifted to their position. A chunk
+ * under the selection whose layout comes from contributed views is laid out
+ * again with its reveal state.
  */
 const chunkCache = new WeakMap<
   readonly FormattedNodeView[],
-  WeakMap<Tree, ChunkLayout>
+  WeakMap<readonly string[], WeakMap<Tree, ChunkLayout>>
 >()
+function cacheFor(state: EditorState) {
+  const views = state.facet(formattedViews),
+    literal = state.facet(formattedLiteral)
+  let byLiteral = chunkCache.get(views)
+  if (!byLiteral) {
+    byLiteral = new WeakMap()
+    chunkCache.set(views, byLiteral)
+  }
+  let cache = byLiteral.get(literal)
+  if (!cache) {
+    cache = new WeakMap()
+    byLiteral.set(literal, cache)
+  }
+  return cache
+}
 const intersects = (reveal: readonly Revealed[], from: number, to: number) =>
   reveal.some((range) => range.from <= to && range.to >= from)
 function layoutDecorations(
@@ -1016,12 +1036,7 @@ function layoutDecorations(
   tree: Tree,
   reveal: readonly Revealed[],
 ): DecorationSet {
-  const views = state.facet(formattedViews)
-  let cache = chunkCache.get(views)
-  if (!cache) {
-    cache = new WeakMap()
-    chunkCache.set(views, cache)
-  }
+  const cache = cacheFor(state)
   const out: Range<Decoration>[] = []
   for (const { from, chunk, covered } of parsedChunks(tree)) {
     let layout = cache.get(chunk)
@@ -1044,11 +1059,11 @@ function revealMatters(
   reveal: readonly Revealed[],
 ) {
   if (!reveal.length) return false
-  const cache = chunkCache.get(state.facet(formattedViews))
+  const cache = cacheFor(state)
   return parsedChunks(tree).some(
     ({ from, chunk }) =>
       intersects(reveal, from, from + chunk.length) &&
-      (cache?.get(chunk)?.sensitive ?? true),
+      (cache.get(chunk)?.sensitive ?? true),
   )
 }
 
@@ -1097,12 +1112,16 @@ export function livePreview(
       const { state, startState } = transaction
       const tree = syntax.tree(state),
         reveal = revealedIn(state)
+      // An edit's unfinished reparse keeps the layout it replaces, mapped.
       if (
-        tree === syntax.tree(startState) &&
-        state.facet(formattedViews) === startState.facet(formattedViews) &&
-        (sameRanges(reveal, revealedIn(startState)) ||
-          (!revealMatters(state, tree, reveal) &&
-            !revealMatters(state, tree, revealedIn(startState))))
+        syntax.settling(state) ||
+        (tree === syntax.tree(startState) &&
+          state.facet(formattedViews) === startState.facet(formattedViews) &&
+          state.facet(formattedLiteral) ===
+            startState.facet(formattedLiteral) &&
+          (sameRanges(reveal, revealedIn(startState)) ||
+            (!revealMatters(state, tree, reveal) &&
+              !revealMatters(state, tree, revealedIn(startState)))))
       )
         return value.map(transaction.changes)
       return layoutDecorations(state, tree, reveal)
@@ -1144,14 +1163,23 @@ export function livePreview(
               range.to !== this.reveal[index]?.to,
           )
         this.reveal = reveal
-        if (
+        // An edit's unfinished reparse keeps what was drawn, mapped through it.
+        if (syntax.settling(update.state)) {
+          this.decorations = this.decorations.map(update.changes)
+          this.atomic = this.atomic.map(update.changes)
+        } else if (
           update.docChanged ||
           update.viewportChanged ||
           changedReveal ||
           tree !== syntax.tree(update.startState) ||
           update.state.field(layout) !== update.startState.field(layout) ||
           update.state.facet(formattedViews) !==
-            update.startState.facet(formattedViews)
+            update.startState.facet(formattedViews) ||
+          update.state.facet(formattedLiteral) !==
+            update.startState.facet(formattedLiteral) ||
+          update.transactions.some((transaction) =>
+            transaction.effects.some((effect) => effect.is(formattedRefresh)),
+          )
         )
           ({ decorations: this.decorations, atomic: this.atomic } = inline(
             update.view,

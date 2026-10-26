@@ -4,7 +4,9 @@ import { TreeFragment } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
 import {
   ChunkedMarkdownParser,
+  listWindow,
   parsedChunks,
+  readAhead,
   uncovered,
 } from '../src/renderer/src/chunked-markdown.ts'
 
@@ -99,6 +101,9 @@ const blocks = [
   () => '[ref]: /url "title"',
   () => '- \n  item after empty marker',
   () => '1) parenthesized\n2) list',
+  // An open fence or raw block in a list item takes in the blank lines after it.
+  (r) =>
+    `- ${['```', '~~~', '<script>', '<!--'][Math.floor(r() * 4)]}${r() < 0.5 ? '\n  ' : ''}`,
 ]
 function document(seed, count = 24) {
   const r = random(seed)
@@ -360,6 +365,34 @@ const chain = (tree, pos) => {
     if (node.type.is('Block')) out.push(node.name)
   return out.join('>')
 }
+/** The numbers the formatted view shows for ordered list items starting in `from`-`to`. */
+const numbers = (tree, text, from, to) => {
+  const out = []
+  tree.iterate({
+    from,
+    to,
+    enter(ref) {
+      if (ref.name !== 'ListItem' || ref.from < from || ref.from >= to) return
+      const item = ref.node,
+        list = item.parent
+      if (list.name !== 'OrderedList') return
+      const first = list.getChild('ListItem').getChild('ListMark')
+      let top = list
+      while (top.parent && top.parent.name !== 'Document') top = top.parent
+      let index = 0
+      for (
+        let node = list.firstChild;
+        node.from < item.from;
+        node = node.nextSibling
+      )
+        if (node.name === 'ListItem') index++
+      out.push(
+        `${item.from}:${Number.parseInt(text.slice(first.from, first.to), 10) + (top.tree?.prop(listWindow)?.get(list.from - top.from) ?? 0) + index}`,
+      )
+    },
+  })
+  return out
+}
 
 test('blocks longer than a window continue from replay points with bounded steps and exact block structure', () => {
   const lines = (count, line) =>
@@ -380,6 +413,19 @@ test('blocks longer than a window continue from replay points with bounded steps
       (i) => `${i + 1}. item ${i}${i % 9 ? '' : '\n\n   more'}`,
     ),
     quote: lines(2000, (i) => (i % 6 ? `> quoted ${i}` : '>')),
+    // Blocks inside quotes and list items that opened on earlier lines.
+    nestedFence: `- parent\n\n  > ~~~js\n${lines(2000, (i) => `  > const v${i} = ${i}`)}\n  > ~~~`,
+    quotedSetext: `${lines(2000, (i) => `> title ${i} *x*`)}\n> ===`,
+    itemSetext: `- parent\n\n${lines(2000, (i) => `  title ${i} *x*`)}\n  ---`,
+    quotedItems: lines(
+      2600,
+      (i) => `> 1. item ${i}${i % 9 ? '' : '\n>\n>    more'}`,
+    ),
+    nestedItems: `1. outer\n\n${lines(2600, (i) => `   1. inner ${i}`)}`,
+    blankItem: `-\n  first\n\n${lines(2000, (i) => (i % 5 ? `  para ${i}` : ''))}`,
+    paragraphs: lines(4000, (i) =>
+      i % 40 === 39 ? '>' : i % 80 === 38 ? '> ===' : `> words ${i}`,
+    ),
   }
   const before = '# Title\n\n- a\n- b\n\nSome *intro* text.\n\n'
   const after = '\n\n## After\n\nClosing **words**.\n'
@@ -466,6 +512,11 @@ test('blocks longer than a window continue from replay points with bounded steps
       const have = new Set(nodes(tree, demand.from, demand.to))
       const missing = want.filter((entry) => !have.has(entry))
       assert.deepEqual(missing, [], label)
+      assert.deepEqual(
+        numbers(tree, text, demand.from, demand.to),
+        numbers(exact, text, demand.from, demand.to),
+        label,
+      )
     }
   }
 })
@@ -546,4 +597,150 @@ test('a structural edit at the top of a 50 MiB note reads bounded ranges per ste
   assert.ok(unfenced.largest <= window + 64, JSON.stringify(unfenced))
   assert.ok(unfenced.scannedUnits <= 64 * 1024, JSON.stringify(unfenced))
   assert.equal(chain(tree, 0), 'ATXHeading1>Document')
+})
+
+test('deleting or restoring the closing line at the end of a note reparses the lines before it', () => {
+  const body = Array.from({ length: 2000 }, (_, i) => `body words ${i}`).join(
+    '\n',
+  )
+  const cases = {
+    fence: [`~~~\n${body}\n`, '~~~'],
+    html: [`<script>\n${body}\n`, '</script>'],
+    setext: [`${body}\n`, '==='],
+  }
+  const make = () =>
+    new ChunkedMarkdownParser(full, base, { chunkSize: 256, giantBlock: 4096 })
+  const end = (text) => ({
+    from: Math.max(0, text.length - 2000),
+    to: text.length,
+  })
+  const blocks = (tree) => {
+    const out = []
+    for (let node = tree.topNode.firstChild; node; node = node.nextSibling)
+      out.push(`${node.name}:${node.from}-${node.to}`)
+    return out
+  }
+  for (const [kind, [open, closer]] of Object.entries(cases)) {
+    let text = open + closer
+    // A far jump to the end of the note parses the block's last window.
+    let tree = finish(
+      make().startChunkedParse(stringInput(text), [], end(text)),
+    )
+    for (const next of [open, open + closer, open]) {
+      const shared = Math.min(text.length, next.length)
+      const fragments = TreeFragment.applyChanges(TreeFragment.addTree(tree), [
+        { fromA: shared, toA: text.length, fromB: shared, toB: next.length },
+      ])
+      text = next
+      tree = finish(
+        make().startChunkedParse(stringInput(text), fragments, end(text)),
+      )
+      const exact = full.parse(text)
+      const label = `${kind} ${text.endsWith(closer) ? 'restored' : 'deleted'}`
+      assert.deepEqual(blocks(tree), blocks(exact), label)
+      for (const pos of [2, text.length - 1000, text.length - 2])
+        assert.equal(chain(tree, pos), chain(exact, pos), `${label} at ${pos}`)
+    }
+  }
+})
+
+test('a giant fence in a quote in a list item continues in bounded steps', () => {
+  const text = `- parent\n\n  > ~~~js\n${'  > const sample = 42\n'.repeat(50000)}  > ~~~\n\nend\n`
+  const exact = full.parse(text)
+  const make = (counts) =>
+    new ChunkedMarkdownParser(full, base, { probe: counts })
+  let tree = null
+  for (const at of [0.5, 0.9, 0.2]) {
+    const middle = Math.floor(text.length * at)
+    const counts = probe()
+    const result = steps(
+      make(counts).startChunkedParse(
+        stringInput(text),
+        tree ? TreeFragment.addTree(tree) : [],
+        { from: middle, to: middle + 6000 },
+      ),
+      counts,
+    )
+    tree = result.tree
+    // Before container replay, one step read the whole 1.1 MiB block.
+    assert.ok(result.largest <= 65536 + 4096, `${at}: ${result.largest}`)
+    assert.ok(!uncovered(tree, middle, middle + 6000), `${at}`)
+    assert.equal(chain(tree, middle + 3000), chain(exact, middle + 3000))
+  }
+})
+
+test('a decision that read past an edit parses its chunk and the chunk before it again', () => {
+  // `$$` opens display math only when a closing `$$` line follows within
+  // 10,000 characters, as in the rich view, so the decision reads ahead.
+  let input = null
+  /** Where the display math opened at `start` ends, or null. */
+  const closing = (start) => {
+    const limit = Math.min(input.length, start + 10000)
+    const close = /\n\$\$(?=\n|$)/.exec(input.read(start + 2, limit))
+    readAhead(input, close ? start + 2 + close.index + 3 : limit)
+    return close ? start + 2 + close.index + 3 : null
+  }
+  const math = parser.configure([
+    GFM,
+    {
+      defineNodes: [{ name: 'BlockMath', block: true }],
+      wrap: (inner, outer) => {
+        input = outer
+        return inner
+      },
+      parseBlock: [
+        {
+          name: 'BlockMath',
+          before: 'FencedCode',
+          // Display math interrupts a paragraph.
+          endLeaf: (cx, line) =>
+            line.text.slice(line.pos) === '$$' &&
+            closing(cx.lineStart + line.pos) !== null,
+          parse(cx, line) {
+            if (line.text.slice(line.pos) !== '$$') return false
+            const start = cx.lineStart + line.pos
+            const end = closing(start)
+            if (end === null) return false
+            while (cx.lineStart + line.text.length < end && cx.nextLine()) {}
+            cx.nextLine()
+            cx.addElement(cx.elt('BlockMath', start, end))
+            return true
+          },
+        },
+      ],
+    },
+  ])
+  const run = (text, fragments, options) =>
+    finish(
+      new ChunkedMarkdownParser(math, math, options).startChunkedParse(
+        stringInput(text),
+        fragments,
+        { from: 0, to: 3000 },
+      ),
+    )
+  const check = (before, at, insert, options, label) => {
+    const old = run(before, [], options)
+    const text = before.slice(0, at) + insert + before.slice(at)
+    const tree = run(
+      text,
+      TreeFragment.applyChanges(TreeFragment.addTree(old), [
+        { fromA: at, toA: at, fromB: at, toB: at + insert.length },
+      ]),
+      options,
+    )
+    same(nodes(tree), nodes(math.parse(text)), text, label)
+  }
+  // A closing line typed far below an opener makes it display math.
+  const padded = `$$\nx\n\n${'padding\n\n'.repeat(600)}`
+  check(padded, padded.length, '$$', {}, 'closed far below')
+  // An opener that stops being math continues the paragraph before it, so
+  // the chunk ending at its line is parsed again too.
+  const interrupted = `${'intro words\n\n'.repeat(12)}para line\n$$\nx\n\n# heading\n\n$$\n\nend\n`
+  check(
+    interrupted,
+    interrupted.lastIndexOf('$$') + 2,
+    'z',
+    { chunkSize: 4, groupSize: 3 },
+    'opener reopened as text',
+  )
 })

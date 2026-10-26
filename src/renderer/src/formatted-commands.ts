@@ -18,6 +18,10 @@ import type { SyntaxNode, Tree } from '@lezer/common'
 
 type Hidden = RangeSet<RangeValue>
 
+/** A hidden range that shows a widget in place of its text, which is deleted whole. */
+const shown = (value: RangeValue) =>
+  (value as { spec?: { widget?: unknown } }).spec?.widget !== undefined
+
 const blank = (text: string) => /^[ \t]*$/.test(text)
 
 /** The innermost node of one of `names` around `pos`. */
@@ -205,17 +209,22 @@ export function deleteBackward(
     if (before) return remove(previous.to + 1, line.from, line.from)
     return remove(previous.to, line.from, previous.to)
   }
-  // Skip hidden syntax so the visible character before it is the one deleted.
-  let end = pos
-  for (let moved = true; moved; ) {
+  // Skip hidden syntax so the visible character before it is the one
+  // deleted; a widget shown before it is deleted with the text it shows.
+  let end = pos,
+    widget = null as { from: number; to: number } | null
+  for (let moved = true; moved && !widget; ) {
     moved = false
-    hidden.between(end, end, (from, to) => {
-      if (from < end && to >= end) {
+    hidden.between(end, end, (from, to, value) => {
+      if (from >= end || to < end || widget) return
+      if (shown(value)) widget = { from, to }
+      else {
         end = from
         moved = true
       }
     })
   }
+  if (widget) return remove(widget.from, widget.to)
   if (end === pos) return null
   const at = state.doc.lineAt(end)
   if (end === at.from) return null
@@ -235,16 +244,25 @@ export function deleteForward(
   const pos = range.head
   const line = state.doc.lineAt(pos)
   if (pos !== line.to || line.number === state.doc.lines) {
-    let end = pos
-    for (let moved = true; moved; ) {
+    let end = pos,
+      widget = null as { from: number; to: number } | null
+    for (let moved = true; moved && !widget; ) {
       moved = false
-      hidden.between(end, end, (from, to) => {
-        if (from <= end && to > end) {
+      hidden.between(end, end, (from, to, value) => {
+        if (from > end || to <= end || widget) return
+        if (shown(value)) widget = { from, to }
+        else {
           end = to
           moved = true
         }
       })
     }
+    if (widget)
+      return {
+        changes: widget,
+        selection: EditorSelection.cursor(pos),
+        userEvent: 'delete.forward',
+      }
     if (end === pos || end === state.doc.lineAt(end).to) return null
     const next = state.doc.lineAt(end)
     return {

@@ -6,6 +6,7 @@ import type {
   Line,
   MarkdownConfig,
 } from '@lezer/markdown'
+import { readAhead } from '../../renderer/src/chunked-markdown.ts'
 import { blockMath } from './syntax.ts'
 
 /*
@@ -207,18 +208,22 @@ type Found = {
  * or past the formula limit, which is as far as the tokenizer can match, and
  * lets it decide.
  */
-function findBlock(cx: BlockContext, line: Line): Found | null {
-  const input = current
-  if (!input) return null
+function findBlock(
+  cx: BlockContext,
+  line: Line,
+  input: Input,
+): { found: Found | null; read: number } {
   // The parsed range can end inside this line; decisions read the document.
   const opening = rawLine(input, cx.parsedPos)
   const indent = opening.slice(line.basePos, line.pos)
+  /** Where the lines read after the opening one end, if any were read. */
+  let read = -1
   if (
     indent.length > 3 ||
     /[^ ]/.test(indent) ||
     !opening.startsWith('$$', line.pos)
   )
-    return null
+    return { found: null, read }
   const levels = cx.depth > 1 ? containerLevels(cx, line) : []
   let text = opening.slice(line.pos)
   const lines: Found['lines'] = []
@@ -236,6 +241,7 @@ function findBlock(cx: BlockContext, line: Line): Found | null {
     }
     if (next > input.length) break
     const raw = rawLine(input, next)
+    read = Math.min(input.length, next + raw.length + 1)
     const base = levels.length ? contentStart(levels, raw) : 0
     if (base < 0) break
     text += '\n'
@@ -245,12 +251,15 @@ function findBlock(cx: BlockContext, line: Line): Found | null {
     next += raw.length + 1
   }
   const token = blockMath(text)
-  if (!token) return null
+  if (!token) return { found: null, read }
   const close = token.raw.trimEnd().length - 2
   return {
-    lines: lines.filter((entry) => entry.offset <= close),
-    body,
-    close,
+    found: {
+      lines: lines.filter((entry) => entry.offset <= close),
+      body,
+      close,
+    },
+    read,
   }
 }
 
@@ -296,12 +305,27 @@ function parseBlock(cx: BlockContext, line: Line, found: Found) {
 }
 
 /** The last decision, shared by the paragraph interruption check and the block parser. */
-let last: { input: Input; at: number; found: Found | null } | null = null
+let last: {
+  input: Input
+  at: number
+  depth: number
+  found: Found | null
+  read: number
+} | null = null
 function decide(cx: BlockContext, line: Line) {
   const at = cx.parsedPos + line.pos
   if (!current) return null
-  if (last?.input !== current || last.at !== at)
-    last = { input: current, at, found: findBlock(cx, line) }
+  // A lazy line is checked inside its quote, then parsed after the quote ends.
+  if (last?.input !== current || last.at !== at || last.depth !== cx.depth)
+    last = {
+      input: current,
+      at,
+      depth: cx.depth,
+      ...findBlock(cx, line, current),
+    }
+  // The decision read later lines: an edit before their end parses this
+  // line's chunk again, as a whole-document parse would decide anew.
+  if (last.read >= 0) readAhead(current, last.read)
   return last.found
 }
 

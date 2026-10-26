@@ -93,7 +93,7 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
       "const proofDelimiter = { resolve: 'ProofHighlight', mark: 'ProofMark' }",
       "context.editor.registerSyntax({ id: 'highlight', label: 'Proof highlight', group: 'Proof', level: 'inline', nodes: ['ProofHighlight'], matches: () => false, slash: { markdown: '==slash proof==', cursor: 2, rich() { window.legacySlashCalled = true; throw Error('legacy slash must not run') } } })",
       "context.editor.registerFlavor({ id: 'highlight', name: 'Proof highlight', kind: 'syntax', description: 'Proof', detect: () => true,",
-      "syntax: { defineNodes: ['ProofHighlight', 'ProofMark'], parseInline: [{ name: 'ProofHighlight', parse(cx, next, pos) {",
+      "syntax: { defineNodes: ['ProofHighlight', 'ProofMark'], parseInline: [{ name: 'ProofHighlight', before: 'Escape', parse(cx, next, pos) {",
       'if (next !== 61 || cx.char(pos + 1) !== 61) return -1',
       'return cx.addDelimiter(proofDelimiter, pos, pos + 2, true, true)',
       '} }] },',

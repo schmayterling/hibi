@@ -65,7 +65,7 @@ for (const [mode, cascade] of [
         if (${cascade}) context.editor.registerFlavor({id:'props',name:'Props',kind:'syntax',description:'Proof',detect:()=>true,
           syntax:{props:[()=>{if(window.propsArmed){window.propFailures=(window.propFailures||0)+1;throw Error('props proof failure')}return null}]}})
         const flavor = () => ({id:'bad',name:'Bad',kind:'syntax',description:'Proof',detect:()=>true,
-          syntax:{defineNodes:['Proof','ProofMark','Partial'],parseInline:[{name:'Proof',parse(cx,next,pos){
+          syntax:{defineNodes:['Proof','ProofMark','Partial'],parseInline:[{name:'Proof',before:'Escape',parse(cx,next,pos){
             if(window.throwNow){window.parseFailures=(window.parseFailures||0)+1;window.propsArmed=${cascade};cx.addElement(cx.elt('Partial',pos,pos+1));throw Error('parser proof failure')}
             if(next!==61||cx.char(pos+1)!==61)return -1
             return cx.addDelimiter(delimiter,pos,pos+2,true,true)

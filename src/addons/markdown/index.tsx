@@ -2,6 +2,7 @@ import { Strike } from '@tiptap/extension-strike'
 import { TaskItem } from '@tiptap/extension-task-item'
 import { TaskList } from '@tiptap/extension-task-list'
 import { markedGithubFootnote } from 'marked-github-footnote'
+import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import type { SyntaxSlashCommand } from '../../shared/markdown-syntax'
 import { defineAddon, type MarkdownFlavor } from '../api'
 import { alertMarkdown, alertMarker } from './alerts'
@@ -46,11 +47,18 @@ const obsidian: MarkdownFlavor = {
   export: { extensions: [obsidianMarkdown] },
 }
 
+let stopFormatted: (() => void) | undefined
+
 export default defineAddon({
   manifest,
   flavors: [github, obsidian],
   start(context) {
     context.styles.register('alerts', alertCss)
+    stopFormatted = formattedRegistry.register({
+      id: 'markdown.obsidian',
+      load: () =>
+        import('./formatted').then(({ contribution }) => contribution),
+    })
     context.editor.registerFlavor(github)
     context.editor.registerFlavor(obsidian)
     const slash: Record<
@@ -143,5 +151,9 @@ export default defineAddon({
       codeLanguage: 'markdown',
       Preview: () => null,
     })
+  },
+  stop() {
+    stopFormatted?.()
+    stopFormatted = undefined
   },
 })

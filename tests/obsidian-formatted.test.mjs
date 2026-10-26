@@ -1,0 +1,190 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import { EditorState } from '@codemirror/state'
+import { GFM, parser } from '@lezer/markdown'
+import { Marked } from 'marked'
+import { contribution } from '../src/addons/markdown/formatted.ts'
+import {
+  obsidianSyntax,
+  obsidianWork,
+  wikiParts,
+} from '../src/addons/markdown/formatted-syntax.ts'
+import { obsidianMarkdown } from '../src/addons/markdown/obsidian.ts'
+
+const lezer = parser.configure([GFM, obsidianSyntax])
+const marked = new Marked({ gfm: true }, obsidianMarkdown)
+
+/** Wikilinks, embeds and highlights in document order, as the formatted view's tree has them. */
+function formattedItems(source) {
+  const found = []
+  lezer.parse(source).iterate({
+    enter(node) {
+      if (node.name === 'WikiLink' || node.name === 'WikiEmbed') {
+        const parts = wikiParts(source.slice(node.from, node.to))
+        found.push([
+          node.name === 'WikiEmbed' ? 'embed' : 'link',
+          parts.target,
+          parts.label,
+        ])
+        return false
+      }
+      if (node.name === 'Highlight') {
+        found.push(['highlight', source.slice(node.from + 2, node.to - 2)])
+        return false
+      }
+    },
+  })
+  return found
+}
+
+/** The same, as the rich view's tokenizers read them. */
+function richItems(source) {
+  const found = []
+  marked.walkTokens(marked.lexer(source), (token) => {
+    if (token.type === 'obsidianWikiLink')
+      found.push(['link', token.target, token.text])
+    if (token.type === 'obsidianEmbed')
+      found.push(['embed', token.target, token.text])
+    if (token.type === 'obsidianHighlight')
+      found.push(['highlight', token.text])
+  })
+  return found
+}
+
+const fixtures = [
+  'see [[Note]] here',
+  '[[Note|Alias]] and [[ spaced | label ]]',
+  '[[a|b|c]]',
+  '[[a|]]',
+  '[[ |x]]',
+  '![[img.png]]',
+  '![[img.png|200]]',
+  '![[note#Head|Shown]]',
+  'x ![[ ]] y',
+  '==mark== and == no== and ==no ==',
+  '===a===',
+  '**==bold mark==**',
+  '==a [[b]] c==',
+  '[[a]]]',
+  '[[[a]]',
+  '\\[[a]]',
+  '`[[a]]`',
+  '[x]([[y]])',
+  '[[a\nb]]',
+  '==a\nb==',
+  '| h |\n| - |\n| [[a|b]] |',
+  'a ==b== c ==d==',
+  '==a==b== and ==c==',
+  '[[a]][[b]]',
+  '![[a]]![[b.png]]',
+  'text == spaced == done',
+  '[[é]] ==ü==',
+  '[link [[inner]]](url)',
+  '*[[a]]*',
+  '<span>[[a]]</span>',
+  '[[a]] [ref]\n\n[ref]: /x',
+  '==a ==',
+  '> quoted [[a]]\n- listed ==b==\n# heading ![[c.png]]',
+]
+
+test('wikilinks, embeds and highlights are read as the rich view reads them', () => {
+  for (const source of fixtures)
+    assert.deepEqual(
+      formattedItems(source),
+      richItems(source),
+      JSON.stringify(source),
+    )
+  // Random text over the syntax's characters and the markup around it. Emphasis
+  // that crosses a wikilink or highlight edge differs: the rich view's wins.
+  for (const [seed, alphabet] of [
+    [1, '[[]]==!| ab\n'],
+    [7, '[[]]==!| a`\\#>-\n('],
+  ]) {
+    let state = seed
+    const random = () => {
+      state = (state * 1103515245 + 12345) & 0x7fffffff
+      return state / 0x7fffffff
+    }
+    for (let run = 0; run < 5000; run++) {
+      let source = ''
+      for (let index = 2 + Math.floor(random() * 14); index > 0; index--)
+        source += alphabet[Math.floor(random() * alphabet.length)]
+      assert.deepEqual(
+        formattedItems(source),
+        richItems(source),
+        JSON.stringify(source),
+      )
+    }
+  }
+})
+
+test('openers without closers cost each character a bounded number of reads', () => {
+  for (const unit of ['[[a ', '![[a ', '==a ', '==a == ', '[[a|b ==c ']) {
+    const source = unit.repeat(20000)
+    obsidianWork.reads = 0
+    lezer.parse(source)
+    assert.ok(
+      obsidianWork.reads <= 2 * source.length,
+      `${obsidianWork.reads} reads for ${source.length} characters of ${JSON.stringify(unit)}`,
+    )
+  }
+})
+
+/** What the contribution's views draw for `source`. */
+function drawn(source, revealed = false) {
+  const state = EditorState.create({ doc: source })
+  const calls = []
+  const out = {
+    mark: (from, to, attributes) => calls.push(['mark', from, to, attributes]),
+    syntax: (from, to) => calls.push(['syntax', from, to]),
+    replace: (from, to, widget) =>
+      calls.push([
+        'replace',
+        from,
+        to,
+        { target: widget.target, label: widget.label },
+      ]),
+    line() {},
+    widget() {},
+  }
+  lezer.parse(source).iterate({
+    enter(node) {
+      const view = contribution.views.find((view) =>
+        view.nodes.includes(node.name),
+      )
+      if (!view) return
+      return view.decorate(node, out, {
+        state,
+        revealed,
+        visible: { from: 0, to: source.length },
+      })
+    },
+  })
+  return calls
+}
+
+test('labels read as links, brackets and aliased targets are syntax, embeds become widgets until revealed', () => {
+  assert.equal(contribution.flavor, 'markdown.obsidian')
+  assert.deepEqual(drawn('[[Note]]'), [
+    ['syntax', 0, 2],
+    ['mark', 2, 6, { class: 'hibi-lp-link', 'data-wiki-link': 'Note' }],
+    ['syntax', 6, 8],
+  ])
+  assert.deepEqual(drawn('[[ Note#Part | Shown ]]'), [
+    ['syntax', 0, 15],
+    ['mark', 15, 20, { class: 'hibi-lp-link', 'data-wiki-link': 'Note#Part' }],
+    ['syntax', 20, 23],
+  ])
+  assert.deepEqual(drawn('==mark=='), [
+    ['syntax', 0, 2],
+    ['mark', 2, 6, { class: 'hibi-lp-highlight' }],
+    ['syntax', 6, 8],
+  ])
+  assert.deepEqual(drawn('![[a.png|200]]'), [
+    ['replace', 0, 14, { target: 'a.png', label: '200' }],
+  ])
+  assert.deepEqual(drawn('![[a.png|200]]', true), [
+    ['syntax', 0, 3],
+    ['syntax', 12, 14],
+  ])
+})

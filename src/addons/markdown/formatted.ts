@@ -17,12 +17,14 @@ export const embedRenders = { count: 0 }
  * media, or a link to the embedded note.
  */
 class EmbedWidget extends WidgetType {
-  constructor(
-    readonly target: string,
-    readonly label: string,
-    readonly revision: number,
-  ) {
+  readonly target: string
+  readonly label: string
+  readonly revision: number
+  constructor(target: string, label: string, revision: number) {
     super()
+    this.target = target
+    this.label = label
+    this.revision = revision
   }
   override eq(other: EmbedWidget) {
     return (

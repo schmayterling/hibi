@@ -2,7 +2,8 @@ import { StateField, type Text } from '@codemirror/state'
 import { Decoration, EditorView } from '@codemirror/view'
 import { formattedPrefix } from './formatted-contributions'
 
-const opening = /^---[ \t]*$/
+/** The first line, after a byte order mark the source keeps. */
+const opening = /^\uFEFF?---[ \t]*$/
 const closing = /^(?:---|\.\.\.)[ \t]*$/
 
 /** The end of the first closing line from line `from` on, or 0. */

@@ -369,3 +369,57 @@ test('behind the switch, properties edit notes with crlf line breaks and a byte 
     )
   }
 })
+
+test('behind the switch, frontmatter after a byte order mark shows once', {
+  timeout: 120000,
+}, async (t) => {
+  for (const eol of ['\n', '\r\n']) {
+    const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-properties-'))
+    const file = join(folder, 'notes', 'note.md')
+    await mkdir(join(folder, 'notes'))
+    await writeFile(
+      file,
+      `\uFEFF---${eol}title: One${eol}---${eol}${eol}# Title${eol}${eol}Body text.${eol}`,
+    )
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+    })
+    t.after(async () => {
+      await app.close()
+      await rm(folder, { recursive: true, force: true })
+    })
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    const page = await app.firstWindow()
+    await waitForDocumentEditor(app, page)
+    await page.evaluate(() =>
+      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+    )
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+    await app.evaluate(({ dialog }, path) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [path],
+      })
+    }, file)
+    await pressShortcut(app, `${mod}+o`)
+    await page.locator('.rich-pane .hibi-lp-h1', { hasText: 'Title' }).waitFor()
+    await page.locator('.rich-pane .frontmatter').waitFor()
+    // Before, a byte order mark kept the frontmatter in the text as a rule
+    // and a heading.
+    await waitForAsync(
+      page,
+      () =>
+        !document
+          .querySelector('.rich-pane .cm-content')
+          ?.textContent.includes('title: One'),
+    )
+    assert.equal(
+      await page.locator('.rich-pane .hibi-lp-h2').count(),
+      0,
+      JSON.stringify(eol),
+    )
+  }
+})

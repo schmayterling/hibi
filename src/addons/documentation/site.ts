@@ -12,7 +12,6 @@ import type { WorkspaceSnapshot } from '../../shared/workspace'
 import {
   homePage,
   isMermaidImage,
-  type LockedSite,
   localPage,
   pageRoute,
   type SiteAddon,
@@ -337,8 +336,13 @@ export function prepareSite(
   }
 }
 
-function content(site: SiteData, page: SitePage, prefix: string) {
-  const paths = new Set(site.pages.map((page) => page.path))
+function content(
+  site: SiteData,
+  page: SitePage,
+  prefix: string,
+  paths: ReadonlySet<string>,
+  navigation: readonly SitePage[],
+) {
   let html = renderedHtml(page.html ?? '', {
     blockquote: (_tag, attrs) => ({
       tagName: 'blockquote',
@@ -441,14 +445,6 @@ function content(site: SiteData, page: SitePage, prefix: string) {
       return `<${tag}${attrs} id="${escapeHtml(anchor)}">${alias}${body}</${tag}>`
     },
   )
-  const home = homePage(site.pages, site.options.homePage)
-  const index = site.pages.indexOf(page)
-  const navigation =
-    page === home
-      ? site.pages
-      : [home, site.pages[index - 1], site.pages[index + 1]].filter(
-          (entry): entry is SitePage => !!entry,
-        )
   return `<div class="documentation-site" data-width="${site.options.contentWidth}"><header class="site-header">${escapeHtml(site.name)}</header><div class="site-layout"><main class="site-content"><div class="site-document-layout"><article class="tiptap">${html}</article><nav aria-label="Pages">${[...new Set(navigation)].map((entry) => `<a href="${escapeHtml(site.routing === 'hash' ? `#${new URLSearchParams({ page: entry.path })}` : `${prefix}${pageRoute(entry.path)}`)}">${escapeHtml(entry.title)}</a>`).join(' ')}</nav>${site.options.footer ? `<footer class="site-footer">${escapeHtml(site.options.footer)}</footer>` : ''}</div></main></div></div>`
 }
 
@@ -491,7 +487,30 @@ function siteHead(
   return `<title>${escapeHtml(title)}</title>${meta('description', description)}${meta('author', locked ? '' : site.options.author)}${meta('robots', locked || !site.options.indexing ? 'noindex, nofollow' : 'index, follow')}${meta('og:title', title, true)}${meta('og:description', description, true)}${meta('og:type', 'website', true)}${meta('og:site_name', locked ? '' : site.name, true)}${meta('og:url', locked ? '' : canonical, true)}${meta('og:image', locked ? '' : site.options.socialImage, true)}${meta('twitter:card', site.options.socialImage && !locked ? 'summary_large_image' : 'summary')}${meta('twitter:title', title)}${meta('twitter:description', description)}${meta('twitter:image', locked ? '' : site.options.socialImage)}${canonical && !locked ? `<link rel="canonical" href="${escapeHtml(canonical)}">` : ''}${site.options.favicon && !locked ? `<link rel="icon" href="${escapeHtml(site.options.favicon)}">` : ''}${structured}`
 }
 
-async function encrypt(site: SiteData, password: string): Promise<LockedSite> {
+async function* siteData(
+  site: SiteData,
+  readPage: (page: SitePage) => Promise<SitePage>,
+  serialize = siteJson,
+) {
+  yield '{'
+  let separator = ''
+  for (const key of Object.keys(site) as (keyof SiteData)[]) {
+    if (site[key] === undefined) continue
+    yield separator + serialize(key) + ':'
+    separator = ','
+    if (key === 'pages') {
+      yield '['
+      for (const [index, page] of site.pages.entries()) {
+        if (index) yield ','
+        yield serialize(await readPage(page))
+      }
+      yield ']'
+    } else yield serialize(site[key])
+  }
+  yield '}'
+}
+
+async function* encryptedData(data: AsyncIterable<string>, password: string) {
   if (password.length < 8 || password.length > 1024)
     throw new Error('Use a password between 8 and 1,024 characters.')
   const salt = randomBytes(16),
@@ -499,26 +518,35 @@ async function encrypt(site: SiteData, password: string): Promise<LockedSite> {
     iterations = 600_000
   const key = await promisify(pbkdf2)(password, salt, iterations, 32, 'sha256')
   const cipher = createCipheriv('aes-256-gcm', key, iv)
-  const ciphertext = Buffer.concat([
-    cipher.update(JSON.stringify(site), 'utf8'),
-    cipher.final(),
-    cipher.getAuthTag(),
-  ])
-  return {
+  yield `${JSON.stringify({
     encrypted: true,
     salt: salt.toString('base64'),
     iv: iv.toString('base64'),
-    ciphertext: ciphertext.toString('base64'),
     iterations,
+  }).slice(0, -1)},"ciphertext":"`
+  let remainder = Buffer.alloc(0)
+  const encode = (bytes: Buffer) => {
+    const buffer = Buffer.concat([remainder, bytes])
+    const end = buffer.length - (buffer.length % 3)
+    remainder = buffer.subarray(end)
+    return buffer.subarray(0, end).toString('base64')
   }
+  for await (const chunk of data) yield encode(cipher.update(chunk, 'utf8'))
+  yield encode(Buffer.concat([cipher.final(), cipher.getAuthTag()]))
+  yield `${remainder.toString('base64')}"}`
 }
 
-/** Builds files in memory; callers choose and validate the destination. */
-export async function siteFiles(
+async function* textChunks(text: string) {
+  yield text
+}
+
+/** Emits one file at a time; large workspace data is serialized one page at a time. */
+export async function* siteOutput(
   template: string,
   site: SiteData,
   password = '',
-) {
+  readPage: (page: SitePage) => Promise<SitePage> = async (page) => page,
+): AsyncGenerator<readonly [string, AsyncIterable<string>]> {
   const locked = !!password
   if (site.options.passwordProtected && !locked)
     throw new Error('Enter the password for this export.')
@@ -528,15 +556,29 @@ export async function siteFiles(
       routing: 'hash',
       options: { ...site.options, passwordProtected: true },
     }
-  const data = locked ? await encrypt(site, password) : site
+  const data = () =>
+    locked
+      ? encryptedData(siteData(site, readPage, JSON.stringify), password)
+      : siteData(site, readPage)
   const home = homePage(site.pages, site.options.homePage) as
     | SitePage
     | undefined
+  const paths = new Set(site.pages.map((page) => page.path))
+  const positions = new Map(site.pages.map((page, index) => [page.path, index]))
+  const neighbors = (page: SitePage) => {
+    const index = positions.get(page.path)!
+    return page.path === home?.path
+      ? site.pages
+      : [home, site.pages[index - 1], site.pages[index + 1]].filter(
+          (entry): entry is SitePage => !!entry,
+        )
+  }
+  const homeContent = home && !locked ? await readPage(home) : undefined
   let assets = 'hibi-assets'
-  while (
-    site.pages.some((page) => page.path.toLowerCase().split('/')[0] === assets)
+  const roots = new Set(
+    site.pages.map((page) => page.path.toLowerCase().split('/')[0]),
   )
-    assets += '-site'
+  while (roots.has(assets)) assets += '-site'
   const customCss = `@layer hibi-theme {${themeCss(site)}}\n${site.css ?? ''}\n${(site.addons ?? []).map((addon) => addon.css ?? '').join('\n')}\n${site.options.css}`
   const safeStyle = (css: string) => css.replace(/<\/style/gi, '<\\/style')
   const decorate = (
@@ -561,20 +603,24 @@ export async function siteFiles(
       .replace(
         '<div id="root"></div>',
         () =>
-          `<div id="root">${locked ? '<main class="site-unlock"><h1>Protected site</h1><noscript>Enable JavaScript to unlock this site.</noscript></main>' : page ? content(site, page, prefix) : ''}</div>`,
+          `<div id="root">${locked ? '<main class="site-unlock"><h1>Protected site</h1><noscript>Enable JavaScript to unlock this site.</noscript></main>' : page ? content(site, page, prefix, paths, neighbors(page)) : ''}</div>`,
       )
-  const files = new Map<string, string>()
   if (site.options.singleFile) {
-    files.set(
-      'index.html',
-      decorate(
-        template.replace('__HIBI_WORKSPACE_DATA__', () => siteJson(data)),
-        home,
-        './',
-        site.options.url,
-      ),
+    const marker = randomBytes(16).toString('hex')
+    const html = decorate(
+      template.replace('__HIBI_WORKSPACE_DATA__', marker),
+      homeContent,
+      './',
+      site.options.url,
     )
-    return files
+    const offset = html.indexOf(marker)
+    async function* document() {
+      yield html.slice(0, offset)
+      yield* data()
+      yield html.slice(offset + marker.length)
+    }
+    yield ['index.html', document()]
+    return
   }
   const scripts = [...template.matchAll(/<script>([\s\S]*?)<\/script>/g)]
     .map((match) => match[1])
@@ -582,13 +628,15 @@ export async function siteFiles(
   const css = [...template.matchAll(/<style>([\s\S]*?)<\/style>/g)]
     .map((match) => match[1])
     .join('\n')
-  files.set(`${assets}/site.js`, scripts)
-  files.set(`${assets}/site.css`, css)
-  if (!locked) files.set(`${assets}/custom.css`, customCss)
-  files.set(
-    `${assets}/workspace.js`,
-    `window.__HIBI_WORKSPACE__=${siteJson(data)};`,
-  )
+  yield [`${assets}/site.js`, textChunks(scripts)]
+  yield [`${assets}/site.css`, textChunks(css)]
+  if (!locked) yield [`${assets}/custom.css`, textChunks(customCss)]
+  async function* workspace() {
+    yield 'window.__HIBI_WORKSPACE__='
+    yield* data()
+    yield ';'
+  }
+  yield [`${assets}/workspace.js`, workspace()]
   const shell = (prefix: string) =>
     template
       .replace(
@@ -605,31 +653,64 @@ export async function siteFiles(
       )
       .replace(/script-src 'sha256-[^']+'/, "script-src 'self'")
       .replace("style-src 'unsafe-inline'", "style-src 'self' 'unsafe-inline'")
-  files.set('index.html', decorate(shell('./'), home, './', site.options.url))
+  yield [
+    'index.html',
+    textChunks(decorate(shell('./'), homeContent, './', site.options.url)),
+  ]
   const urls: string[] = site.options.url && !locked ? [site.options.url] : []
   if (!locked)
-    for (const page of site.pages) {
+    for (const metadata of site.pages) {
+      const page = await readPage(metadata)
       const prefix = '../'.repeat(page.path.split('/').length)
       const canonical = site.options.url
-        ? new URL(page === home ? './' : pageRoute(page.path), site.options.url)
-            .href
+        ? new URL(
+            page.path === home?.path ? './' : pageRoute(page.path),
+            site.options.url,
+          ).href
         : ''
-      files.set(
+      yield [
         `${page.path}/index.html`,
-        decorate(shell(prefix), page, prefix, canonical),
-      )
-      if (canonical && page !== home) urls.push(canonical)
+        textChunks(decorate(shell(prefix), page, prefix, canonical)),
+      ]
+      if (canonical && page.path !== home?.path) urls.push(canonical)
     }
-  files.set(
+  yield [
     'robots.txt',
-    locked || !site.options.indexing
-      ? 'User-agent: *\nDisallow: /\n'
-      : `User-agent: *\nAllow: /\n${site.options.url ? `Sitemap: ${new URL('sitemap.xml', site.options.url).href}\n` : ''}`,
-  )
+    textChunks(
+      locked || !site.options.indexing
+        ? 'User-agent: *\nDisallow: /\n'
+        : 'User-agent: *\nAllow: /\n' +
+            (site.options.url
+              ? 'Sitemap: ' +
+                new URL('sitemap.xml', site.options.url).href +
+                '\n'
+              : ''),
+    ),
+  ]
   if (!locked && site.options.indexing && urls.length)
-    files.set(
+    yield [
       'sitemap.xml',
-      `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.map((url) => `<url><loc>${escapeHtml(url)}</loc></url>`).join('')}</urlset>`,
-    )
+      textChunks(
+        '<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' +
+          urls
+            .map((url) => `<url><loc>${escapeHtml(url)}</loc></url>`)
+            .join('') +
+          '</urlset>',
+      ),
+    ]
+}
+
+/** Compatibility API for publishers that require complete UTF-8 files in memory. */
+export async function siteFiles(
+  template: string,
+  site: SiteData,
+  password = '',
+) {
+  const files = new Map<string, string>()
+  for await (const [path, chunks] of siteOutput(template, site, password)) {
+    const contents: string[] = []
+    for await (const chunk of chunks) contents.push(chunk)
+    files.set(path, contents.join(''))
+  }
   return files
 }

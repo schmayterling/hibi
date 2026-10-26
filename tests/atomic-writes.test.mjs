@@ -620,3 +620,27 @@ for (const target of ['last-incident.txt', 'run-state.txt'])
         else assert.equal(bytes, '')
       }
     })
+
+test('streamed text writes publish complete utf8 and roll back interrupted input', async (t) => {
+  const { module } = await runtime({ platform: 'darwin', failures: 0 })
+  const root = await fs.mkdtemp(join(tmpdir(), 'hibi-streamed-write-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  const path = join(root, 'export.html')
+  await fs.writeFile(path, 'original')
+  const bytes = Buffer.from('streamed 日本語')
+  async function* chunks() {
+    for (const byte of bytes) yield Buffer.from([byte])
+  }
+  await module.exports.writeText(path, chunks())
+  assert.equal(await fs.readFile(path, 'utf8'), 'streamed 日本語')
+  async function* interrupted() {
+    yield Buffer.from('partial')
+    throw new Error('source closed')
+  }
+  await assert.rejects(
+    module.exports.writeText(path, interrupted()),
+    /source closed/,
+  )
+  assert.equal(await fs.readFile(path, 'utf8'), 'streamed 日本語')
+  assert.deepEqual(await fs.readdir(root), ['export.html'])
+})

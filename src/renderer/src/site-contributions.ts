@@ -39,8 +39,10 @@ export const siteContributions = {
     rendered: RenderedMarkdown,
     page: SiteExportPage,
     contributions: readonly Contribution[],
+    signal?: AbortSignal,
   ) {
     for (const contribution of contributions) {
+      signal?.throwIfAborted()
       if (registry.get(contribution.id) !== contribution)
         throw new Error('Enabled addons changed during export. Export again.')
       if (contribution.transform) {
@@ -60,6 +62,7 @@ export const siteContributions = {
       if (registry.get(contribution.id) !== contribution)
         throw new Error('Enabled addons changed during export. Export again.')
     }
+    signal?.throwIfAborted()
     return rendered
   },
 }

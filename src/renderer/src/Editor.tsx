@@ -109,8 +109,6 @@ import {
 import { mountedDocumentEdits } from './mounted-document-edits'
 import { multiLineInput } from './multi-line-input'
 import './markdown-markers.css'
-import type { ReferenceValue } from '../../shared/source-references'
-import { createMarkdownSemantics } from './markdown-semantics'
 import { markdownSerializer } from './markdown-serialization'
 import { markdownSyntax } from './markdown-syntax'
 import type { OutlineHeading, OutlineRequest } from './OutlineSidebar'
@@ -137,16 +135,11 @@ import {
 } from './rich-source-session'
 import { flushRich, registerRichSync, richSourceCurrent } from './rich-sync'
 import { exactRichRange } from './rich-text-range'
-import { type SourceOutlineHeading, SourceOutlineModel } from './source-outline'
-import {
-  resolveSourceReference,
-  revealSourcePosition,
-  sourcePosition,
-  sourceView,
-} from './source-view'
+import { revealSourcePosition, sourcePosition, sourceView } from './source-view'
 import { tableLayout } from './table-layout'
 import { textProjection } from './text-projection'
 import { useEditorPanes } from './use-editor-panes'
+import { sourceOutlineSyntax, useSourceOutline } from './use-source-outline'
 
 const SourceEditor = lazy(() =>
   import('./MarkdownSourceEditor').then((module) => ({
@@ -159,10 +152,7 @@ const parseParagraph = (editor: Editor, source: string) =>
     editor.markdown!.parse(source),
   )
 
-// Addons whose syntax features the source outline and the plain codec model.
-const grammarOwners = new Set(
-  [...builtInFlavors.values()].map(({ owner }) => owner),
-)
+// Addons whose syntax features the plain codec models.
 const plainTextOwners = new Set(
   [...builtInFlavors.values()].flatMap(({ owner, plainText }) =>
     plainText === false ? [] : [owner],
@@ -389,58 +379,16 @@ export function MarkdownEditor({
     }
   }, [flavors, markdownExtensions, syntaxVersion])
   // biome-ignore lint/correctness/useExhaustiveDependencies: registry preferences invalidate outline grammar ownership.
-  const outlineSyntax = useMemo(() => {
-    if (
-      !richSyntaxCompatible ||
-      flavors.some((flavor) => {
-        const entry = flavorRegistry
-          .snapshot()
-          .find((entry) => entry === flavor)
-        return (
-          !entry ||
-          builtInFlavors.get(entry.id)?.owner !== entry.addonId ||
-          addonRegistry.origin(entry.addonId) !== 'built-in'
-        )
-      }) ||
-      markdownExtensions.some(
-        (extension) =>
-          extension.id !== 'frontmatter.metadata' ||
-          !('addonId' in extension) ||
-          extension.addonId !== 'frontmatter' ||
-          addonRegistry.origin('frontmatter') !== 'built-in',
-      ) ||
-      markdownSyntax
-        .snapshot()
-        .some(
-          (feature) =>
-            !markdownSyntax.isCore(feature.id) &&
-            feature.scope !== 'document' &&
-            (!grammarOwners.has(feature.owner) ||
-              addonRegistry.origin(feature.owner) !== 'built-in'),
-        )
-    )
-      return null
-    return {
-      gfm: Object.assign(
-        { gfm: false },
-        ...flavors.map((flavor) => flavor.markedOptions),
-      ).gfm,
-      alerts: flavors.some((flavor) => flavor.id === 'markdown.github'),
-      textExtras: flavors.some(
-        (flavor) => flavor.id === 'text-extras.text-extras',
-      ),
-      math: flavors.some((flavor) => flavor.id === 'math.latex'),
-      frontmatter: markdownExtensions.some(
-        (extension) => extension.id === 'frontmatter.metadata',
-      ),
-    }
-  }, [
-    flavors,
-    markdownExtensions,
-    syntaxVersion,
-    richSyntaxCompatible,
-    richExtensions,
-  ])
+  const outlineSyntax = useMemo(
+    () => sourceOutlineSyntax(flavors, markdownExtensions, richExtensions),
+    [
+      flavors,
+      markdownExtensions,
+      syntaxVersion,
+      richSyntaxCompatible,
+      richExtensions,
+    ],
+  )
   // biome-ignore lint/correctness/useExhaustiveDependencies: syntaxVersion invalidates parser contribution compatibility.
   const plainSyncEligible = useMemo(() => {
     const knownOwner = (owner: string) =>
@@ -1703,10 +1651,6 @@ export function MarkdownEditor({
       new Event('hibi:rich-content', { bubbles: true }),
     )
   }, [content, documentState, projection.content])
-  const sourceOutline = useRef<{
-    version: number
-    headings: readonly SourceOutlineHeading[]
-  } | null>(null)
   function prepareRich({
     editor,
     transaction,
@@ -2699,199 +2643,25 @@ export function MarkdownEditor({
       editor.off('mount', focus)
     }
   }, [editor, autoFocus])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: parser ownership and syntax preferences change independently of its source snapshot.
-  useEffect(() => {
-    if (
-      paneMode !== 'markdown' ||
-      !markdownDocument ||
-      !outlineActive ||
-      !sourceReady
-    )
-      return
-    const session = documentRuntime.session(documentState.tabId)
-    if (!session) return
-    const semantics =
-      outlineSyntax && createMarkdownSemantics(flavors, documentState.revision)
-    if (!outlineSyntax || !semantics) {
-      sourceOutline.current = null
-      onOutline([])
-      onActiveOutline(null)
-      onOutlineUnavailable?.(
-        'Source outline is unavailable for the active addon syntax. Switch to visual mode to see its headings.',
-      )
-      return
-    }
-    onOutlineUnavailable?.(null)
-    const model = new SourceOutlineModel(session.snapshot(), {
-      ...outlineSyntax,
-      renderLabel: (tokens, level) =>
-        semantics.read(
-          [
-            {
-              type: 'heading',
-              raw: '',
-              text: '',
-              depth: level,
-              tokens: [...tokens],
-            },
-          ],
-          { before: false, after: false },
-        )?.headings[0]?.label ?? null,
-      disabled: markdownSyntax
-        .snapshot()
-        .filter((feature) => !feature.enabled)
-        .map((feature) => feature.id),
-    })
-    let disposed = false,
-      timer: ReturnType<typeof setTimeout> | null = null,
-      idle: number | null = null,
-      work: ReturnType<SourceOutlineModel['read']> | null = null,
-      referenceValue: ReferenceValue | null | undefined,
-      referenceAbort = new AbortController()
-    const root = content.current
-    const reportActive = () => {
-      const current = sourceOutline.current,
-        element = root?.querySelector<HTMLElement>('.cm-content'),
-        view = element && sourceView(element)
-      onActiveOutline(
-        current?.version === session.snapshot().version && view
-          ? (outlineHeadingAt(
-              current.headings,
-              sourcePosition(view, view.state.selection.main.head),
-              (heading) => heading.from,
-            )?.id ?? null)
-          : null,
-      )
-    }
-    const cancel = () => {
-      referenceAbort.abort()
-      referenceAbort = new AbortController()
-      referenceValue = undefined
-      if (timer !== null) clearTimeout(timer)
-      if (idle !== null) cancelIdleCallback(idle)
-      timer = idle = null
-      work?.return([])
-      work = null
-    }
-    const queue = () => {
-      if (typeof requestIdleCallback === 'function')
-        idle = requestIdleCallback(read, { timeout: 16 })
-      else timer = setTimeout(read, 16)
-    }
-    const read = () => {
-      timer = idle = null
-      if (disposed) return
-      work ??= model.read()
-      const started = performance.now(),
-        version = session.snapshot().version
-      try {
-        do {
-          const step = work.next(referenceValue)
-          referenceValue = undefined
-          if (step.done) {
-            work = null
-            if (version !== session.snapshot().version) return
-            const headings = step.value.map((heading) => ({
-              ...heading,
-              id: `${heading.id}:${version}`,
-            }))
-            sourceOutline.current = { version, headings }
-            onOutlineUnavailable?.(null)
-            onOutline(headings)
-            reportActive()
-            return
-          }
-          if (step.value) {
-            const pending = work,
-              element = root?.querySelector<HTMLElement>('.cm-content'),
-              view = element && sourceView(element)
-            if (!view)
-              throw new Error('Source outline reference lookup is unavailable.')
-            void resolveSourceReference(
-              view,
-              outlineSyntax,
-              step.value.reference,
-              referenceAbort.signal,
-            ).then((result) => {
-              if (
-                disposed ||
-                work !== pending ||
-                version !== session.snapshot().version
-              )
-                return
-              if (result.status !== 'resolved') {
-                cancel()
-                if (result.status === 'unavailable')
-                  onOutlineUnavailable?.(
-                    'Source outline could not resolve this note’s references. Reopen the outline to retry.',
-                  )
-                return
-              }
-              referenceValue = result.value
-              queue()
-            })
-            return
-          }
-        } while (performance.now() - started < 2)
-        // Continue a started read on the next task; waiting for idle between
-        // every short slice makes large outlines stall on busy pages.
-        timer = setTimeout(read, 0)
-      } catch (error) {
-        work = null
-        sourceOutline.current = null
-        onOutline([])
-        onActiveOutline(null)
-        onOutlineUnavailable?.(
-          'Source outline could not read this note’s syntax. Switch to visual mode to see its headings.',
-        )
-        console.error('Source outline failed:', error)
-      }
-    }
-    const schedule = () => {
-      cancel()
-      timer = setTimeout(queue, 120)
-    }
-    const removeOperations = session.subscribeOperations((prepared) => {
-      cancel()
-      sourceOutline.current = null
-      model.apply(prepared)
-      schedule()
-    })
-    const removeStorage = session.subscribeStorage((change) => {
-      cancel()
-      model.adoptStorage(change)
-      schedule()
-    })
-    sourceOutline.current = null
-    onOutline([])
-    onActiveOutline(null)
-    root?.addEventListener('hibi:source-caret', reportActive)
-    schedule()
-    return () => {
-      disposed = true
-      cancel()
-      sourceOutline.current = null
-      removeOperations()
-      removeStorage()
-      root?.removeEventListener('hibi:source-caret', reportActive)
-      model.dispose()
-    }
-  }, [
-    paneMode,
-    markdownDocument,
-    outlineActive,
-    sourceReady,
+  const sourceOutline = useSourceOutline({
+    active:
+      paneMode === 'markdown' &&
+      markdownDocument &&
+      outlineActive &&
+      sourceReady,
     content,
-    documentState.tabId,
-    documentState.revision,
+    tabId: documentState.tabId,
+    revision: documentState.revision,
     flavors,
-    markdownExtensions,
-    syntaxVersion,
     outlineSyntax,
+    view: () => {
+      const element = content.current?.querySelector<HTMLElement>('.cm-content')
+      return element && sourceView(element)
+    },
     onOutline,
     onOutlineUnavailable,
     onActiveOutline,
-  ])
+  })
   type VisualOutlineHeading = OutlineHeading & {
     position: number
     raw: number | null
@@ -3116,23 +2886,8 @@ export function MarkdownEditor({
       return
     if (mode !== 'normal' && !sourceReady) return
     if (paneMode === 'markdown') {
-      const current = sourceOutline.current,
-        session = documentRuntime.session(documentState.tabId),
-        heading = current?.headings.find(
-          (item) => item.id === outlineTarget.id,
-        ),
-        element = content.current?.querySelector<HTMLElement>('.cm-content'),
-        view = element && sourceView(element)
-      if (
-        !session ||
-        current?.version !== session.snapshot().version ||
-        !heading ||
-        !view
-      )
-        return
-      handledOutline.current = outlineTarget
-      revealSourcePosition(view, heading.from)
-      view.focus()
+      if (sourceOutline.reveal(outlineTarget.id))
+        handledOutline.current = outlineTarget
       return
     }
     handledOutline.current = outlineTarget
@@ -3178,6 +2933,7 @@ export function MarkdownEditor({
     sourceReady,
     paneMode,
     documentState.tabId,
+    sourceOutline,
   ])
   useEffect(() => {
     if (paneMode !== 'side-by-side' || !sourceReady || !editor) return

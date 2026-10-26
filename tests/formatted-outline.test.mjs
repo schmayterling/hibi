@@ -1,0 +1,209 @@
+import assert from 'node:assert/strict'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import test from 'node:test'
+import { electron, waitForDocumentEditor } from './electron.mjs'
+import { clickMenu } from './keyboard.mjs'
+
+const filler = (name) =>
+  Array.from({ length: 30 }, (_, i) => `${name} paragraph ${i}.`).join('\n\n')
+
+test('behind the switch, the formatted view reports, follows and navigates the rich outline', {
+  timeout: 90000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-outline-'))
+  const file = join(folder, 'outline.md')
+  await writeFile(
+    file,
+    [
+      '# Title',
+      'Intro.',
+      '## Section *one* with [a link](https://example.com)',
+      filler('first'),
+      'Setext two\n----------',
+      filler('second'),
+      '### Deep `code` &amp; heading',
+      filler('deep'),
+      'Setext top\n==========',
+      '## Reference [label][ref]',
+      '[ref]: /target',
+      filler('reference'),
+      '#### Last **bold**',
+      'End.\n',
+    ].join('\n\n'),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(15000)
+  await page.setViewportSize({ width: 1100, height: 700 })
+  await waitForDocumentEditor(app, page)
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+  }, file)
+  const outline = page.locator(
+    '.outline-sidebar[data-side="right"][data-open="true"]',
+  )
+  const openOutline = async () => {
+    if (await outline.count()) return
+    await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+    await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+    await page
+      .getByRole('menuitem', { name: 'On this page', exact: true })
+      .click()
+    await outline.waitFor()
+  }
+  const entries = () =>
+    page.evaluate(() =>
+      [
+        ...document.querySelectorAll(
+          '.outline-sidebar[data-side="right"] [role="treeitem"]',
+        ),
+      ].map((item) => ({
+        prefix: item.id.split(':')[0],
+        label: item.querySelector('.sidebar-label')?.textContent,
+        depth: item.getAttribute('aria-level'),
+      })),
+    )
+
+  // The rich view's outline is the reference for the same note.
+  await clickMenu(app, 'Open…')
+  await page.locator('.tiptap h4', { hasText: 'Last' }).waitFor()
+  await openOutline()
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll(
+        '.outline-sidebar[data-side="right"] [role="treeitem"]',
+      ).length === 7,
+  )
+  const rich = (await entries()).map(({ label, depth }) => ({ label, depth }))
+  assert.deepEqual(
+    rich.map(({ label }) => label),
+    [
+      'Title',
+      'Section one with a link',
+      'Setext two',
+      'Deep code & heading',
+      'Setext top',
+      'Reference label',
+      'Last bold',
+    ],
+  )
+
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  await clickMenu(app, 'Open…')
+  await page.locator('.rich-pane .hibi-lp-h1', { hasText: 'Title' }).waitFor()
+  assert.equal(await page.locator('.rich-pane .tiptap').count(), 0)
+  // Hidden windows have no focus; the outline focuses the view it moves.
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await openOutline()
+
+  // (1) The same entries, read from the note's source.
+  await page.waitForFunction(
+    (expected) =>
+      JSON.stringify(
+        [
+          ...document.querySelectorAll(
+            '.outline-sidebar[data-side="right"] [role="treeitem"]',
+          ),
+        ].map((item) => ({
+          label: item.querySelector('.sidebar-label')?.textContent,
+          depth: item.getAttribute('aria-level'),
+        })),
+      ) === expected,
+    JSON.stringify(rich),
+  )
+  assert.ok(
+    (await entries()).every(({ prefix }) => prefix === 'right-outline-source'),
+  )
+
+  const caret = () =>
+    page.evaluate(() => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      const head = view.state.selection.main.head,
+        line = view.coordsAtPos(head),
+        scroller = view.scrollDOM.getBoundingClientRect()
+      return {
+        line: view.state.doc.lineAt(head).text,
+        visible:
+          !!line && line.top >= scroller.top && line.bottom <= scroller.bottom,
+        focused: view.hasFocus,
+      }
+    })
+  const selected = outline.locator(
+    '[role="treeitem"][aria-selected="true"] .sidebar-label',
+  )
+  const expectSelected = (label) =>
+    page.waitForFunction(
+      (label) =>
+        document.querySelector(
+          '.outline-sidebar[data-side="right"] [role="treeitem"][aria-selected="true"] .sidebar-label',
+        )?.textContent === label,
+      label,
+    )
+
+  // (2) Choosing an entry moves the formatted view's caret to the heading and
+  // scrolls it into view.
+  assert.equal((await caret()).visible, true)
+  assert.notEqual((await caret()).line, '#### Last **bold**')
+  await outline
+    .getByRole('treeitem', { name: 'Last bold', exact: true })
+    .click()
+  await page.waitForFunction(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    return (
+      view.state.doc.lineAt(view.state.selection.main.head).text ===
+      '#### Last **bold**'
+    )
+  })
+  assert.deepEqual(await caret(), {
+    line: '#### Last **bold**',
+    visible: true,
+    focused: true,
+  })
+  await expectSelected('Last bold')
+  await outline
+    .getByRole('treeitem', { name: 'Setext two', exact: true })
+    .click()
+  await page.waitForFunction(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    return (
+      view.state.doc.lineAt(view.state.selection.main.head).text ===
+      'Setext two'
+    )
+  })
+  assert.equal((await caret()).visible, true)
+
+  // (3) The active heading follows the caret through the note.
+  for (const [text, label] of [
+    ['deep paragraph 3.', 'Deep code & heading'],
+    ['Intro.', 'Title'],
+    ['reference paragraph 0.', 'Reference label'],
+    ['second paragraph 29.', 'Setext two'],
+  ]) {
+    await page.evaluate((text) => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      view.dispatch({
+        selection: { anchor: view.state.doc.toString().indexOf(text) + 2 },
+        scrollIntoView: true,
+      })
+    }, text)
+    await expectSelected(label)
+    assert.equal(await selected.textContent(), label)
+  }
+})

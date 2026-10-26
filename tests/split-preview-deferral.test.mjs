@@ -681,3 +681,106 @@ test('a preview hidden during source edits keeps its selection when shown again'
   assert.equal(after.text, 'beta')
   assert.equal(after.json.anchor, before.anchor + 1)
 })
+
+// Hides the preview, runs `edit` in the source view, then shows the preview.
+async function editHidden(t, edit) {
+  const { page, rich, source, pauseClock, toNormal } = await openSplit(
+    t,
+    `alpha $x^2$ beta ${'a '.repeat(1200)}gamma\n\nomega`,
+  )
+  await source.focus()
+  await pauseClock()
+  const before = await selectBeta(rich)
+  await page
+    .getByRole('button', { name: 'Source view', exact: true })
+    .evaluate((button) => button.click())
+  await page.clock.runFor(1)
+  await source.focus()
+  const result = await page.evaluate(edit)
+  await toNormal()
+  const after = await selected(rich)
+  assert.equal(after.text, 'beta')
+  assert.equal(after.json.anchor, before.anchor + 1)
+  return result
+}
+
+test('a hidden preview records each source edit without copying earlier ones', {
+  timeout: 90000,
+}, async (t) => {
+  const copied = await editHidden(t, () => {
+    const { sdk } = window.deferralFixture
+    const view = sdk.codeMirror.view.EditorView.findFromDOM(
+      document.querySelector('.cm-content'),
+    )
+    if (!view.hasFocus) throw new Error('source must own input')
+    const event = sdk.codeMirror.state.Transaction.userEvent.of('input.type')
+    view.dispatch({ changes: { from: 0, insert: '!' }, annotations: event })
+    view.dispatch({
+      changes: {
+        from: view.state.doc.length,
+        insert: `\n\n${'b'.repeat(900000)}`,
+      },
+      annotations: event,
+    })
+    const clone = window.structuredClone
+    let units = 0
+    window.structuredClone = (value, ...rest) => {
+      if (typeof value === 'string') units += value.length
+      return clone(value, ...rest)
+    }
+    try {
+      for (let key = 0; key < 30; key++) {
+        const at = view.state.doc.line(1).to
+        view.dispatch({
+          changes: { from: at, insert: '?' },
+          annotations: event,
+        })
+      }
+    } finally {
+      window.structuredClone = clone
+    }
+    return units
+  })
+  // Each key copies only its own text, however much was recorded before it.
+  assert.ok(copied < 30 * 1000, String(copied))
+})
+
+test('a hidden preview keeps its selection through more than 1,024 separate edits', {
+  timeout: 90000,
+}, async (t) => {
+  await editHidden(t, () => {
+    const { sdk } = window.deferralFixture
+    const view = sdk.codeMirror.view.EditorView.findFromDOM(
+      document.querySelector('.cm-content'),
+    )
+    if (!view.hasFocus) throw new Error('source must own input')
+    const event = sdk.codeMirror.state.Transaction.userEvent.of('input.type')
+    const start = view.state.doc.toString().indexOf(' beta ') + 6
+    const changes = [{ from: 0, insert: '!' }]
+    for (let index = 0; index < 1100; index++)
+      changes.push({ from: start + 2 * index + 1, insert: 'x' })
+    view.dispatch({ changes, annotations: event })
+    view.dispatch({
+      changes: { from: view.state.doc.line(1).to, insert: '?' },
+      annotations: event,
+    })
+  })
+})
+
+test('split preview catch-up keeps selections when a replacement retypes the front matter delimiter', {
+  timeout: 60000,
+}, async (t) => {
+  // The replacement starts with the unchanged delimiter, so only the body changes.
+  await editAroundBeta(
+    t,
+    '---\ntitle: old\n---\n\nalpha $x^2$ beta gamma\n\nomega',
+    (text) => [
+      {
+        from: text.indexOf('\n---\n') + 1,
+        to: text.indexOf('alpha') + 2,
+        insert: '---\n\n!al',
+      },
+      { from: text.indexOf(' gamma') + 6, insert: '?' },
+    ],
+  )
+})

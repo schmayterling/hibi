@@ -57,7 +57,7 @@ import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
 import { isMediaFile } from '../../shared/media'
 import type { SourceSnapshot } from '../../shared/source-buffer'
 import {
-  composeSourceChanges,
+  composeSourceBatches,
   type RawEdit,
 } from '../../shared/source-operations'
 import {
@@ -235,18 +235,14 @@ function revealRichRange(editor: Editor, from: number, to = from) {
 }
 
 export type ViewMode = DocumentView
-// Source edits composed since a pending split preview last matched `snapshot`.
+// Source edits since a pending split preview last matched `snapshot`: one batch
+// per operation, with the length of the source it applied to. Typing appends;
+// catch-up composes them once.
 type PreviewBase = {
   snapshot: SourceSnapshot
   document: RichNode
-  changes: readonly RawEdit[]
+  batches: { changes: readonly RawEdit[]; length: number }[]
 }
-// ponytail: each source edit recomposes the recorded edits, copying their
-// inserted text; past these sizes catch-up maps by structure. Recording each
-// operation and composing once at catch-up would lift the limit.
-const recordable = (changes: readonly RawEdit[]) =>
-  changes.length <= 1024 &&
-  changes.reduce((size, change) => size + change.insert.length, 0) <= 1 << 20
 
 export function MarkdownEditor({
   document: documentState,
@@ -2065,9 +2061,9 @@ export function MarkdownEditor({
         serialize(editor.state.doc),
       )
     }
-    // The composed source edits as a map from the old preview into the new
-    // one. Edits before the body (front matter) only move it, so body edits map
-    // from each side's own body start; an edit across the boundary gives null.
+    // The recorded source edits as a map from the old preview into the new one.
+    // Edits before the body (front matter) only move it, so body edits map from
+    // each side's own body start; an edit across the boundary gives null.
     const editMap = (
       base: PreviewBase,
       after: RichNode,
@@ -2079,18 +2075,43 @@ export function MarkdownEditor({
         from = body.sourceOffset ?? old.lastIndexOf(body.content),
         to = projected.sourceOffset ?? source.lastIndexOf(projected.content)
       if (from < 0 || to < 0) return null
+      let changes: readonly RawEdit[]
+      try {
+        changes = composeSourceBatches(base.batches)
+      } catch {
+        return null
+      }
       const edits: RawEdit[] = []
       let moved = 0
-      for (const change of base.changes)
-        if (change.from >= from)
-          edits.push({
-            ...change,
-            from: change.from - from,
-            to: change.to - from,
-          })
-        else if (change.to <= from)
-          moved += change.insert.length - (change.to - change.from)
+      for (const change of changes) {
+        // Without the text a replacement kept, such as a retyped delimiter.
+        let start = change.from,
+          end = change.to,
+          head = 0,
+          tail = 0
+        const { insert } = change
+        while (
+          start + head < end &&
+          head < insert.length &&
+          old.charCodeAt(start + head) === insert.charCodeAt(head)
+        )
+          head++
+        while (
+          end - tail > start + head &&
+          tail < insert.length - head &&
+          old.charCodeAt(end - tail - 1) ===
+            insert.charCodeAt(insert.length - tail - 1)
+        )
+          tail++
+        start += head
+        end -= tail
+        const kept = insert.slice(head, insert.length - tail)
+        if (start === end && !kept) continue
+        if (start >= from)
+          edits.push({ from: start - from, to: end - from, insert: kept })
+        else if (end <= from) moved += kept.length - (end - start)
         else return null
+      }
       if (
         to !== from + moved ||
         edits.some((change) => change.to > body.content.length)
@@ -2210,16 +2231,15 @@ export function MarkdownEditor({
         return
       }
       if (preview) {
-        const { base } = preview
-        let changes: readonly RawEdit[] | null = null
-        if (base)
-          try {
-            changes = composeSourceChanges(
-              base.changes,
-              prepared.operation.changes,
-              base.snapshot.utf16Length,
-            )
-          } catch {}
+        // Recording only continues from the snapshot it last saw.
+        const base =
+          preview.snapshot.version === prepared.before.version
+            ? preview.base
+            : undefined
+        base?.batches.push({
+          changes: prepared.operation.changes,
+          length: prepared.before.utf16Length,
+        })
         preview = {
           snapshot: prepared.after,
           selection: mapSourceSelection(
@@ -2227,9 +2247,7 @@ export function MarkdownEditor({
             preview.selection,
             prepared.operation.changes,
           ),
-          ...(base && changes && recordable(changes)
-            ? { base: { ...base, changes } }
-            : {}),
+          ...(base ? { base } : {}),
         }
       }
       // Hidden rich state stays untouched until it is shown again. Its pending
@@ -2242,7 +2260,12 @@ export function MarkdownEditor({
             base: {
               snapshot: prepared.before,
               document: editor.state.doc,
-              changes: prepared.operation.changes,
+              batches: [
+                {
+                  changes: prepared.operation.changes,
+                  length: prepared.before.utf16Length,
+                },
+              ],
             },
           }
         return
@@ -2289,7 +2312,12 @@ export function MarkdownEditor({
                   base: {
                     snapshot: prepared.before,
                     document: editor.state.doc,
-                    changes: prepared.operation.changes,
+                    batches: [
+                      {
+                        changes: prepared.operation.changes,
+                        length: prepared.before.utf16Length,
+                      },
+                    ],
                   },
                 }
               : {}),

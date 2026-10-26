@@ -499,6 +499,7 @@ export function MarkdownEditor({
     direction: 'next',
   })
   const handledFindMove = useRef(0)
+  const queuedFindMoves = useRef<FindMove['direction'][]>([])
   const {
     content,
     paneMode,
@@ -3139,6 +3140,7 @@ export function MarkdownEditor({
   }, [editor, findOpen, findTarget])
 
   useEffect(() => {
+    queuedFindMoves.current = []
     if (!editor) return
     const query = findOpen && findTarget === 'rich' ? findQuery : ''
     if (!query && !richFindKey.getState(editor.state)?.query) return
@@ -3160,23 +3162,37 @@ export function MarkdownEditor({
   }, [editor, findQuery, findOpen, findTarget])
 
   useEffect(() => {
-    if (handledFindMove.current === findMove.id) return
-    handledFindMove.current = findMove.id
-    if (editor && findOpen && findTarget === 'rich' && findMove.id) {
-      if (!flushRich(editor)) return
-      const command = findMove.direction === 'next' ? findNext : findPrev
-      if (
+    if (handledFindMove.current !== findMove.id) {
+      handledFindMove.current = findMove.id
+      if (editor && findOpen && findTarget === 'rich' && findMove.id)
+        queuedFindMoves.current.push(findMove.direction)
+    }
+    // Moves made while a long note is still being searched run, in order,
+    // once its matches are counted, as in source view.
+    if (
+      !editor ||
+      !queuedFindMoves.current.length ||
+      findStatus.pending ||
+      richFindKey.getState(editor.state)?.total === null
+    )
+      return
+    const moves = queuedFindMoves.current.splice(0)
+    if (!flushRich(editor)) return
+    let moved = false
+    for (const direction of moves) {
+      const command = direction === 'next' ? findNext : findPrev
+      moved =
         command(editor.state, (transaction) =>
           editor.view.dispatch(transaction),
-        )
-      )
-        revealRichRange(
-          editor,
-          editor.state.selection.from,
-          editor.state.selection.to,
-        )
+        ) || moved
     }
-  }, [editor, findMove, findOpen, findTarget])
+    if (moved)
+      revealRichRange(
+        editor,
+        editor.state.selection.from,
+        editor.state.selection.to,
+      )
+  }, [editor, findMove, findOpen, findTarget, findStatus.pending])
 
   function updateFromSource(markdown: string) {
     onChange(markdown)

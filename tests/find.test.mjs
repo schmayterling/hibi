@@ -503,4 +503,63 @@ test('find in document searches rich text and offscreen markdown without editing
   assert.equal(await highlighted(), nearby)
   await input.press('Escape')
   await bar.waitFor({ state: 'hidden' })
+
+  // Enter while a long note is still being searched moves once it is counted,
+  // without finishing the search at once.
+  const lines = Array.from({ length: 500 }, (_, index) => `line ${index}`)
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource(
+    [...lines, 'needle one', 'needle two', 'needle three'].join('\n\n'),
+  )
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.waitFor()
+  await rich.focus()
+  await pressShortcut(app, shortcut)
+  // A fast clock ends the first search slice after one block, and the later
+  // slices are held, so the search stays pending.
+  await page.evaluate(() => {
+    const schedule = window.setTimeout
+    window.heldSlices = []
+    window.releaseSlices = () => {
+      window.setTimeout = schedule
+      for (const run of window.heldSlices.splice(0)) run()
+    }
+    window.setTimeout = (run, delay, ...rest) =>
+      delay ? schedule(run, delay, ...rest) : window.heldSlices.push(run)
+    let ticks = 0
+    performance.now = () =>
+      Performance.prototype.now.call(performance) + 1000 * ++ticks
+  })
+  await input.fill('needle')
+  await waitForCount('Searching…')
+  await page.evaluate(() => {
+    delete performance.now
+  })
+  const before = await selected()
+  await page.evaluate(() => {
+    const lower = String.prototype.toLowerCase
+    window.foldedText = 0
+    window.restoreFolding = () => {
+      String.prototype.toLowerCase = lower
+    }
+    String.prototype.toLowerCase = function () {
+      window.foldedText += this.length
+      return lower.call(this)
+    }
+  })
+  await input.press('Enter')
+  await input.press('Enter')
+  assert.ok(
+    (await folded()) < 1000,
+    'a pending move must not search the rest of the note at once',
+  )
+  await page.evaluate(() => window.restoreFolding())
+  assert.deepEqual(await selected(), before)
+  assert.equal(await bar.locator('output').textContent(), 'Searching…')
+  await page.evaluate(() => window.releaseSlices())
+  await waitForCount('3/3')
+  await input.press('Escape')
+  await bar.waitFor({ state: 'hidden' })
 })

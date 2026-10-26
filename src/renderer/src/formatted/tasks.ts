@@ -1,5 +1,6 @@
 import type { EditorState, TransactionSpec } from '@codemirror/state'
 import { type EditorView, WidgetType } from '@codemirror/view'
+import type { SyntaxNode } from '@lezer/common'
 import {
   type BlockContext,
   type LeafBlock,
@@ -76,11 +77,12 @@ export class TaskWidget extends WidgetType {
     box.className = 'hibi-lp-task'
     // Keep the caret and focus in the text, like the rich editor's checkbox.
     box.addEventListener('mousedown', (event) => event.preventDefault())
-    box.addEventListener('click', (event) => {
-      // The source decides the state; the view updates the box after the edit.
-      event.preventDefault()
+    box.addEventListener('click', () => {
+      // The edit updates the box; without one, it keeps showing the source.
+      // Cancelling the click would restore the old state after the update.
       const spec = toggleTask(view.state, view.posAtDOM(box))
       if (spec) view.dispatch(spec)
+      else box.checked = !box.checked
     })
     this.updateDOM(box)
     return box
@@ -96,15 +98,36 @@ export class TaskWidget extends WidgetType {
   }
 }
 
+/** The item's first block, which a task marker must start. */
+function firstBlock(item: SyntaxNode) {
+  for (let child = item.firstChild; child; child = child.nextSibling)
+    if (child.type.is('Block')) return child
+  return null
+}
+const isTaskItem = (item: SyntaxNode) => firstBlock(item)?.name === 'Task'
+
 /** GitHub task list items: the marker becomes a checkbox that edits the source. */
 export const contribution: FormattedContribution = {
   id: 'markdown.tasks',
   feature: 'markdown.tasks',
+  flavor: 'markdown.github',
   syntax: [TaskList, EmptyTask],
   views: [
     {
+      // Like the rich editor's task item: no bullet, the checkbox and a 10px
+      // gap in a 30px indent.
+      nodes: ['ListItem'],
+      container: (node) =>
+        isTaskItem(node.node) ? { width: '30px', marker: false } : undefined,
+    },
+    {
       nodes: ['TaskMarker'],
       decorate(node, out, { state }) {
+        // A marker after the item's first block is text, as in GitHub.
+        const task = node.node.parent
+        const item = task?.parent
+        if (item?.name !== 'ListItem' || firstBlock(item)?.from !== task?.from)
+          return false
         const line = state.doc.lineAt(node.from)
         const rest = state.sliceDoc(node.to, line.to)
         // The checkbox takes the marker and the space before the task's text.

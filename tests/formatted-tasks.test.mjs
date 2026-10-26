@@ -116,7 +116,9 @@ test('toggling a task edits only the character inside its marker', () => {
 })
 
 test('the marker and the space after it become one checkbox', () => {
-  const [view] = contribution.views
+  const view = contribution.views.find((view) =>
+    view.nodes.includes('TaskMarker'),
+  )
   const render = (doc) => {
     const state = EditorState.create({ doc })
     const replaced = []
@@ -147,4 +149,41 @@ test('the marker and the space after it become one checkbox', () => {
   // Equal checkboxes keep their DOM; a toggled one updates in place.
   assert.ok(new TaskWidget(false, 'a').eq(new TaskWidget(false, 'a')))
   assert.ok(!new TaskWidget(false, 'a').eq(new TaskWidget(true, 'a')))
+})
+
+test('task items hang their checkbox in a 30px indent without a bullet', () => {
+  const doc = '- [ ] task\n- bullet\n- text\n\n  [ ] later paragraph'
+  const state = EditorState.create({ doc })
+  const containers = []
+  const replaced = []
+  const sink = {
+    mark() {},
+    syntax() {},
+    line() {},
+    widget() {},
+    replace: (from) => replaced.push(from),
+  }
+  markdown.parse(doc).iterate({
+    enter(node) {
+      for (const view of contribution.views) {
+        if (!view.nodes.includes(node.name)) continue
+        if (view.container)
+          containers.push(
+            view.container(node, { state, revealed: false, visible: null }),
+          )
+        view.decorate?.(node, sink, {
+          state,
+          revealed: false,
+          visible: { from: 0, to: doc.length },
+        })
+      }
+    },
+  })
+  assert.deepEqual(containers, [
+    { width: '30px', marker: false },
+    undefined,
+    undefined,
+  ])
+  // A marker after the item's first block is text.
+  assert.deepEqual(replaced, [2])
 })

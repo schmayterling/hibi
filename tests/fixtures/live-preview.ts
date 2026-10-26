@@ -15,6 +15,7 @@ const probe: ChunkedMarkdownProbe = {
   builtGroups: 0,
 }
 let view: EditorView | null = null
+let syntax = formattedSyntax({ probe })
 
 document.body.innerHTML =
   '<main class="editor-panes mode-normal"><div class="editor-content"><section class="rich-pane" aria-label="Formatted document"><div class="rich-editor-host"></div></section></div></main>'
@@ -24,7 +25,11 @@ const panes = document.querySelector<HTMLElement>('.editor-panes')!
 Object.assign(window, {
   livePreview: {
     probe,
-    async mount(doc: string, size?: { width: number; height: number }) {
+    async mount(
+      doc: string,
+      size?: { width: number; height: number },
+      options: { slice?: number } = {},
+    ) {
       if (size)
         Object.assign(panes.style, {
           position: 'fixed',
@@ -39,12 +44,13 @@ Object.assign(window, {
         ),
       )
       view?.destroy()
+      syntax = formattedSyntax({ probe, ...options })
       view = new EditorView({
         parent: host,
         state: EditorState.create({
           doc,
           extensions: [
-            livePreview(formattedSyntax({ probe })),
+            livePreview(syntax),
             EditorState.readOnly.of(true),
             EditorView.editable.of(false),
           ],
@@ -56,6 +62,14 @@ Object.assign(window, {
       await new Promise(requestAnimationFrame)
     },
     view: () => view,
+    /** Scroll a position to the top of the viewport. */
+    scrollTo(pos: number) {
+      view?.dispatch({
+        effects: EditorView.scrollIntoView(pos, { y: 'start' }),
+      })
+    },
+    /** The formatted view's syntax tree. */
+    tree: () => (view ? syntax.tree(view.state) : null),
     reset() {
       for (const key of Object.keys(probe) as (keyof ChunkedMarkdownProbe)[])
         probe[key] = 0

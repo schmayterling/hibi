@@ -69,8 +69,10 @@
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
 }
-.hibi-formatted .cm-line.hibi-lp-list {
-  margin-left: calc(var(--hibi-list-depth) * 1.5em);
+/* Quotes and lists indent their lines; quote bars are drawn in the indentation. */
+.hibi-formatted .cm-line.hibi-lp-nested {
+  position: relative;
+  margin-left: var(--hibi-indent);
 }
 .hibi-formatted .cm-line.hibi-lp-list-item {
   display: list-item;
@@ -79,15 +81,17 @@
   list-style-type: decimal;
 }
 .hibi-formatted .cm-line.hibi-lp-quote {
-  padding-left: calc(var(--hibi-quote-depth) * 21px);
   color: var(--syntax-quote);
-  background-image: repeating-linear-gradient(
-    to right,
-    var(--border) 0 1px,
-    transparent 1px 21px
-  );
-  background-size: calc(var(--hibi-quote-depth) * 21px) 100%;
-  background-repeat: no-repeat;
+}
+.hibi-formatted .cm-line.hibi-lp-quote::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--hibi-indent));
+  width: var(--hibi-indent);
+  background: var(--hibi-bars);
+  pointer-events: none;
 }
 /* Lines keep the pre element's generic monospace strut; text uses the code font. */
 .hibi-formatted .cm-line.hibi-lp-codeblock {

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { builtInFeatures, builtInFlavors } from '../shared/built-in-grammar.ts'
 import {
   builtInNoteSyntax,
   defaultNoteSyntax,
@@ -13,14 +14,6 @@ type Projection = NonNullable<WorkspaceSyntaxSnapshot['projections']>[number]
 
 const idPattern = /^[a-z][a-z0-9.-]{0,127}$/
 const fileIdPattern = /^[a-f0-9]{64}$/
-const knownFlavors = new Set([
-  'markdown.github',
-  'markdown.obsidian',
-  'math.latex',
-  'text-extras.text-extras',
-])
-const knownFeatures =
-  /^(?:core\.(?:heading-[1-6]|bold|italic|inline-code|escapes|code-blocks|quotes|bullet-lists|numbered-lists|dividers|line-breaks|links|images|html-blocks|inline-html)|markdown\.(?:tables|tasks|strike|alerts)|math\.(?:inline|block)|text-extras\.(?:subscript|subtext))$/
 
 export type PageSyntax = {
   readonly settings: NoteSyntax
@@ -179,7 +172,7 @@ export function workspaceSyntax(input: unknown): WorkspaceSyntax | null {
     .filter((feature) => !feature.enabled)
     .map((feature) => feature.id)
   const unknownFeature = features.some(
-    (feature) => !knownFeatures.test(feature.id),
+    (feature) => !builtInFeatures.test(feature.id),
   )
   const unknownProjection = projections.some(
     (projection) => projection.id !== 'frontmatter.metadata',
@@ -211,7 +204,7 @@ export function workspaceSyntax(input: unknown): WorkspaceSyntax | null {
       const unsupported =
         unknownFeature ||
         unknownProjection ||
-        selected.some((flavor) => !knownFlavors.has(flavor.id)) ||
+        selected.some((flavor) => !builtInFlavors.has(flavor.id)) ||
         (ids.has('markdown.github') &&
           (/^ {0,3}>[ \t]*\[![a-z][a-z0-9-]*\]/im.test(source) ||
             /\[\^[^\]\r\n]+\]/.test(source))) ||

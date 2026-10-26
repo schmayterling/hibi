@@ -1,4 +1,8 @@
 import {
+  builtInFeatures,
+  builtInFlavors,
+} from '../../shared/built-in-grammar.ts'
+import {
   builtInNoteSyntax,
   type NoteSyntax,
 } from '../../shared/note-syntax-config.ts'
@@ -21,14 +25,6 @@ const MAX_FEATURES = 512
 const MAX_PROJECTIONS = 128
 const MAX_SYNTAX_IDS = 128
 const choiceKey = /^hibi:flavor:([0-9a-f]{64})$/
-const knownFlavors = new Set([
-  'markdown.github',
-  'markdown.obsidian',
-  'math.latex',
-  'text-extras.text-extras',
-])
-const knownFeatures =
-  /^(?:core\.(?:heading-[1-6]|bold|italic|inline-code|escapes|code-blocks|quotes|bullet-lists|numbered-lists|dividers|line-breaks|links|images|html-blocks|inline-html)|markdown\.(?:tables|tasks|strike|alerts)|math\.(?:inline|block)|text-extras\.(?:subscript|subtext))$/
 type Projection = { id: string; preservation?: { version: string } }
 
 /** Current document's built-in parser contract without enumerating other files. */
@@ -59,8 +55,8 @@ export function activeNoteMetadataSyntax(
     available.length > MAX_FLAVORS ||
     registeredFeatures.length > MAX_FEATURES ||
     projections.length > MAX_PROJECTIONS ||
-    selected.some((flavor) => !knownFlavors.has(flavor.id)) ||
-    features.some((feature) => !knownFeatures.test(feature.id)) ||
+    selected.some((flavor) => !builtInFlavors.has(flavor.id)) ||
+    features.some((feature) => !builtInFeatures.test(feature.id)) ||
     activeProjections.some(
       (projection) => projection.id !== 'frontmatter.metadata',
     ) ||

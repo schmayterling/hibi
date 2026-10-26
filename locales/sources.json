@@ -371,6 +371,10 @@
   "8c733faf0a0a": [
     "src/main/dependencies.ts"
   ],
+  "caf4b57ff979": [
+    "src/addons/documentation/native.ts",
+    "src/addons/documentation/site-runtime.ts"
+  ],
   "46e7dbbc93e5": [
     "src/main/index.ts",
     "src/renderer/src/main.tsx"
@@ -820,7 +824,7 @@
     "src/main/document.ts"
   ],
   "42e3ecb68937": [
-    "src/main/media.ts"
+    "src/main/document-media.ts"
   ],
   "f84eb17965b6": [
     "src/main/addon-hotkeys.ts",
@@ -1369,7 +1373,9 @@
     "src/renderer/src/main.tsx"
   ],
   "7f43531f5a30": [
-    "src/addons/documentation/native.ts"
+    "src/addons/documentation/native.ts",
+    "src/addons/documentation/prepare.ts",
+    "src/addons/documentation/site-runtime.ts"
   ],
   "283432fdadc1": [
     "src/addons/dictionary/index.tsx"
@@ -1472,6 +1478,9 @@
   ],
   "0af861157fe6": [
     "src/renderer/src/autosave.ts"
+  ],
+  "93a0e14c0592": [
+    "src/site/search-worker-client.ts"
   ],
   "f6a61661c1fd": [
     "src/renderer/src/document-worker-client.ts"
@@ -1949,6 +1958,9 @@
   "b865e72c0593": [
     "src/addons/ui-preview/index.tsx"
   ],
+  "e5f4adee36ed": [
+    "src/addons/mermaid/Block.tsx"
+  ],
   "c7bf14938074": [
     "src/addons/asciidoc/hibi-addon.json"
   ],
@@ -2041,6 +2053,9 @@
   ],
   "c6c094bc0054": [
     "src/addons/frontmatter/Properties.tsx"
+  ],
+  "f23b5633a4b0": [
+    "src/addons/mermaid/Block.tsx"
   ],
   "5342e09f2729": [
     "src/renderer/src/FormatEditor.tsx"
@@ -2265,12 +2280,6 @@
   ],
   "d9d979c63132": [
     "src/main/host-selected-io.ts"
-  ],
-  "423a85dca9b6": [
-    "src/main/workspace.ts"
-  ],
-  "23b5bc4d7a20": [
-    "src/main/workspace.ts"
   ],
   "e7154684d4df": [
     "src/addons/dictionary/CustomWords.tsx"
@@ -3056,9 +3065,6 @@
   "650bc9063f2c": [
     "src/addons/dictionary/native.ts"
   ],
-  "9d5bc8bf6003": [
-    "src/addons/dictionary/pack-store.ts"
-  ],
   "5a2f299940cc": [
     "src/shared/document-journal.ts"
   ],
@@ -3332,6 +3338,9 @@
   ],
   "cb8f2c8855ca": [
     "src/addons/dictionary/PackSettings.tsx"
+  ],
+  "bf94dee592e6": [
+    "src/addons/documentation/ExportDialog.tsx"
   ],
   "2de539a660eb": [
     "src/renderer/src/LicenseSettings.tsx"
@@ -5744,9 +5753,6 @@
   "53a9d03e9663": [
     "src/main/addon-documentation.ts"
   ],
-  "8c6ee6bc52e4": [
-    "src/addons/documentation/native.ts"
-  ],
   "6d78247b2a33": [
     "src/main/links.ts"
   ],
@@ -5967,7 +5973,9 @@
     "src/main/index.ts"
   ],
   "671a56401be1": [
-    "src/addons/documentation/native.ts"
+    "src/addons/documentation/native.ts",
+    "src/addons/documentation/site-worker.ts",
+    "src/main/workspace.ts"
   ],
   "1f9371eb85f2": [
     "src/main/workspace.ts"
@@ -6220,20 +6228,18 @@
   "1629952fe484": [
     "src/main/dependencies.ts"
   ],
-  "4450b8d48106": [
-    "src/addons/mermaid/render.ts"
-  ],
   "e0642a812b2e": [
-    "src/addons/dictionary/pack-store.ts"
+    "src/addons/dictionary/pack-verification.ts"
   ],
   "4aca8915ed3c": [
     "src/addons/dictionary/packs.ts"
   ],
   "794c92bbef64": [
-    "src/addons/dictionary/pack-store.ts"
+    "src/addons/dictionary/pack-store.ts",
+    "src/addons/dictionary/pack-verification.ts"
   ],
   "3f08b04c75dd": [
-    "src/addons/dictionary/pack-store.ts"
+    "src/addons/dictionary/pack-verification.ts"
   ],
   "f70a180e8466": [
     "src/shared/imports.ts"
@@ -6426,6 +6432,9 @@
   "3ec61208f558": [
     "src/main/global-shortcuts.ts"
   ],
+  "53101e1d982a": [
+    "src/addons/documentation/site-runtime.ts"
+  ],
   "f876c831e537": [
     "src/renderer/src/document-runtime.ts"
   ],
@@ -6469,6 +6478,7 @@
     "src/addons/autocomplete/index.tsx"
   ],
   "78c4a3ab448e": [
+    "src/addons/documentation/native.ts",
     "src/main/workspace.ts"
   ],
   "a5d897d361ec": [
@@ -7055,6 +7065,9 @@
   ],
   "a03fccdc8fea": [
     "src/addons/markdown/hibi-addon.json"
+  ],
+  "6e038946c2ae": [
+    "src/addons/mermaid/index.tsx"
   ],
   "2cfece6a285e": [
     "src/addons/typst/hibi-addon.json"

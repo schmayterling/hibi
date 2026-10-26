@@ -16,7 +16,7 @@ The main process checks the sender, main frame, and exact app URL before every p
 
 Document replacement, export, and addon preference writes share an operation guard. Closing the app waits for an active operation and checks for unsaved edits. Workspace watchers debounce changes and read asynchronously. New save destinations resolve their parent directory first, so later saves through a symlink compare the same canonical path and still detect external edits.
 
-Local images are bound to the current document revision. The main process resolves relative references from that document's native path, limits reads to 8 MiB, and validates image content before returning a data URL. This bridge cannot read arbitrary files. Documentation snapshots use the same validated images.
+Local media display URLs are opaque and bound to the current document revision. The main process validates paths and sniffs a small header; Chromium streams and decodes the file without a compressed-byte display limit. Shared resolution cancels obsolete work and refreshes only dependencies affected by workspace changes. SVG responses remain inert under a sandboxed content security policy. The compatibility image-byte bridge retains its 8 MiB limit, and documentation snapshots still validate and embed media through the bounded export path.
 
 ## Appearance and licenses
 

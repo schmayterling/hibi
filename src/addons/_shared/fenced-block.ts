@@ -1,12 +1,14 @@
-import { Marked } from 'marked'
+import { Lexer, Tokenizer } from 'marked'
 
 /** Use Marked's fence parser so indentation, long fences, and raw source round-trip. */
 export function fencedBlock(language: string, type: string) {
-  const lexer = new Marked()
+  // The lexer only installs Marked's rules; each call reads one fence, never
+  // the rest of the note.
+  const tokenizer = new Tokenizer()
+  new Lexer({ tokenizer })
   return (source: string) => {
-    if (!/^ {0,3}(?:`{3,}|~{3,})/.test(source)) return
-    const token = lexer.lexer(source)[0]
-    if (token?.type !== 'code' || token.lang?.toLowerCase() !== language) return
+    const token = tokenizer.fences(source)
+    if (token?.lang?.toLowerCase() !== language) return
     return { type, raw: token.raw, source: token.text }
   }
 }

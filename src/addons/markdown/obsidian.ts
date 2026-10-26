@@ -1,5 +1,6 @@
 import { Mark, Node } from '@tiptap/core'
 import type { MarkedExtension } from 'marked'
+import { observeDocumentMedia } from '../../renderer/src/document-media.ts'
 import { wikiHref } from '../../shared/note-links.ts'
 
 const wiki = /^(!?)\[\[([^\]\r\n]+)\]\]/
@@ -149,7 +150,10 @@ export const WikiEmbed = Node.create({
       dom.contentEditable = 'false'
       let current = node
       let request = 0
+      let unsubscribe = () => {}
       const render = async () => {
+        unsubscribe()
+        dom.querySelector('img')?.removeAttribute('src')
         const id = ++request
         const fullTarget = String(current.attrs.target ?? '')
         const target = fullTarget.split('#')[0] ?? ''
@@ -161,6 +165,8 @@ export const WikiEmbed = Node.create({
           return
         }
         const img = document.createElement('img')
+        img.loading = 'lazy'
+        img.decoding = 'async'
         const label = String(current.attrs.label ?? '')
         const dimensions = /^(\d{1,4})(?:x(\d{1,4}))?$/.exec(label)
         img.alt = dimensions
@@ -172,11 +178,12 @@ export const WikiEmbed = Node.create({
         }
         dom.replaceChildren(img)
         const revision = (await window.hibi.getDocument()).revision
+        if (id !== request) return
         const source = target.includes('/') ? `/${target}` : target
-        const media = await window.hibi
-          .readDocumentMedia(source, revision)
-          .catch(() => null)
-        if (id === request && media?.kind === 'image') img.src = media.url
+        unsubscribe = observeDocumentMedia(source, revision, (media) => {
+          if (media?.kind === 'image') img.src = media.url
+          else img.removeAttribute('src')
+        })
       }
       void render()
       return {
@@ -195,6 +202,9 @@ export const WikiEmbed = Node.create({
         ignoreMutation: () => true,
         destroy() {
           request++
+          unsubscribe()
+          dom.querySelector('img')?.removeAttribute('src')
+          dom.replaceChildren()
         },
       }
     }

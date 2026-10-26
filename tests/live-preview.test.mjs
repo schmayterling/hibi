@@ -44,6 +44,31 @@ Closing paragraph.
 After the rule.
 `
 
+/** Blocks inside quotes and lists: quote > code, list > code, quote > list, list > quote > code. */
+const nested = `# Nested blocks
+
+> ~~~js
+> const nested = 42
+> ~~~
+
+- parent
+
+  ~~~js
+  const child = 7
+  ~~~
+
+> - quoted item
+> - another item
+
+- item with a quote
+
+  > ~~~
+  > const deep = 1
+  > ~~~
+
+closing paragraph.
+`
+
 let app, folder, page, harness
 
 const palette = (id) => {
@@ -95,25 +120,14 @@ before(
     const file = join(folder, 'notes', 'parity.md')
     await mkdir(join(folder, 'notes'))
     await writeFile(file, note)
+    await writeFile(join(folder, 'notes', 'nested.md'), nested)
     app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
     })
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
     await waitForDocumentEditor(app, page)
-    await app.evaluate(({ dialog }, path) => {
-      dialog.showOpenDialog = async () => ({
-        canceled: false,
-        filePaths: [path],
-      })
-    }, file)
-    await pressShortcut(
-      app,
-      process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
-    )
-    await page
-      .locator('.tiptap h1', { hasText: 'Formatted view parity' })
-      .waitFor()
+    await open(file, 'Formatted view parity')
     const size = await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].getContentSize(),
     )
@@ -142,6 +156,35 @@ before(
   },
   { timeout: 90000 },
 )
+/** Open a note in the app's rich view. */
+async function open(file, title) {
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [path],
+    })
+  }, file)
+  if (!harness)
+    await pressShortcut(
+      app,
+      process.platform === 'darwin' ? 'Meta+o' : 'Control+o',
+    )
+  // The shortcut goes to the app window, not the harness window opened after it.
+  else
+    await app.evaluate(
+      ({ BrowserWindow }, modifiers) => {
+        const contents = BrowserWindow.getAllWindows().find(
+          (window) =>
+            !window.webContents.getURL().endsWith('/bundle/index.html'),
+        ).webContents
+        for (const type of ['keyDown', 'keyUp'])
+          contents.sendInputEvent({ type, keyCode: 'O', modifiers })
+      },
+      [process.platform === 'darwin' ? 'meta' : 'control'],
+    )
+  await page.locator('.tiptap h1', { hasText: title }).waitFor()
+}
+
 after(
   async () => {
     await app?.close()
@@ -151,51 +194,57 @@ after(
 )
 
 /** Computed styles and text geometry for matching elements in both editors. */
-const sample = (target, selectors) =>
-  target.evaluate((selectors) => {
-    const pane = document.querySelector('.rich-pane').getBoundingClientRect()
-    const textBox = (element, text) => {
-      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        const index = node.data.indexOf(text)
-        if (index < 0) continue
-        const range = document.createRange()
-        range.setStart(node, index)
-        range.setEnd(node, index + text.length)
-        const box = range.getBoundingClientRect()
-        return {
-          left: box.left - pane.left,
-          top: box.top - pane.top,
-          height: box.height,
+const sample = (target, selectors, title) =>
+  target.evaluate(
+    ({ selectors, title }) => {
+      const root = [...document.querySelectorAll('.rich-pane')].find((pane) =>
+        pane.querySelector(':is(h1, .hibi-lp-h1)')?.textContent.includes(title),
+      )
+      const pane = root.getBoundingClientRect()
+      const textBox = (element, text) => {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const index = node.data.indexOf(text)
+          if (index < 0) continue
+          const range = document.createRange()
+          range.setStart(node, index)
+          range.setEnd(node, index + text.length)
+          const box = range.getBoundingClientRect()
+          return {
+            left: box.left - pane.left,
+            top: box.top - pane.top,
+            height: box.height,
+          }
         }
+        return null
       }
-      return null
-    }
-    return Object.fromEntries(
-      Object.entries(selectors).map(([key, { selector, text }]) => {
-        const element = [...document.querySelectorAll(selector)].find(
-          (candidate) => candidate.textContent.includes(text),
-        )
-        if (!element) return [key, null]
-        const style = getComputedStyle(element)
-        return [
-          key,
-          {
-            fontFamily: style.fontFamily,
-            fontSize: style.fontSize,
-            fontWeight: style.fontWeight,
-            fontStyle: style.fontStyle,
-            color: style.color,
-            backgroundColor: style.backgroundColor,
-            textDecorationLine: style.textDecorationLine,
-            letterSpacing: style.letterSpacing,
-            // Highlighting splits text into spans; the first word is one text node.
-            box: textBox(element, text.split(' ')[0]),
-          },
-        ]
-      }),
-    )
-  }, selectors)
+      return Object.fromEntries(
+        Object.entries(selectors).map(([key, { selector, text }]) => {
+          const element = [...root.querySelectorAll(selector)].find(
+            (candidate) => candidate.textContent.includes(text),
+          )
+          if (!element) return [key, null]
+          const style = getComputedStyle(element)
+          return [
+            key,
+            {
+              fontFamily: style.fontFamily,
+              fontSize: style.fontSize,
+              fontWeight: style.fontWeight,
+              fontStyle: style.fontStyle,
+              color: style.color,
+              backgroundColor: style.backgroundColor,
+              textDecorationLine: style.textDecorationLine,
+              letterSpacing: style.letterSpacing,
+              // Highlighting splits text into spans; the first word is one text node.
+              box: textBox(element, text.split(' ')[0]),
+            },
+          ]
+        }),
+      )
+    },
+    { selectors, title },
+  )
 
 const rich = {
   title: { selector: '.tiptap h1', text: 'Formatted view parity' },
@@ -226,8 +275,8 @@ const formatted = {
   code: { selector: '.hibi-lp-code', text: 'inline code' },
   link: { selector: '.hibi-lp-link', text: 'link' },
   lists: { selector: '.hibi-lp-h2', text: 'Lists' },
-  item: { selector: '.hibi-lp-list', text: 'first item' },
-  nested: { selector: '.hibi-lp-list', text: 'nested item' },
+  item: { selector: '.hibi-lp-list-item', text: 'first item' },
+  nested: { selector: '.hibi-lp-list-item', text: 'nested item' },
   ordered: { selector: '.hibi-lp-list-ordered', text: 'two' },
   quote: { selector: '.hibi-lp-quote', text: 'A quote' },
   block: { selector: '.hibi-lp-codetext', text: 'const answer' },
@@ -236,16 +285,18 @@ const formatted = {
   after: { selector: '.cm-line', text: 'After the rule' },
 }
 
-test('the codemirror formatted view matches the rich view in light and dark', {
-  timeout: 60000,
-}, async () => {
-  const pane = await page.locator('.rich-pane').evaluate((element) => {
+/** Compare a note in the rich view and the formatted view: styles, text positions and pixels. */
+async function parity(title, doc, rich, formatted, name) {
+  const richPane = page.locator('.rich-pane', {
+    has: page.locator('.tiptap h1', { hasText: title }),
+  })
+  const pane = await richPane.evaluate((element) => {
     const box = element.getBoundingClientRect()
     return { width: box.width, height: box.height }
   })
   await harness.evaluate(
-    ({ note, pane }) => window.livePreview.mount(note, pane),
-    { note, pane },
+    ({ doc, pane }) => window.livePreview.mount(doc, pane),
+    { doc, pane },
   )
   const report = []
   for (const id of ['hibi-light', 'hibi-dark']) {
@@ -253,8 +304,8 @@ test('the codemirror formatted view matches the rich view in light and dark', {
     await applyPalette(page, scheme)
     await applyPalette(harness, scheme)
     await harness.evaluate(() => window.livePreview.settle())
-    const before = await sample(page, rich)
-    const after = await sample(harness, formatted)
+    const before = await sample(page, rich, title)
+    const after = await sample(harness, formatted, title)
     for (const key of Object.keys(rich)) {
       const a = before[key],
         b = after[key]
@@ -276,12 +327,12 @@ test('the codemirror formatted view matches the rich view in light and dark', {
       })
     }
     const images = [
-      await page
-        .locator('.rich-pane')
-        .screenshot({ path: `test-results/live-preview-rich-${id}.png` }),
-      await harness
-        .locator('.rich-pane')
-        .screenshot({ path: `test-results/live-preview-formatted-${id}.png` }),
+      await richPane.screenshot({
+        path: `test-results/live-preview-${name}-rich-${id}.png`,
+      }),
+      await harness.locator('.rich-pane').screenshot({
+        path: `test-results/live-preview-${name}-formatted-${id}.png`,
+      }),
     ].map((image) => image.toString('base64'))
     const difference = await app.evaluate(({ nativeImage }, images) => {
       const [a, b] = images.map((image) =>
@@ -314,6 +365,62 @@ test('the codemirror formatted view matches the rich view in light and dark', {
   )
   console.log(JSON.stringify(report.filter((entry) => entry.key === 'pixels')))
   assert.deepEqual(offsets, [], JSON.stringify(report))
+}
+
+test('the codemirror formatted view matches the rich view in light and dark', {
+  timeout: 60000,
+}, async () => {
+  await parity('Formatted view parity', note, rich, formatted, 'parity')
+})
+
+test('blocks inside quotes and lists match the rich view in light and dark', {
+  timeout: 60000,
+}, async () => {
+  await open(join(folder, 'notes', 'nested.md'), 'Nested blocks')
+  await parity(
+    'Nested blocks',
+    nested,
+    {
+      title: { selector: '.tiptap h1', text: 'Nested blocks' },
+      quotedCode: {
+        selector: '.tiptap blockquote pre code',
+        text: 'const nested',
+      },
+      parent: { selector: '.tiptap li p', text: 'parent' },
+      childCode: { selector: '.tiptap li pre code', text: 'const child' },
+      quotedItem: { selector: '.tiptap blockquote li', text: 'quoted item' },
+      anotherItem: { selector: '.tiptap blockquote li', text: 'another item' },
+      quoteItem: { selector: '.tiptap li p', text: 'item with a quote' },
+      deepCode: {
+        selector: '.tiptap li blockquote pre code',
+        text: 'const deep',
+      },
+      closing: { selector: '.tiptap p', text: 'closing paragraph' },
+    },
+    {
+      title: { selector: '.hibi-lp-h1', text: 'Nested blocks' },
+      quotedCode: { selector: '.hibi-lp-codetext', text: 'const nested' },
+      parent: { selector: '.hibi-lp-list-item', text: 'parent' },
+      childCode: { selector: '.hibi-lp-codetext', text: 'const child' },
+      quotedItem: { selector: '.hibi-lp-list-item', text: 'quoted item' },
+      anotherItem: { selector: '.hibi-lp-list-item', text: 'another item' },
+      quoteItem: { selector: '.hibi-lp-list-item', text: 'item with a quote' },
+      deepCode: { selector: '.hibi-lp-codetext', text: 'const deep' },
+      closing: { selector: '.cm-line', text: 'closing paragraph' },
+    },
+    'nested',
+  )
+  // Quote markers inside code are hidden like the rich view's.
+  const code = await harness.evaluate(() =>
+    [...document.querySelectorAll('.hibi-lp-codeblock')].map(
+      (line) => line.innerText,
+    ),
+  )
+  assert.deepEqual(code, [
+    'const nested = 42',
+    'const child = 7',
+    'const deep = 1',
+  ])
 })
 
 test('a 50 MiB note renders and edits with viewport-bounded work', {
@@ -389,4 +496,207 @@ test('a 50 MiB note renders and edits with viewport-bounded work', {
     assert.ok(edit.builtGroups <= 3, JSON.stringify(edit))
     assert.ok(edit.lines < 400, JSON.stringify(edit))
   }
+})
+
+test('links whose destination spans lines render on one line while mounting and scrolling', {
+  timeout: 90000,
+}, async () => {
+  const errors = []
+  const pageError = (error) => errors.push(error.message)
+  const consoleError = (message) => {
+    if (message.type() === 'error') errors.push(message.text())
+  }
+  harness.on('pageerror', pageError)
+  harness.on('console', consoleError)
+  try {
+    for (const [doc, lines] of [
+      ['[label](https://example.com/\n "title")\n\nend', ['label', 'end']],
+      ['[label](\nhttps://example.com/\n)\n\nend', ['label', 'end']],
+      ['[long\nlabel](https://example.com/)\n\nend', ['long label', 'end']],
+      ['hello\n`` some\ncode ``\n\nend', ['hello some code', 'end']],
+    ]) {
+      const text = await harness.evaluate(async (doc) => {
+        await window.livePreview.mount(doc, { width: 800, height: 600 })
+        await window.livePreview.settle()
+        return [...document.querySelectorAll('.cm-line')]
+          .map((line) => line.textContent.replace(/\s+/g, ' ').trim())
+          .filter(Boolean)
+      }, doc)
+      assert.deepEqual(text, lines, JSON.stringify(doc))
+    }
+    // Each scrolled viewport builds decorations for newly visible links.
+    const shown = await harness.evaluate(async () => {
+      const doc = Array.from(
+        { length: 2000 },
+        (_, i) => `para ${i} [link ${i}](\nhttps://example.com/${i}\n "t")`,
+      ).join('\n\n')
+      const preview = window.livePreview
+      await preview.mount(doc, { width: 800, height: 600 })
+      const view = preview.view()
+      let links = 0
+      for (let step = 1; step <= 20; step++) {
+        view.dispatch({
+          selection: { anchor: Math.floor((doc.length * step) / 20) },
+          scrollIntoView: true,
+        })
+        await preview.settle()
+        links += document.querySelectorAll('.hibi-lp-link').length
+      }
+      return links
+    })
+    assert.ok(shown > 20, `${shown}`)
+    assert.deepEqual(errors, [])
+  } finally {
+    harness.off('pageerror', pageError)
+    harness.off('console', consoleError)
+  }
+})
+
+test('a structural edit at the top of a 50 MiB note parses a bounded window and converges in idle slices', {
+  timeout: 180000,
+}, async () => {
+  const unit = '# heading\n\nparagraph words\n\n- one\n- two\n\n> quote\n\n'
+  // One parse step per transaction: each step reads a bounded range.
+  const length = await harness.evaluate(async (unit) => {
+    await window.livePreview.mount(
+      unit.repeat(Math.ceil((50 * 1024 * 1024) / unit.length)),
+      undefined,
+      { slice: 0 },
+    )
+    return window.livePreview.view().state.doc.length
+  }, unit)
+  await harness.waitForFunction(() => document.querySelector('.hibi-lp-h1'))
+  /** One transaction's parse work: a step never drains the rest of the note. */
+  const step = (spec) =>
+    harness.evaluate((spec) => {
+      const preview = window.livePreview
+      preview.reset()
+      preview.view().dispatch(spec)
+      return { ...preview.probe }
+    }, spec)
+  const bounded = (counts, label) => {
+    assert.ok(
+      counts.scannedUnits <= 160 * 1024,
+      `${label} ${JSON.stringify(counts)}`,
+    )
+    assert.ok(
+      counts.parsedUnits <= 64 * 1024,
+      `${label} ${JSON.stringify(counts)}`,
+    )
+  }
+  // Opening a fence makes the rest of the note one code block.
+  const opened = await step({ changes: { from: 0, insert: '~~~\n' } })
+  bounded(opened, 'open')
+  await harness.waitForFunction(
+    () =>
+      document.querySelectorAll('.hibi-lp-codeblock').length > 5 &&
+      !document.querySelector('.hibi-lp-h1'),
+  )
+  // A far jump scans toward the middle in idle slices; typing meanwhile stays bounded.
+  await harness.evaluate(
+    (middle) => {
+      const view = window.livePreview.view()
+      view.dispatch({ selection: { anchor: middle }, scrollIntoView: true })
+    },
+    Math.floor(length / 2),
+  )
+  const typed = []
+  for (let key = 0; key < 5; key++)
+    typed.push(await step({ changes: { from: 15 + key, insert: 'x' } }))
+  for (const counts of typed) bounded(counts, 'type')
+  await harness.waitForFunction(
+    (middle) => {
+      const view = window.livePreview.view()
+      return [...document.querySelectorAll('.hibi-lp-codeblock')].some(
+        (line) => Math.abs(view.posAtDOM(line) - middle) < 20000,
+      )
+    },
+    Math.floor(length / 2),
+    { timeout: 150000 },
+  )
+  const closed = await step({
+    changes: { from: length + 9, insert: '\n~~~\n' },
+  })
+  bounded(closed, 'close')
+  const unfenced = await step({ changes: { from: 0, to: 4 } })
+  bounded(unfenced, 'unfence')
+  console.log(JSON.stringify({ opened, typed: typed[0], closed, unfenced }))
+})
+
+test('ordered list numbers in a 20,000-item list come from cached item offsets', {
+  timeout: 90000,
+}, async () => {
+  const doc = Array.from(
+    { length: 20000 },
+    (_, i) => `${i + 1}. item ${i}`,
+  ).join('\n')
+  await harness.evaluate(async (doc) => {
+    await window.livePreview.mount(doc, { width: 800, height: 600 })
+    const view = window.livePreview.view()
+    view.dispatch({ selection: { anchor: doc.length }, scrollIntoView: true })
+  }, doc)
+  await harness.waitForFunction(() =>
+    [...document.querySelectorAll('.hibi-lp-list-ordered')].some((line) =>
+      line.textContent.includes('item 19999'),
+    ),
+  )
+  const result = await harness.evaluate(async () => {
+    const preview = window.livePreview
+    const view = preview.view()
+    // Count sibling reads through the node prototypes while the visible items restyle.
+    let reads = 0
+    const restore = []
+    const tree = preview.tree()
+    const at = view.state.doc.length
+    for (const node of [tree.topNode, tree.resolveInner(at, -1)])
+      for (
+        let proto = Object.getPrototypeOf(node);
+        proto;
+        proto = Object.getPrototypeOf(proto)
+      )
+        for (const name of ['prevSibling', 'nextSibling']) {
+          const descriptor = Object.getOwnPropertyDescriptor(proto, name)
+          if (
+            !descriptor?.get ||
+            restore.some(([p, n]) => p === proto && n === name)
+          )
+            continue
+          restore.push([proto, name, descriptor])
+          Object.defineProperty(proto, name, {
+            ...descriptor,
+            get() {
+              reads++
+              return descriptor.get.call(this)
+            },
+          })
+        }
+    // Scrolling within the parsed window restyles items from cached offsets.
+    preview.scrollTo(view.state.doc.line(19970).from)
+    await preview.settle()
+    await preview.settle()
+    const scrolled = reads
+    reads = 0
+    // An edit rebuilds the window around the viewport, not the list before it.
+    view.dispatch({ changes: { from: at, insert: 'x' } })
+    await preview.settle()
+    const edited = reads
+    for (const [proto, name, descriptor] of restore)
+      Object.defineProperty(proto, name, descriptor)
+    const numbers = Object.fromEntries(
+      [...document.querySelectorAll('.hibi-lp-list-ordered')].map((line) => [
+        line.textContent.trim(),
+        line.style.counterSet,
+      ]),
+    )
+    return { scrolled, edited, numbers }
+  })
+  assert.equal(
+    result.numbers['item 19999x'],
+    'list-item 20000',
+    JSON.stringify(result.numbers),
+  )
+  assert.equal(result.numbers['item 19990'], 'list-item 19991')
+  // Before the cache, ten visible items near the end read about 200,000 siblings.
+  assert.ok(result.scrolled < 1000, JSON.stringify(result.scrolled))
+  assert.ok(result.edited < 10000, JSON.stringify(result.edited))
 })

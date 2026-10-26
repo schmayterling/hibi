@@ -10,6 +10,7 @@ import {
 } from '@tiptap/markdown'
 import type { MarkedOptions, Token, TokensList } from 'marked'
 import type { MarkdownFlavor } from '../../addons/api'
+import { builtInFlavors } from '../../shared/built-in-grammar.ts'
 import { contextualTokens } from '../../shared/markdown-semantic-tokens.ts'
 import { documentImage } from './DocumentImage.ts'
 import { markdownConfiguration } from './markdown.ts'
@@ -31,19 +32,7 @@ export function createMarkdownSemantics(
   flavors: readonly MarkdownFlavor[],
   revision: number,
 ) {
-  if (
-    flavors.some(
-      (flavor) =>
-        ![
-          'markdown.github',
-          'markdown.obsidian',
-          'github-markdown.github',
-          'text-extras.text-extras',
-          'math.latex',
-        ].includes(flavor.id),
-    )
-  )
-    return null
+  if (flavors.some((flavor) => !builtInFlavors.has(flavor.id))) return null
   const version = markdownSyntax.version()
   const { parser, options, core, addons } = markdownConfiguration(flavors)
   const extensions = [

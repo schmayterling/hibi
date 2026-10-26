@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto'
-import { createReadStream } from 'node:fs'
 import {
   lstat,
   mkdir,
@@ -17,6 +15,7 @@ import {
   completionPrefix,
   PackWorker,
 } from './pack-runtime.ts'
+import { packStamp } from './pack-verification.ts'
 import {
   type PackId,
   type PackManifest,
@@ -77,28 +76,19 @@ async function manifestAt(path: string, id: PackId) {
     id,
   )
 }
-async function verifyFile(
-  path: string,
-  expected: { bytes: number; sha256: string },
-) {
-  const info = await regularFile(path, expected.bytes)
-  if (info.size !== expected.bytes)
-    throw new Error('This dictionary pack is incomplete. Install it again.')
-  const hash = createHash('sha256')
-  for await (const chunk of createReadStream(path)) hash.update(chunk)
-  if (hash.digest('hex') !== expected.sha256)
-    throw new Error(
-      'This dictionary pack failed its checksum. Install it again.',
-    )
+
+type Verification = {
+  stamp: string
+  generation: number
+  pending: Promise<void>
+  fresh: boolean
 }
 
 /** Main owns downloads; lookup and short-lived conversion workers stay independent. */
 export class PackStore {
   private worker: PackWorker
-  private verified = new Map<
-    PackId,
-    { stamp: string; generation: number; pending: Promise<void> }
-  >()
+  private invalidated = new Set<PackId>()
+  private verified = new Map<PackId, Verification>()
   private active:
     | { id: PackId; controller: AbortController; done: Promise<void> }
     | undefined
@@ -108,8 +98,6 @@ export class PackStore {
   private generation = new Map<PackId, number>()
   private installedCache: Promise<Set<PackId>> | undefined
   private recovered = new Map<PackId, Promise<void>>()
-  private preloadStarted = false
-  private idle: NodeJS.Immediate | undefined
 
   constructor(
     private root: string,
@@ -372,6 +360,7 @@ export class PackStore {
     this.installedCache = undefined
     try {
       const path = await this.recover(id)
+      await this.verified.get(id)?.pending.catch(() => {})
       await this.worker.unload(id)
       const base = await directory(this.root)
       for (const candidate of [
@@ -389,40 +378,6 @@ export class PackStore {
       this.busy = undefined
       this.installedCache = undefined
     }
-  }
-
-  preloadInstalled(value: unknown): void {
-    if (!Array.isArray(value) || value.length > packIds.length)
-      throw new Error('Invalid dictionary preload languages')
-    const preferred = value.map(packId)
-    this.ensureOpen()
-    if (this.preloadStarted) return
-    this.preloadStarted = true
-    const ids = [...new Set(preferred)]
-    const next = () => {
-      if (this.closed) return
-      const id = ids.shift()
-      if (!id) return
-      this.idle = setImmediate(() => {
-        this.idle = undefined
-        void this.installed(id)
-          .then((installed) => (installed ? this.preload(id) : undefined))
-          .catch((error) => {
-            if (!this.closed)
-              console.error('could not preload dictionary pack:', error)
-          })
-          .finally(next)
-      })
-    }
-    next()
-  }
-
-  async preload(value: unknown): Promise<void> {
-    await this.read(
-      packId(value),
-      (id, path) => this.worker.preload(id, path),
-      undefined,
-    )
   }
 
   async complete(value: unknown, prefix: string, limit = 8): Promise<string[]> {
@@ -491,26 +446,63 @@ export class PackStore {
       if (!(await exists(path))) return empty
       const manifest = await manifestAt(path, id)
       if (changed()) return empty
+      const stamp = await packStamp(path, manifest)
+      if (changed()) return empty
       let verification = this.verified.get(id)
       if (
-        verification?.stamp !== manifest.installedAt ||
+        verification?.stamp !== stamp ||
         verification.generation !== generation
       ) {
-        const pending = (async () => {
-          await verifyFile(join(path, 'data.jsonl'), manifest.data)
-          await verifyFile(join(path, 'index.json'), manifest.index)
-        })()
-        verification = { stamp: manifest.installedAt, generation, pending }
-        const current = verification
+        const pending = this.worker
+          .verify(id, path, manifest, this.invalidated.has(id))
+          .then(async ({ cached }) => {
+            current.fresh = !cached
+            if (changed()) return
+            this.invalidated.delete(id)
+            await this.worker.unload(id)
+          })
+        const current: Verification = {
+          stamp,
+          generation,
+          pending,
+          fresh: false,
+        }
+        verification = current
         this.verified.set(id, current)
-        void pending.catch(() => {
-          if (this.verified.get(id) === current) this.verified.delete(id)
+        void pending.catch((error) => {
+          if (
+            this.verified.get(id) === current &&
+            !(
+              error instanceof Error &&
+              error.name === 'DictionaryPackChecksumError'
+            )
+          )
+            this.verified.delete(id)
         })
       }
       await verification.pending
       if (changed()) return empty
-      const result = await query(id, path)
-      return changed() ? empty : result
+      try {
+        const result = await query(id, path)
+        return changed() ? empty : result
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.name === 'DictionaryPackValidationError'
+        ) {
+          if (this.verified.get(id) === verification) {
+            if (verification.fresh) {
+              const pending = Promise.reject(error)
+              void pending.catch(() => {})
+              this.verified.set(id, { ...verification, pending })
+            } else {
+              this.invalidated.add(id)
+              this.verified.delete(id)
+            }
+          }
+        }
+        throw error
+      }
     } catch (error) {
       if (changed()) return empty
       throw error
@@ -519,8 +511,6 @@ export class PackStore {
 
   async close() {
     this.closed = true
-    if (this.idle) clearImmediate(this.idle)
-    this.idle = undefined
     this.installedCache = undefined
     this.active?.controller.abort(
       new Error('Dictionary pack installation canceled.'),

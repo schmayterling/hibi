@@ -7,7 +7,6 @@ import {
   type Lang,
   type Source,
 } from './providers.ts'
-import { writeRecentPack } from './settings.ts'
 
 type Native = AddonContext['native']
 
@@ -142,7 +141,6 @@ export function createOfflineProviders(native: Native): DictionaryProvider[] {
         if (lang !== id) return []
         try {
           const entries = await read(term, signal)
-          if (entries.length) writeRecentPack(id)
           return entries.flatMap((entry) =>
             entry.meanings.map((meaning) => ({
               term: entry.word,
@@ -181,7 +179,6 @@ export function createOfflineProviders(native: Native): DictionaryProvider[] {
             { id, prefix, limit },
             signal,
           )
-          if (words.length) writeRecentPack(id)
           return words
         } catch (error) {
           if (signal.aborted) throw error

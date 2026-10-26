@@ -104,27 +104,58 @@ export async function* siteMediaRecords(): AsyncGenerator<string> {
       ?.content ?? './',
     location.href,
   )
-  for (const path of window.__HIBI_MEDIA_FILES__ ?? []) {
-    if (!/^hibi-assets(?:-site)*\/inline-media\/\d+\.js$/.test(path))
-      throw damaged()
-    yield await new Promise<string>((resolve, reject) => {
-      let record: string | undefined
-      let invalid = false
+  const pending = new Map<
+    HTMLScriptElement,
+    {
+      records: string[]
+      bytes: number
+      fail: () => void
+    }
+  >()
+  const load = (path: string) =>
+    new Promise<string[]>((resolve, reject) => {
+      if (!/^hibi-assets(?:-site)*\/inline-media\/\d+\.js$/.test(path)) {
+        reject(damaged())
+        return
+      }
       const script = document.createElement('script')
+      const records: string[] = []
       const finish = (failed: boolean) => {
-        delete window.__HIBI_MEDIA_CHUNK__
+        pending.delete(script)
+        script.onload = script.onerror = null
         script.remove()
-        if (failed || invalid || record === undefined) reject(damaged())
-        else resolve(record)
+        if (failed || !records.length) reject(damaged())
+        else resolve(records)
       }
-      window.__HIBI_MEDIA_CHUNK__ = (value) => {
-        if (typeof value !== 'string' || record !== undefined) invalid = true
-        else record = value
-      }
+      pending.set(script, { records, bytes: 0, fail: () => finish(true) })
       script.onload = () => finish(false)
       script.onerror = () => finish(true)
       script.src = new URL(path, root).href
       document.head.append(script)
     })
+  window.__HIBI_MEDIA_CHUNK__ = (value) => {
+    const source = pending.get(document.currentScript as HTMLScriptElement)
+    if (!source) return
+    if (
+      typeof value !== 'string' ||
+      value.length > 128 * 1024 ||
+      source.bytes + value.length > 4 * 1024 * 1024
+    ) {
+      source.fail()
+      return
+    }
+    source.bytes += value.length
+    source.records.push(value)
+  }
+  try {
+    const files = window.__HIBI_MEDIA_FILES__ ?? []
+    for (let offset = 0; offset < files.length; offset += 4)
+      for (const records of await Promise.all(
+        files.slice(offset, offset + 4).map(load),
+      ))
+        yield* records
+  } finally {
+    for (const source of pending.values()) source.fail()
+    delete window.__HIBI_MEDIA_CHUNK__
   }
 }

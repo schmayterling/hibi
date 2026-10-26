@@ -204,6 +204,9 @@ for (const mode of [
         Buffer.from('89504e470d0a1a0a', 'hex'),
         Buffer.from('PRIVATE-ASSET-SENTINEL-9153'.repeat(2000)),
         ...(mode === 'protected-single' ? [Buffer.alloc(8 * 1024 * 1024)] : []),
+        ...(mode === 'protected-folder'
+          ? [Buffer.alloc(15 * 1024 * 1024)]
+          : []),
       ])
       const urls = []
       try {
@@ -278,14 +281,23 @@ for (const mode of [
           const window = {}
           runInNewContext(text, { window })
           payload = window.__HIBI_WORKSPACE__
+          assert.ok(
+            (window.__HIBI_MEDIA_FILES__ ?? []).length <= 8,
+            '15 mib media uses at most eight packed files',
+          )
           for (const path of window.__HIBI_MEDIA_FILES__ ?? []) {
             const script = await readFile(
               join(directory, 'files', path),
               'utf8',
             )
-            assert.ok(script.length < 128 * 1024)
+            assert.ok(script.length <= 4 * 1024 * 1024)
             runInNewContext(script, {
-              window: { __HIBI_MEDIA_CHUNK__: (record) => blocks.push(record) },
+              window: {
+                __HIBI_MEDIA_CHUNK__: (record) => {
+                  assert.ok(record.length <= 128 * 1024)
+                  blocks.push(record)
+                },
+              },
             })
           }
         }
@@ -320,6 +332,13 @@ for (const mode of [
           )
           assert.equal(text.includes('PRIVATE-ASSET-SENTINEL-9153'), false)
         }
+        assert.equal(
+          blocks.length,
+          inMemory
+            ? 0
+            : (inline ? Math.ceil(bytes.length / (48 * 1024)) : 0) + 1,
+          'only full records plus one final data record per asset',
+        )
         async function* records() {
           yield* blocks
         }

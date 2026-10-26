@@ -113,6 +113,19 @@ test('base64 chunks carry incomplete triples and stay bounded for oversized read
   assert.equal(size, 2 * 1024 * 1024)
 })
 
+test('64 kib source reads produce full 48 kib records without fragmentation', async () => {
+  const source = Buffer.alloc(64 * 1024, 0xa7)
+  async function* input() {
+    for (let index = 0; index < 240; index++) yield source
+  }
+  let count = 0
+  for await (const chunk of base64Chunks(input())) {
+    assert.equal(chunk.length, 64 * 1024)
+    count++
+  }
+  assert.equal(count, 320)
+})
+
 test('cancelling publication closes source and exclusive destination after the first chunk', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'hibi-site-media-cancel-'))
   t.after(() => rm(directory, { recursive: true, force: true }))

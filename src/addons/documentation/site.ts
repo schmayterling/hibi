@@ -681,9 +681,13 @@ export async function* siteOutput(
     }
     for (const path of inline) {
       let index = 0
-      for await (const data of base64Chunks(readAsset!(path)))
-        yield encode({ path, index: index++, data, last: false })
-      yield encode({ path, index, data: '', last: true })
+      let previous: string | undefined
+      for await (const data of base64Chunks(readAsset!(path))) {
+        if (previous !== undefined)
+          yield encode({ path, index: index++, data: previous, last: false })
+        previous = data
+      }
+      yield encode({ path, index, data: previous ?? '', last: true })
     }
   }
   const home = homePage(site.pages, site.options.homePage) as
@@ -762,14 +766,24 @@ export async function* siteOutput(
   yield [`${assets}/site.css`, textChunks(css)]
   if (!locked) yield [`${assets}/custom.css`, textChunks(customCss)]
   const mediaFiles: string[] = []
-  for await (const record of records()) {
+  let batch: string[] = []
+  let batchBytes = 0
+  const mediaFile = () => {
     const path = assets + '/inline-media/' + mediaFiles.length + '.js'
     mediaFiles.push(path)
-    yield [
-      path,
-      textChunks('window.__HIBI_MEDIA_CHUNK__(' + siteJson(record) + ');'),
-    ]
+    return [path, textChunks(batch.join(''))] as const
   }
+  for await (const record of records()) {
+    const script = 'window.__HIBI_MEDIA_CHUNK__(' + siteJson(record) + ');'
+    if (batchBytes + script.length > 4 * 1024 * 1024) {
+      yield mediaFile()
+      batch = []
+      batchBytes = 0
+    }
+    batch.push(script)
+    batchBytes += script.length
+  }
+  if (batch.length) yield mediaFile()
   async function* workspace() {
     yield 'window.__HIBI_WORKSPACE__='
     yield* data()

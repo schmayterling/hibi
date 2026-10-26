@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { decodeSiteMedia } from '../src/site/media.ts'
+import { decodeSiteMedia, siteMediaRecords } from '../src/site/media.ts'
 
 const path = 'hibi-assets/media/' + 'a'.repeat(64) + '.mp4'
 async function* records(values) {
@@ -47,6 +47,88 @@ test('inline records assemble exact blob bytes and reject missing, reordered and
     ),
     /damaged/,
   )
+})
+
+test('folder media loads four packed files concurrently and yields records in order', async (t) => {
+  const pending = []
+  let inFlight = 0,
+    peak = 0,
+    requests = 0
+  const fakeWindow = {
+    __HIBI_MEDIA_FILES__: Array.from(
+      { length: 8 },
+      (_, index) => 'hibi-assets/inline-media/' + index + '.js',
+    ),
+  }
+  const fakeDocument = {
+    currentScript: null,
+    querySelectorAll: () => [],
+    querySelector: () => null,
+    createElement: () => ({ remove() {} }),
+    head: {
+      append(script) {
+        requests++
+        peak = Math.max(peak, ++inFlight)
+        pending.push(script)
+      },
+    },
+  }
+  for (const [name, value] of Object.entries({
+    window: fakeWindow,
+    document: fakeDocument,
+    location: { href: 'file:///site/index.html' },
+  })) {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, name)
+    Object.defineProperty(globalThis, name, { configurable: true, value })
+    t.after(() => {
+      if (previous) Object.defineProperty(globalThis, name, previous)
+      else delete globalThis[name]
+    })
+  }
+  const iterator = siteMediaRecords()
+  const output = []
+  for (let batch = 0; batch < 2; batch++) {
+    const next = iterator.next()
+    await new Promise(setImmediate)
+    assert.equal(
+      pending.length,
+      4,
+      'four script requests start before any completes',
+    )
+    for (const script of pending.splice(0).reverse()) {
+      const file = Number(script.src.match(/(\d+)\.js$/)[1])
+      fakeDocument.currentScript = script
+      for (let index = 0; index < 2; index++)
+        fakeWindow.__HIBI_MEDIA_CHUNK__(String(file * 2 + index))
+      fakeDocument.currentScript = null
+      inFlight--
+      script.onload()
+    }
+    output.push((await next).value)
+    for (let index = 1; index < 8; index++)
+      output.push((await iterator.next()).value)
+  }
+  assert.equal((await iterator.next()).done, true)
+  assert.deepEqual(
+    output,
+    Array.from({ length: 16 }, (_, index) => String(index)),
+  )
+  assert.equal(requests, 8)
+  assert.equal(peak, 4)
+  assert.equal(inFlight, 0)
+  assert.equal(fakeWindow.__HIBI_MEDIA_CHUNK__, undefined)
+  fakeWindow.__HIBI_MEDIA_FILES__.length = 4
+  const failed = siteMediaRecords().next()
+  await new Promise(setImmediate)
+  assert.equal(pending.length, 4)
+  const scripts = pending.splice(0)
+  scripts[0].onerror()
+  await assert.rejects(failed, /damaged/)
+  for (const script of scripts) {
+    assert.equal(script.onload, null)
+    assert.equal(script.onerror, null)
+  }
+  assert.equal(fakeWindow.__HIBI_MEDIA_CHUNK__, undefined)
 })
 
 test('protected inline chunks authenticate before blob creation', async () => {

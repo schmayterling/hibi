@@ -126,16 +126,18 @@ export class SiteMedia {
 }
 
 export async function* base64Chunks(chunks: AsyncIterable<Uint8Array>) {
-  let remainder = Buffer.alloc(0)
+  const buffer = Buffer.allocUnsafe(48 * 1024)
+  let used = 0
   for await (const chunk of chunks)
-    for (let offset = 0; offset < chunk.length; offset += 48 * 1024) {
-      const bytes = Buffer.concat([
-        remainder,
-        chunk.subarray(offset, offset + 48 * 1024),
-      ])
-      const end = bytes.length - (bytes.length % 3)
-      yield bytes.subarray(0, end).toString('base64')
-      remainder = bytes.subarray(end)
+    for (let offset = 0; offset < chunk.length; ) {
+      const length = Math.min(buffer.length - used, chunk.length - offset)
+      buffer.set(chunk.subarray(offset, offset + length), used)
+      offset += length
+      used += length
+      if (used === buffer.length) {
+        yield buffer.toString('base64')
+        used = 0
+      }
     }
-  if (remainder.length) yield remainder.toString('base64')
+  if (used) yield buffer.subarray(0, used).toString('base64')
 }

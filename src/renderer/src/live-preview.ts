@@ -160,6 +160,41 @@ function blockChild(node: SyntaxNode, last: boolean) {
   return child && !isBlock(child) ? blockSibling(child, !last) : child
 }
 
+/**
+ * The line of a list item's marker when the item's first block starts on
+ * the next line and shows from it: the rich view draws the marker beside
+ * that block, so the marker's own line collapses.
+ */
+function loneMarker(doc: Text, item: SyntaxNode) {
+  const own = doc.lineAt(item.from)
+  // Read the line first: most items hold text after their marker.
+  if (
+    !/^(?:[-+*]|\d{1,9}[.)])[ \t\r]*$/.test(doc.sliceString(item.from, own.to))
+  )
+    return null
+  const first = item.childAfter(own.to)
+  return first &&
+    isBlock(first) &&
+    !isContainer(first) &&
+    first.name !== 'FencedCode'
+    ? own
+    : null
+}
+
+/** The first line a block shows: a lone list marker's line collapses into the next. */
+function shownLine(doc: Text, node: SyntaxNode) {
+  const line = doc.lineAt(node.from)
+  if (!/(?:[-+*]|\d[.)])[ \t\r]*$/.test(line.text)) return line
+  for (
+    let inner: SyntaxNode | null = node;
+    inner && inner.from <= line.to;
+    inner = isContainer(inner) ? blockChild(inner, false) : null
+  )
+    if (inner.name === 'ListItem' && loneMarker(doc, inner))
+      return doc.line(line.number + 1)
+  return line
+}
+
 /** A block's margins in its container: list items and the blocks inside them sit closer. */
 function margins(node: SyntaxNode): { top: number; bottom: number } {
   // Syntax shown as written keeps a paragraph's 1em margins on both sides.
@@ -620,13 +655,18 @@ function inline(
         )
         return
       }
-      case 'ListItem':
+      case 'ListItem': {
         eachLine(doc, ref.from, ref.to, range, (current) => {
           const info = line(current.from)
           info.item = ref.node
           info.containers.push(ref.node)
         })
+        // The layout field hides a lone marker's line.
+        const lone = loneMarker(doc, ref.node)
+        if (lone && lone.from >= range.from && lone.from <= range.to)
+          line(lone.from).hidden = true
         return
+      }
       case 'FencedCode':
       case 'CodeBlock':
         code(ref.node, range)
@@ -695,7 +735,7 @@ function containers(
   for (const container of info.containers) {
     const left = widths.length ? `calc(${widths.join(' + ')})` : '0px'
     const shape = blocks.shapes(container)
-    const first = doc.lineAt(container.from).from === at
+    const first = shownLine(doc, container).from === at
     const offset = `${first ? info.gap + top : 0}px`
     if (shape?.class) info.classes.push(shape.class)
     if (shape?.paint) paint.push(shape.paint(left, offset))
@@ -751,18 +791,28 @@ function itemLine(
     (container) => container.name === 'ListItem',
   ).length
   const marker = item.getChild('ListMark')
-  if (!marker || item.from < current.from || item.from > current.to) {
-    // Continuation lines start at the item's content.
-    const indent = /^[ \t]*/.exec(doc.sliceString(prefix, current.to))![0]
-    return info.leaf ?? prefix + indent.length
-  }
-  // The marker and up to four following spaces are hidden.
-  const after = doc.sliceString(marker.to, current.to)
-  const gap = /^[ \t]{0,4}/.exec(after)![0].length
-  const content = Math.max(
-    info.leaf ?? 0,
-    marker.to + (gap === after.length ? after.length : gap),
+  // Continuation lines start at the item's content.
+  const continuation = () =>
+    info.leaf ??
+    prefix + /^[ \t]*/.exec(doc.sliceString(prefix, current.to))![0].length
+  // A lone marker is drawn on the line after its own.
+  const lone = marker && loneMarker(doc, item)
+  if (
+    !marker ||
+    current.number !== (lone ? lone.number + 1 : doc.lineAt(item.from).number)
   )
+    return continuation()
+  let content: number
+  if (lone) content = continuation()
+  else {
+    // The marker and up to four following spaces are hidden.
+    const after = doc.sliceString(marker.to, current.to)
+    const gap = /^[ \t]{0,4}/.exec(after)![0].length
+    content = Math.max(
+      info.leaf ?? 0,
+      marker.to + (gap === after.length ? after.length : gap),
+    )
+  }
   if (!info.marker) return content
   info.classes.push('hibi-lp-list-item')
   const list = item.parent!
@@ -808,8 +858,9 @@ function spacing(
     const start = doc.lineAt(block.from),
       end = doc.lineAt(previous.to)
     if (end.number + 1 >= start.number) {
-      if (start.from >= range.from && start.from <= range.to)
-        line(start.from).gap = gap
+      const shown = shownLine(doc, block)
+      if (shown.from >= range.from && shown.from <= range.to)
+        line(shown.from).gap = gap
       return
     }
     for (let number = end.number + 1; number < start.number; number++) {
@@ -945,6 +996,12 @@ function chunkLayout(
           case 'Task':
             leaf = { from: ref.from, to: ref.to, hard: new Set(), hidden: [] }
             return
+          case 'ListItem': {
+            const lone = loneMarker(doc, ref.node)
+            if (lone && starts(lone.from))
+              out.push(hiddenLine.range(lone.from - from, lone.to - from))
+            return
+          }
           case 'HardBreak':
             leaf?.hard.add(doc.lineAt(ref.from).to)
             return false

@@ -88,6 +88,10 @@ type Lost = Stuck & {
   line: number | null
   /** The last line read was blank. */
   blank: boolean
+  /** The blank lines just read hold a carriage return, which html blocks do not end at. */
+  cr: boolean
+  /** A line was checked against blank lines without one. */
+  lf: boolean
   /** In some reading, a line since the block left it, so any line may be at the top level. */
   top: boolean
 }
@@ -1542,6 +1546,8 @@ class ChunkedParse implements ChunkedPartialParse {
         at > 0 &&
         (start > 0 || at <= 64) &&
         /^[ \t\r]*$/.test(before.slice(start, -1)),
+      cr: false,
+      lf: false,
       top: stuck.marker === null,
     }
   }
@@ -1590,10 +1596,17 @@ class ChunkedParse implements ChunkedPartialParse {
           break
         }
         lost.blank = true
+        if (line.includes('\r')) lost.cr = true
         continue
       }
       const after = lost.blank
       lost.blank = false
+      // A check against other blank lines does not hold after these.
+      if (after && lost.cr && lost.lf) {
+        literal = true
+        break
+      }
+      lost.cr = false
       let check = false
       if (lost.top) {
         // Every reading leaves its quotes and lists, and blank lines end
@@ -1624,8 +1637,9 @@ class ChunkedParse implements ChunkedPartialParse {
       }
       if (check) {
         if (!whole) literal = true
+        if (!line.endsWith('\r')) lost.lf = true
         checks.push(line)
-        checked += line.length + 6
+        checked += line.length + 7
       }
       if (resume >= 0 || literal) break
     }
@@ -1660,7 +1674,8 @@ class ChunkedParse implements ChunkedPartialParse {
     let text = 'x\n\n'
     const after: number[] = []
     for (const line of lines) {
-      text += `${line}\n\nx\n\n`
+      // Blank lines in crlf text hold a carriage return.
+      text += `${line}\n${line.endsWith('\r') ? '\r' : ''}\nx\n\n`
       after.push(text.length - 3)
     }
     const tree = this.standIn(text)

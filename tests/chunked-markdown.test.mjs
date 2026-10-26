@@ -845,12 +845,16 @@ test('after a stuck block, formatting resumes only at a line that starts a top-l
     ...['> quote', '  > quote', '> > q', '- item', '  - item', '+ plus'],
     ...['1. one', '2. two', '2) two', '* star'],
   ]
-  for (const container of ['-', '1.', '>']) {
+  // Blank lines in crlf text hold a carriage return, which html blocks do not end at.
+  for (const [container, eol] of ['-', '1.', '>'].flatMap((container) => [
+    [container, '\n'],
+    [container, '\r\n'],
+  ])) {
     let resumed = 0
     for (let seed = 1; seed <= 300; seed++) {
       const r = random(seed)
-      const prefix = stuckBlock(container, 60)
-      const text = `${prefix}${Array.from({ length: 24 }, () => lines[Math.floor(r() * lines.length)]).join('\n')}\n`
+      const prefix = stuckBlock(container, 60).replaceAll('\n', eol)
+      const text = `${prefix}${Array.from({ length: 24 }, () => lines[Math.floor(r() * lines.length)]).join(eol)}${eol}`
       const exact = full.parse(text)
       const counts = probe()
       const { tree } = steps(
@@ -878,13 +882,13 @@ test('after a stuck block, formatting resumes only at a line that starts a top-l
         assert.equal(
           chain(tree, pos),
           chain(exact, pos),
-          `${container} seed ${seed} at ${pos}: ${JSON.stringify(text.slice(prefix.length))}`,
+          `${JSON.stringify(container + eol)} seed ${seed} at ${pos}: ${JSON.stringify(text.slice(prefix.length))}`,
         )
       }
       if (shown) resumed++
     }
     // Most notes still format the text after the stuck block.
-    assert.ok(resumed > 150, `${container}: ${resumed}`)
+    assert.ok(resumed > 150, `${JSON.stringify(container + eol)}: ${resumed}`)
   }
 })
 

@@ -368,6 +368,7 @@ class TableView {
           this.rendered.delete(index)
         }
       this.heights = windowed ? new Heights(widget.rows) : null
+      this.seedHeights()
       this.start = this.end = 0
       this.fixed = false
       this.table.style.tableLayout = ''
@@ -433,6 +434,9 @@ class TableView {
     const element = document.createElement(tag)
     const align = this.aligned[column]
     if (align) element.style.textAlign = align
+    // Header cells carry their column's width, also when they render again.
+    const width = tag === 'th' ? this.sizes.columns[column] : 0
+    if (width) element.style.width = `${width}px`
     const paragraph = document.createElement('p')
     const content = cell
       ? cellContent(line.text.slice(cell.from, cell.to))
@@ -484,6 +488,8 @@ class TableView {
         const element = document.createElement('tr')
         element.dataset.line = String(index + 2)
         element.setAttribute('aria-rowindex', String(index + 2))
+        const height = this.sizes.rows[index + 1]
+        if (height) element.style.height = `${height}px`
         // Missing cells render empty; cells past the header's count are not shown.
         const cells = widget.row(index + 2).cells
         for (let column = 0; column < this.aligned.length; column++)
@@ -953,6 +959,7 @@ class TableView {
       return
     this.sizes.columns = next.columns
     this.sizes.rows = next.rows
+    this.seedHeights()
     // Saved after the redraw, which the table's position needs.
     this.save(1)
   }
@@ -1166,12 +1173,23 @@ class TableView {
       columns: [...(found?.columns ?? [])],
       rows: [...(found?.rows ?? [])],
     }
+    this.seedHeights()
     this.applySizes()
   }
 
   /** Another table or view changed the stored sizes: bind them again, unless this table is changing its own. */
   private refreshed = () => {
     if (!this.dragging && this.saving === undefined) this.sized()
+  }
+
+  /** Rows with a stored height count it before they render, so the row window and spacers place them. */
+  private seedHeights() {
+    const { heights } = this
+    if (!heights) return
+    this.sizes.rows.forEach((size, index) => {
+      if (index && size && index - 1 < heights.length)
+        heights.set(index - 1, size)
+    })
   }
 
   /** Show the column widths and row heights, as the rich editor's table decorations do. */
@@ -1282,6 +1300,13 @@ class TableView {
     const sizes = axis === 'column' ? this.sizes.columns : this.sizes.rows
     while (sizes.length <= index) sizes.push(0)
     sizes[index] = size
+    if (
+      axis === 'row' &&
+      index &&
+      this.heights &&
+      index - 1 < this.heights.length
+    )
+      this.heights.set(index - 1, size || ROW_HEIGHT)
     this.applySizes()
   }
 

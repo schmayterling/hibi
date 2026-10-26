@@ -909,6 +909,49 @@ test('table sizes follow their columns and rows through table actions and undo',
   )
 })
 
+test('stored sizes apply to header cells that render again and rows that scroll in', {
+  timeout: 30000,
+}, async () => {
+  const key = tableKey(0, ['a', 'b'])
+  await harness.evaluate(
+    (key) =>
+      window.tables.layouts('mount', [{ key, columns: [200, 0], rows: null }]),
+    key,
+  )
+  await mountTab('| a | b |\n| - | - |\n| 1 | 2 |\n\nafter', 'mount')
+  // Leaving an edited header cell renders it again, at its stored width.
+  await harness.locator('.hibi-lp-table th', { hasText: 'a' }).click()
+  await harness.keyboard.press('Escape')
+  assert.equal(
+    await harness.evaluate(
+      () => document.querySelector('.hibi-lp-table th').style.width,
+    ),
+    '200px',
+  )
+  // A sized row of a long table gets its height when its window renders it.
+  const rows = Array.from({ length: 300 }, (_, i) => `| r${i} | x |`)
+  const long = `| a | b |\n| - | - |\n${rows.join('\n')}\n\nafter`
+  const stored = Array(252).fill(0)
+  stored[251] = 120
+  await harness.evaluate(
+    ({ key, stored }) =>
+      window.tables.layouts('long', [{ key, columns: null, rows: stored }]),
+    { key, stored },
+  )
+  await mountTab(long, 'long')
+  await harness.evaluate((at) => {
+    const view = window.tables.view()
+    view.focus()
+    view.dispatch({ selection: { anchor: at } })
+  }, long.indexOf('| r250 |') + 3)
+  await harness.evaluate(() => window.tables.settle())
+  const row = await harness.evaluate(() => {
+    const tr = document.querySelector('.hibi-lp-table tr[data-line="252"]')
+    return tr && [tr.style.height, tr.getBoundingClientRect().height >= 119]
+  })
+  assert.deepEqual(row, ['120px', true])
+})
+
 test('typing in a cell writes escaped source into that cell only', {
   timeout: 30000,
 }, async () => {

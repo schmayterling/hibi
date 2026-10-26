@@ -132,7 +132,10 @@ test('Obsidian vault opens in place with wiki links, SVG embeds and backup promp
   assert.equal(await callout.getAttribute('data-fold'), '-')
   assert.match(await callout.innerText(), /Custom title/)
   await page.waitForFunction(
-    (img) => img?.getAttribute('src')?.startsWith('data:image/svg+xml;base64,'),
+    (img) =>
+      img?.getAttribute('src')?.startsWith('app://hibi/document-media/') &&
+      img.complete &&
+      img.naturalWidth > 0,
     await media.elementHandle(),
   )
   assert.equal(await media.getAttribute('width'), '100')

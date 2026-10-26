@@ -11,7 +11,7 @@
       "displayName": "may"
     }
   ],
-  "defaultEnabled": false,
+  "defaultEnabled": true,
   "capabilities": ["ui", "rich", "source", "markdown"],
   "fileExtensions": ["mmd", "mermaid"],
   "entry": "index.tsx",

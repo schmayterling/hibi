@@ -148,3 +148,14 @@ test('tab on selected code lines indents each line, and delete never joins a fen
   assert.equal(run('Title|\n===\n\nnext', deleteForward), 'Title|\n===\n\nnext')
   assert.equal(run('Title\n===\n|next', deleteBackward), 'Title\n===\n|next')
 })
+
+test('enter inside formatting closes it before the break and opens it again after', () => {
+  // Before, `**bo|ld**` became `**bo` and `ld**`, and the bold was lost.
+  assert.equal(run('**bo|ld**', blockBreak), '**bo**\n\n**|ld**')
+  assert.equal(run('a *b **c|d** e*', blockBreak), 'a *b **c***\n\n***|d** e*')
+  assert.equal(run('`co|de`', blockBreak), '`co`\n\n`|de`')
+  assert.equal(run('[la|bel](/u)', blockBreak), '[la](/u)\n\n[|bel](/u)')
+  assert.equal(run('- ~~st|ruck~~', blockBreak), '- ~~st~~\n- ~~|ruck~~')
+  // At the edge of formatting the break stays outside it.
+  assert.equal(run('**bold**|', blockBreak), '**bold**\n\n|')
+})

@@ -53,6 +53,39 @@ function continuation(state: EditorState, tree: Tree, pos: number) {
   return prefix
 }
 
+/**
+ * Inline formatting around `pos` to close before a break and open again
+ * after it, innermost first, so a split keeps its formatting.
+ */
+function reopened(state: EditorState, tree: Tree, pos: number) {
+  let close = '',
+    open = ''
+  for (
+    let node: SyntaxNode | null = tree.resolveInner(pos, -1);
+    node && !node.type.is('Block');
+    node = node.parent
+  ) {
+    const first = node.firstChild
+    let last = node.lastChild
+    if (node.name === 'Link')
+      last =
+        node
+          .getChildren('LinkMark')
+          .find((mark) => state.sliceDoc(mark.from, mark.to) === ']') ?? null
+    else if (
+      !['Emphasis', 'StrongEmphasis', 'Strikethrough', 'InlineCode'].includes(
+        node.name,
+      )
+    )
+      continue
+    if (!first || !last || first === last || pos <= first.to || pos > last.from)
+      continue
+    close += state.sliceDoc(last.from, node.name === 'Link' ? node.to : last.to)
+    open = state.sliceDoc(first.from, first.to) + open
+  }
+  return { close, open }
+}
+
 /** The next list marker: same bullet, next number, unchecked task. */
 function nextMarker(state: EditorState, item: SyntaxNode) {
   const mark = item.getChild('ListMark')
@@ -95,18 +128,21 @@ export function blockBreak(
       if (mark && markerLine?.number === line.number && !content.trim())
         return insert('\n', markerLine.from, markerLine.to)
       const marker = nextMarker(state, item)
-      if (marker) return insert(`\n${marker}`)
+      const { close, open } = reopened(state, tree, pos)
+      if (marker) return insert(`${close}\n${marker}${open}`)
     }
     const quote = around(tree, pos, ['Blockquote'])
     if (quote) {
       const prefix = continuation(state, tree, pos)
       if (blank(line.text.replace(/^(\s*>)+/, '')))
         return insert('\n', line.from, line.to)
-      return insert(`\n${prefix}`)
+      const { close, open } = reopened(state, tree, pos)
+      return insert(`${close}\n${prefix}${open}`)
     }
     // A blank line between blocks gains another empty line.
     if (blank(line.text)) return insert('\n')
-    return insert('\n\n')
+    const { close, open } = reopened(state, tree, pos)
+    return insert(`${close}\n\n${open}`)
   })
 }
 

@@ -331,6 +331,31 @@ test('find in document searches rich text and offscreen markdown without editing
   await input.press('Escape')
   await bar.waitFor({ state: 'hidden' })
 
+  await page
+    .getByRole('button', { name: /^source view$/i, exact: true })
+    .click()
+  await replaceSource('😀İ e\u0301 ß ΟΔΟΣ οδος οδοσ;ΑΣΑ ΣΣ.')
+  await source.focus()
+  await pressShortcut(app, shortcut)
+  for (const query of ['ΟΔΟΣ', 'οδος', 'οδοσ']) {
+    await input.fill(query)
+    await waitForCount('1/3')
+    await page.waitForFunction(
+      () =>
+        [...document.querySelectorAll('.source-pane .cm-searchMatch')]
+          .map((node) => node.textContent)
+          .join('|') === 'ΟΔΟΣ|οδος|οδοσ',
+    )
+    await input.press('Enter')
+    await waitForCount('2/3')
+    assert.equal(
+      await source.locator('.cm-searchMatch-selected').textContent(),
+      'οδος',
+    )
+  }
+  await input.press('Escape')
+  await bar.waitFor({ state: 'hidden' })
+
   // Characters that lengthen when lowercased must not shift highlights, and a
   // final sigma is still the same letter.
   await page

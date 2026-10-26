@@ -31,7 +31,6 @@ import {
 } from '@codemirror/language'
 import {
   closeSearchPanel,
-  openSearchPanel,
   SearchQuery,
   search,
   setSearchQuery,
@@ -124,6 +123,7 @@ import {
   observeSourceAnnotations,
   sourceAnnotationExtension,
 } from './source-annotations'
+import { sourceFindHighlights } from './source-find'
 import {
   formattingKeymap,
   type SourceFormatting,
@@ -334,6 +334,7 @@ export function SourceEditor({
   const addons = useRef(new Compartment())
   const indentation = useRef(new Compartment())
   const display = useRef(new Compartment())
+  const findHighlights = useRef(new Compartment())
   // Later changes reconfigure the display compartment without a new editor.
   const displayOptions = useRef({ markers, spellCheck, documentRevision })
   displayOptions.current = { markers, spellCheck, documentRevision }
@@ -1062,6 +1063,7 @@ export function SourceEditor({
         ...(selection ? { selection } : {}),
         extensions: [
           addons.current.of([]),
+          findHighlights.current.of([]),
           search({
             createPanel: () => {
               const dom = window.document.createElement('div')
@@ -1993,14 +1995,19 @@ export function SourceEditor({
     }
     if (!findActive) {
       closeSearchPanel(editor)
+      editor.dispatch({ effects: findHighlights.current.reconfigure([]) })
       stopFind()
       findActions.current = []
       navigatingFind.current = false
       return
     }
-    openSearchPanel(editor)
     const query = new SearchQuery({ search: findQuery, literal: true })
-    editor.dispatch({ effects: setSearchQuery.of(query) })
+    editor.dispatch({
+      effects: [
+        setSearchQuery.of(query),
+        findHighlights.current.reconfigure(sourceFindHighlights(findQuery)),
+      ],
+    })
     findActions.current = []
     navigatingFind.current = query.valid
     if (query.valid) requestFind('first')

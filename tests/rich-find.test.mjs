@@ -1,15 +1,15 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { history, undo } from '@tiptap/pm/history'
-import { Schema } from '@tiptap/pm/model'
+import { Node, Schema } from '@tiptap/pm/model'
 import { EditorState, TextSelection } from '@tiptap/pm/state'
 import { findWrapping, liftTarget } from '@tiptap/pm/transform'
 import {
   findNext,
   findPrev,
-  firstRichMatch,
   richFind,
   richFindKey,
+  scanRichFind,
   setRichFindQuery,
 } from '../src/renderer/src/rich-find.ts'
 
@@ -39,6 +39,14 @@ const create = (blocks, plugins = []) =>
     plugins: [richFind(), ...plugins],
     doc: schema.nodes.doc.create(null, blocks),
   })
+// Enough of an editor view for the scan: state, dispatch, and destruction.
+const viewOf = (state) => ({
+  state,
+  isDestroyed: false,
+  dispatch(tr) {
+    this.state = this.state.apply(tr)
+  },
+})
 
 // Fold each character alone, so σ and ς are the same letter in any context.
 const fold = (text) => text.toLowerCase().replaceAll('ς', 'σ')
@@ -80,6 +88,27 @@ function expectedMatches(doc, query) {
   return matches
 }
 
+// Sets the query, highlights `shown` (the whole document by default), and
+// completes the scan, as the editor's viewport measurement and scan would.
+function search(state, query, shown = { from: 0, to: state.doc.content.size }) {
+  state = state.apply(setRichFindQuery(state.tr, query))
+  state = state.apply(state.tr.setMeta(richFindKey, { window: shown }))
+  const { index } = richFindKey.getState(state)
+  return state.apply(state.tr.setMeta(richFindKey, { complete: index }))
+}
+
+const highlights = (state) =>
+  richFindKey
+    .getState(state)
+    .deco.find()
+    .map((deco) => ({
+      from: deco.from,
+      to: deco.to,
+      active: deco.type.attrs.class === 'ProseMirror-active-search-match',
+    }))
+    .sort((a, b) => a.from - b.from)
+
+// Matches in the window are highlighted, plus the selected match anywhere.
 function verify(state, query) {
   const expected = expectedMatches(state.doc, query)
   const find = richFindKey.getState(state)
@@ -87,16 +116,15 @@ function verify(state, query) {
   const selected = expected.findIndex(
     (match) => match.from === from && match.to === to,
   )
+  const shown = find.window
   assert.deepEqual(
-    find.deco
-      .find()
-      .map((deco) => ({
-        from: deco.from,
-        to: deco.to,
-        active: deco.type.attrs.class === 'ProseMirror-active-search-match',
-      }))
-      .sort((a, b) => a.from - b.from),
-    expected.map((match, index) => ({ ...match, active: index === selected })),
+    highlights(state),
+    expected.flatMap((match, index) =>
+      index === selected ||
+      (shown && match.from < shown.to && match.to > shown.from)
+        ? [{ ...match, active: index === selected }]
+        : [],
+    ),
   )
   assert.equal(find.total, expected.length)
   assert.equal(find.current, selected + 1)
@@ -151,7 +179,7 @@ test('rich find keeps highlights, counts, and navigation exact through edits', (
     ],
     [history()],
   )
-  state = state.apply(setRichFindQuery(state.tr, query))
+  state = search(state, query)
   verify(state, query)
   const apply = (tr) => {
     state = state.apply(tr)
@@ -170,7 +198,6 @@ test('rich find keeps highlights, counts, and navigation exact through edits', (
       target(state, findPrev),
       before ?? (last && last.from >= to ? last : null),
     )
-    assert.deepEqual(firstRichMatch(state), first ?? null)
   }
   const blocks = () => {
     const found = []
@@ -185,7 +212,7 @@ test('rich find keeps highlights, counts, and navigation exact through edits', (
     const { node, pos } = all[random(all.length)]
     const inside = pos + 1 + random(node.content.size + 1)
     const tr = state.tr
-    switch (step % 13) {
+    switch (step % 14) {
       case 0:
         tr.insertText(insertions[random(insertions.length)], inside)
         break
@@ -288,6 +315,17 @@ test('rich find keeps highlights, counts, and navigation exact through edits', (
           tr.replaceWith(0, state.doc.content.size, state.doc.content)
         else tr.setSelection(TextSelection.create(state.doc, inside))
         break
+      case 13: {
+        // The viewport moved: highlight another part of the document.
+        const from = random(state.doc.content.size)
+        tr.setMeta(richFindKey, {
+          window: {
+            from,
+            to: from + 1 + random(state.doc.content.size - from),
+          },
+        })
+        break
+      }
     }
     const undone = tr.getMeta('undone')
     apply(undone ?? tr)
@@ -306,7 +344,7 @@ test('rich find folds a dense paragraph once and restyles only the selected matc
     folded += this.length
     return lower.call(this)
   })
-  state = state.apply(setRichFindQuery(state.tr, 'needle'))
+  state = search(state, 'needle')
   assert.equal(folded, text.length + 'needle'.length)
   assert.equal(richFindKey.getState(state).total, 20000)
   const move = (command) => {
@@ -358,7 +396,7 @@ test('rich find rescans only changed textblocks in a long document', (t) => {
   let state = create(
     Array.from({ length: 2000 }, () => paragraph('needle word')),
   )
-  state = state.apply(setRichFindQuery(state.tr, 'needle'))
+  state = search(state, 'needle')
   let folded = 0
   const lower = String.prototype.toLowerCase
   t.mock.method(String.prototype, 'toLowerCase', function () {
@@ -381,8 +419,7 @@ test('rich find rescans only changed textblocks in a long document', (t) => {
 })
 
 test('rich find does not move from the only match', () => {
-  let state = create([paragraph('one needle here')])
-  state = state.apply(setRichFindQuery(state.tr, 'needle'))
+  let state = search(create([paragraph('one needle here')]), 'needle')
   state = state.apply(
     state.tr.setSelection(TextSelection.create(state.doc, 5, 11)),
   )
@@ -398,8 +435,10 @@ test('rich find does not move from the only match', () => {
 })
 
 test('rich find unselects a shifted match when the selection leaves it', () => {
-  let state = create([paragraph('before'), paragraph('needle and needle')])
-  state = state.apply(setRichFindQuery(state.tr, 'needle'))
+  let state = search(
+    create([paragraph('before'), paragraph('needle and needle')]),
+    'needle',
+  )
   state = state.apply(
     state.tr.setSelection(TextSelection.create(state.doc, 20, 26)),
   )
@@ -423,11 +462,11 @@ test('rich find matches Greek sigma in every position of a word', () => {
     ['ΟΔΟΣ', 3],
     ['οδος', 3],
   ]) {
-    state = state.apply(setRichFindQuery(state.tr, query))
+    state = search(state, query)
     assert.equal(verify(state, query).length, total)
   }
   // Every occurrence is reachable in order, and both directions wrap.
-  state = state.apply(setRichFindQuery(state.tr, 'Σ'))
+  state = search(state, 'Σ')
   const expected = verify(state, 'Σ')
   for (const match of [...expected, expected[0]]) {
     assert.deepEqual(target(state, findNext), match)
@@ -455,8 +494,7 @@ test('lowercasing depends on neighboring letters only for Greek final sigma', ()
 })
 
 test('rich find maps lengthened lowercase characters to whole source characters', () => {
-  let state = create([paragraph('İx needle İİ i')])
-  state = state.apply(setRichFindQuery(state.tr, 'needle'))
+  let state = search(create([paragraph('İx needle İİ i')]), 'needle')
   assert.deepEqual(
     richFindKey
       .getState(state)
@@ -464,7 +502,7 @@ test('rich find maps lengthened lowercase characters to whole source characters'
       .map((deco) => state.doc.textBetween(deco.from, deco.to)),
     ['needle'],
   )
-  state = state.apply(setRichFindQuery(state.tr, 'İ'))
+  state = search(state, 'İ')
   assert.deepEqual(
     richFindKey
       .getState(state)
@@ -472,7 +510,7 @@ test('rich find maps lengthened lowercase characters to whole source characters'
       .map((deco) => state.doc.textBetween(deco.from, deco.to)),
     ['İ', 'İ', 'İ'],
   )
-  state = state.apply(setRichFindQuery(state.tr, 'i'))
+  state = search(state, 'i')
   assert.deepEqual(
     richFindKey
       .getState(state)
@@ -480,4 +518,137 @@ test('rich find maps lengthened lowercase characters to whole source characters'
       .map((deco) => state.doc.textBetween(deco.from, deco.to)),
     ['İ', 'İ', 'İ', 'i'],
   )
+})
+
+test('rich find highlights a bounded window however many matches there are', () => {
+  const shown = { from: 2000, to: 4000 }
+  let rendered
+  for (const count of [1000, 10000, 100000]) {
+    let state = search(
+      create([paragraph('needle word '.repeat(count).trimEnd())]),
+      'needle',
+      shown,
+    )
+    // The reference scan is slow, so it checks the smaller notes.
+    const check = () => count < 100000 && verify(state, 'needle')
+    check()
+    assert.equal(richFindKey.getState(state).total, count)
+    rendered ??= highlights(state).length
+    assert.equal(highlights(state).length, rendered, `${count} matches`)
+    // The last match lies far outside the window; selecting it adds only it.
+    findPrev(state, (tr) => {
+      state = state.apply(tr)
+    })
+    check()
+    assert.equal(richFindKey.getState(state).current, count)
+    assert.equal(highlights(state).length, rendered + 1)
+    findNext(state, (tr) => {
+      state = state.apply(tr)
+    })
+    check()
+    assert.equal(highlights(state).length, rendered + 1)
+  }
+  assert.ok(rendered > 100 && rendered < 200, `${rendered} highlights`)
+})
+
+test('rich find scans long notes in slices and stops for a newer query', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  // Each block visit advances the clock by a millisecond, so a slice covers
+  // eight blocks.
+  let clock = 0
+  t.mock.method(performance, 'now', () => clock++)
+  const view = viewOf(
+    create(
+      Array.from({ length: 40 }, (_, line) =>
+        paragraph(line === 20 || line === 35 ? 'a needle' : `line ${line}`),
+      ),
+    ),
+  )
+  const status = () => {
+    const { total, current } = richFindKey.getState(view.state)
+    return [total, current]
+  }
+  view.dispatch(setRichFindQuery(view.state.tr, 'needle'))
+  const firsts = []
+  scanRichFind(view, (match) => firsts.push(match))
+  assert.deepEqual(status(), [null, 0])
+  assert.deepEqual(firsts, [])
+  // An edit before the scan ends adds a match in an already scanned block.
+  view.dispatch(view.state.tr.insertText('needle ', 1))
+  t.mock.timers.runAll()
+  assert.deepEqual(firsts, [{ from: 1, to: 7 }])
+  assert.deepEqual(status(), [3, 0])
+  view.dispatch(
+    view.state.tr.setSelection(TextSelection.create(view.state.doc, 1, 7)),
+  )
+  assert.deepEqual(status(), [3, 1])
+
+  // A newer query leaves the older scan without effect.
+  view.dispatch(setRichFindQuery(view.state.tr, 'a needle'))
+  scanRichFind(view, () => assert.fail('superseded scan reported a match'))
+  view.dispatch(setRichFindQuery(view.state.tr, 'needle'))
+  t.mock.timers.runAll()
+  assert.deepEqual(status(), [null, 0])
+  const stop = scanRichFind(view, (match) => firsts.push(match))
+  stop()
+  t.mock.timers.runAll()
+  assert.deepEqual(status(), [null, 0])
+  assert.equal(firsts.length, 2)
+})
+
+test('rich find scans each block once however many slices it takes', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let clock = 0
+  t.mock.method(performance, 'now', () => clock++)
+  const child = Node.prototype.child
+  let visits = 0
+  t.mock.method(Node.prototype, 'child', function (index) {
+    visits++
+    return child.call(this, index)
+  })
+  for (const blocks of [800, 1600, 3200]) {
+    const view = viewOf(
+      create(
+        Array.from({ length: blocks }, (_, line) => paragraph(`l${line}`)),
+      ),
+    )
+    view.dispatch(setRichFindQuery(view.state.tr, 'missing'))
+    visits = 0
+    scanRichFind(view, () => assert.fail('no match expected'))
+    t.mock.timers.runAll()
+    assert.equal(richFindKey.getState(view.state).total, 0)
+    // The walk and the final count each visit a block once.
+    assert.ok(visits <= 2 * blocks, `${visits} visits for ${blocks} blocks`)
+  }
+})
+
+test('rich find moves only after the scan has counted every match', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  let clock = 0
+  t.mock.method(performance, 'now', () => clock++)
+  const view = viewOf(
+    create(
+      Array.from({ length: 1000 }, (_, line) =>
+        paragraph(line === 999 ? 'needle' : `line ${line}`),
+      ),
+    ),
+  )
+  view.dispatch(setRichFindQuery(view.state.tr, 'needle'))
+  scanRichFind(view, () => {})
+  let folded = 0
+  const lower = String.prototype.toLowerCase
+  t.mock.method(String.prototype, 'toLowerCase', function () {
+    folded += this.length
+    return lower.call(this)
+  })
+  const move = (command) => command(view.state, (tr) => view.dispatch(tr))
+  // A move cannot finish the scan synchronously; the editor queues it instead.
+  assert.equal(move(findNext), false)
+  assert.equal(move(findPrev), false)
+  assert.equal(folded, 0)
+  assert.equal(richFindKey.getState(view.state).total, null)
+  t.mock.timers.runAll()
+  assert.equal(move(findNext), true)
+  const { total, current } = richFindKey.getState(view.state)
+  assert.deepEqual([total, current], [1, 1])
 })

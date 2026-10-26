@@ -44,7 +44,12 @@ const deferred = () => {
 
 function harness() {
   const frame = { url: 'app://hibi/' }
-  const window = { webContents: { mainFrame: frame } }
+  const window = {
+    webContents: {
+      mainFrame: frame,
+      send: (...args) => state.sent.push(args),
+    },
+  }
   const event = { sender: window.webContents, senderFrame: frame }
   const state = {
     enabled: true,
@@ -52,6 +57,8 @@ function harness() {
     lookups: 0,
     calls: [],
     loads: 0,
+    documentPath: '/notes/first.md',
+    sent: [],
     document: { tabId: 'first', revision: 1 },
     workspace: Object.freeze({ workspaceId: 'first', workspaceGeneration: 1 }),
   }
@@ -59,6 +66,8 @@ function harness() {
   const noop = () => null
   const bindings = {
     window,
+    MEDIA_CHANNELS: { scopeChanged: 'media:scope-changed' },
+    getDocumentPath: () => state.documentPath,
     pendingFileOperations: new Set(),
     fileOperationHasDialog: () => false,
     fileOperationDialogOpened: noop,
@@ -90,7 +99,7 @@ function harness() {
         },
       }
     },
-    getDocument: noop,
+    getDocument: () => state.document,
     getDocumentSource: () => ({
       snapshot: () => ({ document: state.document }),
     }),

@@ -13,4 +13,5 @@ export const mathStyles =
     const data = name && byName.get(name)
     return data ? `src:url(${data}) format("woff2")` : declaration
   }) +
-  '\n.tiptap-mathematics-render{cursor:pointer}.tiptap-mathematics-render[data-type="inline-math"]{display:inline-block}.tiptap-mathematics-render[data-type="block-math"]{overflow-x:auto;padding:8px 0}.katex-display{overflow-x:auto;overflow-y:hidden}.katex{color:inherit}'
+  // Equations are not scroll anchors: text around them stays put while they render.
+  '\n.tiptap-mathematics-render{cursor:pointer;overflow-anchor:none}.tiptap-mathematics-render[data-type="inline-math"]{display:inline-block}.tiptap-mathematics-render[data-type="block-math"]{overflow-x:auto;padding:8px 0}.katex-display{overflow-x:auto;overflow-y:hidden}.katex{color:inherit}'

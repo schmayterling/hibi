@@ -7,19 +7,23 @@ import {
   TextSelection,
   type Transaction,
 } from '@tiptap/pm/state'
-import { StepMap } from '@tiptap/pm/transform'
-import { Decoration, DecorationSet } from '@tiptap/pm/view'
+import { type Mapping, StepMap } from '@tiptap/pm/transform'
+import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view'
 
 type Range = { from: number; to: number }
 type FindState = {
   query: string
   index: MatchIndex | null
   deco: DecorationSet
-  total: number
+  /** Positions near the viewport whose matches are highlighted. */
+  window: Range | null
+  /** Null until every textblock has been scanned. */
+  total: number | null
   /** One-based rank of the selected match, or 0. */
   current: number
   active: Range | null
 }
+type FindMeta = { query: string } | { window: Range } | { complete: MatchIndex }
 
 const matchStyle = { class: 'ProseMirror-search-match' }
 const activeStyle = { class: 'ProseMirror-active-search-match' }
@@ -210,61 +214,107 @@ function matchesBefore(
   return count
 }
 
-function isMatch(index: MatchIndex, doc: Node, from: number, to: number) {
-  if (from >= to) return false
+/** Offset of the match at [from, to] in its textblock, or -1. */
+function matchOffset(index: MatchIndex, doc: Node, from: number, to: number) {
+  if (from >= to) return -1
   const $from = doc.resolve(from)
   for (let depth = 1; depth <= $from.depth; depth++) {
     if (!$from.node(depth).inlineContent) continue
     const found = index.matches($from.node(depth))
-    const start = $from.start(depth)
-    const at = firstPair(found, 0, from - start)
-    return found[at] === from - start && found[at + 1] === to - start
+    const offset = from - $from.start(depth)
+    const at = firstPair(found, 0, offset)
+    return found[at] === offset && found[at + 1] === to - from + offset
+      ? offset
+      : -1
   }
-  return false
+  return -1
+}
+
+/** Where a walk continues: the next child of each open ancestor and its position. */
+type Walk = { node: Node; child: number; pos: number }[]
+
+/** Calls `visit` for the remaining textblocks in order until it returns false; true once done. */
+function walkBlocks(walk: Walk, visit: (block: Node, pos: number) => boolean) {
+  while (walk.length) {
+    const parent = walk.at(-1)!
+    if (parent.child >= parent.node.childCount) {
+      walk.pop()
+      continue
+    }
+    const node = parent.node.child(parent.child++)
+    const pos = parent.pos
+    parent.pos += node.nodeSize
+    if (node.inlineContent) {
+      if (!visit(node, pos)) return false
+    } else if (!node.isLeaf) walk.push({ node, child: 0, pos: pos + 1 })
+  }
+  return true
 }
 
 const none: FindState = {
   query: '',
   index: null,
   deco: DecorationSet.empty,
+  window: null,
   total: 0,
   current: 0,
   active: null,
 }
 
+const overlaps = (shown: Range | null, range: Range) =>
+  !!shown && range.from < shown.to && range.to > shown.from
+
+function mapRange(mapping: Mapping, range: Range | null) {
+  if (!range) return null
+  const from = mapping.map(range.from, 1)
+  const to = mapping.map(range.to, -1)
+  return from < to ? { from, to } : null
+}
+
+/** Highlights the block's matches that overlap `shown`. */
 function highlightBlock(
   decorations: Decoration[],
   index: MatchIndex,
   block: Node,
   pos: number,
+  shown: Range,
 ) {
   const found = index.matches(block)
-  for (let at = 0; at < found.length; at += 2)
+  const start = pos + 1
+  for (
+    let at = firstPair(found, 1, shown.from - start + 1);
+    at < found.length && start + found[at]! < shown.to;
+    at += 2
+  )
     decorations.push(
-      highlight(pos + 1 + found[at]!, pos + 1 + found[at + 1]!, found[at]!),
+      highlight(start + found[at]!, start + found[at + 1]!, found[at]!),
     )
 }
 
-function rebuild(state: EditorState, query: string) {
-  const index = new MatchIndex(query)
+/** Highlights only the matches in `shown`; `select` then restyles the selected one. */
+function show(state: EditorState, find: FindState, shown: Range | null) {
   const decorations: Decoration[] = []
-  state.doc.descendants((node, pos) => {
-    if (!node.inlineContent) return true
-    highlightBlock(decorations, index, node, pos)
-    return false
-  })
+  if (shown)
+    state.doc.nodesBetween(shown.from, shown.to, (node, pos) => {
+      if (!node.inlineContent) return true
+      highlightBlock(decorations, find.index!, node, pos, shown)
+      return false
+    })
   return {
-    query,
-    index,
+    ...find,
+    window: shown,
     deco: DecorationSet.create(state.doc, decorations),
-    total: index.count(state.doc),
-    current: 0,
     active: null,
   }
 }
 
 /** Map highlights and rescan only the textblocks the transaction touched. */
-function update(tr: Transaction, state: EditorState, find: FindState) {
+function update(
+  tr: Transaction,
+  before: EditorState,
+  state: EditorState,
+  find: FindState,
+): FindState {
   const index = find.index!
   // One range covering every step's changes, in final document positions.
   let from = Number.POSITIVE_INFINITY
@@ -280,28 +330,42 @@ function update(tr: Transaction, state: EditorState, find: FindState) {
     })
   }
   // Mark and attribute steps move nothing and keep the text.
-  if (from > to) return { ...find, total: index.count(state.doc) }
+  if (from > to) return find
+  const shown = mapRange(tr.mapping, find.window)
   const replaced: number[] = []
   const decorations: Decoration[] = []
+  let total = find.total
   state.doc.nodesBetween(from, to, (node, pos) => {
     if (!node.inlineContent) return true
     replaced.push(pos, node.nodeSize, node.nodeSize)
-    highlightBlock(decorations, index, node, pos)
+    if (total !== null) total += index.count(node)
+    if (shown) highlightBlock(decorations, index, node, pos, shown)
     return false
   })
+  // Outside the changed range both documents hold the same blocks, so the
+  // total only trades the old blocks there for the new ones.
+  if (total !== null) {
+    const inverse = tr.mapping.invert()
+    before.doc.nodesBetween(
+      inverse.map(from, -1),
+      inverse.map(to, 1),
+      (node) => {
+        if (!node.inlineContent) return true
+        total! -= index.count(node)
+        return false
+      },
+    )
+  }
   // Replacing each touched textblock with itself drops its stale highlights in
   // one pass without moving other positions; removing them one by one is quadratic.
   const mapping = tr.mapping.slice()
   if (replaced.length) mapping.appendMap(new StepMap(replaced))
-  const active = find.active && {
-    from: tr.mapping.map(find.active.from, 1),
-    to: tr.mapping.map(find.active.to, -1),
-  }
   return {
     ...find,
     deco: find.deco.map(mapping, state.doc).add(state.doc, decorations),
-    total: index.count(state.doc),
-    active: active && active.from < active.to ? active : null,
+    window: shown,
+    total,
+    active: mapRange(tr.mapping, find.active),
   }
 }
 
@@ -309,66 +373,222 @@ function update(tr: Transaction, state: EditorState, find: FindState) {
 function select(state: EditorState, find: FindState): FindState {
   const index = find.index!
   const { from, to } = state.selection
-  const selected = isMatch(index, state.doc, from, to) ? { from, to } : null
+  const offset = matchOffset(index, state.doc, from, to)
+  const selected = offset < 0 ? null : { from, to }
   const stale: Decoration[] = []
   const fresh: Decoration[] = []
-  const restyle = (
-    range: Range,
-    before: typeof matchStyle,
-    after: typeof matchStyle,
-  ) => {
-    const found = find.deco
-      .find(range.from, range.to, (spec) => spec.style === before)
+  const styled = (range: Range, style: typeof matchStyle) =>
+    find.deco
+      .find(range.from, range.to, (spec) => spec.style === style)
       .filter((deco) => deco.from === range.from && deco.to === range.to)
-    if (!found.length) return
+  const previous = find.active
+  if (previous && (previous.from !== from || previous.to !== to)) {
+    const found = styled(previous, activeStyle)
     stale.push(...found)
-    fresh.push(highlight(range.from, range.to, found[0]!.spec.offset, after))
+    // Outside the window, a match is highlighted only while it is selected.
+    if (found.length && overlaps(find.window, previous))
+      fresh.push(highlight(previous.from, previous.to, found[0]!.spec.offset))
   }
-  if (find.active && (find.active.from !== from || find.active.to !== to))
-    restyle(find.active, activeStyle, matchStyle)
-  if (selected) restyle(selected, matchStyle, activeStyle)
+  if (selected && !styled(selected, activeStyle).length) {
+    stale.push(...styled(selected, matchStyle))
+    fresh.push(highlight(from, to, offset, activeStyle))
+  }
   return {
     ...find,
-    deco: stale.length
-      ? find.deco.remove(stale).add(state.doc, fresh)
-      : find.deco,
+    deco:
+      stale.length || fresh.length
+        ? find.deco.remove(stale).add(state.doc, fresh)
+        : find.deco,
     active: selected,
-    current: selected ? matchesBefore(index, state.doc, from) + 1 : 0,
+    current:
+      selected && find.total !== null
+        ? matchesBefore(index, state.doc, from) + 1
+        : 0,
   }
+}
+
+/** Document positions at the top and bottom of the editor's visible area. */
+function visibleRange(view: EditorView): Range | null {
+  const box = view.dom.getBoundingClientRect()
+  let top = Math.max(box.top, 0)
+  let bottom = Math.min(box.bottom, window.innerHeight)
+  // Scrolling panes and other clipping ancestors bound what is visible.
+  for (
+    let element = view.dom.parentElement;
+    element;
+    element = element.parentElement
+  )
+    if (getComputedStyle(element).overflowY !== 'visible') {
+      const clip = element.getBoundingClientRect()
+      top = Math.max(top, clip.top)
+      bottom = Math.min(bottom, clip.bottom)
+    }
+  if (top >= bottom) return null
+  // Hit-test at the start of lines: a point past a line's end can resolve to
+  // the end of its block.
+  const left =
+    box.left + Number.parseFloat(getComputedStyle(view.dom).paddingLeft) + 1
+  const at = (y: number, step: number) => {
+    // Overlays such as the find bar can cover a point, so look past them.
+    for (let tries = 0; tries < 8 && y > top && y < bottom; tries++) {
+      const caret = document.caretPositionFromPoint(left, y)
+      if (caret && view.dom.contains(caret.offsetNode)) {
+        try {
+          return view.posAtDOM(caret.offsetNode, caret.offset)
+        } catch {
+          // Markup a node view owns has no document position; look further.
+        }
+      }
+      y += step
+    }
+    return null
+  }
+  const from = at(top + 1, 24)
+  const to = at(bottom - 1, -24)
+  return from === null || to === null || from > to ? null : { from, to }
 }
 
 export const richFindKey = new PluginKey<FindState>('richFind')
 
-/** Highlights literal, case-insensitive matches of the find query in rich text. */
+/**
+ * Highlights literal, case-insensitive matches of the find query near the
+ * viewport. Counts and navigation cover the whole document.
+ */
 export function richFind() {
   return new Plugin<FindState>({
     key: richFindKey,
     state: {
       init: () => none,
-      apply(tr, find, _before, state) {
-        const query: string | undefined = tr.getMeta(richFindKey)
-        if (query !== undefined)
-          return query ? select(state, rebuild(state, query)) : none
-        if (!find.index || (!tr.docChanged && !tr.selectionSet)) return find
-        return select(state, tr.docChanged ? update(tr, state, find) : find)
+      apply(tr, find, before, state) {
+        const meta: FindMeta | undefined = tr.getMeta(richFindKey)
+        if (meta && 'query' in meta) {
+          if (!meta.query) return none
+          const index = new MatchIndex(meta.query)
+          const query = { ...none, query: meta.query, index, total: null }
+          // Matches near the viewport show at once; a scan completes the total.
+          return select(
+            state,
+            show(state, query, mapRange(tr.mapping, find.window)),
+          )
+        }
+        if (!find.index || (!tr.docChanged && !tr.selectionSet && !meta))
+          return find
+        let next = tr.docChanged ? update(tr, before, state, find) : find
+        if (meta && 'window' in meta) next = show(state, next, meta.window)
+        if (meta && 'complete' in meta && meta.complete === next.index)
+          next = { ...next, total: meta.complete.count(state.doc) }
+        return select(state, next)
       },
     },
     props: { decorations: (state) => richFindKey.getState(state)?.deco },
+    view(view) {
+      let frame = 0
+      // Measured once per frame, after scrolling, layout, or find changes.
+      const measure = () => {
+        frame = 0
+        const find = richFindKey.getState(view.state)
+        if (!find?.index) return
+        const visible = visibleRange(view)
+        const shown = find.window
+        if (
+          !visible ||
+          (shown && shown.from <= visible.from && visible.to <= shown.to)
+        )
+          return
+        // About a screen of text on each side keeps scrolling ahead of updates.
+        const margin = Math.max(visible.to - visible.from, 2000)
+        view.dispatch(
+          view.state.tr
+            .setMeta(richFindKey, {
+              window: {
+                from: Math.max(0, visible.from - margin),
+                to: Math.min(view.state.doc.content.size, visible.to + margin),
+              },
+            })
+            .setMeta('addToHistory', false),
+        )
+      }
+      const schedule = () => {
+        if (richFindKey.getState(view.state)?.index)
+          frame ||= requestAnimationFrame(measure)
+      }
+      const resize = new ResizeObserver(schedule)
+      resize.observe(view.dom)
+      document.addEventListener('scroll', schedule, {
+        capture: true,
+        passive: true,
+      })
+      window.addEventListener('resize', schedule)
+      return {
+        update(_view, previous) {
+          if (
+            richFindKey.getState(view.state) !== richFindKey.getState(previous)
+          )
+            schedule()
+        },
+        destroy() {
+          cancelAnimationFrame(frame)
+          resize.disconnect()
+          document.removeEventListener('scroll', schedule, { capture: true })
+          window.removeEventListener('resize', schedule)
+        },
+      }
+    },
   })
 }
 
 export const setRichFindQuery = (tr: Transaction, query: string) =>
-  tr.setMeta(richFindKey, query)
+  tr.setMeta(richFindKey, { query })
 
-export function firstRichMatch(state: EditorState) {
-  const index = richFindKey.getState(state)?.index
-  return index ? nextMatch(index, state.doc, 0) : null
+/**
+ * Scans every textblock for the current query in short slices, so long notes
+ * stay responsive. `first` receives the document's first match as soon as it
+ * is known. Returns a function that stops the scan; a new query stops it too.
+ */
+export function scanRichFind(view: EditorView, first: (match: Range) => void) {
+  const index = richFindKey.getState(view.state)?.index
+  if (!index) return () => {}
+  let doc: Node | null = null
+  let walk: Walk = []
+  let found = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const run = () => {
+    timer = undefined
+    if (view.isDestroyed || richFindKey.getState(view.state)?.index !== index)
+      return
+    // After an edit, walk again; scanned blocks are cached and cost one lookup.
+    if (view.state.doc !== doc) {
+      doc = view.state.doc
+      walk = [{ node: doc, child: 0, pos: 0 }]
+    }
+    // Yield after about half a frame so input and painting keep up.
+    const deadline = performance.now() + 8
+    const done = walkBlocks(walk, (block, pos) => {
+      const matches = index.matches(block)
+      if (!found && matches.length) {
+        found = true
+        first({ from: pos + 1 + matches[0]!, to: pos + 1 + matches[1]! })
+      }
+      return performance.now() < deadline
+    })
+    if (!done) timer = setTimeout(run, 0)
+    else if (richFindKey.getState(view.state)?.index === index)
+      view.dispatch(
+        view.state.tr
+          .setMeta(richFindKey, { complete: index })
+          .setMeta('addToHistory', false),
+      )
+  }
+  run()
+  return () => clearTimeout(timer)
 }
 
+/** Moves wait for a complete count: finishing the scan synchronously would stall. */
 function findCommand(direction: 'next' | 'previous'): Command {
   return (state, dispatch) => {
-    const index = richFindKey.getState(state)?.index
-    if (!index) return false
+    const find = richFindKey.getState(state)
+    const index = find?.index
+    if (!index || find.total === null) return false
     const { doc } = state
     const { from, to } = state.selection
     let found: Range | null

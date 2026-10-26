@@ -303,10 +303,9 @@ export async function queryWorkspaceReferences(
           ? await workspaceMetadataDelta(syntax, active)
           : null
         if (!active()) return false
-        let applied =
-          delta?.every((page) => references.has(page.path))
-            ? await references.applyDeltaCooperatively(target, delta, active)
-            : null
+        let applied = delta?.every((page) => references.has(page.path))
+          ? await references.applyDeltaCooperatively(target, delta, active)
+          : null
         if (!applied && active())
           applied = await references.applyMetadataCooperatively(
             target,

@@ -1,6 +1,6 @@
 import { constants } from 'node:fs'
 import { lstat, open, readFile, realpath, stat } from 'node:fs/promises'
-import { dirname, isAbsolute, resolve } from 'node:path'
+import { dirname, isAbsolute, resolve, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { marked } from 'marked'
 import { isPathInside } from './workspace-paths.ts'
@@ -78,31 +78,38 @@ export async function resolveDocumentMediaPath(
   source: string,
   documentPath: string | null,
   workspacePath: string | null = null,
+  options: { paths?: Set<string>; signal?: AbortSignal } = {},
 ) {
-  const path = documentMediaPath(source, documentPath)
+  const { paths, signal } = options
+  if (signal?.aborted) return null
+  const path = documentMediaPath(source, documentPath, workspacePath)
   if (!path) return null
+  paths?.add(path)
+  if (signal?.aborted) return null
   if (
     await stat(path).then(
       (info) => info.isFile(),
       () => false,
     )
-  )
-    return path
+  ) {
+    if (paths && !signal?.aborted) {
+      const real = await realpath(path).catch(() => null)
+      if (real) paths.add(real)
+    }
+    return signal?.aborted ? null : path
+  }
+  if (signal?.aborted) return null
   const base = workspacePath ?? (documentPath ? dirname(documentPath) : null)
   if (!base || source.startsWith('//')) return null
   const canonicalBase = await realpath(base).catch(() => base)
+  if (signal?.aborted) return null
   let decoded = source
   try {
     decoded = decodeURIComponent(source)
   } catch {
     /* Literal percent in filename. */
   }
-  if (
-    decoded.includes('\0') ||
-    decoded.includes('\\') ||
-    decoded.startsWith('//')
-  )
-    return null
+  if (decoded.includes('\\') || !isLocalMediaPath(decoded)) return null
   const candidates = source.startsWith('/')
     ? [resolve(base, `.${decoded}`), resolve(base, 'public', `.${decoded}`)]
     : workspacePath
@@ -110,10 +117,15 @@ export async function resolveDocumentMediaPath(
       : []
   if (workspacePath && !source.startsWith('/')) {
     const settings = resolve(workspacePath, '.obsidian', 'app.json')
+    paths?.add(settings)
+    if (signal?.aborted) return null
     const info = await lstat(settings).catch(() => null)
     if (info?.isFile() && !info.isSymbolicLink() && info.size < 65536) {
       try {
-        const saved = JSON.parse(await readFile(settings, 'utf8'))
+        if (signal?.aborted) return null
+        const saved = JSON.parse(
+          await readFile(settings, { encoding: 'utf8', signal }),
+        )
         const folder = saved.attachmentFolderPath
         if (
           typeof folder === 'string' &&
@@ -134,9 +146,13 @@ export async function resolveDocumentMediaPath(
     }
   }
   for (const candidate of candidates) {
+    paths?.add(candidate)
+    if (signal?.aborted) return null
     if (!isPathInside(base, candidate)) continue
     const real = await realpath(candidate).catch(() => null)
     if (!real) continue
+    paths?.add(real)
+    if (signal?.aborted) return null
     if (!isPathInside(canonicalBase, real)) continue
     if (
       await stat(real).then(
@@ -144,41 +160,63 @@ export async function resolveDocumentMediaPath(
         () => false,
       )
     )
-      return candidate
+      return signal?.aborted ? null : candidate
   }
   return null
+}
+
+export function isLocalMediaPath(path: string): boolean {
+  const normalized = path.replaceAll('\\', '/')
+  return (
+    !path.includes('\0') &&
+    !normalized.startsWith('//') &&
+    !normalized.startsWith('/??/')
+  )
 }
 
 export function documentMediaPath(
   source: string,
   documentPath: string | null,
+  workspacePath: string | null = null,
 ): string | null {
   if (!source || source.length > 8192 || source.includes('\0')) return null
   let path: string
   try {
-    if (/^file:/i.test(source)) path = fileURLToPath(source)
-    else {
+    if (/^file:/i.test(source)) {
+      const url = new URL(source)
+      // url parsing erases localhost hosts, so check original authority too.
+      if (
+        url.hostname ||
+        /^file:[/\\]{2}[^/\\]/i.test(source.replace(/[\t\r\n]/g, ''))
+      )
+        return null
+      path = fileURLToPath(url)
+      if (!isLocalMediaPath(path)) return null
+    } else {
       if (/^[a-z][a-z\d+.-]*:/i.test(source) && !/^[a-z]:[/\\]/i.test(source))
         return null
-      if (source.startsWith('//') || source.startsWith('\\\\')) return null
       let decoded = source
       try {
         decoded = decodeURIComponent(source)
       } catch {
         /* Literal percent in a filename. */
       }
-      if (
-        decoded.includes('\0') ||
-        decoded.startsWith('//') ||
-        decoded.startsWith('\\\\')
-      )
-        return null
+      if (!isLocalMediaPath(decoded)) return null
       if (!isAbsolute(decoded) && !documentPath) return null
       path = isAbsolute(decoded)
         ? decoded
         : resolve(dirname(documentPath as string), decoded)
     }
-    return path
+    if (isLocalMediaPath(path)) return path
+    // Relative references may inherit a share already opened through the native filesystem.
+    const root = win32.parse(path).root.replaceAll('\\', '/').toLowerCase()
+    return [documentPath, workspacePath].some(
+      (base) =>
+        base &&
+        win32.parse(base).root.replaceAll('\\', '/').toLowerCase() === root,
+    )
+      ? path
+      : null
   } catch {
     return null
   }

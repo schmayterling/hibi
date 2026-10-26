@@ -1,9 +1,14 @@
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, WidgetType } from '@codemirror/view'
 import '../../src/renderer/src/styles.css'
+// The app's control styles, such as its thin scrollbars, so panes look alike.
+import '../../src/ui/controls.css'
 import type { ChunkedMarkdownProbe } from '../../src/renderer/src/chunked-markdown'
 import { codeLanguages } from '../../src/renderer/src/code-languages'
-import { formattedDocument } from '../../src/renderer/src/formatted-contributions'
+import {
+  formattedDocument,
+  formattedRefresh,
+} from '../../src/renderer/src/formatted-contributions'
 import { formattedRegistry } from '../../src/renderer/src/formatted-registry'
 import { formattedSyntax } from '../../src/renderer/src/formatted-syntax'
 import { livePreview } from '../../src/renderer/src/live-preview'
@@ -17,9 +22,10 @@ const probe: ChunkedMarkdownProbe = {
   builtGroups: 0,
 }
 let view: EditorView | null = null
+let revisionLayouts = 0
 const documentRevision = new Compartment()
-const revisionOf = (revision: number) =>
-  formattedDocument.of({ revision, tabId: null })
+const revisionOf = (revision: number, tabId: string | null = null) =>
+  formattedDocument.of({ revision, tabId })
 
 /** Shows the document revision a contributed layout saw. */
 class RevisionWidget extends WidgetType {
@@ -85,6 +91,7 @@ Object.assign(window, {
       await new Promise(requestAnimationFrame)
     },
     view: () => view,
+    revisionLayouts: () => revisionLayouts,
     /** A contributed layout that shows the document revision before each paragraph; returns its removal. */
     showRevisions: () =>
       formattedRegistry.register({
@@ -95,6 +102,7 @@ Object.assign(window, {
             {
               nodes: ['Paragraph'],
               layout(node, out, { state }) {
+                revisionLayouts++
                 out.widget(
                   node.from,
                   new RevisionWidget(state.facet(formattedDocument).revision),
@@ -105,10 +113,14 @@ Object.assign(window, {
         }),
       }),
     /** The note's files or media changed. */
-    setRevision(revision: number) {
+    setRevision(revision: number, tabId: string | null = null) {
       view?.dispatch({
-        effects: documentRevision.reconfigure(revisionOf(revision)),
+        effects: documentRevision.reconfigure(revisionOf(revision, tabId)),
       })
+    },
+    /** Redraw the formatted view's decorations. */
+    refresh() {
+      view?.dispatch({ effects: formattedRefresh.of(null) })
     },
     /** Scroll a position to the top of the viewport. */
     scrollTo(pos: number) {

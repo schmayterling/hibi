@@ -1,0 +1,19 @@
+/* References read like the exported footnote links: superscript, link colored,
+   without changing the line's height. */
+.hibi-formatted .hibi-lp-footnote-ref {
+  font-size: smaller;
+  vertical-align: super;
+  line-height: 0;
+  color: var(--syntax-link);
+}
+/* A note is labelled in its margin, like the exported footnote list, at its size. */
+.hibi-formatted .cm-line.hibi-lp-footnote {
+  font-size: 0.9em;
+}
+.hibi-formatted .cm-line.hibi-lp-footnote-label {
+  display: list-item;
+}
+.hibi-formatted .cm-line.hibi-lp-footnote-label::marker {
+  color: var(--muted);
+  font-size: smaller;
+}

@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { CustomWordDatabase } from '../src/addons/dictionary/custom-word-database.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  crashAndReload,
+  electron,
+  waitForDocumentEditor,
+  waitForElectronShutdown,
+} from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
 
@@ -14,9 +19,9 @@ async function fixture(t) {
     join(profile, 'addons.json'),
     JSON.stringify({ dictionary: true }),
   )
-  let app
-  t.after(async () => {
-    if (app) {
+  let app, child
+  async function close() {
+    if (app && child.exitCode === null && child.signalCode === null) {
       await app
         .evaluate(() => {
           globalThis.finishPicker?.({ canceled: true })
@@ -26,6 +31,10 @@ async function fixture(t) {
         .catch(() => {})
       await app.close()
     }
+    app = undefined
+  }
+  t.after(async () => {
+    await close()
     await rm(profile, { recursive: true, force: true })
   })
   return {
@@ -34,18 +43,16 @@ async function fixture(t) {
       app = await electron.launch({
         args: [resolve('.'), `--user-data-dir=${profile}`],
       })
+      child = app.process()
       await app.evaluate(({ dialog }) => {
         dialog.showMessageBox = async () => ({ response: 1 })
       })
       const page = await app.firstWindow()
       page.setDefaultTimeout(APP_STATE_TIMEOUT)
       await waitForDocumentEditor(app, page)
-      return { app, page }
+      return { app, child, page }
     },
-    async close() {
-      await app.close()
-      app = undefined
-    },
+    close,
   }
 }
 const metadata = (page) =>
@@ -167,18 +174,13 @@ test('profile stages and aborts survive a picker, including an import already in
 
 test('renderer loss discards staging and window close drains a pending profile commit', async (t) => {
   const fixtureState = await fixture(t)
-  let { app, page } = await fixtureState.launch()
+  let { app, child, page } = await fixtureState.launch()
   await stageWord(page, 'lost-renderer')
-  await app.evaluate(async ({ BrowserWindow, dialog }) => {
-    const window = BrowserWindow.getAllWindows()[0]
-    // The crash recovery path must keep this test window hidden.
-    window.isVisible = () => true
-    dialog.showMessageBox = async () => ({ response: 0 })
-    await new Promise((resolve) => {
-      window.webContents.once('did-finish-load', resolve)
-      window.webContents.forcefullyCrashRenderer()
-    })
+  await app.evaluate(({ BrowserWindow }) => {
+    // Exercise recovery without showing the test window.
+    BrowserWindow.getAllWindows()[0].isVisible = () => true
   })
+  await crashAndReload(app)
   // Playwright keeps the crashed target; use the recovered window's real preload bridge.
   page = {
     evaluate: (fn, input) =>
@@ -213,7 +215,10 @@ test('renderer loss discards staging and window close drains a pending profile c
   )
 
   const pending = await stageWord(page, 'pending-close')
-  await app.evaluate(({ BrowserWindow }) => {
+  await app.evaluate(({ app, BrowserWindow }) => {
+    // Exercise last-window shutdown on macos too.
+    if (process.platform === 'darwin')
+      app.once('window-all-closed', () => app.quit())
     const threads = process.getBuiltinModule('node:worker_threads')
     const send = threads.Worker.prototype.postMessage
     threads.Worker.prototype.postMessage = function (message, ...rest) {
@@ -252,8 +257,9 @@ test('renderer loss discards staging and window close drains a pending profile c
     false,
     'pending commit keeps close from finishing',
   )
+  const closed = waitForElectronShutdown(child, app.waitForEvent('close'))
   await app.evaluate(() => globalThis.releaseCommit())
-  await waitForAsync(app, () => globalThis.windowClosed)
+  await closed
   await fixtureState.close()
   ;({ app, page } = await fixtureState.launch())
   assert.equal((await metadata(page)).count, 2)

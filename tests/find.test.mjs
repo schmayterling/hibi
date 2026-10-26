@@ -519,6 +519,9 @@ test('find in document searches rich text and offscreen markdown without editing
   await rich.waitFor()
   await rich.focus()
   await pressShortcut(app, shortcut)
+  await waitForCount('1/3')
+  await input.fill('')
+  await waitForCount('')
   // A fast clock ends the first search slice after one block, and the later
   // slices are held, so the search stays pending.
   await page.evaluate(() => {

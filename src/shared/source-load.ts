@@ -10,8 +10,13 @@ export async function loadSource(
     channel: MessageChannel | undefined
   const pause = () =>
     new Promise<void>((resolve) => {
-      if (typeof setImmediate === 'function') {
-        setImmediate(resolve)
+      const immediate = (
+        globalThis as {
+          setImmediate?: (callback: () => void) => unknown
+        }
+      ).setImmediate
+      if (typeof immediate === 'function') {
+        immediate(resolve)
         return
       }
       channel ??= new MessageChannel()

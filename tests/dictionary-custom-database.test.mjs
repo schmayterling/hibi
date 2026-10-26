@@ -762,10 +762,11 @@ test('duplicate language/key has its own error and leaves both records intact', 
 })
 
 test('completion races indexed ranges without full sorting at one million same-length words', async (t) => {
+  let raw
+  t.after(() => raw?.close())
   const ctx = await fixture(t)
   const store = await ctx.open()
-  const raw = new DatabaseSync(ctx.path)
-  t.after(() => raw.close())
+  raw = new DatabaseSync(ctx.path)
   raw.exec(`
     BEGIN;
     WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i + 1 FROM n WHERE i < 999999)
@@ -1015,11 +1016,12 @@ test('completion matches seeded brute-force top-k through edits and index upgrad
     seen.add(key)
     words.push({ id: `id${words.length}`, word, ...(lang ? { lang } : {}) })
   }
+  let raw
+  t.after(() => raw?.close())
   const ctx = await fixture(t)
   let store = await ctx.open()
   save(store, words)
-  const raw = new DatabaseSync(ctx.path)
-  t.after(() => raw.close())
+  raw = new DatabaseSync(ctx.path)
   const prefixes = [
     'a',
     'b',

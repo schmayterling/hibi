@@ -6,7 +6,10 @@ import {
   type Text,
 } from '@codemirror/state'
 import { Decoration, type DecorationSet, EditorView } from '@codemirror/view'
-import type { FormattedContribution } from '../../renderer/src/formatted-contributions.ts'
+import {
+  type FormattedContribution,
+  formattedPrefix,
+} from '../../renderer/src/formatted-contributions.ts'
 import { readFrontmatter } from '../../shared/frontmatter.ts'
 
 /*
@@ -216,5 +219,11 @@ export const contribution: FormattedContribution = {
       },
     },
   ],
-  extension: [frontmatterField, hidden, protect],
+  extension: [
+    frontmatterField,
+    // The formatted syntax starts after it, so the note's first block starts the document.
+    formattedPrefix.of((state) => state.field(frontmatterField).end),
+    hidden,
+    protect,
+  ],
 }

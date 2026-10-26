@@ -63,7 +63,7 @@ export const frontmatterField: StateField<Frontmatter> =
     update: (value, transaction) =>
       transaction.docChanged ||
       transaction.state.field(frontmatterBounds) !==
-        transaction.startState.field(frontmatterBounds)
+        transaction.startState.field(frontmatterBounds, false)
         ? fromBounds(transaction.state)
         : value,
     provide: () => frontmatterBounds,
@@ -81,7 +81,7 @@ const hidden = StateField.define<DecorationSet>({
   create: (state) => hide(state),
   update: (value, transaction) =>
     transaction.state.field(frontmatterField).end ===
-      transaction.startState.field(frontmatterField).end &&
+      transaction.startState.field(frontmatterField, false)?.end &&
     !transaction.docChanged
       ? value
       : hide(transaction.state),

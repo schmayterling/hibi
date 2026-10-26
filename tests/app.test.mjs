@@ -133,6 +133,8 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'getLicenses',
         'getLicense',
         'openSponsor',
+        'writeClipboardText',
+        'copyWorkspacePaths',
         'setAppearance',
         'getAddonStates',
         'setAddonEnabled',

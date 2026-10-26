@@ -4,6 +4,7 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  realpath,
   rm,
   writeFile,
 } from 'node:fs/promises'
@@ -55,7 +56,7 @@ test('clipboard writes route through the main process and resolve absolute paths
     .click()
   assert.equal(
     await app.evaluate(({ clipboard }) => clipboard.readText()),
-    join(root, 'a.md'),
+    join(await realpath(root), 'a.md'),
   )
 
   await assert.rejects(

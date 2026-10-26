@@ -1,13 +1,14 @@
 import { isolateHistory } from '@codemirror/commands'
 import {
+  ChangeSet,
   EditorSelection,
   type EditorState,
+  Text,
   type TransactionSpec,
 } from '@codemirror/state'
 import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import { uncovered } from '../../renderer/src/chunked-markdown.ts'
-import { itemWidth } from '../../renderer/src/formatted-commands.ts'
 import {
   type FormattedContribution,
   formattedSyntaxTree,
@@ -38,6 +39,85 @@ const isList = (node: SyntaxNode) =>
 const same = (a: SyntaxNode, b: Block) =>
   a.from === b.from && a.to === b.to && a.name === b.name
 
+/** Source indentation belongs to the block, not the separator before it. */
+function sourceFrom(state: EditorState, node: SyntaxNode): number | null {
+  const line = state.doc.lineAt(node.from)
+  const prefix = state.doc.sliceString(line.from, node.from)
+  let container: SyntaxNode | null = null,
+    quotes = 0
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (parent.name === 'Blockquote') quotes++
+    if (
+      !container &&
+      (parent.name === 'Blockquote' || parent.name === 'ListItem')
+    )
+      container = parent
+  }
+  let offset = quotePrefix(prefix, quotes)
+  if (quotes && prefix.slice(0, offset).split('>').length - 1 !== quotes)
+    return null
+  if (container?.name === 'ListItem') {
+    const mark = container.getChild('ListMark')
+    if (!mark) return null
+    const first = state.doc.lineAt(mark.from)
+    // A same-line nested marker or tab-dependent prefix needs reindentation.
+    if (!/^[ >]*$/.test(first.text.slice(0, mark.from - first.from)))
+      return null
+    const after = first.text.slice(mark.to - first.from)
+    if (/^ *\t/.test(after)) return null
+    const spaces = /^ */.exec(after)![0].length
+    offset +=
+      mark.to -
+      first.from -
+      quotePrefix(first.text, quotes) +
+      (!after[spaces] || spaces > 4 ? 1 : spaces)
+  }
+  if (offset > prefix.length || !/^[ \t]*$/.test(prefix.slice(offset)))
+    return null
+  return line.from + offset
+}
+
+/** Quote markers stay in place when an item's continuation changes width. */
+function quotePrefix(line: string, count: number) {
+  let offset = 0
+  for (let i = 0; i < count; i++) {
+    const mark = /^[ \t]*>[ \t]?/.exec(line.slice(offset))
+    if (!mark) break
+    offset += mark[0].length
+  }
+  return offset
+}
+
+/** Footnotes are multiple parser blocks; leave their source together. */
+function footnote(state: EditorState, node: SyntaxNode | null): boolean {
+  if (!node) return false
+  if (node.name === 'LinkReference')
+    return state.doc.sliceString(node.from, node.from + 2) === '[^'
+  if (node.name !== 'CodeBlock') return false
+  let previous = node.prevSibling
+  while (previous && !previous.type.is('Block')) previous = previous.prevSibling
+  return footnote(state, previous)
+}
+
+/** Open raw blocks absorb anything placed after them. */
+function closed(state: EditorState, node: SyntaxNode) {
+  if (node.name === 'FencedCode')
+    return (
+      node.lastChild?.name === 'CodeMark' && node.lastChild.from > node.from
+    )
+  if (node.name !== 'HTMLBlock' && node.name !== 'CommentBlock') return true
+  const first = state.doc
+    .lineAt(node.from)
+    .text.slice(node.from - state.doc.lineAt(node.from).from)
+  const end = state.doc.lineAt(Math.max(node.from, node.to - 1)).text
+  if (first.startsWith('<!--')) return end.includes('-->')
+  if (first.startsWith('<?')) return end.includes('?>')
+  if (first.startsWith('<![CDATA[')) return end.includes(']]>')
+  if (first.startsWith('<!')) return end.includes('>')
+  const raw = /^<(script|style|pre|textarea)(?:\s|>|$)/i.exec(first)
+  return !raw || new RegExp(`</${raw[1]}\\s*>`, 'i').test(end)
+}
+
 /** Text between sibling blocks: line breaks, indentation and quote markers. */
 const separator = /^[\s>]*$/
 
@@ -53,9 +133,13 @@ function sibling(
   direction: -1 | 1,
 ) {
   const doc = state.doc
-  let at = direction > 0 ? node.to : node.from
+  const from = sourceFrom(state, node)
+  if (from === null) return null
+  let at = direction > 0 ? node.to : from
   for (;;) {
     if (direction > 0 ? at >= doc.length : at <= 0) return null
+    if (uncovered(tree, Math.max(0, at - 1), Math.min(doc.length, at + 1)))
+      return null
     const next = doc.sliceString(
       direction > 0 ? at : Math.max(0, at - 256),
       direction > 0 ? Math.min(doc.length, at + 256) : at,
@@ -72,10 +156,12 @@ function sibling(
   while (found && !found.type.is('Block'))
     found = direction > 0 ? found.nextSibling : found.prevSibling
   if (!found) return null
+  const foundFrom = sourceFrom(state, found)
+  if (foundFrom === null) return null
   const gap =
     direction > 0
-      ? state.sliceDoc(node.to, found.from)
-      : state.sliceDoc(found.to, node.from)
+      ? doc.sliceString(node.to, foundFrom)
+      : doc.sliceString(found.to, from)
   return separator.test(gap) ? found : null
 }
 
@@ -171,18 +257,53 @@ function apart(text: string) {
  * lines following the marker's change of width.
  */
 function remarked(state: EditorState, item: SyntaxNode, marker: string) {
-  const mark = item.getChild('ListMark')!
+  const mark = item.getChild('ListMark')
+  const from = sourceFrom(state, item)
+  if (!mark || from === null) return null
+  const text = state.doc.sliceString(from, item.to)
   const by = marker.length - (mark.to - mark.from)
-  const width = itemWidth(state, item)
-  const [first, ...rest] = state.sliceDoc(mark.to, item.to).split('\n')
-  return [
-    marker + first,
-    ...rest.map((line) => {
-      const leading = /^ */.exec(line)![0].length
-      if (!by || !line.trim() || leading < width) return line
-      return by > 0 ? ' '.repeat(by) + line : line.slice(-by)
-    }),
-  ].join('\n')
+  const changes: Change[] = [
+    { from: mark.from - from, to: mark.to - from, insert: marker },
+  ]
+  if (by) {
+    let quotes = 0
+    for (let parent = item.parent; parent; parent = parent.parent)
+      if (parent.name === 'Blockquote') quotes++
+    const first = state.doc.lineAt(mark.from)
+    const prefix = first.text.slice(0, mark.from - first.from)
+    // A marker on its parent's opening line or tab-aligned content needs
+    // container-aware reindentation. Leave those width changes untouched.
+    if (!/^[ >]*$/.test(prefix)) return null
+    const after = first.text.slice(mark.to - first.from)
+    if (/^ *\t/.test(after)) return null
+    const spaces = /^ */.exec(after)![0].length
+    const width =
+      mark.to -
+      first.from -
+      quotePrefix(first.text, quotes) +
+      (!after[spaces] || spaces > 4 ? 1 : spaces)
+    for (
+      let number = first.number + 1;
+      number <= state.doc.lineAt(item.to).number;
+      number++
+    ) {
+      const line = state.doc.line(number)
+      const offset = quotePrefix(line.text, quotes)
+      const content = line.text.slice(offset)
+      if (/^[ \t]*$/.test(content)) continue
+      if (/^ *\t/.test(content)) return null
+      const leading = /^ */.exec(content)![0].length
+      if (leading < width) continue
+      const start = line.from + offset - from
+      changes.push({
+        from: start,
+        to: start + Math.max(0, -by),
+        insert: by > 0 ? ' '.repeat(by) : '',
+      })
+    }
+  }
+  const set = ChangeSet.of(changes, text.length)
+  return { text: set.apply(Text.of(text.split('\n'))).toString(), changes: set }
 }
 
 type Change = { from: number; to: number; insert: string }
@@ -202,7 +323,18 @@ export function moveBlock(
   target: SyntaxNode,
   after: boolean,
 ): TransactionSpec | null {
-  if (state.readOnly || same(target, block) || fixed(block)) return null
+  if (
+    state.readOnly ||
+    same(target, block) ||
+    fixed(block) ||
+    !block.parent ||
+    !target.parent ||
+    !same(block.parent, target.parent) ||
+    footnote(state, block) ||
+    footnote(state, target) ||
+    !closed(state, block)
+  )
+    return null
   const down = target.from > block.from
   const step = (node: SyntaxNode, direction: -1 | 1) =>
     sibling(state, tree, node, direction)
@@ -211,6 +343,10 @@ export function moveBlock(
   if (down && !after) at = step(target, -1)
   else if (!down && after) at = step(target, 1)
   if (!at || same(at, block) || (!down && fixed(at))) return null
+  if (footnote(state, at) || (down && !closed(state, at))) return null
+  const start = (node: SyntaxNode) => sourceFrom(state, node)!
+  const blockFrom = sourceFrom(state, block)
+  if (blockFrom === null || sourceFrom(state, at) === null) return null
   const items = block.name === 'ListItem'
   // The separator after `node`; frontmatter ends with its line break.
   const join = (node: SyntaxNode, text: string) =>
@@ -218,45 +354,50 @@ export function moveBlock(
   const previous = step(block, -1),
     next = step(block, 1)
   if (!(down ? next : previous)) return null
-  const before = previous ? state.sliceDoc(previous.to, block.from) : '',
-    following = next ? state.sliceDoc(block.to, next.from) : ''
-  let text = state.sliceDoc(block.from, block.to)
+  const before = previous ? state.doc.sliceString(previous.to, blockFrom) : '',
+    following = next ? state.doc.sliceString(block.to, start(next)) : ''
+  let text = state.doc.sliceString(blockFrom, block.to)
+  let remarkedChanges: ChangeSet | null = null
   const changes: Change[] = []
   // The block's own place: its neighbors keep the separator on the far side
   // of the move between them.
   if (previous && next)
     changes.push({
       from: previous.to,
-      to: next.from,
+      to: start(next),
       insert: join(previous, down ? before : following),
     })
   else if (previous)
     changes.push({ from: previous.to, to: block.to, insert: '' })
-  else if (next) changes.push({ from: block.from, to: next.from, insert: '' })
+  else if (next) changes.push({ from: blockFrom, to: start(next), insert: '' })
   // Numbered items keep each place's number: the block takes the number of
   // its new place and the items it passes move up or down one.
   if (block.parent?.name === 'OrderedList') {
     const marker = (item: SyntaxNode) => {
       const mark = item.getChild('ListMark')
-      return mark ? state.sliceDoc(mark.from, mark.to) : ''
+      return mark ? state.doc.sliceString(mark.from, mark.to) : ''
     }
     let passed = marker(block)
     for (let item: SyntaxNode | null = down ? next : previous; ; ) {
       if (!item) return null
       const own = marker(item)
       if (own !== passed) {
-        const from = item.getChild('ListMark')!.from
+        const changed = remarked(state, item, passed)
+        if (!changed) return null
         changes.push({
-          from,
+          from: start(item),
           to: item.to,
-          insert: remarked(state, item, passed),
+          insert: changed.text,
         })
       }
       passed = own
       if (same(item, at)) break
       item = step(item, down ? 1 : -1)
     }
-    text = remarked(state, block, passed)
+    const changed = remarked(state, block, passed)
+    if (!changed) return null
+    text = changed.text
+    remarkedChanges = changed.changes
   }
   // The new place: the separator the block had on that side, and for blocks
   // other than items the one already there on the other.
@@ -268,43 +409,52 @@ export function moveBlock(
       far && !items
         ? {
             from: at.to,
-            to: far.from,
-            insert: gap + text + join(block, state.sliceDoc(at.to, far.from)),
+            to: start(far),
+            insert:
+              gap +
+              text +
+              join(block, state.doc.sliceString(at.to, start(far))),
             offset: gap.length,
           }
         : { from: at.to, to: at.to, insert: gap + text, offset: gap.length }
   } else {
     const gap = join(block, before)
-    const head = far && !items ? join(far, state.sliceDoc(far.to, at.from)) : ''
+    const head =
+      far && !items ? join(far, state.doc.sliceString(far.to, start(at))) : ''
     insert =
       far && !items
         ? {
             from: far.to,
-            to: at.from,
+            to: start(at),
             insert: head + text + gap,
             offset: head.length,
           }
-        : { from: at.from, to: at.from, insert: text + gap, offset: 0 }
+        : { from: start(at), to: start(at), insert: text + gap, offset: 0 }
   }
   changes.push(insert)
   // Changes are in document order; an insertion goes before a replacement
   // starting at the same place.
   changes.sort((a, b) => a.from - b.from || a.to - b.to)
   const set = state.changes(
-    changes.map(({ from, to, insert }) => ({ from, to, insert })),
+    changes.map(({ from, to, insert }) => ({
+      from,
+      to,
+      insert: Text.of(insert.split('\n')),
+    })),
   )
   const from = set.mapPos(insert.from, -1) + insert.offset
   // A selection inside the block moves with it; otherwise the caret goes to
   // the block's start.
   const { anchor, head } = state.selection.main
-  const inside = (pos: number) => pos >= block.from && pos <= block.to
-  const place = (pos: number) => from + Math.min(pos - block.from, text.length)
+  const inside = (pos: number) => pos >= blockFrom && pos <= block.to
+  const place = (pos: number) =>
+    from + (remarkedChanges?.mapPos(pos - blockFrom) ?? pos - blockFrom)
   return {
     changes: set,
     selection:
       inside(anchor) && inside(head)
         ? EditorSelection.single(place(anchor), place(head))
-        : EditorSelection.cursor(from),
+        : EditorSelection.cursor(place(block.from)),
     scrollIntoView: true,
     userEvent: 'move',
     annotations: isolateHistory.of('full'),
@@ -375,8 +525,9 @@ function lineElement(view: EditorView, pos: number) {
 
 /** A block's first or last line that is drawn, past lines the view hides. */
 function shownLine(view: EditorView, block: SyntaxNode, last: boolean) {
-  const { from, to } = view.viewport
-  for (let pos = last ? block.to : block.from; pos >= from && pos <= to; ) {
+  const from = Math.max(block.from, view.viewport.from)
+  const to = Math.min(block.to, view.viewport.to)
+  for (let pos = last ? to : from; pos >= from && pos <= to; ) {
     const line = view.lineBlockAt(pos)
     if (line.height > 0.5) return lineElement(view, line.from)
     pos = last ? line.from - 1 : line.to + 1
@@ -493,6 +644,7 @@ class BlockHandle {
     this.hide()
     view.dom.addEventListener('mousemove', this.move)
     view.dom.addEventListener('mouseleave', this.leave)
+    view.contentDOM.addEventListener('keydown', this.keydown, true)
     view.dom.addEventListener('dragover', this.dragover, true)
     view.dom.addEventListener('drop', this.dropped, true)
     view.dom.addEventListener('dragleave', this.dragleave)
@@ -540,6 +692,23 @@ class BlockHandle {
     return block && tree && blockNode(tree, block)
   }
 
+  /** Tab targets the caret's block even when another block was last hovered. */
+  activateCaret() {
+    const tree = formattedSyntaxTree(this.view.state)
+    const node =
+      tree &&
+      handleTarget(tree, this.view.state.selection.main.head, () => false)
+    if (!node) return this.hide()
+    this.target = { from: node.from, to: node.to, name: node.name }
+    // Native focus scrolls to the button before the next measurement frame.
+    this.positioned(this.position(this.view))
+  }
+
+  readonly keydown = (event: KeyboardEvent) => {
+    if (event.key === 'Tab' && !event.shiftKey) this.activateCaret()
+    else this.hide()
+  }
+
   readonly move = (event: MouseEvent) => {
     if (this.dragged || this.wrapper.contains(event.target as Node)) return
     this.pointer = { x: event.clientX, y: event.clientY }
@@ -576,32 +745,39 @@ class BlockHandle {
     this.place()
   }
 
+  position(view: EditorView) {
+    const node = this.node(this.target)
+    const box = node && blockBox(view, node)
+    if (!node || !box) return null
+    const base = view.dom.getBoundingClientRect()
+    return {
+      left: blockLeft(node, column(view)) - this.handle.offsetWidth - base.left,
+      top: box.top - base.top,
+    }
+  }
+
+  positioned(position: { left: number; top: number } | null) {
+    if (!position) return this.hide()
+    this.handle.style.left = `${position.left}px`
+    this.handle.style.top = `${position.top}px`
+    this.show()
+  }
+
   /** Place the handle left of its block's first line, as the rich view does. */
   place() {
     this.view.requestMeasure({
       key: this,
-      read: (view) => {
-        const node = this.node(this.target)
-        const box = node && blockBox(view, node)
-        if (!node || !box) return null
-        const base = view.dom.getBoundingClientRect()
-        return {
-          left:
-            blockLeft(node, column(view)) - this.handle.offsetWidth - base.left,
-          top: box.top - base.top,
-        }
-      },
-      write: (position) => {
-        if (!position) return this.hide()
-        this.handle.style.left = `${position.left}px`
-        this.handle.style.top = `${position.top}px`
-        this.show()
-      },
+      read: (view) => this.position(view),
+      write: (position) => this.positioned(position),
     })
   }
 
   readonly leave = (event: MouseEvent) => {
-    if (this.wrapper.contains(event.relatedTarget as Node)) return
+    if (
+      this.wrapper.contains(event.relatedTarget as Node) ||
+      document.activeElement === this.handle
+    )
+      return
     this.hide()
   }
 
@@ -632,7 +808,14 @@ class BlockHandle {
 
   readonly dragstart = (event: DragEvent) => {
     const node = this.node(this.target)
-    if (!event.dataTransfer || !node || !editable(this.view)) {
+    if (
+      !event.dataTransfer ||
+      !node ||
+      !editable(this.view) ||
+      sourceFrom(this.view.state, node) === null ||
+      footnote(this.view.state, node) ||
+      !closed(this.view.state, node)
+    ) {
       event.preventDefault()
       return
     }
@@ -642,7 +825,7 @@ class BlockHandle {
     event.dataTransfer.clearData()
     event.dataTransfer.setData(
       'text/plain',
-      this.view.state.sliceDoc(node.from, node.to),
+      this.view.state.sliceDoc(sourceFrom(this.view.state, node)!, node.to),
     )
     event.dataTransfer.effectAllowed = 'copyMove'
     event.dataTransfer.setDragImage(this.image, 0, 0)
@@ -753,6 +936,7 @@ class BlockHandle {
     const { view } = this
     view.dom.removeEventListener('mousemove', this.move)
     view.dom.removeEventListener('mouseleave', this.leave)
+    view.contentDOM.removeEventListener('keydown', this.keydown, true)
     view.dom.removeEventListener('dragover', this.dragover, true)
     view.dom.removeEventListener('drop', this.dropped, true)
     view.dom.removeEventListener('dragleave', this.dragleave)
@@ -770,12 +954,7 @@ export function blockDragContribution(
     id: 'block-drag.handle',
     extension: [
       handles,
-      // Any key hides the handle, as in the rich view, including keys the
-      // editor's own bindings handle.
       EditorView.domEventObservers({
-        keydown(_, view) {
-          view.plugin(handles)?.hide()
-        },
         focus(_, view) {
           host.focus(view)
         },

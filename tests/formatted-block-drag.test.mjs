@@ -125,6 +125,13 @@ before(
     )
     await writeFile(join(folder, 'notes', 'note.md'), note)
     await writeFile(
+      join(folder, 'notes', 'tall.md'),
+      '# keyboard first\n\nkeyboard second\n\n' +
+        '\x60\x60\x60txt\n' +
+        Array.from({ length: 180 }, (_, i) => `code-line-${i}`).join('\n') +
+        '\n\x60\x60\x60\n\nlast\n',
+    )
+    await writeFile(
       join(folder, 'notes', 'long.md'),
       // Under the size at which notes open in source view first.
       Array.from(
@@ -498,4 +505,92 @@ test('in a long note the handle follows the block under the pointer and moves it
   )
   await pressShortcut(app, `${mod}+z`)
   await saved(before)
+})
+
+test('native tab activates the caret block without hover and tall blocks keep their handle', {
+  timeout: 120000,
+}, async () => {
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  await open('tall.md')
+  await page.locator('.rich-pane .hibi-lp-h1').waitFor()
+  await page.mouse.move(0, 0)
+  await page.locator('.rich-pane .cm-content').focus()
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({
+      selection: {
+        anchor: view.state.doc.toString().indexOf('keyboard second'),
+      },
+    })
+  })
+  await page.keyboard.press('End')
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Tab')
+  await page.waitForFunction(() =>
+    document.activeElement?.classList.contains('block-drag-handle'),
+  )
+  await page.keyboard.press('Enter')
+  await page
+    .getByRole('menuitem', { name: 'Move block up', exact: true })
+    .waitFor()
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.textContent),
+    'Move block up',
+  )
+  await page.keyboard.press('Enter')
+  await waitForAsync(page, async () =>
+    (await window.hibi.getDocument()).markdown.startsWith(
+      'keyboard second\n\n# keyboard first',
+    ),
+  )
+  assert.equal(
+    await page.evaluate(() =>
+      document.activeElement?.classList.contains('cm-content'),
+    ),
+    true,
+  )
+  await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(page, async () =>
+    (await window.hibi.getDocument()).markdown.startsWith(
+      '# keyboard first\n\nkeyboard second',
+    ),
+  )
+
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  const opening = await page
+    .locator('.rich-pane .hibi-lp-codeblock-first')
+    .boundingBox()
+  const code = await page
+    .locator('.rich-pane .cm-line:has-text("code-line-0")')
+    .boundingBox()
+  await page.mouse.move(code.x + 45, code.y + code.height / 2)
+  await shown(opening.y, opening.y + opening.height)
+  const box = await grip().boundingBox()
+  assert.ok(
+    Math.abs(box.y - opening.y - 8) < 10,
+    JSON.stringify({ box, opening }),
+  )
+  assert.equal(
+    await grip().evaluate(
+      (handle) => getComputedStyle(handle).transitionDuration,
+    ),
+    '0s',
+  )
+  // Its bottom is offscreen: geometry lookup must not render or scan the entire block.
+  assert.ok(
+    await page.evaluate(() => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      return (
+        view.viewport.to < view.state.doc.toString().indexOf('code-line-179')
+      )
+    }),
+  )
 })

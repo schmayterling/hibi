@@ -27,7 +27,7 @@ import {
   type Tree,
 } from '@lezer/common'
 import { highlightTree } from '@lezer/highlight'
-import { listWindow, parsedChunks } from './chunked-markdown'
+import { listWindow, parsedChunks, uncovered } from './chunked-markdown'
 import { codeHighlighter } from './code-languages'
 import {
   blockBreak,
@@ -321,7 +321,7 @@ function inline(
   tree: Tree,
   reveal: readonly Revealed[],
   layout: DecorationSet,
-): { decorations: DecorationSet; atomic: DecorationSet } {
+): { decorations: DecorationSet; atomic: DecorationSet; end: number } {
   const { state } = view
   const doc = state.doc
   const views = namedViews(state)
@@ -671,7 +671,7 @@ function inline(
     }
     return undefined
   }
-  spacing(view, tree, line)
+  const end = spacing(view, tree, line)
   const ordinals = new Map<number, number[]>()
   for (const [at, info] of lines) {
     const current = doc.lineAt(at)
@@ -699,6 +699,7 @@ function inline(
   return {
     decorations: Decoration.set(decorations, true),
     atomic: Decoration.set(atomic, true),
+    end,
   }
 }
 
@@ -835,7 +836,7 @@ function itemLine(
 /**
  * Collapsed margins between sibling blocks, at every level of quotes and
  * lists near the visible ranges, become blank-line heights or first-line
- * padding.
+ * padding. Returns the space below the note's last line.
  */
 function spacing(
   view: EditorView,
@@ -888,24 +889,59 @@ function spacing(
     }
   }
   for (const range of view.visibleRanges) visit(tree.topNode, range)
-  // After the last block, the note takes the rich view's last bottom margin:
-  // the blank line after its final line break is that tall, or the last
-  // line gains it below.
-  const end = view.visibleRanges.at(-1)
+  return ending(view, tree, line)
+}
+
+/**
+ * Blank lines after the last block, as the rich view shows them: an empty
+ * line with another line break after it is the margin above an empty
+ * paragraph, which shows on the next line, and other blank lines hold the
+ * margin below what comes before them. Laid out while the view draws the
+ * last block's end; returns the space below the last line, outside every
+ * block.
+ */
+function ending(view: EditorView, tree: Tree, line: (pos: number) => LineInfo) {
+  const doc = view.state.doc
   const last = blockChild(tree.topNode, true)
-  if (!end || end.to < doc.length || !last) return
-  const after = doc.lineAt(last.to)
-  for (let number = after.number + 1; number <= doc.lines; number++)
-    if (doc.line(number).text.trim()) return
-  const margin = bottomMargin(last)
-  if (after.number === doc.lines) {
-    line(after.from).style.push(`padding-bottom: ${margin}px`)
-    return
+  if (!last) return 0
+  const end = doc.lineAt(last.to)
+  const { viewport } = view
+  // Text after the last block that is not parsed yet may hold more blocks.
+  if (
+    end.to < viewport.from ||
+    end.to > viewport.to ||
+    uncovered(tree, end.to, doc.length)
+  )
+    return 0
+  const paragraph = blockSpace('Paragraph')
+  let margin = bottomMargin(last),
+    below = margin,
+    shown = false
+  const gaps: [number, number][] = []
+  for (let number = end.number + 1; number <= doc.lines; number++) {
+    const blank = doc.line(number)
+    if (blank.from > viewport.to) {
+      below = 0
+      break
+    }
+    if (blank.text.trim()) return 0
+    if (shown) {
+      shown = false
+      margin = below = paragraph.bottom
+    } else if (!blank.text && number < doc.lines) {
+      gaps.push([blank.from, Math.max(margin, paragraph.top)])
+      shown = true
+    } else {
+      gaps.push([blank.from, margin])
+      below = 0
+    }
   }
-  const blank = doc.line(after.number + 1)
-  const info = line(blank.from)
-  info.classes.push('hibi-lp-gap')
-  info.style.push(`height: ${margin}px`, `line-height: ${margin}px`)
+  for (const [at, height] of gaps) {
+    const info = line(at)
+    info.classes.push('hibi-lp-gap')
+    info.style.push(`height: ${height}px`, `line-height: ${height}px`)
+  }
+  return below
 }
 
 /** Layout decorations for one parsed chunk, relative to the chunk start. */
@@ -1244,10 +1280,16 @@ export function livePreview(
     class {
       decorations: DecorationSet
       atomic: DecorationSet
+      /** Space below the last line, in px. */
+      end: number
       reveal: readonly Revealed[]
       constructor(view: EditorView) {
         this.reveal = revealed(view)
-        ;({ decorations: this.decorations, atomic: this.atomic } = inline(
+        ;({
+          decorations: this.decorations,
+          atomic: this.atomic,
+          end: this.end,
+        } = inline(
           view,
           syntax.tree(view.state),
           this.reveal,
@@ -1291,12 +1333,11 @@ export function livePreview(
             transaction.effects.some((effect) => effect.is(formattedRefresh)),
           )
         )
-          ({ decorations: this.decorations, atomic: this.atomic } = inline(
-            update.view,
-            tree,
-            reveal,
-            update.state.field(layout),
-          ))
+          ({
+            decorations: this.decorations,
+            atomic: this.atomic,
+            end: this.end,
+          } = inline(update.view, tree, reveal, update.state.field(layout)))
       }
     },
     { decorations: (plugin) => plugin.decorations },
@@ -1373,6 +1414,11 @@ export function livePreview(
       revealDestinations(view.state.field(layout), view.state),
     ),
     preview,
+    // The space after the last block lies outside every block's paint.
+    EditorView.contentAttributes.of((view) => {
+      const end = view.plugin(preview)?.end
+      return end ? { style: `--hibi-end: ${end}px` } : null
+    }),
     EditorView.atomicRanges.of(hidden),
     // Lines the layout hides whole, with the line breaks around them, so the
     // caret never rests on one.

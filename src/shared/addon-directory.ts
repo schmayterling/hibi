@@ -1,4 +1,8 @@
-import type { AddonAuthor, AddonManifest } from '../addons/api'
+import {
+  type AddonAuthor,
+  type AddonManifest,
+  compatibleAddonManifest,
+} from '../addons/api'
 import { validId } from './addon-manifest.ts'
 import {
   addonPackageUrl,
@@ -85,8 +89,7 @@ export function parseAddonDirectory(value: unknown): AddonDirectoryEntry[] {
       ids.has(entry.id) ||
       !text(entry.name, 128) ||
       !text(entry.description, 2048) ||
-      !text(entry.version, 64) ||
-      ![1, 2].includes(entry.apiVersion as number) ||
+      !compatibleAddonManifest(entry) ||
       !['extension', 'theme'].includes(entry.kind as string) ||
       !text(entry.license, 128) ||
       !Array.isArray(entry.authors) ||

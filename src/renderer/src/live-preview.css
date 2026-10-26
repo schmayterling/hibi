@@ -16,6 +16,8 @@
 }
 .cm-editor.hibi-formatted .cm-content {
   padding: var(--editor-padding);
+  /* Space below the last block, as the rich view keeps its bottom margin. */
+  padding-bottom: calc(var(--editor-padding) + var(--hibi-end, 0px));
   /* Chromium can spend seconds laying out long unbroken text with pair kerning. */
   font-kerning: none;
   overflow-wrap: anywhere;

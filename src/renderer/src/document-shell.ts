@@ -2,6 +2,7 @@ import type { DocumentState } from '../../shared/desktop.ts'
 import { hasFootnoteDefinitions } from '../../shared/markdown-footnotes.ts'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import type { DocumentRuntime } from './document-runtime.ts'
+import { codemirrorFormattedView } from './formatted-engine.ts'
 
 const certifiedVisualEchoes = new WeakSet<SourceSnapshot>()
 // Weak entries leave with their source snapshot, including when a tab closes.
@@ -89,12 +90,23 @@ export function subscribeDocumentShell(
   })
 }
 
-/** ponytail: source-first above 262,144 units until the formatted view in #402. */
-export function preferSourceOpening(
+/** Notes over 262,144 units, whose source opening does not read whole. */
+export function largeOpening(
   runtime: Pick<DocumentRuntime, 'openingLength'>,
   document: DocumentState | null,
 ) {
   return !!document && runtime.openingLength(document) > 256 * 1024
+}
+
+/**
+ * ponytail: the ProseMirror view opens large notes in source view. The
+ * CodeMirror formatted view parses them in bounded steps, so it opens them.
+ */
+export function preferSourceOpening(
+  runtime: Pick<DocumentRuntime, 'openingLength'>,
+  document: DocumentState | null,
+) {
+  return !codemirrorFormattedView && largeOpening(runtime, document)
 }
 
 /** Shell and pane renders share one full footnote lex per immutable source. */

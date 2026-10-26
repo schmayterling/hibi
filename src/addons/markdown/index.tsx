@@ -2,6 +2,7 @@ import { Strike } from '@tiptap/extension-strike'
 import { TaskItem } from '@tiptap/extension-task-item'
 import { TaskList } from '@tiptap/extension-task-list'
 import { markedGithubFootnote } from 'marked-github-footnote'
+import { formattedRegistry } from '../../renderer/src/formatted-registry'
 import type { SyntaxSlashCommand } from '../../shared/markdown-syntax'
 import { defineAddon, type MarkdownFlavor } from '../api'
 import { alertMarkdown, alertMarker } from './alerts'
@@ -46,11 +47,24 @@ const obsidian: MarkdownFlavor = {
   export: { extensions: [obsidianMarkdown] },
 }
 
+let removeFormatted: (() => void) | undefined
+let stopFormatted: (() => void) | undefined
+
 export default defineAddon({
   manifest,
   flavors: [github, obsidian],
   start(context) {
     context.styles.register('alerts', alertCss)
+    // The formatted view's alerts load when a formatted view needs them.
+    removeFormatted = formattedRegistry.register({
+      id: 'markdown.alerts',
+      load: () => import('./formatted').then((module) => module.contribution),
+    })
+    stopFormatted = formattedRegistry.register({
+      id: 'markdown.obsidian',
+      load: () =>
+        import('./formatted-obsidian').then(({ contribution }) => contribution),
+    })
     context.editor.registerFlavor(github)
     context.editor.registerFlavor(obsidian)
     const slash: Record<
@@ -87,12 +101,13 @@ export default defineAddon({
           }),
       },
     }
-    for (const [id, label, extensions, matches] of [
+    for (const [id, label, extensions, matches, nodes] of [
       [
         'tables',
         'Tables',
         ['tableKit'],
         (token: { type: string }) => token.type === 'table',
+        ['Table'],
       ],
       [
         'tasks',
@@ -100,12 +115,14 @@ export default defineAddon({
         ['taskList', 'taskItem'],
         (token: { type: string; items?: { task?: boolean }[] }) =>
           token.type === 'list' && !!token.items?.some((item) => item.task),
+        ['Task'],
       ],
       [
         'strike',
         'Strikethrough',
         ['strike'],
         (token: { type: string }) => token.type === 'del',
+        ['Strikethrough'],
       ],
       [
         'alerts',
@@ -114,6 +131,7 @@ export default defineAddon({
         (token: { type: string; text?: string }) =>
           token.type === 'githubAlert' ||
           (token.type === 'blockquote' && !!alertMarker(token.text ?? '')),
+        ['AlertTitle'],
       ],
     ] as const)
       context.editor.registerSyntax({
@@ -122,6 +140,7 @@ export default defineAddon({
         group: 'Markdown',
         level: id === 'strike' ? 'inline' : 'block',
         extensions,
+        nodes,
         matches,
         slash: slash[id],
       })
@@ -143,5 +162,11 @@ export default defineAddon({
       codeLanguage: 'markdown',
       Preview: () => null,
     })
+  },
+  stop() {
+    removeFormatted?.()
+    removeFormatted = undefined
+    stopFormatted?.()
+    stopFormatted = undefined
   },
 })

@@ -1090,8 +1090,10 @@ function App() {
       flavors: chosenFlavors,
       projections: addonHost.markdownExtensions,
     }
+  // The CodeMirror formatted view edits footnotes in place.
   const footnoteDocument =
     markdownDocument &&
+    !codemirrorFormattedView &&
     hasDocumentFootnotes(documentRuntime, currentDocument.current ?? document)
   const availableViews = addonHost.sourceOnly
     ? ['markdown' as const]
@@ -2742,7 +2744,9 @@ function App() {
       preferSourceOpening(documentRuntime, paneDocument) &&
       richRequests.get(paneDocument?.tabId ?? '') !== paneDocument?.revision
     const paneFootnoteDocument =
-      paneMarkdown && hasDocumentFootnotes(documentRuntime, paneDocument)
+      paneMarkdown &&
+      !codemirrorFormattedView &&
+      hasDocumentFootnotes(documentRuntime, paneDocument)
     const PaneEditor = paneMarkdown
       ? richEditor.Component
       : formatEditor.Component
@@ -3097,6 +3101,12 @@ function App() {
         onCloseTab={(id) =>
           void applyDocumentOperation(
             () => window.hibi.closeDocumentTab(id),
+            false,
+          )
+        }
+        onCloseTabs={(ids, preferred) =>
+          void applyDocumentOperation(
+            () => window.hibi.closeDocumentTabs(ids, preferred),
             false,
           )
         }

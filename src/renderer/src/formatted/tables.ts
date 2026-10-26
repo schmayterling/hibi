@@ -22,6 +22,7 @@ import {
   formattedDocument,
   formattedLiteral,
   formattedMarkdown,
+  formattedRenderInputs,
   formattedViews,
 } from '../formatted-contributions.ts'
 import { tableActions } from '../source-formatting.ts'
@@ -73,15 +74,19 @@ const ALL_ROWS = 200
 
 type Line = { from: number; text: string }
 
-/** What cells render with: the formatted view's syntax, renderers and syntax that is off. */
+/** What cells render with: the formatted view's syntax, renderers, syntax that is off and what renderers read. */
 type CellConfig = {
   markdown: readonly MarkdownConfig[]
   views: readonly FormattedNodeView[]
   literal: readonly string[]
+  inputs: readonly unknown[]
 }
 
 const sameConfig = (a: CellConfig, b: CellConfig) =>
-  a.markdown === b.markdown && a.views === b.views && a.literal === b.literal
+  a.markdown === b.markdown &&
+  a.views === b.views &&
+  a.literal === b.literal &&
+  a.inputs === b.inputs
 
 /**
  * A table: lines `first` (header) to `first + rows + 1` of `doc`, replaced
@@ -396,13 +401,6 @@ class TableView {
     this.relocate()
     this.followSizes()
     this.dom.classList.toggle('hibi-lp-table-inline', widget.inline)
-    if (!sameConfig(previous.config, widget.config)) {
-      // Other syntax or renderers: every cell renders again.
-      this.stopEditing()
-      this.headText = ''
-      for (const row of this.rendered.values()) row.element.remove()
-      this.rendered.clear()
-    }
     const header = widget.line(0),
       delimiter = widget.line(1).text
     const aligned = alignments(delimiter.slice(widget.rowStart(1, delimiter)))
@@ -467,6 +465,13 @@ class TableView {
       this.after?.remove()
       this.show(0, widget.rows)
     }
+    if (!sameConfig(previous.config, widget.config)) {
+      // New syntax or render inputs redraw cells without unmounting the editor.
+      this.refresh(this.head, 0, this.headText, true)
+      for (const [index, row] of this.rendered)
+        this.refresh(row.element, index + 2, row.text, true)
+      this.editing?.editor.refresh()
+    }
     this.applySizes()
     this.syncEditor()
   }
@@ -520,7 +525,14 @@ class TableView {
     const content = cell
       ? cellContent(line.text.slice(cell.from, cell.to))
       : null
-    if (content?.text) renderInline(this.view, content.text, paragraph)
+    if (content?.text && cell)
+      renderInline(
+        this.view,
+        content.text,
+        paragraph,
+        this.now(line.from + cell.from),
+        content.source,
+      )
     else paragraph.append(document.createElement('br'))
     element.append(paragraph)
     // Keyboard handles for the column's width and the row's height.
@@ -529,8 +541,13 @@ class TableView {
     return element
   }
 
-  /** Render the cells of a row whose text changed, except the one being edited. */
-  private refresh(row: HTMLTableRowElement, index: number, previous: string) {
+  /** Render changed cells, or all of them, except the one being edited. */
+  private refresh(
+    row: HTMLTableRowElement,
+    index: number,
+    previous: string,
+    force = false,
+  ) {
     const line = this.widget.line(index)
     const start = this.widget.rowStart(index, previous)
     const before = parseRow(previous.slice(start), start).cells
@@ -541,9 +558,10 @@ class TableView {
       const a = before[column],
         b = after[column]
       if (
-        a && b
+        !force &&
+        (a && b
           ? previous.slice(a.from, a.to) === line.text.slice(b.from, b.to)
-          : !a && !b
+          : !a && !b)
       )
         continue
       element.replaceWith(this.cell(index ? 'td' : 'th', line, b, column))
@@ -691,7 +709,9 @@ class TableView {
 
   /** A position of the widget's text snapshot, where it is now. */
   private now(snapshot: number) {
-    return this.range().from - this.widget.from + snapshot
+    return this.dom.isConnected
+      ? this.range().from - this.widget.from + snapshot
+      : snapshot
   }
 
   /** The cell at a position of the formatted view's document, with the offset in its text. */
@@ -1308,10 +1328,13 @@ class TableView {
     const header = this.widget.line(0)
     return this.widget.row(0).cells.map((cell) => {
       const element = document.createElement('p')
+      const content = cellContent(header.text.slice(cell.from, cell.to))
       renderInline(
         this.view,
-        cellContent(header.text.slice(cell.from, cell.to)).text,
+        content.text,
         element,
+        this.now(header.from + cell.from),
+        content.source,
       )
       return element.textContent ?? ''
     })
@@ -1801,6 +1824,7 @@ export const contribution: FormattedContribution = {
               markdown: state.facet(formattedMarkdown),
               views: state.facet(formattedViews),
               literal: state.facet(formattedLiteral),
+              inputs: state.facet(formattedRenderInputs),
             },
           ),
           inline ? undefined : { block: true },

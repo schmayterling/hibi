@@ -513,7 +513,11 @@ export type MarkdownFlavor = {
   richExtensions?: readonly AnyExtension[]
   /** Lezer Markdown extensions for the formatted view and source highlighting (API 3). */
   syntax?: MarkdownConfig | readonly MarkdownConfig[]
-  /** Viewport-bounded inline renderers and cached block layout (API 3). */
+  /**
+   * Viewport-bounded inline renderers and cached block layout (API 3).
+   * If a render callback throws, Hibi reports it and removes this flavor's
+   * formatted contribution. Other flavors and source editing keep working.
+   */
   render?: readonly FormattedNodeView[]
   /** Rules receive rendered Markdown with declared text characters protected by ctx.literals (sentinel to character), including in tables; preserve node markup. */
   paragraphRules?: readonly MarkdownParagraphRule[]

@@ -197,6 +197,7 @@ test('desktop launch, isolation, offline reload, and recovery', {
         'selectDocumentTab',
         'focusDocumentTab',
         'closeDocumentTab',
+        'closeDocumentTabs',
         'moveDocumentTab',
         'setTabsEnabled',
         'updateDocument',

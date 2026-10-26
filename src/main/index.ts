@@ -132,6 +132,7 @@ import { BackgroundMode } from './background'
 import {
   autosaveDocument,
   closeDocumentTab,
+  closeDocumentTabs,
   confirmDiscard,
   confirmDiscardAll,
   discardChanges,
@@ -2103,6 +2104,13 @@ if (!app.requestSingleInstanceLock()) {
       )
       handle(DOCUMENT_CHANNELS.closeTab, (event, id: unknown) =>
         runFileOperation(event, (window) => closeDocumentTab(window, id)),
+      )
+      handle(
+        DOCUMENT_CHANNELS.closeTabs,
+        (event, ids: unknown, preferred: unknown) =>
+          runFileOperation(event, (window) =>
+            closeDocumentTabs(window, ids, preferred),
+          ),
       )
       handle(
         DOCUMENT_CHANNELS.moveTab,

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { type BigIntStats, constants } from 'node:fs'
 import { link, lstat, open, realpath, unlink } from 'node:fs/promises'
 import { dirname, relative, sep } from 'node:path'
+import { sameFileIdentity } from '../shared/file-identity.ts'
 import type { WorkspaceTarget } from '../shared/foundation-contracts'
 import type {
   WorkspaceBinaryCreation,
@@ -54,7 +55,7 @@ const disposed = (): WorkspaceFileResult<never> => ({
   message: 'This addon is no longer active.',
 })
 
-type ParentIdentity = { canonical: string; dev: number; ino: number }
+type ParentIdentity = { canonical: string; dev: bigint; ino: bigint }
 
 // ponytail: path checks cannot defeat a same-user swap-back race without
 // directory-handle-relative IO; use native openat-style IO if required.
@@ -63,7 +64,10 @@ async function parentIdentity(
   file: string,
 ): Promise<ParentIdentity> {
   const parent = dirname(file)
-  const [canonical, info] = await Promise.all([realpath(parent), lstat(parent)])
+  const [canonical, info] = await Promise.all([
+    realpath(parent),
+    lstat(parent, { bigint: true }),
+  ])
   if (!inside(root, canonical) || info.isSymbolicLink() || !info.isDirectory())
     throw Object.assign(new Error('This path is outside the workspace.'), {
       code: 'EACCES',
@@ -79,8 +83,7 @@ async function verifyParent(
   const current = await parentIdentity(root, file)
   if (
     current.canonical !== expected.canonical ||
-    current.dev !== expected.dev ||
-    current.ino !== expected.ino
+    !sameFileIdentity(current, expected)
   )
     throw Object.assign(new Error('The workspace folder changed. Try again.'), {
       code: 'ESTALE',

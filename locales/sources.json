@@ -107,6 +107,9 @@
   "d8aa9d7083d6": [
     "src/renderer/src/editor-view-api.ts"
   ],
+  "be4baf3c7663": [
+    "src/main/document.ts"
+  ],
   "31dd788747d0": [
     "src/addons/mcp-server/Settings.tsx"
   ],
@@ -499,6 +502,7 @@
     "src/renderer/src/UpdateSettings.tsx"
   ],
   "b4276963bf99": [
+    "src/addons/block-drag/formatted.ts",
     "src/addons/block-drag/index.ts"
   ],
   "a936b1f4cf9c": [
@@ -1053,6 +1057,9 @@
   "99904db30de4": [
     "src/site/main.tsx"
   ],
+  "0ddc2c568df7": [
+    "src/renderer/src/DocumentTabs.tsx"
+  ],
   "17e28e230217": [
     "src/ui/Sidebar.tsx"
   ],
@@ -1063,6 +1070,12 @@
     "src/main/index.ts",
     "src/renderer/src/DocumentTabs.tsx",
     "src/shared/hotkeys.ts"
+  ],
+  "9db4e0a00da4": [
+    "src/renderer/src/DocumentTabs.tsx"
+  ],
+  "70b08b33798a": [
+    "src/renderer/src/DocumentTabs.tsx"
   ],
   "6c73f172ed0b": [
     "src/renderer/src/addon-reload.ts"
@@ -1395,7 +1408,10 @@
     "src/addons/vim/keymaps.ts"
   ],
   "da2df709d46e": [
-    "src/renderer/src/document-worker-client.ts"
+    "src/renderer/src/document-worker-client.ts",
+    "src/shared/chunked-markdown.ts",
+    "src/shared/document-worker-service.ts",
+    "src/shared/markdown-boundary-index.ts"
   ],
   "ce6331b7277c": [
     "src/main/addon-hotkeys.ts"
@@ -3636,9 +3652,11 @@
     "src/addons/mcp-server/tools.ts"
   ],
   "df6c593c35d7": [
+    "src/addons/block-drag/formatted.ts",
     "src/addons/block-drag/index.ts"
   ],
   "cc6fc79ab665": [
+    "src/addons/block-drag/formatted.ts",
     "src/addons/block-drag/index.ts"
   ],
   "9adcdf33dce1": [
@@ -5131,6 +5149,7 @@
   ],
   "886bcbd93207": [
     "src/addons/tags/decorations.ts",
+    "src/addons/tags/formatted.ts",
     "src/addons/tags/rich-decorations.ts"
   ],
   "7d583b20c446": [
@@ -5337,7 +5356,7 @@
     "src/renderer/src/source-outline.ts"
   ],
   "b44730f5bd1a": [
-    "src/renderer/src/Editor.tsx"
+    "src/renderer/src/use-source-outline.ts"
   ],
   "f98206e187b9": [
     "src/renderer/src/source-outline.ts"
@@ -5522,6 +5541,9 @@
   ],
   "9b910110596f": [
     "src/addons/autocomplete/Settings.tsx"
+  ],
+  "6067c7203339": [
+    "src/renderer/src/DocumentTabs.tsx"
   ],
   "70a91037b87d": [
     "src/renderer/src/SettingsScreen.tsx"
@@ -6006,6 +6028,9 @@
   ],
   "cf9108c9789b": [
     "src/addons/mcp-server/tools.ts"
+  ],
+  "8b3833b3d6d6": [
+    "src/main/document.ts"
   ],
   "590fb9c8974a": [
     "src/addons/_shared/format-native.ts"

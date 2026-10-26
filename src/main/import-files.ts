@@ -1,8 +1,15 @@
-import { constants, createWriteStream, type Stats } from 'node:fs'
+import {
+  type BigIntStats,
+  constants,
+  createWriteStream,
+  type Stats,
+} from 'node:fs'
 import { lstat, open, readdir, realpath } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { setImmediate } from 'node:timers/promises'
+import { sameFileIdentity } from '../shared/file-identity.ts'
+import { fileTimeMilliseconds } from '../shared/file-time.ts'
 import type { ImportFile } from '../shared/imports'
 import { isPathInside } from './workspace-paths.ts'
 import { openBoundedZip, readZipEntry } from './zip-reader.ts'
@@ -88,14 +95,14 @@ export type ImportSourceFile = {
   path: string
   source: string
   root: string
-  stat: Pick<Stats, 'size' | 'mtimeMs' | 'ino' | 'dev'>
+  stat: Pick<Stats, 'size' | 'mtimeMs'> & Pick<BigIntStats, 'ino' | 'dev'>
 }
-function checkSource(file: ImportSourceFile, stat: Stats) {
+function checkSource(file: ImportSourceFile, stat: BigIntStats) {
   if (
     !stat.isFile() ||
-    (['size', 'mtimeMs', 'ino', 'dev'] as const).some(
-      (key) => stat[key] !== file.stat[key],
-    )
+    !sameFileIdentity(stat, file.stat) ||
+    stat.size !== BigInt(file.stat.size) ||
+    fileTimeMilliseconds(stat.mtimeNs) !== file.stat.mtimeMs
   )
     throw new Error('An import file changed while being read. Try again.')
 }
@@ -117,12 +124,12 @@ async function boundedFile(
     constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0),
   )
   try {
-    const stat = await handle.stat()
+    const stat = await handle.stat({ bigint: true })
     if (expected) checkSource(expected, stat)
     if (!stat.isFile() || stat.size > limit)
       throw new Error('A file exceeds the import size limit.')
     // One extra byte catches files that grow while being read without unbounded allocation.
-    const bytes = Buffer.alloc(Math.min(stat.size + 1, limit + 1))
+    const bytes = Buffer.alloc(Math.min(Number(stat.size) + 1, limit + 1))
     let size = 0
     while (size < bytes.length) {
       signal?.throwIfAborted()
@@ -131,9 +138,12 @@ async function boundedFile(
       size += result.bytesRead
     }
     signal?.throwIfAborted()
-    if (size !== stat.size || (await handle.stat()).mtimeMs !== stat.mtimeMs)
+    if (
+      BigInt(size) !== stat.size ||
+      (await handle.stat({ bigint: true })).mtimeNs !== stat.mtimeNs
+    )
       throw new Error('An import file changed while being read. Try again.')
-    if (expected) checkSource(expected, await handle.stat())
+    if (expected) checkSource(expected, await handle.stat({ bigint: true }))
     return bytes.subarray(0, size)
   } finally {
     await handle.close()
@@ -154,7 +164,7 @@ export async function copyImportFile(
     constants.O_RDONLY | constants.O_NOFOLLOW | (constants.O_NONBLOCK ?? 0),
   )
   try {
-    checkSource(file, await handle.stat())
+    checkSource(file, await handle.stat({ bigint: true }))
     let size = 0
     await pipeline(
       handle.createReadStream({
@@ -173,7 +183,7 @@ export async function copyImportFile(
     )
     if (size !== file.stat.size)
       throw new Error('An import file changed while being read. Try again.')
-    checkSource(file, await handle.stat())
+    checkSource(file, await handle.stat({ bigint: true }))
   } finally {
     await handle.close()
   }
@@ -197,7 +207,7 @@ export async function readImportFolder(root: string, signal?: AbortSignal) {
       if (!validImportPath(path))
         throw new Error(`This file name cannot be imported: ${path}`)
       const full = join(directory, entry.name),
-        stat = await lstat(full)
+        stat = await lstat(full, { bigint: true })
       if (stat.isSymbolicLink()) {
         warnings.push(`Skipped symbolic link: ${path}`)
         continue
@@ -209,8 +219,8 @@ export async function readImportFolder(root: string, signal?: AbortSignal) {
           source: join(actual, entry.name),
           root,
           stat: {
-            size: stat.size,
-            mtimeMs: stat.mtimeMs,
+            size: Number(stat.size),
+            mtimeMs: fileTimeMilliseconds(stat.mtimeNs),
             ino: stat.ino,
             dev: stat.dev,
           },

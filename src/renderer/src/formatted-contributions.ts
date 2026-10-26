@@ -30,6 +30,18 @@ import { markdownSyntax } from './markdown-syntax.ts'
  * This is the internal shape of addon API 3.
  */
 
+/** Parent output owns an exact replacement range before child renderers visit it. */
+export function claimFormattedReplacement(
+  ranges: Set<string>,
+  from: number,
+  to: number,
+) {
+  const key = `${from}:${to}`
+  if (ranges.has(key)) return false
+  ranges.add(key)
+  return true
+}
+
 export type FormattedContribution = {
   id: string
   /**
@@ -63,11 +75,22 @@ export type FormattedContribution = {
 /** Markdown extensions of the active contributions, read by the formatted syntax. */
 export const formattedMarkdown = Facet.define<MarkdownConfig>()
 
+/** The view's active flavor ids also identify worker boundary configurations. */
+export const formattedFlavors = Facet.define<
+  readonly string[],
+  readonly string[]
+>({
+  combine: (values) => values.at(-1) ?? [],
+})
+
 /** Node views of the active contributions, read by the live preview. */
 export const formattedViews = Facet.define<FormattedNodeView>()
 
 /** Opaque node names of the active contributions, read by the formatted syntax. */
 export const formattedOpaque = Facet.define<string>()
+
+/** Inline formatting nodes of the active contributions, read by the formatted view's Enter. */
+export const formattedFormatting = Facet.define<string>()
 
 /** Nodes of syntax settings that are off: they and their children show as written. */
 export const formattedLiteral = Facet.define<string>()
@@ -79,7 +102,10 @@ export const formattedLiteral = Facet.define<string>()
 export const formattedDocument = Facet.define<
   { revision: number; tabId: string | null },
   { revision: number; tabId: string | null }
->({ combine: (values) => values.at(-1) ?? { revision: 0, tabId: null } })
+>({
+  combine: (values) => values.at(-1) ?? { revision: 0, tabId: null },
+  compare: (a, b) => a.revision === b.revision && a.tabId === b.tabId,
+})
 
 /** How a formatted view reads its syntax tree, which it parses near the viewport. */
 export const formattedTree = Facet.define<
@@ -98,6 +124,18 @@ export function formattedSyntaxTree(state: EditorState): Tree | null {
  * as an index of footnote definitions that an idle slice extended.
  */
 export const formattedRefresh = StateEffect.define<null>()
+
+/**
+ * State other than syntax that renderers read, such as the footnote labels
+ * references resolve against. Renderers that keep their output, like table
+ * cells, render again when it changes.
+ */
+export const formattedRenderInputs = Facet.define<unknown>()
+
+/** The formatted view's state, in the state a renderer gets for text drawn apart from it, such as a table cell's. */
+export const formattedOwner = Facet.define<EditorState, EditorState | null>({
+  combine: (values) => values[0] ?? null,
+})
 
 /** Show the Markdown markers of the formatted text under the selection. */
 export const showMarkdownMarkers = Facet.define<boolean, boolean>({
@@ -151,6 +189,17 @@ function load(entry: FormattedEntry) {
   }, failed)
 }
 
+/** Core features' nodes, kept here rather than in the startup syntax list. */
+const coreNodes: Partial<Record<string, readonly string[]>> = {
+  'core.images': ['Image'],
+  'core.html-blocks': [
+    'HTMLBlock',
+    'CommentBlock',
+    'ProcessingInstructionBlock',
+  ],
+  'core.inline-html': ['HTMLTag', 'Comment', 'ProcessingInstruction'],
+}
+
 export const formattedContributions = {
   /** Changes when registered or loaded contributions or the syntax settings they follow change. */
   version: () =>
@@ -179,10 +228,11 @@ export const formattedContributions = {
         (!feature.enabled ||
           formattedCompatibility.snapshot().includes(feature.owner)) &&
         feature.scope !== 'document'
-          ? (feature.nodes ?? [])
+          ? (feature.nodes ?? coreNodes[feature.id] ?? [])
           : [],
       )
     return [
+      formattedFlavors.of(flavors ?? []),
       literal.map((name) => formattedLiteral.of(name)),
       formattedRegistry.entries().flatMap((entry) => {
         load(entry)

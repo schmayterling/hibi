@@ -18,6 +18,15 @@ import {
 import { formattedRegistry } from '../src/renderer/src/formatted-registry.ts'
 import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
+import { boundarySyntaxIds } from '../src/shared/markdown-boundary-syntax.ts'
+
+// Feature modules import their styles; these tests need only the code.
+registerHooks({
+  load: (url, context, next) =>
+    url.endsWith('.css')
+      ? { format: 'module', source: '', shortCircuit: true }
+      : next(url, context),
+})
 
 /** `==text==` as a `Highlight` node, standing in for a contributed syntax. */
 const highlightDelimiter = { resolve: 'Highlight', mark: 'HighlightMark' }
@@ -379,4 +388,38 @@ test('github task lists parse as tasks in documents of that flavor', async () =>
   } finally {
     remove()
   }
+})
+
+test('turning off core html or images shows their nodes as written', () => {
+  const literal = () =>
+    EditorState.create({
+      extensions: formattedContributions.extension(['markdown.github']),
+    }).facet(formattedLiteral)
+  assert.ok(!literal().includes('HTMLTag'))
+  for (const [id, node] of [
+    ['core.inline-html', 'HTMLTag'],
+    ['core.html-blocks', 'HTMLBlock'],
+    ['core.images', 'Image'],
+  ]) {
+    markdownSyntax.setEnabled(id, false)
+    try {
+      assert.ok(literal().includes(node), id)
+    } finally {
+      markdownSyntax.setEnabled(id, true)
+    }
+  }
+})
+
+test('default task, footnote and alert grammars share exact worker catalog identities', async () => {
+  const tasks = await import('../src/renderer/src/formatted/tasks.ts')
+  const footnotes = await import('../src/renderer/src/formatted/footnotes.ts')
+  const alerts = await import('../src/addons/markdown/formatted.ts')
+  assert.deepEqual(
+    boundarySyntaxIds([
+      tasks.contribution.syntax,
+      footnotes.Footnotes,
+      alerts.GithubAlerts,
+    ]),
+    ['tasks@1', 'empty-tasks@1', 'footnotes@1', 'github-alerts@1'],
+  )
 })

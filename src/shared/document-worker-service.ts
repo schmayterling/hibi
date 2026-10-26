@@ -35,6 +35,24 @@ const validSyntax = (
 
 /** Trusted derived replica. The renderer/native journal remain the source authority. */
 export class DocumentWorkerService {
+  #boundaryModel:
+    | import('./markdown-boundary-index.ts').MarkdownBoundaryIndex
+    | null = null
+  #boundaryRequest: Extract<
+    DocumentWorkerRequest,
+    { type: 'boundaries' }
+  > | null = null
+  #boundaryModule: typeof import('./markdown-boundary-index.ts') | null = null
+  #boundaryLoading = false
+  #boundaryChannel: MessageChannel | null = null
+  #boundaryScheduled = false
+  #boundaryPages: Generator<{
+    records: import('./chunked-markdown.ts').BoundaryRecord[]
+    done: boolean
+  }> | null = null
+  #boundarySequence = 0
+  #boundaryAwaiting: number | null = null
+
   readonly #post: (reply: DocumentWorkerReply) => void
   #store: SourceStore | null = null
   #bootstrap: {
@@ -57,6 +75,8 @@ export class DocumentWorkerService {
   #metadataId = 0
   #metadataLoading = false
   #metadataTimer: ReturnType<typeof setTimeout> | undefined
+  #metadataChannel: MessageChannel | null = null
+  #metadataScheduled = false
   #metadataServiced = 0
   #references: MarkdownSourceReferences | null = null
   #referenceSyntax = ''
@@ -67,6 +87,106 @@ export class DocumentWorkerService {
     null
   constructor(post: (reply: DocumentWorkerReply) => void) {
     this.#post = post
+  }
+  #stopBoundaries(release = false) {
+    this.#boundaryChannel?.port1.close()
+    this.#boundaryChannel?.port2.close()
+    this.#boundaryChannel = null
+    this.#boundaryScheduled = false
+    this.#boundaryPages?.return(undefined)
+    this.#boundaryPages = null
+    this.#boundarySequence = 0
+    this.#boundaryAwaiting = null
+    if (release) {
+      this.#boundaryRequest = null
+      this.#boundaryModel = null
+    }
+  }
+  #scheduleBoundaries() {
+    if (!this.#boundaryRequest || this.#disposed || !this.#store) return
+    if (!this.#boundaryModule) {
+      if (this.#boundaryLoading) return
+      this.#boundaryLoading = true
+      void import('./markdown-boundary-index.ts').then(
+        (module) => {
+          this.#boundaryLoading = false
+          this.#boundaryModule = module
+          this.#scheduleBoundaries()
+        },
+        () => this.#declineBoundaries(),
+      )
+      return
+    }
+    if (this.#boundaryScheduled || this.#boundaryAwaiting !== null) return
+    if (!this.#boundaryChannel) {
+      const channel = new MessageChannel()
+      this.#boundaryChannel = channel
+      channel.port1.onmessage = () => {
+        if (this.#boundaryChannel !== channel) return
+        this.#boundaryScheduled = false
+        this.#runBoundaries()
+      }
+    }
+    this.#boundaryScheduled = true
+    this.#boundaryChannel.port2.postMessage(null)
+  }
+  #declineBoundaries() {
+    const request = this.#boundaryRequest
+    if (request)
+      this.#post({
+        type: 'boundary-declined',
+        epoch: this.#epoch,
+        id: request.id,
+        version: request.version,
+        key: JSON.stringify(request.config),
+      })
+    this.#stopBoundaries(true)
+  }
+  #runBoundaries() {
+    const request = this.#boundaryRequest
+    if (
+      !request ||
+      !this.#store ||
+      request.version !== this.#store.snapshot().version
+    )
+      return
+    try {
+      this.#boundaryModel ??= new this.#boundaryModule!.MarkdownBoundaryIndex(
+        this.#store.snapshot(),
+        request.config,
+      )
+      if (!this.#boundaryPages) {
+        const deadline = performance.now() + 4
+        let complete: boolean
+        do {
+          complete = this.#boundaryModel.advance()
+        } while (!complete && performance.now() < deadline)
+        if (!complete) {
+          this.#scheduleBoundaries()
+          return
+        }
+        this.#boundaryPages = this.#boundaryModel.pages(request.from ?? 0)
+      }
+      const page = this.#boundaryPages.next()
+      if (page.done) {
+        this.#stopBoundaries()
+        return
+      }
+      const sequence = this.#boundarySequence++
+      this.#boundaryAwaiting = sequence
+      this.#post({
+        type: 'boundaries',
+        epoch: this.#epoch,
+        id: request.id,
+        version: request.version,
+        key: this.#boundaryModel.key,
+        sequence,
+        length: this.#boundaryModel.length,
+        ...page.value,
+      })
+    } catch {
+      this.#declineBoundaries()
+    }
   }
   #cancel() {
     this.#findChannel?.port1.close()
@@ -80,6 +200,10 @@ export class DocumentWorkerService {
   #cancelMetadata(release = false) {
     clearTimeout(this.#metadataTimer)
     this.#metadataTimer = undefined
+    this.#metadataChannel?.port1.close()
+    this.#metadataChannel?.port2.close()
+    this.#metadataChannel = null
+    this.#metadataScheduled = false
     this.#referenceWork?.return(undefined)
     this.#referenceWork = null
     this.#referencesReady = false
@@ -115,6 +239,7 @@ export class DocumentWorkerService {
     this.#cancel()
     this.#index = null
     if (stage === 'replica') {
+      this.#stopBoundaries(true)
       this.#cancelMetadata(true)
       this.#maintenance?.dispose()
       this.#maintenance = null
@@ -130,6 +255,7 @@ export class DocumentWorkerService {
     })
   }
   #reset(epoch: string) {
+    this.#stopBoundaries(true)
     this.#cancel()
     this.#cancelMetadata(true)
     this.#metadataId = 0
@@ -216,6 +342,14 @@ export class DocumentWorkerService {
         this.#index = null
         this.#store.commit(prepared)
         this.#model?.apply(prepared)
+        this.#stopBoundaries()
+        this.#boundaryModel?.apply(prepared)
+        if (this.#boundaryRequest)
+          this.#boundaryRequest = {
+            ...this.#boundaryRequest,
+            version: prepared.after.version,
+          }
+        this.#scheduleBoundaries()
         this.#maintenance!.changed(
           prepared.operation.changes.reduce(
             (sum, edit) => sum + edit.to - edit.from + edit.insert.length,
@@ -227,6 +361,44 @@ export class DocumentWorkerService {
           epoch: this.#epoch,
           version: prepared.after.version,
         })
+      } else if (message.type === 'boundaries') {
+        if (message.version !== this.#store.snapshot().version) return
+        if (
+          !Number.isSafeInteger(message.from ?? 0) ||
+          (message.from ?? 0) < 0 ||
+          (message.from ?? 0) > this.#store.snapshot().normalizedLength
+        )
+          throw new Error('Could not read a document worker reply.')
+        if (
+          this.#boundaryRequest?.id === message.id &&
+          this.#boundaryRequest.version === message.version &&
+          this.#boundaryRequest.from === message.from &&
+          JSON.stringify(this.#boundaryRequest.config) ===
+            JSON.stringify(message.config)
+        )
+          return
+        this.#stopBoundaries()
+        if (this.#boundaryModel?.key !== JSON.stringify(message.config))
+          this.#boundaryModel = null
+        this.#boundaryRequest = message
+        this.#scheduleBoundaries()
+      } else if (message.type === 'boundary-ack') {
+        const request = this.#boundaryRequest
+        if (
+          !request ||
+          message.id !== request.id ||
+          message.version !== request.version ||
+          message.key !== this.#boundaryModel?.key ||
+          message.sequence !== this.#boundaryAwaiting
+        )
+          return
+        this.#boundaryAwaiting = null
+        this.#scheduleBoundaries()
+      } else if (message.type === 'cancel-boundaries') {
+        if (message.retain !== undefined && typeof message.retain !== 'boolean')
+          throw new Error('Could not read a document worker reply.')
+        this.#stopBoundaries(!message.retain)
+        this.#boundaryRequest = null
       } else if (message.type === 'cancel-find') {
         if (this.#request?.id === message.id) {
           this.#cancel()
@@ -420,8 +592,25 @@ export class DocumentWorkerService {
       })
   }
   #scheduleMetadata() {
-    if (this.#metadataTimer || !this.#metadata || !this.#model) return
-    this.#metadataTimer = setTimeout(this.#advanceMetadata, 0)
+    if (
+      this.#metadataTimer ||
+      this.#metadataScheduled ||
+      !this.#metadata ||
+      !this.#model
+    )
+      return
+    if (!this.#metadataChannel) {
+      const channel = new MessageChannel()
+      this.#metadataChannel = channel
+      channel.port1.onmessage = () => {
+        if (this.#metadataChannel !== channel) return
+        this.#metadataScheduled = false
+        // Reset timer nesting without starving cancellation timers.
+        this.#metadataTimer = setTimeout(this.#advanceMetadata, 0)
+      }
+    }
+    this.#metadataScheduled = true
+    this.#metadataChannel.port2.postMessage(null)
   }
   *#readSemantics(
     request: MetadataRequest,
@@ -557,7 +746,7 @@ export class DocumentWorkerService {
             this.#semanticWork = null
             semantic = step.value
           }
-          this.#metadata = null
+          this.#cancelMetadata()
           this.#post({
             type: 'metadata',
             epoch: this.#epoch,
@@ -570,6 +759,12 @@ export class DocumentWorkerService {
           return
         }
       } while (performance.now() - this.#metadataServiced < 2)
+      this.#post({
+        type: 'metadata-progress',
+        epoch: this.#epoch,
+        id: request.id,
+        version: request.version,
+      })
       this.#scheduleMetadata()
     } catch (error) {
       this.#fail('metadata', error, request.id)
@@ -611,6 +806,9 @@ export class DocumentWorkerService {
               DocumentWorkerReply,
               { type: 'find' }
             >['location'],
+            ...(request.highlights
+              ? { highlightStarts: this.#index!.highlightStarts() }
+              : {}),
           })
         }
       }
@@ -634,6 +832,7 @@ export class DocumentWorkerService {
   }
   dispose() {
     this.#disposed = true
+    this.#stopBoundaries(true)
     this.#cancel()
     this.#cancelMetadata(true)
     this.#maintenance?.dispose()

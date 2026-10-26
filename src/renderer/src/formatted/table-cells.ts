@@ -25,6 +25,7 @@ import {
   type MarkdownParser,
   parser,
 } from '@lezer/markdown'
+import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
   type FormattedDecorations,
   type FormattedNodeView,
@@ -564,13 +565,27 @@ export class CellEditor {
             ),
           ),
           keymap.of(defaultKeymap),
-          // Undo and redo are the formatted view's, through its history.
+          // Undo and redo are the formatted view's, through its history; a
+          // view that takes no input takes neither, and the browser's own
+          // undo of the cell's DOM never runs.
           Prec.lowest(
             EditorView.domEventHandlers({
               keydown: (event) =>
                 (event.metaKey || event.ctrlKey) &&
                 /^[yz]$/i.test(event.key) &&
-                runScopeHandlers(host.main, event, 'editor'),
+                (!writable(host.main.state) ||
+                  runScopeHandlers(host.main, event, 'editor')),
+              beforeinput: (event) => {
+                const { inputType } = event
+                if (inputType !== 'historyUndo' && inputType !== 'historyRedo')
+                  return false
+                if (writable(host.main.state))
+                  runSourceHistory(
+                    host.main,
+                    inputType === 'historyUndo' ? 'undo' : 'redo',
+                  )
+                return true
+              },
               focusout: (event) => {
                 const next = event.relatedTarget
                 if (!(next instanceof Node) || !this.view.dom.contains(next))

@@ -338,9 +338,7 @@ test('large custom lists load only visible pages and keep row edits keyed', asyn
       counterFont: getComputedStyle(nav.querySelector('.setting-description'))
         .fontSize,
       descriptionFont: getComputedStyle(
-        document.querySelector(
-          '[data-setting-id="dictionary-new-word"] .setting-description',
-        ),
+        document.querySelector('#dictionary-new-word-description'),
       ).fontSize,
     }))
     assert.ok(Math.max(...layout.centers) - Math.min(...layout.centers) < 1)

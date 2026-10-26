@@ -9,7 +9,7 @@ import {
   tableKey as layoutKey,
   readTableLayouts,
   storedTableLayouts,
-  writeTableLayouts,
+  updateTableLayouts,
 } from './table-layout-store'
 
 type Axis = 'column' | 'row'
@@ -570,8 +570,22 @@ export const tableLayout = Extension.create<{ tabId: string }>({
             const tables = layout(state, view.state.doc)
             const json = JSON.stringify(tables)
             if (json === written) return
+            const previous = JSON.parse(written) as TableLayout[]
             written = json
-            writeTableLayouts(tabId, tables)
+            // Only the tables this editor changed: sizes other views and
+            // windows stored since stay as they are.
+            const before = new Map(
+              previous.map((table) => [table.key, JSON.stringify(table)]),
+            )
+            const keys = new Set(tables.map((table) => table.key))
+            updateTableLayouts(tabId, previous, {
+              remove: previous
+                .filter((table) => !keys.has(table.key))
+                .map((table) => table.key),
+              put: tables.filter(
+                (table) => before.get(table.key) !== JSON.stringify(table),
+              ),
+            })
           }
           void Promise.resolve(readTableLayouts(tabId)).then(
             (tables) => {

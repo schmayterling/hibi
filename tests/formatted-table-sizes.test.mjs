@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
+import { tableKey } from '../src/renderer/src/table-layout-store.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -189,4 +190,70 @@ test('formatted tables show and resize the column and row sizes the rich editor 
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     /^\| Names \| Notes \|$/m,
   )
+})
+
+test('the rich editor stores only the tables it changes', {
+  timeout: 120000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-rich-table-updates-'))
+  const root = join(folder, 'notes')
+  const layout = join(root, '.hibi/layout.json')
+  await mkdir(join(root, '.hibi'), { recursive: true })
+  await writeFile(
+    join(root, 'note.md'),
+    '# Two\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n| C | D |\n| --- | --- |\n| 3 | 4 |\n',
+  )
+  const first = tableKey(0, ['A', 'B'])
+  await writeFile(
+    layout,
+    JSON.stringify({
+      version: 1,
+      documents: {
+        'note.md': { tables: [{ key: first, columns: [100, 0], rows: null }] },
+      },
+    }),
+  )
+  const apps = []
+  t.after(async () => {
+    for (const app of apps) await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await openNote(root, join(folder, 'profile'), apps)
+  const rich = page.locator('.tiptap table')
+  await rich.nth(1).getByText('3').waitFor()
+  // Another view or window stores a new width for the first table.
+  await page.evaluate(async (key) => {
+    const { tabId } = await window.hibi.getDocument()
+    await window.hibi.writeTableLayout(tabId, {
+      remove: [key],
+      put: [{ key, columns: [180, 0], rows: null }],
+    })
+  }, first)
+  // The rich editor resizes the second table: its save keeps the first's width.
+  await drag(
+    page,
+    rich.nth(1).locator('th').first(),
+    'column',
+    40,
+    (axis) => `.tiptap[data-table-resize="${axis}"]`,
+  )
+  const second = tableKey(1, ['C', 'D'])
+  await waitForAsync(
+    page,
+    async (key) =>
+      (
+        await window.hibi.readTableLayout(
+          (
+            await window.hibi.getDocument()
+          ).tabId,
+        )
+      )?.some((table) => table.key === key),
+    second,
+  )
+  const tables = await stored(layout)
+  assert.deepEqual(
+    tables.find((table) => table.key === first)?.columns,
+    [180, 0],
+  )
+  assert.ok(tables.find((table) => table.key === second)?.columns?.[0] > 0)
 })

@@ -45,13 +45,6 @@ const changed = (tabId: string) => {
   for (const listener of listeners.get(tabId) ?? []) listener()
 }
 
-/** Store a tab's table sizes and save them in the workspace. */
-export function writeTableLayouts(tabId: string, tables: TableLayout[]) {
-  session.set(tabId, tables)
-  save(tabId, tables)
-  changed(tabId)
-}
-
 /**
  * Update some of a tab's tables on the sizes stored now, here and in the
  * workspace, so that views and windows of the tab never write back each
@@ -79,14 +72,12 @@ export function subscribeTableLayouts(tabId: string, listener: () => void) {
 }
 
 /** Rows past the first 1,000 are stored by index, so long tables stay within the workspace's bounds. */
-function save(tabId: string, tables: TableLayout[] | TableLayoutUpdate) {
+function save(tabId: string, update: TableLayoutUpdate) {
   void window.hibi
-    .writeTableLayout(
-      tabId,
-      Array.isArray(tables)
-        ? tables.map(storedTableLayout)
-        : { ...tables, put: tables.put.map(storedTableLayout) },
-    )
+    .writeTableLayout(tabId, {
+      ...update,
+      put: update.put.map(storedTableLayout),
+    })
     .catch((error: unknown) =>
       console.error('table sizes could not be saved:', error),
     )

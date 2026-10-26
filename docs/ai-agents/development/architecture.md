@@ -14,6 +14,21 @@
 
 Markdown notes open in the ProseMirror formatted view by default. The CodeMirror formatted view (`FormattedEditor.tsx`, `live-preview.ts`, `chunked-markdown.ts`) renders Markdown in place over the same source session as the source view. Tests and development profiles select it with a temporary switch: set `hibi:formatted-engine` to `codemirror` in the renderer's local storage and reload. It has no setting or saved preference and is removed when the CodeMirror view becomes the default.
 
+### Formatted view contributions
+
+Features render in the CodeMirror formatted view through contributions (`formatted-contributions.ts`), the internal shape of addon API 3. A contribution declares:
+
+- `id`, and `feature`: the syntax setting (`owner.feature`) that controls it. While the setting is off the contribution is not installed, so its syntax is not parsed and its text shows as written.
+- `syntax`: Lezer Markdown extensions composed into the chunked language. Changing the installed syntax parses the document again.
+- `views`: renderers for syntax nodes by name. `decorate` runs for nodes in the visible ranges and adds marks, line attributes, inline widgets and one-line replacements; `out.syntax` hides Markdown syntax and shows it as an editable marker while the node is revealed. `layout` runs for nodes in parsed chunks and adds block widgets and replacements across lines; its decorations are cached per chunk, so they may depend only on the node's text and `context.revealed`. Return `false` to skip a node's children. Hidden and replaced ranges are atomic.
+- `keys`, which run before the structure keys, and `extension` for anything else per formatted view.
+
+A node is revealed while the selection touches it in a focused editor that shows Markdown markers. Renderers see one node at a time and must not walk the document or keep state across calls.
+
+Widgets are CodeMirror `WidgetType`s. `eq` compares the source text and options they render, so views reuse their DOM; expensive work belongs in `toDOM`, which runs only for widgets in view. Block widgets give an `estimatedHeight`. Interactive widgets are labelled controls that edit the source with `view.dispatch` at `view.posAtDOM(dom)` and return `false` from `ignoreEvent`; widgets that restate text are `aria-hidden`.
+
+Core features live in `src/renderer/src/formatted/<feature>.ts` and export `contribution` or `contributions`; they are found automatically. Bundled addons register a lazy entry with `formattedRegistry.register({ id, load })` from `formatted-registry.ts` in `start` and remove it in `stop`, so no editor code loads at startup.
+
 ## Privileged operations
 
 The main process checks the sender, main frame, and exact app URL before every privileged operation. File dialogs grant access to paths. Workspace calls accept only relative document paths within the selected canonical folder. Native addon calls require an enabled addon and an explicitly registered method.

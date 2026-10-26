@@ -555,26 +555,65 @@ test('an unavailable root retains postings and reuses them after remount', async
 })
 
 test('saturated gram samples prefer a sparse posting spread', async (t) => {
+  for (const count of [40_000, 130_000]) {
+    const f = await fixture(t, {})
+    await f.store.idle()
+    const insert = f.store.db.prepare(
+      'INSERT INTO text_index(rowid,text) VALUES(?,?)',
+    )
+    const common = workspaceIndexText('the ordinary corpus')
+    const rare = workspaceIndexText('the zyzzyva')
+    f.store.db.exec('BEGIN')
+    for (let rowid = 1; rowid <= count; rowid++)
+      insert.run(rowid, rowid % 100 === 0 ? rare : common)
+    f.store.db.exec('COMMIT')
+    const probes = f.store.counters.gramProbes
+    const postings = f.store.counters.postingSamples
+    const selected = f.store.gram('the zyzzyva')
+    assert.notEqual(selected, '"the"')
+    assert.equal(
+      f.store.db
+        .prepare(
+          'SELECT count(*) AS n FROM text_index WHERE text_index MATCH ?',
+        )
+        .get(selected).n,
+      count / 100,
+    )
+    assert.ok(f.store.counters.gramProbes - probes <= 8)
+    assert.ok(f.store.counters.postingSamples - postings <= 8 * 256)
+  }
+})
+
+test('posting spans ignore a recent import cluster when choosing saturated grams', async (t) => {
   const f = await fixture(t, {})
   await f.store.idle()
   const insert = f.store.db.prepare(
     'INSERT INTO text_index(rowid,text) VALUES(?,?)',
   )
-  const common = workspaceIndexText('the ordinary corpus')
-  const rare = workspaceIndexText('the zyzzyva')
+  const texts = new Map()
   f.store.db.exec('BEGIN')
-  for (let rowid = 1; rowid <= 40_000; rowid++)
-    insert.run(rowid, rowid % 100 === 0 ? rare : common)
+  for (let rowid = 1; rowid <= 130_000; rowid++) {
+    const recent = rowid > 120_000,
+      rare = rowid % 100 === 0
+    const key = `${recent}:${rare}`
+    if (!texts.has(key))
+      texts.set(
+        key,
+        workspaceIndexText(
+          `background quiet d q ${recent ? 'zephyrmigrated ' : ''}${rare ? 'quokka' : ''}`,
+        ),
+      )
+    insert.run(rowid, texts.get(key))
+  }
   f.store.db.exec('COMMIT')
-  const probes = f.store.counters.gramProbes
-  const postings = f.store.counters.postingSamples
-  const selected = f.store.gram('the zyzzyva')
-  assert.notEqual(selected, '"the"')
+  const probes = f.store.counters.gramProbes,
+    postings = f.store.counters.postingSamples
+  const selected = f.store.gram('zephyrmigrated quokka')
   assert.equal(
     f.store.db
       .prepare('SELECT count(*) AS n FROM text_index WHERE text_index MATCH ?')
       .get(selected).n,
-    400,
+    1300,
   )
   assert.ok(f.store.counters.gramProbes - probes <= 8)
   assert.ok(f.store.counters.postingSamples - postings <= 8 * 256)

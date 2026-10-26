@@ -90,4 +90,10 @@ test('behind the switch, notes open in the codemirror formatted view and edit th
   await saved('includes', 'A **bold** word. more')
   await pressShortcut(app, `${mod}+z`)
   await saved('endsWith', 'A **bold** word.\n')
+
+  // Formatting shortcuts edit the Markdown source of the selection.
+  await page.locator('.rich-pane .cm-line', { hasText: 'two' }).dblclick()
+  await page.keyboard.press(`${mod}+b`)
+  await saved('includes', '- **two**')
+  await page.locator('.rich-pane .hibi-lp-strong', { hasText: 'two' }).waitFor()
 })

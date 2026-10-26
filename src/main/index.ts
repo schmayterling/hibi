@@ -181,6 +181,7 @@ import {
 import { LocalDiagnostics } from './local-diagnostics/runtime'
 import {
   attachMedia,
+  documentMedia,
   openDroppedFile,
   readDocumentMedia,
   serveDocumentMedia,
@@ -800,8 +801,14 @@ async function lockFileOperation<T>(
       const running = fileOperation.catch(() => undefined)
       await Promise.race([running, fileOperationDialogOpened() ?? running])
     }
+    const mediaPath = getDocumentPath()
     const pending = withinFileOperation(() => operation(window)).finally(() => {
       fileOperation = null
+      if (mediaPath !== getDocumentPath())
+        mainWindow?.webContents.send(
+          MEDIA_CHANNELS.scopeChanged,
+          getDocument().revision,
+        )
     })
     fileOperation = pending
     return await pending
@@ -2055,6 +2062,26 @@ if (!app.requestSingleInstanceLock()) {
           return readDocumentMedia(source, revision)
         },
       )
+      handle(
+        MEDIA_CHANNELS.resolve,
+        (event, source: unknown, revision: unknown, request: unknown) => {
+          trustedWindow(event)
+          if (
+            typeof source !== 'string' ||
+            typeof revision !== 'number' ||
+            typeof request !== 'string' ||
+            !request ||
+            request.length > 128
+          )
+            return null
+          return documentMedia.resolve(source, revision, request)
+        },
+      )
+      handle(MEDIA_CHANNELS.cancel, (event, request: unknown) => {
+        trustedWindow(event)
+        if (typeof request === 'string' && request.length <= 128)
+          documentMedia.cancel(request)
+      })
       handle(WORKSPACE_CHANNELS.snapshot, (event) =>
         readAfterFileOperation(event, snapshotWorkspace),
       )
@@ -2302,6 +2329,7 @@ if (!app.requestSingleInstanceLock()) {
           ),
       )
       observeWorkspace((change) => {
+        documentMedia.invalidate(change)
         mainWindow?.webContents.send(WORKSPACE_CHANNELS.headerChanged, change)
         if (legacyWorkspaceListeners)
           mainWindow?.webContents.send(

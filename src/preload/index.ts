@@ -325,6 +325,12 @@ if (process.isMainFrame) {
       ),
     readDocumentMedia: (source, revision) =>
       ipcRenderer.invoke(MEDIA_CHANNELS.read, source, revision),
+    resolveDocumentMedia: (source, revision, request) =>
+      ipcRenderer.invoke(MEDIA_CHANNELS.resolve, source, revision, request),
+    cancelDocumentMedia: (request) =>
+      ipcRenderer.invoke(MEDIA_CHANNELS.cancel, request),
+    onDocumentMediaScopeChanged: (callback) =>
+      subscribe(MEDIA_CHANNELS.scopeChanged, callback),
     openDroppedFile: (file, includeEntries = true) =>
       ipcRenderer.invoke(
         MEDIA_CHANNELS.open,

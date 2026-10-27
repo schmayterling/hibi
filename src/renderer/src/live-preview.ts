@@ -509,33 +509,52 @@ function inline(
       mode: IterMode.IgnoreMounts,
       enter(ref: SyntaxNodeRef) {
         const name = ref.name
-        // Syntax whose setting is off shows as written, its children too.
-        if (literal.has(name)) return false
-        const contributed = views.get(name)
-        let skip = false
-        if (contributed) {
-          const out = sink(touched(ref.from, ref.to))
-          const context = {
-            state,
-            revealed: touched(ref.from, ref.to),
-            visible: range,
+        let skip = literal.has(name)
+        if (!skip) {
+          const contributed = views.get(name)
+          if (contributed) {
+            const out = sink(touched(ref.from, ref.to))
+            const context = {
+              state,
+              revealed: touched(ref.from, ref.to),
+              visible: range,
+            }
+            for (const nodeView of contributed)
+              if (nodeView.decorate?.(ref, out, context) === false) skip = true
+            // Other blocks with a container hook hold their lines like quotes.
+            if (
+              name !== 'Blockquote' &&
+              name !== 'ListItem' &&
+              contributed.some((nodeView) => nodeView.container)
+            ) {
+              const node = ref.node
+              eachLine(doc, ref.from, ref.to, range, (current) => {
+                line(current.from).containers.push(node)
+              })
+            }
           }
-          for (const nodeView of contributed)
-            if (nodeView.decorate?.(ref, out, context) === false) skip = true
-          // Other blocks with a container hook hold their lines like quotes.
-          if (
-            name !== 'Blockquote' &&
-            name !== 'ListItem' &&
-            contributed.some((nodeView) => nodeView.container)
-          ) {
-            const node = ref.node
-            eachLine(doc, ref.from, ref.to, range, (current) => {
-              line(current.from).containers.push(node)
-            })
-          }
+
+          skip = builtIn(ref, range) === false || skip
         }
-        const result = builtIn(ref, range)
-        return skip ? false : result
+        if (!skip) return
+        // Container syntax stays independent of skipped inline or literal nodes.
+        if (
+          !literal.has('Blockquote') &&
+          line(doc.lineAt(Math.max(ref.from, range.from)).from).containers.some(
+            (node) => node.name === 'Blockquote',
+          )
+        ) {
+          const pending = [ref.node]
+          for (let parent = pending.pop(); parent; parent = pending.pop())
+            for (
+              let child = parent.childAfter(range.from);
+              child && child.from <= range.to;
+              child = child.nextSibling
+            )
+              if (child.name === 'QuoteMark') builtIn(child, range)
+              else pending.push(child)
+        }
+        return false
       },
     })
   }
@@ -652,11 +671,6 @@ function inline(
       case 'HTMLBlock':
       case 'CommentBlock':
       case 'ProcessingInstructionBlock':
-        // Opaque renderers still need the container prefixes on later lines.
-        for (const quote of ref.node.getChildren('QuoteMark'))
-          if (quote.to >= range.from && quote.from <= range.to)
-            builtIn(quote, range)
-        return false
       case 'Image':
       case 'LinkReference':
       case 'HTMLTag':

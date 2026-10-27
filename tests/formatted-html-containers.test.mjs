@@ -107,6 +107,12 @@ test('raw html terminators keep their semantics, including blank lines and conta
     const original = parser.parse(doc)
     assert.equal(parsed.toString(), original.toString(), raw)
   }
+  const lazy = '> <div>\nlazy\n'
+  const exit = worker().parse(lazy).topNode
+  assert.equal(exit.firstChild.name, 'Blockquote')
+  assert.equal(exit.firstChild.lastChild.name, 'HTMLBlock')
+  assert.equal(exit.lastChild.name, 'Paragraph')
+  assert.equal(lazy.slice(exit.lastChild.from, exit.lastChild.to), 'lazy')
   const escaped = '> <div>\n> html\n\noutside\n'
   assert.equal(
     worker().parse(escaped).toString(),

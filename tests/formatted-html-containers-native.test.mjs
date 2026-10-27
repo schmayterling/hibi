@@ -104,6 +104,81 @@ test('quoted html ends before following prose and lists, with container markers 
     )
   }
 })
+test('skipped inline nodes and disabled html keep quote prefixes hidden', {
+  timeout: 90000,
+}, async () => {
+  const doc =
+    [
+      '> <div>',
+      '> literal html',
+      '> </div>',
+      '>',
+      '> a \x60code',
+      '> span\x60 b',
+      '>',
+      '> ![*alt',
+      '> text*](u.png)',
+      '>',
+      '> before <span',
+      '> class="x">t</span>',
+      '>',
+      '> [a]:',
+      '> /url',
+    ].join('\n') + '\n'
+  await open('skipped.md', doc, 'literal html')
+  await page.evaluate(() =>
+    localStorage.setItem(
+      'hibi:markdown-syntax-disabled',
+      JSON.stringify(['core.html-blocks', 'core.images']),
+    ),
+  )
+  try {
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+    await waitForAsync(
+      page,
+      () =>
+        document.querySelector('.rich-pane .cm-line')?.textContent === '<div>',
+    )
+    assert.equal(await page.locator('.rich-pane .hibi-lp-codeblock').count(), 0)
+    const lines = await page.locator('.rich-pane .cm-line').allTextContents()
+    assert.equal(
+      lines.some((line) => /^\s*>/.test(line)),
+      false,
+      JSON.stringify(lines),
+    )
+    assert.ok(lines.includes('literal html'))
+    assert.ok(lines.includes('a code span b'))
+    assert.ok(lines.includes('![*alt text*](u.png)'))
+    assert.ok(lines.includes('before <span class="x">t</span>'))
+    assert.ok(lines.includes('/url'))
+    await page.evaluate(() =>
+      localStorage.setItem(
+        'hibi:markdown-syntax-disabled',
+        JSON.stringify(['core.html-blocks', 'core.images', 'core.quotes']),
+      ),
+    )
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+    await waitForAsync(
+      page,
+      () =>
+        document.querySelector('.rich-pane .cm-line')?.textContent ===
+        '> <div>',
+    )
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      doc,
+    )
+  } finally {
+    await page.evaluate(() =>
+      localStorage.removeItem('hibi:markdown-syntax-disabled'),
+    )
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+  }
+})
+
 test('quoted fences still hide their container markers after html parsing changes', {
   timeout: 60000,
 }, async () => {

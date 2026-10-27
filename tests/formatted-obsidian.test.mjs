@@ -343,6 +343,153 @@ test('clicks and keys reach wikilinks and embeds: the caret reveals their source
   await engine(true, true)
 })
 
+test('keys pressed while an embedded note link has focus edit beside the embed, with undo and composition', {
+  timeout: 90000,
+}, async () => {
+  await engine(true, false)
+  await open('parity.md')
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const line = 'Embedded note: ![[Other]]'
+  const text = (suffix, prefix = '') =>
+    parityNote.replace(line, `${line.replace('![[', `${prefix}![[`)}${suffix}`)
+  const focus = () =>
+    page.evaluate(() => ({
+      link: document.activeElement?.closest('.obsidian-embed')?.textContent,
+      editor: document.querySelector('.rich-pane .cm-content').cmTile.root.view
+        .hasFocus,
+    }))
+  const markdown = async () =>
+    (await page.evaluate(() => window.hibi.getDocument())).markdown
+  const saved = (markdown) =>
+    waitForAsync(
+      page,
+      async (markdown) =>
+        (await window.hibi.getDocument()).markdown === markdown,
+      markdown,
+    )
+  try {
+    // From after the embed: an arrow focuses its link, and typed keys edit
+    // after it in the editor, which takes focus back.
+    await page
+      .locator('.rich-pane .cm-line', { hasText: 'Embedded note:' })
+      .click()
+    await page.keyboard.press('End')
+    await page.keyboard.press('ArrowLeft')
+    assert.deepEqual(await focus(), { link: 'Other', editor: false })
+    await page.keyboard.type('xy')
+    await page.keyboard.press('Backspace')
+    await saved(text('x'))
+    assert.deepEqual(await focus(), { link: undefined, editor: true })
+    // The editor's own shortcuts apply too: undo from the link.
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('ArrowLeft')
+    assert.deepEqual(await focus(), { link: 'Other', editor: false })
+    await page.keyboard.press(`${mod}+z`)
+    await waitForAsync(
+      page,
+      async (edited) => (await window.hibi.getDocument()).markdown !== edited,
+      text('x'),
+    )
+    assert.deepEqual(await focus(), { link: undefined, editor: true })
+    for (let undo = 0; (await markdown()) !== parityNote && undo < 3; undo++)
+      await page.keyboard.press(`${mod}+z`)
+    await saved(parityNote)
+    // A composition started from the link goes to the editor as one input.
+    await page.keyboard.press('ArrowLeft')
+    assert.deepEqual(await focus(), { link: 'Other', editor: false })
+    await session.send('Input.dispatchKeyEvent', {
+      type: 'rawKeyDown',
+      key: 'Process',
+      code: 'KeyN',
+      windowsVirtualKeyCode: 229,
+      nativeVirtualKeyCode: 229,
+    })
+    await session.send('Input.imeSetComposition', {
+      text: 'に',
+      selectionStart: 1,
+      selectionEnd: 1,
+    })
+    await session.send('Input.insertText', { text: '日' })
+    await session.send('Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key: 'Process',
+      code: 'KeyN',
+      windowsVirtualKeyCode: 229,
+      nativeVirtualKeyCode: 229,
+    })
+    await saved(text('日'))
+    await page.keyboard.press(`${mod}+z`)
+    await saved(parityNote)
+    // From before the embed, typed text goes before it.
+    await page.evaluate((line) => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      const at = view.state.doc.toString().indexOf(line) + line.indexOf('![[')
+      view.dispatch({ selection: { anchor: at } })
+    }, line)
+    await page.keyboard.press('ArrowRight')
+    assert.deepEqual(await focus(), { link: 'Other', editor: false })
+    await page.keyboard.type('z')
+    await saved(text('', 'z'))
+    await page.keyboard.press(`${mod}+z`)
+    await saved(parityNote)
+  } finally {
+    // Later tests open the note as written.
+    await page.evaluate((note) => {
+      const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+        .view
+      if (view.state.doc.toString() !== note)
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: note },
+        })
+    }, parityNote)
+    await engine(true, true)
+  }
+})
+
+test('a revealed image embed keeps its image beside its source, as core images do', {
+  timeout: 90000,
+}, async () => {
+  await engine(true, true)
+  await open('parity.md')
+  const session = await page.context().newCDPSession(page)
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  const images = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll('.rich-pane .obsidian-embed img')].map(
+        (image) => ({
+          width: image.getBoundingClientRect().width,
+          loaded: image.complete && image.naturalWidth > 0,
+        }),
+      ),
+    )
+  await page.waitForFunction(() => {
+    const image = document.querySelector('.rich-pane .obsidian-embed img')
+    return image?.complete && image.naturalWidth > 0
+  })
+  assert.deepEqual(await images(), [{ width: 120, loaded: true }])
+  await page.locator('.rich-pane .obsidian-embed img').click()
+  await page
+    .locator('.rich-pane .cm-line', { hasText: '![[pic.png|120]]' })
+    .waitFor()
+  await page.waitForFunction(() => {
+    const image = document.querySelector('.rich-pane .obsidian-embed img')
+    return image?.complete && image.naturalWidth > 0
+  })
+  assert.deepEqual(await images(), [{ width: 120, loaded: true }])
+  // The image follows its source on the same line.
+  const line = await page.evaluate(() => {
+    const image = document.querySelector('.rich-pane .obsidian-embed img')
+    const line = image.closest('.cm-line')
+    return {
+      text: line.textContent,
+      marker: !!line.querySelector('.hibi-lp-marker'),
+    }
+  })
+  assert.deepEqual(line, { text: '![[pic.png|120]]', marker: true })
+})
+
 test('shift-click below an image and on decoded glyphs keeps the target through mousedown', {
   timeout: 90000,
 }, async () => {

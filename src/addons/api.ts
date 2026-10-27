@@ -704,7 +704,12 @@ export type MarkdownExtension = {
   priority?: number
   /** Verbatim projections keep the exact prefix and suffix around an unchanged source body. */
   preservation?: SourcePreservation
-  /** Pure source-to-body projection; return null for unrecognized documents. */
+  /** Pure source-to-body projection; return null for unrecognized documents.
+   * In the CodeMirror formatted view, verbatim body edits map existing bounds.
+   * Bounds must not depend on body text; changes to such a rule take effect on
+   * reattachment or when the edited pane is focused again. Use formatted contributions
+   * for projections whose structure changes while typing.
+   */
   parse: (source: string) => MarkdownProjection | null
   /** Optional properties UI above the rich editor. Receives the complete source. */
   Editor?: ComponentType<MarkdownEditorProps>

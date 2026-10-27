@@ -1,60 +1,122 @@
 import {
+  Annotation,
   EditorSelection,
   EditorState,
   type Extension,
   Prec,
+  StateEffect,
   StateField,
   Transaction,
 } from '@codemirror/state'
 import { Decoration, EditorView, keymap } from '@codemirror/view'
 import type { MarkdownExtension } from '../../addons/api'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
+import { normalizedSource } from '../../shared/source-projection.ts'
 import { formattedPrefix } from './formatted-contributions.ts'
 import { projectMarkdown } from './markdown-projection.ts'
 
-type Body = { from: number; to: number; readOnly: boolean }
+type Body = {
+  from: number
+  to: number
+  readOnly: boolean
+  stale: boolean
+  watchStart: boolean
+  watchEnd: boolean
+}
+/** Whole-source changes from the projection's properties editor. */
+export const formattedProjectionSource = Annotation.define<string>()
+const refreshProjection = StateEffect.define<null>()
 
 /** Legacy verbatim projections keep their exact source outside the editable body. */
 export function formattedProjection(
   adapters: readonly MarkdownExtension[],
   source: () => SourceSnapshot | undefined,
 ): Extension {
-  const read = (state: EditorState): Body => {
+  const read = (state: EditorState, replacement?: string): Body => {
     const snapshot = source()
-    if (!snapshot || snapshot.normalizedLength !== state.doc.length)
-      return { from: 0, to: state.doc.length, readOnly: true }
-    const projection = projectMarkdown(snapshot.materialize(), adapters)
+    const fallback = {
+      from: 0,
+      to: state.doc.length,
+      readOnly: true,
+      stale: false,
+      watchStart: false,
+      watchEnd: false,
+    }
+    if (
+      !snapshot ||
+      (replacement === undefined &&
+        snapshot.normalizedLength !== state.doc.length)
+    )
+      return fallback
+    const projection = projectMarkdown(
+      replacement ?? snapshot.materialize(),
+      adapters,
+    )
     const offset = projection.sourceOffset
-    const from = offset === undefined ? null : snapshot.rawToEditor(offset)
+    const position = (at: number) =>
+      replacement === undefined
+        ? snapshot.rawToEditor(at)
+        : normalizedSource(replacement.slice(0, at)).length
+    const from = offset === undefined ? null : position(offset)
     const to =
-      offset === undefined
-        ? null
-        : snapshot.rawToEditor(offset + projection.content.length)
+      offset === undefined ? null : position(offset + projection.content.length)
     return from === null || to === null || projection.readOnly
-      ? { from: 0, to: state.doc.length, readOnly: true }
-      : { from, to, readOnly: false }
+      ? fallback
+      : {
+          from,
+          to,
+          readOnly: false,
+          stale: false,
+          watchStart: from > 0,
+          watchEnd: to < state.doc.length,
+        }
   }
   const body = StateField.define<Body>({
     create: read,
     update(value, transaction) {
+      if (transaction.effects.some((effect) => effect.is(refreshProjection)))
+        return read(transaction.state)
       if (!transaction.docChanged) return value
-      let inside = true
+      const replacement = transaction.annotation(formattedProjectionSource)
+      if (replacement !== undefined) return read(transaction.state, replacement)
+      const echo = transaction.annotation(Transaction.addToHistory) === false
+      let reprove = value.readOnly && echo
       transaction.changes.iterChangedRanges((from, to) => {
-        if (from < value.from || to > value.to) inside = false
+        if (
+          from < value.from ||
+          to > value.to ||
+          (echo &&
+            ((value.watchStart && from === 0) ||
+              (value.watchEnd && to === transaction.startState.doc.length)))
+        )
+          reprove = true
       })
-      // Legacy parsers consume whole source on installation or a protected-region
-      // change. Proven body edits only map bounds, including canonical undo echoes.
-      const unknown =
-        value.from === 0 && value.to === transaction.startState.doc.length
-      return inside &&
-        !(unknown && transaction.annotation(Transaction.addToHistory) === false)
-        ? { ...value, to: transaction.changes.mapPos(value.to, 1) }
-        : read(transaction.state)
+      if (reprove) {
+        const next = read(transaction.state)
+        return {
+          ...next,
+          watchStart: next.watchStart || value.watchStart,
+          watchEnd: next.watchEnd || value.watchEnd,
+        }
+      }
+      // A negative proof is still a body proof. Echoes and history map it;
+      // focus rechecks legacy adapters once before an inactive pane accepts input.
+      return {
+        ...value,
+        stale: true,
+        to: transaction.changes.mapPos(value.to, 1),
+      }
     },
   })
   const hidden = Decoration.replace({ block: true })
   return [
     body,
+    EditorView.domEventHandlers({
+      focus(_event, view) {
+        if (view.state.field(body).stale)
+          view.dispatch({ effects: refreshProjection.of(null) })
+      },
+    }),
     formattedPrefix.of((state) => state.field(body).from),
     EditorState.readOnly.from(body, (value) => value.readOnly),
     Prec.high(
@@ -84,7 +146,11 @@ export function formattedProjection(
       transaction.changes.iterChangedRanges((from, to) => {
         if (from < current.from || to > current.to) outside = true
       })
-      if (outside) return []
+      if (
+        outside &&
+        transaction.annotation(formattedProjectionSource) === undefined
+      )
+        return []
       const next = transaction.docChanged
         ? transaction.state.field(body)
         : current

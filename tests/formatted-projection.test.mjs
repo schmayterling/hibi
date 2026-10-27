@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorSelection, EditorState, Transaction } from '@codemirror/state'
-import { formattedProjection } from '../src/renderer/src/formatted-projection.ts'
+import { parseFrontmatter } from '../src/addons/frontmatter/markdown.ts'
+import {
+  formattedProjection,
+  formattedProjectionSource,
+} from '../src/renderer/src/formatted-projection.ts'
 import { createSourceSession } from '../src/renderer/src/source-session.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { normalizedSource } from '../src/shared/source-projection.ts'
@@ -22,7 +26,10 @@ function fixture(text, adapter) {
   const view = {
     state: EditorState.create({
       doc: normalizedSource(text),
-      extensions: formattedProjection([adapter], session.snapshot),
+      extensions: formattedProjection(
+        Array.isArray(adapter) ? adapter : [adapter],
+        session.snapshot,
+      ),
     }),
     update(transactions) {
       for (const transaction of transactions) this.state = transaction.state
@@ -79,6 +86,58 @@ test('verbatim bodies hide and protect prefix and suffix through selection, repl
     f.session.snapshot().materialize(),
     prefix + 'changed\r\nbody' + suffix,
   )
+})
+
+test('frontmatter and custom projections protect the same ordered prefix', () => {
+  const frontmatter = { id: 'frontmatter.metadata', parse: parseFrontmatter }
+  const fm = '---\r\ntitle: exact\r\n---\r\n'
+  const f = fixture(fm + prefix + 'body' + suffix, [frontmatter, adapter])
+  f.dispatch({ selection: EditorSelection.range(0, f.view.state.doc.length) })
+  assert.equal(
+    f.view.state.selection.main.from,
+    normalizedSource(fm + prefix).length,
+  )
+  f.dispatch(f.view.state.replaceSelection('changed'))
+  assert.equal(
+    f.session.snapshot().materialize(),
+    fm + prefix + 'changed' + suffix,
+  )
+  const updated = fm.replace('exact', 'updated title')
+  const next = updated + prefix + 'changed' + suffix
+  f.dispatch({
+    changes: {
+      from: 0,
+      to: normalizedSource(fm).length,
+      insert: normalizedSource(updated),
+    },
+    annotations: formattedProjectionSource.of(next),
+  })
+  assert.equal(f.session.snapshot().materialize(), next)
+  f.dispatch({ selection: { anchor: 0 } })
+  assert.equal(
+    f.view.state.selection.main.from,
+    normalizedSource(updated + prefix).length,
+  )
+})
+
+test('50 mib unmatched notes map source echoes and local undo without reparsing', () => {
+  const f = fixture('x'.repeat(50 * 1024 * 1024), adapter)
+  const count = parses
+  f.session.counters(true)
+  for (let i = 0; i < 5; i++)
+    f.session.edit(
+      [{ from: 10 + i, to: 10 + i, insert: 'y' }],
+      'source',
+      `s${i}`,
+    )
+  for (let i = 0; i < 5; i++)
+    f.dispatch({ changes: { from: 100, insert: 'z' } })
+  for (let i = 0; i < 5; i++) f.bridge.undo()
+  for (let i = 0; i < 5; i++) f.bridge.redo()
+  assert.equal(parses, count)
+  const counters = f.session.counters()
+  assert.equal(counters.materializations, 0)
+  assert.ok(counters.sourceUnitsRead < 4096, JSON.stringify(counters))
 })
 
 test('canonical source-prefix changes refresh projection bounds without running input filters', () => {

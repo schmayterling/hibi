@@ -24,6 +24,7 @@ import { editorViewRegistry } from './editor-view-api'
 import { FindBar, type FindMove, type FindStatus } from './FindBar'
 import { useFormattingToolbar } from './FormattingToolbar'
 import type { FormattedHeadingList } from './formatted-headings'
+import { formattedProjectionSource } from './formatted-projection'
 import { LoadingScreen } from './LoadingScreen'
 import { linkScroll } from './linked-scroll'
 import { MirrorCursor } from './MirrorCursor'
@@ -97,11 +98,14 @@ export function MarkdownEditor({
       ({ id, Editor }) => id === 'frontmatter.metadata' && Editor,
     )
   const projectionExtensions = useMemo<readonly FormattedExtension[]>(() => {
-    const adapters = markdownExtensions.filter(
-      ({ id, preservation }) =>
-        id !== 'frontmatter.metadata' && preservation?.level === 'verbatim',
+    if (
+      !markdownExtensions.some(
+        ({ id, preservation }) =>
+          id !== 'frontmatter.metadata' && preservation?.level === 'verbatim',
+      )
     )
-    if (!adapters.length) return []
+      return []
+    const adapters = markdownExtensions
     return [
       {
         id: 'formatted.projection',
@@ -440,7 +444,10 @@ export function MarkdownEditor({
     view.dispatch({
       changes: { from, to, insert: normalizedSource(change.insert) },
       userEvent: 'input.addon',
-      annotations: isolateHistory.of('full'),
+      annotations: [
+        isolateHistory.of('full'),
+        formattedProjectionSource.of(markdown),
+      ],
     })
   }
   const ready =

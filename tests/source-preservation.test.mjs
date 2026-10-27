@@ -146,7 +146,8 @@ testFormattedEngines(
         source: 'local',
       }),
     )
-    const prefix = '\uFEFF[@sources: é 😀 exact spacing  ]\r\n\r\n'
+    const prefix =
+      '\uFEFF---\r\ntitle: exact\r\n---\r\n[@sources: é 😀 exact spacing  ]\r\n\r\n'
     const file = join(profile, 'citations.md')
     await writeFile(file, `${prefix}Original body`)
     const app = await electron.launch({

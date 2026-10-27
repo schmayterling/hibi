@@ -1,17 +1,25 @@
 import { isolateHistory } from '@codemirror/commands'
+import { DocInput } from '@codemirror/language'
 import {
   ChangeSet,
+  countColumn,
   EditorSelection,
   type EditorState,
+  findColumn,
   Text,
   type TransactionSpec,
 } from '@codemirror/state'
 import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
-import { uncovered } from '../../renderer/src/chunked-markdown.ts'
+import {
+  readAheadFrom,
+  uncovered,
+} from '../../renderer/src/chunked-markdown.ts'
 import {
   type FormattedContribution,
   formattedBlockEdges,
+  formattedBlockParser,
+  formattedPrefix,
   formattedSyntaxTree,
 } from '../../renderer/src/formatted-contributions.ts'
 import type { MenuApi } from '../api'
@@ -67,15 +75,38 @@ function sourceFrom(state: EditorState, node: SyntaxNode): number | null {
     const after = first.text.slice(mark.to - first.from)
     if (/^ *\t/.test(after)) return null
     const spaces = /^ */.exec(after)![0].length
-    offset +=
+    const column =
+      countColumn(prefix, 4, offset) +
       mark.to -
       first.from -
       quotePrefix(first.text, quotes) +
       (!after[spaces] || spaces > 4 ? 1 : spaces)
+    offset = findColumn(prefix, column, 4, true)
+    // A tab that crosses the content column cannot belong to the separator.
+    if (offset < 0 || countColumn(prefix, 4, offset) !== column) return null
   }
   if (offset > prefix.length || !/^[ \t]*$/.test(prefix.slice(offset)))
     return null
   return line.from + offset
+}
+
+/** Blank parent-container lines separate blocks; the block keeps its own markers. */
+function sourceTo(state: EditorState, node: SyntaxNode) {
+  const from = node.from,
+    to = node.to
+  let quotes = 0
+  for (let parent = node.parent; parent; parent = parent.parent)
+    if (parent.name === 'Blockquote') quotes++
+  let line = state.doc.lineAt(Math.max(from, to - 1))
+  while (line.from > from) {
+    const prefix = quotePrefix(line.text, quotes)
+    if (!/^[ \t]*$/.test(line.text.slice(prefix))) break
+    const marker = line.text.lastIndexOf('>', prefix - 1)
+    if (marker >= 0 && node.resolve(line.from + marker, 1).name !== 'QuoteMark')
+      break
+    line = state.doc.line(line.number - 1)
+  }
+  return Math.min(to, line.to)
 }
 
 /** Quote markers stay in place when an item's continuation changes width. */
@@ -141,7 +172,8 @@ function sibling(
   const doc = state.doc
   const from = sourceFrom(state, node)
   if (from === null) return null
-  let at = direction > 0 ? node.to : from
+  let at = direction > 0 ? sourceTo(state, node) : from
+  let found: SyntaxNode | null = null
   for (;;) {
     if (direction > 0 ? at >= doc.length : at <= 0) return null
     if (uncovered(tree, Math.max(0, at - 1), Math.min(doc.length, at + 1)))
@@ -152,22 +184,32 @@ function sibling(
     )
     const run = (direction > 0 ? /^[\s>]*/ : /[\s>]*$/).exec(next)![0].length
     at += direction * run
+    if (
+      uncovered(
+        tree,
+        Math.max(0, at - (direction < 0 ? 1 : 0)),
+        Math.min(doc.length, at + (direction > 0 ? 1 : 0)),
+      )
+    )
+      return null
+    if (!found) {
+      found = direction > 0 ? node.nextSibling : node.prevSibling
+      while (found && !found.type.is('Block'))
+        found = direction > 0 ? found.nextSibling : found.prevSibling
+      if (!found) return null
+    }
     if (run < next.length) break
   }
   if (
     uncovered(tree, at - (direction < 0 ? 1 : 0), at + (direction > 0 ? 1 : 0))
   )
     return null
-  let found = direction > 0 ? node.nextSibling : node.prevSibling
-  while (found && !found.type.is('Block'))
-    found = direction > 0 ? found.nextSibling : found.prevSibling
-  if (!found) return null
   const foundFrom = sourceFrom(state, found)
   if (foundFrom === null) return null
   const gap =
     direction > 0
-      ? doc.sliceString(node.to, foundFrom)
-      : doc.sliceString(found.to, from)
+      ? doc.sliceString(sourceTo(state, node), foundFrom)
+      : doc.sliceString(sourceTo(state, found), from)
   return separator.test(gap) ? found : null
 }
 
@@ -266,7 +308,7 @@ function remarked(state: EditorState, item: SyntaxNode, marker: string) {
   const mark = item.getChild('ListMark')
   const from = sourceFrom(state, item)
   if (!mark || from === null) return null
-  const text = state.doc.sliceString(from, item.to)
+  const text = state.doc.sliceString(from, sourceTo(state, item))
   const by = marker.length - (mark.to - mark.from)
   const changes: Change[] = [
     { from: mark.from - from, to: mark.to - from, insert: marker },
@@ -290,11 +332,12 @@ function remarked(state: EditorState, item: SyntaxNode, marker: string) {
       (!after[spaces] || spaces > 4 ? 1 : spaces)
     for (
       let number = first.number + 1;
-      number <= state.doc.lineAt(item.to).number;
+      number <= state.doc.lineAt(sourceTo(state, item)).number;
       number++
     ) {
       const line = state.doc.line(number)
       const offset = quotePrefix(line.text, quotes)
+      if (line.text.slice(0, offset).split('>').length - 1 !== quotes) continue
       const content = line.text.slice(offset)
       if (/^[ \t]*$/.test(content)) continue
       if (/^ *\t/.test(content)) return null
@@ -313,6 +356,293 @@ function remarked(state: EditorState, item: SyntaxNode, marker: string) {
 }
 
 type Change = { from: number; to: number; insert: string }
+
+/**
+ * Replay the opening and closing lines at both seams, and earlier decisions
+ * that read across them. Other unchanged interiors need no second parse.
+ */
+function preservesBlocks(
+  state: EditorState,
+  tree: Tree,
+  block: SyntaxNode,
+  target: SyntaxNode,
+  changes: ChangeSet,
+  map: (pos: number) => number,
+  modified: readonly number[],
+) {
+  const doc = state.doc
+  let floor = 0
+  for (const measure of state.facet(formattedPrefix))
+    floor = Math.max(floor, measure(state))
+  const lines = new Map<number, number>()
+  const add = (pos: number) => {
+    if (pos < floor) return
+    const line = doc.lineAt(Math.min(doc.length, pos))
+    lines.set(line.number, Math.max(lines.get(line.number) ?? line.from, pos))
+  }
+  const seen = new Set<string>()
+  const sample = (
+    node: SyntaxNode,
+    edge: 'both' | 'first' | 'last' = 'both',
+  ) => {
+    const key = node.from + ':' + node.name + ':' + edge
+    if (seen.has(key) || node.name === 'Document' || node.to <= floor) return
+    seen.add(key)
+    const container = node.type.is('BlockContext')
+    const first = doc.lineAt(node.from)
+    const last = doc.lineAt(
+      Math.max(
+        node.from,
+        (container && edge === 'first' ? node.to : sourceTo(state, node)) - 1,
+      ),
+    )
+    add(node.from)
+    if (first.number < last.number) add(doc.line(first.number + 1).from)
+    if (!container || edge !== 'first') add(last.from)
+    // A reference label may span up to 999 characters before its colon.
+    if (
+      /^(Paragraph|Task|SetextHeading[12])$/.test(node.name) &&
+      doc.sliceString(node.from, node.from + 1) === '['
+    ) {
+      const label = doc.lineAt(Math.min(node.to, node.from + 1000))
+      for (
+        let i = first.number + 2;
+        i <= Math.min(last.number, label.number + 2);
+        i++
+      )
+        add(doc.line(i).from)
+    }
+    if (!container) return
+    let child = firstBlock(node)
+    if (child) {
+      sample(child, 'first')
+      // An empty marker needs another block to finish its first paragraph.
+      if (
+        node.name === 'ListItem' &&
+        doc.lineAt(child.from).number > first.number
+      ) {
+        child = child.nextSibling
+        while (child && !child.type.is('Block')) child = child.nextSibling
+        if (child) {
+          add(child.from)
+          add(Math.max(child.from, child.to - 1))
+        }
+      }
+    }
+    if (edge === 'first') return
+    child = node.lastChild
+    while (child && !child.type.is('Block')) child = child.prevSibling
+    if (child) sample(child, 'last')
+  }
+  const visited = new Set<string>()
+  const contexts = new Map<string, SyntaxNode>()
+  const around = (node: SyntaxNode) => {
+    const key = node.from + ':' + node.name
+    if (visited.has(key)) return true
+    visited.add(key)
+    if (node.to > floor) contexts.set(key, node)
+    sample(node)
+    const first = doc.lineAt(node.from)
+    if (first.number > 1) {
+      const line = doc.line(first.number - 1)
+      add(line.from)
+      if (!separator.test(line.text)) {
+        const context = blockAt(tree, line.from)
+        if (context) sample(context)
+        // Raw-line table lookahead can decide whether this neighbor was lazy.
+        if (line.number > 1) {
+          const before = doc.line(line.number - 1)
+          add(before.from)
+          const opening = blockAt(tree, before.to)
+          if (opening) {
+            sample(opening)
+            if (opening.to > floor)
+              contexts.set(opening.from + ':' + opening.name, opening)
+            for (let parent = opening.parent; parent; parent = parent.parent)
+              sample(parent, 'first')
+          }
+        }
+      }
+    }
+    // Blank separators can hide a neighbor outside the current container.
+    for (const direction of [-1, 1]) {
+      let edge: SyntaxNode | null = node
+      let neighbor: SyntaxNode | null = null
+      while (edge && !neighbor) {
+        neighbor = direction < 0 ? edge.prevSibling : edge.nextSibling
+        while (neighbor && !neighbor.type.is('Block'))
+          neighbor = direction < 0 ? neighbor.prevSibling : neighbor.nextSibling
+        edge = edge.parent
+      }
+      if (
+        uncovered(
+          tree,
+          direction < 0 ? (neighbor?.to ?? floor) : node.to,
+          direction < 0 ? node.from : (neighbor?.from ?? doc.length),
+        )
+      )
+        return false
+      if (neighbor) {
+        sample(neighbor)
+        if (neighbor.to > floor)
+          contexts.set(neighbor.from + ':' + neighbor.name, neighbor)
+      }
+    }
+    for (
+      let parent = node.parent;
+      parent && parent.name !== 'Document';
+      parent = parent.parent
+    )
+      sample(parent, 'first')
+    return true
+  }
+  for (const node of [block, target]) {
+    if (!around(node)) return false
+    const previous = sibling(state, tree, node, -1)
+    const next = sibling(state, tree, node, 1)
+    if (previous && !around(previous)) return false
+    if (next && !around(next)) return false
+  }
+  const seams = [
+    sourceFrom(state, block),
+    sourceTo(state, block),
+    sourceFrom(state, target),
+    sourceTo(state, target),
+    ...modified,
+  ]
+  changes.iterChangedRanges((from, to) => {
+    seams.push(from, to)
+  })
+  for (const at of seams) {
+    if (at === null) return false
+    const decisions = readAheadFrom(tree, at)
+    if (!decisions) return false
+    for (const decision of decisions) {
+      const line = doc.lineAt(decision)
+      if (uncovered(tree, line.from, line.to)) return false
+      add(decision)
+      const context = blockAt(tree, line.to)
+      if (!context || !around(context)) return false
+    }
+  }
+  const ranges = (text: Text, positions: number[], prefix: number) => {
+    const spans: { from: number; to: number }[] = []
+    for (const pos of positions) {
+      const line = text.lineAt(pos)
+      const previous = line.number > 1 ? text.line(line.number - 1) : null
+      const next = line.number < text.lines ? text.line(line.number + 1) : null
+      spans.push({
+        from: Math.max(
+          prefix,
+          previous && separator.test(previous.text) ? previous.from : line.from,
+        ),
+        to: Math.min(
+          text.length,
+          (next && separator.test(next.text) ? next.to : line.to) + 1,
+        ),
+      })
+    }
+    spans.sort((a, b) => a.from - b.from)
+    const joined: typeof spans = []
+    for (const span of spans) {
+      if (span.to <= span.from) continue
+      const previous = joined.at(-1)
+      if (previous && previous.to >= span.from)
+        previous.to = Math.max(previous.to, span.to)
+      else joined.push(span)
+    }
+    return joined
+  }
+  for (const pos of modified) add(pos)
+  const positions = [...lines.values()]
+  const before = ranges(doc, positions, floor)
+  const afterDoc = changes.apply(doc)
+  const after = ranges(afterDoc, positions.map(map), floor)
+  const parser = state.facet(formattedBlockParser)(state)
+  const probes = positions.filter(
+    (pos) => !separator.test(doc.lineAt(pos).text),
+  )
+  const signature = (text: Text, spans: typeof before, reorder: boolean) => {
+    const points = probes
+      .map((pos, id) => ({ pos: reorder ? pos : map(pos), id }))
+      .sort((a, b) => a.pos - b.pos)
+    const parsed = parser.parse(new DocInput(text), [], spans)
+    const base = spans[0]!.from
+    if (reorder)
+      for (const wanted of contexts.values()) {
+        let actual: SyntaxNode | null = parsed.resolveInner(
+          wanted.from - base,
+          1,
+        )
+        while (
+          actual &&
+          (actual.name !== wanted.name || actual.from + base !== wanted.from)
+        )
+          actual = actual.parent
+        if (!actual) return null
+        let a = actual.parent,
+          b = wanted.parent
+        while (a && b) {
+          if (
+            a.name !== b.name ||
+            (a.name !== 'Document' && a.from + base !== b.from)
+          )
+            return null
+          a = a.parent
+          b = b.parent
+        }
+        if (a || b) return null
+      }
+    const pieces: string[] = []
+    let pointIndex = 0
+    let movingFrom = -1,
+      movingTo = -1,
+      landingFrom = -1,
+      landingTo = -1
+    const edge = (node: Block, end: boolean) => {
+      if (node.name === block.name && base + node.from === block.from) {
+        if (end) movingTo = pieces.length
+        else movingFrom = pieces.length
+      }
+      if (node.name === target.name && base + node.from === target.from) {
+        if (end) landingTo = pieces.length
+        else landingFrom = pieces.length
+      }
+    }
+    parsed.iterate({
+      enter(node) {
+        if (node.name !== 'Document' && !node.type.is('Block')) return false
+        edge(node, false)
+        if (node.name === 'Document' || node.type.is('BlockContext')) {
+          pieces.push('[' + node.name)
+          return
+        }
+        const from = base + node.from,
+          to = base + node.to
+        while (pointIndex < points.length && points[pointIndex]!.pos < from)
+          pointIndex++
+        const content: number[] = []
+        while (pointIndex < points.length && points[pointIndex]!.pos < to)
+          content.push(points[pointIndex++]!.id)
+        pieces.push(JSON.stringify([node.name, content]))
+        edge(node, true)
+        return false
+      },
+      leave(node) {
+        pieces.push(']')
+        edge(node, true)
+      },
+    })
+    if (!reorder) return JSON.stringify(pieces)
+    if (movingFrom < 0 || movingTo < 0 || landingFrom < 0 || landingTo < 0)
+      return null
+    const moved = pieces.slice(movingFrom, movingTo)
+    const rest = pieces.slice(0, movingFrom).concat(pieces.slice(movingTo))
+    const at = movingFrom < landingFrom ? landingTo - moved.length : landingFrom
+    return JSON.stringify(rest.slice(0, at).concat(moved, rest.slice(at)))
+  }
+  return signature(doc, before, true) === signature(afterDoc, after, false)
+}
 
 /**
  * Move `block` beside its sibling `target`, after it or before it, as one
@@ -351,7 +681,9 @@ export function moveBlock(
   if (!at || same(at, block) || (!down && fixed(at))) return null
   if (footnote(state, at) || (down && !closed(state, at))) return null
   const start = (node: SyntaxNode) => sourceFrom(state, node)!
+  const end = (node: SyntaxNode) => sourceTo(state, node)
   const blockFrom = sourceFrom(state, block)
+  const blockEnd = end(block)
   if (blockFrom === null || sourceFrom(state, at) === null) return null
   const items = block.name === 'ListItem'
   // The separator after `node`; frontmatter ends with its line break.
@@ -360,21 +692,24 @@ export function moveBlock(
   const previous = step(block, -1),
     next = step(block, 1)
   if (!(down ? next : previous)) return null
-  const before = previous ? state.doc.sliceString(previous.to, blockFrom) : '',
-    following = next ? state.doc.sliceString(block.to, start(next)) : ''
-  let text = state.doc.sliceString(blockFrom, block.to)
+  const before = previous
+      ? state.doc.sliceString(end(previous), blockFrom)
+      : '',
+    following = next ? state.doc.sliceString(blockEnd, start(next)) : ''
+  let text = state.doc.sliceString(blockFrom, blockEnd)
   let remarkedChanges: ChangeSet | null = null
   const changes: Change[] = []
+  const remarkedItems: { from: number; to: number; changes: ChangeSet }[] = []
   // The block's own place: its neighbors keep the separator on the far side
   // of the move between them.
   if (previous && next)
     changes.push({
-      from: previous.to,
+      from: end(previous),
       to: start(next),
       insert: join(previous, down ? before : following),
     })
   else if (previous)
-    changes.push({ from: previous.to, to: block.to, insert: '' })
+    changes.push({ from: end(previous), to: blockEnd, insert: '' })
   else if (next) changes.push({ from: blockFrom, to: start(next), insert: '' })
   // Numbered items keep each place's number: the block takes the number of
   // its new place and the items it passes move up or down one.
@@ -392,8 +727,13 @@ export function moveBlock(
         if (!changed) return null
         changes.push({
           from: start(item),
-          to: item.to,
+          to: end(item),
           insert: changed.text,
+        })
+        remarkedItems.push({
+          from: start(item),
+          to: end(item),
+          changes: changed.changes,
         })
       }
       passed = own
@@ -414,23 +754,23 @@ export function moveBlock(
     insert =
       far && !items
         ? {
-            from: at.to,
+            from: end(at),
             to: start(far),
             insert:
               gap +
               text +
-              join(block, state.doc.sliceString(at.to, start(far))),
+              join(block, state.doc.sliceString(end(at), start(far))),
             offset: gap.length,
           }
-        : { from: at.to, to: at.to, insert: gap + text, offset: gap.length }
+        : { from: end(at), to: end(at), insert: gap + text, offset: gap.length }
   } else {
     const gap = join(block, before)
     const head =
-      far && !items ? join(far, state.doc.sliceString(far.to, start(at))) : ''
+      far && !items ? join(far, state.doc.sliceString(end(far), start(at))) : ''
     insert =
       far && !items
         ? {
-            from: far.to,
+            from: end(far),
             to: start(at),
             insert: head + text + gap,
             offset: head.length,
@@ -438,6 +778,45 @@ export function moveBlock(
         : { from: start(at), to: start(at), insert: text + gap, offset: 0 }
   }
   changes.push(insert)
+  // A bare quote prefix must not consume the first space of a joined block.
+  let quoted = false
+  for (
+    let parent: SyntaxNode | null = block.parent;
+    parent;
+    parent = parent.parent
+  )
+    if (parent.name === 'Blockquote') quoted = true
+  if (quoted) {
+    const bare = (text: string) => /^[ \t>]*>$/.test(text)
+    const prefix = (at: number) =>
+      state.doc.sliceString(state.doc.lineAt(at).from, at)
+    for (const change of changes) {
+      const suffix = state.doc.sliceString(
+        change.to,
+        Math.min(state.doc.length, change.to + 1),
+      )
+      if (/^[ \t]/.test(change.insert || suffix) && bare(prefix(change.from)))
+        return null
+      if (/^[ \t]/.test(suffix)) {
+        const newline = change.insert.lastIndexOf('\n')
+        const tail =
+          newline >= 0
+            ? change.insert.slice(newline + 1)
+            : prefix(change.from) + change.insert
+        if (bare(tail)) return null
+      }
+    }
+    if (/^[ \t]/.test(text)) {
+      const lead = insert.insert.slice(0, insert.offset)
+      const newline = lead.lastIndexOf('\n')
+      if (
+        bare(
+          newline >= 0 ? lead.slice(newline + 1) : prefix(insert.from) + lead,
+        )
+      )
+        return null
+    }
+  }
   // Changes are in document order; an insertion goes before a replacement
   // starting at the same place.
   changes.sort((a, b) => a.from - b.from || a.to - b.to)
@@ -449,10 +828,43 @@ export function moveBlock(
     })),
   )
   const from = set.mapPos(insert.from, -1) + insert.offset
+  const map = (pos: number) => {
+    const line = state.doc.lineAt(pos)
+    const anchor =
+      line.from <= blockFrom && line.to >= blockFrom
+        ? Math.max(pos, blockFrom)
+        : pos
+    if (anchor >= blockFrom && anchor <= blockEnd)
+      return (
+        from +
+        (remarkedChanges?.mapPos(anchor - blockFrom) ?? anchor - blockFrom)
+      )
+    for (const item of remarkedItems) {
+      const anchor =
+        line.from <= item.from && line.to >= item.from
+          ? Math.max(pos, item.from)
+          : pos
+      if (anchor >= item.from && anchor <= item.to)
+        return (
+          set.mapPos(item.from, -1) +
+          (insert.from === item.from && insert.to === insert.from
+            ? insert.insert.length
+            : 0) +
+          item.changes.mapPos(anchor - item.from)
+        )
+    }
+    return set.mapPos(pos, 1)
+  }
+  const modified: number[] = []
+  if (remarkedChanges)
+    remarkedChanges.iterChanges((pos) => modified.push(blockFrom + pos))
+  for (const item of remarkedItems)
+    item.changes.iterChanges((pos) => modified.push(item.from + pos))
+  if (!preservesBlocks(state, tree, block, at, set, map, modified)) return null
   // A selection inside the block moves with it; otherwise the caret goes to
   // the block's start.
   const { anchor, head } = state.selection.main
-  const inside = (pos: number) => pos >= blockFrom && pos <= block.to
+  const inside = (pos: number) => pos >= blockFrom && pos <= blockEnd
   const place = (pos: number) =>
     from + (remarkedChanges?.mapPos(pos - blockFrom) ?? pos - blockFrom)
   return {

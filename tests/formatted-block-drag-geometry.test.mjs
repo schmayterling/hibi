@@ -177,6 +177,9 @@ test('enabling block drag in an open note keeps task checkboxes clickable', {
     await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
     await page.locator('#addon-block-drag').click()
     await page.keyboard.press('Escape')
+    await page
+      .getByRole('button', { name: 'Back to app', exact: true })
+      .waitFor({ state: 'hidden' })
     await page.locator('.rich-pane:not([inert]) .cm-content').waitFor()
   }
   await toggle()

@@ -82,7 +82,7 @@ test('frontmatter checks of a 50 mib note read a few pieces, never the whole not
   // A long first line that cannot open frontmatter ends the read at once.
   const long = note(`${'x'.repeat(50 * MiB)}\n\n/h2`)
   assert.equal(offered(long.document), true)
-  assert.deepEqual(long.read(), { units: 4096, materializations: 0 })
+  assert.deepEqual(long.read(), { units: 4, materializations: 0 })
   assert.equal(offered(long.document), true)
   assert.deepEqual(long.read(), { units: 0, materializations: 0 })
   // Frontmatter ends within the first pieces.
@@ -100,7 +100,8 @@ test('frontmatter checks of a 50 mib note read a few pieces, never the whole not
 })
 
 test('a finished frontmatter read lasts through edits that cannot change it', () => {
-  const divider = note(`---\n\n${body}`)
+  const text = 'ordinary words\n'.repeat(5000)
+  const divider = note(`---\n\n${text}`)
   // Checks read on until the read finishes; then they read nothing.
   let checks = 0
   while (!offered(divider.document)) {
@@ -108,9 +109,9 @@ test('a finished frontmatter read lasts through edits that cannot change it', ()
     checks++
   }
   divider.read()
-  assert.ok(checks > 1000, String(checks))
+  assert.ok(checks > 2 && checks < 40, String(checks))
   // Typing in the body, a new line and a line that only looks like one keep it.
-  const at = body.length / 2 + 5
+  const at = text.length / 2 + 5
   for (const insert of ['x', '\n\nmore', '\n-- -\n']) {
     divider.edit([{ from: at, to: at, insert }])
     // Each edit reads only the lines it touched.

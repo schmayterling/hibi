@@ -97,28 +97,30 @@ export class MarkdownBoundaryIndex {
     let fragments = this.fragments
     if (this.tree) fragments = TreeFragment.addTree(this.tree)
     else if (this.advanced) {
-      // A partial parse verified text before its tail; older fragments still cover the rest.
       const tree = this.parse.snapshot()
       const verified = unindexedFrom(tree) ?? tree.length
-      fragments = [
-        new TreeFragment(0, verified, tree, 0, false, true),
-        ...fragments.flatMap((fragment) =>
-          fragment.to <= verified
-            ? []
-            : fragment.from >= verified
-              ? [fragment]
-              : [
-                  new TreeFragment(
-                    verified,
-                    fragment.to,
-                    fragment.tree,
-                    fragment.offset,
-                    true,
-                    fragment.openEnd,
-                  ),
-                ],
-        ),
-      ]
+      const suffix = this.retained
+        ? fragments.flatMap((fragment) =>
+            fragment.to <= verified
+              ? []
+              : fragment.from >= verified
+                ? [fragment]
+                : [
+                    new TreeFragment(
+                      verified,
+                      fragment.to,
+                      fragment.tree,
+                      fragment.offset,
+                      true,
+                      fragment.openEnd,
+                    ),
+                  ],
+          )
+        : []
+      // Only joining a saved suffix needs a cut; a cold scan keeps its full snapshot.
+      fragments = suffix.length
+        ? [new TreeFragment(0, verified, tree, 0, false, true), ...suffix]
+        : TreeFragment.addTree(tree)
     }
     let offset = 0
     const changes = editorChangesFromSource(

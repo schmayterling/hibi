@@ -655,6 +655,7 @@ export function useAddons(
       SourceExtension & {
         addonId: string
         presentation: 'source' | 'formatted'
+        fail?: (error: unknown) => void
       }
     >(),
   ).current
@@ -1075,6 +1076,7 @@ export function useAddons(
           throw new Error(
             `This addon supplied a duplicate or invalid ${presentation}-editor feature: ${key}.`,
           )
+        let remove = () => {}
         const entry = {
           id: key,
           addonId: id,
@@ -1095,8 +1097,19 @@ export function useAddons(
               )
             }
           },
+          // Input waits for modal editing. Another feature's first failure
+          // removes it from every editor and is reported; later ones are not.
+          ...(addon.manifest.capabilities?.includes('modalEditing')
+            ? {}
+            : {
+                fail(error: unknown) {
+                  if (disposed || !sources.has(`${presentation}:${key}`)) return
+                  remove()
+                  latest.current.error(error)
+                },
+              }),
         }
-        return batch.register(`${presentation}:${extension.id}`, () => {
+        remove = batch.register(`${presentation}:${extension.id}`, () => {
           sources.set(`${presentation}:${key}`, entry)
           const removeCompatibility =
             presentation === 'formatted'
@@ -1109,6 +1122,7 @@ export function useAddons(
             if (!disposed && mounted.current) publishSources()
           }
         })
+        return remove
       }
       const live = <T>(
         call: () => Promise<T>,

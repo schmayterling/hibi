@@ -6,7 +6,7 @@ import test from 'node:test'
 import { electron } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
-test('failed editor attachments stay read-only and disabling the addon restores editing', {
+test('failed rich attachments stay read-only, a failed source feature is reported, and disabling the addon restores editing', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-addon-failure-'))
@@ -123,17 +123,19 @@ test('failed editor attachments stay read-only and disabling the addon restores 
   await page
     .getByRole('button', { name: 'Source view', exact: true })
     .press('Enter')
+  // Only modal editing holds source input for its feature.
   await page
-    .locator('.source-pane .document-notice')
-    .waitFor({ state: 'visible' })
-  assert.equal(
-    await page.locator('.cm-content').evaluate((el) => el.isContentEditable),
-    false,
-  )
-  assert.equal(
-    await page.locator('.editor-panes').getAttribute('data-source-ready'),
-    'false',
-  )
+    .locator('.toast')
+    .filter({
+      hasText: 'Broken editor could not start its source editor feature.',
+    })
+    .waitFor()
+  await page
+    .locator(
+      '.editor-panes[data-source-ready="true"] .source-pane .cm-content[contenteditable="true"]',
+    )
+    .waitFor()
+  assert.equal(await page.locator('.source-pane .document-notice').count(), 0)
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
   await page.locator('#addon-broken-editor').click()

@@ -4,6 +4,7 @@ import {
   ChangeSet,
   EditorSelection,
   type EditorState,
+  type StateEffect,
   Text,
   Transaction,
 } from '@codemirror/state'
@@ -192,12 +193,89 @@ function update(
   view: Pick<EditorView, 'state' | 'update' | 'setState'>,
   transactions: readonly Transaction[],
 ) {
+  // A state an extension failed on never reaches the view.
+  for (const transaction of transactions) reachedState(transaction)
   try {
     view.update(transactions)
   } catch (error) {
     view.setState(transactions.at(-1)?.state ?? view.state)
     throw error
   }
+}
+
+/** CodeMirror keeps the part of a state it reached when an extension failed, and returns it on later reads. */
+const failedStates = new WeakMap<Transaction, unknown>()
+
+/** The state a transaction reaches. When an extension fails on it, every read throws that error. */
+function reachedState(transaction: Transaction) {
+  if (failedStates.has(transaction)) throw failedStates.get(transaction)
+  try {
+    return transaction.state
+  } catch (error) {
+    failedStates.set(transaction, error)
+    throw error
+  }
+}
+
+/**
+ * The state a transaction reaches, or null when an extension fails on it.
+ * Filters pass such a transaction on: dispatch rejects it and reports the
+ * extension's owner.
+ */
+export function transactionState(transaction: Transaction) {
+  try {
+    return reachedState(transaction)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The parts of a configuration that an edit fails with, and their errors.
+ * From `start` with none of them, each is installed in turn while the edit
+ * is replayed; one it fails with is left out of the rest. An edit that fails
+ * without any of them names none.
+ */
+export function failingParts<Part>(
+  start: EditorState,
+  transactions: readonly Transaction[],
+  parts: readonly Part[],
+  install: (parts: readonly Part[]) => StateEffect<unknown>,
+) {
+  const replay = (installed: readonly Part[]) => {
+    let state = reachedState(
+      start.update({ effects: install(installed), filter: false }),
+    )
+    for (const transaction of transactions) {
+      const userEvent = transaction.annotation(Transaction.userEvent)
+      state = reachedState(
+        state.update({
+          changes: transaction.changes,
+          ...(transaction.selection
+            ? { selection: transaction.selection }
+            : {}),
+          effects: transaction.effects,
+          ...(userEvent ? { userEvent } : {}),
+          filter: false,
+        }),
+      )
+    }
+  }
+  const accepted: Part[] = []
+  const failing: { part: Part; error: unknown }[] = []
+  try {
+    replay(accepted)
+  } catch {
+    return failing
+  }
+  for (const part of parts)
+    try {
+      replay([...accepted, part])
+      accepted.push(part)
+    } catch (error) {
+      failing.push({ part, error })
+    }
+  return failing
 }
 
 /** How far above a pane's kept top line its scroll position was, per session and view. */
@@ -246,7 +324,7 @@ export function createSourceSession(
       if (transaction.annotation(sourceOperationEcho))
         throw new Error('Source echoes must bypass input dispatch.')
       combined = combined.compose(transaction.changes)
-      state = transaction.state
+      state = reachedState(transaction)
     }
     const changes: RawEdit[] = []
     combined.iterChanges((from, to, _fromB, _toB, inserted) => {
@@ -361,7 +439,10 @@ export function createSourceSession(
             filter: false,
           })
           pending = selection = null
-          rememberSourceHistory(transaction.state, session.historyDepth())
+          rememberSourceHistory(
+            reachedState(transaction),
+            session.historyDepth(),
+          )
           update(view, [transaction])
         } catch (error) {
           // Like a failed rich synchronization: the view stays, read-only.

@@ -40,6 +40,7 @@ import {
   Compartment,
   EditorSelection,
   EditorState,
+  type Extension,
   Prec,
   type Text,
   Transaction,
@@ -87,6 +88,7 @@ import {
   type EditorInteractionRequest,
   sameInteraction,
 } from '../../shared/editor-interactions'
+import { errorMessage } from '../../shared/errors'
 import type { ViewId, ViewTarget } from '../../shared/foundation-contracts'
 import { protectMarkdownParser } from '../../shared/markdown-flavor-guard'
 import { markdownLink } from '../../shared/markdown-link'
@@ -146,8 +148,10 @@ import {
 import { sourceIndentation } from './source-indent'
 import {
   createSourceSession,
+  failingParts,
   sourceEditorTextCooperatively,
   sourceEditTransaction,
+  transactionState,
 } from './source-session'
 import {
   registerSourceView,
@@ -186,6 +190,53 @@ const sameReferenceSyntax = (
   a.textExtras === b.textExtras &&
   !!a.math === !!b.math &&
   a.frontmatter === b.frontmatter
+
+/** An editor feature. `fail` reports its failure and removes it from every editor; input waits for one without it. */
+type EditorFeature = (SourceExtension | FormattedExtension) & {
+  fail?: (error: unknown) => void
+}
+type InstalledFeature = { feature: EditorFeature; extension: Extension }
+
+const featureExtensions = (
+  installed: readonly InstalledFeature[],
+  formatted: boolean,
+) => {
+  const extensions = installed.map(({ extension }) => extension)
+  // Cached renderers must see the fields installed with their input.
+  return [extensions, formatted ? formattedRenderInputs.of(extensions) : []]
+}
+
+/**
+ * Reports the features an edit fails with, which then leave every editor,
+ * and returns the others. A feature input waits for stays; the edit fails.
+ */
+function isolateFeatures(
+  start: EditorState,
+  transactions: readonly Transaction[],
+  installed: readonly InstalledFeature[],
+  compartment: Compartment,
+  formatted: boolean,
+) {
+  const failing = failingParts(
+    start,
+    transactions,
+    installed.filter(({ feature }) => feature.fail),
+    (kept) =>
+      compartment.reconfigure(
+        featureExtensions(
+          installed.filter((part) => !part.feature.fail || kept.includes(part)),
+          formatted,
+        ),
+      ),
+  )
+  for (const { part, error } of failing)
+    part.feature.fail?.(
+      new Error(`${part.feature.id}: ${errorMessage(error)}`, { cause: error }),
+    )
+  return installed.filter(
+    (part) => !failing.some((failure) => failure.part === part),
+  )
+}
 
 export function SourceEditor({
   document,
@@ -244,7 +295,7 @@ export function SourceEditor({
   findMove: FindMove
   onFindStatus: (status: FindStatus) => void
   showLineNumbers: boolean
-  sourceExtensions: readonly (SourceExtension | FormattedExtension)[]
+  sourceExtensions: readonly EditorFeature[]
   onFormatting: (formatting: SourceFormatting | null) => void
   onLink: (href: string) => void
   /** Formatted renders Markdown in place over the same source session. */
@@ -313,7 +364,7 @@ export function SourceEditor({
   const [mountedView, setMountedView] = useState<EditorView | null>(null)
   const [installedExtensions, setInstalledExtensions] = useState<{
     bridge: ReturnType<typeof createSourceSession>
-    extensions: readonly (SourceExtension | FormattedExtension)[]
+    extensions: readonly EditorFeature[]
   } | null>(null)
   const [extensionError, setExtensionError] = useState('')
   const [languageError, setLanguageError] = useState('')
@@ -365,6 +416,8 @@ export function SourceEditor({
   const editable = useRef(new Compartment())
   const numbers = useRef(new Compartment())
   const addons = useRef(new Compartment())
+  /** The features in `addons`, with what each created. */
+  const installed = useRef<readonly InstalledFeature[]>([])
   const indentation = useRef(new Compartment())
   const display = useRef(new Compartment())
   const findHighlights = useRef(new Compartment())
@@ -1286,6 +1339,7 @@ export function SourceEditor({
       openLink.current(target.href)
       return true
     }
+    installed.current = []
     const editor = new EditorView({
       parent: host.current,
       ...(place
@@ -1302,7 +1356,19 @@ export function SourceEditor({
           setInputError('')
         } catch (error) {
           setInputError(error instanceof Error ? error.message : String(error))
-          editor.update([editor.state.update({})])
+          if (
+            transactions.some((transaction) => !transactionState(transaction))
+          )
+            isolateFeatures(
+              editor.state,
+              transactions,
+              installed.current,
+              addons.current,
+              formatted,
+            )
+          // The DOM may still show input the edit left out. An update could
+          // fail again; setState draws the state as it is.
+          editor.setState(editor.state)
         }
       },
       state: EditorState.create({
@@ -1331,11 +1397,13 @@ export function SourceEditor({
             defaultKeymap: false,
           }),
           EditorState.transactionExtender.of((transaction) => {
-            const options = currentCompletions(transaction.state)
+            const state = transactionState(transaction)
+            if (!state) return null
+            const options = currentCompletions(state)
             if (
               !options.length ||
               options === currentCompletions(transaction.startState) ||
-              selectedCompletion(transaction.state)
+              selectedCompletion(state)
             )
               return null
             const option = options[0]
@@ -2142,26 +2210,41 @@ export function SourceEditor({
     if (!editor || preparedText?.bridge !== bridge) return
     let canceled = false
     const context = Object.freeze({ viewId: viewId as ViewId })
-    void Promise.all(
-      sourceExtensions.map(async (extension) => extension.create(context)),
-    )
-      .then((extensions) => {
-        if (!canceled) {
-          editor.dispatch({
-            effects: addons.current.reconfigure([
-              extensions,
-              // Cached renderers must see the fields installed with their input.
-              formatted ? formattedRenderInputs.of(extensions) : [],
-            ]),
-          })
-          setInstalledExtensions({ bridge, extensions: sourceExtensions })
-        }
+    void Promise.allSettled(
+      sourceExtensions.map(async (feature) => feature.create(context)),
+    ).then((results) => {
+      if (canceled) return
+      const errors: unknown[] = []
+      let parts: InstalledFeature[] = []
+      results.forEach((result, index) => {
+        const feature = sourceExtensions[index]!
+        if (result.status === 'fulfilled')
+          parts.push({ feature, extension: result.value })
+        else if (feature.fail) feature.fail(result.reason)
+        else errors.push(result.reason)
       })
-      .catch((error: unknown) => {
-        if (!canceled) {
-          setExtensionError(String(error))
-        }
-      })
+      const install = () =>
+        editor.state.update({
+          effects: addons.current.reconfigure(
+            featureExtensions(parts, formatted),
+          ),
+        })
+      let transaction = install()
+      if (!transactionState(transaction)) {
+        parts = isolateFeatures(
+          editor.state,
+          [],
+          parts,
+          addons.current,
+          formatted,
+        )
+        transaction = install()
+      }
+      installed.current = parts
+      editor.dispatch(transaction)
+      if (errors.length) setExtensionError(String(errors[0]))
+      else setInstalledExtensions({ bridge, extensions: sourceExtensions })
+    })
     return () => {
       canceled = true
     }

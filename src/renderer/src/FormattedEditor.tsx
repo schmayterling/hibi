@@ -208,8 +208,16 @@ export function MarkdownEditor({
     [flavors, markdownExtensions, richExtensions, syntaxVersion],
   )
   // The source outline also gives assistive technology the headings the
-  // formatted view does not draw, so it is read while the sidebar is closed
-  // too, and reported to the sidebar while it is open.
+  // formatted view does not draw, so it is read while a screen reader is on,
+  // with the sidebar closed too, and reported to the sidebar while it is open.
+  // Its work grows with the note, not the edit: each reparse adds back the
+  // blocks before the edit and a structural edit walks every block. Without
+  // the sidebar or a screen reader nothing reads it. Addon windows get no
+  // screen reader report and always read it.
+  const [assistive, setAssistive] = useState(!window.hibi)
+  useEffect(() => window.hibi?.onAccessibilitySupport(setAssistive), [])
+  const outlineRead =
+    markdownDocument && formattedReady && (outlineActive || assistive)
   const outlineShown = useRef(outlineActive)
   outlineShown.current = outlineActive
   const outline = useRef<{
@@ -242,6 +250,10 @@ export function MarkdownEditor({
     },
     [onOutlineUnavailable],
   )
+  // Entries of a stopped outline would go stale with the next edit.
+  useEffect(() => {
+    if (!outlineRead) reportOutline([])
+  }, [outlineRead, reportOutline])
   useEffect(() => {
     if (!outlineActive) return
     onOutline(outline.current.headings)
@@ -252,7 +264,7 @@ export function MarkdownEditor({
   // active heading and moves to a chosen one. The formatted view stays mounted
   // while the source pane loads.
   const sourceOutline = useSourceOutline({
-    active: markdownDocument && formattedReady,
+    active: outlineRead,
     content,
     tabId: documentState.tabId,
     revision: documentState.revision,

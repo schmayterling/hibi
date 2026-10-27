@@ -6,7 +6,7 @@ import test from 'node:test'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
-async function launch(t, prefix) {
+async function launch(t, prefix, assistive = true) {
   const root = await mkdtemp(join(tmpdir(), prefix))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(root, 'profile')}`],
@@ -21,6 +21,9 @@ async function launch(t, prefix) {
   const page = await app.firstWindow()
   page.setDefaultTimeout(60000)
   await waitForDocumentEditor(app, page)
+  // As a screen reader turns it on.
+  if (assistive)
+    await app.evaluate(({ app }) => app.setAccessibilitySupportEnabled(true))
   await page.evaluate(() => {
     localStorage.setItem('hibi:formatted-engine', 'codemirror')
     localStorage.setItem('markdown-markers', 'false')
@@ -183,6 +186,14 @@ test('every heading of a long formatted note reaches assistive technology once, 
     }),
   )
   assert.deepEqual(reconciled, expected)
+
+  // Without a screen reader or the sidebar, the outline and its entries stop.
+  await app.evaluate(({ app }) => app.setAccessibilitySupportEnabled(false))
+  await page.waitForFunction(
+    () =>
+      !window.headingWork.pending &&
+      !document.querySelector('.formatted-headings [role="heading"]'),
+  )
 })
 
 test('heading entry work at real note scale', {
@@ -290,10 +301,14 @@ test('heading entry work at real note scale', {
   assert.equal(result.activated, 13537)
 })
 
-test('a 50 MiB note keeps its heading entries through body edits and scrolling', {
+test('a 50 MiB note reads no outline until a screen reader starts, then keeps its heading entries through body edits and scrolling', {
   timeout: 180000,
 }, async (t) => {
-  const { root, app, page } = await launch(t, 'hibi-heading-navigation-50m-')
+  const { root, app, page } = await launch(
+    t,
+    'hibi-heading-navigation-50m-',
+    false,
+  )
   const file = join(root, 'large.md')
   const block = `## heading\n\n${`${'plain text body '.repeat(15)}\n`.repeat(16)}\n\n`
   const source = block
@@ -333,12 +348,26 @@ test('a 50 MiB note keeps its heading entries through body edits and scrolling',
       const model = Object.values(await import(`app://hibi/${outline}`)).find(
         (value) => value?.prototype?.read && value.prototype.counters,
       )
-      const read = model.prototype.read
+      const { read, apply } = model.prototype
       window.outlineReads = 0
+      window.outlineWork = { applied: 0, steps: 0, indexVisits: 0 }
+      model.prototype.apply = function (...args) {
+        window.outlineWork.applied++
+        return apply.apply(this, args)
+      }
       model.prototype.read = function* () {
-        const value = yield* read.call(this)
-        window.outlineReads++
-        return value
+        const inner = read.call(this)
+        let input
+        for (;;) {
+          const step = inner.next(input)
+          window.outlineWork.steps++
+          if (step.done) {
+            window.outlineWork.indexVisits += this.counters(true).indexVisits
+            window.outlineReads++
+            return step.value
+          }
+          input = yield step.value
+        }
       }
     },
     {
@@ -347,15 +376,43 @@ test('a 50 MiB note keeps its heading entries through body edits and scrolling',
     },
   )
   await open(app, page, file)
-  await headingCount(page, total, { timeout: 120000 })
+  await waitForAsync(
+    page,
+    (length) =>
+      document.querySelector('.rich-pane .cm-content')?.cmTile.root.view.state
+        .doc.length === length,
+    source.length,
+    { timeout: 120000 },
+  )
+  await page.locator('[data-source-ready="true"]').waitFor()
+  // With the sidebar closed and no screen reader, edits read no outline:
+  // body text, a paragraph split, and a new heading.
+  const from = source.indexOf('body', Math.floor(source.length / 2))
+  for (const insert of ['B', 'text\n\nsplit ', 'b\n\n## new\n\n']) {
+    const work = await page.locator('.rich-pane .cm-content').evaluate(
+      (element, { from, insert }) => {
+        element.cmTile.root.view.dispatch({
+          changes: { from, to: from + 1, insert },
+        })
+        return { ...window.outlineWork, reads: window.outlineReads }
+      },
+      { from, insert },
+    )
+    assert.deepEqual(work, { applied: 0, steps: 0, indexVisits: 0, reads: 0 })
+  }
+  assert.equal(
+    await page.evaluate(() => window.headingWork.created + window.outlineReads),
+    0,
+  )
+  await app.evaluate(({ app }) => app.setAccessibilitySupportEnabled(true))
+  await headingCount(page, total + 1, { timeout: 120000 })
   const work = () =>
     page.evaluate(() => ({
       ...window.headingWork,
       reads: window.outlineReads,
     }))
-  assert.equal((await work()).created, total)
+  assert.equal((await work()).created, total + 1)
   // Body edits leave the outline, and so every entry, as it was.
-  const from = source.indexOf('body', Math.floor(source.length / 2))
   for (const insert of ['B', 'b', 'text']) {
     const before = await work()
     await page.locator('.rich-pane .cm-content').evaluate(
@@ -386,7 +443,7 @@ test('a 50 MiB note keeps its heading entries through body edits and scrolling',
   await page.waitForFunction(
     () => document.querySelector('.formatted-headings').children.length > 0,
   )
-  await headingCount(page, total)
+  await headingCount(page, total + 1)
   const moved = await work()
   assert.equal(moved.created, scrolled.created)
   assert.ok(moved.placed - scrolled.placed < 100, JSON.stringify(moved))
@@ -399,7 +456,7 @@ test('a 50 MiB note keeps its heading entries through body edits and scrolling',
       total - 50,
     total,
   )
-  await headingCount(page, total)
+  await headingCount(page, total + 1)
   assert.equal((await work()).created, moved.created)
   t.diagnostic(
     JSON.stringify({

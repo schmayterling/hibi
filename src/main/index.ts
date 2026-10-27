@@ -39,6 +39,7 @@ import { CLIPBOARD_CHANNELS, MAX_CLIPBOARD_TEXT } from '../shared/clipboard'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
 import { DEPENDENCY_CHANNELS } from '../shared/dependencies'
 import {
+  ACCESSIBILITY_CHANNELS,
   APP_INFO_CHANNEL,
   type AppInfo,
   BOOTSTRAP_CHANNELS,
@@ -1393,6 +1394,9 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit()
   })
+  app.on('accessibility-support-changed', (_event, enabled) => {
+    mainWindow?.webContents.send(ACCESSIBILITY_CHANNELS.changed, enabled)
+  })
 
   void app
     .whenReady()
@@ -1557,6 +1561,11 @@ if (!app.requestSingleInstanceLock()) {
           trustedWindow(event)
           return appInfo()
         },
+        Promise.resolve(),
+      )
+      handle(
+        ACCESSIBILITY_CHANNELS.get,
+        () => app.isAccessibilitySupportEnabled(),
         Promise.resolve(),
       )
       handle(

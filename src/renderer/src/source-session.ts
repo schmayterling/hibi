@@ -218,9 +218,11 @@ export function createSourceSession(
     pending: ChangeSet | null = null,
     flush = () => {},
     // A view that could not show an echo takes no edits until it is rebuilt.
-    failed = false
-  const undo = () => !failed && !!session.undo()
-  const redo = () => !failed && !!session.redo()
+    failed = false,
+    // While the attached view is read-only, no route undoes or redoes.
+    attached: Pick<EditorView, 'state'> | null = null
+  const undo = () => !failed && !attached?.state.readOnly && !!session.undo()
+  const redo = () => !failed && !attached?.state.readOnly && !!session.redo()
   const dispatch = (
     transactions: readonly Transaction[],
     view: Pick<EditorView, 'state' | 'update' | 'setState'> & {
@@ -342,6 +344,7 @@ export function createSourceSession(
       if (!session.ownsCurrentSnapshot(snapshot))
         throw new Error('The source editor is synchronizing.')
       snapshot = session.snapshot()
+      attached = view
       const unregister = registerSourceHistory(view, { undo, redo })
       rememberSourceHistory(view.state, session.historyDepth())
       // A waiting view gets the caret immediate echoes would have left: the
@@ -405,6 +408,7 @@ export function createSourceSession(
       return () => {
         flush = () => {}
         pending = null
+        attached = null
         unregister()
         unsubscribe()
         unsubscribeStorage()

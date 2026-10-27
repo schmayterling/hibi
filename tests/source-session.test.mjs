@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  Compartment,
   EditorSelection,
   EditorState,
   StateEffect,
@@ -284,6 +285,34 @@ test('two source views share text and history but keep separate selections', () 
   assert.equal(f.session.selection('right').ranges[0].head, 4)
   left.dispose()
   right.dispose()
+  f.session.dispose()
+})
+
+test('a read-only view takes no undo or redo by any route and keeps the history', () => {
+  const lock = new Compartment()
+  const f = fixture('abcd', {}, [lock.of([])])
+  const preview = f.attach('formatted')
+  const source = f.attach('source')
+  source.dispatch(type(4, '!', 1))
+  const readOnly = (on) =>
+    preview.dispatch({
+      effects: lock.reconfigure(on ? EditorState.readOnly.of(true) : []),
+    })
+  readOnly(true)
+  assert.equal(preview.bridge.undo(), false)
+  assert.equal(runSourceHistory(preview.view, 'undo'), false)
+  assert.equal(f.session.snapshot().materialize(), 'abcd!')
+  // An editable view of the same note still undoes.
+  assert.equal(source.bridge.undo(), true)
+  assert.equal(preview.bridge.redo(), false)
+  assert.equal(runSourceHistory(preview.view, 'redo'), false)
+  assert.equal(f.session.snapshot().materialize(), 'abcd')
+  assert.deepEqual(f.session.historyDepth(), { undo: 0, redo: 1 })
+  readOnly(false)
+  assert.equal(preview.bridge.redo(), true)
+  assert.equal(f.session.snapshot().materialize(), 'abcd!')
+  preview.dispose()
+  source.dispose()
   f.session.dispose()
 })
 

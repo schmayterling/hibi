@@ -140,7 +140,6 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | split-005 | [motion.test.mjs:223](motion.test.mjs#L223) | split formatted view must remain read-only without an input caret | 3: read-only access and shared history guards |
 | split-006 | [motion.test.mjs:281](motion.test.mjs#L281) | typing in a read-only split preview must preserve source | 3: read-only access and shared history guards |
 | semantics-003 | [outline-navigation.test.mjs:320](outline-navigation.test.mjs#L320) | formatted and source outlines must reuse one document worker | 9: outline semantics and diagram lifecycle |
-| link-001 | [outline-navigation.test.mjs:365](outline-navigation.test.mjs#L365) | formatted heading references must render resolved link labels | 5a: reference labels and destinations |
 | contracts-001 | [raw-html-editor.test.mjs:1147](raw-html-editor.test.mjs#L1147) | clipboard html must exclude markup outside the selected fragment | 3c: clipboard fragments and trusted source |
 | contracts-002 | [raw-html-editor.test.mjs:1156](raw-html-editor.test.mjs#L1156) | a clipboard fragment must restore its exact selected markdown source | 3c: clipboard fragments and trusted source |
 | contracts-003 | [raw-html-editor.test.mjs:1241](raw-html-editor.test.mjs#L1241) | modified inline html copies must fall back without restoring raw markup | 3c: clipboard fragments and trusted source |

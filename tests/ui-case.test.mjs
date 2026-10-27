@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -38,6 +41,7 @@ test('sentence case is default; lowercase covers UI and menus while preserving c
     await rm(profile, { recursive: true, force: true })
   })
   let page = await launch()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await app.evaluate(({ Menu }) => {
     globalThis.initialHibiMenu = Menu.getApplicationMenu()
   })

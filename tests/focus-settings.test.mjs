@@ -5,6 +5,10 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { settingsPages } from '../src/renderer/src/settings-pages.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  testFormattedEngines as it,
+  selectFormattedEngine,
+} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 
 test('settings registrations use addon ownership and clean up without collisions', () => {
@@ -59,7 +63,7 @@ test('settings registrations use addon ownership and clean up without collisions
   assert.deepEqual(settingsPages.snapshot(), { categories: [], pages: [] })
 })
 
-test('reopening settings cancels a pending Back close', {
+it('reopening settings cancels a pending Back close', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-settings-leave-'))
@@ -71,6 +75,7 @@ test('reopening settings cancels a pending Back close', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(6000)
   await page.locator('.titlebar').waitFor()
   await app.evaluate(({ ipcMain }) => {
@@ -131,7 +136,7 @@ test('reopening settings cancels a pending Back close', {
   await settings.waitFor({ state: 'hidden' })
 })
 
-test('status visibility, zen mode, settings groups, search clear and import notice use shared layout', {
+it('status visibility, zen mode, settings groups, search clear and import notice use shared layout', {
   timeout: 45000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-focus-settings-'))
@@ -146,6 +151,7 @@ test('status visibility, zen mode, settings groups, search clear and import noti
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(6000)
   await page.emulateMedia({ reducedMotion: 'reduce' })
   const editor = page.getByRole('textbox', { name: /document editor/i })

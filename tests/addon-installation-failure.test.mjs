@@ -2,9 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
-import { electron } from './electron.mjs'
-import { clickMenu } from './keyboard.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  reloadFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
+import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 test('failed editor attachments stay read-only and disabling the addon restores editing', {
   timeout: 30000,
@@ -55,19 +58,55 @@ test('failed editor attachments stay read-only and disabling the addon restores 
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
   t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
     await app.close()
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
+  // Attachment failures deliberately hold editor readiness.
+  await reloadFormattedEngine(page, t.formattedEngine)
+  const cm = t.formattedEngine === 'codemirror'
   const pageErrors = []
   page.on('pageerror', (error) => pageErrors.push(String(error)))
   page.on('console', (message) => {
     if (message.type() === 'error') pageErrors.push(message.text())
   })
+  if (cm) {
+    // API 1 rich hooks are inert. Source hooks still belong to source view.
+    // The CM counterpart checks native editing here and the failing source attachment below.
+    await waitForDocumentEditor(app, page)
+    const formatted = page.locator('.rich-pane .cm-content')
+    assert.equal(
+      await formatted.evaluate((element) => element.isContentEditable),
+      true,
+    )
+    assert.equal(await page.locator('.rich-pane .document-notice').count(), 0)
+    await formatted.focus()
+    await page.keyboard.insertText('legacy rich hooks are inert')
+    await page.evaluate(() => window.hibi.flushDocumentChanges())
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      'legacy rich hooks are inert',
+    )
+    await pressShortcut(
+      app,
+      process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+    )
+    await page.evaluate(() => window.hibi.flushDocumentChanges())
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      '',
+    )
+    await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  }
   try {
     await page
-      .locator('.rich-pane .document-notice')
+      .locator(
+        cm ? '.source-pane .document-notice' : '.rich-pane .document-notice',
+      )
       .filter({ hasText: /editor addon unavailable/i })
       .waitFor()
   } catch (error) {
@@ -113,13 +152,27 @@ test('failed editor attachments stay read-only and disabling the addon restores 
     throw error
   }
   assert.equal(
-    await page.locator('.tiptap').evaluate((el) => el.isContentEditable),
+    await page
+      .locator(cm ? '.source-pane .cm-content' : '.tiptap')
+      .evaluate((el) => el.isContentEditable),
     false,
   )
-  assert.equal(
-    await page.evaluate(() => document.documentElement.dataset.partialDetached),
-    'true',
-  )
+  if (cm) {
+    // API 1 rich hooks are inert. Their PM attachment/cleanup
+    // signal is TipTap-only; the failing source extension still blocks source input.
+    assert.equal(
+      await page.evaluate(
+        () => document.documentElement.dataset.partialDetached,
+      ),
+      undefined,
+    )
+  } else
+    assert.equal(
+      await page.evaluate(
+        () => document.documentElement.dataset.partialDetached,
+      ),
+      'true',
+    )
   await page
     .getByRole('button', { name: 'Source view', exact: true })
     .press('Enter')
@@ -127,7 +180,9 @@ test('failed editor attachments stay read-only and disabling the addon restores 
     .locator('.source-pane .document-notice')
     .waitFor({ state: 'visible' })
   assert.equal(
-    await page.locator('.cm-content').evaluate((el) => el.isContentEditable),
+    await page
+      .locator('.source-pane .cm-content')
+      .evaluate((el) => el.isContentEditable),
     false,
   )
   assert.equal(
@@ -142,7 +197,7 @@ test('failed editor attachments stay read-only and disabling the addon restores 
   )
   await page.getByRole('button', { name: 'Back to app', exact: true }).click()
   await page.waitForFunction(
-    () => document.querySelector('.cm-content')?.isContentEditable,
+    () => document.querySelector('.source-pane .cm-content')?.isContentEditable,
   )
   assert.equal(await page.locator('.source-pane .document-notice').count(), 0)
   assert.equal(
@@ -150,8 +205,30 @@ test('failed editor attachments stay read-only and disabling the addon restores 
     0,
   )
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.isContentEditable,
-  )
+  if (cm) await waitForDocumentEditor(app, page)
+  else
+    await page.waitForFunction(
+      () => document.querySelector('.tiptap')?.isContentEditable,
+    )
   assert.equal(await page.locator('.rich-pane .document-notice').count(), 0)
+  const editor = page.getByRole('textbox', {
+    name: 'Document editor',
+    exact: true,
+  })
+  await editor.focus()
+  await page.keyboard.insertText('editor recovered')
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    'editor recovered',
+  )
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+  )
+  await page.evaluate(() => window.hibi.flushDocumentChanges())
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    '',
+  )
 })

@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 import { uiName } from './ui.mjs'
@@ -35,7 +38,7 @@ test('opening a file and attaching media release editor busy state while explore
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await app.evaluate(({ dialog }, folder) => {
     dialog.showOpenDialog = async () => ({
       canceled: false,
@@ -76,7 +79,8 @@ test('opening a file and attaching media release editor busy state while explore
     page,
     async () =>
       document.querySelector('.app')?.getAttribute('aria-busy') === 'false' &&
-      document.querySelector('.tiptap')?.isContentEditable === true,
+      document.querySelector('.rich-pane [role="textbox"]')
+        ?.isContentEditable === true,
   )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).name,
@@ -95,7 +99,7 @@ test('opening a file and attaching media release editor busy state while explore
     .click()
   await page
     .getByRole('textbox', { name: /document editor/i })
-    .locator('img')
+    .locator('img:not(.cm-widgetBuffer)')
     .waitFor()
   await waitForAsync(
     page,

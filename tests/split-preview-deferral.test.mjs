@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -18,7 +19,7 @@ const addons = [
   'tags',
 ]
 
-async function openSplit(t, original) {
+async function openSplit(t, original, engine = 'tiptap') {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-split-deferral-'))
   const folder = join(profile, 'installed-addons', 'deferral-fixture')
   const file = join(profile, 'math.md')
@@ -82,6 +83,7 @@ async function openSplit(t, original) {
     name: 'Markdown editor',
     exact: true,
   })
+  await selectFormattedEngine(app, page, engine)
   await rich.waitFor()
   await page.waitForFunction(
     (addons) =>
@@ -95,6 +97,20 @@ async function openSplit(t, original) {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, file)
   await clickMenu(app, 'Open…')
+  if (engine === 'codemirror') {
+    await waitForDocumentEditor(app, page)
+    await waitForAsync(
+      page,
+      async (original) =>
+        (await window.hibi.getDocument()).markdown === original,
+      original,
+    )
+    await page.getByRole('button', { name: /^side-by-side$/i }).click()
+    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+    return { app, page, rich, source, file }
+  }
   await page.waitForFunction(() => {
     const doc = document.querySelector('.tiptap')?.editor?.state.doc
     let math = false
@@ -193,7 +209,7 @@ async function openSplit(t, original) {
   }
 }
 
-test('math and dictionary split previews parse once per pause or rich flush, not per source key', {
+test('tiptap: math and dictionary split previews parse once per pause or rich flush, not per source key', {
   timeout: 60000,
 }, async (t) => {
   const original = '# notes\n\nalpha $x^2$ beta\n\nomega'
@@ -307,7 +323,7 @@ test('math and dictionary split previews parse once per pause or rich flush, not
   assert.equal(await bookmark(), 'et')
 })
 
-test('split preview catch-up keeps select-all and selected nodes, also across a mode switch', {
+test('tiptap: split preview catch-up keeps select-all and selected nodes, also across a mode switch', {
   timeout: 60000,
 }, async (t) => {
   const original =
@@ -380,7 +396,7 @@ test('split preview catch-up keeps select-all and selected nodes, also across a 
   assert.equal(remaining.includes('omega'), false, remaining)
 })
 
-test('split preview catch-up keeps selections in content the edits left alone', {
+test('tiptap: split preview catch-up keeps selections in content the edits left alone', {
   timeout: 60000,
 }, async (t) => {
   const original =
@@ -473,7 +489,7 @@ test('split preview catch-up keeps selections in content the edits left alone', 
   }
 })
 
-test('split preview catch-up maps selections through the source edits around them', {
+test('tiptap: split preview catch-up maps selections through the source edits around them', {
   timeout: 120000,
 }, async (t) => {
   // Lines that end in an atom have no visible text at the edit, and repeated
@@ -617,7 +633,7 @@ async function editAroundBeta(t, original, changes) {
   assert.equal(after.text, 'beta')
 }
 
-test('split preview catch-up keeps selections between edits inside long atoms', {
+test('tiptap: split preview catch-up keeps selections between edits inside long atoms', {
   timeout: 60000,
 }, async (t) => {
   // No visible text lies within hundreds of source units of either edit.
@@ -633,7 +649,7 @@ test('split preview catch-up keeps selections between edits inside long atoms', 
   )
 })
 
-test('split preview catch-up keeps selections when front matter moves the body', {
+test('tiptap: split preview catch-up keeps selections when front matter moves the body', {
   timeout: 60000,
 }, async (t) => {
   await editAroundBeta(
@@ -651,7 +667,7 @@ test('split preview catch-up keeps selections when front matter moves the body',
   )
 })
 
-test('a preview hidden during source edits keeps its selection when shown again', {
+test('tiptap: a preview hidden during source edits keeps its selection when shown again', {
   timeout: 60000,
 }, async (t) => {
   const { page, rich, source, pauseClock, toNormal } = await openSplit(
@@ -707,7 +723,7 @@ async function editHidden(t, edit) {
   return result
 }
 
-test('a hidden preview records each source edit without copying earlier ones', {
+test('tiptap: a hidden preview records each source edit without copying earlier ones', {
   timeout: 90000,
 }, async (t) => {
   const copied = await editHidden(t, () => {
@@ -748,7 +764,7 @@ test('a hidden preview records each source edit without copying earlier ones', {
   assert.ok(copied < 30 * 1000, String(copied))
 })
 
-test('a hidden preview keeps its selection through more than 1,024 separate edits', {
+test('tiptap: a hidden preview keeps its selection through more than 1,024 separate edits', {
   timeout: 90000,
 }, async (t) => {
   await editHidden(t, () => {
@@ -770,7 +786,7 @@ test('a hidden preview keeps its selection through more than 1,024 separate edit
   })
 })
 
-test('split preview catch-up keeps selections when a replacement retypes the front matter delimiter', {
+test('tiptap: split preview catch-up keeps selections when a replacement retypes the front matter delimiter', {
   timeout: 60000,
 }, async (t) => {
   // The replacement starts with the unchanged delimiter, so only the body changes.
@@ -788,7 +804,7 @@ test('split preview catch-up keeps selections when a replacement retypes the fro
   )
 })
 
-test('split preview catch-up keeps selections after a block is wrapped or unwrapped', {
+test('tiptap: split preview catch-up keeps selections after a block is wrapped or unwrapped', {
   timeout: 120000,
 }, async (t) => {
   // The container around the first block changes; the blocks after it do not.
@@ -799,6 +815,450 @@ test('split preview catch-up keeps selections after a block is wrapped or unwrap
     ['- ', ''],
   ])
     await editAroundBeta(
+      t,
+      `${prefix}alpha\n\nbeta gamma\n\nmath $x^2$\n\nomega`,
+      () => [{ from: 0, to: prefix.length, insert }],
+    )
+})
+
+// Deferred parsing and immutable PM selections have no CM counterpart.
+// These tests preserve their user contracts: current
+// rendering, save/history, focus and mapped text/image/table source ranges.
+// Native cell-editor mapping is also covered by formatted-tables.test.mjs:
+// "a cell editor follows its row when rows are added or deleted around it".
+async function cmSplit(t, original) {
+  const state = await openSplit(t, original, 'codemirror')
+  const { page } = state
+  // Hidden panes leave the accessibility tree; retain DOM locators for their
+  // saved selections, then compare text only while that pane is shown.
+  const rich = page.locator('.rich-pane .cm-content')
+  const source = page.locator('.source-pane .cm-content')
+  const selection = () =>
+    rich.evaluate((element) => {
+      const view = element.cmTile.root.view,
+        range = view.state.selection.main
+      return {
+        anchor: range.anchor,
+        head: range.head,
+        text: view.state.doc.sliceString(range.from, range.to),
+      }
+    })
+  const select = async (from, to = from) =>
+    rich.evaluate(
+      (element, { from, to }) => {
+        const view = element.cmTile.root.view
+        view.focus()
+        view.dispatch({
+          selection: { anchor: from, head: to },
+          scrollIntoView: true,
+        })
+      },
+      { from, to },
+    )
+  const exact = async () => {
+    await page.evaluate(() => window.hibi.flushDocumentChanges())
+    const canonical = (await page.evaluate(() => window.hibi.getDocument()))
+      .markdown
+    const sourceMode = await page.locator('.editor-panes.mode-markdown').count()
+    const editors = sourceMode ? [] : [rich]
+    if (
+      original.length > 256 * 1024 &&
+      (await page.locator('.editor-panes.mode-normal').count())
+    ) {
+      // Opening size stays cached while this fixture edits one revision.
+      // Huge-note growth needs a separate release check.
+      await source.waitFor({ state: 'detached' })
+      assert.equal(await source.count(), 0)
+    } else {
+      assert.equal(await source.count(), 1)
+      editors.push(source)
+    }
+    for (const editor of editors)
+      assert.equal(
+        await editor.evaluate((element) =>
+          element.cmTile.root.view.state.doc.toString(),
+        ),
+        canonical.replace(/\r\n?/g, '\n'),
+      )
+    if (!sourceMode) {
+      const tail = canonical.match(/^omega[^\n]*$/m)?.[0]
+      if (tail) assert.ok((await rich.innerText()).includes(tail), tail)
+      if (
+        await source.evaluate((element) => document.activeElement === element)
+      ) {
+        if (canonical.includes('$y^2$'))
+          assert.ok(
+            (
+              await rich.locator('.katex annotation').allTextContents()
+            ).includes('y^2'),
+          )
+        if (canonical.includes('![first]'))
+          assert.ok(await rich.locator('img').count())
+        if (canonical.includes('| a | b |'))
+          assert.ok(await rich.locator('table').count())
+      }
+    }
+    return canonical
+  }
+  const edit = async (changes) => {
+    await source.focus()
+    await source.evaluate((element, changes) => {
+      const view = element.cmTile.root.view
+      if (!view.hasFocus) throw new Error('source must own input')
+      view.dispatch({ changes, userEvent: 'input.type' })
+    }, changes)
+    await exact()
+    assert.equal(
+      await source.evaluate((element) => document.activeElement === element),
+      true,
+    )
+  }
+  const normal = async () => {
+    await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+    await waitForDocumentEditor(state.app, page)
+  }
+  const beta = async () => {
+    const at = (await exact()).indexOf('beta')
+    await select(at, at + 4)
+    return selection()
+  }
+  return {
+    ...state,
+    rich,
+    source,
+    selection,
+    select,
+    exact,
+    edit,
+    normal,
+    beta,
+  }
+}
+
+test('codemirror: math split edits render current source, save exactly and share history without stealing focus', {
+  timeout: 60000,
+}, async (t) => {
+  const original = '# notes\n\nalpha $x^2$ beta\n\nomega'
+  const {
+    app,
+    page,
+    rich,
+    source,
+    file,
+    select,
+    selection,
+    exact,
+    edit,
+    normal,
+  } = await cmSplit(t, original)
+  const beta = original.indexOf('beta')
+  await select(beta + 1, beta + 3)
+  await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({ selection: { anchor: view.state.doc.line(1).to } })
+    view.focus()
+  })
+  let typed = original
+  for (const character of ' and $y^2$') {
+    await page.keyboard.insertText(character)
+    typed = typed.replace('\n', `${character}\n`)
+    assert.equal(await exact(), typed)
+    assert.equal((await selection()).text, 'et')
+    assert.equal(
+      await source.evaluate((element) => document.activeElement === element),
+      true,
+    )
+  }
+  const saved = await page.evaluate(() => window.hibi.saveDocument(false))
+  assert.equal(saved.saveReceipt, true)
+  const current = await page.evaluate(() => window.hibi.getDocument())
+  assert.equal(saved.savedVersion, current.contentVersion)
+  assert.equal(current.markdown, typed)
+  assert.equal(await readFile(file, 'utf8'), typed)
+  await page.locator('.rich-pane .hibi-lp-h1 .katex').waitFor()
+  await edit({ from: typed.length, insert: ' later' })
+  assert.equal(await exact(), `${typed} later`)
+  await rich.focus()
+  assert.equal(await exact(), `${typed} later`)
+  await source.focus()
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+  )
+  assert.notEqual(await exact(), `${typed} later`)
+  await select(
+    (await exact()).indexOf('beta') + 1,
+    (await exact()).indexOf('beta') + 3,
+  )
+  await edit({ from: 0, insert: '!' })
+  await normal()
+  assert.equal((await selection()).text, 'et')
+  assert.equal(await rich.getAttribute('contenteditable'), 'true')
+})
+
+test('codemirror: select-all and boundary image ranges survive split edits and mode switches', {
+  timeout: 60000,
+}, async (t) => {
+  const original =
+    '![first](https://example.com/a.png)\n\n# notes\n\nalpha $x^2$ beta\n\nomega'
+  const state = await cmSplit(t, original)
+  const { page, rich, select, selection, exact, edit, normal } = state
+  await rich.focus()
+  await rich.press('ControlOrMeta+a')
+  await edit({ from: original.length, insert: '!' })
+  await t.test('all content stays selected', async () => {
+    const all = await selection()
+    assert.equal(all.anchor, 0)
+    assert.equal(all.head, (await exact()).length)
+  })
+  const image = original.slice(0, original.indexOf('\n'))
+  await select(0, image.length)
+  await edit({ from: (await exact()).length, insert: '?' })
+  assert.equal((await selection()).text, image)
+  await rich.focus()
+  await rich.press('ControlOrMeta+a')
+  await edit({ from: (await exact()).length, insert: ' end' })
+  await normal()
+  await rich.press('Backspace')
+  await waitForAsync(
+    page,
+    async () => (await window.hibi.getDocument()).markdown === '',
+  )
+  const remaining = (await page.evaluate(() => window.hibi.getDocument()))
+    .markdown
+  assert.equal(remaining.includes('![first]'), false, remaining)
+  assert.equal(remaining.includes('omega'), false, remaining)
+})
+
+test('codemirror: final newlines and edits around text, image and table ranges preserve selected content', {
+  timeout: 60000,
+}, async (t) => {
+  const original =
+    '# notes\n\n![first](https://example.com/a.png)\n\nalpha $x^2$ beta\n\n| a | b |\n| --- | --- |\n| c | d |\n\nomega'
+  const { select, selection, exact, edit } = await cmSplit(t, original)
+  for (const target of [
+    'beta',
+    '![first](https://example.com/a.png)',
+    'c | d',
+  ]) {
+    const from = (await exact()).indexOf(target)
+    await select(from, from + target.length)
+    const before = await selection()
+    await edit({ from: (await exact()).length, insert: '\n' })
+    assert.deepEqual(await selection(), before, target)
+    const text = await exact()
+    await edit([
+      { from: 0, insert: 'preface\n\n' },
+      { from: text.indexOf('omega') + 5, insert: ' suffix' },
+    ])
+    assert.equal((await selection()).text, target)
+  }
+})
+
+for (const item of [
+  {
+    original: 'alpha $x^2$ beta gamma\n\nomega',
+    target: 'beta',
+    lines: [1, 1],
+  },
+  {
+    original: 'left\n\nsame\n\nsame\n\nmath $x^2$\n\nomega',
+    target: 'same',
+    lines: [1, 7],
+  },
+  {
+    original:
+      'left\n\n![a](https://example.com/a.png)\n\n![b](https://example.com/b.png)\n\nmath $x^2$\n\nomega',
+    target: '![a](https://example.com/a.png)',
+    lines: [1, 7],
+  },
+])
+  test(`codemirror: split edits map the first ${item.target} range through atoms and repeated blocks`, {
+    timeout: 60000,
+  }, async (t) => {
+    const { select, selection, edit } = await cmSplit(t, item.original)
+    const from = item.original.indexOf(item.target)
+    await select(from, from + item.target.length)
+    const before = await selection()
+    const lines = item.original.split('\n')
+    const first = lines.slice(0, item.lines[0]).join('\n').length
+    const last = lines.slice(0, item.lines[1]).join('\n').length
+    await edit([
+      { from: item.lines[0] === item.lines[1] ? 0 : first, insert: '!' },
+      { from: last, insert: '?' },
+    ])
+    const after = await selection()
+    assert.equal(after.text, item.target)
+    assert.equal(after.anchor, before.anchor + 1)
+  })
+
+async function cmAroundBeta(t, original, changes, hidden = false) {
+  const { page, source, beta, selection, exact, edit, normal } = await cmSplit(
+    t,
+    original,
+  )
+  const before = await beta()
+  if (hidden) {
+    await page.getByRole('button', { name: 'Source view', exact: true }).click()
+    await source.waitFor()
+  }
+  await edit(changes(original))
+  if (hidden) await normal()
+  const after = await selection()
+  assert.equal(after.text, 'beta')
+  assert.equal(
+    after.anchor,
+    before.anchor +
+      changes(original)
+        .filter((change) => change.from < before.anchor)
+        .reduce(
+          (delta, change) =>
+            delta +
+            change.insert.length -
+            ((change.to ?? change.from) - change.from),
+          0,
+        ),
+  )
+  await exact()
+}
+
+test('codemirror: selections survive edits inside long math atoms', {
+  timeout: 60000,
+}, async (t) => {
+  const long = (name) => name.repeat(200)
+  await cmAroundBeta(
+    t,
+    `alpha $${long('x')}$ beta $${long('y')}$ gamma\n\nomega`,
+    (text) =>
+      ['x', 'y'].map((name) => ({
+        from: text.indexOf(long(name)) + 100,
+        insert: 'z',
+      })),
+  )
+})
+
+test('codemirror: frontmatter body shifts preserve selections', {
+  timeout: 60000,
+}, async (t) => {
+  await cmAroundBeta(
+    t,
+    '---\ntitle: old\n---\n\nalpha $x^2$ beta gamma\n\nomega',
+    (text) => [
+      {
+        from: text.indexOf('old'),
+        to: text.indexOf('old') + 3,
+        insert: 'new title',
+      },
+      { from: text.indexOf('alpha'), insert: '!' },
+      { from: text.indexOf(' gamma') + 6, insert: '?' },
+    ],
+  )
+})
+
+test('codemirror: a preview hidden during source edits keeps its mapped selection when shown', {
+  timeout: 60000,
+}, async (t) => {
+  await cmAroundBeta(
+    t,
+    'alpha $x^2$ beta gamma\n\nomega',
+    (text) => [
+      { from: 0, insert: '!' },
+      { from: text.indexOf('\n'), insert: '?' },
+    ],
+    true,
+  )
+})
+
+test('codemirror: hidden preview edits copy only current input and retain selection', {
+  timeout: 90000,
+}, async (t) => {
+  const original = `alpha $x^2$ beta ${'a '.repeat(1200)}gamma\n\nomega`
+  const { page, source, beta, edit, selection, exact, normal } = await cmSplit(
+    t,
+    original,
+  )
+  const before = await beta()
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  await edit({ from: 0, insert: '!' })
+  await edit({
+    from: (await exact()).length,
+    insert: `\n\n${'b'.repeat(900000)}`,
+  })
+  await source.focus()
+  const copied = await source.evaluate((element) => {
+    const view = element.cmTile.root.view
+    const clone = window.structuredClone
+    let units = 0
+    window.structuredClone = (value, ...rest) => {
+      if (typeof value === 'string') units += value.length
+      return clone(value, ...rest)
+    }
+    try {
+      window.structuredClone('probe')
+      if (units !== 5)
+        throw new Error('clone counter must observe the positive control')
+      units = 0
+      for (let index = 0; index < 30; index++)
+        view.dispatch({
+          changes: { from: view.state.doc.line(1).to, insert: '?' },
+          userEvent: 'input.type',
+        })
+    } finally {
+      window.structuredClone = clone
+    }
+    return units
+  })
+  assert.ok(copied < 30 * 1000, String(copied))
+  await normal()
+  assert.equal((await selection()).text, 'beta')
+  assert.equal((await selection()).anchor, before.anchor + 1)
+  await exact()
+})
+
+test('codemirror: a hidden preview maps selections through more than 1,024 edits', {
+  timeout: 90000,
+}, async (t) => {
+  const original = `alpha $x^2$ beta ${'a '.repeat(1200)}gamma\n\nomega`
+  const { page, beta, edit, selection, normal } = await cmSplit(t, original)
+  const before = await beta()
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  const start = original.indexOf(' beta ') + 6
+  const changes = [{ from: 0, insert: '!' }]
+  for (let index = 0; index < 1100; index++)
+    changes.push({ from: start + 2 * index + 1, insert: 'x' })
+  await edit(changes)
+  await normal()
+  assert.equal((await selection()).text, 'beta')
+  assert.equal((await selection()).anchor, before.anchor + 1)
+})
+
+test('codemirror: retyping a frontmatter delimiter preserves the body selection', {
+  timeout: 60000,
+}, async (t) => {
+  await cmAroundBeta(
+    t,
+    '---\ntitle: old\n---\n\nalpha $x^2$ beta gamma\n\nomega',
+    (text) => [
+      {
+        from: text.indexOf('\n---\n') + 1,
+        to: text.indexOf('alpha') + 2,
+        insert: '---\n\n!al',
+      },
+      { from: text.indexOf(' gamma') + 6, insert: '?' },
+    ],
+  )
+})
+
+test('codemirror: wrapping and unwrapping an earlier block preserves later selections', {
+  timeout: 120000,
+}, async (t) => {
+  for (const [prefix, insert] of [
+    ['', '> '],
+    ['', '- '],
+    ['> ', ''],
+    ['- ', ''],
+  ])
+    await cmAroundBeta(
       t,
       `${prefix}alpha\n\nbeta gamma\n\nmath $x^2$\n\nomega`,
       () => [{ from: 0, to: prefix.length, insert }],

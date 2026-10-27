@@ -1,4 +1,6 @@
 export async function replaceRichText(page, target, text) {
+  if (await target.evaluate((element) => element.matches('.cm-content')))
+    return replaceSourceText(page, target, text)
   await target.evaluate((element) => {
     const editor = element.closest('.tiptap').editor
     // DOM-only fill ranges race ProseMirror's deferred focus reconciliation.

@@ -2,12 +2,15 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import {
   electron,
   startupDiagnostics,
   waitForDocumentEditor,
 } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { pressShortcut, replaceSourceText } from './keyboard.mjs'
 
 test('sidebar starts hidden, stays open while typing, and navigates the page outline in either editor', {
@@ -25,6 +28,7 @@ test('sidebar starts hidden, stays open while typing, and navigates the page out
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(6500)
   await page
     .getByRole('textbox', { name: /document editor/i })
@@ -86,16 +90,33 @@ test('sidebar starts hidden, stays open while typing, and navigates the page out
     .waitFor()
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
   await outline.getByRole('treeitem', { name: /^alpha$/i, exact: true }).click()
-  await page.waitForFunction(() =>
-    document.activeElement?.classList.contains('tiptap'),
+  await page.waitForFunction(
+    (engine) =>
+      document.activeElement?.classList.contains(
+        engine === 'tiptap' ? 'tiptap' : 'cm-content',
+      ),
+    t.formattedEngine,
   )
-  assert.equal(
-    await page.evaluate(
-      () =>
-        window.getSelection()?.anchorNode?.parentElement?.closest('h1')
-          ?.textContent,
-    ),
-    'alpha',
+  await t.test(
+    'outline navigation exposes rendered heading text',
+    {
+      todo:
+        t.formattedEngine === 'codemirror'
+          ? 'formatted gap marker-007: outline navigation must expose rendered heading text'
+          : undefined,
+    },
+    async () => {
+      assert.equal(
+        await page.evaluate(
+          () =>
+            window
+              .getSelection()
+              ?.anchorNode?.parentElement?.closest('h1, [role="heading"]')
+              ?.textContent,
+        ),
+        'alpha',
+      )
+    },
   )
   await pressShortcut(
     app,
@@ -139,6 +160,7 @@ test('outline nesting follows the cursor and sidebar view pins survive reload', 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(6500)
   await page.getByRole('button', { name: /^source view$/i }).click()
   const source = page.getByRole('textbox', { name: /markdown editor/i })
@@ -187,7 +209,7 @@ test('outline nesting follows the cursor and sidebar view pins survive reload', 
   await active('beta')
   await page.getByRole('button', { name: /^normal$/i }).click()
   await page
-    .locator('.tiptap p')
+    .locator('.rich-pane .tiptap p, .rich-pane .cm-line')
     .filter({ hasText: /^alpha body$/ })
     .click()
   await active('alpha')
@@ -202,7 +224,7 @@ test('outline nesting follows the cursor and sidebar view pins survive reload', 
     .click()
   await active('final')
   await page
-    .locator('.tiptap p')
+    .locator('.rich-pane .tiptap p, .rich-pane .cm-line')
     .filter({ hasText: /^deep body$/ })
     .click()
   await active('deep')

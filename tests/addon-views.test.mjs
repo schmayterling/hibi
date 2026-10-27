@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -99,6 +102,7 @@ test('accepted document navigation reveals documents and retains addon tab sessi
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await page.waitForFunction(() => window.navigationView)
   await page.evaluate(() => {
     window.navigationView.open({ id: 'session' })
@@ -125,11 +129,32 @@ test('accepted document navigation reveals documents and retains addon tab sessi
     })
     await editor.waitFor()
     await idle()
-    assert.equal(await editor.textContent(), content)
+    // Compare the visible document and exact source.
+    if (
+      t.formattedEngine === 'codemirror' &&
+      editorName === 'Document editor'
+    ) {
+      assert.equal(
+        await editor.evaluate((element) => {
+          const text = element.cloneNode(true)
+          text
+            .querySelectorAll('.hibi-lp-marker, .cm-placeholder')
+            .forEach((marker) => {
+              marker.remove()
+            })
+          return text.textContent
+        }),
+        content,
+      )
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        content ? `# ${content}` : '',
+      )
+    } else assert.equal(await editor.textContent(), content)
     assert.equal(await addonPanel.isVisible(), false)
     if (capture)
       await page.screenshot({
-        path: `test-results/addon-navigation-${capture}.png`,
+        path: `test-results/addon-navigation-${t.formattedEngine}-${capture}.png`,
       })
     await addonTab.click()
     await retained()
@@ -301,7 +326,10 @@ test('accepted document navigation reveals documents and retains addon tab sessi
         .waitFor()
       await replaceRichText(
         page,
-        documentPanel.locator('.tiptap'),
+        documentPanel.getByRole('textbox', {
+          name: 'Document editor',
+          exact: true,
+        }),
         'Unsaved navigation draft',
       )
       await clickMenu(app, 'Settings')
@@ -446,6 +474,7 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   const editor = page
     .locator('#document-editor-panel')
     .getByRole('textbox', { name: 'Document editor', exact: true })
@@ -578,7 +607,9 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
   const firstRevision = (await page.evaluate(() => window.hibi.getDocument()))
     .revision
   await splitTab(app, page, second)
-  const leftEditor = page.locator('.editor-page[data-side="left"] .tiptap')
+  const leftEditor = page.locator(
+    '.editor-page[data-side="left"] .rich-pane :is(.tiptap, .cm-content)',
+  )
   const leftNode = await leftEditor.elementHandle()
   await waitForAsync(
     page,
@@ -611,7 +642,9 @@ test('scoped views preserve sessions, pin documents, contain lazy failures, and 
     await page.evaluate(
       (node) =>
         node ===
-        document.querySelector('.editor-page[data-side="left"] .tiptap'),
+        document.querySelector(
+          '.editor-page[data-side="left"] .rich-pane :is(.tiptap, .cm-content)',
+        ),
       leftNode,
     ),
     true,

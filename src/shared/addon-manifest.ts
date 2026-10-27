@@ -142,15 +142,17 @@ export function parseAddonManifest(
             'formatted',
             'markdown',
             'modalEditing',
-          ].includes(value),
+          ].includes(value) ||
+          (value === 'formatted' && data.apiVersion !== 3),
       ))
   )
     throw new Error('The addon lists invalid SDK capabilities.')
   if (
     data.activation !== undefined &&
-    !['command', 'source', 'rich', 'formatted'].includes(
+    (!['command', 'source', 'rich', 'formatted'].includes(
       String(data.activation),
-    )
+    ) ||
+      (data.activation === 'formatted' && data.apiVersion !== 3))
   )
     throw new Error('The addon activation mode is invalid.')
   if (

@@ -1,0 +1,135 @@
+name: pin published docs
+
+on:
+  repository_dispatch:
+    types: [hibi-docs-published]
+  workflow_dispatch:
+    inputs:
+      docs_sha:
+        description: full hibigarden/docs commit that just published
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: docs-pin
+  cancel-in-progress: false
+
+jobs:
+  pin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: resolve published revision
+        id: rev
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_SHA: ${{ inputs.docs_sha }}
+          PAYLOAD_SHA: ${{ github.event.client_payload.docs_sha }}
+        run: |
+          set -euo pipefail
+          sha=$PAYLOAD_SHA
+          if [[ $EVENT == workflow_dispatch ]]; then
+            sha=$INPUT_SHA
+          fi
+          if [[ ! $sha =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error::docs_sha must be a full commit SHA'
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: published commit is still docs main
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOCS_SHA: ${{ steps.rev.outputs.sha }}
+        run: |
+          set -euo pipefail
+          main=$(gh api repos/hibigarden/docs/commits/main --jq .sha)
+          if [[ $main != "$DOCS_SHA" ]]; then
+            echo "::notice::hibigarden/docs main is $main, not $DOCS_SHA; not pinning"
+            echo 'pin=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'pin=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.current.outputs.pin == 'true'
+        with:
+          ref: main
+
+      - uses: DeterminateSystems/nix-installer-action@main
+        if: steps.current.outputs.pin == 'true'
+
+      - name: open a pull request for the published pin
+        if: steps.current.outputs.pin == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOCS_SHA: ${{ steps.rev.outputs.sha }}
+        run: |
+          set -euo pipefail
+          json=$(nix shell nixpkgs#nix-prefetch-github --command \
+            nix-prefetch-github --rev "$DOCS_SHA" --json hibigarden docs)
+          hash=$(printf '%s\n' "$json" | sed -n 's/^[[:space:]]*"hash": "\(sha256-[A-Za-z0-9+/=]*\)".*/\1/p')
+          if [[ ! $hash =~ ^sha256-[A-Za-z0-9+/]+=$ ]]; then
+            echo '::error::nix-prefetch-github did not return a fetchFromGitHub hash'
+            printf '%s\n' "$json"
+            exit 1
+          fi
+
+          printf '%s\n' "$DOCS_SHA" > docs-revision
+          HASH=$hash node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs"
+            const hash = process.env.HASH
+            const path = "nix/package.nix"
+            const source = readFileSync(path, "utf8")
+            const marker = "hash = \"" + hash + "\";"
+            const next = source.replace(/hash = "sha256-[^"]+";/, marker)
+            if (next.split(marker).length !== 2) {
+              console.error("nix/package.nix has no single fetchFromGitHub hash assignment")
+              process.exit(1)
+            }
+            writeFileSync(path, next)
+          '
+
+          git add -- docs-revision nix/package.nix
+          if git diff --cached --quiet; then
+            echo "::notice::main already pins $DOCS_SHA at $hash"
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          branch="docs-pin/$DOCS_SHA"
+          git checkout -B "$branch"
+          git commit -m "chore(nix): pin published docs ${DOCS_SHA:0:12}" \
+            -m "Point docs-revision and the fetchFromGitHub hash at the documentation commit that just published."
+
+          if git fetch origin "$branch"; then
+            git push --force-with-lease origin "HEAD:$branch"
+          else
+            git push origin "HEAD:$branch"
+          fi
+
+          if ! gh pr view "$branch" --json number --jq .number >/dev/null 2>&1; then
+            gh pr create --base main --head "$branch" \
+              --title "chore(nix): pin published docs ${DOCS_SHA:0:12}" \
+              --body "$(cat <<EOF
+          Published [hibigarden/docs](https://github.com/hibigarden/docs) at \`$DOCS_SHA\`.
+
+          This moves \`docs-revision\` and the \`fetchFromGitHub\` hash in \`nix/package.nix\` to that archive (\`$hash\`). The app keeps its current documentation snapshot until this is merged.
+
+          The Nix workflow does not start on this branch. GitHub does not run workflows for commits pushed with the default workflow token. Push an empty commit to this branch if you want that check before merging.
+          EOF
+          )"
+          fi
+
+          gh pr list --state open --limit 30 --json number,title,headRefName \
+            --jq '.[] | select(.title | startswith("chore(nix): pin published docs ")) | "\(.number)\t\(.headRefName)"' |
+            while IFS=$'\t' read -r number head; do
+              if [[ $head != "$branch" ]]; then
+                gh pr close "$number" --comment "Superseded by ${DOCS_SHA}."
+              fi
+            done

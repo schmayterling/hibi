@@ -9,8 +9,11 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut, replaceSourceText } from './keyboard.mjs'
 import { NATIVE_COMPILER_READY_TIMEOUT, waitForAsync } from './poll.mjs'
 import { renameDocument } from './rename.mjs'
@@ -49,6 +52,7 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  const rich = await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(7000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -414,20 +418,30 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     .getByRole('treeitem', { name: /^blocks\.md$/i, exact: true })
     .click()
   await page.getByAltText('Typst block preview', { exact: true }).waitFor()
-  assert.equal(await page.locator('.tiptap h1').innerText(), 'markdown')
-  assert.match(
-    await page.locator('.tiptap').innerText(),
-    /keep this paragraph\./,
-  )
-  assert.equal((await read()).markdown, markdown)
   assert.equal(
-    await page.locator('.tiptap').getAttribute('contenteditable'),
-    'false',
+    await rich.getByRole('heading', { level: 1 }).innerText(),
+    'markdown',
+  )
+  assert.match(await rich.innerText(), /keep this paragraph\./)
+  assert.equal((await read()).markdown, markdown)
+  await t.test(
+    'split formatted view is read-only',
+    {
+      todo:
+        t.formattedEngine === 'codemirror'
+          ? 'formatted gap split-014: split formatted view must remain read-only'
+          : undefined,
+    },
+    async () => {
+      assert.equal(await rich.getAttribute('contenteditable'), 'false')
+    },
   )
   await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.editor?.isEditable,
-  )
+  if (t.formattedEngine === 'tiptap')
+    await page.waitForFunction(
+      () => document.querySelector('.tiptap')?.editor?.isEditable,
+    )
+  else await rich.and(page.locator('[contenteditable="true"]')).waitFor()
   for (const equation of ['$ x^3 $', '$ x^4 $']) {
     await page
       .getByRole('button', { name: /^edit typst block$/i, exact: true })
@@ -460,9 +474,18 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
     ['undo', '$ x^3 $'],
     ['redo', '$ x^4 $'],
   ]) {
-    await page.evaluate((command) => {
-      document.querySelector('.tiptap').editor.commands[command]()
-    }, command)
+    if (t.formattedEngine === 'tiptap')
+      await page.evaluate((command) => {
+        document.querySelector('.tiptap').editor.commands[command]()
+      }, command)
+    else
+      await rich.press(
+        command === 'undo'
+          ? 'ControlOrMeta+z'
+          : process.platform === 'win32'
+            ? 'Control+y'
+            : 'ControlOrMeta+Shift+z',
+      )
     const expected = markdown.replace(
       '$ sum_(k=1)^n k = (n(n+1))/2 $',
       equation,
@@ -549,11 +572,10 @@ test('typst documents and markdown blocks preview locally, export, and preserve 
   await page.getByRole('tab', { name: /^addon manager$/i, exact: true }).click()
   await page.locator('#addon-typst').click()
   await page.getByRole('button', { name: /^back to app$/i }).click()
-  await page.locator('.tiptap pre').waitFor()
-  assert.equal(
-    await page.locator('.tiptap').getAttribute('contenteditable'),
-    'true',
-  )
+  if (t.formattedEngine === 'tiptap')
+    await page.locator('.tiptap pre').waitFor()
+  else await rich.getByText('$ x^4 $', { exact: true }).waitFor()
+  assert.equal(await rich.getAttribute('contenteditable'), 'true')
   assert.equal(
     (await read()).markdown,
     markdown.replace('$ sum_(k=1)^n k = (n(n+1))/2 $', '$ x^4 $'),

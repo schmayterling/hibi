@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
+import unit from 'node:test'
 import { Marked } from 'marked'
 import { alertMarkdown } from '../src/addons/markdown/alerts.ts'
 import {
@@ -13,6 +13,10 @@ import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
 import { installSyntaxPreferences } from '../src/renderer/src/syntax-parser.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
+import {
   clickMenu,
   pressShortcut,
   replaceRichText,
@@ -21,60 +25,66 @@ import {
 import { waitForAsync } from './poll.mjs'
 import { uiName } from './ui.mjs'
 
-test('syntax controls preserve raw tokens in both lexer and export paths', () => {
-  const parser = installSyntaxPreferences(
-    new Marked({ gfm: true }, alertMarkdown, textExtrasMarkdown),
-  )
-  const unregister = markdownSyntax.register('test', {
-    id: 'alerts',
-    label: 'alerts',
-    group: 'test',
-    level: 'block',
-    matches: (token) => token.type === 'githubAlert',
-  })
-  const source =
-    '# one\n\n## two\n\n**bold** and *italic*\n\n> [!WARNING]\n> keep **this**'
-  try {
-    for (const id of ['core.heading-1', 'core.bold', 'test.alerts'])
-      markdownSyntax.setEnabled(id, false)
-    const html = parser.parse(source)
-    assert.match(html, /hibi-literal-block"># one/)
-    assert.match(html, /<h2>two<\/h2>/)
-    assert.match(html, /hibi-literal-inline">\*\*bold\*\*/)
-    assert.match(html, /<em>italic<\/em>/)
-    assert.ok(html.includes('&gt; [!WARNING]\n&gt; keep **this**'))
-    const tokens = new parser.Lexer(parser.defaults).lex(source)
-    assert.equal(tokens[0].type, 'hibiLiteralBlock')
-    assert.equal(tokens.at(-1).type, 'hibiLiteralBlock')
-    markdownSyntax.setEnabled('core.bold', true)
-    assert.match(parser.parse('**bold**'), /<strong>bold<\/strong>/)
-  } finally {
-    for (const id of ['core.heading-1', 'core.bold', 'test.alerts'])
-      markdownSyntax.setEnabled(id, true)
-    unregister()
-  }
-})
+unit(
+  'syntax controls preserve raw tokens in both lexer and export paths',
+  () => {
+    const parser = installSyntaxPreferences(
+      new Marked({ gfm: true }, alertMarkdown, textExtrasMarkdown),
+    )
+    const unregister = markdownSyntax.register('test', {
+      id: 'alerts',
+      label: 'alerts',
+      group: 'test',
+      level: 'block',
+      matches: (token) => token.type === 'githubAlert',
+    })
+    const source =
+      '# one\n\n## two\n\n**bold** and *italic*\n\n> [!WARNING]\n> keep **this**'
+    try {
+      for (const id of ['core.heading-1', 'core.bold', 'test.alerts'])
+        markdownSyntax.setEnabled(id, false)
+      const html = parser.parse(source)
+      assert.match(html, /hibi-literal-block"># one/)
+      assert.match(html, /<h2>two<\/h2>/)
+      assert.match(html, /hibi-literal-inline">\*\*bold\*\*/)
+      assert.match(html, /<em>italic<\/em>/)
+      assert.ok(html.includes('&gt; [!WARNING]\n&gt; keep **this**'))
+      const tokens = new parser.Lexer(parser.defaults).lex(source)
+      assert.equal(tokens[0].type, 'hibiLiteralBlock')
+      assert.equal(tokens.at(-1).type, 'hibiLiteralBlock')
+      markdownSyntax.setEnabled('core.bold', true)
+      assert.match(parser.parse('**bold**'), /<strong>bold<\/strong>/)
+    } finally {
+      for (const id of ['core.heading-1', 'core.bold', 'test.alerts'])
+        markdownSyntax.setEnabled(id, true)
+      unregister()
+    }
+  },
+)
 
-test('subscript and discord small text preserve code, strike, and ordinary text', () => {
-  const parser = new Marked({ gfm: true }, textExtrasMarkdown)
-  assert.match(
-    parser.parse('H~2~O ~~strike~~'),
-    /H<sub>2<\/sub>O <del>strike<\/del>/,
-  )
-  assert.match(
-    parser.parse('-# small **text**'),
-    /class="markdown-subtext">small <strong>text<\/strong>/,
-  )
-  assert.equal(detectTextExtras('`~2~`\n\n```md\n-# code\n```'), false)
-  assert.equal(detectTextExtras('H~2~O'), true)
-  for (const source of [
-    '-#no space',
-    'before -# ordinary',
-    ' ~ bad~',
-    '~bad ~',
-  ])
-    assert.doesNotMatch(parser.parse(source), /<sub>|markdown-subtext/)
-})
+unit(
+  'subscript and discord small text preserve code, strike, and ordinary text',
+  () => {
+    const parser = new Marked({ gfm: true }, textExtrasMarkdown)
+    assert.match(
+      parser.parse('H~2~O ~~strike~~'),
+      /H<sub>2<\/sub>O <del>strike<\/del>/,
+    )
+    assert.match(
+      parser.parse('-# small **text**'),
+      /class="markdown-subtext">small <strong>text<\/strong>/,
+    )
+    assert.equal(detectTextExtras('`~2~`\n\n```md\n-# code\n```'), false)
+    assert.equal(detectTextExtras('H~2~O'), true)
+    for (const source of [
+      '-#no space',
+      'before -# ordinary',
+      ' ~ bad~',
+      '~bad ~',
+    ])
+      assert.doesNotMatch(parser.parse(source), /<sub>|markdown-subtext/)
+  },
+)
 
 test('syntax settings preserve edits, update rich formatting, and discover addon features', {
   timeout: 45000,
@@ -103,6 +113,8 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
   })
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   const rich = page.getByRole('textbox', { name: /document editor/i })
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  const cm = t.formattedEngine === 'codemirror'
   await rich.waitFor()
   await pressShortcut(app, `${mod}+Shift+]`)
   const source = page.getByRole('textbox', { name: /markdown editor/i })
@@ -113,12 +125,13 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()
-  await rich.locator('sub').waitFor()
+  await rich.locator('sub, .hibi-lp-subscript').waitFor()
+  await rich.locator('.github-alert, .hibi-lp-alert').first().waitFor()
   assert.equal(
     await rich.locator('.markdown-subtext').innerText(),
     'small text',
   )
-  assert.equal(await rich.locator('s').innerText(), 'strike')
+  assert.equal(await rich.locator('s, .hibi-lp-strike').innerText(), 'strike')
   const settings = async () => {
     await clickMenu(app, 'Settings')
     await page.getByRole('tab', { name: /^syntax$/i, exact: true }).click()
@@ -131,7 +144,7 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
   await page.waitForFunction(
     () =>
       !document.querySelector(
-        '.tiptap h1, .tiptap strong, .tiptap sub, .tiptap .github-alert, .tiptap .markdown-subtext',
+        '.rich-pane :is(h1, strong, sub, .hibi-lp-h1, .hibi-lp-strong, .hibi-lp-subscript, .github-alert, .hibi-lp-alert, .hibi-lp-alert-title, .hibi-lp-alert-body, .markdown-subtext)',
       ),
   )
   assert.equal(
@@ -141,18 +154,41 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
   await page
     .getByRole('button', { name: /^back to app$/i, exact: true })
     .click()
-  assert.equal(await rich.locator('h2').innerText(), 'two')
+  assert.equal(await rich.locator('h2, .hibi-lp-h2').innerText(), 'two')
   assert.match(await rich.innerText(), /\*\*bold\*\* H~2~O/)
-  assert.equal(await rich.getAttribute('contenteditable'), 'false')
+  await t.test(
+    'split formatted view is read-only',
+    {
+      todo: cm
+        ? 'formatted gap split-012: split formatted view must remain read-only'
+        : undefined,
+    },
+    async () => {
+      assert.equal(await rich.getAttribute('contenteditable'), 'false')
+    },
+  )
   await pressShortcut(app, `${mod}+Shift+[`)
   await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.editor?.isEditable,
+    (cm) =>
+      cm
+        ? document.querySelector('.rich-pane [contenteditable="true"]')
+        : document.querySelector('.tiptap')?.editor?.isEditable,
+    cm,
   )
-  await replaceRichText(
-    page,
-    rich.locator('.hibi-literal-block').filter({ hasText: /# one/i }),
-    '# changed',
-  )
+  if (cm) {
+    await rich.evaluate((element) => {
+      const view = element.cmTile.root.view
+      const line = view.state.doc.line(1)
+      view.dispatch({ selection: { anchor: line.from, head: line.to } })
+      view.focus()
+    })
+    await page.keyboard.insertText('# changed')
+  } else
+    await replaceRichText(
+      page,
+      rich.locator('.hibi-literal-block').filter({ hasText: /# one/i }),
+      '# changed',
+    )
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.includes('# changed'),
   )
@@ -161,7 +197,13 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
   assert.ok(edited.includes('> [!WARNING]\n> hello'))
   await pressShortcut(app, `${mod}+Shift+\\`)
   await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.editor?.isEditable === false,
+    (cm) =>
+      cm
+        ? document.querySelector(
+            '.editor-panes.mode-side-by-side .rich-pane .cm-content',
+          )
+        : document.querySelector('.tiptap')?.editor?.isEditable === false,
+    cm,
   )
   await settings()
   for (const name of ['heading 1', 'bold', 'alerts', 'subscript', 'small text'])
@@ -179,8 +221,8 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
     .click()
   // Schema changes recreate the editor asynchronously; wait for the edited content.
   await rich
-    .locator('h1')
-    .filter({ hasText: /^changed$/ })
+    .locator('h1, .hibi-lp-h1')
+    .filter({ hasText: cm ? /^#? ?changed$/ : /^changed$/ })
     .waitFor()
     .catch(async (cause) => {
       const state = await page.evaluate(async () => ({
@@ -192,15 +234,19 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
         cause,
       })
     })
+  await source.focus()
+  await page.waitForFunction(
+    () => !document.querySelector('.rich-pane .hibi-lp-marker'),
+  )
   assert.equal(
-    await rich.locator('h1').innerText(),
+    await rich.locator('h1, .hibi-lp-h1').innerText(),
     'changed',
     JSON.stringify({
       main: (await page.evaluate(() => window.hibi.getDocument())).markdown,
       source: await source.innerText(),
     }),
   )
-  assert.equal(await rich.locator('sub').innerText(), '2')
+  assert.equal(await rich.locator('sub, .hibi-lp-subscript').innerText(), '2')
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     edited,
@@ -224,13 +270,22 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
     edited,
   )
   await pressShortcut(app, `${mod}+Shift+[`)
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.editor?.isEditable,
-  )
+  if (cm) await waitForDocumentEditor(app, page)
+  else
+    await page.waitForFunction(
+      () => document.querySelector('.tiptap')?.editor?.isEditable,
+    )
   // Keep the detected flavor present while exercising rich input rules.
   // Set the editor selection directly; DOM selection changes are asynchronous.
   await rich.evaluate((element) => {
-    element.editor.commands.focus('end')
+    if (element.matches('.cm-content')) {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        selection: { anchor: view.state.doc.length },
+        scrollIntoView: true,
+      })
+      view.focus()
+    } else element.editor.commands.focus('end')
   })
   await rich.press('Enter')
   await rich.press('Enter')
@@ -246,6 +301,12 @@ test('syntax settings preserve edits, update rich formatting, and discover addon
     .waitFor()
   await rich.press('Enter')
   await rich.pressSequentially('normal again')
-  assert.equal(await rich.locator('p').last().innerText(), 'normal again')
+  assert.equal(
+    await rich
+      .locator(cm ? '.cm-line' : 'p')
+      .last()
+      .innerText(),
+    'normal again',
+  )
   assert.deepEqual(errors, [])
 })

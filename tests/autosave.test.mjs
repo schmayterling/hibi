@@ -2,9 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -27,6 +30,7 @@ test('autosave keeps a dirty tab scheduled after focus moves to another tab', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(6500)
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await rich.waitFor()
@@ -114,6 +118,7 @@ test('autosave preserves later edits, pauses on external changes, and never prom
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(6500)
   const rich = page.getByRole('textbox', { name: /document editor/i })
   await rich.waitFor()
@@ -148,8 +153,8 @@ test('autosave preserves later edits, pauses on external changes, and never prom
   )
   // Native state can arrive before React replaces the previous tab's editor.
   await page.waitForFunction(() => {
-    const editor = document.querySelector('.tiptap')?.editor
-    return editor?.isEditable && editor.getText() === 'original'
+    const editor = document.querySelector('[aria-label="Document editor"]')
+    return editor?.isContentEditable && editor.textContent === 'original'
   })
   await app.evaluate(({ ipcMain }) => {
     const save = ipcMain._invokeHandlers.get('document:autosave')
@@ -199,8 +204,9 @@ test('autosave preserves later edits, pauses on external changes, and never prom
   assert.equal(await readFile(file, 'utf8'), 'another local edit')
   await page.waitForFunction(
     () =>
-      document.querySelector('.tiptap')?.getAttribute('contenteditable') ===
-      'true',
+      document
+        .querySelector('[aria-label="Document editor"]')
+        ?.getAttribute('contenteditable') === 'true',
   )
   await replaceRichText(page, rich, 'autosave resumes')
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)

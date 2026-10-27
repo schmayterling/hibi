@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  testFormattedEngines as it,
+  selectFormattedEngine,
+} from './formatted-engine.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -11,13 +14,14 @@ import {
   replaceSourceText,
 } from './keyboard.mjs'
 
-test('empty entry, three views, and lossless source switching', {
+it('empty entry, three views, and lossless source switching', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-editor-'))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
+  let cdp
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({
@@ -25,19 +29,38 @@ test('empty entry, three views, and lossless source switching', {
         checkboxChecked: false,
       })
     })
+    await cdp?.detach()
     await app.close()
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   await page.emulateMedia({ reducedMotion: 'reduce' })
+  const cm = t.formattedEngine === 'codemirror'
+  await selectFormattedEngine(app, page, t.formattedEngine)
   const rich = page.getByRole('textbox', { name: /document editor/i })
+  if (cm) {
+    cdp = await page.context().newCDPSession(page)
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  }
   await waitForDocumentEditor(app, page)
-  assert.equal((await rich.innerText()).trim(), '')
-  assert.equal(
-    await rich.locator('p').getAttribute('data-placeholder'),
-    'Start typing',
-  )
+  if (cm) {
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      '',
+    )
+    await rich.locator('.cm-placeholder').waitFor({ state: 'attached' })
+    assert.equal(
+      await rich.locator('.cm-placeholder').textContent(),
+      'Start typing',
+    )
+  } else {
+    assert.equal((await rich.innerText()).trim(), '')
+    assert.equal(
+      await rich.locator('p').getAttribute('data-placeholder'),
+      'Start typing',
+    )
+  }
   await page.waitForFunction(
     () =>
       (
@@ -61,7 +84,7 @@ test('empty entry, three views, and lossless source switching', {
     .click()
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   await source.waitFor()
-  const geometry = await page.evaluate(() => {
+  const geometry = await page.evaluate((cm) => {
     const panes = document
       .querySelector('.editor-panes')
       .getBoundingClientRect()
@@ -79,7 +102,9 @@ test('empty entry, three views, and lossless source switching', {
         ),
       bottom: panes.bottom,
       viewport: innerHeight,
-      padding: getComputedStyle(document.querySelector('.tiptap')).paddingTop,
+      padding: getComputedStyle(
+        document.querySelector(cm ? '.rich-pane .cm-content' : '.tiptap'),
+      ).paddingTop,
       besideSidebar:
         title.x >
         document.querySelector('.workspace-sidebar').getBoundingClientRect()
@@ -90,7 +115,7 @@ test('empty entry, three views, and lossless source switching', {
         getComputedStyle(document.querySelector('.document-title'))
           .borderWidth === '0px',
     }
-  })
+  }, cm)
   assert.equal(geometry.top, geometry.toolbarBottom)
   assert.equal(geometry.bottom, geometry.viewport - 32)
   assert.equal(geometry.padding, '48px')
@@ -98,12 +123,17 @@ test('empty entry, three views, and lossless source switching', {
   assert.equal(geometry.flat, true)
   await clickMenu(app, 'Settings')
   await page.getByRole('main', { name: /settings/i }).waitFor()
+  if (cm) await rich.waitFor({ state: 'hidden' })
   assert.equal(await rich.isVisible(), false)
   await page.getByRole('tab', { name: /^editor$/i, exact: true }).click()
   await page.getByRole('slider', { name: /content padding/i }).press('Home')
   assert.equal(
     await page.evaluate(
-      () => getComputedStyle(document.querySelector('.tiptap')).paddingTop,
+      (cm) =>
+        getComputedStyle(
+          document.querySelector(cm ? '.rich-pane .cm-content' : '.tiptap'),
+        ).paddingTop,
+      cm,
     ),
     '0px',
   )
@@ -114,7 +144,20 @@ test('empty entry, three views, and lossless source switching', {
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await replaceSourceText(page, source, markdown)
   await rich.getByRole('heading', { name: /^hello$/i, exact: true }).waitFor()
-  assert.equal(await rich.locator('strong').innerText(), 'bold')
+  assert.equal(
+    await rich.locator(cm ? '.hibi-lp-strong' : 'strong').innerText(),
+    'bold',
+  )
+  if (cm)
+    assert.equal(
+      await rich
+        .locator('.hibi-lp-strong')
+        .evaluate(
+          (element) =>
+            Number.parseFloat(getComputedStyle(element).fontWeight) >= 600,
+        ),
+      true,
+    )
   assert.equal(await rich.getByRole('checkbox').isChecked(), true)
   assert.equal(
     await rich.getByRole('cell', { name: /^two$/i, exact: true }).innerText(),
@@ -137,7 +180,25 @@ test('empty entry, three views, and lossless source switching', {
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()
-  assert.equal(await rich.getAttribute('contenteditable'), 'false')
+  await t.test(
+    'split formatted view is read-only',
+    {
+      todo: cm
+        ? 'formatted gap split-002: split formatted view must remain read-only'
+        : undefined,
+    },
+    async () => {
+      assert.equal(await rich.getAttribute('contenteditable'), 'false')
+    },
+  )
+  if (cm) {
+    await rich.locator('.hibi-lp-codeblock').waitFor()
+    assert.ok(
+      (await rich.innerText()).includes(
+        '<div data-value="keep">custom html</div>',
+      ),
+    )
+  }
   assert.equal(
     (await source.locator('.cm-line').allTextContents()).join('\n'),
     extended,
@@ -167,7 +228,11 @@ test('empty entry, three views, and lossless source switching', {
   await page.keyboard.press('Escape')
   assert.equal(
     await page.evaluate(
-      () => getComputedStyle(document.querySelector('.tiptap')).paddingTop,
+      (cm) =>
+        getComputedStyle(
+          document.querySelector(cm ? '.rich-pane .cm-content' : '.tiptap'),
+        ).paddingTop,
+      cm,
     ),
     '0px',
   )
@@ -212,9 +277,10 @@ test('empty entry, three views, and lossless source switching', {
   )
 })
 
-test('rich find status follows matches and selection while typing', {
+it('rich find status follows matches and selection while typing', {
   timeout: 30000,
 }, async (t) => {
+  const engine = t.formattedEngine
   const profile = await mkdtemp(join(tmpdir(), 'hibi-find-status-'))
   const file = join(profile, 'find.md')
   await writeFile(file, 'alpha beta alpha\n')
@@ -229,28 +295,24 @@ test('rich find status follows matches and selection while typing', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await waitForDocumentEditor(app, page)
+  const rich = await selectFormattedEngine(app, page, engine)
   const count = (text) =>
     page.waitForFunction(
       (text) => document.querySelector('.find-count')?.textContent === text,
       text,
     )
-  const edit = (change) =>
-    page.evaluate((change) => {
-      const editor = document.querySelector('.tiptap').editor
-      const text = editor.state.doc.textContent
-      const at = (index) => index + 1
-      if (change === 'beta')
-        editor.commands.setTextSelection(at(text.indexOf('beta')))
-      else if (change === 'append')
-        editor.commands.insertContentAt(at(text.length), ' alpha')
-      else if (change === 'last')
-        editor.commands.setTextSelection({
-          from: at(text.lastIndexOf('alpha')),
-          to: at(text.lastIndexOf('alpha') + 5),
-        })
-      else editor.commands.insertContentAt(at(text.indexOf('beta')), 'x')
-    }, change)
+  const edit = async (change) => {
+    if (change === 'append' || change === 'last') {
+      await rich.press('End')
+      if (change === 'append') await page.keyboard.insertText(' alpha')
+      else
+        for (let i = 0; i < 5; i++) await page.keyboard.press('Shift+ArrowLeft')
+    } else {
+      await rich.press('Home')
+      for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowRight')
+      if (change === 'type') await page.keyboard.insertText('x')
+    }
+  }
   await pressShortcut(
     app,
     process.platform === 'darwin' ? 'Meta+f' : 'Control+f',

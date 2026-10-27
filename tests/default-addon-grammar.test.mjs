@@ -2,12 +2,16 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import {
   electron,
   stopElectronTree,
   waitForDocumentEditor,
 } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
+import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 // A default-on flavor missing from src/shared/built-in-grammar.ts turns off the
@@ -44,8 +48,9 @@ async function open(t, addons, source = original) {
     async () => (await window.hibi?.getDocument())?.name === 'note.md',
   )
   await waitForDocumentEditor(app, page)
-  await page.locator('.tiptap .mermaid-block').waitFor()
-  return page
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  await page.locator('.rich-pane .mermaid-block').waitFor()
+  return { app, page }
 }
 
 async function sourceOutline(page, count) {
@@ -73,6 +78,9 @@ async function sourceOutline(page, count) {
 
 // Typing at the end of the last paragraph parses at most that paragraph when a
 // certified fast path exists; otherwise the whole body is parsed as candidates.
+// These PM parser counters are implementation-exclusive. CM native typing,
+// history and outline are tested below; live-preview.test.mjs checks bounded
+// parsing in "a 50 MiB note renders and edits with viewport-bounded work".
 async function typedParses(page, text) {
   await page.evaluate(
     () => new Promise((resolve) => requestIdleCallback(resolve)),
@@ -101,7 +109,57 @@ async function typedParses(page, text) {
 test('default addons keep plain visual typing, caret history and the source outline', {
   timeout: 60000,
 }, async (t) => {
-  const page = await open(t)
+  const { app, page } = await open(t)
+  if (t.formattedEngine === 'codemirror') {
+    const rich = page.getByRole('textbox', {
+      name: 'Document editor',
+      exact: true,
+    })
+    await rich.evaluate((element) => {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        selection: { anchor: view.state.doc.length - 1 },
+        scrollIntoView: true,
+      })
+    })
+    await rich.focus()
+    await page.keyboard.insertText('s')
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      original.replace('elsewhere', 'elsewheres'),
+    )
+    const word = await rich.evaluate((element) => {
+      const view = element.cmTile.root.view
+      const from = view.state.doc.toString().indexOf('needle')
+      view.dispatch({
+        selection: { anchor: from, head: from + 6 },
+        scrollIntoView: true,
+      })
+      return { from, to: from + 6 }
+    })
+    await page.keyboard.insertText('pin')
+    await waitForAsync(page, async () =>
+      (await window.hibi.getDocument()).markdown.includes('pin word'),
+    )
+    await pressShortcut(
+      app,
+      process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+    )
+    await waitForAsync(page, async () =>
+      (await window.hibi.getDocument()).markdown.includes('needle word'),
+    )
+    assert.equal(
+      await rich.evaluate(
+        (element) => element.cmTile.root.view.state.selection.main.to,
+      ),
+      word.to,
+      'undo keeps the caret at the restored word',
+    )
+    assert.deepEqual(await sourceOutline(page, 2), ['Title', 'Next'])
+    return
+  }
   assert.deepEqual(
     await typedParses(page, 's'),
     [],
@@ -144,11 +202,21 @@ test('a quoted diagram keeps the source outline in step with the rich view', {
   timeout: 60000,
 }, async (t) => {
   // The quote ends at its diagram, so the next two lines are a setext heading.
-  const page = await open(
+  const { page } = await open(
     t,
     undefined,
     '> ```mermaid\n> graph TD\n> A-->B\n> ```\noutside\n===\n\n# real\n',
   )
+  if (t.formattedEngine === 'codemirror') {
+    assert.deepEqual(
+      await page
+        .locator('.rich-pane :is(.hibi-lp-h1, .hibi-lp-h2)')
+        .allTextContents(),
+      ['outside', 'real'],
+    )
+    assert.deepEqual(await sourceOutline(page, 2), ['outside', 'real'])
+    return
+  }
   const headings = await page.evaluate(() => {
     const labels = []
     document.querySelector('.tiptap').editor.state.doc.descendants((node) => {
@@ -163,7 +231,43 @@ test('a quoted diagram keeps the source outline in step with the rich view', {
 test('default addons keep the math paragraph proof', {
   timeout: 60000,
 }, async (t) => {
-  const page = await open(t, { math: true })
+  const { app, page } = await open(t, { math: true })
+  if (t.formattedEngine === 'codemirror') {
+    // Tiptap's paragraph-proof parse counts are schema-specific. Native typing
+    // is covered here; bounded CM parsing: live-preview.test.mjs, 50 MiB tests.
+    await page.locator('.rich-pane .katex').waitFor()
+    const rich = page.getByRole('textbox', {
+      name: 'Document editor',
+      exact: true,
+    })
+    await rich.evaluate((element) => {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        selection: { anchor: view.state.doc.length - 1 },
+        scrollIntoView: true,
+      })
+    })
+    await rich.focus()
+    await page.keyboard.insertText('!')
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      original.replace('elsewhere', 'elsewhere!'),
+    )
+    await pressShortcut(
+      app,
+      process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+    )
+    await waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      original,
+    )
+    assert.deepEqual(await sourceOutline(page, 2), ['Title', 'Next'])
+    return
+  }
   assert.equal(
     await page.evaluate(() =>
       Boolean(document.querySelector('.tiptap').editor.schema.nodes.inlineMath),

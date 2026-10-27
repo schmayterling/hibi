@@ -1,0 +1,16 @@
+name: cancel closed pull request checks
+on:
+  # pull_request_target also fires for forks and conflicted pull requests; it checks out nothing.
+  pull_request_target:
+    types: [closed]
+permissions: {}
+concurrency:
+  # check.yml uses this group for pull request runs, so starting here cancels them.
+  group: check-refs/pull/${{ github.event.number }}/merge
+  cancel-in-progress: true
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: 'true'

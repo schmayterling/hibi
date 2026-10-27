@@ -6,7 +6,12 @@ import test from 'node:test'
 import { filterCommands } from '../src/addons/slash-commands/commands.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  testFormattedEngines as it,
+  selectFormattedEngine,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('slash search matches labels, descriptions, and extension keywords without case sensitivity', () => {
   assert.deepEqual(
@@ -67,7 +72,7 @@ test('slash search matches labels, descriptions, and extension keywords without 
   }
 })
 
-test('slash commands work in both editors, preserve undo, and coexist with vim', {
+it('slash commands work in both editors, preserve undo, and coexist with vim', {
   timeout: 60000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-slash-'))
@@ -82,6 +87,7 @@ test('slash commands work in both editors, preserve undo, and coexist with vim',
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(5000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -91,86 +97,163 @@ test('slash commands work in both editors, preserve undo, and coexist with vim',
   const read = () =>
     page.evaluate(async () => (await window.hibi.getDocument()).markdown)
   const undo = process.platform === 'darwin' ? 'Meta+z' : 'Control+z'
+  const setFormattedFixture = (markdown) =>
+    rich.evaluate((element, markdown) => {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: markdown },
+        selection: { anchor: markdown.length },
+      })
+      view.focus()
+    }, markdown)
   await waitForDocumentEditor(app, page)
-  await replaceRichText(page, rich, '/h2')
-  await menu.waitFor()
-  await rich.press('Enter')
-  assert.equal(await rich.locator('h2').count(), 1)
-  await rich.press(undo)
-  assert.equal(await read(), '/h2')
-  await replaceRichText(page, rich, '/h6')
-  await menu.waitFor()
-  await rich.press('Enter')
-  assert.equal(await rich.locator('h6').count(), 1)
-  await replaceRichText(page, rich, '/')
-  await menu.waitFor()
-  await page.waitForFunction(
-    () =>
-      document.querySelectorAll('.slash-menu:popover-open [role="option"]')
-        .length > 12,
+  await t.test(
+    'formatted slash actions retain menu, cancellation and history',
+    async () => {
+      await replaceRichText(page, rich, '/h2')
+      await menu.waitFor()
+      await rich.press('Enter')
+      assert.equal(await rich.getByRole('heading', { level: 2 }).count(), 1)
+      await rich.press(undo)
+      assert.equal(await read(), '/h2')
+      await replaceRichText(page, rich, '/h6')
+      await menu.waitFor()
+      await rich.press('Enter')
+      assert.equal(await rich.getByRole('heading', { level: 6 }).count(), 1)
+      await replaceRichText(page, rich, '/')
+      await menu.waitFor()
+      await page.waitForFunction(
+        () =>
+          document.querySelectorAll('.slash-menu:popover-open [role="option"]')
+            .length > 12,
+      )
+      assert.ok((await menu.getByRole('option').count()) > 12)
+      await menu
+        .getByRole('option', { name: /^text plain paragraph$/i, exact: true })
+        .click()
+      assert.equal(await read(), '')
+      await replaceRichText(page, rich, '/')
+      await menu.waitFor()
+      await rich.press('ArrowDown')
+      await rich.press('Enter')
+      assert.equal(await rich.getByRole('heading', { level: 1 }).count(), 1)
+      await replaceRichText(page, rich, '/quote')
+      await menu.waitFor()
+      await menu
+        .getByRole('option', { name: /^Quotes Indented quotation$/ })
+        .click()
+      assert.equal(
+        await rich
+          .locator(
+            t.formattedEngine === 'tiptap'
+              ? 'blockquote'
+              : '.cm-line.hibi-lp-quote',
+          )
+          .count(),
+        1,
+      )
+      await replaceRichText(page, rich, '/')
+      await menu.waitFor()
+      const beforeDismiss = await read()
+      await rich.press('Escape')
+      await menu.waitFor({ state: 'hidden' })
+      assert.equal(await read(), beforeDismiss)
+      await rich.pressSequentially('literal')
+      assert.equal(await menu.isVisible(), false)
+      if (t.formattedEngine === 'tiptap')
+        await rich.evaluate((element) => {
+          const editor = element.editor
+          editor.commands.setContent('<p>/table</p>')
+          editor.commands.setTextSelection(7)
+          editor.commands.focus()
+        })
+      else await replaceRichText(page, rich, '/table')
+      assert.equal(await read(), '/table')
+      await menu.waitFor()
+      await rich.press('Tab')
+      assert.equal(await rich.locator('table').count(), 1)
+      if (t.formattedEngine === 'tiptap')
+        await rich.evaluate((element) => {
+          const editor = element.editor
+          editor.commands.setContent('<p>/</p>')
+          editor.commands.setTextSelection(2)
+          editor.commands.focus()
+        })
+      else await setFormattedFixture('/')
+      await menu.waitFor()
+      await rich.press('Escape')
+      await menu.waitFor({ state: 'hidden' })
+      if (t.formattedEngine === 'tiptap')
+        await rich.evaluate((element) => {
+          const editor = element.editor
+          editor.commands.insertContent('literal')
+          editor.commands.setContent('<p>/table</p>')
+          editor.commands.setTextSelection(7)
+        })
+      else {
+        await page.keyboard.insertText('literal')
+        await setFormattedFixture('/table')
+      }
+      await menu.waitFor()
+      assert.match(await menu.innerText(), /Tables/)
+      await rich.press('Tab')
+      assert.equal(await rich.locator('table').count(), 1)
+      // A DOM fill cannot remove the table and quote nodes from earlier commands.
+      if (t.formattedEngine === 'tiptap')
+        await rich.evaluate((element) =>
+          element.editor.commands.setContent('<p></p>'),
+        )
+      else await setFormattedFixture('')
+      await replaceRichText(page, rich, '/alerts')
+      await menu.waitFor()
+      await rich.press('Enter')
+      assert.equal(
+        await rich
+          .locator(
+            t.formattedEngine === 'tiptap'
+              ? '.github-alert'
+              : '.hibi-lp-alert-title',
+          )
+          .count(),
+        1,
+      )
+      assert.match(await read(), /> \[!NOTE\]/)
+    },
   )
-  assert.ok((await menu.getByRole('option').count()) > 12)
-  await menu
-    .getByRole('option', { name: /^text plain paragraph$/i, exact: true })
-    .click()
-  assert.equal(await read(), '')
-  await replaceRichText(page, rich, '/')
-  await menu.waitFor()
-  await rich.press('ArrowDown')
-  await rich.press('Enter')
-  assert.equal(await rich.locator('h1').count(), 1)
-  await replaceRichText(page, rich, '/quote')
-  await menu.waitFor()
-  await menu
-    .getByRole('option', { name: /^Quotes Indented quotation$/ })
-    .click()
-  assert.equal(await rich.locator('blockquote').count(), 1)
-  await replaceRichText(page, rich, '/')
-  await menu.waitFor()
-  const beforeDismiss = await read()
-  await rich.press('Escape')
-  await menu.waitFor({ state: 'hidden' })
-  assert.equal(await read(), beforeDismiss)
-  await rich.pressSequentially('literal')
-  assert.equal(await menu.isVisible(), false)
-  await rich.evaluate((element) => {
-    const editor = element.editor
-    editor.commands.setContent('<p>/table</p>')
-    editor.commands.setTextSelection(7)
-    editor.commands.focus()
-  })
-  assert.equal(await read(), '/table')
-  await menu.waitFor()
-  await rich.press('Tab')
-  assert.equal(await rich.locator('table').count(), 1)
-  await rich.evaluate((element) => {
-    const editor = element.editor
-    editor.commands.setContent('<p>/</p>')
-    editor.commands.setTextSelection(2)
-    editor.commands.focus()
-  })
-  await menu.waitFor()
-  await rich.press('Escape')
-  await menu.waitFor({ state: 'hidden' })
-  await rich.evaluate((element) => {
-    const editor = element.editor
-    editor.commands.insertContent('literal')
-    editor.commands.setContent('<p>/table</p>')
-    editor.commands.setTextSelection(7)
-  })
-  await menu.waitFor()
-  assert.match(await menu.innerText(), /Tables/)
-  await rich.press('Tab')
-  assert.equal(await rich.locator('table').count(), 1)
-  // A DOM fill cannot remove the table and quote nodes from earlier commands.
-  await rich.evaluate((element) =>
-    element.editor.commands.setContent('<p></p>'),
+
+  await t.test(
+    'physical typing replaces a selected table and undo restores it',
+    async () => {
+      if (t.formattedEngine === 'tiptap')
+        await rich.evaluate((element) => {
+          element.editor.commands.setContent('<p>/table</p>')
+          element.editor.commands.setTextSelection(7)
+          element.editor.commands.focus()
+        })
+      else await setFormattedFixture('/table')
+      await menu.waitFor()
+      await rich.press('Tab')
+      assert.equal(await rich.locator('table').count(), 1)
+      const original = await read()
+      await rich.press('ControlOrMeta+a')
+      await page.keyboard.press('r')
+      await waitForAsync(
+        page,
+        async () => (await window.hibi.getDocument()).markdown === 'r',
+      )
+      assert.equal(await read(), 'r')
+      assert.equal(await rich.locator('table').count(), 0)
+      await rich.press(undo)
+      await waitForAsync(
+        page,
+        async (expected) =>
+          (await window.hibi.getDocument()).markdown === expected,
+        original,
+      )
+      assert.equal(await read(), original)
+      assert.equal(await rich.locator('table').count(), 1)
+    },
   )
-  await replaceRichText(page, rich, '/alerts')
-  await menu.waitFor()
-  await rich.press('Enter')
-  assert.equal(await rich.locator('.github-alert').count(), 1)
-  assert.match(await read(), /> \[!NOTE\]/)
 
   await page.mouse.move(450, 18)
   await page
@@ -254,37 +337,85 @@ test('slash commands work in both editors, preserve undo, and coexist with vim',
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.editor?.isEditable === false,
+  if (t.formattedEngine === 'codemirror')
+    await t.test(
+      'split formatted view is read-only',
+      {
+        todo: 'formatted gap split-008: split formatted view must remain read-only',
+      },
+      async () => {
+        assert.equal(await rich.getAttribute('contenteditable'), 'false')
+      },
+    )
+  await t.test(
+    'formatted heading slash commands survive split mode',
+    async () => {
+      if (t.formattedEngine === 'tiptap')
+        await page.waitForFunction(
+          () => document.querySelector('.tiptap')?.editor?.isEditable === false,
+        )
+      await rich.getByRole('heading', { level: 2 }).last().waitFor()
+      await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+      if (t.formattedEngine === 'tiptap')
+        await page.waitForFunction(
+          () => document.querySelector('.tiptap')?.editor?.isEditable,
+        )
+      else await rich.and(page.locator('[contenteditable="true"]')).waitFor()
+      if (t.formattedEngine === 'tiptap')
+        await rich
+          .getByRole('heading', { level: 2 })
+          .last()
+          .evaluate((heading) => {
+            const editor = heading.closest('.tiptap').editor
+            editor.commands.setTextSelection(editor.view.posAtDOM(heading, 0))
+            editor.commands.focus()
+          })
+      else
+        await rich.evaluate((element) => {
+          const view = element.cmTile.root.view
+          const from = view.state.doc.toString().lastIndexOf('## ') + 3
+          view.dispatch({ selection: { anchor: from } })
+          view.focus()
+        })
+      await rich.pressSequentially('/quote')
+      await menu.waitFor()
+      await rich.press('Enter')
+      assert.equal(
+        await rich
+          .locator(
+            t.formattedEngine === 'tiptap'
+              ? 'blockquote'
+              : '.cm-line.hibi-lp-quote',
+          )
+          .count(),
+        1,
+      )
+      assert.match(await read(), />/)
+      await page.mouse.move(400, 18)
+      await page
+        .getByRole('button', { name: /^side-by-side$/i, exact: true })
+        .click()
+      await page.waitForFunction(
+        (engine) =>
+          (engine === 'codemirror' ||
+            document.querySelector('.tiptap')?.editor?.isEditable === false) &&
+          document
+            .querySelector('.source-pane .cm-content')
+            ?.textContent.includes('>'),
+        t.formattedEngine,
+      )
+      assert.equal(
+        await rich
+          .locator(
+            t.formattedEngine === 'tiptap'
+              ? 'blockquote'
+              : '.cm-line.hibi-lp-quote',
+          )
+          .count(),
+        1,
+      )
+    },
   )
-  await rich.locator('h2').last().waitFor()
-  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.editor?.isEditable,
-  )
-  await rich
-    .locator('h2')
-    .last()
-    .evaluate((heading) => {
-      const editor = heading.closest('.tiptap').editor
-      editor.commands.setTextSelection(editor.view.posAtDOM(heading, 0))
-      editor.commands.focus()
-    })
-  await rich.pressSequentially('/quote')
-  await menu.waitFor()
-  await rich.press('Enter')
-  assert.equal(await rich.locator('blockquote').count(), 1)
-  assert.match(await read(), />/)
-  await page.mouse.move(400, 18)
-  await page
-    .getByRole('button', { name: /^side-by-side$/i, exact: true })
-    .click()
-  await page.waitForFunction(
-    () =>
-      document.querySelector('.tiptap')?.editor?.isEditable === false &&
-      document.querySelector('.cm-content')?.textContent.includes('>'),
-  )
-  assert.equal(await rich.locator('blockquote').count(), 1)
   await page
     .getByRole('button', { name: /^source view$/i, exact: true })
     .click()

@@ -2,17 +2,36 @@ import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
+import native from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
+
+async function placeCaret(editor, offset) {
+  await editor.evaluate((element, offset) => {
+    if (element.editor) element.editor.commands.focus(offset + 1)
+    else {
+      const view = element.cmTile.root.view
+      view.dispatch({ selection: { anchor: offset } })
+      view.focus()
+    }
+  }, offset)
+}
+
+async function undoRich(editor) {
+  if (await editor.evaluate((element) => !!element.editor))
+    await editor.evaluate((element) => element.editor.commands.undo())
+  else await editor.press('ControlOrMeta+z')
+}
 
 const fixture = (name) =>
   readFile(new URL(`./fixtures/dictionary/${name}`, import.meta.url), 'utf8')
 
-test('dictionary looks up the caret word and replaces it with one undo step in both editors', {
-  timeout: 60000,
-}, async (t) => {
+async function dictionaryCase(t) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-dictionary-'))
   const file = join(profile, 'note.md')
   await writeFile(file, 'I am Happy today')
@@ -31,6 +50,7 @@ test('dictionary looks up the caret word and replaces it with one undo step in b
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(8000)
   await waitForDocumentEditor(app, page)
   const responses = {
@@ -72,9 +92,16 @@ test('dictionary looks up the caret word and replaces it with one undo step in b
     async () => (await window.hibi.getDocument()).name === 'note.md',
   )
   await waitForDocumentEditor(app, page)
-  const rich = page.locator('.rich-pane .tiptap[contenteditable="true"]')
+  if (t.dictionarySource) {
+    await page.getByRole('button', { name: 'Source view', exact: true }).click()
+    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+  }
+  const rich = page.getByRole('textbox', {
+    name: t.dictionarySource ? 'Markdown editor' : 'Document editor',
+    exact: true,
+  })
   await rich.click()
-  await rich.evaluate((element) => element.editor.commands.setTextSelection(8))
+  await placeCaret(rich, 7)
   assert.deepEqual(await requests(), [])
 
   await clickMenu(app, 'Command palette')
@@ -98,9 +125,19 @@ test('dictionary looks up the caret word and replaces it with one undo step in b
   ])
   await page.keyboard.press('Escape')
   await define.waitFor({ state: 'detached' })
-  await waitForAsync(page, () =>
-    document.activeElement?.classList.contains('tiptap'),
-  )
+  if (t.dictionarySource)
+    await waitForAsync(
+      page,
+      () =>
+        document.activeElement?.getAttribute('aria-label') ===
+        'Markdown editor',
+    )
+  else
+    await waitForAsync(page, () =>
+      document.activeElement?.matches(
+        '.rich-pane [aria-label="Document editor"]',
+      ),
+    )
   assert.equal(await markdown(), 'I am Happy today')
 
   await rich.press('Shift+F10')
@@ -120,15 +157,21 @@ test('dictionary looks up the caret word and replaces it with one undo step in b
     async () =>
       (await window.hibi.getDocument()).markdown === 'I am Glad today',
   )
-  assert.equal(
-    await page.evaluate(() =>
-      document.activeElement?.classList.contains('tiptap'),
-    ),
-    true,
-  )
-  await page.evaluate(() =>
-    document.querySelector('.tiptap').editor.commands.undo(),
-  )
+  if (t.dictionarySource)
+    assert.equal(
+      await rich.evaluate((element) => document.activeElement === element),
+      true,
+    )
+  else
+    assert.equal(
+      await page.evaluate(() =>
+        document.activeElement?.matches(
+          '.rich-pane [aria-label="Document editor"]',
+        ),
+      ),
+      true,
+    )
+  await undoRich(rich)
   await waitForAsync(
     page,
     async () =>
@@ -136,12 +179,19 @@ test('dictionary looks up the caret word and replaces it with one undo step in b
   )
 
   // Editing while the dialog is open cancels the choice with a notice.
-  await rich.evaluate((element) => element.editor.commands.focus(8))
+  await placeCaret(rich, 7)
   await pressShortcut(app, 'Shift+F7')
   await synonyms.getByRole('button', { name: 'glad', exact: true }).waitFor()
-  await rich.evaluate((element) =>
-    element.editor.commands.insertContentAt(1, 'Oh, '),
-  )
+  if (t.formattedEngine === 'tiptap')
+    await rich.evaluate((element) =>
+      element.editor.commands.insertContentAt(1, 'Oh, '),
+    )
+  else
+    await rich.evaluate((element) =>
+      element.cmTile.root.view.dispatch({
+        changes: { from: 0, insert: 'Oh, ' },
+      }),
+    )
   await synonyms.getByRole('button', { name: 'glad', exact: true }).click()
   await page
     .locator('.toast')
@@ -149,7 +199,7 @@ test('dictionary looks up the caret word and replaces it with one undo step in b
     .waitFor()
   assert.equal(await markdown(), 'Oh, I am Happy today')
   assert.deepEqual(pageErrors, [])
-  await rich.evaluate((element) => element.editor.commands.undo())
+  await undoRich(rich)
   await waitForAsync(
     page,
     async () =>
@@ -163,7 +213,7 @@ test('dictionary looks up the caret word and replaces it with one undo step in b
       globalThis.releaseHold = resolve
     })
   }, todaySynonyms)
-  await rich.evaluate((element) => element.editor.commands.focus(13))
+  await placeCaret(rich, 12)
   await pressShortcut(app, 'Shift+F7')
   const today = page.getByRole('dialog', { name: 'Synonyms for “today”' })
   await today.waitFor()
@@ -177,7 +227,7 @@ test('dictionary looks up the caret word and replaces it with one undo step in b
   await app.evaluate(() => globalThis.releaseHold())
   await today.waitFor({ state: 'detached' })
   // A later lookup's request proves the closed one sent nothing after it.
-  await rich.evaluate((element) => element.editor.commands.focus(13))
+  await placeCaret(rich, 12)
   await clickMenu(app, 'Command palette')
   await page
     .getByRole('combobox', { name: /search commands/i })
@@ -192,7 +242,8 @@ test('dictionary looks up the caret word and replaces it with one undo step in b
   await page.keyboard.press('Escape')
   await defineToday.waitFor({ state: 'detached' })
 
-  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  if (!t.dictionarySource)
+    await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   const source = page.getByRole('textbox', {
     name: 'Markdown editor',
@@ -222,11 +273,25 @@ test('dictionary looks up the caret word and replaces it with one undo step in b
     async () =>
       (await window.hibi.getDocument()).markdown === 'I am Happy today',
   )
-})
+}
 
-test('dictionary replaces the word in the split pane it was invoked from', {
-  timeout: 90000,
-}, async (t) => {
+test(
+  'dictionary looks up the caret word and replaces it with one undo step in both editors',
+  { timeout: 60000 },
+  dictionaryCase,
+)
+
+native(
+  'codemirror: dictionary source lookup remains independent of formatted hooks',
+  { timeout: 60000 },
+  async (t) => {
+    t.formattedEngine = 'codemirror'
+    t.dictionarySource = true
+    await dictionaryCase(t)
+  },
+)
+
+async function dictionarySplitCase(t) {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-dictionary-split-'))
   const left = join(profile, 'left.md')
   const right = join(profile, 'right.md')
@@ -247,6 +312,7 @@ test('dictionary replaces the word in the split pane it was invoked from', {
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(8000)
   await waitForDocumentEditor(app, page)
   const responses = {
@@ -322,12 +388,31 @@ test('dictionary replaces the word in the split pane it was invoked from', {
   }
 
   // Both carets sit at the same offset, so only view identity tells them apart.
-  const rich = (side) => panes[side].locator('.rich-pane .tiptap')
+  if (t.dictionarySource) {
+    for (const side of ['left', 'right']) {
+      await focusPane(
+        side,
+        panes[side].getByRole('textbox', {
+          name: 'Document editor',
+          exact: true,
+        }),
+      )
+      await page
+        .getByRole('button', { name: 'Source view', exact: true })
+        .click()
+      await panes[side]
+        .locator('.source-pane [contenteditable="true"]')
+        .waitFor()
+    }
+  }
+  const rich = (side) =>
+    panes[side].getByRole('textbox', {
+      name: t.dictionarySource ? 'Markdown editor' : 'Document editor',
+      exact: true,
+    })
   for (const side of ['right', 'left']) {
     await focusPane(side, rich(side))
-    await rich(side).evaluate((element) =>
-      element.editor.commands.setTextSelection(3),
-    )
+    await placeCaret(rich(side), 2)
   }
   await rich('left').press('Shift+F10')
   await page
@@ -337,14 +422,18 @@ test('dictionary replaces the word in the split pane it was invoked from', {
   await pick()
   await waitForAsync(
     page,
-    () =>
-      document.querySelector('.editor-page[data-side="left"] .tiptap')
-        ?.textContent === 'Glad',
+    (source) =>
+      document.querySelector(
+        source
+          ? '.editor-page[data-side="left"] .source-pane [aria-label="Markdown editor"]'
+          : '.editor-page[data-side="left"] .rich-pane [aria-label="Document editor"]',
+      )?.textContent === 'Glad',
+    t.dictionarySource,
   )
   assert.equal(await rich('right').textContent(), 'Sad')
   assert.equal(await markdown('right', rich), 'Sad')
   assert.equal(await markdown('left', rich), 'Glad')
-  await rich('left').evaluate((element) => element.editor.commands.undo())
+  await undoRich(rich('left'))
   await waitForAsync(
     page,
     async () => (await window.hibi.getDocument()).markdown === 'Happy',
@@ -373,27 +462,32 @@ test('dictionary replaces the word in the split pane it was invoked from', {
   await pick()
   await waitForAsync(
     page,
-    () =>
-      document.querySelector('.editor-page[data-side="left"] .tiptap')
-        ?.textContent === 'Glad',
+    (source) =>
+      document.querySelector(
+        source
+          ? '.editor-page[data-side="left"] .source-pane [aria-label="Markdown editor"]'
+          : '.editor-page[data-side="left"] .rich-pane [aria-label="Document editor"]',
+      )?.textContent === 'Glad',
+    t.dictionarySource,
   )
   assert.equal(await page.locator('.toast').count(), 0)
   assert.equal(await markdown('right', rich), 'Sad')
   assert.equal(await markdown('left', rich), 'Glad')
-  await rich('left').evaluate((element) => element.editor.commands.undo())
+  await undoRich(rich('left'))
   await waitForAsync(
     page,
     async () => (await window.hibi.getDocument()).markdown === 'Happy',
   )
 
-  const source = (side) => panes[side].locator('.cm-content')
-  for (const side of ['left', 'right']) {
+  const source = (side) => panes[side].locator('.source-pane .cm-content')
+  for (const side of t.dictionarySource ? [] : ['left', 'right']) {
     await focusPane(side, rich(side))
     await page.getByRole('button', { name: 'Source view', exact: true }).click()
     await page.waitForFunction(
       (side) =>
-        document.querySelector(`.editor-page[data-side="${side}"] .cm-content`)
-          ?.isContentEditable,
+        document.querySelector(
+          `.editor-page[data-side="${side}"] .source-pane .cm-content`,
+        )?.isContentEditable,
       side,
     )
   }
@@ -427,6 +521,22 @@ test('dictionary replaces the word in the split pane it was invoked from', {
     .locator('.toast')
     .filter({ hasText: 'The document changed. Look up the word again.' })
     .waitFor()
-  await page.locator('.editor-page .cm-content').waitFor()
+  await page.locator('.editor-page .source-pane .cm-content').waitFor()
   assert.deepEqual(pageErrors, [])
-})
+}
+
+test(
+  'dictionary replaces the word in the split pane it was invoked from',
+  { timeout: 90000 },
+  dictionarySplitCase,
+)
+
+native(
+  'codemirror: dictionary source split replacement keeps pane identity and rejects closed targets',
+  { timeout: 90000 },
+  async (t) => {
+    t.formattedEngine = 'codemirror'
+    t.dictionarySource = true
+    await dictionarySplitCase(t)
+  },
+)

@@ -1,8 +1,5 @@
-import {
-  frontmatterEnd,
-  readFrontmatter as splitFrontmatter,
-} from '../../shared/frontmatter.ts'
-import type { AddonNoteReader, MarkdownProjection } from '../api'
+import { readFrontmatter as splitFrontmatter } from '../../shared/frontmatter.ts'
+import type { MarkdownProjection } from '../api'
 
 export { splitFrontmatter }
 
@@ -11,12 +8,6 @@ export function addFrontmatter(source: string): string {
   const bom = source.startsWith('\uFEFF') ? '\uFEFF' : ''
   const eol = source.includes('\r\n') ? '\r\n' : '\n'
   return `${bom}---${eol}{}${eol}---${eol}${eol}${source.slice(bom.length)}`
-}
-
-/** Whether a note starts with frontmatter, read only up to its closing line. */
-export function hasFrontmatter(note: AddonNoteReader) {
-  const end = frontmatterEnd(note)
-  return end >= 0 && !!splitFrontmatter(note.slice(0, end))
 }
 
 export function replaceFrontmatter(source: string, yaml: string): string {

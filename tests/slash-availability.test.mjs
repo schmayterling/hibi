@@ -1,36 +1,73 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  carryFrontmatterRead,
   hasFrontmatter,
-  parseFrontmatter,
-} from '../src/addons/frontmatter/markdown.ts'
+} from '../src/addons/frontmatter/slash.ts'
 import { sourceDocument } from '../src/renderer/src/document-transfer.ts'
 import {
   availableSlashCommands,
   noteReader,
 } from '../src/renderer/src/slash-availability.ts'
-import { frontmatterEnd, readFrontmatter } from '../src/shared/frontmatter.ts'
+import { readFrontmatter } from '../src/shared/frontmatter.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
 const MiB = 1024 * 1024
 const body = 'ordinary words in a paragraph\n\n'.repeat(
   Math.ceil((50 * MiB) / 31),
 )
+const report = (error) => {
+  throw error
+}
+let tabs = 0
 
-/** A note of the document runtime, and its store's read counters. */
+/** A note of the document runtime, its store's read counters, and edits to it. */
 function note(text) {
-  const store = new SourceStore(text, { tabId: 'slash', revision: 1 })
-  const document = sourceDocument(
-    { tabId: 'slash', revision: 1 },
-    store.snapshot(),
-    store.snapshot(),
-  )
+  const tabId = `slash-${++tabs}`
+  const store = new SourceStore(text, { tabId, revision: 1 })
+  let version = store.snapshot().version
+  const state = (snapshot) =>
+    sourceDocument(
+      { tabId, revision: 1, contentVersion: version },
+      snapshot,
+      snapshot,
+    )
+  let document = state(store.snapshot())
+  carryFrontmatterRead(document, null)
   store.counters(true)
-  return { document, read: () => store.counters() }
+  return {
+    store,
+    get document() {
+      return document
+    },
+    /** Apply edits as the document runtime publishes them. */
+    edit(changes) {
+      const snapshot = store.commit(
+        store.prepare({
+          document: store.snapshot().document,
+          operationId: `edit-${version}`,
+          historyGroup: `edit-${version}`,
+          origin: 'source',
+          baseVersion: version,
+          contentVersion: version + 1,
+          changes,
+        }),
+      )
+      version++
+      document = state(snapshot)
+      carryFrontmatterRead(document, changes)
+    },
+    /** Units read and whole-source reads since the last call. */
+    read() {
+      const { sourceUnitsRead, materializations } = store.counters(true)
+      return { units: sourceUnitsRead, materializations }
+    },
+  }
 }
 
 const frontmatter = {
   id: 'frontmatter.add',
+  live: () => true,
   slash: {
     label: 'Frontmatter',
     description: 'Add page properties',
@@ -38,116 +75,142 @@ const frontmatter = {
     transform: (source) => source,
   },
 }
+const offered = (document) =>
+  availableSlashCommands([frontmatter], document, report).length === 1
 
-test('frontmatter read in pieces up to its closing line agrees with the whole-note read', () => {
-  const piece = 4096
-  // One YAML line that ends `length` units after the opening line.
-  const pad = (length, eol) => `a: ${'v'.repeat(length - 3 - eol.length)}${eol}`
-  const notes = [
-    '',
-    '---',
-    '---\n',
-    '---\n---',
-    '---\n---\n',
-    '---\na: 1\n---',
-    '---\na: 1\n...\nbody',
-    '\uFEFF---\r\na: 1\r\n---\r\n\r\nbody',
-    '---\ta \t\na: 1\n---\n',
-    '---  \t\na: 1\n---  \t \nbody',
-    '---\na: 1\r---\rbody',
-    '---\na: 1\u2028---\u2028body',
-    '---\na: 1\u2029...\u2029body',
-    '---\n- a\n- b\n---\nbody',
-    '---\nSome prose here.\n\n---\nmore',
-    '--- \nunclosed: yes\nbody',
-    '# title\n---\na: 1\n---\n',
-    `---${' '.repeat(piece + 10)}\na: 1\n---\nbody`,
-    `---\nlong: ${'x'.repeat(3 * piece)}\n---\nbody`,
-    `---\n${'y'.repeat(3 * piece)}\nbody`,
-  ]
-  // Closing lines across the end of the second piece read, which starts
-  // after the opening line, with every line ending.
-  for (const eol of ['\n', '\r\n', '\r', '\u2028'])
-    for (let shift = -6; shift <= 2; shift++)
-      for (const closing of ['---', '...', '--- \t', '----', '-- -']) {
-        const yaml = pad(piece * 2 + shift - 4, eol)
-        notes.push(`---\n${yaml}${closing}${eol}body${eol}`)
-        notes.push(`---\n${yaml}${closing}`)
-      }
-  for (const text of notes) {
-    const end = frontmatterEnd({
-      length: text.length,
-      slice: (from, to) => text.slice(from, to),
-    })
-    const whole = readFrontmatter(text)
-    const head = end < 0 ? null : readFrontmatter(text.slice(0, end))
-    const label = JSON.stringify(text.slice(0, 80))
-    assert.equal(!!head, !!whole, label)
-    if (whole) {
-      assert.equal(head.yaml, whole.yaml, label)
-      assert.equal(head.opening, whole.opening, label)
-      assert.equal(head.eol, whole.eol, label)
-      assert.ok(whole.prefix.startsWith(text.slice(0, end)), label)
-    }
+test('frontmatter checks of a 50 mib note read a few pieces, never the whole note', () => {
+  // A long first line that cannot open frontmatter ends the read at once.
+  const long = note(`${'x'.repeat(50 * MiB)}\n\n/h2`)
+  assert.equal(offered(long.document), true)
+  assert.deepEqual(long.read(), { units: 4096, materializations: 0 })
+  assert.equal(offered(long.document), true)
+  assert.deepEqual(long.read(), { units: 0, materializations: 0 })
+  // Frontmatter ends within the first pieces.
+  const properties = note(`---\ntitle: Long note\n---\n\n${body}`)
+  assert.equal(offered(properties.document), false)
+  assert.deepEqual(properties.read().materializations, 0)
+  // A divider with no closing line is read on a few pieces per check.
+  const divider = note(`---\n\n${body}`)
+  for (let check = 0; check < 3; check++) {
+    assert.equal(offered(divider.document), true)
+    const { units, materializations } = divider.read()
+    assert.equal(materializations, 0)
+    assert.ok(units > 0 && units <= 3 * 4096, String(units))
   }
 })
 
-test('slash checks of a 50 mib note read only the frontmatter, never the whole note', () => {
-  const properties = '---\ntitle: Long note\ntags: [a, b]\n---\n\n'
-  for (const [text, offered] of [
-    [body, true],
-    [properties + body, false],
-  ]) {
-    const { document, read } = note(text)
-    const ids = availableSlashCommands([frontmatter], document).map(
-      (command) => command.id,
-    )
-    assert.deepEqual(ids, offered ? ['frontmatter.add'] : [])
-    const counters = read()
-    assert.equal(counters.materializations, 0)
-    // The opening line, then the lines up to the closing one, in pieces.
-    assert.ok(
-      counters.sourceUnitsRead <= 3 * 4096,
-      String(counters.sourceUnitsRead),
-    )
+test('a finished frontmatter read lasts through edits that cannot change it', () => {
+  const divider = note(`---\n\n${body}`)
+  // Checks read on until the read finishes; then they read nothing.
+  let checks = 0
+  while (offered(divider.document) && divider.read().units) checks++
+  assert.ok(checks > 1000, String(checks))
+  // Typing in the body, a new line and a line that only looks like one keep it.
+  const at = body.length / 2 + 5
+  for (const insert of ['x', '\n\nmore', '\n-- -\n']) {
+    divider.edit([{ from: at, to: at, insert }])
+    // Each edit reads only the lines it touched.
+    assert.ok(divider.read().units < 256)
+    assert.equal(offered(divider.document), true)
+    assert.deepEqual(divider.read(), { units: 0, materializations: 0 })
   }
-  // A divider at the top with no closing line is read once, in pieces.
-  const divider = `---\n\n${body}`
-  const { document, read } = note(divider)
-  assert.equal(availableSlashCommands([frontmatter], document).length, 1)
-  assert.equal(read().materializations, 0)
-  assert.ok(read().sourceUnitsRead <= divider.length + 2 * 4096)
+  // A closing line, or an edit of the opening one, starts a new read.
+  divider.edit([{ from: at, to: at, insert: '\n---\n' }])
+  offered(divider.document)
+  assert.ok(divider.read().units > 0)
+  const properties = note(`---\ntitle: Long note\n---\n\n${body}`)
+  assert.equal(offered(properties.document), false)
+  properties.edit([{ from: 40, to: 40, insert: '/h2' }])
+  properties.read()
+  assert.equal(offered(properties.document), false)
+  assert.deepEqual(properties.read(), { units: 0, materializations: 0 })
+  properties.edit([{ from: 4, to: 9, insert: 'name' }])
+  properties.read()
+  assert.equal(offered(properties.document), false)
+  assert.ok(properties.read().units > 0)
 })
 
 test('commands without checks read nothing, and `when` reads the note once for all of them', () => {
-  const { document, read } = note(body)
-  const plain = { id: 'a.plain', slash: { label: 'Plain', description: '' } }
-  assert.equal(availableSlashCommands([plain, plain], document).length, 2)
-  assert.deepEqual([read().materializations, read().sourceUnitsRead], [0, 0])
-  // The whole-note check as frontmatter had it: the control that reads everything.
-  const sources = []
-  const whole = (id) => ({
+  const plain = note(body)
+  const command = (id, slash) => ({
     id,
+    live: () => true,
     slash: {
       label: id,
       description: '',
-      when: (source) => {
-        sources.push(source.length)
-        return !parseFrontmatter(source)
-      },
+      transform: (source) => source,
+      ...slash,
     },
   })
   assert.equal(
-    availableSlashCommands([whole('a.one'), whole('a.two')], document).length,
+    availableSlashCommands(
+      [command('a.one', {}), command('a.two', {})],
+      plain.document,
+      report,
+    ).length,
+    2,
+  )
+  assert.deepEqual(plain.read(), { units: 0, materializations: 0 })
+  // The whole-note check as frontmatter had it: the control that reads everything.
+  const sources = []
+  const when = (source) => {
+    sources.push(source.length)
+    return !readFrontmatter(source)
+  }
+  assert.equal(
+    availableSlashCommands(
+      [command('a.one', { when }), command('a.two', { when })],
+      plain.document,
+      report,
+    ).length,
     2,
   )
   assert.deepEqual(sources, [body.length, body.length])
-  assert.equal(read().materializations, 1)
+  assert.equal(plain.read().materializations, 1)
 })
 
-test('a note reader clamps ranges to the note', () => {
+test('stopped commands, throwing checks and transforms are neither offered nor run', () => {
+  const plain = note('text')
+  const errors = []
+  let running = true
+  const [offeredCommand] = availableSlashCommands(
+    [
+      {
+        id: 'a.stopping',
+        live: () => running,
+        slash: {
+          label: 'Stopping',
+          description: '',
+          transform: () => 'changed',
+        },
+      },
+      {
+        id: 'a.throws',
+        live: () => true,
+        slash: {
+          label: 'Throws',
+          description: '',
+          available: () => {
+            throw new Error('check failed')
+          },
+          transform: (source) => source,
+        },
+      },
+    ],
+    plain.document,
+    (error) => errors.push(error.message),
+  )
+  assert.equal(offeredCommand.id, 'a.stopping')
+  assert.deepEqual(errors, ['check failed'])
+  assert.equal(offeredCommand.transform('text'), 'changed')
+  running = false
+  assert.equal(offeredCommand.transform('text'), null)
+})
+
+test('a note reader clamps ranges to the note and is one reader per version', () => {
   const { document } = note('abcdef')
   const reader = noteReader(document)
+  assert.equal(noteReader(document), reader)
   assert.equal(reader.length, 6)
   assert.deepEqual(
     [

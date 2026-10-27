@@ -84,7 +84,6 @@ import { markdownSyntax } from './markdown-syntax'
 import { registrationBatch } from './registration-batch'
 import { settingsPages } from './settings-pages'
 import { siteContributions } from './site-contributions'
-import { availableSlashCommands } from './slash-availability'
 import { toolbar } from './toolbar'
 import { viewNotifications } from './view-notifications'
 import {
@@ -123,9 +122,18 @@ function loadInteractionBroker() {
   return interactionBrokerModule
 }
 
+/** Slash command checks, loaded before addons start, which then read them synchronously. */
+let slashChecks: typeof import('./slash-availability') | undefined
+const loadSlashChecks = () =>
+  import('./slash-availability').then((module) => {
+    slashChecks = module
+  })
+
 export type RegisteredCommand = Omit<AddonCommand, 'run'> & {
   addonId: string
   canRun: (context: CommandExecutionContext) => boolean
+  /** Whether the command is still registered by a running addon. */
+  live?: () => boolean
   run: (context?: CommandExecutionContext) => Promise<void>
 }
 type HotkeyDescriptor = Omit<AddonHotkeyRegistration, 'token'>
@@ -1883,10 +1891,11 @@ export function useAddons(
             commands: {
               execute: (command) => live(() => executeCommand(id, command)),
               getSlashCommands() {
-                if (disposed) return []
-                return availableSlashCommands(
+                if (disposed || !slashChecks) return []
+                return slashChecks.availableSlashCommands(
                   registered.values(),
                   latest.current.getEditorDocument(),
+                  (error) => latest.current.error(error),
                 )
               },
               register(command) {
@@ -1914,45 +1923,12 @@ export function useAddons(
                     return false
                   }
                 }
-                /** A slash check: false once the command stops, and on errors, which it reports. */
-                const check =
-                  <T>(predicate: (input: T) => boolean) =>
-                  (input: T) => {
-                    if (!active || disposed) return false
-                    try {
-                      return predicate(input)
-                    } catch (error) {
-                      latest.current.error(error)
-                      return false
-                    }
-                  }
                 const entry: RegisteredCommand = {
                   ...command,
                   id: key,
                   addonId: id,
                   canRun,
-                  ...(command.slash
-                    ? {
-                        slash: {
-                          ...command.slash,
-                          ...(command.slash.when && {
-                            when: check(command.slash.when),
-                          }),
-                          ...(command.slash.available && {
-                            available: check(command.slash.available),
-                          }),
-                          transform(source) {
-                            if (!active || disposed) return null
-                            try {
-                              return command.slash?.transform(source) ?? null
-                            } catch (error) {
-                              latest.current.error(error)
-                              return null
-                            }
-                          },
-                        },
-                      }
-                    : {}),
+                  live: () => active && !disposed,
                   run: async (context = captureCommandContext('api')) => {
                     const target = structuredClone(context)
                     if (!canRun(context)) return
@@ -2124,7 +2100,10 @@ export function useAddons(
           startupSpan(
             `addon:${id}`,
             async () => {
-              const { styles, themes } = await addonRegistry.resources(id)
+              const [{ styles, themes }] = await Promise.all([
+                addonRegistry.resources(id),
+                loadSlashChecks(),
+              ])
               if (styles.length) {
                 const { linkAddonSheets } = await import('./addon-sheets')
                 if (!disposed) {

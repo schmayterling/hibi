@@ -2,13 +2,17 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { stripTypeScriptTypes } from 'node:module'
 import test from 'node:test'
-import { Text } from '@codemirror/state'
+import { EditorState, Text } from '@codemirror/state'
 import { Schema } from '@tiptap/pm/model'
 import {
   maximumSlashQueryUnits,
   slashQuery,
 } from '../src/addons/slash-commands/commands.ts'
-import { frontmatterEnd, readFrontmatter } from '../src/shared/frontmatter.ts'
+import {
+  frontmatterBounds,
+  frontmatterProbe,
+} from '../src/renderer/src/formatted-frontmatter.ts'
+import { readFrontmatter } from '../src/shared/frontmatter.ts'
 
 async function load(file, name, bindings) {
   const source = stripTypeScriptTypes(
@@ -197,57 +201,68 @@ test('source reads only a possible slash prefix, even near the start of a long l
   assert.deepEqual(ranges, [])
 })
 
-test('source frontmatter checks read a 50 mib note only up to the closing line', async () => {
+test('source frontmatter checks read nothing per query, and edits only the lines they touch', async () => {
   const current = await load('source', 'current', {
     EditorView: { editable: Symbol('editable') },
     syntaxTree: () => ({ resolveInner: () => null }),
     slashQuery,
     maximumSlashQueryUnits,
-    frontmatterEnd,
+    frontmatterBounds,
     readFrontmatter,
   })
   const body = 'ordinary words in a paragraph\n\n'.repeat(
     Math.ceil((50 * 1024 * 1024) / 31),
   )
-  // A slash query between `before` and `after`, and the units the check read.
-  const check = (before, after) => {
-    const text = Text.of(`${before}/h2${after}`.split('\n'))
+  // The query after a note's `/h2`, and the units the check read.
+  const check = (state) => {
     let units = 0
+    const { head } = state.selection.main
     const match = current({
       hasFocus: true,
       scrollDOM: { classList: { contains: () => false } },
       state: {
         readOnly: false,
         facet: () => true,
-        selection: {
-          main: { head: before.length + 3, empty: true },
-          ranges: [{}],
-        },
+        selection: { main: { head, empty: true }, ranges: [{}] },
+        field: (field, require) => state.field(field, require),
         doc: {
-          length: text.length,
-          lineAt: (pos) => text.lineAt(pos),
+          lineAt: (pos) => state.doc.lineAt(pos),
           sliceString(from, to) {
-            const read = text.sliceString(from, to)
+            const read = state.doc.sliceString(from, to)
             units += read.length
             return read
           },
           toString() {
-            units += text.length
-            return text.toString()
+            units += state.doc.length
+            return state.doc.toString()
           },
         },
       },
     })
-    return { query: match?.query ?? null, units, length: text.length }
+    return { query: match?.query ?? null, units }
   }
-  const after = check('---\ntitle: Long note\n---\n\n', `\n\n${body}`)
-  assert.equal(after.query, 'h2')
-  assert.ok(after.units <= 3 * 4096, String(after.units))
-  const inside = check('---\ntitle: Long note\n', `\n---\n\n${body}`)
-  assert.equal(inside.query, null)
-  assert.ok(inside.units <= 3 * 4096, String(inside.units))
-  // A divider at the top with no closing line is read once, in pieces.
-  const divider = check('---\n\n', `\n\n${body}`)
-  assert.equal(divider.query, 'h2')
-  assert.ok(divider.units <= divider.length + 3 * 4096, String(divider.units))
+  const note = (before, after) =>
+    EditorState.create({
+      doc: `${before}/h2${after}`,
+      selection: { anchor: before.length + 3 },
+      extensions: [frontmatterBounds],
+    })
+  assert.deepEqual(
+    check(note('---\ntitle: Long note\n---\n\n', `\n\n${body}`)),
+    { query: 'h2', units: 7 },
+  )
+  assert.deepEqual(check(note('---\ntitle: Long note\n', `\n---\n\n${body}`)), {
+    query: null,
+    units: 7,
+  })
+  // A divider without a closing line: the editor reads a bounded part of
+  // the note at first and the rest in idle time; edits read their lines.
+  frontmatterProbe.lines = 0
+  let divider = note('---\n\n', `\n\n${body}`)
+  assert.ok(frontmatterProbe.lines < 10_000, String(frontmatterProbe.lines))
+  for (let query = 0; query < 3; query++)
+    assert.deepEqual(check(divider), { query: 'h2', units: 7 })
+  frontmatterProbe.lines = 0
+  divider = divider.update({ changes: { from: 4, insert: 'x' } }).state
+  assert.ok(frontmatterProbe.lines <= 2, String(frontmatterProbe.lines))
 })

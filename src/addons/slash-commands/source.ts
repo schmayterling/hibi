@@ -2,8 +2,8 @@ import { isolateHistory } from '@codemirror/commands'
 import { syntaxTree } from '@codemirror/language'
 import { Prec, Transaction } from '@codemirror/state'
 import { EditorView, ViewPlugin } from '@codemirror/view'
+import { frontmatterBounds } from '../../renderer/src/formatted-frontmatter'
 import { isMarkdownDocument } from '../../shared/document-types'
-import { frontmatterEnd, readFrontmatter } from '../../shared/frontmatter'
 import type { AddonContext } from '../api'
 import { maximumSlashQueryUnits, slashQuery } from './commands'
 import { createSlashMenu } from './menu'
@@ -33,17 +33,13 @@ function current(view: EditorView) {
     if (/^(FencedCode|CodeBlock|InlineCode|HTMLBlock|HTMLTag)$/.test(node.name))
       return null
   }
-  // Markdown's syntax tree does not recognize YAML frontmatter, which is
-  // read only up to its closing line.
-  const { doc } = view.state
-  if (doc.sliceString(0, 4).startsWith('---')) {
-    const end = frontmatterEnd({
-      length: doc.length,
-      slice: (from, to) => doc.sliceString(from, to),
-    })
-    if (selection.head < end && readFrontmatter(doc.sliceString(0, end)))
-      return null
-  }
+  // Markdown's syntax tree does not recognize YAML frontmatter, whose bounds
+  // the editor keeps through edits, searching long notes in idle time.
+  if (
+    view.state.doc.sliceString(0, 4).startsWith('---') &&
+    selection.head < (view.state.field(frontmatterBounds, false)?.end ?? 0)
+  )
+    return null
   return { from: line.from, to: selection.head, query }
 }
 
@@ -147,6 +143,7 @@ export function sourceSlashCommands(context: AddonContext) {
         }
       },
       {
+        provide: () => frontmatterBounds,
         eventHandlers: {
           keydown(event) {
             if (event.key === 'Enter' || event.key === 'Tab') this.refresh()

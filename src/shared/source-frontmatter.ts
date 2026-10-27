@@ -17,9 +17,10 @@ export type FrontmatterRead = Readonly<{
 
 /** A completed read owns only scalars. Its unfinished generator owns the input. */
 export function* readSourceFrontmatter(
-  source: SourceSnapshot,
+  source: Pick<SourceSnapshot, 'utf16Length' | 'chunks' | 'sliceRaw'>,
 ): Generator<void, FrontmatterRead> {
   const chunks = source.chunks()[Symbol.iterator]()
+  const lineEnds = /[\r\n\u2028\u2029]/g
   let chunk = '',
     chunkFrom = 0,
     position = 0,
@@ -114,8 +115,16 @@ export function* readSourceFrontmatter(
           }
         }
       }
-      lineStart = /[\r\n\u2028\u2029]/.test(take())
-      if (position % 4096 === 0) yield
+      // On to the next line's start in this piece, or the piece's end.
+      peek()
+      lineEnds.lastIndex = position - chunkFrom
+      const end = lineEnds.exec(chunk)
+      const next = chunkFrom + (end ? end.index + 1 : chunk.length)
+      inspectedTo = Math.max(inspectedTo, next)
+      const pause = Math.floor(next / 4096) > Math.floor(position / 4096)
+      position = next
+      lineStart = !!end
+      if (pause) yield
     }
     // No closing marker: a future append can complete one.
     dependsOnEnd = true
@@ -135,4 +144,51 @@ export function reuseFrontmatterRead(
       change.from >= read.inspectedTo &&
       (!read.dependsOnEnd || change.from !== read.inspectedTo),
   )
+}
+
+/**
+ * Whether edits keep a read that found an opening line and no closing one:
+ * they leave the opening line alone and make no line that could close it.
+ * `source` is the source after them. Lines are its LF lines, as in the
+ * formatted view, and edits that insert other line ends do not keep it. The
+ * kept read is up to `source`'s end.
+ */
+export function keepUnclosedFrontmatterRead(
+  read: FrontmatterRead,
+  changes: readonly RawEdit[],
+  source: SourceSnapshot,
+): FrontmatterRead | null {
+  if (read.bounds || !read.dependsOnEnd) return null
+  const opening = source.lineAt(0)
+  if (
+    !opening ||
+    opening.number === source.lineCount ||
+    !/^\uFEFF?---[ \t]*$/.test(source.sliceRaw(0, opening.to))
+  )
+    return null
+  /** Whether the line starting at `start` is a closing line, read only up to its marker's end. */
+  const closes = (start: number) => {
+    const line = source.lineAt(start)
+    if (!line || line.to - start < 3) return false
+    const marker = source.sliceRaw(start, start + 3)
+    if (marker !== '---' && marker !== '...') return false
+    for (let at = start + 3; at < line.to; at += 64) {
+      const after = /[^ \t]/.exec(
+        source.sliceRaw(at, Math.min(line.to, at + 64)),
+      )?.[0]
+      if (after) return /[\r\u2028\u2029]/.test(after)
+    }
+    return true
+  }
+  let shift = 0
+  for (const { from, to, insert } of changes) {
+    const at = from + shift
+    shift += insert.length - (to - from)
+    if (/[\r\u2028\u2029]/.test(insert)) return null
+    const line = source.lineAt(at)
+    if (!line || line.number === 1 || closes(line.from)) return null
+    for (let i = insert.indexOf('\n'); i >= 0; i = insert.indexOf('\n', i + 1))
+      if (closes(at + i + 1)) return null
+  }
+  return Object.freeze({ ...read, inspectedTo: source.utf16Length })
 }

@@ -33,11 +33,15 @@ function current(view: EditorView) {
     if (/^(FencedCode|CodeBlock|InlineCode|HTMLBlock|HTMLTag)$/.test(node.name))
       return null
   }
-  // Markdown's syntax tree does not recognize YAML frontmatter, whose bounds
-  // the editor keeps through edits, searching long notes in idle time.
+  // Markdown's syntax tree does not recognize YAML frontmatter. Keep
+  // commands out until the editor's bounded search can classify the prefix.
+  const bounds = view.state.field(frontmatterBounds, false)
   if (
-    view.state.doc.sliceString(0, 4).startsWith('---') &&
-    selection.head < (view.state.field(frontmatterBounds, false)?.end ?? 0)
+    bounds &&
+    (selection.head < bounds.end ||
+      (bounds.open &&
+        !bounds.closer &&
+        bounds.searched < view.state.doc.length))
   )
     return null
   return { from: line.from, to: selection.head, query }

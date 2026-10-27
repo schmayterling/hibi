@@ -92,7 +92,7 @@ test('frontmatter checks of a 50 mib note read a few pieces, never the whole not
   // A divider with no closing line is read on a few pieces per check.
   const divider = note(`---\n\n${body}`)
   for (let check = 0; check < 3; check++) {
-    assert.equal(offered(divider.document), true)
+    assert.equal(offered(divider.document), false)
     const { units, materializations } = divider.read()
     assert.equal(materializations, 0)
     assert.ok(units > 0 && units <= 3 * 4096, String(units))
@@ -103,7 +103,11 @@ test('a finished frontmatter read lasts through edits that cannot change it', ()
   const divider = note(`---\n\n${body}`)
   // Checks read on until the read finishes; then they read nothing.
   let checks = 0
-  while (offered(divider.document) && divider.read().units) checks++
+  while (!offered(divider.document)) {
+    assert.ok(divider.read().units > 0)
+    checks++
+  }
+  divider.read()
   assert.ok(checks > 1000, String(checks))
   // Typing in the body, a new line and a line that only looks like one keep it.
   const at = body.length / 2 + 5
@@ -128,6 +132,34 @@ test('a finished frontmatter read lasts through edits that cannot change it', ()
   properties.read()
   assert.equal(offered(properties.document), false)
   assert.ok(properties.read().units > 0)
+})
+
+test('unfinished frontmatter reads withhold the action until classification finishes', () => {
+  const properties = note(`---\ntitle: ${'x'.repeat(24_000)}\n---\n\nbody`)
+  assert.equal(offered(properties.document), false)
+  for (let check = 0; check < 10; check++)
+    assert.equal(offered(properties.document), false)
+  assert.equal(properties.read().materializations, 0)
+  const divider = note(`---\n\n${'words\n'.repeat(4000)}`)
+  assert.equal(offered(divider.document), false)
+  for (let check = 0; check < 10; check++) offered(divider.document)
+  assert.equal(offered(divider.document), true)
+  assert.equal(divider.read().materializations, 0)
+})
+
+test('repairing an invalid closed mapping agrees with a fresh frontmatter read', () => {
+  for (const ending of ['\n', '', ' \t']) {
+    const invalid = note(`---\nscalar\n---${ending}`)
+    assert.equal(offered(invalid.document), true)
+    invalid.edit([{ from: 4, to: 10, insert: 'key: value' }])
+    const fresh = note(`---\nkey: value\n---${ending}`)
+    assert.equal(offered(fresh.document), false)
+    assert.equal(
+      offered(invalid.document),
+      offered(fresh.document),
+      JSON.stringify(ending),
+    )
+  }
 })
 
 test('commands without checks read nothing, and `when` reads the note once for all of them', () => {

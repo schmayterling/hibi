@@ -105,9 +105,9 @@ function readWhenIdle(
 }
 
 /**
- * Whether a note starts with frontmatter. A check reads a few pieces of the
- * note; idle time reads on, and a finished read lasts through edits that
- * cannot change it. Until a read finishes, the note has none.
+ * Whether frontmatter is present or its read is unfinished. A check reads a
+ * few pieces of the note; idle time reads on, and a finished read lasts through edits that
+ * cannot change it. Until a read finishes, withhold the add action.
  */
 export function hasFrontmatter(note: AddonNoteReader) {
   const document = noteDocument(note)
@@ -131,5 +131,5 @@ export function hasFrontmatter(note: AddonNoteReader) {
     advance(reading, document, 2)
     if (!reading.read) readWhenIdle(reading, document)
   }
-  return !!reading.read?.bounds
+  return !reading.read || !!reading.read.bounds
 }

@@ -13,6 +13,8 @@ export type FrontmatterRead = Readonly<{
   bounds: FrontmatterBounds | null
   inspectedTo: number
   dependsOnEnd: boolean
+  /** The opening line was followed by a complete scan with no closing marker. */
+  unclosed: boolean
 }>
 
 /** A completed read owns only scalars. Its unfinished generator owns the input. */
@@ -43,11 +45,15 @@ export function* readSourceFrontmatter(
     if (character) position++
     return character
   }
-  const finish = (bounds: FrontmatterBounds | null): FrontmatterRead =>
+  const finish = (
+    bounds: FrontmatterBounds | null,
+    unclosed = false,
+  ): FrontmatterRead =>
     Object.freeze({
       bounds: bounds && Object.freeze(bounds),
       inspectedTo,
       dependsOnEnd,
+      unclosed,
     })
   function* spaces() {
     while (peek() === ' ' || peek() === '\t') {
@@ -128,7 +134,7 @@ export function* readSourceFrontmatter(
     }
     // No closing marker: a future append can complete one.
     dependsOnEnd = true
-    return finish(null)
+    return finish(null, true)
   } finally {
     chunks.return?.()
   }
@@ -158,7 +164,7 @@ export function keepUnclosedFrontmatterRead(
   changes: readonly RawEdit[],
   source: SourceSnapshot,
 ): FrontmatterRead | null {
-  if (read.bounds || !read.dependsOnEnd) return null
+  if (!read.unclosed) return null
   const opening = source.lineAt(0)
   if (
     !opening ||

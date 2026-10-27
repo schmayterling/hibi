@@ -144,7 +144,7 @@ export type FormattedContribution = {
   syntax?: MarkdownConfig | readonly MarkdownConfig[]
   /**
    * The syntax's inline parsers start only at characters in
-   * ``\`&*_![]<>~^$:``, URLs or email addresses, so the language keeps
+   * ``\`&*_![]<>~^$:=``, URLs or email addresses, so the language keeps
    * skipping text without them; other contributed inline syntax turns that off.
    */
   inlineStops?: boolean

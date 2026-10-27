@@ -23,7 +23,7 @@ const emailCharacter = (code: number) =>
 export function createPlainTextRunExtension() {
   const approved = new WeakSet<MarkdownParser>(),
     contexts = new WeakMap<InlineContext, Stops>(),
-    syntax = /[\\`&*_![\]<>\r\n~^$:]/g,
+    syntax = /[\\`&*_![\]<>\r\n~^$:=]/g,
     urls = /www\.|https?:\/\/|mailto:|xmpp:/g
   const extension: MarkdownConfig = {
     parseInline: [

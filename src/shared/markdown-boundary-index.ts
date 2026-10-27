@@ -48,6 +48,8 @@ export class MarkdownBoundaryIndex {
   readonly parser: ChunkedMarkdownParser
   private parse: ChunkedPartialParse
   private tree: Tree | null = null
+  private fragments: readonly TreeFragment[] = []
+  private advanced = false
   private source: SourceSnapshot
   readonly config: BoundaryConfig
   constructor(
@@ -82,10 +84,11 @@ export class MarkdownBoundaryIndex {
   }
   advance() {
     this.tree = this.parse.advance()
+    this.advanced = true
     return this.tree !== null
   }
   apply(prepared: PreparedSourceOperation) {
-    const tree = this.tree ?? this.parse.snapshot()
+    const tree = this.tree ?? (this.advanced ? this.parse.snapshot() : null)
     let offset = 0
     const changes = editorChangesFromSource(
       prepared.before,
@@ -100,15 +103,17 @@ export class MarkdownBoundaryIndex {
       offset += change.insert.length - (change.to - change.from)
       return result
     })
-    const fragments = TreeFragment.applyChanges(
-      TreeFragment.addTree(tree),
+    // An unadvanced replacement parse has no verified progress to retain.
+    this.fragments = TreeFragment.applyChanges(
+      tree ? TreeFragment.addTree(tree) : this.fragments,
       changes,
     )
     this.source = prepared.after
     this.tree = null
+    this.advanced = false
     this.parse = this.parser.startBoundaryParse(
       boundaryInput(prepared.after),
-      fragments,
+      this.fragments,
       this.config.prefix,
     )
   }

@@ -62,12 +62,11 @@ async function hover(token) {
   const line = page.locator('.rich-pane:not([inert]) .cm-line', {
     hasText: token,
   })
-  const box = await line.boundingBox()
   const top = await line.evaluate(
     (line) => Number.parseFloat(line.style.paddingTop) || 0,
   )
   await page.mouse.move(0, 0)
-  await page.mouse.move(box.x + 90, box.y + top + 14)
+  await line.hover({ position: { x: 90, y: top + 14 } })
   await page.waitForFunction(() => {
     const handle = document.querySelector(
       '.rich-pane:not([inert]) .block-drag-handle',

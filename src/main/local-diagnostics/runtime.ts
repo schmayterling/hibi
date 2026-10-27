@@ -371,12 +371,7 @@ export class LocalDiagnostics {
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
       if (bytesRead > 64 * 1024) return
       const data = JSON.parse(buffer.toString('utf8', 0, bytesRead))
-      if (
-        data?.schema !== 1 ||
-        !Array.isArray(data.artifacts) ||
-        data.artifacts.length > 256
-      )
-        return
+      if (data?.schema !== 1 || !Array.isArray(data.artifacts)) return
       for (const entry of data.artifacts) {
         if (
           Array.isArray(entry) &&

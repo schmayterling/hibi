@@ -83,8 +83,7 @@ export function diagnosticsBuild() {
         if (
           artifact(name) &&
           entry.type === 'chunk' &&
-          trustedModules(entry.modules) &&
-          workers.size < 256
+          trustedModules(entry.modules)
         )
           workers.add(name)
       }
@@ -103,12 +102,27 @@ export function diagnosticsBuild() {
         )
         .map(([name]) => name)
         .sort()
-        .slice(0, 256)
-      const artifacts = files.map((file, index) => [file, index + 100])
+      const artifacts = files.map((file, index) => [file, index + 100] as const)
+      const source = JSON.stringify({ schema: 1, artifacts })
+      const sessionBytes = artifacts.reduce(
+        (bytes, [file, id]) =>
+          bytes +
+          Buffer.byteLength(JSON.stringify([`app://hibi/${file}`, id])) +
+          1,
+        128,
+      )
+      if (
+        Buffer.byteLength(source) > 64 * 1024 ||
+        sessionBytes > 60 * 1024 ||
+        artifacts.some(([, id]) => id > 4096)
+      )
+        throw new Error(
+          'Diagnostic artifact catalog exceeds its transport bounds.',
+        )
       this.emitFile({
         type: 'asset',
         fileName: 'diagnostic-artifacts.json',
-        source: JSON.stringify({ schema: 1, artifacts }),
+        source,
       })
       // Keep cached worker approvals during watch builds, but forget outputs
       // that no longer belong to the current renderer bundle.

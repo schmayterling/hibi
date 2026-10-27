@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { history, isolateHistory, redo, undo } from '@codemirror/commands'
 import { EditorState } from '@codemirror/state'
 import { Decoration, WidgetType } from '@codemirror/view'
 import { Tree } from '@lezer/common'
@@ -188,7 +189,7 @@ test('code indentation survives partial trees, prefix edits and repeated tail ke
   state = state.update({
     changes: { from: first, to: first + 2, insert: '    ' },
   }).state
-  assert.equal(state.field(codeIndent), null)
+  assert.equal(state.field(codeIndent).first, null)
   press('    ')
   state = state.update({
     changes: { from: first, insert: '\tearlier\n' },
@@ -208,6 +209,177 @@ test('code indentation strips quote and indented-code prefixes', () => {
   )
   assert.equal(run('    x\n      |y', tab), '    x\n        |y')
   assert.equal(run('>     x\n>       |y', tab), '>     x\n>         |y')
+})
+
+test('indented code ignores whitespace-only lines when choosing its unit', () => {
+  const tab = (state, tree, hidden) => indent(state, tree, false, hidden)
+  for (const prefix of ['', '> ', '> > ']) {
+    const control = `${prefix}    x\n${prefix}      y\n${prefix}    |z`
+    assert.equal(run(control, tab), control.replace('|z', '  |z'))
+    for (const whitespace of ['\t\t', ' \t \t', '        ']) {
+      const source = `${prefix}    x\n${prefix}${whitespace}\n${prefix}      y\n${prefix}    |z`
+      assert.equal(run(source, tab), source.replace('|z', '  |z'))
+    }
+  }
+  // Fenced code preserves its blank tabs as CodeText.
+  assert.equal(
+    run('~~~\nx\n\t\t\n  y\n|z\n~~~', tab),
+    '~~~\nx\n\t\t\n  y\n\t|z\n~~~',
+  )
+})
+
+for (const size of [4, 1024])
+  for (const partial of [false, true])
+    test(`tail tabs bound line reads with no earlier indent: ${size} lines, partial ${partial}`, () => {
+      const source = `~~~\n${'word '.repeat(51).concat('\n').repeat(size)}y\n~~~`
+      let state = EditorState.create({
+        doc: source,
+        selection: { anchor: source.lastIndexOf('y') },
+        extensions: codeIndent,
+      })
+      const tree = () => {
+        const complete = markdown.parse(state.doc.toString())
+        if (!partial) return complete
+        const code = complete.topNode.getChild('FencedCode')
+        const opening = code.firstChild,
+          closing = code.lastChild
+        const tail = state.doc.lineAt(state.selection.main.head)
+        const fragment = new Tree(
+          code.type,
+          [
+            new Tree(opening.type, [], [], opening.to - opening.from),
+            new Tree(
+              code.getChild('CodeText').type,
+              [],
+              [],
+              tail.to - tail.from,
+            ),
+            new Tree(closing.type, [], [], closing.to - closing.from),
+          ],
+          [0, tail.from - code.from, closing.from - code.from],
+          code.to - code.from,
+        )
+        return new Tree(complete.type, [fragment], [code.from], complete.length)
+      }
+      // Prime detection without editing, so all three keys have a checked prefix.
+      state = state.update({
+        effects: indent(state, tree(), false, Decoration.none).effects,
+      }).state
+      const counts = []
+      for (let key = 0; key < 3; key++) {
+        const parsed = tree()
+        const prototype = Object.getPrototypeOf(state.doc)
+        const originals = { lineAt: prototype.lineAt, line: prototype.line }
+        let lines = 0,
+          units = 0
+        for (const name of ['lineAt', 'line'])
+          prototype[name] = function (...args) {
+            const line = originals[name].apply(this, args)
+            lines++
+            units += line.length
+            return line
+          }
+        const head = state.selection.main.head
+        try {
+          state = state.update(
+            indent(state, parsed, false, Decoration.none),
+          ).state
+        } finally {
+          Object.assign(prototype, originals)
+        }
+        counts.push({ lines, units })
+        assert.equal(state.doc.sliceString(head, head + 1), '\t')
+      }
+      console.log(
+        'tail-indent-reads',
+        JSON.stringify({ size, partial, counts }),
+      )
+      assert.ok(
+        counts.every(({ lines, units }) => lines < 12 && units < 4096),
+        'warm tail keys must only read local lines',
+      )
+    })
+
+test('cached code indentation matches fresh detection through edits, undo and redo', () => {
+  for (const source of [
+    'intro\n\n  ~~~\nx\ny\n  ~~~',
+    'intro\n\n> >   ~~~\n> > x\n> > y\n> >   ~~~',
+    'intro\n\n    x\n\t\t\n      y\n    z',
+  ]) {
+    let state = EditorState.create({
+      doc: source,
+      selection: {
+        anchor: source.lastIndexOf(source.endsWith('z') ? 'z' : 'y'),
+      },
+      extensions: [codeIndent, history()],
+    })
+    const check = () => {
+      const tree = markdown.parse(state.doc.toString())
+      const fresh = EditorState.create({
+        doc: state.doc,
+        selection: state.selection,
+      })
+      const expected = indent(fresh, tree, false, Decoration.none)
+      const spec = indent(state, tree, false, Decoration.none)
+      assert.deepEqual(
+        state.changes(spec.changes).toJSON(),
+        fresh.changes(expected.changes).toJSON(),
+      )
+      state = state.update({ effects: spec.effects }).state
+    }
+    let edits = 0
+    const edit = (changes) => {
+      state = state.update({
+        changes,
+        annotations: isolateHistory.of('full'),
+      }).state
+      edits++
+      check()
+    }
+    check()
+    // Editing inside an indented opening fence must never scan that fence as code.
+    if (source.includes('~~~')) {
+      const opening = state.doc.toString().indexOf('  ~~~')
+      edit({ from: opening + 1, insert: ' ' })
+    }
+    edit({ from: 0, insert: 'before\n' })
+    edit({ from: state.doc.toString().indexOf('x'), insert: '  ' })
+    const first = state.doc.toString().indexOf('x')
+    edit({ from: first - 2, to: first, insert: '\t' })
+    const at = state.doc.toString().indexOf('x')
+    const line = state.doc.lineAt(at)
+    edit({ from: at, insert: `a\n${line.text.slice(0, at - line.from)}` })
+    const removed = state.doc.lineAt(state.doc.toString().indexOf('a'))
+    edit({ from: removed.from, to: removed.to + 1 })
+    edit([
+      { from: 0, insert: 'prefix\n' },
+      { from: state.selection.main.head, insert: '    ' },
+    ])
+    // Restore every earlier first-line choice, then replay it with warm metadata.
+    for (let step = 0; step < edits; step++) {
+      assert.ok(
+        undo({
+          state,
+          dispatch: (transaction) => {
+            state = transaction.state
+          },
+        }),
+      )
+      check()
+    }
+    assert.equal(state.doc.toString(), source)
+    for (let step = 0; step < edits; step++) {
+      assert.ok(
+        redo({
+          state,
+          dispatch: (transaction) => {
+            state = transaction.state
+          },
+        }),
+      )
+      check()
+    }
+  }
 })
 
 test('typing on the blank line between two blocks starts its own paragraph', () => {

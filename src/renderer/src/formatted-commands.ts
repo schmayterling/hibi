@@ -371,6 +371,7 @@ type CodeIndent = {
   from: number
   to: number
   prefix: string
+  scan: number
   first: { from: number; to: number; unit: string } | null
 }
 const rememberCodeIndent = StateEffect.define<CodeIndent>()
@@ -378,22 +379,30 @@ const rememberCodeIndent = StateEffect.define<CodeIndent>()
 /** One active code block's first indent, independent of its parsed fragments. */
 export const codeIndent = StateField.define<CodeIndent | null>({
   create: () => null,
-  update(found, { changes, docChanged, effects }) {
+  update(found, { changes, docChanged, effects, newDoc }) {
     for (const effect of effects)
       if (effect.is(rememberCodeIndent)) found = effect.value
     if (!found || !docChanged) return found
-    // Earlier code or container-prefix edits can change which indent is first.
-    if (changes.touchesRange(found.from, found.first?.to ?? found.to))
-      return null
+    if (changes.touchesRange(found.from)) return null
+    // Keep the checked prefix; only changed lines can introduce an earlier indent.
+    let scan = changes.mapPos(found.scan)
+    changes.iterChangedRanges((from, to, next) => {
+      if (from <= found.scan && to >= found.from)
+        scan = Math.min(scan, newDoc.lineAt(next).from)
+    })
     return {
       ...found,
       from: changes.mapPos(found.from),
       to: changes.mapPos(found.to),
-      first: found.first && {
-        ...found.first,
-        from: changes.mapPos(found.first.from),
-        to: changes.mapPos(found.first.to),
-      },
+      scan,
+      first:
+        found.first && !changes.touchesRange(found.from, found.first.to)
+          ? {
+              ...found.first,
+              from: changes.mapPos(found.first.from),
+              to: changes.mapPos(found.first.to),
+            }
+          : null,
     }
   },
 })
@@ -405,29 +414,43 @@ function codeIndentUnit(state: EditorState, code: SyntaxNode) {
   for (let parent = code.parent; parent; parent = parent.parent)
     if (parent.name === 'Blockquote') quotes++
   const prefix = `${code.name}:${quotes}`
+  const fenced = code.name === 'FencedCode'
   let found = state.field(codeIndent, false)
   if (
     found?.from !== opening.from ||
     found.to !== code.to ||
     found.prefix !== prefix
-  ) {
-    const fenced = code.name === 'FencedCode'
+  )
+    found = {
+      from: opening.from,
+      to: code.to,
+      prefix,
+      scan: fenced ? opening.to + 1 : opening.from,
+      first: null,
+    }
+  if (!found.first) {
     const closing = code.lastChild
     const end =
       fenced && closing?.name === 'CodeMark' && closing.from > opening.to
         ? state.doc.lineAt(closing.from).from - 1
         : code.to
     const markers = new RegExp(`^(?:[ \\t]*>[ \\t]?){${quotes}}`)
-    found = { from: opening.from, to: code.to, prefix, first: null }
-    for (let pos = fenced ? opening.to + 1 : opening.from; pos <= end; ) {
+    found = { ...found }
+    for (
+      let pos = Math.max(found.scan, fenced ? opening.to + 1 : opening.from);
+      pos <= end;
+    ) {
       const line = state.doc.lineAt(pos)
+      found.scan = line.from
       let start = markers.exec(line.text)?.[0].length ?? 0
       if (!fenced)
         start =
           line.number === opening.number
             ? code.from - line.from
             : findColumn(line.text, countColumn(line.text, 4, start) + 4, 4)
-      const unit = detectIndentUnit(line.text.slice(start))
+      const text = line.text.slice(start)
+      // Indented-code parsing discards blank whitespace; fenced code preserves it.
+      const unit = !fenced && blank(text) ? undefined : detectIndentUnit(text)
       if (unit) {
         found.first = { from: line.from, to: line.to, unit }
         break

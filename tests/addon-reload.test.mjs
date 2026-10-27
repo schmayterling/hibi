@@ -13,6 +13,29 @@ import {
 } from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
 
+async function reportSelection(t, editor) {
+  t.diagnostic(
+    JSON.stringify(
+      await editor.evaluate((element) => {
+        const view = element.cmTile?.root.view
+        const selection = view?.state.selection.main
+        return {
+          selected: getSelection()?.toString(),
+          focused: document.activeElement === element,
+          active: document.activeElement?.tagName,
+          documentFocused: document.hasFocus(),
+          range: selection && {
+            anchor: selection.anchor,
+            head: selection.head,
+          },
+          readOnly: view?.state.readOnly,
+          editable: element.isContentEditable,
+        }
+      }),
+    ),
+  )
+}
+
 const scheme = {
   id: 'dusk',
   name: 'Reload dusk',
@@ -721,16 +744,22 @@ test('reloading an editor extension restores the selection and focus once it set
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
+  let cdp
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1 })
     })
+    await cdp?.detach()
     await app.close()
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   await selectFormattedEngine(app, page, t.formattedEngine)
+  if (t.formattedEngine === 'codemirror') {
+    cdp = await page.context().newCDPSession(page)
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  }
   await waitForDocumentEditor(app, page)
   const editor = page.getByRole('textbox', { name: /document editor/i })
   await editor.click()
@@ -746,13 +775,20 @@ test('reloading an editor extension restores the selection and focus once it set
   await page
     .locator('style[data-addon-style="markdown.alerts"]:not([data-stale])')
     .waitFor({ state: 'attached' })
-  await page.waitForFunction(
-    () =>
-      getSelection().toString() === 'ad me' &&
-      document.activeElement?.matches(
-        '.rich-pane :is(.ProseMirror, .cm-content)[contenteditable="true"]',
-      ),
-  )
+  await t.test('reload retains chosen text and document focus', async () => {
+    await page
+      .waitForFunction(
+        () =>
+          getSelection().toString() === 'ad me' &&
+          document.activeElement?.matches(
+            '.rich-pane :is(.ProseMirror, .cm-content)[contenteditable="true"]',
+          ),
+      )
+      .catch(async (error) => {
+        await reportSelection(t, editor)
+        throw error
+      })
+  })
   assert.match(await editor.innerText(), /Hello world, reload me/)
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).dirty,
@@ -805,16 +841,22 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
+  let cdp
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1 })
     })
+    await cdp?.detach()
     await app.close()
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   await selectFormattedEngine(app, page, t.formattedEngine)
+  if (t.formattedEngine === 'codemirror') {
+    cdp = await page.context().newCDPSession(page)
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  }
   await waitForDocumentEditor(app, page)
   await page.waitForFunction(() => window.consumerStarts === 1)
   const editor = page.getByRole('textbox', { name: /document editor/i })
@@ -878,9 +920,16 @@ test('editing stays read-only while an editor extension reloads and keeps a sele
     )
     await editor.getByText('Rendered widget text').waitFor()
   }
-  await page.waitForFunction(
-    (moved) => getSelection().toString() === moved,
-    moved,
+  await t.test(
+    'reload keeps the selection moved while input was read-only',
+    async () => {
+      await page
+        .waitForFunction((moved) => getSelection().toString() === moved, moved)
+        .catch(async (error) => {
+          await reportSelection(t, editor)
+          throw error
+        })
+    },
   )
   assert.equal(await markdown(), before)
   await page.keyboard.press('End')

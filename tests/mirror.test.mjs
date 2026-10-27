@@ -5,7 +5,11 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { Schema } from '@tiptap/pm/model'
 import { markdownPositions } from '../src/renderer/src/markdown-positions.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron } from './electron.mjs'
+import {
+  testFormattedEngines as it,
+  selectFormattedEngine,
+} from './formatted-engine.mjs'
 import { replaceRichText } from './keyboard.mjs'
 
 test('caret mapping skips formatting and link destinations, including repeated words', () => {
@@ -26,7 +30,7 @@ test('caret mapping skips formatting and link destinations, including repeated w
   assert.equal(map(source.indexOf('next'), 'source'), 11)
 })
 
-test('split view mirrors the caret without moving focus or selecting the other pane', {
+it('split view mirrors the caret without moving focus or selecting the other pane', {
   timeout: 30000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-mirror-'))
@@ -43,7 +47,7 @@ test('split view mirrors the caret without moving focus or selecting the other p
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
   const rich = page.getByRole('textbox', { name: /document editor/i })
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await replaceRichText(page, rich, 'mirror this text')
   await page
     .getByRole('button', { name: /^side-by-side$/i, exact: true })

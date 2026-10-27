@@ -2,12 +2,15 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import {
   electron,
   startupDiagnostics,
   waitForDocumentEditor,
 } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -112,11 +115,13 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
   })
   phase = 'first window'
   page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
   const rich = page.getByRole('textbox', { name: /document editor/i })
   phase = 'initial editor'
   await rich.waitFor()
   phase = 'dismiss start screen'
   await page.getByRole('button', { name: /dismiss this screen/i }).click()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   phase = 'initial caret'
   // Exercise caret rendering without taking focus from the user's active window.
   await page.evaluate(() => {
@@ -128,9 +133,11 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     const caret = document
       .querySelector('.editor-cursor')
       .getBoundingClientRect()
-    const baseline = document
-      .querySelector('.tiptap p br')
-      .getBoundingClientRect()
+    const formatted = document.querySelector('.hibi-formatted .cm-content')
+    const point = formatted?.cmTile.root.view.coordsAtPos(0)
+    const baseline = point
+      ? { x: point.left, y: point.top, height: point.bottom - point.top }
+      : document.querySelector('.tiptap p br').getBoundingClientRect()
     return {
       x: caret.x - baseline.x,
       y: caret.y - baseline.y,
@@ -170,6 +177,19 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
     .getByRole('main', { name: /^settings$/i })
     .waitFor({ state: 'hidden' })
   await page.locator('.editor-surface:not([inert])').waitFor()
+  if (t.formattedEngine === 'codemirror') {
+    await page.evaluate(
+      () =>
+        new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        ),
+    )
+    assert.equal(
+      await rich.evaluate((element) => document.activeElement === element),
+      true,
+      'closing appearance settings restores the formatted editor focus and caret',
+    )
+  }
   await cursor.waitFor()
   await page.evaluate(
     () =>
@@ -238,8 +258,18 @@ test('cursor appearance, movement, selection hiding, and persistence in both edi
         .classList.contains('mode-side-by-side') &&
       document.querySelector('.rich-pane').getAnimations().length === 0,
   )
-  // Split preview is read-only; its editable source pane owns the typing caret.
-  assert.equal(await rich.getAttribute('contenteditable'), 'false')
+  await t.test(
+    'split formatted view is read-only',
+    {
+      todo:
+        t.formattedEngine === 'codemirror'
+          ? 'formatted gap split-001: split formatted view must remain read-only'
+          : undefined,
+    },
+    async () => {
+      assert.equal(await rich.getAttribute('contenteditable'), 'false')
+    },
+  )
   phase = 'split source caret'
   await page.getByRole('textbox', { name: /markdown editor/i }).focus()
   await page.locator('.source-pane .editor-cursor').waitFor()

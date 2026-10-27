@@ -11,6 +11,7 @@ import { CLIPBOARD_CHANNELS } from '../shared/clipboard'
 import { APPEARANCE_CHANNEL } from '../shared/colorschemes'
 import { DEPENDENCY_CHANNELS } from '../shared/dependencies'
 import {
+  ACCESSIBILITY_CHANNELS,
   APP_INFO_CHANNEL,
   BOOTSTRAP_CHANNELS,
   type DesktopApi,
@@ -634,6 +635,20 @@ if (process.isMainFrame) {
     onWorkspaceListChanged: (callback) =>
       subscribe(WORKSPACE_CHANNELS.listChanged, callback),
     getAppInfo: () => ipcRenderer.invoke(APP_INFO_CHANNEL),
+    onAccessibilitySupport: (callback) => {
+      let current = true
+      const stop = subscribe<boolean>(ACCESSIBILITY_CHANNELS.changed, (on) => {
+        current = false
+        callback(on)
+      })
+      void transport.invoke(ACCESSIBILITY_CHANNELS.get).then((on) => {
+        if (current) callback(on)
+      }, console.error)
+      return () => {
+        current = false
+        stop()
+      }
+    },
     setUiCase: (value) => ipcRenderer.invoke(UI_CASE_CHANNEL, value),
     getDocument: () => ipcRenderer.invoke(DOCUMENT_CHANNELS.get),
     selectDocumentTab: (id) =>

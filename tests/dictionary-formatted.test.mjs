@@ -11,8 +11,8 @@ const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 const fixture = (name) =>
   readFile(new URL(`./fixtures/dictionary/${name}`, import.meta.url), 'utf8')
 
-/** Launch with the dictionary, autocomplete and the codemirror formatted view, and answer lookups from fixtures. */
-async function launch(t, files) {
+/** Launch with the dictionary, autocomplete and the `engine` formatted view, and answer lookups from fixtures. */
+async function launch(t, files, engine = 'codemirror') {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-dictionary-formatted-'))
   for (const [name, text] of Object.entries(files))
     await writeFile(join(profile, name), text)
@@ -33,11 +33,13 @@ async function launch(t, files) {
   const page = await app.firstWindow()
   page.setDefaultTimeout(10000)
   await waitForDocumentEditor(app, page)
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
-  await page.reload()
-  await waitForDocumentEditor(app, page)
+  if (engine === 'codemirror') {
+    await page.evaluate(() =>
+      localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+    )
+    await page.reload()
+    await waitForDocumentEditor(app, page)
+  }
   const responses = {
     'https://en.wiktionary.org/api/rest_v1/page/definition/happy':
       await fixture('wiktionary-happy.json'),
@@ -284,4 +286,163 @@ test('the dictionary replaces the word in the formatted split pane it was invoke
     await page.locator(`${pane('left')} .cm-content`).textContent(),
     'Glad',
   )
+})
+
+/** Put the rich editor's caret `offset` characters into the first `text` of a paragraph. */
+const richCaret = (page, text, offset) =>
+  page.evaluate(
+    ({ text, offset }) => {
+      const editor = document.querySelector('.rich-pane .tiptap').editor
+      let at = null
+      editor.state.doc.descendants((node, pos) => {
+        if (at !== null) return false
+        if (!node.isTextblock) return true
+        const index = node.textContent.indexOf(text)
+        if (index >= 0) at = pos + 1 + index + offset
+        return false
+      })
+      editor.commands.focus()
+      editor.commands.setTextSelection(at)
+    },
+    { text, offset },
+  )
+
+/** Look up the caret word's synonyms and choose `choice`. */
+async function chooseSynonym(app, page, word, choice) {
+  await pressShortcut(app, 'Shift+F7')
+  const dialog = page.getByRole('dialog', { name: `Synonyms for “${word}”` })
+  await dialog.getByRole('button', { name: choice, exact: true }).click()
+  await dialog.waitFor({ state: 'detached' })
+}
+
+const linkNote = `Link [Happy](https://happy.example) here
+
+Reference [Happy][ref] here
+
+Code \`happy\` and tag #happy here
+
+[ref]: https://x.example
+`
+
+for (const engine of ['tiptap', 'codemirror'])
+  test(`in the ${engine} formatted view, a replaced word in a link's text keeps the link's destination`, {
+    timeout: 90000,
+  }, async (t) => {
+    const { app, page, open } = await launch(
+      t,
+      { 'links.md': linkNote },
+      engine,
+    )
+    await open('links.md')
+    const cases = [
+      ['[Happy](', 'Link Happy', 'Happy', '[Glad]('],
+      ['[Happy][ref]', 'Reference Happy', 'Happy', '[Glad][ref]'],
+      ['`happy`', 'Code happy', 'happy', '`glad`'],
+      ['#happy', 'tag #happy', 'happy', '#glad'],
+    ]
+    for (const [source, rich, word, replaced] of cases) {
+      if (engine === 'codemirror')
+        await caret(page, linkNote.indexOf(source) + 3)
+      else await richCaret(page, rich, rich.length - 2)
+      await chooseSynonym(app, page, word, 'glad')
+      await saved(page, linkNote.replace(source, replaced))
+      if (engine === 'codemirror') await pressShortcut(app, `${mod}+z`)
+      else
+        await page.evaluate(() =>
+          document.querySelector('.rich-pane .tiptap').editor.commands.undo(),
+        )
+      await saved(page, linkNote)
+    }
+  })
+
+test('in the formatted view a wikilink keeps its target, and destinations, labels and embeds offer no word', {
+  timeout: 90000,
+}, async (t) => {
+  const note = `Link [Happy](https://happy.example "happy title") here
+
+Reference [x][happy] and [Happy][] and [Happy] here
+
+Wiki [[Happy]] and [[Note|Happy]] and [[Happy|Note]] here
+
+Embed ![[Happy.png]] here
+
+Autolink <https://happy.example> and https://happy.example here
+
+Footnote [^Happy] here
+
+[^Happy]: Happy note
+
+| Wiki | Cell |
+| - | - |
+| [[Happy]] | x |
+
+[happy]: https://happy.example
+`
+  const { app, page, open } = await launch(t, { 'wiki.md': note })
+  await open('wiki.md')
+  await page
+    .locator('.rich-pane .cm-line', { hasText: 'Wiki' })
+    .first()
+    .waitFor()
+  // A wikilink without an alias keeps its target and shows the new word as
+  // its alias, as the rich view writes it; in a table the alias pipe is
+  // escaped. A footnote's text changes in place.
+  for (const [source, offset, replaced] of [
+    ['[[Happy]] and', 3, '[[Happy|Glad]] and'],
+    ['[[Note|Happy]]', 8, '[[Note|Glad]]'],
+    ['| [[Happy]] |', 5, '| [[Happy\\|Glad]] |'],
+    ['[^Happy]: Happy note', 12, '[^Happy]: Glad note'],
+  ]) {
+    await caret(page, note.indexOf(source) + offset)
+    await chooseSynonym(app, page, 'Happy', 'glad')
+    await saved(page, note.replace(source, replaced))
+    await pressShortcut(app, `${mod}+z`)
+    await saved(page, note)
+  }
+  // Text the formatted view shows as a link's destination, title or label, a
+  // footnote's label, an alias's target, an embed, or a URL is not a word to
+  // look up.
+  await page.evaluate(() => {
+    window.noWordNotices = 0
+    new MutationObserver((records) => {
+      for (const { addedNodes } of records)
+        for (const node of addedNodes)
+          if (node instanceof Element)
+            for (const toast of [node, ...node.querySelectorAll('.toast')])
+              if (
+                toast.matches('.toast') &&
+                toast.textContent.includes(
+                  'Place the cursor in a word or select one word.',
+                )
+              )
+                window.noWordNotices++
+    }).observe(document.body, { childList: true, subtree: true })
+  })
+  const definition = note.indexOf('[happy]: ')
+  for (const at of [
+    note.indexOf('happy.example "') + 2,
+    note.indexOf('happy title') + 2,
+    note.indexOf('[x][happy]') + 5,
+    note.indexOf('[Happy][]') + 3,
+    note.indexOf('[Happy] here') + 3,
+    note.indexOf('[[Happy|Note]]') + 3,
+    note.indexOf('![[Happy.png]]') + 5,
+    note.indexOf('<https://happy.example>') + 10,
+    note.indexOf('and https://happy.example') + 14,
+    note.indexOf('[^Happy] here') + 4,
+    note.indexOf('[^Happy]:') + 4,
+    definition + 3,
+    note.indexOf('happy.example', definition) + 2,
+  ]) {
+    const notices = await page.evaluate(() => window.noWordNotices)
+    await caret(page, at)
+    await pressShortcut(app, 'Shift+F7')
+    await waitForAsync(
+      page,
+      (notices) => window.noWordNotices > notices,
+      notices,
+    )
+    assert.equal(await page.getByRole('dialog').count(), 0, `offset ${at}`)
+    assert.equal(await markdown(page), note)
+  }
 })

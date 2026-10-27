@@ -2,12 +2,36 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { gzipSync } from 'node:zlib'
 import { packs } from '../src/addons/dictionary/packs.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
+
+async function placeCaret(editor, offset = 'end') {
+  await editor.evaluate((element, offset) => {
+    if (element.editor)
+      element.editor.commands.focus(offset === 'end' ? offset : offset + 1)
+    else {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        selection: {
+          anchor: offset === 'end' ? view.state.doc.length : offset,
+        },
+      })
+      view.focus()
+    }
+  }, offset)
+}
+async function undoRich(editor) {
+  if (await editor.evaluate((element) => !!element.editor))
+    await editor.evaluate((element) => element.editor.commands.undo())
+  else await editor.press('ControlOrMeta+z')
+}
 
 test('side view follows the caret offline, replaces in one undo step, and pack suggestions accept with Tab', {
   timeout: 90000,
@@ -63,10 +87,23 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
     { downloads, path: file },
   )
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(APP_STATE_TIMEOUT)
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ ipcMain }) => {
     globalThis.onlineRequests = []
+    globalThis.completionPackQueries = 0
+    const query = ipcMain._invokeHandlers.get('addons:query')
+    ipcMain._invokeHandlers.set(
+      'addons:query',
+      (event, id, method, ...input) => {
+        if (id === 'dictionary' && method === 'packCompleteAll')
+          globalThis.completionPackQueries++
+        return query(event, id, method, ...input)
+      },
+    )
     ipcMain.removeHandler('host-network:get-text')
     ipcMain.handle('host-network:get-text', (_event, _owner, request) => {
       globalThis.onlineRequests.push(request.url)
@@ -90,9 +127,12 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
     async () => (await window.hibi.getDocument()).name === 'note.md',
   )
   await waitForDocumentEditor(app, page)
-  const rich = page.locator('.rich-pane .tiptap[contenteditable="true"]')
+  const rich = page.getByRole('textbox', {
+    name: 'Document editor',
+    exact: true,
+  })
   await rich.click()
-  await rich.evaluate((element) => element.editor.commands.setTextSelection(14))
+  await placeCaret(rich, 13)
 
   const openSide = async () => {
     await clickMenu(app, 'Command palette')
@@ -136,10 +176,7 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
     .waitFor()
 
   // The view follows the caret after it settles, from the installed pack only.
-  await rich.evaluate((element) => {
-    element.editor.commands.focus()
-    element.editor.commands.setTextSelection(6)
-  })
+  await placeCaret(rich, 5)
   await side.getByRole('heading', { name: 'dog', exact: true }).waitFor()
   const chip = side
     .getByRole('group', { name: 'Synonyms' })
@@ -188,9 +225,7 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
       (await window.hibi.getDocument()).markdown ===
       'The domestic dog is happy',
   )
-  await page.evaluate(() =>
-    document.querySelector('.tiptap').editor.commands.undo(),
-  )
+  await undoRich(rich)
   await waitForAsync(
     page,
     async () =>
@@ -228,11 +263,11 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
   await toggle('autocomplete-suggest')
   await toggle('autocomplete-suggest')
   const richText = () =>
-    rich.evaluate((element) => element.editor.state.doc.textContent)
+    t.formattedEngine === 'tiptap'
+      ? rich.evaluate((element) => element.editor.state.doc.textContent)
+      : markdown()
   const menu = page.getByRole('listbox', { name: 'Completions' })
-  await rich.evaluate((element) => {
-    element.editor.commands.focus('end')
-  })
+  await placeCaret(rich)
   await page.keyboard.type(' hap')
   await menu.getByRole('option', { name: 'happy', exact: true }).waitFor()
   await page.screenshot({ path: 'test-results/dictionary-suggestions.png' })
@@ -253,7 +288,7 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
 
   // With Tab acceptance off, Tab works as usual and Enter still accepts.
   await toggle('autocomplete-tab-accepts')
-  await rich.evaluate((element) => element.editor.commands.focus('end'))
+  await placeCaret(rich)
   await page.keyboard.type(' hap')
   await menu.getByRole('option', { name: 'happy', exact: true }).waitFor()
   await page.keyboard.press('Tab')
@@ -268,23 +303,36 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
     (await window.hibi.getDocument()).markdown.endsWith(' zq happy'),
   )
 
-  // Slash commands win over word suggestions.
   const slash = page.getByRole('listbox', { name: 'Slash commands' })
-  await rich.evaluate((element) => element.editor.commands.focus('end'))
-  await page.keyboard.press('Enter')
-  await page.keyboard.type('/tab')
-  await slash.getByRole('option', { name: /^Table/ }).waitFor()
-  await nextFrames()
-  assert.equal(await menu.isVisible(), false)
-  await page.keyboard.press('Enter')
-  await rich.locator('table').waitFor()
-  assert.doesNotMatch(await markdown(), /\/table/)
-  await waitForAsync(page, async () => {
-    const { markdown } = await window.hibi.getDocument()
-    if (markdown.endsWith(' zq happy')) return true
-    document.querySelector('.tiptap').editor.commands.undo()
-    return false
+  await t.test('slash commands win over word suggestions', async () => {
+    // Slash commands win over word suggestions.
+    await placeCaret(rich)
+    await page.keyboard.press('Enter')
+    await page.keyboard.type('/tab')
+    await slash.getByRole('option', { name: /^Table/ }).waitFor()
+    await nextFrames()
+    assert.equal(await menu.isVisible(), false)
+    await page.keyboard.press('Enter')
+    await rich.locator('table').waitFor()
+    assert.doesNotMatch(await markdown(), /\/table/)
   })
+  if (t.formattedEngine === 'tiptap')
+    await waitForAsync(page, async () => {
+      const { markdown } = await window.hibi.getDocument()
+      if (markdown.endsWith(' zq happy')) return true
+      document.querySelector('.tiptap').editor.commands.undo()
+      return false
+    })
+  else
+    while (!(await markdown()).endsWith(' zq happy')) {
+      const before = await markdown()
+      await undoRich(rich)
+      await waitForAsync(
+        page,
+        async (before) => (await window.hibi.getDocument()).markdown !== before,
+        before,
+      )
+    }
 
   // Code-mixed writing: German joins English, tagged by language, in one
   // native request per keystroke.
@@ -296,7 +344,7 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
     return states.find((state) => state.id === 'de')?.phase === 'installed'
   })
   await toggle('autocomplete-language-de')
-  await rich.evaluate((element) => element.editor.commands.focus('end'))
+  await placeCaret(rich)
   await page.keyboard.type(' sch')
   await menu
     .getByRole('option', { name: /^schön/ })
@@ -312,45 +360,64 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
     false,
   )
   assert.match(await richText(), / sch$/)
-  await rich.evaluate((element) => element.editor.commands.focus('end'))
+  await placeCaret(rich)
   await waitForAsync(page, async () =>
-    document.querySelector('.tiptap').contains(document.activeElement),
+    document
+      .querySelector('.rich-pane [aria-label="Document editor"]')
+      .contains(document.activeElement),
   )
   const latencies = []
   for (let sample = 0; sample < 5; sample++) {
+    const queriesBefore = await app.evaluate(
+      () => globalThis.completionPackQueries,
+    )
     await page.keyboard.type(' ha')
     await page.evaluate(() => {
-      // Keystroke to rendered suggestion, measured inside the window.
-      window.suggestionLatency = new Promise((resolve) => {
-        let start
-        document.addEventListener(
-          'keydown',
-          () => {
-            start = performance.now()
-          },
-          { capture: true, once: true },
+      // Both completion hosts reuse options; check a visible result after keydown.
+      window.suggestionLatency = undefined
+      let start
+      const check = () => {
+        const shown = [
+          ...document.querySelectorAll(
+            '[aria-label="Completions"] [role="option"]',
+          ),
+        ].find(
+          (option) =>
+            option.getClientRects().length &&
+            option.textContent.startsWith('happy'),
         )
-        const observer = new MutationObserver(() => {
-          const shown = document.querySelector(
-            '[aria-label="Completions"]:popover-open [role="option"]',
-          )
-          if (start === undefined || !shown?.textContent?.startsWith('happy'))
-            return
-          observer.disconnect()
-          resolve(performance.now() - start)
-        })
-        observer.observe(document.body, { childList: true, subtree: true })
-      })
+        if (start === undefined || !shown) return
+        observer.disconnect()
+        window.suggestionLatency = performance.now() - start
+      }
+      document.addEventListener(
+        'keydown',
+        () => {
+          start = performance.now()
+          requestAnimationFrame(check)
+        },
+        { capture: true, once: true },
+      )
+      const observer = new MutationObserver(check)
+      observer.observe(document.body, { childList: true, subtree: true })
     })
     await page.keyboard.type('p')
+    await page.waitForFunction(
+      () => typeof window.suggestionLatency === 'number',
+    )
     latencies.push(await page.evaluate(() => window.suggestionLatency))
+    if (t.formattedEngine === 'codemirror')
+      assert.ok(
+        (await app.evaluate(() => globalThis.completionPackQueries)) -
+          queriesBefore <=
+          4,
+        'four input keys issue at most four batched pack queries across both languages',
+      )
     await menu
       .getByRole('option', { name: /^happy/ })
       .filter({ hasText: 'English' })
       .first()
-      .waitFor()
-    await page.keyboard.press('ArrowDown')
-    await page.keyboard.press('Enter')
+      .click()
     await waitForAsync(page, async () =>
       (await window.hibi.getDocument()).markdown.endsWith(' happy'),
     )
@@ -372,13 +439,15 @@ test('side view follows the caret offline, replaces in one undo step, and pack s
   // The editor's own state, so focus, caret, and text are read before any flush.
   await page.evaluate(() => {
     window.sourceView = () =>
-      document.querySelector('.cm-content').cmTile.root.view
+      document.querySelector('.source-pane .cm-content').cmTile.root.view
   })
   const sourceText = () =>
     page.evaluate(() => window.sourceView().state.doc.toString())
   const typeAtEnd = async (text) => {
     await source.focus()
-    await source.press('ControlOrMeta+End')
+    await source.press(
+      process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End',
+    )
     await waitForAsync(page, async () => {
       const { hasFocus, state } = window.sourceView()
       return hasFocus && state.selection.main.head === state.doc.length

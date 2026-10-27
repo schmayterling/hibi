@@ -5,9 +5,13 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { createPackage } from '@electron/asar'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  testFormattedEngines as it,
+  selectFormattedEngine,
+} from './formatted-engine.mjs'
 import { waitForAsync } from './poll.mjs'
 
-test('native search covers all notes and giant sources while accepting draft edits', {
+it('native search covers all notes and giant sources while accepting draft edits', {
   timeout: 45000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-text-native-'))
@@ -50,10 +54,13 @@ test('native search covers all notes and giant sources while accepting draft edi
     await rm(profile, { recursive: true, force: true })
   })
   await app.evaluate(({ dialog }, path) => {
-    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+    dialog.showOpenDialog = async () => ({
+      canceled: false,
+      filePaths: [path],
+    })
   }, workspace)
   const page = await app.firstWindow()
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await page.evaluate(() => window.hibi.openWorkspace())
   const { target } = await page.evaluate(() =>
     window.hibi.getWorkspaceChangeSnapshot(),
@@ -98,11 +105,14 @@ test('native search covers all notes and giant sources while accepting draft edi
       .getByRole('button', { name: /toggle workspace sidebar/i })
       .click()
   await file.click()
-  const editor = page.locator('.tiptap')
+  const editor = page.getByRole('textbox', {
+    name: 'Document editor',
+    exact: true,
+  })
   await waitForDocumentEditor(app, page)
   await page.waitForFunction(() =>
     document
-      .querySelector('.tiptap')
+      .querySelector('[aria-label="Document editor"]')
       ?.textContent?.includes('original saved source'),
   )
   const reading = page.evaluate(

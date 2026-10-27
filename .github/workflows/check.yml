@@ -16,12 +16,14 @@ concurrency:
   cancel-in-progress: true
 jobs:
   desktop:
-    timeout-minutes: 35
+    timeout-minutes: ${{ matrix.shard == '0/1' && 120 || 35 }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest]
         shard: ['0/4', '1/4', '2/4', '3/4']
+        # macOS runners are the scarce queue: pull requests get one unsharded macOS job, main keeps four.
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"macos-latest","shard":"0/1"}]' || '[{"os":"macos-latest","shard":"0/4"},{"os":"macos-latest","shard":"1/4"},{"os":"macos-latest","shard":"2/4"},{"os":"macos-latest","shard":"3/4"}]') }}
     runs-on: ${{ matrix.os }}
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
@@ -39,6 +41,6 @@ jobs:
           shard: ${{ matrix.shard }}
       - run: npx electron-builder --dir --config.mac.identity=-
         shell: bash
-        if: steps.ci.outputs.build == 'true' && matrix.shard == '0/4'
+        if: steps.ci.outputs.build == 'true' && startsWith(matrix.shard, '0/')
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'

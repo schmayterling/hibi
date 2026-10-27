@@ -2,9 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
-import { clickMenu } from './keyboard.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
+import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('autocomplete learns locally, disables learning, excludes documents and clears disk through settings and palette', {
@@ -26,6 +29,7 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(8000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -42,8 +46,29 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
       throw new Error('autocomplete must stay offline')
     })
   })
-  const rich = page.locator('.rich-pane .tiptap[contenteditable="true"]')
+  const cm = t.formattedEngine === 'codemirror'
+  const rich = page.locator(
+    cm
+      ? '.rich-pane .cm-content[contenteditable="true"]'
+      : '.rich-pane .tiptap[contenteditable="true"]',
+  )
   const focusRich = async () => {
+    if (cm) {
+      await rich.focus()
+      await rich.press(
+        process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End',
+      )
+      await page.waitForFunction(() => {
+        const element = document.querySelector('.rich-pane .cm-content')
+        const view = element.cmTile.root.view
+        return (
+          document.activeElement === element &&
+          view.state.selection.main.empty &&
+          view.state.selection.main.head === view.state.doc.length
+        )
+      })
+      return
+    }
     await rich.evaluate((element) => element.editor.commands.focus('end'))
     await page.waitForFunction(() => {
       const editor = document.querySelector('.rich-pane .tiptap').editor
@@ -121,14 +146,16 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
       await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
     }
     const popup =
-      mode === 'rich'
+      mode === 'rich' && !cm
         ? page.getByRole('listbox', { name: 'Completions' })
-        : page.locator('.cm-tooltip-autocomplete')
+        : page.locator(
+            `${mode === 'rich' ? '.rich-pane' : '.source-pane'} .cm-tooltip-autocomplete`,
+          )
     const waitForChoice = () =>
       popup.getByRole('option', { name: 'wild', exact: true }).waitFor()
     // Exercise CodeMirror's interaction delay without depending on elapsed time.
     const pressWhenListIs = async (age, key) => {
-      if (mode === 'rich') return page.keyboard.press(key)
+      if (mode === 'rich' && !cm) return page.keyboard.press(key)
       await page.evaluate(
         (shift) => {
           const now = Date.now
@@ -147,10 +174,12 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
     }
     const reset = async (text) => {
       if (mode === 'rich') {
-        await rich.evaluate((element, text) => {
-          const editor = element.editor
-          editor.commands.setContent(text, { contentType: 'markdown' })
-        }, text)
+        if (cm) await replaceRichText(page, rich, text)
+        else
+          await rich.evaluate((element, text) => {
+            const editor = element.editor
+            editor.commands.setContent(text, { contentType: 'markdown' })
+          }, text)
         await focusRich()
       } else {
         const source = page.getByRole('textbox', {
@@ -189,49 +218,59 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
       ),
     )
     const caret = () =>
-      page.evaluate((mode) => {
-        if (mode === 'rich') {
-          const { anchor, head } =
-            document.querySelector('.rich-pane .tiptap').editor.state.selection
+      page.evaluate(
+        ({ mode, cm }) => {
+          if (mode === 'rich' && !cm) {
+            const { anchor, head } =
+              document.querySelector('.rich-pane .tiptap').editor.state
+                .selection
+            return { anchor, head }
+          }
+          const { anchor, head } = document.querySelector(
+            `${mode === 'rich' ? '.rich-pane' : '.source-pane'} .cm-content`,
+          ).cmTile.root.view.state.selection.main
           return { anchor, head }
-        }
-        const { anchor, head } =
-          document.querySelector('.cm-content').cmTile.root.view.state.selection
-            .main
-        return { anchor, head }
-      }, mode)
+        },
+        { mode, cm },
+      )
     const waitForCaret = (condition) =>
       waitForAsync(
         page,
-        ({ mode, previousHead, expected }) => {
+        ({ mode, cm, previousHead, expected }) => {
           const { anchor, head } =
-            mode === 'rich'
+            mode === 'rich' && !cm
               ? document.querySelector('.rich-pane .tiptap').editor.state
                   .selection
-              : document.querySelector('.cm-content').cmTile.root.view.state
-                  .selection.main
+              : document.querySelector(
+                  `${mode === 'rich' ? '.rich-pane' : '.source-pane'} .cm-content`,
+                ).cmTile.root.view.state.selection.main
           return expected
             ? anchor === expected.anchor && head === expected.head
             : head !== previousHead
         },
-        { mode, ...condition },
+        { mode, cm, ...condition },
       )
     const openBetweenParagraphs = async () => {
       await reset('previous paragraph\n\nbro that was\n\nfollowing paragraph')
-      await page.evaluate((mode) => {
-        if (mode === 'rich') {
-          const editor = document.querySelector('.rich-pane .tiptap').editor
-          editor.commands.setTextSelection(
-            editor.state.doc.child(0).nodeSize + 1 + 'bro that was'.length,
-          )
-        } else {
-          const view = document.querySelector('.cm-content').cmTile.root.view
-          const head =
-            view.state.doc.toString().indexOf('bro that was') +
-            'bro that was'.length
-          view.dispatch({ selection: { anchor: head } })
-        }
-      }, mode)
+      await page.evaluate(
+        ({ mode, cm }) => {
+          if (mode === 'rich' && !cm) {
+            const editor = document.querySelector('.rich-pane .tiptap').editor
+            editor.commands.setTextSelection(
+              editor.state.doc.child(0).nodeSize + 1 + 'bro that was'.length,
+            )
+          } else {
+            const view = document.querySelector(
+              `${mode === 'rich' ? '.rich-pane' : '.source-pane'} .cm-content`,
+            ).cmTile.root.view
+            const head =
+              view.state.doc.toString().indexOf('bro that was') +
+              'bro that was'.length
+            view.dispatch({ selection: { anchor: head } })
+          }
+        },
+        { mode, cm },
+      )
       await page.keyboard.type(' ')
       await waitForChoice()
     }
@@ -280,14 +319,16 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
     // Read editor state directly so a delayed document flush cannot hide acceptance.
     const editorText = () =>
       page.evaluate(
-        (mode) =>
-          mode === 'rich'
+        ({ mode, cm }) =>
+          mode === 'rich' && !cm
             ? document.querySelector('.rich-pane .tiptap').editor.state.doc
                 .textContent
             : document
-                .querySelector('.cm-content')
+                .querySelector(
+                  `${mode === 'rich' ? '.rich-pane' : '.source-pane'} .cm-content`,
+                )
                 .cmTile.root.view.state.doc.toString(),
-        mode,
+        { mode, cm },
       )
     assert.equal(await editorText(), 'bro that was \t', `${mode} next-word Tab`)
     const tabAcceptance = async (enabled) => {
@@ -314,16 +355,26 @@ test('autocomplete learns locally, disables learning, excludes documents and cle
       )
     }
     await tabAcceptance(true)
-    if (mode === 'source') {
+    {
       await reset('bro that was wil')
       await page.keyboard.press('Control+Space')
       await waitForChoice()
       const typed = await editorText()
       await pressWhenListIs('new', 'Tab')
-      assert.equal(
-        await editorText(),
-        `${typed}\t`,
-        'new source list Tab indents',
+      await t.test(
+        `${mode} new list Tab keeps the rich acceptance contract`,
+        {
+          todo:
+            t.formattedEngine === 'codemirror' && mode === 'rich'
+              ? 'formatted gap completion-001: a fresh rich completion list must accept the word with tab'
+              : undefined,
+        },
+        async () => {
+          assert.equal(
+            await editorText(),
+            mode === 'source' ? `${typed}\t` : 'bro that was wild',
+          )
+        },
       )
       await popup.waitFor({ state: 'hidden' })
     }
@@ -578,6 +629,7 @@ test('autocomplete warns when exclusions cannot be saved and clears the warning 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(8000)
   await waitForDocumentEditor(app, page)
   const openSettings = async () => {
@@ -651,6 +703,7 @@ test('legacy dictionary suggestions enable autocomplete at startup while explici
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await waitForDocumentEditor(app, page)
   const seedLegacy = () =>
     page.evaluate(() => {

@@ -2,12 +2,15 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import {
   electron,
   startupDiagnostics,
   waitForDocumentEditor,
 } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -90,7 +93,7 @@ test('editor command shares rich and source action menus with guarded selection'
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await app.evaluate(({ dialog }, path) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, file)
@@ -100,11 +103,17 @@ test('editor command shares rich and source action menus with guarded selection'
     async () => (await window.hibi.getDocument()).name === 'note.md',
   )
   await waitForDocumentEditor(app, page)
-  const rich = page.locator('.rich-pane .tiptap[contenteditable="true"]')
-  await rich.click()
-  await rich.evaluate((element) =>
-    element.editor.commands.setTextSelection({ from: 1, to: 6 }),
+  const rich = page.locator(
+    t.formattedEngine === 'tiptap'
+      ? '.rich-pane .tiptap[contenteditable="true"]'
+      : '.rich-pane .hibi-formatted .cm-content[contenteditable="true"]',
   )
+  await rich.click()
+  if (t.formattedEngine === 'tiptap')
+    await rich.evaluate((element) =>
+      element.editor.commands.setTextSelection({ from: 1, to: 6 }),
+    )
+  else await rich.press('ControlOrMeta+a')
   const menu = page.getByRole('menu', { name: 'Editor actions' })
   // Hosted runners sometimes lose the menu before its first click; record why.
   await page.evaluate(() => {
@@ -118,7 +127,7 @@ test('editor command shares rich and source action menus with guarded selection'
     for (const event of ['blur', 'focus'])
       window.addEventListener(event, () => record(`window ${event}`))
     document
-      .querySelector('.rich-pane .tiptap')
+      .querySelector('.rich-pane [aria-label="Document editor"]')
       .addEventListener('blur', () => record('editor blur'))
     document.addEventListener(
       'scroll',
@@ -153,12 +162,14 @@ test('editor command shares rich and source action menus with guarded selection'
       throw error
     })
   // Focus returning to the editor, as when its window regains focus, keeps the menu.
-  await rich.evaluate((element) => {
+  await rich.evaluate((element, engine) => {
     element.dispatchEvent(new FocusEvent('focus'))
-    // Focus reconciliation can explicitly restore an unchanged selection.
-    const { view } = element.editor
-    view.dispatch(view.state.tr.setSelection(view.state.selection))
-  })
+    // ProseMirror's unchanged-selection transaction is a Tiptap-only oracle.
+    if (engine === 'tiptap') {
+      const { view } = element.editor
+      view.dispatch(view.state.tr.setSelection(view.state.selection))
+    }
+  }, t.formattedEngine)
   await menu
     .getByRole('menuitem', { name: 'Inspect editor selection' })
     .click()
@@ -188,9 +199,11 @@ test('editor command shares rich and source action menus with guarded selection'
     page,
     async () => (await window.hibi.getDocument()).markdown === 'changed',
   )
-  await rich.evaluate((element) =>
-    element.editor.commands.setTextSelection({ from: 1, to: 8 }),
-  )
+  if (t.formattedEngine === 'tiptap')
+    await rich.evaluate((element) =>
+      element.editor.commands.setTextSelection({ from: 1, to: 8 }),
+    )
+  else await rich.press('ControlOrMeta+a')
   await rich.press('Shift+F10')
   await menu
     .getByRole('menuitem', { name: 'Inspect editor selection' })

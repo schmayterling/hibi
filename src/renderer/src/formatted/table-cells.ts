@@ -32,6 +32,7 @@ import {
   type FormattedDecorations,
   type FormattedRenderContext,
   followsLink,
+  formattedCellExtensions,
   formattedLinkAttributes,
   formattedLiteral,
   formattedMarkdown,
@@ -515,6 +516,9 @@ export class CellEditor {
         selection: { anchor, head },
         extensions: [
           preview,
+          main
+            .facet(formattedCellExtensions)
+            .map((extension) => extension(host.main)),
           this.access.of(access(main)),
           EditorState.transactionFilter.of((transaction) => {
             // Nothing writes while the host takes no input or has old spans.

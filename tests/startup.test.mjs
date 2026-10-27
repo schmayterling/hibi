@@ -9,8 +9,11 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
 import { uiName } from './ui.mjs'
 
@@ -20,6 +23,7 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
   const temp = await realpath(await mkdtemp(join(tmpdir(), 'hibi-startup-')))
   const profile = join(temp, 'profile')
   let app
+  let seeded = false
   async function launch() {
     app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${profile}`],
@@ -29,6 +33,18 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
     })
     const page = await app.firstWindow()
     page.setDefaultTimeout(6500)
+    if (!seeded) {
+      await selectFormattedEngine(app, page, t.formattedEngine)
+      seeded = true
+    } else {
+      await page
+        .locator(
+          t.formattedEngine === 'tiptap'
+            ? '.rich-pane .tiptap[contenteditable="true"]'
+            : '.rich-pane .hibi-formatted .cm-content[contenteditable="true"]',
+        )
+        .waitFor()
+    }
     await page.getByRole('textbox', { name: /document editor/i }).waitFor()
     return page
   }
@@ -152,11 +168,17 @@ test('startup placeholder stays out of documents and reopens persisted recent wo
     .getByRole('treeitem', { name: /^empty\.md$/i, exact: true })
     .click()
   await welcome().waitFor({ state: 'hidden' })
-  await page.locator('.tiptap p[data-placeholder="Start typing"]').waitFor()
-  assert.equal(
-    await page.locator('.tiptap p').getAttribute('data-placeholder'),
-    'Start typing',
-  )
+  if (t.formattedEngine === 'tiptap') {
+    await page.locator('.tiptap p[data-placeholder="Start typing"]').waitFor()
+    assert.equal(
+      await page.locator('.tiptap p').getAttribute('data-placeholder'),
+      'Start typing',
+    )
+  } else {
+    const placeholder = page.locator('.rich-pane .cm-placeholder')
+    await placeholder.waitFor()
+    assert.equal(await placeholder.textContent(), 'Start typing')
+  }
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     '',

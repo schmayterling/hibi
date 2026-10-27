@@ -4,23 +4,12 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { setTimeout } from 'node:timers/promises'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 
 const editorSelector = {
   tiptap: '.tiptap[contenteditable="true"]',
   codemirror: '.hibi-formatted .cm-content[contenteditable="true"]',
-}
-
-// Addon windows follow the formatted view selected in the main window.
-async function selectEngine(app, page, engine) {
-  await waitForDocumentEditor(app, page)
-  if (engine === 'tiptap') return
-  await page.evaluate(() =>
-    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
-  )
-  await page.reload()
-  await waitForDocumentEditor(app, page)
-  await page.locator(`.rich-pane ${editorSelector.codemirror}`).waitFor()
 }
 
 test('addon window boot code loads no addon module before taking the bridge', async () => {
@@ -123,7 +112,7 @@ async function hostEditor(t, engine) {
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
-  await selectEngine(app, page, engine)
+  await selectFormattedEngine(app, page, engine)
   await page.evaluate(() =>
     window.hibi.openAddonWindow('ui-preview', {
       id: 'editor',
@@ -134,6 +123,7 @@ async function hostEditor(t, engine) {
     app.windows().find((item) => item.url().endsWith('/addon-window.html'))
   while (!findPreview()) await setTimeout(30)
   const preview = findPreview()
+  preview.setDefaultTimeout(7000)
   const editor = preview.locator(editorSelector[engine])
   await preview
     .getByRole('textbox', { name: 'Document editor', exact: true })
@@ -165,8 +155,7 @@ async function hostEditor(t, engine) {
     .waitFor()
 
   // Slash transforms that rewrite the whole note apply to the window's note.
-  // The formatted view has no slash commands yet.
-  if (engine === 'tiptap') {
+  await t.test('window slash transforms apply to its own note', async () => {
     await preview.keyboard.press('Enter')
     await preview.keyboard.type('/front')
     await preview
@@ -177,7 +166,7 @@ async function hostEditor(t, engine) {
       .getByRole('region', { name: /frontmatter properties/i })
       .waitFor()
     await heading.getByText('Title').waitFor()
-  }
+  })
 
   // Preferences saved in the main window apply to open windows.
   assert.equal(await editor.getAttribute('spellcheck'), 'true')
@@ -327,7 +316,7 @@ async function recoverAddons(t, engine) {
     }
   })
   const page = await app.firstWindow()
-  await selectEngine(app, page, engine)
+  await selectFormattedEngine(app, page, engine)
   await page.evaluate(() =>
     window.hibi.openAddonWindow('ui-preview', {
       id: 'editor',

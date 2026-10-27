@@ -1,6 +1,13 @@
 {
   description = "Desktop editor for local markdown/latex notes and documents";
 
+  nixConfig = {
+    extra-substituters = [ "https://hibi.cachix.org" ];
+    extra-trusted-public-keys = [
+      "hibi.cachix.org-1:92loy/fHEkZnot1RY+kOz/p/Nj9qL4QF5aEuxVrGQI8="
+    ];
+  };
+
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
   outputs = { self, nixpkgs }:

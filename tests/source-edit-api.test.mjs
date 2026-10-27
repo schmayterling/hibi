@@ -2,9 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
-import { clickMenu, replaceRichText } from './keyboard.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
+import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
 test('a review addon applies source edits atomically, preserves undo, and rejects stale or stopped requests', {
@@ -70,28 +73,42 @@ test('a review addon applies source edits atomically, preserves undo, and reject
   page.setDefaultTimeout(6000)
   const original = 'very very good and teh note'
   const corrected = 'very good and the note'
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await replaceRichText(
     page,
     page.getByRole('textbox', { name: 'Document editor', exact: true }),
     original,
   )
+  await waitForAsync(
+    page,
+    async () =>
+      (await window.hibi.getDocument()).markdown ===
+      'very very good and teh note',
+  )
+  await waitForDocumentEditor(app, page)
   const richResult = await page.evaluate(() => {
     const { context, review } = window.reviewFixture
     return context.editor.applySourceEdits(review())
   })
   assert.equal(richResult.status, 'applied')
-  await page.evaluate(() =>
-    document.querySelector('.tiptap').editor.commands.undo(),
+  await pressShortcut(
+    app,
+    `${process.platform === 'darwin' ? 'Meta' : 'Control'}+z`,
+  )
+  await waitForAsync(
+    page,
+    async () =>
+      (await window.hibi.getDocument()).markdown ===
+      'very very good and teh note',
   )
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await page.waitForFunction(
-    () => document.querySelector('.cm-content')?.isContentEditable,
+    () => document.querySelector('.source-pane .cm-content')?.isContentEditable,
   )
   const result = await page.evaluate(async () => {
     const { context, sdk, review } = window.reviewFixture
     const view = sdk.codeMirror.view.EditorView.findFromDOM(
-      document.querySelector('.cm-content'),
+      document.querySelector('.source-pane .cm-content'),
     )
     const type = (text) =>
       view.dispatch({
@@ -164,12 +181,14 @@ test('a review addon applies source edits atomically, preserves undo, and reject
     ),
   )
   await page.waitForFunction(() =>
-    document.querySelector('.cm-content')?.textContent.includes('teh note'),
+    document
+      .querySelector('.source-pane .cm-content')
+      ?.textContent.includes('teh note'),
   )
   const lineEndings = await page.evaluate(() => {
     const { context, sdk } = window.reviewFixture
     const view = sdk.codeMirror.view.EditorView.findFromDOM(
-      document.querySelector('.cm-content'),
+      document.querySelector('.source-pane .cm-content'),
     )
     const snapshot = context.editor.getDocument()
     const request = (changes) => ({

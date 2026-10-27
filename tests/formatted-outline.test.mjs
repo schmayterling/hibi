@@ -471,7 +471,7 @@ test('outline rows name long headings in full and shorten them only on screen', 
   assert.equal(formatted.height, formatted.rowHeight)
 })
 
-test('long outline labels run in a worker and cancel when edited or the note changes', {
+test('long outline labels run in a worker and cancel when edited, closed, or the note changes', {
   timeout: 90000,
 }, async (t) => {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-outline-label-worker-'))
@@ -568,7 +568,7 @@ test('long outline labels run in a worker and cancel when edited or the note cha
   )
   assert.equal(await page.evaluate(() => window.outlineLabelRequests.length), 2)
 
-  // Closing the sidebar keeps heading navigation's labels; changing notes cancels them.
+  // A new pending label must also terminate when the outline closes.
   await page.evaluate(() => {
     window.holdOutlineLabels = true
   })
@@ -576,18 +576,24 @@ test('long outline labels run in a worker and cancel when edited or the note cha
   await page.waitForFunction(() => window.outlineLabelRequests.length === 3)
   const beforeClose = await page.evaluate(() => window.outlineLabelTerminations)
   await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
-  await outline.waitFor({ state: 'hidden' })
-  assert.equal(
-    await page.evaluate(() => window.outlineLabelTerminations),
+  await page.waitForFunction(
+    (count) => window.outlineLabelTerminations > count,
     beforeClose,
   )
+
+  // A screen reader reads heading navigation's labels with the sidebar
+  // closed; changing notes cancels them.
+  await outline.waitFor({ state: 'hidden' })
+  await app.evaluate(({ app }) => app.setAccessibilitySupportEnabled(true))
+  await page.waitForFunction(() => window.outlineLabelRequests.length === 4)
+  const beforeNew = await page.evaluate(() => window.outlineLabelTerminations)
   await app.evaluate(({ dialog }) => {
     dialog.showMessageBox = async () => ({ response: 1 })
   })
   await clickMenu(app, 'New')
   await page.waitForFunction(
     (count) => window.outlineLabelTerminations > count,
-    beforeClose,
+    beforeNew,
   )
   assert.deepEqual(
     (await page.pageErrors()).map((error) => error.message),

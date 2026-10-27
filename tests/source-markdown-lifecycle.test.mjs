@@ -3,7 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { electron } from './electron.mjs'
+import { electron, waitForDocumentEditor } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -192,4 +193,195 @@ test('Markdown source loading and schema recreation leave the hidden rich docume
       editor.state.doc.lastChild?.textContent === 'untouched content'
     )
   })
+})
+
+test('codemirror: source loading, addon reconfiguration and split editing preserve source and history', {
+  timeout: 45000,
+}, async (t) => {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-cm-source-markdown-'))
+  const first = join(profile, 'first.md'),
+    second = join(profile, 'second.md')
+  const original =
+    '# source heading\r\n\r\n' + 'ordinary words '.repeat(2000) + 'ending'
+  const other = '# second heading\n\nuntouched content'
+  await writeFile(first, original)
+  await writeFile(second, other)
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'word-count': true }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+  await selectFormattedEngine(app, page, 'codemirror')
+  await page.evaluate(() => localStorage.setItem('default-view', 'markdown'))
+  await page.reload()
+  const source = page.getByRole('textbox', {
+    name: 'Markdown editor',
+    exact: true,
+  })
+  const rich = page.locator('.rich-pane .cm-content')
+  await source.waitFor()
+  const expectSource = (text) =>
+    waitForAsync(
+      page,
+      async (text) => (await window.hibi.getDocument()).markdown === text,
+      text,
+    )
+  const hidden = async () => {
+    assert.equal(
+      await page.locator('.rich-pane').getAttribute('aria-hidden'),
+      'true',
+    )
+    assert.equal(
+      await page.locator('.rich-pane').evaluate((pane) => pane.inert),
+      true,
+    )
+    assert.equal(
+      await page
+        .getByRole('textbox', { name: 'Document editor', exact: true })
+        .count(),
+      0,
+    )
+    assert.equal(await page.locator('.tiptap').count(), 0)
+  }
+  const ready = () =>
+    page.waitForFunction(
+      () =>
+        document.querySelector('.app')?.getAttribute('aria-busy') === 'false' &&
+        document.querySelector('.source-pane .cm-content')?.isContentEditable,
+    )
+  const open = async (file, text) => {
+    await app.evaluate(({ dialog }, file) => {
+      dialog.showOpenDialog = async () => ({
+        canceled: false,
+        filePaths: [file],
+      })
+    }, file)
+    await clickMenu(app, 'Open…')
+    await expectSource(text)
+  }
+  await hidden()
+  await open(first, original)
+  await hidden()
+  await ready()
+  await source.focus()
+  await source.press(
+    process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End',
+  )
+  await page.keyboard.insertText('s')
+  await expectSource(`${original}s`)
+  await hidden()
+  await clickMenu(app, 'Save')
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  await ready()
+  assert.equal(await readFile(first, 'utf8'), `${original}s`)
+  await source.focus()
+  await pressShortcut(app, `${mod}+z`)
+  await expectSource(original)
+  await pressShortcut(app, `${mod}+Shift+z`)
+  await expectSource(`${original}s`)
+  await hidden()
+  await pressShortcut(app, `${mod}+Shift+[`)
+  await rich.waitFor()
+  await waitForDocumentEditor(app, page)
+  await rich.focus()
+  await rich.press(
+    process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End',
+  )
+  await rich.locator('.cm-line', { hasText: /endings$/ }).waitFor()
+  await expectSource(`${original}s`)
+  await open(second, other)
+  await rich.locator('.cm-line', { hasText: 'untouched content' }).waitFor()
+  const before = await page.evaluate(() => window.hibi.getDocument())
+  await pressShortcut(app, `${mod}+Shift+]`)
+  await source.waitFor()
+  await source.evaluate((element) => {
+    window.lifecycleSourceView = element.cmTile.root.view
+  })
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  assert.equal(await page.locator('#addon-frontmatter').isChecked(), true)
+  await page.locator('#addon-frontmatter').click()
+  await page.waitForFunction(
+    () => !document.querySelector('#addon-frontmatter')?.checked,
+  )
+  await hidden()
+  const after = await page.evaluate(() => window.hibi.getDocument())
+  assert.equal(after.markdown, other)
+  assert.equal(after.contentVersion, before.contentVersion)
+  await page.getByRole('button', { name: 'Back to app', exact: true }).click()
+  assert.equal(
+    await source.evaluate(
+      (element) => element.cmTile.root.view === window.lifecycleSourceView,
+    ),
+    true,
+  )
+  await page
+    .getByRole('button', { name: /^side-by-side$/i, exact: true })
+    .click()
+  await rich.locator('.cm-line', { hasText: 'untouched content' }).waitFor()
+  await t.test(
+    'split formatted view is read-only',
+    {
+      todo: 'formatted gap split-009: split formatted view must remain read-only',
+    },
+    async () => {
+      assert.equal(
+        await rich.evaluate((element) => element.isContentEditable),
+        false,
+      )
+    },
+  )
+  assert.equal(
+    await source.evaluate((element) => element.isContentEditable),
+    true,
+  )
+  await expectSource(other)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).contentVersion,
+    before.contentVersion,
+  )
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  await rich.evaluate((element) => {
+    const view = element.cmTile.root.view
+    view.dispatch({ selection: { anchor: view.state.doc.length } })
+    view.focus()
+  })
+  await page.keyboard.insertText('x')
+  await expectSource(`${other}x`)
+  assert.equal(
+    await rich.evaluate(
+      (element) => element.cmTile.root.view.state.selection.main.head,
+    ),
+    other.length + 1,
+  )
+  await clickMenu(app, 'Save')
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  await page.waitForFunction(
+    () => document.querySelector('.rich-pane .cm-content')?.isContentEditable,
+  )
+  assert.equal(await readFile(second, 'utf8'), `${other}x`)
+  await rich.focus()
+  await pressShortcut(app, `${mod}+z`)
+  await expectSource(other)
+  await page
+    .getByRole('button', { name: /^side-by-side$/i, exact: true })
+    .click()
+  await source.waitFor()
+  assert.equal(
+    await rich.evaluate((element) => element.isContentEditable),
+    true,
+  )
+  await expectSource(other)
 })

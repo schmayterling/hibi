@@ -2,8 +2,12 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron } from './electron.mjs'
+import {
+  reloadFormattedEngine,
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 const { version: appVersion } = JSON.parse(
@@ -28,6 +32,13 @@ test('vim cursor stays hidden behind the startup screen', {
     const page = await app.firstWindow()
     page.setDefaultTimeout(6000)
     await page.locator('.titlebar').waitFor()
+    // The introduction intentionally keeps the editor inert during startup.
+    if (
+      (await page.evaluate(() =>
+        localStorage.getItem('hibi:formatted-engine'),
+      )) !== t.formattedEngine
+    )
+      await reloadFormattedEngine(page, t.formattedEngine)
     return page
   }
   t.after(async () => {
@@ -47,7 +58,7 @@ test('vim cursor stays hidden behind the startup screen', {
 
   page = await launch()
   await page.getByRole('region', { name: /start writing/i }).waitFor()
-  const cursor = page.locator('.cm-fat-cursor')
+  const cursor = page.locator('.source-pane .cm-fat-cursor')
   await cursor.waitFor({ state: 'attached' })
   assert.equal(
     await cursor.evaluate((element) => getComputedStyle(element).visibility),
@@ -86,12 +97,15 @@ test('plugin pages, metadata, shared controls, and full source vim editing', {
     })
   }, fixture)
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await clickMenu(app, 'Open…')
   await page.waitForFunction(() =>
-    document.querySelector('.tiptap')?.textContent.includes('alpha'),
+    document
+      .querySelector('.rich-pane :is(.tiptap, .cm-content)')
+      ?.textContent.includes('alpha'),
   )
   await page
     .getByRole('button', { name: /^source view$/i, exact: true })

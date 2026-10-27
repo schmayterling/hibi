@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, splitTab } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -78,7 +81,7 @@ test('editor extensions receive the view id of the editor they attach to', {
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(8000)
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await page.waitForFunction(() => window.viewFixture)
   const pageErrors = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
@@ -109,21 +112,36 @@ test('editor extensions receive the view id of the editor they attach to', {
     async () => (await window.hibi.getDocument()).name === 'note.md',
   )
   await waitForDocumentEditor(app, page)
-  await page.locator('.rich-pane .tiptap').click()
-  await page.waitForFunction(() =>
-    window.viewFixture.attached.some(
-      (entry) =>
-        entry.kind === 'rich' &&
-        entry.dom.isConnected &&
-        entry.viewId ===
-          window.viewFixture.context.editorViews.getActive()?.viewId,
-    ),
-  )
+  await page
+    .getByRole('textbox', { name: 'Document editor', exact: true })
+    .click()
+  // API 2 registerRich attaches only to Tiptap; CodeMirror exposes public view identity.
+  if (t.formattedEngine === 'tiptap')
+    await page.waitForFunction(() =>
+      window.viewFixture.attached.some(
+        (entry) =>
+          entry.kind === 'rich' &&
+          entry.dom.isConnected &&
+          entry.viewId ===
+            window.viewFixture.context.editorViews.getActive()?.viewId,
+      ),
+    )
   const single = await views(page, 'rich')
-  assert.deepEqual(
-    single.attached.filter((entry) => entry.connected),
-    [{ connected: true, side: null, viewId: single.active }],
-  )
+  if (t.formattedEngine === 'tiptap')
+    assert.deepEqual(
+      single.attached.filter((entry) => entry.connected),
+      [{ connected: true, side: null, viewId: single.active }],
+    )
+  else {
+    const selection = await page.evaluate(() => {
+      const api = window.viewFixture.context.editorViews
+      return api.getSelection(api.getActive())
+    })
+    assert.equal(selection.ok, true)
+    assert.equal(selection.value.editor, 'rich')
+    assert.equal(selection.value.view.viewId, single.active)
+    assert.deepEqual(single.attached, [])
+  }
 
   // The same note in both panes still gives each editor its own view.
   const tabId = (await page.evaluate(() => window.hibi.getDocument())).tabId
@@ -143,7 +161,8 @@ test('editor extensions receive the view id of the editor they attach to', {
     )
     return (await views(page, 'rich')).active
   }
-  const rich = (side) => panes[side].locator('.rich-pane .tiptap')
+  const rich = (side) =>
+    panes[side].getByRole('textbox', { name: 'Document editor', exact: true })
   await rich('left').waitFor()
   await rich('right').waitFor()
   const richViews = {
@@ -151,48 +170,72 @@ test('editor extensions receive the view id of the editor they attach to', {
     right: await focusPane('right', rich('right')),
   }
   assert.notEqual(richViews.left, richViews.right)
-  await waitForAsync(
-    page,
-    (expected) =>
-      window.viewFixture.attached.filter(
-        (entry) =>
-          entry.kind === 'rich' &&
-          entry.dom.isConnected &&
-          entry.viewId ===
-            expected[
-              entry.dom.closest('.editor-page')?.getAttribute('data-side')
-            ],
-      ).length === 2,
-    richViews,
-  )
-  assert.deepEqual(
-    (await views(page, 'rich')).attached.filter((entry) => entry.connected),
-    [
-      { connected: true, side: 'left', viewId: richViews.left },
-      { connected: true, side: 'right', viewId: richViews.right },
-    ],
-  )
+  if (t.formattedEngine === 'tiptap')
+    await waitForAsync(
+      page,
+      (expected) =>
+        window.viewFixture.attached.filter(
+          (entry) =>
+            entry.kind === 'rich' &&
+            entry.dom.isConnected &&
+            entry.viewId ===
+              expected[
+                entry.dom.closest('.editor-page')?.getAttribute('data-side')
+              ],
+        ).length === 2,
+      richViews,
+    )
+  if (t.formattedEngine === 'tiptap') {
+    assert.deepEqual(
+      (await views(page, 'rich')).attached.filter((entry) => entry.connected),
+      [
+        { connected: true, side: 'left', viewId: richViews.left },
+        { connected: true, side: 'right', viewId: richViews.right },
+      ],
+    )
+  } else {
+    const selections = await page.evaluate(() => {
+      const api = window.viewFixture.context.editorViews
+      return api.list().map((view) => api.getSelection(view))
+    })
+    assert.equal(selections.length, 2)
+    for (const selection of selections) {
+      assert.equal(selection.ok, true)
+      assert.equal(selection.value.editor, 'rich')
+    }
+    assert.deepEqual(
+      selections.map(({ value }) => value.view.viewId).sort(),
+      Object.values(richViews).sort(),
+    )
+  }
 
   // Focus moves the active view without reattaching the inactive editor.
   const attaches = await page.evaluate(() => window.viewFixture.attaches)
   assert.equal(await focusPane('left', rich('left')), richViews.left)
   assert.equal(await focusPane('right', rich('right')), richViews.right)
   assert.equal(await page.evaluate(() => window.viewFixture.attaches), attaches)
-  assert.deepEqual(
-    (await views(page, 'rich')).attached
-      .filter((entry) => entry.side === 'left')
-      .map((entry) => entry.viewId),
-    [richViews.left],
-  )
+  if (t.formattedEngine === 'tiptap') {
+    assert.deepEqual(
+      (await views(page, 'rich')).attached
+        .filter((entry) => entry.side === 'left')
+        .map((entry) => entry.viewId),
+      [richViews.left],
+    )
+  } else {
+    assert.equal(await focusPane('left', rich('left')), richViews.left)
+    assert.equal(await focusPane('right', rich('right')), richViews.right)
+    assert.deepEqual((await views(page, 'rich')).attached, [])
+  }
 
-  const source = (side) => panes[side].locator('.cm-content')
+  const source = (side) => panes[side].locator('.source-pane .cm-content')
   for (const side of ['left', 'right']) {
     await focusPane(side, rich(side))
     await page.getByRole('button', { name: 'Source view', exact: true }).click()
     await page.waitForFunction(
       (side) =>
-        document.querySelector(`.editor-page[data-side="${side}"] .cm-content`)
-          ?.isContentEditable,
+        document.querySelector(
+          `.editor-page[data-side="${side}"] .source-pane .cm-content`,
+        )?.isContentEditable,
       side,
     )
   }
@@ -200,13 +243,26 @@ test('editor extensions receive the view id of the editor they attach to', {
     left: await focusPane('left', source('left')),
     right: await focusPane('right', source('right')),
   }
-  assert.deepEqual(sourceViews, richViews)
-  assert.deepEqual(
-    (await views(page, 'source')).attached.filter((entry) => entry.connected),
-    [
-      { connected: true, side: 'left', viewId: richViews.left },
-      { connected: true, side: 'right', viewId: richViews.right },
-    ],
+  await t.test(
+    'source and formatted editors preserve hosting view identities',
+    {
+      todo:
+        t.formattedEngine === 'codemirror'
+          ? 'formatted gap api-002: source and formatted editors must preserve hosting view identities'
+          : undefined,
+    },
+    async () => {
+      assert.deepEqual(sourceViews, richViews)
+      assert.deepEqual(
+        (await views(page, 'source')).attached.filter(
+          (entry) => entry.connected,
+        ),
+        [
+          { connected: true, side: 'left', viewId: richViews.left },
+          { connected: true, side: 'right', viewId: richViews.right },
+        ],
+      )
+    },
   )
 
   // Removing a lazy extension before it resolves must cancel both attachments.
@@ -221,14 +277,17 @@ test('editor extensions receive the view id of the editor they attach to', {
     Object.values(sourceViews).sort(),
   )
   assert.equal(
-    await page.locator('.cm-content[contenteditable="false"]').count(),
+    await page
+      .locator('.source-pane .cm-content[contenteditable="false"]')
+      .count(),
     2,
   )
   await page.evaluate(() => window.viewFixture.removeDelayed())
   await page.waitForFunction(
     () =>
-      document.querySelectorAll('.cm-content[contenteditable="true"]')
-        .length === 2,
+      document.querySelectorAll(
+        '.source-pane .cm-content[contenteditable="true"]',
+      ).length === 2,
   )
   await page.evaluate(async () => {
     for (const pending of window.viewFixture.pending) pending.resolve()

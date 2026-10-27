@@ -13,6 +13,10 @@ import {
 } from '../src/addons/markdown/alerts.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
+  testFormattedEngines as it,
+  selectFormattedEngine,
+} from './formatted-engine.mjs'
+import {
   pressShortcut,
   replaceRichText,
   replaceSourceText,
@@ -91,7 +95,7 @@ test('github alert markers survive sanitized site export', async () => {
   assert.doesNotMatch(hostile.pages[0].html, /data-alert|data-fold|onmouseover/)
 })
 
-test('github alerts edit in rich view, preview in split, and export with markers and theme colors', {
+it('github alerts edit in rich view, preview in split, and export with markers and theme colors', {
   timeout: 45000,
 }, async (t) => {
   const temp = await mkdtemp(join(tmpdir(), 'hibi-alerts-'))
@@ -102,14 +106,22 @@ test('github alerts edit in rich view, preview in split, and export with markers
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(temp, 'profile')}`],
   })
+  let cdp
   t.after(async () => {
     await app.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1 })
     })
+    await cdp?.detach()
     await app.close()
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  const cm = t.formattedEngine === 'codemirror'
+  if (cm) {
+    cdp = await page.context().newCDPSession(page)
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  }
   page.setDefaultTimeout(6500)
   const errors = []
   page.on('pageerror', (error) => {
@@ -127,7 +139,10 @@ test('github alerts edit in rich view, preview in split, and export with markers
   await rich.waitFor()
   await rich.pressSequentially('> [!WARNING]')
   await rich.press('Enter')
-  await rich.locator('[data-alert="warning"]').waitFor()
+  await rich
+    .locator(cm ? '.hibi-lp-alert-warning' : '[data-alert="warning"]')
+    .first()
+    .waitFor()
   await rich.pressSequentially('typed body')
   assert.match(await read(), /> \[!WARNING\]\n> typed body/)
   await pressShortcut(app, `${mod}+Shift+]`)
@@ -142,35 +157,78 @@ test('github alerts edit in rich view, preview in split, and export with markers
   await replaceSourceText(page, source, initial)
   await pressShortcut(app, `${mod}+Shift+\\`)
   await page.waitForFunction(
-    () => document.querySelectorAll('.tiptap .github-alert').length === 5,
+    (cm) =>
+      document.querySelectorAll(
+        cm ? '.rich-pane .hibi-lp-alert-title' : '.tiptap .github-alert',
+      ).length === 5,
+    cm,
   )
   assert.equal(await read(), initial)
   await page
     .locator('[data-status-id="flavor"]')
     .filter({ hasText: /github markdown/i })
     .waitFor()
-  const warning = rich.locator('[data-alert="warning"]')
-  assert.equal(await warning.locator('strong').innerText(), 'hello warning')
-  assert.equal(await warning.locator('li').count(), 2)
+  const warning = rich.locator(
+    cm ? '.cm-line.hibi-lp-alert-warning' : '[data-alert="warning"]',
+  )
   assert.equal(
-    await warning.evaluate(
-      (element) => getComputedStyle(element).borderLeftWidth,
-    ),
+    await warning.locator(cm ? '.hibi-lp-strong' : 'strong').innerText(),
+    'hello warning',
+  )
+  assert.equal(
+    cm
+      ? await warning.and(rich.locator('.hibi-lp-list-item')).count()
+      : await warning.locator('li').count(),
+    2,
+  )
+  assert.equal(
+    await warning
+      .first()
+      .evaluate(
+        (element, cm) =>
+          cm
+            ? getComputedStyle(element, '::before')
+                .backgroundSize.split(',')[0]
+                .trim()
+                .split(' ')[0]
+            : getComputedStyle(element).borderLeftWidth,
+        cm,
+      ),
     '3px',
   )
-  assert.equal(
-    await rich.evaluate((element) => element.editor.isEditable),
-    false,
+  await t.test(
+    'split formatted view is read-only',
+    {
+      todo: cm
+        ? 'formatted gap split-004: split formatted view must remain read-only'
+        : undefined,
+    },
+    async () => {
+      assert.equal(await rich.getAttribute('contenteditable'), 'false')
+    },
   )
   await pressShortcut(app, `${mod}+Shift+[`)
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.editor?.isEditable,
-  )
-  await replaceRichText(
-    page,
-    warning.locator('.github-alert-body > p'),
-    'edited warning',
-  )
+  if (cm) await rich.and(page.locator('[contenteditable="true"]')).waitFor()
+  else
+    await page.waitForFunction(
+      () => document.querySelector('.tiptap')?.editor?.isEditable,
+    )
+  if (cm) {
+    await rich.evaluate((element) => {
+      const view = element.cmTile.root.view
+      const text = '**hello warning**'
+      const from = view.state.doc.toString().indexOf(text)
+      if (from < 0) throw new Error('The warning fixture is not in the editor.')
+      view.dispatch({ selection: { anchor: from, head: from + text.length } })
+      view.focus()
+    })
+    await page.keyboard.insertText('edited warning')
+  } else
+    await replaceRichText(
+      page,
+      warning.locator('.github-alert-body > p'),
+      'edited warning',
+    )
   await waitForAsync(page, async () =>
     (await window.hibi.getDocument()).markdown.includes('edited warning'),
   )
@@ -179,16 +237,20 @@ test('github alerts edit in rich view, preview in split, and export with markers
     assert.ok(edited.includes(`[!${type.toUpperCase()}]`))
   await pressShortcut(app, `${mod}+Shift+\\`)
   await page.waitForFunction(
-    () =>
-      document.querySelector('.tiptap')?.editor?.isEditable === false &&
+    (cm) =>
+      (cm || document.querySelector('.tiptap')?.editor?.isEditable === false) &&
       document
-        .querySelector('.cm-content')
+        .querySelector('.source-pane .cm-content')
         ?.textContent.includes('edited warning'),
+    cm,
   )
-  assert.equal(
-    await warning.locator('.github-alert-body > p').innerText(),
-    'edited warning',
-  )
+  if (cm)
+    assert.match((await warning.allTextContents()).join('\n'), /edited warning/)
+  else
+    assert.equal(
+      await warning.locator('.github-alert-body > p').innerText(),
+      'edited warning',
+    )
   await app.evaluate(
     ({ dialog }, { root, file, output }) => {
       dialog.showOpenDialog = async () => ({
@@ -256,6 +318,9 @@ test('github alerts edit in rich view, preview in split, and export with markers
   )
   await site.close()
   assert.equal(await read(), edited)
-  await rich.locator('[data-alert="warning"]').waitFor()
+  await rich
+    .locator(cm ? '.hibi-lp-alert-warning' : '[data-alert="warning"]')
+    .first()
+    .waitFor()
   assert.deepEqual(errors, [])
 })

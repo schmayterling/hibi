@@ -9,6 +9,7 @@ import { tableKey } from '../src/renderer/src/table-layout-store.ts'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -101,7 +102,7 @@ before(
     })
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
-    await waitForDocumentEditor(app, page)
+    await selectFormattedEngine(app, page, 'tiptap')
     await app.evaluate(({ dialog }, path) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,

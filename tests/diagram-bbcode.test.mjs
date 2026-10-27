@@ -4,10 +4,14 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  testFormattedEngines as it,
+  selectFormattedEngine,
+} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-test('Mermaid and BBCode edit, preview, and export without executing content', {
+it('Mermaid and BBCode edit, preview, and export without executing content', {
   timeout: 90000,
 }, async (t) => {
   const temp = await mkdtemp(join(tmpdir(), 'hibi-diagrams-'))
@@ -28,6 +32,7 @@ test('Mermaid and BBCode edit, preview, and export without executing content', {
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine ?? 'tiptap')
   page.on('pageerror', (error) => console.error(error.message))
   page.on('console', (message) => {
     if (message.type() === 'error') console.error(message.text())
@@ -232,7 +237,7 @@ test('Mermaid and BBCode edit, preview, and export without executing content', {
     .getByRole('button', { name: /^source view$/i, exact: true })
     .click()
   assert.match(
-    await page.locator('.cm-content').innerText(),
+    await page.locator('.source-pane .cm-content').innerText(),
     /Alice->>Bob: Again/,
   )
 })
@@ -254,6 +259,7 @@ const launchWithNote = async (t, prefix, addons, markdown, prepare) => {
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine ?? 'tiptap')
   page.setDefaultTimeout(15000)
   await waitForDocumentEditor(app, page)
   await prepare?.(page)
@@ -268,7 +274,7 @@ const launchWithNote = async (t, prefix, addons, markdown, prepare) => {
   )
   return { app, page }
 }
-test('Mermaid is on by default and keeps diagram links, images, and markup inert', {
+it('Mermaid is on by default and keeps diagram links, images, and markup inert', {
   timeout: 60000,
 }, async (t) => {
   const hostile = `\`\`\`mermaid
@@ -306,7 +312,7 @@ flowchart LR
   assert.equal(await page.evaluate(() => window.compromised), undefined)
 })
 
-test('a note full of diagrams draws visible ones first, then idle slices that stop when Mermaid is disabled', {
+test('tiptap: a note full of diagrams draws visible ones first, then idle slices that stop when Mermaid is disabled', {
   timeout: 90000,
 }, async (t) => {
   const count = 120
@@ -412,4 +418,392 @@ test('a note full of diagrams draws visible ones first, then idle slices that st
     })
   assert.equal(await page.evaluate(() => window.diagramDraws), draws)
   assert.equal(await page.locator('.tiptap pre').count(), count)
+})
+
+test('codemirror: diagram work stays near the viewport and disabling it cancels pending drawings without changing source', {
+  timeout: 90000,
+}, async (t) => {
+  t.formattedEngine = 'codemirror'
+  const catalog = JSON.parse(
+    await readFile('out/renderer/startup-bundle.json', 'utf8'),
+  )
+  const diagramChunk = catalog.find((chunk) =>
+    chunk.modules.includes('src/addons/mermaid/render.ts'),
+  )
+  assert.ok(diagramChunk, 'the built catalog identifies the diagram scheduler')
+  const count = 120
+  const markdown = Array.from(
+    { length: count },
+    (_, index) =>
+      `\`\`\`mermaid\nflowchart LR\n${Array.from(
+        { length: 20 },
+        (_, step) => `  N${step}[Probe ${index}-${step}] --> N${step + 1}`,
+      ).join('\n')}\n\`\`\`\n`,
+  ).join('\n')
+  const { app, page } = await launchWithNote(
+    t,
+    'hibi-formatted-diagram-cancel-',
+    { mermaid: true },
+    markdown,
+    (page) =>
+      page.evaluate(() => {
+        window.diagramDraws = 0
+        new MutationObserver((records) => {
+          for (const record of records)
+            if (record.target.matches?.('.mermaid-diagram'))
+              window.diagramDraws += [...record.addedNodes].filter(
+                (node) => node.nodeName === 'svg',
+              ).length
+        }).observe(document.documentElement, { childList: true, subtree: true })
+      }),
+  )
+  await waitForDocumentEditor(app, page)
+  const rich = page.getByRole('textbox', {
+    name: 'Document editor',
+    exact: true,
+  })
+  // Read between fences, so the focused caret does not reveal the first diagram's source.
+  await rich.evaluate((element) => {
+    const view = element.cmTile.root.view
+    const gap = view.state.doc.toString().indexOf('\n```\n') + 5
+    view.dispatch({ selection: { anchor: gap } })
+  })
+  await page.locator('.rich-pane .mermaid-diagram > svg').first().waitFor()
+  await page.waitForFunction(() => {
+    const pane = document.querySelector('.rich-pane').getBoundingClientRect()
+    const visible = [
+      ...document.querySelectorAll('.rich-pane .mermaid-diagram'),
+    ].filter((figure) => {
+      const box = figure.getBoundingClientRect()
+      return box.bottom > pane.top && box.top < pane.bottom
+    })
+    return visible.length > 0 && visible.every((figure) => figure.firstChild)
+  })
+  const progress = await page.evaluate(() => {
+    const figures = [
+      ...document.querySelectorAll('.rich-pane .mermaid-diagram'),
+    ]
+    const pane = document.querySelector('.rich-pane').getBoundingClientRect()
+    const visible = figures.filter((figure) => {
+      const box = figure.getBoundingClientRect()
+      return box.bottom > pane.top && box.top < pane.bottom
+    })
+    return {
+      mounted: figures.length,
+      drawn: figures.filter((figure) => figure.firstChild).length,
+      visible: visible.length,
+      pending: visible.filter((figure) => !figure.firstChild).length,
+    }
+  })
+  assert.ok(
+    progress.drawn > 0 && progress.visible > 0,
+    JSON.stringify(progress),
+  )
+  assert.equal(progress.pending, 0)
+  // Offscreen source is virtualized rather than eagerly mounting every block.
+  assert.ok(
+    progress.mounted < count && progress.drawn < count,
+    JSON.stringify(progress),
+  )
+  // Hold diagram work while editor layout and addon teardown keep running.
+  await page.evaluate((diagramChunk) => {
+    const nativeFrame = window.requestAnimationFrame.bind(window)
+    window.nextDiagramFrame = () => new Promise(nativeFrame)
+    window.heldFrames = []
+    window.heldIdle = []
+    window.holdNewDiagramWork = true
+    const resumes = []
+    for (const [request, cancel, queue] of [
+      ['queueMicrotask', null, window.heldFrames],
+      ['requestAnimationFrame', 'cancelAnimationFrame', window.heldFrames],
+      ['requestIdleCallback', 'cancelIdleCallback', window.heldIdle],
+    ]) {
+      const nativeRequest = window[request].bind(window)
+      const nativeCancel = cancel && window[cancel].bind(window)
+      const callbacks = new Map()
+      let holding = true
+      let sequence = 1_000_000_000
+      window[request] = (callback, ...options) => {
+        const caller = new Error().stack.split('\n')[2]
+        if (
+          !holding ||
+          !window.holdNewDiagramWork ||
+          !caller?.includes(diagramChunk)
+        )
+          return nativeRequest(callback, ...options)
+        const id = ++sequence
+        const held = (value) => {
+          if (!callbacks.delete(id)) return false
+          callback.call(window, value)
+          return true
+        }
+        held.options = options
+        callbacks.set(id, held)
+        queue.push(held)
+        return id
+      }
+      if (cancel)
+        window[cancel] = (id) => {
+          const held = callbacks.get(id)
+          if (!held) return nativeCancel(id)
+          callbacks.delete(id)
+          const index = queue.indexOf(held)
+          if (index >= 0) queue.splice(index, 1)
+          if (held.nativeId !== undefined) nativeCancel(held.nativeId)
+        }
+      resumes.push(() => {
+        holding = false
+        for (const held of queue.splice(0))
+          held.nativeId = nativeRequest(held, ...held.options)
+      })
+    }
+    window.resumeDiagramScheduling = () => {
+      for (const resume of resumes) resume()
+    }
+    window.diagramControlTargets = []
+    window.diagramInitialDrawn = [
+      ...document.querySelectorAll('.rich-pane .mermaid-diagram'),
+    ].filter((node) => node.querySelector('svg'))
+    window.pendingDiagrams = (fresh = false) => {
+      const pane = document.querySelector('.rich-pane').getBoundingClientRect()
+      return [
+        ...document.querySelectorAll('.rich-pane .mermaid-diagram'),
+      ].filter((figure) => {
+        const box = figure.getBoundingClientRect()
+        return (
+          !figure.firstChild &&
+          box.width > 0 &&
+          box.bottom > Math.max(0, pane.top) &&
+          box.top < Math.min(innerHeight, pane.bottom) &&
+          (!fresh || !window.diagramControlTargets.includes(figure))
+        )
+      })
+    }
+    window.watchPendingDiagrams = (fresh = false) => {
+      window.diagramProbe?.observer.disconnect()
+      const targets = window.pendingDiagrams(fresh)
+      const probe = { targets, svgAdds: 0, controlled: 0, released: 0 }
+      probe.observer = new MutationObserver((records) => {
+        for (const record of records)
+          probe.svgAdds += [...record.addedNodes].filter(
+            (node) => node.nodeName === 'svg',
+          ).length
+      })
+      for (const target of targets)
+        probe.observer.observe(target, { childList: true })
+      window.diagramProbe = probe
+      return { pending: targets.length, held: window.heldFrames.length }
+    }
+    window.releaseDiagramFrame = async () => {
+      const time = await window.nextDiagramFrame()
+      const probe = window.diagramProbe
+      const before =
+        probe?.targets.filter((node) => node.querySelector('svg')).length ?? 0
+      const callback = window.heldFrames.shift()
+      const idle = !callback && window.heldIdle.shift()
+      const released = callback
+        ? callback(time)
+        : (idle?.({ didTimeout: false, timeRemaining: () => 50 }) ?? false)
+      if (probe && released) probe.released++
+      // Keep real paints/resize delivery live while all newly queued app frames stay held.
+      await window.nextDiagramFrame()
+      if (probe)
+        probe.controlled +=
+          probe.targets.filter((node) => node.querySelector('svg')).length -
+          before
+    }
+  }, diagramChunk.file)
+  const diagnose = async (phase) =>
+    t.diagnostic(
+      'diagram frame fixture: ' +
+        JSON.stringify(
+          await page.evaluate((phase) => {
+            const figures = [
+              ...document.querySelectorAll('.rich-pane .mermaid-diagram'),
+            ]
+            return {
+              phase,
+              heldFrames: window.heldFrames.length,
+              heldIdle: window.heldIdle.length,
+              pending: window.pendingDiagrams(true).length,
+              mounted: figures.length,
+              drawn: figures.filter((node) => node.querySelector('svg')).length,
+              controlTargets: window.diagramControlTargets.length,
+              disabled:
+                document.querySelector('#addon-mermaid')?.checked === false,
+              samples: figures.slice(0, 8).map((node) => {
+                const box = node.getBoundingClientRect()
+                return {
+                  empty: !node.firstChild,
+                  width: box.width,
+                  top: box.top,
+                  bottom: box.bottom,
+                }
+              }),
+            }
+          }, phase),
+        ),
+    )
+  const waitForPending = async (index, fresh = false) => {
+    // One native editor scroll request into an existing gap; canonical text never changes.
+    const gap = await rich.evaluate((element, index) => {
+      const view = element.cmTile.root.view
+      const closes = [...view.state.doc.toString().matchAll(/\n```\n/g)]
+      const gap = closes[index - 1].index + 5
+      view.dispatch({ selection: { anchor: gap }, scrollIntoView: true })
+      return gap
+    }, index)
+    try {
+      await waitForAsync(
+        page,
+        async ({ fresh, gap }) => {
+          const ready = () => {
+            const root = document.querySelector('.rich-pane .cm-content')
+            const view = root.cmTile.root.view
+            if (
+              !view.visibleRanges.some(
+                ({ from, to }) => from <= gap && to >= gap,
+              )
+            )
+              return false
+            // DOM reads do not flush CodeMirror's held measure callback.
+            const { node } = view.domAtPos(gap)
+            const line = (
+              node.nodeType === 3 ? node.parentElement : node
+            ).closest('.cm-line')
+            const box = line?.getBoundingClientRect()
+            const pane = root.closest('.rich-pane').getBoundingClientRect()
+            return (
+              box &&
+              box.bottom > pane.top &&
+              box.top < pane.bottom &&
+              window.pendingDiagrams(fresh).length > 0 &&
+              window.heldFrames.length > 0
+            )
+          }
+          if (ready()) return true
+          await window.releaseDiagramFrame()
+          return ready()
+        },
+        { fresh, gap },
+        { timeout: 15000 },
+      )
+    } catch (error) {
+      await diagnose(fresh ? 'cancellation pending' : 'positive pending')
+      throw error
+    }
+  }
+  await waitForPending(80)
+  const control = await page.evaluate(() => window.watchPendingDiagrams())
+  assert.ok(control.pending > 0 && control.held > 0, JSON.stringify(control))
+  await page.evaluate(() => {
+    window.diagramControlTargets = window.diagramProbe.targets
+  })
+  let positive
+  for (let turn = 0; turn < 20; turn++) {
+    positive = await page.evaluate(async () => {
+      await window.releaseDiagramFrame()
+      const { released, controlled, svgAdds, targets } = window.diagramProbe
+      return {
+        released,
+        controlled,
+        svgAdds,
+        pendingTargets: targets.length,
+        held: window.heldFrames.length,
+        heldIdle: window.heldIdle.length,
+      }
+    })
+    if (positive.controlled > 0) break
+  }
+  t.diagnostic('diagram frame positive: ' + JSON.stringify(positive))
+  assert.ok(
+    positive.released > 0 && positive.controlled > 0 && positive.svgAdds > 0,
+    'held scheduling work draws actual pending diagrams: ' +
+      JSON.stringify(positive),
+  )
+  const afterFrames = await page.evaluate(
+    () =>
+      new Set([
+        ...window.diagramInitialDrawn,
+        ...window.diagramControlTargets.filter((node) =>
+          node.querySelector('svg'),
+        ),
+      ]).size,
+  )
+  assert.ok(
+    afterFrames > progress.drawn && afterFrames < count,
+    String(afterFrames),
+  )
+
+  // Another untouched region must expose actual pending targets before disable.
+  await waitForPending(40, true)
+  const pending = await page.evaluate(() => window.watchPendingDiagrams(true))
+  assert.ok(pending.pending > 0 && pending.held > 0, JSON.stringify(pending))
+  t.diagnostic('diagram frame cancellation: ' + JSON.stringify(pending))
+  const draws = await page.evaluate(() => window.diagramDraws)
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  await page.locator('#addon-mermaid').click()
+  await page.waitForFunction(
+    () => !document.querySelector('#addon-mermaid').checked,
+  )
+  await page.getByRole('button', { name: /^back to app$/i }).click()
+  await t.test('disabling cancels queued diagram work', async () => {
+    try {
+      // Polling cannot release the queued diagram work used by this proof.
+      await waitForAsync(
+        page,
+        () => !document.querySelector('.rich-pane .mermaid-block'),
+        undefined,
+        { timeout: 15000 },
+      )
+      for (let turn = 0; turn < 3; turn++)
+        await page.evaluate(async () => {
+          const time = await window.nextDiagramFrame()
+          for (const callback of window.heldFrames.splice(0)) callback(time)
+          for (const callback of window.heldIdle.splice(0))
+            callback({ didTimeout: false, timeRemaining: () => 50 })
+          await window.nextDiagramFrame()
+          await window.nextDiagramFrame()
+        })
+      assert.equal(await page.evaluate(() => window.diagramDraws), draws)
+      assert.equal(await page.locator('.rich-pane .mermaid-block').count(), 0)
+      assert.deepEqual(
+        await page.evaluate(() => ({
+          pendingTargets: window.diagramProbe.targets.length,
+          svgAdds: window.diagramProbe.svgAdds,
+          renderedAfterDisable: window.diagramProbe.targets.filter((node) =>
+            node.querySelector('svg'),
+          ).length,
+        })),
+        {
+          pendingTargets: pending.pending,
+          svgAdds: 0,
+          renderedAfterDisable: 0,
+        },
+        'canceled targets stay empty even after their DOM detaches',
+      )
+    } catch (error) {
+      await diagnose('disable detachment blocked')
+      throw error
+    } finally {
+      // Restore scheduling even when cancellation itself fails.
+      await page.evaluate(async () => {
+        window.resumeDiagramScheduling()
+        await window.nextDiagramFrame()
+        await window.nextDiagramFrame()
+      })
+    }
+  })
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    markdown,
+  )
+  await page.evaluate(() => window.diagramProbe.observer.disconnect())
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  await page.waitForFunction(
+    () => !document.querySelector('#addon-mermaid').checked,
+  )
+  await page.getByRole('button', { name: /^back to app$/i }).click()
 })

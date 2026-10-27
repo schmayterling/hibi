@@ -3,8 +3,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import test from 'node:test'
 import { crashAndReload, electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -90,7 +93,8 @@ for (const size of sizes)
       await rm(root, { recursive: true, force: true })
     })
     const page = await app.firstWindow()
-    await waitForDocumentEditor(app, page)
+    await selectFormattedEngine(app, page, t.formattedEngine)
+    const cm = t.formattedEngine === 'codemirror'
     await app.evaluate(({ dialog, ipcMain }, file) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,
@@ -146,7 +150,10 @@ for (const size of sizes)
             )
             probe.messages++
             if (channel === 'document:open')
-              probe.open = { ms: performance.now() - start, name: value?.name }
+              probe.open = {
+                ms: performance.now() - start,
+                name: value?.name,
+              }
             if (channel === 'document:save') {
               probe.save = { ms: performance.now() - start }
               globalThis.scaleSaved(probe.save)
@@ -165,16 +172,17 @@ for (const size of sizes)
         })
       }
     }, file)
-    await page.evaluate(() => {
-      window.scaleRichUnits = 0
-      const manager = document.querySelector('.tiptap').editor.markdown,
-        prototype = Object.getPrototypeOf(manager),
-        parse = prototype.parse
-      prototype.parse = function (source) {
-        window.scaleRichUnits = Math.max(window.scaleRichUnits, source.length)
-        return parse.call(this, source)
-      }
-    })
+    if (!cm)
+      await page.evaluate(() => {
+        window.scaleRichUnits = 0
+        const manager = document.querySelector('.tiptap').editor.markdown,
+          prototype = Object.getPrototypeOf(manager),
+          parse = prototype.parse
+        prototype.parse = function (source) {
+          window.scaleRichUnits = Math.max(window.scaleRichUnits, source.length)
+          return parse.call(this, source)
+        }
+      })
     const started = performance.now()
     await clickMenu(app, 'Open…')
     await waitForAsync(app, () => !!globalThis.scaleProbe.open)
@@ -211,10 +219,12 @@ for (const size of sizes)
         await page.locator('.cm-content[contenteditable="true"]').count(),
         1,
       )
-      assert.ok(
-        await page.evaluate(() => window.scaleRichUnits <= 256 * 1024),
-        'large opening parsed complete rich source',
-      )
+      if (cm) assert.equal(await page.locator('.tiptap').count(), 0)
+      else
+        assert.ok(
+          await page.evaluate(() => window.scaleRichUnits <= 256 * 1024),
+          'large opening parsed complete rich source',
+        )
     }
     if (!(await page.locator('.cm-content[contenteditable="true"]').count())) {
       await page
@@ -222,10 +232,81 @@ for (const size of sizes)
         .click()
       await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
     }
-    if (!baseline) {
+    if (!baseline && cm) {
+      await t.test(
+        'formatted mib notes stay editable and preserve their source',
+        async () => {
+          // Formatted notes use an editable
+          // virtualized view. No pager or retained hidden-source identity applies;
+          // formatted-hidden-source.test.mjs also checks rope release and mapping.
+          const formatted = page.locator('.rich-pane .cm-content')
+          assert.equal(await formatted.getAttribute('contenteditable'), 'true')
+          assert.equal(
+            await page.locator('.editor-panes.mode-normal').count(),
+            1,
+          )
+          assert.ok((await formatted.locator('.cm-line').count()) < 512)
+          const normalized = source.replace(/\r\n?/g, '\n')
+          assert.deepEqual(
+            await formatted.evaluate((element) => {
+              const view = element.cmTile.root.view
+              return {
+                length: view.state.doc.length,
+                first: view.state.doc.sliceString(0, 32),
+                last: view.state.doc.sliceString(view.state.doc.length - 32),
+              }
+            }),
+            {
+              length: normalized.length,
+              first: normalized.slice(0, 32),
+              last: normalized.slice(-32),
+            },
+          )
+          for (const anchor of [Math.floor(normalized.length / 2), 0]) {
+            await formatted.evaluate((element, anchor) => {
+              element.cmTile.root.view.dispatch({
+                selection: { anchor },
+                scrollIntoView: true,
+              })
+            }, anchor)
+            await page.waitForFunction((anchor) => {
+              const view = document.querySelector('.rich-pane .cm-content')
+                .cmTile.root.view
+              const caret = view.coordsAtPos(anchor),
+                box = view.scrollDOM.getBoundingClientRect()
+              return caret && caret.bottom >= box.top && caret.top <= box.bottom
+            }, anchor)
+            assert.ok((await formatted.locator('.cm-line').count()) < 512)
+          }
+          if (size === 2)
+            for (const character of ['Q', '#']) {
+              await formatted.evaluate((element) => {
+                const view = element.cmTile.root.view
+                view.dispatch({ selection: { anchor: 0, head: 1 } })
+                view.focus()
+              })
+              await page.keyboard.insertText(character)
+              await page.evaluate(() => window.hibi.flushDocumentChanges())
+            }
+          await page
+            .getByRole('button', { name: 'Source view', exact: true })
+            .click()
+          await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+          await page
+            .getByRole('button', { name: 'normal', exact: true })
+            .click()
+          await page
+            .locator('.source-pane .cm-editor')
+            .waitFor({ state: 'detached' })
+          assert.equal(await page.locator('.source-pane .cm-editor').count(), 0)
+          assert.equal(await page.locator('.large-markdown-preview').count(), 0)
+        },
+      )
+    } else if (!baseline) {
       await page.evaluate(() => {
-        window.scaleSourceView =
-          document.querySelector('.cm-content').cmTile.root.view
+        window.scaleSourceView = document.querySelector(
+          '.rich-pane:not([inert]) .cm-content, .source-pane:not([inert]) .cm-content',
+        ).cmTile.root.view
       })
       await page.getByRole('button', { name: 'normal', exact: true }).click()
       const preview = page.locator('.large-markdown-preview')
@@ -289,8 +370,9 @@ for (const size of sizes)
       assert.equal(
         await page.evaluate(
           () =>
-            document.querySelector('.cm-content').cmTile.root.view ===
-            window.scaleSourceView,
+            document.querySelector(
+              '.rich-pane:not([inert]) .cm-content, .source-pane:not([inert]) .cm-content',
+            ).cmTile.root.view === window.scaleSourceView,
         ),
         true,
       )
@@ -334,7 +416,9 @@ for (const size of sizes)
     const edit = async (char) => {
       await page.evaluate(
         ({ offset, char }) => {
-          const view = document.querySelector('.cm-content').cmTile.root.view
+          const view = document.querySelector(
+            '.rich-pane:not([inert]) .cm-content, .source-pane:not([inert]) .cm-content',
+          ).cmTile.root.view
           view.dispatch({
             changes: { from: offset, to: offset + 1, insert: char },
             userEvent: 'input.type',
@@ -367,7 +451,7 @@ for (const size of sizes)
         new Promise((resolve) => {
           const ready = () => {
             const content = document.querySelector(
-                '.cm-content[contenteditable="true"]',
+                '.source-pane .cm-content[contenteditable="true"]',
               ),
               view = content?.cmTile?.root?.view
             if (
@@ -399,7 +483,9 @@ for (const size of sizes)
       expected('Y').replace(/\r\n?/g, '\n').slice(0, 32),
     )
     await live(app, () => {
-      const view = document.querySelector('.cm-content').cmTile.root.view,
+      const view = document.querySelector(
+          '.rich-pane:not([inert]) .cm-content, .source-pane:not([inert]) .cm-content',
+        ).cmTile.root.view,
         offset = view.state.doc.sliceString(0, 1) === '\uFEFF' ? 1 : 0
       view.dispatch({
         changes: { from: offset, to: offset + 1, insert: 'X' },

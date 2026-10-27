@@ -6,10 +6,7 @@ import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
-import {
-  ADDON_API_VERSION,
-  compatibleAddonManifest,
-} from '../src/addons/api.ts'
+import { compatibleAddonManifest } from '../src/addons/api.ts'
 
 const execute = promisify(execFile)
 const create = resolve('packages/create-hibi-addon/index.mjs')
@@ -20,7 +17,7 @@ async function scratch(t) {
   return directory
 }
 
-test('create-hibi-addon writes a valid runnable starter without overwriting', async (t) => {
+test('create-hibi-addon writes a runnable api 2 starter for released clients without overwriting', async (t) => {
   const directory = await scratch(t)
   const target = join(directory, 'note-tools')
   const result = await execute(
@@ -37,7 +34,7 @@ test('create-hibi-addon writes a valid runnable starter without overwriting', as
     name: 'Note tools',
     description: 'A starter Hibi addon.',
     version: '1.0.0',
-    apiVersion: ADDON_API_VERSION,
+    apiVersion: 2,
     kind: 'extension',
     capabilities: [],
     activation: 'command',

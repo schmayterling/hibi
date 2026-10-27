@@ -2,14 +2,17 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { gzipSync } from 'node:zlib'
 import { packs } from '../src/addons/dictionary/packs.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
 
-async function launch(profile, bytes) {
+async function launch(profile, bytes, engine) {
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
   })
@@ -32,7 +35,17 @@ async function launch(profile, bytes) {
     )
     const page = await app.firstWindow()
     page.setDefaultTimeout(APP_STATE_TIMEOUT)
-    await waitForDocumentEditor(app, page)
+    if (bytes) await selectFormattedEngine(app, page, engine)
+    else {
+      await waitForDocumentEditor(app, page)
+      await page
+        .locator(
+          engine === 'tiptap'
+            ? '.rich-pane .tiptap'
+            : '.rich-pane .hibi-formatted .cm-content',
+        )
+        .waitFor()
+    }
     await app.evaluate(({ ipcMain }) => {
       globalThis.dictionaryOnlineRequests = []
       ipcMain.removeHandler('host-network:get-text')
@@ -72,7 +85,7 @@ const lookup = (page) =>
     }),
   )
 
-test('pack dialog install, offline definition, profile restart, path rejection and uninstall', async (t) => {
+test('pack dialog install, offline definition, profile restart, path rejection and uninstall', {}, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-dictionary-packs-'))
   await writeFile(
     join(profile, 'addons.json'),
@@ -88,7 +101,7 @@ test('pack dialog install, offline definition, profile restart, path rejection a
       new URL('./fixtures/dictionary-packs/zh.txt', import.meta.url),
     ),
   )
-  let launched = await launch(profile, bytes)
+  let launched = await launch(profile, bytes, t.formattedEngine)
   app = launched.app
   let page = launched.page
   await waitForPack(page, 'absent')
@@ -177,39 +190,60 @@ test('pack dialog install, offline definition, profile restart, path rejection a
     async () => (await window.hibi.getDocument()).name === 'offline-note.md',
   )
   await waitForDocumentEditor(app, page)
-  const rich = page.locator('.rich-pane .tiptap[contenteditable="true"]')
+  const rich = page.getByRole('textbox', {
+    name: 'Document editor',
+    exact: true,
+  })
   await rich.click()
-  await rich.evaluate((element) => element.editor.commands.setTextSelection(1))
-  await clickMenu(app, 'Command palette')
-  await page
-    .getByRole('combobox', { name: /search commands/i })
-    .fill('Define word')
-  await page.getByRole('option', { name: /Define word/i }).click()
-  const definition = page.getByRole('dialog', { name: 'Define “猫”' })
-  await definition
-    .getByText(entries[0].meanings[0].definitions[0].definition, {
-      exact: true,
-    })
-    .waitFor()
-  await definition.getByRole('heading', { name: 'mao1', exact: true }).waitFor()
-  await definition
-    .getByText('CC-CEDICT · CC BY-SA 4.0', { exact: true })
-    .first()
-    .waitFor()
-  assert.deepEqual(
-    await app.evaluate(() => globalThis.dictionaryOnlineRequests),
-    [],
+  if (t.formattedEngine === 'tiptap')
+    await rich.evaluate((element) =>
+      element.editor.commands.setTextSelection(1),
+    )
+  else {
+    await rich.focus()
+    await rich.press(
+      process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home',
+    )
+  }
+  await t.test(
+    'offline definition preserves reading, license, privacy and source',
+    async () => {
+      await clickMenu(app, 'Command palette')
+      await page
+        .getByRole('combobox', { name: /search commands/i })
+        .fill('Define word')
+      await page.getByRole('option', { name: /Define word/i }).click()
+      const definition = page.getByRole('dialog', { name: 'Define “猫”' })
+      await definition
+        .getByText(entries[0].meanings[0].definitions[0].definition, {
+          exact: true,
+        })
+        .waitFor()
+      await definition
+        .getByRole('heading', { name: 'mao1', exact: true })
+        .waitFor()
+      await definition
+        .getByText('CC-CEDICT · CC BY-SA 4.0', { exact: true })
+        .first()
+        .waitFor()
+      assert.deepEqual(
+        await app.evaluate(() => globalThis.dictionaryOnlineRequests),
+        [],
+      )
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        '猫',
+      )
+      await page.keyboard.press('Escape')
+      await definition.waitFor({ state: 'detached' })
+    },
   )
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    '猫',
-  )
-  await page.keyboard.press('Escape')
-  await definition.waitFor({ state: 'detached' })
+  const openDefinition = page.getByRole('dialog', { name: 'Define “猫”' })
+  if (await openDefinition.count()) await page.keyboard.press('Escape')
   await page.evaluate(() => window.hibi.setAddonEnabled('dictionary', false))
   await app.close()
   app = undefined
-  launched = await launch(profile)
+  launched = await launch(profile, undefined, t.formattedEngine)
   app = launched.app
   page = launched.page
   await app.evaluate(({ ipcMain }) => {

@@ -9,12 +9,15 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import {
   electron,
   waitForAppState,
   waitForDocumentEditor,
 } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -39,6 +42,7 @@ test('workspace popovers, durable folders, ephemeral files, inline rename, dirty
     dialog.showMessageBox = async () => ({ response: 1 })
   }, root)
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await waitForDocumentEditor(app, page)

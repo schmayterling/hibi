@@ -80,7 +80,7 @@ async function engine(codemirror, markers = true) {
     ({ codemirror, markers }) => {
       if (codemirror)
         localStorage.setItem('hibi:formatted-engine', 'codemirror')
-      else localStorage.removeItem('hibi:formatted-engine')
+      else localStorage.setItem('hibi:formatted-engine', 'tiptap')
       localStorage.setItem('markdown-markers', String(markers))
     },
     { codemirror, markers },

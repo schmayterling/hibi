@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { link, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { pressShortcut, replaceSourceText } from './keyboard.mjs'
 
 const gif = Buffer.from(
@@ -42,7 +45,7 @@ test('large local images stream; external changes refresh one image and svg rema
   })
   const page = await app.firstWindow()
   page.setDefaultTimeout(6000)
-  await waitForDocumentEditor(app, page)
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await app.evaluate(({ dialog }, workspace) => {
     dialog.showOpenDialog = async () => ({
       canceled: false,
@@ -55,14 +58,15 @@ test('large local images stream; external changes refresh one image and svg rema
     .getByRole('button', { name: /^open workspace$/i, exact: true })
     .click()
   await page.getByRole('treeitem', { name: /^note\.md$/i, exact: true }).click()
-  const images = page.locator('.tiptap img')
+  const images = page.locator('.rich-pane img:not(.cm-widgetBuffer)')
   await images.first().waitFor()
   await page.waitForFunction(
     () =>
-      [...document.querySelectorAll('.tiptap img')].length === 3 &&
-      [...document.querySelectorAll('.tiptap img')].every(
-        (img) => img.complete && img.naturalWidth > 0,
-      ),
+      [...document.querySelectorAll('.rich-pane img:not(.cm-widgetBuffer)')]
+        .length === 3 &&
+      [
+        ...document.querySelectorAll('.rich-pane img:not(.cm-widgetBuffer)'),
+      ].every((img) => img.complete && img.naturalWidth > 0),
   )
   const urls = await images.evaluateAll((items) =>
     items.map((image) => image.src),
@@ -122,7 +126,9 @@ test('large local images stream; external changes refresh one image and svg rema
   await svgWindow.dispose()
   await writeFile(join(workspace, 'assets', 'active.svg'), svg(48))
   await page.waitForFunction((previous) => {
-    const image = document.querySelector('.tiptap img[alt="active"]')
+    const image = document.querySelector(
+      '.rich-pane img:not(.cm-widgetBuffer)[alt="active"]',
+    )
     return (
       image?.src !== previous && image?.complete && image.naturalWidth === 48
     )
@@ -152,8 +158,11 @@ test('large local images stream; external changes refresh one image and svg rema
     await operation()
     await page.waitForFunction(
       (previous) =>
-        [...document.querySelectorAll('.tiptap img')].length === 3 &&
-        [...document.querySelectorAll('.tiptap img')].every(
+        [...document.querySelectorAll('.rich-pane img:not(.cm-widgetBuffer)')]
+          .length === 3 &&
+        [
+          ...document.querySelectorAll('.rich-pane img:not(.cm-widgetBuffer)'),
+        ].every(
           (image, index) =>
             image.src !== previous[index] &&
             image.complete &&
@@ -202,7 +211,7 @@ test('large local images stream; external changes refresh one image and svg rema
   await replaceSourceText(page, source, '![first save](assets/stable.gif)')
   await pressShortcut(app, mod + '+Shift+[')
   await page
-    .locator('.tiptap img[alt="first save"]')
+    .locator('.rich-pane img:not(.cm-widgetBuffer)[alt="first save"]')
     .waitFor({ state: 'attached' })
   await app.evaluate(
     ({ dialog }, path) => {
@@ -212,7 +221,9 @@ test('large local images stream; external changes refresh one image and svg rema
   )
   await page.evaluate(() => window.hibi.saveDocument(false))
   await page.waitForFunction(() => {
-    const image = document.querySelector('.tiptap img[alt="first save"]')
+    const image = document.querySelector(
+      '.rich-pane img:not(.cm-widgetBuffer)[alt="first save"]',
+    )
     return image?.complete && image.naturalWidth === 1
   })
   assert.equal(

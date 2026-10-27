@@ -9,7 +9,12 @@ import {
   parseSyntaxDescriptors,
 } from '../src/shared/preservation.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines,
+} from './formatted-engine.mjs'
 import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('verbatim projections preserve surrounding bytes and reject unprovable bodies', () => {
   const adapter = {
@@ -91,144 +96,231 @@ test('inert syntax ownership is validated and protects never-loaded addons', () 
     assert.throws(() => parseSyntaxDescriptors(value))
 })
 
-test('custom source stays locked while its addon enables and survives rich editing, saving, and reload', {
-  timeout: 30000,
-}, async (t) => {
-  const profile = await mkdtemp(join(tmpdir(), 'hibi-preservation-'))
-  const folder = join(profile, 'installed-addons', 'citations')
-  await mkdir(folder, { recursive: true })
-  await writeFile(
-    join(folder, 'hibi-addon.json'),
-    JSON.stringify({
-      id: 'citations',
-      name: 'Citations',
-      description: 'Source preservation fixture',
-      kind: 'extension',
-      version: '1.0.0',
-      apiVersion: 2,
-      capabilities: [],
-      authors: [{ displayName: 'Test' }],
-      entry: 'index.js',
-      syntax: [
-        {
-          id: 'header',
-          kind: 'projection',
-          markers: ['[@sources:'],
-          preservation: { level: 'verbatim', version: '1', fallback: 'source' },
-        },
-      ],
-    }),
-  )
-  await writeFile(
-    join(folder, 'index.js'),
-    `window.citationsLoaded = true; export default () => ({ start(context) { context.editor.registerMarkdown({ id: 'header', preservation: { level: 'verbatim', version: '1' }, parse(source) {
+testFormattedEngines(
+  'custom source stays locked while its addon enables and survives rich editing, saving, and reload',
+  (engine) => ({
+    timeout: 30000,
+    todo:
+      engine === 'codemirror'
+        ? 'formatted gap projection-002: formatted body edits must preserve custom source prefixes and line endings'
+        : undefined,
+  }),
+  async (t) => {
+    const profile = await mkdtemp(join(tmpdir(), 'hibi-preservation-'))
+    const folder = join(profile, 'installed-addons', 'citations')
+    await mkdir(folder, { recursive: true })
+    await writeFile(
+      join(folder, 'hibi-addon.json'),
+      JSON.stringify({
+        id: 'citations',
+        name: 'Citations',
+        description: 'Source preservation fixture',
+        kind: 'extension',
+        version: '1.0.0',
+        apiVersion: 2,
+        capabilities: [],
+        authors: [{ displayName: 'Test' }],
+        entry: 'index.js',
+        syntax: [
+          {
+            id: 'header',
+            kind: 'projection',
+            markers: ['[@sources:'],
+            preservation: {
+              level: 'verbatim',
+              version: '1',
+              fallback: 'source',
+            },
+          },
+        ],
+      }),
+    )
+    await writeFile(
+      join(folder, 'index.js'),
+      `window.citationsLoaded = true; export default () => ({ start(context) { context.editor.registerMarkdown({ id: 'header', preservation: { level: 'verbatim', version: '1' }, parse(source) {
     if (!source.startsWith('[@sources:')) return null;
     const end = source.indexOf(String.fromCharCode(13, 10, 13, 10)) + 4;
     if (end < 4) return null;
     return { content: source.slice(end), sourceOffset: end, serialize() { throw new Error('The host must preserve the prefix'); } };
   }}); } });`,
-  )
-  await writeFile(
-    join(folder, '.hibi-install.json'),
-    JSON.stringify({
-      hash: 'a'.repeat(64),
-      files: ['hibi-addon.json', 'index.js'],
-      source: 'local',
-    }),
-  )
-  const prefix = '[@sources: é 😀 exact spacing  ]\r\n\r\n'
-  const file = join(profile, 'citations.md')
-  await writeFile(file, `${prefix}Original body`)
-  const app = await electron.launch({
-    args: [resolve('.'), `--user-data-dir=${profile}`, file],
-  })
-  t.after(async () => {
-    await app.evaluate(({ dialog }) => {
-      globalThis.releaseCitationsEnable?.()
-      dialog.showMessageBox = async () => ({ response: 1 })
+    )
+    await writeFile(
+      join(folder, '.hibi-install.json'),
+      JSON.stringify({
+        hash: 'a'.repeat(64),
+        files: ['hibi-addon.json', 'index.js'],
+        source: 'local',
+      }),
+    )
+    const prefix = '[@sources: é 😀 exact spacing  ]\r\n\r\n'
+    const file = join(profile, 'citations.md')
+    await writeFile(file, `${prefix}Original body`)
+    const app = await electron.launch({
+      args: [resolve('.'), `--user-data-dir=${profile}`, file],
     })
-    await app.close()
-    await rm(profile, { recursive: true, force: true })
-  })
-  const page = await app.firstWindow()
-  page.setDefaultTimeout(7000)
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.isContentEditable,
-  )
-  assert.equal(await page.evaluate(() => window.citationsLoaded), undefined)
-  await page.getByRole('button', { name: 'Source view', exact: true }).click()
-  await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
-  await replaceSourceText(
-    page,
-    page.getByRole('textbox', { name: 'Markdown editor', exact: true }),
-    `${prefix}Unsaved body`,
-  )
-  await app.evaluate(({ ipcMain }) => {
-    const enable = ipcMain._invokeHandlers.get('addons:enable')
-    if (!enable) throw new Error('The addon enable handler is not ready.')
-    let started
-    globalThis.citationsEnableStarted = new Promise((resolve) => {
-      started = resolve
+    t.after(async () => {
+      await app.evaluate(({ dialog }) => {
+        globalThis.releaseCitationsEnable?.()
+        dialog.showMessageBox = async () => ({ response: 1 })
+      })
+      await app.close()
+      await rm(profile, { recursive: true, force: true })
     })
-    ipcMain.removeHandler('addons:enable')
-    ipcMain.handle('addons:enable', async (...args) => {
-      if (args[1] === 'citations' && args[2] === true) {
-        await new Promise((resolve) => {
-          globalThis.releaseCitationsEnable = resolve
-          started()
+    const page = await app.firstWindow()
+    page.setDefaultTimeout(7000)
+    await selectFormattedEngine(app, page, t.formattedEngine)
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[aria-label="Document editor"]')
+          ?.isContentEditable,
+    )
+    assert.equal(await page.evaluate(() => window.citationsLoaded), undefined)
+    await page.getByRole('button', { name: 'Source view', exact: true }).click()
+    await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
+    await replaceSourceText(
+      page,
+      page.getByRole('textbox', { name: 'Markdown editor', exact: true }),
+      `${prefix}Unsaved body`,
+    )
+    await app.evaluate(({ ipcMain }) => {
+      const enable = ipcMain._invokeHandlers.get('addons:enable')
+      if (!enable) throw new Error('The addon enable handler is not ready.')
+      let started
+      globalThis.citationsEnableStarted = new Promise((resolve) => {
+        started = resolve
+      })
+      ipcMain.removeHandler('addons:enable')
+      ipcMain.handle('addons:enable', async (...args) => {
+        if (args[1] === 'citations' && args[2] === true) {
+          await new Promise((resolve) => {
+            globalThis.releaseCitationsEnable = resolve
+            started()
+          })
+        }
+        return enable(...args)
+      })
+    })
+    await clickMenu(app, 'Settings')
+    await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+    await page.locator('#addon-citations').click()
+    await app.evaluate(() => globalThis.citationsEnableStarted)
+    await clickMenu(app, 'Settings')
+    await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+    await page.waitForFunction(
+      () => document.querySelector('#document-editor-panel')?.inert,
+    )
+    if (t.formattedEngine === 'tiptap') {
+      assert.equal(
+        await page
+          .locator('.tiptap')
+          .evaluate((element) => element.isContentEditable),
+        false,
+      )
+    } else {
+      assert.equal(
+        await page
+          .getByRole('textbox', { name: 'Document editor', exact: true })
+          .evaluate((element) => element.isContentEditable),
+        false,
+      )
+    }
+    await app.evaluate(() => globalThis.releaseCitationsEnable())
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[aria-label="Document editor"]')
+          ?.isContentEditable,
+    )
+    const projectionState = () =>
+      page.evaluate(async () => {
+        const element = document.querySelector('[aria-label="Document editor"]')
+        return {
+          source: (await window.hibi.getDocument()).markdown,
+          rendered: element.innerText,
+          nativeText: element.matches('.cm-content')
+            ? element.cmTile.root.view.state.doc.toString()
+            : element.editor.state.doc.textContent,
+        }
+      })
+    t.diagnostic(
+      JSON.stringify({
+        engine: t.formattedEngine,
+        stage: 'before body replacement',
+        ...(await projectionState()),
+      }),
+    )
+    if (t.formattedEngine === 'codemirror') {
+      const rich = page.getByRole('textbox', {
+        name: 'Document editor',
+        exact: true,
+      })
+      await rich.evaluate((element) => {
+        const view = element.cmTile.root.view
+        const from = view.state.doc.toString().indexOf('Unsaved body')
+        view.dispatch({
+          selection: { anchor: from, head: from + 'Unsaved body'.length },
         })
-      }
-      return enable(...args)
-    })
-  })
-  await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
-  await page.locator('#addon-citations').click()
-  await app.evaluate(() => globalThis.citationsEnableStarted)
-  await clickMenu(app, 'Settings')
-  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
-  await page.waitForFunction(
-    () => document.querySelector('#document-editor-panel')?.inert,
-  )
-  assert.equal(
-    await page
-      .locator('.tiptap')
-      .evaluate((element) => element.isContentEditable),
-    false,
-  )
-  await app.evaluate(() => globalThis.releaseCitationsEnable())
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.isContentEditable,
-  )
-  await replaceRichText(
-    page,
-    page.getByRole('textbox', { name: 'Document editor', exact: true }),
-    'Changed body',
-  )
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    `${prefix}Changed body`,
-  )
-  await clickMenu(app, 'Settings')
-  await page.locator('#addon-citations').click()
-  await clickMenu(app, 'Settings')
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.isContentEditable,
-  )
-  await page.evaluate(() => window.hibi.saveDocument(false))
-  assert.equal(await readFile(file, 'utf8'), `${prefix}Changed body`)
-  await page.reload()
-  await page.waitForFunction(
-    () => document.querySelector('.tiptap')?.isContentEditable,
-  )
-  assert.equal(await page.evaluate(() => window.citationsLoaded), undefined)
-  await replaceRichText(
-    page,
-    page.getByRole('textbox', { name: 'Document editor', exact: true }),
-    'Editable without the addon',
-  )
-  assert.equal(
-    (await page.evaluate(() => window.hibi.getDocument())).markdown,
-    'Editable without the addon',
-  )
-})
+        view.focus()
+      })
+      await page.keyboard.insertText('Changed body')
+      assert.equal(
+        (await page.evaluate(() => window.hibi.getDocument())).markdown,
+        `${prefix}Changed body`,
+      )
+      t.diagnostic(
+        JSON.stringify({
+          engine: t.formattedEngine,
+          stage: 'body-only selection preserves prefix',
+          ...(await projectionState()),
+        }),
+      )
+      await rich.press('ControlOrMeta+z')
+      await waitForAsync(
+        page,
+        async (text) => (await window.hibi.getDocument()).markdown === text,
+        `${prefix}Unsaved body`,
+      )
+    }
+    await replaceRichText(
+      page,
+      page.getByRole('textbox', { name: 'Document editor', exact: true }),
+      'Changed body',
+    )
+    t.diagnostic(
+      JSON.stringify({
+        engine: t.formattedEngine,
+        stage: 'after body replacement',
+        ...(await projectionState()),
+      }),
+    )
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      `${prefix}Changed body`,
+    )
+    await clickMenu(app, 'Settings')
+    await page.locator('#addon-citations').click()
+    await clickMenu(app, 'Settings')
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[aria-label="Document editor"]')
+          ?.isContentEditable,
+    )
+    await page.evaluate(() => window.hibi.saveDocument(false))
+    assert.equal(await readFile(file, 'utf8'), `${prefix}Changed body`)
+    await page.reload()
+    await page.waitForFunction(
+      () =>
+        document.querySelector('[aria-label="Document editor"]')
+          ?.isContentEditable,
+    )
+    assert.equal(await page.evaluate(() => window.citationsLoaded), undefined)
+    await replaceRichText(
+      page,
+      page.getByRole('textbox', { name: 'Document editor', exact: true }),
+      'Editable without the addon',
+    )
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      'Editable without the addon',
+    )
+  },
+)

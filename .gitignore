@@ -18,3 +18,6 @@ test-results/
 # nix
 result
 result-*
+
+# local agent state
+.kilo/

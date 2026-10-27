@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import {
   clickMenu,
   pressShortcut,
@@ -25,6 +28,7 @@ test('addon actions follow formatting by default and keep custom toolbar order',
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(7000)
   await page.evaluate(() => window.hibi.setAddonEnabled('tags', true))
   await page.reload()
@@ -72,6 +76,7 @@ test('toolbar and top bar stay visible by default, auto-hide shares timing, and 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(6000)
   await page.emulateMedia({ reducedMotion: 'no-preference' })
   const rich = page.getByRole('textbox', { name: /document editor/i })
@@ -169,7 +174,7 @@ test('toolbar and top bar stay visible by default, auto-hide shares timing, and 
         const duration = grid.effect.getComputedTiming().duration
         const read = () => {
           const paragraph = document
-            .querySelector('.tiptap p')
+            .querySelector('.rich-pane .tiptap p, .rich-pane .cm-line')
             .getBoundingClientRect()
           return {
             height: slot.getBoundingClientRect().height,
@@ -300,6 +305,7 @@ test('markdown toolbar formats both panes without dragging and reorders only in 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await page.evaluate(() =>
     localStorage.setItem('hibi:toolbar', JSON.stringify({ autoHide: false })),
   )
@@ -383,7 +389,7 @@ test('markdown toolbar formats both panes without dragging and reorders only in 
   await rich.click()
   await overflow.waitFor({ state: 'hidden' })
   await page.setViewportSize({ width: 1000, height: 720 })
-  await rich.press('Control+a')
+  await rich.press('ControlOrMeta+a')
   await run('bold')
   await waitForMarkdown('**hello**')
   await page.waitForFunction(
@@ -456,23 +462,23 @@ test('markdown toolbar formats both panes without dragging and reorders only in 
     ['quote', '> hello'],
   ]) {
     await replaceSourceText(page, source, 'hello')
-    await source.press('Control+a')
+    await source.press('ControlOrMeta+a')
     await run(id)
     await waitForMarkdown(expected)
     await run('undo')
     await waitForMarkdown('hello')
   }
   await replaceSourceText(page, source, 'first\nsecond')
-  await source.press('Control+a')
+  await source.press('ControlOrMeta+a')
   await run('numbered-list')
   await waitForMarkdown('1. first\n2. second')
   await run('undo')
   await waitForMarkdown('first\nsecond')
-  await source.press('Control+a')
+  await source.press('ControlOrMeta+a')
   await run('code-block')
   assert.match(await read(), /^```\nfirst\nsecond\n```/)
   await replaceSourceText(page, source, 'image here')
-  await source.press('Control+a')
+  await source.press('ControlOrMeta+a')
   await writeFile(
     join(profile, 'sample.gif'),
     Buffer.from(
@@ -501,10 +507,10 @@ test('markdown toolbar formats both panes without dragging and reorders only in 
     .getByRole('button', { name: /^side-by-side$/i, exact: true })
     .click()
   await source.click()
-  await source.press('Control+a')
+  await source.press('ControlOrMeta+a')
   await run('italic')
   await waitForMarkdown('*split text*')
-  await rich.locator('em').waitFor()
+  await rich.locator('em, .hibi-lp-em').waitFor()
   await mkdir('test-results', { recursive: true })
   await page.screenshot({
     path: 'test-results/markdown-toolbar.png',
@@ -624,6 +630,7 @@ test('select all stays in the active pane after changing views or clicking line 
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(7000)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await page.evaluate(() => localStorage.setItem('line-numbers', 'true'))
@@ -664,13 +671,16 @@ test('select all stays in the active pane after changing views or clicking line 
     assert.match(selected.focus, /cm-content/)
     assert.equal(selected.text.match(/first/g).length, 1)
     assert.doesNotMatch(selected.text, /\d/)
-    await page.locator('.cm-lineNumbers .cm-gutterElement').last().click()
+    await page
+      .locator('.source-pane .cm-lineNumbers .cm-gutterElement')
+      .last()
+      .click()
     selected = await select()
     assert.match(selected.anchor, /cm-content/)
     assert.match(selected.focus, /cm-content/)
     await page
       .getByRole('textbox', { name: /markdown editor/i })
-      .press('Control+a')
+      .press('ControlOrMeta+a')
     assert.equal(
       await page.evaluate(() => window.getSelection().toString()),
       selected.text,
@@ -678,7 +688,8 @@ test('select all stays in the active pane after changing views or clicking line 
   }
   await rich.click()
   const selected = await select()
-  assert.match(selected.anchor, /tiptap/)
-  assert.match(selected.focus, /tiptap/)
+  const editorClass = t.formattedEngine === 'tiptap' ? /tiptap/ : /cm-content/
+  assert.match(selected.anchor, editorClass)
+  assert.match(selected.focus, editorClass)
   assert.equal(selected.text.match(/first/g).length, 1)
 })

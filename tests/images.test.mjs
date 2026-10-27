@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
+import unit from 'node:test'
 import { pathToFileURL } from 'node:url'
 import {
   documentMediaPath,
@@ -11,6 +11,10 @@ import {
   resolveDocumentMediaPath,
 } from '../src/main/images.ts'
 import { electron } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 
 const png = Buffer.from(
@@ -18,44 +22,47 @@ const png = Buffer.from(
   'base64',
 )
 
-test('website-root image paths fall back to workspace assets without replacing absolute-file behavior', async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'hibi-root-images-'))
-  t.after(() => rm(root, { recursive: true, force: true }))
-  await mkdir(join(root, 'uploads'))
-  await mkdir(join(root, 'notes'))
-  const image = join(root, 'uploads', 'shot with spaces.png'),
-    note = join(root, 'notes', 'note.md')
-  await writeFile(image, png)
-  const source = '/uploads/shot%20with%20spaces.png'
-  assert.equal(await resolveDocumentMediaPath(source, note, root), image)
-  assert.equal(
-    await readDocumentImage(source, note, root),
-    `data:image/png;base64,${png.toString('base64')}`,
-  )
-  assert.equal(await readDocumentImage(source, note), null)
-  assert.equal(
-    await readDocumentImage(source, join(root, 'note.md')),
-    `data:image/png;base64,${png.toString('base64')}`,
-  )
-  assert.equal(await resolveDocumentMediaPath(image, note, root), image)
-  assert.equal(
-    await resolveDocumentMediaPath(pathToFileURL(image).href, note, root),
-    image,
-  )
-  assert.equal(
-    await resolveDocumentMediaPath('/../outside.png', note, root),
-    null,
-  )
-  assert.equal(documentMediaPath('%2F%2Fserver/image.png', note), null)
-  assert.equal(documentMediaPath('assets/%00.png', note), null)
-  await mkdir(join(root, 'public', 'uploads'), { recursive: true })
-  const publicImage = join(root, 'public', 'uploads', 'site.png')
-  await writeFile(publicImage, png)
-  assert.equal(
-    await resolveDocumentMediaPath('/uploads/site.png', note, root),
-    publicImage,
-  )
-})
+unit(
+  'website-root image paths fall back to workspace assets without replacing absolute-file behavior',
+  async (t) => {
+    const root = await mkdtemp(join(tmpdir(), 'hibi-root-images-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    await mkdir(join(root, 'uploads'))
+    await mkdir(join(root, 'notes'))
+    const image = join(root, 'uploads', 'shot with spaces.png'),
+      note = join(root, 'notes', 'note.md')
+    await writeFile(image, png)
+    const source = '/uploads/shot%20with%20spaces.png'
+    assert.equal(await resolveDocumentMediaPath(source, note, root), image)
+    assert.equal(
+      await readDocumentImage(source, note, root),
+      `data:image/png;base64,${png.toString('base64')}`,
+    )
+    assert.equal(await readDocumentImage(source, note), null)
+    assert.equal(
+      await readDocumentImage(source, join(root, 'note.md')),
+      `data:image/png;base64,${png.toString('base64')}`,
+    )
+    assert.equal(await resolveDocumentMediaPath(image, note, root), image)
+    assert.equal(
+      await resolveDocumentMediaPath(pathToFileURL(image).href, note, root),
+      image,
+    )
+    assert.equal(
+      await resolveDocumentMediaPath('/../outside.png', note, root),
+      null,
+    )
+    assert.equal(documentMediaPath('%2F%2Fserver/image.png', note), null)
+    assert.equal(documentMediaPath('assets/%00.png', note), null)
+    await mkdir(join(root, 'public', 'uploads'), { recursive: true })
+    const publicImage = join(root, 'public', 'uploads', 'site.png')
+    await writeFile(publicImage, png)
+    assert.equal(
+      await resolveDocumentMediaPath('/uploads/site.png', note, root),
+      publicImage,
+    )
+  },
+)
 
 test('local images resolve from the note, validate content, and retain their Markdown paths', {
   timeout: 30000,
@@ -103,6 +110,7 @@ test('local images resolve from the note, validate content, and retain their Mar
   }, first)
   const page = await app.firstWindow()
   page.setDefaultTimeout(6500)
+  const rich = await selectFormattedEngine(app, page, t.formattedEngine)
   await page.getByRole('textbox', { name: /document editor/i }).waitFor()
   await clickMenu(app, 'Open…')
   await page.waitForFunction(
@@ -129,13 +137,15 @@ test('local images resolve from the note, validate content, and retain their Mar
     toolbar.every((frame) => frame.same && frame.opacity === '1'),
     JSON.stringify(toolbar),
   )
-  await page.waitForFunction(
-    () =>
-      [...document.querySelectorAll('.tiptap img')].length === 4 &&
-      [...document.querySelectorAll('.tiptap img')].every(
-        (image) => image.complete && image.naturalWidth === 1,
-      ),
-  )
+  await page.waitForFunction(() => {
+    const images = [
+      ...document.querySelectorAll('.rich-pane img:not(.cm-widgetBuffer)'),
+    ]
+    return (
+      images.length === 4 &&
+      images.every((image) => image.complete && image.naturalWidth === 1)
+    )
+  })
   const revision = (await page.evaluate(() => window.hibi.getDocument()))
     .revision
   assert.equal(
@@ -153,8 +163,13 @@ test('local images resolve from the note, validate content, and retain their Mar
     ),
     null,
   )
-  await page.locator('.tiptap p').last().click()
-  await page.keyboard.press('End')
+  if (t.formattedEngine === 'tiptap') {
+    await rich.locator('p').last().click()
+    await page.keyboard.press('End')
+  } else {
+    await rich.focus()
+    await rich.press('ControlOrMeta+End')
+  }
   await page.keyboard.type(' edited')
   const markdown = (await page.evaluate(() => window.hibi.getDocument()))
     .markdown
@@ -178,7 +193,7 @@ test('local images resolve from the note, validate content, and retain their Mar
     `${process.platform === 'darwin' ? 'Meta' : 'Control'}+o`,
   )
   await page
-    .locator('.tiptap img[data-tooltip^="Could not load this media"]')
+    .locator('.rich-pane img[data-tooltip^="Could not load this media"]')
     .waitFor({ state: 'attached' })
   await app.evaluate(({ dialog }, folder) => {
     dialog.showOpenDialog = async () => ({
@@ -191,7 +206,7 @@ test('local images resolve from the note, validate content, and retain their Mar
     return window.hibi.getWorkspaceSnapshot()
   })
   await page.waitForFunction(() => {
-    const image = document.querySelector('.tiptap img')
+    const image = document.querySelector('.rich-pane img:not(.cm-widgetBuffer)')
     return image?.complete && image.naturalWidth === 1
   })
   assert.equal(

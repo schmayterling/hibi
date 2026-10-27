@@ -38,15 +38,45 @@ const base = {
 }
 const { entry, ...metadata } = base
 
-test('formatted activation accepts the formatted capability', () => {
-  const parsed = parseAddonManifest({
-    ...base,
-    apiVersion: 3,
-    capabilities: ['formatted'],
-    activation: 'formatted',
+for (const trust of ['installed', 'compiled']) {
+  test(`${trust} api 3 accepts formatted capability and activation`, () => {
+    const parsed = parseAddonManifest(
+      {
+        ...base,
+        apiVersion: 3,
+        capabilities: ['formatted'],
+        activation: 'formatted',
+      },
+      { trust },
+    )
+    assert.deepEqual(parsed.manifest.capabilities, ['formatted'])
+    assert.equal(parsed.manifest.activation, 'formatted')
   })
-  assert.equal(parsed.manifest.activation, 'formatted')
-})
+
+  for (const apiVersion of [1, 2]) {
+    test(`${trust} api ${apiVersion} rejects the formatted capability`, () => {
+      assert.throws(
+        () =>
+          parseAddonManifest(
+            { ...base, apiVersion, capabilities: ['formatted'] },
+            { trust },
+          ),
+        /invalid SDK capabilities/,
+      )
+    })
+
+    test(`${trust} api ${apiVersion} rejects formatted activation`, () => {
+      assert.throws(
+        () =>
+          parseAddonManifest(
+            { ...base, apiVersion, capabilities: [], activation: 'formatted' },
+            { trust },
+          ),
+        /activation mode is invalid/,
+      )
+    })
+  }
+}
 
 test('package parser bundles without main, platform, or editor dependencies', () => {
   const paths = Object.keys(metafile.inputs).join('\n')

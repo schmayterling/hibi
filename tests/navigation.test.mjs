@@ -3,8 +3,11 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut, replaceRichText } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
@@ -47,6 +50,7 @@ test('modified link clicks, note/settings history, and file-menu remote imports'
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(6000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await app.evaluate(
@@ -106,11 +110,18 @@ test('modified link clicks, note/settings history, and file-menu remote imports'
   await pressShortcut(app, `${mod}+]`)
   await waitName('b.md')
   // History switches tabs without discarding the other note's draft.
-  await replaceRichText(
-    page,
-    rich.getByRole('heading', { name: 'second', exact: true }),
-    'unsaved second',
-  )
+  const heading = rich.getByRole('heading', { name: 'second', exact: true })
+  await heading.waitFor()
+  if (t.formattedEngine === 'tiptap')
+    await replaceRichText(page, heading, 'unsaved second')
+  else {
+    await heading.click()
+    await page.keyboard.press('End')
+    for (let i = 0; i < 'second'.length; i++)
+      await page.keyboard.press('Shift+ArrowLeft')
+    assert.equal(await page.evaluate(() => getSelection().toString()), 'second')
+    await page.keyboard.insertText('unsaved second')
+  }
   await app.evaluate(({ dialog }) => {
     dialog.showMessageBox = async () => ({ response: 2 })
   })

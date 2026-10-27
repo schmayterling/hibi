@@ -6,7 +6,8 @@ import test, { after, before } from 'node:test'
 import { build } from 'vite'
 import { bundledColorschemes } from '../src/shared/color-palettes.ts'
 import { COLOR_TOKENS } from '../src/shared/colorschemes.ts'
-import { electron, waitForDocumentEditor } from './electron.mjs'
+import { electron } from './electron.mjs'
+import { selectFormattedEngine } from './formatted-engine.mjs'
 import { pressShortcut } from './keyboard.mjs'
 
 const image =
@@ -95,7 +96,7 @@ before(
     })
     page = await app.firstWindow()
     page.setDefaultTimeout(10000)
-    await waitForDocumentEditor(app, page)
+    await selectFormattedEngine(app, page, 'tiptap')
     await app.evaluate(({ dialog }, path) => {
       dialog.showOpenDialog = async () => ({
         canceled: false,

@@ -7,6 +7,10 @@ import { setTimeout } from 'node:timers/promises'
 import { mathFlavor } from '../src/addons/math/syntax.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import {
+  testFormattedEngines as it,
+  selectFormattedEngine,
+} from './formatted-engine.mjs'
+import {
   clickMenu,
   pressShortcut,
   replaceRichText,
@@ -29,7 +33,7 @@ test('math detection respects code, escaped delimiters, and currency spacing', (
     assert.equal(mathFlavor.detect(source), false)
 })
 
-test('flavors auto-detect, persist overrides, render/edit math, and export it offline', {
+it('flavors auto-detect, persist overrides, render/edit math, and export it offline', {
   timeout: 45000,
 }, async (t) => {
   const temp = await mkdtemp(join(tmpdir(), 'hibi-flavors-')),
@@ -66,6 +70,14 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
     { file, root, output },
   )
   const page = await app.firstWindow()
+  const cm = t.formattedEngine === 'codemirror'
+  if (cm) {
+    await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
+    await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
+  }
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   const choose = async (query) => {
@@ -83,7 +95,9 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
   const source = page.getByRole('textbox', { name: /markdown editor/i })
   const initial =
     '# math\n\ninline $x^2$\n\ntext $$x$$\n\ntext $$x$$ more\n\n$$\n\\frac{1}{2}\n$$\n\n`$literal$`\n\n```javascript\nconst answer = 42\n```'
-  const hiddenText = await page.locator('.tiptap').textContent()
+  const hiddenText = await page
+    .locator('.rich-pane [aria-label="Document editor"]')
+    .textContent()
   await waitForDocumentEditor(app, page, { name: 'Markdown editor' })
   await replaceSourceText(page, source, initial)
   await page
@@ -94,23 +108,45 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
     .locator('[data-status-id="flavor"]')
     .filter({ hasText: /math/i })
     .waitFor()
-  assert.equal(
-    await page.locator('.tiptap').textContent(),
-    hiddenText,
-    'source typing must not refresh the hidden rich document',
+  await t.test(
+    'source typing does not refresh the hidden formatted document',
+    async () => {
+      assert.equal(
+        await page
+          .locator('.rich-pane [aria-label="Document editor"]')
+          .textContent(),
+        hiddenText,
+        'source typing must not refresh the hidden rich document',
+      )
+    },
   )
-  assert.equal(await page.locator('.tiptap .katex').count(), 0)
+  await t.test('source typing does not render hidden math', async () => {
+    assert.equal(
+      await page
+        .locator('.rich-pane [aria-label="Document editor"] .katex')
+        .count(),
+      0,
+    )
+  })
   await choose('enable latex')
   // Enabling a flavor does not parse the hidden rich document in source view.
   await pressShortcut(app, `${mod}+Shift+[`)
   await page.waitForFunction(
-    () => document.querySelectorAll('.tiptap .katex').length === 2,
+    () =>
+      document.querySelectorAll(
+        '.rich-pane [aria-label="Document editor"] .katex',
+      ).length === 2,
   )
-  assert.equal(await page.locator('.tiptap .katex-display').count(), 1)
+  assert.equal(
+    await page
+      .locator('.rich-pane [aria-label="Document editor"] .katex-display')
+      .count(),
+    1,
+  )
   for (const text of ['text $$x$$', 'text $$x$$ more'])
     assert.equal(
       await page
-        .locator('.tiptap p')
+        .locator('.rich-pane [aria-label="Document editor"] :is(p, .cm-line)')
         .getByText(text, { exact: true })
         .textContent(),
       text,
@@ -138,12 +174,21 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     initial,
   )
-  await page
-    .locator('.rich-pane .hibi-token-keyword')
-    .filter({ hasText: /const/i })
-    .waitFor()
+  await t.test(
+    'formatted flavor renders code syntax highlighting',
+    async () => {
+      await page
+        .locator('.rich-pane .hibi-token-keyword')
+        .filter({ hasText: /const/i })
+        .waitFor()
+    },
+  )
   await waitForDocumentEditor(app, page)
-  await page.locator('[data-type="inline-math"]').click()
+  if (cm)
+    await page
+      .locator('[data-type="inline-math"] button[aria-label="Edit equation"]')
+      .click()
+  else await page.locator('[data-type="inline-math"]').click()
   const dialog = page.getByRole('dialog', { name: /^math$/i, exact: true })
   await dialog.getByLabel(/^latex$/i, { exact: true }).fill('x^3')
   await dialog.getByRole('button', { name: /^apply$/i, exact: true }).click()
@@ -152,7 +197,9 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
   )
   await choose('use github markdown flavor')
   await page.evaluate(() => {
-    window.beforeSaveEditor = document.querySelector('.tiptap')
+    window.beforeSaveEditor = document.querySelector(
+      '.rich-pane [aria-label="Document editor"]',
+    )
   })
   await pressShortcut(app, `${mod}+s`)
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
@@ -161,7 +208,9 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
   )
   assert.equal(
     await page.evaluate(
-      () => window.beforeSaveEditor === document.querySelector('.tiptap'),
+      () =>
+        window.beforeSaveEditor ===
+        document.querySelector('.rich-pane [aria-label="Document editor"]'),
     ),
     true,
   )
@@ -243,25 +292,41 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     saved,
   )
-  assert.equal(await page.locator('.tiptap .katex').count(), 0)
+  assert.equal(
+    await page
+      .locator('.rich-pane [aria-label="Document editor"] .katex')
+      .count(),
+    0,
+  )
   await pressShortcut(app, `${mod}+o`)
   await page.waitForFunction(
     () =>
-      document.querySelector('.tiptap')?.getAttribute('contenteditable') ===
-      'false',
+      document
+        .querySelector('.rich-pane [aria-label="Document editor"]')
+        ?.getAttribute('contenteditable') === 'false',
   )
-  assert.equal(await page.locator('.tiptap .katex').count(), 0)
+  assert.equal(
+    await page
+      .locator('.rich-pane [aria-label="Document editor"] .katex')
+      .count(),
+    0,
+  )
   await choose('automatically detect markdown flavor')
   try {
     await page.waitForFunction(
-      () => document.querySelectorAll('.tiptap .katex').length === 2,
+      () =>
+        document.querySelectorAll(
+          '.rich-pane [aria-label="Document editor"] .katex',
+        ).length === 2,
     )
   } catch (error) {
     const state = await page.evaluate(async () => ({
       flavor: document.querySelector('[data-status-id="flavor"]')?.textContent,
-      mathBlocks: document.querySelectorAll('.tiptap .katex').length,
+      mathBlocks: document.querySelectorAll(
+        '.rich-pane [aria-label="Document editor"] .katex',
+      ).length,
       editorReady: document
-        .querySelector('.tiptap')
+        .querySelector('.rich-pane [aria-label="Document editor"]')
         ?.getAttribute('contenteditable'),
       source: (await window.hibi.getDocument()).markdown,
     }))
@@ -274,7 +339,7 @@ test('flavors auto-detect, persist overrides, render/edit math, and export it of
   }
 })
 
-test('math source bytes survive source and visual view round trips and saving', {
+it('math source bytes survive source and visual view round trips and saving', {
   timeout: 45000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-math-source-'))
@@ -296,6 +361,14 @@ test('math source bytes survive source and visual view round trips and saving', 
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  const cm = t.formattedEngine === 'codemirror'
+  if (cm) {
+    await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
+    await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
+  }
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(7000)
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await waitForDocumentEditor(app, page)
@@ -308,18 +381,24 @@ test('math source bytes survive source and visual view round trips and saving', 
     .getByRole('dialog', { name: /command palette/i })
     .waitFor({ state: 'hidden' })
   await page.waitForFunction(
-    () => document.querySelectorAll('.tiptap .katex-display').length === 3,
+    () =>
+      document.querySelectorAll(
+        '.rich-pane [aria-label="Document editor"] .katex-display',
+      ).length === 3,
   )
   assert.equal(
     (await page.evaluate(() => window.hibi.getDocument())).markdown,
     original,
   )
-  const rich = page.locator('.tiptap')
+  const rich = page.locator('.rich-pane [aria-label="Document editor"]')
   await pressShortcut(app, `${mod}+Shift+]`)
   await page.getByRole('textbox', { name: /markdown editor/i }).waitFor()
   await pressShortcut(app, `${mod}+Shift+[`)
   await page.waitForFunction(
-    () => document.querySelectorAll('.tiptap .katex-display').length === 3,
+    () =>
+      document.querySelectorAll(
+        '.rich-pane [aria-label="Document editor"] .katex-display',
+      ).length === 3,
   )
   assert.equal(
     await rich.getByText('$$x$$', { exact: true }).textContent(),
@@ -335,11 +414,19 @@ test('math source bytes survive source and visual view round trips and saving', 
   // leave the save's busy state so the math click is not ignored.
   while ((await stat(file)).mtimeMs === written) await setTimeout(30)
   await page
-    .locator('.app[aria-busy="false"] .tiptap[contenteditable="true"]')
+    .locator(
+      '.app[aria-busy="false"] .rich-pane [aria-label="Document editor"][contenteditable="true"]',
+    )
     .waitFor()
   assert.equal(await readFile(file, 'utf8'), original)
 
-  await rich.locator('[data-type="block-math"]').first().click()
+  if (cm)
+    await rich
+      .locator('[data-type="block-math"]')
+      .first()
+      .getByRole('button', { name: 'Edit equation', exact: true })
+      .click()
+  else await rich.locator('[data-type="block-math"]').first().click()
   const dialog = page.getByRole('dialog', { name: /^math$/i, exact: true })
   await dialog.getByLabel(/^latex$/i, { exact: true }).fill('z+1')
   await dialog.getByRole('button', { name: /^apply$/i, exact: true }).click()
@@ -357,7 +444,10 @@ test('math source bytes survive source and visual view round trips and saving', 
   await page.getByRole('textbox', { name: /markdown editor/i }).waitFor()
   await pressShortcut(app, `${mod}+Shift+[`)
   await page.waitForFunction(
-    () => document.querySelectorAll('.tiptap .katex-display').length === 3,
+    () =>
+      document.querySelectorAll(
+        '.rich-pane [aria-label="Document editor"] .katex-display',
+      ).length === 3,
   )
   assert.equal(
     await rich.getByText('$$x$$', { exact: true }).textContent(),
@@ -365,7 +455,7 @@ test('math source bytes survive source and visual view round trips and saving', 
   )
 })
 
-test('split focus preserves each file flavor', {
+it('split focus preserves each file flavor', {
   timeout: 45000,
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'hibi-split-flavors-'))
@@ -379,6 +469,14 @@ test('split focus preserves each file flavor', {
     await rm(root, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  const cm = t.formattedEngine === 'codemirror'
+  if (cm) {
+    await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
+    await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
+  }
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(7000)
   await waitForDocumentEditor(app, page)
   const open = async (file) => {
@@ -418,7 +516,13 @@ test('split focus preserves each file flavor', {
   await page.locator('.editor-page[data-side="right"]').waitFor()
   const c = await open(files[2])
   await selectDialect('markdown.github')
-  await page.locator('.editor-page[data-side="right"] .github-alert').waitFor()
+  await page
+    .locator(
+      cm
+        ? '.editor-page[data-side="right"] .hibi-lp-alert-title'
+        : '.editor-page[data-side="right"] .github-alert',
+    )
+    .waitFor()
   await page
     .locator('.editor-page[data-side="left"] .split-tab-heading')
     .click()
@@ -447,7 +551,16 @@ test('split focus preserves each file flavor', {
   await page.waitForFunction(
     () => document.querySelectorAll('.editor-page[data-side]').length === 0,
   )
-  assert.equal(await page.locator('.tiptap .github-alert').count(), 0)
+  assert.equal(
+    await page
+      .locator(
+        cm
+          ? '.rich-pane .hibi-lp-alert-title'
+          : '.rich-pane [aria-label="Document editor"] .github-alert',
+      )
+      .count(),
+    0,
+  )
   const beforeRename = await page.evaluate(() => window.hibi.getDocument())
   await renameDocument(app, page, 'renamed')
   await waitForAsync(
@@ -471,7 +584,7 @@ test('split focus preserves each file flavor', {
   )
 })
 
-test('rich editor survives document-only syntax and rebuilds for flavor changes', {
+it('rich editor survives document-only syntax and rebuilds for flavor changes', {
   timeout: 45000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-rich-rebuild-'))
@@ -518,6 +631,14 @@ test('rich editor survives document-only syntax and rebuilds for flavor changes'
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  const cm = t.formattedEngine === 'codemirror'
+  if (cm) {
+    await page.waitForURL('app://hibi/', { waitUntil: 'commit' })
+    await page.evaluate(() => localStorage.setItem('markdown-markers', 'false'))
+  }
+  await selectFormattedEngine(app, page, t.formattedEngine)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   page.setDefaultTimeout(7000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
@@ -533,20 +654,61 @@ test('rich editor survives document-only syntax and rebuilds for flavor changes'
     async () =>
       (await window.hibi.getDocument()).markdown === 'Keep this draft.',
   )
+  const checkDraft = async () => {
+    await waitForDocumentEditor(app, page)
+    assert.equal(
+      (await page.evaluate(() => window.hibi.getDocument())).markdown,
+      'Keep this draft.',
+    )
+    assert.equal(await editor.textContent(), 'Keep this draft.')
+    assert.equal(await editor.getAttribute('contenteditable'), 'true')
+  }
+  const sameView = () =>
+    page.evaluate(
+      () =>
+        document.querySelector('.rich-pane .cm-content')?.cmTile.root.view ===
+        window.richEditor,
+    )
   const remember = () =>
-    page.evaluate(() => {
-      window.richEditor = document.querySelector('.tiptap').editor
-    })
-  const subscript = (expected) =>
-    page.waitForFunction(
+    page.evaluate((cm) => {
+      const element = document.querySelector(
+        '.rich-pane [aria-label="Document editor"]',
+      )
+      window.richEditor = cm ? element.cmTile.root.view : element.editor
+    }, cm)
+  const subscript = async (expected) => {
+    if (cm) {
+      await page.evaluate(() =>
+        window.syntaxProbe.updateMarkdown(() => 'Keep this draft. ~probe~'),
+      )
+      await waitForAsync(
+        page,
+        async () =>
+          (await window.hibi.getDocument()).markdown ===
+          'Keep this draft. ~probe~',
+      )
+      await page.waitForFunction(
+        (expected) =>
+          !!document.querySelector('.rich-pane .hibi-lp-subscript') ===
+          expected,
+        expected,
+      )
+      await page.evaluate(() =>
+        window.syntaxProbe.updateMarkdown(() => 'Keep this draft.'),
+      )
+      await checkDraft()
+      return
+    }
+    await page.waitForFunction(
       (expected) =>
         document
-          .querySelector('.tiptap')
+          .querySelector('.rich-pane [aria-label="Document editor"]')
           ?.editor?.extensionManager.extensions.some(
             (extension) => extension.name === 'subscript',
           ) === expected,
       expected,
     )
+  }
   await remember()
   // Format addons such as rst register preview-only syntax after the editor is ready.
   await page.evaluate(async () => {
@@ -560,10 +722,13 @@ test('rich editor survives document-only syntax and rebuilds for flavor changes'
     await new Promise((resolve) => setTimeout(resolve))
   })
   assert.equal(
-    await page.evaluate(() => window.richEditor.isDestroyed),
-    false,
+    cm
+      ? await sameView()
+      : await page.evaluate(() => !window.richEditor.isDestroyed),
+    true,
     'document-only syntax keeps the rich editor',
   )
+  if (cm) await checkDraft()
   for (const enabled of [false, true]) {
     await clickMenu(app, 'Settings')
     await page
@@ -576,7 +741,8 @@ test('rich editor survives document-only syntax and rebuilds for flavor changes'
       enabled,
     )
     await page.getByRole('button', { name: /^back to app$/i }).click()
-    await page.waitForFunction(() => window.richEditor.isDestroyed)
+    if (cm) assert.equal(await sameView(), true)
+    else await page.waitForFunction(() => window.richEditor.isDestroyed)
     await subscript(enabled)
     await waitForDocumentEditor(app, page)
     assert.equal(await editor.textContent(), 'Keep this draft.')
@@ -594,7 +760,19 @@ test('rich editor survives document-only syntax and rebuilds for flavor changes'
   await palette
     .getByRole('option', { name: /Use plain Markdown flavor/i })
     .press('Enter')
-  await page.waitForFunction(() => window.richEditor.isDestroyed)
+  if (cm) {
+    await palette.waitFor({ state: 'hidden' })
+    await waitForAsync(page, async () => {
+      const snapshot = await window.hibi.getDocument()
+      const choice = JSON.parse(
+        localStorage.getItem(`hibi:flavor:${snapshot.id}`),
+      )
+      return choice?.dialect === 'markdown' && choice.syntax?.length === 0
+    })
+    assert.equal(await sameView(), true)
+    await subscript(false)
+    await checkDraft()
+  } else await page.waitForFunction(() => window.richEditor.isDestroyed)
   await waitForDocumentEditor(app, page)
   await remember()
   await page.evaluate(async () => {
@@ -611,10 +789,26 @@ test('rich editor survives document-only syntax and rebuilds for flavor changes'
     await new Promise((resolve) => setTimeout(resolve))
   })
   assert.equal(
-    await page.evaluate(() => window.richEditor.isDestroyed),
-    false,
+    cm
+      ? await sameView()
+      : await page.evaluate(() => !window.richEditor.isDestroyed),
+    true,
     'a flavor outside the explicit choice keeps the rich editor',
   )
+  if (cm) await checkDraft()
   assert.equal(await editor.textContent(), 'Keep this draft.')
+  if (cm) {
+    await editor.press('End')
+    assert.equal(
+      await editor.evaluate((element) => document.activeElement === element),
+      true,
+    )
+    await page.keyboard.insertText('!')
+    await waitForAsync(
+      page,
+      async () =>
+        (await window.hibi.getDocument()).markdown === 'Keep this draft.!',
+    )
+  }
   assert.deepEqual(errors, [])
 })

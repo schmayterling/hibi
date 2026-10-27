@@ -82,7 +82,7 @@ test('frontmatter checks of a 50 mib note read a few pieces, never the whole not
   // A long first line that cannot open frontmatter ends the read at once.
   const long = note(`${'x'.repeat(50 * MiB)}\n\n/h2`)
   assert.equal(offered(long.document), true)
-  assert.deepEqual(long.read(), { units: 4096, materializations: 0 })
+  assert.deepEqual(long.read(), { units: 4, materializations: 0 })
   assert.equal(offered(long.document), true)
   assert.deepEqual(long.read(), { units: 0, materializations: 0 })
   // Frontmatter ends within the first pieces.

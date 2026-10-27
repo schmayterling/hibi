@@ -26,12 +26,18 @@ export type FrontmatterRead = Readonly<{
 
 /** A completed read owns only scalars. Its unfinished generator owns the input. */
 export function* readSourceFrontmatter(
-  source: Pick<SourceSnapshot, 'utf16Length' | 'sliceRaw'>,
+  source: Pick<SourceSnapshot, 'utf16Length' | 'sliceRaw'> &
+    Partial<Pick<SourceSnapshot, 'chunks'>>,
   known?: FrontmatterBounds,
 ): Generator<void, FrontmatterRead> {
   const chunks = (function* () {
-    for (let from = 0; from < source.utf16Length; from += 4096)
-      yield source.sliceRaw(from, Math.min(source.utf16Length, from + 4096))
+    for (let from = 0; from < source.utf16Length; ) {
+      const to = Math.min(source.utf16Length, from + (from === 0 ? 4 : 4096))
+      yield source.chunks
+        ? [...source.chunks(from, to)].join('')
+        : source.sliceRaw(from, to)
+      from = to
+    }
   })()
   const lineEnds = /[\r\n\u2028\u2029]/g
   let chunk = '',
@@ -231,10 +237,13 @@ export function keepUnclosedFrontmatterRead(
     }
     return true
   }
-  let shift = 0
+  let shift = 0,
+    inspectedTo = read.inspectedTo
   for (const { from, to, insert } of changes) {
-    const at = from + shift
-    shift += insert.length - (to - from)
+    const at = from + shift,
+      delta = insert.length - (to - from)
+    shift += delta
+    if (from < read.inspectedTo) inspectedTo += delta
     if (/[\r\u2028\u2029]/.test(insert)) return null
     const line = source.lineAt(at)
     if (!line || line.number === 1 || closes(line.from)) return null
@@ -243,6 +252,6 @@ export function keepUnclosedFrontmatterRead(
   }
   return Object.freeze({
     ...read,
-    inspectedTo: read.oversized ? read.inspectedTo : source.utf16Length,
+    inspectedTo: read.oversized ? inspectedTo : source.utf16Length,
   })
 }

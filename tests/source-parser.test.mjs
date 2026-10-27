@@ -298,6 +298,22 @@ test('open fragments at indented line starts reparse before reuse', (t) => {
   assert.deepEqual(treeShape(finish(session)), treeShape(dialect.parse(source)))
 })
 
+test('open fragments at blank lines keep empty-marker lists equal to fresh trees', (t) => {
+  const source = '\n  h\n\n1.\n1. \n   c\n\n   e'
+  const dialect = parser.configure(GFM)
+  const store = new SourceStore(source, { tabId: 'blank-line', revision: 0 })
+  const session = new SourceParserSession(store.snapshot(), dialect, 'gfm')
+  t.after(() => session.dispose())
+  finish(session)
+  session.apply(edit(store, [{ from: 0, to: 4, insert: '  ' }]))
+  assert.deepEqual(
+    treeShape(finish(session)),
+    treeShape(dialect.parse(normalizedSource(store.snapshot().materialize()))),
+  )
+  session.apply(edit(store, [{ from: 0, to: 2, insert: source.slice(0, 4) }]))
+  assert.deepEqual(treeShape(finish(session)), treeShape(dialect.parse(source)))
+})
+
 test('parser cancellation retains ordered patches and rejects stale roots and dialect reuse', () => {
   const store = new SourceStore('# start\n\ntext\n'.repeat(1000), {
     tabId: 'parser',

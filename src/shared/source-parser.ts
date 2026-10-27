@@ -218,7 +218,15 @@ export class SourceParserSession {
             // keep its first unit outside reuse to reparse that line.
             const rawFrom = openStart ? source.editorToRaw(fragment.from) : null
             const lineStart =
-              rawFrom !== null && source.lineAt(rawFrom)?.from === rawFrom
+              rawFrom !== null &&
+              source.lineAt(rawFrom)?.from === rawFrom &&
+              (rawFrom === 0 ||
+                /^[ \t]/.test(
+                  source.sliceRaw(
+                    rawFrom,
+                    Math.min(rawFrom + 1, source.utf16Length),
+                  ),
+                ))
             const from = lineStart ? fragment.from + 1 : fragment.from
             return from === fragment.from &&
               openStart === fragment.openStart &&

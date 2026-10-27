@@ -358,6 +358,25 @@ test('an insertion at a block end rechecks the preceding owner bounds', () => {
   }
 })
 
+test('a blank line before empty-marker lists keeps fresh owners through undo', () => {
+  const source = '\n  h\n\n1.\n1. \n   c\n\n   e'
+  const store = new SourceStore(source, { tabId: 'blank-line', revision: 0 })
+  const dialect = parser.configure(GFM)
+  const model = new MarkdownSourceModel(store.snapshot(), dialect, 'gfm')
+  try {
+    const original = rows(finish(model).owners)
+    edit(store, model, [{ from: 0, to: 4, insert: '  ' }])
+    assert.deepEqual(
+      rows(finish(model).owners),
+      oracle(store.snapshot(), dialect),
+    )
+    edit(store, model, [{ from: 0, to: 2, insert: source.slice(0, 4) }])
+    assert.deepEqual(rows(finish(model).owners), original)
+  } finally {
+    model.dispose()
+  }
+})
+
 test('indentation before a two mib list keeps parser reads and reconciliation bounded', () => {
   const item = '- item words here\n'
   const source =

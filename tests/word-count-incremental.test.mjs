@@ -127,6 +127,18 @@ test('line break edits that retain indentation keep fresh counts through undo', 
   assert.deepEqual(count(counter), original)
 })
 
+test('a blank line before empty-marker lists keeps fresh counts through undo', (t) => {
+  const source = '\n  h\n\n1.\n1. \n   c\n\n   e'
+  const counter = fixture(t, source)
+  const original = count(counter)
+  edit(counter, 0, 4, '  ')
+  const fresh = fixture(t, counter.store.snapshot().materialize())
+  assert.deepEqual(count(counter), count(fresh))
+  assert.deepEqual(count(counter), { words: 2, characters: 10 })
+  edit(counter, 0, 2, source.slice(0, 4), 'undo')
+  assert.deepEqual(count(counter), original)
+})
+
 test('regional fence termination matches Marked through tab edits and undo', (t) => {
   for (const language of ['mermaid', 'js', 'typst']) {
     for (const marker of ['```', '~~~']) {

@@ -1,5 +1,6 @@
 import { Lexer, Marked, type Token } from 'marked'
 import { readFrontmatter } from './frontmatter.ts'
+import { blockMarkdown } from './marked-blocks.ts'
 import { defaultNoteSyntax, type NoteSyntax } from './note-syntax-config.ts'
 
 export {
@@ -154,7 +155,7 @@ export function noteLexer(
   const key = `${Number(syntax.gfm)}:${Number(syntax.wikilinks)}`
   let parser = parsers.get(key)
   if (!parser) {
-    parser = new Marked({ gfm: syntax.gfm, breaks: false })
+    parser = new Marked({ gfm: syntax.gfm, breaks: false }, blockMarkdown)
     if (syntax.wikilinks) {
       parser.use({
         extensions: [

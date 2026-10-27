@@ -303,7 +303,16 @@ test('default diagnostics preserve editing, use the raw bridge and export only s
     JSON.parse(await window.hibiDiagnostics.configuration()),
   )
   assert.equal(config.profile, 'debug')
-  assert.ok(config.artifacts.length > 0)
+  const catalog = JSON.parse(
+    await readFile('out/renderer/diagnostic-artifacts.json', 'utf8'),
+  )
+  assert.deepEqual(
+    config.artifacts,
+    catalog.artifacts.map(([name, id]) => [
+      new URL(name, 'app://hibi/').href,
+      id,
+    ]),
+  )
   const sentinel = 'PRIVATE DIAGNOSTIC DOCUMENT 雪'
   await replaceRichText(page, editor, sentinel)
   const captured = await page.evaluate(

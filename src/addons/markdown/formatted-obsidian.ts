@@ -1,67 +1,28 @@
-import type { EditorState } from '@codemirror/state'
 import { EditorView, WidgetType } from '@codemirror/view'
-import { decodeHTMLStrict } from 'entities'
+import type { SyntaxNode } from '@lezer/common'
 import { observeDocumentMedia } from '../../renderer/src/document-media.ts'
 import {
   type FormattedContribution,
-  type FormattedDecorations,
   formattedDocument,
   showMarkdownMarkers,
 } from '../../renderer/src/formatted-contributions.ts'
-import { obsidianSyntax, wikiParts } from './formatted-syntax.ts'
+import { wrapDecoded } from '../_shared/formatted-entities.ts'
+import { obsidianSyntax, wikiText } from './formatted-syntax.ts'
 
 const image = /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i
 
 /** Embeds the formatted view drew, for viewport tests. */
 export const embedRenders = { count: 0 }
 
-// The references the rich view's text decodes (`decodeMarkdownEntities`).
-const entity = /&(?:#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[a-zA-Z][a-zA-Z0-9]+);/g
-
-/** The characters an entity stands for, styled as the text around them. */
-class CharactersWidget extends WidgetType {
-  readonly text: string
-  readonly className: string
-  constructor(text: string, className: string) {
-    super()
-    this.text = text
-    this.className = className
-  }
-  override eq(other: CharactersWidget) {
-    return other.text === this.text && other.className === this.className
-  }
-  toDOM() {
-    const span = document.createElement('span')
-    // Marks end at replaced text, so the widget takes the mark's class itself.
-    span.className = `${this.className} hibi-lp-entity`
-    span.textContent = this.text
-    return span
-  }
-  override ignoreEvent() {
-    return false
-  }
-}
-
-/** Entities in `[from, to)` show their characters, as the rich view's text does, and their source under the caret. */
-function decodeEntities(
-  state: EditorState,
-  out: FormattedDecorations,
-  from: number,
-  to: number,
-  revealed: boolean,
-  className: string,
-) {
-  if (revealed) return
-  for (const match of state.sliceDoc(from, to).matchAll(entity)) {
-    const decoded = decodeHTMLStrict(match[0])
-    if (decoded === match[0]) continue
-    const at = from + match.index
-    out.replace(
-      at,
-      at + match[0].length,
-      new CharactersWidget(decoded, className),
-    )
-  }
+/**
+ * A wikilink or embed's target, and its label's node: the alias, or else the
+ * target. Their text was kept when they were parsed.
+ */
+function wikiParts(node: SyntaxNode) {
+  const target = node.getChild('WikiTarget')
+  const label = node.getChild('WikiAlias') ?? target
+  const text = target?.tree?.prop(wikiText)
+  return label && text !== undefined ? { target: text, label } : null
 }
 
 /**
@@ -130,7 +91,10 @@ class EmbedWidget extends WidgetType {
               anchor: event.key === 'ArrowLeft' ? from : from + this.length,
             },
           })
-        }
+        } else if (!['Alt', 'Control', 'Meta', 'Shift'].includes(event.key))
+          // Other keys edit at the caret beside the embed, which the editor
+          // keeps: it takes focus back before the key reaches it.
+          view.focus()
       })
       dom.append(link)
       return dom
@@ -163,8 +127,8 @@ class EmbedWidget extends WidgetType {
     return dom
   }
   override ignoreEvent(event: Event) {
-    // Mouse events reach the editor; keys stay with the focused link.
-    return !(event instanceof MouseEvent)
+    // Mouse events reach the editor, and so do keys the focused link leaves.
+    return !(event instanceof MouseEvent) && event.defaultPrevented
   }
   override destroy(dom: HTMLElement) {
     stops.get(dom)?.()
@@ -203,21 +167,22 @@ export const contribution: FormattedContribution = {
   id: 'markdown.obsidian',
   flavor: 'markdown.obsidian',
   syntax: obsidianSyntax,
+  // Embeds, wikilinks and highlights start at `!`, `[` and `=`, so text
+  // without them is still skipped.
+  inlineStops: true,
   views: [
     {
       nodes: ['WikiLink'],
-      decorate(node, out, { state, revealed }) {
-        const parts = wikiParts(state.sliceDoc(node.from, node.to))
+      decorate(node, out, context) {
+        const parts = wikiParts(node.node)
         if (!parts) return false
         // The label reads as a link; brackets, and the target behind an alias, are syntax.
-        const from = node.from + parts.labelFrom,
-          to = node.from + parts.labelTo
+        const { from, to } = parts.label
         out.syntax(node.from, from)
-        out.mark(from, to, {
+        wrapDecoded(out, context, from, to, {
           class: 'hibi-lp-link',
           'data-wiki-link': parts.target,
         })
-        decodeEntities(state, out, from, to, revealed, 'hibi-lp-link')
         out.syntax(to, node.to)
         return false
       },
@@ -225,38 +190,33 @@ export const contribution: FormattedContribution = {
     {
       nodes: ['WikiEmbed'],
       decorate(node, out, { state, revealed }) {
-        const parts = wikiParts(state.sliceDoc(node.from, node.to))
-        if (!parts) return false
+        const parts = wikiParts(node.node)
+        const label = parts?.label.tree?.prop(wikiText)
+        if (!parts || label === undefined) return false
+        const widget = new EmbedWidget(
+          parts.target,
+          label,
+          state.facet(formattedDocument).revision,
+          node.to - node.from,
+        )
         if (revealed) {
           out.syntax(node.from, node.from + 3)
           out.syntax(node.to - 2, node.to)
-        } else
-          out.replace(
-            node.from,
-            node.to,
-            new EmbedWidget(
-              parts.target,
-              parts.label,
-              state.facet(formattedDocument).revision,
-              node.to - node.from,
-            ),
-          )
+          // An image stays beside its source, as core images do; a note's
+          // link would only repeat the label.
+          if (image.test(parts.target.split('#')[0] ?? ''))
+            out.widget(node.to, widget)
+        } else out.replace(node.from, node.to, widget)
         return false
       },
     },
     {
       nodes: ['Highlight'],
-      decorate(node, out, { state, revealed }) {
+      decorate(node, out, context) {
         out.syntax(node.from, node.from + 2)
-        out.mark(node.from + 2, node.to - 2, { class: 'hibi-lp-highlight' })
-        decodeEntities(
-          state,
-          out,
-          node.from + 2,
-          node.to - 2,
-          revealed,
-          'hibi-lp-highlight',
-        )
+        wrapDecoded(out, context, node.from + 2, node.to - 2, {
+          class: 'hibi-lp-highlight',
+        })
         out.syntax(node.to - 2, node.to)
         return false
       },

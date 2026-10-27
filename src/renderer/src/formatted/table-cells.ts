@@ -30,12 +30,11 @@ import { runSourceHistory } from '../../../shared/source-history.ts'
 import {
   claimFormattedReplacement,
   type FormattedDecorations,
-  type FormattedNodeView,
   type FormattedRenderContext,
   formattedLiteral,
   formattedMarkdown,
+  formattedNodeViews,
   formattedRefresh,
-  formattedViews,
   showMarkdownMarkers,
 } from '../formatted-contributions.ts'
 import {
@@ -62,24 +61,6 @@ function cellParser(state: EditorState) {
       (inline as unknown as { blockNames?: readonly string[] }).blockNames ?? []
     found = inline.configure({ remove: [...blocks] })
     cellParsers.set(contributed, found)
-  }
-  return found
-}
-
-/** Contributed node views by node name, per set of views. */
-const named = new WeakMap<
-  readonly FormattedNodeView[],
-  Map<string, FormattedNodeView[]>
->()
-function namedViews(state: EditorState) {
-  const views = state.facet(formattedViews)
-  let found = named.get(views)
-  if (!found) {
-    found = new Map()
-    for (const view of views)
-      for (const name of view.nodes)
-        found.set(name, [...(found.get(name) ?? []), view])
-    named.set(views, found)
   }
   return found
 }
@@ -129,7 +110,7 @@ function decorateCell(
   source?: readonly number[],
 ) {
   const to = from + (source?.[text.length] ?? text.length)
-  const views = namedViews(state)
+  const views = formattedNodeViews(state)
   const literal = literalNodes(state)
   const replacements = new Set<string>()
   // Node and context positions stay in the owning document. Only the sink
@@ -187,7 +168,7 @@ function decorateCell(
     let skip = false
     // A cell draws its line breaks itself, so contributed HTML renderers
     // add no second one.
-    const nodeViews = lineBreakAt(node) ? [] : (views.get(node.name) ?? [])
+    const nodeViews = lineBreakAt(node) ? [] : views(node.type).views
     for (const nodeView of nodeViews) {
       const context: FormattedRenderContext = {
         state,

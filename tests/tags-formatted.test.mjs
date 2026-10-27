@@ -2,18 +2,35 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import { GFM, parser } from '@lezer/markdown'
+import { blockMathSyntax } from '../src/addons/math/formatted-syntax.ts'
 import { formattedTags } from '../src/addons/tags/formatted.ts'
+import { contributions as extras } from '../src/addons/text-extras/formatted.ts'
+import { subtextSyntax } from '../src/addons/text-extras/formatted-syntax.ts'
 import { renderInline } from '../src/renderer/src/formatted/table-cells.ts'
 import {
   formattedLiteral,
+  formattedNodeViews,
+  formattedOpaque,
   formattedViews,
 } from '../src/renderer/src/formatted-contributions.ts'
+import { FrontmatterParser } from '../src/shared/frontmatter-parser.ts'
+import { Footnotes, GithubAlerts } from '../src/shared/markdown-extra-syntax.ts'
 import { noteTags } from '../src/shared/note-tags.ts'
 
 const markdown = parser.configure(GFM)
 // Table cells render their text with inline syntax only, as table-cells.ts does.
-const cells = markdown.configure({ remove: [...markdown.blockNames] })
+const cellParsers = new Map()
+const cellsOf = (syntax) => {
+  let cells = cellParsers.get(syntax)
+  if (!cells) {
+    cells = syntax.configure({ remove: [...syntax.blockNames] })
+    cellParsers.set(syntax, cells)
+  }
+  return cells
+}
 const [view] = formattedTags(() => {}).views
+/** Whether the view renders nodes of `type`, which it names or names a group of. */
+const shows = (type) => view.nodes.some((name) => type.is(name))
 
 /**
  * Tag marks the formatted view's renderer gives a note, visiting nodes in
@@ -22,11 +39,20 @@ const [view] = formattedTags(() => {}).views
  */
 function render(
   doc,
-  { ranges = [{ from: 0, to: doc.length }], off = [] } = {},
+  {
+    ranges = [{ from: 0, to: doc.length }],
+    off = [],
+    syntax = markdown,
+    prefix = 0,
+  } = {},
 ) {
   const state = EditorState.create({
     doc,
-    extensions: off.map((name) => formattedLiteral.of(name)),
+    extensions: [
+      off.map((name) => formattedLiteral.of(name)),
+      // GitHub tables are opaque: their cells render on their own.
+      formattedOpaque.of('Table'),
+    ],
   })
   let read = 0,
     visits = 0
@@ -68,7 +94,9 @@ function render(
     widget() {},
     replace() {},
   }
-  const tree = markdown.parse(doc)
+  const tree = prefix
+    ? new FrontmatterParser(syntax, prefix).parse(doc)
+    : syntax.parse(doc)
   for (const visible of ranges)
     tree.iterate({
       from: visible.from,
@@ -78,28 +106,36 @@ function render(
         if (node.name === 'TableCell') {
           const text = doc.slice(node.from, node.to)
           const cell = EditorState.create({ doc: text })
-          cells.parse(text).iterate({
-            enter(inner) {
-              if (view.nodes.includes(inner.name))
-                view.decorate(
-                  inner,
-                  {
-                    ...out,
-                    mark: (from, to, attributes) =>
-                      out.mark(node.from + from, node.from + to, attributes),
-                  },
-                  {
-                    state: cell,
-                    visible: { from: 0, to: text.length },
-                    revealed: false,
-                  },
-                )
-            },
-          })
+          cellsOf(syntax)
+            .parse(text)
+            .iterate({
+              enter(inner) {
+                if (shows(inner.type))
+                  view.decorate(
+                    inner,
+                    {
+                      ...out,
+                      mark: (from, to, attributes) =>
+                        out.mark(node.from + from, node.from + to, attributes),
+                    },
+                    {
+                      state: cell,
+                      visible: { from: 0, to: text.length },
+                      revealed: false,
+                    },
+                  )
+              },
+            })
         }
-        if (view.nodes.includes(node.name))
+        if (shows(node.type))
           view.decorate(
-            { from: node.from, to: node.to, node: wrap(node.node) },
+            {
+              name: node.name,
+              type: node.type,
+              from: node.from,
+              to: node.to,
+              node: wrap(node.node),
+            },
             out,
             { state, visible, revealed: false },
           )
@@ -133,6 +169,160 @@ test('tags in text, headings, quotes, lists and tasks match the workspace index'
     '#Upper #MiXeD',
   ])
     assert.deepEqual(tags(doc), noteTags(doc), JSON.stringify(doc))
+})
+
+/** A contributed block with inline text, which the tags addon does not know by name. */
+const futureBlock = {
+  defineNodes: [{ name: 'FutureBlock', block: true }, 'FutureMark'],
+  parseBlock: [
+    {
+      name: 'FutureBlock',
+      before: 'HorizontalRule',
+      parse(cx, line) {
+        if (line.next !== 64 || line.text.charCodeAt(line.pos + 1) !== 32)
+          return false
+        const from = cx.lineStart + line.pos
+        const text = line.text.slice(line.pos + 2)
+        cx.nextLine()
+        cx.addElement(
+          cx.elt('FutureBlock', from, from + 2 + text.length, [
+            cx.elt('FutureMark', from, from + 2),
+            ...cx.parser.parseInline(text, from + 2),
+          ]),
+        )
+        return true
+      },
+    },
+  ],
+}
+const contributed = parser.configure([
+  GFM,
+  Footnotes,
+  GithubAlerts,
+  subtextSyntax,
+  blockMathSyntax,
+  futureBlock,
+])
+const found = (doc, options) =>
+  render(doc, { syntax: contributed, ...options }).marks.map(
+    (mark) => mark['data-tag'],
+  )
+
+test('every leaf block with inline text holds its tags once, whichever syntax adds it', () => {
+  for (const [doc, expected] of [
+    ['-# small #small text', ['small']],
+    ['- -# listed #listed\n- item #item', ['listed', 'item']],
+    ['> -# quoted #quoted\n> after #after', ['quoted', 'after']],
+    [
+      '@ future #future\n\n- @ listed #listed\n\n> @ quoted #quoted',
+      ['future', 'listed', 'quoted'],
+    ],
+    ['> - [ ] task #task\n>   - nested #nested', ['task', 'nested']],
+    ['| head #head |\n| - |\n| #cell |', ['head', 'cell']],
+  ]) {
+    assert.deepEqual(found(doc), expected, JSON.stringify(doc))
+    assert.deepEqual(noteTags(doc), [...expected].sort(), JSON.stringify(doc))
+  }
+  // A footnote's text is a paragraph inside its definition.
+  assert.deepEqual(found('note[^1] #ref\n\n[^1]: defined #defined'), [
+    'ref',
+    'defined',
+  ])
+  // Without the small text syntax, the line is a paragraph with the same tag.
+  assert.deepEqual(
+    render('-# small #small').marks.map((mark) => mark['data-tag']),
+    ['small'],
+  )
+  // A long small-text line reads only the text near its visible range.
+  const long = `-# ${'words #tag and **#bold** with &amp; more text '.repeat(30_000)}`
+  const from = Math.floor(long.length / 2),
+    to = from + 4096
+  const { marks, read } = render(long, {
+    syntax: contributed,
+    ranges: [{ from, to }],
+  })
+  assert.ok(marks.length > 100, `${marks.length} tags`)
+  assert.ok(read < 2 * (to - from), `${read} characters read`)
+})
+
+test('code, HTML, comments, link definitions, frontmatter, alert titles, block math and rules hold no tags', () => {
+  const doc = [
+    '```\n#fenced\n```',
+    '    #indented',
+    '<div>\n#html\n</div>',
+    '<!-- #comment -->',
+    '<?pi #pi ?>',
+    '[ref]: /url "#linkref"',
+    '$$\n#math\n$$',
+    '> [!NOTE] Title #title\n> body #body',
+    'after #after',
+  ].join('\n\n')
+  assert.deepEqual(found(doc), ['body', 'after'])
+  // The rich view shows alert titles and formulas apart from the text, and
+  // so does the formatted view; the workspace index reads them as text.
+  assert.deepEqual(noteTags(doc), ['after', 'body', 'math', 'title'])
+  const prefix = '---\ntags: #front\n---\n'
+  assert.deepEqual(found(`${prefix}\nbody #body`, { prefix: prefix.length }), [
+    'body',
+  ])
+  // A rule has no text, so a long one in view reads none.
+  const rule = render('-'.repeat(100_000), {
+    ranges: [{ from: 50_000, to: 50_064 }],
+  })
+  assert.deepEqual(rule.marks, [])
+  assert.equal(rule.read, 0)
+})
+
+test('contributed node views apply by node name or Lezer group, once each', () => {
+  const leaf = { nodes: ['LeafBlock'] },
+    both = { nodes: ['Paragraph', 'LeafBlock'] },
+    named = { nodes: ['Emphasis'] }
+  const state = EditorState.create({
+    extensions: [leaf, both, named].map((entry) => formattedViews.of(entry)),
+  })
+  const views = formattedNodeViews(state)
+  const type = (name) =>
+    contributed.nodeSet.types.find((entry) => entry.name === name)
+  // Views naming the node come first.
+  assert.deepEqual(views(type('Paragraph')), {
+    views: [both, leaf],
+    grouped: [leaf],
+  })
+  for (const name of ['FencedCode', 'Subtext', 'FutureBlock'])
+    assert.deepEqual(
+      views(type(name)),
+      { views: [leaf, both], grouped: [leaf, both] },
+      name,
+    )
+  assert.deepEqual(views(type('Emphasis')), { views: [named], grouped: [] })
+  assert.deepEqual(views(type('Blockquote')), { views: [], grouped: [] })
+  // Each type resolves once per set of views.
+  assert.equal(
+    formattedNodeViews(state)(type('Paragraph')),
+    views(type('Paragraph')),
+  )
+})
+
+test('small text holds its tags through a group view whichever contribution registers first', () => {
+  // Small text beside a list bullet marks its text, which may be only a tag.
+  // The formatted view draws group views' marks from a source of higher
+  // precedence, so the tag sits inside the small text.
+  const subtext = contributed.nodeSet.types.find(
+    (type) => type.name === 'Subtext',
+  )
+  for (const order of [
+    [...extras.subtext.views, view],
+    [view, ...extras.subtext.views],
+  ])
+    assert.deepEqual(
+      formattedNodeViews(
+        EditorState.create({
+          extensions: order.map((entry) => formattedViews.of(entry)),
+        }),
+      )(subtext),
+      { views: [...extras.subtext.views, view], grouped: [view] },
+      order.map((entry) => entry.nodes.join()).join(' then '),
+    )
 })
 
 test('the formatted view shows reference links and entities as written, so their tags follow the text', () => {

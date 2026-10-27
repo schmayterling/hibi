@@ -38,6 +38,16 @@ const base = {
 }
 const { entry, ...metadata } = base
 
+test('formatted activation accepts the formatted capability', () => {
+  const parsed = parseAddonManifest({
+    ...base,
+    apiVersion: 3,
+    capabilities: ['formatted'],
+    activation: 'formatted',
+  })
+  assert.equal(parsed.manifest.activation, 'formatted')
+})
+
 test('package parser bundles without main, platform, or editor dependencies', () => {
   const paths = Object.keys(metafile.inputs).join('\n')
   assert.doesNotMatch(paths, /node_modules|src\/main\//)

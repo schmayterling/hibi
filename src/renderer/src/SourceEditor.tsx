@@ -61,7 +61,11 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { DocumentFormat, SourceExtension } from '../../addons/api'
+import type {
+  DocumentFormat,
+  FormattedExtension,
+  SourceExtension,
+} from '../../addons/api'
 import {
   type CompletionItem,
   type CompletionRequest,
@@ -108,6 +112,7 @@ import { documentProjections } from './document-projections'
 import { documentRuntime } from './document-runtime'
 import { DocumentWorkerClient, type FindAction } from './document-worker-client'
 import { registerEditorSelectionCapture } from './editor-command-targets'
+import { captureEditorFocus } from './editor-focus-restore'
 import {
   hasEditorInteractionProviders,
   onEditorInteractionProvidersChanged,
@@ -235,7 +240,7 @@ export function SourceEditor({
   findMove: FindMove
   onFindStatus: (status: FindStatus) => void
   showLineNumbers: boolean
-  sourceExtensions: readonly SourceExtension[]
+  sourceExtensions: readonly (SourceExtension | FormattedExtension)[]
   onFormatting: (formatting: SourceFormatting | null) => void
   onLink: (href: string) => void
   /** Formatted renders Markdown in place over the same source session. */
@@ -278,6 +283,7 @@ export function SourceEditor({
   }
   const flavorKey = flavors?.join(',')
   const configureParser = useRef(() => {})
+  const configureFlavors = useRef(() => {})
   // biome-ignore lint/correctness/useExhaustiveDependencies: parser configuration reads these current values through parserOptions.
   useEffect(() => {
     configureParser.current()
@@ -289,17 +295,21 @@ export function SourceEditor({
     label,
     sourceFormat,
     supportsMedia,
-    flavorKey,
   ])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: flavor configuration reads the current flavors through parserOptions.
+  useEffect(() => {
+    configureFlavors.current()
+  }, [flavorKey])
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
+  const restoreFocus = useRef<(() => void) | null>(null)
   const keepingPlace = useRef(keepPlace)
   keepingPlace.current = keepPlace
   // Effects follow the actual view, which mounts after source preparation.
   const [mountedView, setMountedView] = useState<EditorView | null>(null)
   const [installedExtensions, setInstalledExtensions] = useState<{
     bridge: ReturnType<typeof createSourceSession>
-    extensions: readonly SourceExtension[]
+    extensions: readonly (SourceExtension | FormattedExtension)[]
   } | null>(null)
   const [extensionError, setExtensionError] = useState('')
   const [languageError, setLanguageError] = useState('')
@@ -312,6 +322,12 @@ export function SourceEditor({
     () => createSourceSession(session, viewId),
     [session, viewId, bridgeRetry, document.tabId, document.revision],
   )
+  // An echo this bridge's view could not show; Retry rebuilds the view.
+  const [failedEcho, setFailedEcho] = useState<{
+    bridge: typeof bridge
+    message: string
+  } | null>(null)
+  const echoError = failedEcho?.bridge === bridge ? failedEcho.message : ''
   const [preparedText, setPreparedText] = useState<{
     bridge: ReturnType<typeof createSourceSession>
     text: Text
@@ -323,7 +339,8 @@ export function SourceEditor({
     preparedText?.bridge === bridge &&
     installedExtensions?.bridge === bridge &&
     installedExtensions.extensions === sourceExtensions &&
-    languageReady
+    languageReady &&
+    !echoError
   const editContext = useRef({
     document,
     editTarget,
@@ -644,9 +661,15 @@ export function SourceEditor({
       formatted
         ? {
             boundaries: {
-              request: (config, receive, declined, from) => {
+              request: (config, receive, declined, from, baseVersion) => {
                 if (bridge.isCurrent())
-                  getWorker().boundaries(config, receive, declined, from)
+                  getWorker().boundaries(
+                    config,
+                    receive,
+                    declined,
+                    from,
+                    baseVersion,
+                  )
                 else declined('stale')
               },
               release: (retain) =>
@@ -657,6 +680,20 @@ export function SourceEditor({
     )
     const tree = (state: EditorState) =>
       formatted ? syntax.tree(state) : syntaxTree(state)
+    // Flavor syntax extends only the Markdown parser.
+    const flavorConfigs = () =>
+      parserOptions.current.markdownMode
+        ? markdownFlavors
+            .snapshot()
+            .filter(
+              (flavor) =>
+                !parserOptions.current.flavors ||
+                parserOptions.current.flavors.includes(flavor.id),
+            )
+            .flatMap((flavor) => flavorSyntax(flavor) ?? [])
+        : []
+    /** The flavor syntax the source parser was configured with. */
+    let parsedFlavors: ReturnType<typeof flavorConfigs> = []
     const markdown = () => {
       const {
         markdownMode,
@@ -676,14 +713,7 @@ export function SourceEditor({
             'aria-description': 'Press Escape, then Tab, to leave the editor.',
           }),
         ]
-      const extensions = markdownFlavors
-        .snapshot()
-        .filter(
-          (flavor) =>
-            !parserOptions.current.flavors ||
-            parserOptions.current.flavors.includes(flavor.id),
-        )
-        .flatMap((flavor) => flavorSyntax(flavor) ?? [])
+      parsedFlavors = flavorConfigs()
       const support =
         markdownMode && !(codeLanguage && !codeLanguages.resolve(codeLanguage))
           ? markdownLanguage?.({
@@ -693,7 +723,7 @@ export function SourceEditor({
       if (support)
         support.language.parser = protectMarkdownParser(
           support.language.parser as MarkdownParser,
-          extensions,
+          parsedFlavors,
         )
       return [
         markdownMode
@@ -1422,8 +1452,13 @@ export function SourceEditor({
           keymap.of([
             { key: 'Ctrl-a', run: selectAll },
             ...defaultKeymap,
-            { key: 'Mod-z', run: bridge.undo, shift: bridge.redo },
-            { key: 'Mod-y', run: bridge.redo },
+            {
+              key: 'Mod-z',
+              run: bridge.undo,
+              shift: bridge.redo,
+              preventDefault: true,
+            },
+            { key: 'Mod-y', run: bridge.redo, preventDefault: true },
           ]),
           formatted
             ? []
@@ -1559,7 +1594,14 @@ export function SourceEditor({
     })
     view.current = editor
     setMountedView(editor)
-    const detachSession = bridge.attach(editor)
+    const detachSession = bridge.attach(editor, (error) =>
+      setFailedEcho({
+        bridge,
+        message:
+          (error instanceof Error ? error.message : String(error)) ||
+          'The source editor is synchronizing.',
+      }),
+    )
     const removeTypingHistory = session.subscribeOperations((prepared) => {
       if (
         !completionBroker.hasTypingListeners() ||
@@ -1835,15 +1877,21 @@ export function SourceEditor({
     const unregister = registerSourceView(
       editor,
       (raw) => {
-        const anchor = bridge.snapshot().rawToEditor(raw)
-        if (anchor !== null)
-          editor.dispatch({
-            selection: { anchor },
-            effects: EditorView.scrollIntoView(anchor, {
-              y: 'start',
-              yMargin: 48,
-            }),
-          })
+        const at = bridge.snapshot().rawToEditor(raw)
+        if (at === null) return
+        // Like the rich view, the formatted view puts the caret in a heading's
+        // text, after the opening mark and the space it hides with it.
+        const end = Math.min(editor.state.doc.lineAt(at).to, at + 7),
+          mark = formatted
+            ? /^#{1,6}(?:[ \t]|$)/.exec(editor.state.sliceDoc(at, end))
+            : null
+        editor.dispatch({
+          selection: { anchor: at + (mark?.[0].length ?? 0) },
+          effects: EditorView.scrollIntoView(at, {
+            y: 'start',
+            yMargin: 48,
+          }),
+        })
       },
       {
         toSource: (position) =>
@@ -1859,7 +1907,11 @@ export function SourceEditor({
       {
         read: () => {
           const source = bridge.snapshot()
-          if (view.current !== editor || !session.ownsCurrentSnapshot(source))
+          if (
+            view.current !== editor ||
+            !bridge.isCurrent() ||
+            !session.ownsCurrentSnapshot(source)
+          )
             return null
           const selection = editor.state.selection.main
           return {
@@ -1914,8 +1966,18 @@ export function SourceEditor({
       reportFormatting.current(formatting.current)
     }
     const unsubscribe = codeLanguages.subscribe(() => configureParser.current())
+    // Flavors that bring no source syntax keep the parser and its parse.
+    configureFlavors.current = () => {
+      const configs = formatted ? null : flavorConfigs()
+      if (
+        !configs ||
+        configs.length !== parsedFlavors.length ||
+        configs.some((config, index) => config !== parsedFlavors[index])
+      )
+        configureParser.current()
+    }
     const unsubscribeFlavors = markdownFlavors.subscribe(() => {
-      if (!formatted) configureParser.current()
+      if (!formatted) configureFlavors.current()
     })
     configureParser.current()
     const measure = () => {
@@ -1935,6 +1997,7 @@ export function SourceEditor({
       .load(formatted ? '16px "Geist"' : '13px "Geist Mono"')
       .then(finishFont, finishFont)
     return () => {
+      restoreFocus.current ??= captureEditorFocus(editor.contentDOM)
       cancelAnimationFrame(compositionFrame)
       editor.contentDOM.removeEventListener('keydown', onTypingCommand, true)
       editor.contentDOM.removeEventListener(
@@ -1956,6 +2019,7 @@ export function SourceEditor({
       unsubscribe()
       unsubscribeFlavors()
       configureParser.current = () => {}
+      configureFlavors.current = () => {}
       disposed = true
       unsubscribeInteractions()
       unregisterSelection()
@@ -2087,30 +2151,42 @@ export function SourceEditor({
   ])
   useEffect(() => {
     if (mountedView !== view.current) return
+    if (mountedView && (disabled || !inputReady))
+      restoreFocus.current ??= captureEditorFocus(mountedView.contentDOM)
     mountedView?.dispatch({
       effects: editable.current.reconfigure([
         EditorView.editable.of(!disabled && inputReady),
         EditorState.readOnly.of(disabled || !inputReady),
+        ...(echoError
+          ? [EditorView.contentAttributes.of({ tabindex: '0' })]
+          : []),
       ]),
     })
-  }, [mountedView, disabled, inputReady])
+  }, [mountedView, disabled, inputReady, echoError])
 
   useEffect(() => {
     // Publish readiness after CodeMirror configures input, before its next frame.
-    ready.current(
-      extensionError || languageError
+    const status =
+      extensionError || languageError || echoError
         ? 'failed'
         : inputReady && (!waitForFont || fontReadyBridge === bridge)
           ? 'ready'
-          : 'loading',
-    )
+          : 'loading'
+    ready.current(status)
+    if (status === 'ready' && !disabled) {
+      const restore = restoreFocus.current
+      restoreFocus.current = null
+      restore?.()
+    }
   }, [
     bridge,
+    disabled,
     inputReady,
     waitForFont,
     fontReadyBridge,
     extensionError,
     languageError,
+    echoError,
   ])
 
   useEffect(() => {
@@ -2197,15 +2273,20 @@ export function SourceEditor({
 
   return (
     <>
-      {(extensionError || languageError || inputError) && (
+      {(extensionError || languageError || inputError || echoError) && (
         <DocumentNotice
           title={
-            inputError
+            echoError || inputError
               ? 'Edit could not be applied'
               : 'Editor addon unavailable'
           }
-          message={inputError || extensionError || languageError}
+          message={echoError || inputError || extensionError || languageError}
         >
+          {echoError && (
+            <Button onClick={() => retryBridge((retry) => retry + 1)}>
+              Retry
+            </Button>
+          )}
           {!inputError && !extensionError && languageError && codeLanguage && (
             <Button onClick={() => void codeLanguages.retry(codeLanguage)}>
               Retry language

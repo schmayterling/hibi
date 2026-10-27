@@ -148,7 +148,9 @@ export default create
       'formatted.ts': `import type { FormattedNode, FormattedNodeView, FormattedDecorations, FormattedLayout, FormattedRenderContext, FormattedExtension, MarkdownFlavor } from '@hibi/addon-sdk/api'
 import type { CapabilityFactory } from '@hibi/addon-sdk/sdk-loader'
 const create: CapabilityFactory = sdk => ({ start(context) {
-  if (!sdk.codeMirror?.markdown) throw Error('formatted unavailable')
+  if (!sdk.codeMirror?.markdown || !sdk.codeMirror.common) throw Error('formatted unavailable')
+  const prop = new sdk.codeMirror.common.NodeProp<string>()
+  sdk.codeMirror.markdown.parser.configure({ props: [prop.add({ Paragraph: 'shared' })] })
   const { WidgetType } = sdk.codeMirror.view
   class Widget extends WidgetType { toDOM() { return document.createElement('span') } }
   const render: FormattedNodeView = { nodes: ['Proof'], feature: 'proof',
@@ -158,7 +160,7 @@ const create: CapabilityFactory = sdk => ({ start(context) {
   const flavor: MarkdownFlavor = { id: 'proof', name: 'Proof', kind: 'syntax', description: 'Proof', detect: () => true, syntax: sdk.codeMirror.markdown.GFM, render: [render] }
   context.editor.registerSyntax({ id: 'proof', label: 'Proof', group: 'Proof', level: 'inline', nodes: ['Proof'], matches: () => false })
   context.editor.registerFlavor(flavor)
-  const extension: FormattedExtension = { id: 'proof', create(ctx) { return sdk.codeMirror!.view.EditorView.editorAttributes.of({ 'data-view': ctx?.viewId ?? '' }) } }
+  const extension: FormattedExtension = { id: 'proof', create(ctx) { return sdk.codeMirror!.view.EditorView.editorAttributes.of({ 'data-view': ctx.viewId }) } }
   context.editor.registerFormatted(extension)
 } })
 export default create

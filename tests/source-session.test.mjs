@@ -4,6 +4,7 @@ import {
   EditorSelection,
   EditorState,
   StateEffect,
+  StateField,
   Transaction,
 } from '@codemirror/state'
 import {
@@ -11,6 +12,7 @@ import {
   sourceEditTransaction,
 } from '../src/renderer/src/source-session.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
+import { runSourceHistory } from '../src/shared/source-history.ts'
 import { sourceEditorText } from './source-editor-text.mjs'
 
 function fixture(source, options = {}, extensions = []) {
@@ -422,6 +424,98 @@ test('a shown source view gets the caret immediate echoes would have left', () =
     assert.deepEqual(run(scenario, true), live, JSON.stringify(scenario.steps))
   }
 })
+for (const hidden of [false, true]) {
+  for (const failure of ['before update', 'after update', 'state update']) {
+    test(`a ${hidden ? 'hidden' : 'shown'} view failing ${failure} rejects edits and history until rebuilt`, (t) => {
+      const f = fixture('start')
+      t.after(() => f.session.dispose())
+      const source = f.attach('source')
+      const formatted = createSourceSession(f.session, 'formatted')
+      let fail = true
+      const rejected = []
+      const shown = {
+        state: EditorState.create({
+          doc: sourceEditorText(f.session.snapshot()),
+          extensions:
+            failure === 'state update'
+              ? StateField.define({
+                  create: () => null,
+                  update(value, transaction) {
+                    if (fail && transaction.docChanged) {
+                      fail = false
+                      throw new Error('Fixture rejected the echo.')
+                    }
+                    return value
+                  },
+                })
+              : [],
+        }),
+        update(transactions) {
+          const reject = fail && transactions.some((tr) => tr.docChanged)
+          if (reject) fail = false
+          if (reject && failure === 'before update')
+            throw new Error('Fixture rejected the echo.')
+          for (const transaction of transactions) this.state = transaction.state
+          if (reject && failure === 'after update')
+            throw new Error('Fixture rejected the echo.')
+        },
+      }
+      const detach = formatted.attach(shown, (error) =>
+        rejected.push(error.message),
+      )
+      formatted.setVisible(!hidden)
+      const type = (insert) =>
+        source.dispatch({
+          changes: { from: source.view.state.doc.length, insert },
+          userEvent: 'input.type',
+        })
+      type('!')
+      // Showing a hidden view must isolate the same failure as an immediate echo.
+      formatted.setVisible(true)
+      assert.deepEqual(rejected, ['Fixture rejected the echo.'])
+      assert.equal(formatted.isCurrent(), false)
+      type('?')
+      assert.equal(
+        shown.state.doc.toString(),
+        failure === 'after update' ? 'start!' : 'start',
+      )
+      assert.equal(f.session.snapshot().materialize(), 'start!?')
+      assert.throws(
+        () =>
+          formatted.dispatch(
+            [shown.state.update({ changes: { from: 0, insert: 'x' } })],
+            shown,
+          ),
+        /synchronizing/,
+      )
+      // Local selection and effects must not publish positions from stale text.
+      const selection = f.session.selection('formatted')
+      formatted.dispatch(
+        [shown.state.update({ selection: { anchor: 1 } })],
+        shown,
+      )
+      assert.equal(shown.state.selection.main.head, 1)
+      assert.deepEqual(f.session.selection('formatted'), selection)
+      assert.equal(formatted.undo(), false)
+      assert.equal(runSourceHistory(shown, 'undo'), false)
+      assert.equal(f.session.snapshot().materialize(), 'start!?')
+      assert.equal(source.bridge.undo(), true)
+      const undone = f.session.snapshot().materialize()
+      assert.equal(formatted.redo(), false)
+      assert.equal(runSourceHistory(shown, 'redo'), false)
+      assert.equal(f.session.snapshot().materialize(), undone)
+      assert.equal(source.bridge.redo(), true)
+      assert.equal(f.session.snapshot().materialize(), 'start!?')
+      formatted.keepPlace(shown, 0, -7)
+      detach()
+      const retry = createSourceSession(f.session, 'formatted')
+      assert.equal(retry.place(), null)
+      assert.equal(retry.snapshot(), f.session.snapshot())
+      assert.deepEqual(rejected, ['Fixture rejected the echo.'])
+      assert.deepEqual(f.errors, [])
+    })
+  }
+}
 
 test('reads, internal effects and stale input keep a hidden source replica exact', () => {
   const f = fixture('alpha\r\nbeta')

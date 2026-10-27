@@ -317,9 +317,19 @@ export type AddonSlashCommand = {
   label: string
   description: string
   keywords?: string
+  /** Receives the complete note, read again whenever the menu changes. */
   when?: (source: string) => boolean
+  /** Checked instead of `when`, reading only the parts of the note it asks for. */
+  available?: (note: AddonNoteReader) => boolean
   /** Receives the complete note with the slash query removed. Null cancels. */
   transform: (source: string) => string | null
+}
+
+/** A note read in parts. Positions are UTF-16 code units. */
+export type AddonNoteReader = {
+  readonly length: number
+  /** The text from `from` to `to`, within the note. */
+  slice: (from: number, to: number) => string
 }
 
 export type ExportResult = { path: string; pages: number }

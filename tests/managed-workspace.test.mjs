@@ -50,10 +50,10 @@ test('managed workspaces stay opt-in, preserve files, import safely, and reopen 
     })
     const page = await app.firstWindow()
     page.setDefaultTimeout(10000)
+    await waitForDocumentEditor(app, page)
     return page
   }
   let page = await launch()
-  await waitForDocumentEditor(app, page)
   assert.equal(
     (await page.evaluate(() => window.hibi.getWorkspaceSettings())).enabled,
     false,

@@ -6,18 +6,10 @@ import {
   formattedFormatting,
   formattedSyntaxTree,
 } from '../../renderer/src/formatted-contributions.ts'
-import { markDecoded } from '../_shared/formatted-entities.ts'
+import { entityNodes, markDecoded } from '../_shared/formatted-entities.ts'
 import { subscriptSyntax, subtextSyntax } from './formatted-syntax.ts'
 
 const flavor = 'text-extras.text-extras'
-
-/** References in `node`'s text, outside the subscripts in it, which show their own. */
-function entities(node: SyntaxNode, found: SyntaxNode[] = []) {
-  for (let child = node.firstChild; child; child = child.nextSibling)
-    if (child.name === 'Entity') found.push(child)
-    else if (child.name !== 'Subscript') entities(child, found)
-  return found
-}
 
 /** `~text~` reads as the rich view's `<sub>`; its tildes are syntax. */
 const subscript: FormattedContribution = {
@@ -29,16 +21,15 @@ const subscript: FormattedContribution = {
   views: [
     {
       nodes: ['Subscript'],
-      decorate(node, out, { state, revealed }) {
+      decorate(node, out, context) {
         out.syntax(node.from, node.from + 1)
         markDecoded(
-          state,
           out,
+          context,
           node.from + 1,
           node.to - 1,
           { class: 'hibi-lp-subscript' },
-          revealed,
-          entities(node.node),
+          entityNodes(node.node, context.visible, 'Subscript'),
         )
         out.syntax(node.to - 1, node.to)
         return undefined
@@ -106,7 +97,8 @@ const subtext: FormattedContribution = {
       nodes: ['Subtext'],
       // A paragraph's `0 0 1em` margins at the addon's 0.85em size.
       space: { top: 0, bottom: 13.6 },
-      decorate(node, out, { state, revealed }) {
+      decorate(node, out, context) {
+        const { state } = context
         const line = state.doc.lineAt(node.from)
         const item = node.node.parent
         // Beside a list bullet, only the text is small: the rich view's
@@ -116,13 +108,12 @@ const subtext: FormattedContribution = {
           state.doc.lineAt(item.from).number === line.number
         if (!beside) out.line(line.from, { class: 'markdown-subtext' })
         markDecoded(
-          state,
           out,
+          context,
           node.from + 3,
           node.to,
           beside ? { class: 'markdown-subtext' } : null,
-          revealed,
-          entities(node.node),
+          entityNodes(node.node, context.visible, 'Subscript'),
         )
         out.syntax(node.from, node.from + 3)
         return undefined

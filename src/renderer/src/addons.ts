@@ -32,6 +32,7 @@ import {
   startsInWindow,
 } from '../../shared/addon-dependencies'
 import type { AddonHotkeyRegistration } from '../../shared/addon-hotkeys'
+import type { DocumentState } from '../../shared/desktop'
 import {
   documentExtension,
   isMarkdownDocument,
@@ -72,12 +73,7 @@ import { onEditorInput, onEditorKeyEvent } from './editor-events'
 import { countEditorInteractionProvider } from './editor-interaction-presence'
 import { createEditorViewScope, editorViewRegistry } from './editor-view-api'
 import { explorerDecorations } from './explorer-decorations'
-import {
-  flavors,
-  type RegisteredFlavor,
-  renderMarkdown,
-  renderMarkdownAsync,
-} from './flavors'
+import { flavors, type RegisteredFlavor, renderMarkdownAsync } from './flavors'
 import { projectMarkdown } from './markdown-projection'
 import { markdownSyntax } from './markdown-syntax'
 import { registrationBatch } from './registration-batch'
@@ -121,9 +117,18 @@ function loadInteractionBroker() {
   return interactionBrokerModule
 }
 
+/** Slash command checks, loaded before addons start, which then read them synchronously. */
+let slashChecks: typeof import('./slash-availability') | undefined
+const loadSlashChecks = () =>
+  import('./slash-availability').then((module) => {
+    slashChecks = module
+  })
+
 export type RegisteredCommand = Omit<AddonCommand, 'run'> & {
   addonId: string
   canRun: (context: CommandExecutionContext) => boolean
+  /** Whether the command is still registered by a running addon. */
+  live?: () => boolean
   run: (context?: CommandExecutionContext) => Promise<void>
 }
 type HotkeyDescriptor = Omit<AddonHotkeyRegistration, 'token'>
@@ -185,7 +190,8 @@ type Environment = Omit<
   updateMarkdown: AddonContext['editor']['updateMarkdown']
   runCommand: AddonContext['editor']['runCommand']
   runAction: AddonApp['runAction']
-  getMarkdown: () => string
+  /** The note slash commands act on, read in parts by their checks. */
+  getEditorDocument: () => Readonly<DocumentState> | null
   openSidebar: (id: string, input?: unknown, side?: 'left' | 'right') => void
   closeSidebar: (side: 'left' | 'right') => void
   openTab: () => void
@@ -1273,8 +1279,10 @@ export function useAddons(
             `The ${id} addon needs an update before it can run in this version of Hibi.`,
           )
         running.set(id, { addon, stop, restyle })
-        const start = () =>
-          addon.start({
+        const start = async () => {
+          const { renderMarkdown } = await import('./render-markdown')
+          if (disposed) return
+          return addon.start({
             addons: exchangeScope.addons,
             exports: exchangeScope.exports,
             site: {
@@ -1880,12 +1888,11 @@ export function useAddons(
             commands: {
               execute: (command) => live(() => executeCommand(id, command)),
               getSlashCommands() {
-                if (disposed) return []
-                const source = latest.current.getMarkdown()
-                return [...registered.values()].flatMap(({ id, slash }) =>
-                  slash && (!slash.when || slash.when(source))
-                    ? [{ ...slash, id }]
-                    : [],
+                if (disposed || !slashChecks) return []
+                return slashChecks.availableSlashCommands(
+                  registered.values(),
+                  latest.current.getEditorDocument(),
+                  (error) => latest.current.error(error),
                 )
               },
               register(command) {
@@ -1918,31 +1925,7 @@ export function useAddons(
                   id: key,
                   addonId: id,
                   canRun,
-                  ...(command.slash
-                    ? {
-                        slash: {
-                          ...command.slash,
-                          when(source) {
-                            if (!active || disposed) return false
-                            try {
-                              return command.slash?.when?.(source) ?? true
-                            } catch (error) {
-                              latest.current.error(error)
-                              return false
-                            }
-                          },
-                          transform(source) {
-                            if (!active || disposed) return null
-                            try {
-                              return command.slash?.transform(source) ?? null
-                            } catch (error) {
-                              latest.current.error(error)
-                              return null
-                            }
-                          },
-                        },
-                      }
-                    : {}),
+                  live: () => active && !disposed,
                   run: async (context = captureCommandContext('api')) => {
                     const target = structuredClone(context)
                     if (!canRun(context)) return
@@ -2109,12 +2092,16 @@ export function useAddons(
               if (!disposed) toastScope.api.show({ message })
             },
           })
+        }
         const startDetail = { addonName: addon.manifest.name, status: 'ready' }
         const measuredStart = () =>
           startupSpan(
             `addon:${id}`,
             async () => {
-              const { styles, themes } = await addonRegistry.resources(id)
+              const [{ styles, themes }] = await Promise.all([
+                addonRegistry.resources(id),
+                loadSlashChecks(),
+              ])
               if (styles.length) {
                 const { linkAddonSheets } = await import('./addon-sheets')
                 if (!disposed) {

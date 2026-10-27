@@ -11,10 +11,13 @@ const redo: typeof nativeCommands.redo = (view) =>
   runSourceHistory(view, 'redo') ?? nativeCommands.redo(view)
 /** A host view keeps native selection steps; its text history is its session's. */
 const selectionHistory =
-  (direction: 'undo' | 'redo'): typeof nativeCommands.undoSelection =>
+  (
+    direction: 'undo' | 'redo',
+    native: typeof nativeCommands.undoSelection,
+  ): typeof native =>
   (target) => {
     let step: Transaction | undefined
-    nativeCommands[direction === 'undo' ? 'undoSelection' : 'redoSelection']({
+    native({
       state: target.state,
       dispatch: (transaction) => {
         step = transaction
@@ -28,8 +31,8 @@ const selectionHistory =
     target.dispatch(step)
     return true
   }
-const undoSelection = selectionHistory('undo')
-const redoSelection = selectionHistory('redo')
+const undoSelection = selectionHistory('undo', nativeCommands.undoSelection)
+const redoSelection = selectionHistory('redo', nativeCommands.redoSelection)
 const hosted = new Map<unknown, typeof undo>([
   [nativeCommands.undo, undo],
   [nativeCommands.redo, redo],

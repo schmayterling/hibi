@@ -13,10 +13,10 @@ import {
   createSourceSession,
   failedEditGuard,
   failingParts,
+  firstStateRead,
   reconfiguration,
   sourceEditTransaction,
   transactionState,
-  watchFields,
 } from '../src/renderer/src/source-session.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
 import { runSourceHistory } from '../src/shared/source-history.ts'
@@ -1064,11 +1064,12 @@ test('a failure an extension caught while reading the state is still rejected', 
       return true
     }),
   ]
-  const f = fixture('end', {}, [watchFields(feature), failedEditGuard])
+  const f = fixture('end', {}, [firstStateRead, feature, failedEditGuard])
   const surface = f.attach()
   const typed = type(3, 'Q', 1)
   assert.throws(() => surface.dispatch(typed), /field failed/)
-  assert.deepEqual(swallowed, ['field failed'])
+  // Read first, the failure is kept before the filter runs; it reads the start.
+  assert.deepEqual(swallowed, [])
   assert.equal(f.session.snapshot().materialize(), 'end')
   assert.equal(surface.view.state.doc.toString(), 'end')
   surface.dispatch(type(3, 'b', 2))
@@ -1076,6 +1077,23 @@ test('a failure an extension caught while reading the state is still rejected', 
   assert.deepEqual(f.errors, [])
   surface.dispose()
   f.session.dispose()
+  // With nothing reading first, the state CodeMirror left unfinished still fails.
+  const unguarded = EditorState.create({
+    doc: 'end',
+    extensions: [
+      failing,
+      EditorState.transactionExtender.of((transaction) => {
+        try {
+          transaction.state
+        } catch {}
+        return null
+      }),
+    ],
+  }).update({ changes: { from: 3, insert: 'Q' } })
+  assert.equal(unguarded.state.doc.toString(), 'endQ')
+  assert.equal(transactionState(unguarded), null)
+  // Then it reads as the state the edit started from.
+  assert.equal(unguarded.state.doc.toString(), 'end')
 })
 
 test('an edit an extension fails on reaches neither the session nor the view', () => {

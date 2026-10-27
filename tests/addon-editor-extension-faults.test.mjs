@@ -924,6 +924,163 @@ for (const presentation of ['formatted', 'source'])
     assert.deepEqual(errors, [])
   })
 
+/**
+ * A failure on `Q` that the addon's own change filter catches, from a field
+ * another field provides, a field a facet enables, a facet value, or a field
+ * behind precedence and a compartment.
+ */
+const swallowedNested = (mode) => (presentation) =>
+  `export default (sdk) => ({ start(context) {
+  const { Compartment, EditorState, Facet, Prec, StateField } = sdk.codeMirror.state
+  const { EditorView } = sdk.codeMirror.view
+  const failing = StateField.define({
+    create: () => 0,
+    update(value, transaction) {
+      if (transaction.docChanged && transaction.newDoc.toString().includes('Q')) throw new Error('nested boom')
+      return value
+    },
+  })
+  const counted = Facet.define({ combine: (values) => values[0] ?? 0 })
+  const extension = {
+    provide: StateField.define({ create: () => 0, update: (value) => value, provide: () => failing }),
+    enable: Facet.define({ enables: failing }).of(1),
+    compute: counted.compute(['doc'], (state) => {
+      if (state.doc.toString().includes('Q')) throw new Error('nested boom')
+      return state.doc.length
+    }),
+    wrap: Prec.highest(new Compartment().of([Prec.lowest(failing)])),
+  }[${JSON.stringify(mode)}]
+  context.editor.${register(presentation)}({ id: 'bad', create: () => [
+    extension,
+    EditorView.editorAttributes.of({ 'data-bad': 'yes' }),
+    EditorState.changeFilter.of((transaction) => {
+      try {
+        ${mode === 'compute' ? 'transaction.state.facet(counted)' : 'transaction.state.field(failing)'}
+      } catch {}
+      return true
+    }),
+  ] })
+} })`
+
+for (const presentation of ['formatted', 'source'])
+  for (const mode of ['provide', 'enable', 'compute', 'wrap'])
+    test(`an addon ${presentation} failure from a ${mode === 'provide' ? 'provided field' : mode === 'enable' ? 'facet-enabled field' : mode === 'compute' ? 'facet value' : 'wrapped field'} that its change filter catches is rejected, named and removed (codemirror)`, {
+      timeout: 120000,
+    }, async (t) => {
+      const { page, pane, errors } = await open(t, {
+        source: plain,
+        presentation,
+        engine: 'codemirror',
+        code: swallowedNested(mode),
+      })
+      await type(page, pane, ['Q'])
+      await reported(page, 'bad-ext.bad: nested boom')
+      await page.locator(`${pane} [data-bad]`).waitFor({ state: 'detached' })
+      const rejected = await state(page, pane)
+      t.diagnostic(JSON.stringify({ rejected, errors }))
+      assert.equal(rejected.canonical, plain)
+      assert.equal(rejected.view, rejected.canonical)
+      assert.deepEqual(rejected.shown, ['end'])
+      assert.deepEqual(errors, [])
+    })
+
+/** A feature that adds a field failing on `Q` through its own compartment when F9 is pressed, and a change filter that reads it and catches the failure. */
+const compartmentAdded = (
+  presentation,
+) => `export default (sdk) => ({ start(context) {
+  const { Compartment, EditorState, StateField } = sdk.codeMirror.state
+  const { EditorView, keymap } = sdk.codeMirror.view
+  const failing = StateField.define({
+    create: () => 0,
+    update(value, transaction) {
+      if (transaction.docChanged && transaction.newDoc.toString().includes('Q')) throw new Error('added boom')
+      return value
+    },
+  })
+  const compartment = new Compartment()
+  context.editor.${register(presentation)}({ id: 'bad', create: () => [
+    compartment.of([]),
+    EditorState.changeFilter.of((transaction) => {
+      try {
+        transaction.state.field(failing)
+      } catch {}
+      return true
+    }),
+    keymap.of([{ key: 'F9', run(view) {
+      view.dispatch({ effects: compartment.reconfigure(failing) })
+      return true
+    } }]),
+    EditorView.editorAttributes.of({ 'data-bad': 'yes' }),
+  ] })
+} })`
+
+for (const presentation of ['formatted', 'source'])
+  test(`an addon ${presentation} field added later through the addon's compartment, whose failure its change filter catches, is rejected, named and removed (codemirror)`, {
+    timeout: 120000,
+  }, async (t) => {
+    const { page, pane, errors } = await open(t, {
+      source: plain,
+      presentation,
+      engine: 'codemirror',
+      code: compartmentAdded,
+    })
+    await caret(page, pane)
+    await page.keyboard.press('F9')
+    await type(page, pane, ['a', 'Q'])
+    await reported(page, 'bad-ext.bad: added boom')
+    await page.locator(`${pane} [data-bad]`).waitFor({ state: 'detached' })
+    const rejected = await state(page, pane)
+    t.diagnostic(JSON.stringify({ rejected, errors }))
+    assert.equal(rejected.canonical, plain.replace(/end\n$/, 'enda\n'))
+    assert.equal(rejected.view, rejected.canonical)
+    assert.deepEqual(rejected.shown, ['enda'])
+    await type(page, pane, ['b', 'Q'])
+    const after = await state(page, pane)
+    assert.equal(after.canonical, plain.replace(/end\n$/, 'endabQ\n'))
+    assert.equal(after.view, after.canonical)
+    assert.deepEqual(errors, [])
+  })
+
+/** A healthy feature whose state field is frozen, with a field that fails on `Q`. */
+const frozenField = (
+  presentation,
+) => `export default (sdk) => ({ start(context) {
+  const { StateField } = sdk.codeMirror.state
+  const { EditorView } = sdk.codeMirror.view
+  context.editor.${register(presentation)}({ id: 'frozen', create: () => Object.freeze(StateField.define({ create: () => 0, update: (value) => value + 1 })) })
+  context.editor.${register(presentation)}({ id: 'bad', create: () => [
+    StateField.define({
+      create: () => 0,
+      update(value, transaction) {
+        if (transaction.docChanged && transaction.newDoc.toString().includes('Q')) throw new Error('frozen boom')
+        return value
+      },
+    }),
+    EditorView.editorAttributes.of({ 'data-bad': 'yes' }),
+  ] })
+} })`
+
+for (const presentation of ['formatted', 'source'])
+  test(`an addon ${presentation} feature with a frozen state field installs and typing works next to a failing one (codemirror)`, {
+    timeout: 120000,
+  }, async (t) => {
+    const { page, pane, errors } = await open(t, {
+      source: plain,
+      presentation,
+      engine: 'codemirror',
+      code: frozenField,
+    })
+    await type(page, pane, ['a', 'Q'])
+    await reported(page, 'bad-ext.bad: frozen boom')
+    await type(page, pane, ['b'])
+    const after = await state(page, pane)
+    t.diagnostic(JSON.stringify({ after, errors }))
+    assert.equal(after.canonical, plain.replace(/end\n$/, 'endab\n'))
+    assert.equal(after.view, after.canonical)
+    assert.deepEqual(after.shown, ['endab'])
+    assert.deepEqual(errors, [])
+  })
+
 /** A failing state field with a filter that rebuilds every transaction from its parts, without annotations. */
 const rebuildingFilter = (
   presentation,

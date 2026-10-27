@@ -4,10 +4,8 @@ import {
   ChangeSet,
   EditorSelection,
   EditorState,
-  type Extension,
   Prec,
   type StateEffect,
-  StateField,
   Text,
   Transaction,
   type TransactionSpec,
@@ -221,52 +219,51 @@ function recordFailure(transaction: Transaction, error: unknown) {
   Object.defineProperty(transaction, 'state', { value: transaction.startState })
 }
 
-/** The state a transaction reaches. When an extension fails on it, every read throws that error. */
+/** Transactions whose state was checked complete. */
+const completeStates = new WeakSet<Transaction>()
+
+/**
+ * The state a transaction reaches. When an extension fails on it, every read
+ * throws that error. A state CodeMirror left with a slot it never finished
+ * (its per-slot status, an internal) failed too, even if every throw on the
+ * way was caught.
+ */
 function reachedState(transaction: Transaction): EditorState {
   if (failedStates.has(transaction)) throw failedStates.get(transaction)
+  let state: EditorState
   try {
-    return transaction.state
+    state = transaction.state
   } catch (error) {
     recordFailure(transaction, error)
     throw error
   }
+  if (completeStates.has(transaction)) return state
+  // 2 marks a computed slot.
+  if (
+    (state as unknown as { status: number[] }).status.some(
+      (slot) => !(slot & 2),
+    )
+  ) {
+    const error = new Error(
+      'An editor extension failed while this edit was made.',
+    )
+    recordFailure(transaction, error)
+    throw error
+  }
+  completeStates.add(transaction)
+  return state
 }
-
-const watchedFields = new WeakSet<object>()
 
 /**
- * Makes the state fields in an extension keep their failures on the
- * transaction they fail on, where they happen, so a failure stays rejected
- * even when the code that read the state caught it. Fields, precedence and
- * compartment wrappers are CodeMirror internals here.
+ * Reads each new state before any change filter can, so a failure is kept on
+ * its transaction before addon code could read it and catch it. It goes first.
  */
-export function watchFields(extension: Extension): Extension {
-  const visit = (value: unknown): void => {
-    if (Array.isArray(value)) value.forEach(visit)
-    else if (value instanceof StateField) {
-      if (watchedFields.has(value)) return
-      watchedFields.add(value)
-      const field = value as unknown as {
-        updateF: (value: unknown, transaction: Transaction) => unknown
-      }
-      const update = field.updateF
-      field.updateF = (value, transaction) => {
-        try {
-          return update(value, transaction)
-        } catch (error) {
-          recordFailure(transaction, error)
-          throw error
-        }
-      }
-    } else if (value && typeof value === 'object') {
-      if ('inner' in value) visit(value.inner)
-      else if ('extension' in value && value.extension !== value)
-        visit(value.extension)
-    }
-  }
-  visit(extension)
-  return extension
-}
+export const firstStateRead = Prec.highest(
+  EditorState.changeFilter.of((transaction) => {
+    transactionState(transaction)
+    return true
+  }),
+)
 
 /**
  * Reads each new state before other filters and extenders can, so a failure

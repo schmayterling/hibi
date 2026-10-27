@@ -152,11 +152,11 @@ import {
   editSpec,
   failedEditGuard,
   failingParts,
+  firstStateRead,
   reconfiguration,
   sourceEditorTextCooperatively,
   sourceEditTransaction,
   transactionState,
-  watchFields,
 } from './source-session'
 import {
   registerSourceView,
@@ -1457,6 +1457,7 @@ export function SourceEditor({
         doc: preparedText.text,
         ...(selection ? { selection } : {}),
         extensions: [
+          firstStateRead,
           // The first transaction typing makes, as CodeMirror made it, before
           // anything else can fail on it.
           Prec.highest(
@@ -2374,7 +2375,7 @@ export function SourceEditor({
       results.forEach((result, index) => {
         const feature = sourceExtensions[index]!
         if (result.status === 'fulfilled')
-          parts.push({ feature, extension: watchFields(result.value) })
+          parts.push({ feature, extension: result.value })
         else if (feature.fail) feature.fail(result.reason)
         else errors.push(result.reason)
       })

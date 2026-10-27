@@ -152,6 +152,7 @@ import {
   editSpec,
   failedEditGuard,
   failingParts,
+  reconfiguration,
   sourceEditorTextCooperatively,
   sourceEditTransaction,
   transactionState,
@@ -2324,11 +2325,10 @@ export function SourceEditor({
         else errors.push(result.reason)
       })
       const install = () =>
-        editor.state.update({
-          effects: addons.current.reconfigure(
-            featureExtensions(parts, formatted),
-          ),
-        })
+        reconfiguration(
+          editor.state,
+          addons.current.reconfigure(featureExtensions(parts, formatted)),
+        )
       let transaction = install()
       if (!transactionState(transaction)) {
         parts = isolateFeatures(

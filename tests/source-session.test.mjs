@@ -13,6 +13,7 @@ import {
   createSourceSession,
   failedEditGuard,
   failingParts,
+  reconfiguration,
   sourceEditTransaction,
   transactionState,
 } from '../src/renderer/src/source-session.ts'
@@ -960,12 +961,12 @@ test('filters and extenders that read a state never see one an extension failed 
     const typed = start.update(typedQ)
     assert.equal(typed.docChanged, false)
     assert.equal(transactionState(typed), null)
-    // Leaving out a feature runs its extender, which may require its field:
-    // then it cannot be named and the edit is only rejected.
-    assert.deepEqual(
-      names(start, [typed], [{ name: 'feature', extension }]),
-      required ? [] : ['feature: field failed'],
-    )
+    // Leaving it out does not run its extender, which may require its field.
+    assert.deepEqual(names(start, [typed], [{ name: 'feature', extension }]), [
+      'feature: field failed',
+    ])
+    const removed = reconfiguration(start, install([])).state
+    assert.equal(removed.field(failing, false), undefined)
     const typedB = start.update({ changes: { from: 3, insert: 'b' } })
     assert.equal(transactionState(typedB)?.doc.toString(), 'endb')
   }

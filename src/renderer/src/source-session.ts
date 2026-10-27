@@ -251,6 +251,35 @@ export function transactionState(transaction: Transaction) {
   }
 }
 
+/**
+ * A transaction that only reconfigures. Taking an extension out runs its own
+ * filters and extenders first, which may read fields it takes along, so this
+ * skips them, with CodeMirror's internal constructor.
+ */
+export function reconfiguration(
+  state: EditorState,
+  effect: StateEffect<unknown>,
+): Transaction {
+  const { create } = Transaction as unknown as {
+    create: (
+      startState: EditorState,
+      changes: ChangeSet,
+      selection: undefined,
+      effects: readonly StateEffect<unknown>[],
+      annotations: readonly Annotation<unknown>[],
+      scrollIntoView: boolean,
+    ) => Transaction
+  }
+  return create(
+    state,
+    ChangeSet.empty(state.doc.length),
+    undefined,
+    [effect],
+    [],
+    false,
+  )
+}
+
 /** A spec that makes a transaction's edit again, with everything it carries. */
 export function editSpec(transaction: Transaction): TransactionSpec {
   const original = transaction.annotation(failedEdit) ?? transaction
@@ -280,9 +309,7 @@ export function failingParts<Part>(
   install: (parts: readonly Part[]) => StateEffect<unknown>,
 ) {
   const replay = (installed: readonly Part[]) => {
-    let state = reachedState(
-      start.update({ effects: install(installed), filter: false }),
-    )
+    let state = reachedState(reconfiguration(start, install(installed)))
     if (edit.every((part) => part instanceof Transaction))
       for (const transaction of edit as readonly Transaction[])
         state = reachedState(state.update(editSpec(transaction)))

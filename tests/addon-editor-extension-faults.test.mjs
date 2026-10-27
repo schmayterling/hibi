@@ -371,6 +371,7 @@ const readFailingField = (
   presentation,
 ) => `export default (sdk) => ({ start(context) {
   const { EditorState, StateField } = sdk.codeMirror.state
+  const { EditorView } = sdk.codeMirror.view
   const field = StateField.define({
     create: () => 0,
     update(value, transaction) {
@@ -384,11 +385,12 @@ const readFailingField = (
       transaction.state.field(field)
       return null
     }),
+    EditorView.editorAttributes.of({ 'data-bad': 'yes' }),
   ] })
 } })`
 
 for (const presentation of ['formatted', 'source'])
-  test(`an addon ${presentation} extender that reads its failing field cannot leave rejected input on screen (codemirror)`, {
+  test(`an addon ${presentation} extender that reads its failing field cannot leave rejected input on screen, and the feature is named and removed (codemirror)`, {
     timeout: 120000,
   }, async (t) => {
     const { page, pane, errors } = await open(t, {
@@ -404,16 +406,15 @@ for (const presentation of ['formatted', 'source'])
     assert.equal(rejected.canonical, plain.replace(/end\n$/, 'enda\n'))
     assert.equal(rejected.view, rejected.canonical)
     assert.deepEqual(rejected.shown, ['enda'])
-    await page
-      .locator(`${pane} .document-notice`)
-      .filter({ hasText: 'Edit could not be applied' })
-      .filter({ hasText: 'field boom' })
-      .waitFor({ timeout: 10000 })
-    await type(page, pane, ['b'])
+    await reported(page, 'bad-ext.bad: field boom')
+    await page.locator(`${pane} [data-bad]`).waitFor({ state: 'detached' })
+    await type(page, pane, ['b', 'Q'])
     const after = await state(page, pane)
-    assert.equal(after.canonical, plain.replace(/end\n$/, 'endab\n'))
+    t.diagnostic(JSON.stringify({ after, errors }))
+    assert.equal(after.canonical, plain.replace(/end\n$/, 'endabQ\n'))
     assert.equal(after.view, after.canonical)
-    assert.deepEqual(after.shown, ['endab'])
+    assert.deepEqual(after.shown, ['endabQ'])
+    assert.equal(after.good, true)
     assert.deepEqual(errors, [])
   })
 

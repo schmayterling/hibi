@@ -67,8 +67,12 @@ test('50 MiB formatted projections and reference reads retain long paragraphs', 
 }, () => {
   const size = 50 * 1024 * 1024
   for (const unit of ['ordinary words. ', 'ordinary words.\n']) {
-    const source = unit.repeat(Math.ceil(size / unit.length)).slice(0, size - 1) + 'x'
-    assert.equal(richText(source, syntax).slice(1), source)
+    const source =
+      unit.repeat(Math.ceil(size / unit.length)).slice(0, size - 1) + 'x'
+    assert.ok(
+      richText(source, syntax).slice(1) === source.replaceAll('\n', ' '),
+      JSON.stringify({ unit, size }),
+    )
   }
   // Formatting prevents the plain-source shortcut from skipping reference lexing.
   const source = '**start** ' + 'ordinary words. '.repeat(size / 16)

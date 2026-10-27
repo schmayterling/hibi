@@ -381,44 +381,62 @@ function preservesBlocks(
   const signature = (text: Text, spans: typeof ranges, reorder: boolean) => {
     const parsed = parser.parse(new DocInput(text), [], spans)
     const base = spans[0]!.from
-    let reordered = !reorder
-    const describe = (node: SyntaxNode): string => {
-      const children: { node: SyntaxNode; value: string }[] = []
-      for (let child = node.firstChild; child; child = child.nextSibling)
-        if (child.type.is('Block'))
-          children.push({ node: child, value: describe(child) })
-      if (
-        children.length ||
-        node.name === 'Document' ||
-        node.type.is('BlockContext')
-      ) {
-        if (reorder) {
-          const moving = children.findIndex(
-            ({ node }) =>
-              node.name === block.name && base + node.from === block.from,
-          )
-          const landing = children.findIndex(
-            ({ node }) =>
-              node.name === target.name && base + node.from === target.from,
-          )
-          if (moving >= 0 && landing >= 0) {
-            const [entry] = children.splice(moving, 1)
-            children.splice(landing, 0, entry!)
-            reordered = true
-          }
-        }
-        return JSON.stringify([node.name, children.map(({ value }) => value)])
+    const pieces: string[] = []
+    let movingFrom = -1,
+      movingTo = -1,
+      landingFrom = -1,
+      landingTo = -1
+    const edge = (node: Block, end: boolean) => {
+      if (node.name === block.name && base + node.from === block.from) {
+        if (end) movingTo = pieces.length
+        else movingFrom = pieces.length
       }
-      const content = text
-        .sliceString(base + node.from, base + node.to)
-        .split('\n')
-        .map((line) => line.replace(/^[\s>]*/, '').trim())
-        .filter(Boolean)
-        .join(' ')
-      return JSON.stringify([node.name, content])
+      if (node.name === target.name && base + node.from === target.from) {
+        if (end) landingTo = pieces.length
+        else landingFrom = pieces.length
+      }
     }
-    const result = describe(parsed.topNode)
-    return reordered ? result : null
+    parsed.iterate({
+      enter(node) {
+        if (node.name !== 'Document' && !node.type.is('Block')) return false
+        edge(node, false)
+        let container = node.name === 'Document' || node.type.is('BlockContext')
+        if (!container)
+          for (
+            let child = node.node.firstChild;
+            child;
+            child = child.nextSibling
+          )
+            if (child.type.is('Block')) {
+              container = true
+              break
+            }
+        if (container) {
+          pieces.push('[' + node.name)
+          return
+        }
+        const content = text
+          .sliceString(base + node.from, base + node.to)
+          .split('\n')
+          .map((line) => line.replace(/^[\s>]*/, '').trim())
+          .filter(Boolean)
+          .join(' ')
+        pieces.push(JSON.stringify([node.name, content]))
+        edge(node, true)
+        return false
+      },
+      leave(node) {
+        pieces.push(']')
+        edge(node, true)
+      },
+    })
+    if (!reorder) return JSON.stringify(pieces)
+    if (movingFrom < 0 || movingTo < 0 || landingFrom < 0 || landingTo < 0)
+      return null
+    const moved = pieces.slice(movingFrom, movingTo)
+    const rest = pieces.slice(0, movingFrom).concat(pieces.slice(movingTo))
+    const at = movingFrom < landingFrom ? landingTo - moved.length : landingFrom
+    return JSON.stringify(rest.slice(0, at).concat(moved, rest.slice(at)))
   }
   const mapped = joined.map(({ from, to }) => ({
     from: changes.mapPos(from, -1),

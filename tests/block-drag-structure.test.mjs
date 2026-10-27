@@ -206,3 +206,33 @@ test('validation reads local ranges in a 20,000-item container', () => {
   assert.equal(large, small)
   assert.ok(large < 2048, String(large))
 })
+
+test('structure validation serializes nested containers once', () => {
+  for (const depth of [12, 64]) {
+    const doc = `first\n\n${'> '.repeat(depth)}nested\n\nlast\n`
+    const { state, tree } = view(doc)
+    const stringify = JSON.stringify
+    let units = 0,
+      spec
+    try {
+      JSON.stringify = (value, ...args) => {
+        const pending = [value]
+        while (pending.length) {
+          const part = pending.pop()
+          if (typeof part === 'string') units += part.length
+          else if (Array.isArray(part))
+            for (const entry of part) pending.push(entry)
+        }
+        return stringify(value, ...args)
+      }
+      spec = blockStep(state, tree, tree.topNode.firstChild, 1)
+    } finally {
+      JSON.stringify = stringify
+    }
+    assert.ok(spec)
+    console.log(
+      JSON.stringify({ depth, source: doc.length, serialized: units }),
+    )
+    assert.ok(units < 50 * doc.length, String(units))
+  }
+})

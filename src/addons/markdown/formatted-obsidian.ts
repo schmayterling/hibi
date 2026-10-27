@@ -1,9 +1,11 @@
+import type { EditorState } from '@codemirror/state'
 import { EditorView, WidgetType } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
 import { observeDocumentMedia } from '../../renderer/src/document-media.ts'
 import {
   type FormattedContribution,
   formattedDocument,
+  formattedSyntaxTree,
   showMarkdownMarkers,
 } from '../../renderer/src/formatted-contributions.ts'
 import { wrapDecoded } from '../_shared/formatted-entities.ts'
@@ -18,17 +20,20 @@ export const embedRenders = { count: 0 }
  * A wikilink or embed's target, and its label's node: the alias, or else the
  * target. Their text was kept when they were parsed.
  */
-function wikiParts(node: SyntaxNode) {
+function wikiParts(node: SyntaxNode, state: EditorState) {
   const target = node.getChild('WikiTarget')
   const label = node.getChild('WikiAlias') ?? target
-  const text = target?.tree?.prop(wikiText)
-  return label && text !== undefined
-    ? {
-        target: text,
-        label,
-        aliased: node.getChildren('WikiMark').length === 3,
-      }
-    : null
+  let text = target?.tree?.prop(wikiText)
+  const aliased = node.getChildren('WikiMark').length === 3
+  if (aliased && text?.endsWith('\\')) {
+    let parent: SyntaxNode | null =
+      formattedSyntaxTree(state)?.resolveInner(node.from, 1) ?? null
+    while (parent && parent.name !== 'Table') parent = parent.parent
+    // The table owns the slash before its alias pipe, not the wiki target.
+    // Keep the parsed source ranges intact for both cell renderers.
+    if (parent) text = text.slice(0, -1).trimEnd()
+  }
+  return label && text !== undefined ? { target: text, label, aliased } : null
 }
 
 /**
@@ -180,7 +185,7 @@ export const contribution: FormattedContribution = {
     {
       nodes: ['WikiLink'],
       decorate(node, out, context) {
-        const parts = wikiParts(node.node)
+        const parts = wikiParts(node.node, context.state)
         if (!parts) return false
         // The label reads as a link; brackets, and the target behind an alias, are syntax.
         const { from, to } = parts.label
@@ -203,8 +208,11 @@ export const contribution: FormattedContribution = {
     {
       nodes: ['WikiEmbed'],
       decorate(node, out, { state, revealed }) {
-        const parts = wikiParts(node.node)
-        const label = parts?.label.tree?.prop(wikiText)
+        const parts = wikiParts(node.node, state)
+        const label =
+          parts?.label.name === 'WikiTarget'
+            ? parts.target
+            : parts?.label.tree?.prop(wikiText)
         if (!parts || label === undefined) return false
         const widget = new EmbedWidget(
           parts.target,

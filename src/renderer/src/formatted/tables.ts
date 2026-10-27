@@ -1745,12 +1745,7 @@ class TableView {
     const link = (event.target as Element).closest('.hibi-lp-link')
     const pos = link && this.dom.contains(link) ? this.linkStart(link) : null
     const wiki = link?.closest('[data-wiki-link]')
-    const raw = wiki?.getAttribute('data-wiki-link')
-    // Both cell renderers read the canonical table escape before an alias's pipe.
-    const target =
-      wiki?.getAttribute('data-wiki-alias') === 'true' && raw?.endsWith('\\')
-        ? raw.slice(0, -1).trim()
-        : (raw ?? undefined)
+    const target = wiki?.getAttribute('data-wiki-link') ?? undefined
     if (
       pos != null &&
       this.view.state.facet(formattedFollowLink)?.(this.view, pos, target)

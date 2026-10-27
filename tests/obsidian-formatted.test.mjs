@@ -10,6 +10,7 @@ import {
   wikiText,
 } from '../src/addons/markdown/formatted-syntax.ts'
 import { obsidianMarkdown } from '../src/addons/markdown/obsidian.ts'
+import { formattedTree } from '../src/renderer/src/formatted-contributions.ts'
 
 const lezer = parser.configure([GFM, obsidianSyntax])
 const marked = new Marked({ gfm: true }, obsidianMarkdown)
@@ -153,7 +154,11 @@ test('openers without closers cost each character a bounded number of reads', ()
 
 /** What the contribution's views draw for `source`. */
 function drawn(source, revealed = false) {
-  const state = EditorState.create({ doc: source })
+  const tree = lezer.parse(source)
+  const state = EditorState.create({
+    doc: source,
+    extensions: [formattedTree.of(() => tree)],
+  })
   const calls = []
   const out = {
     mark: (from, to, attributes) => calls.push(['mark', from, to, attributes]),
@@ -231,6 +236,61 @@ test('labels read as links, brackets and aliased targets are syntax, embeds beco
     ['syntax', 0, 3],
     ['syntax', 12, 14],
   ])
+})
+
+test('table wiki aliases remove only their table-owned escape before rendering', () => {
+  const table = (source) => `| media |\n| --- |\n| ${source} |`
+  for (const [alias, label] of [
+    ['200', '200'],
+    ['200x100', '200x100'],
+    ['caption', 'caption'],
+    ['', 'picture.png'],
+    ['   ', 'picture.png'],
+  ]) {
+    const embed = String.raw`![[picture.png\|${alias}]]`
+    const calls = drawn(table(embed))
+    const replacement = calls.find(([kind]) => kind === 'replace')
+    assert.deepEqual(
+      replacement,
+      [
+        'replace',
+        table(embed).indexOf(embed),
+        table(embed).indexOf(embed) + embed.length,
+        { target: 'picture.png', label },
+      ],
+      alias,
+    )
+  }
+  for (const target of [
+    'picture.png',
+    String.raw`folder\picture.png`,
+    String.raw`literal\\`,
+  ]) {
+    const embed = `![[ ${target}\\|caption ]]`
+    assert.deepEqual(
+      drawn(table(embed)).find(([kind]) => kind === 'replace')?.[3],
+      {
+        target,
+        label: 'caption',
+      },
+    )
+  }
+  assert.deepEqual(
+    drawn(table(String.raw`[[Other \|alias]]`)).find(
+      ([kind]) => kind === 'link',
+    )?.[3],
+    { 'data-wiki-link': 'Other', 'data-wiki-alias': 'true' },
+  )
+  for (const source of [
+    String.raw`![[picture.png\|200]]`,
+    String.raw`![[folder\picture.png|200]]`,
+    '![[picture.png]]',
+  ])
+    assert.deepEqual(
+      drawn(source).find(([kind]) => kind === 'replace')?.[3],
+      { target: richItems(source)[0][1], label: richItems(source)[0][2] },
+      source,
+    )
 })
 
 test('decoded glyphs pass mouse events through to the editor', () => {

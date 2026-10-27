@@ -1,12 +1,12 @@
 import { type MarkedExtension, marked, Tokenizer } from 'marked'
 
-// Keep each parser's start, interruption and underline grammar, but replace its
-// per-character (.|newline)+? backtracking with an iterative line scan.
-// The delimiters describe the installed Marked rules; equivalence tests guard them.
+// Keep each parser's block grammar, but scan lines without a backtracking frame
+// per character or continuation line. Equivalence tests guard the rule delimiters.
 const setextRules = new WeakMap<
   RegExp,
   { start: RegExp; interrupt: RegExp; underline: RegExp }
 >()
+const paragraphRules = new WeakMap<RegExp, RegExp>()
 
 export function lexMarkdown(source: string) {
   return marked.lexer(source, {
@@ -31,7 +31,37 @@ export const blockMarkdown: MarkedExtension = {
         Object.getPrototypeOf(this).lheading,
       )
     },
+    paragraph(source) {
+      return BlockTokenizer.prototype.paragraph.call(
+        this,
+        source,
+        Object.getPrototypeOf(this).paragraph,
+      )
+    },
   },
+}
+
+// Let upstream construct tokens, including its version-specific newline behavior.
+function blockToken<Result>(
+  tokenizer: Tokenizer,
+  name: 'lheading' | 'paragraph',
+  source: string,
+  parts: [string, ...string[]],
+  read: (source: string) => Result,
+): Result {
+  const match = Object.assign(parts, { index: 0, input: source })
+  const rule = /(?:)/
+  rule.exec = () => match
+  const rules = tokenizer.rules
+  tokenizer.rules = {
+    ...rules,
+    block: { ...rules.block, [name]: rule },
+  }
+  try {
+    return read.call(tokenizer, source)
+  } finally {
+    tokenizer.rules = rules
+  }
 }
 
 export class BlockTokenizer extends Tokenizer {
@@ -59,31 +89,54 @@ export class BlockTokenizer extends Tokenizer {
       if (/[\r\u2028\u2029]/.test(source.slice(from, end))) return
       const rest = source.slice(end + 1)
       const underline = rule.underline.exec(rest)
-      if (end > 0 && underline) {
-        // Let the upstream tokenizer retain its own raw/newline behavior.
-        const match = Object.assign(
+      if (end > 0 && underline)
+        return blockToken(
+          this,
+          'lheading',
+          source,
           [
             source.slice(0, end + 1 + underline[0].length),
             source.slice(0, end),
-            underline[1],
-          ] as [string, string, string],
-          { index: 0, input: source },
+            underline[1] as string,
+          ],
+          read,
         )
-        const heading = /(?:)/
-        heading.exec = () => match
-        const rules = this.rules
-        this.rules = {
-          ...rules,
-          block: { ...rules.block, lheading: heading },
-        }
-        try {
-          return read.call(this, source)
-        } finally {
-          this.rules = rules
-        }
-      }
       if (rule.interrupt.test(rest)) return
       from = end + 1
     }
+  }
+
+  override paragraph(source: string, read = Tokenizer.prototype.paragraph) {
+    let end = source.indexOf('\n')
+    // One physical line needs no repeated continuation match.
+    if (end < 0) return read.call(this, source)
+    if (!end) return
+    const firstLine = end
+    const pattern = this.rules.block.paragraph
+    let interrupt = paragraphRules.get(pattern)
+    if (!interrupt) {
+      const start = '^([^\\n]+(?:\\n(?!'
+      const tail = ')[^\\n]+)*)'
+      if (!pattern.source.startsWith(start) || !pattern.source.endsWith(tail))
+        return read.call(this, source)
+      interrupt = new RegExp(
+        `^(?:${pattern.source.slice(start.length, -tail.length)})`,
+      )
+      paragraphRules.set(pattern, interrupt)
+    }
+    while (end < source.length) {
+      const from = end + 1
+      if (
+        from === source.length ||
+        source.charCodeAt(from) === 10 ||
+        interrupt.test(source.slice(from))
+      )
+        break
+      const newline = source.indexOf('\n', from)
+      end = newline < 0 ? source.length : newline
+    }
+    if (end === firstLine) return read.call(this, source)
+    const text = source.slice(0, end)
+    return blockToken(this, 'paragraph', source, [text, text], read)
   }
 }

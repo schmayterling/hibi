@@ -218,10 +218,16 @@ test('tokens, references, headings, metadata and full export match unpatched mar
           'lheading',
           ExportTokenizer.prototype.lheading,
         )
+        const exportParagraphFallback = t.mock.method(
+          ExportBlockTokenizer.prototype,
+          'paragraph',
+          ExportTokenizer.prototype.paragraph,
+        )
         try {
           assert.equal(html, renderMarkdown(source).html)
           assert.equal(projection, JSON.stringify(textProjection(source, true)))
         } finally {
+          exportParagraphFallback.mock.restore()
           exportFallback.mock.restore()
         }
         const page = { path: 'note.md', markdown: source }
@@ -239,6 +245,11 @@ test('tokens, references, headings, metadata and full export match unpatched mar
           BlockTokenizer.prototype,
           'lheading',
           Tokenizer.prototype.lheading,
+        )
+        const paragraphFallback = t.mock.method(
+          BlockTokenizer.prototype,
+          'paragraph',
+          Tokenizer.prototype.paragraph,
         )
         try {
           assert.equal(
@@ -259,6 +270,7 @@ test('tokens, references, headings, metadata and full export match unpatched mar
             JSON.stringify(references(source, gfm)),
           )
         } finally {
+          paragraphFallback.mock.restore()
           fallback.mock.restore()
         }
       }
@@ -358,6 +370,22 @@ test('setext scanner preserves independent rules and the nested parser grammar',
     const patched = new nested.Marked({ gfm }, blockMarkdown)
     for (const source of corpus)
       assert.deepEqual(patched.lexer(source), original.lexer(source), source)
+  }
+})
+
+test('wrapped 50 mib paragraphs avoid the recursive paragraph rule', (t) => {
+  const wrapped = 'ordinary words\n'.repeat(Math.ceil(size / 15)).slice(0, size)
+  for (const gfm of [false, true]) {
+    const tokenizer = new BlockTokenizer()
+    const lexer = new Lexer({ gfm, tokenizer })
+    const recursive = t.mock.method(tokenizer.rules.block.paragraph, 'exec')
+    const token = tokenizer.paragraph(wrapped)
+    assert.equal(token.type, 'paragraph')
+    assert.equal(token.raw, wrapped)
+    assert.equal(token.text, wrapped)
+    assert.equal(lexer.inlineQueue[0].src, wrapped)
+    assert.equal(recursive.mock.callCount(), 0)
+    recursive.mock.restore()
   }
 })
 

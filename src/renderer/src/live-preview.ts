@@ -501,41 +501,68 @@ function inline(
       mode: IterMode.IgnoreMounts,
       enter(ref: SyntaxNodeRef) {
         const name = ref.name
-        // Syntax whose setting is off shows as written, its children too.
-        if (literal.has(name)) return false
-        const contributed = views(ref.type)
-        let skip = false
-        if (contributed.views.length) {
-          const out = sink(touched(ref.from, ref.to))
-          const grouped = sink(touched(ref.from, ref.to), groupMarks)
-          const context = {
-            state,
-            revealed: touched(ref.from, ref.to),
-            visible: range,
-          }
-          for (const nodeView of contributed.views)
+        let skip = literal.has(name)
+        if (!skip) {
+          const contributed = views(ref.type)
+          if (contributed.views.length) {
+            const out = sink(touched(ref.from, ref.to))
+            const grouped = sink(touched(ref.from, ref.to), groupMarks)
+            const context = {
+              state,
+              revealed: touched(ref.from, ref.to),
+              visible: range,
+            }
+            for (const nodeView of contributed.views)
+              if (
+                nodeView.decorate?.(
+                  ref,
+                  contributed.grouped.includes(nodeView) ? grouped : out,
+                  context,
+                ) === false
+              )
+                skip = true
+            // Other blocks with a container hook hold their lines like quotes.
             if (
-              nodeView.decorate?.(
-                ref,
-                contributed.grouped.includes(nodeView) ? grouped : out,
-                context,
-              ) === false
-            )
-              skip = true
-          // Other blocks with a container hook hold their lines like quotes.
-          if (
-            name !== 'Blockquote' &&
-            name !== 'ListItem' &&
-            contributed.views.some((nodeView) => nodeView.container)
-          ) {
-            const node = ref.node
-            eachLine(doc, ref.from, ref.to, range, (current) => {
-              line(current.from).containers.push(node)
-            })
+              name !== 'Blockquote' &&
+              name !== 'ListItem' &&
+              contributed.views.some((nodeView) => nodeView.container)
+            ) {
+              const node = ref.node
+              eachLine(doc, ref.from, ref.to, range, (current) => {
+                line(current.from).containers.push(node)
+              })
+            }
+          }
+
+          skip = builtIn(ref, range) === false || skip
+        }
+        if (!skip) return
+        // Container syntax stays independent of skipped inline or literal nodes.
+        if (
+          !literal.has('Blockquote') &&
+          lines
+            .get(doc.lineAt(Math.max(ref.from, range.from)).from)
+            ?.containers.some((node) => node.name === 'Blockquote')
+        ) {
+          const pending = [ref.node.cursor(IterMode.IgnoreMounts)]
+          for (let cursor = pending.pop(); cursor; cursor = pending.pop()) {
+            if (!cursor.childAfter(range.from)) continue
+            do {
+              if (cursor.from > range.to) break
+              if (cursor.name === 'QuoteMark') {
+                const current = doc.lineAt(cursor.from)
+                const depth = line(current.from).containers.filter(
+                  (node) => node.name === 'Blockquote',
+                ).length
+                // Quotes nested in literal containers stay literal too.
+                const before = doc.sliceString(current.from, cursor.from)
+                if ((before.match(/>/g)?.length ?? 0) < depth)
+                  builtIn(cursor.node, range)
+              } else pending.push(cursor.node.cursor(IterMode.IgnoreMounts))
+            } while (cursor.nextSibling())
           }
         }
-        const result = builtIn(ref, range)
-        return skip ? false : result
+        return false
       },
     })
   }
@@ -649,12 +676,12 @@ function inline(
           mark('hibi-lp-link', ref.from, ref.to)
         return
       }
-      case 'Image':
-      case 'LinkReference':
       case 'HTMLBlock':
-      case 'HTMLTag':
       case 'CommentBlock':
       case 'ProcessingInstructionBlock':
+      case 'Image':
+      case 'LinkReference':
+      case 'HTMLTag':
       case 'Table':
       case 'Entity':
         // Rendered by later formatted-view slices; shown as source text for now.

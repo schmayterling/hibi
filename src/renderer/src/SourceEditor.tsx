@@ -1385,37 +1385,41 @@ export function SourceEditor({
       for (const { feature } of installed.current)
         if (!kept.some((part) => part.feature === feature))
           failedFeatures.current.add(feature)
-      if (!view.compositionStarted) {
-        view.setState(view.state)
-        return
-      }
       // A composition must keep the note's text: CodeMirror redraws text that
       // differs, which ends the composition, and the IME then starts over
       // beside it. Without the features named, the edit is made again, in the
       // same update. The features leave first, so their extenders do not run.
       if (
-        !edit ||
-        start !== view.state ||
-        kept.length === installed.current.length
-      )
-        return
-      installed.current = kept
-      const reinstall = reconfiguration(
-        view.state,
-        addons.current.reconfigure(featureExtensions(kept, formatted)),
-      )
-      let retry: Transaction
-      try {
-        retry = reinstall.state.update(
-          ...edit.map((part, index) => {
-            const spec = part instanceof Transaction ? editSpec(part) : part
-            return index ? { ...spec, sequential: true } : spec
-          }),
+        view.compositionStarted &&
+        edit &&
+        start === view.state &&
+        kept.length < installed.current.length
+      ) {
+        const reinstall = reconfiguration(
+          view.state,
+          addons.current.reconfigure(featureExtensions(kept, formatted)),
         )
-      } catch {
-        return
+        let retry: Transaction | null = null
+        try {
+          retry = reinstall.state.update(
+            ...edit.map((part, index) => {
+              const spec = part instanceof Transaction ? editSpec(part) : part
+              return index ? { ...spec, sequential: true } : spec
+            }),
+          )
+        } catch {}
+        if (retry) {
+          installed.current = kept
+          view.dispatch([reinstall, retry])
+          return
+        }
       }
-      view.dispatch([reinstall, retry])
+      // Otherwise the input is not applied. A composition ends first, so the
+      // IME does not compose on over text the note does not have.
+      const focused = view.hasFocus
+      if (view.compositionStarted) view.contentDOM.blur()
+      view.setState(view.state)
+      if (focused) view.focus()
     }
     const editor = new EditorView({
       parent: host.current,
@@ -1786,6 +1790,27 @@ export function SourceEditor({
             }
           }),
           failedEditGuard,
+          // Typing read from the DOM is made into an edit here, last, so an
+          // extension that fails while it is made is named from that edit.
+          Prec.lowest(
+            EditorView.inputHandler.of((view, from, to, text, insert) => {
+              try {
+                insert()
+                return false
+              } catch (error) {
+                reject(view, error, [
+                  {
+                    changes: { from, to, insert: text },
+                    selection: { anchor: from + text.length },
+                    userEvent: view.composing
+                      ? 'input.type.compose'
+                      : 'input.type',
+                  },
+                ])
+                return true
+              }
+            }),
+          ),
         ],
       }),
     })

@@ -435,6 +435,183 @@ for (const presentation of ['formatted', 'source'])
     composeOverFailure(presentation, readFailingField),
   )
 
+/** A feature that fails on `Q` while the edit is made: an extender that throws, or a change filter that reads a field that throws. */
+const failingWhileMade = (hook) => (presentation) =>
+  `export default (sdk) => ({ start(context) {
+  const { EditorState, StateField } = sdk.codeMirror.state
+  const { EditorView } = sdk.codeMirror.view
+  context.editor.${register(presentation)}({ id: 'bad', create: () => [
+    ${
+      hook === 'extender'
+        ? `EditorState.transactionExtender.of((transaction) => {
+      if (transaction.docChanged && transaction.newDoc.toString().includes('Q')) throw new Error('made boom')
+      return null
+    })`
+        : `StateField.define({
+      create: () => 0,
+      update(value, transaction) {
+        if (transaction.docChanged && transaction.newDoc.toString().includes('Q')) throw new Error('made boom')
+        return value
+      },
+    }),
+    EditorState.changeFilter.of((transaction) => {
+      transaction.state
+      return true
+    })`
+    },
+    EditorView.editorAttributes.of({ 'data-bad': 'yes' }),
+  ] })
+} })`
+
+for (const presentation of ['formatted', 'source'])
+  for (const hook of ['extender', 'changeFilter'])
+    test(`an addon ${presentation} ${hook} that fails while a composition is made into an edit is removed, and the screen follows the note through the rest of the composition (codemirror)`, {
+      timeout: 120000,
+    }, async (t) => {
+      const { page, pane, errors, cdp } = await open(t, {
+        source: plain,
+        presentation,
+        engine: 'codemirror',
+        code: failingWhileMade(hook),
+      })
+      await caret(page, pane)
+      const converged = () =>
+        page.waitForFunction(
+          (pane) => {
+            const content = document.querySelector(`${pane} .cm-content`)
+            const lines = (text) =>
+              text.split('\n').filter((line) => line.startsWith('end'))
+            return (
+              JSON.stringify(
+                lines(
+                  [...content.querySelectorAll('.cm-line')]
+                    .map((line) => line.textContent)
+                    .join('\n'),
+                ),
+              ) ===
+              JSON.stringify(
+                lines(content.cmTile.root.view.state.doc.toString()),
+              )
+            )
+          },
+          pane,
+          { polling: 100 },
+        )
+      for (const text of ['日', '日Q']) {
+        await cdp.send('Input.imeSetComposition', {
+          text,
+          selectionStart: text.length,
+          selectionEnd: text.length,
+        })
+        await frame(page)
+      }
+      await reported(page, 'bad-ext.bad: made boom')
+      await converged()
+      await cdp.send('Input.insertText', { text: '日Q' })
+      await converged()
+      // The composition after it lands as well.
+      await cdp.send('Input.imeSetComposition', {
+        text: '日本',
+        selectionStart: 2,
+        selectionEnd: 2,
+      })
+      await cdp.send('Input.insertText', { text: '日本語' })
+      await frame(page)
+      await converged()
+      const after = await state(page, pane)
+      t.diagnostic(JSON.stringify({ after, errors }))
+      assert.equal(after.canonical, plain.replace(/end\n$/, 'end日Q日本語\n'))
+      assert.equal(after.view, after.canonical)
+      assert.deepEqual(after.shown, ['end日Q日本語'])
+      assert.equal(await page.locator(`${pane} [data-bad]`).count(), 0)
+      assert.deepEqual(errors, [])
+    })
+
+/** An extender that throws once, on the first edit that leaves a `Q`, so a replay cannot name it. */
+const throwingOnce = (
+  presentation,
+) => `export default (sdk) => ({ start(context) {
+  const { EditorState } = sdk.codeMirror.state
+  const { EditorView } = sdk.codeMirror.view
+  let thrown = false
+  context.editor.${register(presentation)}({ id: 'bad', create: () => [
+    EditorState.transactionExtender.of((transaction) => {
+      if (!thrown && transaction.docChanged && transaction.newDoc.toString().includes('Q')) {
+        thrown = true
+        throw new Error('once boom')
+      }
+      return null
+    }),
+    EditorView.editorAttributes.of({ 'data-bad': 'yes' }),
+  ] })
+} })`
+
+for (const presentation of ['formatted', 'source'])
+  test(`a composed edit that fails without naming an addon ${presentation} feature ends the composition, and the screen follows the note (codemirror)`, {
+    timeout: 120000,
+  }, async (t) => {
+    const { page, pane, errors, cdp } = await open(t, {
+      source: plain,
+      presentation,
+      engine: 'codemirror',
+      code: throwingOnce,
+    })
+    await caret(page, pane)
+    const converged = () =>
+      page.waitForFunction(
+        (pane) => {
+          const content = document.querySelector(`${pane} .cm-content`)
+          const view = content.cmTile.root.view
+          const shown = [...content.querySelectorAll('.cm-line')]
+            .map((line) => line.textContent)
+            .filter((line) => line.startsWith('end'))
+          const lines = view.state.doc
+            .toString()
+            .split('\n')
+            .filter((line) => line.startsWith('end'))
+          return JSON.stringify(shown) === JSON.stringify(lines)
+        },
+        pane,
+        { polling: 100 },
+      )
+    for (const text of ['日', '日Q']) {
+      await cdp.send('Input.imeSetComposition', {
+        text,
+        selectionStart: text.length,
+        selectionEnd: text.length,
+      })
+      await frame(page)
+    }
+    await page
+      .locator(`${pane} .document-notice`)
+      .filter({ hasText: 'once boom' })
+      .waitFor({ timeout: 10000 })
+    await converged()
+    const rejected = await state(page, pane)
+    const ended = await page
+      .locator(`${pane} .cm-content`)
+      .evaluate((content) => !content.cmTile.root.view.compositionStarted)
+    t.diagnostic(JSON.stringify({ rejected, ended, errors }))
+    assert.equal(rejected.canonical, plain.replace(/end\n$/, 'end日\n'))
+    assert.equal(rejected.view, rejected.canonical)
+    assert.equal(ended, true)
+    assert.equal(await page.locator(`${pane} [data-bad]`).count(), 1)
+    // The IME composes on; what it commits lands as shown.
+    await cdp.send('Input.imeSetComposition', {
+      text: '日本',
+      selectionStart: 2,
+      selectionEnd: 2,
+    })
+    await cdp.send('Input.insertText', { text: '日本語' })
+    await frame(page)
+    await converged()
+    const after = await state(page, pane)
+    t.diagnostic(JSON.stringify({ after, errors }))
+    assert.equal(after.view, after.canonical)
+    assert.ok(after.canonical.includes('日本語'))
+    assert.deepEqual(errors, [])
+  })
+
 test('an addon source state field that fails on a pasted edit is removed and the paste is rejected on screen and in the note (codemirror)', {
   timeout: 120000,
 }, async (t) => {
@@ -693,39 +870,35 @@ const failingExtender = (
   ] })
 } })`
 
-test('an addon extender that fails while typed input or a command is made into an edit is rejected, then named and removed (codemirror)', {
-  timeout: 120000,
-}, async (t) => {
-  const { page, pane, errors } = await open(t, {
-    source: plain,
-    presentation: 'source',
-    engine: 'codemirror',
-    code: failingExtender,
+for (const made of ['typing', 'a command'])
+  test(`an addon extender that fails while ${made} is made into an edit is named and removed, and the edit is rejected (codemirror)`, {
+    timeout: 120000,
+  }, async (t) => {
+    const { page, pane, errors } = await open(t, {
+      source: plain,
+      presentation: 'source',
+      engine: 'codemirror',
+      code: failingExtender,
+    })
+    if (made === 'typing') await type(page, pane, ['Z'])
+    else {
+      await caret(page, pane)
+      await page.keyboard.press('F8')
+    }
+    await reported(page, 'bad-ext.bad: extender boom')
+    await page.locator(`${pane} [data-bad]`).waitFor({ state: 'detached' })
+    const rejected = await state(page, pane)
+    t.diagnostic(JSON.stringify({ rejected, errors }))
+    assert.equal(rejected.canonical, plain)
+    assert.equal(rejected.view, rejected.canonical)
+    assert.deepEqual(rejected.shown, ['end'])
+    await type(page, pane, ['Z'])
+    const after = await state(page, pane)
+    assert.equal(after.canonical, plain.replace(/end\n$/, 'endZ\n'))
+    assert.equal(after.view, after.canonical)
+    assert.deepEqual(after.shown, ['endZ'])
+    assert.deepEqual(errors, [])
   })
-  // Typing reaches no edit to replay, so nothing is named.
-  await type(page, pane, ['Z'])
-  const typed = await state(page, pane)
-  t.diagnostic(JSON.stringify({ typed, errors }))
-  assert.equal(typed.canonical, plain)
-  assert.equal(typed.view, typed.canonical)
-  assert.deepEqual(typed.shown, ['end'])
-  await page
-    .locator(`${pane} .document-notice`)
-    .filter({ hasText: 'extender boom' })
-    .waitFor({ timeout: 10000 })
-  assert.equal(await page.locator(`${pane} [data-bad]`).count(), 1)
-  await caret(page, pane)
-  await page.keyboard.press('F8')
-  await reported(page, 'bad-ext.bad: extender boom')
-  await page.locator(`${pane} [data-bad]`).waitFor({ state: 'detached' })
-  await type(page, pane, ['Z'])
-  const after = await state(page, pane)
-  t.diagnostic(JSON.stringify({ after, errors }))
-  assert.equal(after.canonical, plain.replace(/end\n$/, 'endZ\n'))
-  assert.equal(after.view, after.canonical)
-  assert.deepEqual(after.shown, ['endZ'])
-  assert.deepEqual(errors, [])
-})
 
 /** Adds a formatted feature that fails on `Q` to the bundled text extras, in one window. */
 async function addWindowFeature(page) {

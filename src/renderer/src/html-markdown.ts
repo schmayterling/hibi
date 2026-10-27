@@ -96,8 +96,17 @@ function code(text: string) {
   return `${fence}${pad}${text}${pad}${fence}`
 }
 
+/**
+ * A link or image destination that stays one: tabs and line breaks drop out,
+ * as URL parsing drops them; backslashes, which could escape the closing
+ * bracket, are percent-encoded as the export renderer writes them; and
+ * spaces, controls, angle brackets and parentheses take the `<…>` form.
+ */
 function destination(url: string) {
-  return /[\s()<>]/.test(url) ? `<${url.replace(/[<>]/g, encodeURI)}>` : url
+  url = url.replace(/[\t\n\r]/g, '').replace(/\\/g, '%5C')
+  return /[\s()<>\p{Cc}]/u.test(url)
+    ? `<${url.replace(/[<>]/g, encodeURI)}>`
+    : url
 }
 
 /** Inline Markdown of a node's children; `cell` writes breaks as `<br>`. */
@@ -133,9 +142,12 @@ function inlineNode(node: Node, cell: boolean): string {
     }
     case 'IMG': {
       const src = element.getAttribute('src')
-      return src
-        ? `![${literal(element.getAttribute('alt') ?? '')}](${destination(src)})`
-        : ''
+      // A description reads as text: its blank lines must not end the paragraph.
+      const alt = (element.getAttribute('alt') ?? '').replace(
+        /[ \t\r\n\f]+/g,
+        ' ',
+      )
+      return src ? `![${literal(alt)}](${destination(src)})` : ''
     }
     case 'BR':
       return cell ? '<br>' : '  \n'

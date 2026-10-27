@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test, { after, before } from 'node:test'
+import { parser as markdownParser } from '@lezer/markdown'
 import { marked } from 'marked'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { pressShortcut } from './keyboard.mjs'
@@ -570,6 +571,90 @@ test('a leading language marker cannot extend a code fence or swallow following 
     assert.deepEqual(actual, { code: 'hello\n', paragraphs: ['after'] })
   } finally {
     await setFixture(note)
+  }
+})
+
+test('pasted link and image urls stay destinations through line breaks, controls and backslashes', {
+  timeout: 60000,
+}, async (t) => {
+  for (const [name, html, expected, urls] of [
+    [
+      'line break',
+      '<p><a href="a&#10;onclick=x">t</a> tail</p>',
+      '[t](aonclick=x) tail',
+      ['aonclick=x'],
+    ],
+    [
+      'tab and carriage return',
+      '<p><a href="https://x.test/a&#9;b&#13;c">t</a></p>',
+      '[t](https://x.test/abc)',
+      ['https://x.test/abc'],
+    ],
+    [
+      'backslash before the closing angle bracket',
+      '<p><a href="x onclick=y\\">t</a></p>',
+      '[t](<x onclick=y%5C>)',
+      ['x%20onclick=y%5C'],
+    ],
+    [
+      'backslash before the closing parenthesis',
+      '<p><a href="https://x.test/a\\">t</a> b</p>',
+      '[t](https://x.test/a%5C) b',
+      ['https://x.test/a%5C'],
+    ],
+    [
+      'control character',
+      '<p><a href="a&#1;b">t</a></p>',
+      '[t](<a\u0001b>)',
+      ['a%01b'],
+    ],
+    [
+      'image source and description',
+      '<p><img src="pic&#10;.png" alt="a&#10;&#10;b"> c</p>',
+      '![a b](pic.png) c',
+      ['pic.png'],
+    ],
+  ]) {
+    await t.test(name, async () => {
+      try {
+        await clipboardEvent('paste', note.length, note.length, {
+          'text/html': html,
+        })
+        await waitForAsync(
+          page,
+          async (length) =>
+            (await window.hibi.getDocument()).markdown.length > length,
+          note.length,
+        )
+        const inserted = (await markdown()).slice(note.length)
+        assert.equal(inserted, expected)
+        // The formatted view reads a link or image, not an html tag.
+        const nodes = new Set()
+        markdownParser.parse(inserted).iterate({
+          enter: ({ name }) => {
+            nodes.add(name)
+          },
+        })
+        assert.ok(nodes.has('Link') || nodes.has('Image'), inserted)
+        assert.ok(!nodes.has('HTMLTag'), inserted)
+        // Exports render the same destination.
+        const rendered = marked.parse(inserted)
+        const actual = await page.evaluate(
+          (rendered) =>
+            [
+              ...new DOMParser()
+                .parseFromString(rendered, 'text/html')
+                .querySelectorAll('a, img'),
+            ].map(
+              (node) => node.getAttribute('href') ?? node.getAttribute('src'),
+            ),
+          rendered,
+        )
+        assert.deepEqual(actual, urls)
+      } finally {
+        await setFixture(note)
+      }
+    })
   }
 })
 

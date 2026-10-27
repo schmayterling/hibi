@@ -114,7 +114,7 @@ export function compatibleAddonManifest(manifest: {
 /** Metadata used to list an addon before its code loads. */
 export type AddonCapability =
   | 'ui'
-  /** Legacy Tiptap SDK, available only with the previous formatted editor. */
+  /** @deprecated Tiptap SDK for the previous editor. Use formatted for the CodeMirror formatted view. */
   | 'rich'
   /** CodeMirror formatted editor and Lezer Markdown SDK (API 3). */
   | 'formatted'
@@ -162,7 +162,7 @@ export type AddonManifest = {
    */
   capabilities?: readonly AddonCapability[]
   /** Command activation needs inert command descriptors. View activation is for editor behavior, not schemas. */
-  activation?: 'command' | 'source' | 'rich'
+  activation?: 'command' | 'source' | 'rich' | 'formatted'
   commands?: readonly AddonCommandDescriptor[]
   /** Inert ownership metadata protects source even when an installed addon has never been loaded. */
   syntax?: readonly AddonSyntaxDescriptor[]
@@ -210,6 +210,11 @@ export type FormattedNode = SyntaxNodeRef
 export type FormattedDecorations = {
   /** Attributes, such as `class`, for text in the node. */
   mark(from: number, to: number, attributes: Record<string, string>): void
+  /**
+   * Text that reads as a link, such as a link's label: one element with the
+   * link role and style, whole around the other decorations in it.
+   */
+  link(from: number, to: number, attributes?: Record<string, string>): void
   /**
    * Markdown syntax: hidden and atomic, or an editable marker while the node
    * is revealed. Stays on one line.
@@ -278,8 +283,9 @@ export type FormattedContainer = {
   marker?: boolean
 }
 
-/** Rendering for syntax nodes by name. */
+/** Rendering for syntax nodes by name or Lezer group. */
 export type FormattedNodeView = {
+  /** Names of the nodes it renders, or of their Lezer groups, such as `LeafBlock`. */
   nodes: readonly string[]
   /** Local registerSyntax id controlling this renderer. Disabled nodes show literal source. */
   feature?: string
@@ -311,7 +317,7 @@ export type FormattedNodeView = {
 /** Per formatted editor; removed when its addon stops. */
 export type FormattedExtension = {
   id: string
-  create: (context?: EditorExtensionContext) => Extension | Promise<Extension>
+  create: (context: EditorExtensionContext) => Extension | Promise<Extension>
 }
 
 export type SourceExtension = {
@@ -320,6 +326,7 @@ export type SourceExtension = {
   create: (context?: EditorExtensionContext) => Extension | Promise<Extension>
 }
 
+/** @deprecated Tiptap-only attachment. Use FormattedExtension for the CodeMirror formatted view. */
 export type RichExtension = {
   id: string
   /** Attach editor behavior without rebuilding its schema or undo history. */
@@ -436,9 +443,19 @@ export type AddonSlashCommand = {
   label: string
   description: string
   keywords?: string
+  /** Receives the complete note, read again whenever the menu changes. */
   when?: (source: string) => boolean
+  /** Checked instead of `when`, reading only the parts of the note it asks for. */
+  available?: (note: AddonNoteReader) => boolean
   /** Receives the complete note with the slash query removed. Null cancels. */
   transform: (source: string) => string | null
+}
+
+/** A note read in parts. Positions are UTF-16 code units. */
+export type AddonNoteReader = {
+  readonly length: number
+  /** The text from `from` to `to`, within the note. */
+  slice: (from: number, to: number) => string
 }
 
 export type ExportResult = { path: string; pages: number }
@@ -509,10 +526,19 @@ export type MarkdownFlavor = {
   /** False when disabled syntax has a lossless built-in fallback, such as a code fence. */
   readOnlyWhenDisabled?: boolean
   markedOptions?: { gfm?: boolean; breaks?: boolean }
-  /** Legacy Tiptap schema extensions; ignored by the CodeMirror formatted editor. */
+  /** @deprecated Legacy Tiptap schema extensions. Use syntax and render for the CodeMirror formatted editor. */
   richExtensions?: readonly AnyExtension[]
-  /** Lezer Markdown extensions for the formatted view and source highlighting (API 3). */
+  /**
+   * Lezer Markdown extensions for the formatted view and source highlighting (API 3).
+   * New node names must be unique across the configured grammar. Use your addon id
+   * as a prefix; declarations colliding with bundled or other addon nodes are rejected.
+   */
   syntax?: MarkdownConfig | readonly MarkdownConfig[]
+  /**
+   * True only when inline parsers start at backslash, backtick, & * _ ! [ ] < > ~ ^ $ : =,
+   * line breaks, or core URL/email starts. Preserves plain-text run skipping.
+   */
+  inlineStops?: boolean
   /**
    * Viewport-bounded inline renderers and cached block layout (API 3).
    * If a render callback throws, Hibi reports it and removes this flavor's
@@ -959,6 +985,7 @@ export type AddonContext = {
     registerContextActionProvider: (
       provider: import('../shared/editor-interactions').EditorContextActionProvider,
     ) => Promise<() => void>
+    /** @deprecated Tiptap-only. Use registerFormatted for the CodeMirror formatted editor. */
     registerRich: (extension: RichExtension) => () => void
     registerMarkdown: (extension: MarkdownExtension) => () => void
     registerSource: (extension: SourceExtension) => () => void

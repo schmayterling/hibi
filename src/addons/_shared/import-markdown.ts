@@ -5,6 +5,7 @@ import {
   type ImportFile,
   importTextData,
 } from '../../shared/imports.ts'
+import { blockMarkdown } from '../../shared/marked-blocks.ts'
 
 const decoder = new TextDecoder('utf-8', { fatal: true })
 export const importText = (file: ImportEntry) =>
@@ -13,7 +14,7 @@ export const textFile = (path: string, text: string): ImportFile => ({
   path,
   data: new TextEncoder().encode(text),
 })
-const markdown = new Marked()
+const markdown = new Marked({}, blockMarkdown)
 
 /** Keep code fences and inline code literal when translating note links. */
 export function outsideCode(

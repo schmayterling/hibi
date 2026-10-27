@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { EditorState, StateEffect, Transaction } from '@codemirror/state'
+import {
+  EditorSelection,
+  EditorState,
+  StateEffect,
+  StateField,
+  Transaction,
+} from '@codemirror/state'
 import {
   createSourceSession,
   sourceEditTransaction,
 } from '../src/renderer/src/source-session.ts'
 import { DocumentSession } from '../src/shared/document-session.ts'
+import { runSourceHistory } from '../src/shared/source-history.ts'
 import { sourceEditorText } from './source-editor-text.mjs'
 
 function fixture(source, options = {}, extensions = []) {
@@ -22,7 +29,7 @@ function fixture(source, options = {}, extensions = []) {
       ...options,
     },
   )
-  const attach = (viewId) => {
+  const attach = (viewId, reject) => {
     const bridge = createSourceSession(session, viewId)
     const selection = bridge.selection()
     const view = {
@@ -42,7 +49,7 @@ function fixture(source, options = {}, extensions = []) {
         })
       },
     }
-    const dispose = bridge.attach(view)
+    const dispose = bridge.attach(view, reject)
     return {
       bridge,
       view,
@@ -53,6 +60,52 @@ function fixture(source, options = {}, extensions = []) {
   }
   return { session, operations, errors, observations, attach }
 }
+test('unmounted panes keep independent places mapped through edits without full-source reads', () => {
+  const f = fixture('a\r\n😀b\r\n'.repeat(60000), {}, [
+    EditorState.allowMultipleSelections.of(true),
+  ])
+  const source = f.attach('source'),
+    other = f.attach('other')
+  source.dispatch({
+    selection: EditorSelection.create([
+      EditorSelection.range(102, 106),
+      EditorSelection.cursor(120),
+    ]),
+  })
+  other.dispatch({ selection: { anchor: 202, head: 198 } })
+  source.bridge.keepPlace(source.view, 90, -7)
+  other.bridge.keepPlace(other.view, 180, -3)
+  source.dispose()
+  other.dispose()
+  f.session.releaseView('source')
+  f.session.releaseView('other')
+  f.session.counters(true)
+  f.session.edit([{ from: 0, to: 0, insert: 'é\r\n' }], 'visual', 'prefix')
+  f.session.undo()
+  f.session.redo()
+  const bridge = createSourceSession(f.session, 'source'),
+    place = bridge.place(),
+    second = createSourceSession(f.session, 'other').place()
+  assert.deepEqual(
+    place.selection.ranges.map(({ anchor, head }) => ({ anchor, head })),
+    [
+      { anchor: 104, head: 108 },
+      { anchor: 122, head: 122 },
+    ],
+  )
+  assert.equal(place.top, 92)
+  assert.equal(place.margin, -7)
+  assert.equal(second.selection.main.anchor, 204)
+  assert.equal(second.selection.main.head, 200)
+  assert.equal(second.top, 182)
+  assert.equal(second.margin, -3)
+  assert.equal(bridge.place(), null)
+  assert.equal(f.session.counters().materializations, 0)
+  assert.ok(f.session.counters().sourceUnitsRead < 1000)
+  assert.deepEqual(f.errors, [])
+  f.session.dispose()
+})
+
 test('addon admission uses exact ranges and rejects native vetoes without flattening', () => {
   for (const extensions of [
     [],
@@ -371,6 +424,103 @@ test('a shown source view gets the caret immediate echoes would have left', () =
     assert.deepEqual(run(scenario, true), live, JSON.stringify(scenario.steps))
   }
 })
+for (const hidden of [false, true]) {
+  for (const failure of ['before update', 'after update', 'state update']) {
+    test(`a ${hidden ? 'hidden' : 'shown'} view failing ${failure} rejects edits and history until rebuilt`, (t) => {
+      const f = fixture('start')
+      t.after(() => f.session.dispose())
+      const source = f.attach('source')
+      const formatted = createSourceSession(f.session, 'formatted')
+      let fail = true
+      const rejected = []
+      const shown = {
+        state: EditorState.create({
+          doc: sourceEditorText(f.session.snapshot()),
+          extensions:
+            failure === 'state update'
+              ? StateField.define({
+                  create: () => null,
+                  update(value, transaction) {
+                    if (fail && transaction.docChanged) {
+                      fail = false
+                      throw new Error('Fixture rejected the echo.')
+                    }
+                    return value
+                  },
+                })
+              : [],
+        }),
+        update(transactions) {
+          const reject = fail && transactions.some((tr) => tr.docChanged)
+          if (reject) fail = false
+          if (reject && failure === 'before update')
+            throw new Error('Fixture rejected the echo.')
+          for (const transaction of transactions) this.state = transaction.state
+          if (reject && failure === 'after update')
+            throw new Error('Fixture rejected the echo.')
+        },
+        setState(state) {
+          this.state = state
+        },
+      }
+      const detach = formatted.attach(shown, (error) =>
+        rejected.push(error.message),
+      )
+      formatted.setVisible(!hidden)
+      const type = (insert) =>
+        source.dispatch({
+          changes: { from: source.view.state.doc.length, insert },
+          userEvent: 'input.type',
+        })
+      type('!')
+      // Showing a hidden view must isolate the same failure as an immediate echo.
+      formatted.setVisible(true)
+      assert.deepEqual(rejected, ['Fixture rejected the echo.'])
+      assert.equal(formatted.isCurrent(), false)
+      type('?')
+      // A failed draw is redrawn at the accepted echo; a failed state update
+      // never reaches the view.
+      assert.equal(
+        shown.state.doc.toString(),
+        failure === 'state update' ? 'start' : 'start!',
+      )
+      assert.equal(f.session.snapshot().materialize(), 'start!?')
+      assert.throws(
+        () =>
+          formatted.dispatch(
+            [shown.state.update({ changes: { from: 0, insert: 'x' } })],
+            shown,
+          ),
+        /synchronizing/,
+      )
+      // Local selection and effects must not publish positions from stale text.
+      const selection = f.session.selection('formatted')
+      formatted.dispatch(
+        [shown.state.update({ selection: { anchor: 1 } })],
+        shown,
+      )
+      assert.equal(shown.state.selection.main.head, 1)
+      assert.deepEqual(f.session.selection('formatted'), selection)
+      assert.equal(formatted.undo(), false)
+      assert.equal(runSourceHistory(shown, 'undo'), false)
+      assert.equal(f.session.snapshot().materialize(), 'start!?')
+      assert.equal(source.bridge.undo(), true)
+      const undone = f.session.snapshot().materialize()
+      assert.equal(formatted.redo(), false)
+      assert.equal(runSourceHistory(shown, 'redo'), false)
+      assert.equal(f.session.snapshot().materialize(), undone)
+      assert.equal(source.bridge.redo(), true)
+      assert.equal(f.session.snapshot().materialize(), 'start!?')
+      formatted.keepPlace(shown, 0, -7)
+      detach()
+      const retry = createSourceSession(f.session, 'formatted')
+      assert.equal(retry.place(), null)
+      assert.equal(retry.snapshot(), f.session.snapshot())
+      assert.deepEqual(rejected, ['Fixture rejected the echo.'])
+      assert.deepEqual(f.errors, [])
+    })
+  }
+}
 
 test('reads, internal effects and stale input keep a hidden source replica exact', () => {
   const f = fixture('alpha\r\nbeta')
@@ -386,15 +536,19 @@ test('reads, internal effects and stale input keep a hidden source replica exact
     surface.view,
   )
   assert.equal(surface.view.state.doc.toString(), 'alpha\nbeta')
+  assert.equal(surface.bridge.isCurrent(), false)
   const selection = f.session.selection()
   surface.dispatch({ selection: { anchor: 1 } })
   assert.equal(f.session.selection(), selection)
   assert.throws(() => surface.dispatch(type(0, 'x', 0)), /synchronizing/)
   assert.equal(f.session.snapshot().materialize(), '# alpha\r\nbeta')
   assert.equal(surface.view.state.doc.toString(), '# alpha\nbeta')
+  assert.equal(surface.bridge.isCurrent(), true)
   assert.equal(f.observations.length, 3)
   f.session.edit([{ from: 2, to: 7, insert: 'ALPHA' }], 'visual', 'caps')
+  assert.equal(surface.bridge.isCurrent(), false)
   assert.equal(surface.bridge.snapshot(), f.session.snapshot())
+  assert.equal(surface.bridge.isCurrent(), true)
   assert.equal(surface.view.state.doc.toString(), '# ALPHA\nbeta')
   assert.equal(f.operations.length, 2)
   assert.deepEqual(f.errors, [])
@@ -547,6 +701,97 @@ test('ENG24: 100k-line local input retains native CM Text and bounded source wor
   assert.equal(surface.view.state.doc.length, 501000)
   assert.equal(f.session.snapshot().utf16Length, 601000)
   assert.ok(counters.unitsScanned < 1_000_000, JSON.stringify(counters))
+  assert.deepEqual(f.errors, [])
+  surface.dispose()
+  f.session.dispose()
+})
+
+test('a view update that throws while drawing is redrawn at the accepted state', () => {
+  const f = fixture('one\r\ntwo\r\n')
+  const rejected = []
+  const surface = f.attach(undefined, (error) => rejected.push(error.message))
+  const other = f.attach('other')
+  const resets = []
+  const draw = surface.view.update
+  // CodeMirror sets its new state before drawing, so a draw can fail after it.
+  let failure = 'after'
+  surface.view.update = function (transactions) {
+    const mode = failure
+    failure = ''
+    if (mode !== 'before') draw.call(this, transactions)
+    if (mode) throw new Error(`draw failed ${mode}`)
+  }
+  surface.view.setState = function (state) {
+    resets.push(state)
+    this.state = state
+  }
+  surface.dispatch(type(3, 'X', 1))
+  assert.equal(f.session.snapshot().materialize(), 'oneX\r\ntwo\r\n')
+  assert.equal(surface.view.state.doc.toString(), 'oneX\ntwo\n')
+  assert.equal(resets.at(-1), surface.view.state)
+  surface.dispatch(type(4, 'Y', 2))
+  failure = 'before'
+  surface.dispatch(type(5, 'Z', 3))
+  assert.equal(f.session.snapshot().materialize(), 'oneXYZ\r\ntwo\r\n')
+  assert.equal(surface.view.state.doc.toString(), 'oneXYZ\ntwo\n')
+  assert.equal(resets.at(-1), surface.view.state)
+  // Canonical edits from another view reach a failing view the same way,
+  // which then takes no edits or history until it is rebuilt.
+  failure = 'after'
+  other.dispatch(type(10, '!', 600))
+  assert.equal(f.session.snapshot().materialize(), 'oneXYZ\r\ntwo!\r\n')
+  assert.equal(surface.view.state.doc.toString(), 'oneXYZ\ntwo!\n')
+  assert.equal(resets.length, 3)
+  assert.deepEqual(
+    f.errors.map((error) => error.message),
+    ['draw failed after', 'draw failed before'],
+  )
+  assert.deepEqual(rejected, ['draw failed after'])
+  assert.throws(() => surface.dispatch(type(0, '?', 700)), /synchronizing/)
+  assert.equal(surface.bridge.undo(), false)
+  // Its selection still moves, and a failed draw of it is redrawn too.
+  failure = 'before'
+  assert.throws(
+    () => surface.dispatch({ selection: { anchor: 0 } }),
+    /draw failed before/,
+  )
+  assert.equal(resets.length, 4)
+  assert.equal(surface.view.state.selection.main.head, 0)
+  surface.dispose()
+  const rebuilt = f.attach()
+  rebuilt.bridge.undo()
+  rebuilt.bridge.undo()
+  assert.equal(f.session.snapshot().materialize(), 'one\r\ntwo\r\n')
+  assert.equal(rebuilt.view.state.doc.toString(), 'one\ntwo\n')
+  assert.equal(other.view.state.doc.toString(), 'one\ntwo\n')
+  rebuilt.bridge.redo()
+  assert.equal(rebuilt.view.state.doc.toString(), 'oneXYZ\ntwo\n')
+  assert.equal(resets.length, 4)
+  assert.deepEqual(rejected, ['draw failed after'])
+  rebuilt.dispose()
+  other.dispose()
+  f.session.dispose()
+})
+
+test('an edit the session rejects leaves the view at the canonical text', () => {
+  let reject = false
+  const f = fixture('ab\r\n', {
+    admit: () => {
+      if (reject) throw new Error('rejected')
+    },
+  })
+  const surface = f.attach()
+  const resets = []
+  surface.view.setState = (state) => resets.push(state)
+  reject = true
+  assert.throws(() => surface.dispatch(type(2, 'X', 1)), /rejected/)
+  assert.equal(f.session.snapshot().materialize(), 'ab\r\n')
+  assert.equal(surface.view.state.doc.toString(), 'ab\n')
+  reject = false
+  surface.dispatch(type(2, 'Y', 2))
+  assert.equal(f.session.snapshot().materialize(), 'abY\r\n')
+  assert.equal(surface.view.state.doc.toString(), 'abY\n')
+  assert.deepEqual(resets, [])
   assert.deepEqual(f.errors, [])
   surface.dispose()
   f.session.dispose()

@@ -53,6 +53,7 @@ test('native search covers all notes and giant sources while accepting draft edi
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
   }, workspace)
   const page = await app.firstWindow()
+  await waitForDocumentEditor(app, page)
   await page.evaluate(() => window.hibi.openWorkspace())
   const { target } = await page.evaluate(() =>
     window.hibi.getWorkspaceChangeSnapshot(),

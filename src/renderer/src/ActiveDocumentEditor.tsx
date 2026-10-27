@@ -122,21 +122,6 @@ export function ActiveDocumentEditor({
   const deferredSource = markdown && largeOpening(documentRuntime, document)
   const sourceFirst = markdown && preferSourceOpening(documentRuntime, document)
   const source = markdown && !deferredSource ? document.markdown : ''
-  const unsupported = useMemo(() => {
-    if (!markdown || deferredSource) return false
-    if (needsOwnedSource(source, manifests, enabledAddons)) return true
-    if (!protectionFlavors.length) return false
-    const body = projectMarkdown(source, props.markdownExtensions).content
-    return protectionFlavors.some((flavor) => flavorMatches(flavor, body))
-  }, [
-    markdown,
-    deferredSource,
-    source,
-    manifests,
-    enabledAddons,
-    protectionFlavors,
-    props.markdownExtensions,
-  ])
   useEffect(() => {
     if (!markdown || deferredSource) return
     // Display-only flavor detection can wait for typing to pause.
@@ -157,6 +142,9 @@ export function ActiveDocumentEditor({
             .filter((flavor) => flavor.kind === 'syntax')
             .map((flavor) => flavor.name),
         ].join(' + ')
+        const unsupported =
+          needsOwnedSource(source, manifests, enabledAddons) ||
+          protectionFlavors.some((flavor) => detected.includes(flavor))
         onFlavorStatus({ label, unsupported })
       },
       document.tabId,
@@ -170,7 +158,9 @@ export function ActiveDocumentEditor({
     knownFlavors,
     chosenFlavors,
     flavorChoice,
-    unsupported,
+    manifests,
+    enabledAddons,
+    protectionFlavors,
     onFlavorStatus,
   ])
   return (

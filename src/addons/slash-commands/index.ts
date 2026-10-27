@@ -25,8 +25,19 @@ export default defineAddon({
     })
     context.editor.registerSource({
       id: 'menu',
-      create: async () =>
-        (await import('./source')).sourceSlashCommands(context),
+      async create() {
+        const [{ sourceSlashCommands }, { frontmatterBounds }] =
+          await Promise.all([
+            import('./source'),
+            import('../../renderer/src/formatted-frontmatter'),
+          ])
+        return [
+          frontmatterBounds,
+          sourceSlashCommands(context, undefined, (state) =>
+            state.field(frontmatterBounds, false),
+          ),
+        ]
+      },
     })
   },
 })

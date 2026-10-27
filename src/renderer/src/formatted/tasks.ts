@@ -1,46 +1,14 @@
 import type { EditorState, TransactionSpec } from '@codemirror/state'
 import { type EditorView, WidgetType } from '@codemirror/view'
 import type { SyntaxNode } from '@lezer/common'
-import {
-  type BlockContext,
-  type LeafBlock,
-  type LeafBlockParser,
-  type MarkdownConfig,
-  TaskList,
-} from '@lezer/markdown'
+import { TaskList } from '@lezer/markdown'
+import { decodeHTMLStrict } from 'entities'
+import { wikiText } from '../../../addons/markdown/formatted-syntax.ts'
+import { EmptyTask } from '../../../shared/markdown-extra-syntax.ts'
 import type { FormattedContribution } from '../formatted-contributions.ts'
 import './tasks.css'
 
-/** Lezer's task parser, for a marker with nothing after it on its line. */
-class EmptyTaskParser implements LeafBlockParser {
-  nextLine() {
-    return false
-  }
-  finish(cx: BlockContext, leaf: LeafBlock) {
-    cx.addLeafElement(
-      leaf,
-      cx.elt('Task', leaf.start, leaf.start + leaf.content.length, [
-        cx.elt('TaskMarker', leaf.start, leaf.start + 3),
-        ...cx.parser.parseInline(leaf.content.slice(3), leaf.start + 3),
-      ]),
-    )
-    return true
-  }
-}
-
-/** `- [ ]` alone on its line is a task too; GFM's syntax needs text after the marker. */
-export const EmptyTask: MarkdownConfig = {
-  parseBlock: [
-    {
-      name: 'EmptyTask',
-      leaf: (cx, leaf) =>
-        /^\[[ xX]\]$/.test(leaf.content) && cx.parentType().name === 'ListItem'
-          ? new EmptyTaskParser()
-          : null,
-      after: 'SetextHeading',
-    },
-  ],
-}
+export { EmptyTask } from '../../../shared/markdown-extra-syntax.ts'
 
 /** Check or uncheck the task marker starting at `pos` with one source edit. */
 export function toggleTask(
@@ -98,6 +66,69 @@ export class TaskWidget extends WidgetType {
   }
 }
 
+/** Syntax whose text the formatted view does not show: an inline link's destination and title, images, html. */
+const unshown = new Set([
+  'URL',
+  'LinkTitle',
+  'LinkLabel',
+  'Image',
+  'HTMLTag',
+  'Comment',
+  'ProcessingInstruction',
+])
+
+/**
+ * The task's text after `from` as the formatted view shows it, for its
+ * checkbox's name: without Markdown markers, a link's text only, entities as
+ * their characters. Like outline labels, it reads at most 512 characters.
+ */
+function taskText(state: EditorState, task: SyntaxNode, from: number) {
+  const end = Math.min(task.to, from + 512)
+  let text = ''
+  let at = from
+  /** Add the text up to `to`, then `insert` for the node there, and go past the node. */
+  const take = (node: SyntaxNode, insert = '') => {
+    if (node.from > at) text += state.sliceDoc(at, Math.min(node.from, end))
+    text += insert
+    at = node.to
+  }
+  const visit = (node: SyntaxNode | null) => {
+    for (; node && node.from < end; node = node.nextSibling) {
+      if (node.to <= at) continue
+      const { name } = node
+      // Reference links and images show as written.
+      if (
+        (name === 'Link' || name === 'Image') &&
+        state.sliceDoc(node.to - 1, node.to) !== ')'
+      )
+        continue
+      if (
+        /Mark(er)?$/.test(name) ||
+        // Autolinks and bare URLs show their URL.
+        (unshown.has(name) && !(name === 'URL' && node.parent?.name !== 'Link'))
+      )
+        take(node)
+      else if (name === 'Escape')
+        take(node, state.sliceDoc(node.to - 1, node.to))
+      else if (name === 'WikiLink') {
+        const label = node.getChild('WikiAlias') ?? node.getChild('WikiTarget')
+        take(
+          node,
+          node.to <= end
+            ? decodeHTMLStrict(label?.tree?.prop(wikiText) ?? '')
+            : '',
+        )
+      } else if (name === 'HardBreak') take(node, ' ')
+      else if (name === 'Entity')
+        take(node, decodeHTMLStrict(state.sliceDoc(node.from, node.to)))
+      else visit(node.firstChild)
+    }
+  }
+  visit(task.firstChild)
+  if (end > at) text += state.sliceDoc(at, end)
+  return text.replace(/\s+/g, ' ').trim()
+}
+
 /** The item's first block, which a task marker must start. */
 function firstBlock(item: SyntaxNode) {
   // A lookup after the list marker, not a walk over the item's children.
@@ -126,7 +157,11 @@ export const contribution: FormattedContribution = {
         // A marker after the item's first block is text, as in GitHub.
         const task = node.node.parent
         const item = task?.parent
-        if (item?.name !== 'ListItem' || firstBlock(item)?.from !== task?.from)
+        if (
+          !task ||
+          item?.name !== 'ListItem' ||
+          firstBlock(item)?.from !== task.from
+        )
           return false
         const line = state.doc.lineAt(node.from)
         const rest = state.sliceDoc(node.to, line.to)
@@ -137,7 +172,7 @@ export const contribution: FormattedContribution = {
           node.to + space,
           new TaskWidget(
             /[xX]/.test(state.sliceDoc(node.from + 1, node.from + 2)),
-            rest.slice(space).trim(),
+            taskText(state, task, node.to),
           ),
         )
         return false

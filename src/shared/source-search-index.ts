@@ -1,3 +1,4 @@
+import { foldSearchText } from './search-fold.ts'
 import {
   acceptedStorageChange,
   type SourceSnapshot,
@@ -23,6 +24,7 @@ export class SourceSearchIndex {
   readonly #query: string
   readonly #options: LiteralSearchOptions
   readonly #checkpoints: RankedMatch[] = []
+  readonly #highlightStarts: number[] = [0]
   #first: RankedMatch | null = null
   #last: RankedMatch | null = null
   #total = 0
@@ -50,11 +52,19 @@ export class SourceSearchIndex {
       checkpoints: this.#checkpoints.length,
     })
   }
+  highlightStarts(): readonly number[] {
+    return this.#highlightStarts
+  }
   *build() {
     if (this.#complete) return this.state()
     this.#checkpoints.length = 0
     this.#total = 0
     this.#first = this.#last = null
+    this.#highlightStarts.length = 1
+    const query = this.#query.normalize('NFKD')
+    const margin =
+      (this.#options.caseSensitive ? query : foldSearchText(query)).length * 2
+    let highlightScan = 0
     for (const batch of searchSourceLiteral(
       this.#source,
       this.#query,
@@ -65,6 +75,14 @@ export class SourceSearchIndex {
         this.#first ??= ranked
         this.#last = ranked
         if (this.#total % 1024 === 0) this.#checkpoints.push(ranked)
+      }
+      if (batch.scanned - highlightScan >= 8192) {
+        // Restart after the last match, retaining any unfinished query prefix.
+        let from = Math.max(this.#last?.match.to ?? 0, batch.scanned - margin)
+        const raw = this.#source.editorToRaw(from)!
+        if (!this.#source.isEditBoundary(raw)) from--
+        this.#highlightStarts.push(from)
+        highlightScan = batch.scanned
       }
       yield Object.freeze({ scanned: batch.scanned, total: this.#total })
     }

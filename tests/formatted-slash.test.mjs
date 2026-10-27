@@ -240,3 +240,55 @@ test('disabling slash removes its formatted menu and re-enabling preserves the d
   await menu().waitFor()
   assert.deepEqual(errors, [])
 })
+
+test('replacing a focused table preserves selection with slash disabled', {
+  timeout: 30000,
+}, async () => {
+  const start = errors.length
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  await page.locator('#addon-slash-commands').uncheck()
+  await page.getByRole('button', { name: 'Back to app', exact: true }).click()
+  assert.equal(await page.locator('.slash-menu').count(), 0)
+  for (const [source, head] of [
+    ['/h2', 3],
+    ['q  r', 1],
+  ]) {
+    await set('| a | b |\n| - | - |\n| beta | end |\n\nafter')
+    await page.locator('.hibi-lp-table td', { hasText: 'beta' }).click()
+    await page.locator('.hibi-lp-cell-editor .cm-content').waitFor()
+    await page.evaluate(
+      ({ source, head }) => {
+        const view = document.querySelector('.rich-pane .cm-content').cmTile
+          .root.view
+        view.focus()
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: source },
+          selection: { anchor: head },
+          userEvent: 'input.addon',
+        })
+      },
+      { source, head },
+    )
+    await matches(source)
+    await page.evaluate(() => new Promise(requestAnimationFrame))
+    assert.deepEqual(
+      await page.evaluate(() => {
+        const view = document.querySelector('.rich-pane .cm-content').cmTile
+          .root.view
+        const { anchor, head } = view.state.selection.main
+        return [
+          anchor,
+          head,
+          document.querySelector('.hibi-lp-cell-editor') !== null,
+        ]
+      }),
+      [head, head, false],
+    )
+  }
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  await page.locator('#addon-slash-commands').check()
+  await page.getByRole('button', { name: 'Back to app', exact: true }).click()
+  assert.deepEqual(errors.slice(start), [])
+})

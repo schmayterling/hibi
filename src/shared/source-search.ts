@@ -1,3 +1,4 @@
+import { foldSearchText } from './search-fold.ts'
 import type { SourceSnapshot } from './source-buffer.ts'
 import { normalizedChunks } from './source-projection.ts'
 
@@ -24,7 +25,7 @@ export function* searchSourceLiteral(
     throw new Error('Find text exceeds the 65,536-character limit.')
   const normalize = options.caseSensitive
     ? (text: string) => text.normalize('NFKD')
-    : (text: string) => text.normalize('NFKD').toLowerCase()
+    : (text: string) => foldSearchText(text.normalize('NFKD'))
   const needle = normalize(query)
   if (needle.length > 65536)
     throw new Error('Normalized find text exceeds the 65,536-character limit.')

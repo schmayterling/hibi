@@ -12,21 +12,28 @@ test('575 kb source-first samples record real capability and continue to editabl
   )
   // Keep provenance and traces for inspection alongside the benchmark report.
   t.diagnostic(directory)
-  await promisify(execFile)(process.execPath, [
-    'scripts/benchmark-editors.mjs',
-    '--runs',
-    '2',
-    '--keys',
-    '2',
-    '--scroll-frames',
-    '2',
-    '--sizes',
-    '575kb,100kb',
-    '--fixtures',
-    'prose',
-    '--out',
-    directory,
-  ])
+  const env = { ...process.env }
+  delete env.GITHUB_ACTIONS
+  delete env.HIBI_TEST_SHOW_WINDOWS
+  await promisify(execFile)(
+    process.execPath,
+    [
+      'scripts/benchmark-editors.mjs',
+      '--runs',
+      '2',
+      '--keys',
+      '2',
+      '--scroll-frames',
+      '2',
+      '--sizes',
+      '575kb,100kb',
+      '--fixtures',
+      'prose',
+      '--out',
+      directory,
+    ],
+    { env },
+  )
   const report = JSON.parse(
     await readFile(join(directory, 'results.json'), 'utf8'),
   )
@@ -83,12 +90,21 @@ test('575 kb source-first samples record real capability and continue to editabl
       )
       assert.equal(sample.scroll.requestedPx, 3600)
       assert.ok(sample.scroll.actualPx > 0)
-      assert.equal(sample.scroll.frames.length, 2)
-      assert.equal(sample.scroll.mainThreadPerFrameMs, sample.scroll.taskMs / 2)
+      assert.equal(sample.scroll.passes.length, 3)
+      assert.equal(sample.scroll.frames.length, 6)
+      for (const pass of [sample.scroll.first, ...sample.scroll.passes]) {
+        assert.equal(pass.frames.length, 2)
+        assert.equal(pass.mainThreadPerFrameMs, pass.taskMs / 2)
+        assert.equal(typeof pass.settled, 'boolean')
+      }
     }
   }
   const table = await readFile(join(directory, 'table.md'), 'utf8')
   assert.ok(table.includes('unavailable'))
+  assert.ok(table.includes('codemirror / tiptap per pair'))
+  const [pair] = report.pairs.filter(({ size }) => size === '100kb')
+  assert.equal(pair.pairs, 2)
+  assert.equal(pair.ratios.scrollMainThreadPerFrameMs.n, 2)
   assert.equal(
     report.status,
     report.samples.some(({ status }) => status === 'unavailable')

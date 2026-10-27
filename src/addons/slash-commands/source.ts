@@ -4,14 +4,23 @@ import { type EditorState, Prec, Transaction } from '@codemirror/state'
 import { EditorView, ViewPlugin } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import { isMarkdownDocument } from '../../shared/document-types'
-import { readFrontmatter } from '../../shared/frontmatter'
 import type { AddonContext } from '../api'
 import { maximumSlashQueryUnits, slashQuery } from './commands'
 import { createSlashMenu } from './menu'
 
+type FrontmatterReader = (state: EditorState) =>
+  | {
+      end: number
+      open: boolean
+      closer: number
+      searched: number
+    }
+  | undefined
+
 function current(
   view: EditorView,
   formattedTree?: (state: EditorState) => Tree | null,
+  sourceBounds?: FrontmatterReader,
 ) {
   const formatted = Boolean(formattedTree)
   const selection = view.state.selection.main
@@ -73,17 +82,23 @@ function current(
   from += spacing
   const query = slashQuery(prefix.slice(spacing))
   if (query === null) return null
-  // The source language does not recognize YAML; the formatted tree does.
-  if (!formatted && view.state.doc.sliceString(0, 4).startsWith('---')) {
-    const metadata = readFrontmatter(view.state.doc.toString())
-    if (metadata && selection.head < metadata.prefix.length) return null
-  }
+  // The source language does not recognize YAML; use the host's bounded search.
+  const bounds = !formatted && sourceBounds?.(view.state)
+  if (
+    bounds &&
+    (selection.head < bounds.end ||
+      (bounds.open &&
+        !bounds.closer &&
+        bounds.searched < view.state.doc.length))
+  )
+    return null
   return { from, to: selection.head, query, block }
 }
 
 export function sourceSlashCommands(
   context: AddonContext,
   formattedTree?: (state: EditorState) => Tree | null,
+  sourceBounds?: FrontmatterReader,
 ) {
   const formatted = Boolean(formattedTree)
   return Prec.highest(
@@ -101,7 +116,7 @@ export function sourceSlashCommands(
           this.schedule()
         }
         schedule() {
-          const match = current(this.view, formattedTree)
+          const match = current(this.view, formattedTree, sourceBounds)
           this.menu.observe(match)
           if (!match) this.menu.update(null)
           cancelAnimationFrame(this.frame)
@@ -114,7 +129,7 @@ export function sourceSlashCommands(
             this.menu.update(null)
             return
           }
-          const match = current(this.view, formattedTree)
+          const match = current(this.view, formattedTree, sourceBounds)
           const rect = match ? this.view.coordsAtPos(match.to) : null
           this.menu.update(
             match && rect
@@ -122,7 +137,11 @@ export function sourceSlashCommands(
                   ...match,
                   rect,
                   run: (command) => {
-                    const latest = current(this.view, formattedTree)
+                    const latest = current(
+                      this.view,
+                      formattedTree,
+                      sourceBounds,
+                    )
                     if (
                       !latest ||
                       latest.from !== match.from ||

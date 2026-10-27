@@ -37,7 +37,7 @@ test('palette selection reuses filtered results and rerenders only the rows it c
   })
   await writeFile(
     join(root, 'index.html'),
-    '<!doctype html><html><head><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
+    '<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="harness.css"></head><body><script src="harness.js"></script></body></html>',
   )
   await writeFile(
     join(root, 'main.cjs'),
@@ -93,6 +93,18 @@ test('palette selection reuses filtered results and rerenders only the rows it c
   await selected(2)
   assert.equal(await page.getByRole('option').count(), 542)
   assert.ok((await counts()).filtered > moved.filtered)
+
+  for (const query of ['ΟΔΟΣ', 'οδος', 'οδοσ', 'Σ', 'σ', 'ς', 'ΑςΑ']) {
+    await search.fill(query)
+    await page.locator('#command-greek-0').waitFor()
+    assert.deepEqual(
+      await page
+        .getByRole('option')
+        .evaluateAll((rows) => rows.map((row) => row.id)),
+      ['command-greek-0', 'command-greek-1', 'command-greek-2'],
+      query,
+    )
+  }
 
   // A search callback runs once per query, not once per selection move.
   await page.evaluate(() => window.paletteHarness.setMode('search'))

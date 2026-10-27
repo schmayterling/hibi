@@ -1,14 +1,17 @@
 import { journalMessageBytes } from '../../shared/document-journal.ts'
 import type { DocumentSession } from '../../shared/document-session.ts'
-import type {
-  DocumentWorkerReply,
-  DocumentWorkerRequest,
-  MarkdownReferenceRequest,
-  MarkdownReferenceSyntax,
-  MarkdownSemanticResult,
-  MetadataDialect,
+import {
+  type BoundaryReceive,
+  boundaryKey,
+  type DocumentWorkerReply,
+  type DocumentWorkerRequest,
+  type MarkdownReferenceRequest,
+  type MarkdownReferenceSyntax,
+  type MarkdownSemanticResult,
+  type MetadataDialect,
 } from '../../shared/document-worker-protocol.ts'
 import { reportDiagnosticFailure } from '../../shared/local-diagnostics-observer.ts'
+import type { BoundaryConfig } from '../../shared/markdown-boundary-syntax.ts'
 import type { SourceOwnerPage } from '../../shared/markdown-source-model.ts'
 import type { SourceSnapshot } from '../../shared/source-buffer.ts'
 import type { SourceOperation } from '../../shared/source-operations.ts'
@@ -30,7 +33,12 @@ type Request = Extract<DocumentWorkerRequest, { type: 'find' }> & {
 type ClientOptions = {
   changed: () => void
   pending: () => void
-  result: (location: SearchLocation, action: FindAction) => void
+  result: (
+    location: SearchLocation,
+    action: FindAction,
+    highlightStarts: readonly number[] | undefined,
+    query: string,
+  ) => void
   error: (message: string) => void
   metadataPending?: () => void
   metadataResult?: (
@@ -84,6 +92,21 @@ export class DocumentWorkerClient {
   #findDeadline: ReturnType<typeof setTimeout> | undefined
   #findTimer: ReturnType<typeof setTimeout> | undefined
   #findQuietUntil = 0
+  #highlightRequest: Request | null = null
+  #boundaries: {
+    id: number
+    version: number
+    config: BoundaryConfig
+    key: string
+    from: number
+    baseVersion?: number
+    receive: BoundaryReceive
+    declined: (reason: 'stale' | 'mismatch') => void
+  } | null = null
+  #sentBoundaries = ''
+  #boundarySequence = 0
+  #boundaryFrom: number | null = null
+  #boundaryTo: number | null = null
   constructor(session: DocumentSession, options: ClientOptions) {
     this.#session = session
     this.#options = options
@@ -92,6 +115,13 @@ export class DocumentWorkerClient {
       session.subscribeOperations((prepared) => {
         if (this.#disposed || this.#failed) return
         const operation = prepared.operation
+        if (this.#boundaries) {
+          // The receiver still belongs to its view's old document until it requests again.
+          this.#sentBoundaries = ''
+          this.#boundarySequence = 0
+          this.#boundaryFrom = null
+          this.#boundaryTo = null
+        }
         this.#deferFind()
         if (this.#bootstrap || this.#loaded) {
           const bytes = journalMessageBytes(operation)
@@ -130,11 +160,85 @@ export class DocumentWorkerClient {
           this.#latest = null
           this.#findQuietUntil = 0
           this.#metadata = null
+          this.#boundaries = null
           this.#restart()
           options.changed()
         }
       }),
     ]
+  }
+  boundaries(
+    config: BoundaryConfig,
+    receive: BoundaryReceive,
+    declined: (reason: 'stale' | 'mismatch') => void,
+    from = 0,
+    baseVersion?: number,
+  ) {
+    if (this.#disposed || this.#failed) return
+    const key = boundaryKey(config),
+      version = this.#session.snapshot().version
+    if (
+      this.#boundaries?.key === key &&
+      this.#boundaries.config.prefix === config.prefix &&
+      this.#boundaries.version === version &&
+      this.#boundaries.from === from &&
+      this.#boundaries.baseVersion === baseVersion
+    ) {
+      this.#boundaries.receive = receive
+      return
+    }
+    this.#boundaries = {
+      config,
+      key,
+      version,
+      id: ++this.#requestId,
+      from,
+      ...(baseVersion === undefined ? {} : { baseVersion }),
+      receive,
+      declined,
+    }
+    this.#sentBoundaries = ''
+    this.#boundarySequence = 0
+    this.#boundaryFrom = null
+    this.#boundaryTo = null
+    if (!this.#worker && !this.#startTimer && !this.#bootstrap) this.#restart()
+    this.#flushBoundaries()
+  }
+  releaseBoundaries(retain = false) {
+    this.#boundaries = null
+    this.#sentBoundaries = ''
+    this.#boundarySequence = 0
+    this.#boundaryFrom = null
+    this.#boundaryTo = null
+    this.#post({
+      type: 'cancel-boundaries',
+      epoch: this.#epoch,
+      ...(retain ? { retain: true } : {}),
+    })
+  }
+  #flushBoundaries() {
+    const request = this.#boundaries
+    if (
+      !request ||
+      !this.#loaded ||
+      request.version !== this.#session.snapshot().version ||
+      this.#ack !== request.version
+    )
+      return
+    const sent = `${request.id} ${request.version} ${request.key}`
+    if (this.#sentBoundaries === sent) return
+    this.#sentBoundaries = sent
+    this.#post({
+      type: 'boundaries',
+      epoch: this.#epoch,
+      id: request.id,
+      version: request.version,
+      config: request.config,
+      ...(request.from ? { from: request.from } : {}),
+      ...(request.baseVersion === undefined
+        ? {}
+        : { baseVersion: request.baseVersion }),
+    })
   }
   find(query: string, from: number, to: number, action: FindAction = null) {
     if (this.#disposed || this.#failed) return
@@ -180,6 +284,7 @@ export class DocumentWorkerClient {
     this.#flushMetadata()
   }
   cancelFind() {
+    this.#highlightRequest = null
     clearTimeout(this.#findTimer)
     this.#findTimer = undefined
     this.#findQuietUntil = 0
@@ -237,12 +342,15 @@ export class DocumentWorkerClient {
       return
     this.#metadataFlight = this.#sentMetadata = request.id
     this.#post(request)
-    if (this.#metadataFlight === request.id)
-      this.#metadataDeadline = setTimeout(
-        () =>
-          this.#fail(new Error('Document metadata worker stopped responding.')),
-        this.#options.timeoutMs ?? 5000,
-      )
+    if (this.#metadataFlight === request.id) this.#watchMetadata()
+  }
+  #watchMetadata() {
+    clearTimeout(this.#metadataDeadline)
+    this.#metadataDeadline = setTimeout(
+      () =>
+        this.#fail(new Error('Document metadata worker stopped responding.')),
+      this.#options.timeoutMs ?? 5000,
+    )
   }
   #post(message: DocumentWorkerRequest) {
     if (!this.#worker) return false
@@ -302,6 +410,9 @@ export class DocumentWorkerClient {
       id: request.id,
       version: request.version,
       query: request.query,
+      highlights:
+        this.#highlightRequest?.query !== request.query ||
+        this.#highlightRequest?.version !== request.version,
       from: request.from,
       to: request.to,
     })
@@ -328,7 +439,70 @@ export class DocumentWorkerClient {
     )
   }
   #reply(reply: DocumentWorkerReply) {
-    if (this.#disposed || reply.epoch !== this.#epoch) return
+    if (this.#disposed) return
+    if (reply.epoch !== this.#epoch) {
+      if (reply.type === 'boundaries') this.#boundaries?.declined('stale')
+      return
+    }
+    if (reply.type === 'boundaries' || reply.type === 'boundary-declined') {
+      const request = this.#boundaries
+      if (!request) return
+      if (
+        reply.id !== request.id ||
+        reply.version !== request.version ||
+        reply.version !== this.#session.snapshot().version
+      ) {
+        request.declined('stale')
+        return
+      }
+      if (reply.key !== request.key || reply.type === 'boundary-declined') {
+        request.declined('mismatch')
+        return
+      }
+      const from = reply.from ?? 0,
+        to = reply.to ?? reply.length
+      if (
+        !Number.isSafeInteger(from) ||
+        from < 0 ||
+        from > request.from ||
+        !Number.isSafeInteger(to) ||
+        to < from ||
+        to > reply.length ||
+        (reply.to !== undefined && request.baseVersion === undefined) ||
+        (this.#boundaryTo !== null && to !== this.#boundaryTo) ||
+        (this.#boundaryFrom !== null && from !== this.#boundaryFrom) ||
+        reply.sequence !== this.#boundarySequence++ ||
+        !Array.isArray(reply.records) ||
+        reply.records.length > 128 ||
+        reply.length !== this.#session.snapshot().normalizedLength
+      ) {
+        request.declined('mismatch')
+        this.releaseBoundaries()
+        return
+      }
+      this.#boundaryFrom = from
+      this.#boundaryTo = to
+      let acknowledged = false
+      request.receive(reply, () => {
+        if (
+          acknowledged ||
+          this.#boundaries !== request ||
+          request.version !== reply.version ||
+          reply.version !== this.#session.snapshot().version
+        )
+          return
+        acknowledged = true
+        this.#post({
+          type: 'boundary-ack',
+          epoch: this.#epoch,
+          id: request.id,
+          version: reply.version,
+          key: request.key,
+          sequence: reply.sequence,
+        })
+      })
+      return
+    }
     if (reply.type === 'load-ack') {
       const bootstrap = this.#bootstrap
       if (
@@ -436,8 +610,26 @@ export class DocumentWorkerClient {
         request?.id === reply.id &&
         request.version === reply.version &&
         reply.version === this.#session.snapshot().version
+      ) {
+        if (reply.highlightStarts) this.#highlightRequest = request
+        this.#options.result(
+          reply.location,
+          request.action,
+          reply.highlightStarts,
+          request.query,
+        )
+      }
+    } else if (reply.type === 'metadata-progress') {
+      const request = this.#metadata
+      if (
+        request?.id === reply.id &&
+        this.#metadataFlight === reply.id &&
+        this.#metadataCanceling === null &&
+        request.version === reply.version &&
+        reply.version === this.#ack &&
+        reply.version === this.#session.snapshot().version
       )
-        this.#options.result(reply.location, request.action)
+        this.#watchMetadata()
     } else if (reply.type === 'metadata-canceled') {
       if (
         reply.id !== this.#metadataCanceling ||
@@ -492,9 +684,11 @@ export class DocumentWorkerClient {
     }
     this.#flushQuery()
     this.#flushMetadata()
+    this.#flushBoundaries()
     this.#watch()
   }
   #stop() {
+    this.#highlightRequest = null
     clearTimeout(this.#findTimer)
     this.#findTimer = undefined
     clearTimeout(this.#startTimer)
@@ -517,6 +711,10 @@ export class DocumentWorkerClient {
     this.#flight = this.#canceling = null
     this.#ack = this.#sent = -1
     this.#sentRequest = 0
+    this.#sentBoundaries = ''
+    this.#boundarySequence = 0
+    this.#boundaryFrom = null
+    this.#boundaryTo = null
   }
   #restart() {
     this.#stop()
@@ -540,6 +738,11 @@ export class DocumentWorkerClient {
         epoch: this.#epoch,
         id: ++this.#requestId,
         version: this.#session.snapshot().version,
+      }
+    if (this.#boundaries)
+      this.#boundaries = {
+        ...this.#boundaries,
+        id: ++this.#requestId,
       }
     const epoch = this.#epoch
     this.#startTimer = setTimeout(() => {
@@ -614,5 +817,6 @@ export class DocumentWorkerClient {
     for (const detach of this.#detach) detach()
     this.#latest = null
     this.#metadata = null
+    this.#boundaries = null
   }
 }

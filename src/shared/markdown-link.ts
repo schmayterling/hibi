@@ -1,8 +1,12 @@
 import { Lexer, marked, type Token, Tokenizer, type TokensList } from 'marked'
 
-/** Let the existing tokenizer normalize reference labels and distinguish images. */
+/**
+ * Let the existing tokenizer normalize reference labels and distinguish images.
+ * With `gfm`, a bare URL such as `www.example.com` is a link too.
+ */
 export function markdownLink(
   source: string,
+  gfm = false,
 ): { href: string } | { label: string } | null {
   const labels = new WeakMap<Token, string>()
   class LinkTokenizer extends Tokenizer {
@@ -21,7 +25,7 @@ export function markdownLink(
       return token
     }
   }
-  const lexer = new Lexer({ tokenizer: new LinkTokenizer() })
+  const lexer = new Lexer({ gfm, tokenizer: new LinkTokenizer() })
   let target: { href: string } | { label: string } | null = null
   marked.walkTokens(lexer.inlineTokens(source), (token) => {
     if (token.type !== 'link' || target) return

@@ -26,6 +26,7 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
     entryPoints: ['src/addons/slash-commands/source.ts'],
     bundle: true,
     write: false,
+    metafile: true,
     format: 'iife',
     globalName: 'slashFixture',
     plugins: [
@@ -53,14 +54,21 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
       },
     ],
   })
+  assert.deepEqual(
+    Object.keys(slash.metafile.inputs).filter((path) =>
+      path.startsWith('src/renderer/'),
+    ),
+    [],
+  )
   await install(
     profile,
     'formatted-slash-proof',
     3,
     ['formatted'],
-    'export default sdk => { ' +
+    'export default sdk => { window.formattedActivations = (window.formattedActivations || 0) + 1; ' +
       slash.outputFiles[0].text +
-      "; return { start(context) { context.editor.registerFormatted({ id: 'slash', create() { return slashFixture.sourceSlashCommands(context) } }) } } }",
+      "; return { start(context) { context.editor.registerFormatted({ id: 'slash', create() { return slashFixture.sourceSlashCommands(context) } }) }, stop() { window.formattedStops = (window.formattedStops || 0) + 1 } } }",
+    'formatted',
   )
   await install(
     profile,
@@ -90,10 +98,12 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
       'export default sdk => ({ start(context) {',
       'const { EditorView } = sdk.codeMirror.view',
       'window.formattedMarkdownAvailable = !!sdk.codeMirror.markdown.parser',
+      "const prop = new sdk.codeMirror.common.NodeProp(); const parser = sdk.codeMirror.markdown.parser.configure({ props: [prop.add({ Paragraph: 'shared' })] }); window.formattedCommonShared = parser.parse('text').topNode.firstChild.type.prop(prop) === 'shared'",
+
       "const proofDelimiter = { resolve: 'ProofHighlight', mark: 'ProofMark' }",
       "context.editor.registerSyntax({ id: 'highlight', label: 'Proof highlight', group: 'Proof', level: 'inline', nodes: ['ProofHighlight'], matches: () => false, slash: { markdown: '==slash proof==', cursor: 2, rich() { window.legacySlashCalled = true; throw Error('legacy slash must not run') } } })",
       "context.editor.registerFlavor({ id: 'highlight', name: 'Proof highlight', kind: 'syntax', description: 'Proof', detect: () => true,",
-      "syntax: { defineNodes: ['ProofHighlight', 'ProofMark'], parseInline: [{ name: 'ProofHighlight', parse(cx, next, pos) {",
+      "syntax: { defineNodes: ['ProofHighlight', 'ProofMark'], parseInline: [{ name: 'ProofHighlight', before: 'Escape', parse(cx, next, pos) {",
       'if (next !== 61 || cx.char(pos + 1) !== 61) return -1',
       'return cx.addDelimiter(proofDelimiter, pos, pos + 2, true, true)',
       '} }] },',
@@ -152,6 +162,11 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
       window.richSdkAvailable &&
       window.formattedMarkdownAvailable,
   )
+  assert.equal(
+    await page.evaluate(() => window.formattedActivations),
+    undefined,
+  )
+  assert.equal(await page.evaluate(() => window.formattedCommonShared), true)
   assert.equal(await page.getByText(notice, { exact: true }).count(), 0)
   assert.equal(await page.locator('[data-formatted-proof]').count(), 0)
   await app.evaluate(({ dialog }, path) => {
@@ -181,6 +196,7 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
     .locator('.rich-pane .fixture-formatted', { hasText: 'formatted proof' })
     .waitFor()
   await page.locator('.rich-pane [data-formatted-proof]').waitFor()
+  await page.waitForFunction(() => window.formattedActivations === 1)
   assert.equal(await page.locator('.rich-pane [data-source-proof]').count(), 0)
   assert.equal(await page.evaluate(() => window.legacyRichAttached), undefined)
   assert.equal(await page.evaluate(() => window.richSdkAvailable), undefined)
@@ -234,6 +250,7 @@ test('installed api 3 formatted contributions coexist with legacy api 1 and 2 pa
   }, source.length)
   await page.getByRole('button', { name: 'Source view', exact: true }).click()
   await page.locator('.source-pane [data-source-proof]').waitFor()
+  await page.waitForFunction(() => window.formattedStops === 1)
   assert.equal(
     await page.locator('.source-pane [data-formatted-proof]').count(),
     0,
@@ -377,7 +394,140 @@ for (const hook of ['decorate', 'layout', 'container']) {
   })
 }
 
-async function install(profile, id, apiVersion, capabilities, code) {
+test('installed flavor state stays current in static and editable table cells', {
+  timeout: 90000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-cell-state-'))
+  const profile = join(folder, 'profile')
+  const file = join(folder, 'note.md')
+  const source = '# Title\n\n**body**\n\n| **head** |\n| --- |\n| **a\\|b** |\n'
+  await writeFile(file, source)
+  await install(
+    profile,
+    'cell-state',
+    3,
+    ['formatted'],
+    `
+    export default sdk => {
+      const length = sdk.codeMirror.state.StateField.define({
+        create: state => state.doc.length,
+        update: (_, transaction) => transaction.newDoc.length
+      })
+      return { start(context) {
+        context.editor.registerFormatted({
+          id: 'field',
+          create: () => [length, sdk.codeMirror.view.EditorView.editorAttributes.of({ 'data-field-ready': 'yes' })]
+        })
+        context.editor.registerFlavor({
+          id: 'cells', name: 'Cells', kind: 'syntax', description: 'Cell state', detect: () => true,
+          render: [{
+            nodes: ['Paragraph', 'StrongEmphasis'],
+            decorate(node, out, { state, visible }) {
+              try {
+                const size = state.field(length, false)
+                if (size === undefined) return
+                const source = state.sliceDoc(node.from, node.to)
+                if (size !== state.doc.length) throw Error('Stale field')
+                if (node.name === 'StrongEmphasis' && !source.startsWith('**')) throw Error('Wrong source positions')
+                if (visible.from > node.from || visible.to < node.to) throw Error('Wrong visible range')
+                out.link(node.from, node.to, { class: 'cell-state-proof', 'data-length': String(size) })
+              } catch (error) {
+                window.cellStateError = String(error)
+                throw error
+              }
+            }
+          }]
+        })
+      } }
+    }
+  `,
+  )
+  await writeFile(
+    join(profile, 'addons.json'),
+    JSON.stringify({ 'cell-state': true }),
+  )
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${profile}`],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  await app.evaluate(({ dialog }) => {
+    dialog.showMessageBox = async () => ({ response: 1 })
+  })
+  const page = await app.firstWindow()
+  await waitForDocumentEditor(app, page)
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+  )
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] })
+  }, file)
+  await pressShortcut(app, `${mod}+o`)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    source,
+  )
+  await page.locator('.rich-pane [data-field-ready="yes"]').waitFor()
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({ selection: { anchor: 0 } })
+  })
+  await page.locator('.rich-pane .cell-state-proof').first().waitFor()
+  await page.getByRole('link', { name: 'a|b', exact: true }).first().waitFor()
+  const addition = '\n| **head** |\n| --- |\n| **a\\|b** |\n'
+  await page.evaluate((text) => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({ changes: { from: view.state.doc.length, insert: text } })
+  }, addition)
+  const cell = page.locator('.rich-pane table tbody td').first()
+  await cell.locator('.cell-state-proof').first().waitFor()
+  assert.equal(await cell.textContent(), 'a|b')
+  assert.equal(await page.evaluate(() => window.cellStateError), undefined)
+  await cell.click()
+  const input = cell.locator('.cm-content')
+  await input.waitFor()
+  const before = (await page.evaluate(() => window.hibi.getDocument())).markdown
+  await input.press('End')
+  await input.type('x')
+  await waitForAsync(
+    page,
+    async (size) => (await window.hibi.getDocument()).markdown.length === size,
+    before.length + 1,
+  )
+  await cell.getByRole('link').first().waitFor()
+  await cell
+    .locator(`.cell-state-proof[data-length="${before.length + 1}"]`)
+    .first()
+    .waitFor()
+  assert.equal(await page.evaluate(() => window.cellStateError), undefined)
+  await pressShortcut(app, `${mod}+z`)
+  await waitForAsync(
+    page,
+    async (expected) => (await window.hibi.getDocument()).markdown === expected,
+    before,
+  )
+  await cell
+    .locator(`.cell-state-proof[data-length="${before.length}"]`)
+    .first()
+    .waitFor()
+  assert.equal(await page.evaluate(() => window.cellStateError), undefined)
+})
+
+async function install(
+  profile,
+  id,
+  apiVersion,
+  capabilities,
+  code,
+  activation,
+) {
   const folder = join(profile, 'installed-addons', id)
   await mkdir(folder, { recursive: true })
   await writeFile(
@@ -388,6 +538,7 @@ async function install(profile, id, apiVersion, capabilities, code) {
       description: 'Formatted fixture',
       apiVersion,
       capabilities,
+      activation,
       version: '1.0.0',
       kind: 'extension',
       authors: [{ displayName: 'Test' }],

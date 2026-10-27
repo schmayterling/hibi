@@ -151,7 +151,6 @@ owner numbers follow the ordered formatted engine readiness plan. the default fl
 | split-007 | [rich-editability.test.mjs:72](rich-editability.test.mjs#L72) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | marker-007 | [sidebar-views.test.mjs:105](sidebar-views.test.mjs#L105) | outline navigation must expose rendered heading text | 8b: hidden markers and math caret placement |
 | syntax-005 | [sideload.test.mjs:283](sideload.test.mjs#L283) | disabling an addon must remove its formatted syntax colors | 8c: highlighting and grammar lifecycle |
-| link-003 | [site.test.mjs:518](site.test.mjs#L518) | heading links must navigate to canonical and legacy destinations | 5a: reference labels and destinations |
 | split-008 | [slash.test.mjs:344](slash.test.mjs#L344) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | split-009 | [source-markdown-lifecycle.test.mjs:337](source-markdown-lifecycle.test.mjs#L337) | split formatted view must remain read-only | 3: read-only access and shared history guards |
 | projection-002 | [source-preservation.test.mjs:105](source-preservation.test.mjs#L105) | formatted body edits must preserve custom source prefixes and line endings | 6: verbatim projections and selection contracts |

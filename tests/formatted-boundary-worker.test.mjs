@@ -159,7 +159,8 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
     await window.livePreview.mount(
       unit.repeat(Math.ceil((52 * 1024 * 1024) / unit.length)),
       undefined,
-      { worker: true, history: true, editable: true },
+      // One advance per slice keeps scan counters independent of host speed.
+      { worker: true, history: true, editable: true, slice: 0 },
     )
   })
   await page

@@ -21,7 +21,7 @@ const makeSource = (size) => {
 }
 
 /** Open `file` in a fresh app, with the CodeMirror formatted view switch on or off. */
-async function launch(t, file, codemirror) {
+async function launch(t, file, codemirror, boundaryLength) {
   const folder = await mkdtemp(join(tmpdir(), 'hibi-formatted-large-'))
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
@@ -38,7 +38,7 @@ async function launch(t, file, codemirror) {
   page.setDefaultTimeout(60000)
   await waitForDocumentEditor(app, page)
   if (codemirror) {
-    await page.addInitScript(() => {
+    await page.addInitScript((length) => {
       const counters = {
         requests: 0,
         pages: 0,
@@ -53,7 +53,10 @@ async function launch(t, file, codemirror) {
         constructor(...args) {
           super(...args)
           this.addEventListener('message', ({ data }) => {
-            if (data.type !== 'boundaries') return
+            if (data.type !== 'boundaries' || data.length !== length) return
+            const syntax = JSON.parse(data.key).syntax
+            if (!syntax.includes('subtext@1')) return
+            counters.syntax = syntax
             counters.pages++
             counters.records += data.records.length
             counters.maxRecords = Math.max(
@@ -66,13 +69,11 @@ async function launch(t, file, codemirror) {
         postMessage(message, ...args) {
           if (message.type === 'boundaries') {
             counters.requests++
-            counters.syntax = message.config.syntax
-            counters.done = false
           }
           super.postMessage(message, ...args)
         }
       }
-    })
+    }, boundaryLength)
     await page.evaluate(() =>
       localStorage.setItem('hibi:formatted-engine', 'codemirror'),
     )
@@ -96,7 +97,7 @@ for (const size of [2, 50])
     const file = join(folder, `${size}.md`)
     await mkdir(folder, { recursive: true })
     await writeFile(file, makeSource(size))
-    const { page, started } = await launch(t, file, true)
+    const { page, started } = await launch(t, file, true, size * 1024 * 1024)
     // Before, notes over 256 KiB opened in source view.
     await page
       .locator('.rich-pane .hibi-formatted .hibi-lp-h1', {

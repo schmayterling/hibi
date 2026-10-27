@@ -30,6 +30,8 @@ before(
     )
     await page.reload()
     await waitForDocumentEditor(app, page)
+    const session = await page.context().newCDPSession(page)
+    await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   },
   { timeout: 90000 },
 )

@@ -21,6 +21,7 @@ import {
   boundarySyntaxIds,
 } from '../../shared/markdown-boundary-syntax.ts'
 import { createPlainTextRunExtension } from '../../shared/markdown-plain-text-runs.ts'
+import { mappedPrefix } from '../../shared/source-projection.ts'
 import {
   BoundaryTree,
   ChunkedMarkdownParser,
@@ -294,13 +295,24 @@ function syntaxField(options: FormattedSyntaxOptions) {
           }
         }
       }
-      // New syntax contributions or a new unparsed prefix parse the document again.
+      // New syntax or edits crossing the unparsed prefix parse the document again.
       const { state, startState } = transaction
+      const prefix = prefixOf(state)
+      const ranges: {
+        fromA: number
+        toA: number
+        fromB: number
+        toB: number
+      }[] = []
+      transaction.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+        ranges.push({ fromA, toA, fromB, toB })
+      })
       if (
         state.facet(formattedMarkdown) !==
           startState.facet(formattedMarkdown) ||
         state.facet(formattedOpaque) !== startState.facet(formattedOpaque) ||
-        prefixOf(state) !== value.prefix
+        (prefix !== value.prefix &&
+          mappedPrefix(value.prefix, ranges) !== prefix)
       )
         return start(
           transaction.state,
@@ -312,15 +324,6 @@ function syntaxField(options: FormattedSyntaxOptions) {
         )
       if (transaction.docChanged) {
         demand = mapDemand(demand, transaction.changes)
-        const ranges: {
-          fromA: number
-          toA: number
-          fromB: number
-          toB: number
-        }[] = []
-        transaction.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-          ranges.push({ fromA, toA, fromB, toB })
-        })
         // The unfinished parse belongs to the old text; its verified chunks are in the tree.
         const fragments = TreeFragment.applyChanges(
           TreeFragment.addTree(value.tree),
@@ -375,6 +378,7 @@ function driver(
       private boundaryDoc: EditorState['doc'] | null = null
       /** The last boundary configuration followed; undefined before the first. */
       private boundaryKey: string | null | undefined = undefined
+      private boundaryPrefix: number | null = null
       private boundaryStream: string | null = null
       private boundarySeeded = false
       private boundaryVersion: number | undefined
@@ -387,7 +391,7 @@ function driver(
         this.followBoundaries()
       }
       update(update: ViewUpdate) {
-        this.followBoundaries()
+        this.followBoundaries(update.changes)
         if (update.viewportChanged) this.schedule(true)
         else if (!update.state.field(field).complete) this.schedule(false)
       }
@@ -395,12 +399,26 @@ function driver(
         const probe = options.probe
         if (probe) probe.adoptionDeclined = (probe.adoptionDeclined ?? 0) + 1
       }
-      private followBoundaries() {
+      private followBoundaries(changes?: ChangeDesc) {
         if (!options.boundaries) return
         const { state } = this.view
         const config = boundaryConfig(state, options, prefixOf(state))
         const key = config ? boundaryKey(config) : null
-        const sameConfig = key === this.boundaryKey
+        let samePrefix = (config?.prefix ?? null) === this.boundaryPrefix
+        if (!samePrefix && changes && this.boundaryPrefix !== null) {
+          const ranges: {
+            fromA: number
+            toA: number
+            fromB: number
+            toB: number
+          }[] = []
+          changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+            ranges.push({ fromA, toA, fromB, toB })
+          })
+          samePrefix =
+            mappedPrefix(this.boundaryPrefix, ranges) === config?.prefix
+        }
+        const sameConfig = key === this.boundaryKey && samePrefix
         // Syntax the worker cannot parse requests nothing; releasing once covers every later update.
         if (sameConfig && !config) return
         const syntax = state.field(field)
@@ -419,6 +437,7 @@ function driver(
           return
         this.boundaryDoc = state.doc
         this.boundaryKey = key
+        this.boundaryPrefix = config?.prefix ?? null
         this.boundaryStream = null
         if (!sameConfig) {
           this.boundarySeeded = false

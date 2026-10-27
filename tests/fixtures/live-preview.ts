@@ -1,7 +1,13 @@
 import { history, isolateHistory, redo, undo } from '@codemirror/commands'
 import { Compartment, EditorState } from '@codemirror/state'
 import { EditorView, WidgetType } from '@codemirror/view'
+import { contribution as frontmatter } from '../../src/addons/frontmatter/formatted'
 import { DocumentWorkerClient } from '../../src/renderer/src/document-worker-client'
+import {
+  definitionsRead,
+  footnoteDefinitions,
+  footnoteScan,
+} from '../../src/renderer/src/formatted/footnote-definitions'
 import { DocumentSession } from '../../src/shared/document-session'
 import '../../src/renderer/src/styles.css'
 // The app's control styles, such as its thin scrollbars, so panes look alike.
@@ -52,6 +58,7 @@ function applyHistory(command: typeof undo) {
 }
 let revisionLayouts = 0
 const documentRevision = new Compartment()
+const frontmatterSlot = new Compartment()
 const revisionOf = (revision: number, tabId: string | null = null) =>
   formattedDocument.of({ revision, tabId })
 
@@ -81,18 +88,28 @@ Object.assign(window, {
   livePreview: {
     probe,
     workerState,
+    footnoteScan,
+    definitionIndex: () => view?.state.field(footnoteDefinitions, false),
+    definitionsReady: () => {
+      const state = view?.state
+      return (
+        !!state?.field(footnoteDefinitions, false) && definitionsRead(state)
+      )
+    },
     async mount(
       doc: string,
       size?: { width: number; height: number },
       {
         editable,
         worker = false,
+        frontmatter: withFrontmatter = false,
         history: withHistory = false,
         ...options
       }: {
         slice?: number
         editable?: boolean
         worker?: boolean
+        frontmatter?: boolean
         history?: boolean
       } = {},
     ) {
@@ -182,6 +199,7 @@ Object.assign(window, {
           doc,
           extensions: [
             livePreview(syntax),
+            frontmatterSlot.of(withFrontmatter ? frontmatter.extension : []),
             withHistory ? history() : [],
             documentRevision.of(revisionOf(0)),
             editable
@@ -196,12 +214,19 @@ Object.assign(window, {
       await new Promise(requestAnimationFrame)
     },
     view: () => view,
+    setFrontmatter: (enabled: boolean) =>
+      view?.dispatch({
+        effects: frontmatterSlot.reconfigure(
+          enabled ? frontmatter.extension : [],
+        ),
+      }),
     /** An external canonical edit mirrored to the formatted surface. */
-    edit(from: number, to: number, insert: string) {
+    edit(from: number, to: number, insert: string, addon = false) {
       workerSession?.edit([{ from, to, insert }], 'source', 'test')
       view?.dispatch({
         changes: { from, to, insert },
         annotations: isolateHistory.of('full'),
+        ...(addon ? { userEvent: 'input.addon' } : {}),
       })
     },
     undo: () => applyHistory(undo),

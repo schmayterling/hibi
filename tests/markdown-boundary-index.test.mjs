@@ -270,6 +270,94 @@ test('edits during a scan preserve its verified prefix and rescan only damaged r
   assert.ok(probe.scannedUnits < 160 * 1024, JSON.stringify(probe))
 })
 
+test('multiple edits between requests retain verified boundaries and scan every unfinished tail', () => {
+  const unit = '# heading\n\nparagraph words\n\n'
+  const text = unit.repeat(Math.ceil((8 * 1024 * 1024) / unit.length))
+  for (const complete of [true, false]) {
+    const store = new SourceStore(text, { tabId: 'queued-edits', revision: 0 })
+    const probe = counts()
+    const index = new MarkdownBoundaryIndex(
+      store.snapshot(),
+      configuration({ chunkSize: 4096, groupSize: 64, giantBlock: 65536 }),
+      probe,
+    )
+    if (complete) drain(index)
+    else for (let i = 0; i < 20; i++) assert.equal(index.advance(), false)
+    probe.scannedUnits = 0
+    probe.reusedNodes = 0
+    const at = Math.floor(text.length / 2)
+    for (let i = 0; i < 3; i++)
+      index.apply(edit(store, [{ from: at + i, to: at + i, insert: 'x' }]))
+    drain(index)
+    const records = [...index.records()]
+    assert.ok(
+      records.length > 1000,
+      JSON.stringify({ complete, records: records.length }),
+    )
+    assert.ok(
+      records.every(
+        (record) => record.kind !== 'chunk' || record.type !== 'tail',
+      ),
+    )
+    assert.equal(
+      records.reduce(
+        (length, record) =>
+          length + (record.kind === 'chunk' ? record.length : 0),
+        0,
+      ),
+      index.length,
+    )
+    assert.ok(probe.reusedNodes > 0, JSON.stringify(probe))
+    if (complete)
+      assert.ok(probe.scannedUnits < 512 * 1024, JSON.stringify(probe))
+    const from = Math.floor(index.length / 2)
+    assert.ok([...index.pages(from)][0].from > 0)
+  }
+})
+
+test('queued structural edits produce the same syntax as a fresh index away from offset zero', () => {
+  const text = '# heading\n\nparagraph words\n\n'.repeat(3000)
+  const store = new SourceStore(text, {
+    tabId: 'queued-structure',
+    revision: 0,
+  })
+  const config = configuration()
+  const index = new MarkdownBoundaryIndex(store.snapshot(), config)
+  drain(index)
+  const at = text.indexOf('# heading', Math.floor(text.length / 2))
+  for (let i = 0; i < 4; i++)
+    index.apply(edit(store, [{ from: at + i, to: at + i, insert: '~~~\n'[i] }]))
+  drain(index)
+  const fresh = new MarkdownBoundaryIndex(store.snapshot(), config)
+  drain(fresh)
+  const source = store.snapshot().materialize()
+  const parse = (model) =>
+    finish(
+      model.parser.startChunkedParse(
+        input(source),
+        TreeFragment.addTree(hydrate(model)),
+        null,
+      ),
+    )
+  assert.ok(
+    [...index.records()].every(
+      (record) => record.kind !== 'chunk' || record.type !== 'tail',
+    ),
+  )
+  assert.deepEqual(shape(parse(index)), shape(parse(fresh)))
+})
+
+test('receiving views reject unscanned boundary records before adopting any page', () => {
+  const store = new SourceStore('paragraph\n', { tabId: 'tail', revision: 0 })
+  const index = new MarkdownBoundaryIndex(store.snapshot(), configuration())
+  const builder = new BoundaryTree(index.parser, index.length)
+  assert.throws(
+    () =>
+      builder.append([{ kind: 'chunk', type: 'tail', length: index.length }]),
+    /Could not read a document worker reply/,
+  )
+})
+
 test('giant replay points, ordered counts, read-ahead, and ends survive bounded pages', () => {
   for (const text of [
     '1. first\n' +

@@ -9,6 +9,7 @@ import {
   contributionExtension,
   formattedContributions,
   formattedLiteral,
+  formattedMarkdown,
   formattedOpaque,
   formattedPrefix,
   formattedSyntaxTree,
@@ -390,4 +391,176 @@ test('default task, footnote and alert grammars share exact worker catalog ident
     ]),
     ['tasks@1', 'empty-tasks@1', 'footnotes@1', 'github-alerts@1'],
   )
+})
+
+const shape = (tree) => {
+  const nodes = []
+  tree.iterate({
+    enter(node) {
+      nodes.push([node.name, node.from, node.to])
+    },
+  })
+  return nodes
+}
+
+test('bundled inline syntax keeps skipping plain text, and inline syntax that may start anywhere turns that off', async () => {
+  const { obsidianSyntax } = await import(
+    '../src/addons/markdown/formatted-syntax.ts'
+  )
+  const { contributions: extras } = await import(
+    '../src/addons/text-extras/formatted.ts'
+  )
+  const modules = await Promise.all(
+    [
+      '../src/renderer/src/formatted/autolinks.ts',
+      '../src/renderer/src/formatted/footnotes.ts',
+      '../src/renderer/src/formatted/strikethrough.ts',
+      '../src/renderer/src/formatted/tables.ts',
+      '../src/renderer/src/formatted/tasks.ts',
+      '../src/addons/markdown/formatted.ts',
+      '../src/addons/markdown/formatted-obsidian.ts',
+    ].map((path) => import(path)),
+  )
+  // Bundled contributions with syntax, registered as the app registers them.
+  // The math addon's module needs the bundler; the plain-text run tests
+  // check its inline syntax.
+  const removals = [
+    ...modules.map((module) => module.contribution),
+    extras.subscript,
+    extras.subtext,
+  ].map((contribution) =>
+    formattedRegistry.register({
+      id: contribution.id,
+      load: () => contribution,
+    }),
+  )
+  // The obsidian flavor's inline parsers run wherever the language does not skip text.
+  let calls = 0
+  const parses = obsidianSyntax.parseInline.map((inline) => inline.parse)
+  for (const [index, inline] of obsidianSyntax.parseInline.entries())
+    inline.parse = (...args) => {
+      calls++
+      return parses[index](...args)
+    }
+  const flavors = [
+    'markdown.github',
+    'markdown.obsidian',
+    'text-extras.text-extras',
+  ]
+  /** The formatted view's tree and parser calls, and the tree of its syntax parsed without skipping text. */
+  const formatted = (doc, documentFlavors = flavors) => {
+    const syntax = formattedSyntax({ slice: Number.POSITIVE_INFINITY })
+    calls = 0
+    const state = EditorState.create({
+      doc,
+      extensions: [
+        formattedContributions.extension(documentFlavors),
+        syntax.extension,
+      ],
+    })
+    const made = calls
+    const markdown = state.facet(formattedMarkdown)
+    const expected = parser.configure([
+      { defineNodes: [{ name: 'Frontmatter', block: true }] },
+      ...markdown,
+    ])
+    return {
+      calls: made,
+      tree: shape(syntax.tree(state)),
+      expected: shape(expected.parse(doc)),
+      markdown,
+    }
+  }
+  try {
+    const found = new Set()
+    for (const doc of [
+      'prose ==highlight== tail [[Target|label]] ![[photo.png|20]]',
+      'a==b==c ===a=== ==a == \\==literal== `==code==` text == spaced ==',
+      '[[a]][[b]] ![[a]]![[b.png]] [[a|b|c]] **==bold==** *[[em]]* ==a [[b]] c==',
+      'plain &amp; ==&lt;tag&gt;== [[Other|&amp;]] <span>==a==</span> <!-- [[b]] -->',
+      'two  \n==hard break== ==a\nb== [[a\nb]] é😀==ü== [[é]]',
+      '# title ==mark==\n\n- [x] ==done== [[task]]\n- [ ]\n\n> quoted ![[c.png]]\n',
+      '> [!NOTE] title ==x==\n> body [[y]]\n',
+      '| a | ==b== |\n| - | - |\n| [[c]] | ![[e.png]] |\n',
+      'note[^1] ~~strike~~ ~sub~ H~2~O www.example.com a_b@example.com\n\n[^1]: defined ==here== [[too]]\n',
+      '-# small ==text== [[x]]\n',
+    ]) {
+      const { tree, expected } = formatted(doc)
+      assert.deepEqual(tree, expected, JSON.stringify(doc))
+      for (const [name] of tree) found.add(name)
+    }
+    for (const name of [
+      'Highlight',
+      'WikiLink',
+      'WikiEmbed',
+      'Task',
+      'AlertTitle',
+      'Table',
+      'FootnoteReference',
+      'FootnoteDefinition',
+      'Strikethrough',
+      'Subscript',
+      'URL',
+      'Subtext',
+    ])
+      assert.ok(found.has(name), name)
+    // The first parse covers the whole document.
+    const prose =
+      `${'Plain prose words with some punctuation, numbers 123 and more text here. '.repeat(14)}\n\n`.repeat(
+        7,
+      )
+    assert.ok(prose.length <= 8192)
+    const plain = formatted(prose)
+    assert.deepEqual(plain.tree, plain.expected)
+    assert.ok(
+      plain.calls <= prose.length / 100,
+      `${plain.calls} obsidian inline parser calls for ${prose.length} characters of prose`,
+    )
+    // The worker has no grammar for the obsidian flavor's syntax, so its
+    // documents decline worker boundaries and parse on the view's thread.
+    assert.ok(boundarySyntaxIds(formatted('', ['markdown.github']).markdown))
+    assert.equal(
+      boundarySyntaxIds(
+        formatted('', ['markdown.github', 'markdown.obsidian']).markdown,
+      ),
+      null,
+    )
+    // Inline syntax without declared stops may start at any character.
+    const word = {
+      id: 'test.word',
+      syntax: {
+        defineNodes: ['HibiWord'],
+        parseInline: [
+          {
+            name: 'HibiWord',
+            after: 'Escape',
+            parse: (cx, next, pos) =>
+              next === 104 && cx.slice(pos, pos + 4) === 'hibi'
+                ? cx.addElement(cx.elt('HibiWord', pos, pos + 4))
+                : -1,
+          },
+        ],
+      },
+    }
+    const removeWord = formattedRegistry.register({
+      id: word.id,
+      load: () => word,
+    })
+    try {
+      const unknown = formatted(prose)
+      assert.ok(
+        unknown.calls >= prose.length,
+        `${unknown.calls} obsidian inline parser calls for ${prose.length} characters`,
+      )
+      const words = formatted('ordinary hibi text prehibipost')
+      assert.deepEqual(words.tree, words.expected)
+      assert.equal(words.tree.filter(([name]) => name === 'HibiWord').length, 2)
+    } finally {
+      removeWord()
+    }
+  } finally {
+    for (const remove of removals) remove()
+    for (const [index, inline] of obsidianSyntax.parseInline.entries())
+      inline.parse = parses[index]
+  }
 })

@@ -3,7 +3,6 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
-import { clipboardHtml } from '../src/renderer/src/RawHtml.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
 import {
@@ -17,9 +16,21 @@ import { waitForAsync } from './poll.mjs'
 const windowsClipboard = (html) =>
   `<html>\r\n<body>\r\n<!--StartFragment-->${html}<!--EndFragment-->\r\n</body>\r\n</html>`
 
+const cmRawHtmlSource =
+  [
+    'editable paragraph',
+    '<kbd>x</kbd> <span id="raw-html-span" onclick="window.__rawExecuted=true">é &amp; 😀</span>',
+    '<div id="raw-html-div">\nraw block body\n<script id="raw-html-script">window.__rawExecuted=true</script>\n<img id="raw-html-img" src="x" onerror="window.__rawExecuted=true">\n<img src=x onerror="window.__rawExecuted=true">\n<object data="x"></object>\n<embed src="x">\n<input onfocus="window.__rawExecuted=true">\n<svg id="raw-html-svg" onload="window.__rawExecuted=true"></svg>\n<iframe id="raw-html-iframe" srcdoc="unsafe"></iframe>\n<style id="raw-html-style">body { display:none }</style>\n</div>',
+    '<!--  keep <b>literal</b> &amp;  -->',
+    '<details id="raw-html-details">\n<summary id="raw-html-summary">show</summary>\n\n<p id="raw-html-first">first</p>\n\n<p id="raw-html-last">last</p>\n</details>',
+    'break a<BR />b',
+    'last paragraph',
+  ].join('\n\n') + '\n'
+
 test('raw HTML stays inert and exact through rich edits, atom deletion, undo, and source edits', {
   timeout: 30000,
 }, async (t) => {
+  const { clipboardHtml } = await import('../src/renderer/src/RawHtml.ts')
   const profile = await mkdtemp(join(tmpdir(), 'hibi-raw-html-'))
   const file = join(profile, 'raw.md')
   const kbd = '<kbd>x</kbd>'
@@ -623,21 +634,34 @@ test('raw HTML stays inert and exact through rich edits, atom deletion, undo, an
   })
 })
 
+async function probeRawDocumentParsing(page) {
+  await page.evaluate(() => {
+    window.rawDocumentParses = []
+    const parse = DOMParser.prototype.parseFromString
+    DOMParser.prototype.parseFromString = function (...args) {
+      const document = parse.apply(this, args)
+      window.rawDocumentParses.push(
+        ...[
+          ...document.querySelectorAll(
+            'kbd, details, summary, script, style, img, svg, iframe, object, embed, input, [id^="raw-html-"]',
+          ),
+        ].map((element) => [element.localName, element.id]),
+      )
+      return document
+    }
+    window.restoreRawDocumentParsing = () => {
+      DOMParser.prototype.parseFromString = parse
+      delete window.restoreRawDocumentParsing
+    }
+  })
+}
+
 test('codemirror: literal html stays inert through native body edits, source switches and clipboard history', {
   timeout: 45000,
 }, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-formatted-raw-html-'))
   const file = join(profile, 'raw.md')
-  const original =
-    [
-      'editable paragraph',
-      '<kbd>x</kbd> <span id="raw-html-span" onclick="window.__rawExecuted=true">é &amp; 😀</span>',
-      '<div id="raw-html-div">\n<script id="raw-html-script">window.__rawExecuted=true</script>\n<img id="raw-html-img" src="x" onerror="window.__rawExecuted=true">\n<svg id="raw-html-svg" onload="window.__rawExecuted=true"></svg>\n<iframe id="raw-html-iframe" srcdoc="unsafe"></iframe>\n<style id="raw-html-style">body { display:none }</style>\n</div>',
-      '<!--  keep <b>literal</b> &amp;  -->',
-      '<details id="raw-html-details">\n<summary id="raw-html-summary">show</summary>\n\n<p id="raw-html-first">first</p>\n\n<p id="raw-html-last">last</p>\n</details>',
-      'break a<BR />b',
-      'last paragraph',
-    ].join('\n\n') + '\n'
+  const original = cmRawHtmlSource
   await writeFile(file, original)
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`],
@@ -652,6 +676,7 @@ test('codemirror: literal html stays inert through native body edits, source swi
   const page = await app.firstWindow()
   page.setDefaultTimeout(7000)
   const rich = await selectFormattedEngine(app, page, 'codemirror')
+  await probeRawDocumentParsing(page)
   await page.evaluate(() => {
     window.__rawExecuted = false
     window.__rawCreated = []
@@ -690,6 +715,13 @@ test('codemirror: literal html stays inert through native body edits, source swi
         .count(),
       0,
     )
+    // codemirror widget buffers are editor decorations.
+    assert.equal(
+      await rich
+        .locator('img:not(.cm-widgetBuffer), object, embed, input')
+        .count(),
+      0,
+    )
     assert.equal(await page.evaluate(() => window.__rawExecuted), false)
   }
   await saved(original)
@@ -707,6 +739,9 @@ test('codemirror: literal html stays inert through native body edits, source swi
   await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
   assert.equal(await readFile(file, 'utf8'), edited)
 
+  assert.deepEqual(await page.evaluate(() => window.rawDocumentParses), [])
+  // Clipboard rendering/conversion intentionally parses sanitized HTML; end the document-only probe first.
+  await page.evaluate(() => window.restoreRawDocumentParsing())
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   const native = async (command) => {
     const before = await page.evaluate((command) => {
@@ -775,4 +810,366 @@ test('codemirror: literal html stays inert through native body edits, source swi
   await inert()
   await saved(sourceEdited)
   assert.equal(await rich.getAttribute('contenteditable'), 'true')
+  await clickMenu(app, 'Save')
+  await waitForAsync(page, async () => !(await window.hibi.getDocument()).dirty)
+  assert.equal(await readFile(file, 'utf8'), sourceEdited)
 })
+
+async function rawCMFixture(t) {
+  const profile = await mkdtemp(join(tmpdir(), 'hibi-raw-cm-case-'))
+  const file = join(profile, 'raw.md')
+  await writeFile(file, cmRawHtmlSource)
+  const app = await electron.launch({
+    args: [resolve('.'), '--user-data-dir=' + profile],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(7000)
+  const rich = await selectFormattedEngine(app, page, 'codemirror')
+  await probeRawDocumentParsing(page)
+  await page.evaluate(() => {
+    window.__rawExecuted = false
+    window.alert = () => {
+      window.__rawExecuted = true
+    }
+  })
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, file)
+  await clickMenu(app, 'Open…')
+  await waitForDocumentEditor(app, page)
+  const saved = (expected) =>
+    waitForAsync(
+      page,
+      async (expected) =>
+        (await window.hibi.getDocument()).markdown === expected,
+      expected,
+    )
+  const inert = async () => {
+    assert.equal(
+      await rich
+        .locator(
+          'kbd, details, summary, script, style, img:not(.cm-widgetBuffer), svg, iframe, object, embed, input, [id^="raw-html-"]',
+        )
+        .count(),
+      0,
+    )
+    assert.equal(await page.evaluate(() => window.__rawExecuted), false)
+  }
+  await saved(cmRawHtmlSource)
+  await inert()
+  assert.deepEqual(await page.evaluate(() => window.rawDocumentParses), [])
+  // This probe covers workspace rendering. Copy/export and paste intentionally parse sanitized HTML.
+  await page.evaluate(() => window.restoreRawDocumentParsing())
+  return { app, page, rich, file, original: cmRawHtmlSource, saved, inert }
+}
+
+async function selectRawSource(rich, from, to) {
+  await rich.focus()
+  return rich.evaluate(
+    (element, { from, to }) => {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        selection: { anchor: from, head: to },
+        scrollIntoView: true,
+      })
+      return view.state.sliceDoc(
+        view.state.selection.main.from,
+        view.state.selection.main.to,
+      )
+    },
+    { from, to },
+  )
+}
+
+async function rawNativeClipboard(app, page, command) {
+  const before = await page.evaluate((command) => {
+    window.rawCaseClipboardEvents ??= []
+    const before = window.rawCaseClipboardEvents.length
+    document.addEventListener(
+      command,
+      (event) => {
+        const data = {
+          command,
+          text: event.clipboardData.getData('text/plain'),
+          html: event.clipboardData.getData('text/html'),
+        }
+        queueMicrotask(() => window.rawCaseClipboardEvents.push(data))
+      },
+      { once: true },
+    )
+    return before
+  }, command)
+  await app.evaluate(({ BrowserWindow }, command) => {
+    BrowserWindow.getAllWindows()[0].webContents[command]()
+  }, command)
+  await page.waitForFunction(
+    (before) => window.rawCaseClipboardEvents.length > before,
+    before,
+  )
+  return page.evaluate(() => window.rawCaseClipboardEvents.at(-1))
+}
+
+const pasteRawData = (rich, data) =>
+  rich.evaluate((element, { text, html }) => {
+    const clipboardData = new DataTransfer()
+    clipboardData.setData('text/plain', text)
+    if (html) clipboardData.setData('text/html', html)
+    element.dispatchEvent(
+      new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      }),
+    )
+  }, data)
+
+for (const [label, find, replacement] of [
+  ['inline', 'x</kbd>', 'y'],
+  ['block', 'raw block body', 'changed block body'],
+]) {
+  test('codemirror: literal ' +
+    label +
+    ' html body accepts native edits and exact undo without executing markup', {
+    timeout: 45000,
+  }, async (t) => {
+    const { app, page, rich, original, saved, inert } = await rawCMFixture(t)
+    const from = original.indexOf(find)
+    const text = label === 'inline' ? 'x' : find
+    assert.equal(await selectRawSource(rich, from, from + text.length), text)
+    await page.keyboard.insertText(replacement)
+    const edited =
+      original.slice(0, from) + replacement + original.slice(from + text.length)
+    await saved(edited)
+    assert.equal(await rich.getAttribute('contenteditable'), 'true')
+    assert.equal(await page.getByRole('dialog').count(), 0)
+    await inert()
+    await pressShortcut(
+      app,
+      process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+    )
+    await saved(original)
+    await inert()
+  })
+}
+
+for (const level of ['inline', 'block']) {
+  test('codemirror: deleting a selected ' +
+    level +
+    ' html source range preserves surrounding bytes and undo', {
+    timeout: 45000,
+  }, async (t) => {
+    const { app, page, rich, original, saved, inert } = await rawCMFixture(t)
+    // Design §11(7): select an editable source range, rather than the PM size-one atom above.
+    const from = original.indexOf(
+      level === 'inline' ? '<kbd>' : '<div id="raw-html-div">',
+    )
+    const to =
+      level === 'inline'
+        ? original.indexOf('</kbd>', from) + 6
+        : original.indexOf('</div>', from) + 6
+    assert.equal(
+      await selectRawSource(rich, from, to),
+      original.slice(from, to),
+    )
+    assert.equal(await page.getByRole('dialog').count(), 0)
+    await page.keyboard.press('Delete')
+    await saved(original.slice(0, from) + original.slice(to))
+    await inert()
+    await pressShortcut(
+      app,
+      process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+    )
+    await saved(original)
+    await inert()
+  })
+}
+
+test('codemirror: partial native html-break clipboard keeps original spelling through cut, paste and history', {
+  timeout: 45000,
+}, async (t) => {
+  const { app, page, rich, original, saved, inert } = await rawCMFixture(t)
+  const fragment = 'a<BR />b'
+  const from = original.indexOf(fragment),
+    to = from + fragment.length
+  assert.equal(await selectRawSource(rich, from, to), fragment)
+  const copied = await rawNativeClipboard(app, page, 'copy')
+  assert.equal(copied.text, fragment)
+  assert.doesNotMatch(copied.html, /data-raw-html-session/)
+  assert.equal(
+    await page.evaluate(
+      (html) =>
+        new DOMParser()
+          .parseFromString(html, 'text/html')
+          .querySelectorAll('br').length,
+      copied.html,
+    ),
+    1,
+  )
+  await rawNativeClipboard(app, page, 'cut')
+  const removed = original.slice(0, from) + original.slice(to)
+  await saved(removed)
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+  )
+  await saved(original)
+  await pressShortcut(
+    app,
+    process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y',
+  )
+  await saved(removed)
+  const pasted = await rawNativeClipboard(app, page, 'paste')
+  await saved(original)
+  // Only Windows exposes its hosted native clipboard envelope; the portable fragment case below runs everywhere.
+  if (process.platform === 'win32') {
+    const fragments = await page.evaluate(
+      (html) =>
+        html.map((value) => {
+          const fragment =
+            /<!--StartFragment-->([\s\S]*?)<!--EndFragment-->/i.exec(
+              value,
+            )?.[1] ?? value
+          return new DOMParser().parseFromString(fragment, 'text/html').body
+            .innerHTML
+        }),
+      [pasted.html, copied.html],
+    )
+    assert.equal(fragments[0], fragments[1])
+  }
+  await inert()
+})
+
+test('codemirror: Windows html fragment wrappers exclude outside markup and retain literal selected source', {
+  timeout: 45000,
+}, async (t) => {
+  const { page, rich, original, saved, inert } = await rawCMFixture(t)
+  const fragment = '<kbd>x</kbd>'
+  const from = original.indexOf(fragment),
+    to = from + fragment.length
+  assert.equal(await selectRawSource(rich, from, to), fragment)
+  const copied = await rich.evaluate((element) => {
+    const clipboardData = new DataTransfer()
+    element.dispatchEvent(
+      new ClipboardEvent('copy', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      }),
+    )
+    return {
+      text: clipboardData.getData('text/plain'),
+      html: clipboardData.getData('text/html'),
+    }
+  })
+  assert.equal(copied.text, fragment)
+  await page.keyboard.press('Delete')
+  await saved(original.slice(0, from) + original.slice(to))
+  const wrapped = windowsClipboard(copied.html)
+    .replace(
+      '<body>',
+      '<head><meta charset="utf-8"></head><body><div>OUTSIDE BEFORE</div>',
+    )
+    .replace('</body>', '<div>OUTSIDE AFTER</div></body>')
+  await pasteRawData(rich, { ...copied, html: wrapped })
+  await waitForAsync(
+    page,
+    async (removed) => (await window.hibi.getDocument()).markdown !== removed,
+    original.slice(0, from) + original.slice(to),
+  )
+  const pasted = (await page.evaluate(() => window.hibi.getDocument())).markdown
+  t.diagnostic(
+    JSON.stringify({
+      outsideBefore: pasted.includes('OUTSIDE BEFORE'),
+      outsideAfter: pasted.includes('OUTSIDE AFTER'),
+      restoredExactSource: pasted === original,
+      insertedPrefix: pasted.slice(from, from + 80),
+    }),
+  )
+  await t.test('only the selected fragment is pasted', () => {
+    assert.doesNotMatch(pasted, /OUTSIDE/)
+  })
+  await t.test('the fragment restores exact selected source', () => {
+    assert.equal(pasted, original)
+  })
+  await inert()
+})
+
+for (const route of ['paste', 'drop']) {
+  test('codemirror: literal html drag data survives ' +
+    route +
+    ' without becoming live markup', {
+    timeout: 45000,
+  }, async (t) => {
+    const { app, page, rich, original, saved, inert } = await rawCMFixture(t)
+    const fragment = '<kbd>x</kbd>'
+    const from = original.indexOf(fragment),
+      to = from + fragment.length
+    assert.equal(await selectRawSource(rich, from, to), fragment)
+    const dragged = await rich.evaluate((element) => {
+      const dataTransfer = new DataTransfer()
+      const view = element.cmTile.root.view
+      const at = view.coordsAtPos(view.state.selection.main.from)
+      element.dispatchEvent(
+        new DragEvent('dragstart', {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer,
+          clientX: at.left + 1,
+          clientY: (at.top + at.bottom) / 2,
+        }),
+      )
+      const data = {
+        text: dataTransfer.getData('text/plain'),
+        html: dataTransfer.getData('text/html'),
+      }
+      element.dispatchEvent(
+        new DragEvent('dragend', { bubbles: true, dataTransfer }),
+      )
+      return data
+    })
+    assert.equal(dragged.text, fragment)
+    assert.doesNotMatch(dragged.html, /data-raw-html-session/)
+    if (route === 'paste') {
+      await page.keyboard.press('Delete')
+      await saved(original.slice(0, from) + original.slice(to))
+      await pasteRawData(rich, dragged)
+      await saved(original)
+    } else {
+      const target = original.indexOf('last paragraph')
+      await selectRawSource(rich, target, target)
+      await page.evaluate(() => new Promise(requestAnimationFrame))
+      const point = await rich.evaluate((element, target) => {
+        const at = element.cmTile.root.view.coordsAtPos(target)
+        return { x: at.left + 1, y: (at.top + at.bottom) / 2 }
+      }, target)
+      const cdp = await page.context().newCDPSession(page)
+      try {
+        const items = [{ mimeType: 'text/plain', data: dragged.text }]
+        if (dragged.html)
+          items.push({ mimeType: 'text/html', data: dragged.html })
+        for (const type of ['dragEnter', 'dragOver', 'drop'])
+          await cdp.send('Input.dispatchDragEvent', {
+            type,
+            ...point,
+            data: { items, files: [], dragOperationsMask: 1 },
+          })
+      } finally {
+        await cdp.detach()
+      }
+      await saved(original.slice(0, target) + fragment + original.slice(target))
+      await pressShortcut(
+        app,
+        process.platform === 'darwin' ? 'Meta+z' : 'Control+z',
+      )
+      await saved(original)
+    }
+    await inert()
+  })
+}

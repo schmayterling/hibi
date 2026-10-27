@@ -1987,15 +1987,19 @@ export const contribution: FormattedContribution = {
           )
             return false
           // Chromium can drop typing over a selected block widget.
-          view.dispatch({
-            changes: {
-              from: selection.from,
-              to: selection.to,
-              insert: event.key,
-            },
-            selection: { anchor: selection.from + event.key.length },
-            annotations: Transaction.userEvent.of('input.type'),
-          })
+          const insert = () =>
+            view.state.update(view.state.replaceSelection(event.key), {
+              userEvent: 'input.type',
+              scrollIntoView: true,
+            })
+          if (
+            !view.state
+              .facet(EditorView.inputHandler)
+              .some((handler) =>
+                handler(view, selection.from, selection.to, event.key, insert),
+              )
+          )
+            view.dispatch(insert())
           return true
         },
       }),

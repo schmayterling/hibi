@@ -1,14 +1,19 @@
 import {
+  countColumn,
   EditorSelection,
   type EditorState,
   findClusterBreak,
+  findColumn,
   type Line,
   type RangeSet,
   type RangeValue,
+  StateEffect,
+  StateField,
   type TransactionSpec,
 } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import { formattedFormatting } from './formatted-contributions.ts'
+import { detectIndentUnit, tabIndent } from './tab-indent.ts'
 
 /*
  * Structure keys for the formatted view. They edit the Markdown source the
@@ -362,6 +367,103 @@ function delimiterLine(state: EditorState, tree: Tree, line: Line) {
   )
 }
 
+type CodeIndent = {
+  from: number
+  to: number
+  prefix: string
+  scan: number
+  first: { from: number; to: number; unit: string } | null
+}
+const rememberCodeIndent = StateEffect.define<CodeIndent>()
+
+/** One active code block's first indent, independent of its parsed fragments. */
+export const codeIndent = StateField.define<CodeIndent | null>({
+  create: () => null,
+  update(found, { changes, docChanged, effects, newDoc }) {
+    for (const effect of effects)
+      if (effect.is(rememberCodeIndent)) found = effect.value
+    if (!found || !docChanged) return found
+    if (changes.touchesRange(found.from)) return null
+    // Keep the checked prefix; only changed lines can introduce an earlier indent.
+    let scan = changes.mapPos(found.scan)
+    changes.iterChangedRanges((from, to, next) => {
+      if (from <= found.scan && to >= found.from)
+        scan = Math.min(scan, newDoc.lineAt(next).from)
+    })
+    return {
+      ...found,
+      from: changes.mapPos(found.from),
+      to: changes.mapPos(found.to),
+      scan,
+      first:
+        found.first && !changes.touchesRange(found.from, found.first.to)
+          ? {
+              ...found.first,
+              from: changes.mapPos(found.first.from),
+              to: changes.mapPos(found.first.to),
+            }
+          : null,
+    }
+  },
+})
+
+/** Code indents like its first indented source line, even outside the parsed chunk. */
+function codeIndentUnit(state: EditorState, code: SyntaxNode) {
+  const opening = state.doc.lineAt(code.from)
+  let quotes = 0
+  for (let parent = code.parent; parent; parent = parent.parent)
+    if (parent.name === 'Blockquote') quotes++
+  const prefix = `${code.name}:${quotes}`
+  const fenced = code.name === 'FencedCode'
+  let found = state.field(codeIndent, false)
+  if (
+    found?.from !== opening.from ||
+    found.to !== code.to ||
+    found.prefix !== prefix
+  )
+    found = {
+      from: opening.from,
+      to: code.to,
+      prefix,
+      scan: fenced ? opening.to + 1 : opening.from,
+      first: null,
+    }
+  if (!found.first) {
+    const closing = code.lastChild
+    const end =
+      fenced && closing?.name === 'CodeMark' && closing.from > opening.to
+        ? state.doc.lineAt(closing.from).from - 1
+        : code.to
+    const markers = new RegExp(`^(?:[ \\t]*>[ \\t]?){${quotes}}`)
+    found = { ...found }
+    for (
+      let pos = Math.max(found.scan, fenced ? opening.to + 1 : opening.from);
+      pos <= end;
+    ) {
+      const line = state.doc.lineAt(pos)
+      found.scan = line.from
+      let start = markers.exec(line.text)?.[0].length ?? 0
+      if (!fenced)
+        start =
+          line.number === opening.number
+            ? code.from - line.from
+            : findColumn(line.text, countColumn(line.text, 4, start) + 4, 4)
+      const text = line.text.slice(start)
+      // Indented-code parsing discards blank whitespace; fenced code preserves it.
+      const unit = !fenced && blank(text) ? undefined : detectIndentUnit(text)
+      if (unit) {
+        found.first = { from: line.from, to: line.to, unit }
+        break
+      }
+      pos = line.to + 1
+    }
+  }
+  return {
+    unit: found.first?.unit ?? tabIndent.snapshot().unit,
+    effects: rememberCodeIndent.of(found),
+  }
+}
+
 /** Where a line's visible content starts: after hidden prefixes such as markers. */
 function contentStart(line: Line, hidden: Hidden) {
   let start = line.from
@@ -615,10 +717,12 @@ export function indent(
   }
   const code = around(tree, range.head, ['FencedCode', 'CodeBlock'])
   if (code) {
+    const { unit, effects } = codeIndentUnit(state, code)
     if (range.empty && !outdent)
       return {
-        changes: { from: range.from, insert: '\t' },
-        selection: EditorSelection.cursor(range.from + 1),
+        effects,
+        changes: { from: range.from, insert: unit },
+        selection: EditorSelection.cursor(range.from + unit.length),
         userEvent: 'input.indent',
       }
     // Otherwise each code line the selection covers is indented or
@@ -636,6 +740,9 @@ export function indent(
         ? end.number - 1
         : end.number
     const changes: { from: number; to?: number; insert?: string }[] = []
+    const leading = new RegExp(
+      `^(?:\t| {1,${unit === '\t' ? 4 : unit.length}})`,
+    )
     for (
       let number = Math.max(
         state.doc.lineAt(range.from).number,
@@ -647,14 +754,15 @@ export function indent(
     ) {
       const line = state.doc.line(number)
       const start = contentStart(line, hidden)
-      if (!outdent) changes.push({ from: start, insert: '\t' })
+      if (!outdent) changes.push({ from: start, insert: unit })
       else {
-        const lead = /^(?:\t| {1,4})/.exec(state.sliceDoc(start, line.to))
+        const lead = leading.exec(state.sliceDoc(start, line.to))
         if (lead) changes.push({ from: start, to: start + lead[0].length })
       }
     }
     const set = state.changes(changes)
     return {
+      effects,
       changes: set,
       selection: state.selection.map(set, 1),
       userEvent: outdent ? 'delete.dedent' : 'input.indent',

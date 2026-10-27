@@ -126,7 +126,10 @@ function wikiElement(
     cx.elt('WikiMark', from, open),
     ...trimmed(cx, 'WikiTarget', open, bar),
     ...(bar < stop
-      ? trimmed(cx, 'WikiAlias', bar + 1, barIn(cx, bar + 1, stop))
+      ? [
+          cx.elt('WikiMark', bar, bar + 1),
+          ...trimmed(cx, 'WikiAlias', bar + 1, barIn(cx, bar + 1, stop)),
+        ]
       : []),
     cx.elt('WikiMark', stop, end),
   ])

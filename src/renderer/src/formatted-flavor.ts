@@ -138,6 +138,14 @@ function checkedDecorations(
       range(from, to)
       out.mark(from, to, checkedAttributes(attributes))
     },
+    link(from, to, attributes) {
+      range(from, to)
+      out.link(
+        from,
+        to,
+        attributes === undefined ? undefined : checkedAttributes(attributes),
+      )
+    },
     syntax(from, to) {
       oneLine(from, to)
       out.syntax(from, to)

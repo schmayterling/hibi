@@ -422,7 +422,7 @@ test('installed flavor state stays current in static and editable table cells', 
                 if (size !== state.doc.length) throw Error('Stale field')
                 if (node.name === 'StrongEmphasis' && !source.startsWith('**')) throw Error('Wrong source positions')
                 if (visible.from > node.from || visible.to < node.to) throw Error('Wrong visible range')
-                out.mark(node.from, node.to, { class: 'cell-state-proof', 'data-length': String(size) })
+                out.link(node.from, node.to, { class: 'cell-state-proof', 'data-length': String(size) })
               } catch (error) {
                 window.cellStateError = String(error)
                 throw error
@@ -471,7 +471,7 @@ test('installed flavor state stays current in static and editable table cells', 
     view.dispatch({ selection: { anchor: 0 } })
   })
   await page.locator('.rich-pane .cell-state-proof').first().waitFor()
-  await page.locator('.rich-pane table .cell-state-proof').first().waitFor()
+  await page.getByRole('link', { name: 'a|b', exact: true }).first().waitFor()
   const addition = '\n| **head** |\n| --- |\n| **a\\|b** |\n'
   await page.evaluate((text) => {
     const view = document.querySelector('.rich-pane .cm-content').cmTile.root
@@ -493,6 +493,7 @@ test('installed flavor state stays current in static and editable table cells', 
     async (size) => (await window.hibi.getDocument()).markdown.length === size,
     before.length + 1,
   )
+  await cell.getByRole('link').first().waitFor()
   await cell
     .locator(`.cell-state-proof[data-length="${before.length + 1}"]`)
     .first()

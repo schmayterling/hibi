@@ -5,6 +5,7 @@ import { decodeHTMLStrict } from 'entities'
 import {
   type FormattedDecorations,
   type FormattedRenderContext,
+  formattedLinkAttributes,
   formattedLiteral,
 } from '../../renderer/src/formatted-contributions.ts'
 
@@ -175,7 +176,8 @@ export function markDecoded(
 /**
  * Marks `[from, to)` with `attributes` as one piece of text around the
  * references in it, which show their characters until the node is revealed
- * and all of its source shows. The glyphs take the mark's class.
+ * and all of its source shows. With `link`, the text reads as a link. The
+ * glyphs take the mark's class.
  */
 export function wrapDecoded(
   out: FormattedDecorations,
@@ -183,12 +185,18 @@ export function wrapDecoded(
   from: number,
   to: number,
   attributes: Record<string, string>,
+  link = false,
 ) {
   const { state, revealed } = context
   const part = shown(context, from, to)
-  if (part.from < part.to) out.mark(part.from, part.to, attributes)
+  if (part.from < part.to)
+    if (link) out.link(part.from, part.to, attributes)
+    else out.mark(part.from, part.to, attributes)
   if (revealed) return
-  const glyph = { class: attributes.class ?? '' }
+  const glyph = {
+    class:
+      (link ? formattedLinkAttributes(attributes) : attributes).class ?? '',
+  }
   for (const entity of referencesIn(state, from, to, part)) {
     const glyphs = decoded(state, entity, glyph)
     if (glyphs) out.replace(entity.from, entity.to, glyphs)

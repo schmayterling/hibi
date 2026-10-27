@@ -73,7 +73,7 @@ test('cell renderers retain the owner state and canonical source positions', asy
               ),
               visible,
             })
-            out.mark(node.from, node.to, { class: 'cell-proof' })
+            out.link(node.from, node.to, { class: 'cell-proof' })
           },
         },
       ],
@@ -113,7 +113,13 @@ test('cell renderers retain the owner state and canonical source positions', asy
         from: prefix.length,
         to: prefix.length + source.length,
       })
-      assert.deepEqual(root.children[0]?.attributes, { class: 'cell-proof' })
+      assert.deepEqual(root.children[0]?.attributes, {
+        class: 'hibi-lp-link cell-proof',
+        role: 'link',
+      })
+      const textOf = (node) =>
+        node.text ?? node.children.map(textOf).join('')
+      assert.equal(textOf(root.children[0]), source.slice(2, -2).replace('\\|', '|'))
     }
     await Promise.resolve()
     assert.deepEqual(errors, [])
@@ -218,7 +224,7 @@ function render(id, hook) {
   view[hook](
     paragraph,
     Object.fromEntries(
-      ['mark', 'syntax', 'line', 'widget', 'replace'].map((name) => [
+      ['mark', 'link', 'syntax', 'line', 'widget', 'replace'].map((name) => [
         name,
         record(name),
       ]),
@@ -252,6 +258,12 @@ test('formatted output the renderer cannot keep fails in its owner guard before 
     ['decorate', (out) => out.syntax(0, 7)],
     ['decorate', (out) => out.replace(4, 9)],
     ['decorate', (out) => out.mark(-1, 2, {})],
+    ['decorate', (out) => out.link(-1, 2)],
+    ['decorate', (out) => out.link(2, doc.length + 1)],
+    ['decorate', (out) => out.link(0, 1.5)],
+    ['decorate', (out) => out.link(2, 1)],
+    ['decorate', (out) => out.link(0, 2, { title: 1 })],
+    ['decorate', (out) => out.link(0, 2, { 'bad name': 'x' })],
     ['decorate', (out) => out.syntax(5, 4)],
     ['decorate', (out) => out.mark(0, 1.5, {})],
     ['decorate', (out) => out.mark(0, 2, { title: 1 })],
@@ -349,6 +361,8 @@ test('valid formatted output reaches the renderer with addon widgets drawn in th
             out.widget(doc.length, label, -1)
             out.replace(9, 14, new Counter(1))
             out.replace(0, 1)
+            out.link(0, 3)
+            out.link(4, 7, { class: 'link-proof' })
           },
           layout(_node, out) {
             out.replace(4, 7, new Counter(2), { block: true })
@@ -376,6 +390,8 @@ test('valid formatted output reaches the renderer with addon widgets drawn in th
         ['widget', doc.length, 'widget', -1],
         ['replace', 9, 14, 'widget'],
         ['replace', 0, 1, undefined],
+        ['link', 0, 3, undefined],
+        ['link', 4, 7, { class: 'link-proof' }],
       ],
     )
     assert.deepEqual(

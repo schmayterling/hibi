@@ -552,35 +552,10 @@ function App() {
   useEffect(() => {
     const side = focusSplitSide.current
     if (busy || !DocumentEditor || !side || splitTabs?.active !== side) return
-    const reveal = () => {
-      if (
-        window.document.activeElement?.matches('.document-tabs [role="tab"]')
-      ) {
-        focusSplitSide.current = null
-        observer.disconnect()
-        return
-      }
-      const target = Array.from(
-        window.document.querySelectorAll<HTMLElement>(
-          `.editor-page[data-side="${side}"] [contenteditable="true"]`,
-        ),
-      ).find(
-        (element) =>
-          !element.closest('[inert]') && element.getClientRects().length,
-      )
-      if (target) {
-        target.focus({ preventScroll: true })
-        focusSplitSide.current = null
-        observer.disconnect()
-      }
-    }
-    const observer = new MutationObserver(reveal)
-    observer.observe(window.document.body, { childList: true, subtree: true })
-    const frame = requestAnimationFrame(reveal)
-    return () => {
-      observer.disconnect()
-      cancelAnimationFrame(frame)
-    }
+    focusSplitSide.current = null
+    if (window.document.activeElement?.matches('.document-tabs [role="tab"]'))
+      return
+    focusEditor({ preventScroll: true })
   }, [busy, DocumentEditor, splitTabs?.active])
   const acknowledgeSave = useCallback(
     (

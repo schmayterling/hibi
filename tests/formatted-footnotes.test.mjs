@@ -260,6 +260,102 @@ test('a reference finds where the text of its first definition starts', () => {
   assert.equal(definitionOf(state, 'b'), null)
 })
 
+for (const continued of [false, true]) {
+  test(`indexed navigation reads no text or syntax for a 50 MiB ${continued ? 'continued definition' : 'definition line'}`, (t) => {
+    const line = `    ${'x'.repeat(1019)}\n`
+    const source = `see[^a]\n\n[^A]: \ttarget${continued ? `\n${line.repeat(51200)}` : 'x'.repeat(50 << 20)}`
+    const state = settle(create(source))
+    assert.ok(state.doc.length >= 50 << 20)
+    const slices = t.mock.method(state.doc, 'sliceString')
+    const iterations = t.mock.method(state.doc, 'iterRange')
+    const parses = t.mock.method(Object.getPrototypeOf(markdown), 'parse')
+    const before = { ...footnoteScan }
+    for (const label of ['a', 'A'])
+      assert.equal(definitionOf(state, label), source.indexOf('target'))
+    const reads = slices.mock.calls.map(
+      ({ arguments: [from, to] }) => to - from,
+    )
+    assert.deepEqual(
+      {
+        largestSlice: Math.max(0, ...reads),
+        totalSliced: reads.reduce((sum, size) => sum + size, 0),
+        iterations: iterations.mock.callCount(),
+        parses: parses.mock.callCount(),
+      },
+      { largestSlice: 0, totalSliced: 0, iterations: 0, parses: 0 },
+    )
+    assert.deepEqual(footnoteScan, before)
+  })
+}
+
+test('definition navigation retains local offsets through replay and mapped stretches', () => {
+  const { window, slice } = footnoteScan
+  try {
+    for (const size of [16, 48, 256]) {
+      footnoteScan.window = size
+      footnoteScan.slice = 256
+      const body =
+        'start[^a] and[^b]\n\n' +
+        'paragraph\n\n'.repeat(100) +
+        '> - item\n' +
+        '>\n'.repeat(30) +
+        '>     [^A]: \tfirst\n' +
+        '>         continuation\n'.repeat(100) +
+        '>\n>     [^b]:\tsecond\n\n[^a]: duplicate\n\n[^empty]: \t\n\nend'
+      let state = settle(create(body))
+      const check = () => {
+        const doc = state.doc.toString()
+        for (const [label, text] of [
+          ['a', 'first'],
+          ['b', 'second'],
+          ['empty', '\n\nend'],
+        ])
+          assert.equal(
+            definitionOf(state, label),
+            doc.indexOf(text),
+            `${size}: ${label}`,
+          )
+      }
+      check()
+      const untouched = state
+        .field(footnoteDefinitions)
+        .groups.at(-1)
+        .stretches.at(-1)
+      state = settle(
+        state.update({ changes: { from: 0, insert: 'new paragraph\n\n' } })
+          .state,
+      )
+      assert.equal(
+        state.field(footnoteDefinitions).groups.at(-1).stretches.at(-1),
+        untouched,
+      )
+      check()
+      const first = state.doc.toString().indexOf('first')
+      state = settle(
+        state.update({ changes: { from: first, insert: '\t  ' } }).state,
+      )
+      check()
+      const start = state.doc.toString().indexOf('[^A]:')
+      state = settle(
+        state.update({
+          changes: { from: start, to: start + 5, insert: '[^c]:' },
+        }).state,
+      )
+      assert.equal(
+        definitionOf(state, 'a'),
+        state.doc.toString().indexOf('duplicate'),
+      )
+      assert.equal(
+        definitionOf(state, 'c'),
+        state.doc.toString().indexOf('first'),
+      )
+    }
+  } finally {
+    footnoteScan.window = window
+    footnoteScan.slice = slice
+  }
+})
+
 test('definition navigation waits for changed blocks to be read again', () => {
   let state = settle(
     create(
@@ -565,12 +661,18 @@ test('blank lookahead yields between bounded reads without losing nested definit
     }
     assert.ok(slices > 100, 'blank lines are read over several slices')
     assert.deepEqual(indexed(state), { real: 1 })
+    assert.equal(definitionOf(state, 'real'), source.lastIndexOf('real'))
     const at = source.lastIndexOf('[^real]:')
     state = settle(
-      state.update({ changes: { from: at, to: at + 7, insert: '[^new]:' } })
-        .state,
+      state.update({
+        changes: { from: at, to: at + '[^real]:'.length, insert: '[^new]:' },
+      }).state,
     )
     assert.deepEqual(indexed(state), { new: 1 })
+    assert.equal(
+      definitionOf(state, 'new'),
+      state.doc.toString().lastIndexOf('real'),
+    )
   }
 })
 

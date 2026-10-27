@@ -19,6 +19,8 @@ const note = `See the note[^far] here and missing[^unknown].
 ${filler}
 
 [^far]: The far definition.
+
+[^FAR]: The duplicate definition.
 `
 
 test('footnote references are links that move to their definitions', {
@@ -45,6 +47,7 @@ test('footnote references are links that move to their definitions', {
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+    dialog.showMessageBox = async () => ({ response: 1 })
   }, file)
   await clickMenu(app, 'Open…')
   const rich = page.locator('.rich-pane')
@@ -74,13 +77,14 @@ test('footnote references are links that move to their definitions', {
     ),
     'none',
   )
-  const definition = note.indexOf('The far definition')
+  let target = 'The far definition'
+  let definition = note.indexOf(target)
   const state = () =>
-    page.evaluate(() => {
+    page.evaluate((target) => {
       const view = document.querySelector('.rich-pane .cm-content').cmTile.root
         .view
       const line = [...view.contentDOM.querySelectorAll('.cm-line')].find(
-        (element) => element.textContent.includes('The far definition'),
+        (element) => element.textContent.includes(target),
       )
       const box = line?.getBoundingClientRect()
       const pane = document.querySelector('.rich-pane').getBoundingClientRect()
@@ -88,7 +92,7 @@ test('footnote references are links that move to their definitions', {
         head: view.state.selection.main.head,
         shown: !!box && box.top >= pane.top && box.bottom <= pane.bottom,
       }
-    })
+    }, target)
   const arrived = () =>
     page.waitForFunction((definition) => {
       const view = document.querySelector('.rich-pane .cm-content').cmTile.root
@@ -137,5 +141,49 @@ test('footnote references are links that move to their definitions', {
         .cmTile.root.view.state.doc.toString(),
     ),
     note,
+  )
+  // Unchanged definition stretches move with a preceding edit.
+  const prefix = 'New paragraph before the references.\n\n'
+  await page.evaluate((prefix) => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    view.dispatch({
+      changes: { from: 0, insert: prefix },
+      selection: { anchor: 0 },
+      scrollIntoView: true,
+    })
+  }, prefix)
+  definition += prefix.length
+  await reference.click({ modifiers: ['Shift'] })
+  await arrived()
+  assert.deepEqual(await state(), { head: definition, shown: true })
+
+  // Removing the first definition makes body and table links use the duplicate.
+  await page.evaluate(() => {
+    const view = document.querySelector('.rich-pane .cm-content').cmTile.root
+      .view
+    const from = view.state.doc.toString().indexOf('[^far]:')
+    view.dispatch({
+      changes: { from, to: from + '[^far]:'.length },
+      selection: { anchor: 0 },
+      scrollIntoView: true,
+    })
+  })
+  const edited = prefix + note.replace('[^far]:', '')
+  target = 'The duplicate definition'
+  definition = edited.indexOf(target)
+  for (const link of [reference, cell]) {
+    await top()
+    await link.click({ modifiers: ['Shift'] })
+    await arrived()
+    assert.deepEqual(await state(), { head: definition, shown: true })
+  }
+  assert.equal(
+    await page.evaluate(() =>
+      document
+        .querySelector('.rich-pane .cm-content')
+        .cmTile.root.view.state.doc.toString(),
+    ),
+    edited,
   )
 })

@@ -4,10 +4,8 @@ import { EditorState } from '@codemirror/state'
 import { GFM } from '@lezer/markdown'
 import { blockStep } from '../src/addons/block-drag/formatted.ts'
 import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
-import {
-  formattedBlockParser,
-  formattedSyntax,
-} from '../src/renderer/src/formatted-syntax.ts'
+import { formattedBlockParser } from '../src/renderer/src/formatted-contributions.ts'
+import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
 import { Footnotes, GithubAlerts } from '../src/shared/markdown-extra-syntax.ts'
 
 const extensions = [GFM, Footnotes, GithubAlerts]

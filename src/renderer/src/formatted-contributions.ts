@@ -7,7 +7,11 @@ import {
 } from '@codemirror/state'
 import { type KeyBinding, keymap, type WidgetType } from '@codemirror/view'
 import type { SyntaxNodeRef, Tree } from '@lezer/common'
-import type { MarkdownConfig } from '@lezer/markdown'
+import {
+  type MarkdownConfig,
+  type MarkdownParser,
+  parser,
+} from '@lezer/markdown'
 import { type FormattedEntry, formattedRegistry } from './formatted-registry.ts'
 import { markdownSyntax } from './markdown-syntax.ts'
 
@@ -163,6 +167,15 @@ export type FormattedContribution = {
 
 /** Markdown extensions of the active contributions, read by the formatted syntax. */
 export const formattedMarkdown = Facet.define<MarkdownConfig>()
+
+/** The same block grammar the view uses, for validating local source transforms. */
+export const formattedBlockParser = Facet.define<
+  (state: EditorState) => MarkdownParser,
+  (state: EditorState) => MarkdownParser
+>({
+  combine: (values) =>
+    values[0] ?? ((state) => parser.configure(state.facet(formattedMarkdown))),
+})
 
 /** The view's active flavor ids also identify worker boundary configurations. */
 export const formattedFlavors = Facet.define<

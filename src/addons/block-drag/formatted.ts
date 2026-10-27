@@ -12,9 +12,9 @@ import type { SyntaxNode, Tree } from '@lezer/common'
 import { uncovered } from '../../renderer/src/chunked-markdown.ts'
 import {
   type FormattedContribution,
+  formattedBlockParser,
   formattedSyntaxTree,
 } from '../../renderer/src/formatted-contributions.ts'
-import { formattedBlockParser } from '../../renderer/src/formatted-syntax.ts'
 import type { MenuApi } from '../api'
 
 /*

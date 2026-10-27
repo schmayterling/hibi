@@ -3,7 +3,6 @@ import {
   type ChangeDesc,
   type EditorState,
   type Extension,
-  Facet,
   StateEffect,
   StateField,
 } from '@codemirror/state'
@@ -12,7 +11,6 @@ import { type Tree, TreeFragment } from '@lezer/common'
 import {
   type MarkdownConfig,
   type MarkdownExtension,
-  type MarkdownParser,
   parseCode,
   parser,
 } from '@lezer/markdown'
@@ -34,6 +32,7 @@ import {
 } from './chunked-markdown.ts'
 import { codeLanguages } from './code-languages.ts'
 import {
+  formattedBlockParser,
   formattedFlavors,
   formattedLiteral,
   formattedMarkdown,
@@ -540,15 +539,6 @@ export type FormattedSyntax = {
    */
   settling: (state: EditorState) => boolean
 }
-
-/** The same block grammar the view uses, for validating local source transforms. */
-export const formattedBlockParser = Facet.define<
-  (state: EditorState) => MarkdownParser,
-  (state: EditorState) => MarkdownParser
->({
-  combine: (values) =>
-    values[0] ?? ((state) => parser.configure(state.facet(formattedMarkdown))),
-})
 
 /** Chunked Markdown syntax for one formatted editor configuration. */
 export function formattedSyntax(

@@ -5,6 +5,7 @@ import {
   Compartment,
   EditorSelection,
   EditorState,
+  Prec,
   StateEffect,
   StateField,
   Transaction,
@@ -1077,23 +1078,31 @@ test('a failure an extension caught while reading the state is still rejected', 
   assert.deepEqual(f.errors, [])
   surface.dispose()
   f.session.dispose()
-  // With nothing reading first, the state CodeMirror left unfinished still fails.
-  const unguarded = EditorState.create({
+  // An addon can append an extender after the guards. On an edit made
+  // without filters it reads the state first and catches the failure; the
+  // state CodeMirror left unfinished still fails.
+  const appended = EditorState.create({
     doc: 'end',
-    extensions: [
-      failing,
-      EditorState.transactionExtender.of((transaction) => {
-        try {
-          transaction.state
-        } catch {}
-        return null
-      }),
-    ],
-  }).update({ changes: { from: 3, insert: 'Q' } })
-  assert.equal(unguarded.state.doc.toString(), 'endQ')
-  assert.equal(transactionState(unguarded), null)
+    extensions: [firstStateRead, failing, failedEditGuard],
+  }).update({
+    effects: StateEffect.appendConfig.of(
+      Prec.lowest(
+        EditorState.transactionExtender.of((transaction) => {
+          try {
+            transaction.state
+          } catch {}
+          return null
+        }),
+      ),
+    ),
+  }).state
+  const late = appended.update({
+    changes: { from: 3, insert: 'Q' },
+    filter: false,
+  })
+  assert.equal(transactionState(late), null)
   // Then it reads as the state the edit started from.
-  assert.equal(unguarded.state.doc.toString(), 'end')
+  assert.equal(late.state, appended)
 })
 
 test('an edit an extension fails on reaches neither the session nor the view', () => {

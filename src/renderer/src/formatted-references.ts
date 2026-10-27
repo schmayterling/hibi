@@ -126,7 +126,9 @@ const requests = ViewPlugin.fromClass(
     private idle = 0
     private queued = false
     private destroyed = false
-    constructor(private readonly view: EditorView) {
+    private readonly view: EditorView
+    constructor(view: EditorView) {
+      this.view = view
       this.syntax = view.state.facet(formattedReferences)?.syntax() ?? null
       this.later()
     }

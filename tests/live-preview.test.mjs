@@ -952,6 +952,60 @@ test('after an idle moment, scrolling near the viewport parses nothing in its fr
   assert.equal(result.scroll.scannedUnits, 0, JSON.stringify(result))
 })
 
+test('links whose destination spans lines render on one line while mounting and scrolling', {
+  timeout: 90000,
+}, async () => {
+  const errors = []
+  const pageError = (error) => errors.push(error.message)
+  const consoleError = (message) => {
+    if (message.type() === 'error') errors.push(message.text())
+  }
+  harness.on('pageerror', pageError)
+  harness.on('console', consoleError)
+  try {
+    for (const [doc, lines] of [
+      ['[label](https://example.com/\n "title")\n\nend', ['label', 'end']],
+      ['[label](\nhttps://example.com/\n)\n\nend', ['label', 'end']],
+      ['[long\nlabel](https://example.com/)\n\nend', ['long label', 'end']],
+      ['hello\n`` some\ncode ``\n\nend', ['hello some code', 'end']],
+    ]) {
+      const text = await harness.evaluate(async (doc) => {
+        await window.livePreview.mount(doc, { width: 800, height: 600 })
+        await window.livePreview.settle()
+        return [...document.querySelectorAll('.cm-line')]
+          .map((line) => line.textContent.replace(/\s+/g, ' ').trim())
+          .filter(Boolean)
+      }, doc)
+      assert.deepEqual(text, lines, JSON.stringify(doc))
+    }
+    // Each scrolled viewport builds decorations for newly visible links.
+    const shown = await harness.evaluate(async () => {
+      const doc = Array.from(
+        { length: 2000 },
+        (_, i) => `para ${i} [link ${i}](\nhttps://example.com/${i}\n "t")`,
+      ).join('\n\n')
+      const preview = window.livePreview
+      await preview.mount(doc, { width: 800, height: 600 })
+      const view = preview.view()
+      let links = 0
+      for (let step = 1; step <= 20; step++) {
+        view.dispatch({
+          selection: { anchor: Math.floor((doc.length * step) / 20) },
+          scrollIntoView: true,
+        })
+        await preview.settle()
+        links += document.querySelectorAll('.hibi-lp-link').length
+      }
+      return links
+    })
+    assert.ok(shown > 20, `${shown}`)
+    assert.deepEqual(errors, [])
+  } finally {
+    harness.off('pageerror', pageError)
+    harness.off('console', consoleError)
+  }
+})
+
 test('reference links render the labels the note defines and keep their brackets otherwise', {
   timeout: 60000,
 }, async () => {
@@ -1094,60 +1148,6 @@ test('reference labels follow definition changes after an edit and ask only abou
   // Labels drawn on screen, at most the 50 distinct ones, never the note's.
   assert.ok(scale.opened.asked <= 50, JSON.stringify(scale))
   assert.ok(scale.scrolled <= 100, JSON.stringify(scale))
-})
-
-test('links whose destination spans lines render on one line while mounting and scrolling', {
-  timeout: 90000,
-}, async () => {
-  const errors = []
-  const pageError = (error) => errors.push(error.message)
-  const consoleError = (message) => {
-    if (message.type() === 'error') errors.push(message.text())
-  }
-  harness.on('pageerror', pageError)
-  harness.on('console', consoleError)
-  try {
-    for (const [doc, lines] of [
-      ['[label](https://example.com/\n "title")\n\nend', ['label', 'end']],
-      ['[label](\nhttps://example.com/\n)\n\nend', ['label', 'end']],
-      ['[long\nlabel](https://example.com/)\n\nend', ['long label', 'end']],
-      ['hello\n`` some\ncode ``\n\nend', ['hello some code', 'end']],
-    ]) {
-      const text = await harness.evaluate(async (doc) => {
-        await window.livePreview.mount(doc, { width: 800, height: 600 })
-        await window.livePreview.settle()
-        return [...document.querySelectorAll('.cm-line')]
-          .map((line) => line.textContent.replace(/\s+/g, ' ').trim())
-          .filter(Boolean)
-      }, doc)
-      assert.deepEqual(text, lines, JSON.stringify(doc))
-    }
-    // Each scrolled viewport builds decorations for newly visible links.
-    const shown = await harness.evaluate(async () => {
-      const doc = Array.from(
-        { length: 2000 },
-        (_, i) => `para ${i} [link ${i}](\nhttps://example.com/${i}\n "t")`,
-      ).join('\n\n')
-      const preview = window.livePreview
-      await preview.mount(doc, { width: 800, height: 600 })
-      const view = preview.view()
-      let links = 0
-      for (let step = 1; step <= 20; step++) {
-        view.dispatch({
-          selection: { anchor: Math.floor((doc.length * step) / 20) },
-          scrollIntoView: true,
-        })
-        await preview.settle()
-        links += document.querySelectorAll('.hibi-lp-link').length
-      }
-      return links
-    })
-    assert.ok(shown > 20, `${shown}`)
-    assert.deepEqual(errors, [])
-  } finally {
-    harness.off('pageerror', pageError)
-    harness.off('console', consoleError)
-  }
 })
 
 test('a structural edit at the top of a 50 MiB note parses a bounded window and converges in idle slices', {

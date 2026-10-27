@@ -20,6 +20,7 @@ import { editorExtensions } from '../src/renderer/src/markdown.ts'
 import { createMarkdownSemantics } from '../src/renderer/src/markdown-semantics.ts'
 import { markdownSyntax } from '../src/renderer/src/markdown-syntax.ts'
 import { SourceOutlineModel } from '../src/renderer/src/source-outline.ts'
+import { createOutlineLabelReader } from '../src/renderer/src/source-outline-label.worker.ts'
 import { readFrontmatter } from '../src/shared/frontmatter.ts'
 import { SourceStore } from '../src/shared/source-buffer.ts'
 
@@ -94,17 +95,21 @@ function referenceOracle(source) {
   return (label) => (Object.hasOwn(links, label) ? links[label] : null)
 }
 
-function finish(work, resolve) {
+function finish(work, resolve, readLabel) {
   let value
   for (let steps = 0; steps < 100_000; steps++) {
     const step = work.next(value)
     if (step.done) return step.value.headings
-    value = step.value ? resolve(step.value.reference) : undefined
+    value = step.value
+      ? 'label' in step.value
+        ? readLabel(step.value.label)
+        : resolve(step.value.reference)
+      : undefined
   }
   assert.fail('Outline work must converge.')
 }
 
-function setup(source, { math = false } = {}) {
+function setup(source, { math = false, deferLabels = false } = {}) {
   const activeFlavors = math ? [...flavors, mathFlavor] : flavors
   const consumer = createMarkdownSemantics(activeFlavors, 0)
   assert.ok(consumer)
@@ -118,6 +123,7 @@ function setup(source, { math = false } = {}) {
     alerts: true,
     textExtras: true,
     math,
+    deferLabels,
     renderLabel: (tokens, level) =>
       consumer.read(
         [
@@ -323,4 +329,86 @@ test('body reuse preserves definition edits, queued edits, removals and undo', (
 
 test('source outline labels preserve native inline math atoms', () => {
   check('# before $x^2$ after and **$y$**', { math: true })
+})
+
+test('deferred labels preserve complete native formatting, references, math and disabled syntax', () => {
+  const padding = 'heading '.repeat(90)
+  const fixtures = [
+    `# ${padding}&amp; &#65; \\*literal\\* **bold *soft*** \`&amp;\``,
+    `# ${padding}~~strike~~ H~2~O ![alt](image.png) <em>html</em><br>tail`,
+    `# ${padding}**before <em>html</em> after** [*a <br> b*](/target)`,
+    `# ${padding}**outer *inner <span>html</span> tail* end**`,
+    `# ${padding}**cross <span>scope** ends</span>`,
+    `# ${padding}\\*literal\\* **bold**`,
+    `# ${padding}[**visible**][ref] [missing][absent]\n\n[ref]: /target`,
+    `# ${padding}**before [outer [inner](/nested)](/target) after**`,
+    `# ${padding}*<pre>raw &amp;</pre>* tail <https://example.test>`,
+    `# ${padding}*<a href="/target">inside* https://example.test </a> tail`,
+    `# ${padding}![![nested image](inside.png)](outside.png) tail`,
+    `${padding}**bold**\n[*link*](/target) &amp;\n---\n`,
+    `# ${'*a '.repeat(64)}b${' a*'.repeat(64)}${padding}\n`,
+    `# ${padding}before $x^2$ after **$y$**`,
+  ]
+  const disabled = [
+    'core.bold',
+    'core.italic',
+    'core.links',
+    'core.images',
+    'core.inline-code',
+    'markdown.strike',
+    'text-extras.subscript',
+    'math.inline',
+  ]
+  for (const off of [false, true]) {
+    const reader = createOutlineLabelReader({
+      syntax: { gfm: true, alerts: true, textExtras: true, math: true },
+      flavors: [...flavors, mathFlavor].map((flavor) => flavor.id),
+      disabled: off ? disabled : [],
+    })
+    const nested = `${'*a '.repeat(1000)}b${' a*'.repeat(1000)}`
+    for (const text of [nested, `[${nested}](/target)`]) {
+      const deep = reader({ text, level: 1, references: new Map() })
+      assert.equal(
+        deep.label,
+        off ? text : `${'a '.repeat(1000)}b${' a'.repeat(1000)}`,
+      )
+    }
+    for (const source of fixtures) {
+      const { model, activeFlavors } = setup(source, {
+        math: true,
+        deferLabels: true,
+      })
+      try {
+        let requests = 0
+        const actual = finish(
+          model.read(),
+          referenceOracle(source),
+          (request) => {
+            requests++
+            assert.ok(request.text.length > 512)
+            return reader(request)
+          },
+        )
+        assert.ok(requests > 0)
+        assert.deepEqual(
+          actual.map(({ label, level }) => ({ label, level })),
+          nativeHeadings(source, activeFlavors),
+        )
+      } finally {
+        model.dispose()
+      }
+    }
+  }
+  markdownSyntax.reset()
+})
+
+test('long heading labels match native headings in full', () => {
+  const words = Array.from(
+    { length: 300 },
+    (_, i) => `word${i} **bold ${i}** [link ${i}](/target) &amp;`,
+  )
+  const [atx] = check(`# ${words.join(' ')}`)
+  assert.ok(atx.label.length > 4096, `${atx.label.length}`)
+  // A paragraph before a dashed line is one setext heading.
+  check(`${words.join('\n')}\n---\n`)
 })

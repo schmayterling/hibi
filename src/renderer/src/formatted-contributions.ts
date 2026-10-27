@@ -5,7 +5,12 @@ import {
   Prec,
   StateEffect,
 } from '@codemirror/state'
-import { type KeyBinding, keymap, type WidgetType } from '@codemirror/view'
+import {
+  type EditorView,
+  type KeyBinding,
+  keymap,
+  type WidgetType,
+} from '@codemirror/view'
 import type { NodeType, SyntaxNodeRef, Tree } from '@lezer/common'
 import type { MarkdownConfig } from '@lezer/markdown'
 import { type FormattedEntry, formattedRegistry } from './formatted-registry.ts'
@@ -23,6 +28,11 @@ import { markdownSyntax } from './markdown-syntax.ts'
 export type FormattedDecorations = {
   /** Attributes, such as `class`, for text in the node. */
   mark(from: number, to: number, attributes: Record<string, string>): void
+  /**
+   * Text that reads as a link, such as a link's label: one element with the
+   * link role and style, whole around the other decorations in it.
+   */
+  link(from: number, to: number, attributes?: Record<string, string>): void
   /**
    * Markdown syntax: hidden and atomic, or an editable marker while the node
    * is revealed. Stays on one line.
@@ -273,6 +283,30 @@ export const formattedRenderInputs = Facet.define<unknown>()
 export const formattedOwner = Facet.define<EditorState, EditorState | null>({
   combine: (values) => values[0] ?? null,
 })
+
+/** The attributes of text that reads as a link, with a renderer's own. */
+export const formattedLinkAttributes = (
+  attributes?: Record<string, string>,
+) => ({
+  ...attributes,
+  class: attributes?.class
+    ? `hibi-lp-link ${attributes.class}`
+    : 'hibi-lp-link',
+  role: 'link',
+})
+
+/** A click that follows the link under it: Shift-click, or Ctrl+Cmd-click as in the rich view. */
+export const followsLink = (event: MouseEvent) =>
+  event.shiftKey || (event.ctrlKey && event.metaKey)
+
+/**
+ * Follow the link at a position of the formatted view's document, as a
+ * modified click on it does; its host provides it. False when there is none.
+ */
+export const formattedFollowLink = Facet.define<
+  (view: EditorView, pos: number, wikiTarget?: string) => boolean,
+  ((view: EditorView, pos: number, wikiTarget?: string) => boolean) | null
+>({ combine: (values) => values.at(-1) ?? null })
 
 /** Show the Markdown markers of the formatted text under the selection. */
 export const showMarkdownMarkers = Facet.define<boolean, boolean>({

@@ -22,7 +22,13 @@ function wikiParts(node: SyntaxNode) {
   const target = node.getChild('WikiTarget')
   const label = node.getChild('WikiAlias') ?? target
   const text = target?.tree?.prop(wikiText)
-  return label && text !== undefined ? { target: text, label } : null
+  return label && text !== undefined
+    ? {
+        target: text,
+        label,
+        aliased: node.getChildren('WikiMark').length === 3,
+      }
+    : null
 }
 
 /**
@@ -179,10 +185,17 @@ export const contribution: FormattedContribution = {
         // The label reads as a link; brackets, and the target behind an alias, are syntax.
         const { from, to } = parts.label
         out.syntax(node.from, from)
-        wrapDecoded(out, context, from, to, {
-          class: 'hibi-lp-link',
-          'data-wiki-link': parts.target,
-        })
+        wrapDecoded(
+          out,
+          context,
+          from,
+          to,
+          {
+            'data-wiki-link': parts.target,
+            'data-wiki-alias': String(parts.aliased),
+          },
+          true,
+        )
         out.syntax(to, node.to)
         return false
       },

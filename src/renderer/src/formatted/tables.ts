@@ -19,7 +19,9 @@ import {
 import {
   type FormattedContribution,
   type FormattedNodeView,
+  followsLink,
   formattedDocument,
+  formattedFollowLink,
   formattedLiteral,
   formattedMarkdown,
   formattedRenderInputs,
@@ -38,6 +40,7 @@ import {
   type CellHost,
   type CellMove,
   cellInput,
+  markStarts,
   padding,
   renderInline,
   textStarts,
@@ -379,6 +382,8 @@ class TableView {
     this.dom.addEventListener('mouseleave', this.leaveHandle)
     this.dom.addEventListener('dblclick', this.reset)
     this.dom.addEventListener('keydown', this.key)
+    this.dom.addEventListener('click', this.followLink)
+    this.dom.addEventListener('contextmenu', this.followLink)
     this.table.append(this.columns, this.body)
     this.dom.append(this.table)
     this.body.append(this.head)
@@ -1678,6 +1683,8 @@ class TableView {
     const index = row?.getAttribute('data-line')
     if (!cell || !row || index == null) return
     event.preventDefault()
+    // A click that follows a link neither edits nor selects.
+    if (followsLink(event) && target.closest('.hibi-lp-link')) return
     const line = Number(index),
       column = [...row.children].indexOf(cell)
     const source = this.widget.line(line)
@@ -1714,6 +1721,65 @@ class TableView {
     this.edit(line, column, offset)
   }
 
+  /** Shift- or Ctrl+Cmd-click follows a cell's link, as elsewhere in the formatted view. */
+  private followLink = (event: MouseEvent) => {
+    // A Ctrl+Cmd-click arrives as a context menu on macOS.
+    if (
+      event.type === 'contextmenu'
+        ? !event.ctrlKey || !event.metaKey
+        : !followsLink(event)
+    )
+      return
+    const link = (event.target as Element).closest('.hibi-lp-link')
+    const pos = link && this.dom.contains(link) ? this.linkStart(link) : null
+    const wiki = link?.closest('[data-wiki-link]')
+    const raw = wiki?.getAttribute('data-wiki-link')
+    // An active cell still has the table escape before an alias's pipe.
+    const target =
+      this.editing?.editor.view.dom.contains(link) &&
+      wiki?.getAttribute('data-wiki-alias') === 'true' &&
+      raw?.endsWith('\\')
+        ? raw.slice(0, -1).trim()
+        : (raw ?? undefined)
+    if (
+      pos != null &&
+      this.view.state.facet(formattedFollowLink)?.(this.view, pos, target)
+    )
+      event.preventDefault()
+  }
+
+  /** Where the text of a cell's link starts in the document now. */
+  private linkStart(link: Element) {
+    const editing = this.editing
+    if (editing?.editor.view.dom.contains(link)) {
+      const span = this.span(editing)
+      return span && span.from + editing.editor.view.posAtDOM(link)
+    }
+    const cell = link.closest('th, td')
+    const row = cell?.parentElement
+    const index = row?.getAttribute('data-line')
+    if (!cell || !row || index == null) return null
+    let start: number | undefined
+    for (
+      let wrapper: Element | null = link;
+      wrapper && cell.contains(wrapper);
+      wrapper = wrapper.parentElement
+    ) {
+      if (!wrapper.matches('.hibi-lp-link')) continue
+      start = markStarts.get(wrapper)
+      if (start !== undefined) break
+    }
+    const line = Number(index)
+    const source = this.widget.line(line)
+    const range = this.widget.row(line).cells[[...row.children].indexOf(cell)]
+    if (start === undefined || !range) return null
+    const content = cellContent(source.text.slice(range.from, range.to))
+    const offset = content.source[start]
+    return offset === undefined
+      ? null
+      : this.now(source.from + range.from + offset)
+  }
+
   destroy() {
     this.stopEditing()
     if (this.saving) this.save()
@@ -1724,6 +1790,8 @@ class TableView {
     this.dom.removeEventListener('mouseleave', this.leaveHandle)
     this.dom.removeEventListener('dblclick', this.reset)
     this.dom.removeEventListener('keydown', this.key)
+    this.dom.removeEventListener('click', this.followLink)
+    this.dom.removeEventListener('contextmenu', this.followLink)
   }
 }
 

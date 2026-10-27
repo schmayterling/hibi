@@ -36,6 +36,47 @@ export type SourceOutline = Readonly<{
   at: (position: number) => SourceOutlineHeading | undefined
 }>
 export type SourceOutlineReference = Readonly<{ reference: string }>
+export type SourceOutlineLabelRequest = {
+  text: string
+  level: number
+  references: ReadonlyMap<string, ReferenceValue | null>
+}
+export type SourceOutlineLabelResult = {
+  label: string | null
+  references: string[]
+  missing: string[]
+}
+export type SourceOutlineInput =
+  | ReferenceValue
+  | SourceOutlineLabelResult
+  | null
+  | undefined
+
+/** The identical lexical read runs locally for short labels and in a worker for long ones. */
+export function readSourceOutlineLabel(
+  request: SourceOutlineLabelRequest,
+  parser: ReturnType<typeof markdownSourceParser>,
+  render: (tokens: readonly Token[], level: number) => string | null,
+): SourceOutlineLabelResult {
+  const references = request.references,
+    used = new Set<string>(),
+    missing = new Set<string>(),
+    lexer = new parser.Lexer({ ...parser.defaults, tokenizer: null })
+  lexer.tokens.links = new Proxy(Object.create(null), {
+    get: (_target, key) => {
+      if (typeof key !== 'string') return undefined
+      used.add(key)
+      if (!references.has(key)) missing.add(key)
+      return references.get(key) ?? undefined
+    },
+  })
+  const tokens = lexer.inlineTokens(request.text)
+  return {
+    label: missing.size ? null : render(tokens, request.level),
+    references: [...used],
+    missing: [...missing],
+  }
+}
 type CachedHeading = {
   heading: SourceOutlineHeading
   references: readonly string[]
@@ -66,12 +107,10 @@ function headingText(source: SourceSnapshot, node: SyntaxNode) {
       node.name.startsWith('ATX') && first?.name === 'HeaderMark'
         ? first.to
         : node.from,
-    to = last?.name === 'HeaderMark' && last.from >= from ? last.from : node.to,
-    boundedTo = Math.min(to, from + 512)
-  // ponytail: labels inspect at most 512 UTF-16 units; full heading text stays
-  // in the document. Larger labels need a separately budgeted inline reader.
+    to = last?.name === 'HeaderMark' && last.from >= from ? last.from : node.to
+  // The whole heading: the outline shortens long labels only on screen.
   return normalizedSource(
-    source.sliceRaw(rawPosition(source, from), rawPosition(source, boundedTo)),
+    source.sliceRaw(rawPosition(source, from), rawPosition(source, to)),
   )
     .replace(/\n[ \t]*(?:>[ \t]*)+/g, '\n')
     .trim()
@@ -85,6 +124,7 @@ export class SourceOutlineModel {
   readonly #math: boolean
   readonly #disabled: ReadonlySet<string>
   readonly #labels: ReturnType<typeof markdownSourceParser>
+  readonly #deferLabels: boolean
   readonly #renderLabel: (
     tokens: readonly Token[],
     level: number,
@@ -114,9 +154,11 @@ export class SourceOutlineModel {
       alerts?: boolean
       textExtras?: boolean
       math?: boolean
+      deferLabels?: boolean
       renderLabel?: (tokens: readonly Token[], level: number) => string | null
     },
   ) {
+    this.#deferLabels = options.deferLabels ?? false
     this.#frontmatter = options.frontmatter
     this.#math = options.math ?? false
     this.#disabled = new Set(options.disabled)
@@ -182,9 +224,9 @@ export class SourceOutlineModel {
   }
 
   *read(): Generator<
-    undefined | SourceOutlineReference,
+    undefined | SourceOutlineReference | { label: SourceOutlineLabelRequest },
     SourceOutline,
-    ReferenceValue | null | undefined
+    SourceOutlineInput
   > {
     const epoch = this.#epoch,
       source = this.#session.state().source,
@@ -242,7 +284,7 @@ export class SourceOutlineModel {
     // Definitions may change outside a reused heading's subtree. Revalidate only
     // its reference dependencies before reusing the corresponding labels.
     for (const [reference, previous] of this.#references) {
-      const value = (yield { reference }) ?? null
+      const value = ((yield { reference }) as ReferenceValue | null) ?? null
       current()
       references.set(reference, value)
       if (value?.href !== previous?.href || value?.title !== previous?.title)
@@ -286,31 +328,30 @@ export class SourceOutlineModel {
           const text = headingText(source, cursor.node),
             used = new Set<string>(),
             level = Number(heading[1])
-          let tokens: Token[]
+          let label: string | null
           for (;;) {
-            const missing = new Set<string>(),
-              lexer = new this.#labels.Lexer({
-                ...this.#labels.defaults,
-                tokenizer: null,
-              })
-            lexer.tokens.links = new Proxy(Object.create(null), {
-              get: (_target, key) => {
-                if (typeof key !== 'string') return undefined
-                used.add(key)
-                if (!references.has(key)) missing.add(key)
-                return references.get(key) ?? undefined
-              },
-            })
-            tokens = lexer.inlineTokens(text)
-            if (!missing.size) break
-            for (const reference of missing) {
-              const value = yield { reference }
+            const request = { text, level, references },
+              result =
+                this.#deferLabels && text.length > 512
+                  ? ((yield { label: request }) as SourceOutlineLabelResult)
+                  : readSourceOutlineLabel(
+                      request,
+                      this.#labels,
+                      this.#renderLabel,
+                    )
+            current()
+            for (const reference of result.references) used.add(reference)
+            if (!result.missing.length) {
+              label = result.label
+              break
+            }
+            for (const reference of result.missing) {
+              const value = (yield { reference }) as ReferenceValue | null
               current()
               references.set(reference, value ?? null)
             }
           }
           this.#work.labelsRead++
-          const label = this.#renderLabel(tokens, level)
           if (label === null)
             throw new Error(
               'Source outline cannot represent the active syntax.',

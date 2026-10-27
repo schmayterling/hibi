@@ -402,3 +402,186 @@ test('an open outline on a 50 MiB formatted note reuses headings after body edit
     [],
   )
 })
+
+test('outline rows name long headings in full and shorten them only on screen', {
+  timeout: 90000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-outline-long-'))
+  const file = join(folder, 'long.md')
+  const words = Array.from({ length: 300 }, (_, i) => `word${i} **bold ${i}**`)
+  const label = words.join(' ').replaceAll('**', '')
+  await writeFile(file, `# ${words.join(' ')}\n\nBody.\n\n## Short\n`)
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`, file],
+  })
+  t.after(async () => {
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(15000)
+  await page.setViewportSize({ width: 1100, height: 700 })
+  const outline = page.locator(
+    '.outline-sidebar[data-side="right"][data-open="true"]',
+  )
+  const rows = async () => {
+    await waitForDocumentEditor(app, page)
+    if (!(await outline.count())) {
+      await page
+        .getByRole('button', { name: /^toggle right sidebar$/i })
+        .click()
+      await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+      await page
+        .getByRole('menuitem', { name: 'On this page', exact: true })
+        .click()
+    }
+    const short = outline.getByRole('treeitem', { name: 'Short', exact: true })
+    await short.waitFor()
+    const row = outline.getByRole('treeitem').first()
+    return {
+      label: await row.locator('.sidebar-label').textContent(),
+      rowHeight: await short.evaluate(
+        (element) => element.getBoundingClientRect().height,
+      ),
+      ...(await row.evaluate((element) => {
+        const text = element.querySelector('.sidebar-label')
+        return {
+          clipped:
+            getComputedStyle(text).textOverflow === 'ellipsis' &&
+            text.scrollWidth > text.clientWidth,
+          height: element.getBoundingClientRect().height,
+        }
+      })),
+    }
+  }
+
+  // The rich view's outline names the heading by its whole text.
+  const rich = await rows()
+  assert.equal(rich.label.length, label.length)
+  assert.equal(rich.label, label)
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+  )
+  await page.reload()
+  await page.locator('.rich-pane .hibi-lp-h1').waitFor()
+  const formatted = await rows()
+  assert.equal(formatted.label.length, label.length)
+  assert.deepEqual(formatted, rich)
+  assert.equal(formatted.clipped, true)
+  assert.equal(formatted.height, formatted.rowHeight)
+})
+
+test('long outline labels run in a worker and cancel when edited or closed', {
+  timeout: 90000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-outline-label-worker-'))
+  const file = join(folder, 'labels.md')
+  await writeFile(file, '# Short\n\nBody.\n')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`, file],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(60000)
+  await waitForDocumentEditor(app, page)
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+  )
+  page.on('console', (message) => {
+    if (
+      message.type() === 'error' &&
+      message.text().startsWith('Source outline failed:')
+    )
+      t.diagnostic(message.text().slice(0, 500))
+  })
+  await page.addInitScript(() => {
+    window.outlineLabelRequests = []
+    window.outlineLabelTerminations = 0
+    window.holdOutlineLabels = true
+    const NativeWorker = window.Worker
+    window.Worker = class extends NativeWorker {
+      postMessage(message, ...rest) {
+        if (message?.request?.text && message?.flavors) {
+          this.outlineLabel = true
+          window.outlineLabelRequests.push(message.request.text)
+          if (window.holdOutlineLabels) return
+        }
+        super.postMessage(message, ...rest)
+      }
+      terminate() {
+        if (this.outlineLabel) window.outlineLabelTerminations++
+        super.terminate()
+      }
+    }
+  })
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  const editor = page.locator('.rich-pane .cm-content')
+  await editor.waitFor()
+  await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+  await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+  await page
+    .getByRole('menuitem', { name: 'On this page', exact: true })
+    .click()
+  const outline = page.locator('.outline-sidebar[data-side="right"]')
+  await outline.getByRole('treeitem', { name: 'Short', exact: true }).waitFor()
+  const replace = (source) =>
+    editor.evaluate((element, source) => {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: source },
+      })
+    }, source)
+  const text = `${'*a '.repeat(1000)}b${' a*'.repeat(1000)}`
+  const source = `# ${text}\n\nBody.\n`
+  const label = `${'a '.repeat(1000)}b${' a'.repeat(1000)}`
+
+  // Hold a request to make cancellation independent of the machine's speed.
+  await replace(source)
+  await page.waitForFunction(() => window.outlineLabelRequests.length === 1)
+  assert.equal(await page.evaluate(() => window.outlineLabelRequests[0]), text)
+  await replace('# Latest\n\nBody.\n')
+  await outline.getByRole('treeitem', { name: 'Latest', exact: true }).waitFor()
+  assert.equal(await page.evaluate(() => window.outlineLabelTerminations), 1)
+
+  // Now execute the real pathological lexer and native conversion in its worker.
+  await page.evaluate(() => {
+    window.holdOutlineLabels = false
+  })
+  await replace(source)
+  await page.waitForFunction(
+    (label) =>
+      document.querySelector(
+        '.outline-sidebar[data-side="right"] .sidebar-label',
+      )?.textContent === label,
+    label,
+  )
+  assert.equal(
+    await outline.getByRole('treeitem', { name: label, exact: true }).count(),
+    1,
+  )
+  assert.equal(await page.evaluate(() => window.outlineLabelRequests.length), 2)
+
+  // A new pending label must also terminate when the outline closes.
+  await page.evaluate(() => {
+    window.holdOutlineLabels = true
+  })
+  await replace(source.replace('# ', '# changed '))
+  await page.waitForFunction(() => window.outlineLabelRequests.length === 3)
+  const beforeClose = await page.evaluate(() => window.outlineLabelTerminations)
+  await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+  await page.waitForFunction(
+    (count) => window.outlineLabelTerminations > count,
+    beforeClose,
+  )
+  assert.deepEqual(
+    (await page.pageErrors()).map((error) => error.message),
+    [],
+  )
+})

@@ -52,6 +52,7 @@ import {
   formattedBlockEdges,
   formattedContributions,
   formattedDocument,
+  formattedLinkAttributes,
   formattedLiteral,
   formattedNodeViews,
   formattedRefresh,
@@ -314,6 +315,7 @@ function inline(
   decorations: DecorationSet
   groupMarks: DecorationSet
   atomic: DecorationSet
+  outer: DecorationSet
   wrappers: RangeSet<BlockWrapper>
   end: number
 } {
@@ -349,6 +351,8 @@ function inline(
    * text in no fixed order, so these get a source of their own.
    */
   const groupMarks: Range<Decoration>[] = []
+  // Text that has to stay one element wraps the other decorations.
+  const outer: Range<Decoration>[] = []
   const replacements = new Set<string>()
   const lines = new Map<number, LineInfo>()
   const headings = new Map<number, Range<BlockWrapper>>()
@@ -382,6 +386,20 @@ function inline(
     if (to > from)
       decorations.push(Decoration.mark({ class: className }).range(from, to))
   }
+  /** Inclusive, so that widgets at the text's ends are inside the link too. */
+  const linkText = (
+    from: number,
+    to: number,
+    attributes?: Record<string, string>,
+  ) => {
+    if (to > from)
+      outer.push(
+        Decoration.mark({
+          attributes: formattedLinkAttributes(attributes),
+          inclusive: true,
+        }).range(from, to),
+      )
+  }
   /** Markers of formatting under the selection stay visible and editable. */
   const syntax = (from: number, to: number, revealed: boolean) => {
     if (revealed) mark('hibi-lp-marker', from, to)
@@ -408,7 +426,7 @@ function inline(
     // A destination on later lines is hidden with its line breaks by the layout field.
     if (doc.lineAt(close.from).number === doc.lineAt(node.to).number)
       syntax(close.from, node.to, revealed)
-    mark('hibi-lp-link', open.to, close.from)
+    linkText(open.to, close.from)
     return undefined
   }
 
@@ -470,6 +488,7 @@ function inline(
     mark(from, to, attributes) {
       if (to > from) marks.push(Decoration.mark({ attributes }).range(from, to))
     },
+    link: linkText,
     syntax: (from, to) => syntax(from, to, revealed),
     line(at, attributes) {
       const info = line(at)
@@ -664,7 +683,7 @@ function inline(
         const revealed = touched(ref.from, ref.to)
         syntax(ref.from, url.from, revealed)
         syntax(url.to, ref.to, revealed)
-        mark('hibi-lp-link', url.from, url.to)
+        linkText(url.from, url.to)
         return false
       }
       case 'URL': {
@@ -674,7 +693,7 @@ function inline(
           parent !== 'Image' &&
           parent !== 'LinkReference'
         )
-          mark('hibi-lp-link', ref.from, ref.to)
+          linkText(ref.from, ref.to)
         return
       }
       case 'HTMLBlock':
@@ -760,6 +779,7 @@ function inline(
     decorations: Decoration.set(decorations, true),
     groupMarks: Decoration.set(groupMarks, true),
     atomic: Decoration.set(atomic, true),
+    outer: Decoration.set(outer, true),
     wrappers: BlockWrapper.set([...headings.values()], true),
     end,
   }
@@ -1400,6 +1420,7 @@ export function livePreview(
       decorations: DecorationSet
       groupMarks: DecorationSet
       atomic: DecorationSet
+      outer: DecorationSet
       wrappers: RangeSet<BlockWrapper>
       /** Space below the last line, in px. */
       end: number
@@ -1410,6 +1431,7 @@ export function livePreview(
           decorations: this.decorations,
           groupMarks: this.groupMarks,
           atomic: this.atomic,
+          outer: this.outer,
           wrappers: this.wrappers,
           end: this.end,
         } = inline(
@@ -1441,6 +1463,7 @@ export function livePreview(
           this.decorations = mapLines(this.decorations, update)
           this.groupMarks = this.groupMarks.map(update.changes)
           this.atomic = mapLines(this.atomic, update)
+          this.outer = this.outer.map(update.changes)
           this.wrappers = this.wrappers.map(update.changes)
         } else if (
           update.docChanged ||
@@ -1464,6 +1487,7 @@ export function livePreview(
             decorations: this.decorations,
             groupMarks: this.groupMarks,
             atomic: this.atomic,
+            outer: this.outer,
             wrappers: this.wrappers,
             end: this.end,
           } = inline(update.view, tree, reveal, update.state.field(layout)))
@@ -1548,6 +1572,9 @@ export function livePreview(
       (view) => view.plugin(preview)?.groupMarks ?? Decoration.none,
     ),
     preview,
+    EditorView.outerDecorations.of(
+      (view) => view.plugin(preview)?.outer ?? Decoration.none,
+    ),
     EditorView.blockWrappers.of(
       (view) => view.plugin(preview)?.wrappers ?? RangeSet.empty,
     ),

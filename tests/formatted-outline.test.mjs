@@ -434,3 +434,118 @@ test('outline rows name long headings in full and shorten them only on screen', 
   assert.equal(formatted.clipped, true)
   assert.equal(formatted.height, formatted.rowHeight)
 })
+
+test('long outline labels run in a worker and cancel when edited or closed', {
+  timeout: 90000,
+}, async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), 'hibi-outline-label-worker-'))
+  const file = join(folder, 'labels.md')
+  await writeFile(file, '# Short\n\nBody.\n')
+  const app = await electron.launch({
+    args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`, file],
+  })
+  t.after(async () => {
+    await app.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1 })
+    })
+    await app.close()
+    await rm(folder, { recursive: true, force: true })
+  })
+  const page = await app.firstWindow()
+  page.setDefaultTimeout(60000)
+  await waitForDocumentEditor(app, page)
+  await page.evaluate(() =>
+    localStorage.setItem('hibi:formatted-engine', 'codemirror'),
+  )
+  page.on('console', (message) => {
+    if (
+      message.type() === 'error' &&
+      message.text().startsWith('Source outline failed:')
+    )
+      t.diagnostic(message.text().slice(0, 500))
+  })
+  await page.addInitScript(() => {
+    window.outlineLabelRequests = []
+    window.outlineLabelTerminations = 0
+    window.holdOutlineLabels = true
+    const NativeWorker = window.Worker
+    window.Worker = class extends NativeWorker {
+      postMessage(message, ...rest) {
+        if (message?.request?.text && message?.flavors) {
+          this.outlineLabel = true
+          window.outlineLabelRequests.push(message.request.text)
+          if (window.holdOutlineLabels) return
+        }
+        super.postMessage(message, ...rest)
+      }
+      terminate() {
+        if (this.outlineLabel) window.outlineLabelTerminations++
+        super.terminate()
+      }
+    }
+  })
+  await page.reload()
+  await waitForDocumentEditor(app, page)
+  const editor = page.locator('.rich-pane .cm-content')
+  await editor.waitFor()
+  await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+  await page.getByRole('button', { name: /^right sidebar views$/i }).click()
+  await page
+    .getByRole('menuitem', { name: 'On this page', exact: true })
+    .click()
+  const outline = page.locator('.outline-sidebar[data-side="right"]')
+  await outline.getByRole('treeitem', { name: 'Short', exact: true }).waitFor()
+  const replace = (source) =>
+    editor.evaluate((element, source) => {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: source },
+      })
+    }, source)
+  const text = `${'*a '.repeat(1000)}b${' a*'.repeat(1000)}`
+  const source = `# ${text}\n\nBody.\n`
+  const label = `${'a '.repeat(1000)}b${' a'.repeat(1000)}`
+
+  // Hold a request to make cancellation independent of the machine's speed.
+  await replace(source)
+  await page.waitForFunction(() => window.outlineLabelRequests.length === 1)
+  assert.equal(await page.evaluate(() => window.outlineLabelRequests[0]), text)
+  await replace('# Latest\n\nBody.\n')
+  await outline.getByRole('treeitem', { name: 'Latest', exact: true }).waitFor()
+  assert.equal(await page.evaluate(() => window.outlineLabelTerminations), 1)
+
+  // Now execute the real pathological lexer and native conversion in its worker.
+  await page.evaluate(() => {
+    window.holdOutlineLabels = false
+  })
+  await replace(source)
+  await page.waitForFunction(
+    (label) =>
+      document.querySelector(
+        '.outline-sidebar[data-side="right"] .sidebar-label',
+      )?.textContent === label,
+    label,
+  )
+  assert.equal(
+    await outline.getByRole('treeitem', { name: label, exact: true }).count(),
+    1,
+  )
+  assert.equal(await page.evaluate(() => window.outlineLabelRequests.length), 2)
+
+  // A new pending label must also terminate when the outline closes.
+  await page.evaluate(() => {
+    window.holdOutlineLabels = true
+  })
+  await replace(source.replace('# ', '# changed '))
+  await page.waitForFunction(() => window.outlineLabelRequests.length === 3)
+  const beforeClose = await page.evaluate(() => window.outlineLabelTerminations)
+  await page.getByRole('button', { name: /^toggle right sidebar$/i }).click()
+  await page.waitForFunction(
+    (count) => window.outlineLabelTerminations > count,
+    beforeClose,
+  )
+  assert.deepEqual(
+    (await page.pageErrors()).map((error) => error.message),
+    [],
+  )
+})

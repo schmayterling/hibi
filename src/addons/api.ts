@@ -519,7 +519,7 @@ export type MarkdownFlavor = {
    */
   syntax?: MarkdownConfig | readonly MarkdownConfig[]
   /**
-   * True only when inline parsers start at backslash, backtick, & * _ ! [ ] < > ~ ^ $ :,
+   * True only when inline parsers start at backslash, backtick, & * _ ! [ ] < > ~ ^ $ : =,
    * line breaks, or core URL/email starts. Preserves plain-text run skipping.
    */
   inlineStops?: boolean

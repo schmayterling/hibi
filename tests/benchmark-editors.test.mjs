@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
+import vm from 'node:vm'
 import {
   captureEditorSample,
   editorBenchmarkPlan,
   editorFixture,
   ensureFormattedEditor,
+  installProbe,
   minimumKeysForP95,
   operationPaint,
   pairEditors,
@@ -496,6 +498,63 @@ test('source-first read-only preview is unavailable, not editable readiness', as
   assert.equal(row.unavailable, 1)
   assert.equal(row.metrics.openReadyMs.n, 0)
   assert.equal(row.metrics.keyTaskMs.n, 0)
+})
+
+test('renderer probe finishes read-only previews without recording editable readiness', () => {
+  for (const mode of ['normal', 'side-by-side']) {
+    let check
+    const marks = []
+    const window = {}
+    const document = {
+      body: {},
+      fonts: { status: 'loaded', addEventListener() {} },
+      addEventListener() {},
+      querySelector(selector) {
+        if (selector === '.editor-panes')
+          return { classList: [`mode-${mode}`], dataset: {} }
+        if (selector === '.rich-pane .large-markdown-preview') return {}
+        if (selector.includes('[role="tab"]'))
+          return { getAttribute: () => 'note.md' }
+        if (selector === '.app' || selector === '#document-editor-panel')
+          return { getAttribute: () => 'false' }
+        return null
+      },
+    }
+    vm.runInNewContext(
+      `(${installProbe})({fileName:'note.md', sourceLength:0, engine:'tiptap', fixture:'prose'})`,
+      {
+        window,
+        document,
+        performance: { mark: (name) => marks.push(name) },
+        MutationObserver: class {
+          constructor(run) {
+            check = run
+          }
+          observe() {}
+        },
+      },
+    )
+    window.__editorBenchmark.arm('open', 'open')
+    check()
+    assert.equal(window.__editorBenchmark.pending.done, true, mode)
+    assert.ok(marks.includes('open:unavailable'), mode)
+    assert.ok(!marks.includes('open:ready'), mode)
+  }
+})
+
+test('direct read-only preview stays unavailable and outside editing pairs', async () => {
+  const open = await ensureFormattedEditor(
+    'tiptap',
+    { mode: 'normal', engine: 'tiptap', preview: true, editable: false },
+    () => assert.fail('direct preview must not switch'),
+  )
+  assert.match(open.unavailable, /read-only preview/)
+  const samples = [
+    { ...launch('tiptap', 0), status: 'unavailable', open },
+    launch('codemirror', 0),
+  ]
+  assert.equal(pairEditors(samples)[0].pairs, 0)
+  assert.equal(summarizeEditors(samples)[0].runs, 0)
 })
 
 test('source-first codemirror and other sample failures do not abort later sizes', async () => {

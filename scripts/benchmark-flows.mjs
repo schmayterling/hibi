@@ -1,5 +1,8 @@
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { join, relative, resolve } from 'node:path'
 import { electron } from '../tests/electron.mjs'
 import { clickMenu, pressShortcut } from '../tests/keyboard.mjs'
 
@@ -92,18 +95,138 @@ export async function launchBenchmarkApp(profile, entry = resolve('.')) {
   }
 }
 
+export function benchmarkEngine(engine) {
+  assert.ok(
+    ['tiptap', 'codemirror'].includes(engine),
+    'unknown benchmark engine',
+  )
+  return engine
+}
+
+// seed only storage at the app origin: no app modules or editor caches are loaded.
+export async function seedBenchmarkProfile(profile, engine) {
+  benchmarkEngine(engine)
+  const entry = join(profile, 'benchmark-profile.cjs')
+  await writeFile(
+    entry,
+    `const {app, BrowserWindow, protocol} = require('electron');
+app.setPath('userData', app.commandLine.getSwitchValue('user-data-dir'));
+if (process.platform === 'darwin') app.setActivationPolicy('accessory');
+protocol.registerSchemesAsPrivileged([{scheme:'app', privileges:{standard:true, secure:true}}]);
+app.whenReady().then(async () => {
+  protocol.handle('app', () => new Response('<!doctype html><title>profile seed</title>', {headers:{'content-type':'text/html'}}));
+  const win = new BrowserWindow({show:false, webPreferences:{sandbox:true, contextIsolation:true, nodeIntegration:false}});
+  await win.loadURL('app://hibi/');
+});
+app.on('window-all-closed', () => app.quit());`,
+  )
+  const app = await launchBenchmarkApp(profile, entry)
+  try {
+    const page = await app.firstWindow()
+    await page.waitForURL('app://hibi/', { waitUntil: 'load' })
+    await page.evaluate((engine) => {
+      localStorage.setItem('hibi:formatted-engine', engine)
+      localStorage.setItem('default-view', 'normal')
+    }, engine)
+    await app.evaluate(({ session }) =>
+      session.defaultSession.flushStorageData(),
+    )
+  } finally {
+    await app.close()
+  }
+}
+
+const hash = (source) => createHash('sha256').update(source).digest('hex')
+
+async function fileHashes(paths, root) {
+  const result = {}
+  for (const path of paths.sort())
+    result[path] = hash(await readFile(join(root, path)))
+  return result
+}
+
+async function treeFiles(path, root) {
+  return (
+    await readdir(join(root, path), { recursive: true, withFileTypes: true })
+  )
+    .filter((entry) => entry.isFile())
+    .map((entry) => relative(root, join(entry.parentPath, entry.name)))
+}
+
+export async function benchmarkProvenance(sampler, root = '.') {
+  root = resolve(root)
+  const rendererFiles = await fileHashes(
+    await treeFiles('out/renderer', root),
+    root,
+  )
+  const buildFiles = {
+    ...(await fileHashes(await treeFiles('out/main', root), root)),
+    ...(await fileHashes(await treeFiles('out/preload', root), root)),
+    ...rendererFiles,
+  }
+  const git = (args) =>
+    execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim()
+  return {
+    revision: git(['rev-parse', 'HEAD']),
+    gitStatus: git(['status', '--porcelain']),
+    sourceHash: hash(
+      JSON.stringify(
+        await fileHashes(
+          [
+            ...(await treeFiles('src', root)),
+            'electron.vite.config.ts',
+            'package.json',
+          ],
+          root,
+        ),
+      ),
+    ),
+    samplerHash: hash(await readFile(sampler)),
+    helperHashes: await fileHashes(
+      [
+        'scripts/benchmark-flows.mjs',
+        'scripts/trace-stream.mjs',
+        'tests/electron.mjs',
+        'tests/keyboard.mjs',
+      ],
+      root,
+    ),
+    rendererBuildHash: hash(JSON.stringify(rendererFiles)),
+    rendererFiles,
+    buildHash: hash(JSON.stringify(buildFiles)),
+    buildFiles,
+    lockfileHash: hash(await readFile(join(root, 'package-lock.json'))),
+  }
+}
+
 // Frame polling avoids locator retry backoff being counted as startup latency.
-export function waitForEditor(page) {
-  return page.waitForFunction(() => {
+export function waitForEditor(page, engine) {
+  return page.waitForFunction((engine) => {
     const editor = document.querySelector(
       '[role="textbox"][aria-label="Document editor"]',
     )
+    const observed = editor?.classList.contains('tiptap')
+      ? 'tiptap'
+      : editor?.closest('.hibi-formatted')
+        ? 'codemirror'
+        : null
     return (
-      editor?.isContentEditable &&
+      !!editor?.isContentEditable &&
+      editor.getAttribute('aria-readonly') !== 'true' &&
       !editor.closest('[inert]') &&
-      editor.getBoundingClientRect().width > 0
+      editor.getBoundingClientRect().width > 0 &&
+      (!engine ||
+        (observed === engine &&
+          document.querySelector('.app')?.getAttribute('aria-busy') ===
+            'false' &&
+          document
+            .querySelector('#document-editor-panel')
+            ?.getAttribute('aria-busy') === 'false' &&
+          (observed !== 'codemirror' ||
+            document.querySelector('.editor-panes')?.dataset.sourceReady ===
+              'true')))
     )
-  })
+  }, engine)
 }
 
 export async function waitForWorkspaces(page, paths) {
@@ -142,7 +265,9 @@ export async function waitForWorkspaces(page, paths) {
         startup: document.querySelector('.editor-page')?.dataset.startup,
         placeholder: !!document.querySelector('.startup-placeholder'),
         welcomeDismissed: sessionStorage.getItem('hibi:welcome-dismissed'),
-        editorTextLength: document.querySelector('.tiptap')?.textContent.length,
+        editorTextLength: document.querySelector(
+          '[role="textbox"][aria-label="Document editor"]',
+        )?.textContent.length,
         workspaces: [
           ...document.querySelectorAll('.startup-placeholder li button'),
         ].map((button) => ({
@@ -207,10 +332,15 @@ export function selectBenchmarkFile(app, file) {
 
 export async function openBenchmarkDocument(app, page, title) {
   await clickMenu(app, 'Open…')
-  await page.waitForFunction(
+  return page.waitForFunction(
     (title) =>
-      [...document.querySelectorAll('.tiptap h1')].some(
-        (heading) => heading.textContent === title,
+      [
+        ...document.querySelectorAll(
+          '.rich-pane h1, .rich-pane [role="heading"][aria-level="1"]',
+        ),
+      ].some(
+        (heading) =>
+          (heading.getAttribute('aria-label') ?? heading.textContent) === title,
       ),
     title,
   )

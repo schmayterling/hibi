@@ -1,11 +1,17 @@
+import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { cpus, loadavg, release, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
+import { parseArgs } from 'node:util'
+import { showTestWindows } from '../tests/electron.mjs'
 import {
   benchmarkDocuments,
+  benchmarkEngine,
+  benchmarkProvenance,
   launchBenchmarkApp,
   openBenchmarkDocument,
+  seedBenchmarkProfile,
   selectBenchmarkFile,
   switchToSource,
   typeCharacter,
@@ -13,9 +19,20 @@ import {
   waitForWorkspaces,
 } from './benchmark-flows.mjs'
 
+const { values } = parseArgs({
+  options: {
+    engine: {
+      type: 'string',
+      default: process.env.HIBI_BENCH_ENGINE ?? 'tiptap',
+    },
+  },
+})
+const engine = benchmarkEngine(values.engine)
+assert.ok(!showTestWindows, 'startup comparison requires hidden test windows')
 const runs = Number(process.env.HIBI_BENCH_RUNS ?? 5)
 if (!Number.isInteger(runs) || runs < 1 || runs > 50)
   throw new Error('Use 1–50 runs.')
+const provenance = await benchmarkProvenance(new URL(import.meta.url))
 const temp = await mkdtemp(join(tmpdir(), 'hibi-benchmark-'))
 const samples = []
 const recentPaths = ['notes', 'journal', 'projects'].map((name) =>
@@ -43,7 +60,7 @@ async function measure(page, start, app, scenario) {
     name: 'Document editor',
     exact: true,
   })
-  await waitForEditor(page)
+  await waitForEditor(page, scenario === 'minimal' ? undefined : engine)
   const editable = performance.now() - start
   let ready = null
   if (
@@ -52,6 +69,16 @@ async function measure(page, start, app, scenario) {
     await waitForWorkspaces(page, recentPaths)
     ready = performance.now() - start
   }
+  // snapshot loaded scripts after readiness, outside startup and input intervals.
+  const session = await page.context().newCDPSession(page)
+  let scripts = []
+  session.on('Debugger.scriptParsed', ({ url }) => {
+    if (url.startsWith('app://hibi/')) scripts.push(url)
+  })
+  await session.send('Debugger.enable')
+  await session.send('Debugger.disable')
+  const beforeInputScripts = [...new Set(scripts)]
+  await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
   const previousText = await editor.textContent()
   const beforeInput = performance.now()
   await typeCharacter(page, previousText)
@@ -82,19 +109,16 @@ async function measure(page, start, app, scenario) {
     paint: performance
       .getEntriesByType('paint')
       .map((entry) => ({ name: entry.name, ms: entry.startTime })),
-    sourceMounted: !!document.querySelector('.cm-editor'),
+    sourceMounted: !!document.querySelector('.source-pane .cm-editor'),
   }))
-  // Custom-scheme scripts are absent from Resource Timing on some Electron versions.
-  // Attach only after latency samples so debugger work does not affect those timings.
-  const session = await page.context().newCDPSession(page)
-  renderer.scripts = []
-  session.on('Debugger.scriptParsed', ({ url }) => {
-    if (url.startsWith('app://hibi/')) renderer.scripts.push(url)
-  })
+  renderer.beforeInputScripts = beforeInputScripts
+  scripts = []
   await session.send('Debugger.enable')
+  renderer.scripts = [...new Set(scripts)]
   await session.detach()
   const main = await app.evaluate(() => ({
     timeOrigin: performance.timeOrigin,
+    runtime: { ...process.versions },
     entries: performance
       .getEntries()
       .filter((entry) => entry.name.startsWith('hibi:'))
@@ -104,8 +128,31 @@ async function measure(page, start, app, scenario) {
         duration: entry.duration,
       })),
   }))
+  const visibility = await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    return { visible: window.isVisible(), focused: window.isFocused() }
+  })
+  assert.equal(
+    visibility.visible,
+    false,
+    'startup comparison requires a hidden window',
+  )
+  const addons =
+    scenario === 'minimal'
+      ? []
+      : await page.evaluate(async () =>
+          (await window.hibi.getAddonStates())
+            .filter(({ enabled, blockedBy }) => enabled && !blockedBy?.length)
+            .map(({ id }) => id)
+            .sort(),
+        )
   samples.push({
     scenario,
+    engine: scenario === 'minimal' ? null : engine,
+    addons,
+    visibility,
+    focusEmulation: true,
+    loadAverage: loadavg(),
     startedAt: performance.timeOrigin + start,
     editable,
     ready,
@@ -136,6 +183,8 @@ try {
             Object.fromEntries(enabledAddons.map((id) => [id, true])),
           ),
         )
+      if (scenario !== 'minimal' && (scenario !== 'warm-profile' || run === 0))
+        await seedBenchmarkProfile(profile, engine)
       const start = performance.now()
       const app = await launchBenchmarkApp(
         profile,
@@ -198,11 +247,27 @@ try {
   const initial = chunks.filter((chunk) => visited.has(chunk.file))
   const quantile = (values, q) =>
     values.toSorted((a, b) => a - b)[Math.ceil(values.length * q) - 1]
+  for (const sample of samples) {
+    const loaded = new Set(
+      sample.renderer.beforeInputScripts.map((url) =>
+        new URL(url).pathname.slice(1),
+      ),
+    )
+    const beforeInput = chunks.filter((chunk) => loaded.has(chunk.file))
+    sample.renderer.beforeInputBytes = beforeInput.reduce(
+      (sum, chunk) => sum + chunk.bytes,
+      0,
+    )
+    sample.renderer.beforeInputModules = beforeInput.flatMap(
+      (chunk) => chunk.modules,
+    )
+  }
   const summary = [...new Set(samples.map((sample) => sample.scenario))].map(
     (scenario) => {
       const group = samples.filter((sample) => sample.scenario === scenario)
       return {
         scenario,
+        engine: group[0].engine,
         runs: group.length,
         editableMedian: quantile(
           group.map((sample) => sample.editable),
@@ -240,11 +305,19 @@ try {
   console.log(
     JSON.stringify(
       {
+        ...provenance,
+        engine,
         runtime: process.version,
+        host: {
+          cpu: cpus()[0]?.model,
+          logicalCores: cpus().length,
+          release: release(),
+        },
         platform: process.platform,
         arch: process.arch,
         enabledAddons,
-        conditions: `Production assets in test Electron; fresh profile is not OS cold-cache; ${process.env.GITHUB_ACTIONS === 'true' ? 'visible focused windows' : 'hidden windows'}; automation latency included.`,
+        conditions:
+          'production assets in test electron; hidden windows with focus emulation; profiles seeded at app origin without loading hibi, before launch timing; fresh profile is not os cold-cache; driver latency included. source and build hashes are independent; rebuild the recorded source before comparing.',
         initialBytes: initial.reduce((sum, chunk) => sum + chunk.bytes, 0),
         initialModules: initial.flatMap((chunk) => chunk.modules),
         summary,

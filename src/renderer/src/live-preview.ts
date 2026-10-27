@@ -747,8 +747,10 @@ function lastLine(doc: Text, node: SyntaxNode, layout: DecorationSet) {
 
 /** Invisible anchors let overlays measure each rendered container's actual edge. */
 class ContainerEdges extends WidgetType {
-  constructor(readonly edges: readonly (readonly [string, string])[]) {
+  readonly edges: readonly (readonly [string, string])[]
+  constructor(edges: readonly (readonly [string, string])[]) {
     super()
+    this.edges = edges
   }
   override eq(other: ContainerEdges) {
     return (

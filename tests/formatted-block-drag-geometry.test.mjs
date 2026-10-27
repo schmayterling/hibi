@@ -56,6 +56,9 @@ async function open(name, doc, token) {
 }
 
 async function hover(token) {
+  await page
+    .locator('.rich-pane:not([inert]) .block-drag-handle')
+    .waitFor({ state: 'attached' })
   const line = page.locator('.rich-pane:not([inert]) .cm-line', {
     hasText: token,
   })

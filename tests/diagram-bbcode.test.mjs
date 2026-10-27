@@ -4,10 +4,14 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  testFormattedEngines as it,
+  selectFormattedEngine,
+} from './formatted-engine.mjs'
 import { clickMenu, pressShortcut } from './keyboard.mjs'
 import { waitForAsync } from './poll.mjs'
 
-test('Mermaid and BBCode edit, preview, and export without executing content', {
+it('Mermaid and BBCode edit, preview, and export without executing content', {
   timeout: 90000,
 }, async (t) => {
   const temp = await mkdtemp(join(tmpdir(), 'hibi-diagrams-'))
@@ -28,6 +32,7 @@ test('Mermaid and BBCode edit, preview, and export without executing content', {
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine ?? 'tiptap')
   page.on('pageerror', (error) => console.error(error.message))
   page.on('console', (message) => {
     if (message.type() === 'error') console.error(message.text())
@@ -254,6 +259,7 @@ const launchWithNote = async (t, prefix, addons, markdown, prepare) => {
     await rm(temp, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine ?? 'tiptap')
   page.setDefaultTimeout(15000)
   await waitForDocumentEditor(app, page)
   await prepare?.(page)
@@ -268,7 +274,7 @@ const launchWithNote = async (t, prefix, addons, markdown, prepare) => {
   )
   return { app, page }
 }
-test('Mermaid is on by default and keeps diagram links, images, and markup inert', {
+it('Mermaid is on by default and keeps diagram links, images, and markup inert', {
   timeout: 60000,
 }, async (t) => {
   const hostile = `\`\`\`mermaid
@@ -306,7 +312,7 @@ flowchart LR
   assert.equal(await page.evaluate(() => window.compromised), undefined)
 })
 
-test('a note full of diagrams draws visible ones first, then idle slices that stop when Mermaid is disabled', {
+test('tiptap: a note full of diagrams draws visible ones first, then idle slices that stop when Mermaid is disabled', {
   timeout: 90000,
 }, async (t) => {
   const count = 120
@@ -412,4 +418,89 @@ test('a note full of diagrams draws visible ones first, then idle slices that st
     })
   assert.equal(await page.evaluate(() => window.diagramDraws), draws)
   assert.equal(await page.locator('.tiptap pre').count(), count)
+})
+
+test('codemirror: diagram work stays near the viewport and disabling it cancels pending drawings without changing source', {
+  timeout: 90000,
+}, async (t) => {
+  t.formattedEngine = 'codemirror'
+  const count = 120
+  const markdown =
+    '# diagrams\n\n' +
+    Array.from(
+      { length: count },
+      (_, index) =>
+        `\`\`\`mermaid\nflowchart LR\n  N${index}[Probe ${index}] --> End\n\`\`\`\n`,
+    ).join('\n')
+  const { app, page } = await launchWithNote(
+    t,
+    'hibi-formatted-diagram-cancel-',
+    { mermaid: true },
+    markdown,
+    (page) =>
+      page.evaluate(() => {
+        window.heldIdle = []
+        window.requestIdleCallback = (callback) =>
+          window.heldIdle.push(callback)
+        window.diagramDraws = 0
+        new MutationObserver((records) => {
+          for (const record of records)
+            if (record.target.matches?.('.mermaid-diagram'))
+              window.diagramDraws += [...record.addedNodes].filter(
+                (node) => node.nodeName === 'svg',
+              ).length
+        }).observe(document.documentElement, { childList: true, subtree: true })
+      }),
+  )
+  await waitForDocumentEditor(app, page)
+  await page.locator('.rich-pane .mermaid-diagram > svg').first().waitFor()
+  const progress = await page.evaluate(() => {
+    const figures = [
+      ...document.querySelectorAll('.rich-pane .mermaid-diagram'),
+    ]
+    const pane = document.querySelector('.rich-pane').getBoundingClientRect()
+    const visible = figures.filter((figure) => {
+      const box = figure.getBoundingClientRect()
+      return box.bottom > pane.top && box.top < pane.bottom
+    })
+    return {
+      mounted: figures.length,
+      drawn: figures.filter((figure) => figure.firstChild).length,
+      visible: visible.length,
+      pending: visible.filter((figure) => !figure.firstChild).length,
+    }
+  })
+  assert.ok(
+    progress.drawn > 0 && progress.visible > 0,
+    JSON.stringify(progress),
+  )
+  assert.equal(progress.pending, 0)
+  // Offscreen source is virtualized rather than eagerly mounting every block (§11).
+  assert.ok(
+    progress.mounted < count && progress.drawn < count,
+    JSON.stringify(progress),
+  )
+  await clickMenu(app, 'Settings')
+  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+  await page.locator('#addon-mermaid').click()
+  await page.waitForFunction(
+    () => !document.querySelector('#addon-mermaid').checked,
+  )
+  await page.locator('.mermaid-block').first().waitFor({ state: 'detached' })
+  const draws = await page.evaluate(() => window.diagramDraws)
+  await page.getByRole('button', { name: /^back to app$/i }).click()
+  for (let turn = 0; turn < 3; turn++)
+    await page.evaluate(() => {
+      for (const callback of window.heldIdle.splice(0))
+        callback({ didTimeout: false, timeRemaining: () => 50 })
+      return new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      )
+    })
+  assert.equal(await page.evaluate(() => window.diagramDraws), draws)
+  assert.equal(await page.locator('.rich-pane .mermaid-block').count(), 0)
+  assert.equal(
+    (await page.evaluate(() => window.hibi.getDocument())).markdown,
+    markdown,
+  )
 })

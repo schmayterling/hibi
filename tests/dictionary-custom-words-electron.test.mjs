@@ -9,12 +9,15 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import test from 'node:test'
 import { electron, waitForDocumentEditor } from './electron.mjs'
+import {
+  selectFormattedEngine,
+  testFormattedEngines as test,
+} from './formatted-engine.mjs'
 import { clickMenu } from './keyboard.mjs'
 import { APP_STATE_TIMEOUT, waitForAsync } from './poll.mjs'
 
-test('legacy words migrate in the native worker and remain available to older builds', async (t) => {
+test('legacy words migrate in the native worker and remain available to older builds', {}, async (t) => {
   const profile = await mkdtemp(join(tmpdir(), 'hibi-dictionary-migration-'))
   await mkdir(join(profile, 'addon-storage', 'global'), { recursive: true })
   const file = join(profile, 'addon-storage', 'global', 'dictionary.json')
@@ -42,6 +45,7 @@ test('legacy words migrate in the native worker and remain available to older bu
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   await waitForDocumentEditor(app, page)
   const words = await page.evaluate(async () => {
     const words = []
@@ -59,7 +63,7 @@ test('legacy words migrate in the native worker and remain available to older bu
   assert.equal(await readFile(file, 'utf8'), original)
   assert.equal(
     await page
-      .locator('.tiptap')
+      .getByRole('textbox', { name: 'Document editor', exact: true })
       .evaluate((element) => element.isContentEditable),
     true,
   )
@@ -98,6 +102,7 @@ test('custom words are added, edited, removed, kept across restart, and suggeste
       }
     }, file)
     const page = await app.firstWindow()
+    await selectFormattedEngine(app, page, t.formattedEngine)
     page.setDefaultTimeout(APP_STATE_TIMEOUT)
     await waitForDocumentEditor(app, page)
     await app.evaluate(({ ipcMain }) => {
@@ -131,9 +136,21 @@ test('custom words are added, edited, removed, kept across restart, and suggeste
     async () => (await window.hibi.getDocument()).name === 'note.md',
   )
   await waitForDocumentEditor(app, page)
-  const rich = page.locator('.rich-pane .tiptap[contenteditable="true"]')
+  const rich = page.getByRole('textbox', {
+    name: 'Document editor',
+    exact: true,
+  })
   await rich.click()
-  await rich.evaluate((element) => element.editor.commands.setTextSelection(6))
+  if (t.formattedEngine === 'tiptap')
+    await rich.evaluate((element) =>
+      element.editor.commands.setTextSelection(6),
+    )
+  else
+    await rich.evaluate((element) => {
+      const view = element.cmTile.root.view
+      view.dispatch({ selection: { anchor: 5 } })
+      view.focus()
+    })
 
   // A word with no entry is added from the side view and then shown as yours.
   await clickMenu(app, 'Command palette')
@@ -187,7 +204,14 @@ test('custom words are added, edited, removed, kept across restart, and suggeste
   await closeSettings()
 
   // Suggestions put custom words first and never go online.
-  await rich.evaluate((element) => element.editor.commands.focus('end'))
+  if (t.formattedEngine === 'tiptap')
+    await rich.evaluate((element) => element.editor.commands.focus('end'))
+  else {
+    await rich.focus()
+    await rich.press(
+      process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End',
+    )
+  }
   await page.keyboard.type(' Hib')
   const menu = page.getByRole('listbox', { name: 'Completions' })
   await menu
@@ -604,6 +628,7 @@ test('5,000 custom words keep bounded live rows, skip hidden discovery work, and
     await rm(profile, { recursive: true, force: true })
   })
   const page = await app.firstWindow()
+  await selectFormattedEngine(app, page, t.formattedEngine)
   page.setDefaultTimeout(APP_STATE_TIMEOUT)
   await waitForDocumentEditor(app, page)
   await app.evaluate(({ ipcMain }) => {

@@ -97,12 +97,13 @@ function code(text: string) {
 }
 
 /**
- * A link or image destination that stays one: tabs and line breaks drop out,
- * as URL parsing drops them; backslashes, which could escape the closing
- * bracket, are percent-encoded as the export renderer writes them; and
+ * HTTP(S) URLs first get browser path semantics. Remaining tabs and line
+ * breaks drop out, backslashes cannot escape closing delimiters, and
  * spaces, controls, angle brackets and parentheses take the `<…>` form.
  */
 function destination(url: string) {
+  const parsed = URL.parse(url)
+  if (parsed && /^https?:$/.test(parsed.protocol)) url = parsed.href
   url = url.replace(/[\t\n\r]/g, '').replace(/\\/g, '%5C')
   return /[\s()<>\p{Cc}]/u.test(url)
     ? `<${url.replace(/[<>]/g, encodeURI)}>`

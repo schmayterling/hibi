@@ -329,7 +329,7 @@ test('pasted html becomes markdown in one edit; plain text and own copies paste 
     '<hr><p><span>kept</span> <custom-el>text</custom-el></p>'
   const expected = [
     '## Title',
-    'Some **bold**, *em*, ~~gone~~, ``a`b`` and [link](<https://x.test/a b>).  \nnext \\*star\\*',
+    'Some **bold**, *em*, ~~gone~~, ``a`b`` and [link](https://x.test/a%20b).  \nnext \\*star\\*',
     '- one\n  - nested\n- two',
     '3. three',
     '> quoted',
@@ -574,6 +574,70 @@ test('a leading language marker cannot extend a code fence or swallow following 
   }
 })
 
+test('pasted web links open the browser target and relative urls keep local handling', {
+  timeout: 30000,
+}, async (t) => {
+  await app.evaluate(({ shell }) => {
+    globalThis.clipboardOpenExternal = shell.openExternal
+    globalThis.clipboardOpened = []
+    shell.openExternal = async (href) => {
+      globalThis.clipboardOpened.push(href)
+    }
+  })
+  try {
+    for (const [href, expected] of [
+      [String.raw`https://x.test/a\b`, 'https://x.test/a/b'],
+      [String.raw`http://x.test/a\b`, 'http://x.test/a/b'],
+      ['https://x.test/a%5Cb', 'https://x.test/a%5Cb'],
+      [String.raw`missing\note.md`, null],
+      [String.raw`//x.test/a\b`, null],
+    ]) {
+      await t.test(href, async () => {
+        try {
+          await app.evaluate(() => {
+            globalThis.clipboardOpened = []
+          })
+          await clipboardEvent('paste', 0, null, {
+            'text/html': `<p><a href="${href}">target</a> tail</p>`,
+          })
+          await waitForAsync(page, async () =>
+            (await window.hibi.getDocument()).markdown.startsWith('[target]'),
+          )
+          if (expected) {
+            await page.locator('.hibi-lp-link').click({ modifiers: ['Shift'] })
+            await waitForAsync(app, () => globalThis.clipboardOpened.length > 0)
+          } else {
+            const target = marked.lexer(await markdown())[0].tokens[0].href
+            assert.equal(target, href.replace(/\\/g, '%5C'))
+            await assert.rejects(
+              page.evaluate(
+                async (href) =>
+                  window.hibi.openDocumentLink(
+                    href,
+                    (await window.hibi.getDocument()).revision,
+                  ),
+                target,
+              ),
+            )
+          }
+          assert.deepEqual(
+            await app.evaluate(() => globalThis.clipboardOpened),
+            expected ? [expected] : [],
+          )
+        } finally {
+          await setFixture(note)
+        }
+      })
+    }
+  } finally {
+    await app.evaluate(({ shell }) => {
+      shell.openExternal = globalThis.clipboardOpenExternal
+      delete globalThis.clipboardOpenExternal
+      delete globalThis.clipboardOpened
+    })
+  }
+})
+
 test('pasted link and image urls stay destinations through line breaks, controls and backslashes', {
   timeout: 60000,
 }, async (t) => {
@@ -599,8 +663,8 @@ test('pasted link and image urls stay destinations through line breaks, controls
     [
       'backslash before the closing parenthesis',
       '<p><a href="https://x.test/a\\">t</a> b</p>',
-      '[t](https://x.test/a%5C) b',
-      ['https://x.test/a%5C'],
+      '[t](https://x.test/a/) b',
+      ['https://x.test/a/'],
     ],
     [
       'control character',

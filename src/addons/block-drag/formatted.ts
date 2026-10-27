@@ -9,7 +9,10 @@ import {
 } from '@codemirror/state'
 import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import type { SyntaxNode, Tree } from '@lezer/common'
-import { uncovered } from '../../renderer/src/chunked-markdown.ts'
+import {
+  readAheadFrom,
+  uncovered,
+} from '../../renderer/src/chunked-markdown.ts'
 import {
   type FormattedContribution,
   formattedBlockEdges,
@@ -346,8 +349,8 @@ function remarked(state: EditorState, item: SyntaxNode, marker: string) {
 type Change = { from: number; to: number; insert: string }
 
 /**
- * Replay the opening and closing lines at both seams. Unchanged interiors
- * and distant siblings cannot affect a seam and need no second parse.
+ * Replay the opening and closing lines at both seams, and earlier decisions
+ * that read across them. Other unchanged interiors need no second parse.
  */
 function preservesBlocks(
   state: EditorState,
@@ -477,6 +480,22 @@ function preservesBlocks(
     const next = sibling(state, tree, node, 1)
     if (previous && !around(previous)) return false
     if (next && !around(next)) return false
+  }
+  for (const at of [
+    sourceFrom(state, block),
+    sourceTo(state, block),
+    sourceFrom(state, target),
+    sourceTo(state, target),
+    ...modified,
+  ]) {
+    if (at === null) return false
+    const decisions = readAheadFrom(tree, at)
+    if (!decisions) return false
+    for (const decision of decisions) {
+      add(decision)
+      const context = blockAt(tree, decision)
+      if (context && !around(context)) return false
+    }
   }
   const ranges = (text: Text, positions: number[], prefix: number) => {
     const spans: { from: number; to: number }[] = []

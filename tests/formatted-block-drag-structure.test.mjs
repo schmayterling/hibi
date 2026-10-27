@@ -14,7 +14,7 @@ before(
     await mkdir(join(folder, 'profile'))
     await writeFile(
       join(folder, 'profile', 'addons.json'),
-      JSON.stringify({ 'block-drag': true }),
+      JSON.stringify({ 'block-drag': true, math: true }),
     )
     app = await electron.launch({
       args: [resolve('.'), `--user-data-dir=${join(folder, 'profile')}`],
@@ -125,6 +125,16 @@ test('list marker spacing cannot absorb the paragraph following the list', {
   const doc = '- narrow item\n-   wide item\n\n  note text\n'
   await open('list-tail.md', doc, 'narrow item')
   assert.equal(await (await menu('narrow item')).isEnabled(), false)
+  await page.keyboard.press('Escape')
+  await saved(doc)
+})
+
+test('moving a later paragraph cannot turn earlier paragraphs into math', {
+  timeout: 60000,
+}, async () => {
+  const doc = '$$ a\n\nfirst paragraph\n\nmiddle paragraph\n\nm $$ x\n\nz $$\n'
+  await open('math-lookahead.md', doc, 'm $$ x')
+  assert.equal(await (await menu('m $$ x')).isEnabled(), false)
   await page.keyboard.press('Escape')
   await saved(doc)
 })

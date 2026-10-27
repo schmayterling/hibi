@@ -3,12 +3,16 @@ import test from 'node:test'
 import { EditorState } from '@codemirror/state'
 import { GFM } from '@lezer/markdown'
 import { blockStep, moveBlock } from '../src/addons/block-drag/formatted.ts'
-import { ChunkedMarkdownParser } from '../src/renderer/src/chunked-markdown.ts'
+import { blockMathSyntax } from '../src/addons/math/formatted-syntax.ts'
+import {
+  ChunkedMarkdownParser,
+  readAheadFrom,
+} from '../src/renderer/src/chunked-markdown.ts'
 import { formattedBlockParser } from '../src/renderer/src/formatted-contributions.ts'
 import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
 import { Footnotes, GithubAlerts } from '../src/shared/markdown-extra-syntax.ts'
 
-const extensions = [GFM, Footnotes, GithubAlerts]
+const extensions = [GFM, Footnotes, GithubAlerts, blockMathSyntax]
 const grammar = EditorState.create({
   extensions: formattedSyntax({ extensions }).extension,
 })
@@ -144,6 +148,69 @@ test('a last item cannot absorb prose after blank separators', () => {
     ['> - a\n> -   b\n>\n>   text\n', 'a', 1],
   ])
     assert.equal(moved(doc, token, 'ListItem', direction), null, doc)
+})
+
+test('moves cannot activate earlier math decisions across blocks or inside paragraphs', () => {
+  const big = 'big ' + 'word '.repeat(2200)
+  for (const [doc, token, direction] of [
+    ['$$ a\n\nf\n\nt\n\nm $$ x\n\nz $$\n', 'z $$', -1],
+    ['$$ a\n\nf\n\nt\n\nm $$ x\n\nz $$\n', 'm $$ x', 1],
+    ['a1\na2\n$$ q\na4\na5\n\nm $$ x\n\nz $$\n', 'z $$', -1],
+    [
+      '> intro\n>\n> $$ a\n>\n> f\n>\n> t\n>\n> m $$ x\n>\n> z $$\n',
+      'z $$',
+      -1,
+    ],
+    [`$$ a\n\nf\n\nt\n\n${big}\n\nz $$\n\nlast\n`, 'big word', 1],
+  ]) {
+    const { state } = view(doc)
+    for (const tree of [view(doc).tree, md.parse(doc)]) {
+      let block = tree.resolveInner(doc.indexOf(token), 1)
+      while (block && block.name !== 'Paragraph') block = block.parent
+      assert.ok(block, token)
+      assert.equal(blockStep(state, tree, block, direction), null, doc)
+    }
+  }
+  const far = `$$\na + b\n\nf\n\ntee\n\n${'filler words here\n\n'.repeat(700)}$$\nx\n$$\n`
+  const { state } = view(far)
+  const tree = md.parse(far)
+  const block = tree.topNode.getChild('BlockMath')
+  const target = tree.resolveInner(far.indexOf('tee'), 1)
+  assert.ok(block)
+  assert.equal(moveBlock(state, tree, block, target, true), null)
+  assert.equal(
+    moved('$$\nx\n$$\n\none\n\ntwo\n', '$$', 'BlockMath', 1),
+    'one\n\n$$\nx\n$$\n\ntwo\n',
+  )
+})
+
+test('lookahead dependency queries skip unrelated chunks in large notes', () => {
+  const visits = (count) => {
+    const doc = '$$ q\n\nm $$ x\n\n'.repeat(count) + 'end\n'
+    const chunked = new ChunkedMarkdownParser(md, md, {
+      chunkSize: 64,
+      groupSize: 8,
+    })
+    const tree = chunked.parse(doc)
+    const proto = Object.getPrototypeOf(tree)
+    const original = proto.prop
+    let calls = 0
+    proto.prop = function (...args) {
+      calls++
+      return original.apply(this, args)
+    }
+    try {
+      const starts = readAheadFrom(tree, doc.lastIndexOf('m $$ x') + 3)
+      assert.ok(starts?.includes(doc.lastIndexOf('$$ q')))
+    } finally {
+      proto.prop = original
+    }
+    return calls
+  }
+  const small = visits(100)
+  const large = visits(20000)
+  console.log(JSON.stringify({ mathDependencies: { small, large } }))
+  assert.ok(large < 100 && large <= small + 16, `${small}, ${large}`)
 })
 
 test('every block in 800 seeded mixed notes preserves structure in both directions', () => {

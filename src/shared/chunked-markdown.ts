@@ -109,6 +109,10 @@ type Window = {
 /** How far decisions made in a chunk or group read ahead, relative to its start. */
 type Reach = {
   reach?: number
+  /** Decisions inside a parsed chunk, relative to its start. Absent on worker-only boundaries. */
+  reads?: readonly { at: number; to: number }[]
+  /** Max reaches in a binary tree over the children, for queries by position. */
+  index?: readonly number[]
   /** Decisions on a chunk's first line, which also decide where the chunk before it ends. */
   edge?: number
 }
@@ -135,14 +139,102 @@ export function readAhead(input: Input, to: number) {
   readers.get(input)?.(to)
 }
 
+const readDecisions = new NodeProp<readonly { at: number; to: number }[]>({
+  perNode: true,
+})
+
+/** Keep read-ahead decisions on plain block parses too. */
+function trackReadAhead(inner: PartialParse, input: Input): PartialParse {
+  const reads: { at: number; to: number }[] = []
+  return {
+    get parsedPos() {
+      return inner.parsedPos
+    },
+    get stoppedAt() {
+      return inner.stoppedAt
+    },
+    stopAt: (pos) => inner.stopAt(pos),
+    advance() {
+      const previous = readers.get(input)
+      readers.set(input, (to) => {
+        previous?.(to)
+        reads.push({ at: inner.parsedPos, to })
+      })
+      try {
+        const tree = inner.advance()
+        return tree && reads.length
+          ? new Tree(tree.type, tree.children, tree.positions, tree.length, [
+              ...tree.propValues,
+              [readDecisions, reads.slice()],
+            ])
+          : tree
+      } finally {
+        if (previous) readers.set(input, previous)
+        else readers.delete(input)
+      }
+    },
+  }
+}
+
 /** The furthest reach of these chunks, relative to the first one's start. */
 function reachOf(chunks: readonly Tree[], positions: readonly number[]) {
-  let reach = -1
+  let reach = -1,
+    size = 1
+  while (size < chunks.length) size *= 2
+  let index: number[] | undefined
   for (let i = 0; i < chunks.length; i++) {
     const own = chunks[i]!.prop(chunkInfo)?.reach
-    if (own !== undefined) reach = Math.max(reach, positions[i]! + own)
+    if (own !== undefined) {
+      reach = Math.max(reach, positions[i]! + own)
+      index ??= Array(size * 2).fill(-1)
+      index[size + i] = positions[i]! + own
+    }
   }
-  return reach < 0 ? {} : { reach }
+  if (!index) return {}
+  for (let i = size - 1; i > 0; i--)
+    index[i] = Math.max(index[i * 2]!, index[i * 2 + 1]!)
+  return { reach, index }
+}
+
+/** Lines whose parsing decision read across `pos`, or null when only boundaries are known. */
+export function readAheadFrom(tree: Tree, pos: number): number[] | null {
+  const found = new Set<number>()
+  let unknown = false
+  const visit = (node: Tree, from: number) => {
+    const info = node.prop(chunkInfo)
+    const reads = info?.reads ?? node.prop(readDecisions)
+    if (reads) {
+      for (const read of reads)
+        if (from + read.at <= pos && from + read.to >= pos)
+          found.add(from + read.at)
+      return
+    }
+    if (!info || info.reach === undefined || from + info.reach < pos) return
+    const index = info.index
+    if (!index) {
+      unknown = true
+      return
+    }
+    const size = index.length / 2
+    const walk = (slot: number, low: number, high: number) => {
+      if (
+        low >= node.children.length ||
+        from + node.positions[low]! > pos ||
+        from + index[slot]! < pos
+      )
+        return
+      if (high - low === 1) {
+        visit(node.children[low] as Tree, from + node.positions[low]!)
+        return
+      }
+      const middle = (low + high) / 2
+      walk(slot * 2, low, middle)
+      walk(slot * 2 + 1, middle, high)
+    }
+    walk(1, 0, size)
+  }
+  visit(tree, 0)
+  return unknown ? null : [...found]
 }
 
 /**
@@ -757,7 +849,7 @@ class ChunkedParse implements ChunkedPartialParse {
       groups,
       positions,
       length,
-      [[chunkInfo, this.rootInfo(groups)]],
+      [[chunkInfo, this.rootInfo(groups, positions)]],
     )
     return this.snapshotTree
   }
@@ -2012,9 +2104,11 @@ class ChunkedParse implements ChunkedPartialParse {
         end = from + chunk.length
       let reach = -1,
         edge = -1
+      const reads: { at: number; to: number }[] = []
       this.reads = this.reads.filter((read) => {
         if (read.at >= end) return true
         if (read.at >= from) {
+          reads.push({ at: read.at - from, to: read.to - from })
           reach = Math.max(reach, read.to - from)
           if (read.at === from) edge = Math.max(edge, read.to - from)
         }
@@ -2033,6 +2127,7 @@ class ChunkedParse implements ChunkedPartialParse {
               {
                 ...info,
                 reach: Math.max(reach, info.reach ?? -1),
+                reads: [...(info.reads ?? []), ...reads],
                 ...(edge >= 0 ? { edge: Math.max(edge, info.edge ?? -1) } : {}),
               },
             ],
@@ -2099,7 +2194,10 @@ class ChunkedParse implements ChunkedPartialParse {
     this.groupGiants = 0
   }
 
-  private rootInfo(groups: readonly Tree[]): ChunkInfo {
+  private rootInfo(
+    groups: readonly Tree[],
+    positions: readonly number[],
+  ): ChunkInfo {
     let parsed = 0,
       giants = 0
     for (const group of groups) {
@@ -2107,7 +2205,7 @@ class ChunkedParse implements ChunkedPartialParse {
       parsed += info.parsed
       giants += info.giants
     }
-    return { kind: 'root', parsed, giants }
+    return { kind: 'root', parsed, giants, ...reachOf(groups, positions) }
   }
 
   private finish() {
@@ -2117,7 +2215,7 @@ class ChunkedParse implements ChunkedPartialParse {
       this.groups,
       this.groupPositions,
       this.input.length,
-      [[chunkInfo, this.rootInfo(this.groups)]],
+      [[chunkInfo, this.rootInfo(this.groups, this.groupPositions)]],
     )
     this.pos = this.input.length
     return this.tree
@@ -2150,13 +2248,14 @@ export class ChunkedMarkdownParser extends Parser {
     this.document = full.nodeSet.types.find((type) => type.name === 'Document')!
     // Inline parsers never change block structure, so boundary scans skip them.
     const inline = (base as unknown as { inlineNames?: unknown }).inlineNames
+    const scan = base.configure({ wrap: trackReadAhead })
     this.scan = Array.isArray(inline)
-      ? base.configure({
+      ? scan.configure({
           remove: inline.filter(
             (name): name is string => typeof name === 'string',
           ),
         })
-      : base
+      : scan
     this.chunkSize = options.chunkSize ?? 4096
     this.groupSize = options.groupSize ?? 64
     this.giantBlock = options.giantBlock ?? 16 * this.chunkSize
@@ -2612,7 +2711,17 @@ export class BoundaryTree {
       this.groups,
       this.positions,
       this.length,
-      [[chunkInfo, { kind: 'root', parsed: 0, giants: this.giants }]],
+      [
+        [
+          chunkInfo,
+          {
+            kind: 'root',
+            parsed: 0,
+            giants: this.giants,
+            ...reachOf(this.groups, this.positions),
+          },
+        ],
+      ],
     )
   }
 }

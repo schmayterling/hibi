@@ -339,9 +339,25 @@ const richQuirks = [
     difference: { words: -1, characters: -10 },
     states: [],
   },
+  {
+    // duplicate definitions stay invisible; rich retains their trailing blank tokens.
+    source: 'a\n\n[x]: /y\n\n[x]: /z',
+    syntax: {},
+    text: 'a\n',
+    difference: { words: 0, characters: 1 },
+    states: [],
+  },
+  {
+    source: 'a\n\n[x]: /y\n\n[x]: /z\n\n[x]: /w',
+    syntax: {},
+    text: 'a\n\n',
+    difference: { words: 0, characters: 2 },
+    states: [],
+  },
 ]
 
 test('schema corpus: paragraph boundary edits retain markdown ownership', () => {
+  const midDuplicate = 'a\n\n[x]: /y\n\n[x]: /z\n\nb'
   const syntax = countSyntax(corpus.configs[0])
   const rich = richOracle(syntax)
   const cases = [
@@ -353,6 +369,7 @@ test('schema corpus: paragraph boundary edits retain markdown ownership', () => 
         [4, 5, ''],
       ],
     ],
+    [midDuplicate, [[midDuplicate.length - 1, midDuplicate.length, 'c']]],
     ['x word', [[0, 1, '']]],
     ['x\u00a0word', [[0, 1, '']]],
     ['words more', [[0, 0, '    ']]],

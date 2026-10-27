@@ -1391,20 +1391,26 @@ export function SourceEditor({
       }
       // A composition must keep the note's text: CodeMirror redraws text that
       // differs, which ends the composition, and the IME then starts over
-      // beside it. Without the features named, the edit is made again.
+      // beside it. Without the features named, the edit is made again, in the
+      // same update. The features leave first, so their extenders do not run.
       if (!edit || kept.length === installed.current.length) return
       installed.current = kept
-      const reinstall = addons.current.reconfigure(
-        featureExtensions(kept, formatted),
+      const reinstall = reconfiguration(
+        view.state,
+        addons.current.reconfigure(featureExtensions(kept, formatted)),
       )
-      view.dispatch(
-        ...edit.map((part, index) => {
-          const spec = part instanceof Transaction ? editSpec(part) : part
-          return index
-            ? { ...spec, sequential: true }
-            : { ...spec, effects: [reinstall].concat(spec.effects ?? []) }
-        }),
-      )
+      let retry: Transaction
+      try {
+        retry = reinstall.state.update(
+          ...edit.map((part, index) => {
+            const spec = part instanceof Transaction ? editSpec(part) : part
+            return index ? { ...spec, sequential: true } : spec
+          }),
+        )
+      } catch {
+        return
+      }
+      view.dispatch([reinstall, retry])
     }
     const editor = new EditorView({
       parent: host.current,

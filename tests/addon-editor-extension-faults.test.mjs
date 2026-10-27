@@ -217,48 +217,56 @@ for (const { presentation, engine, source } of fieldCases)
     assert.deepEqual(errors, [])
   })
 
-for (const presentation of ['formatted', 'source'])
-  test(`an addon ${presentation} state field that fails during composition is removed and the composed text lands once (codemirror)`, {
-    timeout: 120000,
-  }, async (t) => {
-    const { page, pane, errors, cdp } = await open(t, {
-      source: withFrontmatter,
-      presentation,
-      engine: 'codemirror',
-      code: failingField,
-    })
-    await caret(page, pane)
-    // The second candidate fails; the next one replaces it.
-    for (const text of ['日', '日Q', '日本']) {
-      await cdp.send('Input.imeSetComposition', {
-        text,
-        selectionStart: text.length,
-        selectionEnd: text.length,
-      })
-      await frame(page)
-    }
-    await cdp.send('Input.insertText', { text: '日本語' })
-    await frame(page)
-    await reported(page, 'bad-ext.bad: field boom')
-    const composed = await state(page, pane)
-    t.diagnostic(JSON.stringify({ composed, errors }))
-    assert.equal(
-      composed.canonical,
-      withFrontmatter.replace(/end\n$/, 'end日本語\n'),
-    )
-    assert.equal(composed.view, composed.canonical)
-    assert.deepEqual(composed.shown, ['end日本語'])
-    assert.equal(composed.good, true)
-    // One undo takes the composed text back.
-    await page.keyboard.press(`${mod}+z`)
-    await frame(page)
-    const undone = await state(page, pane)
-    t.diagnostic(JSON.stringify({ undone, errors }))
-    assert.equal(undone.canonical, withFrontmatter)
-    assert.equal(undone.view, undone.canonical)
-    assert.deepEqual(undone.shown, ['end'])
-    assert.deepEqual(errors, [])
+/** Composes `日`, `日Q` (which fails), `日本` and commits `日本語`, then undoes once. */
+const composeOverFailure = (presentation, code) => async (t) => {
+  const { page, pane, errors, cdp } = await open(t, {
+    source: withFrontmatter,
+    presentation,
+    engine: 'codemirror',
+    code,
   })
+  await caret(page, pane)
+  // The second candidate fails; the next one replaces it.
+  for (const text of ['日', '日Q', '日本']) {
+    await cdp.send('Input.imeSetComposition', {
+      text,
+      selectionStart: text.length,
+      selectionEnd: text.length,
+    })
+    await frame(page)
+  }
+  await cdp.send('Input.insertText', { text: '日本語' })
+  await frame(page)
+  await reported(page, 'bad-ext.bad: field boom')
+  const composed = await state(page, pane)
+  t.diagnostic(JSON.stringify({ composed, errors }))
+  assert.equal(
+    composed.canonical,
+    withFrontmatter.replace(/end\n$/, 'end日本語\n'),
+  )
+  assert.equal(composed.view, composed.canonical)
+  assert.deepEqual(composed.shown, ['end日本語'])
+  assert.equal(composed.good, true)
+  assert.equal(await page.locator(`${pane} [data-bad]`).count(), 0)
+  // One undo takes the composed text back.
+  await page.keyboard.press(`${mod}+z`)
+  await frame(page)
+  const undone = await state(page, pane)
+  t.diagnostic(JSON.stringify({ undone, errors }))
+  assert.equal(undone.canonical, withFrontmatter)
+  assert.equal(undone.view, undone.canonical)
+  assert.deepEqual(undone.shown, ['end'])
+  assert.deepEqual(errors, [])
+}
+
+for (const presentation of ['formatted', 'source'])
+  test(
+    `an addon ${presentation} state field that fails during composition is removed and the composed text lands once (codemirror)`,
+    {
+      timeout: 120000,
+    },
+    composeOverFailure(presentation, failingField),
+  )
 
 /** A feature with a command whose edits carry an annotation its field fails on. */
 const failingCommand = (
@@ -417,6 +425,15 @@ for (const presentation of ['formatted', 'source'])
     assert.equal(after.good, true)
     assert.deepEqual(errors, [])
   })
+
+for (const presentation of ['formatted', 'source'])
+  test(
+    `an addon ${presentation} state field read by its own extender that fails during composition is removed and the composed text lands once (codemirror)`,
+    {
+      timeout: 120000,
+    },
+    composeOverFailure(presentation, readFailingField),
+  )
 
 test('an addon source state field that fails on a pasted edit is removed and the paste is rejected on screen and in the note (codemirror)', {
   timeout: 120000,
@@ -703,60 +720,70 @@ test('a failing formatted feature leaves the editors of every window, and turnin
   assert.deepEqual(previewErrors, [])
 })
 
-test('a failure another window reports after its addon was turned off does not remove the feature when it is turned on again (codemirror)', {
-  timeout: 180000,
-}, async (t) => {
-  const { app, page, pane, errors, preview, previewErrors, feature } =
-    await openWindows(t, (page) =>
-      // The other window holds failure messages until the test releases them.
-      page.context().addInitScript(() => {
-        const Channel = window.BroadcastChannel
-        window.heldFailures = []
-        window.BroadcastChannel = class extends Channel {
-          set onmessage(receive) {
-            super.onmessage = (event) => {
-              if (window.holdFailures && event.data)
-                window.heldFailures.push(() => receive(event))
-              else receive(event)
+for (const late of ['while it is off', 'after it is on again'])
+  test(`a failure from another window that arrives ${late} does not remove the feature from the addon's next run (codemirror)`, {
+    timeout: 180000,
+  }, async (t) => {
+    const { app, page, pane, errors, preview, previewErrors, feature } =
+      await openWindows(t, (page) =>
+        // The other window holds failure messages until the test releases them.
+        page.context().addInitScript(() => {
+          const Channel = window.BroadcastChannel
+          window.heldFailures = []
+          window.BroadcastChannel = class extends Channel {
+            set onmessage(receive) {
+              super.onmessage = (event) => {
+                if (window.holdFailures && event.data)
+                  window.heldFailures.push(() => receive(event))
+                else receive(event)
+              }
             }
           }
-        }
-      }),
+        }),
+      )
+    await preview.evaluate(() => {
+      window.holdFailures = true
+    })
+    await type(page, pane, ['Q'])
+    await preview.waitForFunction(() => window.heldFailures.length > 0)
+    await clickMenu(app, 'Settings')
+    await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
+    const toggle = page.locator('#addon-text-extras')
+    await toggle.click()
+    await preview
+      .locator('style[data-addon-style="text-extras.text-extras"]')
+      .waitFor({ state: 'detached' })
+    await frame(preview)
+    const release = () =>
+      preview.evaluate(() => {
+        window.holdFailures = false
+        for (const receive of window.heldFailures.splice(0)) receive()
+      })
+    if (late === 'while it is off') await release()
+    await toggle.click()
+    await page.waitForFunction(
+      () => document.querySelector('#addon-text-extras')?.checked === true,
     )
-  await preview.evaluate(() => {
-    window.holdFailures = true
+    await page.getByRole('button', { name: 'Back to app', exact: true }).click()
+    await page.locator('.rich-pane [data-window-fault]').waitFor()
+    await preview
+      .locator('.rich-pane [data-window-fault]')
+      .waitFor({ timeout: 10000 })
+      .catch(() => {})
+    if (late === 'after it is on again') {
+      await release()
+      await frame(preview)
+      await frame(preview)
+    }
+    const restored = {
+      main: await feature(page),
+      other: await feature(preview),
+    }
+    t.diagnostic(JSON.stringify({ restored, errors, previewErrors }))
+    assert.deepEqual(restored, { main: 1, other: 1 })
+    assert.deepEqual(errors, [])
+    assert.deepEqual(previewErrors, [])
   })
-  await type(page, pane, ['Q'])
-  await preview.waitForFunction(() => window.heldFailures.length > 0)
-  await clickMenu(app, 'Settings')
-  await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
-  const toggle = page.locator('#addon-text-extras')
-  await toggle.click()
-  await preview
-    .locator('style[data-addon-style="text-extras.text-extras"]')
-    .waitFor({ state: 'detached' })
-  await frame(preview)
-  // It arrives while the addon is off.
-  await preview.evaluate(() => {
-    window.holdFailures = false
-    for (const receive of window.heldFailures.splice(0)) receive()
-  })
-  await toggle.click()
-  await page.waitForFunction(
-    () => document.querySelector('#addon-text-extras')?.checked === true,
-  )
-  await page.getByRole('button', { name: 'Back to app', exact: true }).click()
-  await page.locator('.rich-pane [data-window-fault]').waitFor()
-  await preview
-    .locator('.rich-pane [data-window-fault]')
-    .waitFor({ timeout: 10000 })
-    .catch(() => {})
-  const restored = { main: await feature(page), other: await feature(preview) }
-  t.diagnostic(JSON.stringify({ restored, errors, previewErrors }))
-  assert.deepEqual(restored, { main: 1, other: 1 })
-  assert.deepEqual(errors, [])
-  assert.deepEqual(previewErrors, [])
-})
 
 /** A feature whose extension CodeMirror cannot install. */
 const invalidExtension = (

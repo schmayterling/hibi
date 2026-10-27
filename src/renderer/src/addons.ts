@@ -788,6 +788,10 @@ export function useAddons(
   useEffect(
     () =>
       latest.current.subscribeStates?.((next) => {
+        // Each message counts, also an off and on that render together.
+        const now = Date.now()
+        for (const state of next)
+          if (!state.enabled) turnedOff.set(state.id, now)
         // Toggling elsewhere retries failed addons, as toggling here does.
         const {
           states: previous,
@@ -817,7 +821,7 @@ export function useAddons(
           )
         setStates(next)
       }),
-    [started],
+    [started, turnedOff],
   )
   useEffect(() => {
     void window.hibi.bootstrap

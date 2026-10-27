@@ -772,6 +772,10 @@ test('multi-line text input is literal and breaks blocks where it lands', () => 
   assert.equal(run('- > a|', type('b\nc')), '- > ab\n  >\n  > c|')
   assert.equal(run('1. a|\n2. b', type('x\ny')), '1. ax\n2. y|\n3. b')
   assert.equal(run('> - a|', type('\n\nb')), '> - a\n>\n> b|')
+  assert.equal(
+    run('> - a|\n> - b', type('x\n\ny')),
+    '> - ax\n>\n> y|\n>\n> - b',
+  )
   // Bold goes on to later lines; a link only where its text continues.
   assert.equal(run('**ab|**', type('x\ny')), '**abx**\n\n**y|**')
   assert.equal(run('**[a|b](u)**', type('x\ny')), '**[ax](u)**\n\n**y|[b](u)**')

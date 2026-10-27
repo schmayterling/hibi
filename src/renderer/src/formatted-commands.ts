@@ -414,6 +414,13 @@ function blocksOf(node: SyntaxNode) {
   return blocks
 }
 
+/** The item after `item` in its list; quote markers between them are not blocks. */
+function nextItem(item: SyntaxNode) {
+  let next = item.nextSibling
+  while (next && !next.type.is('Block')) next = next.nextSibling
+  return next?.name === 'ListItem' ? next : null
+}
+
 /** A list item's marker, its line, and the width from the marker to the item's text. */
 function itemMarker(state: EditorState, item: SyntaxNode) {
   const mark = item.getChild('ListMark')
@@ -776,7 +783,7 @@ export function lineInput(
           // Up a level: the item must end its list, and the list its parent item.
           const parent = levels[current.level + 1]!
           if (
-            level.nextSibling?.name === 'ListItem' ||
+            nextItem(level) ||
             blocksOf(parent).at(-1)?.from !== level.parent!.from
           )
             return null
@@ -805,9 +812,9 @@ export function lineInput(
       const final = made.at(-1) ?? original
       const insertAt = across ? replaceEnd : Math.max(item.to, at)
       if (final.paragraph) {
-        const rest = (levels.length > 1 ? levels.at(-1)! : restAfter)
-          ?.nextSibling
-        if (rest?.name === 'ListItem') {
+        const outer = levels.length > 1 ? levels.at(-1)! : restAfter
+        const rest = outer && nextItem(outer)
+        if (rest) {
           out += `\n${blank}`
           changes.push(...restartList(state, top, rest))
         }
@@ -894,8 +901,8 @@ function restartList(state: EditorState, list: SyntaxNode, rest: SyntaxNode) {
   let number = Number(start[1])
   for (
     let item: SyntaxNode | null = rest;
-    item?.name === 'ListItem';
-    item = item.nextSibling, number++
+    item;
+    item = nextItem(item), number++
   ) {
     const mark = item.getChild('ListMark')
     if (!mark) break

@@ -478,7 +478,7 @@ test('schema corpus: formatted counts match the rich parser and schema in every 
 })
 
 /*
- * The same states in the app's rich editor, with the same addons, flavors
+ * The same states in freshly loaded notes, with the same addons, flavors
  * and disabled syntax. Text is read only from an active, editable rich view
  * outside source panes whose document is what its own parser makes of the
  * canonical source at one unchanged version.
@@ -664,7 +664,7 @@ async function openCorpus(config, formatted = false) {
   }
 }
 
-test('native corpus: the active rich editor holds the schema text of every supported state', {
+test('native corpus: a freshly loaded active rich editor holds the schema text of every supported state', {
   timeout: 3600000,
 }, async (t) => {
   const expected = new Map(
@@ -682,6 +682,9 @@ test('native corpus: the active rich editor holds the schema text of every suppo
         for (const state of states(doc)) {
           const result = expected.get(`${doc.doc}:${state.step}`)
           await open(`${doc.doc}-${state.step}.md`, state.source)
+          // the native footnote tokenizer retains definitions between parses.
+          // reload gives each note the same isolated state as the schema oracle.
+          await page.reload()
           const arg = {
             source: state.source,
             body: result.body,

@@ -214,24 +214,35 @@ for (const { presentation, engine, source } of fieldCases)
     assert.deepEqual(errors, [])
   })
 
+/** A feature whose extension CodeMirror cannot install. */
+const invalidExtension = (
+  presentation,
+) => `export default () => ({ start(context) {
+  context.editor.${register(presentation)}({ id: 'bad', create: () => ({ not: 'an extension' }) })
+} })`
+
 const createCases = [
-  { presentation: 'formatted', engine: 'codemirror' },
-  { presentation: 'source', engine: 'codemirror' },
-  { presentation: 'source', engine: 'tiptap' },
+  { presentation: 'formatted', engine: 'codemirror', code: failingCreate },
+  { presentation: 'source', engine: 'codemirror', code: failingCreate },
+  { presentation: 'source', engine: 'tiptap', code: failingCreate },
+  { presentation: 'formatted', engine: 'codemirror', code: invalidExtension },
+  { presentation: 'source', engine: 'tiptap', code: invalidExtension },
 ]
-for (const { presentation, engine } of createCases)
-  test(`an addon ${presentation} feature that fails to start is reported and the others install with input (${engine})`, {
+for (const { presentation, engine, code } of createCases)
+  test(`an addon ${presentation} feature that ${code === failingCreate ? 'fails to start' : 'cannot be installed'} is reported and the others install with input (${engine})`, {
     timeout: 120000,
   }, async (t) => {
     const { page, pane, errors } = await open(t, {
       source: plain,
       presentation,
       engine,
-      code: failingCreate,
+      code,
     })
     await reported(
       page,
-      `Bad ext could not start its ${presentation} editor feature.`,
+      code === failingCreate
+        ? `Bad ext could not start its ${presentation} editor feature.`
+        : 'bad-ext.bad: Unrecognized extension value',
     )
     await type(page, pane, ['x'])
     const after = await state(page, pane)

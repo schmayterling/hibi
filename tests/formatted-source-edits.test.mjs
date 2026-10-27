@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
+import { TreeCursor } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
 import { formattedLiteralEdits } from '../src/renderer/src/formatted-source-edits.ts'
 
@@ -63,25 +64,23 @@ test('proving a local correction in 20k paragraphs visits only the affected synt
   const transaction = state.update({
     changes: { from, to: from + 9, insert: 'corrected' },
   })
-  let visited = 0
-  const measured = (tree) => ({
-    resolveInner: (...args) => tree.resolveInner(...args),
-    iterate: (spec) =>
-      tree.iterate({
-        ...spec,
-        enter(node) {
-          visited++
-          return spec.enter(node)
-        },
-      }),
-  })
-  assert.equal(
-    formattedLiteralEdits(
-      transaction,
-      measured(markdown.parse(source)),
-      measured(markdown.parse(transaction.newDoc.toString())),
-    ),
-    true,
-  )
-  assert.ok(visited < 16, String(visited))
+  const before = markdown.parse(source)
+  const after = markdown.parse(transaction.newDoc.toString())
+  let moves = 0
+  const originals = new Map()
+  for (const method of ['next', 'prev', 'nextSibling', 'prevSibling']) {
+    const original = TreeCursor.prototype[method]
+    originals.set(method, original)
+    TreeCursor.prototype[method] = function (...args) {
+      moves++
+      return original.apply(this, args)
+    }
+  }
+  try {
+    assert.equal(formattedLiteralEdits(transaction, before, after), true)
+  } finally {
+    for (const [method, original] of originals)
+      TreeCursor.prototype[method] = original
+  }
+  assert.ok(moves < 16, String(moves))
 })

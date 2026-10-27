@@ -1,7 +1,7 @@
 import type { Transaction } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
 
-type Syntax = Pick<Tree, 'resolveInner' | 'iterate'>
+type Syntax = Pick<Tree, 'resolveInner' | 'cursorAt'>
 const prose =
   /^(Paragraph|ATXHeading[1-6]|SetextHeading[12]|TableCell|Emphasis|StrongEmphasis|Strikethrough|Link)$/
 const plain = (node: SyntaxNode) =>
@@ -25,27 +25,26 @@ export function formattedLiteralEdits(
       left.to !== right.to
     )
       return null
-    let exact = true
-    tree.iterate({
-      from,
-      to,
-      enter(node) {
-        if (node.to <= from || node.from >= to) return false
-        if (node.from <= left.from && node.to >= left.to) return
-        if (
-          node.from >= from &&
-          node.to <= to &&
-          node.name !== 'HibiPlainTextRun' &&
-          !(
-            node.type === left.type &&
-            node.from === left.from &&
-            node.to === left.to
-          )
+    const cursor = tree.cursorAt(from, 1)
+    for (
+      let more = cursor.childAfter(from) || cursor.next(false);
+      more && cursor.from < to;
+      more = cursor.next()
+    ) {
+      if (
+        cursor.to > from &&
+        cursor.from >= from &&
+        cursor.to <= to &&
+        cursor.name !== 'HibiPlainTextRun' &&
+        !(
+          cursor.type === left.type &&
+          cursor.from === left.from &&
+          cursor.to === left.to
         )
-          exact = false
-      },
-    })
-    return exact ? left : null
+      )
+        return null
+    }
+    return left
   }
   let valid = true
   transaction.changes.iterChanges((from, to, fromB, toB, insert) => {

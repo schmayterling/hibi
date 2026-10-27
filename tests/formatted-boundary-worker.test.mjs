@@ -49,7 +49,9 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
         '.html': 'text/html',
       }[extname(file)]
       response.writeHead(200, {
-        'Content-Type': type ?? 'application/octet-stream',
+        'Content-Type': type
+          ? `${type}; charset=utf-8`
+          : 'application/octet-stream',
       })
       response.end(await readFile(file))
     } catch {
@@ -169,8 +171,15 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
         const preview = window.livePreview
         const doc = preview.view().state.doc
         const requests = preview.workerState.requests
+        const prefixBefore = preview.definitionIndex().start
         preview.setFrontmatter(true)
-        return { requests, sameDoc: doc === preview.view().state.doc }
+        return {
+          requests,
+          sameDoc: doc === preview.view().state.doc,
+          prefixBefore,
+          prefixAfter: preview.definitionIndex().start,
+          bodyFrom: doc.line(5).from,
+        }
       })
       await page.waitForFunction(() => window.livePreview.workerState.ready)
       const after = await page.evaluate(() => ({
@@ -178,6 +187,8 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
         errors: window.livePreview.workerState.errors,
       }))
       assert.equal(before.sameDoc, true)
+      assert.equal(before.prefixBefore, 0)
+      assert.equal(before.prefixAfter, before.bodyFrom)
       assert.equal(after.requests, before.requests + 1)
       assert.deepEqual(after.errors, [])
     },
@@ -228,6 +239,8 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
           sameGroups: before.groups === after.groups,
           sameLabels: before.labels === after.labels,
           readDelta: after.read - before.read,
+          prefixBefore: before.start,
+          prefixAfter: after.start,
           lengthDelta: preview.view().state.doc.length - length,
           ready: preview.definitionsReady(),
           errors: preview.workerState.errors,
@@ -239,6 +252,8 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
       assert.equal(result.scanned, 0, JSON.stringify(result))
       assert.equal(result.footnoteScanned, 0, JSON.stringify(result))
       assert.equal(result.footnoteParsed, 0, JSON.stringify(result))
+      assert.ok(result.prefixBefore > 0)
+      assert.equal(result.prefixAfter - result.prefixBefore, result.lengthDelta)
       assert.equal(result.sameGroups, true)
       assert.equal(result.sameLabels, true)
       assert.equal(result.readDelta, result.lengthDelta)

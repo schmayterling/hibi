@@ -19,6 +19,8 @@ Around ~~[struck](b.md)~~ and [x **y** z](b.md).
 | --- | --- |
 | row | [cell link](b.md) |
 | wiki | [[c]] |
+| wiki-entity | [[c\\|&copy;]] |
+| wiki-alias | [[b\\|x &amp; y]] |
 | entity | [&amp;](b.md) |
 | mapped | left \\| \\| [&copy;&#x1f331;](c.md) |
 `
@@ -35,6 +37,8 @@ const names = [
   'x y z',
   'cell link',
   'c',
+  '©',
+  'x & y',
   '&',
   '©🌱',
 ]
@@ -152,6 +156,8 @@ for (const engine of ['tiptap', 'codemirror']) {
       ['alias text', 'b.md'],
       ['cell link', 'b.md'],
       ['c', 'c.md'],
+      ['©', 'c.md'],
+      ['x & y', 'b.md'],
       ['&', 'b.md'],
       ['©🌱', 'c.md'],
     ])

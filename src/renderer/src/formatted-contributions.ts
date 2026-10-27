@@ -304,8 +304,8 @@ export const followsLink = (event: MouseEvent) =>
  * modified click on it does; its host provides it. False when there is none.
  */
 export const formattedFollowLink = Facet.define<
-  (view: EditorView, pos: number) => boolean,
-  ((view: EditorView, pos: number) => boolean) | null
+  (view: EditorView, pos: number, wikiTarget?: string) => boolean,
+  ((view: EditorView, pos: number, wikiTarget?: string) => boolean) | null
 >({ combine: (values) => values.at(-1) ?? null })
 
 /** Show the Markdown markers of the formatted text under the selection. */

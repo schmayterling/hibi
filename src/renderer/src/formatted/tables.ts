@@ -1694,7 +1694,12 @@ class TableView {
     const pos = link && this.dom.contains(link) ? this.linkStart(link) : null
     if (
       pos != null &&
-      this.view.state.facet(formattedFollowLink)?.(this.view, pos)
+      this.view.state.facet(formattedFollowLink)?.(
+        this.view,
+        pos,
+        link?.closest('[data-wiki-link]')?.getAttribute('data-wiki-link') ??
+          undefined,
+      )
     )
       event.preventDefault()
   }
@@ -1710,7 +1715,16 @@ class TableView {
     const row = cell?.parentElement
     const index = row?.getAttribute('data-line')
     if (!cell || !row || index == null) return null
-    const start = markStarts.get(link)
+    let start: number | undefined
+    for (
+      let wrapper: Element | null = link;
+      wrapper && cell.contains(wrapper);
+      wrapper = wrapper.parentElement
+    ) {
+      if (!wrapper.matches('.hibi-lp-link')) continue
+      start = markStarts.get(wrapper)
+      if (start !== undefined) break
+    }
     const line = Number(index)
     const source = this.widget.line(line)
     const range = this.widget.row(line).cells[[...row.children].indexOf(cell)]

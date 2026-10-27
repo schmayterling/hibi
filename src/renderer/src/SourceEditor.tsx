@@ -1142,12 +1142,21 @@ export function SourceEditor({
       return true
     }
     /** Open the link at a position, as a modified click on it does. */
-    const followLink = (view: EditorView, position: number) => {
+    const followLink = (
+      view: EditorView,
+      position: number,
+      wikiTarget?: string,
+    ) => {
       if (
         !parserOptions.current.markdownMode ||
         !parserOptions.current.linksEnabled
       )
         return false
+      if (wikiTarget !== undefined) {
+        if (!wikiTarget) return false
+        openLink.current(wikiHref(wikiTarget))
+        return true
+      }
       // The formatted view also follows bare URLs, which it shows as links.
       const bare = (node: SyntaxNode) =>
         formatted &&

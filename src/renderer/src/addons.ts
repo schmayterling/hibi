@@ -73,12 +73,7 @@ import { onEditorInput, onEditorKeyEvent } from './editor-events'
 import { countEditorInteractionProvider } from './editor-interaction-presence'
 import { createEditorViewScope, editorViewRegistry } from './editor-view-api'
 import { explorerDecorations } from './explorer-decorations'
-import {
-  flavors,
-  type RegisteredFlavor,
-  renderMarkdown,
-  renderMarkdownAsync,
-} from './flavors'
+import { flavors, type RegisteredFlavor, renderMarkdownAsync } from './flavors'
 import { codemirrorFormattedView } from './formatted-engine'
 import { projectMarkdown } from './markdown-projection'
 import { markdownSyntax } from './markdown-syntax'
@@ -1377,8 +1372,10 @@ export function useAddons(
             `The ${id} addon needs an update before it can run in this version of Hibi.`,
           )
         running.set(id, { addon, stop, restyle })
-        const start = () =>
-          addon.start({
+        const start = async () => {
+          const { renderMarkdown } = await import('./render-markdown')
+          if (disposed) return
+          return addon.start({
             addons: exchangeScope.addons,
             exports: exchangeScope.exports,
             site: {
@@ -2197,6 +2194,7 @@ export function useAddons(
               if (!disposed) toastScope.api.show({ message })
             },
           })
+        }
         const startDetail = { addonName: addon.manifest.name, status: 'ready' }
         const measuredStart = () =>
           startupSpan(

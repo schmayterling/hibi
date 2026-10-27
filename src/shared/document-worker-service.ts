@@ -165,7 +165,10 @@ export class DocumentWorkerService {
           this.#scheduleBoundaries()
           return
         }
-        this.#boundaryPages = this.#boundaryModel.pages(request.from ?? 0)
+        this.#boundaryPages = this.#boundaryModel.pages(
+          request.from ?? 0,
+          request.baseVersion,
+        )
       }
       const page = this.#boundaryPages.next()
       if (page.done) {
@@ -366,13 +369,18 @@ export class DocumentWorkerService {
         if (
           !Number.isSafeInteger(message.from ?? 0) ||
           (message.from ?? 0) < 0 ||
-          (message.from ?? 0) > this.#store.snapshot().normalizedLength
+          (message.from ?? 0) > this.#store.snapshot().normalizedLength ||
+          (message.baseVersion !== undefined &&
+            (!Number.isSafeInteger(message.baseVersion) ||
+              message.baseVersion < 0 ||
+              message.baseVersion > message.version))
         )
           throw new Error('Could not read a document worker reply.')
         if (
           this.#boundaryRequest?.id === message.id &&
           this.#boundaryRequest.version === message.version &&
           this.#boundaryRequest.from === message.from &&
+          this.#boundaryRequest.baseVersion === message.baseVersion &&
           JSON.stringify(this.#boundaryRequest.config) ===
             JSON.stringify(message.config)
         )

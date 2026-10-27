@@ -308,6 +308,32 @@ test('completed indexes stay idle through edits and stream only a requested suff
   assert.deepEqual(f.errors, [])
 })
 
+test('invalid or inconsistent unchanged-suffix markers cannot publish another page', async (t) => {
+  for (const [to, baseVersion] of [
+    [-1, 0],
+    [0.5, 0],
+    [Number.MAX_SAFE_INTEGER, 0],
+    [0, 0],
+    [0, undefined],
+  ]) {
+    const f = fixture(t)
+    f.client.boundaries(
+      config,
+      (page) => f.pages.push(page),
+      (reason) => f.declined.push(reason),
+      0,
+      baseVersion,
+    )
+    await until(() => f.pages.length === 1)
+    f.transports[0].onmessage({
+      data: { ...f.pages[0], sequence: 1, to },
+    })
+    assert.deepEqual(f.declined, ['mismatch'])
+    assert.equal(f.pages.length, 1)
+    assert.deepEqual(f.errors, [])
+  }
+})
+
 test('invalid suffix offsets cannot publish another boundary page', async (t) => {
   for (const from of [-1, 0.5, Number.MAX_SAFE_INTEGER]) {
     const f = fixture(t)

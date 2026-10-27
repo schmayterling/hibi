@@ -1,11 +1,11 @@
-import { marked } from 'marked'
+import { lexMarkdown } from '../shared/marked-blocks.ts'
 import type { WorkspacePage } from '../shared/workspace'
 
 export function pageTitle(page: WorkspacePage & { title?: string }) {
   if (page.title) return page.title
-  const heading = marked
-    .lexer(page.markdown)
-    .find((token) => token.type === 'heading')
+  const heading = lexMarkdown(page.markdown).find(
+    (token) => token.type === 'heading',
+  )
   return heading?.type === 'heading'
     ? heading.text.replace(/[*`]/g, '')
     : (page.path

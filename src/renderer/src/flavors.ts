@@ -1,14 +1,11 @@
-import { Marked } from 'marked'
-import type { MarkdownFlavor, RenderedMarkdown } from '../../addons/api'
+import type { MarkdownFlavor } from '../../addons/api'
 import { validatePreservation } from '../../shared/preservation'
 import { workspaceSyntaxEvents } from '../../shared/workspace-syntax-events.ts'
-import literalStyles from '../../ui/markdown-literal.css?raw'
-import syntaxStyles from '../../ui/syntax.css?raw'
-import { codeHtml, codeLanguages, escapeCode } from './code-languages'
+import { codeLanguages } from './code-languages'
 import { flavorRegistrations } from './flavor-registrations'
-import { installSyntaxPreferences } from './syntax-parser'
 
 export async function renderMarkdownAsync(source: string, documentId?: string) {
+  const { renderMarkdown } = await import('./render-markdown')
   const version = codeLanguages.version()
   let rendered = renderMarkdown(source, documentId)
   await codeLanguages.settle()
@@ -144,41 +141,5 @@ export function flavorMatches(flavor: MarkdownFlavor, source: string) {
   } catch (error) {
     console.error(`flavor detection failed: ${flavor.id}`, error)
     return false
-  }
-}
-export function renderMarkdown(
-  source: string,
-  documentId?: string,
-): RenderedMarkdown {
-  const selected = selectedFlavors(loadFlavor(documentId), snapshot)
-  const parser = installSyntaxPreferences(
-    new Marked({ gfm: false, breaks: false }),
-  )
-  parser.use({
-    renderer: {
-      code({ text, lang }) {
-        const language = lang?.trim().split(/\s+/)[0] ?? ''
-        return `<pre><code${language ? ` class="language-${escapeCode(language)}"` : ''}>${codeHtml(text, language)}\n</code></pre>\n`
-      },
-    },
-  })
-  for (const flavor of selected) {
-    if (flavor.markedOptions) parser.setOptions(flavor.markedOptions)
-    for (const extension of flavor.export?.extensions ?? [])
-      parser.use(extension)
-  }
-  return {
-    html: parser.parse(source, { async: false }),
-    css:
-      syntaxStyles +
-      literalStyles +
-      '\n' +
-      selected
-        .filter(
-          (flavor) =>
-            flavor.kind === 'dialect' || flavorMatches(flavor, source),
-        )
-        .map((flavor) => flavor.export?.css ?? '')
-        .join('\n'),
   }
 }

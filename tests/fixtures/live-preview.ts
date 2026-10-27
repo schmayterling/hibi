@@ -146,7 +146,7 @@ Object.assign(window, {
         ...(worker
           ? {
               boundaries: {
-                request: (config, receive, declined, from) => {
+                request: (config, receive, declined, from, baseVersion) => {
                   workerState.requests++
                   workerState.ranges.push(from ?? 0)
                   workerState.ready = false
@@ -165,6 +165,7 @@ Object.assign(window, {
                     },
                     declined,
                     from,
+                    baseVersion,
                   )
                 },
                 release: (retain) => {

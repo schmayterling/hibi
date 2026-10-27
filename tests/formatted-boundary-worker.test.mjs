@@ -154,6 +154,97 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
       }
     },
   )
+  await t.test(
+    'a short structural repair keeps the unchanged 52 mib suffix in the view',
+    async () => {
+      await page.evaluate(async () => {
+        const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
+        const body = unit.repeat(Math.ceil((52 * 1024 * 1024) / unit.length))
+        const close = body.indexOf(
+          'paragraph',
+          Math.floor(body.length * 0.01) + 200 * 1024,
+        )
+        await window.livePreview.mount(
+          body.slice(0, close) + 'paragraph --> text\n\n' + body.slice(close),
+          undefined,
+          { worker: true },
+        )
+      })
+      await page.waitForFunction(
+        () => window.livePreview.workerState.ready,
+        undefined,
+        { timeout: 120000 },
+      )
+      const before = await page.evaluate(() => {
+        const preview = window.livePreview
+        const view = preview.view()
+        const at = view.state.doc.lineAt(
+          Math.floor(view.state.doc.length * 0.01),
+        ).from
+        const result = {
+          pages: preview.workerState.pages,
+          requests: preview.workerState.requests,
+        }
+        preview.reset()
+        preview.edit(at, at, '<!--\n')
+        return result
+      })
+      await page.waitForFunction(
+        (before) =>
+          window.livePreview.workerState.pages - before.pages > 4 ||
+          (!window.livePreview.settling() &&
+            window.livePreview.workerState.ready),
+        before,
+        { timeout: 120000 },
+      )
+      const repaired = await page.evaluate(
+        (before) => ({
+          pages: window.livePreview.workerState.pages - before.pages,
+          requests: window.livePreview.workerState.requests - before.requests,
+          records: window.livePreview.probe.adoptedRecords,
+          settling: window.livePreview.settling(),
+          errors: window.livePreview.workerState.errors,
+        }),
+        before,
+      )
+      t.diagnostic(JSON.stringify({ shortRepair: repaired }))
+      assert.equal(repaired.settling, false, JSON.stringify(repaired))
+      assert.ok(
+        repaired.requests > 0 && repaired.requests <= 4,
+        JSON.stringify(repaired),
+      )
+      assert.ok(
+        repaired.pages > 0 && repaired.pages <= 2,
+        JSON.stringify(repaired),
+      )
+      assert.ok(
+        repaired.records > 0 && repaired.records <= 256,
+        JSON.stringify(repaired),
+      )
+      assert.deepEqual(repaired.errors, [])
+      const at = await page.evaluate(() => {
+        const preview = window.livePreview
+        preview.reset()
+        const at = preview.view().state.doc.length - 8192
+        preview.scrollTo(at)
+        return at
+      })
+      await page.waitForFunction(
+        (at) =>
+          [...document.querySelectorAll('.hibi-lp-heading')].some(
+            (element) =>
+              Math.abs(window.livePreview.view().posAtDOM(element) - at) <
+              12000,
+          ),
+        at,
+      )
+      assert.equal(
+        await page.evaluate(() => window.livePreview.probe.scannedUnits),
+        0,
+      )
+    },
+  )
+
   await page.evaluate(async () => {
     const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
     await window.livePreview.mount(

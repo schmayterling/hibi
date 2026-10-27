@@ -2,6 +2,7 @@ import { build } from 'esbuild'
 import {
   BoundaryTree,
   boundaryRecords,
+  spliceBoundaryFragments,
 } from '../src/shared/chunked-markdown.ts'
 import { MarkdownBoundaryIndex } from '../src/shared/markdown-boundary-index.ts'
 import {
@@ -355,6 +356,290 @@ test('receiving views reject unscanned boundary records before adopting any page
     () =>
       builder.append([{ kind: 'chunk', type: 'tail', length: index.length }]),
     /Could not read a document worker reply/,
+  )
+})
+
+test('continued typing lets a long worker repair finish within a fixed advance budget', (t) => {
+  const unit = '# heading\n\nparagraph words\n\n'
+  const text = unit.repeat(Math.ceil((8 * 1024 * 1024) / unit.length))
+  const store = new SourceStore(text, { tabId: 'continued', revision: 0 })
+  const probe = counts()
+  const index = new MarkdownBoundaryIndex(
+    store.snapshot(),
+    configuration({
+      chunkSize: 4096,
+      groupSize: 64,
+      giantBlock: 65536,
+      opaque: ['Table'],
+    }),
+    probe,
+  )
+  drain(index)
+  probe.scannedUnits = 0
+  const fence = text.indexOf('# heading', Math.floor(text.length / 2))
+  index.apply(edit(store, [{ from: fence, to: fence, insert: '~~~\n' }]))
+  const at = text.indexOf('paragraph', Math.floor(text.length / 10)) + 4
+  let typed = 0,
+    complete = false
+  while (typed < 12) {
+    for (let step = 0; step < 30 && !complete; step++)
+      complete = index.advance()
+    if (complete) break
+    index.apply(
+      edit(store, [{ from: at + typed, to: at + typed, insert: 'x' }]),
+    )
+    typed++
+  }
+  t.diagnostic(JSON.stringify({ typed, complete, scanned: probe.scannedUnits }))
+  assert.equal(complete, true)
+  assert.ok(probe.scannedUnits < 8 * 1024 * 1024, JSON.stringify(probe))
+})
+
+test('edits during active boundary repairs retain progress and the saved suffix', (t) => {
+  const text = '# heading\n\nparagraph words\n\n'.repeat(
+    Math.ceil((8 * 1024 * 1024) / 28),
+  )
+  const store = new SourceStore(text, { tabId: 'midscan', revision: 0 })
+  const probe = counts()
+  const index = new MarkdownBoundaryIndex(
+    store.snapshot(),
+    configuration({
+      chunkSize: 4096,
+      groupSize: 64,
+      giantBlock: 65536,
+      opaque: ['Table'],
+    }),
+    probe,
+  )
+  drain(index)
+  const at = text.indexOf('# heading', Math.floor(text.length / 2))
+  probe.scannedUnits = 0
+  index.apply(edit(store, [{ from: at + 2, to: at + 2, insert: 'x' }]))
+  assert.equal(index.advance(), false)
+  assert.equal(index.advance(), false)
+  index.apply(edit(store, [{ from: at + 3, to: at + 3, insert: 'y' }]))
+  drain(index)
+  assert.ok(probe.scannedUnits < 512 * 1024, JSON.stringify(probe))
+  const ordinaryScanned = probe.scannedUnits
+  probe.scannedUnits = 0
+  let pos = at
+  for (const character of '<!-- note -->') {
+    index.apply(edit(store, [{ from: pos, to: pos, insert: character }]))
+    pos++
+    for (let step = 0; step < 3; step++) if (index.advance()) break
+  }
+  drain(index)
+  assert.ok(probe.scannedUnits < 2 * 1024 * 1024, JSON.stringify(probe))
+  t.diagnostic(
+    JSON.stringify({ ordinaryScanned, commentScanned: probe.scannedUnits }),
+  )
+  assert.ok(
+    [...index.records()].every(
+      (record) => record.kind !== 'chunk' || record.type !== 'tail',
+    ),
+  )
+})
+
+test('short repair pages splice into mapped viewport fragments with matching syntax', () => {
+  const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
+  const body = unit.repeat(1200)
+  const at = body.indexOf('# heading', Math.floor(body.length / 4))
+  const close = body.indexOf('paragraph', at + 2000)
+  const text = body.slice(0, close) + 'words --> text\n\n' + body.slice(close)
+  const store = new SourceStore(text, { tabId: 'splice', revision: 0 })
+  const config = configuration({ opaque: ['Table'] })
+  const index = new MarkdownBoundaryIndex(store.snapshot(), config)
+  drain(index)
+  const old = hydrate(index)
+  const version = index.version
+  const change = edit(store, [{ from: at, to: at, insert: '<!--\n' }])
+  const mapped = TreeFragment.applyChanges(
+    TreeFragment.addTree(old),
+    changedRanges(change),
+  )
+  const source = sourceParserInput(store.snapshot())
+  const local = index.parser.startChunkedParse(source, mapped, {
+    from: 0,
+    to: 200,
+  })
+  local.advance()
+  index.apply(change)
+  drain(index)
+  const pages = [...index.pages(at, version)]
+  const { from, to } = pages[0]
+  assert.ok(to < index.length)
+  const builder = new BoundaryTree(index.parser, to - from)
+  for (const page of pages) builder.append(page.records)
+  const fragments = spliceBoundaryFragments(
+    local.snapshot(),
+    mapped,
+    from,
+    to,
+    builder.finish(),
+  )
+  const fresh = new MarkdownBoundaryIndex(store.snapshot(), config)
+  drain(fresh)
+  for (const center of [from, at + 1000, to, index.length - 200]) {
+    const demand = {
+      from: Math.max(0, center - 200),
+      to: Math.min(index.length, center + 200),
+    }
+    const visible = (tree) =>
+      shape(tree).filter(
+        ([name, start, end]) =>
+          name && name !== 'Document' && start < demand.to && end > demand.from,
+      )
+    const actual = finish(
+      index.parser.startChunkedParse(source, fragments, demand, 0, true),
+    )
+    const expected = finish(
+      fresh.parser.startChunkedParse(
+        source,
+        TreeFragment.addTree(hydrate(fresh)),
+        demand,
+      ),
+    )
+    assert.deepEqual(visible(actual), visible(expected), JSON.stringify(demand))
+  }
+})
+
+test('a repair beginning inside the stale view prefix preserves its giant paragraph', () => {
+  const line = 'code body line\n'
+  const head = `intro\n\n${line.repeat(80)}`
+  const before = `${head}${line}${line.repeat(10)}\n# end\n`
+  const after = `${head}# code body ln\n${line.repeat(10)}\n# end\n`
+  assert.equal(before.length, after.length)
+  const config = configuration({ syntax: [], opaque: [] })
+  const store = new SourceStore(after, { tabId: 'prefix-seam', revision: 0 })
+  const index = new MarkdownBoundaryIndex(store.snapshot(), config)
+  drain(index)
+  // A stale giant in the view crosses the worker's verified repair start.
+  const stale = finish(
+    index.parser.startChunkedParse(input(before), [], {
+      from: after.length - 20,
+      to: after.length,
+    }),
+  )
+  const from = head.length
+  const pages = [...index.pages(from)]
+  assert.equal(pages[0].from, from)
+  const builder = new BoundaryTree(index.parser, after.length - from)
+  for (const page of pages) builder.append(page.records)
+  const fragments = spliceBoundaryFragments(
+    stale,
+    [],
+    from,
+    after.length,
+    builder.finish(),
+  )
+  const actual = finish(
+    index.parser.startChunkedParse(
+      input(after),
+      fragments,
+      { from: 0, to: 400 },
+      0,
+      true,
+    ),
+  )
+  const paragraphs = (tree) =>
+    shape(tree).filter(([name, start]) => name === 'Paragraph' && start < 400)
+  assert.deepEqual(
+    paragraphs(actual),
+    paragraphs(boundaryParser(config).parse(after)),
+  )
+})
+
+test('a 52 mib structural repair transfers only through the unchanged suffix', (t) => {
+  const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
+  const body = unit.repeat(Math.ceil((52 * 1024 * 1024) / unit.length))
+  const close = body.indexOf(
+    'paragraph',
+    Math.floor(body.length * 0.01) + 200 * 1024,
+  )
+  const text =
+    body.slice(0, close) + 'paragraph --> text\n\n' + body.slice(close)
+  const store = new SourceStore(text, { tabId: 'rejoin', revision: 0 })
+  const config = configuration({
+    chunkSize: 4096,
+    groupSize: 64,
+    giantBlock: 65536,
+  })
+  const probe = counts()
+  const index = new MarkdownBoundaryIndex(store.snapshot(), config, probe)
+  drain(index)
+  const old = hydrate(index)
+  const baseVersion = index.version
+  const at = text.lastIndexOf('\n# heading', Math.floor(text.length * 0.01)) + 1
+  const prepared = edit(store, [{ from: at, to: at, insert: '<!--\n' }])
+  probe.scannedUnits = 0
+  index.apply(prepared)
+  drain(index)
+  const pages = [...index.pages(at, baseVersion)]
+  const records = pages.reduce((sum, page) => sum + page.records.length, 0)
+  t.diagnostic(
+    JSON.stringify({
+      pages: pages.length,
+      records,
+      scanned: probe.scannedUnits,
+    }),
+  )
+  assert.ok(pages.length <= 2, JSON.stringify({ pages: pages.length, records }))
+  assert.ok(records <= 256)
+  const { from, to } = pages[0]
+  assert.ok(from > 0 && from <= at)
+  assert.ok(to > close && to < close + 512 * 1024)
+  assert.ok(pages.every((page) => page.from === from && page.to === to))
+  assert.ok(probe.scannedUnits < 1024 * 1024)
+  const builder = new BoundaryTree(index.parser, to - from)
+  for (const page of pages) builder.append(page.records)
+  const mapped = TreeFragment.applyChanges(
+    TreeFragment.addTree(old),
+    changedRanges(prepared),
+  )
+  const fragments = spliceBoundaryFragments(
+    old,
+    mapped,
+    from,
+    to,
+    builder.finish(),
+  )
+  probe.scannedUnits = 0
+  const parsed = finish(
+    index.parser.startChunkedParse(
+      sourceParserInput(store.snapshot()),
+      fragments,
+      {
+        from: index.length - 8192,
+        to: index.length,
+      },
+      0,
+      true,
+    ),
+  )
+  assert.equal(parsed.length, index.length)
+  // The repaired start may fall inside the view's last prefix chunk.
+  t.diagnostic(JSON.stringify({ spliceScanned: probe.scannedUnits }))
+  assert.ok(probe.scannedUnits <= 32 * config.chunkSize, JSON.stringify(probe))
+  probe.scannedUnits = 0
+  finish(
+    index.parser.startChunkedParse(
+      sourceParserInput(store.snapshot()),
+      TreeFragment.addTree(parsed),
+      {
+        from: index.length - 16384,
+        to: index.length - 8192,
+      },
+    ),
+  )
+  assert.equal(probe.scannedUnits, 0)
+  const unchanged = [...index.pages(index.length - 100, baseVersion)]
+  assert.equal(unchanged.length, 1)
+  assert.equal(unchanged[0].to, unchanged[0].from)
+  assert.deepEqual(unchanged[0].records, [])
+  index.apply(edit(store, [{ from: at + 10, to: at + 10, insert: 'x' }]))
+  drain(index)
+  assert.ok(
+    [...index.pages(at, baseVersion)].every((page) => page.to === undefined),
   )
 })
 

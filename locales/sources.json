@@ -4836,6 +4836,7 @@
     "src/renderer/src/AddonViewContent.tsx",
     "src/renderer/src/Editor.tsx",
     "src/renderer/src/SettingsScreen.tsx",
+    "src/renderer/src/SourceEditor.tsx",
     "src/renderer/src/main.tsx"
   ],
   "3823b2b1ccc2": [

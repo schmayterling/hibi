@@ -11,6 +11,8 @@ export type BoundaryPage = {
   sequence: number
   length: number
   from?: number
+  /** End of the repaired range; the suffix after it is unchanged from baseVersion. */
+  to?: number
   records: BoundaryRecord[]
   done: boolean
 }
@@ -71,6 +73,7 @@ export type DocumentWorkerRequest =
       version: number
       config: BoundaryConfig
       from?: number
+      baseVersion?: number
     }
   | {
       type: 'boundary-ack'

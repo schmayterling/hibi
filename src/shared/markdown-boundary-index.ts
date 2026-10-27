@@ -1,10 +1,12 @@
 import { type Input, type Tree, TreeFragment } from '@lezer/common'
 import {
   boundaryRecords,
+  boundaryRejoin,
   boundaryStart,
   ChunkedMarkdownParser,
   type ChunkedMarkdownProbe,
   type ChunkedPartialParse,
+  unindexedFrom,
 } from './chunked-markdown.ts'
 import {
   type BoundaryConfig,
@@ -51,6 +53,10 @@ export class MarkdownBoundaryIndex {
   private fragments: readonly TreeFragment[] = []
   private advanced = false
   private source: SourceSnapshot
+  private retained: {
+    version: number
+    fragments: readonly TreeFragment[]
+  } | null = null
   readonly config: BoundaryConfig
   constructor(
     source: SourceSnapshot,
@@ -88,7 +94,34 @@ export class MarkdownBoundaryIndex {
     return this.tree !== null
   }
   apply(prepared: PreparedSourceOperation) {
-    const tree = this.tree ?? (this.advanced ? this.parse.snapshot() : null)
+    let fragments = this.fragments
+    if (this.tree) fragments = TreeFragment.addTree(this.tree)
+    else if (this.advanced) {
+      const tree = this.parse.snapshot()
+      const verified = unindexedFrom(tree) ?? tree.length
+      const suffix = this.retained
+        ? fragments.flatMap((fragment) =>
+            fragment.to <= verified
+              ? []
+              : fragment.from >= verified
+                ? [fragment]
+                : [
+                    new TreeFragment(
+                      verified,
+                      fragment.to,
+                      fragment.tree,
+                      fragment.offset,
+                      true,
+                      fragment.openEnd,
+                    ),
+                  ],
+          )
+        : []
+      // Only joining a saved suffix needs a cut; a cold scan keeps its full snapshot.
+      fragments = suffix.length
+        ? [new TreeFragment(0, verified, tree, 0, false, true), ...suffix]
+        : TreeFragment.addTree(tree)
+    }
     let offset = 0
     const changes = editorChangesFromSource(
       prepared.before,
@@ -103,11 +136,17 @@ export class MarkdownBoundaryIndex {
       offset += change.insert.length - (change.to - change.from)
       return result
     })
-    // An unadvanced replacement parse has no verified progress to retain.
-    this.fragments = TreeFragment.applyChanges(
-      tree ? TreeFragment.addTree(tree) : this.fragments,
-      changes,
-    )
+    if (this.tree && unindexedFrom(this.tree) === null)
+      this.retained = {
+        version: this.version,
+        fragments: TreeFragment.addTree(this.tree),
+      }
+    if (this.retained)
+      this.retained = {
+        version: this.retained.version,
+        fragments: TreeFragment.applyChanges(this.retained.fragments, changes),
+      }
+    this.fragments = TreeFragment.applyChanges(fragments, changes)
     this.source = prepared.after
     this.tree = null
     this.advanced = false
@@ -117,9 +156,18 @@ export class MarkdownBoundaryIndex {
       this.config.prefix,
     )
   }
-  *pages(from = 0) {
-    const records = this.records(from)
-    const start = boundaryStart(this.tree!, from)
+  *pages(from = 0, baseVersion?: number) {
+    if (!this.tree) throw new Error('Could not read a document worker reply.')
+    const start = boundaryStart(this.tree, from)
+    const retained =
+      baseVersion === this.retained?.version
+        ? this.retained?.fragments.at(-1)
+        : undefined
+    const to = retained
+      ? Math.max(start, boundaryRejoin(this.tree, retained))
+      : this.length
+    const end = to < this.length ? { to } : {}
+    const records = boundaryRecords(this.tree, from, to)
     let next = records.next()
     while (!next.done) {
       const page = []
@@ -131,9 +179,10 @@ export class MarkdownBoundaryIndex {
         page.push(next.value)
         next = records.next()
       }
-      yield { from: start, records: page, done: !!next.done }
+      yield { from: start, ...end, records: page, done: !!next.done }
     }
-    if (!this.length) yield { from: 0, records: [], done: true }
+    if (!this.length || start === to)
+      yield { from: start, ...end, records: [], done: true }
   }
   records(from = 0) {
     if (!this.tree) throw new Error('Could not read a document worker reply.')

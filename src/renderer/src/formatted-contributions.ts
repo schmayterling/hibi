@@ -6,7 +6,7 @@ import {
   StateEffect,
 } from '@codemirror/state'
 import { type KeyBinding, keymap } from '@codemirror/view'
-import type { Tree } from '@lezer/common'
+import type { NodeType, Tree } from '@lezer/common'
 import type { MarkdownConfig } from '@lezer/markdown'
 import type { FormattedNodeView } from '../../addons/api'
 
@@ -90,6 +90,48 @@ export const formattedFlavors = Facet.define<
 
 /** Node views of the active contributions, read by the live preview. */
 export const formattedViews = Facet.define<FormattedNodeView>()
+
+/** The active node views for nodes of one type, each once. */
+export type FormattedNodeViews = {
+  /**
+   * Views that name the node, then views that name one of its groups, so
+   * the node's own container, spacing and layout come first.
+   */
+  views: readonly FormattedNodeView[]
+  /**
+   * The views that name one of the node's groups. The formatted view draws
+   * their marks inside its other marks, so small text wraps the tags in it.
+   */
+  grouped: readonly FormattedNodeView[]
+}
+
+const viewsByType = new WeakMap<
+  readonly FormattedNodeView[],
+  WeakMap<NodeType, FormattedNodeViews>
+>()
+/** The active node views for nodes of a type: those that name it or one of its groups. */
+export function formattedNodeViews(state: EditorState) {
+  const views = state.facet(formattedViews)
+  let byType = viewsByType.get(views)
+  if (!byType) {
+    byType = new WeakMap()
+    viewsByType.set(views, byType)
+  }
+  const found = byType
+  return (type: NodeType) => {
+    let matched = found.get(type)
+    if (!matched) {
+      const named = views.filter((view) => view.nodes.includes(type.name))
+      const grouped = views.filter(
+        (view) =>
+          !named.includes(view) && view.nodes.some((name) => type.is(name)),
+      )
+      matched = { views: [...named, ...grouped], grouped }
+      found.set(type, matched)
+    }
+    return matched
+  }
+}
 
 /** Opaque node names of the active contributions, read by the formatted syntax. */
 export const formattedOpaque = Facet.define<string>()

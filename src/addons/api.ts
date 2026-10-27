@@ -278,8 +278,9 @@ export type FormattedContainer = {
   marker?: boolean
 }
 
-/** Rendering for syntax nodes by name. */
+/** Rendering for syntax nodes by name or Lezer group. */
 export type FormattedNodeView = {
+  /** Names of the nodes it renders, or of their Lezer groups, such as `LeafBlock`. */
   nodes: readonly string[]
   /** Local registerSyntax id controlling this renderer. Disabled nodes show literal source. */
   feature?: string

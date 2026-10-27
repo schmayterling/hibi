@@ -682,6 +682,15 @@ it('rich editor survives document-only syntax and rebuilds for flavor changes', 
     await palette
       .getByRole('option', { name: /Use plain Markdown flavor/i })
       .press('Enter')
+    await palette.waitFor({ state: 'hidden' })
+    // The native host may stay mounted; wait for the deferred palette action itself.
+    await waitForAsync(page, async () => {
+      const snapshot = await window.hibi.getDocument()
+      const choice = JSON.parse(
+        localStorage.getItem(`hibi:flavor:${snapshot.id}`),
+      )
+      return choice?.dialect === 'markdown' && choice.syntax?.length === 0
+    })
     await checkDraft()
     await page.evaluate(async () => {
       window.syntaxProbe.registerFlavor({
@@ -696,12 +705,37 @@ it('rich editor survives document-only syntax and rebuilds for flavor changes', 
     })
     await checkDraft()
     await editor.press('End')
+    assert.equal(
+      await editor.evaluate((element) => document.activeElement === element),
+      true,
+    )
     await page.keyboard.insertText('!')
     await waitForAsync(
       page,
       async () =>
         (await window.hibi.getDocument()).markdown === 'Keep this draft.!',
-    )
+    ).catch(async (error) => {
+      t.diagnostic(
+        JSON.stringify(
+          await editor.evaluate(async (element) => {
+            const snapshot = await window.hibi.getDocument()
+            const view = element.cmTile.root.view
+            const { anchor, head } = view.state.selection.main
+            return {
+              source: snapshot.markdown,
+              native: view.state.doc.toString(),
+              anchor,
+              head,
+              focused: document.activeElement === element,
+              documentFocused: document.hasFocus(),
+              editable: element.isContentEditable,
+              readOnly: view.state.readOnly,
+            }
+          }),
+        ),
+      )
+      throw error
+    })
     assert.deepEqual(errors, [])
     return
   }

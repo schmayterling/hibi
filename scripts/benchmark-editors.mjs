@@ -494,27 +494,41 @@ async function metrics(session) {
   return values
 }
 
+/**
+ * Wait for a quiet renderer: two consecutive 100 ms windows that each add
+ * under 1 ms of main-thread task time, for at most 3 s. Idle-time work an
+ * editor queued, such as parsing ahead of the viewport, then cannot start
+ * inside the next measurement.
+ */
+export async function settle(page, session) {
+  const started = performance.now()
+  let quiet = 0
+  let previous = (await metrics(session)).TaskDuration
+  while (quiet < 2) {
+    if (performance.now() - started >= 3000)
+      return { settled: false, settleMs: performance.now() - started }
+    await page.evaluate(
+      () => new Promise((resolve) => setTimeout(resolve, 100)),
+    )
+    const now = (await metrics(session)).TaskDuration
+    quiet = (now - previous) * 1000 < 1 ? quiet + 1 : 0
+    previous = now
+  }
+  return { settled: true, settleMs: performance.now() - started }
+}
+
 export async function scrollFrames(
   page,
   session,
   frameCount,
   label = 'scroll',
 ) {
-  const start = await page.evaluate(async () => {
+  await page.evaluate(async () => {
     document.querySelector('.rich-pane').scrollTop = 0
     await new Promise(requestAnimationFrame)
     await new Promise(requestAnimationFrame)
-    // Start from a quiet main thread: a long idle period means no task or frame was pending.
-    const started = performance.now()
-    for (;;) {
-      const remaining = await new Promise((resolve) =>
-        requestIdleCallback((deadline) => resolve(deadline.timeRemaining())),
-      )
-      const settleMs = performance.now() - started
-      if (remaining >= 40) return { settled: true, settleMs }
-      if (settleMs >= 1000) return { settled: false, settleMs }
-    }
   })
+  const start = await settle(page, session)
   const pass = { frameCount, label }
   const before = await metrics(session)
   const scroll = await page.evaluate(async ({ frameCount, label }) => {
@@ -881,7 +895,7 @@ function markdownReport(report) {
     'open readyMs ends at editable formatted DOM with loaded fonts; mixed fixtures also require a rendered heading. open paint is the first subsequent renderer Paint. source-first tiptap attempts normal view; open+switch is reported only if an editable formatted view becomes ready. an observed read-only preview, or codemirror source fallback needing #450, records unavailable formatted metrics while retaining source-open timing, capability state, source hash and traces. unavailable samples make the report partial; unexpected errors fail it. the matrix continues in both cases.',
     `${report.config.warmupKeys} untimed warm-up keys precede measured keys; p95 is quoted only when every launch measured at least ${minimumKeysForP95} keys. key processing is keydown → model-ready (readyMs); cdp task deltas also include observer/driver work and two-frame settlement. key → paint is mostly next-frame wait (0.6–14.8 ms in prior input traces); it is not a processing-time metric.`,
     'Paint is a same-thread temporal trace match within the operation, not proof of glyph presentation or physical keyboard latency. missing paint is n/a, never zero. full frame, layout, gc and User Timing evidence is retained in traces.',
-    `scroll requests 3600 css px over a fixed number of animation frames. every pass starts at the top after a long idle period (or 1 s), so pending background work does not land in it. the first traversal follows typing and find; steady state is the median of ${report.config.scrollPasses} later passes over the same distance, which codemirror has already drawn and measured once. main/frame is the CDP TaskDuration delta divided by measured scroll frames; it includes the scroll driver and final settlement. short documents clamp distance; documents that fit have no scroll sample. raw task deltas, distances, settle state and frame intervals are in results.json.`,
+    `scroll requests 3600 css px over a fixed number of animation frames. every pass starts at the top once the renderer is quiet (two 100 ms windows under 1 ms of task time each, at most 3 s), so queued idle-time work does not land in it. the first traversal follows typing and find; steady state is the median of ${report.config.scrollPasses} later passes over the same distance, which codemirror has already drawn and measured once. main/frame is the CDP TaskDuration delta divided by measured scroll frames; it includes the scroll driver and final settlement. short documents clamp distance; documents that fit have no scroll sample. raw task deltas, distances, settle state and frame intervals are in results.json.`,
     "the prose 575kb fixture is trace-input-paint.mjs's exact 574,998-byte, 100,000-word paragraph fixture. mixed fixtures repeat headings, emphasis, links, lists, code, a table and math at the same byte sizes. math rendering depends on the enabled addons recorded per sample.",
     report.smoke
       ? 'smoke numbers validate the sampler under shared load; they establish no performance ranking or full-matrix pass.'

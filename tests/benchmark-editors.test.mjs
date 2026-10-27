@@ -12,6 +12,7 @@ import {
   requireFormattedEditor,
   scrollFrames,
   scrollSeries,
+  settle,
   statistics,
   summarizeEditors,
 } from '../scripts/benchmark-editors.mjs'
@@ -303,13 +304,17 @@ test('pairs compare codemirror with tiptap within each run, so load drift cancel
   assert.equal(row.ratios.openPaintMs.missing, 2)
 })
 
-test('scroll series keeps the first traversal apart from settled repeat passes', async () => {
-  const passes = []
+/** A page and cdp session whose renderer task time grows by the scripted milliseconds per metrics read. */
+function fakeRenderer(taskMs) {
+  const log = []
+  let total = 1000
   const page = {
     async evaluate(_work, argument) {
-      // Reset-and-settle runs without an argument; each pass names its marks.
-      if (argument === undefined) return { settled: true, settleMs: 3 }
-      passes.push(argument.label)
+      if (!argument?.label) {
+        log.push('wait')
+        return
+      }
+      log.push(argument.label)
       return {
         requestedPx: 3600,
         distancePx: 3600,
@@ -318,22 +323,45 @@ test('scroll series keeps the first traversal apart from settled repeat passes',
       }
     },
   }
-  const durations = [1, 1.008, 1.008, 1.01, 1.01, 1.016, 1.016, 1.02]
   const session = {
-    async send() {
-      const value = durations.shift()
+    async send(method) {
+      assert.equal(method, 'Performance.getMetrics')
+      total += taskMs.shift() ?? 0
+      log.push('metrics')
       return {
         metrics: [
           'TaskDuration',
           'ScriptDuration',
           'LayoutDuration',
           'RecalcStyleDuration',
-        ].map((name) => ({ name, value })),
+        ].map((name) => ({ name, value: total / 1000 })),
       }
     },
   }
+  return { page, session, log }
+}
+
+test('settling waits for two quiet windows after background work', async () => {
+  const { page, session, log } = fakeRenderer([0, 5, 0.2, 3, 0.4, 0.3])
+  const result = await settle(page, session)
+  assert.equal(result.settled, true)
+  assert.equal(log.filter((entry) => entry === 'wait').length, 5)
+})
+
+test('scroll series keeps the first traversal apart from settled repeat passes', async () => {
+  // Per pass: three quiet settle reads, then the task time before and after scrolling.
+  const pass = (scrollMs) => [0, 0.2, 0.2, 0, scrollMs]
+  const { page, session, log } = fakeRenderer([
+    ...pass(8),
+    ...pass(2),
+    ...pass(6),
+    ...pass(4),
+  ])
   const scroll = await scrollSeries(page, session, 2, 3)
-  assert.deepEqual(passes, ['scroll-first', 'scroll-0', 'scroll-1', 'scroll-2'])
+  assert.deepEqual(
+    log.filter((entry) => entry.startsWith('scroll')),
+    ['scroll-first', 'scroll-0', 'scroll-1', 'scroll-2'],
+  )
   assert.ok(Math.abs(scroll.first.mainThreadPerFrameMs - 4) < 1e-8)
   assert.deepEqual(
     scroll.passes.map((pass) => Math.round(pass.mainThreadPerFrameMs)),
@@ -449,54 +477,32 @@ test('source-first codemirror and other sample failures do not abort later sizes
   }
 })
 
-test('scroll reports task milliseconds per frame, excluding top-reset work', async () => {
-  let stage = 0
-  const page = {
-    async evaluate() {
-      if (stage === 0) {
-        stage++
-        return
-      }
-      assert.equal(
-        stage++,
-        2,
-        'metrics must start after reset and before scrolling',
-      )
-      return {
-        requestedPx: 3600,
-        distancePx: 3600,
-        actualPx: 3600,
-        frames: Array(12).fill(16.7),
-      }
-    },
-  }
-  const session = {
-    async send(method) {
-      assert.equal(method, 'Performance.getMetrics')
-      const duration = stage++ === 1 ? 1 : 1.072
-      return {
-        metrics: [
-          'TaskDuration',
-          'ScriptDuration',
-          'LayoutDuration',
-          'RecalcStyleDuration',
-        ].map((name) => ({ name, value: duration })),
-      }
-    },
-  }
+test('scroll reports task milliseconds per frame, excluding reset and settle work', async () => {
+  const { page, session, log } = fakeRenderer([0, 0.3, 0.3, 0.2, 72])
   const scroll = await scrollFrames(page, session, 12)
+  assert.deepEqual(log, [
+    'wait',
+    'metrics',
+    'wait',
+    'metrics',
+    'wait',
+    'metrics',
+    'metrics',
+    'scroll',
+    'metrics',
+  ])
   assert.ok(Math.abs(scroll.taskMs - 72) < 1e-8)
   assert.ok(Math.abs(scroll.mainThreadPerFrameMs - 6) < 1e-8)
   assert.equal(scroll.frames.length, 12)
+  assert.equal(scroll.settled, true)
 
-  stage = 0
   const fitting = await scrollFrames(
     {
       async evaluate() {
         return { frames: [], reason: 'document fits viewport' }
       },
     },
-    session,
+    fakeRenderer([]).session,
     12,
   )
   assert.equal(fitting.mainThreadPerFrameMs, null)

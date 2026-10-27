@@ -24,6 +24,7 @@ import {
 } from '@codemirror/view'
 import {
   IterMode,
+  type NodeType,
   type SyntaxNode,
   type SyntaxNodeRef,
   type Tree,
@@ -46,10 +47,12 @@ import {
   type FormattedDecorations,
   type FormattedLayout,
   type FormattedNodeView,
+  type FormattedNodeViews,
   formattedBlockEdges,
   formattedContributions,
   formattedDocument,
   formattedLiteral,
+  formattedNodeViews,
   formattedRefresh,
   formattedRenderInputs,
   formattedTree,
@@ -75,27 +78,6 @@ export const formattedTabIndents = Facet.define<boolean, boolean>({
 })
 
 type Revealed = { from: number; to: number }
-
-/** Contributed node views by node name, per set of views. */
-const viewsByName = new WeakMap<
-  readonly FormattedNodeView[],
-  Map<string, FormattedNodeView[]>
->()
-function namedViews(state: EditorState) {
-  const views = state.facet(formattedViews)
-  let named = viewsByName.get(views)
-  if (!named) {
-    named = new Map()
-    for (const view of views)
-      for (const name of view.nodes) {
-        const list = named.get(name)
-        if (list) list.push(view)
-        else named.set(name, [view])
-      }
-    viewsByName.set(views, named)
-  }
-  return named
-}
 
 class SpaceWidget extends WidgetType {
   override eq() {
@@ -134,12 +116,13 @@ function blockSpace(name: string): { top: number; bottom: number } {
 /** Rules of the render in progress: syntax shown as written and contributed node views. */
 type Blocks = {
   literal: ReadonlySet<string>
-  views: Map<string, FormattedNodeView[]>
+  views: (type: NodeType) => FormattedNodeViews
   shapes: (node: SyntaxNode) => FormattedContainer | undefined
 }
+const noViews: FormattedNodeViews = { views: [], grouped: [] }
 const noBlocks: Blocks = {
   literal: new Set(),
-  views: new Map(),
+  views: () => noViews,
   shapes: () => undefined,
 }
 let blocks = noBlocks
@@ -153,7 +136,7 @@ const isContainer = (node: SyntaxNode) =>
   (node.name === 'Blockquote' ||
     node.name === 'ListItem' ||
     isList(node) ||
-    !!blocks.views.get(node.name)?.some((view) => view.container))
+    blocks.views(node.type).views.some((view) => view.container))
 
 function blockSibling(node: SyntaxNode, forward: boolean) {
   let next = forward ? node.nextSibling : node.prevSibling
@@ -215,7 +198,7 @@ function margins(node: SyntaxNode): { top: number; bottom: number } {
   if (parent && isList(parent))
     return { top: blockSibling(node, false) ? 4.8 : 0, bottom: 0 }
   const space =
-    blocks.views.get(node.name)?.find((view) => view.space)?.space ??
+    blocks.views(node.type).views.find((view) => view.space)?.space ??
     blockSpace(node.name)
   // A quote's last block has no bottom margin.
   return parent?.name === 'Blockquote' && !blockSibling(node, true)
@@ -328,13 +311,14 @@ function inline(
   layout: DecorationSet,
 ): {
   decorations: DecorationSet
+  groupMarks: DecorationSet
   atomic: DecorationSet
   wrappers: RangeSet<BlockWrapper>
   end: number
 } {
   const { state } = view
   const doc = state.doc
-  const views = namedViews(state)
+  const views = formattedNodeViews(state)
   const literal = new Set(state.facet(formattedLiteral))
   const atomic: Range<Decoration>[] = []
   const touched = (from: number, to: number) =>
@@ -350,7 +334,7 @@ function inline(
       revealed: touched(node.from, node.to),
       visible: null,
     }
-    for (const nodeView of views.get(node.name) ?? []) {
+    for (const nodeView of views(node.type).views) {
       shape = nodeView.container?.(node, context)
       if (shape) break
     }
@@ -359,6 +343,11 @@ function inline(
   }
   blocks = { literal, views, shapes }
   const decorations: Range<Decoration>[] = []
+  /**
+   * Marks of views for a node's group. One set nests marks over the same
+   * text in no fixed order, so these get a source of their own.
+   */
+  const groupMarks: Range<Decoration>[] = []
   const replacements = new Set<string>()
   const lines = new Map<number, LineInfo>()
   const headings = new Map<number, Range<BlockWrapper>>()
@@ -473,10 +462,12 @@ function inline(
   }
 
   /** Decorations from a contributed view for one node, revealed while the selection touches it. */
-  const sink = (revealed: boolean): FormattedDecorations => ({
+  const sink = (
+    revealed: boolean,
+    marks = decorations,
+  ): FormattedDecorations => ({
     mark(from, to, attributes) {
-      if (to > from)
-        decorations.push(Decoration.mark({ attributes }).range(from, to))
+      if (to > from) marks.push(Decoration.mark({ attributes }).range(from, to))
     },
     syntax: (from, to) => syntax(from, to, revealed),
     line(at, attributes) {
@@ -512,22 +503,30 @@ function inline(
         const name = ref.name
         // Syntax whose setting is off shows as written, its children too.
         if (literal.has(name)) return false
-        const contributed = views.get(name)
+        const contributed = views(ref.type)
         let skip = false
-        if (contributed) {
+        if (contributed.views.length) {
           const out = sink(touched(ref.from, ref.to))
+          const grouped = sink(touched(ref.from, ref.to), groupMarks)
           const context = {
             state,
             revealed: touched(ref.from, ref.to),
             visible: range,
           }
-          for (const nodeView of contributed)
-            if (nodeView.decorate?.(ref, out, context) === false) skip = true
+          for (const nodeView of contributed.views)
+            if (
+              nodeView.decorate?.(
+                ref,
+                contributed.grouped.includes(nodeView) ? grouped : out,
+                context,
+              ) === false
+            )
+              skip = true
           // Other blocks with a container hook hold their lines like quotes.
           if (
             name !== 'Blockquote' &&
             name !== 'ListItem' &&
-            contributed.some((nodeView) => nodeView.container)
+            contributed.views.some((nodeView) => nodeView.container)
           ) {
             const node = ref.node
             eachLine(doc, ref.from, ref.to, range, (current) => {
@@ -731,6 +730,7 @@ function inline(
   blocks = noBlocks
   return {
     decorations: Decoration.set(decorations, true),
+    groupMarks: Decoration.set(groupMarks, true),
     atomic: Decoration.set(atomic, true),
     wrappers: BlockWrapper.set([...headings.values()], true),
     end,
@@ -1030,7 +1030,7 @@ function chunkLayout(
   reveal: readonly Revealed[],
 ) {
   const doc = state.doc
-  const views = namedViews(state)
+  const views = formattedNodeViews(state)
   const literal = new Set(state.facet(formattedLiteral))
   const out: Range<Decoration>[] = []
   /** A contributed layout view ran, so the chunk's layout can follow the selection. */
@@ -1071,8 +1071,8 @@ function chunkLayout(
       enter(ref) {
         if (ref.to <= range.from || ref.from >= range.to) return false
         if (literal.has(ref.name)) return false
-        const contributed = views.get(ref.name)
-        if (contributed?.some((view) => view.layout)) {
+        const contributed = views(ref.type).views
+        if (contributed.some((view) => view.layout)) {
           sensitive = true
           // A node spanning covered ranges is laid out once, where it starts.
           if (!starts(ref.from)) return
@@ -1368,6 +1368,7 @@ export function livePreview(
   const preview = ViewPlugin.fromClass(
     class {
       decorations: DecorationSet
+      groupMarks: DecorationSet
       atomic: DecorationSet
       wrappers: RangeSet<BlockWrapper>
       /** Space below the last line, in px. */
@@ -1377,6 +1378,7 @@ export function livePreview(
         this.reveal = revealed(view)
         ;({
           decorations: this.decorations,
+          groupMarks: this.groupMarks,
           atomic: this.atomic,
           wrappers: this.wrappers,
           end: this.end,
@@ -1407,6 +1409,7 @@ export function livePreview(
         // An edit's unfinished reparse keeps what was drawn, mapped through it.
         if (syntax.settling(update.state)) {
           this.decorations = mapLines(this.decorations, update)
+          this.groupMarks = this.groupMarks.map(update.changes)
           this.atomic = mapLines(this.atomic, update)
           this.wrappers = this.wrappers.map(update.changes)
         } else if (
@@ -1429,6 +1432,7 @@ export function livePreview(
         )
           ({
             decorations: this.decorations,
+            groupMarks: this.groupMarks,
             atomic: this.atomic,
             wrappers: this.wrappers,
             end: this.end,
@@ -1507,6 +1511,11 @@ export function livePreview(
     // Hidden layout syntax is atomic too.
     EditorView.atomicRanges.of((view) =>
       revealDestinations(view.state.field(layout), view.state),
+    ),
+    // A source of higher precedence than the preview's own: the editor
+    // draws its marks inside the preview's.
+    EditorView.decorations.of(
+      (view) => view.plugin(preview)?.groupMarks ?? Decoration.none,
     ),
     preview,
     EditorView.blockWrappers.of(

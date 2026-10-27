@@ -282,7 +282,7 @@ export function MarkdownEditor({
   findOpen: boolean
   onCloseFind: () => void
   markdownExtensions: readonly MarkdownExtension[]
-  formattedExtensions?: readonly FormattedExtension[]
+  formattedExtensions: readonly FormattedExtension[]
   sourceExtensions: readonly SourceExtension[]
   richExtensions: readonly RichExtension[]
   cursorSettings: CursorSettings

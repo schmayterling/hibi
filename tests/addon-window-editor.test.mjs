@@ -85,8 +85,10 @@ async function hostEditor(t, engine) {
     app.windows().find((item) => item.url().endsWith('/addon-window.html'))
   while (!findPreview()) await setTimeout(30)
   const preview = findPreview()
+  // The textbox appears before the view takes input, which waits for its extensions.
   await preview
     .getByRole('textbox', { name: 'Document editor', exact: true })
+    .and(preview.locator('[contenteditable="true"]'))
     .waitFor()
   const editor = preview.locator(editorSelector[engine])
   assert.equal(await editor.count(), 1, 'the selected formatted view')
@@ -289,6 +291,7 @@ async function recoverAddons(t, engine) {
   const kept = find()
   await kept
     .getByRole('textbox', { name: 'Document editor', exact: true })
+    .and(kept.locator('[contenteditable="true"]'))
     .waitFor()
   assert.equal(
     await kept.locator(editorSelector[engine]).count(),

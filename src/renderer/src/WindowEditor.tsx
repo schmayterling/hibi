@@ -179,6 +179,7 @@ function Host({
               flavors={chosen}
               footnoteDocument={false}
               sourceExtensions={host.sourceExtensions}
+              formattedExtensions={host.formattedExtensions}
               richExtensions={host.richExtensions}
               documentRevision={current.revision}
               showLineNumbers={lineNumbers}

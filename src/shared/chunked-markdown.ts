@@ -193,7 +193,7 @@ function indexedReach(length: number, value: (index: number) => number): Reach {
   if (!index) return {}
   for (let i = size - 1; i > 0; i--)
     index[i] = Math.max(index[i * 2]!, index[i * 2 + 1]!)
-  return { reach: index[1], index }
+  return { reach: index[1]!, index }
 }
 
 /** Unique decision positions, followed by their ends, in source order. */

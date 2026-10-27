@@ -6,7 +6,7 @@ import {
   StateEffect,
 } from '@codemirror/state'
 import { type KeyBinding, keymap, type WidgetType } from '@codemirror/view'
-import type { SyntaxNodeRef, Tree } from '@lezer/common'
+import type { NodeType, SyntaxNodeRef, Tree } from '@lezer/common'
 import type { MarkdownConfig } from '@lezer/markdown'
 import { type FormattedEntry, formattedRegistry } from './formatted-registry.ts'
 import { markdownSyntax } from './markdown-syntax.ts'
@@ -103,8 +103,9 @@ export type FormattedContainer = {
   marker?: boolean
 }
 
-/** Rendering for syntax nodes by name. */
+/** Rendering for syntax nodes by name or Lezer group. */
 export type FormattedNodeView = {
+  /** Names of the nodes it renders, or of their Lezer groups, such as `LeafBlock`. */
   nodes: readonly string[]
   /** Inline decorations. Return false to skip the node's children. */
   decorate?(
@@ -174,6 +175,29 @@ export const formattedFlavors = Facet.define<
 
 /** Node views of the active contributions, read by the live preview. */
 export const formattedViews = Facet.define<FormattedNodeView>()
+
+const viewsByType = new WeakMap<
+  readonly FormattedNodeView[],
+  WeakMap<NodeType, readonly FormattedNodeView[]>
+>()
+/** The active node views for nodes of a type: those that name it or one of its groups. */
+export function formattedNodeViews(state: EditorState) {
+  const views = state.facet(formattedViews)
+  let byType = viewsByType.get(views)
+  if (!byType) {
+    byType = new WeakMap()
+    viewsByType.set(views, byType)
+  }
+  const found = byType
+  return (type: NodeType) => {
+    let matched = found.get(type)
+    if (!matched) {
+      matched = views.filter((view) => view.nodes.some((name) => type.is(name)))
+      found.set(type, matched)
+    }
+    return matched
+  }
+}
 
 /** Opaque node names of the active contributions, read by the formatted syntax. */
 export const formattedOpaque = Facet.define<string>()

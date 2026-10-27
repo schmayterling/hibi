@@ -24,6 +24,7 @@ import {
 } from '@codemirror/view'
 import {
   IterMode,
+  type NodeType,
   type SyntaxNode,
   type SyntaxNodeRef,
   type Tree,
@@ -49,6 +50,7 @@ import {
   formattedContributions,
   formattedDocument,
   formattedLiteral,
+  formattedNodeViews,
   formattedRefresh,
   formattedRenderInputs,
   formattedTree,
@@ -74,27 +76,6 @@ export const formattedTabIndents = Facet.define<boolean, boolean>({
 })
 
 type Revealed = { from: number; to: number }
-
-/** Contributed node views by node name, per set of views. */
-const viewsByName = new WeakMap<
-  readonly FormattedNodeView[],
-  Map<string, FormattedNodeView[]>
->()
-function namedViews(state: EditorState) {
-  const views = state.facet(formattedViews)
-  let named = viewsByName.get(views)
-  if (!named) {
-    named = new Map()
-    for (const view of views)
-      for (const name of view.nodes) {
-        const list = named.get(name)
-        if (list) list.push(view)
-        else named.set(name, [view])
-      }
-    viewsByName.set(views, named)
-  }
-  return named
-}
 
 class SpaceWidget extends WidgetType {
   override eq() {
@@ -133,12 +114,12 @@ function blockSpace(name: string): { top: number; bottom: number } {
 /** Rules of the render in progress: syntax shown as written and contributed node views. */
 type Blocks = {
   literal: ReadonlySet<string>
-  views: Map<string, FormattedNodeView[]>
+  views: (type: NodeType) => readonly FormattedNodeView[]
   shapes: (node: SyntaxNode) => FormattedContainer | undefined
 }
 const noBlocks: Blocks = {
   literal: new Set(),
-  views: new Map(),
+  views: () => [],
   shapes: () => undefined,
 }
 let blocks = noBlocks
@@ -152,7 +133,7 @@ const isContainer = (node: SyntaxNode) =>
   (node.name === 'Blockquote' ||
     node.name === 'ListItem' ||
     isList(node) ||
-    !!blocks.views.get(node.name)?.some((view) => view.container))
+    blocks.views(node.type).some((view) => view.container))
 
 function blockSibling(node: SyntaxNode, forward: boolean) {
   let next = forward ? node.nextSibling : node.prevSibling
@@ -214,7 +195,7 @@ function margins(node: SyntaxNode): { top: number; bottom: number } {
   if (parent && isList(parent))
     return { top: blockSibling(node, false) ? 4.8 : 0, bottom: 0 }
   const space =
-    blocks.views.get(node.name)?.find((view) => view.space)?.space ??
+    blocks.views(node.type).find((view) => view.space)?.space ??
     blockSpace(node.name)
   // A quote's last block has no bottom margin.
   return parent?.name === 'Blockquote' && !blockSibling(node, true)
@@ -333,7 +314,7 @@ function inline(
 } {
   const { state } = view
   const doc = state.doc
-  const views = namedViews(state)
+  const views = formattedNodeViews(state)
   const literal = new Set(state.facet(formattedLiteral))
   const atomic: Range<Decoration>[] = []
   const touched = (from: number, to: number) =>
@@ -349,7 +330,7 @@ function inline(
       revealed: touched(node.from, node.to),
       visible: null,
     }
-    for (const nodeView of views.get(node.name) ?? []) {
+    for (const nodeView of views(node.type)) {
       shape = nodeView.container?.(node, context)
       if (shape) break
     }
@@ -511,9 +492,9 @@ function inline(
         const name = ref.name
         // Syntax whose setting is off shows as written, its children too.
         if (literal.has(name)) return false
-        const contributed = views.get(name)
+        const contributed = views(ref.type)
         let skip = false
-        if (contributed) {
+        if (contributed.length) {
           const out = sink(touched(ref.from, ref.to))
           const context = {
             state,
@@ -978,7 +959,7 @@ function chunkLayout(
   reveal: readonly Revealed[],
 ) {
   const doc = state.doc
-  const views = namedViews(state)
+  const views = formattedNodeViews(state)
   const literal = new Set(state.facet(formattedLiteral))
   const out: Range<Decoration>[] = []
   /** A contributed layout view ran, so the chunk's layout can follow the selection. */
@@ -1019,8 +1000,8 @@ function chunkLayout(
       enter(ref) {
         if (ref.to <= range.from || ref.from >= range.to) return false
         if (literal.has(ref.name)) return false
-        const contributed = views.get(ref.name)
-        if (contributed?.some((view) => view.layout)) {
+        const contributed = views(ref.type)
+        if (contributed.some((view) => view.layout)) {
           sensitive = true
           // A node spanning covered ranges is laid out once, where it starts.
           if (!starts(ref.from)) return

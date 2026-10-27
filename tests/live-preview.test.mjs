@@ -1172,29 +1172,41 @@ test('reference labels follow definition changes after an edit and ask only abou
   assert.ok(scale.opened.asked <= 50, JSON.stringify(scale))
   assert.ok(scale.scrolled <= 100, JSON.stringify(scale))
   // Layout hides labels on later lines over parsed text past the viewport
-  // too, but only labels drawn in view are asked about.
+  // too, but only labels of lines drawn are asked about.
   const multiline = await harness.evaluate(async () => {
     const preview = window.livePreview
     preview.references.defined = { has: () => true }
     preview.references.asked = []
-    const count = Math.ceil((50 * 1024 * 1024) / 32)
+    const drawn = new Set()
+    const observer = new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.addedNodes)
+          for (const [, number] of (node.textContent ?? '').matchAll(
+            /link (\d+)/g,
+          ))
+            drawn.add(number)
+    })
+    observer.observe(document.body, { childList: true, subtree: true })
+    const count = Math.ceil((50 * 1024 * 1024) / 40)
     const doc = Array.from(
       { length: count },
-      (_, i) => `Paragraph [link][label\n${i}] words.`,
+      (_, i) => `Paragraph [link ${i}][label\n${i}] words.`,
     ).join('\n\n')
     await preview.mount(doc, { width: 800, height: 600 }, { references: true })
-    // Answers redraw the viewport's links once its labels are asked about.
     while (!document.querySelector('.hibi-lp-link')) await preview.settle()
     await preview.settle()
+    observer.disconnect()
+    const asked = preview.references.asked
     return {
       length: doc.length,
-      asked: preview.references.asked.length,
-      links: document.querySelectorAll('.hibi-lp-link').length,
+      asked: asked.length,
+      drawn: drawn.size,
+      undrawn: asked.filter((label) => !drawn.has(label.split(' ')[1])).length,
     }
   })
   assert.ok(multiline.length > 50 * 1024 * 1024)
-  assert.ok(multiline.links > 0, JSON.stringify(multiline))
-  assert.ok(multiline.asked <= multiline.links, JSON.stringify(multiline))
+  assert.ok(multiline.asked > 0, JSON.stringify(multiline))
+  assert.equal(multiline.undrawn, 0, JSON.stringify(multiline))
 })
 
 test('a structural edit at the top of a 50 MiB note parses a bounded window and converges in idle slices', {

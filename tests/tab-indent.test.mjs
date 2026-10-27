@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { EditorState } from '@codemirror/state'
-import { sourceIndent } from '../src/renderer/src/source-indent.ts'
 import {
   codeIndentLines,
   detectIndentUnit,
-} from '../src/renderer/src/tab-indent.ts'
+} from '../src/renderer/src/indentation.ts'
+import { sourceIndent } from '../src/renderer/src/source-indent.ts'
 import { electron, waitForDocumentEditor } from './electron.mjs'
 import { selectFormattedEngine } from './formatted-engine.mjs'
 import { clickMenu, replaceSourceText } from './keyboard.mjs'

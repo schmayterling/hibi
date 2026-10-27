@@ -500,6 +500,87 @@ test('source-first read-only preview is unavailable, not editable readiness', as
   assert.equal(row.metrics.keyTaskMs.n, 0)
 })
 
+test('formatted probe waits for the same idle font and frame milestone in both engines', () => {
+  for (const engine of ['tiptap', 'codemirror']) {
+    let check
+    let busy = false
+    let readonly = false
+    const frames = []
+    const marks = []
+    const window = {}
+    const element = {
+      isContentEditable: true,
+      getAttribute: () => (readonly ? 'true' : null),
+      getBoundingClientRect: () => ({ width: 100 }),
+      closest: () => null,
+      classList: {
+        contains: (name) => engine === 'tiptap' && name === 'tiptap',
+      },
+      ...(engine === 'tiptap'
+        ? { editor: { state: { doc: { content: { size: 2 } } } } }
+        : { cmTile: { root: { view: { state: { doc: { length: 0 } } } } } }),
+    }
+    const document = {
+      body: {},
+      fonts: { status: 'loading', addEventListener() {} },
+      addEventListener() {},
+      querySelector(selector) {
+        if (selector === '.editor-panes')
+          return {
+            classList: ['mode-normal'],
+            dataset: { sourceReady: 'false' },
+          }
+        if (selector.includes('[role="tab"]'))
+          return { getAttribute: () => 'note.md' }
+        if (selector === '.app' || selector === '#document-editor-panel')
+          return { getAttribute: () => (busy ? 'true' : 'false') }
+        if (selector.startsWith('.rich-pane .tiptap,')) return element
+        return null
+      },
+    }
+    vm.runInNewContext(
+      `(${installProbe})(${JSON.stringify({ fileName: 'note.md', sourceLength: 0, engine, fixture: 'prose' })})`,
+      {
+        window,
+        document,
+        performance: { mark: (name) => marks.push(name) },
+        requestAnimationFrame: (run) => frames.push(run),
+        MutationObserver: class {
+          constructor(run) {
+            check = run
+          }
+          observe() {}
+        },
+      },
+    )
+    window.__editorBenchmark.arm('open', 'open')
+    check()
+    assert.equal(frames.length, 0, 'fonts still loading')
+    document.fonts.status = 'loaded'
+    busy = true
+    check()
+    assert.equal(frames.length, 0, 'document still busy')
+    busy = false
+    check()
+    assert.ok(!marks.includes('open:ready'), 'readiness waits for first frame')
+    assert.equal(frames.length, 1)
+    busy = true
+    frames.shift()()
+    assert.ok(!marks.includes('open:ready'), 'frame rechecks readiness')
+    busy = false
+    check()
+    assert.equal(frames.length, 1)
+    frames.shift()()
+    assert.ok(marks.includes('open:ready'), engine)
+    while (frames.length) frames.shift()()
+    assert.equal(window.__editorBenchmark.pending.done, true)
+    readonly = true
+    window.__editorBenchmark.arm('readonly', 'open')
+    check()
+    assert.equal(frames.length, 0, 'read-only is not ready')
+  }
+})
+
 test('renderer probe finishes read-only previews without recording editable readiness', () => {
   for (const mode of ['normal', 'side-by-side']) {
     let check

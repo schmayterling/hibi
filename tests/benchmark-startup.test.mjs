@@ -31,6 +31,7 @@ test('profile seed selects explicit engine without importing editor code', async
           assert.equal(value, profile)
         },
         setActivationPolicy: () => {},
+        disableHardwareAcceleration: () => events.push('software-seed'),
         whenReady: () => ready,
         on: () => {},
       },
@@ -98,14 +99,20 @@ test('profile seed selects explicit engine without importing editor code', async
     }
   })
   for (const engine of ['tiptap', 'codemirror']) {
-    await flows.seedBenchmarkProfile(profile, engine)
+    const seed = await flows.seedBenchmarkProfile(profile, engine)
+    assert.equal(seed.method, 'chromium-storage-only')
+    assert.equal(seed.hardwareAcceleration, false)
+    assert.ok(seed.files['benchmark-profile.cjs'].bytes > 0)
+    assert.match(seed.files['benchmark-profile.cjs'].sha256, /^[a-f0-9]{64}$/)
     assert.equal(values.get('hibi:formatted-engine'), engine)
     assert.equal(values.get('default-view'), 'normal')
   }
   assert.deepEqual(events, [
+    'software-seed',
     'seed',
     'flush',
     'closed',
+    'software-seed',
     'seed',
     'flush',
     'closed',
@@ -116,28 +123,13 @@ test('profile seed selects explicit engine without importing editor code', async
   )
 })
 
-test('readiness accepts both engines and rejects wrong, inert and readonly surfaces', async () => {
-  const page = {
-    waitForFunction: (run, engine) =>
-      vm.runInNewContext(`(${run})(${JSON.stringify(engine)})`, {
-        document: {
-          querySelector(selector) {
-            if (selector === '.app' || selector === '#document-editor-panel')
-              return { getAttribute: () => (busy ? 'true' : 'false') }
-            if (selector === '.editor-panes')
-              return {
-                dataset: { sourceReady: sourceReady ? 'true' : 'false' },
-              }
-            return editor
-          },
-        },
-      }),
-  }
+test('both engines wait for editable, idle, loaded fonts and the next frame', async () => {
   let observed = 'codemirror'
   let readonly = false
   let inert = false
   let busy = false
-  let sourceReady = true
+  let fontStatus = 'loaded'
+  const frames = []
   const editor = {
     isContentEditable: true,
     getAttribute: () => (readonly ? 'true' : null),
@@ -152,21 +144,84 @@ test('readiness accepts both engines and rejects wrong, inert and readonly surfa
     },
     getBoundingClientRect: () => ({ width: 100 }),
   }
-  assert.equal(await flows.waitForEditor(page, 'codemirror'), true)
-  sourceReady = false
-  assert.equal(await flows.waitForEditor(page, 'codemirror'), false)
-  sourceReady = true
-  assert.equal(await flows.waitForEditor(page, 'tiptap'), false)
-  observed = 'tiptap'
-  assert.equal(await flows.waitForEditor(page, 'tiptap'), true)
-  busy = true
-  assert.equal(await flows.waitForEditor(page, 'tiptap'), false)
-  busy = false
-  readonly = true
-  assert.equal(await flows.waitForEditor(page, 'tiptap'), false)
-  readonly = false
-  inert = true
-  assert.equal(await flows.waitForEditor(page, 'tiptap'), false)
+  const runInPage = (run, engine) =>
+    vm.runInNewContext(`(${run})(${JSON.stringify(engine)})`, {
+      requestAnimationFrame: (run) => frames.push(run),
+      document: {
+        fonts: {
+          get status() {
+            return fontStatus
+          },
+        },
+        querySelector(selector) {
+          if (selector === '.app' || selector === '#document-editor-panel')
+            return { getAttribute: () => (busy ? 'true' : 'false') }
+          if (selector === '.editor-panes')
+            return { dataset: { sourceReady: 'false' } }
+          return editor
+        },
+      },
+    })
+  const page = {
+    waitForFunction(run, engine) {
+      const result = runInPage(run, engine)
+      assert.equal(
+        typeof result,
+        'boolean',
+        'readiness polling must stay synchronous',
+      )
+      if (!result) throw new Error('not ready')
+      return result
+    },
+    evaluate: runInPage,
+  }
+  for (observed of ['codemirror', 'tiptap']) {
+    for (const condition of [
+      'fonts',
+      'busy',
+      'readonly',
+      'inert',
+      'editable',
+    ]) {
+      fontStatus = condition === 'fonts' ? 'loading' : 'loaded'
+      busy = condition === 'busy'
+      readonly = condition === 'readonly'
+      inert = condition === 'inert'
+      editor.isContentEditable = condition !== 'editable'
+      await assert.rejects(
+        () => flows.waitForEditor(page, observed),
+        /not ready/,
+        condition,
+      )
+      assert.equal(frames.length, 0, 'no frame until common conditions hold')
+    }
+    fontStatus = 'loaded'
+    busy = readonly = inert = false
+    editor.isContentEditable = true
+    await assert.rejects(
+      () =>
+        flows.waitForEditor(
+          page,
+          observed === 'tiptap' ? 'codemirror' : 'tiptap',
+        ),
+      /not ready/,
+    )
+    const pending = flows.waitForEditor(page, observed)
+    await Promise.resolve()
+    assert.equal(frames.length, 1, 'readiness must await first frame')
+    frames.shift()()
+    assert.equal(await pending, true, observed)
+    const invalidated = flows.waitForEditor(page, observed)
+    await Promise.resolve()
+    busy = true
+    frames.shift()()
+    await assert.rejects(
+      invalidated,
+      /not ready/,
+      'conditions rechecked after frame',
+    )
+    busy = false
+  }
 })
 
 test('document opening recognizes formatted headings in either engine', async () => {
@@ -206,7 +261,7 @@ test('document opening recognizes formatted headings in either engine', async ()
     await flows.openBenchmarkDocument(app, page, 'Note')
 })
 
-test('script census and input timing stay separate while reporting engine and conditions', async () => {
+test('timed startup and later document samples never enable the debugger', async () => {
   const source = await readFile(
     new URL('../scripts/benchmark-startup.mjs', import.meta.url),
     'utf8',
@@ -223,13 +278,15 @@ test('script census and input timing stay separate while reporting engine and co
       on(_event, run) {
         parsed = run
       },
+      off() {},
       async send(method) {
-        if (method === 'Debugger.enable') {
-          events.push('debugger')
+        events.push(method)
+        if (method === 'Debugger.enable')
           parsed({ url: 'app://hibi/assets/editor.js' })
-        }
       },
-      async detach() {},
+      async detach() {
+        events.push('detach')
+      },
     }
     const page = {
       getByRole: () => ({ textContent: async () => '', press: async () => {} }),
@@ -241,12 +298,15 @@ test('script census and input timing stay separate while reporting engine and co
     const app = {
       async evaluate(run) {
         return String(run).includes('BrowserWindow')
-          ? { visible: false, focused: false }
+          ? { visible: true, focused: false }
           : {}
       },
     }
     await vm.runInNewContext(
-      `${measure}; measure(page, 0, app, 'fresh-profile')`,
+      `${measure}; (async () => {
+        await measure(page, 0, app, 'fresh-profile');
+        await measure(page, 0, app, 'document-open:note.md');
+      })()`,
       {
         page,
         app,
@@ -259,19 +319,38 @@ test('script census and input timing stay separate while reporting engine and co
         process: { env: {} },
         setTimeout: (run) => run(),
         loadavg: () => [1, 2, 3],
-        waitForEditor: async (_page, engine) =>
-          assert.equal(engine, 'codemirror'),
+        waitForEditor: async () => {},
         waitForWorkspaces: async () => {},
-        typeCharacter: async () => events.push('input'),
+        focusBenchmarkPage: async () => session,
+        prepareBenchmarkInput: async () => events.push('input-ready'),
+        typeCharacter: async () => {
+          assert.equal(
+            events.at(-1),
+            'input-ready',
+            'focus settled before first key',
+          )
+          events.push('input')
+        },
       },
     )
+    assert.equal(samples.length, 2)
     assert.equal(samples[0].engine, 'codemirror')
-    assert.equal(samples[0].visibility.visible, false)
+    assert.equal(
+      samples[0].visibility.visible,
+      true,
+      'isVisible is diagnostic only on macos',
+    )
     assert.equal(samples[0].focusEmulation, true)
     assert.deepEqual(samples[0].addons, ['markdown'])
     assert.deepEqual(samples[0].loadAverage, [1, 2, 3])
+    assert.ok(
+      !events.includes('detach'),
+      'focus session survives document samples',
+    )
     if (census) {
       assert.ok(!events.includes('input'))
+      assert.equal(samples[0].editable, null)
+      assert.equal(samples[0].ready, null)
       assert.equal(samples[0].firstInput, null)
       assert.equal(samples[0].typing.length, 0)
       assert.equal(
@@ -279,19 +358,126 @@ test('script census and input timing stay separate while reporting engine and co
         'app://hibi/assets/editor.js',
       )
     } else {
-      assert.ok(events.indexOf('input') < events.indexOf('debugger'))
+      assert.ok(!events.some((event) => event.startsWith('Debugger.')))
       assert.equal(samples[0].renderer.beforeInputScripts, null)
+      assert.equal(samples[0].renderer.scripts, null)
     }
   }
 })
 
-test('report provenance fingerprints source, both processes, renderer, helpers and lockfile', async (t) => {
+test('focus emulation persists per renderer and settles before every input interval', async () => {
+  const events = []
+  const frames = []
+  const editor = { isContentEditable: true }
+  const document = {
+    hasFocus: () => true,
+    activeElement: editor,
+    querySelector: () => editor,
+  }
+  const session = {
+    async send(method) {
+      events.push(method)
+    },
+  }
+  const page = {
+    context: () => ({
+      async newCDPSession() {
+        events.push('session')
+        return session
+      },
+    }),
+    getByRole: () => ({
+      async focus() {
+        events.push('editor-focus')
+      },
+    }),
+    async waitForFunction(run) {
+      assert.equal(vm.runInNewContext(`(${run})()`, { document }), true)
+    },
+    evaluate: (run) =>
+      vm.runInNewContext(`(${run})()`, {
+        requestAnimationFrame: (run) => frames.push(run),
+      }),
+  }
+  assert.equal(await flows.focusBenchmarkPage(page), session)
+  assert.equal(await flows.focusBenchmarkPage(page), session)
+  assert.deepEqual(events, ['session', 'Emulation.setFocusEmulationEnabled'])
+  for (let i = 0; i < 2; i++) {
+    const pending = flows.prepareBenchmarkInput(page)
+    for (let turn = 0; !frames.length && turn < 10; turn++)
+      await Promise.resolve()
+    assert.equal(events.at(-1), 'editor-focus')
+    assert.equal(frames.length, 1)
+    frames.shift()()
+    assert.equal(frames.length, 1, 'second frame still pending')
+    frames.shift()()
+    await pending
+    assert.equal(frames.length, 0)
+  }
+  assert.equal(events.filter((event) => event === 'session').length, 1)
+})
+
+test('all startup conditions seed identically before launch including minimal control', async () => {
+  const source = await readFile(
+    new URL('../scripts/benchmark-startup.mjs', import.meta.url),
+    'utf8',
+  )
+  const loop = source.slice(
+    source.indexOf('\ntry {') + 1,
+    source.indexOf('  const chunks ='),
+  )
+  const seeds = []
+  const launches = []
+  let now = 0
+  await vm.runInNewContext(`(async () => { ${loop}} finally {} })()`, {
+    runs: 2,
+    documents: [],
+    temp: '/profiles',
+    recentPaths: [],
+    enabledAddons: [],
+    minimal: 'minimal.cjs',
+    engine: 'tiptap',
+    profileSeeds: new Map(),
+    join,
+    process: { platform: 'linux' },
+    mkdir: async () => {},
+    writeFile: async () => {},
+    performance: { now: () => ++now },
+    seedBenchmarkProfile: async (profile, engine) => {
+      seeds.push({ profile, engine, now })
+      return { method: 'seeded' }
+    },
+    launchBenchmarkApp: async (profile) => {
+      assert.ok(seeds.some((seed) => seed.profile === profile))
+      launches.push(profile)
+      return { firstWindow: async () => ({}), close: async () => {} }
+    },
+    measure: async () => {},
+  })
+  assert.deepEqual(
+    seeds.map((seed) => seed.profile),
+    [
+      '/profiles/minimal-0',
+      '/profiles/minimal-1',
+      '/profiles/fresh-profile-0',
+      '/profiles/fresh-profile-1',
+      '/profiles/warm',
+    ],
+  )
+  assert.ok(seeds.every((seed) => seed.engine === 'tiptap'))
+  assert.equal(launches.length, 6)
+})
+
+async function provenanceFixture(t) {
   const root = await scratch(t)
   const files = {
+    '.gitignore': 'src/useraddons/\n',
     'src/example.ts': 'source',
+    'src/useraddons/private.ts': 'private source',
     'electron.vite.config.ts': 'config',
     'package.json': '{}',
     'package-lock.json': 'lock',
+    'docs-revision': 'docs',
     'out/main/index.js': 'main',
     'out/preload/index.js': 'preload',
     'out/renderer/index.html': 'html',
@@ -306,7 +492,21 @@ test('report provenance fingerprints source, both processes, renderer, helpers a
     await mkdir(join(path, '..'), { recursive: true })
     await writeFile(path, value)
   }
+  return root
+}
+
+test('provenance refuses missing or stale build manifests including ignored addon changes', async (t) => {
+  const root = await provenanceFixture(t)
   const sampler = new URL(import.meta.url)
+  await assert.rejects(
+    () => flows.benchmarkProvenance(sampler, root),
+    /build manifest/,
+  )
+  const { recordBenchmarkBuild } = await import(
+    '../scripts/build-provenance.mjs'
+  )
+  const build = () => recordBenchmarkBuild(async () => {}, root)
+  await build()
   const before = await flows.benchmarkProvenance(sampler, root)
   assert.match(before.revision, /^[a-f0-9]{40}$/)
   assert.equal(before.lockfileHash, hash('lock'))
@@ -318,16 +518,93 @@ test('report provenance fingerprints source, both processes, renderer, helpers a
     before.helperHashes['scripts/benchmark-flows.mjs'],
     hash('flows'),
   )
+  assert.ok(
+    before.gitStatus.includes('src/useraddons/'),
+    'ignored built source is dirty',
+  )
   for (const [path, field] of [
     ['src/example.ts', 'sourceHash'],
+    ['src/useraddons/private.ts', 'sourceHash'],
     ['out/renderer/index.html', 'rendererBuildHash'],
     ['out/main/index.js', 'buildHash'],
     ['out/preload/index.js', 'buildHash'],
-    ['package-lock.json', 'lockfileHash'],
+    ['package-lock.json', 'sourceHash'],
   ]) {
     await writeFile(join(root, path), 'changed')
+    await assert.rejects(
+      () => flows.benchmarkProvenance(sampler, root),
+      /stale build/,
+      path,
+    )
+    await build()
     const after = await flows.benchmarkProvenance(sampler, root)
-    assert.notEqual(after[field], before[field], field)
+    assert.notEqual(after[field], before[field], path)
+  }
+})
+
+test('build manifest invalidates prior output before building and rejects source edits during build', async (t) => {
+  const root = await provenanceFixture(t)
+  const { recordBenchmarkBuild } = await import(
+    '../scripts/build-provenance.mjs'
+  )
+  const sampler = new URL(import.meta.url)
+  await recordBenchmarkBuild(async () => {}, root)
+  await assert.rejects(
+    () =>
+      recordBenchmarkBuild(async () => {
+        throw new Error('build failed')
+      }, root),
+    /build failed/,
+  )
+  await assert.rejects(
+    () => flows.benchmarkProvenance(sampler, root),
+    /incomplete build/,
+  )
+  await assert.rejects(
+    () =>
+      recordBenchmarkBuild(
+        () => writeFile(join(root, 'src/example.ts'), 'mid-build edit'),
+        root,
+      ),
+    /source changed during build/,
+  )
+  await assert.rejects(
+    () => flows.benchmarkProvenance(sampler, root),
+    /incomplete build/,
+  )
+})
+
+test('end verification rejects changed source, output, helpers or a replacement build', async (t) => {
+  const root = await provenanceFixture(t)
+  const { recordBenchmarkBuild } = await import(
+    '../scripts/build-provenance.mjs'
+  )
+  const sampler = new URL(import.meta.url)
+  for (const path of [
+    'src/example.ts',
+    'out/main/index.js',
+    'tests/keyboard.mjs',
+    null,
+  ]) {
+    await recordBenchmarkBuild(async () => {}, root)
+    const before = await flows.benchmarkProvenance(sampler, root)
+    await flows.verifyBenchmarkProvenance(before, sampler, root)
+    if (path) await writeFile(join(root, path), `changed ${path}`)
+    else await recordBenchmarkBuild(async () => {}, root)
+    await assert.rejects(
+      () => flows.verifyBenchmarkProvenance(before, sampler, root),
+      /stale build|changed during sampling/,
+    )
+  }
+})
+
+test('samplers verify provenance after sampling and cold startup never times a reload', async () => {
+  for (const file of ['benchmark-startup.mjs', 'benchmark-editors.mjs']) {
+    const source = await readFile(
+      new URL(`../scripts/${file}`, import.meta.url),
+      'utf8',
+    )
+    assert.ok(source.includes('await verifyBenchmarkProvenance('), file)
   }
   const startup = await readFile(
     new URL('../scripts/benchmark-startup.mjs', import.meta.url),

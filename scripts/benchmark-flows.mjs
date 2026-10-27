@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
-import { join, relative, resolve } from 'node:path'
+import { join, relative, resolve, sep } from 'node:path'
 import { electron } from '../tests/electron.mjs'
 import { clickMenu, pressShortcut } from '../tests/keyboard.mjs'
 
@@ -103,13 +103,14 @@ export function benchmarkEngine(engine) {
   return engine
 }
 
-// seed only storage at the app origin: no app modules or editor caches are loaded.
+// seed chromium storage identically for every condition, without app modules.
 export async function seedBenchmarkProfile(profile, engine) {
   benchmarkEngine(engine)
   const entry = join(profile, 'benchmark-profile.cjs')
   await writeFile(
     entry,
     `const {app, BrowserWindow, protocol} = require('electron');
+app.disableHardwareAcceleration();
 app.setPath('userData', app.commandLine.getSwitchValue('user-data-dir'));
 if (process.platform === 'darwin') app.setActivationPolicy('accessory');
 protocol.registerSchemesAsPrivileged([{scheme:'app', privileges:{standard:true, secure:true}}]);
@@ -134,6 +135,12 @@ app.on('window-all-closed', () => app.quit());`,
   } finally {
     await app.close()
   }
+  const files = {}
+  for (const path of (await treeFiles('.', profile)).sort()) {
+    const content = await readFile(join(profile, path))
+    files[path] = { bytes: content.length, sha256: hash(content) }
+  }
+  return { method: 'chromium-storage-only', hardwareAcceleration: false, files }
 }
 
 const hash = (source) => createHash('sha256').update(source).digest('hex')
@@ -150,37 +157,96 @@ async function treeFiles(path, root) {
     await readdir(join(root, path), { recursive: true, withFileTypes: true })
   )
     .filter((entry) => entry.isFile())
-    .map((entry) => relative(root, join(entry.parentPath, entry.name)))
+    .map((entry) =>
+      relative(root, join(entry.parentPath, entry.name)).split(sep).join('/'),
+    )
+}
+
+export async function benchmarkSourceHash(root) {
+  return hash(
+    JSON.stringify(
+      await fileHashes(
+        [
+          ...(await treeFiles('src', root)),
+          ...(await treeFiles('scripts', root)),
+          'electron.vite.config.ts',
+          'package.json',
+          'package-lock.json',
+          'docs-revision',
+        ],
+        root,
+      ),
+    ),
+  )
+}
+
+export async function benchmarkBuild(root) {
+  const buildFiles = await fileHashes(
+    (await treeFiles('out', root)).filter(
+      (path) => path !== 'out/benchmark-build.json',
+    ),
+    root,
+  )
+  const rendererFiles = Object.fromEntries(
+    Object.entries(buildFiles).filter(([path]) =>
+      path.startsWith('out/renderer/'),
+    ),
+  )
+  return {
+    sourceHash: await benchmarkSourceHash(root),
+    rendererBuildHash: hash(JSON.stringify(rendererFiles)),
+    rendererFiles,
+    buildHash: hash(JSON.stringify(buildFiles)),
+    buildFiles,
+  }
 }
 
 export async function benchmarkProvenance(sampler, root = '.') {
   root = resolve(root)
-  const rendererFiles = await fileHashes(
-    await treeFiles('out/renderer', root),
-    root,
+  const build = await benchmarkBuild(root)
+  const manifest = await readFile(
+    join(root, 'out/benchmark-build.json'),
+    'utf8',
+  ).catch((cause) => {
+    throw new Error('benchmark build manifest missing; run npm run build', {
+      cause,
+    })
+  })
+  const buildManifest = JSON.parse(manifest)
+  assert.equal(
+    buildManifest.status,
+    'complete',
+    'incomplete build; run npm run build',
   )
-  const buildFiles = {
-    ...(await fileHashes(await treeFiles('out/main', root), root)),
-    ...(await fileHashes(await treeFiles('out/preload', root), root)),
-    ...rendererFiles,
-  }
+  assert.equal(
+    buildManifest.sourceHash,
+    build.sourceHash,
+    'stale build: source changed; run npm run build',
+  )
+  assert.equal(
+    buildManifest.buildHash,
+    build.buildHash,
+    'stale build: output changed; run npm run build',
+  )
   const git = (args) =>
     execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim()
   return {
     revision: git(['rev-parse', 'HEAD']),
-    gitStatus: git(['status', '--porcelain']),
-    sourceHash: hash(
-      JSON.stringify(
-        await fileHashes(
-          [
-            ...(await treeFiles('src', root)),
-            'electron.vite.config.ts',
-            'package.json',
-          ],
-          root,
-        ),
-      ),
-    ),
+    gitStatus: [
+      git(['status', '--porcelain']),
+      git([
+        'status',
+        '--porcelain',
+        '--ignored',
+        '--untracked-files=all',
+        '--',
+        'src/useraddons',
+      ]),
+    ]
+      .filter(Boolean)
+      .join('\n'),
+    ...build,
+    buildManifest,
     samplerHash: hash(await readFile(sampler)),
     helperHashes: await fileHashes(
       [
@@ -191,17 +257,18 @@ export async function benchmarkProvenance(sampler, root = '.') {
       ],
       root,
     ),
-    rendererBuildHash: hash(JSON.stringify(rendererFiles)),
-    rendererFiles,
-    buildHash: hash(JSON.stringify(buildFiles)),
-    buildFiles,
     lockfileHash: hash(await readFile(join(root, 'package-lock.json'))),
   }
 }
 
+export async function verifyBenchmarkProvenance(before, sampler, root = '.') {
+  const after = await benchmarkProvenance(sampler, root)
+  assert.deepEqual(after, before, 'benchmark inputs changed during sampling')
+}
+
 // Frame polling avoids locator retry backoff being counted as startup latency.
-export function waitForEditor(page, engine) {
-  return page.waitForFunction((engine) => {
+export async function waitForEditor(page, engine) {
+  const ready = (engine) => {
     const editor = document.querySelector(
       '[role="textbox"][aria-label="Document editor"]',
     )
@@ -215,18 +282,58 @@ export function waitForEditor(page, engine) {
       editor.getAttribute('aria-readonly') !== 'true' &&
       !editor.closest('[inert]') &&
       editor.getBoundingClientRect().width > 0 &&
+      document.fonts.status === 'loaded' &&
       (!engine ||
         (observed === engine &&
           document.querySelector('.app')?.getAttribute('aria-busy') ===
             'false' &&
           document
             .querySelector('#document-editor-panel')
-            ?.getAttribute('aria-busy') === 'false' &&
-          (observed !== 'codemirror' ||
-            document.querySelector('.editor-panes')?.dataset.sourceReady ===
-              'true')))
+            ?.getAttribute('aria-busy') === 'false'))
     )
-  }, engine)
+  }
+  // this playwright build does not await promises in waitForFunction.
+  for (;;) {
+    await page.waitForFunction(ready, engine)
+    await page.evaluate(
+      () => new Promise((done) => requestAnimationFrame(done)),
+    )
+    if (await page.evaluate(ready, engine)) return true
+  }
+}
+
+const focusSessions = new WeakMap()
+
+export async function focusBenchmarkPage(page) {
+  let session = focusSessions.get(page)
+  if (!session) {
+    session = await page.context().newCDPSession(page)
+    await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+    focusSessions.set(page, session)
+  }
+  await page.waitForFunction(() => document.hasFocus())
+  return session
+}
+
+export async function prepareBenchmarkInput(page) {
+  await focusBenchmarkPage(page)
+  await page
+    .getByRole('textbox', { name: 'Document editor', exact: true })
+    .focus()
+  await page.waitForFunction(
+    () =>
+      document.hasFocus() &&
+      document.activeElement ===
+        document.querySelector(
+          '[role="textbox"][aria-label="Document editor"]',
+        ),
+  )
+  await page.evaluate(
+    () =>
+      new Promise((done) =>
+        requestAnimationFrame(() => requestAnimationFrame(done)),
+      ),
+  )
 }
 
 export async function waitForWorkspaces(page, paths) {

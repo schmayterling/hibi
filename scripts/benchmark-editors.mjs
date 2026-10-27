@@ -10,9 +10,12 @@ import { clickMenu, pressShortcut } from '../tests/keyboard.mjs'
 import {
   benchmarkEngine,
   benchmarkProvenance,
+  focusBenchmarkPage,
   launchBenchmarkApp,
+  prepareBenchmarkInput,
   seedBenchmarkProfile,
   selectBenchmarkFile,
+  verifyBenchmarkProvenance,
   waitForEditor,
 } from './benchmark-flows.mjs'
 import { createTraceFinalizer } from './trace-stream.mjs'
@@ -372,7 +375,11 @@ export function installProbe({ fileName, sourceLength, engine, fixture }) {
         : element
           ? 'codemirror'
           : null,
-      editable: !!element?.isContentEditable && !element.closest('[inert]'),
+      editable:
+        !!element?.isContentEditable &&
+        element.getAttribute('aria-readonly') !== 'true' &&
+        !element.closest('[inert]') &&
+        element.getBoundingClientRect().width > 0,
       formatted: !!document.querySelector(
         '.rich-pane .tiptap h1, .rich-pane .hibi-lp-h1',
       ),
@@ -389,7 +396,7 @@ export function installProbe({ fileName, sourceLength, engine, fixture }) {
     pending.started = true
     performance.mark(`${pending.label}:start`)
   }
-  const check = () => {
+  const check = (afterFrame = false) => {
     const pending = probe.pending
     if (!pending?.started || pending.ready || pending.done) return
     let ready = false
@@ -425,6 +432,20 @@ export function installProbe({ fileName, sourceLength, engine, fixture }) {
       ready = length() === pending.beforeLength + 1
     else ready = /^\d+\/\d+$/.test(count) && count !== pending.beforeCount
     if (!ready) return
+    if (
+      (pending.kind === 'open' || pending.kind === 'switch') &&
+      afterFrame !== true
+    ) {
+      if (!pending.frame) {
+        pending.frame = true
+        requestAnimationFrame(() => {
+          if (probe.pending !== pending) return
+          pending.frame = false
+          check(true)
+        })
+      }
+      return
+    }
     pending.ready = true
     pending.count = count
     performance.mark(`${pending.label}:ready`)
@@ -617,20 +638,19 @@ async function runSample(config, directory, file, out) {
   const sample = {}
   const profile = join(directory, `${size}-${fixture}-${run}-${engine}`)
   await mkdir(profile)
-  await seedBenchmarkProfile(profile, engine)
+  sample.profileSeed = await seedBenchmarkProfile(profile, engine)
   const app = await launchBenchmarkApp(profile)
   try {
     const page = await app.firstWindow()
+    const session = await focusBenchmarkPage(page)
     await waitForDocumentEditor(app, page)
     await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()[0].setContentSize(1280, 900),
     )
     await waitForEditor(page, engine)
     await page.emulateMedia({ reducedMotion: 'no-preference' })
-    const session = await page.context().newCDPSession(page)
-    await session.send('Emulation.setFocusEmulationEnabled', { enabled: true })
     await session.send('Performance.enable')
-    await page.waitForFunction(() => document.hasFocus())
+    await prepareBenchmarkInput(page)
     await page.evaluate(installProbe, {
       fileName: basename(file),
       sourceLength: config.sourceLength,
@@ -698,6 +718,7 @@ async function runSample(config, directory, file, out) {
             view.focus()
           }
         })
+        await prepareBenchmarkInput(page)
         // Untimed keys reach steady state first; see keyIndexMedians in the report.
         for (let index = 0; index < config.warmupKeys; index++) {
           const label = `warmup-${index}`
@@ -781,10 +802,7 @@ async function runSample(config, directory, file, out) {
         addons,
         visibility: await app.evaluate(({ BrowserWindow }) => {
           const window = BrowserWindow.getAllWindows()[0]
-          const visible = window.isVisible()
-          if (visible)
-            throw new Error('editor comparison requires a hidden window')
-          return { visible, focused: window.isFocused() }
+          return { visible: window.isVisible(), focused: window.isFocused() }
         }),
         trace,
         traceCollection,
@@ -903,8 +921,8 @@ function markdownReport(report) {
         `| ${row.size} | ${row.fixture} | ${row.engine} | ${row.keyIndexMedians.readyMs.map((value) => (Number.isFinite(value) ? value.toFixed(2) : 'n/a')).join(' ') || 'n/a'} |`,
     ),
     '',
-    `hidden windows, focus emulation, fresh profiles; engine order: ${report.config.order}. profile seeding and startup are excluded; engine is selected before the first editor import. no os cache clearing.`,
-    'open readyMs ends at editable formatted DOM with loaded fonts; mixed fixtures also require a rendered heading. open paint is the first subsequent renderer Paint. source-first tiptap attempts normal view; open+switch is reported only if an editable formatted view becomes ready. an observed read-only preview, or codemirror source fallback needing #450, records unavailable formatted metrics while retaining source-open timing, capability state, source hash and traces. unavailable samples make the report partial; unexpected errors fail it. the matrix continues in both cases.',
+    `hidden launch policy (isVisible is diagnostic only on macos), persistent focus emulation, seeded app-cold profiles; engine order: ${report.config.order}. profile seeding uses hardware acceleration disabled and records file inventories; seeding and startup are excluded; engine is selected before the first editor import. no os cache clearing.`,
+    'open readyMs ends at the first frame after editable, non-busy formatted DOM with loaded fonts; mixed fixtures also require a rendered heading. open paint is the first subsequent renderer Paint. source-first tiptap attempts normal view; open+switch is reported only if an editable formatted view becomes ready. an observed read-only preview, or codemirror source fallback needing #450, records unavailable formatted metrics while retaining source-open timing, capability state, source hash and traces. unavailable samples make the report partial; unexpected errors fail it. the matrix continues in both cases.',
     `${report.config.warmupKeys} untimed warm-up keys precede measured keys; each p95 is quoted only when every launch observed at least ${minimumKeysForP95} values for that metric. key processing is keydown → model-ready (readyMs); cdp task deltas also include observer/driver work and two-frame settlement. key → paint is mostly next-frame wait (0.6–14.8 ms in prior input traces); it is not a processing-time metric.`,
     'Paint is a same-thread temporal trace match within the operation, not proof of glyph presentation or physical keyboard latency. missing paint is n/a, never zero. full frame, layout, gc and User Timing evidence is retained in traces.',
     `scroll requests 3600 css px over a fixed number of animation frames. every pass starts at the top after two quiet 100 ms windows or a 3 s timeout. quiet windows reduce overlap with queued work but do not prove none can interleave; timed-out passes remain in raw results and are excluded from comparisons. the first traversal follows typing and find; steady state is the median of up to ${report.config.scrollPasses} settled later passes over the same distance, which codemirror has already drawn and measured once. main/frame is the CDP TaskDuration delta divided by measured scroll frames; it includes the scroll driver and final settlement. short documents clamp distance; documents that fit have no scroll sample. raw task deltas, distances, settle state and frame intervals are in results.json.`,
@@ -987,11 +1005,13 @@ async function main() {
   const out = resolve(values.out)
   await mkdir(join(out, 'traces'), { recursive: true })
   const directory = await mkdtemp(join(out, 'scratch-'))
+  const provenance = await benchmarkProvenance(new URL(import.meta.url))
   const report = {
     smoke: values.smoke,
     status: 'running',
     startedAt: new Date().toISOString(),
-    ...(await benchmarkProvenance(new URL(import.meta.url))),
+    ...provenance,
+    provenanceVerifiedAtEnd: false,
     dependencies: Object.fromEntries(
       await Promise.all(
         [
@@ -1103,6 +1123,8 @@ async function main() {
         }
       }
     }
+    await verifyBenchmarkProvenance(provenance, new URL(import.meta.url))
+    report.provenanceVerifiedAtEnd = true
     report.status = report.samples.some((sample) => sample.status === 'failed')
       ? 'failed'
       : report.samples.some((sample) => sample.status === 'unavailable')

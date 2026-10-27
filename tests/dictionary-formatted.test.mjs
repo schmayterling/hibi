@@ -246,6 +246,7 @@ test('the dictionary replaces the word in the formatted split pane it was invoke
   // Both carets sit at the same offset, so only the view tells them apart.
   for (const side of ['right', 'left']) {
     await page.locator(`${pane(side)} .cm-content`).click()
+    await waitForDocumentEditor(app, page)
     await caret(page, 3, pane(side))
   }
   await page.locator(`${pane('left')} .cm-content`).press('Shift+F10')
@@ -268,6 +269,7 @@ test('the dictionary replaces the word in the formatted split pane it was invoke
   )
   // The right pane's lookup replaces its own word.
   await page.locator(`${pane('right')} .cm-content`).click()
+  await waitForDocumentEditor(app, page)
   await caret(page, 3, pane('right'))
   await pressShortcut(app, 'Shift+F7')
   const sad = page.getByRole('dialog', { name: 'Synonyms for “Sad”' })

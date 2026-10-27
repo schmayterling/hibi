@@ -556,6 +556,27 @@ test('a selection from outside into a table opens no cell editor', {
   assert.equal(selection.anchor, 0)
 })
 
+test('physical typing replaces a selection over a table and undo restores it', async () => {
+  const table = '| a | b |\n| - | - |\n| c | d |'
+  for (const doc of [table, `before\n\n${table}\n\nafter`]) {
+    await mount(doc)
+    await harness.evaluate(() => window.tables.view().focus())
+    await harness.keyboard.press('ControlOrMeta+a')
+    assert.deepEqual(
+      await harness.evaluate(() => {
+        const { from, to } = window.tables.view().state.selection.main
+        return [from, to]
+      }),
+      [0, doc.length],
+    )
+    await harness.keyboard.press('r')
+    assert.equal((await state()).doc, 'r')
+    await harness.keyboard.press('ControlOrMeta+z')
+    assert.equal((await state()).doc, doc)
+    assert.equal(await harness.locator('.hibi-lp-table').count(), 1)
+  }
+})
+
 test('a selection in a table edits the cell it is in once the table has redrawn', {
   timeout: 30000,
 }, async () => {

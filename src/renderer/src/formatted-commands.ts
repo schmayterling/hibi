@@ -13,7 +13,7 @@ import {
 } from '@codemirror/state'
 import type { SyntaxNode, Tree } from '@lezer/common'
 import { formattedFormatting } from './formatted-contributions.ts'
-import { detectIndentUnit, tabIndent } from './tab-indent.ts'
+import { codeIndentLines, detectIndentUnit, tabIndent } from './tab-indent.ts'
 
 /*
  * Structure keys for the formatted view. They edit the Markdown source the
@@ -407,7 +407,10 @@ export const codeIndent = StateField.define<CodeIndent | null>({
   },
 })
 
-/** Code indents like its first indented source line, even outside the parsed chunk. */
+/**
+ * Code indents like its first indented source line among its first
+ * `codeIndentLines` lines, even outside the parsed chunk.
+ */
 function codeIndentUnit(state: EditorState, code: SyntaxNode) {
   const opening = state.doc.lineAt(code.from)
   let quotes = 0
@@ -430,10 +433,18 @@ function codeIndentUnit(state: EditorState, code: SyntaxNode) {
     }
   if (!found.first) {
     const closing = code.lastChild
-    const end =
+    const last = state.doc.line(
+      Math.min(
+        state.doc.lines,
+        opening.number + (fenced ? 1 : 0) + codeIndentLines - 1,
+      ),
+    )
+    const end = Math.min(
+      last.to,
       fenced && closing?.name === 'CodeMark' && closing.from > opening.to
         ? state.doc.lineAt(closing.from).from - 1
-        : code.to
+        : code.to,
+    )
     const markers = new RegExp(`^(?:[ \\t]*>[ \\t]?){${quotes}}`)
     found = { ...found }
     for (

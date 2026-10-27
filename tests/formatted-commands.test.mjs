@@ -211,6 +211,82 @@ test('code indentation strips quote and indented-code prefixes', () => {
   assert.equal(run('>     x\n>       |y', tab), '>     x\n>         |y')
 })
 
+test('the first tab in a 50 MiB code block with no indented line reads only its first lines', () => {
+  const body = `${'word '.repeat(11)}\n`.repeat(Math.ceil((50 * 2 ** 20) / 56))
+  const source = `intro\n\n~~~\n${body}y\n~~~\n`
+  const sample = markdown.parse('intro\n\n~~~\nx\ny\n~~~\n')
+  const code = sample.topNode.getChild('FencedCode')
+  const from = source.indexOf('~~~'),
+    closing = source.lastIndexOf('~~~'),
+    tail = source.lastIndexOf('y\n~~~')
+  /** A chunked tree that holds the block's fences and its last line, after `typed` tabs there. */
+  const tree = (typed) =>
+    new Tree(
+      sample.type,
+      [
+        new Tree(
+          code.type,
+          [
+            new Tree(code.firstChild.type, [], [], 3),
+            new Tree(code.getChild('CodeText').type, [], [], 1 + typed),
+            new Tree(code.lastChild.type, [], [], 3),
+          ],
+          [0, tail - from, closing + typed - from],
+          closing + typed + 3 - from,
+        ),
+      ],
+      [from],
+      source.length + typed,
+    )
+  let state = EditorState.create({
+    doc: source,
+    selection: { anchor: tail + 1 },
+    extensions: codeIndent,
+  })
+  const counts = []
+  for (let key = 0; key < 3; key++) {
+    const prototype = Object.getPrototypeOf(state.doc)
+    const originals = { lineAt: prototype.lineAt, line: prototype.line }
+    let lines = 0,
+      units = 0
+    for (const name of ['lineAt', 'line'])
+      prototype[name] = function (...args) {
+        const line = originals[name].apply(this, args)
+        lines++
+        units += line.length
+        return line
+      }
+    const head = state.selection.main.head
+    try {
+      state = state.update(
+        indent(state, tree(key), false, Decoration.none),
+      ).state
+    } finally {
+      Object.assign(prototype, originals)
+    }
+    counts.push({ lines, units })
+    assert.equal(state.doc.sliceString(head, head + 1), '\t')
+  }
+  console.log('code-indent-50mib-reads', JSON.stringify(counts))
+  // 936,232 line reads before the window; the first key now reads at most it.
+  assert.ok(
+    counts.every(({ lines, units }) => lines <= 1010 && units <= 1010 * 60),
+    JSON.stringify(counts),
+  )
+  assert.ok(counts.slice(1).every(({ lines }) => lines < 12))
+})
+
+test('code indentation follows an indented line among its first thousand lines only', () => {
+  const tab = (state, tree, hidden) => indent(state, tree, false, hidden)
+  for (const [before, unit] of [
+    [999, '  '],
+    [1000, '\t'],
+  ]) {
+    const doc = `~~~\n${'x\n'.repeat(before)}  y\n|z\n~~~`
+    assert.equal(run(doc, tab), doc.replace('|z', `${unit}|z`), `${before}`)
+  }
+})
+
 test('indented code ignores whitespace-only lines when choosing its unit', () => {
   const tab = (state, tree, hidden) => indent(state, tree, false, hidden)
   for (const prefix of ['', '> ', '> > ']) {

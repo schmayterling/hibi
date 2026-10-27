@@ -32,10 +32,13 @@ export const tabIndent = {
   },
 }
 
+/** Code blocks indent like an indented line among their first this many lines; later ones are not read. */
+export const codeIndentLines = 1000
+
 const indented = /\t| {2,}(?=[^ \n])/y
-/** The first indented line's unit, scanning only as far as that line. */
-export function detectIndentUnit(text: string) {
-  for (let at = 0; ; ) {
+/** The first indented line's unit among at most `lines` lines, scanning only as far as that line. */
+export function detectIndentUnit(text: string, lines = Infinity) {
+  for (let at = 0, line = 0; line < lines; line++) {
     indented.lastIndex = at
     const match = indented.exec(text)?.[0]
     if (match)
@@ -43,6 +46,7 @@ export function detectIndentUnit(text: string) {
     at = text.indexOf('\n', at) + 1
     if (!at) return undefined
   }
+  return undefined
 }
 
 /** Rich-text Tab: lists and tables first, then code indentation, then a mid-line tab. */
@@ -100,7 +104,8 @@ export const TabIndent = Extension.create({
       if (code) {
         const start = $from.start()
         const text = $from.parent.textContent
-        const unit = detectIndentUnit(text) ?? tabIndent.snapshot().unit
+        const unit =
+          detectIndentUnit(text, codeIndentLines) ?? tabIndent.snapshot().unit
         if (!outdent && from === to) tr.insertText(unit, from)
         else {
           // One replacement for every line: per-line steps would each keep a whole-block copy.

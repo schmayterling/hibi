@@ -329,6 +329,9 @@
   "293aad4970e4": [
     "src/renderer/src/Editor.tsx"
   ],
+  "ce2d3152cde7": [
+    "src/renderer/src/source-session.ts"
+  ],
   "6e1bc14eb426": [
     "src/renderer/src/addons.ts"
   ],

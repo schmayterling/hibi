@@ -101,15 +101,15 @@ export function* formattedTextEffects(
       yield null
       work = 0
     }
-    const node = cursor.node,
-      name = node.name
-    const from = offset + node.from,
-      to = offset + node.to
+    const from = offset + cursor.from,
+      to = offset + cursor.to
     descend = true
     if (to <= range.from || from >= range.to) {
       descend = false
       continue
     }
+    const node = cursor.node,
+      name = node.name
     if (literal.has(name)) {
       // The surrounding quote's own markers still hide in literal child blocks.
       if (name !== 'Blockquote') {

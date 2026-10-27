@@ -404,6 +404,7 @@ export class RenderedTextIndex {
       this.length,
     )
     const trailing = /\n*$/.exec(tail)![0].length
+    if (this.#tick(tail.length)) yield
     if (trailing === tail.length) return
     const range = this.#input.lineAt(this.length - trailing)
     if (
@@ -412,12 +413,9 @@ export class RenderedTextIndex {
       range.from - this.prefix > this.#config.giantBlock
     )
       return
-    if (
-      !plainInlineText(
-        this.text(Math.max(range.from, range.to - batch), range.to),
-      )
-    )
-      return
+    const last = this.text(Math.max(range.from, range.to - batch), range.to)
+    if (!plainInlineText(last)) return
+    if (this.#tick(last.length)) yield
     for (let at = range.from; at < range.to; ) {
       let to = Math.min(range.to, at + batch)
       if (!this.validStart(to)) to--

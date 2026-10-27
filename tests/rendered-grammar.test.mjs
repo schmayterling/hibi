@@ -133,6 +133,16 @@ test('syntax-free final paragraphs use a bounded configured grammar proof', () =
     assert.equal(projection.counters().plainTailUnits, 0, prefix)
   }
 })
+
+test('plain paragraph proof separates bounded reads at a source-page seam', () => {
+  const projection = index('hello **world**\n\n' + 'a'.repeat(4096 * 20))
+  assert.equal(projection.counters().plainTailUnits, 4096 * 20)
+  assert.ok(
+    projection.counters().maximumYieldRead <= 8192,
+    JSON.stringify(projection.counters()),
+  )
+})
+
 test('semantic block separators survive chunk and syntax-window boundaries', () => {
   const options = { ...config, chunkSize: 16, groupSize: 4, giantBlock: 64 }
   const source = Array.from(

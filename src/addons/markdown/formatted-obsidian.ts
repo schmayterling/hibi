@@ -130,7 +130,10 @@ class EmbedWidget extends WidgetType {
               anchor: event.key === 'ArrowLeft' ? from : from + this.length,
             },
           })
-        }
+        } else if (!['Alt', 'Control', 'Meta', 'Shift'].includes(event.key))
+          // Other keys edit at the caret beside the embed, which the editor
+          // keeps: it takes focus back before the key reaches it.
+          view.focus()
       })
       dom.append(link)
       return dom
@@ -163,8 +166,8 @@ class EmbedWidget extends WidgetType {
     return dom
   }
   override ignoreEvent(event: Event) {
-    // Mouse events reach the editor; keys stay with the focused link.
-    return !(event instanceof MouseEvent)
+    // Mouse events reach the editor, and so do keys the focused link leaves.
+    return !(event instanceof MouseEvent) && event.defaultPrevented
   }
   override destroy(dom: HTMLElement) {
     stops.get(dom)?.()

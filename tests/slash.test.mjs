@@ -11,6 +11,7 @@ import {
   selectFormattedEngine,
 } from './formatted-engine.mjs'
 import { clickMenu, replaceRichText, replaceSourceText } from './keyboard.mjs'
+import { waitForAsync } from './poll.mjs'
 
 test('slash search matches labels, descriptions, and extension keywords without case sensitivity', () => {
   assert.deepEqual(
@@ -96,6 +97,15 @@ it('slash commands work in both editors, preserve undo, and coexist with vim', {
   const read = () =>
     page.evaluate(async () => (await window.hibi.getDocument()).markdown)
   const undo = process.platform === 'darwin' ? 'Meta+z' : 'Control+z'
+  const setFormattedFixture = (markdown) =>
+    rich.evaluate((element, markdown) => {
+      const view = element.cmTile.root.view
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: markdown },
+        selection: { anchor: markdown.length },
+      })
+      view.focus()
+    }, markdown)
   await waitForDocumentEditor(app, page)
   await t.test(
     'formatted slash actions retain menu, cancellation and history',
@@ -169,7 +179,7 @@ it('slash commands work in both editors, preserve undo, and coexist with vim', {
           editor.commands.setTextSelection(2)
           editor.commands.focus()
         })
-      else await replaceRichText(page, rich, '/')
+      else await setFormattedFixture('/')
       await menu.waitFor()
       await rich.press('Escape')
       await menu.waitFor({ state: 'hidden' })
@@ -182,7 +192,7 @@ it('slash commands work in both editors, preserve undo, and coexist with vim', {
         })
       else {
         await page.keyboard.insertText('literal')
-        await replaceRichText(page, rich, '/table')
+        await setFormattedFixture('/table')
       }
       await menu.waitFor()
       assert.match(await menu.innerText(), /Tables/)
@@ -193,7 +203,7 @@ it('slash commands work in both editors, preserve undo, and coexist with vim', {
         await rich.evaluate((element) =>
           element.editor.commands.setContent('<p></p>'),
         )
-      else await replaceRichText(page, rich, '')
+      else await setFormattedFixture('')
       await replaceRichText(page, rich, '/alerts')
       await menu.waitFor()
       await rich.press('Enter')
@@ -208,6 +218,40 @@ it('slash commands work in both editors, preserve undo, and coexist with vim', {
         1,
       )
       assert.match(await read(), /> \[!NOTE\]/)
+    },
+  )
+
+  await t.test(
+    'physical typing replaces a selected table and undo restores it',
+    async () => {
+      if (t.formattedEngine === 'tiptap')
+        await rich.evaluate((element) => {
+          element.editor.commands.setContent('<p>/table</p>')
+          element.editor.commands.setTextSelection(7)
+          element.editor.commands.focus()
+        })
+      else await setFormattedFixture('/table')
+      await menu.waitFor()
+      await rich.press('Tab')
+      assert.equal(await rich.locator('table').count(), 1)
+      const original = await read()
+      await rich.press('ControlOrMeta+a')
+      await page.keyboard.press('r')
+      await waitForAsync(
+        page,
+        async () => (await window.hibi.getDocument()).markdown === 'r',
+      )
+      assert.equal(await read(), 'r')
+      assert.equal(await rich.locator('table').count(), 0)
+      await rich.press(undo)
+      await waitForAsync(
+        page,
+        async (expected) =>
+          (await window.hibi.getDocument()).markdown === expected,
+        original,
+      )
+      assert.equal(await read(), original)
+      assert.equal(await rich.locator('table').count(), 1)
     },
   )
 

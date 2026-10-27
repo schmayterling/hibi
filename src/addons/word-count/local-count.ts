@@ -133,6 +133,13 @@ export function localCount(
     }
     right = limit
   }
+  // an inline syntax edge need not be a visible word or grapheme boundary.
+  if (
+    (left === start && span.from > 0) ||
+    (right === end &&
+      span.to < (typeof spans === 'number' ? spans : spans.length))
+  )
+    return null
   const before = source.sliceRaw(left, right)
   const after = `${before.slice(0, from - left)}${insert}${before.slice(to - left)}`
   // punctuation or deletion can turn the first word into an ordered marker.

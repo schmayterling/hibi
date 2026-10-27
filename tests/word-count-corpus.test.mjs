@@ -375,6 +375,41 @@ test('schema corpus: escaped title alternatives retain native definition spans',
   markdownSyntax.reset()
 })
 
+test('schema corpus: styled unicode edits keep the rich text boundary context', () => {
+  const syntax = countSyntax(corpus.configs[0])
+  const rich = richOracle(syntax)
+  for (const [source, marker, offset] of [
+    ['**word**\u0301x', '\u0301', 1],
+    ['x\u0301**word**', '\u0301', 0],
+    ['`word`\u0301x', '\u0301', 1],
+    ['**👩**\u200d💻x', '\u200d', 1],
+  ]) {
+    const counter = new FormattedCounter(
+      new SourceStore(source, { tabId: 'styled-unicode', revision: 0 }),
+      syntax,
+    )
+    try {
+      assert.deepEqual(read(counter), countText(rich(source).text))
+      const from = source.indexOf(marker) + offset
+      const snapshot = counter.store.snapshot()
+      counter.apply({
+        document: snapshot.document,
+        operationId: crypto.randomUUID(),
+        baseVersion: snapshot.version,
+        contentVersion: snapshot.version + 1,
+        origin: 'source',
+        historyGroup: 'styled-unicode',
+        changes: [{ from, to: from, insert: ' ' }],
+      })
+      const changed = `${source.slice(0, from)} ${source.slice(from)}`
+      assert.deepEqual(read(counter), countText(rich(changed).text), changed)
+    } finally {
+      counter.dispose()
+    }
+  }
+  markdownSyntax.reset()
+})
+
 test('schema corpus: rich parser quirks keep their minimal reproductions', () => {
   for (const quirk of richQuirks) {
     const syntax = countSyntax({ ...corpus.configs[0], ...quirk.syntax })

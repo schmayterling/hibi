@@ -145,3 +145,35 @@ test('local summaries retain unicode boundaries, bursts, neighbors and syntax in
     }
   }
 })
+
+test('local count windows preserve word and grapheme context across inline syntax', (t) => {
+  for (const [initial, marker, offset] of [
+    ['**word**\u0301x', '\u0301', 1],
+    ['x\u0301**word**', '\u0301', 0],
+    ['`word`\u0301x', '\u0301', 1],
+    ['**👩**\u200d💻x', '\u200d', 1],
+  ]) {
+    const counter = new FormattedCounter(
+      new SourceStore(initial, { tabId: 'inline-boundary', revision: 0 }),
+      syntax,
+    )
+    t.after(() => counter.dispose())
+    assert.deepEqual(
+      read(counter),
+      countText(richText(initial, syntax).slice(1)),
+    )
+    const from = initial.indexOf(marker) + offset
+    edit(counter, from, from, ' ')
+    const changed = `${initial.slice(0, from)} ${initial.slice(from)}`
+    assert.deepEqual(
+      read(counter),
+      countText(richText(changed, syntax).slice(1)),
+      changed,
+    )
+    edit(counter, from, from + 1, '')
+    assert.deepEqual(
+      read(counter),
+      countText(richText(initial, syntax).slice(1)),
+    )
+  }
+})

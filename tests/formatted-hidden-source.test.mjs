@@ -220,3 +220,109 @@ test("find shows its matches in a large note's source view that mounts again", {
     )
   }
 })
+
+test('a note that grows to 50 mib releases its source view after a visit', {
+  timeout: 240000,
+}, async (t) => {
+  const { app, page, view } = await open(t, 16)
+  assert.equal(await mounted(page), 1)
+  const before = await page.evaluate(async () => {
+    const document = await window.hibi.getDocument()
+    return {
+      tabId: document.tabId,
+      contentVersion: document.contentVersion,
+      units: document.markdown.length,
+    }
+  })
+  const target = 50 * 1024 * 1024
+  // Drain each admitted edit; growth must keep this document's activation.
+  const lengths = await page.evaluate(async (target) => {
+    const lengths = []
+    const unit = '\n\nordinary growth words '.repeat(16)
+    while (true) {
+      const element = document.querySelector(
+        '.rich-pane [aria-label="Document editor"]',
+      )
+      const editor = element.cmTile.root.view
+      const remaining = target - editor.state.doc.length
+      if (!remaining) break
+      const size = Math.min(remaining, 1024 * 1024)
+      const insert = unit.repeat(Math.ceil(size / unit.length)).slice(0, size)
+      editor.dispatch({
+        changes: { from: editor.state.doc.length, insert },
+        userEvent: 'input.type',
+      })
+      await window.hibi.flushDocumentChanges()
+      lengths.push(editor.state.doc.length)
+      if (editor.state.doc.length !== target - remaining + size)
+        throw new Error('Growth edit was not admitted.')
+    }
+    return lengths
+  }, target)
+  assert.deepEqual(
+    lengths,
+    Array.from(
+      { length: Math.ceil((target - before.units) / (1024 * 1024)) },
+      (_, index) => Math.min(target, before.units + (index + 1) * 1024 * 1024),
+    ),
+  )
+  const after = await page.evaluate(async () => {
+    const document = await window.hibi.getDocument()
+    return {
+      tabId: document.tabId,
+      contentVersion: document.contentVersion,
+      units: document.markdown.length,
+    }
+  })
+  assert.equal(after.tabId, before.tabId)
+  assert.equal(after.units, target)
+  assert.equal(after.contentVersion, before.contentVersion + lengths.length)
+  await view('Source view')
+  await sourceShown(page)
+  assert.equal(
+    await page.locator('.source-pane .cm-content').evaluate((element) => {
+      const editor = element.cmTile.root.view
+      window.grownSourceDestroyed = 0
+      const destroy = editor.destroy.bind(editor)
+      editor.destroy = () => {
+        window.grownSourceDestroyed++
+        destroy()
+      }
+      return editor.state.doc.length
+    }),
+    target,
+  )
+  await view('normal')
+  await waitForDocumentEditor(app, page)
+  await waitForAsync(
+    page,
+    () => document.querySelectorAll('.source-pane .cm-editor').length === 0,
+  ).catch(() => {})
+  const state = {
+    sourceMounted: await mounted(page),
+    sourceDestroyed: await page.evaluate(() => window.grownSourceDestroyed),
+  }
+  t.diagnostic(
+    JSON.stringify({ units: target, edits: lengths.length, ...state }),
+  )
+  await t.test(
+    'the huge source view is unmounted after normal view returns',
+    () => {
+      assert.equal(state.sourceMounted, 0)
+    },
+  )
+  await t.test('the source editor holding the huge rope is destroyed', () => {
+    assert.ok(state.sourceDestroyed > 0)
+  })
+  await t.test(
+    'normal view still owns the exact accepted document length',
+    async () => {
+      assert.equal(
+        await page
+          .locator('.rich-pane .cm-content')
+          .evaluate((element) => element.cmTile.root.view.state.doc.length),
+        target,
+      )
+    },
+  )
+})

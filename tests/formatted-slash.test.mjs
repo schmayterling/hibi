@@ -247,7 +247,10 @@ test('replacing a focused table preserves selection with slash disabled', {
   const start = errors.length
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
-  await page.locator('#addon-slash-commands').uncheck()
+  await page.locator('#addon-slash-commands').click()
+  await page.waitForFunction(
+    () => !document.querySelector('#addon-slash-commands').checked,
+  )
   await page.getByRole('button', { name: 'Back to app', exact: true }).click()
   assert.equal(await page.locator('.slash-menu').count(), 0)
   for (const [source, head] of [
@@ -288,7 +291,10 @@ test('replacing a focused table preserves selection with slash disabled', {
   }
   await clickMenu(app, 'Settings')
   await page.getByRole('tab', { name: 'Addon Manager', exact: true }).click()
-  await page.locator('#addon-slash-commands').check()
+  await page.locator('#addon-slash-commands').click()
+  await page.waitForFunction(
+    () => document.querySelector('#addon-slash-commands').checked,
+  )
   await page.getByRole('button', { name: 'Back to app', exact: true }).click()
   assert.deepEqual(errors.slice(start), [])
 })

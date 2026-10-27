@@ -69,8 +69,8 @@ async function formattedWindowProof(page, preview) {
       const addons = Object.values(await import(`app://hibi/${registry}`)).find(
         (value) => value?.isInstalled && value?.snapshot,
       )
-      const view = Object.values(await import(`app://hibi/${sdk}`)).find(
-        (value) => value?.EditorView,
+      const { view } = Object.values(await import(`app://hibi/${sdk}`)).find(
+        (value) => value?.view?.EditorView,
       )
       const addon = addons.snapshot().find(
         (entry) => entry.manifest.id === 'text-extras',

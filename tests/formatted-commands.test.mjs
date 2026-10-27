@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { history, isolateHistory, redo, undo } from '@codemirror/commands'
-import { EditorState } from '@codemirror/state'
+import { EditorSelection, EditorState } from '@codemirror/state'
 import { Decoration, WidgetType } from '@codemirror/view'
 import { Tree } from '@lezer/common'
 import { GFM, parser } from '@lezer/markdown'
@@ -15,6 +15,7 @@ import {
   gapInput,
   indent,
   lineBreak,
+  lineInput,
 } from '../src/renderer/src/formatted-commands.ts'
 import { markdownConfiguration } from '../src/renderer/src/markdown.ts'
 import {
@@ -758,4 +759,35 @@ test('enter with a selection at the edges of formatting leaves no empty markers,
     run('1. parent\n   - child\n   - |\n2. after', blockBreak),
     '1. parent\n   - child\n2. |\n3. after',
   )
+})
+
+test('multi-line text input is literal and breaks blocks where it lands', () => {
+  const type = (text) => (state, tree) => {
+    const { from, to } = state.selection.main
+    return lineInput(state, tree, from, to, text)
+  }
+  // Before, typed syntax became Markdown and each break was one source line.
+  assert.equal(run('|', type('# a\n*b* <i>')), '\\# a\n\n\\*b\\* \\<i>|')
+  assert.equal(run('a\n|\nb', type('x\ny')), 'a\n\nx\n\ny|\n\nb')
+  assert.equal(run('- > a|', type('b\nc')), '- > ab\n  >\n  > c|')
+  assert.equal(run('1. a|\n2. b', type('x\ny')), '1. ax\n2. y|\n3. b')
+  assert.equal(run('> - a|', type('\n\nb')), '> - a\n>\n> b|')
+  // Bold goes on to later lines; a link only where its text continues.
+  assert.equal(run('**ab|**', type('x\ny')), '**abx**\n\n**y|**')
+  assert.equal(run('**[a|b](u)**', type('x\ny')), '**[ax](u)**\n\n**y|[b](u)**')
+  // One blank break is Enter; code, tables and several carets keep the default.
+  assert.equal(run('ab|', type('\n')), 'ab\n\n|')
+  assert.equal(run('```\na|\n```', type('x\ny')), null)
+  const table = '| a |\n| - |\n| b |'
+  const cell = EditorState.create({ doc: table, selection: { anchor: 15 } })
+  assert.equal(lineInput(cell, markdown.parse(table), 15, 15, 'x\ny'), null)
+  const carets = EditorState.create({
+    doc: 'ab',
+    selection: EditorSelection.create([
+      EditorSelection.cursor(1),
+      EditorSelection.cursor(2),
+    ]),
+    extensions: EditorState.allowMultipleSelections.of(true),
+  })
+  assert.equal(lineInput(carets, markdown.parse('ab'), 1, 1, 'x\ny'), null)
 })

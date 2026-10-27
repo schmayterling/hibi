@@ -41,6 +41,7 @@ import {
   gapInput,
   indent,
   lineBreak,
+  lineInput,
 } from './formatted-commands'
 import {
   claimFormattedReplacement,
@@ -1708,7 +1709,10 @@ export function livePreview(
     ),
     EditorView.inputHandler.of((view, from, to, text) => {
       if (view.composing) return false
-      const spec = gapInput(view.state, syntax.tree(view.state), from, to, text)
+      const tree = syntax.tree(view.state)
+      const spec =
+        (text.includes('\n') && lineInput(view.state, tree, from, to, text)) ||
+        gapInput(view.state, tree, from, to, text)
       if (!spec) return false
       view.dispatch(view.state.update(spec, { scrollIntoView: true }))
       return true

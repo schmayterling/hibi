@@ -297,33 +297,52 @@ function table(element: Element): string {
 }
 
 /**
- * Keep only the selection of clipboard HTML. Native clipboards can wrap it in
- * a page whose `StartFragment` and `EndFragment` comments mark it: what lies
- * outside them goes, and the elements around them stay as its context.
+ * Parse clipboard HTML, keeping only its selection. Native clipboards can wrap
+ * it in a page and mark it with `<!--StartFragment-->` and
+ * `<!--EndFragment-->`; as in Chromium, the first start and the last end
+ * count. What lies outside goes, and the elements around the markers stay as
+ * its context, ordered lists keeping their numbers.
  */
-function cropToFragment(body: HTMLElement) {
-  const comments = body.ownerDocument.createTreeWalker(
-    body,
-    NodeFilter.SHOW_COMMENT,
+function parseSelection(html: string) {
+  // Only those exact comments mark it: `<!StartFragment>` parses to the same
+  // comment, so the markers get a name this paste alone knows.
+  const id = crypto.getRandomValues(new Uint32Array(4)).join('-')
+  const document = new DOMParser().parseFromString(
+    html.replace(
+      /<!--(Start|End)Fragment-->/gi,
+      (_, edge: string) => `<!--${edge.toLowerCase()} ${id}-->`,
+    ),
+    'text/html',
   )
-  let start: Node | null = null
-  for (let node = comments.nextNode(); node; node = comments.nextNode()) {
+  const comments = document.createTreeWalker(document, NodeFilter.SHOW_COMMENT)
+  let start: Node | null = null,
+    end: Node | null = null
+  for (let node = comments.nextNode(); node; node = comments.nextNode())
     if (!start) {
-      if (/^StartFragment$/i.test(node.nodeValue ?? '')) start = node
-    } else if (/^EndFragment$/i.test(node.nodeValue ?? '')) {
-      for (let at: Node | null = start; at && at !== body; at = at.parentNode)
-        while (at.previousSibling) at.previousSibling.remove()
-      for (let at: Node | null = node; at && at !== body; at = at.parentNode)
-        while (at.nextSibling) at.nextSibling.remove()
-      return
+      if (node.nodeValue === `start ${id}`) start = node
+    } else if (node.nodeValue === `end ${id}`) end = node
+  if (!start || !end) return document
+  // Markers outside the body prune up to the document.
+  const { body } = document
+  for (let at: Node | null = start; at && at !== body; at = at.parentNode) {
+    let items = 0
+    while (at.previousSibling) {
+      if (at.previousSibling.nodeName === 'LI') items++
+      at.previousSibling.remove()
     }
+    if (items && at.parentNode instanceof HTMLOListElement)
+      at.parentNode.start += items
   }
+  for (let at: Node | null = end; at && at !== body; at = at.parentNode)
+    while (at.nextSibling) at.nextSibling.remove()
+  return document
 }
 
 /** Markdown for pasted HTML. */
 export function htmlToMarkdown(html: string, original?: string) {
-  const document = new DOMParser().parseFromString(html, 'text/html')
-  cropToFragment(document.body)
+  const document = parseSelection(html)
+  // Markers before the body select nothing in it.
+  if (!document.body) return ''
   if (
     original !== undefined &&
     document.body.firstElementChild?.hasAttribute('data-hibi-markdown')

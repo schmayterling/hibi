@@ -503,6 +503,52 @@ test('short repair pages splice into mapped viewport fragments with matching syn
   }
 })
 
+test('a repair beginning inside the stale view prefix preserves its giant paragraph', () => {
+  const line = 'code body line\n'
+  const head = `intro\n\n${line.repeat(80)}`
+  const before = `${head}${line}${line.repeat(10)}\n# end\n`
+  const after = `${head}# code body ln\n${line.repeat(10)}\n# end\n`
+  assert.equal(before.length, after.length)
+  const config = configuration({ syntax: [], opaque: [] })
+  const store = new SourceStore(after, { tabId: 'prefix-seam', revision: 0 })
+  const index = new MarkdownBoundaryIndex(store.snapshot(), config)
+  drain(index)
+  // A stale giant in the view crosses the worker's verified repair start.
+  const stale = finish(
+    index.parser.startChunkedParse(input(before), [], {
+      from: after.length - 20,
+      to: after.length,
+    }),
+  )
+  const from = head.length
+  const pages = [...index.pages(from)]
+  assert.equal(pages[0].from, from)
+  const builder = new BoundaryTree(index.parser, after.length - from)
+  for (const page of pages) builder.append(page.records)
+  const fragments = spliceBoundaryFragments(
+    stale,
+    [],
+    from,
+    after.length,
+    builder.finish(),
+  )
+  const actual = finish(
+    index.parser.startChunkedParse(
+      input(after),
+      fragments,
+      { from: 0, to: 400 },
+      0,
+      true,
+    ),
+  )
+  const paragraphs = (tree) =>
+    shape(tree).filter(([name, start]) => name === 'Paragraph' && start < 400)
+  assert.deepEqual(
+    paragraphs(actual),
+    paragraphs(boundaryParser(config).parse(after)),
+  )
+})
+
 test('a 52 mib structural repair transfers only through the unchanged suffix', (t) => {
   const unit = '# heading\n\nparagraph **bold** words\n\n- one\n- two\n\n'
   const body = unit.repeat(Math.ceil((52 * 1024 * 1024) / unit.length))

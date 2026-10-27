@@ -2347,7 +2347,7 @@ export function unindexedFrom(tree: Tree): number | null {
     : null
 }
 
-/** Splice verified boundaries at closed seams, keeping real edit cuts in the suffix. */
+/** Join the verified suffix seam, keeping the view prefix and real edit cuts open. */
 export function spliceBoundaryFragments(
   current: Tree,
   retained: readonly TreeFragment[],
@@ -2366,17 +2366,7 @@ export function spliceBoundaryFragments(
     0,
   )
   return [
-    ...prefix.map(
-      (fragment) =>
-        new TreeFragment(
-          fragment.from,
-          fragment.to,
-          fragment.tree,
-          fragment.offset,
-          fragment.openStart,
-          false,
-        ),
-    ),
+    ...prefix,
     ...(to > from ? [new TreeFragment(from, to, replacement, -from)] : []),
     ...suffix.map(
       (fragment) =>

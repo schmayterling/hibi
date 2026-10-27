@@ -1545,7 +1545,14 @@ class ChunkedParse implements ChunkedPartialParse {
     const end =
       found.start + (info.block.end ?? found.chunk.length) - old.fragment.offset
     return end > pos && end <= old.safe
-      ? { at: end, closed: info.block.end !== null }
+      ? {
+          at: end,
+          closed: info.block.end !== null,
+          reach:
+            info.reach === undefined
+              ? -1
+              : found.start + info.reach - old.fragment.offset,
+        }
       : null
   }
 
@@ -1567,11 +1574,21 @@ class ChunkedParse implements ChunkedPartialParse {
     this.pos = block.from
     if (block.key !== null) {
       const known = this.known(block.key, block.frontier)
-      if (known?.closed) {
-        this.endGiant(block, known.at)
-        return
+      if (known) {
+        // Skipped decisions have a known reach, without a complete local list.
+        if (known.reach >= 0)
+          block.reach = {
+            reach: Math.max(block.reach?.reach ?? -1, known.reach - block.from),
+            ...(block.reach?.edge === undefined
+              ? {}
+              : { edge: block.reach.edge }),
+          }
+        if (known.closed) {
+          this.endGiant(block, known.at)
+          return
+        }
+        block.frontier = known.at
       }
-      if (known) block.frontier = known.at
     }
     const demand = this.demand()
     // Blocks up to the giant size are scanned to their end for an exact chunk;
@@ -1679,11 +1696,11 @@ class ChunkedParse implements ChunkedPartialParse {
     if (frontier > from) {
       const giant: Giant = { ...this.giant(block, null), stuck }
       if (this.wanted(from, frontier) && !this.stopped(from)) {
-        this.startWindow(from, frontier, giant)
+        this.startWindow(from, frontier, giant, block.reach)
         return
       }
       this.pos = from
-      this.addChunk(this.giantLeaf(giant, frontier - from))
+      this.addChunk(this.giantLeaf(giant, frontier - from, block.reach))
     }
     this.pos = frontier
     this.lost = this.lostAt(frontier, stuck, frontier === from)

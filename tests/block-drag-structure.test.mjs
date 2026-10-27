@@ -12,6 +12,7 @@ import {
   boundaryRecords,
   ChunkedMarkdownParser,
   readAheadFrom,
+  spliceBoundaryFragments,
 } from '../src/renderer/src/chunked-markdown.ts'
 import { formattedBlockParser } from '../src/renderer/src/formatted-contributions.ts'
 import { formattedSyntax } from '../src/renderer/src/formatted-syntax.ts'
@@ -416,6 +417,159 @@ test('every block in 800 seeded mixed notes preserves structure in both directio
   }
   console.log(JSON.stringify({ moves, changed: 0 }))
   assert.ok(moves > 4000, String(moves))
+})
+
+test('jumping to a known giant end retains decisions through worker adoption', () => {
+  const filler = (length, tag) => {
+    const lines = []
+    let size = 0
+    for (let i = 0; size < length; i++) {
+      const line = `${tag}${i} ${'w'.repeat(60 + (i % 37))}`
+      lines.push(line)
+      size += line.length + 1
+    }
+    return lines.join('\n')
+  }
+  const paragraph =
+    'intro words of the long paragraph\n' +
+    filler(80000, 'p') +
+    '\n$$ a\n' +
+    filler(9600, 'f')
+  const doc =
+    paragraph +
+    '\n\nm $$ x\n\nz $$\n\n' +
+    filler(4000, 'q') +
+    '\n\n' +
+    filler(30000, 'r').replaceAll('\n', '\n\n') +
+    '\n'
+  const chunked = new ChunkedMarkdownParser(md, md)
+  const finish = (work) => {
+    let tree
+    while (!tree) tree = work.advance()
+    return tree
+  }
+  const input = (doc) => new DocInput(EditorState.create({ doc }).doc)
+  const demand = {
+    from: doc.indexOf('m $$ x') + 3000,
+    to: doc.indexOf('m $$ x') + 6000,
+  }
+  const initial = finish(chunked.startChunkedParse(input(doc), [], demand))
+  const worker = finish(chunked.startBoundaryParse(input(doc), []))
+  const edited = doc.slice(0, 5) + 'x' + doc.slice(5)
+  const change = [{ fromA: 5, toA: 5, fromB: 5, toB: 6 }]
+  const fragments = (tree) =>
+    TreeFragment.applyChanges(TreeFragment.addTree(tree), change)
+  const updated = finish(
+    chunked.startChunkedParse(input(edited), fragments(initial), demand),
+  )
+  const repaired = finish(
+    chunked.startBoundaryParse(input(edited), fragments(worker)),
+  )
+  const boundary = new BoundaryTree(chunked, edited.length)
+  const records = [...boundaryRecords(repaired)]
+  for (let i = 0; i < records.length; i += 128)
+    boundary.append(records.slice(i, i + 128))
+  const fresh = finish(chunked.startChunkedParse(input(edited), [], demand))
+  const adopted = finish(
+    chunked.startChunkedParse(
+      input(edited),
+      spliceBoundaryFragments(
+        fresh,
+        TreeFragment.addTree(fresh),
+        0,
+        edited.length,
+        boundary.finish(),
+      ),
+      demand,
+      0,
+      true,
+    ),
+  )
+  const { state } = view(edited)
+  const at = edited.indexOf('m $$ x')
+  const deciding = edited.indexOf('\n$$ a\n') + 1
+  for (const tree of [updated, repaired, adopted]) {
+    const decisions = readAheadFrom(tree, at)
+    assert.ok(
+      decisions === null || decisions.includes(deciding),
+      String(decisions),
+    )
+  }
+  for (const tree of [updated, adopted]) {
+    let target = tree.resolveInner(at, 1)
+    while (target && target.name !== 'Paragraph') target = target.parent
+    let block = tree.resolveInner(edited.indexOf('z $$'), 1)
+    while (block && block.name !== 'Paragraph') block = block.parent
+    assert.ok(block && target)
+    assert.equal(moveBlock(state, tree, block, target, false), null)
+  }
+})
+
+test('a stuck continuation retains decisions before its new window', () => {
+  const paragraphs = (length, tag) => {
+    const lines = []
+    let size = 0
+    for (let i = 0; size < length; i++) {
+      const line = `> ${tag}${i} ${'w'.repeat(60 + (i % 37))}`
+      lines.push(line, '>')
+      size += line.length + 3
+    }
+    return lines.join('\n')
+  }
+  const doc =
+    '> intro\n>\n' +
+    paragraphs(15000, 'p') +
+    '\n> $$ a\n>\n' +
+    paragraphs(9500, 'f') +
+    '\n> m $$ x\n>\n> z $$\n>\n' +
+    paragraphs(12000, 'g') +
+    '\n> > ~~~\n> > code\n> > ~~~\n> >\n' +
+    '> > quoted words *em*\n'.repeat(5000) +
+    '\nend words\n'
+  const chunked = new ChunkedMarkdownParser(md, md, {
+    chunkSize: 1024,
+    groupSize: 4,
+    giantBlock: 65536,
+  })
+  const demand = {
+    from: doc.indexOf('z $$') + 3000,
+    to: doc.indexOf('z $$') + 6000,
+  }
+  const parse = (text, fragments, demand) => {
+    const work = chunked.startChunkedParse(
+      new DocInput(EditorState.create({ doc: text }).doc),
+      fragments,
+      demand,
+    )
+    let tree
+    while (!tree) tree = work.advance()
+    return tree
+  }
+  const initial = parse(doc, [], demand)
+  const at = doc.indexOf('m $$ x')
+  const deciding = doc.indexOf('> $$ a')
+  assert.ok(readAheadFrom(initial, at)?.includes(deciding))
+  const edit = doc.indexOf('> g40 ') + 4
+  const edited = doc.slice(0, edit) + 'x' + doc.slice(edit)
+  const fragments = TreeFragment.applyChanges(TreeFragment.addTree(initial), [
+    { fromA: edit, toA: edit, fromB: edit, toB: edit + 1 },
+  ])
+  const { state } = view(edited)
+  for (const viewport of [demand, { from: Infinity, to: Infinity }]) {
+    const tree = parse(edited, fragments, viewport)
+    const decisions = readAheadFrom(tree, at)
+    assert.ok(
+      decisions === null || decisions.includes(deciding),
+      String(decisions),
+    )
+    if (viewport !== demand) continue
+    let target = tree.resolveInner(at, 1)
+    while (target && target.name !== 'Paragraph') target = target.parent
+    let block = tree.resolveInner(edited.indexOf('z $$'), 1)
+    while (block && block.name !== 'Paragraph') block = block.parent
+    assert.ok(block && target)
+    assert.equal(moveBlock(state, tree, block, target, false), null)
+  }
 })
 
 test('viewport changes retain distant math decisions in giant containers', () => {

@@ -119,6 +119,16 @@ test('a move cannot absorb the paragraph following a quote', {
   )
 })
 
+test('list marker spacing cannot absorb the paragraph following the list', {
+  timeout: 60000,
+}, async () => {
+  const doc = '- narrow item\n-   wide item\n\n  note text\n'
+  await open('list-tail.md', doc, 'narrow item')
+  assert.equal(await (await menu('narrow item')).isEnabled(), false)
+  await page.keyboard.press('Escape')
+  await saved(doc)
+})
+
 test('moving indented code below a list is disabled before source changes', {
   timeout: 60000,
 }, async () => {

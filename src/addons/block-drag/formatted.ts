@@ -80,11 +80,11 @@ function sourceFrom(state: EditorState, node: SyntaxNode): number | null {
   return line.from + offset
 }
 
-/** Blank container lines separate blocks; they never travel with the block. */
+/** Blank parent-container lines separate blocks; the block keeps its own markers. */
 function sourceTo(state: EditorState, node: SyntaxNode) {
   const from = node.from,
     to = node.to
-  let quotes = node.name === 'Blockquote' ? 1 : 0
+  let quotes = 0
   for (let parent = node.parent; parent; parent = parent.parent)
     if (parent.name === 'Blockquote') quotes++
   let line = state.doc.lineAt(Math.max(from, to - 1))
@@ -160,6 +160,7 @@ function sibling(
   const from = sourceFrom(state, node)
   if (from === null) return null
   let at = direction > 0 ? sourceTo(state, node) : from
+  let found: SyntaxNode | null = null
   for (;;) {
     if (direction > 0 ? at >= doc.length : at <= 0) return null
     if (uncovered(tree, Math.max(0, at - 1), Math.min(doc.length, at + 1)))
@@ -170,16 +171,26 @@ function sibling(
     )
     const run = (direction > 0 ? /^[\s>]*/ : /[\s>]*$/).exec(next)![0].length
     at += direction * run
+    if (
+      uncovered(
+        tree,
+        Math.max(0, at - (direction < 0 ? 1 : 0)),
+        Math.min(doc.length, at + (direction > 0 ? 1 : 0)),
+      )
+    )
+      return null
+    if (!found) {
+      found = direction > 0 ? node.nextSibling : node.prevSibling
+      while (found && !found.type.is('Block'))
+        found = direction > 0 ? found.nextSibling : found.prevSibling
+      if (!found) return null
+    }
     if (run < next.length) break
   }
   if (
     uncovered(tree, at - (direction < 0 ? 1 : 0), at + (direction > 0 ? 1 : 0))
   )
     return null
-  let found = direction > 0 ? node.nextSibling : node.prevSibling
-  while (found && !found.type.is('Block'))
-    found = direction > 0 ? found.nextSibling : found.prevSibling
-  if (!found) return null
   const foundFrom = sourceFrom(state, found)
   if (foundFrom === null) return null
   const gap =
@@ -313,6 +324,7 @@ function remarked(state: EditorState, item: SyntaxNode, marker: string) {
     ) {
       const line = state.doc.line(number)
       const offset = quotePrefix(line.text, quotes)
+      if (line.text.slice(0, offset).split('>').length - 1 !== quotes) continue
       const content = line.text.slice(offset)
       if (/^[ \t]*$/.test(content)) continue
       if (/^ *\t/.test(content)) return null
@@ -343,6 +355,7 @@ function preservesBlocks(
   target: SyntaxNode,
   changes: ChangeSet,
   map: (pos: number) => number,
+  modified: readonly number[],
 ) {
   const doc = state.doc
   let floor = 0
@@ -355,15 +368,24 @@ function preservesBlocks(
     lines.set(line.number, Math.max(lines.get(line.number) ?? line.from, pos))
   }
   const seen = new Set<string>()
-  const sample = (node: SyntaxNode, openingOnly = false) => {
-    const key = node.from + ':' + node.name + ':' + openingOnly
+  const sample = (
+    node: SyntaxNode,
+    edge: 'both' | 'first' | 'last' = 'both',
+  ) => {
+    const key = node.from + ':' + node.name + ':' + edge
     if (seen.has(key) || node.name === 'Document' || node.to <= floor) return
     seen.add(key)
+    const container = node.type.is('BlockContext')
     const first = doc.lineAt(node.from)
-    const last = doc.lineAt(Math.max(node.from, sourceTo(state, node) - 1))
+    const last = doc.lineAt(
+      Math.max(
+        node.from,
+        (container && edge === 'first' ? node.to : sourceTo(state, node)) - 1,
+      ),
+    )
     add(node.from)
-    if (!openingOnly) add(last.from)
     if (first.number < last.number) add(doc.line(first.number + 1).from)
+    if (!container || edge !== 'first') add(last.from)
     // A reference label may span up to 999 characters before its colon.
     if (
       /^(Paragraph|Task|SetextHeading[12])$/.test(node.name) &&
@@ -377,37 +399,67 @@ function preservesBlocks(
       )
         add(doc.line(i).from)
     }
-    if (!node.type.is('BlockContext')) return
+    if (!container) return
     let child = firstBlock(node)
     if (child) {
-      sample(child)
-      // A blank list marker needs two finished children to hold its body.
-      if (node.name === 'ListItem') {
+      sample(child, 'first')
+      // An empty marker needs another block to finish its first paragraph.
+      if (
+        node.name === 'ListItem' &&
+        doc.lineAt(child.from).number > first.number
+      ) {
         child = child.nextSibling
         while (child && !child.type.is('Block')) child = child.nextSibling
-        if (child) sample(child)
+        if (child) {
+          add(child.from)
+          add(Math.max(child.from, child.to - 1))
+        }
       }
     }
-    if (openingOnly) return
+    if (edge === 'first') return
     child = node.lastChild
     while (child && !child.type.is('Block')) child = child.prevSibling
-    if (child) sample(child)
+    if (child) sample(child, 'last')
   }
   const visited = new Set<string>()
+  const contexts = new Map<string, SyntaxNode>()
   const around = (node: SyntaxNode) => {
     const key = node.from + ':' + node.name
-    if (visited.has(key)) return
+    if (visited.has(key)) return true
     visited.add(key)
+    if (node.to > floor) contexts.set(key, node)
     sample(node)
     const first = doc.lineAt(node.from)
-    const last = doc.lineAt(sourceTo(state, node))
-    for (const number of [first.number - 1, last.number + 1]) {
-      if (number < 1 || number > doc.lines) continue
-      const line = doc.line(number)
+    if (first.number > 1) {
+      const line = doc.line(first.number - 1)
       add(line.from)
       if (!separator.test(line.text)) {
         const context = blockAt(tree, line.from)
         if (context) sample(context)
+      }
+    }
+    // Blank separators can hide a neighbor outside the current container.
+    for (const direction of [-1, 1]) {
+      let edge: SyntaxNode | null = node
+      let neighbor: SyntaxNode | null = null
+      while (edge && !neighbor) {
+        neighbor = direction < 0 ? edge.prevSibling : edge.nextSibling
+        while (neighbor && !neighbor.type.is('Block'))
+          neighbor = direction < 0 ? neighbor.prevSibling : neighbor.nextSibling
+        edge = edge.parent
+      }
+      if (
+        uncovered(
+          tree,
+          direction < 0 ? (neighbor?.to ?? floor) : node.to,
+          direction < 0 ? node.from : (neighbor?.from ?? doc.length),
+        )
+      )
+        return false
+      if (neighbor) {
+        sample(neighbor)
+        if (neighbor.to > floor)
+          contexts.set(neighbor.from + ':' + neighbor.name, neighbor)
       }
     }
     for (
@@ -415,14 +467,15 @@ function preservesBlocks(
       parent && parent.name !== 'Document';
       parent = parent.parent
     )
-      sample(parent, true)
+      sample(parent, 'first')
+    return true
   }
   for (const node of [block, target]) {
-    around(node)
+    if (!around(node)) return false
     const previous = sibling(state, tree, node, -1)
     const next = sibling(state, tree, node, 1)
-    if (previous) around(previous)
-    if (next) around(next)
+    if (previous && !around(previous)) return false
+    if (next && !around(next)) return false
   }
   const ranges = (text: Text, positions: number[], prefix: number) => {
     const spans: { from: number; to: number }[] = []
@@ -452,6 +505,7 @@ function preservesBlocks(
     }
     return joined
   }
+  for (const pos of modified) add(pos)
   const positions = [...lines.values()]
   const before = ranges(doc, positions, floor)
   const afterDoc = changes.apply(doc)
@@ -466,6 +520,31 @@ function preservesBlocks(
       .sort((a, b) => a.pos - b.pos)
     const parsed = parser.parse(new DocInput(text), [], spans)
     const base = spans[0]!.from
+    if (reorder)
+      for (const wanted of contexts.values()) {
+        let actual: SyntaxNode | null = parsed.resolveInner(
+          wanted.from - base,
+          1,
+        )
+        while (
+          actual &&
+          (actual.name !== wanted.name || actual.from + base !== wanted.from)
+        )
+          actual = actual.parent
+        if (!actual) return null
+        let a = actual.parent,
+          b = wanted.parent
+        while (a && b) {
+          if (
+            a.name !== b.name ||
+            (a.name !== 'Document' && a.from + base !== b.from)
+          )
+            return null
+          a = a.parent
+          b = b.parent
+        }
+        if (a || b) return null
+      }
     const pieces: string[] = []
     let pointIndex = 0
     let movingFrom = -1,
@@ -689,7 +768,12 @@ export function moveBlock(
     }
     return set.mapPos(pos, 1)
   }
-  if (!preservesBlocks(state, tree, block, at, set, map)) return null
+  const modified: number[] = []
+  if (remarkedChanges)
+    remarkedChanges.iterChanges((pos) => modified.push(blockFrom + pos))
+  for (const item of remarkedItems)
+    item.changes.iterChanges((pos) => modified.push(item.from + pos))
+  if (!preservesBlocks(state, tree, block, at, set, map, modified)) return null
   // A selection inside the block moves with it; otherwise the caret goes to
   // the block's start.
   const { anchor, head } = state.selection.main

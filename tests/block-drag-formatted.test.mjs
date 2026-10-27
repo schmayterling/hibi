@@ -361,8 +361,9 @@ test('finding and moving a block reads as many syntax nodes in a 20k-block note 
       large[key] <= small[key] + 8,
       `${key}: ${small[key]} → ${large[key]}`,
     )
+  // Moves also verify the block context beyond both container edges.
   assert.ok(
-    large.hover <= 150 && large.drop <= 300 && large.move <= 600,
+    large.hover <= 150 && large.drop <= 300 && large.move <= 900,
     JSON.stringify(large),
   )
 })

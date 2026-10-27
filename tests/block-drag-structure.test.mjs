@@ -21,30 +21,61 @@ const containers = new Set([
   'FootnoteDefinition',
   'Document',
 ])
-function leaves(doc) {
-  const out = [],
-    path = []
-  md.parse(doc).iterate({
-    enter(node) {
-      if (!node.type.is('Block') && node.name !== 'Document') return false
-      if (containers.has(node.name)) {
-        path.push(node.name)
-        return true
+function structure(doc, tree = md.parse(doc), moving = null, direction = 0) {
+  const visit = (node) => {
+    if (containers.has(node.name)) {
+      const children = node.getChildren('Block')
+      if (
+        moving?.parent &&
+        node.from === moving.parent.from &&
+        node.to === moving.parent.to &&
+        node.name === moving.parent.name
+      ) {
+        const at = children.findIndex(
+          (child) =>
+            child.from === moving.from &&
+            child.to === moving.to &&
+            child.name === moving.name,
+        )
+        assert.ok(at >= 0 && children[at + direction])
+        const [moved] = children.splice(at, 1)
+        children.splice(at + direction, 0, moved)
       }
-      const text = doc
+      return [node.name, ...children.map(visit)]
+    }
+    return [
+      node.name,
+      doc
         .slice(node.from, node.to)
         .split('\n')
         .map((line) => line.replace(/^[\s>]*/, '').trim())
         .filter(Boolean)
-        .join(' ')
-      out.push(`${path.join('/')}/${node.name}:${text}`)
-      return false
-    },
-    leave(node) {
-      if (containers.has(node.name)) path.pop()
+        .join(' '),
+    ]
+  }
+  return visit(tree.topNode)
+}
+function checkMoves(doc) {
+  const { state, tree } = view(doc)
+  assert.deepEqual(structure(doc, tree), structure(doc), doc)
+  let moves = 0
+  tree.iterate({
+    enter(ref) {
+      if (!ref.type.is('Block') || ref.name === 'Document') return
+      for (const direction of [-1, 1]) {
+        const spec = blockStep(state, tree, ref.node, direction)
+        if (!spec) continue
+        moves++
+        const after = state.update(spec).state.doc.toString()
+        assert.deepEqual(
+          structure(after),
+          structure(doc, tree, ref.node, direction),
+          doc,
+        )
+      }
     },
   })
-  return out.sort()
+  return moves
 }
 const view = (doc) => {
   const syntax = formattedSyntax({ slice: 1e6, extensions })
@@ -75,6 +106,10 @@ test('quoted items leave trailing quote-only lines between blocks', () => {
     moved('> -\n>   a\n> - b\n>\n> after\n', 'a', 'ListItem', 1),
     '> - b\n> -\n>   a\n>\n> after\n',
   )
+  assert.equal(
+    moved('> one\n>\n\nlast\n', 'one', 'Blockquote', 1),
+    'last\n\n> one\n>\n',
+  )
   let doc = '> before\n>\n> - a\n> - b\n>\n> after\n'
   const original = doc
   for (let i = 0; i < 3; i++) {
@@ -101,6 +136,16 @@ test('moves reject absorption at both the old and new neighbors', () => {
   }
 })
 
+test('a last item cannot absorb prose after blank separators', () => {
+  for (const [doc, token, direction] of [
+    ['- narrow item\n-   wide item\n\n  note text\n', 'narrow', 1],
+    ['1. one\n2.  two\n\n   text\n', 'one', 1],
+    ['- a\n-\n\n  text\n', 'a', 1],
+    ['> - a\n> -   b\n>\n>   text\n', 'a', 1],
+  ])
+    assert.equal(moved(doc, token, 'ListItem', direction), null, doc)
+})
+
 test('every block in 800 seeded mixed notes preserves structure in both directions', () => {
   const kinds = [
     (i) => `para ${i} with a ref[^n${i}]`,
@@ -120,13 +165,11 @@ test('every block in 800 seeded mixed notes preserves structure in both directio
     (i) => `  spaced ${i}`,
   ]
   let seed = 7,
-    moves = 0,
-    changed = 0
+    moves = 0
   const random = () => {
     seed = (seed * 1103515245 + 12345) % 2147483648
     return seed / 2147483648
   }
-  const examples = []
   for (let i = 0; i < 400; i++) {
     const blocks = Array.from({ length: 6 }, (_, j) =>
       kinds[Math.floor(random() * kinds.length)](j),
@@ -139,28 +182,53 @@ test('every block in 800 seeded mixed notes preserves structure in both directio
           .split('\n')
           .map((line) => (line ? `> ${line}` : '>'))
           .join('\n')}\n`
-      const { state, tree } = view(doc)
-      const before = leaves(doc)
-      tree.iterate({
-        enter(node) {
-          if (!node.type.is('Block') || node.name === 'Document') return
-          for (const direction of [-1, 1]) {
-            const spec = blockStep(state, tree, node.node, direction)
-            if (!spec) continue
-            moves++
-            const after = state.update(spec).state.doc.toString()
-            if (JSON.stringify(leaves(after)) === JSON.stringify(before))
-              continue
-            changed++
-            if (examples.length < 3) examples.push({ doc, after })
-          }
-        },
-      })
+      moves += checkMoves(doc)
     }
   }
-  console.log(JSON.stringify({ moves, changed, examples }))
+  console.log(JSON.stringify({ moves, changed: 0 }))
   assert.ok(moves > 4000, String(moves))
-  assert.equal(changed, 0)
+})
+
+test('varied list marker widths and blank runs retain the complete block tree', () => {
+  let moves = 0
+  for (const [first, second] of [
+    ['-', '-'],
+    ['1.', '2.'],
+    ['9.', '10.'],
+    ['10.', '11.'],
+  ])
+    for (const a of [1, 3])
+      for (const b of [0, 1, 2, 4])
+        for (const indent of [0, 1, 2, 3, 4, 5])
+          for (const blanks of [1, 4])
+            for (const quoted of [false, true]) {
+              let doc =
+                first +
+                ' '.repeat(a) +
+                'first\n' +
+                second +
+                (b ? ' '.repeat(b) + 'second' : '') +
+                '\n'.repeat(blanks + 1) +
+                ' '.repeat(indent) +
+                'note\n'
+              if (quoted)
+                doc =
+                  doc
+                    .trimEnd()
+                    .split('\n')
+                    .map((line) => (line ? '> ' + line : '>'))
+                    .join('\n') + '\n'
+              moves += checkMoves(doc)
+            }
+  console.log(JSON.stringify({ variedListMoves: moves, changed: 0 }))
+  assert.ok(moves > 500)
+  const lazy = '> 9. nine\n> 10. ten\n>     more\n    ~~~\n> after\n'
+  assert.ok(checkMoves(lazy))
+  assert.ok(moved(lazy, '10.', 'ListItem', -1).includes('\n    ~~~\n'))
+  assert.equal(
+    moved('- intro bullet\n\n1. first\n  2. second\n', 'first', 'ListItem', 1),
+    null,
+  )
 })
 
 test('lazy continuation and paragraph interruption at either seam stay unchanged', () => {
@@ -360,6 +428,87 @@ test('a 50 mib commonmark paragraph neighbor does not trigger an inline characte
   console.log(JSON.stringify({ wideLineCharacters: { small, large } }))
   assert.equal(large, small)
   assert.ok(large < 2048, String(large))
+})
+
+test('blank quote tails stay outside validation work and nested outlines use edge paths', () => {
+  const quoted = (mib) => {
+    const head = '> one\n>\n> two\n',
+      row = '> ' + ' '.repeat(1000) + '\n'
+    const doc =
+      head +
+      row.repeat(Math.ceil((mib * 1024 * 1024) / row.length)) +
+      '\nafter\n'
+    const tree = md.parse(
+      doc,
+      [],
+      [
+        { from: 0, to: head.length },
+        { from: doc.lastIndexOf(row), to: doc.length },
+      ],
+    )
+    const state = EditorState.create({
+      doc,
+      extensions: formattedBlockParser.of(() => md),
+    })
+    const prototype = Object.getPrototypeOf(state.doc),
+      read = prototype.sliceString,
+      line = prototype.line
+    let bytes = 0,
+      lines = 0
+    try {
+      prototype.sliceString = function (from = 0, to = this.length, ...args) {
+        bytes += to - from
+        if (bytes > 65536) throw new Error('move scanned the blank run')
+        return read.call(this, from, to, ...args)
+      }
+      prototype.line = function (...args) {
+        if (++lines > 4096) throw new Error('move walked the blank lines')
+        return line.apply(this, args)
+      }
+      assert.ok(blockStep(state, tree, tree.resolveInner(2, 1), 1))
+    } finally {
+      prototype.sliceString = read
+      prototype.line = line
+    }
+    return { bytes, lines }
+  }
+  const small = quoted(2),
+    large = quoted(50)
+  console.log(JSON.stringify({ quoteTail: { small, large } }))
+  assert.deepEqual(large, small)
+
+  const outline = (depth) => {
+    const lines = []
+    let id = 0
+    const append = (level) => {
+      for (let i = 0; i < 2; i++) {
+        lines.push('  '.repeat(level) + '- item ' + id++)
+        if (level + 1 < depth) append(level + 1)
+      }
+    }
+    append(0)
+    const doc = lines.join('\n') + '\n\nmoved\n\nlast\n'
+    const tree = md.parse(doc)
+    let units = 0
+    const state = EditorState.create({
+      doc,
+      extensions: formattedBlockParser.of(() => ({
+        parse(input, fragments, ranges) {
+          units += ranges.reduce((sum, range) => sum + range.to - range.from, 0)
+          if (units > 16384) throw new Error('move scanned the whole outline')
+          return md.parse(input, fragments, ranges)
+        },
+      })),
+    })
+    let node = tree.resolveInner(doc.indexOf('moved'), 1)
+    while (node.name !== 'Paragraph') node = node.parent
+    assert.ok(blockStep(state, tree, node, -1))
+    return units
+  }
+  const shallow = outline(8),
+    deep = outline(16)
+  console.log(JSON.stringify({ branchingOutline: { shallow, deep } }))
+  assert.ok(deep < shallow * 8)
 })
 
 test('structure validation serializes nested containers once', () => {

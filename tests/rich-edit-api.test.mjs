@@ -291,9 +291,6 @@ test('codemirror: api 2 source edits preserve canonical source, history and proj
   })
   await t.test(
     'rich source edits reject a structural markup change',
-    {
-      todo: 'formatted gap api-005: rich source edits must reject structural markup changes',
-    },
     async () => {
       assert.equal(markup.status, 'unsupported-view')
       assert.equal(

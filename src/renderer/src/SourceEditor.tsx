@@ -130,6 +130,7 @@ import {
   formattedRenderInputs,
   showMarkdownMarkers,
 } from './formatted-contributions'
+import { formattedLiteralEdits } from './formatted-source-edits'
 import { formattedSyntax } from './formatted-syntax'
 import { tabIndent } from './indentation'
 import { formattedTabIndents, livePreview } from './live-preview'
@@ -1822,6 +1823,18 @@ export function SourceEditor({
       } catch (error) {
         return { status: 'invalid', message: String(error) }
       }
+      if (
+        formatted &&
+        !formattedLiteralEdits(
+          transaction,
+          tree(editor.state),
+          tree(transaction.state),
+        )
+      )
+        return {
+          status: 'unsupported-view',
+          message: 'Open source view to apply these edits.',
+        }
       exactChanges.current = request.changes
       try {
         editor.dispatch(transaction)

@@ -191,12 +191,17 @@ test('labels read as links, brackets and aliased targets are syntax, embeds beco
   assert.equal(contribution.flavor, 'markdown.obsidian')
   assert.deepEqual(drawn('[[Note]]'), [
     ['syntax', 0, 2],
-    ['link', 2, 6, { 'data-wiki-link': 'Note' }],
+    ['link', 2, 6, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'false' }],
     ['syntax', 6, 8],
   ])
   assert.deepEqual(drawn('[[ Note#Part | Shown ]]'), [
     ['syntax', 0, 15],
-    ['link', 15, 20, { 'data-wiki-link': 'Note#Part' }],
+    [
+      'link',
+      15,
+      20,
+      { 'data-wiki-link': 'Note#Part', 'data-wiki-alias': 'true' },
+    ],
     ['syntax', 20, 23],
   ])
   assert.deepEqual(drawn('==mark=='), [
@@ -243,7 +248,7 @@ test('decoded glyphs pass mouse events through to the editor', () => {
 test('entities in labels and highlights show their characters, as in the rich view, until the caret reveals them', () => {
   assert.deepEqual(drawn('[[Note|&amp;]]'), [
     ['syntax', 0, 7],
-    ['link', 7, 12, { 'data-wiki-link': 'Note' }],
+    ['link', 7, 12, { 'data-wiki-link': 'Note', 'data-wiki-alias': 'true' }],
     ['replace', 7, 12, ['&', 'hibi-lp-link']],
     ['syntax', 12, 14],
   ])

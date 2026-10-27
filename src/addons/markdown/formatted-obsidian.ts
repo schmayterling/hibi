@@ -184,7 +184,10 @@ export const contribution: FormattedContribution = {
           context,
           from,
           to,
-          { 'data-wiki-link': parts.target },
+          {
+            'data-wiki-link': parts.target,
+            'data-wiki-alias': String(parts.label.name === 'WikiAlias'),
+          },
           true,
         )
         out.syntax(to, node.to)

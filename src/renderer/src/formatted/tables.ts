@@ -1713,14 +1713,18 @@ class TableView {
       return
     const link = (event.target as Element).closest('.hibi-lp-link')
     const pos = link && this.dom.contains(link) ? this.linkStart(link) : null
+    const wiki = link?.closest('[data-wiki-link]')
+    const raw = wiki?.getAttribute('data-wiki-link')
+    // An active cell still has the table escape before an alias's pipe.
+    const target =
+      this.editing?.editor.view.dom.contains(link) &&
+      wiki?.getAttribute('data-wiki-alias') === 'true' &&
+      raw?.endsWith('\\')
+        ? raw.slice(0, -1).trim()
+        : (raw ?? undefined)
     if (
       pos != null &&
-      this.view.state.facet(formattedFollowLink)?.(
-        this.view,
-        pos,
-        link?.closest('[data-wiki-link]')?.getAttribute('data-wiki-link') ??
-          undefined,
-      )
+      this.view.state.facet(formattedFollowLink)?.(this.view, pos, target)
     )
       event.preventDefault()
   }

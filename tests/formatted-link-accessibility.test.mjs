@@ -20,7 +20,7 @@ Around ~~[struck](b.md)~~ and [x **y** z](b.md).
 | row | [cell link](b.md) |
 | wiki | [[c]] |
 | wiki-entity | [[c\\|&copy;]] |
-| wiki-alias | [[b\\|x &amp; y]] |
+| wiki-alias | [[b \\|x &amp; y]] |
 | entity | [&amp;](b.md) |
 | mapped | left \\| \\| [&copy;&#x1f331;](c.md) |
 `
@@ -187,6 +187,24 @@ for (const engine of ['tiptap', 'codemirror']) {
         assert.equal(await link(name).count(), 1)
         assert.deepEqual(await settled(), { name: 'a.md', opened: [] })
         await link(name).click({ modifiers })
+        await shown(app, page, target)
+        await pressShortcut(app, `${mod}+[`)
+        await shown(app, page, 'a.md')
+        await link('c').waitFor()
+      }
+    // Editing keeps table escapes in the source, but follows the same wiki target.
+    for (const [name, target] of [
+      ['©', 'c.md'],
+      ['x & y', 'b.md'],
+    ])
+      for (const modifiers of follows) {
+        await link(name).click()
+        const active =
+          engine === 'codemirror'
+            ? rich.locator('.hibi-lp-cell-editor [data-wiki-link]')
+            : link(name)
+        await active.waitFor()
+        await active.click({ modifiers })
         await shown(app, page, target)
         await pressShortcut(app, `${mod}+[`)
         await shown(app, page, 'a.md')

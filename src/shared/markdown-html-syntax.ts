@@ -24,7 +24,7 @@ export const ContainerHTML: MarkdownConfig = {
           // Lezer's runtime line depth records which composites still match.
           if ((line as typeof line & { depth: number }).depth < cx.depth) break
           if (/^[ \t\r]*$/.test(line.text.slice(line.basePos))) break
-          marks.push(...line.markers)
+          for (const mark of line.markers) marks.push(mark)
           to = cx.lineStart + line.text.length
         }
         cx.addElement(cx.elt('HTMLBlock', from, to, marks))

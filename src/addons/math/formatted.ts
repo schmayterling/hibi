@@ -64,6 +64,9 @@ function readingPosition(view: EditorView) {
  * one scroll per rendering slice, after its formulas fill.
  */
 function keepReading(view: EditorView, dom: HTMLElement) {
+  // Formulas below what is on screen never move it, nor do hidden editors.
+  const at = view.posAtDOM(dom)
+  if (!view.inView || at >= (view.visibleRanges.at(-1)?.to ?? 0)) return
   let position = reading.get(view)
   if (position === undefined) {
     position = readingPosition(view)
@@ -79,7 +82,7 @@ function keepReading(view: EditorView, dom: HTMLElement) {
         })
     })
   }
-  if (position && view.posAtDOM(dom) < position.pos) position.moved = true
+  if (position && at < position.pos) position.moved = true
 }
 const widgets = new WeakMap<HTMLElement, FormulaWidget>()
 const editControl = {

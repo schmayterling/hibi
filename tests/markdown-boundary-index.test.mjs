@@ -6,6 +6,7 @@ import {
 } from '../src/shared/chunked-markdown.ts'
 import { MarkdownBoundaryIndex } from '../src/shared/markdown-boundary-index.ts'
 import {
+  boundaryKey,
   boundaryParser,
   boundarySyntaxIds,
 } from '../src/shared/markdown-boundary-syntax.ts'
@@ -220,6 +221,49 @@ test('frontmatter prefixes and empty notes transfer without syntax nodes', () =>
       parsed.topNode.firstChild?.name,
       text ? 'Frontmatter' : undefined,
     )
+  }
+})
+
+test('properties edits map worker prefixes and retain boundaries without scanning body text', () => {
+  const prefix = '---\ntitle: exact\n---\n\n'
+  const config = configuration({
+    prefix: prefix.length,
+    chunkSize: 4096,
+    groupSize: 64,
+    giantBlock: 65536,
+  })
+  assert.equal(
+    boundaryKey(config),
+    boundaryKey({ ...config, prefix: prefix.length + 1 }),
+  )
+  for (const ending of ['\n', '\r\n', '\r']) {
+    const unit = '# heading\n\nparagraph words\n\n'
+    const length = ending === '\n' ? 8 * 1024 * 1024 : 128 * 1024
+    const text = prefix + unit.repeat(Math.ceil(length / unit.length))
+    const store = new SourceStore(text.replaceAll('\n', ending), {
+      tabId: 'properties',
+      revision: 0,
+    })
+    const probe = counts()
+    const index = new MarkdownBoundaryIndex(store.snapshot(), config, probe)
+    drain(index)
+    let expected = prefix.length
+    for (const insert of ['x', ending + 'other: value', 'z']) {
+      const at = store.snapshot().materialize().indexOf('exact') + 5
+      probe.scannedUnits = probe.reusedNodes = 0
+      index.apply(edit(store, [{ from: at, to: at, insert }]))
+      expected += normalizedSource(insert).length
+      drain(index)
+      assert.equal(index.config.prefix, expected)
+      assert.equal(index.key, boundaryKey({ ...config, prefix: expected }))
+      assert.equal(probe.scannedUnits, 0, JSON.stringify(probe))
+      assert.ok(probe.reusedNodes > 0)
+      assert.ok(
+        [...index.records()].every(
+          (record) => record.kind !== 'chunk' || record.type !== 'tail',
+        ),
+      )
+    }
   }
 })
 

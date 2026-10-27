@@ -1,8 +1,20 @@
+import type { ChangedRange } from '@lezer/common'
 import type { SourceSnapshot } from './source-buffer.ts'
 import type { RawEdit } from './source-operations.ts'
 
 export const normalizedSource = (source: string) =>
   source.replace(/\r\n?/g, '\n')
+
+/** Shift an unparsed prefix only when every normalized edit stays inside it. */
+export function mappedPrefix(prefix: number, changes: readonly ChangedRange[]) {
+  if (!prefix) return null
+  let next = prefix
+  for (const change of changes) {
+    if (change.fromA >= prefix || change.toA > prefix) return null
+    next += change.toB - change.fromB - (change.toA - change.fromA)
+  }
+  return next
+}
 
 /** Capture once when opening a source surface; keep its insertion convention. */
 export function preferredLineBreak(source: SourceSnapshot): string {

@@ -46,6 +46,7 @@ import {
   type FormattedDecorations,
   type FormattedLayout,
   type FormattedNodeView,
+  formattedBlockEdges,
   formattedContributions,
   formattedDocument,
   formattedLiteral,
@@ -699,7 +700,15 @@ function inline(
   const ordinals = new Map<number, number[]>()
   for (const [at, info] of lines) {
     const current = doc.lineAt(at)
-    containers(doc, at, info, layout)
+    const edges = containers(
+      doc,
+      at,
+      info,
+      layout,
+      state.facet(formattedBlockEdges),
+    )
+    if (edges)
+      decorations.push(Decoration.widget({ widget: edges, side: -1 }).range(at))
     let prefix = info.quoteEnd ?? at
     if (info.code !== null) prefix = info.code
     else if (info.item) prefix = itemLine(doc, current, info, prefix, ordinals)
@@ -736,6 +745,37 @@ function lastLine(doc: Text, node: SyntaxNode, layout: DecorationSet) {
   return last.from
 }
 
+/** Invisible anchors let overlays measure each rendered container's actual edge. */
+class ContainerEdges extends WidgetType {
+  readonly edges: readonly (readonly [string, string])[]
+  constructor(edges: readonly (readonly [string, string])[]) {
+    super()
+    this.edges = edges
+  }
+  override eq(other: ContainerEdges) {
+    return (
+      this.edges.length === other.edges.length &&
+      this.edges.every(
+        ([key, left], i) =>
+          key === other.edges[i]?.[0] && left === other.edges[i]?.[1],
+      )
+    )
+  }
+  toDOM() {
+    const wrap = document.createElement('span')
+    wrap.setAttribute('aria-hidden', 'true')
+    wrap.style.cssText =
+      'position: absolute; top: 0; left: 0; width: 0; height: 0; pointer-events: none'
+    for (const [key, left] of this.edges) {
+      const edge = document.createElement('span')
+      edge.dataset.hibiBlockEdge = key
+      edge.style.cssText = `position: absolute; left: calc(-1 * var(--hibi-indent) + ${left}); width: 0; height: 0`
+      wrap.append(edge)
+    }
+    return wrap
+  }
+}
+
 /**
  * Containers indent a line by their widths: a quote's 20px padding and 1px
  * bar, a list's 1.5em, or what a contributed view gives. Bars and paint are
@@ -747,9 +787,12 @@ function containers(
   at: number,
   info: LineInfo,
   layout: DecorationSet,
+  measure: boolean,
 ) {
   if (!info.containers.length) return
   const widths: string[] = []
+  const edges: [string, string][] | null = measure ? [] : null
+  const depths = measure ? new Map<string, number>() : null
   const paint: string[] = []
   let top = 0,
     bottom = 0,
@@ -757,6 +800,12 @@ function containers(
   for (const container of info.containers) {
     const left = widths.length ? `calc(${widths.join(' + ')})` : '0px'
     const shape = blocks.shapes(container)
+    const depth = depths?.get(container.name) ?? 0
+    depths?.set(container.name, depth + 1)
+    // Nesting keys survive mapped decorations while a reparse is unfinished.
+    const key = edges ? `${container.name}:${depth}` : ''
+    if (container.name !== 'ListItem' || shape?.marker === false)
+      edges?.push([key, left])
     const first = shownLine(doc, container).from === at
     const offset = `${first ? info.gap + top : 0}px`
     if (shape?.class) info.classes.push(shape.class)
@@ -788,6 +837,8 @@ function containers(
             ? '1.5 * var(--text-editor)'
             : '0px'),
     )
+    if (container.name === 'ListItem' && shape?.marker !== false)
+      edges?.push([key, `calc(${widths.join(' + ')})`])
   }
   info.gap += top
   if (bottom) info.style.push(`padding-bottom: ${bottom}px`)
@@ -798,6 +849,7 @@ function containers(
     info.classes.push('hibi-lp-painted')
     info.style.push(`--hibi-paint: ${paint.join(', ')}`)
   }
+  return edges ? new ContainerEdges(edges) : undefined
 }
 
 /** List lines: native markers in the indentation, source markers and continuation indentation hidden. */
@@ -1360,6 +1412,8 @@ export function livePreview(
         } else if (
           update.docChanged ||
           update.viewportChanged ||
+          update.state.facet(formattedBlockEdges) !==
+            update.startState.facet(formattedBlockEdges) ||
           changedReveal ||
           tree !== syntax.tree(update.startState) ||
           update.state.field(layout) !== update.startState.field(layout) ||

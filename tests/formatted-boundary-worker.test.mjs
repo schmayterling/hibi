@@ -460,12 +460,18 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
       undefined,
       { worker: true },
     )
+    const view = window.livePreview.view()
+    const releases = window.livePreview.workerState.releases
+    // Selection moves update the view without changing the syntax configuration.
+    for (let at = 1; at <= 40; at++)
+      view.dispatch({ selection: { anchor: at } })
     const result = {
       requests: window.livePreview.workerState.requests,
       declined: window.livePreview.probe.adoptionDeclined ?? 0,
+      releases,
+      repeatedReleases: window.livePreview.workerState.releases - releases,
     }
     window.livePreview.reset()
-    const view = window.livePreview.view()
     view.dispatch({
       selection: { anchor: view.state.doc.length - 10 },
       scrollIntoView: true,
@@ -474,6 +480,9 @@ test('a real worker formats a never-visited 50 mib far jump without main-thread 
   })
   assert.equal(unknown.requests, 0)
   assert.ok(unknown.declined > 0)
+  assert.ok(unknown.releases > 0, JSON.stringify(unknown))
+  // Each release posts a message to the worker; updates after the first have nothing to cancel.
+  assert.equal(unknown.repeatedReleases, 0, JSON.stringify(unknown))
   await page.waitForFunction(() => window.livePreview.probe.scannedUnits > 0)
   await page.evaluate(() => window.removeUnknown())
   await page.waitForFunction(

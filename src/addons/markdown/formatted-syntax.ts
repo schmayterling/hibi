@@ -1,4 +1,5 @@
-import type { InlineContext, MarkdownConfig } from '@lezer/markdown'
+import { NodeProp, Tree } from '@lezer/common'
+import type { Element, InlineContext, MarkdownConfig } from '@lezer/markdown'
 
 /*
  * Obsidian's wikilinks, embeds and highlights for the formatted view's
@@ -10,40 +11,12 @@ import type { InlineContext, MarkdownConfig } from '@lezer/markdown'
 /** Characters the inline scans and patterns read, for complexity tests. */
 export const obsidianWork = { reads: 0 }
 
-/** A wikilink or embed as the rich view reads it, with its label's place in the source. */
-export type WikiParts = {
-  embed: boolean
-  /** The target, trimmed, with any `#heading`. */
-  target: string
-  /** The shown label: the alias, or else the target, trimmed. */
-  label: string
-  labelFrom: number
-  labelTo: number
-}
-
-/** A wikilink or embed's parts, when `source` is exactly one. */
-export function wikiParts(source: string): WikiParts | null {
-  obsidianWork.reads += source.length
-  const embed = source.startsWith('!')
-  const open = embed ? 3 : 2
-  const inner = source.slice(open, -2)
-  if (!inner || /[\]\r\n]/.test(inner)) return null
-  // As `split('|', 2)` reads it: text after a second bar is dropped.
-  const bar = inner.indexOf('|')
-  const target = bar < 0 ? inner : inner.slice(0, bar)
-  if (!target.trim()) return null
-  const next = bar < 0 ? -1 : inner.indexOf('|', bar + 1)
-  const alias = bar < 0 ? '' : inner.slice(bar + 1, next < 0 ? undefined : next)
-  const [from, shown] = alias.trim() ? [open + bar + 1, alias] : [open, target]
-  const lead = shown.length - shown.trimStart().length
-  return {
-    embed,
-    target: target.trim(),
-    label: shown.trim(),
-    labelFrom: from + lead,
-    labelTo: from + lead + shown.trim().length,
-  }
-}
+/**
+ * The text of a wikilink or embed's `WikiTarget` (with any `#heading`) or
+ * `WikiAlias`, trimmed, as the rich view reads it. The parse keeps it, so
+ * renderers never read a long target or label again.
+ */
+export const wikiText = new NodeProp<string>({ perNode: true })
 
 const space = /\s/
 const isSpace = (code: number) =>
@@ -108,6 +81,57 @@ function wikiEnd(cx: InlineContext, pos: number, embed: boolean) {
   return -1
 }
 
+/** The first `|` in `[from, to)`, or `to`. */
+function barIn(cx: InlineContext, from: number, to: number) {
+  for (; from < to; from++) {
+    obsidianWork.reads++
+    if (cx.char(from) === 124) break
+  }
+  return from
+}
+
+/** A node with its text for `[from, to)` without the spaces at its ends; none when that is blank. */
+function trimmed(
+  cx: InlineContext,
+  name: string,
+  from: number,
+  to: number,
+): Element[] {
+  for (; from < to && isSpace(cx.char(from)); from++) obsidianWork.reads++
+  for (; to > from && isSpace(cx.char(to - 1)); to--) obsidianWork.reads++
+  if (from === to) return []
+  // An element for the node gives its type's id in this parser.
+  const type = cx.parser.nodeSet.types[cx.elt(name, from, to).type]!
+  const text = new Tree(type, [], [], to - from, [
+    [wikiText, cx.slice(from, to)],
+  ])
+  return [cx.elt(text, from)]
+}
+
+/**
+ * `[[…]]` or `![[…]]` from `from` to `end` with its text from `open`. As
+ * `split('|', 2)` reads it, the target ends at the first `|` and an alias at
+ * the next, after which text is dropped.
+ */
+function wikiElement(
+  cx: InlineContext,
+  name: string,
+  from: number,
+  open: number,
+  end: number,
+) {
+  const stop = end - 2
+  const bar = barIn(cx, open, stop)
+  return cx.elt(name, from, end, [
+    cx.elt('WikiMark', from, open),
+    ...trimmed(cx, 'WikiTarget', open, bar),
+    ...(bar < stop
+      ? trimmed(cx, 'WikiAlias', bar + 1, barIn(cx, bar + 1, stop))
+      : []),
+    cx.elt('WikiMark', stop, end),
+  ])
+}
+
 /**
  * The end of `==text==` starting at `pos`, or -1. Like the rich view's
  * pattern, a longer text wins: the first `==` after a non-space at least two
@@ -149,6 +173,8 @@ export const obsidianSyntax: MarkdownConfig = {
     { name: 'WikiLink' },
     { name: 'WikiEmbed' },
     { name: 'WikiMark' },
+    { name: 'WikiTarget' },
+    { name: 'WikiAlias' },
     { name: 'Highlight' },
     { name: 'HighlightMark' },
   ],
@@ -160,12 +186,7 @@ export const obsidianSyntax: MarkdownConfig = {
         if (next !== 33) return -1
         const end = wikiEnd(cx, pos, true)
         if (end < 0) return -1
-        return cx.addElement(
-          cx.elt('WikiEmbed', pos, end, [
-            cx.elt('WikiMark', pos, pos + 3),
-            cx.elt('WikiMark', end - 2, end),
-          ]),
-        )
+        return cx.addElement(wikiElement(cx, 'WikiEmbed', pos, pos + 3, end))
       },
     },
     {
@@ -175,12 +196,7 @@ export const obsidianSyntax: MarkdownConfig = {
         if (next !== 91) return -1
         const end = wikiEnd(cx, pos, false)
         if (end < 0) return -1
-        return cx.addElement(
-          cx.elt('WikiLink', pos, end, [
-            cx.elt('WikiMark', pos, pos + 2),
-            cx.elt('WikiMark', end - 2, end),
-          ]),
-        )
+        return cx.addElement(wikiElement(cx, 'WikiLink', pos, pos + 2, end))
       },
     },
     {

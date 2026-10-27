@@ -521,6 +521,9 @@
   "a066ff921096": [
     "src/addons/frontmatter/Properties.tsx"
   ],
+  "b01a69e19d91": [
+    "src/addons/word-count/count-brackets.ts"
+  ],
   "52656e8104ee": [
     "src/addons/git/Panel.tsx"
   ],
@@ -3525,7 +3528,7 @@
   "85a5ac392dfd": [
     "src/addons/_shared/format-worker.ts"
   ],
-  "25a239179c0c": [
+  "42c6b818dcbc": [
     "src/renderer/src/HibiSettings.tsx"
   ],
   "f988f51a872a": [
@@ -4284,6 +4287,9 @@
     "src/shared/markdown-source-model.ts"
   ],
   "7210e2c9cfdd": [
+    "src/shared/source-parser.ts"
+  ],
+  "d447510064bd": [
     "src/shared/source-parser.ts"
   ],
   "26f98a0491bd": [
@@ -7377,6 +7383,9 @@
   "189df083f938": [
     "src/renderer/src/HibiSettings.tsx"
   ],
+  "a7e2d26e8d15": [
+    "src/renderer/src/HibiSettings.tsx"
+  ],
   "277089d91c0b": [
     "src/renderer/src/VersionHistory.tsx"
   ],
@@ -7559,9 +7568,6 @@
   "4c94485e0c21": [
     "src/renderer/src/AddonGarden.tsx",
     "src/renderer/src/AddonSettings.tsx"
-  ],
-  "0695b563acde": [
-    "src/renderer/src/HibiSettings.tsx"
   ],
   "21fc4b4e6645": [
     "src/main/workspace-layout.ts"

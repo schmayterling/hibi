@@ -1,4 +1,4 @@
-import type { Lexer, MarkedOptions, Token, TokensList } from 'marked'
+import type { Lexer, Marked, MarkedOptions, Token, TokensList } from 'marked'
 import type { MarkdownReferenceSyntax } from './document-worker-protocol.ts'
 import { markdownSourceParser } from './markdown-source-references.ts'
 import { BlockTokenizer } from './marked-blocks.ts'
@@ -156,9 +156,11 @@ export class MarkdownSemanticLexer {
     options?: MarkedOptions,
   ) => Lexer
   #context: Context | null = null
-  constructor(syntax: MarkdownReferenceSyntax) {
-    const parser = markdownSourceParser(syntax),
-      context = () => this.#context!
+  constructor(
+    syntax: MarkdownReferenceSyntax,
+    parser: Marked = markdownSourceParser(syntax),
+  ) {
+    const context = () => this.#context!
     this.#options = { ...parser.defaults }
     delete this.#options.tokenizer
     this.#Lexer = class extends parser.Lexer {

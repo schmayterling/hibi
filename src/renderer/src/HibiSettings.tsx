@@ -65,7 +65,7 @@ export function HibiSettings({
           </span>
         </div>
         <p className="hibi-credit">
-          Made by <Heart size={12} aria-label="Love" /> with{' '}
+          Made with <Heart size={12} aria-label="Love" /> by{' '}
           <a href="https://github.com/schmayterling" onClick={openExternalLink}>
             may
           </a>{' '}

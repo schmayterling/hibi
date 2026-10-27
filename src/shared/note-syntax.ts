@@ -102,7 +102,10 @@ function highlightToken(source: string, tokens: Token[]) {
   }
 }
 
-function disabledToken(token: Token, disabled: ReadonlySet<string>): boolean {
+export function disabledToken(
+  token: Token,
+  disabled: ReadonlySet<string>,
+): boolean {
   switch (token.type) {
     case 'heading':
       return disabled.has(`core.heading-${token.depth}`)
@@ -147,6 +150,44 @@ function disabledToken(token: Token, disabled: ReadonlySet<string>): boolean {
   }
 }
 
+/** Pure built-in grammar shared by bounded worker projections. */
+export function noteParser(syntax: NoteSyntax = defaultNoteSyntax) {
+  const parser = new Marked({ gfm: syntax.gfm, breaks: false }, blockMarkdown)
+  if (syntax.wikilinks) {
+    parser.use({
+      extensions: [
+        {
+          name: 'obsidianEmbed',
+          level: 'inline',
+          tokenizer: (text, tokens) => wikiToken(text, true, tokens),
+        },
+        {
+          name: 'obsidianWikiLink',
+          level: 'inline',
+          tokenizer: (text, tokens) => wikiToken(text, false, tokens),
+        },
+        {
+          name: 'obsidianHighlight',
+          level: 'inline',
+          start(text) {
+            return inlineStart(
+              text,
+              syntax.gfm,
+              inlineRuns.get(this.lexer) as Token[],
+            )
+          },
+          tokenizer(text, tokens) {
+            // Runs before each hint, including nested labels/emphasis.
+            inlineRuns.set(this.lexer, tokens)
+            return highlightToken(text, tokens)
+          },
+        },
+      ],
+    })
+  }
+  return parser
+}
+
 /** Lex supported built-in Markdown settings; unsupported addon syntax is reported by the index. */
 export function noteLexer(
   source: string,
@@ -155,39 +196,7 @@ export function noteLexer(
   const key = `${Number(syntax.gfm)}:${Number(syntax.wikilinks)}`
   let parser = parsers.get(key)
   if (!parser) {
-    parser = new Marked({ gfm: syntax.gfm, breaks: false }, blockMarkdown)
-    if (syntax.wikilinks) {
-      parser.use({
-        extensions: [
-          {
-            name: 'obsidianEmbed',
-            level: 'inline',
-            tokenizer: (text, tokens) => wikiToken(text, true, tokens),
-          },
-          {
-            name: 'obsidianWikiLink',
-            level: 'inline',
-            tokenizer: (text, tokens) => wikiToken(text, false, tokens),
-          },
-          {
-            name: 'obsidianHighlight',
-            level: 'inline',
-            start(text) {
-              return inlineStart(
-                text,
-                syntax.gfm,
-                inlineRuns.get(this.lexer) as Token[],
-              )
-            },
-            tokenizer(text, tokens) {
-              // Runs before each hint, including nested labels/emphasis.
-              inlineRuns.set(this.lexer, tokens)
-              return highlightToken(text, tokens)
-            },
-          },
-        ],
-      })
-    }
+    parser = noteParser(syntax)
     parsers.set(key, parser)
   }
   const tokens = parser.lexer(

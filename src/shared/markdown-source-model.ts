@@ -192,6 +192,17 @@ export class MarkdownSourceModel {
       complete: false,
     })
   }
+  /** grammar lookahead can change an earlier owner without editing its text. */
+  invalidate(from: number, to: number) {
+    this.#parser.invalidate(from, to)
+    let owners = this.#state.owners
+    const first = owners?.at(from),
+      last = owners?.at(to, -1)
+    if (owners && first && last)
+      for (const row of owners.records(first.index, last.index + 1))
+        owners = owners.update(row.index, { ...row.owner, parsed: false })
+    this.#state = Object.freeze({ ...this.#state, owners, complete: false })
+  }
   reconfigure(parser: Parser, dialect: string) {
     this.#parser.reconfigure(parser, dialect)
     this.#trees.clear()

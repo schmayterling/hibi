@@ -1,4 +1,5 @@
 import {
+  type ChangedRange,
   type Input,
   type Parser,
   type PartialParse,
@@ -166,6 +167,31 @@ export class SourceParserSession {
       shift += change.insert.length - (change.to - change.from)
       return range
     })
+    this.#invalidateFragments(ranges, prepared.after)
+  }
+  /** invalidate grammar lookahead dependencies without changing canonical source. */
+  invalidate(from: number, to: number) {
+    const source = this.#state.source,
+      start = source.rawToEditor(from),
+      end = source.rawToEditor(to)
+    if (
+      this.#disposed ||
+      !safePosition(from) ||
+      !safePosition(to) ||
+      to <= from ||
+      start === null ||
+      end === null
+    )
+      throw new Error('Parser invalidation is outside its source snapshot.')
+    this.#invalidateFragments(
+      [{ fromA: start, toA: end, fromB: start, toB: end }],
+      source,
+    )
+  }
+  #invalidateFragments(
+    ranges: readonly ChangedRange[],
+    source: SourceSnapshot,
+  ) {
     // All fragments refer to the last completed tree. Mapping another edit
     // can close an earlier open edge; its tree position still stays fixed.
     const openStarts = new Set<number>(),
@@ -204,7 +230,7 @@ export class SourceParserSession {
     this.#pending = null
     this.#state = Object.freeze({
       ...this.#state,
-      source: prepared.after,
+      source,
       tree: null,
       complete: false,
     })

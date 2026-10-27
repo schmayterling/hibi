@@ -2,6 +2,7 @@ import { isolateHistory } from '@codemirror/commands'
 import {
   type ChangeDesc,
   MapMode,
+  Prec,
   type Text,
   Transaction,
 } from '@codemirror/state'
@@ -1960,6 +1961,49 @@ export const contribution: FormattedContribution = {
   ],
   extension: [
     tableEditing,
+    Prec.lowest(
+      EditorView.domEventHandlers({
+        keydown(event, view) {
+          if (
+            event.target !== view.contentDOM ||
+            event.isComposing ||
+            view.composing ||
+            event.altKey ||
+            event.ctrlKey ||
+            event.metaKey ||
+            [...event.key].length !== 1 ||
+            !writable(view.state)
+          )
+            return false
+          const selection = view.state.selection.main
+          if (
+            selection.empty ||
+            view.state.selection.ranges.length !== 1 ||
+            ![...(mounted.get(view) ?? [])].some((table) => {
+              if (!table.current || !table.dom.isConnected) return false
+              const { from, to } = table.range()
+              return selection.from <= from && selection.to >= to
+            })
+          )
+            return false
+          // Chromium can drop typing over a selected block widget.
+          const insert = () =>
+            view.state.update(view.state.replaceSelection(event.key), {
+              userEvent: 'input.type',
+              scrollIntoView: true,
+            })
+          if (
+            !view.state
+              .facet(EditorView.inputHandler)
+              .some((handler) =>
+                handler(view, selection.from, selection.to, event.key, insert),
+              )
+          )
+            view.dispatch(insert())
+          return true
+        },
+      }),
+    ),
     EditorView.inputHandler.of((view) => {
       // Mapped widget bounds are current even when its snapshot's length is old.
       const { node, offset } = view.domAtPos(view.state.selection.main.head)

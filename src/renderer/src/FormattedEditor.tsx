@@ -216,6 +216,11 @@ export function MarkdownEditor({
   const [anchor, setAnchor] = useState<{ target: string } | null>(null)
   const pendingAnchor = useRef<string | null>(null)
   const revealAnchor = useRef(() => {})
+  /** Heading positions by destination, for the outline's published headings. */
+  const anchorIndex = useRef<{
+    headings: OutlineHeading[]
+    index: Map<string, number>
+  } | null>(null)
   const outlineRead =
     markdownDocument &&
     formattedReady &&
@@ -232,6 +237,7 @@ export function MarkdownEditor({
   const reportOutline = useCallback(
     (headings: OutlineHeading[]) => {
       outline.current.headings = headings
+      if (anchorIndex.current?.headings !== headings) anchorIndex.current = null
       headingList.current?.update(headings)
       measureHeadings.current()
       if (outlineShown.current) onOutline(headings)
@@ -301,12 +307,18 @@ export function MarkdownEditor({
       current = sourceOutline.outline(),
       { headings } = outline.current
     if (target === null || current?.headings.length !== headings.length) return
-    const heading =
-      headings[
-        headingAnchors(headings.map(({ label }) => label)).findIndex(
-          ({ anchor, legacy }) => anchor === target || legacy === target,
-        )
-      ]
+    // Destinations are assigned once per outline, not per link followed.
+    if (anchorIndex.current?.headings !== headings) {
+      const index = new Map<string, number>()
+      headingAnchors(headings.map(({ label }) => label)).forEach(
+        ({ anchor, legacy }, position) => {
+          if (!index.has(anchor)) index.set(anchor, position)
+          if (legacy !== null && !index.has(legacy)) index.set(legacy, position)
+        },
+      )
+      anchorIndex.current = { headings, index }
+    }
+    const heading = headings[anchorIndex.current.index.get(target) ?? -1]
     // A stale outline is read again after the edit that made it stale.
     if (heading && !sourceOutline.reveal(heading.id)) return
     pendingAnchor.current = null

@@ -490,7 +490,6 @@ export const electron = {
         detachQuitTrace?.()
         quitTrace.errors = Math.min(999999, quitTrace.errors + 1)
       }
-      const page = await application.firstWindow()
       await application.evaluate(({ app, BrowserWindow }) => {
         // Event-time evidence only: no earlier window history or private quit state.
         try {
@@ -618,6 +617,8 @@ export const electron = {
       await application.evaluate(showElectronTestWindows)
       const reportSlowStart = async () => {
         try {
+          const page = application.windows()[0]
+          if (!page || page.isClosed()) return
           let readinessTimer
           const ready = await Promise.race([
             page
@@ -658,7 +659,7 @@ export const electron = {
         }
       }
       slowStartTimer = setTimeout(() => {
-        if (closing || page.isClosed()) return
+        if (closing) return
         slowStart = reportSlowStart()
       }, 4000)
       slowStartTimer.unref()

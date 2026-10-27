@@ -6,7 +6,7 @@ import {
   Transaction,
 } from '@codemirror/state'
 import {
-  type EditorView,
+  EditorView,
   ViewPlugin,
   type ViewUpdate,
   WidgetType,
@@ -388,6 +388,11 @@ class TableView {
     this.update(widget)
   }
 
+  /** Cell positions are valid only for the widget's text snapshot. */
+  get current() {
+    return this.widget.doc === this.view.state.doc
+  }
+
   get windowed() {
     return this.heights !== null
   }
@@ -708,7 +713,8 @@ class TableView {
   }
 
   /** The cell at a position of the formatted view's document, with the offset in its text. */
-  locate(pos: number): Cell & { offset: number | 'end' } {
+  locate(pos: number): (Cell & { offset: number | 'end' }) | null {
+    if (!this.current) return null
     const { widget } = this
     const snapshot = pos - this.range().from + widget.from
     const index = widget.doc.lineAt(snapshot).number - widget.first
@@ -728,8 +734,9 @@ class TableView {
     return { line, column: 0, offset: 'end' }
   }
 
-  /** A cell's text between its delimiters in the document now; null while its row ends before it. */
+  /** A cell's text between its delimiters now; null while stale or its row ends before it. */
   private span({ line, column }: Cell) {
+    if (!this.current) return null
     const { text, from } = this.widget.line(line)
     const span = cellSpan(this.widget.row(line), column, text.length)
     if (!span) return null
@@ -764,6 +771,7 @@ class TableView {
       line < 0 ||
       line >= this.lines ||
       !this.aligned.length ||
+      !this.current ||
       !writable(this.view.state)
     )
       return false
@@ -809,7 +817,9 @@ class TableView {
     const { from: start, to: end } = this.range()
     if (anchor < start || anchor > end || head < start || head > end)
       return false
-    const { line, column, offset } = this.locate(head)
+    const cell = this.locate(head)
+    if (!cell) return false
+    const { line, column, offset } = cell
     const from = anchor === head ? null : this.locate(anchor)
     if (from && (from.line !== line || from.column !== column)) return false
     return this.edit(
@@ -830,6 +840,7 @@ class TableView {
   private host(): CellHost {
     return {
       main: this.view,
+      current: () => this.current,
       span: () => (this.editing ? this.span(this.editing) : null),
       fill: (text) => this.fill(text),
       move: (move) => this.move(move),
@@ -1198,10 +1209,11 @@ class TableView {
    * a selection it set lands, as after undo, or, when the edited row was
    * deleted, the row now in its place, in the table there then. Elsewhere,
    * editing ends there. Focus moved out of the editor meanwhile stays put.
+   * False while the widget's old snapshot must wait for a redraw.
    */
-  follow(lost: Lost | null) {
+  follow(lost: Lost | null): boolean {
     const editing = this.editing
-    if (editing?.editor.view.composing) return
+    if (editing?.editor.view.composing) return true
     const { view } = this
     const active = view.root.activeElement
     if (
@@ -1209,24 +1221,27 @@ class TableView {
       active !== view.dom.ownerDocument.body &&
       !view.dom.contains(active)
     )
-      return
+      return true
     if (lost) {
       // The row that starts where the deleted one did, or the last row when
       // the table now ends just before it.
       for (const table of mounted.get(view) ?? []) {
+        if (!table.current) return false
         const { from, to } = table.range()
         if (lost.at < from || lost.at > to + 1) continue
-        const { line } = table.locate(Math.min(lost.at, to))
-        if (table.edit(line, lost.column, 'end')) return
+        const cell = table.locate(Math.min(lost.at, to))
+        if (!cell) return false
+        if (table.edit(cell.line, lost.column, 'end')) return true
         break
       }
       view.focus()
-      return
+      return true
     }
     if (!this.dom.isConnected) {
       view.focus()
-      return
+      return true
     }
+    if (!this.current) return false
     const { anchor, head } = this.view.state.selection.main
     const span = editing && this.span(editing)
     if (
@@ -1236,12 +1251,13 @@ class TableView {
       Math.max(anchor, head) <= span.to
     ) {
       editing.editor.select(anchor - span.from, head - span.from)
-      return
+      return true
     }
     if (!this.editAt(anchor, head)) {
       this.stopEditing()
       this.view.focus()
     }
+    return true
   }
 
   /** Show the edited cell's text after the formatted view changed it. */
@@ -1258,9 +1274,10 @@ class TableView {
 
   /** Run a toolbar table action on the edited cell, or on the cell at the selection. */
   run(id: string): boolean {
-    if (!writable(this.view.state)) return false
+    if (!this.current || !writable(this.view.state)) return false
     const cell =
       this.editing ?? this.locate(this.view.state.selection.main.head)
+    if (!cell) return false
     const source = this.source()
     let result: TableEdit
     switch (id) {
@@ -1646,7 +1663,8 @@ class TableView {
 
   /** A click edits the clicked cell at the clicked place; shift-click extends the selection. */
   private select = (event: MouseEvent) => {
-    if (event.button !== 0 || !writable(this.view.state)) return
+    if (event.button !== 0 || !this.current || !writable(this.view.state))
+      return
     if (this.handle) {
       event.preventDefault()
       this.drag(event)
@@ -1738,7 +1756,7 @@ const tableEditing = ViewPlugin.fromClass(
         (transaction) =>
           transaction.selection &&
           !transaction.annotation(cellInput) &&
-          !transaction.isUserEvent('select'),
+          transaction.annotation(Transaction.userEvent) !== 'select',
       )
       // Until they follow, deleted rows' places move with every change, and
       // a selection set since takes their place.
@@ -1751,7 +1769,7 @@ const tableEditing = ViewPlugin.fromClass(
         // Before tables redraw: the edited rows where they are now.
         const lost = update.docChanged ? table.map(update.changes) : null
         if (focused && (selected || lost))
-          this.follow(table, selected ? null : lost)
+          this.following.push({ table, lost: selected ? null : lost })
       }
       if (update.geometryChanged || update.viewportChanged)
         for (const table of tables) table.scrolled()
@@ -1760,23 +1778,19 @@ const tableEditing = ViewPlugin.fromClass(
       // The cell at the selection is found once tables have redrawn, from the
       // selection then: until the redraw, tables are where they were before
       // this update, and it may remove them.
-      if (update.view.hasFocus && (update.selectionSet || update.focusChanged))
+      if (update.view.hasFocus || this.following.length)
         queueMicrotask(() => {
+          const following = this.following
+          this.following = []
+          // Old snapshots wait for the next syntax/layout update to retry.
+          for (const pending of following)
+            if (!pending.table.follow(pending.lost))
+              this.following.push(pending)
           const { view } = this
           const { main } = view.state.selection
           if (view.hasFocus)
             tableAt(view, main.head, true)?.editAt(main.anchor, main.head)
         })
-    }
-    /** Follow a cell editor once tables have redrawn, with the others queued in this task. */
-    follow(table: TableView, lost: Lost | null) {
-      if (!this.following.length)
-        queueMicrotask(() => {
-          const following = this.following
-          this.following = []
-          for (const { table, lost } of following) table.follow(lost)
-        })
-      this.following.push({ table, lost })
     }
   },
   {
@@ -1870,6 +1884,18 @@ export const contribution: FormattedContribution = {
   ],
   extension: [
     tableEditing,
+    EditorView.inputHandler.of((view) => {
+      // Mapped widget bounds are current even when its snapshot's length is old.
+      const { node, offset } = view.domAtPos(view.state.selection.main.head)
+      for (const table of mounted.get(view) ?? [])
+        if (
+          !table.current &&
+          (node.childNodes[offset] === table.dom ||
+            node.childNodes[offset - 1] === table.dom)
+        )
+          return true
+      return false
+    }),
     tableActions.of({
       active: (view) => !!tableAt(view, view.state.selection.main.head),
       run: (view, id) =>

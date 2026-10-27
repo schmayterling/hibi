@@ -767,6 +767,128 @@ test('a cell editor whose row is deleted edits the row now there after later cha
   assert.match(now.doc, /\| alpha \|\n\| gammaX \|\n\| delta \|/)
 })
 
+test('a later pointer selection supersedes deleted-row recovery', {
+  timeout: 30000,
+}, async () => {
+  await mount('| h |\n| - |\n| alpha |\n| beta |\n| gamma |\n\nafter')
+  await harness.locator('.hibi-lp-table td', { hasText: 'beta' }).click()
+  await harness.evaluate(() => {
+    const view = window.tables.view()
+    const text = view.state.doc.toString()
+    view.dispatch({
+      changes: { from: text.indexOf('| beta'), to: text.indexOf('| gamma') },
+    })
+    view.focus()
+    view.dispatch({
+      selection: { anchor: view.state.doc.length },
+      userEvent: 'select.pointer',
+    })
+  })
+  await harness.evaluate(() => window.tables.settle())
+  const now = await state()
+  assert.equal(now.head, now.doc.length)
+  assert.equal(now.editor, null)
+})
+
+test('unfinished syntax never resolves or writes cells with old spans', {
+  timeout: 60000,
+}, async () => {
+  const doc =
+    'intro\n\n| a | b |\n| - | - |\n' +
+    Array.from(
+      { length: 20000 },
+      (_, index) => `| row ${index} | right${index} |`,
+    ).join('\n') +
+    '\n\nafter'
+  for (const mode of ['input', 'follow', 'lookup', 'lookup-end']) {
+    await harness.evaluate(
+      (doc) =>
+        window.tables.mount(
+          doc,
+          { width: 1000, height: 800 },
+          { editable: true, slice: 0 },
+        ),
+      doc,
+    )
+    await harness.waitForFunction(() => !window.tables.settling())
+    const target = mode === 'lookup-end' ? 'right19999' : 'right0'
+    if (mode === 'lookup-end') {
+      await harness.evaluate((target) => {
+        const view = window.tables.view()
+        view.focus()
+        view.dispatch({
+          selection: { anchor: view.state.doc.toString().indexOf(target) },
+        })
+      }, target)
+      await harness.evaluate(() => window.tables.settle())
+    }
+    await harness
+      .locator('.hibi-lp-table td', { hasText: new RegExp(`^${target}$`) })
+      .click()
+    const result = await harness.evaluate(async (mode) => {
+      const view = window.tables.view()
+      const text = view.state.doc.toString()
+      const target = mode === 'lookup-end' ? 'right19999' : 'right0'
+      if (mode.startsWith('lookup')) view.focus()
+      view.dispatch({
+        changes: [
+          { from: 0, insert: '~~~\n' },
+          { from: text.indexOf('row 0'), insert: 'Z'.repeat(200) },
+        ],
+        ...(mode === 'input'
+          ? {}
+          : { selection: { anchor: text.indexOf(target) + 204 } }),
+      })
+      const settling = window.tables.settling()
+      const before = view.state.doc.toString()
+      const expected = view.state.selection.main.head
+      await new Promise(queueMicrotask)
+      const head = view.state.selection.main.head
+      document.execCommand('insertText', false, 'Q')
+      await new Promise(queueMicrotask)
+      await new Promise(queueMicrotask)
+      return {
+        settling,
+        before,
+        expected,
+        head,
+        doc: view.state.doc.toString(),
+      }
+    }, mode)
+    assert.equal(result.settling, true, mode)
+    assert.equal(result.head, result.expected, mode)
+    assert.equal(result.doc === result.before, true, mode)
+    // Restore table syntax; queued recovery must retry after the new layout.
+    await harness.evaluate(() =>
+      window.tables.view().dispatch({ changes: { from: 0, to: 4 } }),
+    )
+    await harness.waitForFunction(() => !window.tables.settling())
+    await harness.evaluate(() => window.tables.settle())
+    const now = await state()
+    assert.deepEqual(
+      [now.cell, now.editor],
+      [mode === 'lookup-end' ? '20001:1' : '2:1', target],
+      mode,
+    )
+    await harness.keyboard.press('Home')
+    await harness.keyboard.type('Q')
+    assert.ok((await state()).doc.includes(`| Q${target} |`), mode)
+  }
+  // A settled parse may reuse its tree; its mapped widgets still need a new snapshot.
+  await mount(doc)
+  await harness.evaluate(() => {
+    const view = window.tables.view()
+    view.focus()
+    view.dispatch({
+      selection: { anchor: view.state.doc.toString().indexOf('right19998') },
+    })
+    view.dispatch({ changes: { from: 0, insert: 'prefix ' } })
+  })
+  await harness.evaluate(() => window.tables.settle())
+  const now = await state()
+  assert.deepEqual([now.cell, now.editor], ['20000:1', 'right19998'])
+})
+
 test('a cell editor whose row is deleted leaves focus that moved out of the editor', {
   timeout: 30000,
 }, async () => {

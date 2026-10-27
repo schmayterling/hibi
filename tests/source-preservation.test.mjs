@@ -372,7 +372,7 @@ testFormattedEngines(
     )
     assert.equal(
       (await page.evaluate(() => window.hibi.getDocument())).markdown,
-      'Editable without the addon',
+      '\uFEFF---\r\ntitle: exact\r\n---\r\nEditable without the addon',
     )
   },
 )

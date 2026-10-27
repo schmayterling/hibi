@@ -5,6 +5,8 @@ import { GFM } from '@lezer/markdown'
 import { blockStep, moveBlock } from '../src/addons/block-drag/formatted.ts'
 import { blockMathSyntax } from '../src/addons/math/formatted-syntax.ts'
 import {
+  BoundaryTree,
+  boundaryRecords,
   ChunkedMarkdownParser,
   readAheadFrom,
 } from '../src/renderer/src/chunked-markdown.ts'
@@ -185,6 +187,12 @@ test('moves cannot activate earlier math decisions across blocks or inside parag
 })
 
 test('lookahead dependency queries skip unrelated chunks in large notes', () => {
+  const doc = '$$ a\n\nf\n\nt\n\nm $$ x\n\nz $$\n'
+  const chunked = new ChunkedMarkdownParser(md, md)
+  const tree = chunked.parse(doc)
+  const boundary = new BoundaryTree(chunked, doc.length)
+  boundary.append([...boundaryRecords(tree)])
+  assert.equal(readAheadFrom(boundary.finish(), doc.indexOf('m $$ x')), null)
   const visits = (count) => {
     const doc = '$$ q\n\nm $$ x\n\n'.repeat(count) + 'end\n'
     const chunked = new ChunkedMarkdownParser(md, md, {
@@ -197,7 +205,18 @@ test('lookahead dependency queries skip unrelated chunks in large notes', () => 
     let calls = 0
     proto.prop = function (...args) {
       calls++
-      return original.apply(this, args)
+      const value = original.apply(this, args)
+      return value?.index
+        ? {
+            ...value,
+            index: new Proxy(value.index, {
+              get(target, key, receiver) {
+                if (typeof key === 'string' && /^\d+$/.test(key)) calls++
+                return Reflect.get(target, key, receiver)
+              },
+            }),
+          }
+        : value
     }
     try {
       const starts = readAheadFrom(tree, doc.lastIndexOf('m $$ x') + 3)
@@ -210,7 +229,7 @@ test('lookahead dependency queries skip unrelated chunks in large notes', () => 
   const small = visits(100)
   const large = visits(20000)
   console.log(JSON.stringify({ mathDependencies: { small, large } }))
-  assert.ok(large < 100 && large <= small + 16, `${small}, ${large}`)
+  assert.ok(large < 100 && large <= small + 32, `${small}, ${large}`)
 })
 
 test('every block in 800 seeded mixed notes preserves structure in both directions', () => {

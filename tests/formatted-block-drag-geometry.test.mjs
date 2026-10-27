@@ -185,3 +185,48 @@ test('enabling block drag in an open note keeps task checkboxes clickable', {
     doc,
   )
 })
+
+test('source-prefix edits keep task controls clear of their mapped handle', {
+  timeout: 90000,
+}, async () => {
+  const doc = '- [ ] first task\n- [ ] second task\n'
+  await open('prefix.md', doc, 'second task')
+  await page.getByRole('button', { name: 'Source view', exact: true }).click()
+  const source = page.getByRole('textbox', {
+    name: 'Markdown editor',
+    exact: true,
+  })
+  await source.waitFor()
+  await source.click()
+  await page.keyboard.press(
+    process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home',
+  )
+  await page.keyboard.insertText('prefix\n\n')
+  await waitForAsync(
+    page,
+    async (doc) =>
+      (await window.hibi.getDocument()).markdown === 'prefix\n\n' + doc,
+    doc,
+  )
+  await page.getByRole('button', { name: /^normal$/i, exact: true }).click()
+  const line = await hover('second task')
+  const checkbox = await line.locator('input.hibi-lp-task').boundingBox()
+  const handle = await page
+    .locator('.rich-pane:not([inert]) .block-drag-handle')
+    .boundingBox()
+  assert.ok(
+    handle.x + handle.width <= checkbox.x,
+    JSON.stringify({ handle, checkbox }),
+  )
+  await page.mouse.click(
+    checkbox.x + checkbox.width / 2,
+    checkbox.y + checkbox.height / 2,
+  )
+  await waitForAsync(
+    page,
+    async (doc) =>
+      (await window.hibi.getDocument()).markdown ===
+      'prefix\n\n' + doc.replace('- [ ] second', '- [x] second'),
+    doc,
+  )
+})

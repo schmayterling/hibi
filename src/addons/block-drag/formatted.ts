@@ -569,8 +569,11 @@ function column(view: EditorView) {
 /** A block's drawn edge, including contributed container widths and controls. */
 function blockLeft(view: EditorView, block: SyntaxNode) {
   const line = shownLine(view, block, false)
+  let depth = 0
+  for (let parent = block.parent; parent; parent = parent.parent)
+    if (parent.name === block.name) depth++
   const edge = line?.querySelector(
-    `[data-hibi-block-edge="${block.from}:${block.name}"]`,
+    `[data-hibi-block-edge="${block.name}:${depth}"]`,
   )
   return (edge ?? line)?.getBoundingClientRect().left ?? column(view).left
 }

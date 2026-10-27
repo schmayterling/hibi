@@ -792,6 +792,7 @@ function containers(
   if (!info.containers.length) return
   const widths: string[] = []
   const edges: [string, string][] | null = measure ? [] : null
+  const depths = measure ? new Map<string, number>() : null
   const paint: string[] = []
   let top = 0,
     bottom = 0,
@@ -799,7 +800,10 @@ function containers(
   for (const container of info.containers) {
     const left = widths.length ? `calc(${widths.join(' + ')})` : '0px'
     const shape = blocks.shapes(container)
-    const key = `${container.from}:${container.name}`
+    const depth = depths?.get(container.name) ?? 0
+    depths?.set(container.name, depth + 1)
+    // Nesting keys survive mapped decorations while a reparse is unfinished.
+    const key = edges ? `${container.name}:${depth}` : ''
     if (container.name !== 'ListItem' || shape?.marker === false)
       edges?.push([key, left])
     const first = shownLine(doc, container).from === at

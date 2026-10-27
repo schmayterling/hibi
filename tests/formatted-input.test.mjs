@@ -16,8 +16,9 @@ test('formatted multiline native input replaces one selection in one edit and pr
   const profile = await mkdtemp(join(tmpdir(), 'hibi-formatted-input-'))
   const file = join(profile, 'note.md')
   const original = '# heading\n\nbefore MIDDLE after 😀\n\n- keep me\n'
+  // Each line break starts a paragraph, as in the rich editor.
   const expected =
-    '# heading\n\nbefore one\n\ntwo\nthree after 😀\n\n- keep me\n'
+    '# heading\n\nbefore one\n\n\n\ntwo\n\nthree after 😀\n\n- keep me\n'
   await writeFile(file, original)
   const app = await electron.launch({
     args: [resolve('.'), `--user-data-dir=${profile}`, file],

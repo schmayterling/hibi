@@ -31,12 +31,7 @@ import { markdownSyntax } from './markdown-syntax'
 import { mountedDocumentEdits } from './mounted-document-edits'
 import type { OutlineHeading } from './OutlineSidebar'
 import { SourceEditor } from './SourceEditor'
-import {
-  editorPosition,
-  revealSourcePosition,
-  sourcePosition,
-  sourceView,
-} from './source-view'
+import { editorPosition, revealSourcePosition, sourceView } from './source-view'
 import { useEditorPanes } from './use-editor-panes'
 import { sourceOutlineSyntax, useSourceOutline } from './use-source-outline'
 
@@ -297,14 +292,7 @@ export function MarkdownEditor({
     const current = sourceOutline.outline(),
       view = richView()
     if (!current || !view || index >= current.headings.length) return
-    const at = editorPosition(view, current.position(index))
-    if (at === null) return
-    const end = Math.min(view.state.doc.lineAt(at).to, at + 7),
-      mark = /^#{1,6}(?:[ \t]|$)/.exec(view.state.sliceDoc(at, end))
-    revealSourcePosition(
-      view,
-      sourcePosition(view, at + (mark?.[0].length ?? 0)),
-    )
+    revealSourcePosition(view, current.position(index))
     view.focus()
   }
   const beforeHeadings = useRef<HTMLDivElement>(null)

@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
+import { promisify } from 'node:util'
 import { electron, waitForAsync, waitForDocumentEditor } from './electron.mjs'
 import { clickMenu } from './keyboard.mjs'
 
@@ -58,11 +60,11 @@ test('every heading of a long formatted note reaches assistive technology once, 
 }, async (t) => {
   const { root, app, page } = await launch(t, 'hibi-heading-navigation-')
   const file = join(root, 'long.md')
-  const text = Array.from(
+  const text = `${Array.from(
     { length: 200 },
     (_, i) =>
       `${i % 3 ? '##' : '#'} heading ${i}\n\nparagraph ${i} with some words to fill the line.\n`,
-  ).join('\n')
+  ).join('\n')}\n## # of items\n`
   await writeFile(file, text)
   const chunks = JSON.parse(
     await readFile('out/renderer/startup-bundle.json', 'utf8'),
@@ -97,7 +99,7 @@ test('every heading of a long formatted note reaches assistive technology once, 
     { outline, list },
   )
   await open(app, page, file)
-  await headingCount(page, 200)
+  await headingCount(page, 201)
   const cdp = await page.context().newCDPSession(page)
   // Depth first, in the tree's order, as heading navigation reads it.
   const headings = async () => {
@@ -117,10 +119,10 @@ test('every heading of a long formatted note reaches assistive technology once, 
     visit(nodes.find((node) => !node.parentId))
     return found
   }
-  const expected = Array.from({ length: 200 }, (_, i) => [
-    `heading ${i}`,
-    i % 3 ? 2 : 1,
-  ])
+  const expected = [
+    ...Array.from({ length: 200 }, (_, i) => [`heading ${i}`, i % 3 ? 2 : 1]),
+    ['# of items', 2],
+  ]
   // The editor draws a few of them; the others are entries around it.
   assert.ok(
     (await page.locator('.rich-pane .cm-content > [role="heading"]').count()) <
@@ -148,13 +150,25 @@ test('every heading of a long formatted note reaches assistive technology once, 
       )
     )
   }, target + 3)
-  await headingCount(page, 200)
+  await headingCount(page, 201)
   assert.deepEqual(await headings(), expected)
   assert.equal(
     await page
       .locator('.formatted-headings a', { hasText: /^heading 151$/ })
       .count(),
     0,
+  )
+  // A heading whose text starts with # keeps that # in its text.
+  await page
+    .locator('.formatted-headings a', { hasText: /^# of items$/ })
+    .evaluate((link) => link.click())
+  assert.equal(
+    await page
+      .locator('.rich-pane .cm-content')
+      .evaluate(
+        (content) => content.cmTile.root.view.state.selection.main.head,
+      ),
+    text.indexOf('## # of items') + 3,
   )
 
   // Stop scrolling while a body-only outline reread is pending. Its heading
@@ -193,6 +207,103 @@ test('every heading of a long formatted note reaches assistive technology once, 
     () =>
       !window.headingWork.pending &&
       !document.querySelector('.formatted-headings [role="heading"]'),
+  )
+})
+
+test('VoiceOver starting and stopping after the note opens adds and removes heading entries without an Electron event', {
+  timeout: 120000,
+  skip: process.platform !== 'darwin' && 'VoiceOver runs on macOS',
+}, async (t) => {
+  const { root, app, page } = await launch(
+    t,
+    'hibi-heading-navigation-voiceover-',
+    false,
+  )
+  // VoiceOver starting calls this; Electron then serves it without emitting
+  // accessibility-support-changed.
+  const voiceOver = join(root, 'voiceover.node')
+  await writeFile(
+    join(root, 'voiceover.mm'),
+    `#include <node_api.h>
+#import <Cocoa/Cocoa.h>
+@interface NSApplication (VoiceOverState)
+- (void)voiceOverStateChanged:(BOOL)enabled;
+@end
+static napi_value change(napi_env env, napi_callback_info info) {
+  size_t count = 1;
+  napi_value argument;
+  bool enabled = false;
+  napi_get_cb_info(env, info, &count, &argument, nullptr, nullptr);
+  napi_get_value_bool(env, argument, &enabled);
+  if (![NSApp respondsToSelector:@selector(voiceOverStateChanged:)]) {
+    napi_throw_error(env, nullptr, "voiceOverStateChanged: is missing");
+    return nullptr;
+  }
+  [NSApp voiceOverStateChanged:enabled];
+  return nullptr;
+}
+NAPI_MODULE_INIT() {
+  napi_value function;
+  napi_create_function(env, "change", NAPI_AUTO_LENGTH, change, nullptr, &function);
+  napi_set_named_property(env, exports, "change", function);
+  return exports;
+}
+`,
+  )
+  await promisify(execFile)('clang++', [
+    '-x',
+    'objective-c++',
+    '-dynamiclib',
+    '-undefined',
+    'dynamic_lookup',
+    '-framework',
+    'Cocoa',
+    '-I',
+    join(dirname(process.execPath), '..', 'include', 'node'),
+    '-o',
+    voiceOver,
+    join(root, 'voiceover.mm'),
+  ])
+  const file = join(root, 'long.md')
+  await writeFile(
+    file,
+    Array.from(
+      { length: 200 },
+      (_, i) => `## heading ${i}\n\nparagraph ${i}.\n`,
+    ).join('\n'),
+  )
+  await open(app, page, file)
+  await page.locator('[data-source-ready="true"]').waitFor()
+  assert.ok((await page.locator(everyHeading).count()) < 200)
+  const state = await app.evaluate(({ app, BrowserWindow }, path) => {
+    // Test windows stay hidden; this one reads as shown.
+    const [window] = BrowserWindow.getAllWindows()
+    window.isVisible = () => true
+    window.emit('show')
+    globalThis.accessibilityEvents = []
+    app.on('accessibility-support-changed', (_event, enabled) =>
+      globalThis.accessibilityEvents.push(enabled),
+    )
+    const module = { exports: {} }
+    process.dlopen(module, path)
+    globalThis.voiceOver = module.exports
+    globalThis.voiceOver.change(true)
+    return app.isAccessibilitySupportEnabled()
+  }, voiceOver)
+  assert.equal(state, true)
+  await headingCount(page, 200)
+  const stopped = await app.evaluate(({ app }) => {
+    globalThis.voiceOver.change(false)
+    return app.isAccessibilitySupportEnabled()
+  })
+  assert.equal(stopped, false)
+  await page.waitForFunction(
+    () => !document.querySelector('.formatted-headings [role="heading"]'),
+  )
+  t.diagnostic(
+    JSON.stringify({
+      events: await app.evaluate(() => globalThis.accessibilityEvents),
+    }),
   )
 })
 

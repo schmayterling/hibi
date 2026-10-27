@@ -78,6 +78,7 @@ import { UI_CASE_CHANNEL } from '../shared/ui-case'
 import { UPDATE_CHANNELS } from '../shared/updates'
 import { WORKSPACE_CHANNELS } from '../shared/workspace'
 import { WORKSPACE_SETTINGS_CHANNELS } from '../shared/workspace-settings'
+import { followAccessibilitySupport } from './accessibility-support'
 import { AddonHotkeys } from './addon-hotkeys'
 import { createAddonStorage } from './addon-storage'
 import {
@@ -409,6 +410,16 @@ const devUrl = !app.isPackaged ? process.env.ELECTRON_RENDERER_URL : undefined
 const rendererUrl = devUrl ? new URL(devUrl).href : 'app://hibi/'
 const rendererRoot = join(import.meta.dirname, '../renderer')
 let mainWindow: BrowserWindow | null = null
+const followAccessibility = followAccessibilitySupport(
+  () => app.isAccessibilitySupportEnabled(),
+  () =>
+    !!mainWindow &&
+    !mainWindow.isDestroyed() &&
+    mainWindow.isVisible() &&
+    !mainWindow.isMinimized(),
+  (enabled) =>
+    mainWindow?.webContents.send(ACCESSIBILITY_CHANNELS.changed, enabled),
+)
 let networkWindowKey: object = {}
 const addonStorage = createAddonStorage(
   join(app.getPath('userData'), 'addon-storage'),
@@ -933,6 +944,9 @@ function createWindow(): void {
     if (!window.isDestroyed()) window.webContents.setIgnoreMenuShortcuts(false)
   }
   window.on('blur', stopRecording)
+  window.on('show', followAccessibility)
+  window.on('focus', followAccessibility)
+  window.on('restore', followAccessibility)
   window.webContents.on('did-start-loading', stopRecording)
   window.webContents.on('did-start-loading', () => {
     backgroundSettingsReady = false
@@ -1394,9 +1408,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit()
   })
-  app.on('accessibility-support-changed', (_event, enabled) => {
-    mainWindow?.webContents.send(ACCESSIBILITY_CHANNELS.changed, enabled)
-  })
+  app.on('accessibility-support-changed', followAccessibility)
 
   void app
     .whenReady()
@@ -1563,11 +1575,7 @@ if (!app.requestSingleInstanceLock()) {
         },
         Promise.resolve(),
       )
-      handle(
-        ACCESSIBILITY_CHANNELS.get,
-        () => app.isAccessibilitySupportEnabled(),
-        Promise.resolve(),
-      )
+      handle(ACCESSIBILITY_CHANNELS.get, followAccessibility, Promise.resolve())
       handle(
         SIDELOAD_CHANNELS.documentation,
         (event, id: unknown, path: unknown) => {
